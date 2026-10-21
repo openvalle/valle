@@ -364,7 +364,7 @@ fn typescript_projections_keep_their_exact_wire_shapes() {
         "export type TimelineVisualClipWire = ({ \"anchor\"?",
         "\"duration\": TimelineTimeWire",
         "\"start\": TimelineTimeWire",
-        "export type TimelineAdjustmentClipWire = ({ \"duration\": TimelineTimeWire; \"start\": TimelineTimeWire } & { \"kind\": \"color-grade\"; \"temperature\": number })",
+        "export type TimelineAdjustmentClipWire = ({ \"duration\": TimelineTimeWire; \"start\": TimelineTimeWire } & ({ \"kind\": \"color-grade\"; \"temperature\": number } | { \"component\": string; \"kind\": \"motion\"; \"props\"?: Record<string, TimelineParamWire2>; \"resources\"?: Record<string, string> }))",
     ] {
         assert!(generated.contains(literal), "missing TS literal {literal}");
     }

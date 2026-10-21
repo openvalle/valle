@@ -35,6 +35,9 @@ pub enum MotionRole {
     /// A track transition: the template stretches over the window and reads the outgoing and
     /// incoming clips as `input://from` and `input://to`.
     Transition,
+    /// An effect on a clip or an adjustment: the template stretches over its host's window,
+    /// reads the picture it applies to as `input://source` and replaces it.
+    Effect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +89,7 @@ impl MotionRole {
             Self::Overlay { .. } => "overlay",
             Self::CaptionPresenter { .. } => "captionPresenter",
             Self::Transition => "transition",
+            Self::Effect => "effect",
         }
     }
 
@@ -94,7 +98,7 @@ impl MotionRole {
             Self::Clip => None,
             Self::Overlay { intro, outro, hold } => Some((intro, outro, hold)),
             Self::CaptionPresenter { intro, outro } => Some((intro, outro, OverlayHold::Once)),
-            Self::Transition => {
+            Self::Transition | Self::Effect => {
                 Some((RationalTime::ZERO, RationalTime::ZERO, OverlayHold::Stretch))
             }
         }

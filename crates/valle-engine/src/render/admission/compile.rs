@@ -227,6 +227,7 @@ pub(super) fn compile_admitted_timeline(
                     exact_start: clip.exact_start,
                     source: clip.source,
                     layer: compile_visual_layer(clip.layer),
+                    effects: clip.effects,
                 },
             },
             AdmittedVisualItem::Gap { gap } => CompiledVisualItem::Gap {
@@ -278,6 +279,7 @@ pub(super) fn compile_admitted_timeline(
                 .clips
                 .into_iter()
                 .map(|clip| CompiledAdjustmentClip {
+                    id: clip.id,
                     range: clip.range,
                     effect: match clip.effect {
                         AdmittedAdjustmentEffect::ColorGrade { temperature } => {
@@ -287,6 +289,9 @@ pub(super) fn compile_admitted_timeline(
                             CompiledAdjustmentEffect::Extension {
                                 call: compile_kernel_call(call),
                             }
+                        }
+                        AdmittedAdjustmentEffect::Motion { source } => {
+                            CompiledAdjustmentEffect::Motion { source }
                         }
                     },
                 })

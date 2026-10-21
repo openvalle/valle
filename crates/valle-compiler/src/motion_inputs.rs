@@ -25,6 +25,10 @@ impl MotionPreparationInput {
                 crate::motion::MotionTrack::Caption
             } else if self.clip_path.contains("/transitions/") {
                 crate::motion::MotionTrack::Transition
+            } else if self.clip_path.starts_with("/tracks/adjustment/")
+                || self.clip_path.contains("/effects/")
+            {
+                crate::motion::MotionTrack::Effect
             } else {
                 crate::motion::MotionTrack::Visual
             },
@@ -75,6 +79,16 @@ pub(crate) fn motion_preparation_inputs_wire(
                     },
                 });
             }
+            for (ei, effect) in clip.effects.iter().enumerate() {
+                let path = format!("/tracks/visual/{ti}/clips/{ci}/effects/{ei}");
+                inputs.push(MotionPreparationInput {
+                    locator: locator(&timeline.resources, &effect.component, &path)?,
+                    component: effect.component.clone(),
+                    clip_path: path,
+                    resources: effect.resources.clone(),
+                    data: Value::Null,
+                });
+            }
         }
         for (ri, transition) in track.transitions.iter().enumerate() {
             if let TimelineTransitionEffectWire::Motion {
@@ -84,6 +98,25 @@ pub(crate) fn motion_preparation_inputs_wire(
             } = &transition.effect
             {
                 let path = format!("/tracks/visual/{ti}/transitions/{ri}");
+                inputs.push(MotionPreparationInput {
+                    locator: locator(&timeline.resources, component, &path)?,
+                    component: component.clone(),
+                    clip_path: path,
+                    resources: resources.clone(),
+                    data: Value::Null,
+                });
+            }
+        }
+    }
+    for (ti, track) in timeline.tracks.adjustment.iter().enumerate() {
+        for (ci, clip) in track.clips.iter().enumerate() {
+            if let TimelineAdjustmentWire::Motion {
+                component,
+                resources,
+                ..
+            } = &clip.adjustment
+            {
+                let path = format!("/tracks/adjustment/{ti}/clips/{ci}");
                 inputs.push(MotionPreparationInput {
                     locator: locator(&timeline.resources, component, &path)?,
                     component: component.clone(),

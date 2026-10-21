@@ -300,3 +300,25 @@ test("overlay leading trim edits the host window without creating a source trim"
   expect(trimmed.tracks.visual![0]!.clips[0]).toEqual({kind:"motion",component:"card",start:1.5,duration:2.5});
   expect(authored.tracks.visual![0]!.clips[0]!.start).toBe(1);
 });
+
+test("clip effects append, replace and remove templates, and the same component keeps its props", async () => {
+  const { setTimelineClipEffect } = await import("./timeline-edit.ts");
+  const source = { ...timeline(), resources: { glow: "glow.motion.tsx", invert: "invert.motion.tsx" } } as Timeline;
+  const clip = (edited: Timeline) => edited.tracks.visual![0]!.clips[1]!;
+  const one = setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 0, "glow");
+  expect(clip(one).effects).toEqual([{kind:"motion",component:"glow"}]);
+  expect(clip(source)).not.toHaveProperty("effects");
+  Object.assign(clip(one).effects![0]!, { props: { radius: 4 }, resources: { noise: "grain" } });
+  const glow = {kind:"motion" as const,component:"glow",props:{radius:4},resources:{noise:"grain"}};
+  const two = setTimelineClipEffect(one, "/tracks/visual/0/clips/1", 1, "invert");
+  expect(clip(two).effects).toEqual([glow,{kind:"motion",component:"invert"}]);
+  expect(clip(setTimelineClipEffect(two, "/tracks/visual/0/clips/1", 0, "glow")).effects).toEqual(clip(two).effects!);
+  expect(clip(setTimelineClipEffect(two, "/tracks/visual/0/clips/1", 0, "invert")).effects)
+    .toEqual([{kind:"motion",component:"invert"},{kind:"motion",component:"invert"}]);
+  const first = setTimelineClipEffect(two, "/tracks/visual/0/clips/1", 1, null);
+  expect(clip(first).effects).toEqual([glow]);
+  expect(clip(setTimelineClipEffect(first, "/tracks/visual/0/clips/1", 0, null))).not.toHaveProperty("effects");
+  expect(() => setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 1, "glow")).toThrow("Effect does not exist");
+  expect(() => setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 0, null)).toThrow("Effect does not exist");
+  expect(() => setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 0, "missing")).toThrow("does not exist");
+});

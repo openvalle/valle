@@ -59,10 +59,17 @@ export function timelineCompilePayload(
   const resources = new Map(resourceInputs.map((resource) => [resource.id, resource]));
   const instances: CompilePayload["instances"] = [];
   const frozenFonts = new Map<string, Uint8Array>();
-  const clips: { component: string; resources?: Record<string, string>; data?: Record<string, unknown>; clipPath: string }[] = (timeline.tracks.visual ?? []).flatMap((track, ti) => [
-    ...track.clips.flatMap((clip, ci) => clip.kind === "motion" ? [{ ...clip, clipPath: `/tracks/visual/${ti}/clips/${ci}` }] : []),
-    ...(track.transitions ?? []).flatMap((transition, ri) => transition.kind === "motion" ? [{ ...transition, clipPath: `/tracks/visual/${ti}/transitions/${ri}` }] : []),
-  ]);
+  const clips: { component: string; resources?: Record<string, string>; data?: Record<string, unknown>; clipPath: string }[] = [
+    ...(timeline.tracks.visual ?? []).flatMap((track, ti) => [
+      ...track.clips.flatMap((clip, ci) => [
+        ...(clip.kind === "motion" ? [{ ...clip, clipPath: `/tracks/visual/${ti}/clips/${ci}` }] : []),
+        ...(clip.effects ?? []).map((effect, ei) => ({ ...effect, clipPath: `/tracks/visual/${ti}/clips/${ci}/effects/${ei}` })),
+      ]),
+      ...(track.transitions ?? []).flatMap((transition, ri) => transition.kind === "motion" ? [{ ...transition, clipPath: `/tracks/visual/${ti}/transitions/${ri}` }] : []),
+    ]),
+    ...(timeline.tracks.adjustment ?? []).flatMap((track, ti) => track.clips.flatMap((clip, ci) =>
+      clip.kind === "motion" ? [{ ...clip, clipPath: `/tracks/adjustment/${ti}/clips/${ci}` }] : [])),
+  ];
   for (const [ti, track] of (timeline.tracks.caption ?? []).entries()) {
     if (!track.presenter) continue;
     for (const [ci] of track.clips.entries()) {

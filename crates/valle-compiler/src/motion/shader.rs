@@ -240,8 +240,8 @@ impl<'s> Compiler<'s> {
                 DiagCode::GrammarForbidden,
                 span,
                 format!(
-                    "shader texture input `{name}` needs `src`, an asset:// reference or a \
-                     transition() template's input://from or input://to"
+                    "shader texture input `{name}` needs `src`, an asset:// reference or a host \
+                     frame: input://from, input://to or input://source"
                 ),
             );
             return None;
@@ -340,14 +340,16 @@ impl<'s> Compiler<'s> {
                 });
                 continue;
             }
-            // A transition() template reads its clips; the artifact checks the role.
-            if valle_draw::requirements::HostFrame::from_source(asset).is_some() {
+            // A transition() template reads its clips and an effect() template its source; the
+            // artifact checks the role.
+            if let Some(frame) = valle_draw::requirements::HostFrame::from_source(asset) {
                 if input.kind != valle_motion::shader::InputKind::Color {
+                    let (_, _, pictured) = valle_motion::artifact::frame_reader(frame);
                     self.illegal(
                         DiagCode::GrammarForbidden,
                         asset_span,
                         format!(
-                            "shader texture input `{}` reads a clip, which needs kind \"color\"",
+                            "shader texture input `{}` reads {pictured}, which needs kind \"color\"",
                             input.name
                         ),
                     );
@@ -367,8 +369,9 @@ impl<'s> Compiler<'s> {
                     DiagCode::GrammarForbidden,
                     asset_span,
                     format!(
-                        "shader texture input `{}` must use asset://<image-control>, or \
-                         input://from or input://to in a transition() template",
+                        "shader texture input `{}` must use asset://<image-control>, \
+                         input://from or input://to in a transition() template, or \
+                         input://source in an effect() template",
                         input.name
                     ),
                 );

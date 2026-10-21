@@ -41,6 +41,7 @@ import {
   setTimelineSourceStartFrames,
   trimTimelineClipFrames,
   timelineClipAddress,
+  setTimelineClipEffect,
   setTimelineTransition,
   setTimelineTransitionParameter,
   transitionParameterSpecs,
@@ -217,7 +218,10 @@ function itemLabel(item: TimelineSequenceItem): string {
   if ("type" in item && item.type === "clip" && "runs" in item) {
     return item.runs.map((run: { text: string }) => run.text).join("");
   }
-  if ("effect" in item) return item.effect.type;
+  if ("effect" in item) {
+    if ("motion" in item.effect) return (item.effect.motion.component.split(/[\\/]/).pop() ?? item.effect.motion.component).replace(/^resource:/, "");
+    return item.effect.type;
+  }
   if ("type" in item && item.type === "transition") {
     if ("motion" in item.kernel) return (item.kernel.motion.component.split(/[\\/]/).pop() ?? item.kernel.motion.component).replace(/^resource:/, "");
     return item.kernel.type in transitionLabels ? transitionLabels[item.kernel.type as TimelineTransitionKind] : "Transition";
@@ -1005,6 +1009,18 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           })) : []),
         ] });
       }
+      const clip = address?.band === "visual" ? track?.clips[address.clipIndex] : undefined;
+      if (clip) {
+        // Effect templates are offered like transition templates; the compiler checks they declare effect().
+        const templates = Object.entries(workingCopy.resources ?? {}).filter(([, locator]) => /\.(?:tsx|jsx)$/i.test(locator)).map(([alias]) => alias);
+        const effects = clip.effects ?? [];
+        sections.push({ title: "Effects", rows: [
+          ...effects.map((effect, index) => ({ kind: "select" as const, key: `effect:${index}`, label: `Effect ${index + 1}`,
+            value: effect.component, values: [...new Set(["none", ...templates, effect.component])], valueLabels: { none: "Remove" } })),
+          { kind: "select" as const, key: `effect:${effects.length}`, label: "Add effect", value: "none",
+            values: ["none", ...templates], valueLabels: { none: "None" } },
+        ] });
+      }
     }
     if (visual) {
       const rows: InspectorSectionView["rows"][number][] = [
@@ -1336,6 +1352,15 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         return setTimelineTransition(workingCopy, projected.timelinePath,
           transition.kind === "motion" ? { component: transition.component } : transition.kind,
           timelineTimeFromFrames(frames, workingCopy.canvas.fps));
+      });
+    }
+    if (key.startsWith("effect:")) {
+      return queueWorkingCopy(() => {
+        const projected = findProjectedItem(compiledCopy.timeline, documentView, itemId);
+        if (!projected?.timelinePath) throw new Error("Select a visual clip to edit its effects");
+        const component = String(value);
+        return setTimelineClipEffect(workingCopy, projected.timelinePath, Number(key.slice("effect:".length)),
+          component === "none" ? null : component);
       });
     }
     if (key.startsWith("component:")) {

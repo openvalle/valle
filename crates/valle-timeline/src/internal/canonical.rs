@@ -188,6 +188,11 @@ fn quantize_document_scalars(document: &mut TimelineDocumentWire) {
                 VisualItemWire::Gap(_) => continue,
             };
             quantize_visual_layer(&mut clip.layer);
+            for effect in &mut clip.layer.effects {
+                for param in effect.props.values_mut() {
+                    quantize_param(param, quantize_json_numbers);
+                }
+            }
             if let Some(size) = &mut clip.layer.transform.size {
                 quantize_param(size, quantize_components);
             }
@@ -214,8 +219,14 @@ fn quantize_document_scalars(document: &mut TimelineDocumentWire) {
     }
 
     for timed in &mut document.adjustments {
-        if let AdjustmentEffectWire::ColorGrade(grade) = &mut timed.effect {
-            quantize_scalar(&mut grade.temperature);
+        match &mut timed.effect {
+            AdjustmentEffectWire::ColorGrade(grade) => quantize_scalar(&mut grade.temperature),
+            AdjustmentEffectWire::Motion(kernel) => {
+                for param in kernel.motion.props.values_mut() {
+                    quantize_param(param, quantize_json_numbers);
+                }
+            }
+            AdjustmentEffectWire::Extension(_) => {}
         }
     }
 
@@ -577,25 +588,13 @@ impl<'a> Validator<'a> {
                                     );
                                 }
                             }
-                            TransitionKernelWire::Motion(kernel) => {
-                                if !matches!(kernel.motion.role, crate::MotionRole::Transition) {
-                                    self.error(
-                                        "motion_role_invalid",
-                                        &format!("{path}/kernel/motion/role"),
-                                        Some(&transition.id),
-                                        details([(
-                                            "reason",
-                                            json!("a Motion transition must declare transition()"),
-                                        )]),
-                                    );
-                                }
-                                self.validate_motion_source(
-                                    &kernel.motion,
-                                    transition.duration,
-                                    &transition.id,
-                                    &format!("{path}/kernel/motion"),
-                                );
-                            }
+                            TransitionKernelWire::Motion(kernel) => self.validate_template(
+                                &kernel.motion,
+                                crate::MotionRole::Transition,
+                                transition.duration,
+                                &transition.id,
+                                &format!("{path}/kernel/motion"),
+                            ),
                             TransitionKernelWire::Extension(_) => {}
                         }
                         self.register_id(
@@ -679,6 +678,15 @@ impl<'a> Validator<'a> {
 
     fn validate_visual_clip(&mut self, clip: &VisualClipWire, path: &str) {
         self.validate_layer(&clip.layer, clip.duration, &format!("{path}/layer"));
+        for (index, effect) in clip.layer.effects.iter().enumerate() {
+            self.validate_template(
+                effect,
+                crate::MotionRole::Effect,
+                clip.duration,
+                &clip.id,
+                &format!("{path}/layer/effects/{index}"),
+            );
+        }
         match &clip.source {
             VisualSourceWire::Video(source) => {
                 if let Some(gain) = &source.gain {
@@ -738,12 +746,40 @@ impl<'a> Validator<'a> {
         }
     }
 
+    /// A Motion template its host places in `role`, over a window of `duration`.
+    fn validate_template(
+        &mut self,
+        motion: &MotionInstanceWire,
+        role: crate::MotionRole,
+        duration: ExactRational,
+        id: &str,
+        path: &str,
+    ) {
+        if motion.role != role {
+            self.error(
+                "motion_role_invalid",
+                &format!("{path}/role"),
+                Some(id),
+                details([(
+                    "reason",
+                    json!(format!(
+                        "a Motion {} must declare {}()",
+                        role.name(),
+                        role.name()
+                    )),
+                )]),
+            );
+        }
+        self.validate_motion_source(motion, duration, id, path);
+    }
+
     fn validate_motion_source(
         &mut self,
         source: &MotionInstanceWire,
         duration: ExactRational,
         id: &str,
-        // The instance's own pointer: a clip's `source` or a transition's `kernel/motion`.
+        // The instance's own pointer: a clip's `source`, a transition's `kernel/motion`, a layer
+        // effect or an adjustment's `effect/motion`.
         path: &str,
     ) {
         if !matches!(source.role, crate::MotionRole::Clip) {
@@ -1006,6 +1042,15 @@ impl<'a> Validator<'a> {
                     &path,
                     Some(&effect.id),
                     JsonObject::new(),
+                );
+            }
+            if let AdjustmentEffectWire::Motion(kernel) = &effect.effect {
+                self.validate_template(
+                    &kernel.motion,
+                    crate::MotionRole::Effect,
+                    effect.duration,
+                    &effect.id,
+                    &format!("{path}/effect/motion"),
                 );
             }
             if let AdjustmentEffectWire::ColorGrade(grade) = &effect.effect {

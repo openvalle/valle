@@ -2526,7 +2526,8 @@ fn validate_texture(texture: &ExternalTexture, location: &str) -> Result<(), Dra
     if frame.is_some() != (texture.kind == TextureKind::Frame) {
         return invalid(
             location,
-            "a host frame is named input://from or input://to, and only a frame is",
+            "a host frame is named input://from, input://to or input://source, and only a \
+             frame is",
         );
     }
     if let Some(frame) = frame

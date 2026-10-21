@@ -296,7 +296,7 @@ fn shader_manifest_defaults_become_typed_artifact_bindings() {
     }
 }
 
-const SHADER_CODE_SCENE: &str = r##"const effect = `
+const SHADER_CODE_SCENE: &str = r##"const shade = `
 uniform float progress;
 uniform color tint;
 uniform shader field;
@@ -310,7 +310,7 @@ export default function Contract() {
   return <Scene>LAYERS</Scene>;
 }"##;
 
-const SHADER_CODE_LAYER: &str = r##"code={effect} inputs={{ field: "asset://field" }} uniforms={{ progress: ctx.progress, tint: "#38bdf8" }}"##;
+const SHADER_CODE_LAYER: &str = r##"code={shade} inputs={{ field: "asset://field" }} uniforms={{ progress: ctx.progress, tint: "#38bdf8" }}"##;
 
 fn shader_code_scene(layers: &[&str]) -> String {
     let layers = layers
@@ -457,10 +457,7 @@ fn shader_layer_code_declares_its_uniforms_and_inputs() {
             "ShaderLayer outset must be a whole number of pixels",
         ),
         (
-            edited(
-                "code={effect}",
-                "code={ctx.progress > 0.5 ? effect : effect}",
-            ),
+            edited("code={shade}", "code={ctx.progress > 0.5 ? shade : shade}"),
             "ShaderLayer code must be a static string",
         ),
         (

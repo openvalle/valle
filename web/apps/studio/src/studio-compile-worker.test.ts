@@ -155,6 +155,34 @@ test("Timeline Motion transitions compile at their transition path as transition
   if (clip.status === "error") expect(clip.message).toContain("transition()");
 });
 
+test("Timeline effects compile at their effect and adjustment paths as effect() templates", async () => {
+  const invert = "const invert=`uniform shader source;\nfloat4 valle_main(float2 uv){float4 c=sample_source(uv);return float4(1.0-c.rgb,c.a);}`;\n"
+    + `export const composition={width:64,height:32,fps:4,duration:1};
+    export const role=effect();
+    export default function Invert(){ const ctx = useTime(); return <Scene>
+      <ShaderLayer code={invert} inputs={{source:"input://source"}} style={{width:ctx.viewport.width,height:ctx.viewport.height}}/>
+    </Scene>;}`;
+  const request = (source: string) => ({
+    id: 41, runtimeAssets, runtimeBaseUrl,
+    authorTimeline: { canvas: { width: 64, height: 32, fps: 4 }, resources: { invert: "invert.motion.tsx" },
+      tracks: {
+        visual: [{ clips: [{ kind: "solid", color: "#ff0000", start: 0, duration: 2,
+          effects: [{ kind: "motion", component: "invert" }] }] }],
+        adjustment: [{ clips: [{ kind: "motion", component: "invert", start: 0.5, duration: 1 }] }],
+      } },
+    instances: ["/tracks/visual/0/clips/0/effects/0", "/tracks/adjustment/0/clips/0"].map((clipPath) => ({
+      clipPath, entry: "invert.motion.tsx", modules: { "invert.motion.tsx": source }, fonts: [] })),
+  }) as Parameters<typeof compileStudioPreview>[0];
+  const result = await compileStudioPreview(request(invert));
+  if (result.status !== "ok") throw new Error(result.message);
+  const { document } = JSON.parse(result.package.timelineJson);
+  expect(document.visual.tracks[0].items[0].layer.effects[0].role).toEqual({ type: "effect" });
+  expect(document.adjustments[0].effect.motion.role).toEqual({ type: "effect" });
+  const clip = await compileStudioPreview(request(invert.replace("export const role=effect();", "")));
+  expect(clip.status).toBe("error");
+  if (clip.status === "error") expect(clip.message).toContain("effect()");
+});
+
 test("300 Timeline captions compile each immutable word input once and retain exact frame identity", async () => {
   const font = new Uint8Array(await readFile(new URL("../../../../assets/fonts/noto/NotoSans-Regular.ttf", import.meta.url)));
   const digest = `sha256:${new Bun.CryptoHasher("sha256").update(font).digest("hex")}`;

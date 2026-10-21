@@ -269,6 +269,7 @@ impl<'s> Compiler<'s> {
                 valle_timeline::MotionRole::CaptionPresenter { .. }
             );
             let transition = matches!(self.role, valle_timeline::MotionRole::Transition);
+            let effect = matches!(self.role, valle_timeline::MotionRole::Effect);
             let mismatch = match placement.track {
                 MotionTrack::Visual => {
                     caption.then_some("captionPresenter belongs on a caption track")
@@ -279,6 +280,7 @@ impl<'s> Compiler<'s> {
                 MotionTrack::Transition => {
                     (!transition).then_some("a track transition must declare transition()")
                 }
+                MotionTrack::Effect => (!effect).then_some("an effect must declare effect()"),
             };
             if let Some(reason) = mismatch {
                 self.illegal(

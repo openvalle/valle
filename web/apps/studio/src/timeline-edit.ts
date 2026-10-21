@@ -9,6 +9,7 @@ type TimelineVisualClip = TimelineSchema.TimelineVisualClipWire;
 type TimelineAudioClip = TimelineSchema.TimelineAudioClipWire;
 type TimelineCaptionClip = TimelineSchema.TimelineCaptionClipWire;
 type TimelineAdjustmentClip = TimelineSchema.TimelineAdjustmentClipWire;
+type TimelineClipEffect = TimelineSchema.TimelineClipEffectWire;
 
 export type TimelineTrackBand = "visual" | "audio" | "caption" | "adjustment";
 
@@ -133,7 +134,7 @@ export function trimTimelineClipFrames(
       } else if (target.band === "visual"
         && target.clip.kind !== "image"
         && target.clip.kind !== "solid"
-        && !(target.clip.kind === "motion" && (motionRole?.type === "overlay" || motionRole?.type === "transition"))) {
+        && !(target.clip.kind === "motion" && (motionRole?.type === "overlay" || motionRole?.type === "transition" || motionRole?.type === "effect"))) {
         const sourceDelta = finiteNumber(
           sourceTimeDeltaFromFrames(deltaFrames, timeline.canvas.fps, target.clip.rate),
           "source trim delta",
@@ -281,6 +282,32 @@ export function setTimelineMotionResource(
       throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
     }
     target.clip.resources = { ...(target.clip.resources ?? {}), [slot]: alias };
+  });
+}
+
+/**
+ * Add (at the end), replace or remove (`null`) the Motion template at `index` of a visual clip's
+ * effects. The same template keeps its props and resources; the compiler checks it declares
+ * `effect()`.
+ */
+export function setTimelineClipEffect(
+  timeline: Timeline,
+  timelinePath: string,
+  index: number,
+  component: string | null,
+): Timeline {
+  if (component !== null && !Object.hasOwn(timeline.resources ?? {}, component)) {
+    throw new Error(`Timeline resource '${component}' does not exist`);
+  }
+  return editTimelineClip(timeline, timelinePath, (target) => {
+    if (target.band !== "visual") throw new Error("Effects apply to visual clips");
+    const effects: TimelineClipEffect[] = target.clip.effects ?? [];
+    const end = component === null ? effects.length - 1 : effects.length;
+    if (!Number.isSafeInteger(index) || index < 0 || index > end) throw new Error("Effect does not exist");
+    if (component === null) effects.splice(index, 1);
+    else if (effects[index]?.component !== component) effects[index] = { kind: "motion", component };
+    if (effects.length) target.clip.effects = effects;
+    else delete target.clip.effects;
   });
 }
 

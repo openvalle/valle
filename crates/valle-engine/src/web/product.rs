@@ -1658,7 +1658,9 @@ impl ProductEngine {
     }
 }
 
+/// A click selects the clip under its effects.
 fn push_hit<'a>(hits: &mut Vec<ProductHitRect<'a>>, layer: &'a PreparedLayer) {
+    let layer = layer.innermost();
     let kind = match &layer.source {
         PreparedSource::External { source_kind, .. }
         | PreparedSource::Program { source_kind, .. } => match source_kind {
@@ -1680,6 +1682,7 @@ fn push_scene3d_placements(
     layer: &PreparedLayer,
     programs: &[crate::prepare::PreparedProgram],
 ) -> Result<(), JsError> {
+    let layer = layer.innermost();
     let PreparedSource::Program { program, .. } = &layer.source else {
         return Ok(());
     };

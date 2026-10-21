@@ -8,7 +8,7 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 export namespace TimelineDocumentSchema {
   export type Root = { "document": TimelineDocumentWire };
   export type AdjustmentEffectExtensionWire = { "parameters": Record<string, JsonValue>; "type": NamespacedKernelTypeWire };
-  export type AdjustmentEffectWire = (ColorGradeEffectWire | AdjustmentEffectExtensionWire);
+  export type AdjustmentEffectWire = (ColorGradeEffectWire | AdjustmentEffectExtensionWire | MotionAdjustmentEffectWire);
   export type AudioCompositionWire = { "tracks": Array<AudioTrackWire> };
   export type AudioEffectWire = { "id": string; "parameters": Record<string, JsonValue>; "type": NamespacedKernelTypeWire };
   export type AudioItemWire = ({ "duration": ExactRational; "effects": Array<AudioEffectWire>; "gain": ParamWire2; "id": string; "pan": ParamWire2; "source": AudioSourceWire; "type": "clip" } | { "duration": ExactRational; "id": string; "type": "gap" } | { "duration": ExactRational; "id": string; "type": "crossfade" });
@@ -44,8 +44,9 @@ export namespace TimelineDocumentSchema {
   export type LayerMaskWire = ({ "feather": ParamWire2; "invert": boolean; "rect": ParamWire3; "type": "rect" } | { "feather": ParamWire2; "invert": boolean; "rect": ParamWire3; "type": "ellipse" });
   export type LayerTransformWire = { "anchor": [number, number]; "position": ParamWire; "rotation": ParamWire2; "scale": ParamWire; "size"?: (ParamWire | null) };
   export type MediaEndBehaviorWire = ("error" | "hold" | "loop");
+  export type MotionAdjustmentEffectWire = { "motion": MotionInstanceWire };
   export type MotionInstanceWire = { "component": string; "data"?: Record<string, JsonValue>; "endBehavior": MediaEndBehaviorWire; "fit": RasterFitWire; "props": Record<string, ParamWire4>; "rate": ExactRational; "resources": Record<string, string>; "role": MotionRole; "sourceDuration": ExactRational; "sourceStart": ExactRational };
-  export type MotionRole = ({ "type": "clip" } | { "intro": RationalTime; "outro": RationalTime; "type": "captionPresenter" } | { "hold": OverlayHold; "intro": RationalTime; "outro": RationalTime; "type": "overlay" } | { "type": "transition" });
+  export type MotionRole = ({ "type": "clip" } | { "intro": RationalTime; "outro": RationalTime; "type": "captionPresenter" } | { "hold": OverlayHold; "intro": RationalTime; "outro": RationalTime; "type": "overlay" } | { "type": "transition" } | { "type": "effect" });
   export type MotionTransitionKernelWire = { "motion": MotionInstanceWire };
   export type NamespacedKernelTypeWire = string;
   export type OverlayHold = ("once" | "loop" | "stretch");
@@ -77,7 +78,7 @@ export namespace TimelineDocumentSchema {
   export type VisualCompositionWire = { "tracks": Array<VisualTrackWire> };
   export type VisualFilterWire = { "id": string; "parameters": Record<string, JsonValue>; "type": NamespacedKernelTypeWire };
   export type VisualItemWire = ({ "duration": ExactRational; "id": string; "layer": VisualLayerWire; "source": VisualSourceWire; "type": "clip" } | { "duration": ExactRational; "id": string; "type": "gap" } | { "duration": ExactRational; "id": string; "kernel": TransitionKernelWire; "type": "transition" });
-  export type VisualLayerWire = { "blend": BlendModeWire; "filters": Array<VisualFilterWire>; "mask": RequiredNullable_for_LayerMaskWire; "opacity": ParamWire2; "transform": LayerTransformWire };
+  export type VisualLayerWire = { "blend": BlendModeWire; "effects"?: Array<MotionInstanceWire>; "filters": Array<VisualFilterWire>; "mask": RequiredNullable_for_LayerMaskWire; "opacity": ParamWire2; "transform": LayerTransformWire };
   export type VisualSourceWire = ({ "endBehavior": MediaEndBehaviorWire; "gain"?: (ParamWire2 | null); "rate": ExactRational; "resource": string; "sampling": RasterSamplingWire; "sourceStart": ExactRational; "type": "video" } | { "resource": string; "sampling": RasterSamplingWire; "type": "image" } | { "component": string; "data"?: Record<string, JsonValue>; "endBehavior": MediaEndBehaviorWire; "fit": RasterFitWire; "props": Record<string, ParamWire4>; "rate": ExactRational; "resources": Record<string, string>; "role": MotionRole; "sourceDuration": ExactRational; "sourceStart": ExactRational; "type": "motion" } | { "color": string; "type": "solid" });
   export type VisualTrackWire = { "id": string; "items": Array<VisualItemWire> };
 }

@@ -43,8 +43,8 @@ use crate::{
 
 use super::{
     DynamicBindingKind, DynamicValue, FrameInspection, FrameMetadata, PrepareError, PrepareOutput,
-    PrepareState, PreparedEffect, PreparedEffectKernel, PreparedEffectSpace, PreparedFrame,
-    PreparedLayer, PreparedMotionTransition, PreparedProgramKind, PreparedSource,
+    PrepareState, PreparedAdjustment, PreparedEffect, PreparedEffectKernel, PreparedEffectSpace,
+    PreparedFrame, PreparedLayer, PreparedMotionTransition, PreparedProgramKind, PreparedSource,
     PreparedSourceKind, PreparedTransition, PreparedTransitionKernel, PreparedVisualItem,
     ProductPrepareCaches, motion, prepare_background, validate,
 };
@@ -97,7 +97,7 @@ pub fn prepare_compiled_render_frame_cached(
         let path = format!("visual[{index}]");
         match operation {
             EvaluatedVisualOperation::Clip(clip) => {
-                let layer = prepare_endpoint(
+                let layer = prepare_clip(
                     render,
                     evaluated,
                     clip.clip_id(),
@@ -125,22 +125,50 @@ pub fn prepare_compiled_render_frame_cached(
     }
 
     let mut adjustments = Vec::with_capacity(evaluated.adjustments().len());
-    for (index, effect) in evaluated.adjustments().iter().enumerate() {
+    for (index, adjustment) in evaluated.adjustments().iter().enumerate() {
         let path = format!("adjustments[{index}]");
-        adjustments.push(match effect.effect() {
-            CompiledAdjustmentEffect::ColorGrade { temperature } => PreparedEffect {
-                semantic_path: path,
-                space: PreparedEffectSpace::Root,
-                kernel: PreparedEffectKernel::ColorGrade {
-                    brightness: 0.0,
-                    contrast: 0.0,
-                    saturation: 0.0,
-                    temperature: *temperature as f32,
-                    vignette: 0.0,
-                },
-            },
-            CompiledAdjustmentEffect::Extension { call } => {
-                prepared_extension_effect(render, call, &path, PreparedEffectSpace::Root)?
+        adjustments.push(match adjustment.effect() {
+            CompiledAdjustmentEffect::ColorGrade { temperature } => {
+                PreparedAdjustment::Effect(PreparedEffect {
+                    semantic_path: path,
+                    space: PreparedEffectSpace::Root,
+                    kernel: PreparedEffectKernel::ColorGrade {
+                        brightness: 0.0,
+                        contrast: 0.0,
+                        saturation: 0.0,
+                        temperature: *temperature as f32,
+                        vignette: 0.0,
+                    },
+                })
+            }
+            CompiledAdjustmentEffect::Extension { call } => PreparedAdjustment::Effect(
+                prepared_extension_effect(render, call, &path, PreparedEffectSpace::Root)?,
+            ),
+            CompiledAdjustmentEffect::Motion { .. } => {
+                let template = adjustment.template().ok_or_else(|| {
+                    PrepareError::at(&path, "Motion adjustment has no evaluated template")
+                })?;
+                // Its output replaces the composite, so it draws from what it replaces.
+                if !template_frames(render, template, &path)?.contains(&HostFrame::Source) {
+                    return Err(PrepareError::at(
+                        format!("{path}.source.component"),
+                        "a Motion adjustment's template must read input://source",
+                    ));
+                }
+                // The composite it reads was already seen through the camera.
+                let camera = state.frame.camera.take();
+                let prepared = prepare_endpoint(
+                    render,
+                    evaluated,
+                    adjustment.id(),
+                    "adjustments",
+                    template,
+                    &EvaluatedRenderLayer::canvas(),
+                    &path,
+                    &mut state,
+                );
+                state.frame.camera = camera;
+                PreparedAdjustment::Motion(Box::new(prepared?))
             }
         });
     }
@@ -261,7 +289,7 @@ fn prepare_transition(
             DynamicValue::Scalar(transition.progress().as_f64()),
         )
         .map_err(|error| PrepareError::at(path, error))?;
-    let from = prepare_endpoint(
+    let from = prepare_clip(
         render,
         evaluated,
         transition.from_clip_id(),
@@ -271,7 +299,7 @@ fn prepare_transition(
         &format!("{path}.from"),
         state,
     )?;
-    let to = prepare_endpoint(
+    let to = prepare_clip(
         render,
         evaluated,
         transition.to_clip_id(),
@@ -300,21 +328,9 @@ fn prepare_motion_transition(
     path: &str,
     state: &mut PrepareState<'_>,
 ) -> Result<PreparedMotionTransition, PrepareError> {
-    let frames = render
-        .sources()
-        .source(template.source_index())
-        .and_then(|source| source.motion())
-        .and_then(|instance| render.motion_scene(instance))
-        .ok_or_else(|| {
-            PrepareError::at(
-                format!("{path}.source.component"),
-                "admitted Motion template payload missing",
-            )
-        })?
-        .artifact()
-        .frames();
+    let frames = template_frames(render, template, path)?;
     let from = if frames.contains(&HostFrame::From) {
-        Some(prepare_endpoint(
+        Some(prepare_clip(
             render,
             evaluated,
             transition.from_clip_id(),
@@ -328,7 +344,7 @@ fn prepare_motion_transition(
         None
     };
     let to = if frames.contains(&HostFrame::To) {
-        Some(prepare_endpoint(
+        Some(prepare_clip(
             render,
             evaluated,
             transition.to_clip_id(),
@@ -360,6 +376,103 @@ fn prepare_motion_transition(
         to,
         template: prepared?,
     })
+}
+
+/// A clip and the effect templates over it, in order. Each template reads the picture before it
+/// as `input://source`: first the clip after its transform, mask and filters, then each earlier
+/// template's output. The last template takes the clip's opacity and blend. A template that reads
+/// no source starts afresh, so nothing before it is prepared.
+#[allow(clippy::too_many_arguments)]
+fn prepare_clip(
+    render: &CompiledRender,
+    evaluated: &EvaluatedRenderFrame,
+    clip_id: &str,
+    track_id: &str,
+    source: &EvaluatedSourceRef,
+    layer: &EvaluatedRenderLayer,
+    path: &str,
+    state: &mut PrepareState<'_>,
+) -> Result<PreparedLayer, PrepareError> {
+    let effects = layer.effects();
+    if effects.is_empty() {
+        return prepare_endpoint(
+            render, evaluated, clip_id, track_id, source, layer, path, state,
+        );
+    }
+    // The template at `index` lies at `path` under one `.source` per template after it.
+    let depth = |index: usize| format!("{path}{}", ".source".repeat(effects.len() - index));
+    let mut fresh = None;
+    for (index, effect) in effects.iter().enumerate() {
+        if !template_frames(render, effect, &depth(index + 1))?.contains(&HostFrame::Source) {
+            fresh = Some(index);
+        }
+    }
+    let mut previous = match fresh {
+        Some(_) => None,
+        None => Some(prepare_endpoint(
+            render,
+            evaluated,
+            clip_id,
+            track_id,
+            source,
+            &layer.effect_source(),
+            &depth(0),
+            state,
+        )?),
+    };
+    // The camera already moved the clip; its templates lie on the canvas it is seen in.
+    let camera = state.frame.camera.take();
+    let mut prepared = Ok(());
+    for (index, effect) in effects.iter().enumerate().skip(fresh.unwrap_or(0)) {
+        let canvas = if index + 1 == effects.len() {
+            layer.effect_canvas()
+        } else {
+            EvaluatedRenderLayer::canvas()
+        };
+        match prepare_endpoint(
+            render,
+            evaluated,
+            clip_id,
+            track_id,
+            effect,
+            &canvas,
+            &depth(index + 1),
+            state,
+        ) {
+            Ok(mut template) => {
+                template.effect_source = previous.take().map(Box::new);
+                previous = Some(template);
+            }
+            Err(error) => {
+                prepared = Err(error);
+                break;
+            }
+        }
+    }
+    state.frame.camera = camera;
+    prepared?;
+    previous.ok_or_else(|| PrepareError::at(path, "a clip with effects prepared no layer"))
+}
+
+/// The host frames a Motion template reads.
+fn template_frames(
+    render: &CompiledRender,
+    template: &EvaluatedSourceRef,
+    path: &str,
+) -> Result<Vec<HostFrame>, PrepareError> {
+    Ok(render
+        .sources()
+        .source(template.source_index())
+        .and_then(|source| source.motion())
+        .and_then(|instance| render.motion_scene(instance))
+        .ok_or_else(|| {
+            PrepareError::at(
+                format!("{path}.source.component"),
+                "admitted Motion template payload missing",
+            )
+        })?
+        .artifact()
+        .frames())
 }
 
 fn prepare_endpoint(

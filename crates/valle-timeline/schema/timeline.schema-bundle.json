@@ -112,8 +112,8 @@
           ],
           "type": "string"
         },
-        "MotionTransitionKindWire": {
-          "description": "The `kind` of a transition a Motion template draws.",
+        "MotionKindWire": {
+          "description": "The `kind` that names a Motion template: a transition's, an adjustment's or a clip effect's.",
           "enum": [
             "motion"
           ],
@@ -152,6 +152,35 @@
               "required": [
                 "kind",
                 "temperature"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A Motion template that declares `effect()`: it reads the picture under it as\n`input://source` and replaces it. Props curves use seconds from the clip's start.",
+              "properties": {
+                "component": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "motion",
+                  "type": "string"
+                },
+                "props": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/TimelineParamWire2"
+                  },
+                  "type": "object"
+                },
+                "resources": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "component"
               ],
               "type": "object"
             }
@@ -656,6 +685,35 @@
           ],
           "type": "object"
         },
+        "TimelineClipEffectWire": {
+          "additionalProperties": false,
+          "description": "A Motion template that declares `effect()`, applied to its clip: it reads the clip as\n`input://source`, and its props curves use seconds from the clip's start.",
+          "properties": {
+            "component": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/MotionKindWire"
+            },
+            "props": {
+              "additionalProperties": {
+                "$ref": "#/$defs/TimelineParamWire2"
+              },
+              "type": "object"
+            },
+            "resources": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "component"
+          ],
+          "type": "object"
+        },
         "TimelineCurveWire": {
           "additionalProperties": false,
           "properties": {
@@ -1152,7 +1210,7 @@
                   "type": "string"
                 },
                 "kind": {
-                  "$ref": "#/$defs/MotionTransitionKindWire"
+                  "$ref": "#/$defs/MotionKindWire"
                 },
                 "props": {
                   "additionalProperties": {
@@ -1404,6 +1462,13 @@
             },
             "duration": {
               "$ref": "#/$defs/TimelineTimeWire"
+            },
+            "effects": {
+              "description": "Motion templates that declare `effect()`, applied to the clip in order.",
+              "items": {
+                "$ref": "#/$defs/TimelineClipEffectWire"
+              },
+              "type": "array"
             },
             "opacity": {
               "anyOf": [
@@ -1778,8 +1843,8 @@
           ],
           "type": "string"
         },
-        "MotionTransitionKindWire": {
-          "description": "The `kind` of a transition a Motion template draws.",
+        "MotionKindWire": {
+          "description": "The `kind` that names a Motion template: a transition's, an adjustment's or a clip effect's.",
           "enum": [
             "motion"
           ],
@@ -1818,6 +1883,35 @@
               "required": [
                 "kind",
                 "temperature"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A Motion template that declares `effect()`: it reads the picture under it as\n`input://source` and replaces it. Props curves use seconds from the clip's start.",
+              "properties": {
+                "component": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "motion",
+                  "type": "string"
+                },
+                "props": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/TimelineParamWire2"
+                  },
+                  "type": "object"
+                },
+                "resources": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind",
+                "component"
               ],
               "type": "object"
             }
@@ -2322,6 +2416,35 @@
           ],
           "type": "object"
         },
+        "TimelineClipEffectWire": {
+          "additionalProperties": false,
+          "description": "A Motion template that declares `effect()`, applied to its clip: it reads the clip as\n`input://source`, and its props curves use seconds from the clip's start.",
+          "properties": {
+            "component": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/MotionKindWire"
+            },
+            "props": {
+              "additionalProperties": {
+                "$ref": "#/$defs/TimelineParamWire2"
+              },
+              "type": "object"
+            },
+            "resources": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "kind",
+            "component"
+          ],
+          "type": "object"
+        },
         "TimelineCurveWire": {
           "additionalProperties": false,
           "properties": {
@@ -2818,7 +2941,7 @@
                   "type": "string"
                 },
                 "kind": {
-                  "$ref": "#/$defs/MotionTransitionKindWire"
+                  "$ref": "#/$defs/MotionKindWire"
                 },
                 "props": {
                   "additionalProperties": {
@@ -3070,6 +3193,13 @@
             },
             "duration": {
               "$ref": "#/$defs/TimelineTimeWire"
+            },
+            "effects": {
+              "description": "Motion templates that declare `effect()`, applied to the clip in order.",
+              "items": {
+                "$ref": "#/$defs/TimelineClipEffectWire"
+              },
+              "type": "array"
             },
             "opacity": {
               "anyOf": [

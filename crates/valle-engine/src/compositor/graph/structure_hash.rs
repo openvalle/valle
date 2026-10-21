@@ -638,6 +638,18 @@ fn write_pass_kind(writer: &mut StructureHash, kind: &LogicalPassKind) {
             writer.u32(output.get());
             write_effect(writer, effect);
         }
+        LogicalPassKind::ReplaceComposite {
+            backdrop,
+            layer,
+            output,
+            opacity,
+        } => {
+            writer.tag(14);
+            writer.u32(backdrop.get());
+            writer.u32(layer.get());
+            writer.u32(output.get());
+            writer.u32(opacity.get());
+        }
         LogicalPassKind::Caption {
             backdrop,
             program,
@@ -675,6 +687,7 @@ fn write_host_frame(writer: &mut StructureHash, frame: valle_draw::requirements:
     writer.tag(match frame {
         valle_draw::requirements::HostFrame::From => 0,
         valle_draw::requirements::HostFrame::To => 1,
+        valle_draw::requirements::HostFrame::Source => 2,
     });
 }
 

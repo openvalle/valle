@@ -108,6 +108,22 @@ pub struct PreparedLayer {
     pub effects: Vec<PreparedEffect>,
     pub mask: Option<PreparedMask>,
     pub blend: CompositeBlendMode,
+    /// For an `effect()` template, the picture it reads as `input://source` at
+    /// `{semantic_path}.source`: the clip it applies to, or the effect before it. The clip's
+    /// opacity and blend belong to the last effect, so everything before it composites as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_source: Option<Box<PreparedLayer>>,
+}
+
+impl PreparedLayer {
+    /// The clip an effect chain applies to, or the layer itself without effects.
+    pub fn innermost(&self) -> &Self {
+        let mut layer = self;
+        while let Some(source) = &layer.effect_source {
+            layer = source;
+        }
+        layer
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +147,15 @@ pub struct PreparedMotionTransition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<PreparedLayer>,
     pub template: PreparedLayer,
+}
+
+/// One adjustment active at a frame, applied to the composed picture in declared order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum PreparedAdjustment {
+    Effect(PreparedEffect),
+    /// A Motion template that reads the composed picture as `input://source` and replaces it.
+    Motion(Box<PreparedLayer>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -216,7 +241,7 @@ pub struct PreparedFrame {
     pub render_spec: RenderSpec,
     pub background: PreparedBackground,
     pub visual: Vec<PreparedVisualItem>,
-    pub adjustments: Vec<PreparedEffect>,
+    pub adjustments: Vec<PreparedAdjustment>,
     pub captions: Vec<PreparedCaption>,
     pub programs: Vec<PreparedProgram>,
     pub resources: ResourceManifest,
@@ -232,7 +257,7 @@ struct PreparedFrameWire {
     render_spec: RenderSpec,
     background: PreparedBackground,
     visual: Vec<PreparedVisualItem>,
-    adjustments: Vec<PreparedEffect>,
+    adjustments: Vec<PreparedAdjustment>,
     captions: Vec<PreparedCaption>,
     programs: Vec<PreparedProgram>,
     resources: ResourceManifest,
@@ -572,6 +597,7 @@ impl<'a> PrepareState<'a> {
             effects,
             mask: prepared_mask,
             blend: clip.blend,
+            effect_source: None,
         })
     }
 
@@ -655,6 +681,7 @@ impl<'a> PrepareState<'a> {
             effects: Vec::new(),
             mask: prepared_mask,
             blend: clip.blend,
+            effect_source: None,
         })
     }
 

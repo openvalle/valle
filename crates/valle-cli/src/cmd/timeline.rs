@@ -160,6 +160,19 @@ pub(crate) fn prepare_timeline_media_facts(
     {
         if let Some(clips) = track["clips"].as_array_mut() {
             for clip in clips {
+                // Effect templates are Motion too; only the assets they bind are media facts.
+                if let Some(effects) = clip.as_object_mut().and_then(|clip| clip.remove("effects"))
+                {
+                    for effect in effects.as_array().into_iter().flatten() {
+                        motion_assets.extend(
+                            effect["resources"]
+                                .as_object()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|(_, value)| value.as_str().map(str::to_owned)),
+                        );
+                    }
+                }
                 if clip["kind"] != "motion" {
                     continue;
                 }
@@ -190,6 +203,30 @@ pub(crate) fn prepare_timeline_media_facts(
             }
             *transition = serde_json::json!({
                 "from": transition["from"], "to": transition["to"], "kind": "fade",
+            });
+        }
+    }
+    for track in doc
+        .pointer_mut("/tracks/adjustment")
+        .and_then(serde_json::Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        for clip in track["clips"].as_array_mut().into_iter().flatten() {
+            if clip["kind"] != "motion" {
+                continue;
+            }
+            if let Some(bindings) = clip["resources"].as_object() {
+                motion_assets.extend(
+                    bindings
+                        .values()
+                        .filter_map(|value| value.as_str().map(str::to_owned)),
+                );
+            }
+            // A neutral grade keeps the adjustment's interval in the export's duration.
+            *clip = serde_json::json!({
+                "kind": "color-grade", "temperature": 0,
+                "start": clip["start"], "duration": clip["duration"],
             });
         }
     }
@@ -903,16 +940,24 @@ pub(crate) fn motion_source_paths(
     let document: serde_json::Value = serde_json::from_slice(&timeline_bytes(timeline)?)?;
     let locators = document["resources"].as_object();
     let mut paths = std::collections::BTreeSet::new();
-    let visual = document["tracks"]["visual"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let tracks = |band: &'static str| document["tracks"][band].as_array().into_iter().flatten();
+    let visual = tracks("visual")
         .flat_map(|track| {
             ["clips", "transitions"]
                 .into_iter()
                 .flat_map(|items| track[items].as_array().into_iter().flatten())
         })
-        .filter(|item| item["kind"] == "motion")
+        .flat_map(|item| {
+            let effects = item["effects"].as_array().into_iter().flatten();
+            std::iter::once(item)
+                .filter(|item| item["kind"] == "motion")
+                .chain(effects)
+        })
+        .chain(
+            tracks("adjustment")
+                .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+                .filter(|clip| clip["kind"] == "motion"),
+        )
         .filter_map(|item| item["component"].as_str());
     let caption = document["tracks"]["caption"]
         .as_array()
@@ -965,21 +1010,23 @@ pub(crate) fn motion_source_metadata(
                         || (band == "captions" && item["type"] == "motion");
                     (source, motion)
                 };
-                if !motion {
-                    continue;
+                if motion {
+                    insert_motion_metadata(&mut durations, source)?;
                 }
-                let alias = source["component"]
-                    .as_str()
-                    .and_then(|id| id.strip_prefix("resource:"))
-                    .ok_or_else(|| anyhow!("invalid prepared Motion component"))?;
-                durations.insert(
-                    alias.to_owned(),
-                    valle_timeline::MotionSourceMetadata {
-                        duration: serde_json::from_value(source["sourceDuration"].clone())?,
-                        role: serde_json::from_value(source["role"].clone())?,
-                    },
-                );
+                for effect in item["layer"]["effects"].as_array().into_iter().flatten() {
+                    insert_motion_metadata(&mut durations, effect)?;
+                }
             }
+        }
+    }
+    for adjustment in canonical["document"]["adjustments"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let template = &adjustment["effect"]["motion"];
+        if template.is_object() {
+            insert_motion_metadata(&mut durations, template)?;
         }
     }
     for input in valle_compiler::motion_preparation_inputs(&decode_timeline(&author.to_string())?)?
@@ -990,6 +1037,25 @@ pub(crate) fn motion_source_metadata(
         durations.insert(input.component, metadata);
     }
     Ok(durations)
+}
+
+/// The duration and role of a placed Motion instance, by the alias its component names.
+fn insert_motion_metadata(
+    durations: &mut std::collections::BTreeMap<String, valle_timeline::MotionSourceMetadata>,
+    instance: &serde_json::Value,
+) -> Result<()> {
+    let alias = instance["component"]
+        .as_str()
+        .and_then(|id| id.strip_prefix("resource:"))
+        .ok_or_else(|| anyhow!("invalid prepared Motion component"))?;
+    durations.insert(
+        alias.to_owned(),
+        valle_timeline::MotionSourceMetadata {
+            duration: serde_json::from_value(instance["sourceDuration"].clone())?,
+            role: serde_json::from_value(instance["role"].clone())?,
+        },
+    );
+    Ok(())
 }
 
 fn collect_used_resources(

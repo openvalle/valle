@@ -137,12 +137,24 @@ fn bind_motion_instances(
             if let timeline::TimelineVisualSourceWire::Motion { component, .. } = &mut clip.source {
                 *component = by_path[&format!("/tracks/visual/{ti}/clips/{ci}")].clone();
             }
+            for (ei, effect) in clip.effects.iter_mut().enumerate() {
+                effect.component =
+                    by_path[&format!("/tracks/visual/{ti}/clips/{ci}/effects/{ei}")].clone();
+            }
         }
         for (ri, transition) in track.transitions.iter_mut().enumerate() {
             if let timeline::TimelineTransitionEffectWire::Motion { component, .. } =
                 &mut transition.effect
             {
                 *component = by_path[&format!("/tracks/visual/{ti}/transitions/{ri}")].clone();
+            }
+        }
+    }
+    for (ti, track) in timeline.tracks.adjustment.iter_mut().enumerate() {
+        for (ci, clip) in track.clips.iter_mut().enumerate() {
+            if let timeline::TimelineAdjustmentWire::Motion { component, .. } = &mut clip.adjustment
+            {
+                *component = by_path[&format!("/tracks/adjustment/{ti}/clips/{ci}")].clone();
             }
         }
     }
@@ -327,6 +339,25 @@ impl TimelineNormalizer {
                     .unwrap_or_else(|| constant(1.0)),
                 mask: None,
                 filters: Vec::new(),
+                effects: clip
+                    .effects
+                    .iter()
+                    .enumerate()
+                    .map(|(index, effect)| {
+                        self.motion_template(
+                            &effect.component,
+                            &effect.props,
+                            &effect.resources,
+                            &format!("{clip_id}:effect:{index}"),
+                            duration,
+                            &format!("{clip_path}/effects/{index}"),
+                            (
+                                valle_timeline::MotionRole::Effect,
+                                "a clip effect must declare effect()",
+                            ),
+                        )
+                    })
+                    .collect::<Result<_, _>>()?,
                 blend: clip
                     .blend
                     .map(lower_blend)
@@ -353,22 +384,51 @@ impl TimelineNormalizer {
         duration: ExactRational,
         path: &str,
     ) -> Result<document::TransitionKernelWire, CompileTimelineError> {
-        let (component, props, resources) = match effect {
-            timeline::TimelineTransitionEffectWire::Builtin { kind, params } => {
-                return Ok(document::TransitionKernelWire::Builtin(
-                    document::BuiltinTransitionKernelWire {
-                        kind: *kind,
-                        params: params.clone(),
-                    },
-                ));
-            }
+        match effect {
+            timeline::TimelineTransitionEffectWire::Builtin { kind, params } => Ok(
+                document::TransitionKernelWire::Builtin(document::BuiltinTransitionKernelWire {
+                    kind: *kind,
+                    params: params.clone(),
+                }),
+            ),
             timeline::TimelineTransitionEffectWire::Motion {
                 component,
                 props,
                 resources,
                 ..
-            } => (component, props, resources),
-        };
+            } => Ok(document::TransitionKernelWire::Motion(
+                document::MotionTransitionKernelWire {
+                    motion: self.motion_template(
+                        component,
+                        props,
+                        resources,
+                        owner,
+                        duration,
+                        path,
+                        (
+                            valle_timeline::MotionRole::Transition,
+                            "a track transition must declare transition()",
+                        ),
+                    )?,
+                },
+            )),
+        }
+    }
+
+    /// A Motion template placed over its host's window of `duration`, which `role` names with the
+    /// reason given when the template declares another. The whole composition stretches over
+    /// the window, with neutral media timing and fit.
+    #[allow(clippy::too_many_arguments)]
+    fn motion_template(
+        &self,
+        component: &str,
+        props: &BTreeMap<String, timeline::TimelineParamWire<serde_json::Value>>,
+        resources: &BTreeMap<String, String>,
+        owner: &str,
+        duration: ExactRational,
+        path: &str,
+        (role, requirement): (valle_timeline::MotionRole, &str),
+    ) -> Result<document::MotionInstanceWire, CompileTimelineError> {
         let metadata = self.motion_sources.get(component).ok_or_else(|| {
             CompileTimelineError::MissingMotionMetadata {
                 path: path.to_owned(),
@@ -384,10 +444,8 @@ impl TimelineNormalizer {
             path: path.to_owned(),
             reason,
         };
-        if !matches!(metadata.role, valle_timeline::MotionRole::Transition) {
-            return Err(role_error(
-                "a track transition must declare transition()".into(),
-            ));
+        if metadata.role != role {
+            return Err(role_error(requirement.into()));
         }
         metadata
             .role
@@ -411,22 +469,18 @@ impl TimelineNormalizer {
                     .map(|resource| (slot.clone(), resource))
             })
             .collect::<Result<_, _>>()?;
-        Ok(document::TransitionKernelWire::Motion(
-            document::MotionTransitionKernelWire {
-                motion: document::MotionInstanceWire {
-                    component: self.resolve(component, &format!("{path}/component"))?,
-                    role: metadata.role,
-                    fit: document::RasterFitWire::Contain,
-                    source_start: ExactRational::ZERO,
-                    source_duration: metadata.duration.into_exact(),
-                    rate: ExactRational::ONE,
-                    end_behavior: document::MediaEndBehaviorWire::Hold,
-                    props,
-                    data: BTreeMap::new(),
-                    resources,
-                },
-            },
-        ))
+        Ok(document::MotionInstanceWire {
+            component: self.resolve(component, &format!("{path}/component"))?,
+            role: metadata.role,
+            fit: document::RasterFitWire::Contain,
+            source_start: ExactRational::ZERO,
+            source_duration: metadata.duration.into_exact(),
+            rate: ExactRational::ONE,
+            end_behavior: document::MediaEndBehaviorWire::Hold,
+            props,
+            data: BTreeMap::new(),
+            resources,
+        })
     }
 
     fn visual_source(
@@ -540,6 +594,7 @@ impl TimelineNormalizer {
                     metadata.role,
                     valle_timeline::MotionRole::Overlay { .. }
                         | valle_timeline::MotionRole::Transition
+                        | valle_timeline::MotionRole::Effect
                 );
                 if template {
                     for (field, present) in [
@@ -812,6 +867,7 @@ impl TimelineNormalizer {
             let _ = require_gap(cursor, start, &path)?;
             let duration = exact_time(&clip.duration);
             cursor = checked_end(start, duration, &path)?;
+            let id = clip_id("adjustment", track_index, clip_index);
             let effect = match clip.adjustment {
                 timeline::TimelineAdjustmentWire::ColorGrade { temperature } => {
                     document::AdjustmentEffectWire::ColorGrade(document::ColorGradeEffectWire {
@@ -819,9 +875,27 @@ impl TimelineNormalizer {
                         temperature,
                     })
                 }
+                timeline::TimelineAdjustmentWire::Motion {
+                    component,
+                    props,
+                    resources,
+                } => document::AdjustmentEffectWire::Motion(document::MotionAdjustmentEffectWire {
+                    motion: self.motion_template(
+                        &component,
+                        &props,
+                        &resources,
+                        &id,
+                        duration,
+                        &path,
+                        (
+                            valle_timeline::MotionRole::Effect,
+                            "a Motion adjustment must declare effect()",
+                        ),
+                    )?,
+                }),
             };
             effects.push(document::TimedAdjustmentWire {
-                id: clip_id("adjustment", track_index, clip_index),
+                id,
                 start,
                 duration,
                 effect,

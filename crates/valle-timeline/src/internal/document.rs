@@ -268,6 +268,8 @@ pub struct VisualLayer {
     pub opacity: Param<f64>,
     pub mask: Option<LayerMask>,
     pub filters: Vec<VisualFilter>,
+    /// Templates that declare `effect()`, applied in order after the filters.
+    pub effects: Vec<MotionInstance>,
     pub blend: BlendMode,
 }
 
@@ -451,6 +453,8 @@ pub struct TimedAdjustment {
 pub enum AdjustmentEffect {
     ColorGrade(ColorGradeEffect),
     Extension(AdjustmentEffectExtension),
+    /// A Motion template that declares `effect()` and replaces the picture under it.
+    Motion(MotionInstance),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -972,6 +976,11 @@ fn visual_layer_from_wire(
                 })
             })
             .collect::<Result<_, DocumentConversionError>>()?,
+        effects: layer
+            .effects
+            .into_iter()
+            .map(motion_instance_from_wire)
+            .collect::<Result<_, _>>()?,
         blend: blend_mode_from_wire(layer.blend),
     })
 }
@@ -998,6 +1007,11 @@ fn visual_layer_into_wire(layer: VisualLayer) -> wire::VisualLayerWire {
                 kind: kernel_type_into_wire(filter.kind),
                 parameters: filter.parameters,
             })
+            .collect(),
+        effects: layer
+            .effects
+            .into_iter()
+            .map(motion_instance_into_wire)
             .collect(),
         blend: blend_mode_into_wire(layer.blend),
     }
@@ -1327,6 +1341,9 @@ fn adjustment_from_wire(
                     parameters: extension.parameters,
                 })
             }
+            wire::AdjustmentEffectWire::Motion(effect) => {
+                AdjustmentEffect::Motion(motion_instance_from_wire(effect.motion)?)
+            }
         },
     })
 }
@@ -1347,6 +1364,11 @@ fn adjustment_into_wire(effect: TimedAdjustment) -> wire::TimedAdjustmentWire {
                 wire::AdjustmentEffectWire::Extension(wire::AdjustmentEffectExtensionWire {
                     kind: kernel_type_into_wire(extension.kind),
                     parameters: extension.parameters,
+                })
+            }
+            AdjustmentEffect::Motion(motion) => {
+                wire::AdjustmentEffectWire::Motion(wire::MotionAdjustmentEffectWire {
+                    motion: motion_instance_into_wire(motion),
                 })
             }
         },

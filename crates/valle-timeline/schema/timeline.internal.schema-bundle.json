@@ -608,6 +608,9 @@
             },
             {
               "$ref": "#/$defs/AdjustmentEffectExtensionWire"
+            },
+            {
+              "$ref": "#/$defs/MotionAdjustmentEffectWire"
             }
           ]
         },
@@ -1468,6 +1471,19 @@
           ],
           "type": "string"
         },
+        "MotionAdjustmentEffectWire": {
+          "additionalProperties": false,
+          "description": "An adjustment drawn by a Motion template that declares `effect()`: it reads the composed\npicture under it as `input://source` and replaces it.",
+          "properties": {
+            "motion": {
+              "$ref": "#/$defs/MotionInstanceWire"
+            }
+          },
+          "required": [
+            "motion"
+          ],
+          "type": "object"
+        },
         "MotionInstanceWire": {
           "additionalProperties": false,
           "properties": {
@@ -1589,6 +1605,20 @@
               "properties": {
                 "type": {
                   "const": "transition",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "description": "An effect on a clip or an adjustment: the template stretches over its host's window,\nreads the picture it applies to as `input://source` and replaces it.",
+              "properties": {
+                "type": {
+                  "const": "effect",
                   "type": "string"
                 }
               },
@@ -2255,6 +2285,13 @@
           "properties": {
             "blend": {
               "$ref": "#/$defs/BlendModeWire"
+            },
+            "effects": {
+              "description": "Templates that declare `effect()`, applied in order after the filters and before the\nopacity and blend.",
+              "items": {
+                "$ref": "#/$defs/MotionInstanceWire"
+              },
+              "type": "array"
             },
             "filters": {
               "items": {

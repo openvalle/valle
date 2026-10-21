@@ -150,6 +150,43 @@ export default function M(){const ctx=useTime();return <Scene><ShaderLayer code=
         expect(worst,`fraction-dissolve/${f} inside the viewport`).toBeLessThanOrEqual(2);
       }} : {reference:`${size}-fade`})});
   }
+  // Effect templates read their clip, or what lies under an adjustment, as input://source. Drawn
+  // unchanged, a source renders as no effect, also for placed, translucent and blended clips and
+  // in a preview that scales the canvas, and an adjustment's invert matches its clip's.
+  await writeFile(join(dir,"same.motion.tsx"),`export const composition={width:48,height:48,duration:1,fps:4};
+export const role=effect();
+export default function S(){return <Scene className="relative h-full w-full"><Image src="input://source" className="absolute inset-0 h-full w-full"/></Scene>;}`);
+  await writeFile(join(dir,"mark.motion.tsx"),`export const composition={width:96,height:64,duration:1,fps:4};
+export const role=effect();
+export default function K(){return <Scene className="relative h-full w-full"><Image src="input://source" className="absolute inset-0 h-full w-full"/><View style={{position:"absolute",left:0,top:0,width:8,height:8,backgroundColor:"#2040ff"}}/></Scene>;}`);
+  await writeFile(join(dir,"invert.motion.tsx"),"const invert=`uniform shader source;\nfloat4 valle_main(float2 uv){float4 c=sample_source(uv);return float4(1.0-c.rgb,c.a);}`;\n"
+    +`export const composition={width:96,height:64,duration:1,fps:4};
+export const role=effect();
+export default function I(){const ctx=useTime();return <Scene><ShaderLayer code={invert} inputs={{source:"input://source"}} style={{width:ctx.viewport.width,height:ctx.viewport.height}}/></Scene>;}`);
+  const effected = (tracks:unknown[][],adjustment?:unknown[]) => JSON.stringify({canvas:{width:96,height:64,fps:4,background:"#ffffff"},
+    resources:{same:"same.motion.tsx",mark:"mark.motion.tsx",invert:"invert.motion.tsx",from:"param-from.motion.tsx",to:"param-to.motion.tsx"},
+    tracks:{visual:tracks.map(clips=>({clips})),...(adjustment ? {adjustment:[{clips:adjustment}]} : {})}});
+  const layered = (...components:string[]) => {
+    const effects = components.length ? {effects:components.map(component=>({kind:"motion",component}))} : {};
+    return [[{kind:"motion",component:"from",start:0,duration:2,position:[0.4,0.5],scale:[0.8,0.8],opacity:0.7,...effects}],
+      [{kind:"motion",component:"to",start:0,duration:2,rotation:15,opacity:0.8,blend:"multiply",...effects}]];
+  };
+  const solid = (...components:string[]) => [[{kind:"solid",color:"#ff2050",start:0,duration:2,
+    ...(components.length ? {effects:components.map(component=>({kind:"motion",component}))} : {})}]];
+  const adjust = (component:string) => [{kind:"motion",component,start:0.5,duration:1}];
+  cases.push({name:"effect-none",command:"timeline",content:effected(layered()),width:96,height:64,frames:[1,3,5,3]});
+  cases.push({name:"effect-same",command:"timeline",content:effected(layered("same")),width:96,height:64,frames:[1,3,5,3],reference:"effect-none"});
+  cases.push({name:"effect-twice",command:"timeline",content:effected(layered("same","same")),width:96,height:64,frames:[1,3,5,3],reference:"effect-none"});
+  cases.push({name:"effect-chain",command:"timeline",content:effected(layered("mark","invert")),width:96,height:64,frames:[1,3,5,3]});
+  cases.push({name:"adjust-same",command:"timeline",content:effected(layered(),adjust("same")),width:96,height:64,frames:[1,3,5,3],reference:"effect-none"});
+  // Inverted, #ff2050 has a red channel that is zero only by cancellation in the Rec2020 F16
+  // working space. Skia stores F16 by truncation in WASM and to nearest on NEON, which next to
+  // black leaves that channel up to 3 sRGB levels apart.
+  cases.push({name:"effect-invert",command:"timeline",content:effected(solid("invert")),width:96,height:64,frames:[3,5],parity:3});
+  cases.push({name:"adjust-invert",command:"timeline",content:effected(solid(),adjust("invert")),width:96,height:64,frames:[3,5],parity:3,reference:"effect-invert"});
+  cases.push({name:"invert-mark",command:"timeline",content:effected(solid("invert","mark")),width:96,height:64,frames:[3],parity:3,probe:(p)=>pixel(p,96,2,2,[0x20,0x40,0xff,255])});
+  cases.push({name:"scaled-effect-none",command:"timeline",content:effected(layered()),width:192,height:128,frames:[3,1],native:false});
+  cases.push({name:"scaled-effect-same",command:"timeline",content:effected(layered("same")),width:192,height:128,frames:[3,1],native:false,reference:"scaled-effect-none"});
   const filter = process.env.VALLE_TEST_TRANSITION_CASE;
   const selected = new Set(cases.filter(c=>!filter || new RegExp(filter).test(c.name)).map(c=>c.name));
   for (const fixture of [...cases].reverse()) if (selected.has(fixture.name)) {

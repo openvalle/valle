@@ -822,6 +822,7 @@ fn pass_kind_label(kind: &LogicalPassKind) -> &'static str {
         LogicalPassKind::Blend { .. } => "blend",
         LogicalPassKind::Transition { .. } => "transition",
         LogicalPassKind::AdjustmentEffect { .. } => "adjustment-effect",
+        LogicalPassKind::ReplaceComposite { .. } => "replace-composite",
         LogicalPassKind::Caption { .. } => "caption",
         LogicalPassKind::OutputTransform { .. } => "output-transform",
     }

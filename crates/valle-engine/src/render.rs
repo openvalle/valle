@@ -46,9 +46,9 @@ pub use valle_timeline::internal::{FrameKey, RenderId};
 #[cfg(test)]
 use evaluate::evaluate_source_sample_index;
 use evaluate::{
-    crossfade_progress, euclidean_source_modulo, evaluate_audio_sample, evaluate_camera,
-    evaluate_caption_program, evaluate_visual_program, frame_sample_time, sample_time,
-    transition_progress,
+    crossfade_progress, euclidean_source_modulo, evaluate_adjustments, evaluate_audio_sample,
+    evaluate_camera, evaluate_caption_program, evaluate_visual_program, frame_sample_time,
+    sample_time, transition_progress,
 };
 
 const MAX_SAFE_JSON_INTEGER: i64 = 9_007_199_254_740_991;
@@ -1690,6 +1690,9 @@ pub struct CompiledVisualClip {
     exact_start: RationalTime,
     source: u32,
     layer: CompiledVisualLayer,
+    /// The sources of the layer's effect templates, in order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    effects: Vec<u32>,
 }
 
 impl CompiledVisualClip {
@@ -1826,18 +1829,32 @@ impl CompiledVisualProgram {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum CompiledAdjustmentEffect {
-    ColorGrade { temperature: f64 },
-    Extension { call: CompiledKernelCall },
+    ColorGrade {
+        temperature: f64,
+    },
+    Extension {
+        call: CompiledKernelCall,
+    },
+    /// A Motion template over the adjustment, the source at this index of the catalog.
+    Motion {
+        source: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledAdjustmentClip {
+    #[serde(skip)]
+    id: String,
     range: FrameRange,
     effect: CompiledAdjustmentEffect,
 }
 
 impl CompiledAdjustmentClip {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
     pub const fn range(&self) -> FrameRange {
         self.range
     }
@@ -2557,13 +2574,14 @@ impl CompiledRender {
             composition_time,
             &mut resources,
         )?;
-        let adjustments = self
-            .adjustments
-            .clips
-            .iter()
-            .filter(|effect| effect.range.contains(frame.index()))
-            .cloned()
-            .collect();
+        let adjustments = evaluate_adjustments(
+            &self.adjustments,
+            &self.sources,
+            &self.resources,
+            frame.index(),
+            composition_time,
+            &mut resources,
+        )?;
         let captions = evaluate_caption_program(
             &self.captions,
             &self.sources,
@@ -2766,6 +2784,8 @@ pub struct EvaluatedVisualLayer {
     blend: CompiledBlendMode,
     mask: Option<EvaluatedVisualMask>,
     filters: Vec<CompiledKernelCall>,
+    /// The layer's effect templates at this frame, applied in order after the filters.
+    effects: Vec<EvaluatedSourceRef>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2795,6 +2815,26 @@ impl EvaluatedVisualLayer {
             blend: CompiledBlendMode::Normal,
             mask: None,
             filters: Vec::new(),
+            effects: Vec::new(),
+        }
+    }
+
+    /// The layer as its first effect reads it: before its opacity and blend.
+    pub(crate) fn effect_source(&self) -> Self {
+        Self {
+            opacity: 1.0,
+            blend: CompiledBlendMode::Normal,
+            effects: Vec::new(),
+            ..self.clone()
+        }
+    }
+
+    /// The canvas its last effect lies on, composited with the layer's opacity and blend.
+    pub(crate) fn effect_canvas(&self) -> Self {
+        Self {
+            opacity: self.opacity,
+            blend: self.blend,
+            ..Self::canvas()
         }
     }
 
@@ -2831,6 +2871,10 @@ impl EvaluatedVisualLayer {
 
     pub fn filters(&self) -> &[CompiledKernelCall] {
         &self.filters
+    }
+
+    pub fn effects(&self) -> &[EvaluatedSourceRef] {
+        &self.effects
     }
 }
 
@@ -3130,9 +3174,31 @@ pub struct EvaluatedRenderFrame {
     sample_time: SampleTime,
     camera: Option<EvaluatedCamera>,
     visual: Vec<EvaluatedVisualOperation>,
-    adjustments: Vec<CompiledAdjustmentClip>,
+    adjustments: Vec<EvaluatedAdjustment>,
     captions: Vec<EvaluatedCaption>,
     resources: Vec<EvaluatedResourceRef>,
+}
+
+/// An adjustment active at this frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvaluatedAdjustment {
+    clip: CompiledAdjustmentClip,
+    /// The Motion template's source at this frame, for a Motion adjustment.
+    template: Option<EvaluatedSourceRef>,
+}
+
+impl EvaluatedAdjustment {
+    pub fn id(&self) -> &str {
+        self.clip.id()
+    }
+
+    pub const fn effect(&self) -> &CompiledAdjustmentEffect {
+        self.clip.effect()
+    }
+
+    pub const fn template(&self) -> Option<&EvaluatedSourceRef> {
+        self.template.as_ref()
+    }
 }
 
 impl EvaluatedRenderFrame {
@@ -3156,7 +3222,7 @@ impl EvaluatedRenderFrame {
         &self.visual
     }
 
-    pub fn adjustments(&self) -> &[CompiledAdjustmentClip] {
+    pub fn adjustments(&self) -> &[EvaluatedAdjustment] {
         &self.adjustments
     }
 
@@ -3650,22 +3716,12 @@ fn collect_document_requirements(
                             (Some(&source.resource), Some(ResourceKind::Image), "image")
                         }
                         VisualSource::Motion(source) => {
-                            resources.push(ResourceUse {
-                                role: format!("visual/{track_index}/{item_index}/motion-component"),
-                                path: format!("{item_path}/source/component"),
-                                resource_id: source.component.clone(),
-                                expected_kind: Some(ResourceKind::MotionArtifact),
-                            });
-                            for (name, resource_id) in &source.resources {
-                                resources.push(ResourceUse {
-                                    role: format!(
-                                        "visual/{track_index}/{item_index}/motion-resource/{name}"
-                                    ),
-                                    path: format!("{item_path}/source/resources/{name}"),
-                                    resource_id: resource_id.clone(),
-                                    expected_kind: None,
-                                });
-                            }
+                            push_motion_uses(
+                                &mut resources,
+                                &format!("visual/{track_index}/{item_index}"),
+                                &format!("{item_path}/source"),
+                                source,
+                            );
                             (None, None, "motion")
                         }
                         VisualSource::Solid(_) => (None, None, "solid"),
@@ -3686,6 +3742,14 @@ fn collect_document_requirements(
                             parameters: filter.parameters.clone(),
                         });
                     }
+                    for (effect_index, effect) in clip.layer.effects.iter().enumerate() {
+                        push_motion_uses(
+                            &mut resources,
+                            &format!("visual/{track_index}/{item_index}/effect/{effect_index}"),
+                            &format!("{item_path}/layer/effects/{effect_index}"),
+                            effect,
+                        );
+                    }
                 }
                 VisualItem::Transition(transition) => match &transition.kernel {
                     TransitionKernel::Extension(extension) => {
@@ -3696,24 +3760,12 @@ fn collect_document_requirements(
                             parameters: extension.parameters.clone(),
                         });
                     }
-                    TransitionKernel::Motion(source) => {
-                        resources.push(ResourceUse {
-                            role: format!("visual/{track_index}/{item_index}/motion-component"),
-                            path: format!("{item_path}/kernel/motion/component"),
-                            resource_id: source.component.clone(),
-                            expected_kind: Some(ResourceKind::MotionArtifact),
-                        });
-                        for (name, resource_id) in &source.resources {
-                            resources.push(ResourceUse {
-                                role: format!(
-                                    "visual/{track_index}/{item_index}/motion-resource/{name}"
-                                ),
-                                path: format!("{item_path}/kernel/motion/resources/{name}"),
-                                resource_id: resource_id.clone(),
-                                expected_kind: None,
-                            });
-                        }
-                    }
+                    TransitionKernel::Motion(source) => push_motion_uses(
+                        &mut resources,
+                        &format!("visual/{track_index}/{item_index}"),
+                        &format!("{item_path}/kernel/motion"),
+                        source,
+                    ),
                     TransitionKernel::Builtin { .. } => {}
                 },
                 VisualItem::Gap(_) => {}
@@ -3745,35 +3797,32 @@ fn collect_document_requirements(
     }
 
     for (effect_index, effect) in document.adjustments.iter().enumerate() {
-        if let AdjustmentEffect::Extension(extension) = &effect.effect {
-            kernels.push(KernelRequirement {
+        match &effect.effect {
+            AdjustmentEffect::Extension(extension) => kernels.push(KernelRequirement {
                 role: format!("/document/adjustments/{effect_index}/effect"),
                 kind: extension.kind.as_str().to_owned(),
                 domain: CompiledKernelDomain::AdjustmentEffect,
                 parameters: extension.parameters.clone(),
-            });
+            }),
+            AdjustmentEffect::Motion(template) => push_motion_uses(
+                &mut resources,
+                &format!("adjustment/{effect_index}"),
+                &format!("/document/adjustments/{effect_index}/effect/motion"),
+                template,
+            ),
+            AdjustmentEffect::ColorGrade(_) => {}
         }
     }
 
     for (track_index, track) in document.captions.tracks.iter().enumerate() {
         for (item_index, item) in track.items.iter().enumerate() {
             if let CaptionItem::Motion(caption) = item {
-                let path =
-                    format!("/document/captions/tracks/{track_index}/items/{item_index}/source");
-                resources.push(ResourceUse {
-                    role: format!("caption/{track_index}/{item_index}/motion-component"),
-                    path: format!("{path}/component"),
-                    resource_id: caption.source.component.clone(),
-                    expected_kind: Some(ResourceKind::MotionArtifact),
-                });
-                for (name, resource_id) in &caption.source.resources {
-                    resources.push(ResourceUse {
-                        role: format!("caption/{track_index}/{item_index}/motion-resource/{name}"),
-                        path: format!("{path}/resources/{name}"),
-                        resource_id: resource_id.clone(),
-                        expected_kind: None,
-                    });
-                }
+                push_motion_uses(
+                    &mut resources,
+                    &format!("caption/{track_index}/{item_index}"),
+                    &format!("/document/captions/tracks/{track_index}/items/{item_index}/source"),
+                    &caption.source,
+                );
             }
             if let CaptionItem::Clip(caption) = item {
                 let item_path =
@@ -3789,6 +3838,29 @@ fn collect_document_requirements(
     }
 
     (resources, kernels)
+}
+
+/// The artifact and resource bindings of a Motion template placed at `path`.
+fn push_motion_uses(
+    resources: &mut Vec<ResourceUse>,
+    role: &str,
+    path: &str,
+    template: &valle_timeline::internal::MotionInstance,
+) {
+    resources.push(ResourceUse {
+        role: format!("{role}/motion-component"),
+        path: format!("{path}/component"),
+        resource_id: template.component.clone(),
+        expected_kind: Some(ResourceKind::MotionArtifact),
+    });
+    for (name, resource_id) in &template.resources {
+        resources.push(ResourceUse {
+            role: format!("{role}/motion-resource/{name}"),
+            path: format!("{path}/resources/{name}"),
+            resource_id: resource_id.clone(),
+            expected_kind: None,
+        });
+    }
 }
 
 /// Exact logical resource roots referenced by the canonical document. Fixed

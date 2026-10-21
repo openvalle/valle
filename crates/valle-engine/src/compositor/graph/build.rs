@@ -5,7 +5,7 @@ use valle_draw::requirements::HostFrame;
 
 use crate::{
     prepare::{
-        PreparedEffect, PreparedEffectKernel, PreparedFrame, PreparedLayer,
+        PreparedAdjustment, PreparedEffect, PreparedEffectKernel, PreparedFrame, PreparedLayer,
         PreparedMotionTransition, PreparedProgram, PreparedSource, PreparedTransition,
         PreparedVisualItem, ProgramId,
     },
@@ -135,8 +135,13 @@ impl<'a> Builder<'a> {
                 }
             };
         }
-        for effect in &self.frame.adjustments {
-            current = self.adjustment_effect(effect, current)?;
+        for adjustment in &self.frame.adjustments {
+            current = match adjustment {
+                PreparedAdjustment::Effect(effect) => self.adjustment_effect(effect, current)?,
+                PreparedAdjustment::Motion(template) => {
+                    self.motion_adjustment(template, current)?
+                }
+            };
         }
         for caption in &self.frame.captions {
             current = match caption {
@@ -199,7 +204,7 @@ impl<'a> Builder<'a> {
         layer: &PreparedLayer,
         backdrop: ResourceId,
         stage: PassStage,
-        frames: &[(HostFrame, FrameLayer)],
+        frames: &[(HostFrame, FramePicture)],
     ) -> Result<ResourceId, GraphBuildError> {
         let source = self.framed_layer_source(layer, backdrop, stage, frames)?;
         let output = self.composite_resource(format!("{}.composite", layer.semantic_path))?;
@@ -245,8 +250,20 @@ impl<'a> Builder<'a> {
         layer: &PreparedLayer,
         entry_composite: ResourceId,
         stage: PassStage,
-        frames: &[(HostFrame, FrameLayer)],
+        frames: &[(HostFrame, FramePicture)],
     ) -> Result<ResourceId, GraphBuildError> {
+        // An effect template reads the picture under it, drawn first, as its source.
+        let mut frames = frames.to_vec();
+        if let Some(source) = &layer.effect_source {
+            let picture = self.layer_source(source, entry_composite, stage)?;
+            frames.push((
+                HostFrame::Source,
+                FramePicture::Layer(FrameLayer {
+                    layer: picture,
+                    opacity: source.dynamic.opacity,
+                }),
+            ));
+        }
         let mut current = match &layer.source {
             PreparedSource::External {
                 handle, placement, ..
@@ -277,7 +294,7 @@ impl<'a> Builder<'a> {
                 output
             }
             PreparedSource::Program { program, .. } => {
-                self.program_layer(layer, *program, entry_composite, stage, frames)?
+                self.program_layer(layer, *program, entry_composite, stage, &frames)?
             }
         };
 
@@ -327,7 +344,7 @@ impl<'a> Builder<'a> {
         program_id: ProgramId,
         entry_composite: ResourceId,
         stage: PassStage,
-        frames: &[(HostFrame, FrameLayer)],
+        frames: &[(HostFrame, FramePicture)],
     ) -> Result<ResourceId, GraphBuildError> {
         let program = self.program(program_id, &layer.semantic_path)?.clone();
         if program.destination_uses.len() != program.requirements.destination_uses.len() {
@@ -336,17 +353,22 @@ impl<'a> Builder<'a> {
                 "prepared destination bindings do not match DrawRequirements",
             ));
         }
-        // The frames a transition hands its template, then a transparent one for every other
-        // frame the program reads.
+        // The frames its host hands the template, then a transparent one for every other frame
+        // the program reads.
         let mut frame_inputs = Vec::new();
         for frame in HostFrame::ALL {
-            let layer_frame = frames
-                .iter()
-                .find(|(key, _)| *key == frame)
-                .map(|(_, layer)| *layer);
-            if layer_frame.is_none() && !program.requirements.frames.contains(&frame) {
-                continue;
-            }
+            let layer_frame = match frames.iter().find(|(key, _)| *key == frame) {
+                Some((_, FramePicture::Composite(composite))) => {
+                    frame_inputs.push(FrameInput {
+                        frame,
+                        input: *composite,
+                    });
+                    continue;
+                }
+                Some((_, FramePicture::Layer(layer))) => Some(*layer),
+                None if program.requirements.frames.contains(&frame) => None,
+                None => continue,
+            };
             let path = format!("{}.frame.{}", layer.semantic_path, frame_name(frame));
             let output = self.push_resource(
                 &path,
@@ -435,10 +457,10 @@ impl<'a> Builder<'a> {
                 let layer = self.layer_source(clip, backdrop, PassStage::Visual)?;
                 frames.push((
                     frame,
-                    FrameLayer {
+                    FramePicture::Layer(FrameLayer {
                         layer,
                         opacity: clip.dynamic.opacity,
-                    },
+                    }),
                 ));
             }
         }
@@ -465,6 +487,34 @@ impl<'a> Builder<'a> {
                 progress: transition.progress,
                 from_opacity: transition.from.dynamic.opacity,
                 to_opacity: transition.to.dynamic.opacity,
+            },
+        )?;
+        self.link_spine(pass, OrderReason::VisualSpine);
+        Ok(output)
+    }
+
+    /// A Motion adjustment's template reads the composite under it as its source, then its
+    /// output replaces that composite.
+    fn motion_adjustment(
+        &mut self,
+        template: &PreparedLayer,
+        backdrop: ResourceId,
+    ) -> Result<ResourceId, GraphBuildError> {
+        let layer = self.framed_layer_source(
+            template,
+            backdrop,
+            PassStage::Visual,
+            &[(HostFrame::Source, FramePicture::Composite(backdrop))],
+        )?;
+        let output = self.composite_resource(format!("{}.composite", template.semantic_path))?;
+        let pass = self.add_pass(
+            format!("{}.composite", template.semantic_path),
+            PassStage::Visual,
+            LogicalPassKind::ReplaceComposite {
+                backdrop,
+                layer,
+                output,
+                opacity: template.dynamic.opacity,
             },
         )?;
         self.link_spine(pass, OrderReason::VisualSpine);
@@ -688,11 +738,21 @@ impl<'a> Builder<'a> {
     }
 }
 
+/// What a host frame pictures for the program that reads it.
+#[derive(Debug, Clone, Copy)]
+enum FramePicture {
+    /// A layer alone over transparent pixels, at its opacity.
+    Layer(FrameLayer),
+    /// The composite under an adjustment, as it is.
+    Composite(ResourceId),
+}
+
 /// The semantic-path segment naming a host frame.
 pub(super) const fn frame_name(frame: HostFrame) -> &'static str {
     match frame {
         HostFrame::From => "from",
         HostFrame::To => "to",
+        HostFrame::Source => "source",
     }
 }
 

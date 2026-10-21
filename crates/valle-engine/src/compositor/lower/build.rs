@@ -374,7 +374,8 @@ fn validate_dynamic_projection(
                 )?;
             }
             LogicalPassKind::CompositeLayer { opacity, .. }
-            | LogicalPassKind::Blend { opacity, .. } => {
+            | LogicalPassKind::Blend { opacity, .. }
+            | LogicalPassKind::ReplaceComposite { opacity, .. } => {
                 let owner = pass
                     .semantic_path
                     .strip_suffix(".composite")
@@ -753,6 +754,19 @@ fn lower_passes(
                     output: plan_resource_id(*output)?,
                     effect: lower_effect(effect),
                 },
+            },
+            // The template already read the composite it replaces; only its picture is drawn.
+            LogicalPassKind::ReplaceComposite {
+                layer,
+                output,
+                opacity,
+                ..
+            } => ExecutionPassKind::FrameRegion {
+                layer: Some(PlanFrameLayer {
+                    layer: plan_resource_id(*layer)?,
+                    opacity: *opacity,
+                }),
+                output: plan_resource_id(*output)?,
             },
             LogicalPassKind::Caption {
                 backdrop,

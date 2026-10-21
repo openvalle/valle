@@ -302,6 +302,10 @@ pub struct VisualLayerWire {
     #[serde(deserialize_with = "required_option")]
     pub mask: Option<LayerMaskWire>,
     pub filters: Vec<VisualFilterWire>,
+    /// Templates that declare `effect()`, applied in order after the filters and before the
+    /// opacity and blend.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<MotionInstanceWire>,
     pub blend: BlendModeWire,
 }
 
@@ -539,6 +543,16 @@ pub struct TimedAdjustmentWire {
 pub enum AdjustmentEffectWire {
     ColorGrade(ColorGradeEffectWire),
     Extension(AdjustmentEffectExtensionWire),
+    Motion(MotionAdjustmentEffectWire),
+}
+
+/// An adjustment drawn by a Motion template that declares `effect()`: it reads the composed
+/// picture under it as `input://source` and replaces it.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MotionAdjustmentEffectWire {
+    pub motion: MotionInstanceWire,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

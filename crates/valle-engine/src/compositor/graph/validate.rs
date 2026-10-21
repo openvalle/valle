@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
+use valle_draw::requirements::HostFrame;
 
 use crate::{
     compositor::reference::{PremulRgba32, decode_author_srgb},
@@ -405,7 +406,8 @@ fn validate_pass_contracts(graph: &RenderGraph) -> Result<(), GraphValidationErr
             LogicalPassKind::OutputTransform { .. } => pass.stage == PassStage::Output,
             LogicalPassKind::ClearComposite { .. }
             | LogicalPassKind::Transition { .. }
-            | LogicalPassKind::AdjustmentEffect { .. } => pass.stage == PassStage::Visual,
+            | LogicalPassKind::AdjustmentEffect { .. }
+            | LogicalPassKind::ReplaceComposite { .. } => pass.stage == PassStage::Visual,
             _ => matches!(pass.stage, PassStage::Visual | PassStage::Caption),
         };
         if !valid_stage {
@@ -498,7 +500,12 @@ fn validate_pass_contracts(graph: &RenderGraph) -> Result<(), GraphValidationErr
                     })?;
                 }
                 for frame in frame_inputs {
-                    expect_frame(graph, pass.id, frame.input)?;
+                    expect_resource(graph, pass.id, frame.input, "host frame", |kind| {
+                        matches!(
+                            kind,
+                            GraphResourceKind::Frame | GraphResourceKind::Composite { .. }
+                        )
+                    })?;
                 }
                 expect_layer_role(graph, pass.id, *output, LayerRole::ProgramSource)?;
             }
@@ -574,6 +581,12 @@ fn validate_pass_contracts(graph: &RenderGraph) -> Result<(), GraphValidationErr
                 ..
             }
             | LogicalPassKind::Blend {
+                backdrop,
+                layer,
+                output,
+                ..
+            }
+            | LogicalPassKind::ReplaceComposite {
                 backdrop,
                 layer,
                 output,
@@ -1019,8 +1032,10 @@ fn validate_program_destinations(
     Ok(())
 }
 
-/// A Draw reads one frame per host frame, in order: each its program samples, plus each clip a
-/// transition hands its template. A frame that pictures no clip is one the program samples.
+/// A Draw reads one frame per host frame, in order: each its program samples, plus each picture
+/// its host hands the template. A frame that pictures nothing is one the program samples; an
+/// adjustment's template reads the composite under it as its source, checked with the pass that
+/// replaces that composite.
 fn validate_program_frames(
     graph: &RenderGraph,
     writers: &BTreeMap<ResourceId, PassId>,
@@ -1042,6 +1057,18 @@ fn validate_program_frames(
     }
     for input in inputs {
         let expected_path = format!("{owner}.frame.{}", frame_name(input.frame));
+        if matches!(
+            graph.resources[input.input.index()].kind,
+            GraphResourceKind::Composite { .. }
+        ) {
+            if input.frame != HostFrame::Source {
+                return Err(invalid(
+                    &expected_path,
+                    "only an adjustment's source frame reads a composite",
+                ));
+            }
+            continue;
+        }
         let writer = writers
             .get(&input.input)
             .map(|writer| &graph.passes[writer.index()])
@@ -1108,6 +1135,8 @@ struct LayerSlots {
     /// The clips the layer's program reads as host frames, each with its opacity slot. Their
     /// slots precede the layer's own.
     frames: Vec<(LayerSlots, DynamicBindingId)>,
+    /// The composite the layer's program reads as its source frame, under an adjustment.
+    composite_frame: Option<ResourceId>,
     source_lengths: Vec<(DynamicBindingId, String)>,
     transform: DynamicBindingId,
     bounds: DynamicBindingId,
@@ -1155,7 +1184,31 @@ fn validate_dynamic_contracts(graph: &RenderGraph) -> Result<(), GraphValidation
                         "layer source slots do not match their composite owner",
                     ));
                 }
-                admit_layer_slots(&slots, *opacity, *backdrop, &mut next)?;
+                admit_layer_slots(&slots, *opacity, *backdrop, None, &mut next)?;
+            }
+            LogicalPassKind::ReplaceComposite {
+                backdrop,
+                layer,
+                opacity,
+                ..
+            } => {
+                let owner = pass
+                    .semantic_path
+                    .strip_suffix(".composite")
+                    .ok_or_else(|| {
+                        invalid(
+                            &pass.semantic_path,
+                            "composite replacement path must end in .composite",
+                        )
+                    })?;
+                let slots = trace_layer_slots(graph, &writers, *layer, &mut visited_layer_passes)?;
+                if slots.owner != owner {
+                    return Err(invalid(
+                        &pass.semantic_path,
+                        "template slots do not match their adjustment owner",
+                    ));
+                }
+                admit_layer_slots(&slots, *opacity, *backdrop, Some(*backdrop), &mut next)?;
             }
             LogicalPassKind::Transition {
                 backdrop,
@@ -1184,7 +1237,7 @@ fn validate_dynamic_contracts(graph: &RenderGraph) -> Result<(), GraphValidation
                         "transition from-layer semantic owner is not canonical",
                     ));
                 }
-                admit_layer_slots(&from_slots, *from_opacity, *backdrop, &mut next)?;
+                admit_layer_slots(&from_slots, *from_opacity, *backdrop, None, &mut next)?;
                 let to_slots = trace_layer_slots(graph, &writers, *to, &mut visited_layer_passes)?;
                 if to_slots.owner != format!("{owner}.to") {
                     return Err(invalid(
@@ -1192,7 +1245,7 @@ fn validate_dynamic_contracts(graph: &RenderGraph) -> Result<(), GraphValidation
                         "transition to-layer semantic owner is not canonical",
                     ));
                 }
-                admit_layer_slots(&to_slots, *to_opacity, *backdrop, &mut next)?;
+                admit_layer_slots(&to_slots, *to_opacity, *backdrop, None, &mut next)?;
             }
             LogicalPassKind::Caption {
                 transform,
@@ -1295,6 +1348,7 @@ fn trace_layer_slots(
             Ok(LayerSlots {
                 owner: owner.to_owned(),
                 frames: Vec::new(),
+                composite_frame: None,
                 source_lengths: match placement.backdrop {
                     Some(PreparedExternalBackdrop::Blur {
                         sigma_device_px, ..
@@ -1341,7 +1395,15 @@ fn trace_layer_slots(
                 ));
             }
             let mut frames = Vec::new();
+            let mut composite_frame = None;
             for input in frame_inputs {
+                if matches!(
+                    graph.resources[input.input.index()].kind,
+                    GraphResourceKind::Composite { .. }
+                ) {
+                    composite_frame = Some(input.input);
+                    continue;
+                }
                 let writer = writers.get(&input.input).copied().ok_or_else(|| {
                     invalid(&pass.semantic_path, "host frame input has no writer")
                 })?;
@@ -1389,6 +1451,7 @@ fn trace_layer_slots(
             Ok(LayerSlots {
                 owner: owner.to_owned(),
                 frames,
+                composite_frame,
                 source_lengths: Vec::new(),
                 transform: *transform,
                 bounds: layer_bounds_binding(graph, resource)?,
@@ -1471,14 +1534,23 @@ fn layer_bounds_binding(
     }
 }
 
+/// `source` is the composite the layer reads as its source frame: the backdrop an adjustment's
+/// template replaces, and nothing for any other layer.
 fn admit_layer_slots(
     slots: &LayerSlots,
     opacity: DynamicBindingId,
     expected_backdrop: ResourceId,
+    source: Option<ResourceId>,
     next: &mut u32,
 ) -> Result<(), GraphValidationError> {
+    if slots.composite_frame != source {
+        return Err(invalid(
+            &slots.owner,
+            "only an adjustment's template reads the composite it replaces as its source",
+        ));
+    }
     for (frame, opacity) in &slots.frames {
-        admit_layer_slots(frame, *opacity, expected_backdrop, next)?;
+        admit_layer_slots(frame, *opacity, expected_backdrop, None, next)?;
     }
     for (id, path) in &slots.source_lengths {
         expect_next_dynamic(*id, path, next)?;
@@ -1721,7 +1793,8 @@ fn validate_order_edges(graph: &RenderGraph) -> Result<(), GraphValidationError>
             LogicalPassKind::CompositeLayer { .. }
             | LogicalPassKind::Blend { .. }
             | LogicalPassKind::Transition { .. }
-            | LogicalPassKind::AdjustmentEffect { .. } => {
+            | LogicalPassKind::AdjustmentEffect { .. }
+            | LogicalPassKind::ReplaceComposite { .. } => {
                 Some(if pass.stage == PassStage::Caption {
                     OrderReason::CaptionTerminal
                 } else {

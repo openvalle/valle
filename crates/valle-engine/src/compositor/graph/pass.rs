@@ -61,7 +61,8 @@ pub struct BackdropToken {
     pub version: CompositeVersionId,
 }
 
-/// A host frame a Draw program reads, named as the program names it.
+/// A host frame a Draw program reads, named as the program names it: a `Frame` pass's picture,
+/// or for an adjustment's template, the composite under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrameInput {
@@ -155,6 +156,14 @@ pub enum LogicalPassKind {
         output: ResourceId,
         effect: PreparedEffect,
     },
+    /// An adjustment's Motion template replaces the composite it read as its source: the
+    /// template's layer, at its opacity, over transparent pixels.
+    ReplaceComposite {
+        backdrop: ResourceId,
+        layer: ResourceId,
+        output: ResourceId,
+        opacity: DynamicBindingId,
+    },
     Caption {
         backdrop: ResourceId,
         program: ProgramId,
@@ -186,7 +195,7 @@ impl LogicalPassKind {
                 capabilities
             }
             Self::Draw { .. } => vec![GraphCapability::DrawProgram],
-            Self::Frame { .. } => vec![GraphCapability::HostFrame],
+            Self::Frame { .. } | Self::ReplaceComposite { .. } => vec![GraphCapability::HostFrame],
             Self::Group { .. } => vec![GraphCapability::Group],
             Self::BackdropRead { .. } => vec![GraphCapability::BackdropRead],
             Self::Filter { .. } => vec![GraphCapability::Filter],
@@ -225,6 +234,9 @@ impl LogicalPassKind {
             }
             | Self::Blend {
                 backdrop, layer, ..
+            }
+            | Self::ReplaceComposite {
+                backdrop, layer, ..
             } => vec![*backdrop, *layer],
             Self::Transition {
                 backdrop, from, to, ..
@@ -256,6 +268,7 @@ impl LogicalPassKind {
             | Self::Blend { output, .. }
             | Self::Transition { output, .. }
             | Self::AdjustmentEffect { output, .. }
+            | Self::ReplaceComposite { output, .. }
             | Self::Caption { output, .. }
             | Self::OutputTransform { output, .. } => *output,
         }

@@ -433,13 +433,57 @@ like an image of that size. It holds the device pixels under the viewport: a
 preview or export that scales the canvas keeps the clip's full resolution, and a
 viewport edge between device pixels rounds to the nearest one, shifting the frame
 by at most half a pixel. Each frame a template reads takes one surface of that size
-against the frame memory limit. Only `transition()` templates read frames, and a
-frame cannot be a GeometryBatch atlas.
+against the frame memory limit. Only `transition()` templates read `input://from`
+and `input://to`, and a frame cannot be a GeometryBatch atlas.
 
 Outside a Timeline transition the frames are transparent: in `motion check`,
 `review` and `render`, in Studio's file preview, and when a Timeline places the
 template as an ordinary clip. As a clip it behaves like an overlay with
 `hold: "stretch"` and takes no `fit`, `trimStart`, `rate` or `end`.
+
+### Effect role
+
+Declare `effect()` to draw a Timeline effect: an entry of a visual clip's `effects`,
+or an adjustment clip of kind `"motion"` ([Timeline effects](timeline.md#effects)).
+Like a transition, the template stretches over its host, the clip or the adjustment:
+`ctx.host.progress` is exactly 0 on the host's first frame and exactly 1 on its last,
+and prop curves use seconds from the host's start. It lays out on the Timeline canvas.
+
+The template reads the picture it applies to as `input://source`, as a transition
+reads its frames: through `<Image src>` or a ShaderLayer/Transition input of kind
+`"color"`. On a clip, the source is the clip alone over transparent pixels, after its
+transform and before its opacity and blend, or the output of the clip's previous
+effect; the clip's opacity and blend apply to the last effect's output. On an
+adjustment, the source is everything composed under it. The template's output
+replaces the picture it read, so pixels it leaves empty are transparent:
+
+```tsx
+const invert = `
+uniform shader source;
+
+float4 valle_main(float2 uv) {
+  float4 color = sample_source(uv);
+  return float4(1.0 - color.rgb, color.a);
+}`;
+
+export const composition = { width: 1920, height: 1080, duration: 1, fps: 30 };
+export const role = effect();
+
+export default function Invert() {
+  const ctx = useTime();
+  return <Scene>
+    <ShaderLayer code={invert} inputs={{ source: "input://source" }}
+      style={{ width: ctx.viewport.width, height: ctx.viewport.height }} />
+  </Scene>;
+}
+```
+
+The source holds the device pixels under the viewport, like a transition frame, and
+takes one surface of that size against the frame memory limit. Only `effect()`
+templates read `input://source`. On a clip, a template that does not read it draws
+its own picture in place of the clip; an adjustment's template must read it. Outside
+a Timeline effect the source is transparent, and placed as an ordinary clip the
+template behaves like a transition template placed as a clip.
 
 ### Local modules
 

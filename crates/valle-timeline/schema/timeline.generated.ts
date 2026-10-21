@@ -16,10 +16,10 @@ export namespace TimelineSchema {
   export type InterpolationWire = ("step" | "linear");
   export type KaraokeModeWire = ("word" | "line");
   export type MediaEndBehaviorWire = ("error" | "hold" | "loop");
-  export type MotionTransitionKindWire = "motion";
+  export type MotionKindWire = "motion";
   export type RasterFitWire = ("contain" | "cover" | "fill" | "none");
   export type ScrollAxisWire = ("horizontal" | "vertical");
-  export type TimelineAdjustmentClipWire = ({ "duration": TimelineTimeWire; "start": TimelineTimeWire } & { "kind": "color-grade"; "temperature": number });
+  export type TimelineAdjustmentClipWire = ({ "duration": TimelineTimeWire; "start": TimelineTimeWire } & ({ "kind": "color-grade"; "temperature": number } | { "component": string; "kind": "motion"; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> }));
   export type TimelineAdjustmentTrackWire = { "clips": Array<TimelineAdjustmentClipWire> };
   export type TimelineAudioClipWire = { "duration": TimelineTimeWire; "end"?: (MediaEndBehaviorWire | null); "gain"?: (TimelineParamWire | null); "pan"?: (TimelineParamWire | null); "rate"?: (TimelineTimeWire | null); "src": string; "start": TimelineTimeWire; "trimStart"?: (TimelineTimeWire | null) };
   export type TimelineAudioTrackWire = { "clips": Array<TimelineAudioClipWire> };
@@ -32,6 +32,7 @@ export namespace TimelineSchema {
   export type TimelineCaptionShadowWire = { "blur"?: (number | null); "color": string; "offset": [number, number] };
   export type TimelineCaptionStyleWire = { "color"?: (string | null); "font": string; "fontSize"?: (number | null); "shadow"?: (TimelineCaptionShadowWire | null) };
   export type TimelineCaptionTrackWire = { "clips": Array<TimelineCaptionClipWire>; "layout"?: (TimelineCaptionLayoutWire | null); "presenter"?: (TimelineCaptionPresenterWire | null); "style": TimelineCaptionStyleWire };
+  export type TimelineClipEffectWire = { "component": string; "kind": MotionKindWire; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> };
   export type TimelineCurveWire = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire> };
   export type TimelineCurveWire2 = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire2> };
   export type TimelineCurveWire3 = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire3> };
@@ -51,8 +52,8 @@ export namespace TimelineSchema {
   export type TimelineTextRunWire = { "color"?: (string | null); "end"?: (TimelineTimeWire | null); "fontSize"?: (number | null); "start"?: (TimelineTimeWire | null); "text": string };
   export type TimelineTimeWire = number;
   export type TimelineTracksWire = { "adjustment"?: Array<TimelineAdjustmentTrackWire>; "audio"?: Array<TimelineAudioTrackWire>; "caption"?: Array<TimelineCaptionTrackWire>; "visual"?: Array<TimelineVisualTrackWire> };
-  export type TimelineTransitionWire = ({ "from": number; "to": number } & ({ "kind": TransitionKind; "params"?: Record<string, number> } | { "component": string; "kind": MotionTransitionKindWire; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> }));
-  export type TimelineVisualClipWire = ({ "anchor"?: ([number, number] | null); "blend"?: (BlendModeWire | null); "duration": TimelineTimeWire; "opacity"?: (TimelineParamWire | null); "position"?: (TimelineParamWire3 | null); "rotation"?: (TimelineParamWire | null); "scale"?: (TimelineParamWire3 | null); "size"?: (TimelineParamWire3 | null); "start": TimelineTimeWire } & ({ "end"?: (MediaEndBehaviorWire | null); "fit"?: (RasterFitWire | null); "gain"?: (TimelineParamWire | null); "kind": "video"; "rate"?: (TimelineTimeWire | null); "src": string; "trimStart"?: (TimelineTimeWire | null) } | { "fit"?: (RasterFitWire | null); "kind": "image"; "src": string } | { "component": string; "data"?: Record<string, JsonValue>; "end"?: (MediaEndBehaviorWire | null); "fit"?: (RasterFitWire | null); "kind": "motion"; "props"?: Record<string, TimelineParamWire2>; "rate"?: (TimelineTimeWire | null); "resources"?: Record<string, string>; "trimStart"?: (TimelineTimeWire | null) } | { "color": string; "kind": "solid" }));
+  export type TimelineTransitionWire = ({ "from": number; "to": number } & ({ "kind": TransitionKind; "params"?: Record<string, number> } | { "component": string; "kind": MotionKindWire; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> }));
+  export type TimelineVisualClipWire = ({ "anchor"?: ([number, number] | null); "blend"?: (BlendModeWire | null); "duration": TimelineTimeWire; "effects"?: Array<TimelineClipEffectWire>; "opacity"?: (TimelineParamWire | null); "position"?: (TimelineParamWire3 | null); "rotation"?: (TimelineParamWire | null); "scale"?: (TimelineParamWire3 | null); "size"?: (TimelineParamWire3 | null); "start": TimelineTimeWire } & ({ "end"?: (MediaEndBehaviorWire | null); "fit"?: (RasterFitWire | null); "gain"?: (TimelineParamWire | null); "kind": "video"; "rate"?: (TimelineTimeWire | null); "src": string; "trimStart"?: (TimelineTimeWire | null) } | { "fit"?: (RasterFitWire | null); "kind": "image"; "src": string } | { "component": string; "data"?: Record<string, JsonValue>; "end"?: (MediaEndBehaviorWire | null); "fit"?: (RasterFitWire | null); "kind": "motion"; "props"?: Record<string, TimelineParamWire2>; "rate"?: (TimelineTimeWire | null); "resources"?: Record<string, string>; "trimStart"?: (TimelineTimeWire | null) } | { "color": string; "kind": "solid" }));
   export type TimelineVisualTrackWire = { "clips": Array<TimelineVisualClipWire>; "transitions"?: Array<TimelineTransitionWire> };
   export type TransitionKind = ("fade" | "wipeLeft" | "wipeRight" | "circleOpen" | "simpleZoom" | "crossWarp" | "linearBlur" | "directionalWarp" | "dreamyZoom" | "ripple" | "flyEye" | "multiplyBlend" | "perlin");
 }
@@ -69,10 +70,10 @@ export namespace EditTimelineRequestSchema {
   export type InterpolationWire = ("step" | "linear");
   export type KaraokeModeWire = ("word" | "line");
   export type MediaEndBehaviorWire = ("error" | "hold" | "loop");
-  export type MotionTransitionKindWire = "motion";
+  export type MotionKindWire = "motion";
   export type RasterFitWire = ("contain" | "cover" | "fill" | "none");
   export type ScrollAxisWire = ("horizontal" | "vertical");
-  export type TimelineAdjustmentClipWire = ({ "duration": TimelineTimeWire; "start": TimelineTimeWire } & { "kind": "color-grade"; "temperature": number });
+  export type TimelineAdjustmentClipWire = ({ "duration": TimelineTimeWire; "start": TimelineTimeWire } & ({ "kind": "color-grade"; "temperature": number } | { "component": string; "kind": "motion"; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> }));
   export type TimelineAdjustmentTrackWire = { "clips": Array<TimelineAdjustmentClipWire> };
   export type TimelineAudioClipWire = { "duration": TimelineTimeWire; "end"?: (MediaEndBehaviorWire | null); "gain"?: (TimelineParamWire | null); "pan"?: (TimelineParamWire | null); "rate"?: (TimelineTimeWire | null); "src": string; "start": TimelineTimeWire; "trimStart"?: (TimelineTimeWire | null) };
   export type TimelineAudioTrackWire = { "clips": Array<TimelineAudioClipWire> };
@@ -85,6 +86,7 @@ export namespace EditTimelineRequestSchema {
   export type TimelineCaptionShadowWire = { "blur"?: (number | null); "color": string; "offset": [number, number] };
   export type TimelineCaptionStyleWire = { "color"?: (string | null); "font": string; "fontSize"?: (number | null); "shadow"?: (TimelineCaptionShadowWire | null) };
   export type TimelineCaptionTrackWire = { "clips": Array<TimelineCaptionClipWire>; "layout"?: (TimelineCaptionLayoutWire | null); "presenter"?: (TimelineCaptionPresenterWire | null); "style": TimelineCaptionStyleWire };
+  export type TimelineClipEffectWire = { "component": string; "kind": MotionKindWire; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> };
   export type TimelineCurveWire = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire> };
   export type TimelineCurveWire2 = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire2> };
   export type TimelineCurveWire3 = { "interpolation"?: (InterpolationWire | null); "keyframes": Array<TimelineKeyframeWire3> };
@@ -104,8 +106,8 @@ export namespace EditTimelineRequestSchema {
   export type TimelineTextRunWire = { "color"?: (string | null); "end"?: (TimelineTimeWire | null); "fontSize"?: (number | null); "start"?: (TimelineTimeWire | null); "text": string };
   export type TimelineTimeWire = number;
   export type TimelineTracksWire = { "adjustment"?: Array<TimelineAdjustmentTrackWire>; "audio"?: Array<TimelineAudioTrackWire>; "caption"?: Array<TimelineCaptionTrackWire>; "visual"?: Array<TimelineVisualTrackWire> };
-  export type TimelineTransitionWire = ({ "from": number; "to": number } & ({ "kind": TransitionKind; "params"?: Record<string, number> } | { "component": string; "kind": MotionTransitionKindWire; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> }));
-  export type TimelineVisualClipWire = ({ "anchor"?: ([number, number] | null); "blend"?: (BlendModeWire | null); "duration": TimelineTimeWire; "opacity"?: (TimelineParamWire | null); "position"?: (TimelineParamWire3 | null); "rotation"?: (TimelineParamWire | null); "scale"?: (TimelineParamWire3 | null); "size"?: (TimelineParamWire3 | null); "start": TimelineTimeWire } & ({ "end"?: (MediaEndBehaviorWire | null); "fit"?: (RasterFitWire | null); "gain"?: (TimelineParamWire | null); "kind": "video"; "rate"?: (TimelineTimeWire | null); "src": string; "trimStart"?: (TimelineTimeWire | null) } | { "fit"?: (RasterFitWire | null); "kind": "image"; "src": string } | { "component": string; "data"?: Record<string, JsonValue>; "end"?: (MediaEndBehaviorWire | null); "fit"?: (RasterFitWire | null); "kind": "motion"; "props"?: Record<string, TimelineParamWire2>; "rate"?: (TimelineTimeWire | null); "resources"?: Record<string, string>; "trimStart"?: (TimelineTimeWire | null) } | { "color": string; "kind": "solid" }));
+  export type TimelineTransitionWire = ({ "from": number; "to": number } & ({ "kind": TransitionKind; "params"?: Record<string, number> } | { "component": string; "kind": MotionKindWire; "props"?: Record<string, TimelineParamWire2>; "resources"?: Record<string, string> }));
+  export type TimelineVisualClipWire = ({ "anchor"?: ([number, number] | null); "blend"?: (BlendModeWire | null); "duration": TimelineTimeWire; "effects"?: Array<TimelineClipEffectWire>; "opacity"?: (TimelineParamWire | null); "position"?: (TimelineParamWire3 | null); "rotation"?: (TimelineParamWire | null); "scale"?: (TimelineParamWire3 | null); "size"?: (TimelineParamWire3 | null); "start": TimelineTimeWire } & ({ "end"?: (MediaEndBehaviorWire | null); "fit"?: (RasterFitWire | null); "gain"?: (TimelineParamWire | null); "kind": "video"; "rate"?: (TimelineTimeWire | null); "src": string; "trimStart"?: (TimelineTimeWire | null) } | { "fit"?: (RasterFitWire | null); "kind": "image"; "src": string } | { "component": string; "data"?: Record<string, JsonValue>; "end"?: (MediaEndBehaviorWire | null); "fit"?: (RasterFitWire | null); "kind": "motion"; "props"?: Record<string, TimelineParamWire2>; "rate"?: (TimelineTimeWire | null); "resources"?: Record<string, string>; "trimStart"?: (TimelineTimeWire | null) } | { "color": string; "kind": "solid" }));
   export type TimelineVisualTrackWire = { "clips": Array<TimelineVisualClipWire>; "transitions"?: Array<TimelineTransitionWire> };
   export type TimelineWire = { "canvas": TimelineCanvasWire; "resources"?: Record<string, string>; "tracks": TimelineTracksWire };
   export type TransitionKind = ("fade" | "wipeLeft" | "wipeRight" | "circleOpen" | "simpleZoom" | "crossWarp" | "linearBlur" | "directionalWarp" | "dreamyZoom" | "ripple" | "flyEye" | "multiplyBlend" | "perlin");

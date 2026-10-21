@@ -150,25 +150,29 @@ pub enum TextureKind {
     Frame,
 }
 
-/// A host frame: one clip of the Timeline transition that reads it, alone over transparent
-/// pixels, as it lies under the reading program's viewport. Its intrinsic size is the viewport.
+/// A host frame: a picture the Timeline renders for the template that reads it, over
+/// transparent pixels, as it lies under the reading program's viewport. Its intrinsic size is
+/// the viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum HostFrame {
-    /// `input://from`, the outgoing clip.
+    /// `input://from`, a transition's outgoing clip.
     From,
-    /// `input://to`, the incoming clip.
+    /// `input://to`, a transition's incoming clip.
     To,
+    /// `input://source`, the picture an effect applies to.
+    Source,
 }
 
 impl HostFrame {
-    pub const ALL: [Self; 2] = [Self::From, Self::To];
+    pub const ALL: [Self; 3] = [Self::From, Self::To, Self::Source];
 
     /// The source a program names the frame by.
     pub const fn source(self) -> &'static str {
         match self {
             Self::From => "input://from",
             Self::To => "input://to",
+            Self::Source => "input://source",
         }
     }
 

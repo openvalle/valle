@@ -2231,3 +2231,419 @@ export default function Reader() {
     let report = String::from_utf8_lossy(&output.stdout);
     assert!(report.contains("reads a clip"), "{report}");
 }
+
+/// Effect templates: one that draws its source unchanged, one that marks its corner over it,
+/// one that draws only the mark, one that fades the source in over its host, and the
+/// documented shader that inverts colors.
+const SAME: &str = r##"export const composition = { width: 48, height: 48, duration: 1, fps: 30 };
+export const role = effect();
+
+export default function Same() {
+  return <Scene className="relative h-full w-full">
+    <Image src="input://source" className="absolute inset-0 h-full w-full" />
+  </Scene>;
+}"##;
+const MARK: &str = r##"export const composition = { width: 64, height: 32, duration: 1, fps: 30 };
+export const role = effect();
+
+export default function Mark() {
+  return <Scene className="relative h-full w-full">
+    <Image src="input://source" className="absolute inset-0 h-full w-full" />
+    <View style={{ position: "absolute", left: 0, top: 0, width: 8, height: 8,
+      backgroundColor: "#2040ff" }} />
+  </Scene>;
+}"##;
+const PATCH: &str = r##"export const composition = { width: 64, height: 32, duration: 1, fps: 30 };
+export const role = effect();
+
+export default function Patch() {
+  return <Scene className="relative h-full w-full">
+    <View style={{ position: "absolute", left: 0, top: 0, width: 8, height: 8,
+      backgroundColor: "#2040ff" }} />
+  </Scene>;
+}"##;
+const FADE_IN: &str = r##"export const composition = { width: 64, height: 32, duration: 1, fps: 30 };
+export const role = effect();
+
+export default function FadeIn() {
+  const ctx = useTime();
+  return <Scene className="relative h-full w-full">
+    <Image src="input://source" className="absolute inset-0 h-full w-full"
+      style={{ opacity: ctx.host.progress }} />
+  </Scene>;
+}"##;
+const INVERT: &str = r##"const invert = `
+uniform shader source;
+
+float4 valle_main(float2 uv) {
+  float4 color = sample_source(uv);
+  return float4(1.0 - color.rgb, color.a);
+}`;
+export const composition = { width: 64, height: 32, duration: 1, fps: 30 };
+export const role = effect();
+
+export default function Invert() {
+  const ctx = useTime();
+  return <Scene>
+    <ShaderLayer code={invert} inputs={{ source: "input://source" }}
+      style={{ width: ctx.viewport.width, height: ctx.viewport.height }} />
+  </Scene>;
+}"##;
+const CARD: &str = r##"export const composition = { width: 64, height: 32, fps: 30, duration: 3 };
+export default function Card() {
+  return <Scene style={{ width: 64, height: 32 }}>
+    <View style={{ position: "absolute", left: 8, top: 6, width: 40, height: 20, borderRadius: 6,
+      backgroundImage: "linear-gradient(90deg in srgb, #ff2050, #2040ff)", opacity: 0.7 }} />
+  </Scene>;
+}"##;
+
+fn write_effects(dir: &Path) {
+    for (name, source) in [
+        ("same", SAME),
+        ("mark", MARK),
+        ("patch", PATCH),
+        ("fadein", FADE_IN),
+        ("invert", INVERT),
+        ("card", CARD),
+        ("mix", MIX),
+    ] {
+        std::fs::write(dir.join(format!("{name}.motion.tsx")), source).unwrap();
+    }
+}
+
+fn effect_timeline(visual: Value, adjustment: Option<Value>) -> Value {
+    let mut timeline = json!({
+        "canvas": {"width": 64, "height": 32, "fps": 30, "background": "#ffffff"},
+        "resources": {"same": "same.motion.tsx", "mark": "mark.motion.tsx",
+            "patch": "patch.motion.tsx", "fadein": "fadein.motion.tsx",
+            "invert": "invert.motion.tsx", "card": "card.motion.tsx", "mix": "mix.motion.tsx"},
+        "tracks": {"visual": visual}
+    });
+    if let Some(adjustment) = adjustment {
+        timeline["tracks"]["adjustment"] = adjustment;
+    }
+    timeline
+}
+
+fn render_frames(dir: &Path, name: &str, timeline: Value, frames: &[u32]) -> Vec<Vec<u8>> {
+    put(dir, &format!("{name}.json"), timeline);
+    let list = frames
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let pattern = format!("{name}-%d.png");
+    success(run(
+        dir,
+        &[
+            "timeline",
+            "render",
+            &format!("{name}.json"),
+            "--frames",
+            &list,
+            "-o",
+            &pattern,
+        ],
+    ));
+    frames
+        .iter()
+        .map(|frame| {
+            valle_media::codec::read_rgba_png(&dir.join(format!("{name}-{frame}.png")))
+                .unwrap()
+                .data
+        })
+        .collect()
+}
+
+fn worst(a: &[u8], b: &[u8]) -> u8 {
+    a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max().unwrap()
+}
+
+fn close(a: &[u8], b: &[u8]) -> bool {
+    a.iter().zip(b).all(|(a, b)| a.abs_diff(*b) <= 1)
+}
+
+#[test]
+fn motion_effects_replace_the_picture_they_read_as_their_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    write_effects(dir);
+    let effect = |component: &str| json!({"kind": "motion", "component": component});
+    // A moved, scaled, turned and translucent clip and a blended Motion clip over a backdrop.
+    let placed = |effects: &[Value]| {
+        let mut tracks = json!([
+            {"clips": [{"kind": "solid", "color": "#ffd000", "start": 0, "duration": 2}]},
+            {"clips": [{"kind": "solid", "color": "#2040ff", "start": 0, "duration": 2,
+                "position": [0.35, 0.5], "scale": [0.5, 0.75], "rotation": 12, "opacity": 0.6}]},
+            {"clips": [{"kind": "motion", "component": "card", "start": 0, "duration": 2,
+                "opacity": 0.8, "blend": "multiply"}]}
+        ]);
+        if !effects.is_empty() {
+            for track in tracks.as_array_mut().unwrap().iter_mut().skip(1) {
+                track["clips"][0]["effects"] = json!(effects);
+            }
+        }
+        tracks
+    };
+    let frames = [0, 20, 59];
+    let plain = render_frames(dir, "plain", effect_timeline(placed(&[]), None), &frames);
+    for (name, effects) in [
+        ("same", vec![effect("same")]),
+        ("twice", vec![effect("same"), effect("same")]),
+    ] {
+        let rendered = render_frames(dir, name, effect_timeline(placed(&effects), None), &frames);
+        for ((frame, plain), rendered) in frames.iter().zip(&plain).zip(&rendered) {
+            let worst = worst(plain, rendered);
+            assert!(worst <= 1, "{name} frame {frame} differs by {worst}");
+        }
+    }
+    // Effects apply in order, and one that does not read its source draws in place of the clip.
+    let solid = |name: &str, color: &str, effects: &[&str]| {
+        let mut clip = json!({"kind": "solid", "color": color, "start": 0, "duration": 2});
+        if !effects.is_empty() {
+            clip["effects"] = json!(effects.iter().map(|name| effect(name)).collect::<Vec<_>>());
+        }
+        render_frames(
+            dir,
+            name,
+            effect_timeline(json!([{ "clips": [clip] }]), None),
+            &[20],
+        );
+        let file = format!("{name}-20.png");
+        [pixel(dir, &file, 2, 2), pixel(dir, &file, 40, 20)]
+    };
+    let [_, inverted_red] = solid("inverted-red", "#ff2050", &["invert"]);
+    let [inverted_blue, _] = solid("inverted-blue", "#2040ff", &["invert"]);
+    assert!(inverted_red[0] < 0x40, "{inverted_red:?}");
+    let [corner, inside] = solid("mark-invert", "#ff2050", &["mark", "invert"]);
+    assert!(
+        close(&corner, &inverted_blue) && close(&inside, &inverted_red),
+        "{corner:?} {inside:?}"
+    );
+    let [corner, inside] = solid("invert-mark", "#ff2050", &["invert", "mark"]);
+    assert!(
+        close(&corner, &[0x20, 0x40, 0xff]) && close(&inside, &inverted_red),
+        "{corner:?} {inside:?}"
+    );
+    let [corner, inside] = solid("invert-patch", "#ff2050", &["invert", "patch"]);
+    assert!(
+        close(&corner, &[0x20, 0x40, 0xff]) && close(&inside, &[0xff, 0xff, 0xff]),
+        "{corner:?} {inside:?}"
+    );
+    // A template stretches over its clip: progress is 0 on its first frame and 1 on its last.
+    let clip = json!({"kind": "solid", "color": "#ff2050", "start": 0.5, "duration": 1,
+        "effects": [effect("fadein")]});
+    render_frames(
+        dir,
+        "fadein",
+        effect_timeline(json!([{ "clips": [clip] }]), None),
+        &[15, 44],
+    );
+    assert_eq!(pixel(dir, "fadein-15.png", 32, 16), vec![0xff, 0xff, 0xff]);
+    let last = pixel(dir, "fadein-44.png", 32, 16);
+    assert!(close(&last, &[0xff, 0x20, 0x50]), "{last:?}");
+    // A transition's endpoints carry their effects.
+    let clips = json!([
+        {"kind": "solid", "color": "#ff2050", "start": 0, "duration": 1.5,
+            "effects": [effect("invert")]},
+        {"kind": "solid", "color": "#22cc88", "start": 0.5, "duration": 1.5}
+    ]);
+    for (name, kernel) in [
+        ("fade", json!({"kind": "fade"})),
+        ("mix", json!({"kind": "motion", "component": "mix"})),
+    ] {
+        let mut transition = json!({"from": 0, "to": 1});
+        transition
+            .as_object_mut()
+            .unwrap()
+            .extend(kernel.as_object().unwrap().clone());
+        let name = format!("endpoint-{name}");
+        render_frames(
+            dir,
+            &name,
+            effect_timeline(
+                json!([{ "clips": clips.clone(), "transitions": [transition] }]),
+                None,
+            ),
+            &[15],
+        );
+        let inside = pixel(dir, &format!("{name}-15.png"), 40, 20);
+        assert!(close(&inside, &inverted_red), "{name}: {inside:?}");
+    }
+    // An adjustment reads everything composed under it, for its interval only.
+    let adjust = |component: &str| {
+        json!([{"clips": [{"kind": "motion", "component": component,
+            "start": 0.5, "duration": 1}]}])
+    };
+    let adjusted = render_frames(
+        dir,
+        "adjust-same",
+        effect_timeline(placed(&[]), Some(adjust("same"))),
+        &frames,
+    );
+    for ((frame, plain), adjusted) in frames.iter().zip(&plain).zip(&adjusted) {
+        let worst = worst(plain, adjusted);
+        assert!(worst <= 1, "adjust-same frame {frame} differs by {worst}");
+    }
+    let red =
+        json!([{"clips": [{"kind": "solid", "color": "#ff2050", "start": 0, "duration": 2}]}]);
+    render_frames(
+        dir,
+        "adjust-invert",
+        effect_timeline(red, Some(adjust("invert"))),
+        &[0, 20],
+    );
+    assert_eq!(
+        pixel(dir, "adjust-invert-0.png", 40, 20),
+        vec![0xff, 0x20, 0x50]
+    );
+    let inside = pixel(dir, "adjust-invert-20.png", 40, 20);
+    assert!(close(&inside, &inverted_red), "{inside:?}");
+    // Adjustments on different tracks stack in track order, a Motion adjustment among them.
+    let gray =
+        json!([{"clips": [{"kind": "solid", "color": "#808080", "start": 0, "duration": 2}]}]);
+    let grade = json!({"clips": [{"kind": "color-grade", "temperature": 0.8,
+        "start": 0, "duration": 2}]});
+    let once = render_frames(
+        dir,
+        "grade-once",
+        effect_timeline(gray.clone(), Some(json!([grade.clone()]))),
+        &[20],
+    );
+    let twice = render_frames(
+        dir,
+        "grade-twice",
+        effect_timeline(gray.clone(), Some(json!([grade.clone(), grade.clone()]))),
+        &[20],
+    );
+    assert!(worst(&once[0], &twice[0]) > 2);
+    let inverted = render_frames(
+        dir,
+        "grade-invert",
+        effect_timeline(gray, Some(json!([grade, adjust("invert")[0].clone()]))),
+        &[20],
+    );
+    assert!(worst(&once[0], &inverted[0]) > 2);
+}
+
+#[test]
+fn effect_templates_read_nothing_outside_an_effect() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    write_effects(dir);
+    // Alone, the source is transparent.
+    for input in ["same.motion.tsx", "invert.motion.tsx"] {
+        let output = format!("{input}.png");
+        success(run(
+            dir,
+            &["motion", "render", input, "--frame", "15", "-o", &output],
+        ));
+        let pixels = valle_media::codec::read_rgba_png(&dir.join(&output))
+            .unwrap()
+            .data;
+        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 0), "{input}");
+    }
+    // As an ordinary clip it lays out like an overlay, over a transparent source.
+    let solid = json!({"kind": "solid", "color": "#22cc88", "start": 0, "duration": 2});
+    let clip = |extra: Value| {
+        let mut clip = json!({"kind": "motion", "component": "same", "start": 0, "duration": 2});
+        clip.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        effect_timeline(json!([{ "clips": [solid] }, { "clips": [clip] }]), None)
+    };
+    put(dir, "clip.json", clip(json!({})));
+    success(run(
+        dir,
+        &[
+            "timeline",
+            "render",
+            "clip.json",
+            "--frame",
+            "20",
+            "-o",
+            "clip.png",
+        ],
+    ));
+    assert_eq!(pixel(dir, "clip.png", 32, 16), vec![0x22, 0xcc, 0x88]);
+    let error = |name: &str, timeline: Value| -> String {
+        put(dir, name, timeline);
+        let output = run(dir, &["timeline", "check", name]);
+        assert!(!output.status.success(), "{name}");
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        report["error"]["message"].as_str().unwrap().to_owned()
+    };
+    let message = error("fit.json", clip(json!({"fit": "cover"})));
+    assert!(message.contains("effect does not admit `fit`"), "{message}");
+    // Clip effects and Motion adjustments draw through effect() templates.
+    let mut card = solid.clone();
+    card["effects"] = json!([{"kind": "motion", "component": "card"}]);
+    let message = error(
+        "effect.json",
+        effect_timeline(json!([{ "clips": [card] }]), None),
+    );
+    assert!(message.contains("must declare effect()"), "{message}");
+    let message = error(
+        "adjustment.json",
+        effect_timeline(
+            json!([{ "clips": [solid] }]),
+            Some(json!([{"clips": [{"kind": "motion", "component": "card",
+                "start": 0, "duration": 2}]}])),
+        ),
+    );
+    assert!(message.contains("must declare effect()"), "{message}");
+    // An adjustment's template draws from the composite it replaces.
+    put(
+        dir,
+        "patch.json",
+        effect_timeline(
+            json!([{ "clips": [solid] }]),
+            Some(json!([{"clips": [{"kind": "motion", "component": "patch",
+                "start": 0, "duration": 2}]}])),
+        ),
+    );
+    let output = run(
+        dir,
+        &[
+            "timeline",
+            "render",
+            "patch.json",
+            "--frame",
+            "20",
+            "-o",
+            "patch.png",
+        ],
+    );
+    assert!(!output.status.success());
+    let report = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        report.contains("a Motion adjustment's template must read input://source"),
+        "{report}"
+    );
+    // Only an effect() template reads input://source.
+    for (name, role) in [
+        ("clip", ""),
+        ("transition", "export const role = transition();\n"),
+    ] {
+        let input = format!("{name}-reader.motion.tsx");
+        std::fs::write(
+            dir.join(&input),
+            format!(
+                r##"export const composition = {{ width: 64, height: 32, fps: 30, duration: 1 }};
+{role}export default function Reader() {{
+  return <Scene className="relative h-full w-full">
+    <Image src="input://source" className="absolute inset-0 h-full w-full" />
+  </Scene>;
+}}"##
+            ),
+        )
+        .unwrap();
+        let output = run(dir, &["motion", "check", &input]);
+        assert!(!output.status.success(), "{name}");
+        let report = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            report.contains("only an effect() template reads input://source"),
+            "{report}"
+        );
+    }
+}

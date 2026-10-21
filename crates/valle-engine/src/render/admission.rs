@@ -839,6 +839,8 @@ struct AdmittedVisualClip {
     exact_start: RationalTime,
     source: u32,
     layer: AdmittedVisualLayer,
+    /// The admitted sources of the layer's effect templates, in order.
+    effects: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -899,12 +901,21 @@ struct AdmittedVisualProgram {
 
 #[derive(Debug, Clone)]
 enum AdmittedAdjustmentEffect {
-    ColorGrade { temperature: f64 },
-    Extension { call: AdmittedKernelCall },
+    ColorGrade {
+        temperature: f64,
+    },
+    Extension {
+        call: AdmittedKernelCall,
+    },
+    /// The admitted template source, placed over the adjustment.
+    Motion {
+        source: u32,
+    },
 }
 
 #[derive(Debug, Clone)]
 struct AdmittedAdjustmentClip {
+    id: String,
     range: FrameRange,
     effect: AdmittedAdjustmentEffect,
 }
@@ -1098,8 +1109,11 @@ fn admit_timeline_programs(
     let adjustments = admit_adjustment_program(
         &document.adjustments,
         canvas,
+        resource_targets,
+        resources,
         kernel_targets,
         kernels,
+        &mut sources,
         diagnostics,
     )?;
     let captions = admit_caption_program(
@@ -1314,6 +1328,26 @@ fn admit_visual_program(
                         kernels,
                         diagnostics,
                     );
+                    let effects = clip
+                        .layer
+                        .effects
+                        .iter()
+                        .enumerate()
+                        .map(|(index, effect)| {
+                            admit_visual_source(
+                                &VisualSource::Motion(effect.clone()),
+                                cursor,
+                                duration,
+                                range,
+                                canvas.frame_rate,
+                                resource_targets,
+                                resources,
+                                sources,
+                                &format!("{path}/layer/effects/{index}"),
+                                diagnostics,
+                            )
+                        })
+                        .collect();
                     if let Some(expanded) = expand_frame_range(range, layer.footprint) {
                         extend_visual_dependency(sources, source, expanded);
                     } else {
@@ -1326,6 +1360,7 @@ fn admit_visual_program(
                             exact_start: cursor,
                             source,
                             layer,
+                            effects,
                         },
                     }));
                     cursor = cursor.checked_add(duration).ok()?;
@@ -2321,11 +2356,15 @@ fn admitted_raw_source_time(
         .map_err(|_| RuntimeFault::ExactTimeOverflow)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn admit_adjustment_program(
     clips: &[TimedAdjustment],
     canvas: CompiledCanvas,
+    resource_targets: &BTreeMap<String, u32>,
+    resources: &[ResolvedResource],
     kernel_targets: &BTreeMap<String, u32>,
     kernels: &[AdmittedKernel],
+    sources: &mut Vec<AdmittedSource>,
     diagnostics: &mut Vec<EngineOpenDiagnostic>,
 ) -> Option<AdmittedAdjustmentProgram> {
     let clips = clips
@@ -2336,7 +2375,8 @@ fn admit_adjustment_program(
             let duration = effect.duration;
             let interval = quantize_frame_interval(start, duration, canvas.frame_rate).ok()?;
             let path = format!("/document/adjustments/{index}/effect");
-            let effect = match &effect.effect {
+            let range = FrameRange::new(interval.start_frame, interval.end_frame);
+            let kind = match &effect.effect {
                 AdjustmentEffect::ColorGrade(effect) => AdmittedAdjustmentEffect::ColorGrade {
                     temperature: effect.temperature,
                 },
@@ -2349,10 +2389,25 @@ fn admit_adjustment_program(
                         diagnostics,
                     ),
                 },
+                AdjustmentEffect::Motion(template) => AdmittedAdjustmentEffect::Motion {
+                    source: admit_visual_source(
+                        &VisualSource::Motion(template.clone()),
+                        start,
+                        duration,
+                        range,
+                        canvas.frame_rate,
+                        resource_targets,
+                        resources,
+                        sources,
+                        &format!("{path}/motion"),
+                        diagnostics,
+                    ),
+                },
             };
             Some(AdmittedAdjustmentClip {
-                range: FrameRange::new(interval.start_frame, interval.end_frame),
-                effect,
+                id: effect.id.clone(),
+                range,
+                effect: kind,
             })
         })
         .collect::<Option<Vec<_>>>()?;

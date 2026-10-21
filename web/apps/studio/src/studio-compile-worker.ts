@@ -182,7 +182,8 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
         return { ...instance, options: { ...instance.options,
           placement: { component: input.component, path: input.clipPath,
             track: input.clipPath.startsWith("/tracks/caption/") ? "caption"
-              : input.clipPath.includes("/transitions/") ? "transition" : "visual" },
+              : input.clipPath.includes("/transitions/") ? "transition"
+              : input.clipPath.startsWith("/tracks/adjustment/") || input.clipPath.includes("/effects/") ? "effect" : "visual" },
           data: input.data === null ? undefined : { source: `timeline:${instance.clipPath}`, value: input.data } } };
       }) };
     }

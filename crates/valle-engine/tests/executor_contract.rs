@@ -614,7 +614,9 @@ fn prepared_geometric_masks_obey_shape_feather_and_inversion() {
 
 #[test]
 fn prepared_effect_admission_rejects_invalid_parameters_and_impl_identity() {
-    use valle_engine::prepare::{PreparedEffectKernel, PreparedUnitRect, PreparedVisualItem};
+    use valle_engine::prepare::{
+        PreparedAdjustment, PreparedEffectKernel, PreparedUnitRect, PreparedVisualItem,
+    };
     for kernel in [
         PreparedEffectKernel::ColorGrade {
             brightness: 2.0,
@@ -662,7 +664,10 @@ fn prepared_effect_admission_rejects_invalid_parameters_and_impl_identity() {
         },
     ] {
         let (mut frame, _) = support::effect_fixture(0, true, false);
-        frame.adjustments[0].kernel = kernel;
+        let PreparedAdjustment::Effect(effect) = &mut frame.adjustments[0] else {
+            unreachable!("the fixture adjusts with an effect");
+        };
+        effect.kernel = kernel;
         assert!(frame.validate().is_err());
     }
     let (mut frame, _) = support::effect_fixture(0, false, false);

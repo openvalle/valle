@@ -4,10 +4,11 @@ use valle_timeline::internal::quantize::quantize_sample_boundary;
 use valle_timeline::{FrameRate, RationalTime};
 
 use super::{
-    CompiledAudioClip, CompiledAudioItem, CompiledAudioProgram, CompiledCameraProgram,
-    CompiledCaptionItem, CompiledCaptionProgram, CompiledEndBehavior, CompiledMask, CompiledSource,
-    CompiledSourceCatalog, CompiledTransitionKernel, CompiledVisualClip, CompiledVisualItem,
-    CompiledVisualProgram, EvaluatedAudioEndpoint, EvaluatedAudioSample, EvaluatedAudioTrack,
+    CompiledAdjustmentEffect, CompiledAdjustmentProgram, CompiledAudioClip, CompiledAudioItem,
+    CompiledAudioProgram, CompiledCameraProgram, CompiledCaptionItem, CompiledCaptionProgram,
+    CompiledEndBehavior, CompiledMask, CompiledSource, CompiledSourceCatalog,
+    CompiledTransitionKernel, CompiledVisualClip, CompiledVisualItem, CompiledVisualProgram,
+    EvaluatedAdjustment, EvaluatedAudioEndpoint, EvaluatedAudioSample, EvaluatedAudioTrack,
     EvaluatedCamera, EvaluatedCaption, EvaluatedCaptionPresentation, EvaluatedResourceRef,
     EvaluatedSourceRef, EvaluatedVisualClip, EvaluatedVisualLayer, EvaluatedVisualMask,
     EvaluatedVisualOperation, EvaluatedVisualTransition, EvaluationClocks, FrameRange,
@@ -157,8 +158,22 @@ pub(super) fn evaluate_visual_program(
                     to_weight: progress_f64,
                     from,
                     to,
-                    from_layer: evaluate_visual_layer(from_clip, composition_time)?,
-                    to_layer: evaluate_visual_layer(to_clip, composition_time)?,
+                    from_layer: evaluate_visual_layer(
+                        from_clip,
+                        sources,
+                        snapshot,
+                        composition_time,
+                        &format!("visual/{}/transition/from", track.order),
+                        resources,
+                    )?,
+                    to_layer: evaluate_visual_layer(
+                        to_clip,
+                        sources,
+                        snapshot,
+                        composition_time,
+                        &format!("visual/{}/transition/to", track.order),
+                        resources,
+                    )?,
                     kernel: transition.kernel.clone(),
                     template,
                 },
@@ -181,7 +196,14 @@ pub(super) fn evaluate_visual_program(
                     &format!("visual/{}/clip", track.order),
                     resources,
                 )?,
-                layer: evaluate_visual_layer(clip, composition_time)?,
+                layer: evaluate_visual_layer(
+                    clip,
+                    sources,
+                    snapshot,
+                    composition_time,
+                    &format!("visual/{}/clip", track.order),
+                    resources,
+                )?,
             }));
         }
     }
@@ -198,9 +220,49 @@ pub(super) fn visual_clip_at(
     }
 }
 
+/// The adjustments active at `frame`, in declared order, with their Motion templates' sources.
+pub(super) fn evaluate_adjustments(
+    program: &CompiledAdjustmentProgram,
+    sources: &CompiledSourceCatalog,
+    snapshot: &ResolvedResourceSnapshot,
+    frame: i64,
+    composition_time: RationalTime,
+    resources: &mut Vec<EvaluatedResourceRef>,
+) -> Result<Vec<EvaluatedAdjustment>, RuntimeFault> {
+    program
+        .clips
+        .iter()
+        .enumerate()
+        .filter(|(_, clip)| clip.range.contains(frame))
+        .map(|(index, clip)| {
+            let template = match clip.effect {
+                CompiledAdjustmentEffect::Motion { source } => Some(evaluate_source_ref(
+                    sources,
+                    snapshot,
+                    source,
+                    composition_time,
+                    &format!("adjustment/{index}/template"),
+                    resources,
+                )?),
+                CompiledAdjustmentEffect::ColorGrade { .. }
+                | CompiledAdjustmentEffect::Extension { .. } => None,
+            };
+            Ok(EvaluatedAdjustment {
+                clip: clip.clone(),
+                template,
+            })
+        })
+        .collect()
+}
+
+/// A clip's layer at this frame. `role` names the clip's source; its effect templates follow it.
 fn evaluate_visual_layer(
     clip: &CompiledVisualClip,
+    sources: &CompiledSourceCatalog,
+    snapshot: &ResolvedResourceSnapshot,
     composition_time: RationalTime,
+    role: &str,
+    resources: &mut Vec<EvaluatedResourceRef>,
 ) -> Result<EvaluatedVisualLayer, RuntimeFault> {
     let clip_time = composition_time
         .checked_sub(clip.exact_start)
@@ -239,6 +301,21 @@ fn evaluate_visual_layer(
         blend: clip.layer.blend,
         mask,
         filters: clip.layer.filters.clone(),
+        effects: clip
+            .effects
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                evaluate_source_ref(
+                    sources,
+                    snapshot,
+                    *source,
+                    composition_time,
+                    &format!("{role}/effect/{index}"),
+                    resources,
+                )
+            })
+            .collect::<Result<_, _>>()?,
     })
 }
 

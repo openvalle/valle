@@ -1616,7 +1616,7 @@ fn ensure_rendered_assets_are_bound(
             NodeKind::Video { source, .. } => ("video", source),
             _ => continue,
         };
-        // The host renders a clip frame; standalone it is transparent.
+        // The host renders a host frame; standalone it is transparent.
         if valle_draw::requirements::HostFrame::from_source(source).is_some() {
             continue;
         }

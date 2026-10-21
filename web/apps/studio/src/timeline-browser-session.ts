@@ -20,6 +20,10 @@ function mediaInputKey(timeline: Timeline): string | null {
       } else {
         media.push(clip);
       }
+      for (const effect of clip.effects ?? []) {
+        motionComponents.add(effect.component);
+        bindings.push(effect.resources ?? null);
+      }
     }
     for (const transition of track.transitions ?? []) {
       if (transition.kind === "motion") {
@@ -30,6 +34,9 @@ function mediaInputKey(timeline: Timeline): string | null {
   }
   for (const track of timeline.tracks.caption ?? []) {
     if (track.presenter) { motionComponents.add(track.presenter.component); bindings.push({ ...track.presenter.resources, caption: track.style.font }); }
+  }
+  for (const clip of (timeline.tracks.adjustment ?? []).flatMap((track) => track.clips)) {
+    if (clip.kind === "motion") { motionComponents.add(clip.component); bindings.push(clip.resources ?? null); }
   }
   const external = Object.entries(timeline.resources ?? {})
     .filter(([alias]) => !motionComponents.has(alias));

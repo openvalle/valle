@@ -394,6 +394,8 @@ pub enum MotionTrack {
     Caption,
     /// A transition between two clips of a visual track.
     Transition,
+    /// A clip's effect or an adjustment clip.
+    Effect,
 }
 
 /// Compile one deterministic Motion TSX module directly into the Scene IR.

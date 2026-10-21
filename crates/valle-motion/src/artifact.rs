@@ -2561,6 +2561,22 @@ pub struct CameraBinding {
     pub rotation: NumberValue,
 }
 
+/// The role whose templates read `frame`, as errors name it, and what the frame pictures.
+pub fn frame_reader(frame: HostFrame) -> (valle_timeline::MotionRole, &'static str, &'static str) {
+    match frame {
+        HostFrame::From | HostFrame::To => (
+            valle_timeline::MotionRole::Transition,
+            "a transition()",
+            "a clip",
+        ),
+        HostFrame::Source => (
+            valle_timeline::MotionRole::Effect,
+            "an effect()",
+            "input://source",
+        ),
+    }
+}
+
 /// Whether `node` draws the host frame `key`, as an Image or a shader input.
 fn node_reads_frame(node: &SceneNode, key: HostFrame) -> bool {
     let inputs = match &node.kind {
@@ -2596,8 +2612,9 @@ impl SceneArtifact {
         self.any_node(reads_node)
     }
 
-    /// The clips a `transition()` template reads as `input://from` and `input://to`, in
-    /// [`HostFrame`] order. The host renders only these before the template.
+    /// The host frames the template reads, in [`HostFrame`] order: the clips a `transition()`
+    /// template reads as `input://from` and `input://to`, or an `effect()` template's
+    /// `input://source`. The host renders only these before the template.
     pub fn frames(&self) -> Vec<HostFrame> {
         HostFrame::ALL
             .into_iter()
@@ -4494,13 +4511,12 @@ impl SceneArtifact {
                 }
                 continue;
             }
-            if HostFrame::from_source(source).is_some() {
-                if input.kind != crate::shader::InputKind::Color
-                    || self.role != valle_timeline::MotionRole::Transition
-                {
+            if let Some(frame) = HostFrame::from_source(source) {
+                let (role, reader, pictured) = frame_reader(frame);
+                if input.kind != crate::shader::InputKind::Color || self.role != role {
                     errors.push(ValidationError::new(
                         format!("{base}/inputs/{input_at}/source"),
-                        "only a transition() template reads a clip, through a color input",
+                        format!("only {reader} template reads {pictured}, through a color input"),
                     ));
                 }
                 continue;
@@ -5072,11 +5088,12 @@ impl SceneArtifact {
                 }
             }
             if let NodeKind::Image { source } = &node.kind {
-                if HostFrame::from_source(source).is_some() {
-                    if self.role != valle_timeline::MotionRole::Transition {
+                if let Some(frame) = HostFrame::from_source(source) {
+                    let (role, reader, pictured) = frame_reader(frame);
+                    if self.role != role {
                         errors.push(ValidationError::new(
                             format!("{path}/kind/source"),
-                            "only a transition() template reads a clip",
+                            format!("only {reader} template reads {pictured}"),
                         ));
                     }
                 } else {

@@ -264,7 +264,7 @@ pub enum TimelineTransitionEffectWire {
         params: valle_draw::transition::TransitionParams,
     },
     Motion {
-        kind: MotionTransitionKindWire,
+        kind: MotionKindWire,
         component: String,
         /// Template props; curves use seconds from the start of the transition.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -274,11 +274,11 @@ pub enum TimelineTransitionEffectWire {
     },
 }
 
-/// The `kind` of a transition a Motion template draws.
+/// The `kind` that names a Motion template: a transition's, an adjustment's or a clip effect's.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum MotionTransitionKindWire {
+pub enum MotionKindWire {
     Motion,
 }
 
@@ -644,6 +644,23 @@ pub struct TimelineVisualClipWire {
     pub opacity: Option<TimelineParamWire<f64>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blend: Option<BlendModeWire>,
+    /// Motion templates that declare `effect()`, applied to the clip in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<TimelineClipEffectWire>,
+}
+
+/// A Motion template that declares `effect()`, applied to its clip: it reads the clip as
+/// `input://source`, and its props curves use seconds from the clip's start.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TimelineClipEffectWire {
+    pub kind: MotionKindWire,
+    pub component: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub props: BTreeMap<String, TimelineParamWire<JsonValue>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub resources: BTreeMap<String, String>,
 }
 
 impl<'de> Deserialize<'de> for TimelineVisualClipWire {
@@ -662,6 +679,9 @@ impl<'de> Deserialize<'de> for TimelineVisualClipWire {
         let anchor = take_raw(&mut fields, "anchor").map_err(de::Error::custom)?;
         let opacity = take_raw(&mut fields, "opacity").map_err(de::Error::custom)?;
         let blend = take_raw(&mut fields, "blend").map_err(de::Error::custom)?;
+        let effects = take_raw(&mut fields, "effects")
+            .map_err(de::Error::custom)?
+            .unwrap_or_default();
         let source = parse_visual_source(&mut fields).map_err(de::Error::custom)?;
         Ok(Self {
             start,
@@ -674,6 +694,7 @@ impl<'de> Deserialize<'de> for TimelineVisualClipWire {
             anchor,
             opacity,
             blend,
+            effects,
         })
     }
 }
@@ -838,7 +859,18 @@ impl<'de> Deserialize<'de> for TimelineAdjustmentClipWire {
     deny_unknown_fields
 )]
 pub enum TimelineAdjustmentWire {
-    ColorGrade { temperature: f64 },
+    ColorGrade {
+        temperature: f64,
+    },
+    /// A Motion template that declares `effect()`: it reads the picture under it as
+    /// `input://source` and replaces it. Props curves use seconds from the clip's start.
+    Motion {
+        component: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        props: BTreeMap<String, TimelineParamWire<JsonValue>>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        resources: BTreeMap<String, String>,
+    },
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1001,6 +1033,11 @@ fn parse_adjustment(
         "color-grade" => TimelineAdjustmentWire::ColorGrade {
             temperature: required_raw(fields, "temperature")?,
         },
+        "motion" => TimelineAdjustmentWire::Motion {
+            component: required_raw(fields, "component")?,
+            props: take_raw(fields, "props")?.unwrap_or_default(),
+            resources: take_raw(fields, "resources")?.unwrap_or_default(),
+        },
         _ => return Err(format!("unknown Timeline author adjustment kind `{kind}`")),
     };
     reject_unknown(std::mem::take(fields))?;
@@ -1049,7 +1086,7 @@ fn parse_transition_effect(
     let kind: String = required_raw(fields, "kind")?;
     let effect = if kind == "motion" {
         TimelineTransitionEffectWire::Motion {
-            kind: MotionTransitionKindWire::Motion,
+            kind: MotionKindWire::Motion,
             component: required_raw(fields, "component")?,
             props: take_raw(fields, "props")?.unwrap_or_default(),
             resources: take_raw(fields, "resources")?.unwrap_or_default(),

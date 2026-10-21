@@ -3419,7 +3419,8 @@ impl<'a> PlanValidator<'a> {
             .ok_or_else(|| invalid(path, format!("undefined external slot {}", id.get())))
     }
 
-    /// One ordered frame per host frame, each written by its frame region.
+    /// One ordered frame per host frame, each written by its frame region, apart from the
+    /// composite an adjustment's template reads as its source.
     fn validate_program_frames(
         &self,
         inputs: &[PlanFrameInput],
@@ -3433,11 +3434,15 @@ impl<'a> PlanValidator<'a> {
             ));
         }
         for input in inputs {
+            if input.frame == HostFrame::Source && self.is_working_composite(input.input) {
+                continue;
+            }
             let expected_path = format!(
                 "{owner}.frame.{}",
                 match input.frame {
                     HostFrame::From => "from",
                     HostFrame::To => "to",
+                    HostFrame::Source => "source",
                 }
             );
             let writer = self
@@ -3458,6 +3463,17 @@ impl<'a> PlanValidator<'a> {
             }
         }
         Ok(())
+    }
+
+    fn is_working_composite(&self, resource: PlanResourceId) -> bool {
+        self.template
+            .surface_slots
+            .iter()
+            .flat_map(|slot| &slot.allocations)
+            .any(|allocation| {
+                allocation.resource == resource
+                    && allocation.reason == SurfaceAllocationReason::WorkingComposite
+            })
     }
 
     fn program_external_inputs(

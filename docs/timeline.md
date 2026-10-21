@@ -192,7 +192,7 @@ time zero at its end. Prepare a trimmed asset first when only a subrange should 
 | `visual` | `solid`, `image`, `video`, `motion` | Later tracks paint over earlier tracks |
 | `audio` | Media source, gain and pan; no `kind` field | Active tracks mix together |
 | `caption` | Text or rich runs, layout and animation; no `kind` field | Composited above the visual result; later caption tracks are above earlier ones |
-| `adjustment` | Currently `color-grade` | Applied to the visual result before captions |
+| `adjustment` | `color-grade`, or a Motion `effect()` template | Applied to the visual result before captions |
 
 Within each track, list clips in chronological order. Normally,
 `next.start >= previous.start + previous.duration`; a visual track may instead
@@ -234,6 +234,7 @@ static; use separate solids and opacity curves or Motion for an animated color.
 | `anchor` | `[0.5,0.5]` | Static source-relative anchor; `[0,0]` is its top-left |
 | `opacity` | `1` | Composed clip opacity, 0–1 |
 | `blend` | `normal` | Static blend mode with the existing backdrop |
+| `effects` | None | Motion `effect()` templates applied in order; see [Effects](#effects) |
 
 `position`, `size`, `scale`, `rotation` and `opacity` can be constants or keyframe
 curves. `anchor` and `blend` are static. Position uses normalized canvas coordinates;
@@ -273,6 +274,36 @@ the left and right halves of the canvas. The second is slightly rotated.
 For arbitrary masks, CSS filters, complex layout or text graphics, author a Motion
 component and place it as a Motion clip. The public Timeline visual clip does not
 expose `style`, `width`, `height`, `mask`, `filters` or a nested `transform` object.
+
+### Effects
+
+`effects` lists Motion templates that change how a clip looks, applied in order:
+`[{ kind: "motion", component, props?, resources? }]`. Each component must declare
+`effect()` ([Motion effect role](motion.md#effect-role)) and reads the picture it
+applies to as `input://source`. The first reads the clip alone over transparent
+pixels, after its transform and before its opacity and blend; each later effect reads
+the output of the one before it. An effect's output replaces what it read, and the
+clip's `opacity` and `blend` apply to the last output. A template stretches over the
+clip, `props` curves use seconds from the clip's start, and `resources` binds its
+asset slots as on a Motion clip.
+
+```json
+{
+  "canvas": { "width": 640, "height": 360, "fps": 30 },
+  "resources": { "poster": "poster.png", "invert": "invert.motion.tsx" },
+  "tracks": { "visual": [{ "clips": [{
+    "kind": "image", "src": "poster", "start": 0, "duration": 3,
+    "scale": [0.5, 0.5], "opacity": 0.8,
+    "effects": [{ "kind": "motion", "component": "invert" }]
+  }] }] }
+}
+```
+
+An effect lays out on the canvas, so it may draw beyond the clip's rectangle, for
+example a glow around it. A transition's endpoints carry their effects. In Studio,
+the clip inspector's **Effects** section lists the Timeline's `.tsx` resources to add
+an effect, replace one or remove it; the compiler reports a component that does not
+declare `effect()`. The same component keeps its props and resources.
 
 ## Keyframes and crossfades
 
@@ -772,11 +803,21 @@ advanced effects; Timeline placement does not remove their rendering constraints
 
 ## Adjustments
 
-The public adjustment catalog currently contains one kind:
-`{ "kind": "color-grade", "temperature": value }`, with temperature in `[-1,1]`.
-Zero is neutral; positive values warm the image and negative values cool it.
-Temperature is static, not a keyframe parameter. Split into adjacent adjustment
-clips for discrete changes or author a suitable Motion effect for other behavior.
+An adjustment clip is one of two kinds. `{ "kind": "color-grade", "temperature":
+value }` takes a temperature in `[-1,1]`. Zero is neutral; positive values warm the
+image and negative values cool it. Temperature is static, not a keyframe parameter.
+Split into adjacent adjustment clips for discrete changes.
+
+`{ "kind": "motion", "component", "props"?, "resources"? }` draws a Motion template
+that declares `effect()` ([Motion effect role](motion.md#effect-role)). The template
+must read the composed result under it as `input://source`, and its output replaces
+that result for the clip's interval. Its `props` curves use seconds from the clip's
+start:
+
+```json
+"adjustment": [{ "clips": [{ "kind": "motion", "component": "vignette",
+  "start": 0, "duration": 3 }] }]
+```
 
 Save as `adjustment.timeline.json`. The second half has a warm adjustment:
 

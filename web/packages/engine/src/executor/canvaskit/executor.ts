@@ -1211,7 +1211,7 @@ function bindFrames(
   try {
     for (const input of inputs) {
       const frame = String(input.frame);
-      if (frame !== "from" && frame !== "to") fail("frame_contract", `unknown host frame '${frame}'`);
+      if (frame !== "from" && frame !== "to" && frame !== "source") fail("frame_contract", `unknown host frame '${frame}'`);
       const key = `input://${frame}`;
       const picture = resourceValue(resources, input.input);
       let image: Image;

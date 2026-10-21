@@ -161,6 +161,7 @@ pub fn fixture(draw: DrawProgram) -> (PreparedFrame, Vec<DynamicBinding>) {
         effects: vec![],
         mask: None,
         blend: CompositeBlendMode::Normal,
+        effect_source: None,
     };
     let frame = PreparedFrame {
         render_id: RenderId::from_bytes([0x44; 32]),
@@ -343,7 +344,9 @@ pub fn effect_fixture(
         kernel,
     };
     if root {
-        frame.adjustments.push(effect);
+        frame
+            .adjustments
+            .push(valle_engine::prepare::PreparedAdjustment::Effect(effect));
     } else if let PreparedVisualItem::Layer(layer) = &mut frame.visual[0] {
         layer.effects.push(effect);
     }

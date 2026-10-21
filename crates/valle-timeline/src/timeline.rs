@@ -1,6 +1,6 @@
 //! Validated public Timeline timeline boundary.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use serde_json::json;
@@ -197,6 +197,11 @@ impl TimelineValidator {
                             );
                         }
                     }
+                    TimelineAdjustmentWire::Motion {
+                        component,
+                        props,
+                        resources: bindings,
+                    } => self.motion_template(component, props, bindings, &path, &valid_resources),
                 }
             }
         }
@@ -292,23 +297,7 @@ impl TimelineValidator {
                     props,
                     resources: bindings,
                     ..
-                } => {
-                    self.resource_ref(component, &format!("{path}/component"), resources);
-                    for (name, param) in props {
-                        normalize_open_param_easing(
-                            param,
-                            &format!("{path}/props/{}", pointer_escape(name)),
-                            self,
-                        );
-                    }
-                    for (name, resource) in bindings {
-                        self.resource_ref(
-                            resource,
-                            &format!("{path}/resources/{}", pointer_escape(name)),
-                            resources,
-                        );
-                    }
-                }
+                } => self.motion_template(component, props, bindings, &path, resources),
             }
             let from = transition.from;
             let to = transition.to;
@@ -382,26 +371,21 @@ impl TimelineValidator {
                 resources: bindings,
                 ..
             } => {
-                self.resource_ref(component, &format!("{path}/component"), resources);
+                self.motion_template(component, props, bindings, path, resources);
                 if let Some(rate) = rate {
                     self.positive_time(rate, &format!("{path}/rate"));
                 }
-                for (name, param) in props {
-                    normalize_open_param_easing(
-                        param,
-                        &format!("{path}/props/{}", pointer_escape(name)),
-                        self,
-                    );
-                }
-                for (name, resource) in bindings {
-                    self.resource_ref(
-                        resource,
-                        &format!("{path}/resources/{}", pointer_escape(name)),
-                        resources,
-                    );
-                }
             }
             TimelineVisualSourceWire::Solid { .. } => {}
+        }
+        for (index, effect) in clip.effects.iter_mut().enumerate() {
+            self.motion_template(
+                &effect.component,
+                &mut effect.props,
+                &effect.resources,
+                &format!("{path}/effects/{index}"),
+                resources,
+            );
         }
         normalize_param(&mut clip.position, &format!("{path}/position"), self);
         normalize_param(&mut clip.scale, &format!("{path}/scale"), self);
@@ -414,6 +398,32 @@ impl TimelineValidator {
             normalize_array(anchor, &format!("{path}/anchor"), self);
         }
         normalize_param(&mut clip.opacity, &format!("{path}/opacity"), self);
+    }
+
+    /// A Motion template's component, prop curves and resource bindings at `path`.
+    fn motion_template(
+        &mut self,
+        component: &str,
+        props: &mut BTreeMap<String, TimelineParamWire<serde_json::Value>>,
+        bindings: &BTreeMap<String, String>,
+        path: &str,
+        resources: &BTreeSet<&str>,
+    ) {
+        self.resource_ref(component, &format!("{path}/component"), resources);
+        for (name, param) in props {
+            normalize_open_param_easing(
+                param,
+                &format!("{path}/props/{}", pointer_escape(name)),
+                self,
+            );
+        }
+        for (name, resource) in bindings {
+            self.resource_ref(
+                resource,
+                &format!("{path}/resources/{}", pointer_escape(name)),
+                resources,
+            );
+        }
     }
 
     fn caption_clip(&mut self, clip: &mut TimelineCaptionClipWire, presenter: bool, path: &str) {

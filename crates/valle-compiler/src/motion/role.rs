@@ -4,10 +4,11 @@ use valle_timeline::{MotionRole, OverlayHold, RationalTime};
 
 impl Compiler<'_> {
     pub(super) fn compile_role(&mut self, expression: &Expression<'_>) {
-        const ROLES: &str = "role must use overlay(...), captionPresenter(...) or transition()";
+        const ROLES: &str =
+            "role must use overlay(...), captionPresenter(...), transition() or effect()";
         let reported = self.diagnostics.len();
         let Some(value) = self.eval_static(expression) else {
-            // A value that is no JSON, such as the uncalled `transition`, would otherwise leave
+            // A value that is no JSON, such as an uncalled `transition`, would otherwise leave
             // the component an ordinary clip without a word.
             if self.diagnostics.len() == reported {
                 self.illegal(DiagCode::ModuleShape, expression.span(), ROLES);
@@ -20,16 +21,18 @@ impl Compiler<'_> {
             let allowed: &[&str] = match kind {
                 Some("overlay") => &["__valleType", "intro", "outro", "hold"],
                 Some("captionPresenter") => &["__valleType", "intro", "outro"],
-                Some("transition") => &["__valleType"],
+                Some("transition" | "effect") => &["__valleType"],
                 _ => return Err(ROLES.into()),
             };
             let kind = kind.unwrap();
             if let Some(key) = obj.keys().find(|key| !allowed.contains(&key.as_str())) {
                 return Err(format!("{kind} has no field `{key}`"));
             }
-            // A transition always spans its window; it has no timing of its own.
-            if kind == "transition" {
-                return Ok(MotionRole::Transition);
+            // A transition or an effect always spans its window; it has no timing of its own.
+            match kind {
+                "transition" => return Ok(MotionRole::Transition),
+                "effect" => return Ok(MotionRole::Effect),
+                _ => {}
             }
             let time = |name: &str| -> Result<RationalTime, String> {
                 let v = obj

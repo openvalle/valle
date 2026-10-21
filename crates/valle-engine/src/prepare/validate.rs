@@ -18,10 +18,11 @@ use crate::{
 use super::{
     BoundsReason, Diagnostic, DiagnosticCode, DiagnosticSeverity, DynamicBindingId,
     DynamicBindingKind, DynamicBindings, DynamicValue, FrameGeometry, PrepareOutput,
-    PreparedCaption, PreparedDestinationUse, PreparedEffect, PreparedEffectSpace,
-    PreparedExternalBackdrop, PreparedFrame, PreparedLayer, PreparedMotionTransition,
-    PreparedProgram, PreparedProgramKind, PreparedResource, PreparedSource, PreparedSourceKind,
-    PreparedTransition, PreparedVisualItem, ProgramId, bounds::MAX_DEVICE_INTERMEDIATE_PIXELS,
+    PreparedAdjustment, PreparedCaption, PreparedDestinationUse, PreparedEffect,
+    PreparedEffectSpace, PreparedExternalBackdrop, PreparedFrame, PreparedLayer,
+    PreparedMotionTransition, PreparedProgram, PreparedProgramKind, PreparedResource,
+    PreparedSource, PreparedSourceKind, PreparedTransition, PreparedVisualItem, ProgramId,
+    bounds::MAX_DEVICE_INTERMEDIATE_PIXELS,
 };
 
 pub fn validate_prepare_output(output: &PrepareOutput) -> Result<(), PreparedFrameValidationError> {
@@ -77,8 +78,13 @@ pub(crate) fn validate_prepare_output_bindings(
             }
         }
     }
-    for effect in &output.frame.adjustments {
-        bindings.effect(effect, PreparedEffectSpace::Root)?;
+    for adjustment in &output.frame.adjustments {
+        match adjustment {
+            PreparedAdjustment::Effect(effect) => {
+                bindings.effect(effect, PreparedEffectSpace::Root)?;
+            }
+            PreparedAdjustment::Motion(template) => bindings.layer(template)?,
+        }
     }
     for caption in &output.frame.captions {
         bindings.caption(caption)?;
@@ -95,6 +101,10 @@ struct BindingAdmission<'a> {
 
 impl BindingAdmission<'_> {
     fn layer(&mut self, layer: &PreparedLayer) -> Result<(), PreparedFrameValidationError> {
+        // The picture an effect reads was prepared before it.
+        if let Some(source) = &layer.effect_source {
+            self.layer(source)?;
+        }
         let path = &layer.semantic_path;
         if let PreparedSource::External { placement, .. } = &layer.source
             && let Some(PreparedExternalBackdrop::Blur {
@@ -339,13 +349,30 @@ fn validate_prepared_frame_impl(
             }
         }
     }
-    validate_effect_order(&frame.adjustments, "adjustments")?;
-    for (index, effect) in frame.adjustments.iter().enumerate() {
-        admission.effect(
-            effect,
-            &format!("adjustments[{index}]"),
-            PreparedEffectSpace::Root,
-        )?;
+    // Adjustments apply in their declared order, so any effects may stack.
+    for (index, adjustment) in frame.adjustments.iter().enumerate() {
+        let path = format!("adjustments[{index}]");
+        match adjustment {
+            PreparedAdjustment::Effect(effect) => {
+                admission.effect(effect, &path, PreparedEffectSpace::Root)?;
+            }
+            PreparedAdjustment::Motion(template) => {
+                if !matches!(
+                    template.source,
+                    PreparedSource::Program {
+                        source_kind: PreparedSourceKind::Motion,
+                        ..
+                    }
+                ) || template.effect_source.is_some()
+                {
+                    return Err(invalid(
+                        &path,
+                        "a Motion adjustment draws a Motion template, whose source is the composite",
+                    ));
+                }
+                admission.layer(template, &path)?;
+            }
+        }
     }
     for (index, caption) in frame.captions.iter().enumerate() {
         admission.caption(caption, &format!("captions[{index}]"))?;
@@ -409,6 +436,7 @@ impl Admission<'_> {
                 .any(|frame| match frame {
                     HostFrame::From => transition.from.is_none(),
                     HostFrame::To => transition.to.is_none(),
+                    HostFrame::Source => false,
                 })
         }) {
             return Err(invalid(
@@ -424,6 +452,10 @@ impl Admission<'_> {
         layer: &PreparedLayer,
         path: &str,
     ) -> Result<(), PreparedFrameValidationError> {
+        // The picture an effect reads was prepared before it, at `{path}.source`.
+        if let Some(source) = &layer.effect_source {
+            self.layer(source, &format!("{path}.source"))?;
+        }
         expect_path(&layer.semantic_path, path)?;
         if layer.clip_id.is_empty() || layer.track_id.is_empty() {
             return Err(invalid(path, "clip and track ids must not be empty"));
@@ -504,6 +536,22 @@ impl Admission<'_> {
             }
         };
 
+        // A template may leave its source unread on a frame, as a transition's template may leave
+        // a clip unread, for instance while it draws the source fully transparent.
+        if layer.effect_source.is_some()
+            && !matches!(
+                layer.source,
+                PreparedSource::Program {
+                    source_kind: PreparedSourceKind::Motion,
+                    ..
+                }
+            )
+        {
+            return Err(invalid(
+                path,
+                "only a Motion template has a picture under it",
+            ));
+        }
         validate_effect_order(&layer.effects, path)?;
         let has_source_operators = layer
             .effects

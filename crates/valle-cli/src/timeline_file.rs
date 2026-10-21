@@ -146,6 +146,17 @@ impl TimelineFile {
                                     );
                                 }
                             }
+                            for effect in clip["effects"].as_array().into_iter().flatten() {
+                                if let Some(component) = effect["component"].as_str() {
+                                    durations.insert(
+                                        component.to_owned(),
+                                        valle_timeline::MotionSourceMetadata {
+                                            duration: valle_timeline::RationalTime::new(86_400, 1)?,
+                                            role: valle_timeline::MotionRole::Effect,
+                                        },
+                                    );
+                                }
+                            }
                         }
                         for transition in track["transitions"].as_array().into_iter().flatten() {
                             if transition["kind"] == "motion" {
@@ -159,6 +170,24 @@ impl TimelineFile {
                                     );
                                 }
                             }
+                        }
+                    }
+                    for clip in document["tracks"]["adjustment"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+                    {
+                        if clip["kind"] == "motion"
+                            && let Some(component) = clip["component"].as_str()
+                        {
+                            durations.insert(
+                                component.to_owned(),
+                                valle_timeline::MotionSourceMetadata {
+                                    duration: valle_timeline::RationalTime::new(86_400, 1)?,
+                                    role: valle_timeline::MotionRole::Effect,
+                                },
+                            );
                         }
                     }
                     for track in document["tracks"]["caption"]
