@@ -83,6 +83,12 @@ pub enum EvalError {
     DivisionByZero {
         at: usize,
     },
+    /// A pick's index is not a whole number below its value count; the index is as printed.
+    PickIndex {
+        at: usize,
+        index: String,
+        len: usize,
+    },
     BadInterpolate {
         at: usize,
     },
@@ -151,6 +157,14 @@ impl core::fmt::Display for EvalError {
                 write!(f, "expression {at}: type mismatch in {op}")
             }
             EvalError::DivisionByZero { at } => write!(f, "expression {at}: division by zero"),
+            EvalError::PickIndex { at, index, len } => {
+                let last = len.saturating_sub(1);
+                write!(
+                    f,
+                    "expression {at}: index {index} is not a whole number from 0 to {last}; round \
+                     and clamp it, as in `Math.min(Math.floor(x), {last})`"
+                )
+            }
             EvalError::BadInterpolate { at } => {
                 write!(f, "expression {at}: invalid interpolate")
             }
@@ -1058,6 +1072,7 @@ fn reads_runtime_inputs(expr: &Expr) -> bool {
         | Expr::Neg { .. }
         | Expr::Compare { .. }
         | Expr::Select { .. }
+        | Expr::Pick { .. }
         | Expr::Template { .. }
         | Expr::MathUnary { .. }
         | Expr::MathBinary { .. }
@@ -1494,6 +1509,18 @@ fn eval_one_with<'a>(
                 return Err(EvalError::TypeMismatch { at, op: "select" });
             };
             Ok(child(if *condition { *when_true } else { *when_false })?.clone())
+        }
+        Expr::Pick { index, values } => {
+            let index = as_number(at, "pick", child(*index)?)?;
+            // NaN and infinities have no whole part, so they fail with the fractional indices.
+            if index.fract() != 0.0 || index < 0.0 || index >= values.len() as f64 {
+                return Err(EvalError::PickIndex {
+                    at,
+                    index: index.to_string(),
+                    len: values.len(),
+                });
+            }
+            Ok(child(values[index as usize])?.clone())
         }
         Expr::Template { parts } => {
             let mut value = String::new();
@@ -2634,6 +2661,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!(values[2], MotionValue::Bool(true));
+    }
+
+    #[test]
+    fn pick_reads_a_whole_index_and_fails_any_other() {
+        let pick = |index: f64| {
+            let artifact = artifact(vec![
+                Expr::Const {
+                    value: MotionValue::Number(index),
+                },
+                Expr::Const {
+                    value: MotionValue::Str("a".into()),
+                },
+                Expr::Const {
+                    value: MotionValue::Str("b".into()),
+                },
+                Expr::Pick {
+                    index: ExprId(0),
+                    values: vec![ExprId(1), ExprId(2)],
+                },
+            ]);
+            artifact.validate().unwrap();
+            eval_all(
+                &artifact,
+                EvalInputs {
+                    ctx: &context(0),
+                    props: &ResolvedProps::default(),
+                    unit: None,
+                    viewport: None,
+                },
+            )
+            .map(|values| values[3].clone())
+        };
+        assert_eq!(pick(1.0), Ok(MotionValue::Str("b".into())));
+        for index in [-1.0, 0.5, 2.0] {
+            assert_eq!(
+                pick(index),
+                Err(EvalError::PickIndex {
+                    at: 3,
+                    index: index.to_string(),
+                    len: 2,
+                })
+            );
+        }
     }
 
     #[test]

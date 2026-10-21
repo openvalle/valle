@@ -144,6 +144,9 @@ pub fn sample_properties(
                     Expr::Select { condition, .. } => {
                         branches.push(values.get(condition).cloned().ok_or("missing expression")?)
                     }
+                    Expr::Pick { index, .. } => {
+                        branches.push(values.get(index).cloned().ok_or("missing expression")?)
+                    }
                     Expr::Interpolate { input, stops, .. } => {
                         if let Some(MotionValue::Number(x)) = values.get(input) {
                             branches.push(MotionValue::Number(
@@ -172,6 +175,7 @@ pub fn sample_properties(
                     op: crate::expr::MathBinaryOp::Mod | crate::expr::MathBinaryOp::Remainder,
                     ..
                 } | Expr::PathTrajectory { .. }
+                    | Expr::Pick { .. }
                     | Expr::Template { .. }
             )
         });

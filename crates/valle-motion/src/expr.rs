@@ -412,6 +412,12 @@ pub enum Expr {
         when_true: ExprId,
         when_false: ExprId,
     },
+    /// One of `values`, chosen by a whole-number `index` of the frame; any other index fails
+    /// the frame.
+    Pick {
+        index: ExprId,
+        values: Vec<ExprId>,
+    },
     Template {
         parts: Vec<TemplatePart>,
     },
@@ -644,6 +650,9 @@ impl Expr {
                 when_true,
                 when_false,
             } => vec![*condition, *when_true, *when_false],
+            Expr::Pick { index, values } => std::iter::once(*index)
+                .chain(values.iter().copied())
+                .collect(),
             Expr::Template { parts } => parts
                 .iter()
                 .filter_map(|part| match part {
@@ -854,6 +863,12 @@ impl Expr {
                 *condition = map(*condition);
                 *when_true = map(*when_true);
                 *when_false = map(*when_false);
+            }
+            Expr::Pick { index, values } => {
+                *index = map(*index);
+                for value in values {
+                    *value = map(*value);
+                }
             }
             Expr::Template { parts } => {
                 for part in parts {
@@ -1682,6 +1697,26 @@ pub fn validate_next_expr(
                 when_true
             }
         }
+        Expr::Pick { index, values } => {
+            let index = child(*index);
+            let value_types = values.iter().map(|value| child(*value)).collect::<Vec<_>>();
+            if index != Some(ExprType::Number) {
+                errors.push(ValidationError::new(
+                    format!("{path}/index"),
+                    "pick index must be a number",
+                ));
+            }
+            match value_types.first().copied().flatten() {
+                Some(first) if value_types.iter().all(|value| *value == Some(first)) => Some(first),
+                _ => {
+                    errors.push(ValidationError::new(
+                        format!("{path}/values"),
+                        "pick needs one or more values of one type",
+                    ));
+                    None
+                }
+            }
+        }
         Expr::Template { parts } => {
             let static_bytes = parts.iter().fold(0usize, |total, part| {
                 total.saturating_add(match part {
@@ -2242,7 +2277,8 @@ pub fn geometry_eval_policy(exprs: &[Expr], id: ExprId) -> Option<GeometryEvalPo
         | Expr::PathSimplify { .. }
         | Expr::PathStrokeToPath { .. }
         | Expr::Interpolate { .. }
-        | Expr::Select { .. } => GeometryEvalPolicy::FrameExpr,
+        | Expr::Select { .. }
+        | Expr::Pick { .. } => GeometryEvalPolicy::FrameExpr,
         _ => return None,
     })
 }

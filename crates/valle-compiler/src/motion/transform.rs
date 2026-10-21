@@ -222,6 +222,7 @@ impl<'s> Compiler<'s> {
                         when_false,
                         ..
                     } => pending.extend([*when_true, *when_false]),
+                    Expr::Pick { values, .. } => pending.extend(values.iter().copied()),
                     Expr::Const {
                         value: MotionValue::Str(text) | MotionValue::Enum(text),
                     } if !keywords.contains(&text.as_str()) => {

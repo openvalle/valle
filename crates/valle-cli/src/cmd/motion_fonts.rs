@@ -39,8 +39,8 @@ impl TextBound {
 }
 
 /// Every character a text expression can produce: string constants and columns, template text,
-/// both branches of a select, interpolation stops and the choices of a prop control. A free string
-/// prop has no bound at packaging time.
+/// both branches of a select, every value of a pick, interpolation stops and the choices of a prop
+/// control. A free string prop has no bound at packaging time.
 fn append_expr_text(
     controls: &ControlsSchema,
     exprs: &[Expr],
@@ -88,6 +88,7 @@ fn append_expr_text(
             when_false,
             ..
         } => child(when_true, bound) && child(when_false, bound),
+        Expr::Pick { values, .. } => values.iter().all(|value| child(value, bound)),
         Expr::Interpolate { stops, .. } => stops.iter().all(|stop| bound.value(&stop.output)),
         Expr::Prop { name } => match controls.props.get(name).map(|prop| &prop.control) {
             Some(ControlType::Select { values }) => values.iter().all(|value| bound.push(value)),

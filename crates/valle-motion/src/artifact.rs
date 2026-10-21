@@ -6082,6 +6082,7 @@ pub(crate) fn css_expression_variants(
             } => {
                 pending.extend([*when_true, *when_false]);
             }
+            Expr::Pick { values, .. } => pending.extend(values.iter().copied()),
             Expr::Template { parts } => {
                 let mut text = String::new();
                 for part in parts {

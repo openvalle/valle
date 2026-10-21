@@ -299,8 +299,9 @@ export default function Card() { const ctx = useTime();
 }
 
 #[test]
-fn dynamic_tuple_requires_a_static_in_bounds_index() {
-    let dynamic_index = diagnostics(
+fn a_frame_index_picks_from_a_list() {
+    // A tuple of frame values, a prepared `const` array and an inline literal.
+    for source in [
         r##"
 export default function Card() { const ctx = useTime();
   const t = ctx.progress;
@@ -308,13 +309,80 @@ export default function Card() { const ctx = useTime();
   return <View style={{ opacity: values[Math.floor(t * 2)] }} />;
 }
 "##,
-    );
-    assert!(
-        dynamic_index
-            .iter()
-            .any(|message| message.contains("known at compile time")),
-        "dynamic tuple indexing must fail closed: {dynamic_index:?}"
-    );
+        r##"
+const OPACITY = [0.25, 0.5, 1];
+export default function Card() { const ctx = useTime();
+  return <View style={{ opacity: OPACITY[Math.min(Math.floor(ctx.progress * 3), 2)] }} />;
+}
+"##,
+        r##"
+export default function Card() { const ctx = useTime();
+  return <View style={{ backgroundColor: ["#ff0000", "#00ff00"][ctx.localFrame % 2] }} />;
+}
+"##,
+        r##"
+const ROWS = [{ width: 10 }, { width: 20 }];
+export default function Card() { const ctx = useTime();
+  return <View style={{ width: ROWS[ctx.localFrame % 2].width, height: 4 }} />;
+}
+"##,
+        r##"
+const ROWS = [{ width: 10 }, { width: 20 }];
+export default function Card() { const ctx = useTime();
+  return <View style={{ width: ROWS.map((row) => row.width)[ctx.localFrame % 2], height: 4 }} />;
+}
+"##,
+        r##"
+const ROWS = [{ size: { width: 10 } }, { size: { width: 20 } }];
+export default function Card() { const ctx = useTime();
+  return <View style={{ width: ROWS[ctx.localFrame % 2].size.width, height: 4 }} />;
+}
+"##,
+        r##"
+const LABELS = ["one", "two"];
+export default function Card() { const ctx = useTime();
+  return <Text style={{ fontSize: 12 }}>{LABELS[ctx.localFrame % 2]}</Text>;
+}
+"##,
+    ] {
+        let compiled = compile_ok(source);
+        assert!(
+            compiled
+                .artifact
+                .exprs
+                .iter()
+                .any(|expr| matches!(expr, Expr::Pick { values, .. } if values.len() >= 2)),
+            "{source}"
+        );
+    }
+
+    // An object takes only prepared keys, and a frame index reads one field of a row.
+    for (source, phrase) in [
+        (
+            r##"
+const WIDTHS = { a: 10, b: 20 };
+export default function Card() { const ctx = useTime();
+  return <View style={{ width: WIDTHS[ctx.seconds > 0.5 ? "a" : "b"] }} />;
+}
+"##,
+            "choose between its fields with `cond ? table.a : table.b`",
+        ),
+        (
+            r##"
+const ROWS = [{ width: 10 }, { width: 20 }];
+export default function Card() { const ctx = useTime();
+  return <View style={{ width: ROWS[ctx.localFrame % 2] }} />;
+}
+"##,
+            "reads one field of a list of objects, as in `rows[i].width`",
+        ),
+    ] {
+        let messages = diagnostics(source);
+        assert!(
+            messages.iter().any(|message| message.contains(phrase)),
+            "{messages:?}"
+        );
+    }
 
     let out_of_bounds = diagnostics(
         r##"

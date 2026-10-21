@@ -1040,6 +1040,9 @@ impl<'s> Compiler<'s> {
                 expression.span(),
             );
         }
+        if let Some(picked) = self.lower_row_field_pick(expression) {
+            return picked;
+        }
         if let Expression::StaticMemberExpression(member) = expression
             && !matches!(
                 strip_parens(&member.object),
@@ -1338,20 +1341,14 @@ impl<'s> Compiler<'s> {
         &mut self,
         member: &oxc::ast::ast::ComputedMemberExpression<'_>,
     ) -> Option<ExprId> {
-        let Some(values) = self.dynamic_tuple_value(&member.object) else {
-            self.unsupported(
-                member.span,
-                "computed member access is only supported for fixed-length dynamic tuples",
-            );
-            return None;
+        let values = match self.dynamic_tuple_value(&member.object) {
+            Some(values) => values,
+            None => self.prepared_list_values(member)?,
         };
+        // An index of the frame picks one of the values in each frame.
         let Some(index_value) = self.eval_static(&member.expression) else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                member.expression.span(),
-                "dynamic tuple index must be known at compile time",
-            );
-            return None;
+            let index = self.lower_expr(&member.expression)?;
+            return Some(self.push(Expr::Pick { index, values }, member.span));
         };
         let Some(index_number) = index_value.as_f64() else {
             self.illegal(
@@ -1385,6 +1382,102 @@ impl<'s> Compiler<'s> {
             );
             None
         })
+    }
+
+    /// The values of a prepared list that a frame index picks from.
+    fn prepared_list_values(
+        &mut self,
+        member: &oxc::ast::ast::ComputedMemberExpression<'_>,
+    ) -> Option<Vec<ExprId>> {
+        match self.eval_static(&member.object) {
+            Some(serde_json::Value::Array(items)) => self.pick_values(&items, member.span),
+            Some(serde_json::Value::Object(_)) => {
+                self.unsupported(
+                    member.span,
+                    "an object takes only keys known while the scene is prepared; choose \
+                     between its fields with `cond ? table.a : table.b`",
+                );
+                None
+            }
+            _ => {
+                self.unsupported(
+                    member.span,
+                    "an index reads a list: an array literal, a `const` array or a list prop",
+                );
+                None
+            }
+        }
+    }
+
+    /// One constant for each prepared value a frame index can pick.
+    fn pick_values(&mut self, items: &[serde_json::Value], span: Span) -> Option<Vec<ExprId>> {
+        if items.len() > MAX_EXPR_MAP_UNROLL {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!(
+                    "a frame index picks from {} values; the compile-time budget is \
+                     {MAX_EXPR_MAP_UNROLL}",
+                    items.len()
+                ),
+            );
+            return None;
+        }
+        let mut values = Vec::with_capacity(items.len());
+        for item in items {
+            let Some(value) = motion_value_from_json(item) else {
+                self.unsupported(
+                    span,
+                    "a frame index picks from a list of plain values such as numbers, strings \
+                     and colors, or reads one field of a list of objects, as in `rows[i].width`",
+                );
+                return None;
+            };
+            values.push(self.push(Expr::Const { value }, span));
+        }
+        Some(values)
+    }
+
+    /// `rows[i].field` with an index of the frame: the field of each prepared row, picked by `i`.
+    /// Nested fields such as `rows[i].size.width` read the same way.
+    fn lower_row_field_pick(&mut self, expression: &Expression<'_>) -> Option<Option<ExprId>> {
+        let mut fields = Vec::new();
+        let mut current = expression;
+        let row = loop {
+            match strip_parens(current) {
+                Expression::StaticMemberExpression(member) => {
+                    fields.push(member.property.name.as_str());
+                    current = &member.object;
+                }
+                Expression::ComputedMemberExpression(row) if !fields.is_empty() => break row,
+                _ => return None,
+            }
+        };
+        fields.reverse();
+        let Some(serde_json::Value::Array(rows)) = self.eval_static(&row.object) else {
+            return None;
+        };
+        let column = rows
+            .iter()
+            .map(|row| {
+                fields
+                    .iter()
+                    .try_fold(row, |value, field| value.as_object()?.get(*field))
+                    .cloned()
+            })
+            .collect::<Option<Vec<_>>>()?;
+        if self.eval_static(&row.expression).is_some() {
+            return None;
+        }
+        let Some(values) = self.pick_values(&column, expression.span()) else {
+            return Some(None);
+        };
+        let Some(index) = self.lower_expr(&row.expression) else {
+            return Some(None);
+        };
+        Some(Some(
+            self.push(Expr::Pick { index, values }, expression.span()),
+        ))
     }
 
     pub(super) fn lower_geometry_field(

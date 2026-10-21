@@ -226,6 +226,14 @@ pub fn numeric_range(
                     union(child(*when_true)?, child(*when_false)?)
                 }
             }
+            Expr::Pick { values, .. } => {
+                let (first, rest) = values.split_first()?;
+                let mut range = child(*first)?;
+                for value in rest {
+                    range = union(range, child(*value)?)?;
+                }
+                Some(range)
+            }
             Expr::MathUnary { op, input } => {
                 use crate::MathUnaryOp::*;
                 if matches!(op, Sin | Cos) {
