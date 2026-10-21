@@ -751,12 +751,10 @@ pub enum NodeKind {
         display: bool,
         aria_label: Option<String>,
     },
-    /// Independent or field-member refractive surface. Admitted in production (G4.7);
-    /// consumed through the engine kernel route (layout → typed execution program →
-    /// F32/F16 reference → Native Skia / WASM kernel); product layout/emit fail-closes
-    /// instead of silently dropping it.
+    /// A box drawn in glass, on its own or as a member of its nearest GlassField. Emit lowers it
+    /// to a clip or mask, a backdrop blur and the built-in optics shader.
     Glass(crate::glass::GlassNode),
-    /// Shared material domain. Not a layout box.
+    /// Glass members merged into one surface. Not a layout box.
     GlassField(crate::glass::GlassFieldNode),
 }
 
@@ -1195,6 +1193,26 @@ impl SceneNode {
                 refs.push((path, *expr));
             }
         }
+        fn glass_refs(
+            material: &crate::glass::GlassMaterialBinding,
+            light: &crate::glass::GlassLightBinding,
+            refs: &mut Vec<(String, ExprId)>,
+        ) {
+            for (name, value) in [
+                ("bevel", material.bevel.as_ref()),
+                ("refraction", material.refraction.as_ref()),
+                ("dispersion", Some(&material.dispersion)),
+                ("frost", Some(&material.frost)),
+            ] {
+                if let Some(value) = value {
+                    number_at(format!("/kind/material/{name}"), value, refs);
+                }
+            }
+            color("/kind/material/tint".into(), &material.tint, refs);
+            point("/kind/light/direction".into(), &light.direction, refs);
+            number_at("/kind/light/elevation".into(), &light.elevation, refs);
+            number_at("/kind/light/intensity".into(), &light.intensity, refs);
+        }
         fn number_at(path: String, value: &NumberValue, refs: &mut Vec<(String, ExprId)>) {
             if let NumberValue::Expr { expr } = value {
                 refs.push((path, *expr));
@@ -1311,63 +1329,15 @@ impl SceneNode {
             | NodeKind::Image { .. }
             | NodeKind::MathFormula { .. } => {}
             NodeKind::GlassField(field) => {
-                number(
-                    "/kind/material/clarity".into(),
-                    &field.material.clarity,
-                    &mut refs,
-                );
-                number(
-                    "/kind/material/depth".into(),
-                    &field.material.depth,
-                    &mut refs,
-                );
-                color(
-                    "/kind/material/tint".into(),
-                    &field.material.tint,
-                    &mut refs,
-                );
-                point(
-                    "/kind/environment/light/direction".into(),
-                    &field.environment.light.direction,
-                    &mut refs,
-                );
-                number(
-                    "/kind/environment/light/elevation".into(),
-                    &field.environment.light.elevation,
-                    &mut refs,
-                );
-                number(
-                    "/kind/environment/light/intensity".into(),
-                    &field.environment.light.intensity,
-                    &mut refs,
-                );
+                glass_refs(&field.material, &field.light, &mut refs);
             }
             NodeKind::Glass(glass) => {
                 number("/kind/presence".into(), &glass.presence, &mut refs);
-                if let Some(material) = &glass.material {
-                    number(
-                        "/kind/material/clarity".into(),
-                        &material.clarity,
-                        &mut refs,
-                    );
-                    number("/kind/material/depth".into(), &material.depth, &mut refs);
-                    color("/kind/material/tint".into(), &material.tint, &mut refs);
+                if let Some(path) = &glass.path {
+                    path_value("/kind/path".into(), path, &mut refs);
                 }
-                match &glass.shape {
-                    crate::glass::GlassShapeBinding::ContinuousRect { radius } => {
-                        number("/kind/shape/radius".into(), radius, &mut refs);
-                    }
-                    crate::glass::GlassShapeBinding::Path {
-                        path,
-                        reveal_origin,
-                    } => {
-                        path_value("/kind/shape/path".into(), path, &mut refs);
-                        if let Some(origin) = reveal_origin {
-                            point("/kind/shape/revealOrigin".into(), origin, &mut refs);
-                        }
-                    }
-                    crate::glass::GlassShapeBinding::Capsule
-                    | crate::glass::GlassShapeBinding::Circle => {}
+                if let (Some(material), Some(light)) = (&glass.material, &glass.light) {
+                    glass_refs(material, light, &mut refs);
                 }
             }
             NodeKind::Text {

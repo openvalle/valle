@@ -537,7 +537,7 @@ below. Unknown attributes and event handlers are rejected.
 | `Clip` | Path-clipped children; `path` (or `d`), `fillRule` |
 | `Mask`, `MaskSource` | Alpha/luminance masking; see [masks](#clipping-masks-and-effects) |
 | `MathFormula` | Formula leaf; static `latex`, `displayMode`, `ariaLabel` |
-| `Glass`, `GlassField` | Optical material surfaces and shared material fields |
+| `Glass`, `GlassField` | A box drawn in glass; Glass merged into one surface |
 | `Transition` | Two child subtrees, numeric `progress`, and a static `kind` with optional `params` or shader `code` with its `uniforms` and `inputs`; see [transitions](#subtree-transitions) |
 | `ShaderLayer` | Custom shader; inline `code` or a descriptor `source`, `inputs`, `uniforms`, `outset`, content children |
 | `Scene3D` | 3D scene leaf with its own camera and explicit 3D children |
@@ -2229,41 +2229,99 @@ If a transition should stop at its endpoints, pass `clamp(progress, 0, 1)` expli
 
 ### Glass
 
-`Glass` describes an optical surface with a stable `surfaceId` and explicit shape.
-`GlassField` groups surfaces under a shared `fieldId` and material. This is a
-separate effect from CSS `backdropFilter: "blur(...)"`.
+`Glass` lays out and paints like a `View` whose background is glass: it frosts and
+bends what lies behind it and catches a light. Its shape is its border box rounded
+by `borderRadius` (`"50%"` makes a circle, a radius of half the height a capsule), or
+`path` in its local pixels. Its background, border and shadows paint as a View's do;
+outer shadows show only outside the shape. Children are its foreground: they paint
+over the glass and, as in CSS, are not clipped unless `overflow` or a `Clip` says so.
 
 | Attribute | Contract |
 | --- | --- |
-| `shape` | `{ kind: "circle" }`, `{ kind: "capsule" }`, `{ kind: "continuousRect", radius }`, or admitted closed polygon path shape |
-| `material` | `clarity`, `depth`, `tint`; normalized material controls and a color |
-| `presence` | Number 0–1, default 1 |
-| `environment` | `light: { direction: point(...), elevation, intensity, space: "world" or "screen" }` |
-| `GlassField merge` | `{ distance: number }`, static, default 24; members retain separate surface IDs |
+| `path`, `fillRule` | Optional shape, as on `Clip`: path data in local pixels, `"nonZero"` (default) or `"evenOdd"` |
+| `material` | `{ bevel, refraction, dispersion, frost, tint }`, each optional and animatable |
+| `light` | `{ direction, elevation, intensity }`, each optional and animatable |
+| `presence` | 0–1, default 1; scales the frost and the glass's opacity |
+
+`material` lengths are local pixels of the Glass and scale with its transforms:
+
+| Field | Meaning | Default |
+| --- | --- | --- |
+| `bevel` | Width of the curved rim | 40% of the shorter side |
+| `refraction` | How far the backdrop shifts across a straight rim; beyond about 80% of `bevel` the image folds over | 30% of `bevel` |
+| `dispersion` | How much further blue and less far red shift than green, as a fraction of `refraction`; 0 samples the backdrop once | 0 |
+| `frost` | Backdrop blur, a standard deviation as in CSS `blur()` | 0 |
+| `tint` | The glass's own color, mixed in by its alpha under the highlights | transparent |
+
+`light.direction` is the screen direction the light comes from, y down (default
+`point(-0.35, -0.94)`, upper left). `elevation` 0 grazes the glass and 1 shines
+straight at it (default 0.55). `intensity` scales the highlight and the rim, and 0
+draws neither (default 0.65). The light stays fixed on the screen, so a turning glass
+keeps its highlights where the light puts them.
+
+`material` and `light` take an object literal, a static object, or a literal that
+spreads static objects. A helper in place of fixed presets:
+
+```tsx
+// clarity 1 is clear glass, 0 fully frosted; depth 0 is a thin pane, 1 a thick lens.
+function glassMaterial(clarity: number, depth: number, tint = "#ffffff14") {
+  const bevel = 8 + 40 * depth;
+  return { bevel, refraction: bevel * (0.25 + 0.5 * depth), frost: 20 * (1 - clarity), tint };
+}
+```
+
+`GlassField` merges the Glass inside it, through any wrappers, into one surface:
+shapes closer than about `merge.distance` join with a smooth bridge. The field takes
+`material`, `light` and `merge={{ distance }}` (static, 1–128, default 24). Its
+members set none of them; a member's `presence` thins it in the union and shrinks
+its bridges. The field draws once, behind its first member. A member's children are
+its foreground and may hold their own Glass or GlassField. A GlassField is not a
+layout box: its children lay out as its parent's.
 
 Save as `glass.motion.tsx`:
 
 ```tsx
-export default function GlassCard() {
+export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
+
+function glassMaterial(clarity: number, depth: number, tint = "#ffffff14") {
+  const bevel = 8 + 40 * depth;
+  return { bevel, refraction: bevel * (0.25 + 0.5 * depth), frost: 20 * (1 - clarity), tint };
+}
+
+export default function GlassDemo() {
+  const ctx = useTime();
+  const x = interpolate(ctx.progress, [0, 1], [330, 470]);
   return (
     <Scene className="relative h-full w-full"
-      style={{ backgroundImage: "linear-gradient(30deg, #0f172a, #2563eb, #38bdf8)" }}>
+      style={{ backgroundImage: "linear-gradient(30deg, #7c3aed, #2563eb, #22d3ee)" }}>
+      <Text style={{ position: "absolute", left: 24, top: 100, fontSize: 132,
+        fontWeight: 800, color: "#fde047" }}>VALLE</Text>
       <Glass className="flex items-center justify-center"
-        surfaceId="card" shape={{ kind: "continuousRect", radius: 28 }}
-        material={{ clarity: 0.8, depth: 0.4, tint: "#b9d7ff18" }}
-        style={{ position: "absolute", left: 100, top: 80, width: 440, height: 200 }}>
-        <Text style={{ fontSize: 40, color: "#ffffff" }}>Glass material</Text>
+        material={glassMaterial(0.8, 0.6)}
+        style={{ position: "absolute", left: 40, top: 60, width: 250, height: 240,
+          borderRadius: 40, boxShadow: "0 18px 40px #0f172a55" }}>
+        <Text style={{ fontSize: 32, color: "#ffffff" }}>Glass</Text>
       </Glass>
+      <GlassField material={{ refraction: 18, tint: "#ffffff1a" }} merge={{ distance: 32 }}>
+        <Glass style={{ position: "absolute", left: x, top: 130, width: 100, height: 100,
+          borderRadius: "50%" }} />
+        <Glass style={{ position: "absolute", left: 500, top: 130, width: 100, height: 100,
+          borderRadius: "50%" }} />
+      </GlassField>
     </Scene>
   );
 }
 ```
 
-Each frame's Glass depends only on that frame, so its bindings may use any time
-value, `localFrame` included. Surface IDs remain stable across frames.
-
-`motion check` prepares the Glass material through the same path as native
-rendering. Check representative frames as well as the opening frame.
+Glass draws with a backdrop blur and one built-in shader layer, so it costs about
+what a `ShaderLayer` over a `backdropFilter` costs. One Glass or GlassField covers at
+most 1920×1080 local pixels, and its layer counts toward the frame's shader budget.
+A Glass under its own CSS 3D transform or `perspective` frosts and bends on the plane
+it is projected onto: its shape follows the projection, and its lengths scale as the
+projection scales its center. A blur has no single radius under a projection, so a
+Glass inside another element's 3D transform is refused; give the transform to the
+Glass itself. Every value is a function of the frame, so bindings may use any time
+value, `localFrame` included.
 
 ## Data visualization and repeated geometry
 

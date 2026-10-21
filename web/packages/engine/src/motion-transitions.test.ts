@@ -215,7 +215,7 @@ export default function I(){const ctx=useTime();return <Scene><ShaderLayer code=
         if(!config.fixedPackageManifestJson)throw new Error(JSON.stringify(config.diagnostics ?? config));
         engine=new ProductEngine();
         const receipt=JSON.parse(engine.open_fixed_package(config.fixedPackageManifestJson!,config.timelineJson!,config.resourceManifestJson!,config.verifiedBindingBundleJson!));
-        executor=new CanvasKitExecutor(ck,{transform_srgb_preview_pixels:engine.transform_srgb_preview_pixels.bind(engine),pack_motion_glass_uniforms:engine.pack_motion_glass_uniforms.bind(engine),pack_motion_glass_foreground_uniforms:engine.pack_motion_glass_foreground_uniforms.bind(engine)});
+        executor=new CanvasKitExecutor(ck,{transform_srgb_preview_pixels:engine.transform_srgb_preview_pixels.bind(engine)});
         for(const [request,frame] of fixture.frames.entries()) {
           const ticket=engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),width,height,false);
           let web:Uint8Array;

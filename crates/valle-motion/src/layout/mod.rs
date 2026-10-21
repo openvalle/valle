@@ -23,9 +23,8 @@ pub use review::{
 };
 
 pub use bridge::{
-    GlassLayoutEnvironment, GlassLayoutField, GlassLayoutFrame, GlassLayoutMaterial,
-    GlassLayoutSurface, LayoutOptions, LayoutTree, ResolvedUnit, Scene3DFrameRequest,
-    Scene3DRequest, SealedScene3DFrame, StyleCache,
+    LayoutOptions, LayoutTree, ResolvedUnit, Scene3DFrameRequest, Scene3DRequest,
+    SealedScene3DFrame, StyleCache,
 };
 pub use scene::{
     FrameEvaluationStats, LayoutError, PreparedScene, build_tree, layout_boxes,

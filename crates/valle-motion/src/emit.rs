@@ -3,6 +3,8 @@
 //! in CSS order. Apply filters inside group opacity/blending and report unsupported features
 //! explicitly rather than silently omitting them.
 
+mod glass;
+
 use std::collections::{BTreeMap, HashSet};
 
 use takumi_core::geometry::NodeId;
@@ -358,7 +360,8 @@ fn emit_with_faces_and_catalog(
         grain_instances: 0,
         painted_formulas: HashSet::new(),
         resources: catalog,
-        material_stack: Vec::new(),
+        drawn_fields: HashSet::new(),
+        projections: 0,
     };
     if let Some(rect) = source_clip {
         e.push(RecordCmd::BeginClipRect { rect });
@@ -510,21 +513,23 @@ struct Emitter<'a> {
     grain_instances: usize,
     painted_formulas: HashSet<String>,
     resources: Option<&'a dyn valle_draw::program::ProgramResourceCatalog>,
-    /// Material owners currently enclosing the recording cursor. This is semantic state, not a
-    /// rendering shortcut: field members must never be emitted without their one shared owner,
-    /// and nested fields may begin only inside an existing member foreground.
-    material_stack: Vec<String>,
+    /// GlassFields already drawn: each draws once, before the first of its nodes paints.
+    drawn_fields: HashSet<String>,
+    /// The projections the nodes being painted have opened. A blur has no single radius under
+    /// one, so no Glass draws inside another node's projection.
+    projections: usize,
 }
 
 /// Open node groups with the end count and transform state to restore.
 struct Open {
     depth: usize,
     prev: TAffine,
-    material_stack_len: usize,
     /// A culled CSS 3D plane suppresses its complete stacking context. Treating it as merely
     /// "no perspective wrapper" would paint the untransformed source plane for scale(0) and
     /// backface-visibility:hidden.
     hidden: bool,
+    /// Whether the node opened its own projection, which closes with it.
+    projected: bool,
 }
 
 impl Emitter<'_> {
@@ -690,36 +695,11 @@ impl Emitter<'_> {
         let Some(cx) = self.contexts.get(index) else {
             return Ok(());
         };
-        let inherited_material = self.material_stack.last().cloned();
-        let mut field_open: Option<(String, Open)> = None;
-        let mut closed_fields = HashSet::<String>::new();
         for bucket in cx.in_paint_order() {
             for item in bucket {
-                let desired_field = self.field_for_item(item);
-                if field_open
-                    .as_ref()
-                    .is_some_and(|(field, _)| desired_field.as_deref() != Some(field.as_str()))
-                {
-                    let (field, open) = field_open.take().expect("checked above");
-                    self.end(open);
-                    closed_fields.insert(field);
-                }
-                if field_open.is_none()
-                    && let Some(field) = desired_field.as_deref()
-                    && inherited_material.as_deref() != Some(field)
-                {
-                    if closed_fields.contains(field) {
-                        return Err(EmitError::Program(format!(
-                            "GlassField '{field}' is split into discontiguous painter-order runs"
-                        )));
-                    }
-                    field_open = Some((field.to_owned(), self.begin_field(field)?));
-                }
+                self.draw_field_before(item)?;
                 self.paint_item(item)?;
             }
-        }
-        if let Some((_field, open)) = field_open {
-            self.end(open);
         }
         Ok(())
     }
@@ -849,7 +829,8 @@ impl Emitter<'_> {
                 grain_instances: self.grain_instances,
                 painted_formulas,
                 resources: self.resources,
-                material_stack: self.material_stack.clone(),
+                drawn_fields: self.drawn_fields.clone(),
+                projections: self.projections,
             };
             let result = emitter.paint_context_items(endpoint);
             self.fonts = std::mem::take(&mut emitter.fonts);
@@ -874,82 +855,34 @@ impl Emitter<'_> {
         }
     }
 
-    fn field_for_item(&self, item: &takumi_core::scene::PaintItem) -> Option<String> {
+    /// A GlassField draws once, just before the first of its nodes paints.
+    fn draw_field_before(&mut self, item: &takumi_core::scene::PaintItem) -> Result<(), EmitError> {
         let paint = match &item.kind {
             PaintItemKind::Node(paint) => Some(paint),
-            PaintItemKind::Context(index) => self.contexts.get(*index)?.root(),
-        }?;
-        let key = self.node_key(paint)?;
-        self.tree.glass.node_fields.get(key).cloned()
-    }
-
-    fn begin_field(&mut self, field_id: &str) -> Result<Open, EmitError> {
-        let field = self
-            .tree
-            .glass
-            .fields
-            .iter()
-            .find(|field| field.field_id == field_id)
-            .ok_or_else(|| {
-                EmitError::Program(format!("GlassField '{field_id}' has no layout sidecar"))
-            })?;
-        let target = affine_from_glass_matrix(field.owner_to_viewport).ok_or_else(|| {
-            EmitError::Program(format!(
-                "GlassField '{field_id}' has a non-affine or non-finite owner transform"
-            ))
-        })?;
-        let program = self
-            .tree
-            .glass
-            .material_programs
-            .get(field_id)
-            .ok_or_else(|| {
-                EmitError::Program(format!(
-                    "GlassField '{field_id}' has no temporally prepared material program"
-                ))
-            })?;
-        if program.owner_kind != valle_draw::program::glass::GlassOwnerKind::Field
-            || program.owner_id != field_id
-        {
-            return Err(EmitError::Program(format!(
-                "GlassField '{field_id}' material program has the wrong owner identity"
-            )));
+            PaintItemKind::Context(index) => self.contexts.get(*index).and_then(|cx| cx.root()),
+        };
+        let Some(paint) = paint else {
+            return Ok(());
+        };
+        let Some(field) = self
+            .node_key(paint)
+            .and_then(|key| self.tree.glass.field_of.get(key))
+            .cloned()
+        else {
+            return Ok(());
+        };
+        if !self.drawn_fields.insert(field.clone()) {
+            return Ok(());
         }
-        let prev = self.cur;
-        let material_stack_len = self.material_stack.len();
-        let inverse = self.cur.invert().ok_or_else(|| {
-            EmitError::Program(format!(
-                "GlassField '{field_id}' has a non-invertible parent transform"
-            ))
-        })?;
-        let relative = inverse * target;
-        let mut depth = 0;
-        if !relative.is_identity() {
-            self.push(RecordCmd::BeginTransform {
-                transform: affine_of(relative),
-            });
-            self.cur = target;
-            depth += 1;
-        }
-        self.push(RecordCmd::BeginMotionGlass {
-            program: Box::new(program.clone()),
-        });
-        self.material_stack.push(field_id.to_owned());
-        depth += 1;
-        Ok(Open {
-            depth,
-            prev,
-            material_stack_len,
-            hidden: false,
-        })
+        self.glass_field(&field, paint)
     }
 
     fn nothing_open(&self) -> Open {
         Open {
             depth: 0,
             prev: self.cur,
-            material_stack_len: self.material_stack.len(),
             hidden: false,
+            projected: false,
         }
     }
 
@@ -999,8 +932,8 @@ impl Emitter<'_> {
         }
 
         let mut depth = 0usize;
+        let mut projected = false;
         let prev = self.cur;
-        let material_stack_len = self.material_stack.len();
 
         // Scene transforms are absolute, while recording transforms concatenate. Emit
         // inverse(current) * absolute to avoid applying parent transforms twice.
@@ -1019,76 +952,6 @@ impl Emitter<'_> {
                 depth += 1;
                 self.cur = np.transform;
             }
-        }
-
-        // Glass is a semantic material shell, not a painted CSS box. The material owner and its
-        // foreground marker sit immediately inside the shell transform so every ordinary child
-        // remains real DrawProgram content and no effect-bearing wrapper can enter between them.
-        if let Some(key) = self.node_key(np).map(str::to_owned)
-            && let Some(surface) = self
-                .tree
-                .glass
-                .surfaces
-                .iter()
-                .find(|surface| surface.node_key == key)
-                .cloned()
-        {
-            if let Some(field_id) = surface.field_id.as_deref() {
-                if self.material_stack.last().map(String::as_str) != Some(field_id) {
-                    return Err(EmitError::Program(format!(
-                        "Glass member '{}' is outside its field owner '{field_id}'",
-                        surface.surface_id
-                    )));
-                }
-            } else {
-                let program = self
-                    .tree
-                    .glass
-                    .material_programs
-                    .get(&surface.surface_id)
-                    .ok_or_else(|| {
-                        EmitError::Program(format!(
-                            "Glass '{}' has no temporally prepared material program",
-                            surface.surface_id
-                        ))
-                    })?;
-                if program.owner_kind != valle_draw::program::glass::GlassOwnerKind::Independent
-                    || program.owner_id != surface.surface_id
-                {
-                    return Err(EmitError::Program(format!(
-                        "Glass '{}' material program has the wrong owner identity",
-                        surface.surface_id
-                    )));
-                }
-                self.push(RecordCmd::BeginMotionGlass {
-                    program: Box::new(program.clone()),
-                });
-                self.material_stack.push(surface.surface_id.clone());
-                depth += 1;
-            }
-            let foreground = self
-                .tree
-                .glass
-                .foreground_programs
-                .get(&key)
-                .ok_or_else(|| {
-                    EmitError::Program(format!(
-                        "Glass '{}' has no prepared foreground marker",
-                        surface.surface_id
-                    ))
-                })?;
-            let expected_owner = surface.field_id.as_deref().unwrap_or(&surface.surface_id);
-            if foreground.owner_id != expected_owner || foreground.surface_id != surface.surface_id
-            {
-                return Err(EmitError::Program(format!(
-                    "Glass '{}' foreground marker has the wrong owner identity",
-                    surface.surface_id
-                )));
-            }
-            self.push(RecordCmd::BeginMotionGlassForeground {
-                program: Box::new(foreground.clone()),
-            });
-            depth += 1;
         }
 
         if let Some(key) = self.tree.keys.get(&u64::from(np.node_id)) {
@@ -1185,6 +1048,38 @@ impl Emitter<'_> {
             }
         }
 
+        // A Glass frosts what lies behind its shape, then draws its surface over it at its shell.
+        // A field member, which has no material of its own, draws with its field.
+        if let Some(key) = key
+            && tree.glass.glass.contains_key(key)
+            && self.projections > 0
+        {
+            return Err(EmitError::BadStyle {
+                node: key.to_owned(),
+                reason: "a Glass inside another element's CSS 3D transform or perspective cannot \
+                         blur, since a blur has no single radius there; give the 3D transform to \
+                         the Glass itself"
+                    .into(),
+            });
+        }
+        let member = key
+            .and_then(|key| tree.glass.glass.get(key))
+            .is_some_and(|glass| glass.material.is_none());
+        let glass = key.and_then(|key| {
+            let glass = tree.glass.glass.get(key)?;
+            let material = glass.material.as_ref()?;
+            Some((
+                key,
+                glass,
+                material,
+                glass::Outline::of(glass, border_box, radii),
+            ))
+        });
+        if let Some((key, glass, material, outline)) = &glass {
+            let plane = self.layer_perspective(np, node, border_box, key)?;
+            self.glass_frost(glass, material, outline, plane);
+        }
+
         // A shader layer's backdrop is what lies under this node's own layers, which begin here.
         let own_layers = depth;
 
@@ -1258,39 +1153,11 @@ impl Emitter<'_> {
             if fx.contact_shadow > 0.0 {
                 self.contact_shadow(border_box, fx.contact_shadow);
             }
-            if let Some(plane) = self.tree.css_3d_planes.get(key)
-                && !plane.hidden
-                && plane.project
-            {
-                let inverse =
-                    affine_of(np.transform)
-                        .inverse()
-                        .ok_or_else(|| EmitError::BadStyle {
-                            node: key.clone(),
-                            reason: "CSS 3D plane has a non-invertible 2D layout transform".into(),
-                        })?;
-                // The plane replaces the node's 2D placement: its matrix already holds it.
-                let matrix = plane.matrix.then(Homography::from_affine(inverse));
+            if let Some(matrix) = self.layer_perspective(np, node, border_box, key)? {
                 self.push(RecordCmd::BeginPerspective { matrix });
                 depth += 1;
-            } else if fx.rotate_x_deg.abs() > 1e-6 || fx.rotate_y_deg.abs() > 1e-6 {
-                let perspective = fx
-                    .perspective
-                    .unwrap_or(PerspectiveLength::DEFAULT_PX)
-                    .to_px(&node.context.sizing)
-                    .map_err(|reason| EmitError::BadStyle {
-                        node: key.clone(),
-                        reason,
-                    })?;
-                let origin = node.context.style.transform_origin;
-                let cx = f64::from(origin.0.x.resolve(&node.context, border_box.width as f32));
-                let cy = f64::from(origin.0.y.resolve(&node.context, border_box.height as f32));
-                if let Some(matrix) =
-                    Homography::layer(cx, cy, fx.rotate_y_deg, fx.rotate_x_deg, perspective)
-                {
-                    self.push(RecordCmd::BeginPerspective { matrix });
-                    depth += 1;
-                }
+                projected = true;
+                self.projections += 1;
             }
         }
 
@@ -1311,26 +1178,29 @@ impl Emitter<'_> {
             depth += 1;
         }
 
-        let is_glass_shell = self
-            .node_key(np)
-            .is_some_and(|key| self.tree.glass.foreground_programs.contains_key(key));
-
-        // Paint the shell in CSS order. Glass defines material shape; ordinary pixels come from its
-        // foreground subtree.
+        // Paint the shell in CSS order; a Glass draws its surface over its outer shadows, under
+        // its background. A field member's shadows and surface draw with its field.
         // Match upstream shell paint order.
-        if !is_glass_shell {
+        if let Some((key, glass, material, outline)) = &glass {
+            let shadows = self.box_shadow_cmds(node, border_box, radii, false);
+            self.shadows_outside(shadows, outline);
+            let plane = self.layer_perspective(np, node, border_box, key)?;
+            let placement = Homography::from_affine(affine_of(np.transform));
+            let crossed = depth - own_layers;
+            self.glass_surface(key, glass, material, outline, plane, placement, crossed)?;
+        } else if !member {
             self.box_shadows(np, node, border_box, radii, false);
-            self.background(np, style, node, &layout, border_box, radii);
-            if let Some(key) = self.tree.keys.get(&u64::from(np.node_id))
-                && let Some(fx) = self.tree.layer_fx.get(key).copied()
-                && fx.paper_grain > 0.0
-            {
-                self.paper_grain(border_box, fx.paper_grain, key);
-            }
-            self.box_shadows(np, node, border_box, radii, true);
-            self.border(np, style, node, border_box, radii, &layout);
-            self.outline(np, node, &layout);
         }
+        self.background(np, style, node, &layout, border_box, radii);
+        if let Some(key) = self.tree.keys.get(&u64::from(np.node_id))
+            && let Some(fx) = self.tree.layer_fx.get(key).copied()
+            && fx.paper_grain > 0.0
+        {
+            self.paper_grain(border_box, fx.paper_grain, key);
+        }
+        self.box_shadows(np, node, border_box, radii, true);
+        self.border(np, style, node, border_box, radii, &layout);
+        self.outline(np, node, &layout);
 
         // Clip overflow around content using the padding box.
         // Subtract border widths from the border box and corner radii.
@@ -1357,8 +1227,8 @@ impl Emitter<'_> {
         Ok(Open {
             depth,
             prev,
-            material_stack_len,
             hidden: false,
+            projected,
         })
     }
 
@@ -1366,8 +1236,71 @@ impl Emitter<'_> {
         for _ in 0..open.depth {
             self.push(RecordCmd::End);
         }
-        self.material_stack.truncate(open.material_stack_len);
+        if open.projected {
+            self.projections -= 1;
+        }
         self.cur = open.prev;
+    }
+
+    /// The projection a node's own pixels draw through inside its 2D transform: its CSS 3D plane
+    /// or its 2.5D rotation, if any.
+    fn layer_perspective(
+        &self,
+        np: &NodePaint,
+        node: &RenderNode,
+        border_box: Rect,
+        key: &str,
+    ) -> Result<Option<Homography>, EmitError> {
+        if let Some(plane) = self.tree.css_3d_planes.get(key)
+            && !plane.hidden
+            && plane.project
+        {
+            let inverse = affine_of(np.transform)
+                .inverse()
+                .ok_or_else(|| EmitError::BadStyle {
+                    node: key.to_owned(),
+                    reason: "CSS 3D plane has a non-invertible 2D layout transform".into(),
+                })?;
+            // The plane replaces the node's 2D placement: its matrix already holds it.
+            return Ok(Some(plane.matrix.then(Homography::from_affine(inverse))));
+        }
+        let fx = self.tree.layer_fx.get(key).copied().unwrap_or_default();
+        if fx.rotate_x_deg.abs() <= 1e-6 && fx.rotate_y_deg.abs() <= 1e-6 {
+            return Ok(None);
+        }
+        let perspective = fx
+            .perspective
+            .unwrap_or(PerspectiveLength::DEFAULT_PX)
+            .to_px(&node.context.sizing)
+            .map_err(|reason| EmitError::BadStyle {
+                node: key.to_owned(),
+                reason,
+            })?;
+        let origin = node.context.style.transform_origin;
+        let cx = f64::from(origin.0.x.resolve(&node.context, border_box.width as f32));
+        let cy = f64::from(origin.0.y.resolve(&node.context, border_box.height as f32));
+        Ok(Homography::layer(
+            cx,
+            cy,
+            fx.rotate_y_deg,
+            fx.rotate_x_deg,
+            perspective,
+        ))
+    }
+
+    /// Where a node's own border-box pixels land on the viewport.
+    fn local_to_viewport(
+        &self,
+        np: &NodePaint,
+        node: &RenderNode,
+        border_box: Rect,
+        key: &str,
+    ) -> Result<Homography, EmitError> {
+        let placement = Homography::from_affine(affine_of(np.transform));
+        Ok(match self.layer_perspective(np, node, border_box, key)? {
+            Some(matrix) => matrix.then(placement),
+            None => placement,
+        })
     }
 
     /// Emit paths, images, and glyph runs. Report unsupported inline-block content; leave pixel
@@ -3434,39 +3367,53 @@ impl Emitter<'_> {
         radii: [Point; 4],
         inset: bool,
     ) {
+        for shadow in self.box_shadow_cmds(node, border_box, radii, inset) {
+            self.push(shadow);
+        }
+    }
+
+    /// A node's outer or inset box shadows, in written order.
+    fn box_shadow_cmds(
+        &self,
+        node: &RenderNode,
+        border_box: Rect,
+        radii: [Point; 4],
+        inset: bool,
+    ) -> Vec<RecordCmd> {
         let ctx = &node.context;
-        let Some(shadows) = ctx.style.box_shadow.clone() else {
-            return;
+        let Some(shadows) = ctx.style.box_shadow.as_ref() else {
+            return Vec::new();
         };
         let size = takumi_core::geometry::Size {
             width: border_box.width as f32,
             height: border_box.height as f32,
         };
-        for s in shadows.iter() {
-            if s.inset != inset {
-                continue;
-            }
-            let sized = takumi_core::shadow::SizedShadow {
-                offset_x: s.offset_x.to_px(&ctx.sizing, size.width),
-                offset_y: s.offset_y.to_px(&ctx.sizing, size.height),
-                blur_radius: s.blur_radius.to_px(&ctx.sizing, 1.0),
-                spread_radius: s.spread_radius.to_px(&ctx.sizing, 1.0),
-                color: s.color.resolve(ctx.current_color),
-            };
-            self.push(RecordCmd::Shadow {
-                rrect: RoundRect {
-                    rect: border_box,
-                    radii,
-                },
-                dx: f64::from(sized.offset_x),
-                dy: f64::from(sized.offset_y),
-                // Convert shadow blur radius to Gaussian sigma by dividing by two.
-                blur_sigma: f64::from(sized.blur_radius) / 2.0,
-                spread: f64::from(sized.spread_radius),
-                color: rgba_of(sized.color),
-                inset,
-            });
-        }
+        shadows
+            .iter()
+            .filter(|s| s.inset == inset)
+            .map(|s| {
+                let sized = takumi_core::shadow::SizedShadow {
+                    offset_x: s.offset_x.to_px(&ctx.sizing, size.width),
+                    offset_y: s.offset_y.to_px(&ctx.sizing, size.height),
+                    blur_radius: s.blur_radius.to_px(&ctx.sizing, 1.0),
+                    spread_radius: s.spread_radius.to_px(&ctx.sizing, 1.0),
+                    color: s.color.resolve(ctx.current_color),
+                };
+                RecordCmd::Shadow {
+                    rrect: RoundRect {
+                        rect: border_box,
+                        radii,
+                    },
+                    dx: f64::from(sized.offset_x),
+                    dy: f64::from(sized.offset_y),
+                    // Convert shadow blur radius to Gaussian sigma by dividing by two.
+                    blur_sigma: f64::from(sized.blur_radius) / 2.0,
+                    spread: f64::from(sized.spread_radius),
+                    color: rgba_of(sized.color),
+                    inset,
+                }
+            })
+            .collect()
     }
 
     /// Translate filter chains into a side-table span; report unsupported URL filters.
@@ -3917,33 +3864,6 @@ fn affine_of(a: TAffine) -> Affine {
         f64::from(a.x),
         f64::from(a.y),
     ])
-}
-
-fn affine_from_glass_matrix(matrix: [f64; 9]) -> Option<TAffine> {
-    if !matrix.into_iter().all(f64::is_finite)
-        || matrix[6].abs() > 1e-9
-        || matrix[7].abs() > 1e-9
-        || (matrix[8] - 1.0).abs() > 1e-9
-    {
-        return None;
-    }
-    let values = [
-        matrix[0], matrix[3], matrix[1], matrix[4], matrix[2], matrix[5],
-    ];
-    if values
-        .into_iter()
-        .any(|value| value < f64::from(f32::MIN) || value > f64::from(f32::MAX))
-    {
-        return None;
-    }
-    Some(TAffine {
-        a: matrix[0] as f32,
-        b: matrix[3] as f32,
-        c: matrix[1] as f32,
-        d: matrix[4] as f32,
-        x: matrix[2] as f32,
-        y: matrix[5] as f32,
-    })
 }
 
 fn rgba_of(c: Color) -> Rgba {

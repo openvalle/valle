@@ -8,65 +8,48 @@ use takumi_core::style::Style;
 use takumi_core::viewport::Viewport;
 use valle_motion::{MotionContext, MotionValue};
 
+/// One frame's glass material and light.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GlassLayoutMaterial {
-    pub clarity: f64,
-    pub depth: f64,
-    pub tint: valle_draw::program::AuthorColor,
+pub(crate) struct GlassMaterial {
+    /// Absent, the default share of the shorter side, which emit reads from the boxes.
+    pub(crate) bevel: Option<f64>,
+    /// Absent, the default share of the bevel.
+    pub(crate) refraction: Option<f64>,
+    pub(crate) dispersion: f64,
+    pub(crate) frost: f64,
+    pub(crate) tint: valle_draw::program::AuthorColor,
+    /// Screen direction the light comes from, y down.
+    pub(crate) light: [f64; 2],
+    pub(crate) elevation: f64,
+    pub(crate) intensity: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GlassLayoutEnvironment {
-    pub light_direction: [f64; 2],
-    pub light_elevation: f64,
-    pub light_intensity: f64,
-    pub light_space: crate::glass::GlassLightSpace,
+/// One Glass for one frame.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedGlass {
+    pub(crate) presence: f64,
+    /// Its shape in its local pixels; absent, its border box and radii.
+    pub(crate) path: Option<ClipContent>,
+    /// Absent on a field member, which draws with its field.
+    pub(crate) material: Option<GlassMaterial>,
 }
 
-/// One fully evaluated Glass shell after layout. `viewport_matrix` maps the normalized local box
-/// `[0,1]²` into the Motion program viewport and includes CSS layout/camera transforms.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GlassLayoutSurface {
-    pub node_key: String,
-    pub surface_id: String,
-    pub field_id: Option<String>,
-    pub shape: valle_draw::program::PackedGlassShapeKind,
-    pub local_rect: valle_draw::Rect,
-    pub viewport_matrix: [f64; 9],
-    /// Material owner local pixels → Motion program viewport. Independent owners use the Glass
-    /// shell transform; field members share their semantic field parent's transform.
-    pub owner_to_viewport: [f64; 9],
-    pub radius: f32,
-    pub path_points: Vec<[f32; 2]>,
-    pub presence: f64,
-    pub material: Option<GlassLayoutMaterial>,
-    pub environment: Option<GlassLayoutEnvironment>,
+/// One GlassField for one frame.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedGlassField {
+    pub(crate) material: GlassMaterial,
+    pub(crate) merge: f64,
+    /// Its Glass, in node order.
+    pub(crate) members: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct GlassLayoutField {
-    pub node_key: String,
-    pub field_id: String,
-    pub owner_to_viewport: [f64; 9],
-    pub material: GlassLayoutMaterial,
-    pub environment: GlassLayoutEnvironment,
-    pub merge_distance: f64,
-    pub member_surface_ids: Vec<String>,
-}
-
-/// Layout/evaluation sidecar. Packed programs are installed by Engine after it has qualified the
-/// surfaces in device space; the Motion emitter consumes them without interpreting optics.
+/// Glass evaluated for one frame. Emit draws it from these values and the frame's boxes.
 #[derive(Debug, Clone, Default)]
-pub struct GlassLayoutFrame {
-    pub surfaces: Vec<GlassLayoutSurface>,
-    pub fields: Vec<GlassLayoutField>,
-    /// Scene node key → nearest field outside member foreground. Used to synthesize a single
-    /// non-layout material scope around the exact painter-order run.
-    pub node_fields: std::collections::HashMap<String, String>,
-    pub material_programs:
-        std::collections::BTreeMap<String, valle_draw::program::MotionGlassProgram>,
-    pub foreground_programs:
-        std::collections::BTreeMap<String, valle_draw::program::MotionGlassForegroundProgram>,
+pub(crate) struct GlassFrame {
+    pub(crate) glass: std::collections::HashMap<String, ResolvedGlass>,
+    pub(crate) fields: std::collections::HashMap<String, ResolvedGlassField>,
+    /// Scene key → key of the GlassField the node belongs to.
+    pub(crate) field_of: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -339,7 +322,7 @@ pub struct LayoutTree {
     pub(crate) css_3d_planes: Rc<std::collections::HashMap<String, Css3dPlane>>,
     pub(crate) formulas:
         Rc<std::collections::HashMap<String, crate::math_formula::FormulaFragment>>,
-    pub glass: GlassLayoutFrame,
+    pub(crate) glass: Rc<GlassFrame>,
 }
 
 impl LayoutTree {

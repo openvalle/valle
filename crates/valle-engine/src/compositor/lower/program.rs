@@ -6,8 +6,7 @@ use valle_draw::{
     Rect,
     program::{
         BackdropScope, BlendMode, Clip, DrawProgram, FILTER_GAUSSIAN_SUPPORT_SIGMAS, Filter, Group,
-        MaskMode, MotionGlassForegroundProgram, MotionGlassProgram, Node, NodeId,
-        SHADER_BACKDROP_FOOTPRINT, ShaderLayer, ShaderTextureSource, Transform2d,
+        MaskMode, Node, NodeId, SHADER_BACKDROP_FOOTPRINT, ShaderLayer, ShaderTextureSource, Transform2d,
     },
     requirements::{DestinationOperation, Insets, LocalBounds, SamplingMode},
 };
@@ -72,16 +71,6 @@ impl ProgramPlan {
             }
             if !paths.insert(&pass.semantic_path) {
                 return invalid("localPlan.passes", "pass semantic paths must be unique");
-            }
-            if let ProgramPassKind::ApplyMotionGlassForeground {
-                owner_to_program, ..
-            } = &pass.kind
-                && owner_to_program.inverse().is_none()
-            {
-                return invalid(
-                    &pass.semantic_path,
-                    "Motion Glass foreground owner transform must be finite and invertible",
-                );
             }
             let output = pass.kind.output();
             if self.resources.get(output.index()).is_none()
@@ -232,26 +221,6 @@ pub enum ProgramPassKind {
         sampling: SamplingMode,
         filters: Vec<Filter>,
     },
-    /// One digest-verified Motion Glass material contribution. `input` is the resolved Current
-    /// backdrop sample; ordinary group children are composited afterward as foreground.
-    MotionGlass {
-        node: NodeId,
-        input: ProgramResourceId,
-        output: ProgramResourceId,
-        program: MotionGlassProgram,
-    },
-    /// Clip one real ordinary subtree to its member's materialized shape. Protection/tone are
-    /// validated owner metadata; no fake foreground pixels exist in this pass.
-    ApplyMotionGlassForeground {
-        node: NodeId,
-        input: ProgramResourceId,
-        output: ProgramResourceId,
-        /// The material owner's coordinate space is authoritative for the packed foreground
-        /// homography. A Field member can be nested under a different local transform, so the
-        /// executor must not infer this matrix from the foreground output resource.
-        owner_to_program: Transform2d,
-        program: MotionGlassForegroundProgram,
-    },
     SourceOver {
         source: ProgramResourceId,
         destination: ProgramResourceId,
@@ -326,8 +295,6 @@ impl ProgramPassKind {
             Self::Clear { .. } | Self::RasterNode { .. } | Self::RasterTree { .. } => Vec::new(),
             Self::ReadDestination { local_inputs, .. } => local_inputs.clone(),
             Self::Backdrop { input, .. }
-            | Self::MotionGlass { input, .. }
-            | Self::ApplyMotionGlassForeground { input, .. }
             | Self::ApplyClip { input, .. }
             | Self::ApplyFilter { input, .. }
             | Self::ApplyOpacity { input, .. }
@@ -359,8 +326,6 @@ impl ProgramPassKind {
             | Self::RasterTree { output, .. }
             | Self::ReadDestination { output, .. }
             | Self::Backdrop { output, .. }
-            | Self::MotionGlass { output, .. }
-            | Self::ApplyMotionGlassForeground { output, .. }
             | Self::SourceOver { output, .. }
             | Self::ApplyClip { output, .. }
             | Self::ApplyFilter { output, .. }
@@ -421,7 +386,7 @@ impl<'a> Compiler<'a> {
             self.raster_tree(roots, Transform2d::IDENTITY, "root.rasterTree")?
         } else {
             let clear = self.clear("root.clear", Transform2d::IDENTITY)?;
-            self.compose_nodes(roots, clear, &[], true, Transform2d::IDENTITY, None, "root")?
+            self.compose_nodes(roots, clear, &[], true, Transform2d::IDENTITY, "root")?
         };
         if self.next_destination != self.program.requirements().destination_uses.len() {
             return self.invalid(
@@ -508,7 +473,6 @@ impl<'a> Compiler<'a> {
         base_prefix: &[ProgramResourceId],
         entry_is_external: bool,
         local_to_program: Transform2d,
-        glass_owner_to_program: Option<Transform2d>,
         path: &str,
     ) -> Result<ProgramResourceId, ProgramPlanError> {
         let mut index = 0;
@@ -531,13 +495,7 @@ impl<'a> Compiler<'a> {
             } else {
                 let mut prefix = base_prefix.to_vec();
                 prefix.extend(self.nonempty_prefix(&[output]));
-                self.node(
-                    nodes[start],
-                    &prefix,
-                    entry_is_external,
-                    local_to_program,
-                    glass_owner_to_program,
-                )?
+                self.node(nodes[start], &prefix, entry_is_external, local_to_program)?
             };
             output = self.source_over(source, output, format!("{path}[{start}].composite"))?;
         }
@@ -550,7 +508,6 @@ impl<'a> Compiler<'a> {
         parent_prefix: &[ProgramResourceId],
         entry_is_external: bool,
         parent_to_program: Transform2d,
-        glass_owner_to_program: Option<Transform2d>,
     ) -> Result<ProgramResourceId, ProgramPlanError> {
         let node = self
             .program
@@ -573,7 +530,6 @@ impl<'a> Compiler<'a> {
                 parent_prefix,
                 entry_is_external,
                 parent_to_program,
-                glass_owner_to_program,
             ),
             _ => {
                 let bounds = self.node_bounds(id)?;
@@ -594,16 +550,10 @@ impl<'a> Compiler<'a> {
         parent_prefix: &[ProgramResourceId],
         entry_is_external: bool,
         parent_to_program: Transform2d,
-        glass_owner_to_program: Option<Transform2d>,
     ) -> Result<ProgramResourceId, ProgramPlanError> {
         let node_path = format!("node[{}]", id.raw());
         let expected_bounds = self.node_bounds(id)?;
         let local_to_program = group.transform.then(parent_to_program);
-        let child_glass_owner_to_program = if group.glass.is_some() {
-            Some(local_to_program)
-        } else {
-            glass_owner_to_program
-        };
         let group_is_visible = expected_bounds.rect().is_some();
         let child_entry_is_external = entry_is_external && !group.isolated;
         let base_prefix = if group.isolated {
@@ -612,50 +562,6 @@ impl<'a> Compiler<'a> {
             parent_prefix.to_vec()
         };
         let mut output = self.clear(format!("{node_path}.clear"), local_to_program)?;
-
-        if let Some(glass) = group.glass.as_deref()
-            && group_is_visible
-        {
-            let footprint = glass_footprint(glass);
-            let operation = DestinationOperation::Backdrop {
-                footprint,
-                sampling: SamplingMode::LinearClamp,
-            };
-            let (external, local_inputs) = match glass.backdrop.scope {
-                BackdropScope::Current => {
-                    let mut inputs = base_prefix.clone();
-                    inputs.extend(self.nonempty_prefix(&[output]));
-                    (entry_is_external, inputs)
-                }
-                BackdropScope::LayerEntry(_) | BackdropScope::ScopeEntry(_) => (true, Vec::new()),
-            };
-            let destination = self.read_destination(
-                id,
-                ProgramDestinationKind::Backdrop,
-                glass.backdrop.scope.clone(),
-                operation,
-                glass.backdrop.output_bounds,
-                LocalBounds::from_rect(glass.backdrop.sample_bounds),
-                local_to_program,
-                external,
-                local_inputs,
-                format!("{node_path}.glass.destination"),
-            )?;
-            let source = self.resource(
-                LocalBounds::from_rect(glass.backdrop.output_bounds),
-                local_to_program,
-            )?;
-            self.pass(
-                format!("{node_path}.glass"),
-                ProgramPassKind::MotionGlass {
-                    node: id,
-                    input: destination,
-                    output: source,
-                    program: glass.clone(),
-                },
-            )?;
-            output = self.source_over(source, output, format!("{node_path}.glass.composite"))?;
-        }
 
         if let Some(backdrop) = &group.backdrop
             && group_is_visible
@@ -776,20 +682,8 @@ impl<'a> Compiler<'a> {
 
         if let Some(transition) = &group.transition {
             self.enclosing.push(None);
-            let from = self.node(
-                group.children[0],
-                &[],
-                false,
-                local_to_program,
-                child_glass_owner_to_program,
-            )?;
-            let to = self.node(
-                group.children[1],
-                &[],
-                false,
-                local_to_program,
-                child_glass_owner_to_program,
-            )?;
+            let from = self.node(group.children[0], &[], false, local_to_program)?;
+            let to = self.node(group.children[1], &[], false, local_to_program)?;
             self.enclosing.pop();
             let transitioned =
                 self.resource(LocalBounds::from_rect(transition.bounds), local_to_program)?;
@@ -819,51 +713,9 @@ impl<'a> Compiler<'a> {
                 &base_prefix,
                 child_entry_is_external,
                 local_to_program,
-                child_glass_owner_to_program,
                 &format!("{node_path}.children"),
             )?;
             self.enclosing.pop();
-        }
-
-        if let Some(foreground) = group.glass_foreground.as_deref() {
-            let owner_to_program =
-                glass_owner_to_program.ok_or_else(|| ProgramPlanError::InvalidContract {
-                    path: format!("{node_path}.glassForeground"),
-                    reason: "foreground has no active material owner coordinate space".to_owned(),
-                })?;
-            let program_to_local =
-                local_to_program
-                    .inverse()
-                    .ok_or_else(|| ProgramPlanError::InvalidContract {
-                        path: format!("{node_path}.glassForeground"),
-                        reason: "foreground local transform is singular".to_owned(),
-                    })?;
-            let owner_to_local = owner_to_program.then(program_to_local);
-            let surface_to_local =
-                Transform2d(foreground.local_to_owner.map(f64::from)).then(owner_to_local);
-            let bounds = if foreground.presence == 0.0 {
-                LocalBounds::Empty
-            } else {
-                let shape = surface_to_local
-                    .map_bounds(foreground.rect)
-                    .ok_or_else(|| ProgramPlanError::InvalidContract {
-                        path: format!("{node_path}.glassForeground"),
-                        reason: "foreground shape crosses a projective horizon".to_owned(),
-                    })?;
-                intersect(self.bounds(output), LocalBounds::from_rect(shape))
-            };
-            let clipped = self.resource(bounds, local_to_program)?;
-            self.pass(
-                format!("{node_path}.glassForeground"),
-                ProgramPassKind::ApplyMotionGlassForeground {
-                    node: id,
-                    input: output,
-                    output: clipped,
-                    owner_to_program,
-                    program: foreground.clone(),
-                },
-            )?;
-            output = clipped;
         }
 
         if let Some(clip) = &group.clip {
@@ -903,13 +755,7 @@ impl<'a> Compiler<'a> {
 
         if let Some(mask) = &group.mask {
             self.enclosing.push(None);
-            let mask_source = self.node(
-                mask.source,
-                &[],
-                false,
-                local_to_program,
-                child_glass_owner_to_program,
-            )?;
+            let mask_source = self.node(mask.source, &[], false, local_to_program)?;
             self.enclosing.pop();
             let masked = self.resource(
                 if mask.mode.is_inverted() {
@@ -1273,17 +1119,6 @@ fn outset(rect: Rect, insets: Insets) -> Rect {
     )
 }
 
-fn glass_footprint(glass: &MotionGlassProgram) -> Insets {
-    let output = glass.backdrop.output_bounds;
-    let sample = glass.backdrop.sample_bounds;
-    Insets::new(
-        (output.left() - sample.left()).max(0.0) as f32,
-        (output.top() - sample.top()).max(0.0) as f32,
-        (sample.right() - output.right()).max(0.0) as f32,
-        (sample.bottom() - output.bottom()).max(0.0) as f32,
-    )
-}
-
 fn clip_bounds(program: &DrawProgram, clip: &Clip) -> LocalBounds {
     match clip {
         Clip::Rect(rect) => LocalBounds::from_rect(*rect),
@@ -1414,11 +1249,6 @@ mod tests {
     use valle_draw::program::{
         BackdropRead, BackdropScope, DrawProgramBuilder, LinearColor, Mask, Node, Paint, PathData,
         PathNode, PathVerb,
-        glass::{
-            BackdropUse, GlassOwnerKind, MOTION_GLASS_KERNEL_ID, MotionGlassForegroundProgram,
-            PackedGlassField, PackedGlassMaterial, PackedGlassShapeKind, PackedGlassSurface,
-            motion_glass_kernel_digest, schema_digest,
-        },
     };
 
     use super::*;
@@ -1503,178 +1333,6 @@ mod tests {
             }
         }
         assert_eq!((transitions, reads), (1, 1));
-    }
-
-    fn field_owner_program() -> MotionGlassProgram {
-        MotionGlassProgram {
-            owner_kind: GlassOwnerKind::Field,
-            owner_id: "pair".into(),
-            surfaces: vec![PackedGlassSurface {
-                surface_id: "member".into(),
-                shape: PackedGlassShapeKind::ContinuousRect,
-                rect: Rect::new(0.0, 0.0, 1.0, 1.0),
-                // Normalized member coordinates -> Field owner coordinates.
-                local_to_owner: [30.0, 0.0, 20.0, 0.0, 20.0, 10.0, 0.0, 0.0, 1.0],
-                radius: 0.2,
-                presence: 1.0,
-                path_points: Vec::new(),
-            }],
-            field: Some(PackedGlassField {
-                field_id: "pair".into(),
-                merge_distance: 4.0,
-                member_ids: vec!["member".into()],
-            }),
-            material: PackedGlassMaterial {
-                bevel_width: 4.0,
-                thickness: 8.0,
-                refractive_index: 1.18,
-                roughness: 0.08,
-                dispersion: 0.01,
-                tint_linear: [0.2, 0.3, 0.8, 0.2],
-                specular_strength: 0.45,
-                shadow_strength: 0.1,
-                light: valle_draw::program::PackedGlassLight::DEFAULT,
-            },
-            backdrop: BackdropUse {
-                scope: BackdropScope::ScopeEntry("pair".into()),
-                output_bounds: Rect::new(0.0, 0.0, 70.0, 50.0),
-                sample_bounds: Rect::new(-10.0, -10.0, 90.0, 70.0),
-            },
-            kernel_id: MOTION_GLASS_KERNEL_ID.into(),
-            kernel_digest: motion_glass_kernel_digest(),
-            schema_digest: schema_digest(),
-        }
-    }
-
-    #[test]
-    fn field_foreground_uses_owner_space_while_keeping_member_local_bounds() {
-        let owner = field_owner_program();
-        let foreground = MotionGlassForegroundProgram::from_owner(&owner, "member").unwrap();
-        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 128.0, 72.0));
-        let before = rect_path(
-            &mut builder,
-            Rect::new(1.0, 1.0, 8.0, 8.0),
-            LinearColor::new(0.2, 0.4, 0.6, 1.0),
-        );
-        builder.add_root(before);
-        let child = rect_path(
-            &mut builder,
-            Rect::new(0.0, 0.0, 30.0, 20.0),
-            LinearColor::new(0.9, 0.8, 0.7, 1.0),
-        );
-        let mut foreground_group = Group::plain(vec![child]);
-        foreground_group.glass_foreground = Some(Box::new(foreground));
-        let foreground_node = builder.push_node(Node::Group(foreground_group));
-
-        let member_to_owner = Transform2d([1.0, 0.0, 20.0, 0.0, 1.0, 10.0, 0.0, 0.0, 1.0]);
-        let mut member_group = Group::plain(vec![foreground_node]);
-        member_group.transform = member_to_owner;
-        let member_node = builder.push_node(Node::Group(member_group));
-
-        let mut owner_group = Group::plain(vec![member_node]);
-        owner_group.glass = Some(Box::new(owner));
-        let owner_node = builder.push_node(Node::Group(owner_group));
-
-        let owner_to_program = Transform2d([1.0, 0.0, 4.0, 0.0, 1.0, 3.0, 0.0, 0.0, 1.0]);
-        let mut outer_group = Group::plain(vec![owner_node]);
-        outer_group.transform = owner_to_program;
-        let root = builder.push_node(Node::Group(outer_group));
-        builder.add_root(root);
-        let program = builder.finish().unwrap();
-        let foreground_node = program
-            .nodes()
-            .iter()
-            .position(|node| matches!(node, Node::Group(group) if group.glass_foreground.is_some()))
-            .map(|index| NodeId::from_raw(u32::try_from(index).unwrap()))
-            .expect("canonical foreground node");
-
-        assert_eq!(
-            program.geometry(foreground_node).unwrap().output_bounds,
-            LocalBounds::from_rect(Rect::new(0.0, 0.0, 30.0, 20.0)),
-            "normalized material geometry must be projected back into the member's local pixels",
-        );
-
-        let plan = ProgramPlan::derive(&program).unwrap();
-        let glass_owner = program
-            .nodes()
-            .iter()
-            .position(|node| matches!(node, Node::Group(group) if group.glass.is_some()))
-            .map(|index| NodeId::from_raw(u32::try_from(index).unwrap()))
-            .expect("canonical Glass field owner");
-        assert!(plan.passes().iter().any(|pass| matches!(
-            &pass.kind,
-            ProgramPassKind::ReadDestination {
-                node,
-                scope: BackdropScope::ScopeEntry(field),
-                external: Some(_),
-                local_inputs,
-                ..
-            } if *node == glass_owner && field == "pair" && local_inputs.is_empty()
-        )));
-        let (output, admitted_owner) = plan
-            .passes()
-            .iter()
-            .find_map(|pass| match &pass.kind {
-                ProgramPassKind::ApplyMotionGlassForeground {
-                    node,
-                    output,
-                    owner_to_program,
-                    ..
-                } if *node == foreground_node => Some((*output, *owner_to_program)),
-                _ => None,
-            })
-            .expect("foreground pass");
-        assert_eq!(admitted_owner, owner_to_program);
-        assert_eq!(
-            plan.resources()[output.index()].bounds,
-            LocalBounds::from_rect(Rect::new(0.0, 0.0, 30.0, 20.0)),
-        );
-        assert_eq!(
-            plan.resources()[output.index()].local_to_program,
-            member_to_owner.then(owner_to_program),
-            "the foreground image remains in member-local coordinates even though its kernel uses the Field owner",
-        );
-    }
-
-    #[test]
-    fn glass_scope_entry_remains_external_inside_isolation() {
-        let owner = field_owner_program();
-        let foreground = MotionGlassForegroundProgram::from_owner(&owner, "member").unwrap();
-        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 128.0, 72.0));
-        let child = rect_path(
-            &mut builder,
-            Rect::new(0.0, 0.0, 30.0, 20.0),
-            LinearColor::new(0.9, 0.8, 0.7, 1.0),
-        );
-        let mut foreground_group = Group::plain(vec![child]);
-        foreground_group.glass_foreground = Some(Box::new(foreground));
-        let foreground = builder.push_node(Node::Group(foreground_group));
-        let mut owner_group = Group::plain(vec![foreground]);
-        owner_group.glass = Some(Box::new(owner));
-        let owner = builder.push_node(Node::Group(owner_group));
-        let mut isolation = Group::plain(vec![owner]);
-        isolation.isolated = true;
-        let isolation = builder.push_node(Node::Group(isolation));
-        builder.add_root(isolation);
-
-        let program = builder.finish().unwrap();
-        assert!(
-            program
-                .requirements()
-                .destination_uses
-                .iter()
-                .any(|read| { read.scope == BackdropScope::ScopeEntry("pair".into()) })
-        );
-        let plan = ProgramPlan::derive(&program).unwrap();
-        assert!(plan.passes().iter().any(|pass| matches!(
-            &pass.kind,
-            ProgramPassKind::ReadDestination {
-                scope: BackdropScope::ScopeEntry(field),
-                external: Some(_),
-                local_inputs,
-                ..
-            } if field == "pair" && local_inputs.is_empty()
-        )));
     }
 
     #[test]

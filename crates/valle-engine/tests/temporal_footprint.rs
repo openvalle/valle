@@ -114,7 +114,7 @@ fn glass_artifact() -> Arc<SceneArtifact> {
         r#"
 export const composition = { width: 1920, height: 1080, duration: 1 };
 export default function Scene() {
-  return <Glass surfaceId="history-lens" shape={{ kind: "circle" }} />;
+  return <Glass material={{ frost: 12 }} style={{ width: 400, height: 300, borderRadius: 40 }} />;
 }
 "#,
     )

@@ -88,7 +88,7 @@ impl PremulRgba32 {
     /// Porter-Duff source-over in the working linear premultiplied domain.
     pub fn source_over(self, destination: Self) -> Result<Self, PixelError> {
         // These exact premultiplied identities dominate sparse effect contributions such as
-        // Glass. Avoid four checked f64 operations for every transparent ROI padding pixel, and
+        // glows. Avoid four checked f64 operations for every transparent ROI padding pixel, and
         // avoid touching the destination when an opaque source replaces it completely.
         if self.alpha() == 0.0 {
             return Ok(destination);

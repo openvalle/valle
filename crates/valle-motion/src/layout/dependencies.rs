@@ -295,15 +295,7 @@ impl SceneDependencies {
             }
         }
 
-        let field_nodes = artifact
-            .nodes
-            .iter()
-            .enumerate()
-            .filter_map(|(at, node)| match &node.kind {
-                NodeKind::GlassField(field) => Some((field.field_id.as_str(), at)),
-                _ => None,
-            })
-            .collect::<BTreeMap<_, _>>();
+        let fields = crate::glass::field_membership(artifact);
         let mut reference_ids = BTreeSet::new();
         for (consumer, node) in artifact.nodes.iter().enumerate() {
             let mut visited = BTreeSet::new();
@@ -334,9 +326,8 @@ impl SceneDependencies {
                 nodes[source].paint_referenced = true;
                 reference_ids.insert((consumer, source, 1u8));
             }
-            if let NodeKind::Glass(glass) = &node.kind
-                && let Some(field_id) = &glass.field_id
-                && let Some(&source) = field_nodes.get(field_id.as_str())
+            if matches!(node.kind, NodeKind::Glass(_))
+                && let Some(source) = fields[consumer]
             {
                 reference_ids.insert((consumer, source, 2u8));
             }

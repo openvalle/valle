@@ -103,14 +103,9 @@ pub use geometry::{
     MAX_PATH_POINTS, PATH_ARC_SEGMENTS, PATH_CURVE_STEPS, PATH_SECTOR_ARC_SEGMENTS,
     PATH_SECTOR_POINTS, PATH_SECTOR_VERBS, PathBooleanOp, PathData,
 };
-pub use glass::{
-    GlassFieldId, GlassSurfaceId, MOTION_GLASS_CAPABILITY, MOTION_GLASS_SCHEMA_ID,
-    validate_glass_schema,
-};
+pub use glass::{MOTION_GLASS_CAPABILITY, validate_glass_schema};
 pub use layout::{
-    FrameEvaluationStats, GlassLayoutEnvironment, GlassLayoutField, GlassLayoutFrame,
-    GlassLayoutMaterial, GlassLayoutSurface, LAYOUT_ENGINE_ID, LayoutError, LayoutOptions,
-    LayoutTree, MotionReview, MotionReviewIssue, MotionTrajectory, MotionTrajectoryPoint,
+    FrameEvaluationStats, LAYOUT_ENGINE_ID, LayoutError, LayoutOptions, LayoutTree, MotionReview, MotionReviewIssue, MotionTrajectory, MotionTrajectoryPoint,
     PreparedScene, Scene3DFrameRequest, Scene3DRequest, SealedScene3DFrame, StyleCache, Viewport,
     build_tree, layout_box_at_point, layout_boxes, prepare_owned_scene, prepare_scene,
     review_motion,

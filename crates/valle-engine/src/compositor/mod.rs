@@ -14,7 +14,6 @@ pub use bind::{
 
 pub mod bloom;
 pub mod film;
-pub mod glass;
 pub mod graph;
 pub mod lens;
 pub mod lower;

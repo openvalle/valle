@@ -473,16 +473,6 @@ impl<'a> RecordingCompiler<'a> {
                 )?);
                 self.begin(group);
             }
-            RecordCmd::BeginMotionGlass { program } => {
-                let mut group = Group::plain(Vec::new());
-                group.glass = Some(program.clone());
-                self.begin(group);
-            }
-            RecordCmd::BeginMotionGlassForeground { program } => {
-                let mut group = Group::plain(Vec::new());
-                group.glass_foreground = Some(program.clone());
-                self.begin(group);
-            }
             RecordCmd::End => self.end(command_index)?,
             RecordCmd::Path {
                 path,
@@ -1186,6 +1176,9 @@ fn filter_of(value: recording::FilterOp) -> Filter {
         recording::FilterOp::Blur { sigma } => Filter::Blur {
             sigma_x: sigma as f32,
             sigma_y: sigma as f32,
+        },
+        recording::FilterOp::ColorMatrix { matrix } => Filter::ColorMatrix {
+            matrix: Box::new(matrix.map(|value| value as f32)),
         },
         recording::FilterOp::Brightness { amount } => Filter::Brightness {
             amount: amount as f32,

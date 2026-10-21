@@ -105,11 +105,6 @@ pub(crate) fn canonicalize(
         canonical_roots.push(canonicalizer.visit(root, 0)?);
     }
 
-    // Glass topology is recursive by construction. Run it only after canonical traversal has
-    // rejected cycles and trees deeper than MAX_GROUP_DEPTH, so hostile input cannot exhaust the
-    // thread stack before the structural limits take effect.
-    validate_glass_topology(&canonicalizer.raw_roots, &nodes)?;
-
     // Detect cycles before enforcing the stricter forest ownership invariant, so malformed
     // cyclic input receives the most useful diagnostic.
     validate_single_parents(&canonicalizer.raw_roots, &nodes)?;
@@ -532,34 +527,6 @@ fn validate_group(
     for child in &group.children {
         check_node_id(Some(owner), *child, node_count)?;
     }
-    if let Some(glass) = &group.glass {
-        glass
-            .derive_requirements()
-            .map_err(|error| DrawProgramError::InvalidValue {
-                location: format!("node[{}].glass", owner.raw()),
-                reason: error.to_string(),
-            })?;
-        if group.backdrop.is_some() {
-            return invalid(
-                format!("node[{}]", owner.raw()),
-                "glass and backdrop cannot both own the group destination read",
-            );
-        }
-    }
-    if let Some(foreground) = &group.glass_foreground {
-        foreground
-            .validate()
-            .map_err(|error| DrawProgramError::InvalidValue {
-                location: format!("node[{}].glassForeground", owner.raw()),
-                reason: error.to_string(),
-            })?;
-    }
-    if group.glass.is_some() && group.glass_foreground.is_some() {
-        return invalid(
-            format!("node[{}]", owner.raw()),
-            "one group cannot be both a Glass material owner and foreground",
-        );
-    }
     match group.clip.as_ref() {
         Some(Clip::Rect(rect)) => validate_rect(*rect, &format!("node[{}].clip", owner.raw()))?,
         Some(Clip::RoundRect(round_rect)) => {
@@ -627,7 +594,6 @@ fn validate_group(
             || transition.bounds.width <= 0.0
             || transition.bounds.height <= 0.0
             || group.backdrop.is_some()
-            || group.glass.is_some()
         {
             return invalid(
                 path,
@@ -642,177 +608,6 @@ fn validate_group(
         validate_rect(bounds, &format!("node[{}].layerBounds", owner.raw()))?;
     }
     Ok(())
-}
-
-fn validate_glass_topology(
-    roots: &[NodeId],
-    nodes: &[Option<Node>],
-) -> Result<(), DrawProgramError> {
-    fn has_local_effect(group: &Group) -> bool {
-        group.transform != Transform2d::IDENTITY
-            || group.clip.is_some()
-            || !group.filters.is_empty()
-            || group.mask.is_some()
-            || group.opacity != 1.0
-            || group.internal_blend != super::BlendMode::Normal
-            || group.isolated
-            || group.backdrop.is_some()
-            || group.transition.is_some()
-            || group.shader.is_some()
-            || group.layer_bounds.is_some()
-    }
-
-    fn walk<'a>(
-        id: NodeId,
-        nodes: &'a [Option<Node>],
-        active: Option<&'a super::MotionGlassProgram>,
-        inside_foreground: bool,
-        owners: &mut BTreeSet<String>,
-        markers: &mut BTreeMap<String, BTreeSet<String>>,
-    ) -> Result<(), DrawProgramError> {
-        let node = nodes[id.index()]
-            .as_ref()
-            .expect("undefined nodes rejected before Glass topology validation");
-        let Node::Group(group) = node else {
-            if let Some(owner) = active
-                && !inside_foreground
-            {
-                return invalid(
-                    format!("node[{}]", id.raw()),
-                    format!(
-                        "Glass owner '{}' contains painted content outside a member foreground",
-                        owner.owner_id
-                    ),
-                );
-            }
-            return Ok(());
-        };
-
-        if let Some(owner) = &group.glass {
-            if active.is_some() && !inside_foreground {
-                return invalid(
-                    format!("node[{}].glass", id.raw()),
-                    "a nested Glass material owner must live inside an outer member foreground",
-                );
-            }
-            if has_local_effect(group) {
-                return invalid(
-                    format!("node[{}].glass", id.raw()),
-                    "a Glass material owner group must not also carry transform, clip, filter, mask, opacity, blend, backdrop, shader, isolation, or layer bounds",
-                );
-            }
-            if !owners.insert(owner.owner_id.clone()) {
-                return invalid(
-                    format!("node[{}].glass.ownerId", id.raw()),
-                    "Glass material owner ids must be unique in one DrawProgram",
-                );
-            }
-            markers.entry(owner.owner_id.clone()).or_default();
-            for child in &group.children {
-                walk(*child, nodes, Some(owner), false, owners, markers)?;
-            }
-            return Ok(());
-        }
-
-        if let Some(foreground) = &group.glass_foreground {
-            let Some(owner) = active else {
-                return invalid(
-                    format!("node[{}].glassForeground", id.raw()),
-                    "Glass foreground has no material owner ancestor",
-                );
-            };
-            if inside_foreground {
-                return invalid(
-                    format!("node[{}].glassForeground", id.raw()),
-                    "Glass foreground markers may not nest without a nested material owner",
-                );
-            }
-            if has_local_effect(group) {
-                return invalid(
-                    format!("node[{}].glassForeground", id.raw()),
-                    "a Glass foreground marker group must not carry unrelated group effects",
-                );
-            }
-            if !foreground_matches_owner(foreground, owner) {
-                return invalid(
-                    format!("node[{}].glassForeground", id.raw()),
-                    "Glass foreground is not the exact geometry and metadata of its material surface",
-                );
-            }
-            let seen = markers
-                .get_mut(&owner.owner_id)
-                .expect("active owner registered before descendants");
-            if !seen.insert(foreground.surface_id.clone()) {
-                return invalid(
-                    format!("node[{}].glassForeground.surfaceId", id.raw()),
-                    "a Glass surface may own at most one foreground subtree",
-                );
-            }
-            for child in &group.children {
-                walk(*child, nodes, Some(owner), true, owners, markers)?;
-            }
-            return Ok(());
-        }
-
-        if active.is_some() && !inside_foreground {
-            let paints_between = !group.filters.is_empty()
-                || group.mask.is_some()
-                || group.opacity != 1.0
-                || group.internal_blend != super::BlendMode::Normal
-                || group.isolated
-                || group.backdrop.is_some()
-                || group.transition.is_some()
-                || group.shader.is_some();
-            if paints_between {
-                return invalid(
-                    format!("node[{}]", id.raw()),
-                    "an effect-bearing group cannot sit between a Glass material and its foreground",
-                );
-            }
-        }
-        for child in &group.children {
-            walk(*child, nodes, active, inside_foreground, owners, markers)?;
-        }
-        if let Some(mask) = &group.mask {
-            walk(
-                mask.source,
-                nodes,
-                active,
-                inside_foreground,
-                owners,
-                markers,
-            )?;
-        }
-        Ok(())
-    }
-
-    let mut owners = BTreeSet::new();
-    let mut markers = BTreeMap::new();
-    for root in roots {
-        walk(*root, nodes, None, false, &mut owners, &mut markers)?;
-    }
-    Ok(())
-}
-
-fn foreground_matches_owner(
-    foreground: &super::MotionGlassForegroundProgram,
-    owner: &super::MotionGlassProgram,
-) -> bool {
-    if foreground.owner_id != owner.owner_id
-        || foreground.kernel_digest != owner.kernel_digest
-        || foreground.schema_digest != owner.schema_digest
-    {
-        return false;
-    }
-    owner.surfaces.iter().any(|surface| {
-        foreground.surface_id == surface.surface_id
-            && foreground.shape == surface.shape
-            && foreground.rect == surface.rect
-            && foreground.local_to_owner == surface.local_to_owner
-            && foreground.radius == surface.radius
-            && foreground.presence == surface.presence
-            && foreground.path_points == surface.path_points
-    })
 }
 
 fn validate_stroke(stroke: &super::PathStroke, location: &str) -> Result<(), DrawProgramError> {
@@ -1379,13 +1174,6 @@ fn derive_requirements(
                 if group.backdrop.is_some() {
                     capabilities.insert(crate::requirements::DrawCapability::BackdropRead);
                 }
-                if group.glass.is_some() {
-                    capabilities.insert(crate::requirements::DrawCapability::BackdropRead);
-                    capabilities.insert(crate::requirements::DrawCapability::MotionGlass);
-                }
-                if group.glass_foreground.is_some() {
-                    capabilities.insert(crate::requirements::DrawCapability::MotionGlass);
-                }
                 if let Some(transition) = &group.transition {
                     capabilities.insert(crate::requirements::DrawCapability::Transition);
                     if let super::TransitionKernel::Shader {
@@ -1629,25 +1417,6 @@ fn derive_destination_uses(
         let child_entry_is_external = entry_is_external && !group.isolated;
         let local_to_program = group.transform.then(parent_to_program);
         let group_is_visible = geometry[id.index()].output_bounds.rect().is_some();
-        if let Some(glass) = &group.glass
-            && group_is_visible
-            && match glass.backdrop.scope {
-                BackdropScope::Current => entry_is_external,
-                BackdropScope::LayerEntry(_) | BackdropScope::ScopeEntry(_) => true,
-            }
-        {
-            let footprint = glass_footprint(glass);
-            uses.push(DestinationUse {
-                node: id,
-                scope: glass.backdrop.scope.clone(),
-                output_bounds: map_required_bounds(glass.backdrop.output_bounds, local_to_program)?,
-                sample_bounds: map_required_bounds(glass.backdrop.sample_bounds, local_to_program)?,
-                operation: DestinationOperation::Backdrop {
-                    footprint,
-                    sampling: SamplingMode::LinearClamp,
-                },
-            });
-        }
         if let Some(backdrop) = &group.backdrop {
             let scope_is_external = match backdrop.scope {
                 BackdropScope::Current => child_entry_is_external,
@@ -1776,17 +1545,6 @@ fn map_required_bounds(bounds: Rect, transform: Transform2d) -> Result<Rect, Dra
     Ok(mapped)
 }
 
-fn glass_footprint(glass: &super::MotionGlassProgram) -> Insets {
-    let output = glass.backdrop.output_bounds;
-    let sample = glass.backdrop.sample_bounds;
-    Insets::new(
-        (output.left() - sample.left()).max(0.0) as f32,
-        (output.top() - sample.top()).max(0.0) as f32,
-        (sample.right() - output.right()).max(0.0) as f32,
-        (sample.bottom() - output.bottom()).max(0.0) as f32,
-    )
-}
-
 fn derive_program_geometry(program: &DrawProgram, nodes: &[NodeGeometry]) -> NodeGeometry {
     let mut geometry = NodeGeometry::EMPTY;
     for root in &program.roots {
@@ -1803,7 +1561,7 @@ fn derive_program_geometry(program: &DrawProgram, nodes: &[NodeGeometry]) -> Nod
 fn derive_node_geometries(program: &DrawProgram) -> Result<Vec<NodeGeometry>, DrawProgramError> {
     let mut geometry = vec![NodeGeometry::EMPTY; program.nodes.len()];
     for root in &program.roots {
-        derive_node_geometry(program, *root, &mut geometry, None)?;
+        derive_node_geometry(program, *root, &mut geometry)?;
     }
     Ok(geometry)
 }
@@ -1812,7 +1570,6 @@ fn derive_node_geometry(
     program: &DrawProgram,
     id: NodeId,
     geometry: &mut [NodeGeometry],
-    glass_owner_to_parent: Option<Transform2d>,
 ) -> Result<NodeGeometry, DrawProgramError> {
     let leaf = |bounds: Rect| NodeGeometry {
         content_bounds: LocalBounds::from_rect(bounds),
@@ -1919,23 +1676,10 @@ fn derive_node_geometry(
         Node::RuntimeShader(node) => leaf(node.bounds),
         Node::Scene3d(node) => leaf(node.bounds),
         Node::Group(group) => {
-            let glass_owner_to_group = if group.glass.is_some() {
-                Some(Transform2d::IDENTITY)
-            } else if let Some(owner_to_parent) = glass_owner_to_parent {
-                let Some(parent_to_group) = group.transform.inverse() else {
-                    return invalid(
-                        format!("node[{}].transform", id.raw()),
-                        "Glass foreground ancestry contains a singular transform",
-                    );
-                };
-                Some(owner_to_parent.then(parent_to_group))
-            } else {
-                None
-            };
             let mut result = NodeGeometry::EMPTY;
             let mut peak_local_pixels = 0;
             for child in &group.children {
-                let child = derive_node_geometry(program, *child, geometry, glass_owner_to_group)?;
+                let child = derive_node_geometry(program, *child, geometry)?;
                 result.content_bounds = union_bounds(result.content_bounds, child.content_bounds);
                 result.output_bounds = union_bounds(result.output_bounds, child.output_bounds);
                 result.max_intermediate_pixels = result
@@ -1945,37 +1689,6 @@ fn derive_node_geometry(
             if let Some(transition) = &group.transition {
                 result.output_bounds = LocalBounds::from_rect(transition.bounds);
                 peak_local_pixels = bounds_pixels(result.output_bounds)?;
-            }
-            if let Some(glass) = &group.glass {
-                let output = LocalBounds::from_rect(glass.backdrop.output_bounds);
-                result.content_bounds = union_bounds(result.content_bounds, output);
-                result.output_bounds = union_bounds(result.output_bounds, output);
-                peak_local_pixels = peak_local_pixels.max(bounds_pixels(LocalBounds::from_rect(
-                    glass.backdrop.sample_bounds,
-                ))?);
-            }
-            if let Some(foreground) = &group.glass_foreground {
-                let bounds = if foreground.presence == 0.0 {
-                    LocalBounds::Empty
-                } else {
-                    let Some(owner_to_group) = glass_owner_to_group else {
-                        return invalid(
-                            format!("node[{}].glassForeground", id.raw()),
-                            "Glass foreground has no material owner coordinate space",
-                        );
-                    };
-                    let surface_to_group =
-                        Transform2d(foreground.local_to_owner.map(f64::from)).then(owner_to_group);
-                    let Some(bounds) = surface_to_group.map_bounds(foreground.rect) else {
-                        return invalid(
-                            format!("node[{}].glassForeground", id.raw()),
-                            "Glass foreground shape crosses a projective horizon",
-                        );
-                    };
-                    LocalBounds::from_rect(bounds)
-                };
-                result.content_bounds = intersect_bounds(result.content_bounds, bounds);
-                result.output_bounds = intersect_bounds(result.output_bounds, bounds);
             }
             if let Some(backdrop) = &group.backdrop {
                 let bounds = LocalBounds::from_rect(backdrop.bounds);
@@ -2002,8 +1715,7 @@ fn derive_node_geometry(
             peak_local_pixels = peak_local_pixels.max(bounds_pixels(result.output_bounds)?);
             if let Some(mask) = &group.mask {
                 let inverted = mask.mode.is_inverted();
-                let mask =
-                    derive_node_geometry(program, mask.source, geometry, glass_owner_to_group)?;
+                let mask = derive_node_geometry(program, mask.source, geometry)?;
                 if !inverted {
                     result.output_bounds =
                         intersect_bounds(result.output_bounds, mask.output_bounds);
@@ -2031,8 +1743,6 @@ fn derive_node_geometry(
                 || !group.filters.is_empty()
                 || group.mask.is_some()
                 || group.backdrop.is_some()
-                || group.glass.is_some()
-                || group.glass_foreground.is_some()
                 || group.transition.is_some()
                 || group.shader.is_some();
             if needs_intermediate {
@@ -2245,9 +1955,6 @@ fn derive_filter_footprint(program: &DrawProgram) -> Insets {
             });
         let cumulative = inherited.added(local);
         maximum.include(cumulative);
-        if let Some(glass) = &group.glass {
-            maximum.include(cumulative.added(glass_footprint(glass)));
-        }
         for child in &group.children {
             visit(program, *child, cumulative, maximum);
         }

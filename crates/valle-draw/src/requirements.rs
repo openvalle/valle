@@ -385,7 +385,6 @@ pub enum DrawCapability {
     BoxShadow,
     GroupShader,
     Transition,
-    MotionGlass,
 }
 
 /// This is output of validation, never author input.

@@ -425,13 +425,6 @@ pub struct TransitionLayer {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Group {
     pub children: Vec<NodeId>,
-    /// Motion Glass material painted from the Current destination before ordered foreground
-    /// children. Foreground remains ordinary DrawProgram content instead of a synthetic payload.
-    pub glass: Option<Box<super::MotionGlassProgram>>,
-    /// Marks the nested ordinary subtree as the real foreground of one Glass surface. The
-    /// material owner is a distinct ancestor group; validators reject orphaned, duplicated, or
-    /// mismatched markers instead of letting executors guess painter order.
-    pub glass_foreground: Option<Box<super::MotionGlassForegroundProgram>>,
     pub transform: Transform2d,
     pub clip: Option<Clip>,
     pub filters: Vec<Filter>,
@@ -451,8 +444,6 @@ impl Group {
     pub fn plain(children: Vec<NodeId>) -> Self {
         Self {
             children,
-            glass: None,
-            glass_foreground: None,
             transform: Transform2d::IDENTITY,
             clip: None,
             filters: Vec::new(),
@@ -484,9 +475,7 @@ impl Group {
     /// A destination-independent raster subtree. Clips are applied once to the flattened
     /// children, using a separate coverage layer before the group's opacity is restored.
     pub fn is_raster_tree_group(&self) -> bool {
-        self.glass.is_none()
-            && self.glass_foreground.is_none()
-            && self.filters.is_empty()
+        self.filters.is_empty()
             && self.mask.is_none()
             && self.internal_blend == BlendMode::Normal
             && self.backdrop.is_none()

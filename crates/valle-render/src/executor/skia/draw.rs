@@ -20,9 +20,7 @@ use valle_draw::{
         RoundRect, ShaderLayer, ShaderTextureBinding, ShaderTextureSource, ShaderUniformBinding,
         ShaderUniformValue, SpreadMode, StrokeCap, StrokeJoin, Transform2d, TransitionKernel,
     },
-    requirements::{
-        DrawCapability, ExternalTexture, FontKey, HostFrame, RuntimeShaderKey, SamplingMode,
-    },
+    requirements::{ExternalTexture, FontKey, HostFrame, RuntimeShaderKey, SamplingMode},
 };
 use valle_engine::compositor::{
     BoundExternalObjects, ExternalObject,
@@ -46,9 +44,6 @@ use super::{
     cache::{BackendCaches, SmallOpacityCache},
     clip_coverage,
     effect::{draw_filters_into, set_working_color, straight_color},
-    glass::{
-        admit_motion_glass_shader, render_motion_glass_foreground_into, render_motion_glass_into,
-    },
     gradient_fill,
     noise::NoiseFields,
     surface::{
@@ -112,7 +107,6 @@ pub(crate) struct ProgramRuntime {
     pub(crate) fonts: BTreeMap<(ContentDigest, u32), Typeface>,
     pub(crate) shaders: BTreeMap<String, Arc<RuntimeEffect>>,
     scenes: BTreeMap<ContentDigest, SceneImage>,
-    glass: Option<RuntimeEffect>,
     blend: Option<BlendRuntime>,
     mask_coverage: Option<RuntimeEffect>,
     opacity_layers: Arc<std::sync::Mutex<SmallOpacityCache>>,
@@ -151,7 +145,6 @@ impl core::fmt::Debug for ProgramRuntime {
             .field("fonts", &self.fonts.len())
             .field("shaders", &self.shaders.len())
             .field("scenes", &self.scenes.len())
-            .field("motionGlass", &self.glass.is_some())
             .field("creativeBlend", &self.blend.is_some())
             .finish()
     }
@@ -387,13 +380,6 @@ impl ProgramRuntime {
             .then(BlendRuntime::admit)
             .transpose()?;
 
-        let glass = plan
-            .requirements
-            .capabilities
-            .contains(&DrawCapability::MotionGlass)
-            .then(admit_motion_glass_shader)
-            .transpose()?;
-
         let mask_coverage = plan.local_plan().passes().iter()
             .any(|pass| matches!(pass.kind, ProgramPassKind::ApplyMask { mode, .. } if mode.is_luminance()))
             .then(|| RuntimeEffect::make_for_shader(
@@ -417,7 +403,6 @@ impl ProgramRuntime {
             fonts,
             shaders,
             scenes,
-            glass,
             blend,
         })
     }
@@ -828,43 +813,6 @@ impl ProgramRuntime {
                     &Clip::Rect(*bounds),
                     self.device_matrix(plan, output, transform)?,
                     self.program.paths(),
-                    target_origin,
-                )
-            }
-            ProgramPassKind::MotionGlass { input, program, .. } => {
-                let input = resource(resources, *input)?.ok_or_else(|| {
-                    DrawError::Internal("Motion Glass input is transparent".into())
-                })?;
-                render_motion_glass_into(
-                    target,
-                    self.glass.as_ref().ok_or_else(|| {
-                        DrawError::Internal("Motion Glass pass has no admitted kernel".into())
-                    })?,
-                    &input.image,
-                    input.roi,
-                    program,
-                    self.device_matrix_values(plan, output, transform)?,
-                    target_origin,
-                )
-            }
-            ProgramPassKind::ApplyMotionGlassForeground {
-                input,
-                owner_to_program,
-                program,
-                ..
-            } => {
-                let input = resource(resources, *input)?.ok_or_else(|| {
-                    DrawError::Internal("Motion Glass foreground input is transparent".into())
-                })?;
-                render_motion_glass_foreground_into(
-                    target,
-                    self.glass.as_ref().ok_or_else(|| {
-                        DrawError::Internal("Motion Glass pass has no admitted kernel".into())
-                    })?,
-                    &input.image,
-                    input.roi,
-                    program,
-                    self.program_transform_values(*owner_to_program, transform)?,
                     target_origin,
                 )
             }
@@ -2250,8 +2198,8 @@ fn resource(
 /// Pass kinds whose result is their output ROI, drawn through the canvas, so a scratch target
 /// may be clipped to that ROI. Clipping renders exactly as a ROI-sized surface would; without
 /// it, Skia's antialiasing and wide blurs near the ROI edge depended on how large a slot
-/// surface other resources had made. Blends can write whole surfaces directly, and shader,
-/// glass and mask passes keep the unclipped path.
+/// surface other resources had made. Blends can write whole surfaces directly, and shader and
+/// mask passes keep the unclipped path.
 fn draws_within_roi(pass: &ProgramPassKind) -> bool {
     matches!(
         pass,
@@ -2267,8 +2215,8 @@ fn draws_within_roi(pass: &ProgramPassKind) -> bool {
 }
 
 /// The local results whose slot pixels outside their ROI a pass of `plan` may read, so that
-/// those pixels must stay transparent. Masks, transition and shader inputs and Motion Glass
-/// backdrops are sampled through shaders of their whole slot image. Every other input is read
+/// those pixels must stay transparent. Masks, transition and shader inputs are sampled through
+/// shaders of their whole slot image. Every other input is read
 /// only inside its ROI, by a strict copy of it or by a kernel bounded to it. Reading an alias
 /// reads the result it forwards.
 fn read_outside_roi(
@@ -2289,10 +2237,6 @@ fn read_outside_roi(
             } => {
                 read.insert(*input);
                 read.extend(backdrops.iter().copied());
-            }
-            ProgramPassKind::MotionGlass { input, .. }
-            | ProgramPassKind::ApplyMotionGlassForeground { input, .. } => {
-                read.insert(*input);
             }
             ProgramPassKind::Clear { .. }
             | ProgramPassKind::RasterNode { .. }
@@ -4940,7 +4884,6 @@ mod tests {
                 fonts: BTreeMap::new(),
                 shaders: BTreeMap::new(),
                 scenes: BTreeMap::new(),
-                glass: None,
                 blend: None,
                 mask_coverage: None,
                 opacity_layers: Arc::clone(&cache),
@@ -6594,7 +6537,6 @@ mod tests {
                 fonts: BTreeMap::new(),
                 shaders: BTreeMap::new(),
                 scenes: BTreeMap::new(),
-                glass: None,
                 blend: None,
                 mask_coverage: None,
                 opacity_layers: Default::default(),
@@ -6648,7 +6590,6 @@ mod tests {
             fonts: BTreeMap::new(),
             shaders: BTreeMap::new(),
             scenes: BTreeMap::new(),
-            glass: None,
             blend: None,
             mask_coverage: None,
             opacity_layers: Default::default(),
@@ -6726,7 +6667,6 @@ mod tests {
             fonts: BTreeMap::new(),
             shaders: BTreeMap::new(),
             scenes: BTreeMap::new(),
-            glass: None,
             blend: None,
             mask_coverage: None,
             opacity_layers: Default::default(),
@@ -6812,7 +6752,6 @@ mod tests {
             fonts: BTreeMap::new(),
             shaders: BTreeMap::new(),
             scenes: BTreeMap::new(),
-            glass: None,
             blend: None,
             mask_coverage: None,
             opacity_layers: Default::default(),
@@ -6921,7 +6860,6 @@ mod tests {
                     fonts: BTreeMap::new(),
                     shaders: BTreeMap::new(),
                     scenes: BTreeMap::new(),
-                    glass: None,
                     blend: None,
                     mask_coverage: None,
                     opacity_layers: Default::default(),
@@ -7505,7 +7443,6 @@ mod tests {
             fonts: BTreeMap::new(),
             shaders: BTreeMap::new(),
             scenes: BTreeMap::new(),
-            glass: None,
             blend: None,
             mask_coverage: None,
             opacity_layers: Default::default(),

@@ -60,8 +60,6 @@ test("all 13 Timeline transitions render exact endpoints and analytic midpoints 
         const receipt = JSON.parse(engine.open_fixed_package(config.fixedPackageManifestJson!,config.timelineJson!,config.resourceManifestJson!,config.verifiedBindingBundleJson!));
         executor = new CanvasKitExecutor(ck,{
           transform_srgb_preview_pixels:engine.transform_srgb_preview_pixels.bind(engine),
-          pack_motion_glass_uniforms:engine.pack_motion_glass_uniforms.bind(engine),
-          pack_motion_glass_foreground_uniforms:engine.pack_motion_glass_foreground_uniforms.bind(engine),
         });
         let first: Uint8Array | undefined;
         for (const [request,frame] of fixture.frames.entries()) {

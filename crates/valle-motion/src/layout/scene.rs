@@ -19,7 +19,6 @@ use std::sync::Arc;
 
 use takumi_core::layout::node::Node;
 use takumi_core::layout::tree::{LayoutResults, RenderNode};
-use takumi_core::scene::{PaintItemKind, StackingContextNode, build_stacking_contexts};
 use takumi_core::style::{Affine as TAffine, ComputedStyle, SizingContext, ZIndex};
 use valle_draw::program::recording::Homography;
 use valle_motion::MotionValue;
@@ -35,8 +34,7 @@ use valle_motion::{
 use super::activation::{ActivationPlan, InstanceRangeGate, InstanceRowSelection};
 use super::dependencies::{SceneDependencies, TemporalSampling};
 use crate::layout::bridge::{
-    EchoSample, GlassLayoutEnvironment, GlassLayoutField, GlassLayoutFrame, GlassLayoutMaterial,
-    GlassLayoutSurface, LayoutOptions, LayoutTree, ResolvedUnit, TemporalSample, parse_style,
+    EchoSample, LayoutOptions, LayoutTree, ResolvedUnit, TemporalSample, parse_style,
 };
 
 /// Fail-closed failures from Scene Artifact evaluation or layout construction.
@@ -434,9 +432,17 @@ pub fn prepare(artifact: &SceneArtifact) -> Result<PreparedScene, LayoutError> {
 pub fn prepare_owned(artifact: SceneArtifact) -> Result<PreparedScene, LayoutError> {
     artifact.validate().map_err(LayoutError::InvalidArtifact)?;
     admit_supported_surface(&artifact)?;
-    let inline_shaders = artifact
+    let mut inline_shaders = artifact
         .inline_shader_packages()
         .map_err(LayoutError::InvalidArtifact)?;
+    // Glass draws with a built-in shader, which backends fetch as they fetch an inline one.
+    if artifact
+        .nodes
+        .iter()
+        .any(|node| matches!(node.kind, NodeKind::Glass(_) | NodeKind::GlassField(_)))
+    {
+        inline_shaders.push(crate::glass::optics::optics_package().clone());
+    }
     let mut scene = prepare_admitted(artifact, false)?;
     scene.inline_shaders = inline_shaders.into();
     Ok(scene)
@@ -1617,15 +1623,7 @@ pub(super) fn build_tree_inner(
         }
     }
 
-    let glass = resolve_glass_layout(
-        artifact,
-        &values,
-        &root,
-        &layout,
-        &keys,
-        &boxes,
-        &css_3d_planes,
-    )?;
+    let glass = Rc::new(resolve_glass(artifact, &values)?);
 
     if let Some(timings) = timings.as_deref_mut() {
         timings.finish_ms = elapsed(&mut started);
@@ -1716,334 +1714,150 @@ pub(super) fn build_tree_inner(
     })
 }
 
-fn resolve_glass_layout(
+/// Each Glass and GlassField's values for this frame. Emit draws them from these and the frame's
+/// boxes and transforms.
+fn resolve_glass(
     artifact: &SceneArtifact,
     values: &[MotionValue],
-    root: &RenderNode,
-    layout: &Arc<LayoutResults>,
-    keys: &HashMap<u64, String>,
-    boxes: &BTreeMap<String, valle_draw::Rect>,
-    css_3d_planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,
-) -> Result<GlassLayoutFrame, LayoutError> {
+) -> Result<crate::layout::bridge::GlassFrame, LayoutError> {
+    use crate::layout::bridge::{GlassFrame, GlassMaterial, ResolvedGlass, ResolvedGlassField};
+
+    let mut frame = GlassFrame::default();
     if !artifact
         .nodes
         .iter()
         .any(|node| matches!(node.kind, NodeKind::Glass(_) | NodeKind::GlassField(_)))
     {
-        return Ok(GlassLayoutFrame::default());
+        return Ok(frame);
     }
-
-    let root_layout = layout
-        .layout(takumi_core::geometry::NodeId::ROOT)
-        .map_err(|error| LayoutError::BadStyle {
-            node: artifact.nodes[artifact.root.0 as usize].key.clone(),
-            declarations: "glass transform qualification".into(),
-            reason: error.to_string(),
-        })?;
-    let contexts = build_stacking_contexts(
-        root,
-        layout,
-        takumi_core::geometry::NodeId::ROOT,
-        TAffine::IDENTITY,
-        (Some(root_layout.size.width), Some(root_layout.size.height)),
-    )
-    .map_err(|error| LayoutError::BadStyle {
-        node: artifact.nodes[artifact.root.0 as usize].key.clone(),
-        declarations: "glass painter transform qualification".into(),
-        reason: error.to_string(),
-    })?;
-    let mut transforms = HashMap::<String, TAffine>::new();
-    collect_paint_transforms(&contexts, 0, keys, &mut transforms);
-
-    let mut parents = vec![None; artifact.nodes.len()];
-    for (parent, node) in artifact.nodes.iter().enumerate() {
-        let range = node.children.start as usize..node.children.end as usize;
-        for child in &artifact.node_children[range] {
-            parents[child.0 as usize] = Some(parent);
-        }
-    }
-    let owner_matrix_for = |mut at: usize| {
-        while let Some(parent) = parents[at] {
-            if let Some(transform) = transforms.get(&artifact.nodes[parent].key) {
-                return affine_matrix(*transform);
+    let bad = |at: usize, declarations: &str, reason: String| LayoutError::BadStyle {
+        node: artifact.nodes[at].key.clone(),
+        declarations: declarations.into(),
+        reason,
+    };
+    let material = |material: &crate::glass::GlassMaterialBinding,
+                    light: &crate::glass::GlassLightBinding,
+                    at: usize|
+     -> Result<GlassMaterial, LayoutError> {
+        let length = |value: &NumberValue, op: &'static str| {
+            let length = number_value(value, values, at, op)?;
+            if length.is_finite() && length >= 0.0 {
+                Ok(length)
+            } else {
+                Err(bad(
+                    at,
+                    "Glass material",
+                    format!("{op} = {length} must be a finite non-negative number"),
+                ))
             }
-            at = parent;
+        };
+        let direction = point_value(&light.direction, values, at, "glass light direction")?;
+        if !(direction.x.is_finite()
+            && direction.y.is_finite()
+            && (direction.x != 0.0 || direction.y != 0.0))
+        {
+            return Err(bad(
+                at,
+                "Glass light",
+                "light direction must be a finite non-zero vector".into(),
+            ));
         }
-        [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        let elevation = number_value(&light.elevation, values, at, "glass light elevation")?;
+        if !(0.0..=1.0).contains(&elevation) {
+            return Err(bad(
+                at,
+                "Glass light",
+                format!("light elevation = {elevation} must be in 0..=1"),
+            ));
+        }
+        Ok(GlassMaterial {
+            bevel: material
+                .bevel
+                .as_ref()
+                .map(|value| length(value, "glass bevel"))
+                .transpose()?,
+            refraction: material
+                .refraction
+                .as_ref()
+                .map(|value| length(value, "glass refraction"))
+                .transpose()?,
+            dispersion: length(&material.dispersion, "glass dispersion")?,
+            frost: length(&material.frost, "glass frost")?,
+            tint: color_value(&material.tint, values, at)?,
+            light: [direction.x, direction.y],
+            elevation,
+            intensity: length(&light.intensity, "glass light intensity")?,
+        })
     };
 
     let membership = crate::glass::field_membership(artifact);
-    let mut frame = GlassLayoutFrame::default();
-    for (index, field) in membership.iter().enumerate() {
-        if let Some(field) = field {
-            frame
-                .node_fields
-                .insert(artifact.nodes[index].key.clone(), field.as_str().to_owned());
-            if let NodeKind::InstanceLayout { group } = artifact.nodes[index].kind
-                && let Some(group) = artifact.instance_groups.get(group as usize)
-            {
-                for row in 0..group.rows() {
-                    if let Some(key) = group.keys.key_at(row) {
-                        frame.node_fields.insert(key, field.as_str().to_owned());
-                    }
+    for (at, node) in artifact.nodes.iter().enumerate() {
+        match &node.kind {
+            NodeKind::Glass(glass) => {
+                let presence = number_value(&glass.presence, values, at, "glass presence")?;
+                if !(0.0..=1.0).contains(&presence) {
+                    return Err(bad(
+                        at,
+                        "Glass presence",
+                        format!("presence = {presence} must be in 0..=1"),
+                    ));
+                }
+                let path = match &glass.path {
+                    Some(path) => Some(crate::layout::bridge::ClipContent {
+                        path: path_value(path, values, at)?.clone(),
+                        fill_rule: glass.fill_rule,
+                    }),
+                    None => None,
+                };
+                let material = match (&glass.material, &glass.light) {
+                    (Some(binding), Some(light)) => Some(material(binding, light, at)?),
+                    _ => None,
+                };
+                frame.glass.insert(
+                    node.key.clone(),
+                    ResolvedGlass {
+                        presence,
+                        path,
+                        material,
+                    },
+                );
+            }
+            NodeKind::GlassField(field) => {
+                frame.fields.insert(
+                    node.key.clone(),
+                    ResolvedGlassField {
+                        material: material(&field.material, &field.light, at)?,
+                        merge: field.merge.distance,
+                        members: Vec::new(),
+                    },
+                );
+            }
+            _ => {}
+        }
+    }
+    for (at, field) in membership.iter().enumerate() {
+        let Some(field) = field else {
+            continue;
+        };
+        let node = &artifact.nodes[at];
+        let field = &artifact.nodes[*field].key;
+        frame.field_of.insert(node.key.clone(), field.clone());
+        if matches!(node.kind, NodeKind::Glass(_))
+            && let Some(resolved) = frame.fields.get_mut(field)
+        {
+            resolved.members.push(node.key.clone());
+        }
+        if let NodeKind::InstanceLayout { group } = node.kind
+            && let Some(group) = artifact.instance_groups.get(group as usize)
+        {
+            for row in 0..group.rows() {
+                if let Some(key) = group.keys.key_at(row) {
+                    frame.field_of.insert(key, field.clone());
                 }
             }
         }
-    }
-
-    let resolve_material = |material: &crate::glass::GlassMaterialBinding,
-                            at: usize|
-     -> Result<GlassLayoutMaterial, LayoutError> {
-        Ok(GlassLayoutMaterial {
-            clarity: number_value(&material.clarity, values, at, "glass material clarity")?,
-            depth: number_value(&material.depth, values, at, "glass material depth")?,
-            tint: color_value(&material.tint, values, at)?,
-        })
-    };
-    let resolve_environment = |environment: &crate::glass::GlassEnvironmentBinding,
-                               at: usize|
-     -> Result<GlassLayoutEnvironment, LayoutError> {
-        let direction = point_value(
-            &environment.light.direction,
-            values,
-            at,
-            "glass light direction",
-        )?;
-        Ok(GlassLayoutEnvironment {
-            light_direction: [direction.x, direction.y],
-            light_elevation: number_value(
-                &environment.light.elevation,
-                values,
-                at,
-                "glass light elevation",
-            )?,
-            light_intensity: number_value(
-                &environment.light.intensity,
-                values,
-                at,
-                "glass light intensity",
-            )?,
-            light_space: environment.light.space,
-        })
-    };
-
-    for (at, node) in artifact.nodes.iter().enumerate() {
-        let NodeKind::GlassField(field) = &node.kind else {
-            continue;
-        };
-        frame.fields.push(GlassLayoutField {
-            node_key: node.key.clone(),
-            field_id: field.field_id.as_str().to_owned(),
-            owner_to_viewport: owner_matrix_for(at),
-            material: resolve_material(&field.material, at)?,
-            environment: resolve_environment(&field.environment, at)?,
-            merge_distance: field.merge.distance,
-            member_surface_ids: Vec::new(),
-        });
-    }
-    frame
-        .fields
-        .sort_by(|left, right| left.field_id.cmp(&right.field_id));
-    let field_by_id = frame
-        .fields
-        .iter()
-        .map(|field| (field.field_id.clone(), field.clone()))
-        .collect::<BTreeMap<_, _>>();
-
-    for (at, node) in artifact.nodes.iter().enumerate() {
-        let NodeKind::Glass(glass) = &node.kind else {
-            continue;
-        };
-        let rect = boxes
-            .get(&node.key)
-            .copied()
-            .ok_or(LayoutError::BadNode { at })?;
-        if rect.is_empty() {
-            return Err(LayoutError::BadStyle {
-                node: node.key.clone(),
-                declarations: "Glass layout box".into(),
-                reason: "Glass requires a positive layout box".into(),
-            });
-        }
-        let local_rect = valle_draw::Rect::new(0.0, 0.0, rect.width, rect.height);
-        let transform = transforms.get(&node.key).copied().unwrap_or(TAffine {
-            a: 1.0,
-            b: 0.0,
-            c: 0.0,
-            d: 1.0,
-            x: rect.x as f32,
-            y: rect.y as f32,
-        });
-        let width = rect.width;
-        let height = rect.height;
-        let affine_viewport_matrix = [
-            f64::from(transform.a) * width,
-            f64::from(transform.c) * height,
-            f64::from(transform.x),
-            f64::from(transform.b) * width,
-            f64::from(transform.d) * height,
-            f64::from(transform.y),
-            0.0,
-            0.0,
-            1.0,
-        ];
-        // CSS 3D is resolved before paint into one authoritative viewport plane. The foreground
-        // emitter draws through that plane with BeginPerspective; the material sidecar must
-        // therefore carry its homography as well or the two layers visibly split.
-        let viewport_matrix = match css_3d_planes.get(&node.key) {
-            Some(plane) if plane.project => {
-                valle_draw::program::recording::Homography::map_rect(
-                    valle_draw::Rect::new(0.0, 0.0, 1.0, 1.0),
-                    plane.quad,
-                )
-                .ok_or_else(|| LayoutError::BadStyle {
-                    node: node.key.clone(),
-                    declarations: "Glass CSS 3D projection".into(),
-                    reason: "projected Glass quad is degenerate or self-intersecting".into(),
-                })?
-                .0
-            }
-            _ => affine_viewport_matrix,
-        };
-        let (shape, radius, path_points) = match &glass.shape {
-            crate::glass::GlassShapeBinding::Capsule => (
-                valle_draw::program::PackedGlassShapeKind::Capsule,
-                (width.min(height) * 0.5) as f32,
-                Vec::new(),
-            ),
-            crate::glass::GlassShapeBinding::Circle => (
-                valle_draw::program::PackedGlassShapeKind::Circle,
-                (width.min(height) * 0.5) as f32,
-                Vec::new(),
-            ),
-            crate::glass::GlassShapeBinding::ContinuousRect { radius } => (
-                valle_draw::program::PackedGlassShapeKind::ContinuousRect,
-                number_value(radius, values, at, "glass continuous radius")? as f32,
-                Vec::new(),
-            ),
-            crate::glass::GlassShapeBinding::Path { path, .. } => {
-                let points = path_value(path, values, at)?
-                    .closed_polygon_points()
-                    .map_err(|error| LayoutError::BadPaint {
-                        node: node.key.clone(),
-                        reason: format!("Glass path must be one closed contour: {error}"),
-                    })?;
-                if points.len() > valle_draw::program::glass::MAX_GLASS_PATH_POINTS {
-                    return Err(LayoutError::BadPaint {
-                        node: node.key.clone(),
-                        reason: format!(
-                            "Glass path has {} flattened points; maximum is {}",
-                            points.len(),
-                            valle_draw::program::glass::MAX_GLASS_PATH_POINTS
-                        ),
-                    });
-                }
-                (
-                    valle_draw::program::PackedGlassShapeKind::Path,
-                    0.0,
-                    points
-                        .into_iter()
-                        .map(|point| [point.x as f32, point.y as f32])
-                        .collect(),
-                )
-            }
-        };
-        let field_id = membership[at]
-            .as_ref()
-            .map(|field| field.as_str().to_owned());
-        let owner_to_viewport = field_id
-            .as_ref()
-            .and_then(|field| field_by_id.get(field))
-            .map_or_else(|| affine_matrix(transform), |field| field.owner_to_viewport);
-        frame.surfaces.push(GlassLayoutSurface {
-            node_key: node.key.clone(),
-            surface_id: glass.surface_id.as_str().to_owned(),
-            field_id,
-            shape,
-            local_rect,
-            viewport_matrix,
-            owner_to_viewport,
-            radius,
-            path_points,
-            // A backface-hidden member must disappear from a field's shared material program as
-            // well as from its foreground subtree. Keeping the stable surface with zero presence
-            // preserves topology while matching CSS visibility.
-            presence: if css_3d_planes
-                .get(&node.key)
-                .is_some_and(|plane| plane.hidden)
-            {
-                0.0
-            } else {
-                number_value(&glass.presence, values, at, "glass presence")?
-            },
-            material: glass
-                .material
-                .as_ref()
-                .map(|material| resolve_material(material, at))
-                .transpose()?,
-            environment: glass
-                .environment
-                .as_ref()
-                .map(|environment| resolve_environment(environment, at))
-                .transpose()?,
-        });
-    }
-    frame
-        .surfaces
-        .sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
-    for field in &mut frame.fields {
-        field.member_surface_ids = frame
-            .surfaces
-            .iter()
-            .filter(|surface| surface.field_id.as_deref() == Some(field.field_id.as_str()))
-            .map(|surface| surface.surface_id.clone())
-            .collect();
     }
     Ok(frame)
-}
-
-fn collect_paint_transforms(
-    contexts: &[StackingContextNode],
-    index: usize,
-    keys: &HashMap<u64, String>,
-    output: &mut HashMap<String, TAffine>,
-) {
-    let Some(context) = contexts.get(index) else {
-        return;
-    };
-    if let Some(root) = context.root()
-        && let Some(key) = keys.get(&u64::from(root.node_id))
-    {
-        output.insert(key.clone(), root.transform);
-    }
-    for bucket in context.in_paint_order() {
-        for item in bucket {
-            match &item.kind {
-                PaintItemKind::Node(node) => {
-                    if let Some(key) = keys.get(&u64::from(node.node_id)) {
-                        output.insert(key.clone(), node.transform);
-                    }
-                }
-                PaintItemKind::Context(child) => {
-                    collect_paint_transforms(contexts, *child, keys, output);
-                }
-            }
-        }
-    }
-}
-
-fn affine_matrix(transform: TAffine) -> [f64; 9] {
-    [
-        f64::from(transform.a),
-        f64::from(transform.c),
-        f64::from(transform.x),
-        f64::from(transform.b),
-        f64::from(transform.d),
-        f64::from(transform.y),
-        0.0,
-        0.0,
-        1.0,
-    ]
 }
 
 fn resolve_scene3d_requests(

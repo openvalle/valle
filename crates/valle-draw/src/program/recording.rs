@@ -468,6 +468,10 @@ pub enum FilterOp {
     Blur {
         sigma: f64,
     },
+    /// Row-major 4x5 matrix applied to straight color, offsets in 0-1, as SVG `feColorMatrix`.
+    ColorMatrix {
+        matrix: [f64; 20],
+    },
     Brightness {
         amount: f64,
     },
@@ -1156,18 +1160,6 @@ pub enum RecordCmd {
         inputs: Span,
         bounds: Rect,
     },
-    /// Paint one validated Motion Glass material from the Current destination, then paint the
-    /// nested commands as its real foreground in author order. This construction-only recording
-    /// carries the typed program; the outer DrawProgram is the only serialized execution packet.
-    BeginMotionGlass {
-        program: Box<super::MotionGlassProgram>,
-    },
-    /// Clip the nested ordinary subtree to one materialized member shape. `tone` and
-    /// `protection` remain digest-pinned metadata for the owner kernel; the command never carries
-    /// a synthetic foreground primitive.
-    BeginMotionGlassForeground {
-        program: Box<super::MotionGlassForegroundProgram>,
-    },
     /// Close one group; validation rejects missing or extra ends.
     End,
 
@@ -1266,9 +1258,7 @@ impl RecordCmd {
             | RecordCmd::BeginMask { .. }
             | RecordCmd::BeginFilter { .. }
             | RecordCmd::BeginBackdropFilter { .. }
-            | RecordCmd::BeginShaderLayer { .. }
-            | RecordCmd::BeginMotionGlass { .. }
-            | RecordCmd::BeginMotionGlassForeground { .. } => 1,
+            | RecordCmd::BeginShaderLayer { .. } => 1,
             RecordCmd::End => -1,
             _ => 0,
         }
@@ -1406,12 +1396,6 @@ pub enum RecordingError {
         at: usize,
         reason: &'static str,
     },
-    InvalidMotionGlass {
-        at: usize,
-    },
-    InvalidMotionGlassForeground {
-        at: usize,
-    },
 }
 
 impl core::fmt::Display for RecordingError {
@@ -1458,12 +1442,6 @@ impl core::fmt::Display for RecordingError {
             }
             RecordingError::InvalidTextureCommand { at, reason } => {
                 write!(f, "cmd {at}: invalid generated texture draw: {reason}")
-            }
-            RecordingError::InvalidMotionGlass { at } => {
-                write!(f, "cmd {at}: invalid MotionGlassProgram")
-            }
-            RecordingError::InvalidMotionGlassForeground { at } => {
-                write!(f, "cmd {at}: invalid MotionGlassForegroundProgram")
             }
         }
     }
@@ -1558,6 +1536,7 @@ mod finite {
     pub fn filter(op: &FilterOp) -> bool {
         match op {
             FilterOp::Blur { sigma } => sigma.is_finite(),
+            FilterOp::ColorMatrix { matrix } => matrix.iter().all(|value| value.is_finite()),
             FilterOp::Brightness { amount }
             | FilterOp::Contrast { amount }
             | FilterOp::Grayscale { amount }
@@ -1693,9 +1672,6 @@ mod finite {
                     && bounds.y == 0.0
                     && bounds.width > 0.0
                     && bounds.height > 0.0
-            }
-            RecordCmd::BeginMotionGlass { .. } | RecordCmd::BeginMotionGlassForeground { .. } => {
-                true
             }
             RecordCmd::Path {
                 fill, stroke: s, ..
@@ -2206,12 +2182,6 @@ impl ProgramRecording {
                     },
                 ..
             } => self.check_shader(at, *program, *uniforms, *inputs),
-            RecordCmd::BeginMotionGlass { program } => program
-                .validate()
-                .map_err(|_| RecordingError::InvalidMotionGlass { at }),
-            RecordCmd::BeginMotionGlassForeground { program } => program
-                .validate()
-                .map_err(|_| RecordingError::InvalidMotionGlassForeground { at }),
             RecordCmd::BeginMask { source, .. } => match source {
                 MaskSource::Image { image } => {
                     self.check_id(at, "images", image.0, self.images.len())

@@ -13,8 +13,6 @@ pub mod resource;
 // Fixed-package caption shaping is an internal Prepare service, not an authoring surface.
 #[cfg(feature = "text")]
 pub(crate) mod text_semantic;
-#[cfg(target_arch = "wasm32")]
-mod wasm_glass;
 #[cfg(feature = "web")]
 pub mod web;
 

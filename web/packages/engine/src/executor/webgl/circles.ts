@@ -10,8 +10,6 @@ interface CircleGroup {
   backdrop?: unknown;
   shader?: unknown;
   transition?: unknown;
-  glass?: unknown;
-  glassForeground?: unknown;
   filters: readonly unknown[];
   internalBlend: string;
   children: readonly number[];
@@ -169,8 +167,6 @@ function simpleGroup(g: CircleGroup): boolean {
     !g.backdrop &&
     !g.shader &&
     !g.transition &&
-    !g.glass &&
-    !g.glassForeground &&
     !g.filters.length &&
     g.internalBlend === "normal"
   );

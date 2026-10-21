@@ -56,8 +56,6 @@ pub enum ProgramAllocationReason {
     RasterIntermediate,
     DestinationComposite,
     BackdropKernel,
-    MotionGlassKernel,
-    MotionGlassForegroundKernel,
     OrderedComposite,
     ClipKernel,
     FilterKernel,
@@ -312,12 +310,6 @@ impl<'a> Scheduler<'a> {
             } => self.destination_storage(*external, local_inputs, path),
             ProgramPassKind::Backdrop { .. } => Ok(StorageDraft::Materialized {
                 reason: ProgramAllocationReason::BackdropKernel,
-            }),
-            ProgramPassKind::MotionGlass { .. } => Ok(StorageDraft::Materialized {
-                reason: ProgramAllocationReason::MotionGlassKernel,
-            }),
-            ProgramPassKind::ApplyMotionGlassForeground { .. } => Ok(StorageDraft::Materialized {
-                reason: ProgramAllocationReason::MotionGlassForegroundKernel,
             }),
             ProgramPassKind::SourceOver {
                 source,

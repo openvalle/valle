@@ -156,8 +156,6 @@ fn fixture(reverse_arena_insertion: bool) -> DrawProgram {
     let mask = *ids.last().expect("mask node");
     let root = builder.push_node(Node::Group(Group {
         children: ids[..5].to_vec(),
-        glass: None,
-        glass_foreground: None,
         transform: Default::default(),
         clip: Some(Clip::Rect(Rect::new(0.0, 0.0, 64.0, 48.0))),
         filters: vec![Filter::Blur {

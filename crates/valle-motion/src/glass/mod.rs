@@ -1,18 +1,14 @@
-//! Motion Glass typed contracts.
-//!
-//! G4.7: `motion-glass` is admitted in production — `artifact::BASE_CAPABILITIES` lists
-//! the capability, the production compiler emits these nodes, and the Artifact validator
-//! covers the typed schema (G3.2).
+//! Motion Glass: a box drawn in glass, and GlassField, which merges its Glass into one surface.
+//! Glass lowers to ordinary DrawProgram groups and one built-in shader; see [`optics`].
 
-mod ids;
 mod intent;
+pub mod optics;
 mod validate;
 
-pub use ids::{GlassFieldId, GlassIdError, GlassSurfaceId};
 pub use intent::{
-    DEFAULT_CLARITY, DEFAULT_DEPTH, DEFAULT_MERGE_DISTANCE, DEFAULT_PRESENCE,
-    GlassEnvironmentBinding, GlassFieldNode, GlassLightBinding, GlassLightSpace,
-    GlassMaterialBinding, GlassMergeIntent, GlassNode, GlassShapeBinding, MOTION_GLASS_CAPABILITY,
-    MOTION_GLASS_SCHEMA_ID,
+    DEFAULT_BEVEL_OF_SHORTER_SIDE, DEFAULT_LIGHT_ELEVATION, DEFAULT_LIGHT_INTENSITY,
+    DEFAULT_MERGE_DISTANCE, DEFAULT_PRESENCE, DEFAULT_REFRACTION_OF_BEVEL, GlassFieldNode,
+    GlassLightBinding, GlassMaterialBinding, GlassMergeIntent, GlassNode, MERGE_MAX_DISTANCE,
+    MERGE_MIN_DISTANCE, MOTION_GLASS_CAPABILITY,
 };
 pub use validate::{field_membership, validate_glass_schema};

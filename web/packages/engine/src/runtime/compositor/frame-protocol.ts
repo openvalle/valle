@@ -80,14 +80,6 @@ export interface ProductEngineWire {
   binding_bytes(ticket: number): Uint8Array;
   bound_schedule_bytes(ticket: number): Uint8Array;
   release_ticket(ticket: number): boolean;
-  pack_motion_glass_uniforms(
-    programJson: string,
-    ownerToDevice: Float64Array,
-  ): Float32Array;
-  pack_motion_glass_foreground_uniforms(
-    programJson: string,
-    ownerToDevice: Float64Array,
-  ): Float32Array;
   free(): void;
 }
 

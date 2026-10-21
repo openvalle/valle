@@ -671,7 +671,7 @@ fn motion_check_prepares_glass_and_native_shader_resources() {
         (
             "glass.motion.tsx",
             r##"export const composition = { width: 64, height: 64, fps: 30, duration: 3 };
-export default function T(){return <Scene style={{width:64,height:64,backgroundColor:"#468aff"}}><Glass surfaceId="card" shape={{kind:"continuousRect",radius:4}} material={{clarity:0.8,depth:0.4,tint:"#b9d7ff18"}} style={{position:"absolute",left:8,top:8,width:40,height:30}}><Text style={{fontSize:12}}>Hi</Text></Glass></Scene>; }"##,
+export default function T(){return <Scene style={{width:64,height:64,backgroundColor:"#468aff"}}><Glass material={{frost:4,tint:"#b9d7ff18"}} style={{position:"absolute",left:8,top:8,width:40,height:30,borderRadius:4}}><Text style={{fontSize:12}}>Hi</Text></Glass></Scene>; }"##,
         ),
         (
             "shader.motion.tsx",

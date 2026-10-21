@@ -1,37 +1,27 @@
-//! G3.1 Motion Glass JSX lowering: `<Glass>` / `<GlassField>` → normalized typed Artifact
-//! nodes with defaults expanded.
-//!
-//! G4.7: production admission is open — the production compile entry lowers both tags and
-//! declares `motion-glass` (see `tests/motion_glass.rs`); the old admission gate and the
-//! test-only fixture compile entry were removed with the admission commit.
-//! `MotionGlassNotAdmitted` remains declared in `valle-motion::diag` as a historical
-//! diagnostic code for pre-admission artifacts (as-built record, not a live gate).
+//! `<Glass>` and `<GlassField>` JSX → typed Artifact nodes. A Glass lays out like a View; its
+//! `path` and `fillRule` lower with the Clip attributes in `jsx.rs`.
 
 use super::*;
 use valle_motion::glass::{
-    GlassEnvironmentBinding, GlassFieldNode, GlassLightBinding, GlassLightSpace,
-    GlassMaterialBinding, GlassMergeIntent, GlassNode, GlassShapeBinding,
+    DEFAULT_PRESENCE, GlassFieldNode, GlassLightBinding, GlassMaterialBinding, GlassMergeIntent,
+    GlassNode,
 };
-use valle_motion::glass::{GlassFieldId, GlassSurfaceId};
 
 #[derive(Default)]
 pub(super) struct GlassProps {
-    pub surface_id: Option<String>,
-    pub field_id: Option<String>,
-    pub shape_kind: Option<String>,
-    pub shape_radius: Option<NumberValue>,
-    pub shape_path: Option<PathValue>,
     pub material: Option<GlassMaterialBinding>,
+    pub light: Option<GlassLightBinding>,
     pub presence: Option<NumberValue>,
     pub merge_distance: Option<f64>,
-    pub environment_authored: bool,
-    pub light_direction: Option<PointValue>,
-    pub light_elevation: Option<NumberValue>,
-    pub light_intensity: Option<NumberValue>,
-    pub light_space: Option<String>,
 }
 
-/// Static value of a JSON-ish literal inside an object property.
+/// One field of a `material`, `light` or `merge` object: an expression in an object literal, or
+/// a value of a static object the literal spreads or the attribute is.
+enum Field<'s> {
+    Expr(&'s Expression<'s>),
+    Static(serde_json::Value),
+}
+
 fn object_property_name(property: &oxc::ast::ast::ObjectProperty<'_>) -> Option<String> {
     match &property.key {
         PropertyKey::StaticIdentifier(name) => Some(name.name.to_string()),
@@ -40,213 +30,160 @@ fn object_property_name(property: &oxc::ast::ast::ObjectProperty<'_>) -> Option<
     }
 }
 
+fn non_negative(value: f64) -> bool {
+    value >= 0.0
+}
+
 impl<'s> Compiler<'s> {
-    /// Static string from an object-property expression.
-    fn glass_static_string(
+    /// The fields of an object attribute, in order, so a later one wins as in JavaScript. The
+    /// attribute is an object literal, or a static object such as `glassMaterial(0.8, 0.5)`; a
+    /// literal may spread static objects.
+    fn glass_fields(
         &mut self,
-        expression: &Expression<'_>,
+        value: &'s Option<JSXAttributeValue<'s>>,
         span: Span,
-        name: &str,
-    ) -> Option<String> {
-        self.eval_static(expression)
-            .and_then(|value| match value {
-                serde_json::Value::String(value) => Some(value),
-                serde_json::Value::Number(value) => Some(value.to_string()),
-                _ => None,
-            })
-            .or_else(|| {
+        label: &str,
+    ) -> Vec<(String, Field<'s>, Span)> {
+        let mut fields = Vec::new();
+        let Some(expression) = attr_expression(value) else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("{label} must be an object"),
+            );
+            return fields;
+        };
+        let Expression::ObjectExpression(object) = peel_expr(expression) else {
+            self.static_fields(expression, label, &mut fields);
+            return fields;
+        };
+        for property in &object.properties {
+            match property {
+                ObjectPropertyKind::ObjectProperty(property) => {
+                    let Some(name) = object_property_name(property) else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            property.key.span(),
+                            format!("computed {label} names are illegal"),
+                        );
+                        continue;
+                    };
+                    fields.push((name, Field::Expr(&property.value), property.key.span()));
+                }
+                ObjectPropertyKind::SpreadProperty(spread) => {
+                    self.static_fields(&spread.argument, label, &mut fields);
+                }
+            }
+        }
+        fields
+    }
+
+    fn static_fields(
+        &mut self,
+        expression: &'s Expression<'s>,
+        label: &str,
+        fields: &mut Vec<(String, Field<'s>, Span)>,
+    ) {
+        let span = expression.span();
+        if let Some(serde_json::Value::Object(object)) = self.eval_static(expression) {
+            fields.extend(
+                object
+                    .into_iter()
+                    .map(|(name, value)| (name, Field::Static(value), span)),
+            );
+        } else {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("{label} must be an object literal or a static object"),
+            );
+        }
+    }
+
+    fn glass_number(
+        &mut self,
+        field: Field<'s>,
+        span: Span,
+        label: &str,
+        valid: impl Fn(f64) -> bool,
+    ) -> Option<NumberValue> {
+        let value = match field {
+            Field::Expr(expression) => return self.number_binding(expression, label, valid),
+            Field::Static(value) => value.as_f64(),
+        };
+        match value {
+            Some(value) if value.is_finite() && valid(value) => Some(NumberValue::Static { value }),
+            _ => {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     span,
-                    format!("{name} must be a static string"),
+                    format!("{label} has an invalid static value"),
                 );
                 None
-            })
-    }
-
-    /// Path value from an object-property expression (static string/`line([...])` or typed).
-    fn glass_path_value(
-        &mut self,
-        expression: &Expression<'_>,
-        span: Span,
-        name: &str,
-    ) -> Option<PathValue> {
-        if let Some(value) = self.eval_static(expression) {
-            if let Some(text) = value.as_str() {
-                return parse_path_data(text)
-                    .map(|value| PathValue::Static { value })
-                    .or_else(|| {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            span,
-                            format!("{name} is not valid path data"),
-                        );
-                        None
-                    });
-            }
-            if let Some(MotionValue::PathData(value)) = motion_value_from_json(&value) {
-                return Some(PathValue::Static { value });
             }
         }
-        let expr = self.lower_expr(expression)?;
-        let policy = geometry_eval_policy(&self.expr_arena.values, expr).or_else(|| {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                format!("{name} must produce PathData"),
-            );
-            None
-        })?;
-        Some(PathValue::Expr { expr, policy })
     }
 
-    /// Object literal from an object-property expression.
-    fn glass_object_literal<'a>(
-        &mut self,
-        expression: &'a Expression<'a>,
-        span: Span,
-        label: &str,
-    ) -> Option<&'a ObjectExpression<'a>> {
-        let Expression::ObjectExpression(object) = strip_parens(expression) else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                format!("{label} must be an object literal"),
-            );
-            return None;
+    fn glass_color(&mut self, field: Field<'s>, span: Span, label: &str) -> Option<ColorValue> {
+        let value = match field {
+            Field::Expr(expression) => return self.color_binding(expression, label),
+            Field::Static(value) => value,
         };
-        Some(object)
+        if let Some(MotionValue::Color(value)) = motion_value_from_json(&value) {
+            return Some(ColorValue::Static { value });
+        }
+        self.illegal(
+            DiagCode::GrammarForbidden,
+            span,
+            format!("{label} must produce Color"),
+        );
+        None
+    }
+
+    fn glass_point(&mut self, field: Field<'s>, span: Span, label: &str) -> Option<PointValue> {
+        let value = match field {
+            Field::Expr(expression) => return self.point_binding(expression, label),
+            Field::Static(value) => value,
+        };
+        if let Some(MotionValue::Point(value)) = motion_value_from_json(&value) {
+            return Some(PointValue::Static { value });
+        }
+        self.illegal(
+            DiagCode::GrammarForbidden,
+            span,
+            format!("{label} must produce Point"),
+        );
+        None
     }
 
     /// Entry for glass-specific attributes from the JSX dispatch loop.
     pub(super) fn lower_glass_attribute(
         &mut self,
+        kind_tag: &str,
         name: &str,
         attribute: &'s oxc::ast::ast::JSXAttribute<'s>,
         props: &mut GlassProps,
     ) {
         let value = &attribute.value;
         let span = attribute.span();
+        let element = if kind_tag == "glass" {
+            "Glass"
+        } else {
+            "GlassField"
+        };
         match name {
-            "surfaceId" => {
-                props.surface_id = self.attr_static_string(value, span, "surfaceId");
-            }
-            "fieldId" => {
-                props.field_id = self.attr_static_string(value, span, "fieldId");
-            }
-            "shape" => {
-                let Some(object) = self.attr_object_literal(value, span, "Glass shape") else {
-                    return;
-                };
-                for property in &object.properties {
-                    let ObjectPropertyKind::ObjectProperty(property) = property else {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            property.span(),
-                            "Glass shape spread is illegal",
-                        );
-                        continue;
-                    };
-                    let Some(property_name) = object_property_name(property) else {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            property.key.span(),
-                            "computed Glass shape names are illegal",
-                        );
-                        continue;
-                    };
-                    match property_name.as_str() {
-                        "kind" => {
-                            props.shape_kind = self.glass_static_string(
-                                &property.value,
-                                property.key.span(),
-                                "shape.kind",
-                            );
-                        }
-                        "radius" => {
-                            props.shape_radius =
-                                self.number_binding(&property.value, "shape.radius", |value| {
-                                    value.is_finite() && value >= 0.0
-                                });
-                        }
-                        "path" => {
-                            props.shape_path = self.glass_path_value(
-                                &property.value,
-                                property.key.span(),
-                                "shape.path",
-                            );
-                        }
-                        other => self.illegal(
-                            DiagCode::GrammarForbidden,
-                            property.key.span(),
-                            format!("unknown Glass shape property `{other}`"),
-                        ),
-                    }
-                }
-            }
             "material" => {
-                let Some(object) = self.attr_object_literal(value, span, "Glass material") else {
-                    return;
-                };
-                let mut material = GlassMaterialBinding::defaults();
-                let mut saw = false;
-                for property in &object.properties {
-                    let ObjectPropertyKind::ObjectProperty(property) = property else {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            property.span(),
-                            "Glass material spread is illegal",
-                        );
-                        continue;
-                    };
-                    let Some(property_name) = object_property_name(property) else {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            property.key.span(),
-                            "computed Glass material names are illegal",
-                        );
-                        continue;
-                    };
-                    match property_name.as_str() {
-                        "clarity" => {
-                            material.clarity = self
-                                .number_binding(&property.value, "material.clarity", |value| {
-                                    value.is_finite() && (0.0..=1.0).contains(&value)
-                                })
-                                .unwrap_or(material.clarity);
-                            saw = true;
-                        }
-                        "depth" => {
-                            material.depth = self
-                                .number_binding(&property.value, "material.depth", |value| {
-                                    value.is_finite() && (0.0..=1.0).contains(&value)
-                                })
-                                .unwrap_or(material.depth);
-                            saw = true;
-                        }
-                        "tint" => {
-                            if let Some(value) =
-                                self.color_binding(&property.value, "material.tint")
-                            {
-                                material.tint = value;
-                                saw = true;
-                            }
-                        }
-                        other => self.illegal(
-                            DiagCode::GrammarForbidden,
-                            property.key.span(),
-                            format!("unknown Glass material property `{other}`"),
-                        ),
-                    }
-                }
-                if saw {
-                    props.material = Some(material);
-                }
+                let fields = self.glass_fields(value, span, "Glass material");
+                props.material = Some(self.glass_material(fields));
             }
-            "presence" => {
+            "light" => {
+                let fields = self.glass_fields(value, span, "Glass light");
+                props.light = Some(self.glass_light(fields));
+            }
+            "presence" if kind_tag == "glass" => {
                 if let Some(expression) = attr_expression(value) {
                     props.presence = self.number_binding(expression, "presence", |value| {
-                        value.is_finite() && (0.0..=1.0).contains(&value)
+                        (0.0..=1.0).contains(&value)
                     });
                 } else {
                     self.illegal(
@@ -256,264 +193,166 @@ impl<'s> Compiler<'s> {
                     );
                 }
             }
-            "merge" => {
-                let Some(object) = self.attr_object_literal(value, span, "GlassField merge") else {
-                    return;
-                };
-                for property in &object.properties {
-                    let ObjectPropertyKind::ObjectProperty(property) = property else {
+            "merge" if kind_tag == "glass-field" => {
+                for (name, field, span) in self.glass_fields(value, span, "GlassField merge") {
+                    if name != "distance" {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            span,
+                            format!("unknown GlassField merge property `{name}`"),
+                        );
                         continue;
+                    }
+                    let distance = match field {
+                        Field::Expr(expression) => self
+                            .eval_static(expression)
+                            .and_then(|value| value.as_f64()),
+                        Field::Static(value) => value.as_f64(),
                     };
-                    let Some(property_name) = object_property_name(property) else {
-                        continue;
-                    };
-                    if property_name == "distance" {
-                        if let Some(value) = self
-                            .eval_static(&property.value)
-                            .and_then(|value| value.as_f64())
-                        {
-                            props.merge_distance = Some(value);
-                        } else {
-                            self.illegal(
-                                DiagCode::GrammarForbidden,
-                                property.key.span(),
-                                "merge.distance must be a static finite number",
-                            );
-                        }
+                    if distance.is_some() {
+                        props.merge_distance = distance;
                     } else {
                         self.illegal(
                             DiagCode::GrammarForbidden,
-                            property.key.span(),
-                            format!("unknown GlassField merge property `{property_name}`"),
+                            span,
+                            "merge.distance must be a static finite number",
                         );
                     }
                 }
             }
-            "environment" => {
-                props.environment_authored = true;
-                let Some(object) = self.attr_object_literal(value, span, "Glass environment")
-                else {
-                    return;
-                };
-                for property in &object.properties {
-                    let ObjectPropertyKind::ObjectProperty(property) = property else {
-                        continue;
-                    };
-                    let Some(property_name) = object_property_name(property) else {
-                        continue;
-                    };
-                    match property_name.as_str() {
-                        "light" => {
-                            let Some(light) = self.glass_object_literal(
-                                &property.value,
-                                property.key.span(),
-                                "Glass light",
-                            ) else {
-                                continue;
-                            };
-                            for light_property in &light.properties {
-                                let ObjectPropertyKind::ObjectProperty(light_property) =
-                                    light_property
-                                else {
-                                    continue;
-                                };
-                                let Some(light_name) = object_property_name(light_property) else {
-                                    continue;
-                                };
-                                match light_name.as_str() {
-                                    "direction" => {
-                                        props.light_direction = self.point_binding(
-                                            &light_property.value,
-                                            "environment.light.direction",
-                                        );
-                                    }
-                                    "elevation" => {
-                                        props.light_elevation = self.number_binding(
-                                            &light_property.value,
-                                            "environment.light.elevation",
-                                            |value| {
-                                                value.is_finite() && (0.0..=1.0).contains(&value)
-                                            },
-                                        );
-                                    }
-                                    "intensity" => {
-                                        props.light_intensity = self.number_binding(
-                                            &light_property.value,
-                                            "environment.light.intensity",
-                                            |value| {
-                                                value.is_finite() && (0.0..=1.0).contains(&value)
-                                            },
-                                        );
-                                    }
-                                    "space" => {
-                                        props.light_space = self.glass_static_string(
-                                            &light_property.value,
-                                            light_property.key.span(),
-                                            "environment.light.space",
-                                        );
-                                    }
-                                    other => self.illegal(
-                                        DiagCode::GrammarForbidden,
-                                        light_property.key.span(),
-                                        format!("unknown Glass light property `{other}`"),
-                                    ),
-                                }
-                            }
-                        }
-                        other => self.illegal(
-                            DiagCode::GrammarForbidden,
-                            property.key.span(),
-                            format!("unknown Glass environment property `{other}`"),
-                        ),
-                    }
-                }
-            }
+            "shape" => self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "Glass `shape` was removed: a Glass is its box rounded by `borderRadius`, or its `path`",
+            ),
+            "surfaceId" | "fieldId" => self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                format!("Glass `{name}` was removed: a GlassField's members are the Glass inside it"),
+            ),
+            "environment" => self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "Glass `environment` was removed: write `light={{ direction, elevation, intensity }}`",
+            ),
             other => self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                format!("unknown Glass attribute `{other}`"),
+                format!("unknown {element} attribute `{other}`"),
             ),
         }
     }
 
-    /// Finishes the Glass/GlassField node kind with defaults expanded.
+    fn glass_material(&mut self, fields: Vec<(String, Field<'s>, Span)>) -> GlassMaterialBinding {
+        let mut material = GlassMaterialBinding::defaults();
+        for (name, field, span) in fields {
+            let label = format!("material.{name}");
+            match name.as_str() {
+                "bevel" => material.bevel = self.glass_number(field, span, &label, non_negative),
+                "refraction" => {
+                    material.refraction = self.glass_number(field, span, &label, non_negative);
+                }
+                "dispersion" => {
+                    if let Some(value) = self.glass_number(field, span, &label, non_negative) {
+                        material.dispersion = value;
+                    }
+                }
+                "frost" => {
+                    if let Some(value) = self.glass_number(field, span, &label, non_negative) {
+                        material.frost = value;
+                    }
+                }
+                "tint" => {
+                    if let Some(value) = self.glass_color(field, span, &label) {
+                        material.tint = value;
+                    }
+                }
+                "clarity" | "depth" => self.illegal(
+                    DiagCode::GrammarForbidden,
+                    span,
+                    format!(
+                        "{label} was removed: write bevel, refraction and frost (the Motion docs show a glassMaterial() helper)"
+                    ),
+                ),
+                other => self.illegal(
+                    DiagCode::GrammarForbidden,
+                    span,
+                    format!("unknown Glass material property `{other}`"),
+                ),
+            }
+        }
+        material
+    }
+
+    fn glass_light(&mut self, fields: Vec<(String, Field<'s>, Span)>) -> GlassLightBinding {
+        let mut light = GlassLightBinding::defaults();
+        for (name, field, span) in fields {
+            let label = format!("light.{name}");
+            match name.as_str() {
+                "direction" => {
+                    if let Some(value) = self.glass_point(field, span, &label) {
+                        light.direction = value;
+                    }
+                }
+                "elevation" => {
+                    if let Some(value) =
+                        self.glass_number(field, span, &label, |value| (0.0..=1.0).contains(&value))
+                    {
+                        light.elevation = value;
+                    }
+                }
+                "intensity" => {
+                    if let Some(value) = self.glass_number(field, span, &label, non_negative) {
+                        light.intensity = value;
+                    }
+                }
+                "space" => self.illegal(
+                    DiagCode::GrammarForbidden,
+                    span,
+                    "light.space was removed: the light stays fixed on the screen",
+                ),
+                other => self.illegal(
+                    DiagCode::GrammarForbidden,
+                    span,
+                    format!("unknown Glass light property `{other}`"),
+                ),
+            }
+        }
+        light
+    }
+
+    /// The Glass or GlassField node. A Glass keeps an absent material and light absent: scope
+    /// normalization decides, once the whole tree exists, whether it takes them from a field or
+    /// gets the defaults.
     pub(super) fn finish_glass_kind(
         &mut self,
         kind_tag: &str,
-        props: &GlassProps,
-        span: Span,
-    ) -> Option<NodeKind> {
-        match kind_tag {
-            "glass" => {
-                let surface_id = props.surface_id.as_deref().unwrap_or("");
-                if surface_id.is_empty() {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        span,
-                        "<Glass> requires a non-empty static surfaceId",
-                    );
-                    return None;
-                }
-                let shape = match props.shape_kind.as_deref() {
-                    Some("circle") => GlassShapeBinding::Circle,
-                    Some("capsule") => GlassShapeBinding::Capsule,
-                    Some("continuousRect") => GlassShapeBinding::ContinuousRect {
-                        radius: props
-                            .shape_radius
-                            .clone()
-                            .unwrap_or(NumberValue::Static { value: 0.0 }),
-                    },
-                    Some("path") => {
-                        let Some(path) = props.shape_path.clone() else {
-                            self.illegal(DiagCode::GrammarForbidden, span, "Glass shape.kind \"path\" requires a `path` property (closed polygon)");
-                            return None;
-                        };
-                        GlassShapeBinding::Path {
-                            path,
-                            reveal_origin: None,
-                        }
-                    }
-                    Some(other) => {
-                        self.illegal(DiagCode::GrammarForbidden, span, format!("Glass shape.kind must be circle, capsule or continuousRect, got `{other}`"));
-                        return None;
-                    }
-                    None => {
-                        self.illegal(DiagCode::GrammarForbidden, span, "<Glass> requires shape={{ kind: \"circle\" | \"continuousRect\" | \"capsule\" }}");
-                        return None;
-                    }
-                };
-                let node = GlassNode {
-                    surface_id: GlassSurfaceId::new(surface_id).ok()?,
-                    field_id: props
-                        .field_id
-                        .clone()
-                        .and_then(|id| GlassFieldId::new(id).ok()),
-                    shape,
-                    // Scope normalization runs after the complete JSX tree exists. Until then
-                    // these options preserve whether the author actually supplied an
-                    // independent-only property; injecting defaults here made it impossible to
-                    // distinguish a legal field member from an illegal override.
-                    material: props.material.clone(),
-                    environment: props.environment_authored.then(|| GlassEnvironmentBinding {
-                        light: GlassLightBinding {
-                            direction: props.light_direction.clone().unwrap_or_else(|| {
-                                PointValue::Static {
-                                    value: Point::new(-0.35, -0.94),
-                                }
-                            }),
-                            elevation: props
-                                .light_elevation
-                                .clone()
-                                .unwrap_or(NumberValue::Static { value: 0.55 }),
-                            intensity: props
-                                .light_intensity
-                                .clone()
-                                .unwrap_or(NumberValue::Static { value: 0.65 }),
-                            space: match props.light_space.as_deref() {
-                                Some("world") => GlassLightSpace::World,
-                                Some("screen") | None => GlassLightSpace::Screen,
-                                Some(other) => {
-                                    self.illegal(DiagCode::GrammarForbidden, span, format!("environment.light.space must be screen or world, got `{other}`"));
-                                    GlassLightSpace::Screen
-                                }
-                            },
-                        },
+        props: GlassProps,
+        path: Option<PathValue>,
+        fill_rule: FillRule,
+    ) -> NodeKind {
+        if kind_tag == "glass" {
+            NodeKind::Glass(GlassNode {
+                path,
+                fill_rule,
+                material: props.material,
+                light: props.light,
+                presence: props.presence.unwrap_or(NumberValue::Static {
+                    value: DEFAULT_PRESENCE,
+                }),
+            })
+        } else {
+            NodeKind::GlassField(GlassFieldNode {
+                material: props
+                    .material
+                    .unwrap_or_else(GlassMaterialBinding::defaults),
+                light: props.light.unwrap_or_else(GlassLightBinding::defaults),
+                merge: props
+                    .merge_distance
+                    .map_or_else(GlassMergeIntent::defaults, |distance| GlassMergeIntent {
+                        distance,
                     }),
-                    presence: props
-                        .presence
-                        .clone()
-                        .unwrap_or(NumberValue::Static { value: 1.0 }),
-                };
-                Some(NodeKind::Glass(node))
-            }
-            "glass-field" => {
-                let field_id = props.field_id.as_deref().unwrap_or("");
-                if field_id.is_empty() {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        span,
-                        "<GlassField> requires a non-empty static fieldId",
-                    );
-                    return None;
-                }
-                let node = GlassFieldNode {
-                    field_id: GlassFieldId::new(field_id).ok()?,
-                    material: props
-                        .material
-                        .clone()
-                        .unwrap_or_else(GlassMaterialBinding::defaults),
-                    merge: GlassMergeIntent {
-                        distance: props.merge_distance.unwrap_or(24.0),
-                    },
-                    environment: GlassEnvironmentBinding {
-                        light: GlassLightBinding {
-                            direction: props.light_direction.clone().unwrap_or_else(|| {
-                                PointValue::Static {
-                                    value: Point::new(-0.35, -0.94),
-                                }
-                            }),
-                            elevation: props
-                                .light_elevation
-                                .clone()
-                                .unwrap_or(NumberValue::Static { value: 0.55 }),
-                            intensity: props
-                                .light_intensity
-                                .clone()
-                                .unwrap_or(NumberValue::Static { value: 0.65 }),
-                            space: match props.light_space.as_deref() {
-                                Some("world") => GlassLightSpace::World,
-                                Some("screen") | None => GlassLightSpace::Screen,
-                                Some(other) => {
-                                    self.illegal(DiagCode::GrammarForbidden, span, format!("environment.light.space must be screen or world, got `{other}`"));
-                                    return None;
-                                }
-                            },
-                        },
-                    },
-                };
-                Some(NodeKind::GlassField(node))
-            }
-            _ => None,
+            })
         }
     }
 }
@@ -534,294 +373,237 @@ mod tests {
     use crate::motion::compile_motion;
     use valle_motion::glass::MOTION_GLASS_CAPABILITY;
 
-    fn compile_glass_for_test(source: &str) -> Result<SceneArtifact, Vec<CompilerDiagnostic>> {
+    fn compile(source: &str) -> Result<SceneArtifact, Vec<CompilerDiagnostic>> {
         compile_motion(source).map(|compiled| compiled.artifact)
     }
 
-    #[test]
-    fn glass_circle_lowers_with_expanded_defaults() {
-        let source = r##"
-
-export default function Scene() {
-  return (
-    <Glass surfaceId="hero-lens" shape={{ kind: "circle" }}
-      style={{ width: 420, height: 180 }} />
-  );
-}
-"##;
-        let artifact = compile_glass_for_test(source).unwrap();
-        let NodeKind::Glass(glass) = &artifact.nodes[1].kind else {
-            panic!("expected Glass node");
-        };
-        assert_eq!(glass.surface_id.as_str(), "hero-lens");
-        assert_eq!(glass.shape, GlassShapeBinding::Circle);
-        assert!(glass.material.is_some(), "defaults must be expanded");
-        assert_eq!(glass.presence, NumberValue::Static { value: 1.0 });
+    fn errors(source: &str) -> String {
+        compile(source)
+            .unwrap_err()
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
-    #[test]
-    fn glass_full_props_lower() {
-        let source = r##"
-
-export default function Scene() {
-  return (
-    <Glass surfaceId="lens"
-      shape={{ kind: "continuousRect", radius: 44 }}
-      material={{ clarity: 0.78, depth: 0.62, tint: "#B9D7FF18" }}
-      environment={{ light: { direction: point(0.6, -0.8), elevation: 0.4, intensity: 0.9, space: "world" } }}
-      presence={0.5}
-      style={{ width: 420, height: 180 }} />
-  );
-}
-"##;
-        let artifact = compile_glass_for_test(source).unwrap();
-        let NodeKind::Glass(glass) = &artifact.nodes[1].kind else {
-            panic!("expected Glass node");
-        };
-        let material = glass.material.as_ref().unwrap();
-        assert_eq!(material.clarity, NumberValue::Static { value: 0.78 });
-        assert_eq!(glass.presence, NumberValue::Static { value: 0.5 });
-        assert_eq!(
-            glass.environment.as_ref().unwrap().light.space,
-            GlassLightSpace::World
-        );
+    fn scene(element: &str) -> String {
+        format!("export default function Scene() {{\n  return {element};\n}}\n")
     }
 
-    #[test]
-    fn glass_field_lowers() {
-        let source = r##"
-
-export default function Scene() {
-  return (
-    <GlassField fieldId="orbit" material={{ clarity: 0.82 }}
-      merge={{ distance: 36 }}
-      environment={{ light: { direction: point(-0.35, -0.94), elevation: 0.55, intensity: 0.7, space: "screen" } }}>
-      <Glass surfaceId="orbit-left" shape={{ kind: "circle" }}
-        style={{ width: 100, height: 100 }} />
-      <Glass surfaceId="orbit-right" shape={{ kind: "circle" }}
-        style={{ width: 100, height: 100 }} />
-    </GlassField>
-  );
-}
-"##;
-        let artifact = compile_glass_for_test(source).unwrap();
-        let NodeKind::GlassField(field) = &artifact.nodes[1].kind else {
-            panic!("expected GlassField node");
-        };
-        assert_eq!(field.field_id.as_str(), "orbit");
-        assert_eq!(field.merge.distance, 36.0);
-        assert_eq!(field.environment.light.space, GlassLightSpace::Screen);
-        let glass_count = artifact
+    fn glasses(artifact: &SceneArtifact) -> Vec<&GlassNode> {
+        artifact
             .nodes
             .iter()
-            .filter(|node| matches!(node.kind, NodeKind::Glass(_)))
-            .count();
-        assert_eq!(glass_count, 2);
-        for node in &artifact.nodes {
-            if let NodeKind::Glass(glass) = &node.kind {
-                assert_eq!(glass.field_id.as_ref().map(|id| id.as_str()), Some("orbit"));
-                assert!(glass.material.is_none());
-                assert!(glass.environment.is_none());
-            }
-        }
+            .filter_map(|node| match &node.kind {
+                NodeKind::Glass(glass) => Some(glass),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
-    fn unsupported_backdrop_stability_is_rejected_instead_of_being_silently_dropped() {
-        let source = r#"
-export default function Scene() {
-  return <Glass surfaceId="lens" shape={{ kind: "circle" }}
-    environment={{ backdropStability: 0.16 }} />;
-}
-"#;
-        let diagnostics = compile_glass_for_test(source).unwrap_err();
-        assert!(diagnostics.iter().any(|diagnostic| {
-            diagnostic
-                .message
-                .contains("unknown Glass environment property `backdropStability`")
-        }));
-    }
-
-    #[test]
-    fn member_field_id_is_derived_and_repeated_author_prop_is_rejected() {
-        let source = r##"
-
-export default function Scene() {
-  return (
-    <GlassField fieldId="orbit">
-      <Glass surfaceId="left" fieldId="orbit" shape={{ kind: "circle" }} />
-    </GlassField>
-  );
-}
-"##;
-        let errors = compile_glass_for_test(source).unwrap_err();
+    fn a_glass_on_its_own_gets_the_default_material_and_light() {
+        let artifact = compile(&scene(
+            r#"<Glass style={{ width: 420, height: 180, borderRadius: 90 }} />"#,
+        ))
+        .unwrap();
+        let glass = glasses(&artifact)[0];
+        assert_eq!(glass.path, None);
+        assert_eq!(glass.material, Some(GlassMaterialBinding::defaults()));
+        assert_eq!(glass.light, Some(GlassLightBinding::defaults()));
+        assert_eq!(glass.presence, NumberValue::Static { value: 1.0 });
         assert!(
-            errors
-                .iter()
-                .any(|diagnostic| diagnostic.message.contains("must not declare fieldId")),
-            "{errors:?}"
-        );
-    }
-
-    #[test]
-    fn production_entry_compiles_glass_and_declares_capability() {
-        // G4.7: production admission is open; compiled artifacts declare motion-glass.
-        let source = r##"
-
-export default function Scene() {
-  return <Glass surfaceId="hero-lens" shape={{ kind: "circle" }} />;
-}
-"##;
-        let compiled = compile_motion(source).expect("production compile admits Glass");
-        assert!(
-            compiled
-                .artifact
+            artifact
                 .capability_set
                 .names
                 .contains(&MOTION_GLASS_CAPABILITY.to_string())
         );
-        compiled.artifact.validate().expect("artifact validates");
-    }
-
-    // ---- G3.2 diagnostics: every author error points at the source span ----
-
-    fn first_message(error: &[CompilerDiagnostic]) -> String {
-        error
-            .first()
-            .map(|diagnostic| diagnostic.message.clone())
-            .unwrap_or_default()
+        artifact.validate().unwrap();
     }
 
     #[test]
-    fn missing_surface_id_diagnostic() {
-        let source = r##"
-
-export default function Scene() {
-  return <Glass shape={{ kind: "circle" }} />;
-}
-"##;
-        let error = compile_glass_for_test(source).unwrap_err();
-        assert!(first_message(&error).contains("surfaceId"), "{error:?}");
-    }
-
-    #[test]
-    fn missing_shape_diagnostic() {
-        let source = r##"
-
-export default function Scene() {
-  return <Glass surfaceId="lens" />;
-}
-"##;
-        let error = compile_glass_for_test(source).unwrap_err();
-        assert!(first_message(&error).contains("shape"), "{error:?}");
-    }
-
-    #[test]
-    fn bad_shape_kind_diagnostic() {
-        let source = r##"
-
-export default function Scene() {
-  return <Glass surfaceId="lens" shape={{ kind: "blob" }} />;
-}
-"##;
-        let error = compile_glass_for_test(source).unwrap_err();
-        assert!(first_message(&error).contains("blob"), "{error:?}");
-    }
-
-    #[test]
-    fn unknown_glass_attribute_diagnostic() {
-        let source = r##"
-
-export default function Scene() {
-  return <Glass surfaceId="lens" shape={{ kind: "circle" }} shader="x" />;
-}
-"##;
-        let error = compile_glass_for_test(source).unwrap_err();
-        assert!(
-            error
-                .iter()
-                .any(|diagnostic| diagnostic.message.contains("unknown Glass attribute")),
-            "{error:?}"
+    fn every_glass_property_lowers() {
+        let artifact = compile(&scene(
+            r##"<Glass path={line([point(0, 0), point(160, 0), point(80, 140)])} fillRule="evenOdd"
+      material={{ bevel: 30, refraction: 9, dispersion: 0.2, frost: 12, tint: "#B9D7FF18" }}
+      light={{ direction: point(0.6, -0.8), elevation: 0.4, intensity: 0.9 }}
+      presence={0.5}
+      style={{ width: 160, height: 140 }} />"##,
+        ))
+        .unwrap();
+        let glass = glasses(&artifact)[0];
+        assert!(matches!(glass.path, Some(PathValue::Static { .. })));
+        assert_eq!(glass.fill_rule, FillRule::EvenOdd);
+        let material = glass.material.as_ref().unwrap();
+        assert_eq!(material.bevel, Some(NumberValue::Static { value: 30.0 }));
+        assert_eq!(
+            material.refraction,
+            Some(NumberValue::Static { value: 9.0 })
         );
+        assert_eq!(material.dispersion, NumberValue::Static { value: 0.2 });
+        assert_eq!(material.frost, NumberValue::Static { value: 12.0 });
+        let light = glass.light.as_ref().unwrap();
+        assert_eq!(light.elevation, NumberValue::Static { value: 0.4 });
+        assert_eq!(light.intensity, NumberValue::Static { value: 0.9 });
+        assert_eq!(glass.presence, NumberValue::Static { value: 0.5 });
+        artifact.validate().unwrap();
     }
 
     #[test]
-    fn duplicate_surface_id_rejected() {
-        let source = r##"
-
-export default function Scene() {
-  return (
-    <Group>
-      <Glass surfaceId="lens" shape={{ kind: "circle" }} style={{ left: 0, top: 0, width: 80, height: 80 }} />
-      <Glass surfaceId="lens" shape={{ kind: "circle" }} style={{ left: 200, top: 0, width: 80, height: 80 }} />
-    </Group>
-  );
+    fn material_and_light_may_be_static_objects() {
+        let artifact = compile(
+            r##"
+// clarity 1 is clear glass, 0 fully frosted; depth 0 is a thin pane, 1 a thick lens.
+function glassMaterial(clarity: number, depth: number, tint = "#ffffff14") {
+  const bevel = 8 + 40 * depth;
+  return { bevel, refraction: bevel * (0.25 + 0.5 * depth), frost: 20 * (1 - clarity), tint };
 }
-"##;
-        let error = compile_glass_for_test(source).unwrap_err();
-        let message = error
-            .iter()
-            .map(|diagnostic| diagnostic.message.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+const light = { direction: point(1, 0), intensity: 0.5 };
+export default function Scene() {
+  const ctx = useTime();
+  return <Glass material={{ ...glassMaterial(0.75, 0.5), dispersion: ctx.progress }}
+    light={light} style={{ width: 200, height: 100 }} />;
+}
+"##,
+        )
+        .unwrap();
+        let glass = glasses(&artifact)[0];
+        let material = glass.material.as_ref().unwrap();
+        assert_eq!(material.bevel, Some(NumberValue::Static { value: 28.0 }));
+        assert_eq!(
+            material.refraction,
+            Some(NumberValue::Static { value: 14.0 })
+        );
+        assert_eq!(material.frost, NumberValue::Static { value: 5.0 });
+        assert!(matches!(material.tint, ColorValue::Static { .. }));
+        assert!(matches!(material.dispersion, NumberValue::Expr { .. }));
+        let light = glass.light.as_ref().unwrap();
+        assert_eq!(
+            light.direction,
+            PointValue::Static {
+                value: Point::new(1.0, 0.0)
+            }
+        );
+        assert_eq!(light.intensity, NumberValue::Static { value: 0.5 });
+        assert_eq!(light.elevation, GlassLightBinding::defaults().elevation);
+        artifact.validate().unwrap();
+    }
+
+    #[test]
+    fn field_members_take_the_fields_material_and_light() {
+        let artifact = compile(&scene(
+            r#"<GlassField material={{ frost: 8 }} merge={{ distance: 36 }}
+      light={{ direction: point(-0.35, -0.94), intensity: 0.7 }}>
+      <View style={{ transform: "translateX(40px)" }}>
+        <Glass style={{ width: 100, height: 100, borderRadius: "50%" }} />
+      </View>
+      <Glass style={{ width: 100, height: 100, borderRadius: "50%" }} />
+    </GlassField>"#,
+        ))
+        .unwrap();
+        let NodeKind::GlassField(field) = &artifact.nodes[1].kind else {
+            panic!("expected GlassField node");
+        };
+        assert_eq!(field.merge.distance, 36.0);
+        assert_eq!(field.material.frost, NumberValue::Static { value: 8.0 });
+        assert_eq!(field.light.intensity, NumberValue::Static { value: 0.7 });
+        let members = glasses(&artifact);
+        assert_eq!(members.len(), 2);
+        for member in members {
+            assert_eq!(member.material, None);
+            assert_eq!(member.light, None);
+        }
+        artifact.validate().unwrap();
+    }
+
+    #[test]
+    fn a_member_may_not_set_material_or_light() {
+        let message = errors(&scene(
+            r#"<GlassField><Glass material={{ frost: 4 }} light={{ intensity: 0 }} /></GlassField>"#,
+        ));
         assert!(
-            message.contains("surfaceId 'lens' appears twice"),
+            message.contains("in a <GlassField> takes the field's material"),
+            "{message}"
+        );
+        assert!(
+            message.contains("in a <GlassField> takes the field's light"),
             "{message}"
         );
     }
 
     #[test]
-    fn path_shape_lowers_with_closed_polygon() {
-        let source = r##"
-
-export default function Scene() {
-  return (
-    <Glass surfaceId="plate" shape={{ kind: "path", path: line([point(40, 40), point(120, 40), point(120, 120), point(40, 120)]) }}
-      style={{ width: 160, height: 160 }} />
-  );
-}
-"##;
-        let compiled = compile_motion(source).expect("path glass compiles");
-        compiled.artifact.validate().expect("validates");
-        let NodeKind::Glass(glass) = &compiled.artifact.nodes[1].kind else {
-            panic!("glass node");
-        };
-        assert!(matches!(glass.shape, GlassShapeBinding::Path { .. }));
+    fn a_glass_in_a_members_children_draws_on_its_own() {
+        let artifact = compile(&scene(
+            r#"<GlassField>
+      <Glass style={{ width: 200, height: 200 }}>
+        <Glass material={{ frost: 2 }} style={{ width: 40, height: 40 }} />
+      </Glass>
+    </GlassField>"#,
+        ))
+        .unwrap();
+        let glasses = glasses(&artifact);
+        assert_eq!(glasses[0].material, None);
+        assert!(glasses[1].material.is_some() && glasses[1].light.is_some());
+        artifact.validate().unwrap();
     }
 
     #[test]
-    fn removed_glass_attributes_are_rejected() {
-        // Motion response, foreground protection and usage never changed pixels and are gone.
-        for (tag, attribute) in [
+    fn a_field_directly_inside_a_field_is_refused() {
+        let message = errors(&scene(
+            r#"<GlassField><GlassField><Glass /></GlassField></GlassField>"#,
+        ));
+        assert!(
+            message.contains("a <GlassField> inside another"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn removed_and_unknown_attributes_are_refused() {
+        for (element, expected) in [
             (
-                "Glass",
-                r#"motion={{ character: "fluid", intensity: 0.6 }}"#,
+                r#"<Glass shape={{ kind: "circle" }} />"#,
+                "Glass `shape` was removed",
             ),
             (
-                "Glass",
-                r#"foreground={{ tone: "light", protection: 0.5 }}"#,
+                r#"<Glass surfaceId="lens" />"#,
+                "Glass `surfaceId` was removed",
             ),
             (
-                "Glass",
-                r#"usage={{ profile: "interface", role: "control" }}"#,
+                r#"<GlassField fieldId="orbit"><Glass /></GlassField>"#,
+                "Glass `fieldId` was removed",
             ),
-            ("GlassField", r#"motion={{ character: "fluid" }}"#),
+            (
+                r#"<Glass environment={{ light: {} }} />"#,
+                "Glass `environment` was removed",
+            ),
+            (
+                r#"<Glass material={{ clarity: 0.8 }} />"#,
+                "material.clarity was removed",
+            ),
+            (
+                r#"<Glass light={{ space: "world" }} />"#,
+                "light.space was removed",
+            ),
+            (
+                r#"<Glass motion={{ character: "fluid" }} />"#,
+                "unknown Glass attribute `motion`",
+            ),
+            (
+                r#"<GlassField presence={0.5}><Glass /></GlassField>"#,
+                "unknown GlassField attribute `presence`",
+            ),
+            (
+                r#"<Glass merge={{ distance: 4 }} />"#,
+                "unknown Glass attribute `merge`",
+            ),
+            (
+                r#"<Glass material={{ frost: -1 }} />"#,
+                "material.frost has an invalid static value",
+            ),
         ] {
-            let glass = r#"<Glass surfaceId="lens" shape={{ kind: "circle" }} />"#;
-            let element = if tag == "Glass" {
-                format!(r#"<Glass surfaceId="lens" shape={{{{ kind: "circle" }}}} {attribute} />"#)
-            } else {
-                format!(r#"<GlassField fieldId="orbit" {attribute}>{glass}</GlassField>"#)
-            };
-            let source = format!("export default function Scene() {{\n  return {element};\n}}\n");
-            let name = attribute.split('=').next().unwrap();
-            let errors = compile_glass_for_test(&source).unwrap_err();
-            assert!(
-                errors.iter().any(|diagnostic| diagnostic
-                    .message
-                    .contains(&format!("unknown Glass attribute `{name}`"))),
-                "{tag} {name}: {errors:?}"
-            );
+            let message = errors(&scene(element));
+            assert!(message.contains(expected), "{element}: {message}");
         }
     }
 }

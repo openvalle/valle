@@ -627,17 +627,6 @@ fn prepare_endpoint(
                 .map_err(|error| PrepareError::at(format!("{path}.source.frame"), error))?;
             let viewport = crate::resource::Extent2d::new(source_extent.0, source_extent.1)
                 .map_err(|error| PrepareError::at(path, error))?;
-            let program_to_device = super::bounds::layer_device_transform(
-                &clip.transform,
-                &clip.resolved_animation,
-                state.frame.camera.as_ref(),
-                state.frame.canvas_mapping,
-                [
-                    state.frame.render_spec.width(),
-                    state.frame.render_spec.height(),
-                ],
-            )
-            .map_err(|error| PrepareError::at(path, error))?;
             let assets = compiled_motion_assets(source, path)?;
             let model_resources = compiled_motion_models(source);
             // Dependency roles retain the authored fallback order, including font:10+.
@@ -695,7 +684,6 @@ fn prepare_endpoint(
                         styles: state.motion_styles,
                         faces: state.motion_faces,
                         fonts,
-                        program_to_device,
                         assets: &assets,
                         model_resources: &model_resources,
                     },

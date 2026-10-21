@@ -52,9 +52,6 @@ fn shared_tagged_unions_keep_their_discriminants() {
     assert!(value.contains(r#""kind": "pathData""#), "{value}");
     let command = decl::<RecordCmd>();
     assert!(command.contains(r#""op": "beginSaveLayer""#), "{command}");
-    assert!(command.contains(r#""op": "beginMotionGlass""#), "{command}");
-    assert!(command.contains("program: MotionGlassProgram"), "{command}");
-    assert!(!command.contains("packedProgram"), "{command}");
     assert!(command.contains(r#""op": "end""#), "{command}");
 }
 
@@ -112,28 +109,40 @@ fn glass_authoring_types_are_generated_for_tooling() {
     // Export Glass authoring types for editor validation and completion.
     let node = decl::<valle_motion::glass::GlassNode>();
     for field in [
-        "surfaceId: GlassSurfaceId",
-        "fieldId: GlassFieldId | null",
-        "shape: GlassShapeBinding",
+        "path?: PathValue",
+        "fillRule: FillRule",
         "material: GlassMaterialBinding | null",
+        "light: GlassLightBinding | null",
         "presence: NumberValue",
     ] {
         assert!(node.contains(field), "{node}");
     }
-    let shape = decl::<valle_motion::glass::GlassShapeBinding>();
-    assert!(shape.contains(r#""kind": "circle""#), "{shape}");
-    assert!(shape.contains(r#""kind": "continuousRect""#), "{shape}");
+    let material = decl::<valle_motion::glass::GlassMaterialBinding>();
+    for field in [
+        "bevel?: NumberValue",
+        "refraction?: NumberValue",
+        "dispersion: NumberValue",
+        "frost: NumberValue",
+        "tint: ColorValue",
+    ] {
+        assert!(material.contains(field), "{material}");
+    }
+    let light = decl::<valle_motion::glass::GlassLightBinding>();
+    for field in [
+        "direction: PointValue",
+        "elevation: NumberValue",
+        "intensity: NumberValue",
+    ] {
+        assert!(light.contains(field), "{light}");
+    }
     let field = decl::<valle_motion::glass::GlassFieldNode>();
-    assert!(field.contains("merge: GlassMergeIntent"), "{field}");
-    assert!(
-        field.contains("environment: GlassEnvironmentBinding"),
-        "{field}"
-    );
-    // The id types are string aliases on the wire.
-    let surface = decl::<valle_motion::glass::GlassSurfaceId>();
-    assert_eq!(surface, "type GlassSurfaceId = string;");
-    let field_id = decl::<valle_motion::glass::GlassFieldId>();
-    assert_eq!(field_id, "type GlassFieldId = string;");
+    for member in [
+        "material: GlassMaterialBinding",
+        "light: GlassLightBinding",
+        "merge: GlassMergeIntent",
+    ] {
+        assert!(field.contains(member), "{field}");
+    }
 }
 
 #[test]

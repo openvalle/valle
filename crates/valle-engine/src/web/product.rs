@@ -543,35 +543,6 @@ impl ProductEngine {
         .map_err(|error| js_error("lens_distortion", error))
     }
 
-    /// Pack the canonical production SkSL uniform ABI. CanvasKit binds these floats and the
-    /// working-linear backdrop mechanically; no material formulas or pixels cross into JS/Wasm.
-    pub fn pack_motion_glass_uniforms(
-        &self,
-        program_json: &str,
-        owner_to_device: &[f64],
-    ) -> Result<Vec<f32>, JsError> {
-        let program: valle_draw::program::MotionGlassProgram =
-            parse_json(program_json, "MotionGlassProgram")?;
-        let transform = glass_transform(owner_to_device)?;
-        crate::compositor::glass::pack_motion_glass_gpu_uniforms(&program, transform)
-            .map(|uniforms| uniforms.to_vec())
-            .map_err(|error| js_error("motion_glass_uniforms", error))
-    }
-
-    /// Pack the foreground mode of the same production SkSL uniform ABI.
-    pub fn pack_motion_glass_foreground_uniforms(
-        &self,
-        program_json: &str,
-        owner_to_device: &[f64],
-    ) -> Result<Vec<f32>, JsError> {
-        let foreground: valle_draw::program::MotionGlassForegroundProgram =
-            parse_json(program_json, "MotionGlassForegroundProgram")?;
-        let transform = glass_transform(owner_to_device)?;
-        crate::compositor::glass::pack_motion_glass_foreground_gpu_uniforms(&foreground, transform)
-            .map(|uniforms| uniforms.to_vec())
-            .map_err(|error| js_error("motion_glass_foreground_uniforms", error))
-    }
-
     /// Clear the active render, frame tickets and host-side fulfillment caches. Backend objects
     /// remain JS-owned and must be retired by the host under the matching external generation.
     pub fn reset(&mut self) {
@@ -1798,18 +1769,6 @@ fn open_product_fixed_package(
 fn parse_json<T: serde::de::DeserializeOwned>(json: &str, kind: &str) -> Result<T, JsError> {
     serde_json::from_str(json)
         .map_err(|error| JsError::new(&format!("[input_parse] invalid {kind}: {error}")))
-}
-
-fn glass_transform(values: &[f64]) -> Result<[f64; 9], JsError> {
-    let transform: [f64; 9] = values.try_into().map_err(|_| {
-        JsError::new("[motion_glass_transform] ownerToDevice must contain exactly 9 values")
-    })?;
-    if !transform.iter().all(|value| value.is_finite()) {
-        return Err(JsError::new(
-            "[motion_glass_transform] ownerToDevice must be finite",
-        ));
-    }
-    Ok(transform)
 }
 
 fn unknown_ticket(ticket: u32) -> JsError {

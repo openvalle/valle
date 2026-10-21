@@ -267,7 +267,7 @@ pub(crate) fn decode_results(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{prepare::DeviceTransform, resource::Extent2d};
+    use crate::resource::Extent2d;
     use valle_timeline::FrameRate;
 
     fn fixture() -> (Definition, MotionFrameInput) {
@@ -303,7 +303,6 @@ export default function Card(props) { const ctx = useTime();
             .unwrap(),
             viewport: Extent2d::new(320, 180).unwrap(),
             source_clip: Some(Rect::new(0.0, 0.0, 320.0, 180.0)),
-            program_to_device: DeviceTransform::from_affine([1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
             assets: BTreeMap::new(),
             model_resources: BTreeMap::new(),
         };

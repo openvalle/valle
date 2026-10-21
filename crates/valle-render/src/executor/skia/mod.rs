@@ -14,7 +14,6 @@ mod color_matrix;
 mod draw;
 mod effect;
 mod film_gpu;
-mod glass;
 mod gradient_fill;
 mod import;
 mod lens_gpu;

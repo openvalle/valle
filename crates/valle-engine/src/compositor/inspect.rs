@@ -547,8 +547,6 @@ fn program_pass_kind(kind: &ProgramPassKind) -> &'static str {
         ProgramPassKind::RasterNode { .. } | ProgramPassKind::RasterTree { .. } => "raster",
         ProgramPassKind::ReadDestination { .. } => "destination",
         ProgramPassKind::Backdrop { .. } => "backdrop",
-        ProgramPassKind::MotionGlass { .. } => "glass",
-        ProgramPassKind::ApplyMotionGlassForeground { .. } => "glassForeground",
         ProgramPassKind::SourceOver { .. } => "composite",
         ProgramPassKind::ApplyClip { .. } => "clip",
         ProgramPassKind::ApplyMask { .. } => "mask",

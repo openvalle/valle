@@ -1074,16 +1074,6 @@ enum ProgramPassStructure {
         input: u32,
         output: u32,
     },
-    MotionGlass {
-        node: u32,
-        input: u32,
-        output: u32,
-    },
-    ApplyMotionGlassForeground {
-        node: u32,
-        input: u32,
-        output: u32,
-    },
     SourceOver {
         source: u32,
         destination: u32,
@@ -1178,26 +1168,6 @@ impl From<&super::ProgramPass> for ProgramPassStructure {
                 output,
                 ..
             } => Self::Backdrop {
-                node: node.raw(),
-                input: input.get(),
-                output: output.get(),
-            },
-            Kind::MotionGlass {
-                node,
-                input,
-                output,
-                ..
-            } => Self::MotionGlass {
-                node: node.raw(),
-                input: input.get(),
-                output: output.get(),
-            },
-            Kind::ApplyMotionGlassForeground {
-                node,
-                input,
-                output,
-                ..
-            } => Self::ApplyMotionGlassForeground {
                 node: node.raw(),
                 input: input.get(),
                 output: output.get(),

@@ -793,43 +793,6 @@ fn preflight_program(
                     &mut budget.coverage_samples,
                 )?;
             }
-            ProgramPassKind::MotionGlass {
-                output, program, ..
-            } => {
-                let output_roi = bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
-                let blur_radius = f64::from(program.material.roughness)
-                    * f64::from(program.material.thickness)
-                    * 0.65;
-                // R/G/B Snell reads plus four diagonal roughness taps when diffusion is active.
-                let texture_samples = if blur_radius >= 0.5 { 7 } else { 3 };
-                reserve_kernel_samples(
-                    pass,
-                    output_roi.pixels(),
-                    texture_samples,
-                    &mut budget.kernel_samples,
-                )?;
-            }
-            ProgramPassKind::ApplyMotionGlassForeground {
-                output, program, ..
-            } => {
-                let output_roi = bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
-                reserve_raster_samples(
-                    pass,
-                    output_roi.pixels(),
-                    1,
-                    samples_per_pixel,
-                    &mut budget.coverage_samples,
-                )?;
-                if program.shape == valle_draw::program::PackedGlassShapeKind::Path {
-                    reserve_raster_geometry_tests(
-                        pass,
-                        output_roi.pixels(),
-                        u64::try_from(program.path_points.len()).unwrap_or(u64::MAX),
-                        samples_per_pixel,
-                        &mut budget.geometry_tests,
-                    )?;
-                }
-            }
             ProgramPassKind::ApplyClip { node, output, .. } => {
                 let output_roi = bound_program_resource_roi(schedule, prepared.id, pass, *output)?;
                 reserve_raster_samples(
@@ -1376,30 +1339,6 @@ fn prepare_reference_program(
                         program: id,
                         node: *node,
                     });
-                }
-            }
-            ProgramPassKind::MotionGlass {
-                node,
-                program: glass,
-                ..
-            } => {
-                let Some(Node::Group(group)) = program.nodes().get(node.raw() as usize) else {
-                    return Err(ReferenceExecuteError::InvalidProgram { program: id });
-                };
-                if group.glass.as_deref() != Some(glass) {
-                    return Err(ReferenceExecuteError::InvalidProgram { program: id });
-                }
-            }
-            ProgramPassKind::ApplyMotionGlassForeground {
-                node,
-                program: foreground,
-                ..
-            } => {
-                let Some(Node::Group(group)) = program.nodes().get(node.raw() as usize) else {
-                    return Err(ReferenceExecuteError::InvalidProgram { program: id });
-                };
-                if group.glass_foreground.as_deref() != Some(foreground) {
-                    return Err(ReferenceExecuteError::InvalidProgram { program: id });
                 }
             }
             ProgramPassKind::Clear { .. }
@@ -2856,76 +2795,6 @@ fn raster_program<'program, 'object>(
                         .scale_coverage(coverage)?)
                 })?;
             }
-            ProgramPassKind::MotionGlass {
-                input,
-                output,
-                program: glass,
-                ..
-            } => {
-                let owner_to_device = program_resource_to_device(
-                    prepared,
-                    *output,
-                    program.viewport,
-                    transform.matrix(),
-                )?;
-                let mut pixels =
-                    Vec::with_capacity(extent.width() as usize * extent.height() as usize);
-                for y in 0..extent.height() {
-                    for x in 0..extent.width() {
-                        pixels.push(execution.read_pixel(*input, x, y)?);
-                    }
-                }
-                let backdrop = ReferenceImage::new(extent, pixels)?;
-                let contribution = match glass.owner_kind {
-                    valle_draw::program::glass::GlassOwnerKind::Independent => {
-                        crate::compositor::glass::render_glass_contribution_transformed(
-                            glass,
-                            owner_to_device,
-                            &backdrop,
-                        )
-                    }
-                    valle_draw::program::glass::GlassOwnerKind::Field => {
-                        crate::compositor::glass::render_field_contribution_transformed(
-                            glass,
-                            owner_to_device,
-                            &backdrop,
-                        )
-                    }
-                }
-                .map_err(|_| ReferenceExecuteError::InvalidProgram {
-                    program: program.id,
-                })?;
-                execution.write_resource(*output, |execution, x, y| {
-                    contribution
-                        .pixel(x, y)
-                        .ok_or_else(|| execution.invalid_schedule())
-                })?;
-            }
-            ProgramPassKind::ApplyMotionGlassForeground {
-                input,
-                output,
-                owner_to_program,
-                program: foreground,
-                ..
-            } => {
-                let owner_to_device = program_transform_to_device(
-                    prepared,
-                    *owner_to_program,
-                    program.viewport,
-                    transform.matrix(),
-                )?;
-                execution.write_resource(*output, |execution, x, y| {
-                    let coverage =
-                        program_glass_foreground_coverage(foreground, owner_to_device, x, y)?;
-                    if coverage == 0.0 {
-                        return Ok(PremulRgba32::TRANSPARENT);
-                    }
-                    execution
-                        .read_pixel(*input, x, y)?
-                        .scale_coverage(coverage)
-                        .map_err(Into::into)
-                })?;
-            }
             ProgramPassKind::ApplyClip {
                 node,
                 input,
@@ -3241,40 +3110,6 @@ fn program_clip_coverage(
     y: u32,
 ) -> Result<f32, ReferenceExecuteError> {
     program_local_coverage(viewport, inverse, x, y, |point| clip.contains(point))
-}
-
-fn program_glass_foreground_coverage(
-    foreground: &valle_draw::program::MotionGlassForegroundProgram,
-    owner_to_device: [f64; 9],
-    x: u32,
-    y: u32,
-) -> Result<f32, ReferenceExecuteError> {
-    let presence = crate::compositor::glass::materialization(f64::from(foreground.presence));
-    if presence <= 0.0 {
-        return Ok(0.0);
-    }
-    let mut inside = 0_u32;
-    for sample_y in 0..PROGRAM_COVERAGE_SAMPLES_PER_AXIS {
-        for sample_x in 0..PROGRAM_COVERAGE_SAMPLES_PER_AXIS {
-            let device = [
-                f64::from(x)
-                    + (f64::from(sample_x) + 0.5) / f64::from(PROGRAM_COVERAGE_SAMPLES_PER_AXIS),
-                f64::from(y)
-                    + (f64::from(sample_y) + 0.5) / f64::from(PROGRAM_COVERAGE_SAMPLES_PER_AXIS),
-            ];
-            let Some((distance, band)) = crate::compositor::glass::transformed_foreground_distance(
-                foreground,
-                owner_to_device,
-                device,
-            ) else {
-                continue;
-            };
-            let effective_distance = distance + (1.0 - presence) * band;
-            inside += u32::from(effective_distance <= 0.0);
-        }
-    }
-    Ok(inside as f32
-        / (PROGRAM_COVERAGE_SAMPLES_PER_AXIS * PROGRAM_COVERAGE_SAMPLES_PER_AXIS) as f32)
 }
 
 fn program_resource_to_device(

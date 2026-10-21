@@ -2,7 +2,8 @@
 
 use valle_compiler::motion::compile_motion;
 use valle_draw::program::{
-    AuthorColor, GradientInterpolation, HueDirection, Node, Paint, interpolate_author_colors,
+    AuthorColor, GradientInterpolation, HueDirection, Node, Paint, ShaderUniformValue,
+    interpolate_author_colors,
 };
 use valle_motion::{
     BatchFieldProgress, Expr, Fonts, LayoutOptions, MotionValue, NodeKind, Viewport, build_tree,
@@ -378,8 +379,31 @@ fn glass_tint_remains_float_through_layout() {
         },
     );
     assert_ne!(expected, AuthorColor::from_srgb8(expected.to_srgb8()));
-    assert_eq!(tree.glass.surfaces.len(), 1);
-    assert_eq!(tree.glass.surfaces[0].material.unwrap().tint, expected);
+    let program = emit(&tree, &default_font_naming).unwrap().program;
+    let tint = program
+        .nodes()
+        .iter()
+        .find_map(|node| match node {
+            Node::Group(group) => group
+                .shader
+                .as_ref()?
+                .uniforms
+                .iter()
+                .find(|uniform| uniform.name == "tint"),
+            _ => None,
+        })
+        .expect("the Glass optics layer binds its tint");
+    let ShaderUniformValue::Color(tint) = tint.value else {
+        panic!("tint binds a color, got {:?}", tint.value);
+    };
+    // Within float error, far below a byte step.
+    let channels = [expected.red, expected.green, expected.blue, expected.alpha];
+    for (bound, channel) in tint.iter().zip(channels) {
+        assert!(
+            (f64::from(*bound) - channel).abs() < 1e-4,
+            "{tint:?} against {expected:?}"
+        );
+    }
 }
 
 #[test]

@@ -130,7 +130,6 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
     pub styles: &'a valle_motion::StyleCache,
     pub faces: &'a valle_motion::FaceCache,
     pub fonts: &'a MotionFontSet,
-    pub program_to_device: super::DeviceTransform,
     pub assets: &'a BTreeMap<String, SemanticAsset>,
     pub model_resources: &'a BTreeMap<String, ContentDigest>,
 }
@@ -145,7 +144,6 @@ pub(super) struct MotionFrameInput {
     pub motion_context: valle_motion::MotionContext,
     pub viewport: Extent2d,
     pub source_clip: Option<Rect>,
-    pub program_to_device: super::DeviceTransform,
     pub assets: BTreeMap<String, SemanticAsset>,
     pub model_resources: BTreeMap<String, ContentDigest>,
 }
@@ -238,7 +236,6 @@ pub(super) fn resolve_motion_input(
         motion_context,
         viewport: context.viewport,
         source_clip: context.source_clip,
-        program_to_device: context.program_to_device,
         assets: context.assets.clone(),
         model_resources: context.model_resources.clone(),
     })
@@ -275,14 +272,11 @@ pub(super) fn build_motion_program(
             cache.build_tree(&motion_context, &props, options.viewport, options.styles)
         })
     };
-    let mut tree = reused
+    let tree = reused
         .unwrap_or_else(|| valle_motion::build_tree(prepared, &motion_context, &props, &options))
         .map_err(|error| ProgramPrepareError::MotionLayout {
             reason: format!("{error} at frame {local_frame}"),
         })?;
-    if !tree.glass.surfaces.is_empty() {
-        install_glass_programs(&mut tree, input.program_to_device, input.viewport)?;
-    }
     let layout_boxes = valle_motion::layout_boxes(artifact, &tree).map_err(|error| {
         ProgramPrepareError::MotionLayout {
             reason: error.to_string(),
@@ -459,433 +453,6 @@ impl valle_draw::program::ProgramResourceCatalog for CompiledMotionProgramCatalo
             .or_else(|| self.assets.get(control).map(|asset| asset.digest))
             .map(|digest| *digest.as_bytes())
     }
-}
-
-fn install_glass_programs(
-    tree: &mut valle_motion::LayoutTree,
-    program_to_device: super::DeviceTransform,
-    viewport: Extent2d,
-) -> Result<(), ProgramPrepareError> {
-    use crate::compositor::glass::{
-        FieldGlassPackage, FieldMemberPackage, GlassDeviceShape, GlassSurfaceSpec,
-        IndependentGlassPackage, qualify_device_shape, resolve_material_base_with_geometry,
-    };
-
-    let current = tree.glass.clone();
-    let program_normalize = [
-        1.0 / f64::from(viewport.width()),
-        0.0,
-        0.0,
-        0.0,
-        1.0 / f64::from(viewport.height()),
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-    ];
-    let viewport_to_device = matrix_mul(program_to_device.matrix(), program_normalize);
-
-    struct QualifiedSurface {
-        spec: GlassSurfaceSpec,
-        shape: GlassDeviceShape,
-        path_points: Vec<[f32; 2]>,
-    }
-    let mut qualified = BTreeMap::<String, QualifiedSurface>::new();
-    for surface in &current.surfaces {
-        let mean_axis = ((surface.local_rect.width + surface.local_rect.height) * 0.5).max(1e-9);
-        let maximum_radius = surface.local_rect.width.min(surface.local_rect.height) * 0.5;
-        let normalized_radius = f64::from(surface.radius).clamp(0.0, maximum_radius) / mean_axis;
-        let normalized_path = surface
-            .path_points
-            .iter()
-            .map(|point| {
-                [
-                    point[0] / surface.local_rect.width as f32,
-                    point[1] / surface.local_rect.height as f32,
-                ]
-            })
-            .collect::<Vec<_>>();
-        let spec = GlassSurfaceSpec {
-            surface_id: surface.surface_id.clone(),
-            shape: surface.shape,
-            radius: normalized_radius as f32,
-        };
-        let transform = super::DeviceTransform::from_projective(matrix_mul(
-            viewport_to_device,
-            surface.viewport_matrix,
-        ))
-        .map_err(|error| ProgramPrepareError::MotionGlass {
-            reason: error.to_string(),
-        })?;
-        let shape = qualify_device_shape(&spec, surface.presence, transform).map_err(|error| {
-            ProgramPrepareError::MotionGlass {
-                reason: format!("Glass surface '{}': {error}", surface.surface_id),
-            }
-        })?;
-        qualified.insert(
-            surface.surface_id.clone(),
-            QualifiedSurface {
-                spec,
-                shape,
-                path_points: normalized_path,
-            },
-        );
-    }
-
-    let mut material_programs = BTreeMap::new();
-    let mut foreground_programs = BTreeMap::new();
-    for surface in current
-        .surfaces
-        .iter()
-        .filter(|surface| surface.field_id.is_none())
-    {
-        let material = surface
-            .material
-            .ok_or_else(|| ProgramPrepareError::MotionGlass {
-                reason: format!("independent Glass '{}' has no material", surface.surface_id),
-            })?;
-        let qualified_surface = &qualified[&surface.surface_id];
-        let shape = &qualified_surface.shape;
-        let radius =
-            f64::from(shape.radius).max((shape.rect.width.min(shape.rect.height) * 0.5).max(1.0));
-        let resolved = resolve_material_base_with_geometry(
-            material.clarity,
-            material.depth,
-            linear_tint(material.tint)?,
-            1.0,
-            radius,
-        )
-        .map_err(|reason| ProgramPrepareError::MotionGlass {
-            reason: format!("Glass material '{}': {reason}", surface.surface_id),
-        })?;
-        let mut program =
-            crate::compositor::glass::assemble_independent_glass(&IndependentGlassPackage {
-                spec: &qualified_surface.spec,
-                shape,
-                material: resolved,
-                path_points: qualified_surface.path_points.clone(),
-            })
-            .map_err(|error| ProgramPrepareError::MotionGlass {
-                reason: error.to_string(),
-            })?;
-        qualify_program_geometry(
-            &mut program,
-            std::slice::from_ref(surface),
-            surface.owner_to_viewport,
-            viewport_to_device,
-        )?;
-        qualify_program_light(
-            &mut program,
-            surface
-                .environment
-                .as_ref()
-                .ok_or_else(|| ProgramPrepareError::MotionGlass {
-                    reason: format!(
-                        "independent Glass '{}' has no environment",
-                        surface.surface_id
-                    ),
-                })?,
-            surface.owner_to_viewport,
-            viewport_to_device,
-        )?;
-        let foreground = valle_draw::program::MotionGlassForegroundProgram::from_owner(
-            &program,
-            &surface.surface_id,
-        )
-        .map_err(|error| ProgramPrepareError::MotionGlass {
-            reason: error.to_string(),
-        })?;
-        foreground_programs.insert(surface.node_key.clone(), foreground);
-        material_programs.insert(surface.surface_id.clone(), program);
-    }
-
-    for field in &current.fields {
-        let members = field
-            .member_surface_ids
-            .iter()
-            .map(|id| {
-                let member = &qualified[id];
-                FieldMemberPackage {
-                    spec: &member.spec,
-                    shape: &member.shape,
-                    path_points: &member.path_points,
-                }
-            })
-            .collect::<Vec<_>>();
-        let radius = members
-            .iter()
-            .map(|member| {
-                f64::from(member.shape.radius)
-                    .max((member.shape.rect.width.min(member.shape.rect.height) * 0.5).max(1.0))
-            })
-            .fold(f64::INFINITY, f64::min);
-        let resolved = resolve_material_base_with_geometry(
-            field.material.clarity,
-            field.material.depth,
-            linear_tint(field.material.tint)?,
-            1.0,
-            radius,
-        )
-        .map_err(|reason| ProgramPrepareError::MotionGlass {
-            reason: format!("GlassField material '{}': {reason}", field.field_id),
-        })?;
-        let mut program = crate::compositor::glass::assemble_field_glass(&FieldGlassPackage {
-            field_id: &field.field_id,
-            members: &members,
-            material: resolved,
-            merge_distance: field.merge_distance,
-        })
-        .map_err(|error| ProgramPrepareError::MotionGlass {
-            reason: error.to_string(),
-        })?;
-        let current_members = current
-            .surfaces
-            .iter()
-            .filter(|surface| surface.field_id.as_deref() == Some(field.field_id.as_str()))
-            .cloned()
-            .collect::<Vec<_>>();
-        qualify_program_geometry(
-            &mut program,
-            &current_members,
-            field.owner_to_viewport,
-            viewport_to_device,
-        )?;
-        qualify_program_light(
-            &mut program,
-            &field.environment,
-            field.owner_to_viewport,
-            viewport_to_device,
-        )?;
-        for surface in &current_members {
-            let foreground = valle_draw::program::MotionGlassForegroundProgram::from_owner(
-                &program,
-                &surface.surface_id,
-            )
-            .map_err(|error| ProgramPrepareError::MotionGlass {
-                reason: error.to_string(),
-            })?;
-            foreground_programs.insert(surface.node_key.clone(), foreground);
-        }
-        material_programs.insert(field.field_id.clone(), program);
-    }
-    tree.glass.material_programs = material_programs;
-    tree.glass.foreground_programs = foreground_programs;
-    Ok(())
-}
-
-fn linear_tint(color: valle_draw::program::AuthorColor) -> Result<[f32; 4], ProgramPrepareError> {
-    if !color.is_finite() {
-        return Err(ProgramPrepareError::MotionGlass {
-            reason: "Glass tint must be finite with alpha in 0..=1".into(),
-        });
-    }
-    // The material kernel takes straight linear Rec.2020. Clip out-of-gamut author channels to
-    // the sRGB gamut before conversion, without reducing any channel to an 8-bit CSS color.
-    let straight = valle_draw::program::AuthorColor {
-        red: color.red.clamp(0.0, 1.0),
-        green: color.green.clamp(0.0, 1.0),
-        blue: color.blue.clamp(0.0, 1.0),
-        alpha: 1.0,
-    }
-    .to_working();
-    Ok([
-        straight.red,
-        straight.green,
-        straight.blue,
-        color.alpha as f32,
-    ])
-}
-
-fn qualify_program_light(
-    program: &mut valle_draw::program::MotionGlassProgram,
-    environment: &valle_motion::GlassLayoutEnvironment,
-    owner_to_viewport: [f64; 9],
-    viewport_to_device: [f64; 9],
-) -> Result<(), ProgramPrepareError> {
-    let authored = environment.light_direction;
-    let authored_length = authored[0].hypot(authored[1]);
-    if !authored_length.is_finite()
-        || authored_length <= f64::EPSILON
-        || !environment.light_elevation.is_finite()
-        || !(0.0..=1.0).contains(&environment.light_elevation)
-        || !environment.light_intensity.is_finite()
-        || !(0.0..=1.0).contains(&environment.light_intensity)
-    {
-        return Err(ProgramPrepareError::MotionGlass {
-            reason: format!("Glass owner '{}' has an invalid light", program.owner_id),
-        });
-    }
-    let direction = match environment.light_space {
-        valle_motion::glass::GlassLightSpace::Screen => {
-            [authored[0] / authored_length, authored[1] / authored_length]
-        }
-        valle_motion::glass::GlassLightSpace::World => {
-            let owner_to_device = matrix_mul(viewport_to_device, owner_to_viewport);
-            let center = program.backdrop.output_bounds.center();
-            let origin = project(owner_to_device, [center.x, center.y]).ok_or_else(|| {
-                ProgramPrepareError::MotionGlass {
-                    reason: format!(
-                        "Glass owner '{}' light crosses a transform horizon",
-                        program.owner_id
-                    ),
-                }
-            })?;
-            let endpoint = project(
-                owner_to_device,
-                [center.x + authored[0], center.y + authored[1]],
-            )
-            .ok_or_else(|| ProgramPrepareError::MotionGlass {
-                reason: format!(
-                    "Glass owner '{}' light crosses a transform horizon",
-                    program.owner_id
-                ),
-            })?;
-            let transformed = [endpoint[0] - origin[0], endpoint[1] - origin[1]];
-            let length = transformed[0].hypot(transformed[1]);
-            if !length.is_finite() || length <= f64::EPSILON {
-                return Err(ProgramPrepareError::MotionGlass {
-                    reason: format!(
-                        "Glass owner '{}' world light collapses in device space",
-                        program.owner_id
-                    ),
-                });
-            }
-            [transformed[0] / length, transformed[1] / length]
-        }
-    };
-    program.material.light = valle_draw::program::PackedGlassLight {
-        direction: [direction[0] as f32, direction[1] as f32],
-        elevation: environment.light_elevation as f32,
-        intensity: environment.light_intensity as f32,
-    };
-    program
-        .validate()
-        .map_err(|error| ProgramPrepareError::MotionGlass {
-            reason: error.to_string(),
-        })
-}
-
-fn qualify_program_geometry(
-    program: &mut valle_draw::program::MotionGlassProgram,
-    surfaces: &[valle_motion::GlassLayoutSurface],
-    owner_to_viewport: [f64; 9],
-    viewport_to_device: [f64; 9],
-) -> Result<(), ProgramPrepareError> {
-    let viewport_to_owner =
-        matrix_inverse(owner_to_viewport).ok_or_else(|| ProgramPrepareError::MotionGlass {
-            reason: format!(
-                "Glass owner '{}' has a degenerate transform",
-                program.owner_id
-            ),
-        })?;
-    let owner_to_device = matrix_mul(viewport_to_device, owner_to_viewport);
-    for packed in &mut program.surfaces {
-        let surface = surfaces
-            .iter()
-            .find(|surface| surface.surface_id == packed.surface_id)
-            .ok_or_else(|| ProgramPrepareError::MotionGlass {
-                reason: format!(
-                    "Glass owner '{}' lost surface '{}'",
-                    program.owner_id, packed.surface_id
-                ),
-            })?;
-        // `viewport_matrix` maps the normalized box to the viewport, but the analytic Glass
-        // shapes must stay in layout-pixel local coordinates. Keeping a scalar radius in the
-        // normalized 1x1 box turns every circular corner into an ellipse whenever width !=
-        // height (and turns a capsule into a flattened rounded rectangle). Convert local pixels
-        // to normalized coordinates in the matrix instead, so rect, radius and path geometry all
-        // share one isotropic authoring space before the actual CSS transform is applied.
-        let local_pixels_to_normalized = [
-            1.0 / surface.local_rect.width,
-            0.0,
-            0.0,
-            0.0,
-            1.0 / surface.local_rect.height,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-        ];
-        let local_to_owner = matrix_mul(
-            matrix_mul(viewport_to_owner, surface.viewport_matrix),
-            local_pixels_to_normalized,
-        );
-        packed.rect = Rect::new(
-            0.0,
-            0.0,
-            surface.local_rect.width,
-            surface.local_rect.height,
-        );
-        packed.local_to_owner = matrix_f32(local_to_owner)?;
-        let maximum_radius = surface.local_rect.width.min(surface.local_rect.height) * 0.5;
-        packed.radius = f64::from(surface.radius).clamp(0.0, maximum_radius) as f32;
-        packed.path_points = surface.path_points.clone();
-    }
-    let bounds =
-        crate::compositor::glass::resolve_motion_glass_backdrop_bounds(program, owner_to_device)
-            .map_err(|error| ProgramPrepareError::MotionGlass {
-                reason: error.to_string(),
-            })?;
-    program.backdrop.output_bounds = bounds.output_owner;
-    program.backdrop.sample_bounds = bounds.sample_owner;
-    program
-        .validate()
-        .map_err(|error| ProgramPrepareError::MotionGlass {
-            reason: error.to_string(),
-        })
-}
-
-fn matrix_mul(left: [f64; 9], right: [f64; 9]) -> [f64; 9] {
-    let mut output = [0.0; 9];
-    for row in 0..3 {
-        for column in 0..3 {
-            output[row * 3 + column] = (0..3)
-                .map(|index| left[row * 3 + index] * right[index * 3 + column])
-                .sum();
-        }
-    }
-    output
-}
-
-fn matrix_inverse(matrix: [f64; 9]) -> Option<[f64; 9]> {
-    let [a, b, c, d, e, f, g, h, i] = matrix;
-    let cofactors = [
-        e * i - f * h,
-        c * h - b * i,
-        b * f - c * e,
-        f * g - d * i,
-        a * i - c * g,
-        c * d - a * f,
-        d * h - e * g,
-        b * g - a * h,
-        a * e - b * d,
-    ];
-    let determinant = a * cofactors[0] + b * cofactors[3] + c * cofactors[6];
-    (determinant.is_finite() && determinant.abs() > 1e-12)
-        .then(|| cofactors.map(|value| value / determinant))
-}
-
-fn matrix_f32(matrix: [f64; 9]) -> Result<[f32; 9], ProgramPrepareError> {
-    let output = matrix.map(|value| value as f32);
-    if output.into_iter().all(f32::is_finite) {
-        Ok(output)
-    } else {
-        Err(ProgramPrepareError::MotionGlass {
-            reason: "Glass transform exceeds packed f32 range".into(),
-        })
-    }
-}
-
-fn project(matrix: [f64; 9], point: [f64; 2]) -> Option<[f64; 2]> {
-    let denominator = matrix[6] * point[0] + matrix[7] * point[1] + matrix[8];
-    if !denominator.is_finite() || denominator.abs() <= 1e-12 {
-        return None;
-    }
-    let output = [
-        (matrix[0] * point[0] + matrix[1] * point[1] + matrix[2]) / denominator,
-        (matrix[3] * point[0] + matrix[4] * point[1] + matrix[5]) / denominator,
-    ];
-    output.into_iter().all(f64::is_finite).then_some(output)
 }
 
 #[derive(Debug, Clone)]
@@ -1283,8 +850,6 @@ pub enum ProgramPrepareError {
     CompiledInvariant { reason: String },
     #[error("Motion layout failed: {reason}")]
     MotionLayout { reason: String },
-    #[error("Motion Glass preparation failed: {reason}")]
-    MotionGlass { reason: String },
     #[error("Motion DrawProgram emission failed: {reason}")]
     MotionEmit { reason: String },
     /// The emitted DrawProgram exceeds a render budget at its group `node`.
@@ -1320,42 +885,6 @@ mod tests {
 
     const DEPENDENCY_FONT: &[u8] =
         include_bytes!("../../../../assets/fonts/katex/KaTeX_AMS-Regular.ttf");
-
-    #[test]
-    fn glass_tint_reaches_packed_material_without_byte_rounding() {
-        use valle_draw::program::{
-            AuthorColor, GradientInterpolation, HueDirection, interpolate_author_colors,
-        };
-
-        let midpoint = interpolate_author_colors(
-            AuthorColor::from_srgb8(valle_draw::Rgba::rgb(0x21, 0x40, 0xff)),
-            AuthorColor::from_srgb8(valle_draw::Rgba::rgb(0xff, 0xd0, 0)),
-            0.5,
-            GradientInterpolation::Oklch {
-                hue: HueDirection::Shorter,
-            },
-        );
-        let tint = linear_tint(midpoint).unwrap();
-        let rounded = linear_tint(AuthorColor::from_srgb8(midpoint.to_srgb8())).unwrap();
-        assert_ne!(tint, rounded);
-        let straight = AuthorColor {
-            red: midpoint.red.clamp(0.0, 1.0),
-            green: midpoint.green.clamp(0.0, 1.0),
-            blue: midpoint.blue.clamp(0.0, 1.0),
-            alpha: 1.0,
-        }
-        .to_working();
-        assert_eq!(tint, [straight.red, straight.green, straight.blue, 1.0]);
-
-        let material = crate::compositor::glass::resolve_material_base_with_geometry(
-            0.85, 0.7, tint, 1.0, 28.0,
-        )
-        .unwrap();
-        let packed = crate::compositor::glass::pack_material_base(&material);
-        assert_eq!(&packed.tint_linear[..3], &tint[..3]);
-        assert!(packed.tint_linear[3] > 0.0);
-        assert!(packed.tint_linear[3] < 1.0);
-    }
 
     fn emitted_font_request(
         fonts: &valle_motion::Fonts,

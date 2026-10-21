@@ -42,8 +42,8 @@ export class RasterTreeCache {
           bytes: 256 + draw.paths[pathIndex]!.points.length * 16 + draw.paths[pathIndex]!.verbs.length * 8};
       }
     } else if (node!.kind === "group" && value.filters?.length === 0 && value.mask == null &&
-      value.shader == null && value.transition == null && value.glass == null &&
-      value.glassForeground == null && value.backdrop == null && value.internalBlend === "normal" && Array.isArray(value.children)) {
+      value.shader == null && value.transition == null && value.backdrop == null &&
+      value.internalBlend === "normal" && Array.isArray(value.children)) {
       let clip = JSON.stringify(value.clip), supported = true;
       if (value.clip?.kind === "path") {
         const identity = path(value.clip.value.path);

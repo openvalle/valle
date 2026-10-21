@@ -238,8 +238,6 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
             cpuOutputCalls += 1;
             engine!.transform_srgb_preview_pixels(pixels, opaque);
           },
-          pack_motion_glass_uniforms: engine.pack_motion_glass_uniforms.bind(engine),
-          pack_motion_glass_foreground_uniforms: engine.pack_motion_glass_foreground_uniforms.bind(engine),
         });
         const renderWeb = async (engine: ProductEngine, renderId: string, frame: number, transparent = false) => {
           const ticket = engine.evaluate_prepare_preview(renderId, BigInt(frame), 64, 64, transparent);

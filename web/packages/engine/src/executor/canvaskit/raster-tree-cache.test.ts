@@ -38,7 +38,7 @@ test("scope identity includes transforms, clip rules and changed fill or stroke 
   const group = {
     children: [0], transform: [1, 0, 0, 0, 1, 0, 0, 0, 1], opacity: 1,
     clip: {kind: "path", value: {path: 0, fillRule: "nonZero"}}, filters: [],
-    mask: null, shader: null, transition: null, glass: null, glassForeground: null,
+    mask: null, shader: null, transition: null,
     backdrop: null, internalBlend: "normal",
   };
   const draw = {

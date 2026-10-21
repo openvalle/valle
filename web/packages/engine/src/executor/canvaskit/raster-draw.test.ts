@@ -22,8 +22,8 @@ function emptyProgram(): DrawProgramWire {
 
 function group(program: DrawProgramWire, children: number[], options: Wire = {}): number {
   return program.nodes.push({ kind: "group", value: { children, transform: identity, clip: null,
-    filters: [], opacity: 1, mask: null, shader: null, transition: null, glass: null,
-    glassForeground: null, backdrop: null, internalBlend: "normal", ...options } }) - 1;
+    filters: [], opacity: 1, mask: null, shader: null, transition: null,
+    backdrop: null, internalBlend: "normal", ...options } }) - 1;
 }
 
 function path(program: DrawProgramWire, wire: PathWire, fill: number, fillRule = "nonZero"): number {

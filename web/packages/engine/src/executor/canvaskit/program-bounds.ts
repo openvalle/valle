@@ -200,7 +200,7 @@ export function programNodeBounds(
     case "group": {
       // Other group effects have their own scheduled pass and do not enter RasterTree.
       if (node.mask != null || node.backdrop != null || node.shader != null || node.transition != null
-        || node.glass != null || node.glassForeground != null || node.filters.length !== 0) return undefined;
+        || node.filters.length !== 0) return undefined;
       result = null;
       for (const child of node.children as number[]) result = union(result, programNodeBounds(program, child, cache, depth + 1));
       if (node.clip != null) result = intersect(result, programClipBounds(program, node.clip));

@@ -67,8 +67,6 @@ pub enum DiagCode {
     InstanceFallback,
     /// Valid syntax not supported by the current implementation.
     UnsupportedSyntax,
-    /// Motion Glass syntax without production admission.
-    MotionGlassNotAdmitted,
 }
 
 impl DiagCode {
@@ -86,8 +84,7 @@ impl DiagCode {
             | DiagCode::StyleInvalidValue
             | DiagCode::SandboxForbidden
             | DiagCode::StaticEvalFailed
-            | DiagCode::BuiltinRejected
-            | DiagCode::MotionGlassNotAdmitted => DiagClass::Illegal,
+            | DiagCode::BuiltinRejected => DiagClass::Illegal,
             DiagCode::TailwindUnsupported
             | DiagCode::UnsupportedSyntax
             | DiagCode::StyleUnsupportedProperty
@@ -123,7 +120,6 @@ impl DiagCode {
             DiagCode::ParameterRange => "parameter-range",
             DiagCode::InstanceFallback => "instance-fallback",
             DiagCode::UnsupportedSyntax => "unsupported-syntax",
-            DiagCode::MotionGlassNotAdmitted => "motion-glass-not-admitted",
         }
     }
 }

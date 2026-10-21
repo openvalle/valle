@@ -29,7 +29,6 @@ import fadeSource from "../../../../../../crates/valle-draw/assets/shaders/fade.
 import flyEyeSource from "../../../../../../crates/valle-draw/assets/shaders/flyeye.sksl" with { type: "text" };
 import linearBlurSource from "../../../../../../crates/valle-draw/assets/shaders/linearblur.sksl" with { type: "text" };
 import mosaicSource from "../../../../../../crates/valle-draw/assets/shaders/mosaic.sksl" with { type: "text" };
-import motionGlassSource from "../../../../../../crates/valle-draw/assets/shaders/motionglass.sksl" with { type: "text" };
 import multiplyBlendSource from "../../../../../../crates/valle-draw/assets/shaders/multiplyblend.sksl" with { type: "text" };
 import normalizeInputSource from "../../../../../../crates/valle-draw/assets/shaders/normalizeinput.sksl" with { type: "text" };
 import opacitySource from "../../../../../../crates/valle-draw/assets/shaders/opacity.sksl" with { type: "text" };
@@ -42,7 +41,6 @@ import wipeLeftSource from "../../../../../../crates/valle-draw/assets/shaders/w
 import wipeRightSource from "../../../../../../crates/valle-draw/assets/shaders/wiperight.sksl" with { type: "text" };
 
 export type BuiltinKernel = keyof typeof BUILTIN_SOURCES;
-export const MOTION_GLASS_UNIFORM_FLOATS = 580;
 
 // CanvasKit exposes image shaders rather than raw image shaders. Transport depth bytes in
 // Alpha8, where neither color management nor premultiplication can alter the numeric ABI.
@@ -86,7 +84,6 @@ const BUILTIN_SOURCES = Object.freeze({
   flyEye: flyEyeSource,
   linearBlur: linearBlurSource,
   mosaic: mosaicSource,
-  motionGlass: motionGlassSource,
   multiplyBlend: multiplyBlendSource,
   normalizeInput: normalizeInputSource,
   opacity: opacitySource,
@@ -148,14 +145,6 @@ export class CanvasKitBuiltinRuntime {
       detail = message;
     });
     if (!effect) throw new Error(`built-in CanvasKit kernel '${kernel}' failed admission: ${detail}`);
-    if (kernel === "motionGlass"
-      && (effect.getUniformFloatCount() !== MOTION_GLASS_UNIFORM_FLOATS
-        || effect.getUniformCount() !== 15
-        || effect.getUniformName(0) !== "header0"
-        || effect.getUniformName(14) !== "pathPointPairs")) {
-      effect.delete();
-      throw new Error("built-in CanvasKit Motion Glass uniform ABI drifted");
-    }
     this.effects.set(kernel, effect);
     return effect;
   }

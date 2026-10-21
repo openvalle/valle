@@ -606,12 +606,15 @@ impl<'s> Compiler<'s> {
                 "path" | "d" if kind_tag == "clip" => {
                     path_d = self.attr_path_value(&attribute.value, attribute.span());
                 }
+                "path" if kind_tag == "glass" => {
+                    path_d = self.attr_path_value(&attribute.value, attribute.span());
+                }
                 // Text paths share path parsing and static, prepare-time, and per-frame evaluation
                 // policies.
                 "path" if kind_tag == "text" => {
                     text_path = self.attr_path_value(&attribute.value, attribute.span());
                 }
-                "fillRule" if kind_tag == "clip" => {
+                "fillRule" if kind_tag == "clip" || kind_tag == "glass" => {
                     effect_fill_rule = match self
                         .attr_static_string(&attribute.value, attribute.span(), "fillRule")
                         .as_deref()
@@ -622,7 +625,7 @@ impl<'s> Compiler<'s> {
                             self.illegal(
                                 DiagCode::GrammarForbidden,
                                 attribute.span(),
-                                "Clip fillRule must be nonZero or evenOdd",
+                                "fillRule must be nonZero or evenOdd",
                             );
                             FillRule::NonZero
                         }
@@ -903,7 +906,7 @@ impl<'s> Compiler<'s> {
                     mask_rect = self.attr_rect_value(&attribute.value, attribute.span(), "rect");
                 }
                 name if matches!(kind_tag, "glass" | "glass-field") => {
-                    self.lower_glass_attribute(name, attribute, &mut glass_props);
+                    self.lower_glass_attribute(kind_tag, name, attribute, &mut glass_props);
                 }
                 other if other.starts_with("on") => self.illegal(DiagCode::GrammarForbidden, attribute.span(), format!("event handler `{other}` is a side effect and is illegal in frame-pure Motion JSX")),
                 other => self.unsupported(attribute.span(), format!("attribute `{other}` is legal on some frontend elements but is not in the admitted capability set")),
@@ -1830,10 +1833,7 @@ impl<'s> Compiler<'s> {
                 },
                 "shader-layer" => shader_kind.expect("lowered above"),
                 "glass" | "glass-field" => {
-                    match self.finish_glass_kind(kind_tag, &glass_props, element.span()) {
-                        Some(kind) => kind,
-                        None => return None,
-                    }
+                    self.finish_glass_kind(kind_tag, glass_props, path_d, effect_fill_rule)
                 }
                 _ => unreachable!("leaf kinds returned above"),
             },

@@ -394,7 +394,7 @@ impl<'s> Compiler<'s> {
                 caption_row: None,
             }
         };
-        self.normalize_glass_scopes(&mut root, None);
+        self.normalize_glass_scopes(&mut root, false);
         if !self.diagnostics.is_empty() {
             return Err(std::mem::take(&mut self.diagnostics));
         }
@@ -557,82 +557,51 @@ impl<'s> Compiler<'s> {
         Ok(artifact)
     }
 
-    /// Normalize the semantic `<GlassField>` scope after JSX expansion, when the complete parent
-    /// chain is available. Field membership is derived data: authors declare `fieldId` exactly
-    /// once on `<GlassField>`, and every nearest descendant `<Glass>` inherits it through
-    /// non-painting layout/transform wrappers. Independent defaults are expanded only after this
-    /// classification, so field-only inheritance can never depend on a duplicated member prop.
-    fn normalize_glass_scopes(
-        &mut self,
-        node: &mut PendingNode,
-        inherited: Option<valle_motion::glass::GlassFieldId>,
-    ) {
-        let active = match &node.kind {
-            NodeKind::GlassField(field) => {
-                if let Some(parent) = inherited.as_ref() {
-                    self.illegal(
-                        DiagCode::GrammarForbidden,
-                        node.span,
-                        format!(
-                            "<GlassField fieldId=\"{}\"> is structurally nested inside field '{}'; nested fields must be placed inside a member foreground",
-                            field.field_id.as_str(),
-                            parent.as_str()
-                        ),
-                    );
-                }
-                Some(field.field_id.clone())
-            }
-            _ => inherited,
-        };
-
+    /// A Glass inside a GlassField, through any wrappers, is its member: it takes the field's
+    /// material and light, so it leaves them unset. Any other Glass draws on its own and gets the
+    /// default material and light it does not set. A Glass's children are its foreground, outside
+    /// any field. This runs once the whole tree exists, because a component may be placed in a
+    /// field or outside one.
+    fn normalize_glass_scopes(&mut self, node: &mut PendingNode, in_field: bool) {
+        if in_field && matches!(node.kind, NodeKind::GlassField(_)) {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                node.span,
+                "a <GlassField> inside another would split one surface between two materials; nest it in a member's children",
+            );
+        }
         if let NodeKind::Glass(glass) = &mut node.kind {
-            if glass.field_id.is_some() {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    node.span,
-                    "<Glass> must not declare fieldId; membership is inherited from the nearest <GlassField>",
-                );
-            }
-            match active.as_ref() {
-                Some(field_id) => {
-                    if glass.material.is_some() {
+            if in_field {
+                for (name, set) in [
+                    ("material", glass.material.is_some()),
+                    ("light", glass.light.is_some()),
+                ] {
+                    if set {
                         self.illegal(
                             DiagCode::GrammarForbidden,
                             node.span,
-                            "a GlassField member inherits material and cannot override it",
+                            format!(
+                                "a <Glass> in a <GlassField> takes the field's {name}; set it on the field"
+                            ),
                         );
                     }
-                    if glass.environment.is_some() {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            node.span,
-                            "a GlassField member inherits environment and cannot override it",
-                        );
-                    }
-                    glass.field_id = Some(field_id.clone());
                 }
-                None => {
-                    glass.field_id = None;
-                    glass
-                        .material
-                        .get_or_insert_with(valle_motion::glass::GlassMaterialBinding::defaults);
-                    glass
-                        .environment
-                        .get_or_insert_with(valle_motion::glass::GlassEnvironmentBinding::defaults);
-                }
+            } else {
+                glass
+                    .material
+                    .get_or_insert_with(valle_motion::glass::GlassMaterialBinding::defaults);
+                glass
+                    .light
+                    .get_or_insert_with(valle_motion::glass::GlassLightBinding::defaults);
             }
         }
-
-        // A Glass node consumes the active field for its own material shell. Its children are
-        // foreground content and therefore begin a fresh material scope; this is what makes a
-        // nested independent Glass/GlassField unambiguous.
-        let child_scope = if matches!(&node.kind, NodeKind::Glass(_)) {
-            None
-        } else {
-            active
+        let child_in_field = match node.kind {
+            NodeKind::GlassField(_) => true,
+            NodeKind::Glass(_) => false,
+            _ => in_field,
         };
         for child in &mut node.children {
-            self.normalize_glass_scopes(child, child_scope.clone());
+            self.normalize_glass_scopes(child, child_in_field);
         }
     }
 

@@ -46,7 +46,6 @@ import type { CircleBatch, GpuCircles } from "../webgl/circles.ts";
 import { cropProgramInputs } from "./filter-roi.ts";
 import {
   CanvasKitBuiltinRuntime,
-  MOTION_GLASS_UNIFORM_FLOATS,
   TRANSITION_KERNELS,
   type BuiltinKernel,
 } from "./builtin-runtime.ts";
@@ -174,14 +173,6 @@ export interface CanvasKitEngineKernels {
     frameX: number, frameY: number, frameWidth: number, frameHeight: number,
   ): Uint8Array | Promise<Uint8Array>;
   perlin_noise_tables?(seed: number): Uint8Array;
-  pack_motion_glass_uniforms(
-    programJson: string,
-    ownerToDevice: Float64Array,
-  ): Float32Array;
-  pack_motion_glass_foreground_uniforms(
-    programJson: string,
-    ownerToDevice: Float64Array,
-  ): Float32Array;
 }
 
 export interface CanvasKitGlyphCoverageProfile {
@@ -1634,8 +1625,6 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
       && (group.clip == null || record(group.clip, "direct raster clip").kind !== "path")
       && group.shader == null
       && group.transition == null
-      && group.glass == null
-      && group.glassForeground == null
       && String(group.internalBlend) === "normal"
       && opacity >= 0
       && opacity <= 1
@@ -1943,32 +1932,6 @@ async function executeProgramPass(
           applyFiltersAsLayerValue(CanvasKit, canvas, input, filters, null);
         }
       } finally { canvas.restore(); }
-      return;
-    }
-    case "motionGlass": {
-      const kernel = requireGlassKernel(engineKernels);
-      const input = programValue(values, kind.input);
-      const ownerToDevice = programMatrix(admitted, localPlan, kind.output, device);
-      const uniforms = kernel.pack_motion_glass_uniforms(
-        JSON.stringify(record(kind.program, "MotionGlassProgram")),
-        Float64Array.from(ownerToDevice),
-      );
-      drawMotionGlassShader(CanvasKit, builtins, canvas, input, outputRoi, uniforms);
-      return;
-    }
-    case "applyMotionGlassForeground": {
-      const kernel = requireGlassKernel(engineKernels);
-      const input = programValue(values, kind.input);
-      const ownerToDevice = programTransformMatrix(
-        admitted,
-        numberArray(kind.ownerToProgram, 9, "MotionGlassForeground.ownerToProgram"),
-        device,
-      );
-      const uniforms = kernel.pack_motion_glass_foreground_uniforms(
-        JSON.stringify(record(kind.program, "MotionGlassForegroundProgram")),
-        Float64Array.from(ownerToDevice),
-      );
-      drawMotionGlassShader(CanvasKit, builtins, canvas, input, outputRoi, uniforms);
       return;
     }
     case "sourceOver":
@@ -2296,7 +2259,7 @@ export function drawProgramNode(
       case "group": {
         const group = record(node.value, "RasterTree group");
         if (group.mask != null || group.backdrop != null
-          || group.shader != null || group.transition != null || group.glass != null || group.glassForeground != null
+          || group.shader != null || group.transition != null
           || array(group.filters, "RasterTree group filters").length !== 0
           || group.internalBlend !== "normal") {
           fail("program_schedule", `group node ${nodeId} requires a separate pixel operation`);
@@ -4113,43 +4076,6 @@ function programTransformMatrix(admitted: ProgramStructure, localToProgram: numb
   return mul3(device, mul3(normalize, localToProgram));
 }
 
-function requireGlassKernel(kernel: CanvasKitEngineKernels | null): CanvasKitEngineKernels {
-  if (!kernel) fail("motion_glass_kernel", "ProductEngine Motion Glass kernel is not attached");
-  return kernel;
-}
-
-export function drawMotionGlassShader(
-  CanvasKit: CanvasKit,
-  builtins: CanvasKitBuiltinRuntime,
-  canvas: Canvas,
-  value: ImageValue,
-  outputRoi: DeviceRoi,
-  uniforms: Float32Array,
-): void {
-  if (!value.image || value.roi.width <= 0 || value.roi.height <= 0) {
-    fail("motion_glass_input", "Motion Glass requires a materialized non-empty ROI input");
-  }
-  if (!(uniforms instanceof Float32Array) || uniforms.length !== MOTION_GLASS_UNIFORM_FLOATS) {
-    fail("motion_glass_uniforms", `kernel returned ${uniforms.length} floats, expected ${MOTION_GLASS_UNIFORM_FLOATS}`);
-  }
-  const child = imageValueShader(CanvasKit, value, "linearClamp");
-  let shader: Shader | null = null;
-  const paint = new CanvasKit.Paint();
-  try {
-    shader = builtins.shader("motionGlass", uniforms, [child]);
-    paint.setBlendMode(CanvasKit.BlendMode.Src);
-    paint.setShader(shader);
-    canvas.drawRect(
-      CanvasKit.XYWHRect(outputRoi.x, outputRoi.y, outputRoi.width, outputRoi.height),
-      paint,
-    );
-  } finally {
-    paint.delete();
-    shader?.delete();
-    child.delete();
-  }
-}
-
 /** The working-surface envelope of one frame, and where its surfaces are next needed. */
 interface SurfaceFrame {
   readonly envelopeBytes: bigint;
@@ -5687,9 +5613,6 @@ function requiredBuiltinKernels(plan: Wire, programs: Wire[]): Set<BuiltinKernel
         }
       }
       if (kind.kind === "applyMask" && String(kind.mode).startsWith("luminance")) kernels.add("maskCoverage");
-      if (kind.kind === "motionGlass" || kind.kind === "applyMotionGlassForeground") {
-        kernels.add("motionGlass");
-      }
     }
   }
   return kernels;
@@ -6421,8 +6344,6 @@ function programPassReads(kind: Wire): number[] {
     case "applyTransition":
       return [positiveId(kind.from, "program transition from"), positiveId(kind.to, "program transition to")];
     case "backdrop":
-    case "motionGlass":
-    case "applyMotionGlassForeground":
     case "applyClip":
     case "applyFilter":
     case "applyOpacity":

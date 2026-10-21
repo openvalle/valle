@@ -15,9 +15,9 @@ const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
 const backend = process.env.VALLE_TEST_NATIVE_BACKEND ?? "raster";
 // Ganesh covers edges differently from Raster, so Metal parity adds the edge allowance QA registers
 // for native-metal (web/tests/performance/suite.json). Thin or dashed strokes, glyphs, particle dots,
-// tiny transformed stars and rounded clip edges still differ beyond one edge pixel in a few pixels;
-// these rules are the smallest measured passing values with a little headroom, shared by expanded
-// variants.
+// tiny transformed stars, rounded clip edges and hard stripes refracted at a Glass rim still differ
+// beyond one edge pixel in a few pixels; these rules are the smallest measured passing values with a
+// little headroom, shared by expanded variants.
 const metalRuleGroups: Array<[Partial<PixelRule>, string[]]> = [
   [{ edge: 2 }, ["allow-self-intersection", "backdrop-blur-edge", "backdrop-radius",
     "instances-path-rotation", "instances-path-scale-rotation", "instances-path-scale-rotation-skew",
@@ -29,7 +29,7 @@ const metalRuleGroups: Array<[Partial<PixelRule>, string[]]> = [
   [{ rgb: 10, edge: 2 }, ["instances-path-stroke", "instances-path-stroke-style"]],
   [{ rgb: 12, edge: 2 }, ["instances-path-stroke-dynamic"]],
   [{ rgb: 14, edge: 2 }, ["instances-path-stroke-affine", "instances-path-stroke-curve"]],
-  [{ rgb: 16, edge: 2 }, ["instances-path-stroke-affine-opaque"]],
+  [{ rgb: 16, edge: 2 }, ["glass-optics", "instances-path-stroke-affine-opaque"]],
   [{ rgb: 18, edge: 2 }, ["instances-path-stroke-colors-dynamic"]],
   [{ rgb: 20 }, ["instances-cards", "instances-cards-classes", "instances-component", "instances-group",
     "instances-group-component", "instances-text-root", "instances-text-root-direct"]],
@@ -46,7 +46,9 @@ const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as 
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
 type Probe = readonly [number, number, number, number, number, number?];
-type Case = { name: string; body: string; probes: readonly Probe[]; frameProbes?: Record<number,readonly Probe[]>; frames?: number[]; source?: string; width?: number; height?: number; crossParityTolerance?: number; atlasAsset?: boolean };
+// CanvasKit's Skia blurs a little differently from native Skia. Where a threshold or a refraction turns
+// that into a sub-pixel shift of an edge, crossParityRule registers an edge allowance for Raster parity.
+type Case = { name: string; body: string; probes: readonly Probe[]; frameProbes?: Record<number,readonly Probe[]>; frames?: number[]; source?: string; width?: number; height?: number; crossParityTolerance?: number; crossParityRule?: Partial<PixelRule>; atlasAsset?: boolean };
 const view = (color: string, extra = "") => `<View style={{position:"absolute",left:0,top:0,width:64,height:64,backgroundColor:"${color}"${extra}}}/>`;
 const circle = (fill = '"#fff"') => `<Circle cx={32} cy={32} r={16} fill={${fill}}/>`;
 const mask = (source: string, attrs = "", sourceAttrs = "") => `<Mask key="mask" rect={rect(0,0,64,64)} ${attrs} style={{width:64,height:64}}>
@@ -294,6 +296,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
   const nodeGlow = await readFile(join(fixtureDir,"node-glow.motion.tsx"),"utf8");
   const sceneBloom = await readFile(join(fixtureDir,"scene-bloom.motion.tsx"),"utf8");
   const nodeBloom = await readFile(join(fixtureDir,"node-bloom.motion.tsx"),"utf8");
+  const glassFrost = await readFile(join(fixtureDir,"glass-frost.motion.tsx"),"utf8");
   const chromaticAberration = await readFile(join(fixtureDir,"chromatic-aberration.motion.tsx"),"utf8");
   const radialBlur = await readFile(join(fixtureDir,"radial-blur.motion.tsx"),"utf8");
   const filmGrain = await readFile(join(fixtureDir,"film-grain.motion.tsx"),"utf8");
@@ -422,7 +425,16 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"oklch-color-interpolation-batch", source:await readFile(join(fixtureDir,"float-color-batch.motion.tsx"),"utf8"), body:"", width:640, height:360, frames:[0,30,59,30], probes:[], frameProbes:{0:[[320,180,33,64,255]],30:[[320,180,144,136,128]]} },
     { name:"oklch-color-interpolation-instances", source:colorInterpolationInstances, body:"", width:640, height:360, frames:[0,30,59,30], probes:[], frameProbes:{0:[[40,22,33,64,255],[360,202,33,64,255]],30:[[40,22,0,196,159],[360,202,0,196,159]]} },
     { name:"oklch-color-interpolation-instances-expanded", source:colorInterpolationInstances.replace('className="absolute"','className="absolute "'), body:"", width:640, height:360, frames:[0,30,59,30], probes:[] },
-    { name:"oklch-color-interpolation-glass", source:await readFile(join(fixtureDir,"float-color-glass.motion.tsx"),"utf8"), body:"", width:640, height:360, frames:[0,30,59,30], probes:[] },
+    { name:"oklch-color-interpolation-glass", source:await readFile(join(fixtureDir,"float-color-glass.motion.tsx"),"utf8"), body:"", width:640, height:360, frames:[0,30,59,30], probes:[], crossParityTolerance:3 },
+    { name:"glass-optics", source:await readFile(join(fixtureDir,"glass-optics.motion.tsx"),"utf8"), body:"", width:240, height:136, frames:[0], probes:[],
+      crossParityRule:{ rgb: 8, edge: 2 } },
+    { name:"glass-frost", source:glassFrost, body:"", width:96, height:64, frames:[0], probes:[], crossParityTolerance:3 },
+    { name:"glass-frost-backdrop", source:glassFrost.replace("<Glass material={{ frost: 5, refraction: 0 }} light={{ intensity: 0 }}","<View")
+      .replace("borderRadius: 12 }}",'borderRadius: 12, backdropFilter: "blur(5px)" }}'), body:"", width:96, height:64, frames:[0], probes:[],
+      crossParityTolerance:3 },
+    { name:"glass-field", source:await readFile(join(fixtureDir,"glass-field.motion.tsx"),"utf8"), body:"", width:220, height:100, frames:[0,30],
+      probes:[[160,50,255,0,0]], frameProbes:{0:[[95,50,0,0,0]]}, crossParityRule:{ edge: 1 } },
+    { name:"glass-corner", source:await readFile(join(fixtureDir,"glass-corner.motion.tsx"),"utf8"), body:"", width:256, height:224, frames:[0], probes:[] },
     { name:"css-oklab", source:await readFile(join(fixtureDir,"css-oklab.motion.tsx"),"utf8"), body:"", width:640, height:360, probes:[[320,180,140,83,162]] },
     { name:"linear-light-blend", source:await readFile(join(fixtureDir,"linear-light-blend.motion.tsx"),"utf8"), body:"", width:640, height:360, probes:[[160,180,167,0,0],[480,180,128,0,0]] },
     { name:"node-glow", source:nodeGlow, body:"", width:640, height:360, frames:[0,30,0], probes:[] },
@@ -609,8 +621,6 @@ test("Motion composition, easing and color interpolation match analytic pixels o
           apply_film_grain_f16:engine.apply_film_grain_f16.bind(engine),
           apply_lens_distortion_f16:engine.apply_lens_distortion_f16.bind(engine),
           perlin_noise_tables:engine.perlin_noise_tables.bind(engine),
-          pack_motion_glass_uniforms:engine.pack_motion_glass_uniforms.bind(engine),
-          pack_motion_glass_foreground_uniforms:engine.pack_motion_glass_foreground_uniforms.bind(engine),
         });
         let previous: Uint8Array | undefined;
         let previousNative: Uint8Array<ArrayBuffer> | undefined;
@@ -625,6 +635,11 @@ test("Motion composition, easing and color interpolation match analytic pixels o
             for (const request of requests) {
               if (request.expected.kind === "fontBytes") {
                 objects.set(request.handle,{key:request.key,kind:"font",bytes:defaultFont});
+              } else if (request.expected.kind === "runtimeShader") {
+                // Glass draws with its optics shader, which the package compiles beside the scene.
+                const key = request.key as unknown as { content: string; interpretation: { abi_digest: string } };
+                objects.set(request.handle,{key:request.key,kind:"runtimeShader",
+                  bytes:engine.compiled_resource_bytes(receipt.renderId,"runtime-shader",key.content,key.interpretation.abi_digest)});
               } else if (fixture.atlasAsset && request.expected.kind === "visualFrame") {
                 const image = ck.MakeImageFromEncoded(atlasBytes)!;
                 owned.push(image);
@@ -675,6 +690,11 @@ test("Motion composition, easing and color interpolation match analytic pixels o
             const rule = { rgb: tolerance, alpha: tolerance, edge: 1, ...metalRules.get(fixture.name.replace(/-expanded$/, "")) };
             const result = compareFrames({ width, height, data: web }, { width, height, data: native }, rule);
             expect(result.failedPixels,`${fixture.name}/${frame} Metal parity under ${JSON.stringify(rule)}, rgb max ${result.rgbMax}`).toBe(0);
+          } else if (fixture.crossParityRule) {
+            const tolerance = fixture.crossParityTolerance ?? 2;
+            const rule = { rgb: tolerance, alpha: tolerance, ...fixture.crossParityRule };
+            const result = compareFrames({ width, height, data: web }, { width, height, data: native }, rule);
+            expect(result.failedPixels,`${fixture.name}/${frame} parity under ${JSON.stringify(rule)}, rgb max ${result.rgbMax}`).toBe(0);
           } else {
             const at = Math.floor(maximumAt/4)*4;
             const x = Math.floor(maximumAt/4)%width, y = Math.floor(maximumAt/4/width);
@@ -705,6 +725,16 @@ test("Motion composition, easing and color interpolation match analytic pixels o
             for (let i=0;i<pixels.length;i+=4)
               if (pixels[i]! < 40 && pixels[i+1]! > 140 && pixels[i+2]! > 90) teal++;
             expect(teal,`${label} oklch-color-interpolation float text stroke area`).toBeGreaterThan(500);
+          }
+          if (fixture.name === "glass-corner") for (const [label,pixels] of [["CanvasKit",web],["Native",native]] as const) {
+            // Across the top-left corner's diagonal, 8 px inside the rim, the refracted ramp changes
+            // smoothly; a crease in the rim's slope would step by about 14 levels.
+            const red = (x:number,y:number) => pixels[(Math.round(y)*width+Math.round(x))*4]!;
+            const along = (t:number) => red(112-40*Math.SQRT1_2+t*Math.SQRT1_2,80-40*Math.SQRT1_2-t*Math.SQRT1_2);
+            let step = 0;
+            for (let t=-12;t<12;t++) step = Math.max(step,Math.abs(along(t+1)-along(t)));
+            expect(step,`${label} glass-corner step across the diagonal`).toBeLessThanOrEqual(6);
+            expect(along(0)-red(112-40*Math.SQRT1_2,210),`${label} glass-corner bends the ramp in from the rim`).toBeGreaterThanOrEqual(4);
           }
           if (fixture.name === "batch-skew-stroke") for (const [label,pixels] of [["CanvasKit",web],["Native",native]] as const) {
             let different = 0;
@@ -1030,6 +1060,19 @@ test("Motion composition, easing and color interpolation match analytic pixels o
           maximum = Math.max(maximum,Math.abs(instanced.web[index]!-expanded.web[index]!));
         expect(maximum,`${name}/${frame} CanvasKit expanded equivalence`).toBeLessThanOrEqual(2);
       }
+    }
+    if (!only || only === "glass") for (const label of ["native","web"] as const) {
+      const glass = frameImages.get("glass-frost/0")![label];
+      const backdrop = frameImages.get("glass-frost-backdrop/0")![label];
+      let difference = 0, contrast = 0;
+      for (let i=0;i<glass.length;i++) difference = Math.max(difference,Math.abs(glass[i]!-backdrop[i]!));
+      for (let y=20;y<44;y++) for (let x=28;x<67;x++) for (let c=0;c<3;c++)
+        contrast = Math.max(contrast,Math.abs(glass[(y*96+x)*4+c]!-glass[(y*96+x+1)*4+c]!));
+      expect(difference,`${label} Glass frost equals a backdropFilter blur`).toBeLessThanOrEqual(2);
+      // The stripes, 4 px wide, are gone under a 5 px frost.
+      expect(contrast,`${label} Glass frost neighbor contrast`).toBeLessThanOrEqual(12);
+      const bridged = frameImages.get("glass-field/30")![label];
+      expect(bridged[(50*220+116)*4]!,`${label} GlassField bridges an 8 px gap`).toBeGreaterThan(150);
     }
     if ((only || exact) && only !== "node-glow") return;
     for (const label of ["native","web"] as const) {
