@@ -3,7 +3,7 @@
 Valle has six workflow groups, plus `docs` for bundled guides and `licenses` for
 dependency notices. Commands below use `valle` on PATH. A packaged executable needs
 no source checkout; for a source build, use `cargo xtask build --release` and see
-[build requirements](../README.md#requirements).
+[build requirements](development.md#requirements).
 
 | Group | Use it for | First command |
 | --- | --- | --- |

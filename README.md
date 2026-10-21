@@ -1,147 +1,111 @@
-# Valle
+<p align="center">
+  <img src="web/apps/shared/brand/valle-mark.svg" width="80" alt="">
+</p>
 
-English | [简体中文](README.zh-CN.md)
+<h1 align="center">Valle</h1>
 
-A video creation and editing engine built for AI agents.
+<p align="center">
+  <strong>Your AI agent writes code. Valle turns it into video.</strong><br>
+  Motion graphics in TSX, edits in JSON, rendered on your machine by one executable.
+</p>
 
-**Early development release.** We are sharing the code early. Many features, build tools, and documentation are still incomplete. Expect bugs and breaking changes as the project evolves.
+<p align="center">
+  English · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-## Requirements
+<p align="center">
+  <img src="docs/images/launch.webp" width="800" alt="The title Hello, Valle! rises letter by letter out of a blur over a gradient">
+</p>
 
-- [Rust via rustup](https://rustup.rs/). `rust-toolchain.toml` selects Rust **1.99.0** and the `wasm32-unknown-unknown` target.
-- [Bun](https://bun.com/docs/installation) **1.4.2**.
-- Native build tools: C/C++ compiler, LLVM/libclang, `pkg-config`, CMake, Meson, Make, Perl, Python 3, Ninja, Git, curl, and tar (NASM on x86_64). See [rust-skia build requirements](https://github.com/rust-skia/rust-skia#building).
+Coding agents build web pages in minutes. Valle lets them make the video too, with the
+components, CSS and Tailwind they already know, and a renderer that shows them exactly what
+they made.
 
-The setup below targets **macOS**; Linux and Windows build environments are defined in their [packaging workflows](.github/workflows). Install Rust and Bun above, then install the native dependencies with [Homebrew](https://brew.sh/):
+```tsx
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 3 };
 
-```sh
-xcode-select --install # If Command Line Tools are not installed
-brew install pkgconf llvm cmake ninja meson python
-export PATH="$(brew --prefix llvm)/bin:$PATH"
-export LIBCLANG_PATH="$(brew --prefix llvm)/lib"
+export default function Launch() {
+  const ctx = useTime();
+  const shown = clamp(ctx.seconds * 2 - ctx.unit.index * 0.1, 0, 1);
+  return (
+    <Scene className="grid size-full place-items-center
+      bg-linear-to-br from-indigo-600 via-fuchsia-500 to-orange-400">
+      <Text split="char" className="text-9xl font-black tracking-tight text-white" perUnit={{
+        opacity: shown,
+        blur: 16 * (1 - shown),
+        translate: point(0, 40 * (1 - shown)),
+      }}>
+        Hello, Valle!
+      </Text>
+    </Scene>
+  );
+}
 ```
 
-## Build and run
-
 ```sh
-git clone https://github.com/openvalle/valle.git
-cd valle
-cargo xtask build
+valle motion render launch.motion.tsx -o launch.mp4
 ```
 
-The first build needs network access and can take a while. Cargo downloads matching prebuilt Skia binaries when available and otherwise builds Skia from source. The published `valle-ffmpeg` and `valle-ffmpeg-sys` crates include pinned FFmpeg 7.0/8.0/9.0 public headers; building needs libclang, but no FFmpeg installation or extra repository checkout.
+That is the whole scene: the animation at the top is this file, rendered by Valle.
 
-`cargo xtask build` produces **`dist/bin/valle`** (`dist/bin/valle.exe` on Windows), an executable with the Studio Web runtime, CanvasKit, fonts and dependency notices embedded. Use `cargo xtask build --release` for an optimized build. For CLI-only development, `cargo build -p valle-cli` skips these embedded resources; pass `--web-assets-dir /absolute/path/to/web/dist` when starting Studio.
+## Why Valle
 
-FFmpeg is optional at runtime and is not bundled. Media operations, including checking, previewing or rendering a Timeline that contains audio or video, need FFmpeg 7.x, 8.x or 9.x **shared libraries**. Motion checks, pure Motion PNG rendering and Studio startup work without them.
+**It is frontend code.** Components, props, Flexbox, Grid, Tailwind classes and your own
+modules. An agent writes a title sequence the way it writes a landing page.
 
-| Platform | Install FFmpeg shared libraries |
+**Agents see what they made.** An agent cannot watch a video, so Valle shows it the frames: a
+storyboard of up to 12 frames in one image, a review that flags strobing motion and text that
+is too brief, overlapping or out of frame, and errors that point to the line and usually name
+what to write instead.
+
+**Any frame, on demand.** Each frame is a pure function of its time and inputs. Frame 1,000
+renders without playing the 999 before it, and the PNG you check is the frame the MP4 shows.
+
+**It runs on your machine.** One executable checks, renders, previews in a browser Studio,
+keeps a searchable media library and runs open models locally. No cloud service, no account.
+
+## What you can make
+
+| | |
 | --- | --- |
-| macOS | `brew install ffmpeg` |
-| Linux | `sudo apt install ffmpeg` where the distribution ships FFmpeg 7 or newer (for example Debian 13 or Ubuntu 26.04). Ubuntu 24.04 and Debian 12 ship FFmpeg 6.1 and 5.1, which are too old: extract a shared build such as [BtbN](https://github.com/BtbN/FFmpeg-Builds/releases)'s `linux64-gpl-shared` and set `VALLE_FFMPEG_DIR` to its folder |
-| Windows | `winget install Gyan.FFmpeg.Shared` or BtbN's `win64-gpl-shared` build; make sure its `bin` folder is on `PATH`, or set `VALLE_FFMPEG_DIR` to the build's folder |
+| **Motion graphics** | Kinetic type with per-letter animation, springs, path drawing and morphing, masks, blur, glow, motion blur, transitions, LaTeX formulas, charts and particles |
+| **3D and shaders** | GLB models and extruded geometry with PBR lighting, shadows, camera moves and depth of field; your own shaders |
+| **Audio-driven motion** | Animation that follows the levels, bands, onsets and beats of a track |
+| **Edits** | Footage, images, Motion clips, audio and captions on a Timeline; a Project keeps every revision |
+| **Media processing** | Word-timed transcripts, voice cloning, speech cleanup, stem separation, matting, object tracking, inpainting, 4× upscaling and frame interpolation |
+| **Delivery** | MP4 (H.264, or HEVC on macOS), transparent ProRes 4444 or lossless MOV, PNG frames; 4K from a 1080p layout; Metal rendering and hardware encoding on macOS |
 
-Run `./dist/bin/valle media capabilities` to inspect an installation. When none can be loaded, JSON errors use `error.code: "ffmpeg_unavailable"` and the message ends with a platform install hint. See [runtime setup](docs/cli.md#runtime-notes) for custom paths and compatibility rules.
-
-## Package
-
-Build on the platform you want to distribute:
-
-```sh
-# macOS arm64
-cargo xtask package --min-macos 15.0
-# macOS x86_64, on an Intel Mac
-cargo xtask package --target x86_64-apple-darwin --min-macos 15.0
-# Linux or Windows (MSVC), arm64 or x86_64, on the matching native host
-cargo xtask package
-```
-
-The command writes the executable and `SHA256SUMS` under `target/package/`, after verifying startup, embedded assets and Motion/PNG/Studio operation with FFmpeg deliberately unavailable. macOS executables are also signed. GitHub Actions creates the distribution archive and its `.sha256` checksum. Version and platform identifiers appear only in the archive name. Each archive contains only `valle` (`valle.exe` on Windows) and `SHA256SUMS`.
-
-| Actions workflow | Distribution archive | Executable inside |
-| --- | --- | --- |
-| Package macOS arm64 | `valle-vVERSION-darwin-arm64.tar.gz` | `valle` |
-| Package macOS x86_64 | `valle-vVERSION-darwin-x86_64.tar.gz` | `valle` |
-| Package Linux arm64 | `valle-vVERSION-linux-arm64.tar.gz` | `valle` |
-| Package Linux x86_64 | `valle-vVERSION-linux-x86_64.tar.gz` | `valle` |
-| Package Windows arm64 | `valle-vVERSION-windows-arm64.zip` | `valle.exe` |
-| Package Windows x86_64 | `valle-vVERSION-windows-x86_64.zip` | `valle.exe` |
-
-Each platform has its own manually dispatched **CI** and **Package** workflow. CI builds and verifies that platform's package, runs its Rust workspace tests and checks formatting and Web runtime contracts. The entries share reusable OS workflows and keep compiled caches separate by target. macOS arm64 uses `macos-15`; macOS x86_64 uses the official `macos-15-intel` runner, including native Rust, FFmpeg and Chrome execution. Linux and Windows also use native arm64 and x86_64 runners. CI macOS packages use ad-hoc signing and do not require Apple credentials. Web SDK validation and formatting run separately on pushes to `main` and pull requests.
-
-After fixing one platform, run only its workflow under **Actions → Run workflow**, or use the CLI:
+## Get started
 
 ```sh
-gh workflow run ci-macos-x86_64.yml --ref main
-# Developer ID signing and notarization for this platform only:
-gh workflow run package-macos-x86_64.yml --ref main
-```
-
-Choose a workflow under **Actions → Run workflow**. Each uploads the archive and its checksum as an artifact retained for 30 days, with build/test diagnostics retained separately; it does not publish a GitHub Release. The macOS workflow runs on `openvalle/valle`'s `main` branch and tests the final Developer ID-signed executable with FFmpeg 7/8/9 before submitting it to Apple. Once notarization returns `Accepted`, the workflow creates and uploads the archive and checksum. Packaging does not require GPU hardware tests.
-
-Unzip the GitHub artifact, then extract the archive inside. The `.tar.gz` preserves macOS/Linux execution permissions, so no `chmod` is needed. On macOS, verify and extract with:
-
-```sh
-shasum -a 256 -c valle-vVERSION-darwin-arm64.tar.gz.sha256
-tar -xzf valle-vVERSION-darwin-arm64.tar.gz
-shasum -a 256 -c SHA256SUMS
-./valle --help
-```
-
-On Linux, use `sha256sum -c` with the Linux filenames. On Windows, extract the inner ZIP and run `.\valle.exe --help` in PowerShell; `Get-FileHash -Algorithm SHA256` can be compared with the supplied checksum. To repeat the runtime checks on any supported host with build tools installed, run `cargo xtask verify-package /absolute/path/to/EXECUTABLE`.
-
-macOS packages target macOS 15+. Manually dispatched macOS packages use Developer ID signing with Hardened Runtime, a secure timestamp and Apple notarization; local `cargo xtask package` and CI builds use ad-hoc signing. Standalone CLI executables cannot carry a stapled notarization ticket, so Gatekeeper needs network access to retrieve Apple's ticket. Linux packages build on Ubuntu 24.04 (glibc 2.39) and require system C/C++ libraries, Fontconfig and FreeType; on Ubuntu, install `libfontconfig1 libfreetype6`. Windows packages use MSVC and may require the Visual C++ Redistributable matching the package architecture. ASR, forced alignment and voice cloning run locally on CPU on macOS, Linux and Windows, each on ARM64 and x86_64. FFmpeg and ONNX Runtime remain optional external installations.
-
-The macOS workflow requires `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD`, `MACOS_SIGN_IDENTITY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID` and `APPLE_API_KEY_P8_BASE64` as Actions secrets. Missing credentials, invalid signatures, rejected notarization or a notarization wait exceeding 60 minutes prevent artifact publication. Diagnostics retain the submission ID and status so a pending request can be inspected without resubmitting it. The certificate is imported into a temporary keychain, and the API private key is removed after submission processing.
-
-`valle licenses` (or `valle --json licenses`) displays embedded notices and versioned dependency source links. Sources are available separately; publish the corresponding Valle source commit before distributing a build. See [third-party acknowledgements](THIRD_PARTY.md#binary-distribution-notices).
-
-### Web engine SDK
-
-Run **Package Web engine SDK** under **Actions → Run workflow** to build the browser SDK on Linux and download `valle-engine-VERSION.tgz` with its `.sha256` checksum. The workflow checks the generated protocol, package entries, type declarations, WASM and worker before uploading. The npm archive contains the Engine WASM and worker, without Studio or CanvasKit WASM; it declares `canvaskit-wasm` as a dependency. See the [SDK guide](web/packages/engine/README.md). This workflow does not publish to npm.
-
-## Use the CLI
-
-| Command | Capability |
-| --- | --- |
-| `motion` | Author JSX, check, preview in Studio, render video or frames |
-| `timeline` | Validate and render timeline JSON |
-| `project` | Save timeline revisions, apply edits, restore, preview and render |
-| `assets` | Import, organize, annotate and search local media |
-| `media` | Transcribe, synthesize speech, matte, enhance, separate, detect shots, segment, inpaint, upscale and interpolate |
-| `models` | List, install and verify local model weights |
-| `docs` | Read bundled guides offline |
-
-See the [CLI guide](docs/cli.md) for workflows across all six groups, model/runtime
-requirements, JSON results, progress events and exit codes. Each command also has `--help`.
-
-The [Motion authoring reference](docs/motion.md) covers JSX, components, CSS,
-animation, resources and complete examples. The [Timeline authoring reference](docs/timeline.md)
-covers clip timing, tracks, audio, captions and Motion integration. The
-[Media processing reference](docs/media.md) covers models, input/output formats
-and workflows for all nine processing operations. The [Project guide](docs/project.md)
-covers revision history and saves; the [Assets guide](docs/assets.md) covers import,
-annotation, search and maintenance.
-
-Run `valle docs` to list the guides embedded in your executable, then
-`valle docs motion` (or `timeline`, `media`, `project`, `assets`, `cli`)
-to read one offline.
-
-For AI agents, the [Valle skill](skills/valle/SKILL.md) covers command selection,
-authoring inputs, project revisions and result handling in one file.
-
-Try the checked-in examples (no model downloads needed):
-
-```sh
-./dist/bin/valle motion check examples/hello.motion.tsx
-./dist/bin/valle motion render examples/hello.motion.tsx -o hello.mp4 --events
-./dist/bin/valle timeline check examples/timeline.json
-./dist/bin/valle timeline studio examples/timeline.json
-./dist/bin/valle timeline render examples/timeline.json -o timeline.mp4 --events
+git clone https://github.com/openvalle/valle.git && cd valle
+cargo xtask build --release
 ./dist/bin/valle motion studio examples/hello.motion.tsx
 ```
 
-Output files must be new. Use `--json` for one machine-readable result or `--events`
-for NDJSON progress and a final report. Studio keeps serving after its readiness message.
+Studio prints a local URL to open in your browser. It refreshes whenever the file changes, so
+you can watch an agent work. Building needs Rust, Bun and native build tools, and video export
+needs FFmpeg; see [Development](docs/development.md).
 
-Licensed under [Apache-2.0](LICENSE). See [third-party acknowledgements](THIRD_PARTY.md) for dependencies and references.
+## Hand it to your agent
+
+Copy [`skills/valle`](skills/valle) into your agent's skills directory, such as
+`~/.claude/skills/` for Claude Code. The skill tells the agent which command to run, how to
+read the results and how to check its work before a long export. `valle docs` serves the full
+guides offline, matching the installed version, and every command answers in `--json`.
+
+## Documentation
+
+| Guide | Covers |
+| --- | --- |
+| [Motion](docs/motion.md) | Scenes, animation, CSS and Tailwind, text, 3D and shaders |
+| [Timeline](docs/timeline.md) | Footage, Motion clips, audio and captions cut together |
+| [Project](docs/project.md) | Revisions, restore and concurrent edits |
+| [Assets](docs/assets.md) | The local media library |
+| [Media](docs/media.md) | Local models for audio, images and video |
+| [CLI](docs/cli.md) | Output contract, exit codes and runtime notes |
+| [Development](docs/development.md) | Building, testing and packaging Valle |
+
+Valle is in early development: expect rough edges and breaking changes.
+
+Licensed under [Apache-2.0](LICENSE). See [third-party acknowledgements](THIRD_PARTY.md).

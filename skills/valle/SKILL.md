@@ -1,210 +1,173 @@
 ---
 name: valle
-description: Create, edit, and render videos with the Valle CLI. Use for Valle/OpenValle Motion JSX, timeline or project editing, asset-library work, and local media processing or model setup.
+description: Create, edit and render video with the Valle CLI. Use for Valle or OpenValle work, including Motion scenes written in TSX, Timeline JSON edits, versioned projects, the local asset library, and local media processing such as transcription, voice cloning, matting and upscaling, with its model setup.
 ---
 
 # Valle
 
-Use the user's installed Valle executable. Otherwise look for `valle` on PATH or
-`dist/bin/valle` in a source checkout (`valle.exe` on Windows). A packaged CLI works
-without a source checkout, Rust, or Bun. Check its `--version` and use subcommand
-`--help` when an option is uncertain. Uppercase arguments below are task-specific values.
+Use the user's `valle`: the installed executable, `valle` on PATH, or `dist/bin/valle` in a
+source checkout (`valle.exe` on Windows). Before writing input, read the relevant sections of
+the task's guide from that executable, so they match the installed version. The guides are
+long; save one and search it:
 
-For details, prefer `valle docs TOPIC` so documentation matches the installed
-executable. `valle docs` lists `cli`, `motion`, `timeline`, `media`, `project` and
-`assets`; the selected guide is Markdown on stdout. For older binaries
-without `docs`, use the corresponding checkout guide or the links below, checking
-that its options match the installed version. The general reference is
-[docs/cli.md](https://github.com/openvalle/valle/blob/main/docs/cli.md).
+```sh
+valle docs motion > motion.md # or timeline, project, assets, media, cli
+valle motion render --help
+```
 
 ## Choose the command
 
-| User needs | Command group |
-| --- | --- |
-| Animated titles, graphics, or a scene authored in JSX | `motion check`, `motion render`, `motion studio` |
-| Compose or edit footage in a timeline JSON file | `timeline check`, `timeline render` |
-| Edit an existing project with saved revisions | `project show`, `apply`, `history`, `restore`, `render`, `studio` |
-| Organize, annotate, find, or resolve local assets | `assets add`, `show`, `tag`, `annotate`, `search`, `resolve` |
-| Process a media file | `media transcribe`, `matte`, `enhance`, `separate`, `shots`, `segment`, `inpaint`, `upscale`, `interpolate` |
-| Prepare weights for a media operation | `models list`, `install`, `verify` |
+| Task | Commands | Guide |
+| --- | --- | --- |
+| Make animated titles, graphics, charts or a whole scene | `motion check`, `review`, `render`, `studio` | `motion` |
+| Cut footage, images, Motion, audio and captions together | `timeline check`, `render`, `studio` | `timeline` |
+| Edit a saved project, keeping its history | `project show`, `apply`, `history`, `restore`, `render`, `studio` | `project` |
+| Find or organize local media | `assets add`, `search`, `show`, `tag`, `annotate`, `resolve` | `assets` |
+| Process a media file | `media transcribe`, `synthesize`, `matte`, `enhance`, `separate`, `shots`, `segment`, `inpaint`, `upscale`, `interpolate`, with weights from `models` | `media` |
 
-Use `timeline` for a file-based edit and `project` when the user needs revision
-history or is already working in a project. Motion can also be a clip in a timeline.
-Media operations produce standalone files; they do not automatically update a
-timeline, project, or asset-library analysis.
+Use `timeline` for a standalone file and `project` when the user wants revisions or already
+has a project. A Motion scene can be a clip in a Timeline. Media commands write standalone
+files; they never change a timeline, a project or the asset library.
 
-## Run and read results
+## Run commands and read results
 
-- Use `--json` for a single result, or `--events` for progress. They are mutually
-  exclusive. Keep stdout separate from stderr; `--help` and `--version` remain text.
-- NDJSON events contain `type` and `data`. A finite command ends with `report`;
-  its `data` is the same payload used by `--json`. Check the process exit code too.
-- Motion/Timeline rendering and Media use `status`; Assets uses `ok` and may have
-  per-item failures. Project edits use `outcome`; model listing returns an array.
-  Do not assume every successful response has the same envelope.
-- Exit 2 means argument/Media input errors; 3 means Media/model dependency or
-  verification failures; 4 means Media execution failures; 1 is a general or
-  project/asset failure. Read the error and its hint before retrying. Motion compile
-  errors include `error.diagnostics` with source spans.
-- Render destinations must be new files. Some Media commands support `--overwrite`;
-  check their help before replacing output. `separate` always needs a new directory.
-- Studio is a persistent local server: consume `ready` with `--events` (or
-  `status: "ready"` with `--json`), then use its returned URL. `--port 0` selects a
-  free port. Do not wait for Studio to exit as if it were a render job.
+- Pass `--json` for one result, or `--events` for NDJSON progress that ends in a `report`
+  event carrying the same payload. Parse stdout; diagnostics go to stderr.
+- The exit code decides success: 0 ok; 1 a general, project or asset failure; 2 invalid
+  arguments or media input; 3 a missing media or model dependency; 4 a failed media operation.
+- Payloads differ by group: checks and renders report `status`, `project apply` and `restore`
+  report `outcome`, assets report `ok`, and media returns a `valle.media-run` envelope.
+- On failure, read `error.code`, the message and its `hint:` before retrying.
+  `motion_compile_failed` lists `error.diagnostics` with source spans; a failed render names
+  its frame.
+- Outputs must be new paths: choose a new name rather than deleting a file. Only some media
+  commands take `--overwrite`.
+- Studio is a server. Read its URL from the `ready` event (`status: "ready"` with `--json`),
+  pass `--port 0` for a free port, and do not wait for it to exit.
 
-## Author Motion
+## Motion
 
-For syntax, component attributes, CSS/Tailwind support, animation, data, text or
-effects, read the relevant sections of the checkout's `docs/motion.md` or the
-[Motion authoring reference](https://github.com/openvalle/valle/blob/main/docs/motion.md).
-Check its limitations before choosing advanced effects or browser-style CSS.
-
-Motion is a restricted JSX language, not a React application. Use Valle's supplied
-`Scene`, `View`, `Text`, and animation helpers; do not assume React hooks, browser
-APIs, Remotion imports, or arbitrary JavaScript are supported. Components take
-`(props)` as in React, read the frame's time with `useTime()` and prepared data with
-`useData()`; nothing persists between frames, so there is no state or effect.
-Bodies take `let`, `if`/`else`, early `return` and loops. A loop's condition cannot
-depend on the time, and both sides of a time-dependent `if` stay in the scene, so
-their keys must differ.
-Built-ins need no import; `import { View, useTime } from "valle"` also works. Start
-from existing working source when available. A minimal `title.motion.tsx` is:
+Write Motion as frontend code: React-style components, CSS and Tailwind classes in a
+`.motion.tsx` file. It is compiled, not run in a browser, and each frame is a pure function
+of its time and inputs.
 
 ```tsx
-export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
+export const composition = { width: 1920, height: 1080, fps: 30, duration: 4 };
+
 export default function Title() {
-  const ctx = useTime();
-  const opacity = interpolate(ctx.seconds, [0, 0.6], [0, 1]);
+  const { seconds } = useTime();
+  const reveal = interpolate(seconds, [0, 0.8], [0, 1], { easing: "easeOutCubic" });
   return (
     <Scene className="relative h-full w-full flex items-center justify-center"
       style={{ backgroundColor: "#102030" }}>
-      <Text style={{ fontSize: 48, color: "#ffffff", opacity }}>Hello, Valle!</Text>
+      <Text style={{ fontSize: 96, fontWeight: 700, color: "#ffffff", opacity: reveal,
+        translate: point(0, (1 - reveal) * 40) }}>
+        Hello, Valle!
+      </Text>
     </Scene>
   );
 }
 ```
 
-Use literal or immutable compile-time constant interpolation stop arrays.
-Bind declared assets using repeated
-`--asset name=path`, prepared data with `--data file.json`, and extra fonts with
-`--font path`. Bind ordinary parameters with `--props props.json`; a Motion work
-can use numeric props for adjustable time windows or `--data file.json` for a
-list of timestamped items. The source evaluates them against `ctx.seconds`.
-Canvas and duration come from `composition`. Its optional `fps` supplies the
-standalone default; `--fps` can supply or override the output frame rate.
-Keep asset, data and prop bindings consistent across check and render.
+- Components take `(props)`. Read the frame's time with `useTime()` (`seconds`, `progress`,
+  `localFrame`) and prepared data with `useData()`. Built-ins need no import;
+  `import { … } from "valle"` and relative imports of local modules work, npm packages do not.
+- Nothing persists between frames and nothing runs after one: there is no `useState`,
+  `useEffect`, `useRef`, DOM, `fetch`, `Date` or `Math.random`. Compute values from the time,
+  use `seededRandom` or `wiggle` for randomness, and declare files as assets.
+- A body runs once, while the scene is prepared. `let`, `if`/`else`, early `return` and loops
+  work, but a loop's condition cannot depend on the frame, and both sides of a frame-dependent
+  `if` stay in the scene: give them different keys, and `position: absolute` when they share
+  a place.
+- Lists come from prepared arrays: `.map` or `Array.from(source, fn)`, with a stable `key` per
+  item. To show items over time, map the whole array and decide each item per frame. A list that
+  sets the number of nodes comes from a module `const` or `useData()`, not from props.
+- `interpolate` takes stops written as literals or constants. For a destination that depends
+  on a prop, interpolate from 0 to 1 and multiply.
+- The compiler rejects what it cannot render and usually names what to write instead; apply
+  that. Check unfamiliar CSS against the guide's "Unsupported CSS" section.
+
+Work in this order. You cannot watch a video, so look at the frames:
 
 ```sh
-valle motion check title.motion.tsx --json
-valle motion render title.motion.tsx --frame 45 -o title.png --json
-valle motion render title.motion.tsx -o title.mp4 --events
+valle motion check scene.motion.tsx --json                          # compile, draw frame 0
+valle motion render scene.motion.tsx --storyboard sheet.png --json  # up to 12 frames in one PNG
+valle motion review scene.motion.tsx --json                         # strobing, unreadable or overlapping text
+valle motion check scene.motion.tsx --cost --output-size 3840x2160 --json # before a long or 4K export
+valle motion render scene.motion.tsx -o scene.mp4 --events
 ```
 
-Before a long or high-resolution export, `valle motion check title.motion.tsx --cost
---output-size 3840x2160 --json` plans every frame without rendering and lists the frames with
-the most planned pixels and their largest passes, so the expensive moments are known first.
+Bind inputs the same way for every command: `--props props.json` for constant prop values,
+`--data data.json` for prepared data, `--asset name=path` for an asset declared in
+`controls.assets` and read as `asset://name`, and `--font path`. `--frame N` (zero-based)
+writes one PNG, and `--frames 0,30,59` selects frames for a PNG pattern or a storyboard; `.mov`
+keeps alpha. `--output-size` scales delivery without changing layout, `--fps` overrides the
+composition's, and `--backend raster` forces CPU composition (`auto` uses Metal on macOS).
 
-`--frame` is zero-based and writes PNG; omitting it writes MP4. `--output-size`
-scales delivery without changing layout. `--backend raster` selects CPU composition,
-while `auto` may select Metal on macOS. Compositor selection and video encoding
-are independent; `--hardware-encode` explicitly requires a supported encoder.
+## Timeline and Project
 
-For new visuals, inspect a representative PNG before a long export. Fix source
-diagnostics or visible layout problems before spending time tuning workers.
-
-## Edit Timeline and Project
-
-For the JSON format, time domains, track ordering, audio, captions, keyframes or
-Motion bindings, read the relevant sections of the checkout's `docs/timeline.md`
-or the [Timeline authoring reference](https://github.com/openvalle/valle/blob/main/docs/timeline.md).
-Use its tested examples and current CLI limitations when choosing a representation.
-
-Public timeline JSON has `canvas`, optional named `resources`, and `tracks`.
-It has no root `version` field. Times are seconds; size and FPS live in `canvas`.
-For a three-second input video, this is a minimal document:
+A Timeline document has `canvas`, optional named `resources` and `tracks`, and nothing else;
+unknown fields are rejected. Times are in seconds:
 
 ```json
 {
-  "canvas": { "width": 640, "height": 360, "fps": 30 },
-  "resources": { "footage": "input.mp4" },
-  "tracks": { "visual": [{ "clips": [
-    { "kind": "video", "src": "footage", "start": 0, "duration": 3 }
-  ] }] }
+  "canvas": { "width": 1920, "height": 1080, "fps": 30 },
+  "resources": { "title": "title.motion.tsx", "footage": "input.mp4" },
+  "tracks": {
+    "visual": [{ "clips": [
+      { "kind": "motion", "component": "title", "start": 0, "duration": 3 },
+      { "kind": "video", "src": "footage", "start": 3, "trimStart": 2, "duration": 5 }
+    ] }]
+  }
 }
 ```
 
-`start` places a clip on the output timeline; `trimStart` selects its source offset.
-Use the actual source duration. Visual video clips play source audio automatically;
-`gain` defaults to 1, 0 mutes, and values above 1 amplify. Add `tracks.audio` for
-music or independent sound; mute the video's gain when replacing its original
-sound to avoid doubling it. `size: [width,height]` sets a target in canvas pixels,
-defaulting to the canvas; `fit: "cover"` fills it. Rotation uses degrees.
-Caption presets use objects such as `"enter": {"preset":"fade","duration":0.3}`;
-duration is optional. `kind: "solid"` generates a color; `image` and
-`video` refer to named resources through `src`. A Motion clip uses
-`kind: "motion"` and `component: "title"`, with the JSX path in `resources.title`.
-Resolve local resource paths relative to the timeline file. Validate with
-`valle timeline check timeline.json --json`, then render with
-`valle timeline render timeline.json -o output.mp4 --events`.
-`--frame N -o frame.png` selects a frame. MP4 requires an opaque canvas background;
-PNG can preserve transparency. Motion's tuning flags are not exposed on Timeline/Project render.
+- Resource paths resolve from the Timeline file's directory; clips refer to them by alias.
+- `start` places a clip in the output and `trimStart` picks the source offset; stay within the
+  source's real duration. Clips on a track run in order without overlapping, except across a
+  visual `transitions` entry. Put simultaneous clips on separate tracks; later visual tracks
+  paint on top.
+- A visual clip's `kind` is `video`, `image`, `solid` or `motion`. A video plays its own
+  sound; set its `gain` to 0 when a clip in `tracks.audio` replaces it. A caption track needs
+  a font file among the resources.
+- MP4 needs an opaque `canvas.background`, the default; PNG frames and `.mov` keep transparency.
 
-For project revision, save, restore and resource-storage details, read
-`valle docs project` or the checkout's `docs/project.md`. For an existing project:
+Validate with `valle timeline check FILE --json`, then render with the same `-o`, `--frame`,
+`--frames` and `--storyboard` options as Motion. `timeline studio FILE` writes the file back
+on Save.
+
+For a project, submit a complete document against the revision you read:
 
 ```sh
-valle project show PROJECT_ID -o edit.timeline.json --json
-# Edit the exported complete timeline; use the revision returned by show.
-valle project apply PROJECT_ID --base-revision REVISION --timeline edit.timeline.json --json
-valle project render PROJECT_ID -o output.mp4 --events
+valle project show PROJECT -o edit.timeline.json --json # returns its revision
+valle project apply PROJECT --base-revision REVISION --timeline edit.timeline.json --json
+valle project render PROJECT -o output.mp4 --events
 ```
 
-Create a project only when needed with `project create PROJECT_ID --timeline FILE`.
-Submit a complete document, not a patch. `committed` and `unchanged` are successful
-outcomes. On `staleBase`, fetch the latest snapshot and reconcile the requested
-change; do not blindly resubmit the old document with a newer revision number.
-`restore --base-revision CURRENT --revision OLD` appends a revision rather than
-erasing history. Imported relative resource paths become absolute; their files
-must remain available.
+`committed` and `unchanged` both succeed. On `staleBase` someone saved first: `show` again and
+redo the change on the new document; never resubmit the old document with a newer revision.
+`restore --base-revision CURRENT --revision OLD` appends a revision, so history is never
+erased, and `project create PROJECT --timeline FILE` starts a project. `VALLE_HOME` selects
+where projects and the asset library live; keep it when working on existing data.
 
-## Work with Assets and Media
+## Assets and Media
 
-For import modes, annotations, entities, search, analysis and maintenance, read
-`valle docs assets` or the checkout's `docs/assets.md`.
+- `assets add FILE --mode copy --json` imports a file. Its ID is `data.items[].content_digest`,
+  and a unique prefix also works. `assets search QUERY --json` finds assets and
+  `assets resolve ID --json` returns a path. Analysis runs only when asked, as in
+  `assets analyze ID --with shots,beats`.
+- `valle media capabilities --json` shows the FFmpeg libraries in use. For model-backed work,
+  read `models list --json` and install only what a command's error names, with
+  `models install ID`. Verify the `artifact` that install returned with
+  `models verify ID --artifact ARTIFACT`; without `--artifact`, uninstalled variants fail it.
+  ONNX models also need ONNX Runtime 1.28, beside `valle` or named by `ORT_DYLIB_PATH`.
+- Chain operations through their `-o` artifacts, such as a `shots` list into
+  `interpolate --shots` or a `segment` mask into `inpaint --mask`. A `--report` file is a run
+  report, not a transcript or a shot list. The Media guide shows how a transcript becomes
+  captions and a shot list becomes cuts.
 
-Import selected files with `assets add FILE --mode copy --json`. Repeated imports
-reuse the content ID. Read IDs from `data.items[].content_digest`; pass a full ID
-or unique prefix to `show`, `tag`, `annotate`, or `resolve`. Use `assets search QUERY
---json` to find matches, then `assets resolve ID --json` when a file path is needed.
-Analysis is explicit; importing/tagging/searching does not require semantic models.
-`VALLE_HOME` selects project/library storage, so retain it when editing existing data.
+## Report back
 
-Before media decoding or MP4 export, `valle media capabilities --json` can check
-the installed FFmpeg libraries and encoders. FFmpeg 7/8/9 shared libraries are
-optional runtime dependencies; a standalone `ffmpeg` executable is insufficient.
-Use `--ffmpeg-dir PATH` or `VALLE_FFMPEG_DIR` for a custom installation. Pure Motion
-checks, PNG rendering, and Studio startup work without FFmpeg. Software H.264
-export needs `libx264`; hardware availability must be checked on the actual host.
-
-For model-backed work, inspect `models list --json` and the chosen Media
-subcommand's help. Install only needed missing models using the error's install
-hint. Verify the exact `artifact` returned by installation: without `--artifact`,
-`models verify` also checks uninstalled variants and can report failure despite a
-usable installation. `VALLE_MODEL_CACHE` selects model storage independently of
-`VALLE_HOME`. ONNX adapters need ONNX Runtime 1.28.x, selected by `ORT_DYLIB_PATH`
-or a colocated runtime library; installing weights does not install that runtime.
-
-Use `media enhance input.wav -o clean.wav --events` for speech enhancement, for
-example. Add `--report run.json` when a persisted processing report is useful.
-Transcription defaults to word timing and needs both ASR and alignment models;
-`--text-only` skips alignment and cannot be combined with `-o`. ASR currently runs
-on macOS/Linux with `--backend auto`. Before constructing Media inputs, read the
-relevant operation in the checkout's `docs/media.md` or the
-[Media processing reference](https://github.com/openvalle/valle/blob/main/docs/media.md).
-It covers model choices, prompt/mask/shot-list formats, output timing and audio
-behavior, and integration with Timeline/Motion. Use its primary artifact formats
-when chaining operations; a run report is not a shot list or transcript.
-
-Deliver the requested artifact paths and relevant result details. Distinguish
-completed processing from a missing dependency, a started Studio, or an untested
-render; a successful check alone does not prove an export succeeded.
+Give the output paths and the details that matter, and say which state was reached: finished,
+blocked on a dependency, Studio running, or not rendered yet. A passing check does not prove
+that an export works, and a render nobody has looked at is not verified.

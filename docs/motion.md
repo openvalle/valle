@@ -3100,7 +3100,7 @@ accepted programs and rejection cases.
 | A blur is rejected at certain frames | Clamp its computed radius to non-negative values |
 | Post-layout dependency error | Keep bounds/anchors out of size, ordinary layout and text content |
 | PNG and MP4 show different animation states | Match all render inputs and compare the same zero-based frame |
-| Slow export | Inspect bounded layers/blur/overdraw first; select backend/workers and encoding separately |
+| Slow export | Find the heaviest frames and passes with `motion check --cost` and reduce layers, blur and overdraw there first; tune `--backend`, `--threads` and encoding separately |
 
 CSS values and expanded utilities share property diagnostics. Machine-readable compiler
 diagnostics retain `style.kind`, `style.property`, `style.value` and `style.reason`, plus
@@ -3132,6 +3132,23 @@ targets. Supported `View` and `Path` instance templates can use up to 100,000 ro
 flow subtrees have a 32-level, 1,024-node template limit and one million projected
 row nodes. Exact-arc `Circle` templates remain capped at 10,000. Prefer explicit batches for other
 large repeated geometry.
+
+Known limits of Scene3D, procedural geometry and filters:
+
+- A Scene3D layer holds 1 to 8 meshes. Split a larger scene into layers that share one
+  camera; layers do not occlude or shadow each other.
+- The 131,072-triangle layer budget counts procedural meshes (`extrude`, `lathe`, `tube`)
+  as it counts loaded models.
+- An `extrude` bevel is one flat chamfer of at most half the depth; there is no rounded
+  bevel. On thin glyph strokes a large bevel fails with
+  `bevel collapses or intersects the path contours`; lower it until it fits.
+- An `offsetPath` result can contain degenerate contours, which `extrude` rejects with
+  `geometry contour is degenerate`.
+- `tube` rejects a centerline with a zero-length edge, which a `roundCorners` result can
+  have; pass it through `resamplePath` first. An open tube ends in flat caps.
+- A `glow` over the whole frame takes a radius up to about 168 device pixels at
+  3840×2160 and about 432 at 1920×1080; a larger one fails with
+  `filter working image too large`.
 
 For export controls, `--backend raster` selects CPU composition, `metal` requires
 Metal and `auto` chooses an available backend. `--threads` is the total CPU
