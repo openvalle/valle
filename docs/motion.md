@@ -522,7 +522,7 @@ below. Unknown attributes and event handlers are rejected.
 
 | Primitive | Purpose and additional attributes |
 | --- | --- |
-| `Scene` | Composition root; optional 2D `camera` and static `bloom` |
+| `Scene` | Composition root; optional `camera` and `bloom` |
 | `Group` | Group children; shares the layout model, does not imply absolute positioning |
 | `View` | General layout/paint box |
 | `Flex`, `Absolute` | Boxes with implied `flex` or `absolute` class |
@@ -1247,8 +1247,15 @@ The separate CSS 3D adapter supports ordered `translateZ`, `translate3d`,
 mixed with the 2D `translate`, `rotate`, `scale`, `skew` and `matrix` functions. As in
 CSS, `perspective()` below 1px is 1px and `perspective(none)` is the identity. A plane
 that reaches a `perspective()` or `perspective` camera fails the frame instead of
-being clipped. A mixed 3D list does not accept nested length math. A 2D list's
-support does not establish full CSS 3D flattening or composition semantics.
+being clipped. A mixed 3D list does not accept nested length math. A plane is drawn where
+its flat ancestors, the Scene camera and its own 2D transforms place it, and an empty box
+is a plane for the descendants that overflow it. The adapter differs from CSS in four
+ways: a `preserve-3d` node paints its own background and border flat, without its 3D
+transform or the space's perspective; planes that intersect are painted whole in depth
+order instead of being split; `opacity`, `filter`, `overflow` and the other grouping
+properties do not flatten a `preserve-3d` node; and the rows of a map on the layout
+instance path cannot be planes directly inside a `preserve-3d` node, so a frame that
+would make them planes fails.
 Native raster currently rejects spatial blur/drop-shadow combinations whose final
 affine transform produces a non-axis-aligned Gaussian covariance (for example,
 skew plus blur). This is an explicit backend limitation, even when layout and
@@ -2462,7 +2469,7 @@ admission when constructing a new field.
 
 ## Camera, 3D and shaders
 
-### 2D scene camera
+### Scene camera
 
 Save as `camera.motion.tsx`:
 
@@ -2491,6 +2498,29 @@ Center is a point, zoom stays positive, rotation is numeric degrees. Screen-spac
 stays fixed. `Screen` must be a direct Scene child after all world content; do not
 nest World inside Screen. Camera changes affect painting, not the world's layout
 boxes. Use camera movement for a viewport pan/zoom rather than changing every node.
+
+Four more fields move the camera in depth:
+
+```tsx
+camera={{ center: point(320,180), zoom: 1, perspective: 900,
+  z: -300 * ctx.progress, rotateY: interpolate(ctx.progress, [0, 1], [-20, 20]) }}
+```
+
+The camera looks at `center` at depth `z` (default 0; negative is into the scene, as in
+`translateZ`), from `perspective` pixels in front of it, the distance CSS `perspective` takes.
+`rotateX` and `rotateY` orbit the camera around that point in degrees: positive `rotateY`
+moves it right, positive `rotateX` up. Without `perspective` the orbit is seen
+orthographically. Each field may be a frame expression; a static `perspective` that is not
+positive is a compile error, and a frame that computes one fails. World content is drawn
+as CSS draws the children of a `transform-style: preserve-3d` container with that
+perspective toward `center`, turned by the inverse of the orbit and depth: the children
+of World are planes of one 3D space, sorted by depth, and their own 3D transforms compose
+with the camera's. `center`, `zoom` and `rotation` then frame the result as they frame a
+flat world, and Screen content stays flat. A plane that reaches the camera fails the frame,
+as in CSS 3D below; hide it with `visible={false}` before it gets there. A map on the
+layout instance path (see [prepared maps](#automatic-instances-for-prepared-maps)) placed
+directly in World fails the frame too, as its rows cannot be planes; put it in a View,
+which its rows are then drawn on.
 
 ### Scene3D
 

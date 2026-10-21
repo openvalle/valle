@@ -2563,6 +2563,51 @@ pub struct CameraBinding {
     pub zoom: NumberValue,
     /// Rotation around the viewport center, in degrees.
     pub rotation: NumberValue,
+    /// Positive distance in pixels from the camera to the point it looks at, CSS `perspective`;
+    /// absent, a 3D camera projects orthographically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perspective: Option<NumberValue>,
+    /// Depth of the point the camera looks at, in pixels; negative is into the scene, as for
+    /// `translateZ`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<NumberValue>,
+    /// Degrees the camera orbits up around the point it looks at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate_x: Option<NumberValue>,
+    /// Degrees the camera orbits right around the point it looks at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotate_y: Option<NumberValue>,
+}
+
+impl CameraBinding {
+    /// Whether the camera moves in depth, which makes World content planes in its 3D space.
+    pub fn is_3d(&self) -> bool {
+        self.perspective.is_some()
+            || self.z.is_some()
+            || self.rotate_x.is_some()
+            || self.rotate_y.is_some()
+    }
+
+    /// The expression of each field evaluated per frame, with the field's path.
+    pub fn exprs(&self) -> Vec<(&'static str, ExprId)> {
+        let mut exprs = Vec::new();
+        if let PointValue::Expr { expr } = self.center {
+            exprs.push(("/camera/center", expr));
+        }
+        for (path, value) in [
+            ("/camera/zoom", Some(&self.zoom)),
+            ("/camera/rotation", Some(&self.rotation)),
+            ("/camera/perspective", self.perspective.as_ref()),
+            ("/camera/z", self.z.as_ref()),
+            ("/camera/rotateX", self.rotate_x.as_ref()),
+            ("/camera/rotateY", self.rotate_y.as_ref()),
+        ] {
+            if let Some(NumberValue::Expr { expr }) = value {
+                exprs.push((path, *expr));
+            }
+        }
+        exprs
+    }
 }
 
 /// The role whose templates read `frame`, as errors name it, and what the frame pictures.
@@ -3587,23 +3632,10 @@ impl SceneArtifact {
             }
         }
         if let Some(camera) = &self.camera {
-            let reads_row = [
-                match camera.center {
-                    PointValue::Expr { expr } => Some(expr),
-                    PointValue::Static { .. } => None,
-                },
-                match camera.zoom {
-                    NumberValue::Expr { expr } => Some(expr),
-                    NumberValue::Static { .. } => None,
-                },
-                match camera.rotation {
-                    NumberValue::Expr { expr } => Some(expr),
-                    NumberValue::Static { .. } => None,
-                },
-            ]
-            .into_iter()
-            .flatten()
-            .any(|expr| row_dependent.get(expr.0 as usize).copied().unwrap_or(false));
+            let reads_row = camera
+                .exprs()
+                .into_iter()
+                .any(|(_, expr)| row_dependent.get(expr.0 as usize).copied().unwrap_or(false));
             if reads_row {
                 errors.push(ValidationError::new(
                     "/camera",
@@ -3749,17 +3781,7 @@ impl SceneArtifact {
         }
 
         if let Some(camera) = &self.camera {
-            let mut refs = Vec::new();
-            if let PointValue::Expr { expr } = camera.center {
-                refs.push(("/camera/center", expr));
-            }
-            if let NumberValue::Expr { expr } = camera.zoom {
-                refs.push(("/camera/zoom", expr));
-            }
-            if let NumberValue::Expr { expr } = camera.rotation {
-                refs.push(("/camera/rotation", expr));
-            }
-            for (path, expr) in refs {
+            for (path, expr) in camera.exprs() {
                 if projection_dependent
                     .get(expr.0 as usize)
                     .copied()
@@ -4387,14 +4409,28 @@ impl SceneArtifact {
                 ),
             ));
         }
-        // Require positive static zoom; validate dynamic zoom during evaluation.
-        if let NumberValue::Static { value } = &camera.zoom
-            && (!value.is_finite() || *value <= 0.0)
-        {
-            errors.push(ValidationError::new(
-                "/camera/zoom",
-                "camera zoom must be finite and positive",
-            ));
+        // Require positive static zoom and perspective and finite static angles and depth; validate
+        // dynamic values during evaluation.
+        for (path, value, positive) in [
+            ("/camera/zoom", Some(&camera.zoom), true),
+            ("/camera/perspective", camera.perspective.as_ref(), true),
+            ("/camera/z", camera.z.as_ref(), false),
+            ("/camera/rotateX", camera.rotate_x.as_ref(), false),
+            ("/camera/rotateY", camera.rotate_y.as_ref(), false),
+        ] {
+            if let Some(NumberValue::Static { value }) = value
+                && (!value.is_finite() || (positive && *value <= 0.0))
+            {
+                let name = path.trim_start_matches("/camera/");
+                errors.push(ValidationError::new(
+                    path,
+                    if positive {
+                        format!("camera {name} must be finite and positive")
+                    } else {
+                        format!("camera {name} must be finite")
+                    },
+                ));
+            }
         }
         for (at, node) in self.nodes.iter().enumerate() {
             if node.space == Some(CoordinateSpace::Screen)

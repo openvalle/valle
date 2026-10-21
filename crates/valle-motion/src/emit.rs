@@ -1269,12 +1269,8 @@ impl Emitter<'_> {
                             node: key.clone(),
                             reason: "CSS 3D plane has a non-invertible 2D layout transform".into(),
                         })?;
-                let local = plane.quad.map(|point| inverse.apply(point));
-                let matrix =
-                    Homography::map_rect(border_box, local).ok_or_else(|| EmitError::BadStyle {
-                        node: key.clone(),
-                        reason: "CSS 3D plane is degenerate or crosses the projection plane".into(),
-                    })?;
+                // The plane replaces the node's 2D placement: its matrix already holds it.
+                let matrix = plane.matrix.then(Homography::from_affine(inverse));
                 self.push(RecordCmd::BeginPerspective { matrix });
                 depth += 1;
             } else if fx.rotate_x_deg.abs() > 1e-6 || fx.rotate_y_deg.abs() > 1e-6 {

@@ -638,6 +638,10 @@ impl<'s> Compiler<'s> {
         let mut center = None;
         let mut zoom = None;
         let mut rotation = None;
+        let mut perspective = None;
+        let mut z = None;
+        let mut rotate_x = None;
+        let mut rotate_y = None;
         for property in &object.properties {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
                 self.illegal(
@@ -659,11 +663,30 @@ impl<'s> Compiler<'s> {
                 "center" => center = self.expr_point_value(&property.value, span),
                 "zoom" => zoom = self.expr_number_value(&property.value),
                 "rotation" => rotation = self.expr_number_value(&property.value),
+                "perspective" => {
+                    perspective = self.expr_number_value(&property.value);
+                    if let Some(NumberValue::Static { value }) = perspective
+                        && value <= 0.0
+                    {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            property.value.span(),
+                            "camera perspective is a positive distance in pixels",
+                        );
+                        return;
+                    }
+                }
+                "z" => z = self.expr_number_value(&property.value),
+                "rotateX" => rotate_x = self.expr_number_value(&property.value),
+                "rotateY" => rotate_y = self.expr_number_value(&property.value),
                 other => {
                     self.illegal(
                         DiagCode::GrammarForbidden,
                         span,
-                        format!("unknown camera field `{other}`; use center / zoom / rotation"),
+                        format!(
+                            "unknown camera field `{other}`; use center / zoom / rotation, and \
+                             perspective / z / rotateX / rotateY to move in depth"
+                        ),
                     );
                     return;
                 }
@@ -681,6 +704,10 @@ impl<'s> Compiler<'s> {
             center,
             zoom,
             rotation: rotation.unwrap_or(NumberValue::Static { value: 0.0 }),
+            perspective,
+            z,
+            rotate_x,
+            rotate_y,
         });
         self.extra_capabilities.insert(CAMERA_CAPABILITY.to_owned());
     }

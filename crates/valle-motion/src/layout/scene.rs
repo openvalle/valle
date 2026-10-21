@@ -21,6 +21,7 @@ use takumi_core::layout::node::Node;
 use takumi_core::layout::tree::{LayoutResults, RenderNode};
 use takumi_core::scene::{PaintItemKind, StackingContextNode, build_stacking_contexts};
 use takumi_core::style::{Affine as TAffine, ComputedStyle, SizingContext, ZIndex};
+use valle_draw::program::recording::Homography;
 use valle_motion::MotionValue;
 use valle_motion::value::{Length, LengthUnit};
 use valle_motion::{
@@ -416,7 +417,6 @@ impl PreparedScene {
             None,
             None,
             &HashMap::new(),
-            None,
             &[],
             &HashMap::new(),
         )?;
@@ -566,14 +566,7 @@ fn prepare_admitted(
                 .filter(|id| eval_plan.post_layout_dependent(*id) || eval_plan.unit_dependent(*id)),
         );
         if let Some(camera) = &artifact.camera {
-            if let PointValue::Expr { expr } = camera.center {
-                roots.push(expr);
-            }
-            for value in [&camera.zoom, &camera.rotation] {
-                if let NumberValue::Expr { expr } = value {
-                    roots.push(*expr);
-                }
-            }
+            roots.extend(camera.exprs().into_iter().map(|(_, expr)| expr));
         }
         eval_plan.schedule(roots)
     });
@@ -837,7 +830,7 @@ pub(super) fn build_tree_inner(
     // World content.
     //
     // Only bounds-dependent cameras require an extra layout pass.
-    let camera = if camera_depends_on_bounds(artifact, &prepared.eval_plan) {
+    let (camera, camera_space) = if camera_depends_on_bounds(artifact, &prepared.eval_plan) {
         let probe = identity_camera_wrappers(opts)?;
         let probe_node = node_of(
             prepared,
@@ -846,7 +839,6 @@ pub(super) fn build_tree_inner(
             opts.styles,
             Some(&probe),
             &formulas,
-            None,
             &inactive_nodes,
             &layout_instances,
         )?;
@@ -863,9 +855,15 @@ pub(super) fn build_tree_inner(
             },
             &probe_boxes,
         )?;
-        camera_wrappers(artifact, &probe_values, opts)?
+        (
+            camera_wrappers(artifact, &probe_values, opts)?,
+            camera_space(artifact, &probe_values)?,
+        )
     } else {
-        camera_wrappers(artifact, &values, opts)?
+        (
+            camera_wrappers(artifact, &values, opts)?,
+            camera_space(artifact, &values)?,
+        )
     };
     let render_context = takumi_core::context::RenderContext::builder()
         .fonts(opts.fonts.snapshot())
@@ -885,9 +883,6 @@ pub(super) fn build_tree_inner(
             .filter(|snapshot| Some(&snapshot.key) == geometry_key.as_ref())
             .cloned()
     });
-    let cached_origins = cached
-        .as_ref()
-        .and_then(|snapshot| snapshot.css_3d_origins.clone());
     let mut evaluated_root = None;
     let (layout, keys, boxes, scene3d_content_boxes) = if let Some(snapshot) = cached {
         if let Some(timings) = timings.as_deref_mut() {
@@ -907,7 +902,6 @@ pub(super) fn build_tree_inner(
             opts.styles,
             camera.as_ref(),
             &formulas,
-            None,
             &inactive_nodes,
             &layout_instances,
         )?;
@@ -979,7 +973,6 @@ pub(super) fn build_tree_inner(
                 keys: keys.clone(),
                 boxes: boxes.clone(),
                 scene3d_boxes: scene3d_content_boxes.clone(),
-                css_3d_origins: None,
             }));
         }
         // Only the cascade is reused here. The final CSS projection may still require a new
@@ -1020,68 +1013,10 @@ pub(super) fn build_tree_inner(
         &projected,
     )?;
     check_post_layout_origins(artifact, &values, &boxes)?;
-    // Read the current frame's author cascade before adding derived depth. This includes
-    // conditional utilities, inline declarations, and importance in one computed result.
-    let author_styles = if let Some(origins) = cached_origins {
-        origins
-    } else if artifact.nodes.iter().any(|node| {
-        node.styles.iter().any(|style| {
-            style.property.starts_with("motion-transform-3d-")
-                || matches!(
-                    style.property.as_str(),
-                    "rotate-x"
-                        | "rotate-y"
-                        | "perspective"
-                        | "transform-style"
-                        | "backface-visibility"
-                )
-        })
-    }) {
-        let author_root = if !prepared.has_post_layout_values {
-            evaluated_root.take()
-        } else {
-            None
-        };
-        let author_root = match author_root {
-            Some(root) => root,
-            None => {
-                let author_node = node_of(
-                    prepared,
-                    artifact.root.0 as usize,
-                    &values,
-                    opts.styles,
-                    camera.as_ref(),
-                    &formulas,
-                    None,
-                    &inactive_nodes,
-                    &layout_instances,
-                )?;
-                RenderNode::from_node(&render_context, author_node)
-            }
-        };
-        let origins = Arc::new(css_3d_author_styles(
-            artifact,
-            &author_root,
-            &boxes,
-            &inactive_nodes,
-        )?);
-        // Eligibility freezes transform-origin, inherited metrics and the author cascade. Only
-        // the projection/depth changes each frame, so a second styled tree adds no information.
-        if let Some(cache) = geometry_cache {
-            if let Some(snapshot) = cache.borrow_mut().as_mut() {
-                snapshot.css_3d_origins = Some(Arc::clone(&origins));
-            }
-        }
-        origins
-    } else {
-        Arc::new(HashMap::new())
-    };
-    let css_3d_planes = resolve_css_3d_planes(artifact, &values, &boxes, opts, &author_styles)?;
-
     // Post-layout values are admitted only into paint/transform slots or sidecar geometry. Rebuild
     // the same fixed-topology RenderNode with their final values, but keep the already-computed
     // LayoutResults. This makes `translate: project3d(...)` visible without a layout feedback pass.
-    let existing_root = if !prepared.has_post_layout_values && css_3d_planes.is_empty() {
+    let existing_root = if !prepared.has_post_layout_values {
         evaluated_root.take()
     } else {
         None
@@ -1097,7 +1032,6 @@ pub(super) fn build_tree_inner(
                 opts.styles,
                 camera.as_ref(),
                 &formulas,
-                Some(&css_3d_planes),
                 &inactive_nodes,
                 &layout_instances,
             )?;
@@ -1105,7 +1039,29 @@ pub(super) fn build_tree_inner(
         }
     };
     super::transform::preserve_identity(&mut root);
-    apply_css_3d_depth(artifact, &mut root, &css_3d_planes, &inactive_nodes);
+    // CSS 3D reads this frame's cascade from the final tree before adding derived depth:
+    // conditional utilities, inline declarations, and importance in one computed result.
+    let css_3d_planes = if camera_space.is_some()
+        || artifact.nodes.iter().any(|node| {
+            node.styles.iter().any(|style| {
+                style.property.starts_with("motion-transform-3d-")
+                    || matches!(
+                        style.property.as_str(),
+                        "rotate-x"
+                            | "rotate-y"
+                            | "perspective"
+                            | "transform-style"
+                            | "backface-visibility"
+                    )
+            })
+        }) {
+        let nodes = css_3d_nodes(&root, &layout, &keys)?;
+        let planes = resolve_css_3d_planes(artifact, &values, &boxes, opts, &nodes, camera_space)?;
+        apply_css_3d_planes(artifact, &mut root, &planes, &inactive_nodes);
+        planes
+    } else {
+        HashMap::new()
+    };
 
     // Map render paths to Scene keys and retain original text to recover node-local offsets from
     // concatenated inline text. Layout keys cannot identify inline nodes that have no box.
@@ -1931,9 +1887,9 @@ fn resolve_glass_layout(
             0.0,
             1.0,
         ];
-        // CSS 3D is resolved before paint into one authoritative absolute viewport quad. The
-        // foreground emitter consumes that same quad through BeginPerspective; the material
-        // sidecar must therefore carry its homography as well or the two layers visibly split.
+        // CSS 3D is resolved before paint into one authoritative viewport plane. The foreground
+        // emitter draws through that plane with BeginPerspective; the material sidecar must
+        // therefore carry its homography as well or the two layers visibly split.
         let viewport_matrix = match css_3d_planes.get(&node.key) {
             Some(plane) if plane.project => {
                 valle_draw::program::recording::Homography::map_rect(
@@ -3510,68 +3466,149 @@ struct Css3dState {
     preserve_3d: bool,
 }
 
+/// What CSS 3D reads of one node from the frame's final tree, in absolute layout coordinates.
 #[derive(Clone, Copy)]
-pub(super) struct Css3dAuthorStyle {
+struct Css3dNode {
     origin: valle_draw::Point,
+    /// The 2D transform the tree applies to the node: translate, rotate, scale and a 2D
+    /// `transform` list, around its origin.
+    local: Matrix4,
+    /// From absolute layout coordinates to the output, through the transforms of every ancestor,
+    /// a camera's included: where a flat parent draws the node.
+    parent_frame: TAffine,
 }
 
-/// Read the resolved author cascade from the same Takumi tree used for final paint. The origin
-/// is resolved against this node's own font sizing and layout box, rather than a global guess.
-fn css_3d_author_styles(
-    artifact: &SceneArtifact,
+/// Read each node's origin and transforms from the same Takumi tree used for final paint. The
+/// origin is resolved against this node's own font sizing and layout box, rather than a global
+/// guess.
+fn css_3d_nodes(
     root: &RenderNode,
-    boxes: &BTreeMap<String, valle_draw::Rect>,
-    inactive_nodes: &[bool],
-) -> Result<HashMap<String, Css3dAuthorStyle>, LayoutError> {
-    let mut keys = HashMap::new();
-    walk_render_keys(
-        artifact,
-        artifact.root,
-        root,
-        &mut Vec::new(),
-        &mut keys,
-        inactive_nodes,
-    );
+    layout: &LayoutResults,
+    keys: &HashMap<u64, String>,
+) -> Result<HashMap<String, Css3dNode>, LayoutError> {
     let mut out = HashMap::new();
-    for (path, key) in keys {
-        let Some(node) = root
-            .node_at_path(&path)
-            .filter(|node| node.source_order().is_some())
-        else {
+    let mut pending = vec![(
+        root,
+        takumi_core::geometry::NodeId::ROOT,
+        TAffine::IDENTITY,
+        (0.0_f32, 0.0_f32),
+    )];
+    while let Some((node, id, parent, parent_origin)) = pending.pop() {
+        let Ok(box_layout) = layout.layout(id) else {
             continue;
         };
-        let Some(rect) = boxes.get(&key) else {
-            continue;
-        };
-        let origin = node.context.style.transform_origin.0;
-        let x = f64::from(
-            takumi_core::style::Length::from(origin.x)
-                .to_px(&node.context.sizing, rect.width as f32),
-        ) + rect.x;
-        let y = f64::from(
-            takumi_core::style::Length::from(origin.y)
-                .to_px(&node.context.sizing, rect.height as f32),
-        ) + rect.y;
-        if !x.is_finite() || !y.is_finite() {
-            return Err(LayoutError::BadStyle {
-                node: key,
-                declarations: "transform-origin".into(),
-                reason: "origin must resolve to finite coordinates".into(),
-            });
-        }
-        out.insert(
-            key,
-            Css3dAuthorStyle {
-                origin: valle_draw::Point::new(x, y),
-            },
+        let (width, height) = (box_layout.size.width, box_layout.size.height);
+        let at = (
+            parent_origin.0 + box_layout.location.x,
+            parent_origin.1 + box_layout.location.y,
         );
+        let local = node
+            .context
+            .style
+            .local_transform(width, height, &node.context.sizing);
+        let matrix =
+            parent * TAffine::translation(box_layout.location.x, box_layout.location.y) * local;
+        if let Some(key) = keys.get(&u64::from(id)) {
+            let origin = node.context.style.transform_origin.0;
+            let x = f64::from(
+                takumi_core::style::Length::from(origin.x).to_px(&node.context.sizing, width),
+            ) + f64::from(at.0);
+            let y = f64::from(
+                takumi_core::style::Length::from(origin.y).to_px(&node.context.sizing, height),
+            ) + f64::from(at.1);
+            if !x.is_finite() || !y.is_finite() {
+                return Err(LayoutError::BadStyle {
+                    node: key.clone(),
+                    declarations: "transform-origin".into(),
+                    reason: "origin must resolve to finite coordinates".into(),
+                });
+            }
+            let [a, b, c, d, e, f] = local.to_cols_array().map(f64::from);
+            out.insert(
+                key.clone(),
+                Css3dNode {
+                    origin: valle_draw::Point::new(x, y),
+                    local: Matrix4::translate(f64::from(at.0), f64::from(at.1), 0.0)
+                        .multiply(Matrix4([
+                            a, c, 0.0, e, //
+                            b, d, 0.0, f, //
+                            0.0, 0.0, 1.0, 0.0, //
+                            0.0, 0.0, 0.0, 1.0,
+                        ]))
+                        .multiply(Matrix4::translate(-f64::from(at.0), -f64::from(at.1), 0.0)),
+                    parent_frame: parent * TAffine::translation(-parent_origin.0, -parent_origin.1),
+                },
+            );
+        }
+        if let (Some(children), Ok(boxes)) = (&node.children, layout.box_children(id)) {
+            for child in boxes {
+                if let Some(node) = children.get(child.render_index) {
+                    pending.push((node, child.node_id, matrix, at));
+                }
+            }
+        }
     }
     Ok(out)
 }
 
+/// The 3D space a camera moving in depth gives World content: perspective toward the camera's
+/// center and the inverse of its orbit and depth. The camera's center, zoom and rotation stay
+/// with its wrappers, which draw this space as they draw a flat World.
+fn camera_space(
+    artifact: &SceneArtifact,
+    values: &[MotionValue],
+) -> Result<Option<Css3dState>, LayoutError> {
+    let Some(camera) = artifact.camera.as_ref().filter(|camera| camera.is_3d()) else {
+        return Ok(None);
+    };
+    let at = artifact.root.0 as usize;
+    let center = point_value(&camera.center, values, at, "camera center")?;
+    let number = |value: &Option<NumberValue>, name: &'static str| {
+        value
+            .as_ref()
+            .map(|value| number_value(value, values, at, name))
+            .transpose()
+    };
+    let perspective = number(&camera.perspective, "camera perspective")?;
+    let [z, rotate_x, rotate_y] = [
+        number(&camera.z, "camera z")?,
+        number(&camera.rotate_x, "camera rotateX")?,
+        number(&camera.rotate_y, "camera rotateY")?,
+    ]
+    .map(|value| value.unwrap_or(0.0));
+    if perspective.is_some_and(|distance| !distance.is_finite() || distance <= 0.0) {
+        return Err(LayoutError::BadCamera {
+            reason: format!(
+                "perspective must be finite and positive, got {}",
+                perspective.unwrap_or_default()
+            ),
+        });
+    }
+    if ![z, rotate_x, rotate_y]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return Err(LayoutError::BadCamera {
+            reason: "z, rotateX and rotateY must be finite".into(),
+        });
+    }
+    Ok(Some(Css3dState {
+        matrix: Matrix4::translate(center.x, center.y, 0.0)
+            .multiply(Matrix4::rotate_x(-rotate_x))
+            .multiply(Matrix4::rotate_y(-rotate_y))
+            .multiply(Matrix4::translate(-center.x, -center.y, -z)),
+        perspective: perspective.map(|distance| Css3dPerspective {
+            distance,
+            origin: center,
+        }),
+        preserve_3d: true,
+    }))
+}
+
 /// Auto depth is a derived computed default. Applying it after the author cascade means even an
-/// important `z-index: auto` receives the fallback, while every explicit integer wins.
-fn apply_css_3d_depth(
+/// important `z-index: auto` receives the fallback, while every explicit integer wins. A plane
+/// that faces away under `backfaceVisibility: hidden`, or edge-on, paints nothing.
+fn apply_css_3d_planes(
     artifact: &SceneArtifact,
     root: &mut RenderNode,
     planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,
@@ -3603,6 +3640,9 @@ fn apply_css_3d_depth(
                 as i32;
             node.context.style.z_index = ZIndex::Integer(depth);
         }
+        if plane.hidden {
+            node.context.style.visibility = takumi_core::style::Visibility::Hidden;
+        }
     }
 }
 
@@ -3621,41 +3661,92 @@ fn resolve_css_3d_planes(
     values: &[MotionValue],
     boxes: &BTreeMap<String, valle_draw::Rect>,
     opts: &LayoutOptions<'_>,
-    author_styles: &HashMap<String, Css3dAuthorStyle>,
+    nodes: &HashMap<String, Css3dNode>,
+    camera_space: Option<Css3dState>,
 ) -> Result<HashMap<String, crate::layout::bridge::Css3dPlane>, LayoutError> {
     let sizing = SizingContext::builder().viewport(opts.viewport).build();
     let mut out = HashMap::new();
     resolve_css_3d_node(
-        artifact,
+        &Css3dScene {
+            artifact,
+            values,
+            boxes,
+            sizing: &sizing,
+            nodes,
+            camera_space,
+        },
         artifact.root.0 as usize,
-        values,
-        boxes,
-        &sizing,
-        author_styles,
         Css3dState::default(),
+        None,
         &mut out,
     )?;
     Ok(out)
 }
 
+/// The inputs every node of one frame's CSS 3D resolution shares.
+struct Css3dScene<'a> {
+    artifact: &'a SceneArtifact,
+    values: &'a [MotionValue],
+    boxes: &'a BTreeMap<String, valle_draw::Rect>,
+    sizing: &'a SizingContext,
+    nodes: &'a HashMap<String, Css3dNode>,
+    camera_space: Option<Css3dState>,
+}
+
+/// Resolve one node and its descendants. `frame` is where the enclosing 3D rendering context
+/// draws, from its flat root; outside one, each node's own parent draws it.
 fn resolve_css_3d_node(
-    artifact: &SceneArtifact,
+    scene: &Css3dScene<'_>,
     at: usize,
-    values: &[MotionValue],
-    boxes: &BTreeMap<String, valle_draw::Rect>,
-    sizing: &SizingContext,
-    author_styles: &HashMap<String, Css3dAuthorStyle>,
     state: Css3dState,
+    frame: Option<TAffine>,
     out: &mut HashMap<String, crate::layout::bridge::Css3dPlane>,
 ) -> Result<(), LayoutError> {
+    let artifact = scene.artifact;
     let node = artifact.nodes.get(at).ok_or(LayoutError::BadNode { at })?;
-    let style = css_3d_style(node, values, at)?;
-    let rect = boxes.get(&node.key).copied().unwrap_or_default();
-    let origin = author_styles.get(&node.key).map_or_else(
-        || valle_draw::Point::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0),
-        |style| style.origin,
-    );
-    let local = css_3d_local_matrix(&style, origin, rect);
+    let range = node.children.start as usize..node.children.end as usize;
+    let child_ids = artifact
+        .node_children
+        .get(range)
+        .ok_or(LayoutError::BadNode { at })?;
+    let (Some(rect), Some(own)) = (
+        scene.boxes.get(&node.key).copied(),
+        scene.nodes.get(&node.key),
+    ) else {
+        if state.preserve_3d && matches!(node.kind, NodeKind::InstanceLayout { .. }) {
+            return Err(LayoutError::BadStyle {
+                node: node.key.clone(),
+                declarations: "transform-style".into(),
+                reason: "the rows a `.map` lays out from one shared template cannot be planes \
+                         of a 3D space; put the list in a View, which they are then drawn on"
+                    .into(),
+            });
+        }
+        // GlassField and TimeScope lay their children out as their parent's own. Any other node
+        // the frame does not lay out projects nothing, and neither do its descendants.
+        let transparent = matches!(
+            node.kind,
+            NodeKind::GlassField(_) | NodeKind::TimeScope { .. }
+        );
+        for child in child_ids {
+            if transparent {
+                resolve_css_3d_node(scene, child.0 as usize, state, frame, out)?;
+            } else {
+                resolve_css_3d_node(scene, child.0 as usize, Css3dState::default(), None, out)?;
+            }
+        }
+        return Ok(());
+    };
+    let style = css_3d_style(node, scene.values, at)?;
+    // World content shares the space of a camera that moves in depth.
+    let preserve_3d = style.preserve_3d
+        || (state.preserve_3d
+            && scene.camera_space.is_some()
+            && node.space == Some(CoordinateSpace::World));
+    let origin = own.origin;
+    let local = own
+        .local
+        .multiply(css_3d_local_matrix(&style, origin, rect));
     let matrix = if state.preserve_3d {
         state.matrix.multiply(local)
     } else {
@@ -3670,7 +3761,7 @@ fn resolve_css_3d_node(
                 }),
                 rect.x,
                 rect.width,
-                sizing,
+                scene.sizing,
                 &node.key,
                 "perspectiveOrigin.x",
             )?,
@@ -3681,14 +3772,14 @@ fn resolve_css_3d_node(
                 }),
                 rect.y,
                 rect.height,
-                sizing,
+                scene.sizing,
                 &node.key,
                 "perspectiveOrigin.y",
             )?,
         );
         Some(Css3dPerspective {
             distance: value
-                .to_px(sizing)
+                .to_px(scene.sizing)
                 .map_err(|reason| LayoutError::BadStyle {
                     node: node.key.clone(),
                     declarations: "perspective".into(),
@@ -3699,10 +3790,12 @@ fn resolve_css_3d_node(
     } else {
         state.perspective
     };
+    // The flat root of a 3D rendering context draws all of its planes.
+    let frame = frame.unwrap_or(own.parent_frame);
 
     let is_plane =
-        !style.preserve_3d && (state.preserve_3d || !style.ops.is_empty() || style.backface_hidden);
-    if is_plane && rect.width > 0.0 && rect.height > 0.0 {
+        !preserve_3d && (state.preserve_3d || !style.ops.is_empty() || style.backface_hidden);
+    if is_plane {
         let source = [
             [rect.x, rect.y],
             [rect.x + rect.width, rect.y],
@@ -3740,8 +3833,21 @@ fn resolve_css_3d_node(
                 valle_draw::Point::new(point[0], point[1])
             };
         }
-        let signed_area = (quad[1].x - quad[0].x) * (quad[2].y - quad[0].y)
-            - (quad[1].y - quad[0].y) * (quad[2].x - quad[0].x);
+        let projection = plane_projection(matrix, perspective);
+        // Facing is the context's own: transforms that draw the context do not turn its planes.
+        let facing = if rect.width > 0.0 && rect.height > 0.0 {
+            let signed_area = (quad[1].x - quad[0].x) * (quad[2].y - quad[0].y)
+                - (quad[1].y - quad[0].y) * (quad[2].x - quad[0].x);
+            (signed_area.abs() > 1e-8).then_some(signed_area)
+        } else {
+            // An empty box still draws its overflowing descendants: face by the plane's own
+            // local scale there.
+            let [a, b, c, d, e, f, g, h, i] = projection.0;
+            let w = g * rect.x + h * rect.y + i;
+            let jacobian =
+                (a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)) / (w * w * w);
+            (jacobian.is_finite() && jacobian.abs() > 1e-12).then_some(jacobian)
+        };
         let center =
             matrix
                 .apply(origin.x, origin.y, 0.0)
@@ -3750,12 +3856,19 @@ fn resolve_css_3d_node(
                     declarations: "transform".into(),
                     reason: "CSS 3D transform produced a non-finite center".into(),
                 })?;
+        let [fa, fb, fc, fd, fe, ff] = frame.to_cols_array().map(f64::from);
+        let frame_matrix = Homography([fa, fc, fe, fb, fd, ff, 0.0, 0.0, 1.0]);
         out.insert(
             node.key.clone(),
             crate::layout::bridge::Css3dPlane {
-                quad,
+                quad: quad.map(|point| frame_matrix.apply(point)),
+                matrix: normalized(
+                    Homography([1.0, 0.0, rect.x, 0.0, 1.0, rect.y, 0.0, 0.0, 1.0])
+                        .then(projection)
+                        .then(frame_matrix),
+                ),
                 depth: center[2],
-                hidden: signed_area.abs() <= 1e-8 || (style.backface_hidden && signed_area < 0.0),
+                hidden: facing.is_none_or(|facing| style.backface_hidden && facing < 0.0),
                 project: true,
             },
         );
@@ -3763,7 +3876,7 @@ fn resolve_css_3d_node(
 
     // Positioned preserve-3d children are siblings in their parent's 3D painter order. Their
     // descendants own the actual projected planes, so this record contributes only z-index.
-    if style.preserve_3d
+    if preserve_3d
         && state.preserve_3d
         && rect.width > 0.0
         && rect.height > 0.0
@@ -3773,6 +3886,7 @@ fn resolve_css_3d_node(
             node.key.clone(),
             crate::layout::bridge::Css3dPlane {
                 quad: [valle_draw::Point::default(); 4],
+                matrix: Homography::IDENTITY,
                 depth: center[2],
                 hidden: false,
                 project: false,
@@ -3780,39 +3894,73 @@ fn resolve_css_3d_node(
         );
     }
 
-    let child_state = if style.preserve_3d {
-        Css3dState {
-            matrix,
-            perspective,
-            preserve_3d: true,
-        }
+    let (child_state, child_frame) = if preserve_3d {
+        (
+            Css3dState {
+                matrix,
+                perspective,
+                preserve_3d: true,
+            },
+            Some(frame),
+        )
     } else if style.perspective.is_some() {
-        Css3dState {
-            matrix: Matrix4::IDENTITY,
-            perspective,
-            preserve_3d: false,
-        }
+        (
+            Css3dState {
+                matrix: Matrix4::IDENTITY,
+                perspective,
+                preserve_3d: false,
+            },
+            None,
+        )
     } else {
-        Css3dState::default()
+        (Css3dState::default(), None)
     };
-    let range = node.children.start as usize..node.children.end as usize;
-    let child_ids = artifact
-        .node_children
-        .get(range)
-        .ok_or(LayoutError::BadNode { at })?;
     for child in child_ids {
-        resolve_css_3d_node(
-            artifact,
-            child.0 as usize,
-            values,
-            boxes,
-            sizing,
-            author_styles,
-            child_state,
-            out,
-        )?;
+        // World content enters the space of a camera that moves in depth.
+        let world = at == artifact.root.0 as usize
+            && artifact
+                .nodes
+                .get(child.0 as usize)
+                .is_some_and(|child| child.space != Some(CoordinateSpace::Screen));
+        match scene.camera_space.filter(|_| world) {
+            Some(space) => resolve_css_3d_node(scene, child.0 as usize, space, None, out)?,
+            None => resolve_css_3d_node(scene, child.0 as usize, child_state, child_frame, out)?,
+        }
     }
     Ok(())
+}
+
+/// The projective map of a plane's z = 0 from absolute layout coordinates: its 4×4 transform,
+/// then the perspective of the context, if any.
+fn plane_projection(matrix: Matrix4, perspective: Option<Css3dPerspective>) -> Homography {
+    let m = matrix.0;
+    let row = |at: usize| [m[at], m[at + 1], m[at + 3]];
+    let [x, y, z, w] = [row(0), row(4), row(8), row(12)];
+    let rows = match perspective {
+        // Dividing by d − z: x′ = (d·x − oₓ·z) / (d·w − z).
+        Some(Css3dPerspective { distance, origin }) => [
+            [0, 1, 2].map(|at| distance * x[at] - origin.x * z[at]),
+            [0, 1, 2].map(|at| distance * y[at] - origin.y * z[at]),
+            [0, 1, 2].map(|at| distance * w[at] - z[at]),
+        ],
+        None => [x, y, w],
+    };
+    Homography([
+        rows[0][0], rows[0][1], rows[0][2], //
+        rows[1][0], rows[1][1], rows[1][2], //
+        rows[2][0], rows[2][1], rows[2][2],
+    ])
+}
+
+/// A homography scaled so a point at the node's origin has unit weight, as one fitted to its
+/// corners has.
+fn normalized(matrix: Homography) -> Homography {
+    let weight = matrix.0[8];
+    if weight.is_finite() && weight.abs() > 1e-12 {
+        Homography(matrix.0.map(|value| value / weight))
+    } else {
+        matrix
+    }
 }
 
 // Overlay templates keep their authored exclusive endpoint when duration quantization rounds up.
@@ -4366,7 +4514,7 @@ fn screen_anchors(
         if let Some(key) = keys.get(&u64::from(id)) {
             let center_x = box_layout.size.width * 0.5;
             let center_y = box_layout.size.height * 0.5;
-            let point = if let Some(plane) = css_3d_planes.get(key) {
+            let point = if let Some(plane) = css_3d_planes.get(key).filter(|plane| plane.project) {
                 valle_draw::Point::new(
                     plane.quad.iter().map(|point| point.x).sum::<f64>() / 4.0,
                     plane.quad.iter().map(|point| point.y).sum::<f64>() / 4.0,
@@ -4446,7 +4594,7 @@ impl LayoutTree {
             if let Some(key) = key {
                 let width = box_layout.size.width;
                 let height = box_layout.size.height;
-                let plane = self.css_3d_planes.get(key);
+                let plane = self.css_3d_planes.get(key).filter(|plane| plane.project);
                 let corners = plane.map_or_else(
                     || {
                         let point = |x: f32, y: f32| {
@@ -5496,7 +5644,6 @@ fn node_of(
     cache: Option<&crate::StyleCache>,
     camera: Option<&CameraWrappers>,
     formulas: &HashMap<String, crate::math_formula::FormulaFragment>,
-    css_3d_planes: Option<&HashMap<String, crate::layout::bridge::Css3dPlane>>,
     inactive_nodes: &[bool],
     layout_instances: &LayoutInstanceRows,
 ) -> Result<Node, LayoutError> {
@@ -5507,7 +5654,6 @@ fn node_of(
         cache,
         camera,
         formulas,
-        css_3d_planes,
         inactive_nodes,
         layout_instances,
     )?;
@@ -5566,7 +5712,6 @@ fn projected_nodes_of(
     cache: Option<&crate::StyleCache>,
     camera: Option<&CameraWrappers>,
     formulas: &HashMap<String, crate::math_formula::FormulaFragment>,
-    css_3d_planes: Option<&HashMap<String, crate::layout::bridge::Css3dPlane>>,
     inactive_nodes: &[bool],
     layout_instances: &LayoutInstanceRows,
 ) -> Result<Vec<Node>, LayoutError> {
@@ -5599,7 +5744,6 @@ fn projected_nodes_of(
                 cache,
                 camera,
                 formulas,
-                css_3d_planes,
                 inactive_nodes,
                 layout_instances,
             )
@@ -5856,14 +6000,6 @@ fn projected_nodes_of(
     if is_transition_child || matches!(template.kind, NodeKind::Transition { .. }) {
         // These are semantic subtree boundaries even when the author requests isolation:auto.
         declarations.push_str("; isolation: isolate !important");
-    }
-    if let Some(plane) = css_3d_planes.and_then(|planes| planes.get(&template.key)) {
-        if plane.hidden {
-            if !declarations.is_empty() {
-                declarations.push_str("; ");
-            }
-            declarations.push_str("visibility: hidden");
-        }
     }
     if let NodeKind::MathFormula { .. } = &template.kind {
         if let Some(fragment) = formulas.get(&template.key) {
@@ -6823,19 +6959,12 @@ impl CameraWrappers {
 
 /// Whether a camera binding depends on bounds and therefore requires a probe layout pass.
 fn camera_depends_on_bounds(artifact: &SceneArtifact, plan: &EvalPlan) -> bool {
-    let Some(camera) = &artifact.camera else {
-        return false;
-    };
-    let is_dependent = |expr: valle_motion::ExprId| plan.bounds_dependent(expr);
-    let point_dependent = match &camera.center {
-        PointValue::Static { .. } => false,
-        PointValue::Expr { expr } => is_dependent(*expr),
-    };
-    let number_dependent = |binding: &NumberValue| match binding {
-        NumberValue::Static { .. } => false,
-        NumberValue::Expr { expr } => is_dependent(*expr),
-    };
-    point_dependent || number_dependent(&camera.zoom) || number_dependent(&camera.rotation)
+    artifact.camera.as_ref().is_some_and(|camera| {
+        camera
+            .exprs()
+            .into_iter()
+            .any(|(_, expr)| plan.bounds_dependent(expr))
+    })
 }
 
 /// Probe wrappers with the same structure and positioning as the final camera, differing only in

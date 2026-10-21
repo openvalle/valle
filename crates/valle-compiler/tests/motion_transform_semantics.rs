@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use valle_compiler::motion::compile_motion;
+use valle_draw::program::{Node, Paint, Transform2d};
 use valle_motion::layout::LayoutCache;
 use valle_motion::{
     Fonts, LayoutOptions, StyleCache, Viewport, build_tree, default_font_naming, emit,
@@ -816,5 +817,230 @@ fn finite_transform_arguments_cannot_overflow_into_a_successful_empty_frame() {
             .to_string()
             .contains("computed transform must be finite"),
         "{error}"
+    );
+}
+
+/// Where the frame draws the corners of its one red box, in output pixels: the program's
+/// transforms composed down to the box's path, as an executor draws it.
+fn red_corners(source: &str) -> [[f64; 2]; 4] {
+    // Cached geometry draws what a cold layout draws.
+    frames(source, &[0]);
+    let artifact = compile_motion(source)
+        .unwrap_or_else(|d| panic!("{source}: {d:#?}"))
+        .artifact;
+    let prepared = prepare_scene(&artifact).unwrap();
+    let fonts = Fonts::default();
+    let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+    let tree = build_tree(
+        &prepared,
+        &motion_context_at_frame(0, 90, FrameRate::new(30, 1).unwrap()).unwrap(),
+        &props,
+        &LayoutOptions {
+            viewport: Viewport::new((320, 180)),
+            fonts: &fonts,
+            styles: None,
+        },
+    )
+    .unwrap();
+    let program = emit(&tree, &default_font_naming).unwrap().program;
+    // Programs hold colors in the linear Rec.2020 working space.
+    let red = valle_draw::program::LinearColor::from_srgb8(valle_draw::Rgba::rgb(255, 0, 0));
+    let mut corners = Vec::new();
+    let mut pending = program
+        .roots()
+        .iter()
+        .map(|&node| (node, Transform2d::IDENTITY))
+        .collect::<Vec<_>>();
+    while let Some((node, outer)) = pending.pop() {
+        match &program.nodes()[node.raw() as usize] {
+            Node::Group(group) => {
+                let inner = group.transform.then(outer);
+                pending.extend(group.children.iter().map(|&child| (child, inner)));
+            }
+            Node::Path(path)
+                if path.fill.is_some_and(|paint| {
+                    matches!(&program.paints()[paint.raw() as usize], Paint::Solid(color)
+                        if (color.red - red.red).abs() < 1e-4
+                            && (color.green - red.green).abs() < 1e-4
+                            && (color.blue - red.blue).abs() < 1e-4)
+                }) =>
+            {
+                let [x0, y0, x1, y1] = program.paths()[path.path.raw() as usize]
+                    .points
+                    .iter()
+                    .fold(
+                        [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
+                        |[x0, y0, x1, y1], &[x, y]| [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
+                    );
+                corners.push([[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|[x, y]| {
+                    let point = outer.try_apply(valle_draw::Point::new(x, y)).unwrap();
+                    [point.x, point.y]
+                }));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(corners.len(), 1, "{source}");
+    corners[0]
+}
+
+fn assert_corners(source: &str, expected: [[f64; 2]; 4]) {
+    let actual = red_corners(source);
+    assert!(
+        actual
+            .iter()
+            .zip(&expected)
+            .all(|(a, e)| (a[0] - e[0]).abs() < 1e-3 && (a[1] - e[1]).abs() < 1e-3),
+        "drawn {actual:?}, expected {expected:?}\n{source}"
+    );
+}
+
+fn plane_scene(camera: &str, body: &str) -> String {
+    format!(
+        r#"export default function Demo(){{return <Scene style={{{{width:320,height:180}}}} {camera}>{body}</Scene>}}"#
+    )
+}
+
+/// A red 100×60 box at (110, 60), its origin at (160, 90).
+fn card(style: &str) -> String {
+    format!(
+        r#"<View key='card' style={{{{position:'absolute',left:110,top:60,width:100,height:60,
+            backgroundColor:'red',{style}}}}}/>"#
+    )
+}
+
+// The card turned 60° about y and seen without perspective is 50 wide; turned 90° in 2D about
+// its center, it then stands 50 wide and 100 tall around (160, 90).
+const TURNED_CARD: [[f64; 2]; 4] = [[190.0, 65.0], [190.0, 115.0], [130.0, 115.0], [130.0, 65.0]];
+
+#[test]
+fn a_plane_draws_where_its_flat_ancestors_and_the_camera_put_it() {
+    assert_corners(
+        &plane_scene(
+            "",
+            r#"<View key='parent' style={{position:'absolute',left:110,top:60,width:100,height:60,
+                rotate:'90deg'}}>
+                <View key='card' style={{position:'absolute',left:0,top:0,width:100,height:60,
+                    backgroundColor:'red',transform:'rotateY(60deg)'}}/>
+            </View>"#,
+        ),
+        TURNED_CARD,
+    );
+    // The camera draws world point (160, 90) at the output's center, zoomed 2× and turned 90°.
+    assert_corners(
+        &plane_scene(
+            "camera={{center:point(160,90),zoom:2,rotation:90}}",
+            &format!("<World>{}</World>", card("transform:'rotateY(60deg)'")),
+        ),
+        [[220.0, 40.0], [220.0, 140.0], [100.0, 140.0], [100.0, 40.0]],
+    );
+}
+
+#[test]
+fn a_plane_keeps_its_own_2d_transforms_and_so_does_each_plane_of_a_3d_context() {
+    assert_corners(
+        &plane_scene("", &card("rotate:'90deg',transform:'rotateY(60deg)'")),
+        TURNED_CARD,
+    );
+    let stage = |stage: &str, style: &str| {
+        plane_scene(
+            "",
+            &format!(
+                r#"<View key='stage' style={{{{position:'absolute',left:60,top:20,width:200,
+                    height:140,transformStyle:'preserve-3d',{stage}}}}}>
+                    <View key='card' style={{{{position:'absolute',left:50,top:40,width:100,
+                        height:60,backgroundColor:'red',{style}}}}}/>
+                </View>"#
+            ),
+        )
+    };
+    let upright = [[190.0, 40.0], [190.0, 140.0], [130.0, 140.0], [130.0, 40.0]];
+    assert_corners(&stage("", "rotate:'90deg'"), upright);
+    assert_corners(&stage("", "transform:'rotate(90deg)'"), upright);
+    // The context's root turns its planes too.
+    assert_corners(&stage("rotate:'90deg'", ""), upright);
+    assert_corners(
+        &stage("", "translate:'30px 10px'"),
+        [[140.0, 70.0], [240.0, 70.0], [240.0, 130.0], [140.0, 130.0]],
+    );
+}
+
+#[test]
+fn an_empty_box_is_a_plane_for_its_overflowing_descendants() {
+    assert_corners(
+        &plane_scene(
+            "",
+            r#"<View key='hinge' style={{position:'absolute',left:160,top:90,width:0,height:0,
+                transform:'rotateY(60deg)'}}>
+                <View key='card' style={{position:'absolute',left:-50,top:-30,width:100,height:60,
+                    backgroundColor:'red'}}/>
+            </View>"#,
+        ),
+        [[135.0, 60.0], [185.0, 60.0], [185.0, 120.0], [135.0, 120.0]],
+    );
+}
+
+#[test]
+fn a_camera_moving_in_depth_draws_world_planes_in_css_perspective() {
+    let (sin, cos) = valle_draw::math::sin_cos(30_f64.to_radians());
+    // CSS perspective 400px toward the camera's center (160, 90).
+    let project = |[x, y, z]: [f64; 3]| {
+        let scale = 400.0 / (400.0 - z);
+        [160.0 + (x - 160.0) * scale, 90.0 + (y - 90.0) * scale]
+    };
+    let corners = |point: &dyn Fn(f64, f64) -> [f64; 3]| {
+        [[110.0, 60.0], [210.0, 60.0], [210.0, 120.0], [110.0, 120.0]]
+            .map(|[x, y]| project(point(x, y)))
+    };
+    let camera = |fields: &str| {
+        plane_scene(
+            &format!("camera={{{{center:point(160,90),zoom:1,perspective:400,{fields}}}}}"),
+            &format!("<World>{}</World>", card("")),
+        )
+    };
+    // Orbiting right brings the card's right edge closer, and orbiting up its top edge.
+    assert_corners(
+        &camera("rotateY:30"),
+        corners(&|x, y| [160.0 + (x - 160.0) * cos, y, (x - 160.0) * sin]),
+    );
+    assert_corners(
+        &camera("rotateX:30"),
+        corners(&|x, y| [x, 90.0 + (y - 90.0) * cos, -(y - 90.0) * sin]),
+    );
+    // Moving the focus 100px into the scene brings the card 100px closer.
+    assert_corners(&camera("z:-100"), corners(&|x, y| [x, y, 100.0]));
+    assert_corners(&camera(""), corners(&|x, y| [x, y, 0.0]));
+    // Screen content stays out of the camera's space, and its own planes are drawn flat.
+    assert_corners(
+        &plane_scene(
+            "camera={{center:point(100,50),zoom:2,perspective:400,z:-100,rotateY:30}}",
+            &format!(
+                "<World><View key='floor' style={{{{width:10,height:10}}}}/></World><Screen>{}</Screen>",
+                card("transform:'rotateY(60deg)'")
+            ),
+        ),
+        [[135.0, 60.0], [185.0, 60.0], [185.0, 120.0], [135.0, 120.0]],
+    );
+
+    // The camera is the CSS a World would otherwise write by hand: the perspective toward the
+    // center and the inverse of the orbit and depth around it, inside the 2D camera.
+    let planes = card("transform:'rotateY(20deg)'");
+    let by_hand = red_corners(&plane_scene(
+        "camera={{center:point(150,80),zoom:1.5,rotation:10}}",
+        &format!(
+            r#"<World><View key='lens' style={{{{position:'absolute',left:0,top:0,width:320,height:180,
+                perspective:'500px',perspectiveOrigin:'150px 80px'}}}}>
+                <View key='orbit' style={{{{position:'absolute',left:0,top:0,width:320,height:180,
+                    transformStyle:'preserve-3d',transformOrigin:'150px 80px',
+                    transform:'rotateX(-15deg) rotateY(25deg) translateZ(40px)'}}}}>{planes}</View>
+            </View></World>"#
+        ),
+    ));
+    assert_corners(
+        &plane_scene(
+            "camera={{center:point(150,80),zoom:1.5,rotation:10,perspective:500,z:-40,rotateX:15,rotateY:-25}}",
+            &format!("<World>{planes}</World>"),
+        ),
+        by_hand,
     );
 }

@@ -103,7 +103,6 @@ pub(super) struct GeometrySnapshot {
     pub keys: Arc<HashMap<u64, String>>,
     pub boxes: Arc<BTreeMap<String, valle_draw::Rect>>,
     pub scene3d_boxes: Arc<BTreeMap<String, valle_draw::Rect>>,
-    pub css_3d_origins: Option<Arc<HashMap<String, super::scene::Css3dAuthorStyle>>>,
 }
 
 /// One admitted scene and immutable font registry with at most one geometry snapshot. It never

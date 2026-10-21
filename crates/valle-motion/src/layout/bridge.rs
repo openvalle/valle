@@ -384,6 +384,9 @@ pub(crate) struct LayerFx {
 pub(crate) struct Css3dPlane {
     /// Absolute viewport-space TL/TR/BR/BL after ordered 4x4 transform + perspective.
     pub quad: [valle_draw::Point; 4],
+    /// From the node's own border-box coordinates to the viewport. Unlike the quad, it places
+    /// what an empty box's descendants draw.
+    pub matrix: valle_draw::program::recording::Homography,
     /// Positive z points toward the viewer. Used to establish deterministic plane order.
     pub depth: f64,
     pub hidden: bool,

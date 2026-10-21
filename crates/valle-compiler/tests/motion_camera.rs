@@ -227,3 +227,123 @@ fn camera_is_only_allowed_on_the_scene_root() {
         "camera must not be silently accepted on an inner node"
     );
 }
+
+fn frame_error(source: &str, frame: u32) -> String {
+    let compiled = compile_motion(source).expect("compiles; the frame decides");
+    let prepared = prepare_scene(&compiled.artifact).expect("prepare");
+    let props = resolve_props(&compiled.artifact.controls, &Default::default()).expect("props");
+    let ctx = motion_context_at_frame(frame, 30, FrameRate::new(30, 1).unwrap()).expect("frame");
+    let fonts = fonts();
+    match build_tree(
+        &prepared,
+        &ctx,
+        &props,
+        &LayoutOptions {
+            viewport: Viewport::new((960, 540)),
+            fonts: &fonts,
+            styles: None,
+        },
+    ) {
+        Ok(_) => "a layout tree".to_owned(),
+        Err(error) => error.to_string(),
+    }
+}
+
+fn messages(source: &str) -> Vec<String> {
+    compile_motion(source)
+        .expect_err("the camera must be refused")
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect()
+}
+
+#[test]
+fn a_camera_moving_in_depth_refuses_what_css_perspective_cannot_draw() {
+    let depth =
+        |fields: &str| SOURCE.replace("rotation: 0 }", &format!("rotation: 0, {fields} }}"));
+    let compiled = compile_motion(&depth(
+        "perspective: 800, z: -100, rotateX: 10, rotateY: 20",
+    ))
+    .expect("a camera moving in depth compiles");
+    let camera = compiled.artifact.camera.as_ref().unwrap();
+    assert!(camera.is_3d());
+    assert!(
+        !compile_motion(SOURCE)
+            .unwrap()
+            .artifact
+            .camera
+            .unwrap()
+            .is_3d()
+    );
+    assert_eq!(
+        frame_error(&depth("perspective: 800, rotateY: 20"), 0),
+        "a layout tree"
+    );
+
+    let refused = messages(&depth("perspective: 0"));
+    assert!(
+        refused
+            .iter()
+            .any(|message| message.contains("camera perspective is a positive distance")),
+        "{refused:?}"
+    );
+    let refused = messages(&depth("fov: 40"));
+    assert!(
+        refused
+            .iter()
+            .any(|message| message.contains("perspective / z / rotateX / rotateY")),
+        "{refused:?}"
+    );
+
+    // Cross zero explicitly: the half-open progress interval never reaches the endpoint.
+    let error = frame_error(
+        &depth("perspective: interpolate(t, [0, 1], [400, -400])"),
+        29,
+    );
+    assert!(
+        error.contains("perspective must be finite and positive"),
+        "{error}"
+    );
+    // A focus 900px into the scene puts the world 100px behind an 800px camera.
+    let error = frame_error(&depth("perspective: 800, z: -900"), 0);
+    assert!(
+        error.contains("reached or crossed the perspective camera"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_rows_of_a_layout_instance_list_are_drawn_on_a_view_in_a_camera_space() {
+    let source = |list: &str| {
+        format!(
+            r##"const ROWS = Array.from({{ length: 4 }}, (_, i) => ({{ id: `row${{i}}`, height: 8 + i * 4 }}));
+export default function Probe() {{
+  return (
+    <Scene className="h-full w-full" camera={{{{ center: point(480, 270), zoom: 1, perspective: 800, rotateY: 20 }}}}>
+      <World key="world">{list}</World>
+    </Scene>
+  );
+}}"##
+        )
+    };
+    let rows = "{ROWS.map((row) => <View key={row.id} style={{ width: 60, height: row.height, backgroundColor: '#3377dd' }} />)}";
+    let direct = source(rows);
+    assert!(
+        compile_motion(&direct)
+            .unwrap()
+            .artifact
+            .nodes
+            .iter()
+            .any(|node| matches!(node.kind, valle_motion::NodeKind::InstanceLayout { .. })),
+        "the rows must stay one dynamic list"
+    );
+    let error = frame_error(&direct, 0);
+    assert!(
+        error.contains("lays out from one shared template cannot be planes of a 3D space"),
+        "{error}"
+    );
+    assert_eq!(
+        frame_error(&source(&format!("<View key='list'>{rows}</View>")), 0),
+        "a layout tree"
+    );
+}
