@@ -161,3 +161,39 @@ export default function Cut() { const { seconds } = useCurrentTime();
     let smooth = jump.replace("seconds < 0.5 ? 0 : 100", "seconds * 100");
     assert!(hints(&smooth, false, "blur_jump").is_empty());
 }
+
+const CARD: &str = r##"
+export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+export default function Card() { const { seconds } = useCurrentTime();
+  return <Scene style={{width:640,height:360}}>
+    <Shutter samples={8} angle={180}>
+      <View key="card" className="absolute" visible={VISIBLE}
+        style={{left:LEFT,top:120,width:120,height:80,backgroundColor:"#ffffff"}} />
+    </Shutter>
+  </Scene>;
+}
+"##;
+
+#[test]
+fn moving_into_or_out_of_the_frame_inside_a_shutter_is_not_a_switch() {
+    let card = |left: &str, visible: &str| CARD.replace("LEFT", left).replace("VISIBLE", visible);
+    // The card slides in across the left edge, or out across the right one.
+    for left in ["-200 + 300 * seconds", "400 + 300 * seconds"] {
+        let found = hints(&card(left, "true"), false, "shutter_switch");
+        assert!(found.is_empty(), "{left}: {found:?}");
+    }
+    // It jumps into the frame or out of it, or appears in it: that frame shows both states.
+    for (left, visible) in [
+        ("seconds < 1 ? -300 : 200", "true"),
+        ("seconds < 1 ? 200 : 700", "true"),
+        ("200", "seconds >= 1"),
+    ] {
+        let found = hints(&card(left, visible), false, "shutter_switch");
+        assert_eq!(found.len(), 1, "{left}, {visible}: {found:?}");
+        assert_eq!(
+            (found[0].node.as_str(), found[0].start_frame),
+            ("card", 30),
+            "{left}, {visible}"
+        );
+    }
+}

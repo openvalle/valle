@@ -1157,15 +1157,23 @@ struct Shown {
     bounds: [f64; 4],
     opacity: f64,
     blurred: bool,
+    on_screen: bool,
 }
 
 impl Shown {
+    /// The node, if the frame shows it: visible and on screen.
     fn of(sample: &super::scene::ReviewNodeSample) -> Option<Self> {
-        (sample.visible && sample.on_screen && sample.group.is_none()).then_some(Self {
+        Self::drawn(sample).filter(|shown| shown.on_screen)
+    }
+
+    /// The node, if the frame draws it visible, on screen or beside it.
+    fn drawn(sample: &super::scene::ReviewNodeSample) -> Option<Self> {
+        (sample.visible && sample.group.is_none()).then_some(Self {
             position: [sample.position.x, sample.position.y],
             bounds: sample.bounds,
             opacity: sample.opacity,
             blurred: sample.motion_blurred,
+            on_screen: sample.on_screen,
         })
     }
 
@@ -1191,6 +1199,14 @@ impl Shown {
             to.position[1] - from.position[1],
         )
     }
+
+    /// The step from `b` to `c`, if it is a jump: four times longer than the steps on either side
+    /// of it, from `a` and on to `d`.
+    fn jump(a: &Self, b: &Self, c: &Self, d: &Self) -> Option<f64> {
+        let step = Self::step(b, c);
+        (step >= 4.0 && step > 4.0 * Self::step(a, b) && step > 4.0 * Self::step(c, d))
+            .then_some(step)
+    }
 }
 
 /// Hints about the clock: a one-shot scene that ends as it starts, a loop that jumps at its seam,
@@ -1208,6 +1224,8 @@ struct ClockHints {
     second: HashMap<String, Shown>,
     /// The last three frames, the oldest first.
     recent: VecDeque<HashMap<String, Shown>>,
+    /// The shuttered nodes the last three frames draw, on screen or beside it, the oldest first.
+    drawn: VecDeque<HashMap<String, Shown>>,
     /// The text of the shuttered nodes on the last frame.
     texts: HashMap<String, String>,
     /// The nodes some frame shows otherwise than the first.
@@ -1235,6 +1253,7 @@ impl ClockHints {
             first: HashMap::new(),
             second: HashMap::new(),
             recent: VecDeque::new(),
+            drawn: VecDeque::new(),
             texts: HashMap::new(),
             changed: BTreeSet::new(),
             runs: HashMap::new(),
@@ -1290,30 +1309,55 @@ impl ClockHints {
                 self.single.push((key, start));
             }
         }
-        // A jump: one step four times longer than the steps on either side of it.
+        // A jump under motion blur; a jump inside a Shutter switches, below.
         if let (Some(before), Some(from), Some(to)) =
             (self.recent.front(), self.recent.get(1), self.recent.get(2))
         {
-            for (key, after) in &shown {
+            for (key, after) in shown
+                .iter()
+                .filter(|(key, _)| !self.shuttered.contains(*key))
+            {
                 let (Some(a), Some(b), Some(c)) = (before.get(key), from.get(key), to.get(key))
                 else {
                     continue;
                 };
-                let step = Shown::step(b, c);
-                if step >= 4.0
-                    && step > 4.0 * Shown::step(a, b)
-                    && step > 4.0 * Shown::step(c, after)
+                if let Some(step) = Shown::jump(a, b, c, after)
+                    && (b.blurred || c.blurred)
                 {
-                    if self.shuttered.contains(key) {
-                        record(&mut self.switches, key, frame - 1, step);
-                    } else if b.blurred || c.blurred {
-                        record(&mut self.jumps, key, frame - 1, step);
-                    }
+                    record(&mut self.jumps, key, frame - 1, step);
+                }
+            }
+        }
+        // Inside a Shutter, what a frame draws beside the screen counts too: a jump into or out of
+        // the frame lays both places over each other, while a move across its edge does not.
+        let drawn = self
+            .shuttered
+            .iter()
+            .filter(|key| candidates.contains(*key))
+            .filter_map(|key| {
+                current
+                    .get(key)
+                    .and_then(Shown::drawn)
+                    .map(|drawn| (key.clone(), drawn))
+            })
+            .collect::<HashMap<_, _>>();
+        if let (Some(before), Some(from), Some(to)) =
+            (self.drawn.front(), self.drawn.get(1), self.drawn.get(2))
+        {
+            for (key, after) in &drawn {
+                let (Some(a), Some(b), Some(c)) = (before.get(key), from.get(key), to.get(key))
+                else {
+                    continue;
+                };
+                if let Some(step) = Shown::jump(a, b, c, after)
+                    && (b.on_screen || c.on_screen)
+                {
+                    record(&mut self.switches, key, frame - 1, step);
                 }
             }
         }
         // Text that changes, and content that appears or disappears, inside a Shutter.
-        if let Some(before) = self.recent.back() {
+        if let (Some(before), Some(drawn_before)) = (self.recent.back(), self.drawn.back()) {
             for key in &self.shuttered {
                 let text = shown.contains_key(key)
                     && before.contains_key(key)
@@ -1321,8 +1365,10 @@ impl ClockHints {
                         .get(key)
                         .zip(self.texts.get(key))
                         .is_some_and(|(now, then)| now != then);
-                let cut = match (before.get(key), shown.get(key)) {
-                    (Some(seen), None) | (None, Some(seen)) => seen.opacity > 0.05,
+                let cut = match (drawn_before.get(key), drawn.get(key)) {
+                    (Some(seen), None) | (None, Some(seen)) => {
+                        seen.on_screen && seen.opacity > 0.05
+                    }
                     _ => false,
                 };
                 if text || cut {
@@ -1338,6 +1384,10 @@ impl ClockHints {
         self.recent.push_back(shown);
         if self.recent.len() > 3 {
             self.recent.pop_front();
+        }
+        self.drawn.push_back(drawn);
+        if self.drawn.len() > 3 {
+            self.drawn.pop_front();
         }
     }
 
