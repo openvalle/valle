@@ -921,12 +921,6 @@ placement and adjustments. Cuts, media/audio, captions and Motion also exported
 MP4 files. The media example used generated footage and two distinct test tones
 to verify original sound, background music and the music gain ramps.
 
-Current delivery observation: on the tested local build, `ffprobe` reports a
-video-stream duration of 2.966667 seconds for the 90-frame exports, and 3.466667
-for the 105-frame export. All frame packets are present with 1/30-second durations;
-the video-stream duration metadata is one frame shorter than their presentation
-extent. This discrepancy remains a delivery follow-up, not a verified frame loss.
-
 Additional probes covered custom caption presentation, scrolling, line karaoke,
 rational FPS, mirroring, hold/loop and Motion retiming. Negative probes checked
 invalid shapes/times, overlaps, curves, captions and resources, including malformed preset objects. The CLI regression suite covers explicit preset
