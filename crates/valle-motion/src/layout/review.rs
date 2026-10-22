@@ -525,17 +525,6 @@ fn numeric_text_signature(text: &str) -> String {
     result
 }
 
-/// The template root and its descendants, each of which every row instantiates.
-fn instance_templates(group: &crate::InstanceGroup) -> Vec<&crate::SceneNode> {
-    let mut templates = vec![&group.template];
-    let mut children = group.template_children.iter().collect::<Vec<_>>();
-    while let Some(child) = children.pop() {
-        templates.push(&child.node);
-        children.extend(&child.children);
-    }
-    templates
-}
-
 fn painted_nodes(prepared: &PreparedScene) -> BTreeSet<String> {
     let artifact = prepared.artifact();
     let intrinsic = |node: &crate::SceneNode| {
@@ -558,7 +547,8 @@ fn painted_nodes(prepared: &PreparedScene) -> BTreeSet<String> {
         .map(|node| node.key.clone())
         .collect();
     for group in &artifact.instance_groups {
-        for template in instance_templates(group)
+        for template in group
+            .template_nodes()
             .into_iter()
             .filter(|node| intrinsic(node))
         {
@@ -604,7 +594,7 @@ pub fn review_motion(
         .map(|node| node.key.clone())
         .collect::<BTreeSet<_>>();
     for group in &prepared.artifact().instance_groups {
-        for template in instance_templates(group) {
+        for template in group.template_nodes() {
             if matches!(template.kind, NodeKind::Text { .. }) {
                 text_nodes.extend(
                     (0..group.rows()).filter_map(|row| group.key_for_node(row, &template.key)),
@@ -629,7 +619,7 @@ pub fn review_motion(
         if let NodeKind::InstanceLayout { group } | NodeKind::InstanceBatch { group } = node.kind
             && let Some(group) = prepared.artifact().instance_groups.get(group as usize)
         {
-            for template in instance_templates(group) {
+            for template in group.template_nodes() {
                 for row in 0..group.rows() {
                     if let Some(key) = group.key_for_node(row, &template.key) {
                         hosts.insert(key, node.key.clone());

@@ -353,4 +353,28 @@ fn an_onset_takes_a_static_length_and_warns_under_one_frame() {
     assert_eq!(shortest(SOURCE), Some((0.1, 0.1)));
     assert_eq!(shortest(&doubled), Some((0.05, 0.025)));
     assert_eq!(shortest(&scoped), Some((0.05, 0.025)));
+    // So does a row of an instance group, and a row whose time differs by row runs at the speed
+    // of the clock it is computed from.
+    const ROWS: &str = r##"
+export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
+export const controls = { assets: { beat: asset({ kind: "audio", required: true }) } };
+const BEAT = audioAnalysis("asset://beat", { bands: 8, rate: 30 });
+const BARS = Array.from({ length: 4 }, (_, i) => ({ id: `bar${i}`, x: i * 24 }));
+export default function AudioBars() { const time = useCurrentTime();
+  return <Scene style={{width:320,height:180}}>
+    {BARS.map((bar, i) => <View key={bar.id} className="absolute" style={{left:bar.x,top:40,
+      width:20,height:20,opacity:BEAT.onset(time.seconds, 0.05),backgroundColor:"#ffffff"}} />)}
+  </Scene>;
+}
+"##;
+    let staggered = ROWS.replace(
+        "BEAT.onset(time.seconds, 0.05)",
+        "BEAT.onset(time.seconds - i * 0.1, 0.05)",
+    );
+    assert_ne!(staggered, ROWS);
+    for rows in [ROWS, staggered.as_str()] {
+        let artifact = compile(rows).unwrap().artifact;
+        assert_eq!(artifact.instance_groups.len(), 1, "{rows}");
+        assert_eq!(artifact.shortest_onset(), Some((0.05, 0.05)), "{rows}");
+    }
 }

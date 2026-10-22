@@ -2258,6 +2258,17 @@ impl InstanceGroup {
         count
     }
 
+    /// The template root and its descendants, each of which every row instantiates.
+    pub fn template_nodes(&self) -> Vec<&SceneNode> {
+        let mut nodes = vec![&self.template];
+        let mut children = self.template_children.iter().collect::<Vec<_>>();
+        while let Some(child) = children.pop() {
+            nodes.push(&child.node);
+            children.extend(&child.children);
+        }
+        nodes
+    }
+
     pub fn key_for_node(&self, row: usize, template_key: &str) -> Option<String> {
         let root = self.keys.key_at(row)?;
         let root_suffix = self.template.key.strip_prefix(&self.template_key_prefix)?;
@@ -2620,46 +2631,91 @@ fn node_reads_frame(node: &SceneNode, key: HostFrame) -> bool {
         .any(|input| input.source.as_deref() == Some(key.source()))
 }
 
-impl SceneArtifact {
-    /// The onset of `audioAnalysis` that a node shows for the shortest time: its authored
-    /// `length`, and how long it lasts on the scene clock, through the slope of its time, which
-    /// includes the speed of the TimeScopes it is read in. A host divides the second by its own
-    /// speed to meet it with a frame.
-    pub fn shortest_onset(&self) -> Option<(f64, f64)> {
-        // The shortest onset each expression reads, on the clock it is read on.
-        let mut reads: Vec<Option<(f64, f64)>> = Vec::with_capacity(self.exprs.len());
-        let shorter = |a: Option<(f64, f64)>, b: Option<(f64, f64)>| match (a, b) {
-            (Some(a), Some(b)) => Some(if b.1 < a.1 { b } else { a }),
-            (a, b) => a.or(b),
-        };
-        for expr in &self.exprs {
-            let own = match expr {
-                Expr::AudioSample {
-                    time,
-                    signal: crate::AudioSignal::Onsets { length, .. },
-                } => crate::time_function::TimeFunction::compile(&self.exprs, *time)
-                    .filter(|time| {
-                        time.input() == ContextInput::CompositionSeconds && time.derivative() != 0.0
-                    })
-                    .map(|time| (*length, length / time.derivative().abs())),
-                _ => None,
-            };
-            let read = expr
-                .children()
+/// The onset that lasts the shorter time.
+fn shorter_onset(a: Option<(f64, f64)>, b: Option<(f64, f64)>) -> Option<(f64, f64)> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if b.1 < a.1 { b } else { a }),
+        (a, b) => a.or(b),
+    }
+}
+
+/// The shortest onset `nodes` show, their expression ids addressing `exprs`.
+fn shortest_onset_shown<'a>(
+    exprs: &[Expr],
+    nodes: impl IntoIterator<Item = &'a SceneNode>,
+) -> Option<(f64, f64)> {
+    let reads = onset_reads(exprs);
+    nodes
+        .into_iter()
+        .flat_map(|node| {
+            node.expr_refs_outside_per_unit()
                 .into_iter()
-                .map(|child| reads.get(child.0 as usize).copied().flatten())
-                .fold(own, shorter);
-            reads.push(read);
-        }
-        self.nodes
+                .chain(node.per_unit_expr_refs())
+        })
+        .map(|(_, expr)| reads.get(expr.0 as usize).copied().flatten())
+        .fold(None, shorter_onset)
+}
+
+/// The shortest onset each expression of `exprs` reads, on the clock it is read on.
+fn onset_reads(exprs: &[Expr]) -> Vec<Option<(f64, f64)>> {
+    let mut speeds = vec![None; exprs.len()];
+    let mut reads: Vec<Option<(f64, f64)>> = Vec::with_capacity(exprs.len());
+    for expr in exprs {
+        let own = match expr {
+            Expr::AudioSample {
+                time,
+                signal: crate::AudioSignal::Onsets { length, .. },
+            } => clock_speed(exprs, *time, &mut speeds)
+                .filter(|speed| *speed != 0.0)
+                .map(|speed| (*length, length / speed)),
+            _ => None,
+        };
+        let read = expr
+            .children()
+            .into_iter()
+            .map(|child| reads.get(child.0 as usize).copied().flatten())
+            .fold(own, shorter_onset);
+        reads.push(read);
+    }
+    reads
+}
+
+/// How fast `time` runs against the scene clock: the slope of a straight line of the clock, or
+/// else the fastest straight line of the clock it is computed from. `speeds` keeps each answer.
+fn clock_speed(exprs: &[Expr], time: ExprId, speeds: &mut [Option<Option<f64>>]) -> Option<f64> {
+    if let Some(speed) = speeds.get(time.0 as usize).copied().flatten() {
+        return speed;
+    }
+    let speed = match crate::time_function::TimeFunction::compile(exprs, time) {
+        Some(function) => (function.input() == ContextInput::CompositionSeconds)
+            .then(|| function.derivative().abs()),
+        None => exprs
+            .get(time.0 as usize)?
+            .children()
+            .into_iter()
+            .filter_map(|child| clock_speed(exprs, child, speeds))
+            .reduce(f64::max),
+    };
+    speeds[time.0 as usize] = Some(speed);
+    speed
+}
+
+impl SceneArtifact {
+    /// The onset of `audioAnalysis` that a node shows for the shortest time, an instance template
+    /// node included: its authored `length`, and how long it lasts on the scene clock, through
+    /// the slope of its time, which includes the speed of the TimeScopes it is read in. A time
+    /// that is not a straight line of the clock, such as one that differs by instance row, runs at
+    /// the speed of the clock it is computed from. A host divides the second by its own speed to
+    /// meet it with a frame.
+    pub fn shortest_onset(&self) -> Option<(f64, f64)> {
+        // A template's expression ids address its group's own expressions.
+        self.instance_groups
             .iter()
-            .flat_map(|node| {
-                node.expr_refs_outside_per_unit()
-                    .into_iter()
-                    .chain(node.per_unit_expr_refs())
-            })
-            .map(|(_, expr)| reads.get(expr.0 as usize).copied().flatten())
-            .fold(None, shorter)
+            .map(|group| shortest_onset_shown(&group.exprs, group.template_nodes()))
+            .fold(
+                shortest_onset_shown(&self.exprs, &self.nodes),
+                shorter_onset,
+            )
     }
 
     /// Whether evaluating this artifact samples the immutable compositor entry
@@ -2693,19 +2749,10 @@ impl SceneArtifact {
     /// Whether any authored node, including every instance template node, passes `test`.
     pub(crate) fn any_node(&self, mut test: impl FnMut(&SceneNode) -> bool) -> bool {
         self.nodes.iter().any(&mut test)
-            || self.instance_groups.iter().any(|group| {
-                if test(&group.template) {
-                    return true;
-                }
-                let mut stack = group.template_children.iter().collect::<Vec<_>>();
-                while let Some(child) = stack.pop() {
-                    if test(&child.node) {
-                        return true;
-                    }
-                    stack.extend(&child.children);
-                }
-                false
-            })
+            || self
+                .instance_groups
+                .iter()
+                .any(|group| group.template_nodes().into_iter().any(&mut test))
     }
 
     pub fn validate(&self) -> Result<(), Vec<ValidationError>> {
