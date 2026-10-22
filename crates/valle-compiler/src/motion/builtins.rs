@@ -728,11 +728,11 @@ impl<'s> Compiler<'s> {
             );
             return None;
         };
-        if seed < 0.0 || seed.fract() != 0.0 || seed >= 18_446_744_073_709_551_616.0 {
+        if seed < 0.0 || seed.fract() != 0.0 || seed > 9_007_199_254_740_991.0 {
             self.illegal(
                 DiagCode::BuiltinRejected,
                 seed_expression.span(),
-                "noise seed must be a non-negative integer below 2^64",
+                "noise seed must be a non-negative safe integer",
             );
             return None;
         }
@@ -804,19 +804,16 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::BuiltinRejected,
                 options_expression.span(),
-                "wiggle seed must be a non-negative integer below 2^64",
+                "wiggle seed must be a non-negative safe integer",
             );
             return None;
         };
-        if !seed.is_finite()
-            || seed < 0.0
-            || seed.fract() != 0.0
-            || seed >= 18_446_744_073_709_551_616.0
+        if !seed.is_finite() || seed < 0.0 || seed.fract() != 0.0 || seed > 9_007_199_254_740_991.0
         {
             self.illegal(
                 DiagCode::BuiltinRejected,
                 options_expression.span(),
-                "wiggle seed must be a non-negative integer below 2^64",
+                "wiggle seed must be a non-negative safe integer",
             );
             return None;
         }
@@ -976,19 +973,16 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::BuiltinRejected,
                 options_expression.span(),
-                "wiggle2D seed must be a non-negative integer below 2^64",
+                "wiggle2D seed must be a non-negative safe integer",
             );
             return None;
         };
-        if !seed.is_finite()
-            || seed < 0.0
-            || seed.fract() != 0.0
-            || seed >= 18_446_744_073_709_551_616.0
+        if !seed.is_finite() || seed < 0.0 || seed.fract() != 0.0 || seed > 9_007_199_254_740_991.0
         {
             self.illegal(
                 DiagCode::BuiltinRejected,
                 options_expression.span(),
-                "wiggle2D seed must be a non-negative integer below 2^64",
+                "wiggle2D seed must be a non-negative safe integer",
             );
             return None;
         }
@@ -1122,7 +1116,9 @@ impl<'s> Compiler<'s> {
         };
         let seed = seed as u64;
         let x = channel(self, seed, amplitudes[0]);
-        let y = channel(self, seed ^ 0x9e37_79b9_7f4a_7c15, amplitudes[1]);
+        // The y channel draws its own noise. Its seed, like every number a package carries, stays
+        // a safe integer.
+        let y = channel(self, seed ^ 0x17_79b9_7f4a_7c15, amplitudes[1]);
         self.extra_capabilities
             .insert(MOTION_MATH_CAPABILITY.to_owned());
         Some(self.push(Expr::MakePoint { x, y }, span))

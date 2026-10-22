@@ -291,6 +291,22 @@ fn unsupported_math_zero_remainder_and_bad_arc_keep_pointed_diagnostics() {
 }
 
 #[test]
+fn seeds_past_the_safe_integers_are_rejected() {
+    for source in [
+        r#"export default function P(){ const time = useCurrentTime();return <View style={{opacity:noise1d(9007199254740992,time.seconds)}}/>;}"#,
+        r#"export default function P(){ const time = useCurrentTime();return <View style={{translate:wiggle2D(time.seconds,{seed:9007199254740992,frequency:2,amplitude:[5,5]})}}/>;}"#,
+    ] {
+        let diagnostics = compile_motion(source).expect_err("a seed past 2^53 - 1 fails closed");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("safe integer")),
+            "{diagnostics:#?}"
+        );
+    }
+}
+
+#[test]
 fn existing_noise_name_accepts_dynamic_coordinates() {
     let compiled = compile_motion(
         r##"

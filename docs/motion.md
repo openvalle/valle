@@ -1076,9 +1076,10 @@ radian value and `rad(n)` keeps a radian value. These differ from a CSS angle
 string such as `"45deg"`. `%` uses JavaScript remainder semantics; `mod(a,b)` is
 the separate modulo helper. Avoid zero divisors and non-finite values.
 
-`noise1d(seed,x)` and `noise2d(seed,x,y)` take a static seed and may have dynamic
-coordinates. `seededRandom(seed,count,range)` generates a prepared array; do not
-call `Math.random()`. `a ** b` is the same deterministic power as `Math.pow(a, b)`.
+`noise1d(seed,x)`, `noise2d(seed,x,y)`, `wiggle` and `wiggle2D` take a static seed, a
+non-negative safe integer; noise coordinates may be dynamic.
+`seededRandom(seed,count,range)` generates a prepared array; do not call
+`Math.random()`. `a ** b` is the same deterministic power as `Math.pow(a, b)`.
 
 | Text helper | Options |
 | --- | --- |
