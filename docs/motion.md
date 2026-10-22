@@ -2184,10 +2184,10 @@ export default function Wipe() {
 }
 ```
 
-`progress` is the frame position over the frame count: for a 60-frame composition,
-frame 30 is exactly 0.5 and frame 59 is 59/60. Use an explicit time expression when
-the last rendered frame must reach 1. The [E06 fixture](../crates/valle-compiler/tests/fixtures/motion/composition/motion-transition.motion.tsx)
-uses `progress` as authored in the refactor acceptance scene.
+`useCurrentTime().progress` is `seconds / duration`: in a 60-frame composition,
+frame 30 is exactly 0.5 and the last frame, 59, is 1, so a transition it drives ends
+on its second child. The [E06 fixture](../crates/valle-compiler/tests/fixtures/motion/composition/motion-transition.motion.tsx)
+drives `circleOpen` with it.
 
 ### Displacement and motion blur
 
@@ -2316,7 +2316,8 @@ a TimeScope, directly or through props, is a compile error: read the time in a c
 component rendered inside the scope, or move the element out of the scope, which has
 no layout box, so the layout stays the same.
 
-`offset` and `speed` must be finite static numbers. TimeScope contributes no
+`offset` and `speed` are both required and must be finite static numbers; write
+`speed={1}` for a plain delay. TimeScope contributes no
 layout box or paint of its own and takes no authored styles, classes, or
 visibility; use a surrounding `View` for those properties.
 
@@ -3286,6 +3287,22 @@ cover list identity and unknown style fields. The
 [CLI regression tests](../crates/valle-cli/tests/timeline_motion_regressions.rs)
 exercise Glass, ShaderLayer and per-instance image bindings.
 Use actual previews for property combinations and frames beyond these cases.
+
+The [examples](../examples) directory holds ten single-file scenes in different styles, each
+6 seconds at 60 fps with no assets. The comment at the top of each lists what it shows:
+
+| Example | Style | Shows |
+| --- | --- | --- |
+| [01-kinetic-title](../examples/01-kinetic-title.motion.tsx) | Pop kinetic type | `split`/`perUnit`, `rangeSelector`, springs, `cubic-bezier()`, variable font axes, text stroke, `defineSequence`, props; a short blur, a glow and a chromatic-aberration hit |
+| [02-logo-sting](../examples/02-logo-sting.motion.tsx) | Bauhaus logo sting | `path()`, `arc()`, `sector()`, `boolean()`, `offsetPath()`, `morphPath()`, `roundCorners()`, trims, `Clip`, `TimeScope` |
+| [03-data-dashboard](../examples/03-data-dashboard.motion.tsx) | Flat infographic | scales, `ticks`, `stack`, `curve`, `area`, `pie`, instanced `.map`, `staggerProgress`, Grid and Flex, counters, `MathFormula`, `steps()` |
+| [04-ui-showcase](../examples/04-ui-showcase.motion.tsx) | Neo-brutalist product UI | components with children, `ThemeProvider`, HTML tags with Tailwind, `let`/`if`, `defineLayoutStates`/`flip`, `bounds()`, `Transition` |
+| [05-story-vertical](../examples/05-story-vertical.motion.tsx) | 9:16 social story | layout from `useComposition()`, gradients in oklch, `Mask`/`MaskSource`, `mixBlendMode`, `measureText`, `repeatProgress` |
+| [06-memphis-loop](../examples/06-memphis-loop.motion.tsx) | 1:1 seamless loop | `loop: true`, `defineRepeater`, `trail`, `pingPong`, `noise2d`, `seededRandom`, `wiggle`, `GeometryBatch` with `field()`, path modifiers |
+| [07-route-map](../examples/07-route-map.motion.tsx) | Illustrated map | Scene `camera` with `World`/`Screen`, `motionPath`, `pointAt`/`tangentAt`, a dashed trim, `freezeTime`, `connect()` |
+| [08-celebrate](../examples/08-celebrate.motion.tsx) | Festive burst | `particles()` with `curlNoise` and `drag`, `simulate()`, `easeOutElastic`; `motionBlur`, `Echo` and a `Shutter` |
+| [09-cards-3d](../examples/09-cards-3d.motion.tsx) | Editorial 3D cards | `perspective`, `preserve-3d`, `backfaceVisibility`, 3D transform lists; a `Scene3D` badge, a `ShaderLayer`, `Glass`, `backdropFilter` |
+| [10-lower-third](../examples/10-lower-third.motion.tsx) | Broadcast overlay | `overlay()` role, the clip clock, `yoyoProgress`, props, transparent output |
 
 Existing examples provide larger compositions without duplicating them here:
 

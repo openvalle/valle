@@ -85,6 +85,10 @@ Studio prints a local URL to open in your browser. It refreshes whenever the fil
 you can watch an agent work. Building needs Rust, Bun and native build tools, and video export
 needs FFmpeg; see [Development](docs/development.md).
 
+Ten more scenes to start from are in [`examples`](examples), each in one file: kinetic type, a
+logo sting, a dashboard, a product UI, a vertical story, a seamless loop, a route map,
+confetti, 3D cards and a broadcast lower third.
+
 ## Hand it to your agent
 
 Copy [`skills/valle`](skills/valle) into your agent's skills directory, such as

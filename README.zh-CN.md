@@ -75,6 +75,8 @@ cargo xtask build --release
 
 Studio 会打印一个本地地址，用浏览器打开即可。文件一改它就刷新，你可以看着 Agent 干活。构建需要 Rust、Bun 和原生构建工具，导出视频需要 FFmpeg；详见[开发文档](docs/development.md)。
 
+[`examples`](examples) 里还有十个单文件场景可以拿来改：动态文字、Logo 演绎、数据看板、产品界面、竖屏故事、无缝循环、路线地图、庆祝礼花、3D 卡片和新闻字幕条。
+
 ## 交给你的 Agent
 
 把 [`skills/valle`](skills/valle) 复制到 Agent 的 skills 目录，例如 Claude Code 的 `~/.claude/skills/`。这个 skill 告诉 Agent 该跑哪条命令、怎么读结果，以及长时间导出前怎样检查自己的作品。`valle docs` 离线提供与所装版本一致的完整指南，每条命令都能用 `--json` 返回结果。
