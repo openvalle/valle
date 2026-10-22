@@ -266,7 +266,7 @@ fn unsupported_math_zero_remainder_and_bad_arc_keep_pointed_diagnostics() {
             "divisor",
         ),
         (
-            r#"export default function P(){return <Path d={arc(point(0,0),0,0,TAU)} />;}"#,
+            r#"export default function P(){return <Path d={arc(point(0,0),-1,0,TAU)} />;}"#,
             "radius",
         ),
         (

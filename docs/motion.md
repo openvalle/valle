@@ -1742,6 +1742,7 @@ When one `Text` contains styled `Span` runs, its units span the full authored
 text: `unit.index`, `count`, `start`, and `end` do not restart at a `Span`.
 Each run keeps its color, weight, and shaping; the unit style is applied to its
 glyphs. Inline images are excluded from character counts and separate word units.
+A unit whose `scale` has a zero axis draws nothing, as a View does.
 
 `rangeSelector(unit, { start, end, offset?, softness?, shape? })` returns a 0–1 weight
 for the unit of a `perUnit` function. `start` and `end` are
@@ -1876,7 +1877,7 @@ for accepted and rejected extensions.
 | `` pathTemplate`M ${x} ${y} L ${x2} ${y2}` `` | Fixed `M/L/Q/C/Z` command topology with numeric holes |
 | `line(points)` | Open polyline from typed points |
 | `cubic(from,control1,control2,to)` | Cubic Bézier path |
-| `arc(center,radius,startAngle,endAngle)` | Positive radius, angles in radians, sweep at most TAU |
+| `arc(center,radius,startAngle,endAngle)` | Non-negative radius, as in Canvas (0 gives an empty path); angles in radians, sweep at most TAU |
 | `sector({ center, inner?, outer, start, end, cornerRadius? })` | Filled annular sector; frozen 16-command / 39-point table; inner and corner radius default 0; sweep at most TAU |
 | `area(input,baseline)` | Close one open contour to a horizontal baseline, keeping Line/Quad/Cubic verbs |
 | `areaBand(upper,lower)` | Close two aligned open contours (matching segments, strictly increasing X) |
@@ -2007,7 +2008,8 @@ explicit fill intent.
 
 Shape coordinates: Circle `cx,cy,r`; Ellipse `cx,cy,rx,ry`; Rect
 `x,y,width,height`; Line `x1,y1,x2,y2`; Polyline/Polygon `points` as typed-point
-arrays. Coordinates can use admitted expressions. For rounded rectangles use a
+arrays. Coordinates can use admitted expressions; a Circle of radius 0 draws nothing,
+as in SVG, and a negative radius is an error. For rounded rectangles use a
 styled `View` or an authored rounded path; do not assume all SVG attributes are
 available on `Rect`.
 

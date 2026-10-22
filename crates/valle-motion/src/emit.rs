@@ -2539,6 +2539,14 @@ impl Emitter<'_> {
                 .and_then(|unit| unit.color)
                 .map_or(*paint, |color| Paint::FloatSolid(color.to_working()));
             let unit_affine = unit.and_then(|unit| unit_transform(unit, &glyphs[at..end]));
+            // A singular CSS transform paints neither the element nor its descendants, so a unit
+            // scaled to zero draws nothing, as a View does.
+            if unit_affine.is_some_and(|affine| {
+                affine.0.iter().all(|value| value.is_finite()) && affine.inverse().is_none()
+            }) {
+                at = end;
+                continue;
+            }
             // Apply the same unit decoration inside any path transform.
             let decorate = |emitter: &mut Self| -> usize {
                 let mut depth = 0;

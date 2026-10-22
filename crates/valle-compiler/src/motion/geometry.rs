@@ -747,12 +747,12 @@ impl<'s> Compiler<'s> {
         }
         let radius_expression = arguments[1].as_expression()?;
         if let Some(radius) = self.fold_to_number(radius_expression)
-            && radius <= 0.0
+            && !(radius >= 0.0 && radius.is_finite())
         {
             self.illegal(
                 DiagCode::BuiltinRejected,
                 radius_expression.span(),
-                "arc radius must be finite and greater than zero",
+                "arc radius must be finite and non-negative",
             );
             return None;
         }

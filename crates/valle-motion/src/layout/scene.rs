@@ -2458,9 +2458,15 @@ fn resolve_instance_batch(
                     _ => return Err(invalid("cx/cy")),
                 };
                 let radius = match values.get(radius_expr.0 as usize) {
-                    Some(MotionValue::Number(value)) if value.is_finite() && *value > 0.0 => *value,
+                    Some(MotionValue::Number(value)) if value.is_finite() && *value >= 0.0 => {
+                        *value
+                    }
                     _ => return Err(invalid("r")),
                 };
+                // A circle of radius zero draws nothing, as SVG's `r="0"`.
+                if radius == 0.0 {
+                    return Ok(());
+                }
                 let NodeKind::Path {
                     fill: Some(PaintValue::Solid { color }),
                     ..

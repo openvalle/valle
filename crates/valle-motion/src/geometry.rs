@@ -1027,7 +1027,8 @@ impl PathData {
     }
 
     /// Build one arc with fixed topology. Angles use the Canvas/geometry convention: radians,
-    /// zero on +x, positive clockwise in Valle's y-down coordinate space.
+    /// zero on +x, positive clockwise in Valle's y-down coordinate space. A radius of zero gives
+    /// the empty path: Canvas admits it, and SVG's `r="0"` draws nothing.
     pub fn arc(
         center: Point,
         radius: f64,
@@ -1037,15 +1038,17 @@ impl PathData {
         if !center.x.is_finite()
             || !center.y.is_finite()
             || !radius.is_finite()
-            || radius <= 0.0
             || !start_angle.is_finite()
             || !end_angle.is_finite()
         {
             return Err(GeometryError::NonFinite);
         }
         let sweep = end_angle - start_angle;
-        if sweep.abs() > core::f64::consts::TAU {
+        if radius < 0.0 || sweep.abs() > core::f64::consts::TAU {
             return Err(GeometryError::InvalidArc);
+        }
+        if radius == 0.0 {
+            return Self::new(Vec::new(), Vec::new());
         }
         let step = sweep / PATH_ARC_SEGMENTS as f64;
         let mut verbs = Vec::with_capacity(PATH_ARC_SEGMENTS + 1);
@@ -1513,7 +1516,7 @@ impl core::fmt::Display for GeometryError {
                 f.write_str("path trajectory frames must be non-empty and topology-compatible")
             }
             GeometryError::InvalidArc => {
-                f.write_str("arc needs a positive radius and a sweep no larger than one turn")
+                f.write_str("arc needs a non-negative radius and a sweep no larger than one turn")
             }
             GeometryError::InvalidSector => f.write_str(
                 "sector needs finite inner/outer radii with 0 <= inner <= outer, a non-negative corner radius, and a sweep of at most one turn",
@@ -3196,6 +3199,16 @@ mod tests {
         assert_eq!(sampled.points[4], Point::new(10.0, 10.0));
         assert_ne!(sampled.points[0], sampled.points[7]);
         assert_eq!(sampled.path_length().unwrap(), 40.0);
+    }
+
+    #[test]
+    fn an_arc_of_radius_zero_is_empty_and_a_negative_radius_is_invalid() {
+        let empty = PathData::arc(Point::new(1.0, 2.0), 0.0, 0.0, core::f64::consts::TAU).unwrap();
+        assert!(empty.verbs.is_empty() && empty.points.is_empty());
+        assert_eq!(
+            PathData::arc(Point::new(1.0, 2.0), -1.0, 0.0, 1.0),
+            Err(GeometryError::InvalidArc)
+        );
     }
 
     #[test]
