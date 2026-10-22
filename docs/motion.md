@@ -1071,6 +1071,9 @@ Frame expressions expose `sin`, `cos`, `exp`, `floor`, `ceil`, `round`, `fract`,
 `atan2`, `pow`, `mod`, `pingPong`, `clamp`; `Math.sqrt`, `.exp`, `.sin`, `.cos`,
 `.tan`, `.atan2`, `.pow`, `.floor`, `.ceil`, `.round`, `.trunc`, `.min`, `.max`,
 `.abs` have admitted deterministic lowering. This is a finite list, not all of Math.
+Code that runs while a scene is prepared, such as a module constant, has the same
+functions and also `Math.cbrt`; the other functions ECMAScript leaves approximate, such
+as `Math.log`, are rejected, because their results differ between hosts.
 
 Trigonometry uses radians. `TAU` is 2π; `deg(n)` converts degrees to a numeric
 radian value and `rad(n)` keeps a radian value. These differ from a CSS angle

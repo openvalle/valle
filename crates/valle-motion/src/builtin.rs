@@ -188,6 +188,8 @@ fn run(request: &str) -> Result<Value, String> {
     let value = match request.op.as_str() {
         "sqrt" => json!(math_unary(MathUnaryOp::Sqrt, number("value")?).map_err(str::to_owned)?),
         "exp" => json!(math_unary(MathUnaryOp::Exp, number("value")?).map_err(str::to_owned)?),
+        // `Math.cbrt` while a scene is prepared; frame expressions have no cube root.
+        "cbrt" => json!(valle_draw::math::cbrt(number("value")?)),
         "sin" => json!(math_unary(MathUnaryOp::Sin, number("value")?).map_err(str::to_owned)?),
         "cos" => json!(math_unary(MathUnaryOp::Cos, number("value")?).map_err(str::to_owned)?),
         "tan" => json!(math_unary(MathUnaryOp::Tan, number("value")?).map_err(str::to_owned)?),

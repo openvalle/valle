@@ -149,7 +149,6 @@ const APPROXIMATED_MATH: &[&str] = &[
     "Math.log1p",
     "Math.log2",
     "Math.log10",
-    "Math.cbrt",
     "Math.hypot",
 ];
 
@@ -986,13 +985,16 @@ const call = (op, args) => {
   if (result.error) { throw new Error("valle:compute:" + result.error); }
   return result.ok;
 };
-for (const op of ["sin", "cos", "floor", "ceil", "round", "fract"]) {
+for (const op of ["sin", "cos", "exp", "floor", "ceil", "round", "fract"]) {
   globalThis[op] = (value) => call(op, { value });
 }
 for (const op of ["atan2", "pow", "mod", "pingPong"]) {
   globalThis[op] = (lhs, rhs) => call(op, { lhs, rhs });
 }
 Math.sqrt = (value) => call("sqrt", { value });
+Math.exp = globalThis.exp;
+// ECMAScript approximates the cube root; Rust takes it with the pinned libm on every host.
+Math.cbrt = (value) => call("cbrt", { value });
 Math.sin = globalThis.sin;
 Math.cos = globalThis.cos;
 Math.tan = (value) => call("tan", { value });
@@ -1295,6 +1297,8 @@ mod tests {
             "Math.atan2(1, 2)",
             "Math.pow(2, 0.5)",
             "Math.sqrt(2)",
+            "Math.exp(1)",
+            "Math.cbrt(27)",
             "Math.floor(1.5)",
             "Math.PI",
             "Math.max(1, 2)",
@@ -1305,6 +1309,31 @@ mod tests {
         let s = Sandbox::new("", None).unwrap();
         let e = s.eval_json("Math['l' + 'og'](1)", &[], "t").unwrap_err();
         assert_eq!(e.code, DiagCode::SandboxForbidden, "{e}");
+    }
+
+    /// Preparation takes cube roots and exponentials with the pinned libm, as frame expressions
+    /// take `exp`.
+    #[test]
+    fn prepared_cube_roots_and_exponentials_use_the_pinned_libm() {
+        let s = Sandbox::new("const ROOT = Math.cbrt(-27); const E = Math.exp(1);", None).unwrap();
+        let value = s
+            .eval_json("[ROOT, E, exp(0), Math.cbrt(0.001)]", &[], "t")
+            .unwrap();
+        let values: Vec<f64> = value
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_f64().unwrap())
+            .collect();
+        assert_eq!(
+            values,
+            [
+                -3.0,
+                valle_draw::math::exp(1.0),
+                1.0,
+                valle_draw::math::cbrt(0.001)
+            ]
+        );
     }
 
     /// Test runtime hardening through a prelude that bypasses lexical scanning.
