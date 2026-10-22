@@ -1297,6 +1297,9 @@ For animated 2D translation, use `translate: point(x,y)` or the CSS list
 `` transform: `translate(${x}px, ${y}px)` ``. Transform functions use CSS comma
 separators; independent properties use spaces. Single-argument `translate(12px)`
 means `translate(12px, 0px)`. Percentage translations use the element's border box.
+As in CSS, an inline box is not transformed: a `Text` in a block `View` lies on the
+View's lines and ignores `transform`, `translate`, `rotate` and `scale`, while its
+`filter` and `opacity` apply. Give it `display: "block"` or a flex parent to move it.
 
 Independent `translate`, `rotate`, and `scale` accept the same closed CSS templates
 and finite conditional branches as the ordered `transform` list. Templates can be

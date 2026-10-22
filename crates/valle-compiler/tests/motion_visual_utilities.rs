@@ -5,7 +5,8 @@ use valle_compiler::motion::compile_motion;
 use valle_draw::program::{DrawProgram, Filter, Node};
 use valle_motion::{
     Fonts, LayoutOptions, MotionValue, StyleBinding, StyleCache, StyleValue, Viewport, build_tree,
-    default_font_naming, emit, motion_context_at_frame, prepare_scene, resolve_props,
+    default_font_naming, emit, motion_context_at_frame, prepare_scene,
+    register_default_motion_fonts, resolve_props,
 };
 use valle_timeline::FrameRate;
 
@@ -71,6 +72,71 @@ fn filters(program: &DrawProgram) -> Vec<Filter> {
             _ => Vec::new(),
         })
         .collect()
+}
+
+/// The program of one frame of a scene whose text uses the default fonts.
+fn text_program(source: &str) -> DrawProgram {
+    let artifact = compile_motion(source).unwrap().artifact;
+    let prepared = prepare_scene(&artifact).unwrap();
+    let mut fonts = Fonts::default();
+    register_default_motion_fonts(&mut fonts).unwrap();
+    let props = resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+    let ctx = motion_context_at_frame(0, 30, FrameRate::new(30, 1).unwrap()).unwrap();
+    let tree = build_tree(
+        &prepared,
+        &ctx,
+        &props,
+        &LayoutOptions {
+            viewport: Viewport::new((320, 180)),
+            fonts: &fonts,
+            styles: None,
+        },
+    )
+    .unwrap();
+    let report = emit(&tree, &default_font_naming).unwrap();
+    assert!(report.unsupported.is_empty(), "{:?}", report.unsupported);
+    report.program
+}
+
+/// A Text in a block View is an inline box, which CSS draws through its own filter.
+#[test]
+fn inline_text_draws_through_its_own_filter() {
+    let program = text_program(
+        r##"export default function Demo() { return <Scene style={{width:320,height:180}}>
+  <View key="block"><Text key="inline" style={{fontSize:40,color:"#ffffff",filter:"blur(3px)"}}>BLUR</Text></View>
+</Scene>; }"##,
+    );
+    let nodes = program.nodes();
+    fn draws_glyphs(nodes: &[Node], node: &Node) -> bool {
+        match node {
+            Node::GlyphRun(_) => true,
+            Node::Group(group) => group
+                .children
+                .iter()
+                .any(|child| draws_glyphs(nodes, &nodes[child.raw() as usize])),
+            _ => false,
+        }
+    }
+    assert!(nodes.iter().any(|node| matches!(node, Node::Group(group)
+        if group.filters.iter().any(|filter| matches!(filter, Filter::Blur { sigma_x, .. } if *sigma_x == 3.0))
+            && draws_glyphs(nodes, node))));
+}
+
+/// CSS transforms no inline box: a Text on a block View's lines stays in place, and a block
+/// Text moves.
+#[test]
+fn only_a_block_text_takes_its_transform() {
+    let program = |style: &str| {
+        text_program(&format!(
+            r##"export default function Demo() {{ return <Scene style={{{{width:320,height:180}}}}>
+  <View key="block"><Text key="word" style={{{{fontSize:40,color:"#ffffff"{style}}}}}>MOVE</Text></View>
+</Scene>; }}"##
+        ))
+    };
+    let translate = r#",translate:"12px 0px""#;
+    assert_eq!(program(translate), program(""));
+    let block = r#",display:"block""#;
+    assert_ne!(program(&format!("{block}{translate}")), program(block));
 }
 
 #[test]

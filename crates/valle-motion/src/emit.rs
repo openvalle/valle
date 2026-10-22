@@ -1108,39 +1108,11 @@ impl Emitter<'_> {
             depth += 1;
         }
 
-        // Apply the `filter` list in written order, then bloom, displacement and velocity blur in
-        // a fixed semantic order.
-        if let Some(key) = key
-            && let Some(filters) = tree.advanced_filters.get(key)
-            && !filters.is_empty()
-        {
-            let filters = if tree.screen_velocity_blurs.contains(key) {
-                let local = local_velocity_blurs(filters, np.transform);
-                self.out.recording.intern_filters(&local)
-            } else {
-                self.out.recording.intern_filters(filters)
-            };
+        // Keep the filters inside the opacity/blend group. Filter bounds wait for the complete
+        // recording.
+        for filters in self.box_filters(np, &node.context, key.map(String::as_str))? {
             self.push(RecordCmd::BeginFilter {
                 filters,
-                bounds: None,
-            });
-            depth += 1;
-        }
-
-        // Keep CSS filters inside the opacity/blend group.
-        if let Some((key, list)) = key.and_then(|key| Some((key, tree.filter_lists.get(key)?))) {
-            let ops = self.filter_list_ops(np, list, &style.filter, &node.context, key)?;
-            let filters = self.out.recording.intern_filters(&ops);
-            self.push(RecordCmd::BeginFilter {
-                filters,
-                bounds: None,
-            });
-            depth += 1;
-        } else if !style.filter.is_empty() {
-            let filters = self.filters(np, &style.filter, &node.context)?;
-            self.push(RecordCmd::BeginFilter {
-                filters,
-                // Defer filter bounds until the complete recording is available.
                 bounds: None,
             });
             depth += 1;
@@ -1799,6 +1771,24 @@ impl Emitter<'_> {
             return;
         };
         let anchors = self.span_anchors(np, &built, &item_contexts);
+        // A run inside a filtered inline box draws through its filters, text shadows included.
+        let span_filters = self
+            .inline_span_filters(np, &built, &item_contexts)
+            .unwrap_or_else(|_| {
+                self.unsupported(np, "inline text filter cannot be resolved");
+                Vec::new()
+            });
+        let run_filters: Vec<&[valle_draw::Span]> = resolved
+            .runs
+            .iter()
+            .map(|run| {
+                run.glyph_run
+                    .brush
+                    .source_span_id
+                    .and_then(|id| span_filters.get(id as usize))
+                    .map_or(&[][..], Vec::as_slice)
+            })
+            .collect();
         // Report text that produces no glyphs, including missing-font cases that would otherwise
         // look like successful empty output.
         let empty = resolved.runs.iter().all(|r| r.glyph_run.glyphs.is_empty());
@@ -1936,6 +1926,7 @@ impl Emitter<'_> {
                     });
                 }
                 for (at, (run, sr)) in resolved.runs.iter().zip(&source_ranges).enumerate() {
+                    self.begin_filters(run_filters[at]);
                     self.glyph_run_at(
                         np,
                         run,
@@ -1944,6 +1935,7 @@ impl Emitter<'_> {
                         *sr,
                         placement_of(at),
                     );
+                    self.end_filters(run_filters[at]);
                 }
                 if filtered {
                     self.push(RecordCmd::End);
@@ -1951,7 +1943,9 @@ impl Emitter<'_> {
             }
         }
         for (at, (run, sr)) in resolved.runs.iter().zip(&source_ranges).enumerate() {
+            self.begin_filters(run_filters[at]);
             self.glyph_run_at(np, run, layout, None, *sr, placement_of(at));
+            self.end_filters(run_filters[at]);
         }
         for inline_box in &resolved.inline_boxes {
             let Some(ProcessedInlineSpan::Box(item)) = built.spans.get(inline_box.id as usize)
@@ -3422,6 +3416,87 @@ impl Emitter<'_> {
                 }
             })
             .collect()
+    }
+
+    fn begin_filters(&mut self, groups: &[valle_draw::Span]) {
+        for filters in groups {
+            self.push(RecordCmd::BeginFilter {
+                filters: *filters,
+                bounds: None,
+            });
+        }
+    }
+
+    fn end_filters(&mut self, groups: &[valle_draw::Span]) {
+        for _ in groups {
+            self.push(RecordCmd::End);
+        }
+    }
+
+    /// The filter groups of one box, outermost first. The `filter` list applies in written
+    /// order, then bloom, displacement and velocity blur in a fixed semantic order.
+    fn box_filters(
+        &mut self,
+        np: &NodePaint,
+        ctx: &takumi_core::context::RenderContext,
+        key: Option<&str>,
+    ) -> Result<Vec<valle_draw::Span>, EmitError> {
+        let tree = self.tree;
+        let mut groups = Vec::new();
+        if let Some(key) = key
+            && let Some(filters) = tree.advanced_filters.get(key)
+            && !filters.is_empty()
+        {
+            groups.push(if tree.screen_velocity_blurs.contains(key) {
+                let local = local_velocity_blurs(filters, np.transform);
+                self.out.recording.intern_filters(&local)
+            } else {
+                self.out.recording.intern_filters(filters)
+            });
+        }
+        if let Some((key, list)) = key.and_then(|key| Some((key, tree.filter_lists.get(key)?))) {
+            let ops = self.filter_list_ops(np, list, &ctx.style.filter, ctx, key)?;
+            groups.push(self.out.recording.intern_filters(&ops));
+        } else if !ctx.style.filter.is_empty() {
+            groups.push(self.filters(np, &ctx.style.filter, ctx)?);
+        }
+        Ok(groups)
+    }
+
+    /// The filters of the inline boxes each span of `built` lies in, outermost first. CSS filters
+    /// an inline box with its content; the paint node has opened its own filters already.
+    fn inline_span_filters(
+        &mut self,
+        np: &NodePaint,
+        built: &takumi_core::layout::inline::BuiltInlineLayout<'_>,
+        item_contexts: &[Option<&takumi_core::context::RenderContext>],
+    ) -> Result<Vec<Vec<valle_draw::Span>>, EmitError> {
+        let tree = self.tree;
+        let Some(node) = tree.root.node_at_path(&np.path) else {
+            return Ok(Vec::new());
+        };
+        let mut paths = Vec::new();
+        context_paths(node, &np.path, &mut paths);
+        let mut contexts = item_contexts.iter();
+        let mut filters = Vec::with_capacity(built.spans.len());
+        for span in &built.spans {
+            let mut groups = Vec::new();
+            // Synthetic bidi markers have no authored item, as in `span_anchors`.
+            if !matches!(span, ProcessedInlineSpan::DirectionMark { .. })
+                && let Some(context) = contexts.next().copied().flatten()
+                && let Some((_, path)) = paths.iter().find(|(ctx, _)| std::ptr::eq(*ctx, context))
+            {
+                for depth in np.path.len() + 1..=path.len() {
+                    let prefix = &path[..depth];
+                    if let Some(inline) = tree.root.node_at_path(prefix) {
+                        let key = tree.render_keys.get(prefix).map(String::as_str);
+                        groups.extend(self.box_filters(np, &inline.context, key)?);
+                    }
+                }
+            }
+            filters.push(groups);
+        }
+        Ok(filters)
     }
 
     /// Translate filter chains into a side-table span; report unsupported URL filters.
