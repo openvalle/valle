@@ -1390,7 +1390,7 @@ a bounded exact kernel avoids rings and excess diffusion; samples never cross th
 center. Native and CanvasKit use the same shader, including at enlarged output sizes.
 
 `filter: "film-grain(7 0.12 2px)"` adds seeded monochrome grain in sRGB display encoding to the node and its descendants. The unsigned integer seed fixes the sequence;
-amount is in 0–1 and grain size in 1–64 local px. Noise changes once per local frame and stays deterministic across ROI crops and
+amount is in 0–1 and grain size in 1–64 local px. Noise changes once per local frame, `floor(seconds × fps)` of the clock it is drawn on within the scene's frames, and stays deterministic across ROI crops and
 random frame seeks. Noise amplitude follows each channel's distance to black and white, preserving
 both endpoints without asymmetric clipping. Display-gray mean brightness remains
 stable at high amounts. The result returns to working-linear light, scales with

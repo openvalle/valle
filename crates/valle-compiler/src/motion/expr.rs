@@ -5,6 +5,7 @@ use super::*;
 impl<'s> Compiler<'s> {
     /// A scene-clock input on `clock`: the seconds, frame or progress seen inside its chain of
     /// TimeScopes. The value is marked with that clock, so a node outside the chain cannot use it.
+    /// Progress lies in [0, 1] and the frame among the scene's frames, as the host numbers them.
     pub(super) fn scene_clock_expr(
         &mut self,
         input: ContextInput,
@@ -113,13 +114,41 @@ impl<'s> Compiler<'s> {
             span,
         );
         debug_assert_eq!(input, ContextInput::LocalFrame);
-        self.push(
+        let frame = self.push(
             Expr::MathUnary {
                 op: MathUnaryOp::ClockFloor,
                 input: frames,
             },
             span,
-        )
+        );
+        // `floor(seconds × fps)` within the scene's frames, the host's rule: the last frame of a
+        // one-shot scene shows its end and is still frame N − 1.
+        let zero = self.push(
+            Expr::Const {
+                value: MotionValue::Number(0.0),
+            },
+            span,
+        );
+        let count = self.push(
+            Expr::Context {
+                input: ContextInput::DurationFrames,
+            },
+            span,
+        );
+        let one = self.push(
+            Expr::Const {
+                value: MotionValue::Number(1.0),
+            },
+            span,
+        );
+        let last = self.push(
+            Expr::Sub {
+                lhs: count,
+                rhs: one,
+            },
+            span,
+        );
+        self.clamp(frame, zero, last, span)
     }
 
     /// `value` clamped to [0, 1].
@@ -136,18 +165,23 @@ impl<'s> Compiler<'s> {
             },
             span,
         );
+        self.clamp(value, zero, one, span)
+    }
+
+    /// `value` clamped to [`low`, `high`].
+    fn clamp(&mut self, value: ExprId, low: ExprId, high: ExprId, span: Span) -> ExprId {
         let before = self.push(
             Expr::Compare {
                 op: CompareOp::Lt,
                 lhs: value,
-                rhs: zero,
+                rhs: low,
             },
             span,
         );
-        let at_least_zero = self.push(
+        let at_least_low = self.push(
             Expr::Select {
                 condition: before,
-                when_true: zero,
+                when_true: low,
                 when_false: value,
             },
             span,
@@ -155,16 +189,16 @@ impl<'s> Compiler<'s> {
         let after = self.push(
             Expr::Compare {
                 op: CompareOp::Gt,
-                lhs: at_least_zero,
-                rhs: one,
+                lhs: at_least_low,
+                rhs: high,
             },
             span,
         );
         self.push(
             Expr::Select {
                 condition: after,
-                when_true: one,
-                when_false: at_least_zero,
+                when_true: high,
+                when_false: at_least_low,
             },
             span,
         )

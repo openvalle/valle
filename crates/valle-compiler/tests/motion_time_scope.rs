@@ -165,3 +165,69 @@ fn identity_scope_retains_every_integer_frame_at_non_binary_rates() {
         }
     }
 }
+
+/// The frame that seeds film grain follows the host's rule on every clock: `floor(seconds × fps)`
+/// within the scene's frames.
+#[test]
+fn a_scope_numbers_its_frames_as_the_host_does() {
+    let frames = |scope: Option<(f64, f64)>| -> Vec<f64> {
+        let body = match scope {
+            None => "<Grain />".to_owned(),
+            Some((offset, speed)) => format!(
+                r#"<TimeScope key="scope" offset={{{offset}}} speed={{{speed}}}><Grain /></TimeScope>"#
+            ),
+        };
+        let source = format!(
+            r##"export const composition = {{ width: 160, height: 90, fps: 10, duration: 1 }};
+function Grain() {{ return <View key="grain" style={{{{ width: 100, height: 100,
+  backgroundColor: "#808080", filter: "film-grain(7 0.12 2px)" }}}} />; }}
+export default function Main() {{ return <Scene>{body}</Scene>; }}"##
+        );
+        let artifact = compile_motion(&source).unwrap().artifact;
+        let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+        let binding = artifact
+            .nodes
+            .iter()
+            .find(|node| node.key.ends_with("grain"))
+            .and_then(|node| {
+                node.styles
+                    .iter()
+                    .find(|style| style.property == "motion-filter-frame")
+            })
+            .unwrap();
+        let StyleValue::Expr { expr } = binding.value else {
+            panic!("expected a frame expression, got {:?}", binding.value);
+        };
+        (0..10)
+            .map(|frame| {
+                let ctx =
+                    motion_context_at_frame(frame, 10, FrameRate::new(10, 1).unwrap()).unwrap();
+                let values = eval_all(
+                    &artifact,
+                    EvalInputs {
+                        ctx: &ctx,
+                        props: &props,
+                        unit: None,
+                        viewport: Some((160.0, 90.0)),
+                    },
+                )
+                .unwrap();
+                match values[expr.0 as usize] {
+                    MotionValue::Number(value) => value,
+                    ref other => panic!("expected a frame number, got {other:?}"),
+                }
+            })
+            .collect()
+    };
+    let plain = frames(None);
+    assert_eq!(plain, (0..10).map(f64::from).collect::<Vec<_>>());
+    // A scope that keeps the time keeps every frame, the last one included, which shows the end
+    // of the scene.
+    assert_eq!(frames(Some((0.0, 1.0))), plain);
+    // Past the end of the scene the frame stays the last one, and before its start the first.
+    assert_eq!(
+        frames(Some((0.0, 2.0))),
+        [0.0, 2.0, 4.0, 6.0, 8.0, 9.0, 9.0, 9.0, 9.0, 9.0]
+    );
+    assert_eq!(frames(Some((0.5, 1.0)))[..6], [0.0; 6]);
+}
