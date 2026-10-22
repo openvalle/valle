@@ -1482,9 +1482,7 @@ impl ProgramRuntime {
                     &node.uniforms,
                     &node.textures,
                 )? {
-                    let mut paint = SkPaint::default();
-                    paint.set_shader(runtime);
-                    canvas.draw_rect(sk_rect(node.bounds), &paint);
+                    canvas.draw_rect(sk_rect(node.bounds), &shader_box_paint(runtime));
                 }
             }
             Node::Scene3d(scene) => {
@@ -1768,14 +1766,12 @@ impl ProgramRuntime {
                     })?
             }
         };
-        let mut paint = SkPaint::default();
-        paint.set_shader(shader);
         let canvas = surface.canvas();
         canvas.clear(Color::TRANSPARENT);
         canvas.save();
         canvas.translate((-target_origin[0] as f32, -target_origin[1] as f32));
         canvas.concat(&matrix);
-        canvas.draw_rect(sk_rect(transition.bounds), &paint);
+        canvas.draw_rect(sk_rect(transition.bounds), &shader_box_paint(shader));
         canvas.restore();
         Ok(())
     }
@@ -1841,9 +1837,7 @@ impl ProgramRuntime {
             &shader.uniforms,
             &shader.textures,
         )? {
-            let mut paint = SkPaint::default();
-            paint.set_shader(runtime);
-            canvas.draw_rect(sk_rect(shader.output_bounds()), &paint);
+            canvas.draw_rect(sk_rect(shader.output_bounds()), &shader_box_paint(runtime));
         }
         canvas.restore();
         Ok(())
@@ -2104,6 +2098,14 @@ const TRANSITION_INPUTS: &[&str] = &["from", "to"];
 /// missing input evaluates to zero and lets the parent shader compute its output.
 fn transparent() -> Shader {
     skia_safe::shaders::color(Color::TRANSPARENT)
+}
+
+/// The paint that draws a shader over its box. The box's edges take antialiased coverage, as a
+/// path's do, so a rotated box or one on a CSS 3D plane keeps smooth edges.
+fn shader_box_paint(shader: Shader) -> SkPaint {
+    let mut paint = SkPaint::default();
+    paint.set_anti_alias(true).set_shader(shader);
+    paint
 }
 
 /// A transition shader's bindings: its own uniforms, then the progress the transition supplies.
@@ -8589,6 +8591,176 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn shader_boxes_keep_antialiased_edges_under_any_transform() {
+        use valle_draw::program::{DrawProgramBuilder, Group, RuntimeShaderNode, TransitionLayer};
+        use valle_draw::requirements::{DigestBytes, ShaderWork};
+        use valle_draw::transition::TransitionKind;
+        // A box on a CSS 3D plane: rotation and perspective take every edge off the pixel grid.
+        let matrix = [0.97, -0.21, 11.4, 0.18, 1.02, 8.7, 0.0024, -0.0017, 1.0];
+        let bounds = Rect::new(0.0, 0.0, 26.0, 22.0);
+        let info = ImageInfo::new(
+            (48, 48),
+            ColorType::RGBAF32,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let surface = || {
+            let mut surface = skia_safe::surfaces::raster(&info, None, None).unwrap();
+            surface.canvas().clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
+            surface
+        };
+        let alpha = |surface: &mut Surface| {
+            let mut bytes = vec![0_u8; 48 * 48 * 16];
+            assert!(surface.read_pixels(&info, &mut bytes, 48 * 16, (0, 0)));
+            bytes
+                .chunks_exact(16)
+                .map(|pixel| f32::from_ne_bytes(pixel[12..16].try_into().unwrap()))
+                .collect::<Vec<_>>()
+        };
+        // An opaque fill of the same box, the way a path's fill covers it.
+        let mut fill = surface();
+        fill.canvas().concat(&sk_matrix(matrix));
+        let mut white = SkPaint::default();
+        white.set_anti_alias(true).set_color(Color::WHITE);
+        fill.canvas().draw_rect(sk_rect(bounds), &white);
+        let expected = alpha(&mut fill);
+        assert!(
+            expected.iter().filter(|a| **a > 0.05 && **a < 0.45).count() >= 16,
+            "the box has partly covered edge pixels"
+        );
+
+        let key = RuntimeShaderKey {
+            work_per_pixel: ShaderWork {
+                operations: 1,
+                samples: 0,
+            },
+            uri: "test://opaque".into(),
+            content_hash: DigestBytes::from_bytes([1; 32]),
+            abi_hash: DigestBytes::from_bytes([2; 32]),
+        };
+        let mut shaders = BTreeMap::new();
+        for (uri, source) in [
+            (
+                key.uri.clone(),
+                "uniform float2 resolution; uniform shader content; \
+                 half4 main(float2 xy) { return half4(1); }",
+            ),
+            (
+                "builtin://transition-input".into(),
+                include_str!("../../../../valle-draw/assets/shaders/transitioninput.sksl"),
+            ),
+            (
+                format!("builtin://transition/{:?}", TransitionKind::Fade),
+                TransitionKind::Fade.source(),
+            ),
+        ] {
+            let effect = RuntimeEffect::make_for_shader(source, None).unwrap();
+            shaders.insert(uri, Arc::new(effect));
+        }
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 48.0, 48.0));
+        let shader_node = builder.push_node(Node::RuntimeShader(RuntimeShaderNode {
+            shader: key.clone(),
+            bounds,
+            uniforms: Vec::new(),
+            textures: Vec::new(),
+        }));
+        let mut group = Group::plain(vec![shader_node]);
+        group.transform = Transform2d(matrix);
+        let root = builder.push_node(Node::Group(group));
+        builder.add_root(root);
+        let runtime = ProgramRuntime {
+            program: Arc::new(builder.finish().unwrap()),
+            textures: BTreeMap::new(),
+            fonts: BTreeMap::new(),
+            shaders,
+            scenes: BTreeMap::new(),
+            blend: None,
+            mask_coverage: None,
+            opacity_layers: Default::default(),
+            noise_fields: Default::default(),
+        };
+
+        // A shader node drawn in a raster tree, a ShaderLayer's output and a transition between
+        // two opaque inputs each cover the box as the fill does.
+        let mut in_tree = surface();
+        // `finish` renumbers the nodes, so the root is read back from the program.
+        runtime
+            .raster_node(in_tree.canvas(), runtime.program.roots()[0])
+            .unwrap();
+        let layer = ShaderLayer {
+            padding: [0; 4],
+            shader: key,
+            bounds,
+            uniforms: Vec::new(),
+            textures: Vec::new(),
+        };
+        let mut layered = surface();
+        runtime
+            .apply_shader_into(
+                &mut layered,
+                None,
+                &[],
+                &layer,
+                sk_matrix(matrix),
+                &info,
+                [0, 0],
+            )
+            .unwrap();
+        let mut opaque = surface();
+        opaque.canvas().clear(Color4f::new(1.0, 1.0, 1.0, 1.0));
+        let input = ProgramImage {
+            image: opaque.image_snapshot(),
+            roi: DeviceRect {
+                x: 0,
+                y: 0,
+                width: 48,
+                height: 48,
+            },
+        };
+        let transition = TransitionLayer {
+            kernel: TransitionKernel::Builtin {
+                kind: TransitionKind::Fade,
+                params: TransitionKind::Fade.default_values(),
+            },
+            progress: 0.5,
+            bounds,
+        };
+        let mut transitioned = surface();
+        runtime
+            .apply_transition_into(
+                &mut transitioned,
+                [Some(&input), Some(&input)],
+                &transition,
+                sk_matrix(matrix),
+                [0, 0],
+            )
+            .unwrap();
+        for (name, drawn) in [
+            ("shader node", &mut in_tree),
+            ("shader layer", &mut layered),
+            ("transition", &mut transitioned),
+        ] {
+            let actual = alpha(drawn);
+            let (at, error) = actual
+                .iter()
+                .zip(&expected)
+                .map(|(actual, expected)| (actual - expected).abs())
+                .enumerate()
+                .fold((0, 0.0_f32), |worst, (at, error)| {
+                    if error > worst.1 { (at, error) } else { worst }
+                });
+            assert!(
+                error < 1.0e-4,
+                "{name}: pixel ({}, {}) has coverage {} where the fill has {}",
+                at % 48,
+                at / 48,
+                actual[at],
+                expected[at]
+            );
         }
     }
 }

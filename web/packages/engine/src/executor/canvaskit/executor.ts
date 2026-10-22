@@ -2144,6 +2144,7 @@ async function executeProgramPass(
           shader = builtins.shader(transitionKernel(String(kernel.kind)),
             [bounds.width, bounds.height, progress, ...transitionValues(kernel.params, String(kernel.kind))], children);
         }
+        paint.setAntiAlias(true);
         paint.setShader(shader);
         canvas.concat(matrix);
         canvas.drawRect(skRect(CanvasKit, bounds), paint);
@@ -2773,7 +2774,7 @@ function drawRuntimeShaderNode(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinR
   const bounds = rect(node.bounds, "runtime shader bounds");
   const runtime = instantiateRuntimeShader(CanvasKit, builtins, effect, bounds, array(node.uniforms, "shader uniforms"), array(node.textures, "shader textures"), admitted, null);
   const paint = new CanvasKit.Paint();
-  try { paint.setShader(runtime); canvas.drawRect(skRect(CanvasKit, bounds), paint); }
+  try { paint.setAntiAlias(true); paint.setShader(runtime); canvas.drawRect(skRect(CanvasKit, bounds), paint); }
   finally { paint.delete(); runtime.delete(); }
 }
 
@@ -2812,6 +2813,9 @@ function applyProgramShader(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRunt
   canvas.save();
   try {
     canvas.concat(ownerToDevice);
+    // The output box's edges take antialiased coverage, as a path's do and as on Native, so a
+    // rotated layer or one on a CSS 3D plane keeps smooth edges.
+    paint.setAntiAlias(true);
     paint.setShader(runtime);
     canvas.drawRect(skRect(CanvasKit, output), paint);
   } finally { canvas.restore(); paint.delete(); runtime.delete(); }
