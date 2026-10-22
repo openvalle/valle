@@ -180,28 +180,43 @@ pub fn emit(tree: &LayoutTree, naming: FontNaming<'_>) -> Result<EmitReport, Emi
 #[derive(Default)]
 pub(crate) struct ReviewTextInk {
     pub lines: Vec<Rect>,
+    /// What of each line the clips and masks around it let through; a line they hide entirely is
+    /// left out.
+    pub visible_lines: Vec<Rect>,
     pub opacity: f32,
     pub motion_blurred: bool,
 }
 
 /// Review the shaper's ink through the same line, unit, text-path and CSS transforms
 /// as drawing. Force outlines for static fonts too; layout boxes and font-size
-/// approximations are not text ink. Shadows do not extend the reading area.
+/// approximations are not text ink. Shadows do not extend the reading area, and what a clip
+/// or a mask cuts away is not visible.
 pub(crate) fn review_text_ink(
     tree: &LayoutTree,
     faces: &FaceCache,
 ) -> Result<std::collections::HashMap<String, ReviewTextInk>, EmitError> {
-    use valle_draw::program::{Node, Paint as ProgramPaint, Transform2d};
+    use valle_draw::program::{Clip, Node, Paint as ProgramPaint, Transform2d};
+    use valle_draw::requirements::LocalBounds;
     let program =
         emit_with_faces_and_catalog(tree, &default_font_naming, Some(faces), None, None, true)?
             .program;
+    // `rect` within `clip`, the screen bounds that the clips and masks around it let through.
+    let within = |rect: Rect, clip: Option<Rect>| match clip {
+        Some(clip) => Rect::from_edges(
+            rect.left().max(clip.left()),
+            rect.top().max(clip.top()),
+            rect.right().min(clip.right()),
+            rect.bottom().min(clip.bottom()),
+        ),
+        None => rect,
+    };
     let mut ink = std::collections::HashMap::<String, ReviewTextInk>::new();
     let mut pending = program
         .roots()
         .iter()
-        .map(|id| (*id, Transform2d::IDENTITY, 1.0_f32, false))
+        .map(|id| (*id, Transform2d::IDENTITY, 1.0_f32, false, None::<Rect>))
         .collect::<Vec<_>>();
-    while let Some((id, parent, opacity, blurred)) = pending.pop() {
+    while let Some((id, parent, opacity, blurred, clip)) = pending.pop() {
         match &program.nodes()[id.raw() as usize] {
             Node::Group(group) => {
                 let transform = group.transform.then(parent);
@@ -210,11 +225,47 @@ pub(crate) fn review_text_ink(
                         .filters
                         .iter()
                         .any(|f| matches!(f, valle_draw::program::Filter::VelocityBlur { .. }));
+                // A clip, and a mask that does not invert, act in the group's own units before its
+                // transform; a mask hides what lies outside its source.
+                let clip_bounds = group.clip.as_ref().map(|clip| match clip {
+                    Clip::Rect(rect) => LocalBounds::from_rect(*rect),
+                    Clip::RoundRect(round_rect) => LocalBounds::from_rect(round_rect.rect),
+                    Clip::Path { path, .. } => program.paths()[path.raw() as usize]
+                        .points
+                        .iter()
+                        .map(|&[x, y]| Rect::new(x, y, 0.0, 0.0))
+                        .reduce(|a, b| {
+                            Rect::from_edges(
+                                a.left().min(b.left()),
+                                a.top().min(b.top()),
+                                a.right().max(b.right()),
+                                a.bottom().max(b.bottom()),
+                            )
+                        })
+                        .map_or(LocalBounds::Empty, LocalBounds::from_rect),
+                });
+                let mask_bounds = group
+                    .mask
+                    .as_ref()
+                    .filter(|mask| !mask.mode.is_inverted())
+                    .and_then(|mask| program.geometry(mask.source))
+                    .map(|geometry| geometry.output_bounds);
+                let clip = clip_bounds
+                    .into_iter()
+                    .chain(mask_bounds)
+                    .fold(clip, |clip, bounds| match bounds {
+                        LocalBounds::Empty => Some(Rect::new(0.0, 0.0, 0.0, 0.0)),
+                        LocalBounds::Finite { rect } => match transform.map_bounds(rect) {
+                            Some(rect) => Some(within(rect, clip)),
+                            // A cut across the vanishing line does not narrow the bounds.
+                            None => clip,
+                        },
+                    });
                 pending.extend(
                     group
                         .children
                         .iter()
-                        .map(|id| (*id, transform, opacity * group.opacity, blurred)),
+                        .map(|id| (*id, transform, opacity * group.opacity, blurred, clip)),
                 );
             }
             Node::GlyphRun(run) if opacity > 0.0 => {
@@ -249,6 +300,10 @@ pub(crate) fn review_text_ink(
                 {
                     let entry = ink.entry(key.clone()).or_default();
                     entry.lines.push(bounds);
+                    let visible = within(bounds, clip);
+                    if !visible.is_empty() {
+                        entry.visible_lines.push(visible);
+                    }
                     let paint_alpha = |paint: valle_draw::program::PaintId| match &program.paints()
                         [paint.raw() as usize]
                     {

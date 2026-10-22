@@ -598,7 +598,8 @@ visible painted node moves over a quarter of its extent along the travel directi
 intervals without motion blur or a sampling `Shutter`; the rows of one `.map` or batch share one issue. It also reports `text_readability` when visible text is
 shown for less than 0.3 seconds plus 0.3 seconds per word or 0.225 seconds per CJK character (as
 information when the text is still on screen at the last frame), `text_out_of_frame` for text
-outside the canvas, and `text_overlap` for overlapping glyph ink bounds. Informational
+outside the canvas, and `text_overlap` for overlapping glyph ink bounds; what a clip or a mask
+hides counts for neither. Informational
 `motion_while_reading` and `simultaneous_main_actions` hints identify competing prominent
 motion over consecutive frames. `linear_motion` flags a prominent subject whose long move has
 nearly constant screen speed. `stagger_timing` compares observed starts in a consecutively

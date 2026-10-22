@@ -815,7 +815,12 @@ pub fn review_motion(
             if let (Some(sample), Some(_)) = (sample, text)
                 && sample.visible
             {
-                for line in text_ink.get(node).into_iter().flat_map(|ink| &ink.lines) {
+                // What a clip or a mask hides neither leaves the frame nor overlaps.
+                for line in text_ink
+                    .get(node)
+                    .into_iter()
+                    .flat_map(|ink| &ink.visible_lines)
+                {
                     visible_text.push((
                         node.clone(),
                         [line.left(), line.top(), line.right(), line.bottom()],

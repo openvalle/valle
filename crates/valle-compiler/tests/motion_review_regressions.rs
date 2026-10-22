@@ -444,3 +444,48 @@ export default function Main() { const time = useCurrentTime(); const pop = spri
         reviewed.issues
     );
 }
+
+#[test]
+fn text_that_a_clip_cuts_away_neither_leaves_the_frame_nor_overlaps() {
+    // The slot hides its label, tucked below it under the visible one; the edge cuts its
+    // caption where the frame ends.
+    let clipped = r##"export default function Main() { return <Scene>
+        <Text key="label" style={{position:"absolute",left:20,top:140,fontSize:24}}>Visible label</Text>
+        <View key="slot" className="flex overflow-hidden" style={{position:"absolute",left:20,top:100,width:300,height:30}}>
+          <Text key="tucked" style={{fontSize:24,translate:"0px 40px"}}>Tucked label</Text>
+        </View>
+        <View key="edge" className="flex overflow-hidden" style={{position:"absolute",left:560,top:20,width:80,height:40}}>
+          <Text key="cut" style={{fontSize:24,whiteSpace:"nowrap",flexShrink:0}}>Edge caption text</Text>
+        </View>
+    </Scene>; }"##;
+    let reviewed = report(clipped);
+    assert!(
+        reviewed
+            .issues
+            .iter()
+            .all(|i| !matches!(i.code, "text_overlap" | "text_out_of_frame")),
+        "{:?}",
+        reviewed.issues
+    );
+    // A clip that reaches past the frame lets the caption leave it.
+    let wide = report(&clipped.replace("left:560,top:20,width:80", "left:560,top:20,width:200"));
+    assert!(
+        wide.issues
+            .iter()
+            .any(|i| i.code == "text_out_of_frame" && i.node == "cut"),
+        "{:?}",
+        wide.issues
+    );
+    // Without the clips both texts show in full.
+    let reviewed = report(&clipped.replace(" overflow-hidden", ""));
+    let found = |code: &str| {
+        reviewed
+            .issues
+            .iter()
+            .filter(|i| i.code == code)
+            .map(|i| (i.node.as_str(), i.other_node.as_deref()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(found("text_overlap"), [("label", Some("tucked"))]);
+    assert_eq!(found("text_out_of_frame"), [("cut", None)]);
+}

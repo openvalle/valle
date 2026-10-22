@@ -91,8 +91,9 @@ duration, word count and recommended duration; hidden or fully offscreen text is
 still visible at the last frame is reported with severity `info` instead, because what follows
 the composition decides how long it stays readable.
 `text_out_of_frame` reports visible text ink extending beyond the canvas, and `text_overlap`
-reports two visible text ink bounds intersecting by more than 1 px in both directions. Consecutive
-frames are combined into one issue. The informational `motion_while_reading` hint reports a
+reports two visible text ink bounds intersecting by more than 1 px in both directions; ink that a
+clip or a mask hides counts for neither. Consecutive frames are combined into one issue. The
+informational `motion_while_reading` hint reports a
 prominent moving subject during readable text, and `simultaneous_main_actions` reports two
 separate prominent subjects moving together. These hints require at least three consecutive
 intervals; subjects below 1% of the canvas area or moving at most 4 px per frame are ignored.
