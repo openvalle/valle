@@ -93,7 +93,7 @@ function Title() {
         textShadow: `0px 14px 0px ${SHADE}` }}
       perUnit={(unit) => {
         const t = seconds - 0.15 - unit.index * 0.06;
-        const pop = interpolate(t, [0, 0.9], [0.001, 1], { easing: "easeOutElastic" });
+        const pop = interpolate(t, [0, 0.9], [0, 1], { easing: "easeOutElastic" });
         const rise = spring(t, { duration: 0.55, bounce: 0.45 });
         const tilt = interpolate(t, [0, 0.6], [1, 0], { easing: "easeOutBack" });
         const bob = Math.sin((seconds - unit.index * 0.11) * 3.4) * 7 * clamp(t - 0.8, 0, 1);
@@ -190,12 +190,13 @@ function ShootingStar() {
   return (
     <View key="comet" className="absolute"
       visible={flight > 0 && flight < 1}
-      style={{ width: 0, height: 0, motionPath: motionPath(STAR_ARC, flight, { rotate: "auto" }) }}>
+      style={{ width: 0, height: 0, motionPath: motionPath(STAR_ARC, flight, { rotate: "auto" }),
+        motionBlur: "auto" }}>
       <Path key="tail" d={TAIL} style={{ position: "absolute", left: 0, top: 0 }}
         fill={linearGradient(point(-380, 0), point(0, 0),
           [gradientStop(0, "#FFD16600"), gradientStop(0.7, "#FFD16699"), gradientStop(1, "#FFFFFFF2")])} />
       <View key="head" className="absolute"
-        style={{ left: -48, top: -48, width: 96, height: 96, motionBlur: "auto" }}>
+        style={{ left: -48, top: -48, width: 96, height: 96 }}>
         <Circle key="halo" cx={48} cy={48} r={46}
           fill={radialGradient(point(48, 48), 46,
             [gradientStop(0, "#FFF4C8E6"), gradientStop(0.45, "#FFD16666"), gradientStop(1, "#FFD16600")])} />
@@ -208,7 +209,7 @@ function ShootingStar() {
 
 export default function Celebrate() {
   const { seconds, progress } = useCurrentTime();
-  const burst = interpolate(seconds, [0.1, 1.4], [0.001, 1], { easing: "easeOutExpo" });
+  const burst = interpolate(seconds, [0.1, 1.4], [0, 1], { easing: "easeOutExpo" });
   const pop = interpolate(seconds, [1.3, 2.8], [0, 1], { easing: "easeOutCubic" });
   const subtitle = interpolate(seconds, [2.2, 2.75], [0, 1], { easing: "easeOutCubic" });
   return (

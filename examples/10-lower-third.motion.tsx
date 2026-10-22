@@ -1,6 +1,7 @@
 // Lower third: a name strap unfolds from a slanted spine, holds with a breathing LIVE dot and folds
 // back out. Shows overlay({ intro, outro, hold }), controls.props, defineSequence cue sheets,
-// yoyoProgress, and the clip clock (clipSeconds, clipDuration) beside the looped middle.
+// yoyoProgress, textTransform, and the clip clock (clipSeconds, clipDuration) beside the looped
+// middle.
 // Render: valle motion render examples/10-lower-third.motion.tsx -o 10-lower-third.mov
 // Timeline: add it to "resources" as "lowerThird", then place a clip whose duration sets the hold:
 //   { "kind": "motion", "component": "lowerThird", "start": 2, "duration": 9, "props": { "name": "Ada Park" } }
@@ -23,7 +24,7 @@ export const role = overlay({ intro: INTRO, outro: OUTRO, hold: "loop" });
 export const controls = {
   props: {
     name: string({ default: "Maya Okafor", label: "Name" }),
-    title: string({ default: "HEAD OF DESIGN · VALLE STUDIO", label: "Title" }),
+    title: string({ default: "Head of Design · Valle Studio", label: "Title" }),
     accent: color({ default: "#FF3D7F", label: "Name bar" }),
     highlight: color({ default: "#FFC93C", label: "Title bar" }),
   },
@@ -143,7 +144,7 @@ function TitleLine({ title, highlight, onAir }) {
       <View key="title-mask" className="flex overflow-hidden" style={{ padding: "13px 34px 14px 30px",
         transform: UPRIGHT }}>
         <Text key="title" style={{ fontSize: 27, lineHeight: 1.2, letterSpacing: 3.5, color: INK,
-          fontVariationSettings: '"wght" 720, "wdth" 92',
+          textTransform: "uppercase", fontVariationSettings: '"wght" 720, "wdth" 92',
           translate: `${-36 * (1 - slide)}% 0%`, opacity: clamp(5 * slide, 0, 1) }}>
           {title}
         </Text>

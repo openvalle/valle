@@ -3314,11 +3314,11 @@ The [examples](../examples) directory holds ten single-file scenes in different 
 | [03-data-dashboard](../examples/03-data-dashboard.motion.tsx) | Flat infographic | scales, `ticks`, `stack`, `curve`, `area`, `pie`, instanced `.map`, `staggerProgress`, Grid and Flex, counters, `MathFormula`, `steps()` |
 | [04-ui-showcase](../examples/04-ui-showcase.motion.tsx) | Neo-brutalist product UI | components with children, `ThemeProvider`, HTML tags with Tailwind, `let`/`if`, `defineLayoutStates`/`flip`, `bounds()`, `Transition` |
 | [05-story-vertical](../examples/05-story-vertical.motion.tsx) | 9:16 social story | layout from `useComposition()`, gradients in oklch, `Mask`/`MaskSource`, `mixBlendMode`, `measureText`, `repeatProgress` |
-| [06-memphis-loop](../examples/06-memphis-loop.motion.tsx) | 1:1 seamless loop | `loop: true`, `defineRepeater`, `trail`, `pingPong`, `noise2d`, `seededRandom`, `wiggle`, `GeometryBatch` with `field()`, path modifiers |
+| [06-memphis-loop](../examples/06-memphis-loop.motion.tsx) | 1:1 seamless loop | `loop: true`, `defineRepeater`, `trail`, `pingPong`, `noise2d`, `seededRandom`, `wiggle2D`, `GeometryBatch` with `field()`, path modifiers |
 | [07-route-map](../examples/07-route-map.motion.tsx) | Illustrated map | Scene `camera` with `World`/`Screen`, `motionPath`, `pointAt`/`tangentAt`, a dashed trim, `freezeTime`, `connect()` |
 | [08-celebrate](../examples/08-celebrate.motion.tsx) | Festive burst | `particles()` with `curlNoise` and `drag`, `simulate()`, `easeOutElastic`; `motionBlur`, `Echo` and a `Shutter` |
 | [09-cards-3d](../examples/09-cards-3d.motion.tsx) | Editorial 3D cards | `perspective`, `preserve-3d`, `backfaceVisibility`, 3D transform lists; a `Scene3D` badge, a `ShaderLayer`, `Glass`, `backdropFilter` |
-| [10-lower-third](../examples/10-lower-third.motion.tsx) | Broadcast overlay | `overlay()` role, the clip clock, `yoyoProgress`, props, transparent output |
+| [10-lower-third](../examples/10-lower-third.motion.tsx) | Broadcast overlay | `overlay()` role, the clip clock, `yoyoProgress`, props, `textTransform`, transparent output |
 
 Existing examples provide larger compositions without duplicating them here:
 

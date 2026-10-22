@@ -2,7 +2,8 @@
 // stop and pulls back at the end to show the whole trip.
 // Shows the Scene camera with World and Screen, motionPath/follow, autoRotate, pointAt, tangentAt
 // and pathLength, a dashed route revealed with trimEnd under a moving strokeDashoffset, freezeTime
-// for the stops, connect() leader lines from map stops to screen-space cards, Ellipse and Polyline.
+// for the stops, connect() leader lines from map stops to screen-space cards, Ellipse and Polyline,
+// and motionBlur on the small props the camera sweeps past.
 // Render: valle motion render examples/07-route-map.motion.tsx -o 07-route-map.mp4
 
 export const composition = { width: 1920, height: 1080, fps: 60, duration: 6 };
@@ -166,11 +167,13 @@ function Island({ island }) {
   );
 }
 
+// The camera pans faster than a quarter of a small prop's size per frame, so the props carry
+// motionBlur "auto", which counts the camera's movement as well as their own.
 function Lighthouse() {
   const { seconds } = useCurrentTime();
   const glow = 0.5 + 0.5 * cos(seconds * TAU * 0.8);
   return (
-    <View key="lighthouse" className="absolute" style={{ left: 1292, top: 800 }}>
+    <View key="lighthouse" className="absolute" style={{ left: 1292, top: 800, motionBlur: "auto" }}>
       <Ellipse key="base" style={AT_ORIGIN} cx={0} cy={0} rx={22} ry={7} fill="#5FBF6E80" />
       <Polygon key="tower" style={AT_ORIGIN} fill="#FFFFFF"
         points={[point(-13, 0), point(13, 0), point(9, -64), point(-9, -64)]} />
@@ -191,7 +194,7 @@ function Boat({ course, start, speed, hull }) {
   const { seconds } = useCurrentTime();
   return (
     <View key="boat" className="absolute"
-      style={{ motionPath: follow(course, start + speed * seconds, { rotate: "auto" }) }}>
+      style={{ motionPath: follow(course, start + speed * seconds, { rotate: "auto" }), motionBlur: "auto" }}>
       <Polyline key="wake" style={AT_ORIGIN} points={[point(-58, -13), point(-22, 0), point(-58, 13)]}
         fill="none" stroke="#FFFFFFB3" strokeWidth={4} strokeLinecap="round" strokeLinejoin="round" />
       <Path key="hull" style={AT_ORIGIN} fill={hull}
@@ -231,7 +234,8 @@ function Pin({ progress, cruising }) {
   const lift = 16 * cruising + 3 * (1 - cruising) * sin(seconds * TAU * 0.9);
   const lean = clamp(heading.x * cruising * 9, -9, 9);
   return (
-    <View key="pin" className="absolute" style={{ motionPath: motionPath(ROUTE, progress, { rotate: "none" }) }}>
+    <View key="pin" className="absolute"
+      style={{ motionPath: motionPath(ROUTE, progress, { rotate: "none" }), motionBlur: "auto" }}>
       <Ellipse key="shadow" style={AT_ORIGIN} cx={0} cy={0}
         rx={0.01 + 14 * appear - 5 * cruising} ry={0.01 + 5 * appear - 2 * cruising}
         fill={interpolate(cruising, [0, 1], ["#2E2A4F4D", "#2E2A4F1F"])} />
@@ -319,7 +323,7 @@ export default function RouteMap() {
           strokeLinecap="round" strokeDasharray="22 18" strokeDashoffset={-34 * seconds} trimEnd={progress} />
         <Path key="route" style={AT_ORIGIN} d={ROUTE} fill="none" stroke={ROUTE_RED} strokeWidth={9}
           strokeLinecap="round" strokeDasharray="22 18" strokeDashoffset={-34 * seconds} trimEnd={progress} />
-        <View key="harbor" className="absolute" style={{ left: HARBOR[0], top: HARBOR[1] }}>
+        <View key="harbor" className="absolute" style={{ left: HARBOR[0], top: HARBOR[1], motionBlur: "auto" }}>
           <Circle key="harbor-base" style={AT_ORIGIN} cx={0} cy={0} r={8} fill={INK} />
           <Line key="harbor-pole" style={AT_ORIGIN} x1={0} y1={0} x2={0} y2={-40} fill="none" stroke={INK}
             strokeWidth={4} strokeLinecap="round" />

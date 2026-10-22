@@ -64,9 +64,11 @@ function hop(glide) {
 }
 
 // One ring that spreads and fades over a second; each TimeScope starts it at its own moment.
-function Ripple({ color, clear }) {
+function Ripple({ color }) {
   const { seconds } = useCurrentTime();
   const grow = interpolate(seconds, [0, 1.2], [0, 1], { easing: "easeOutCubic" });
+  // The same colour with an alpha of 00 fades the ring out without darkening it.
+  const clear = `${color}00`;
   return (
     <Circle cx={960} cy={540} r={250 + grow * 380} fill="none" strokeWidth={16 - grow * 13}
       stroke={interpolate(seconds, [0, 0.1, 1.2], [clear, color, clear])} />
@@ -137,13 +139,13 @@ export default function LogoSting() {
       <View key="lockup" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080,
         translate: point(slide, 0) }}>
         <TimeScope key="ripple-teal" offset={LOCK} speed={1}>
-          <Ripple key="ring-teal" color={TEAL} clear="#2A9D8F00" />
+          <Ripple key="ring-teal" color={TEAL} />
         </TimeScope>
         <TimeScope key="ripple-red" offset={LOCK + 0.12} speed={1}>
-          <Ripple key="ring-red" color={RED} clear="#E6394600" />
+          <Ripple key="ring-red" color={RED} />
         </TimeScope>
         <TimeScope key="ripple-sand" offset={LOCK + 0.24} speed={1}>
-          <Ripple key="ring-sand" color={SAND} clear="#F4A26100" />
+          <Ripple key="ring-sand" color={SAND} />
         </TimeScope>
 
         <View key="mark" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080,

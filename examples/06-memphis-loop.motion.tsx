@@ -2,7 +2,7 @@
 // dot field ripples and big shapes drift at the corners; every motion repeats a whole number of
 // times in six seconds, so the loop has no seam. Shows loop: true, root .map instances,
 // defineRepeater, trail(…, { mode: "wrap" }), pingPong, sin/cos/TAU, noise2d, seededRandom,
-// wiggle, GeometryBatch with field(), zigzag(), twist(), puckerBloat() and roundCorners().
+// wiggle2D, GeometryBatch with field(), zigzag(), twist(), puckerBloat() and roundCorners().
 // Render: valle motion render examples/06-memphis-loop.motion.tsx -o 06-memphis-loop.mp4
 
 export const composition = { width: 1080, height: 1080, fps: 60, duration: 6, loop: true };
@@ -107,9 +107,9 @@ export default function MemphisLoop() {
 
   // The sun and the ring wander by sampling noise around a circle, which ends where it starts.
   const wander = (seed) => 70 * (noise2d(seed, 1.6 * cos(cycle), 1.6 * sin(cycle)) - 0.5);
-  // wiggle() is noise in time; reading it at pingPong(seconds, 3) plays it forth and back.
-  const swayX = wiggle(pingPong(seconds, 3), { seed: 9, frequency: 0.4, amplitude: 26 });
-  const swayY = wiggle(pingPong(seconds, 3), { seed: 10, frequency: 0.4, amplitude: 18 });
+  // wiggle2D() is noise in time on both axes; reading it at pingPong(seconds, 3) plays it forth
+  // and back.
+  const sway = wiggle2D(pingPong(seconds, 3), { seed: 9, frequency: 0.4, amplitude: [26, 18] });
 
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: BLUSH }}>
@@ -127,7 +127,7 @@ export default function MemphisLoop() {
         stroke={PURPLE} strokeWidth={64} />
       <Path key="half-moon" fill={MINT}
         d={sector({ center: point(0, 0), outer: 230, start: deg(180), end: deg(360) })}
-        style={{ translate: point(95 + swayX, 1010 + swayY), rotate: `${35 + 14 * sin(cycle)}deg`,
+        style={{ translate: point(95 + sway.x, 1010 + sway.y), rotate: `${35 + 14 * sin(cycle)}deg`,
           transformOrigin: point(0, 0) }} />
 
       <GeometryBatch key="sprinkles" geometry={SPRINKLE} positions={SPRINKLE_AT} sizes={1}

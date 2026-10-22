@@ -83,7 +83,7 @@ function Art({ card }) {
           trimEnd={draw} style={{ position: "absolute", left: 0, top: 0 }} />
         <Circle key="start" cx={56} cy={236} r={9} fill={PAPER} />
         <View key="end" className="absolute rounded-full" style={{ left: 302, top: 50, width: 28, height: 28,
-          backgroundColor: PAPER, scale: point(0.001 + 0.999 * arrive, 0.001 + 0.999 * arrive) }} />
+          backgroundColor: PAPER, scale: arrive }} />
       </View>
     );
   }

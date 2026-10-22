@@ -2,7 +2,7 @@
 // stagger, a line draws as its area pours in, a donut opens and the record month is called out.
 // Shows scaleLinear/scaleBand/niceDomain/ticks/stack/curve/area/pie/sector, root `.map` instances,
 // defineSequence + staggerProgress, Grid/Flex with Tailwind, formatNumber/formatPercent counters,
-// MathFormula, a Clip that follows the line head and a steps() blink.
+// MathFormula, a Clip that follows the line head, motionBlur on the head and a steps() blink.
 // Render: valle motion render examples/03-data-dashboard.motion.tsx -o 03-data-dashboard.mp4
 
 export const composition = { width: 1920, height: 1080, fps: 60, duration: 6 };
@@ -328,16 +328,19 @@ export default function DataDashboard() {
           <Path d={TREND} fill="none" stroke={ORANGE} strokeWidth={6} strokeLinecap="round" strokeLinejoin="round" trimEnd={draw} />
           {DOTS.map((dot) => (
             <Circle key={dot.id} cx={dot.x} cy={dot.y} fill={ORANGE}
-              r={0.01 + 7 * interpolate(seconds - dot.at, [0, 0.3], [0, 1], { easing: "easeOutBack" })} />
+              r={7 * interpolate(seconds - dot.at, [0, 0.3], [0, 1], { easing: "easeOutBack" })} />
           ))}
           {DOTS.map((dot) => (
             <Circle key={`${dot.id}-core`} cx={dot.x} cy={dot.y} fill="#FFFFFF"
-              r={0.01 + 3 * interpolate(seconds - dot.at, [0.05, 0.3], [0, 1], { easing: "easeOutCubic" })} />
+              r={3 * interpolate(seconds - dot.at, [0.05, 0.3], [0, 1], { easing: "easeOutCubic" })} />
           ))}
-          <Circle cx={head.x} cy={head.y} r={11 + 18 * pulse} fill="none" stroke={interpolate(pulse, [0, 1], ["#FF6D0099", "#FF6D0000"])}
-            strokeWidth={3} visible={seconds >= LINE_END} />
-          <Circle cx={head.x} cy={head.y} r={11} fill={ORANGE} visible={draw > 0} />
-          <Circle cx={head.x} cy={head.y} r={4.5} fill="#FFFFFF" visible={draw > 0} />
+          {/* The head runs as a translation, so motionBlur "auto" smears it along the line. */}
+          <View className="absolute" style={{ left: 0, top: 0, translate: point(head.x, head.y), motionBlur: "auto" }}>
+            <Circle cx={0} cy={0} r={11 + 18 * pulse} fill="none" stroke={interpolate(pulse, [0, 1], ["#FF6D0099", "#FF6D0000"])}
+              strokeWidth={3} visible={seconds >= LINE_END} />
+            <Circle cx={0} cy={0} r={11} fill={ORANGE} visible={draw > 0} />
+            <Circle cx={0} cy={0} r={4.5} fill="#FFFFFF" visible={draw > 0} />
+          </View>
           <div className="absolute rounded-full px-4 py-2"
             style={{ left: LAST.x - 128, top: LAST.y - 62, backgroundColor: INK,
               opacity: clamp(pop * 2, 0, 1), scale: 0.6 + 0.4 * pop, transformOrigin: "100% 100%" }}>
