@@ -525,6 +525,34 @@ fn numeric_text_signature(text: &str) -> String {
     result
 }
 
+/// The nodes drawn inside a Shutter, each with whether its Shutter blurs motion: one that takes
+/// two samples or more over an open exposure.
+fn shutter_scopes(artifact: &SceneArtifact) -> BTreeMap<String, bool> {
+    let mut scopes = BTreeMap::new();
+    let mut pending = vec![(artifact.root, None)];
+    while let Some((id, scope)) = pending.pop() {
+        let Some(node) = artifact.nodes.get(id.0 as usize) else {
+            continue;
+        };
+        if let Some(blurs) = scope {
+            scopes.insert(node.key.clone(), blurs);
+        }
+        let scope = match node.kind {
+            NodeKind::Shutter {
+                samples,
+                angle_degrees,
+            } => Some(samples > 1 && angle_degrees > 0),
+            _ => scope,
+        };
+        let children = artifact
+            .node_children
+            .get(node.children.start as usize..node.children.end as usize)
+            .unwrap_or_default();
+        pending.extend(children.iter().map(|child| (*child, scope)));
+    }
+    scopes
+}
+
 fn painted_nodes(prepared: &PreparedScene) -> BTreeSet<String> {
     let artifact = prepared.artifact();
     let intrinsic = |node: &crate::SceneNode| {
@@ -628,6 +656,11 @@ pub fn review_motion(
             }
         }
     }
+    // A Shutter that samples an open exposure blurs what it draws, as motion blur does.
+    let shutter_blurred = shutter_scopes(prepared.artifact())
+        .into_iter()
+        .filter_map(|(key, blurs)| blurs.then_some(key))
+        .collect::<BTreeSet<_>>();
     let mut active = BTreeMap::<String, FastRun>::new();
     let mut active_text = BTreeMap::<String, TextRun>::new();
     let mut active_out_of_frame = BTreeMap::<String, FrameRun>::new();
@@ -997,12 +1030,18 @@ pub fn review_motion(
                 }
             }
             for node in &candidates {
+                // The rows of a batch or an instance group in a Shutter are drawn by their host.
+                let shuttered = shutter_blurred.contains(node)
+                    || hosts
+                        .get(node)
+                        .is_some_and(|host| shutter_blurred.contains(host));
                 let motion = previous.get(node).zip(current.get(node)).and_then(
                     |(before, after): (
                         &super::scene::ReviewNodeSample,
                         &super::scene::ReviewNodeSample,
                     )| {
-                        if !before.visible
+                        if shuttered
+                            || !before.visible
                             || !after.visible
                             || before.motion_blurred
                             || after.motion_blurred
@@ -1177,22 +1216,7 @@ struct ClockHints {
 
 impl ClockHints {
     fn new(artifact: &SceneArtifact, clock: valle_timeline::ClipClock) -> Self {
-        let mut shuttered = BTreeSet::new();
-        let mut pending = vec![(artifact.root, false)];
-        while let Some((id, inside)) = pending.pop() {
-            let Some(node) = artifact.nodes.get(id.0 as usize) else {
-                continue;
-            };
-            if inside {
-                shuttered.insert(node.key.clone());
-            }
-            let inside = inside || matches!(node.kind, NodeKind::Shutter { .. });
-            let children = artifact
-                .node_children
-                .get(node.children.start as usize..node.children.end as usize)
-                .unwrap_or_default();
-            pending.extend(children.iter().map(|child| (*child, inside)));
-        }
+        let shuttered = shutter_scopes(artifact).into_keys().collect();
         Self {
             frames: clock.frames(),
             looping: clock.looping(),

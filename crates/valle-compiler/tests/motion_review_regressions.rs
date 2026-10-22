@@ -355,3 +355,47 @@ fn short_text_at_the_last_frame_is_information() {
     assert_eq!(severity("flash"), Some("warning"), "{:?}", reviewed.issues);
     assert_eq!(severity("ending"), Some("info"), "{:?}", reviewed.issues);
 }
+
+/// What `source`'s Scene holds, drawn inside a Shutter of `samples` over `angle` degrees.
+fn shuttered(source: &str, samples: u32, angle: u32) -> String {
+    let start = source.find("<Scene").unwrap();
+    let start = start + source[start..].find('>').unwrap() + 1;
+    let end = source.rfind("</Scene>").unwrap();
+    format!(
+        "{}<Shutter samples={{{samples}}} angle={{{angle}}}>{}</Shutter>{}",
+        &source[..start],
+        &source[start..end],
+        &source[end..]
+    )
+}
+
+#[test]
+fn a_shutter_that_samples_an_open_exposure_blurs_rows_and_nodes_like_motion_blur() {
+    let dot = r##"export default function Main() { const time = useCurrentTime(); return <Scene>
+        <View key="dot" className="absolute" style={{left:20,top:160,width:20,height:20,backgroundColor:"#ffffff",translate:point(300 * time.seconds,0)}} />
+    </Scene>; }"##;
+    // The rows stay instance rows under their host inside the Shutter.
+    assert!(
+        compile_motion(&shuttered(RUNNERS, 4, 180))
+            .unwrap()
+            .artifact
+            .nodes
+            .iter()
+            .any(|node| matches!(node.kind, valle_motion::NodeKind::InstanceBatch { .. }))
+    );
+    // Particle rows, instance rows and a plain node each strobe without blur.
+    for source in [particles(8.0, 1.0, 1.0), RUNNERS.to_owned(), dot.to_owned()] {
+        assert_eq!(strobes(&report(&source)).len(), 1, "{source}");
+        let blurred = report(&shuttered(&source, 4, 180));
+        assert!(
+            strobes(&blurred).is_empty(),
+            "{source}: {:?}",
+            blurred.issues
+        );
+        // One sample, or an exposure of no length, blurs nothing.
+        for (samples, angle) in [(1, 180), (4, 0)] {
+            let sharp = report(&shuttered(&source, samples, angle));
+            assert_eq!(strobes(&sharp).len(), 1, "{source}: {:?}", sharp.issues);
+        }
+    }
+}

@@ -78,7 +78,8 @@ the OS for a free port. Studio uses the Web resources embedded by `cargo xtask b
 `motion review --json` checks every output frame using final screen positions after layout and
 transforms. A `strobe` warning names a visible painted node that moves over a quarter of its
 extent along the travel direction per frame for
-at least three consecutive frame intervals without an active motion blur filter. A single
+at least three consecutive frame intervals without an active motion blur filter or a `Shutter`
+that takes two samples or more over an open exposure. A single
 discontinuous jump is excluded from this sustained-motion rule. The report includes the frame
 range and peak displacement. Content whose square-root area times opacity is below 4 px is ignored.
 Strobe warnings of rows that one element draws combine into one warning with `affectedRows` and
