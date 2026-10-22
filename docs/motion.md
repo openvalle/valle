@@ -148,7 +148,8 @@ editing and source saving remain available.
 ### Module and function shape
 
 The entry module needs a named default function declaration and a
-`composition` with its canvas and duration. Optional `export const controls =
+`composition` with its canvas and duration, which module constants can read, as in
+`const OUT = composition.duration - 0.5`. Optional `export const controls =
 { ... }` declares external inputs. Helper modules may export reusable values
 and components.
 

@@ -81,6 +81,21 @@ impl<'s> Compiler<'s> {
         let mut cache_candidates = Vec::new();
         for statement in &program.body {
             record_module_const_inits(statement, &mut module_const_inits);
+            // Module code reads the exported composition as it reads any module constant.
+            if let Statement::ExportDeclaration(export) = statement
+                && let Declaration::VariableDeclaration(declaration) = &export.declaration
+                && declaration.kind.is_const()
+                && declaration.declarations.iter().any(|declarator| {
+                    declarator.id.get_identifier_name().as_deref() == Some("composition")
+                })
+            {
+                match prelude_peeled_const_text(script, declaration, &exponentiations) {
+                    Some(text) => prelude.push_str(&text),
+                    None => prelude.push_str(&exponentiations.rewrite(script, declaration.span())),
+                }
+                prelude.push_str(";\n");
+                continue;
+            }
             let is_prepare_declaration = match statement {
                 // Keep JSX declarations out of QuickJS; node helpers are expanded by the lowerer.
                 Statement::VariableDeclaration(_) => !contains_jsx(statement),

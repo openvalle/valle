@@ -70,6 +70,25 @@ fn duration_and_optional_fps_are_recorded_exactly() {
 }
 
 #[test]
+fn module_constants_read_the_exported_composition() {
+    let source = r##"export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
+const OUT = composition.duration - 0.5;
+export default function Demo() { const time = useCurrentTime();
+  return <View key="box" style={{ width: 10, height: 10, opacity: interpolate(time.seconds, [0, OUT], [0, 1]) }} />;
+}"##;
+    let artifact = compile_motion(source).unwrap().artifact;
+    let stops = artifact
+        .exprs
+        .iter()
+        .find_map(|expr| match expr {
+            valle_motion::Expr::Interpolate { stops, .. } => Some(stops),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(stops[1].input, 1.5);
+}
+
+#[test]
 fn static_arithmetic_is_accepted_and_removed_fields_are_rejected() {
     let artifact = compile_entry("const W = 800; export const composition = { width: W, height: W / 2, fps: 30000 / 1001, duration: 3 + 0.5 };").unwrap();
     assert_eq!(artifact.composition.unwrap().duration, "7/2");
