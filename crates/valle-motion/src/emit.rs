@@ -4060,7 +4060,7 @@ struct SpanAnchor {
     /// Span byte range in concatenated shaping input; subtract its start for node-relative offsets.
     range: core::ops::Range<usize>,
     /// Processed local byte ranges -> authored local byte ranges. Present only when deterministic
-    /// text processing changed bytes (currently preserved-tab expansion or an ellipsized prefix).
+    /// text processing changed bytes: a case transform, collapsed whitespace or expanded tabs.
     projection: Option<Vec<TextSourceSegment>>,
 }
 
@@ -4166,8 +4166,8 @@ fn tab_spaces(tab_size: &impl ToCss) -> usize {
 }
 
 /// Map Takumi's deterministic preprocessing back to authored bytes. Identity text keeps the old
-/// zero-allocation path. Ellipsis truncation is a verbatim prefix; collapsed CSS whitespace and
-/// preserved tabs carry an explicit byte projection back to the authored source.
+/// zero-allocation path. Ellipsis truncation is a verbatim prefix; case transforms, collapsed CSS
+/// whitespace and preserved tabs carry an explicit byte projection back to the authored source.
 fn text_source_projection(
     source: &str,
     processed: &str,
@@ -4179,7 +4179,34 @@ fn text_source_projection(
         return Ok(None);
     }
     if transform != TextTransform::None {
-        return Err(ClusterReject::NotVerbatim);
+        // Takumi transforms the case first, then processes the whitespace of the result.
+        let (cased, cased_projection) = cased_text(source, transform);
+        let Some(projection) =
+            text_source_projection(&cased, processed, collapse, TextTransform::None, tab_spaces)?
+        else {
+            return Ok(Some(cased_projection));
+        };
+        return projection
+            .into_iter()
+            .map(|segment| {
+                let mut sources = cased_projection
+                    .iter()
+                    .filter(|cased| {
+                        cased.processed.start < segment.source.end
+                            && segment.source.start < cased.processed.end
+                    })
+                    .map(|cased| cased.source.clone());
+                let first = sources.next().ok_or(ClusterReject::NotVerbatim)?;
+                let source = sources.fold(first, |all, next| {
+                    all.start.min(next.start)..all.end.max(next.end)
+                });
+                Ok(TextSourceSegment {
+                    processed: segment.processed,
+                    source,
+                })
+            })
+            .collect::<Result<_, _>>()
+            .map(Some);
     }
     if source.starts_with(processed) {
         return Ok(None);
@@ -4216,6 +4243,58 @@ fn text_source_projection(
         return Err(ClusterReject::NotVerbatim);
     }
     Ok(Some(projection))
+}
+
+/// `source` under Takumi's `text-transform`, with the authored bytes of each character of the
+/// result: a case mapping may change the length, as `ß` becomes `SS`.
+fn cased_text(source: &str, transform: TextTransform) -> (String, Vec<TextSourceSegment>) {
+    // `str::to_lowercase` maps each character as `char::to_lowercase` does, except that it picks
+    // the final form of a capital sigma from its context.
+    let lowercase: Vec<char> = if transform == TextTransform::Lowercase {
+        source.to_lowercase().chars().collect()
+    } else {
+        Vec::new()
+    };
+    let mut next_lowercase = 0;
+    let mut start_of_word = true;
+    let mut cased = String::with_capacity(source.len());
+    let mut projection = Vec::with_capacity(source.len());
+    for (start, ch) in source.char_indices() {
+        let from = cased.len();
+        match transform {
+            TextTransform::Uppercase => cased.extend(ch.to_uppercase()),
+            TextTransform::Lowercase => {
+                let count = ch.to_lowercase().count();
+                cased.extend(
+                    lowercase
+                        .get(next_lowercase..next_lowercase + count)
+                        .unwrap_or_default(),
+                );
+                next_lowercase += count;
+            }
+            // Takumi capitalizes the first letter of a word and lowercases the others.
+            TextTransform::Capitalize if ch.is_alphabetic() => {
+                if start_of_word {
+                    cased.extend(ch.to_uppercase());
+                    start_of_word = false;
+                } else {
+                    cased.extend(ch.to_lowercase());
+                }
+            }
+            TextTransform::Capitalize => {
+                start_of_word = !ch.is_numeric();
+                cased.push(ch);
+            }
+            // No transform, or one Takumi adds later: then the text differs from what it shaped,
+            // and the source address is reported unavailable.
+            _ => cased.push(ch),
+        }
+        projection.push(TextSourceSegment {
+            processed: from..cased.len(),
+            source: start..start + ch.len_utf8(),
+        });
+    }
+    (cased, projection)
 }
 
 fn is_css_collapsible_whitespace(ch: char) -> bool {
@@ -4491,6 +4570,54 @@ mod tests {
         assert_eq!(
             project_cluster_ranges(&[span(0, 1), span(4, 5)], &projection),
             Ok(vec![span(2, 3), span(6, 7)])
+        );
+    }
+
+    #[test]
+    fn case_transforms_project_back_to_the_authored_characters() {
+        // Both capitals of `ß` belong to it.
+        let projection = text_source_projection(
+            "Straße 1",
+            "STRASSE 1",
+            WhiteSpaceCollapse::Collapse,
+            TextTransform::Uppercase,
+            8,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            project_cluster_ranges(
+                &[span(0, 1), span(4, 5), span(5, 6), span(8, 9)],
+                &projection
+            ),
+            Ok(vec![span(0, 1), span(4, 6), span(4, 6), span(8, 9)])
+        );
+        // A final sigma, then whitespace collapsed after the case.
+        let projection = text_source_projection(
+            "ΟΔΟΣ  Α",
+            "οδος α",
+            WhiteSpaceCollapse::Collapse,
+            TextTransform::Lowercase,
+            8,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            project_cluster_ranges(&[span(6, 8), span(8, 9), span(9, 11)], &projection),
+            Ok(vec![span(6, 8), span(8, 10), span(10, 12)])
+        );
+        let projection = text_source_projection(
+            "hello wORLD 2nd",
+            "Hello World 2nd",
+            WhiteSpaceCollapse::Collapse,
+            TextTransform::Capitalize,
+            8,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            project_cluster_ranges(&[span(0, 1), span(7, 8), span(12, 13)], &projection),
+            Ok(vec![span(0, 1), span(7, 8), span(12, 13)])
         );
     }
 

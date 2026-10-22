@@ -695,6 +695,43 @@ export const controls=({assets:{noise:asset({kind:"image"}),effect:asset({kind:"
 }
 
 #[test]
+fn large_seeds_case_transforms_and_zero_sizes_render() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let source = r##"export const composition = { width: 320, height: 180, fps: 30, duration: 1 };
+export default function Sizes() { const time = useCurrentTime();
+  return <Scene className="relative h-full w-full" style={{ backgroundColor: "#000000" }}>
+    <View key="wiggle" className="absolute" style={{ left: 10, top: 10, width: 20, height: 20, backgroundColor: "#ffffff",
+      translate: wiggle2D(time.seconds, { seed: 9007199254740991, frequency: 2, amplitude: [8, 4] }) }} />
+    <Text key="upper" className="absolute" style={{ left: 40, top: 40, fontSize: 32, color: "#ffffff", textTransform: "uppercase" }}>Straße</Text>
+    <Text key="units" split="char" className="absolute" style={{ left: 40, top: 100, fontSize: 32, color: "#ffffff", textTransform: "capitalize" }}
+      perUnit={(unit) => ({ scale: point(time.progress, time.progress) })}>pop art</Text>
+    <Circle key="dot" cx={280} cy={40} r={9 * interpolate(time.seconds, [0.5, 1], [0, 1])} fill="#ffffff" />
+  </Scene>;
+}"##;
+    std::fs::write(dir.join("sizes.motion.tsx"), source).unwrap();
+    success(run(dir, &["motion", "check", "sizes.motion.tsx"]));
+    for frame in ["0", "29"] {
+        success(run(
+            dir,
+            &[
+                "motion",
+                "render",
+                "sizes.motion.tsx",
+                "--frame",
+                frame,
+                "--backend",
+                "raster",
+                "-o",
+                &format!("frame-{frame}.png"),
+            ],
+        ));
+    }
+    assert_eq!(pixel(dir, "frame-0.png", 280, 40), vec![0, 0, 0]);
+    assert!(pixel(dir, "frame-29.png", 280, 40)[0] > 200);
+}
+
+#[test]
 fn motion_time_window_uses_ordinary_numeric_props() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();

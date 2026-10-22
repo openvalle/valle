@@ -1742,7 +1742,9 @@ When one `Text` contains styled `Span` runs, its units span the full authored
 text: `unit.index`, `count`, `start`, and `end` do not restart at a `Span`.
 Each run keeps its color, weight, and shaping; the unit style is applied to its
 glyphs. Inline images are excluded from character counts and separate word units.
-A unit whose `scale` has a zero axis draws nothing, as a View does.
+Units count authored characters: with `textTransform: "uppercase"`, both capitals of
+`ß` belong to its unit. A unit whose `scale` has a zero axis draws nothing, as a View
+does.
 
 `rangeSelector(unit, { start, end, offset?, softness?, shape? })` returns a 0–1 weight
 for the unit of a `perUnit` function. `start` and `end` are
