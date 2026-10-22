@@ -125,7 +125,12 @@ impl<'s> Compiler<'s> {
                 .into_iter()
                 .map(|item| {
                     static_motion_value(item)
-                        .or_else(|| self.fold_to_value(item))
+                        // A string computed at compile time, such as a template literal of
+                        // constants, reads as the string literal it equals.
+                        .or_else(|| match self.fold_to_value(item)? {
+                            MotionValue::Str(text) => Some(motion_value_from_string(&text)),
+                            value => Some(value),
+                        })
                         .or_else(|| {
                             self.illegal(
                                 DiagCode::GrammarForbidden,

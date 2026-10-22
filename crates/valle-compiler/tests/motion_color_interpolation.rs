@@ -16,6 +16,35 @@ const OKLCH_COLOR_INTERPOLATION: &str =
     include_str!("fixtures/motion/composition/oklch-color-interpolation.motion.tsx");
 
 #[test]
+fn template_literal_color_stops_read_as_the_strings_they_equal() {
+    let color = |text: &str| {
+        MotionValue::Color(AuthorColor::from_srgb8(
+            valle_draw::Rgba::parse(text).unwrap(),
+        ))
+    };
+    for outputs in ["[INK, `${INK}00`]", "[`${INK}`, \"#11111100\"]"] {
+        let source = r##"const INK = "#111111";
+export default function T() { const time = useCurrentTime();
+  return <View style={{ width: 10, height: 10, backgroundColor: interpolate(time.progress, [0, 1], OUTPUTS) }} />;
+}"##
+        .replace("OUTPUTS", outputs);
+        let artifact = compile_motion(&source)
+            .unwrap_or_else(|diagnostics| panic!("{outputs}: {diagnostics:#?}"))
+            .artifact;
+        let stops = artifact
+            .exprs
+            .iter()
+            .find_map(|expr| match expr {
+                Expr::Interpolate { stops, .. } => Some(stops),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(stops[0].output, color("#111111"), "{outputs}");
+        assert_eq!(stops[1].output, color("#11111100"), "{outputs}");
+    }
+}
+
+#[test]
 fn color_reaches_draw_program_without_byte_rounding() {
     let artifact = compile_motion(OKLCH_COLOR_INTERPOLATION).unwrap().artifact;
     let interpolate = artifact
