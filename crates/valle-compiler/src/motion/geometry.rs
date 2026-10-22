@@ -1859,6 +1859,7 @@ impl<'s> Compiler<'s> {
             );
         }
         let input = self.lower_expr(arguments[2].as_expression()?)?;
+        let clock = self.reads_clock(input);
         let stop_count = stops.len();
         Some(
             self.push(
@@ -1876,6 +1877,7 @@ impl<'s> Compiler<'s> {
                     color_space: valle_draw::program::GradientInterpolation::Srgb,
                     extrapolate_left: Extrapolation::Clamp,
                     extrapolate_right: Extrapolation::Clamp,
+                    clock,
                 },
                 span,
             ),
@@ -1964,6 +1966,19 @@ impl<'s> Compiler<'s> {
                 None
             })?;
         let frame = self.lower_expr(arguments[1].as_expression()?)?;
+        // The frame is rounded down; a value of the clock takes the clock tolerance, so a frame
+        // boundary reached through seconds × rate picks its own frame.
+        let frame = if self.reads_clock(frame) {
+            self.push(
+                Expr::MathUnary {
+                    op: MathUnaryOp::ClockFloor,
+                    input: frame,
+                },
+                span,
+            )
+        } else {
+            frame
+        };
         Some(self.push(Expr::PathTrajectory { frames, frame }, span))
     }
 }

@@ -694,6 +694,9 @@ pub enum Expr {
         color_space: valle_draw::program::GradientInterpolation,
         extrapolate_left: Extrapolation,
         extrapolate_right: Extrapolation,
+        /// The input is computed from the clock: it reaches a stop, and a step of `steps()`,
+        /// within the clock tolerance, as a comparison and `Math.floor` of it do.
+        clock: bool,
     },
     /// One numeric field of a prepare-time simulation. Samples are spaced by dt from time zero;
     /// arbitrary frame times interpolate adjacent samples after clamping to duration.

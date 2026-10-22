@@ -223,6 +223,12 @@ impl Easing {
 
     /// Evaluate the curve at `t`, clamped to [0, 1].
     pub fn evaluate(self, t: f64) -> f64 {
+        self.evaluate_with_floor(t, f64::floor)
+    }
+
+    /// [`Easing::evaluate`], with `floor` choosing the step of `steps()` from `t` times the
+    /// count: for a `t` computed from the clock, a floor that holds at frame boundaries.
+    pub fn evaluate_with_floor(self, t: f64, floor: fn(f64) -> f64) -> f64 {
         use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
         let t = t.clamp(0.0, 1.0);
@@ -235,7 +241,7 @@ impl Easing {
                     StepPosition::JumpNone => (0.0, count - 1.0),
                     StepPosition::JumpBoth => (1.0, count + 1.0),
                 };
-                ((t * count).floor() + jump).min(jumps) / jumps
+                (floor(t * count) + jump).min(jumps) / jumps
             }
             // The formulas meet their endpoints only up to rounding.
             _ if t == 0.0 => 0.0,

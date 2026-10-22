@@ -9,7 +9,7 @@ use valle_motion::{
     SceneNode, SemanticMeta, StyleBinding, StyleValue, TemplatePart, TextValue, canonical_bytes,
 };
 
-const ENVELOPE_SHA256: &str = "dd14619949e33dc56e958bfc27818356ad87df7748466a400c3ab1d0721964c4";
+const ENVELOPE_SHA256: &str = "ee213d0dcb517e6db2dbb5c741e494a33b9066c5a6d98ec391f0168d84cd3adc";
 
 fn prop(control: ControlType, default: MotionValue) -> PropControl {
     PropControl {
@@ -109,6 +109,7 @@ fn envelope() -> ArtifactEnvelope {
             color_space: valle_draw::program::GradientInterpolation::Srgb,
             extrapolate_left: Extrapolation::Clamp,
             extrapolate_right: Extrapolation::Clamp,
+            clock: true,
         },
     ];
 

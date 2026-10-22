@@ -656,6 +656,7 @@ impl<'s> Compiler<'s> {
             return None;
         };
         let progress = self.lower_expr(call.arguments[3].as_expression()?)?;
+        let clock = self.reads_clock(progress);
         let number = |this: &mut Self, from: f64, to: f64| {
             this.push(
                 Expr::Interpolate {
@@ -674,6 +675,7 @@ impl<'s> Compiler<'s> {
                     color_space: valle_draw::program::GradientInterpolation::Srgb,
                     extrapolate_left: Extrapolation::Extend,
                     extrapolate_right: Extrapolation::Extend,
+                    clock,
                 },
                 span,
             )

@@ -145,10 +145,11 @@ export default function P() { const time = useCurrentTime();
 "#;
     let clamp_artifact = compile_motion(CLAMPED).expect("clamped trail").artifact;
     let wrap_artifact = compile_motion(WRAPPED).expect("wrapped trail").artifact;
+    // A value of the clock wraps as `mod` of it does, with the clock tolerance.
     assert!(wrap_artifact.exprs.iter().any(|expr| matches!(
         expr,
         Expr::MathBinary {
-            op: valle_motion::MathBinaryOp::Mod,
+            op: valle_motion::MathBinaryOp::ClockMod,
             ..
         }
     )));
@@ -169,6 +170,21 @@ export default function P() { const time = useCurrentTime();
     assert!((style_number(CLAMPED, "opacity", 300, fps) - 0.9).abs() < 1e-12);
     assert!((style_number(&negative, "opacity", 300, fps) - 0.1).abs() < 1e-12);
     assert!((style_number(&negative_wrap, "opacity", 0, fps) - 0.6).abs() < 1e-12);
+    // Frame 9 is 0.3 s, where `seconds / 0.1` is 2.9999999999999996: the wrap starts over, as
+    // `mod` does, rather than showing the end of the trail.
+    let at_boundary = |opacity: &str| {
+        let source = WRAPPED.replace(
+            r#"trail(time.progress, 2, { gap: 0.2, mode: "wrap" })"#,
+            opacity,
+        );
+        assert_ne!(source, WRAPPED);
+        style_number(&source, "opacity", 9, fps)
+    };
+    assert_eq!(at_boundary("mod(time.seconds / 0.1, 1)"), 0.0);
+    assert_eq!(
+        at_boundary(r#"trail(time.seconds / 0.1, 0, { gap: 0, mode: "wrap" })"#),
+        0.0
+    );
 }
 
 #[test]

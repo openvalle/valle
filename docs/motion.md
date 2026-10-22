@@ -798,8 +798,11 @@ at frame boundaries. `<`, `<=`, `>`, `>=`, `===`, `!==`, `==`, `!=`, `Math.floor
 `%` of such a value treat two numbers within `min(4ε · max(|a|, |b|, 1), 2⁻²⁴)` of each
 other as equal, with ε = 2⁻⁵². At 0.3 seconds `Math.floor(seconds / 0.1)` is 3,
 `seconds >= 0.3` holds and `seconds % 0.1` is 0, where JavaScript's `0.3 % 0.1` is
-0.09999999999999998. Values that do not depend on the time, such as data, props and
-constants, keep JavaScript's arithmetic.
+0.09999999999999998. The wrap of `trail(t, i, { mode: "wrap" })`, the path
+`pathTrajectory` picks, and the stops and `steps()` of an `interpolate` of such a value
+hold the same way: `interpolate(seconds, [0.1, 0.4], [0, 3], { easing: "steps(3)" })` is 2
+at 0.3 seconds. Values that do not depend on the time, such as data, props and constants,
+keep JavaScript's arithmetic.
 
 The clip clock runs on the host and does not follow the source's trim, rate, looping
 and hold. Both host boundaries are rounded to the nearest frame at the output FPS; the

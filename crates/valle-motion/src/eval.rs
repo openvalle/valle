@@ -1590,6 +1590,7 @@ fn eval_one_with<'a>(
             color_space,
             extrapolate_left,
             extrapolate_right,
+            clock,
         } => interpolate(
             at,
             as_number(at, "interpolate", child(*input)?)?,
@@ -1598,6 +1599,7 @@ fn eval_one_with<'a>(
             *color_space,
             *extrapolate_left,
             *extrapolate_right,
+            *clock,
         ),
         Expr::SimulationSample {
             time,
@@ -1793,6 +1795,7 @@ fn compare(
     Ok(MotionValue::Bool(value))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn interpolate(
     at: usize,
     input: f64,
@@ -1801,26 +1804,43 @@ fn interpolate(
     color_space: GradientInterpolation,
     left: Extrapolation,
     right: Extrapolation,
+    clock: bool,
 ) -> Result<MotionValue, EvalError> {
     if stops.len() < 2 || (!easings.is_empty() && easings.len() + 1 != stops.len()) {
         return Err(EvalError::BadInterpolate { at });
     }
+    // A time within roundoff of a stop is at the stop, so the segment that starts there shows.
+    let input = if clock {
+        stops
+            .iter()
+            .map(|stop| stop.input)
+            .find(|stop| crate::time::clock_equal(input, *stop))
+            .unwrap_or(input)
+    } else {
+        input
+    };
     let first = &stops[0];
     let last = &stops[stops.len() - 1];
     if input < first.input {
         return match left {
             Extrapolation::Clamp => Ok(first.output.clone()),
             Extrapolation::Extend => {
-                interpolate_segment(at, input, &stops[0], &stops[1], None, color_space)
+                interpolate_segment(at, input, &stops[0], &stops[1], None, color_space, clock)
             }
         };
     }
     if input >= last.input {
         return match right {
             Extrapolation::Clamp => Ok(last.output.clone()),
-            Extrapolation::Extend => {
-                interpolate_segment(at, input, &stops[stops.len() - 2], last, None, color_space)
-            }
+            Extrapolation::Extend => interpolate_segment(
+                at,
+                input,
+                &stops[stops.len() - 2],
+                last,
+                None,
+                color_space,
+                clock,
+            ),
         };
     }
     let segment = stops
@@ -1834,6 +1854,7 @@ fn interpolate(
         &stops[segment + 1],
         easings.get(segment).copied(),
         color_space,
+        clock,
     )
 }
 
@@ -1844,18 +1865,25 @@ fn interpolate_segment(
     rhs: &InterpolateStop,
     easing: Option<Easing>,
     color_space: GradientInterpolation,
+    clock: bool,
 ) -> Result<MotionValue, EvalError> {
     let span = rhs.input - lhs.input;
     if span <= 0.0 || !span.is_finite() {
         return Err(EvalError::BadInterpolate { at });
     }
     let raw = (input - lhs.input) / span;
-    let t = easing.map_or(raw, |easing| ease(easing, raw));
+    let t = easing.map_or(raw, |easing| ease(easing, raw, clock));
     lerp_value(at, &lhs.output, &rhs.output, t, color_space)
 }
 
-fn ease(easing: Easing, t: f64) -> f64 {
-    easing.evaluate(t)
+/// `easing` at `t`. A `t` computed from the clock takes the steps of `steps()` with the clock
+/// tolerance, so a step boundary on a frame shows on that frame.
+fn ease(easing: Easing, t: f64, clock: bool) -> f64 {
+    if clock {
+        easing.evaluate_with_floor(t, crate::time::clock_floor)
+    } else {
+        easing.evaluate(t)
+    }
 }
 
 fn lerp_value(
@@ -1953,6 +1981,7 @@ mod tests {
                 &stops[1],
                 Some(easing),
                 GradientInterpolation::Srgb,
+                false,
             )
             .unwrap() else {
                 panic!("number");
@@ -2612,6 +2641,7 @@ mod tests {
                 color_space: GradientInterpolation::Srgb,
                 extrapolate_left: Extrapolation::Clamp,
                 extrapolate_right: Extrapolation::Clamp,
+                clock: false,
             },
             Expr::Const {
                 value: MotionValue::Str("yes".into()),
@@ -2844,6 +2874,7 @@ mod tests {
                 color_space: GradientInterpolation::Srgb,
                 extrapolate_left: Extrapolation::Clamp,
                 extrapolate_right: Extrapolation::Clamp,
+                clock: false,
             });
         }
         let artifact = artifact(exprs);

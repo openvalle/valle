@@ -597,6 +597,7 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
+        let clock = self.reads_clock(input);
         Some(self.push(
             Expr::Interpolate {
                 input,
@@ -605,6 +606,7 @@ impl<'s> Compiler<'s> {
                 color_space,
                 extrapolate_left,
                 extrapolate_right,
+                clock,
             },
             span,
         ))

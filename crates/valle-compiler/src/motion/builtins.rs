@@ -1228,7 +1228,11 @@ impl<'s> Compiler<'s> {
                 .insert(MOTION_MATH_CAPABILITY.to_owned());
             return Some(self.push(
                 Expr::MathBinary {
-                    op: MathBinaryOp::Mod,
+                    op: if self.reads_clock(raw) {
+                        MathBinaryOp::ClockMod
+                    } else {
+                        MathBinaryOp::Mod
+                    },
                     lhs: raw,
                     rhs: one,
                 },

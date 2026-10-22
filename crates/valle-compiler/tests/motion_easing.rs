@@ -115,6 +115,24 @@ fn step_start_jumps_at_zero_and_at_each_segment_start() {
 }
 
 #[test]
+fn steps_of_the_time_change_on_their_frame() {
+    let at_frame_9 = |input: &str, easing: &str| {
+        let source = with_options(&format!("{{easing:{easing:?}}}")).replace(
+            "time.seconds, [0, 1], [40, 440]",
+            &format!("{input}, [0.1, 0.4], [0, 3]"),
+        );
+        assert!(source.contains("[0.1, 0.4]"), "{source}");
+        positions_of(&source, &[9])[0]
+    };
+    // Frame 9 at 30 fps is 0.3 s, two thirds of the way from 0.1 to 0.4, where the second step
+    // begins; `(0.3 - 0.1) / (0.4 - 0.1) * 3` is 1.9999999999999996.
+    assert_eq!(at_frame_9("time.seconds", "steps(3)"), 2.0);
+    // `0.3 - 0.2` is 0.09999999999999998, just before the stop at 0.1, where the first step of
+    // `start` shows.
+    assert_eq!(at_frame_9("time.seconds - 0.2", "steps(3, start)"), 1.0);
+}
+
+#[test]
 fn css_and_easings_net_spellings_name_the_shared_curves() {
     // easeOutCubic at half time: 1 - 0.5³ of the way.
     assert_eq!(positions(r#""easeOutCubic""#, &[15]), vec![390.0]);

@@ -129,6 +129,44 @@ export default function P(props) { return <Scene>
 }
 
 #[test]
+fn a_trajectory_frame_of_the_time_lands_on_its_frame() {
+    let source = r##"
+const FRAMES = [path("M 0 0 L 10 0"), path("M 0 0 L 20 0"), path("M 0 0 L 30 0"), path("M 0 0 L 40 0")];
+export default function P() { const time = useCurrentTime();
+  return <Path key="trajectory" fill="none" stroke="#ffffff" strokeWidth={2}
+    d={pathTrajectory(FRAMES, time.seconds / 0.1)} />;
+}
+"##;
+    let artifact = compile_motion(source)
+        .expect("trajectory compiles")
+        .artifact;
+    let (index, frames) = artifact
+        .exprs
+        .iter()
+        .enumerate()
+        .find_map(|(index, expr)| match expr {
+            Expr::PathTrajectory { frames, .. } => Some((index, frames.clone())),
+            _ => None,
+        })
+        .expect("trajectory expression");
+    let props = resolve_props(&artifact.controls, &BTreeMap::new()).expect("props");
+    // Frame 9 is 0.3 s, where `seconds / 0.1` is 2.9999999999999996: the trajectory shows its
+    // fourth path, as `Math.floor` of the time would pick.
+    let ctx = motion_context_at_frame(9, 60, FrameRate::new(30, 1).unwrap()).expect("context");
+    let values = valle_motion::eval_all(
+        &artifact,
+        EvalInputs {
+            ctx: &ctx,
+            props: &props,
+            unit: None,
+            viewport: Some((1920.0, 1080.0)),
+        },
+    )
+    .expect("evaluate");
+    assert_eq!(values[index], MotionValue::PathData(frames[3].clone()));
+}
+
+#[test]
 fn exponentiation_is_the_deterministic_math_pow_at_frame_and_prepare_time() {
     let source = r##"
 export const controls = ({ props: { base: number({ default: 1.7 }) } });

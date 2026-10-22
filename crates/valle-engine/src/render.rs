@@ -1284,7 +1284,13 @@ impl<T: CompiledParamValueType> CompiledCurve<T> {
             .expect("admitted curve segment duration is positive")
             .as_f64()
             .clamp(0.0, 1.0);
-        from.value.interpolate(&to.value, from.easing.evaluate(raw))
+        // The segment time is exact and only its product with the count of `steps()` rounds; with
+        // the clock tolerance a step that begins on a frame shows on that frame.
+        from.value.interpolate(
+            &to.value,
+            from.easing
+                .evaluate_with_floor(raw, valle_motion::time::clock_floor),
+        )
     }
 }
 
@@ -4523,6 +4529,37 @@ mod compiled_curve_tests {
             p: [0.3, 0.0, 0.2, 1.4],
         };
         assert!(at(bezier, 3) > 100.0);
+    }
+
+    #[test]
+    fn a_step_that_begins_on_a_frame_shows_on_it() {
+        // 22 steps over 22 frames at 30 fps, one a frame, though `15 / 22 * 22` is
+        // 14.999999999999998.
+        let curve = CompiledCurve {
+            interpolation: CompiledInterpolation::Linear,
+            keyframes: vec![
+                CompiledKeyframe {
+                    time: RationalTime::ZERO,
+                    value: 0.0,
+                    easing: Easing::Steps {
+                        count: 22,
+                        position: valle_timeline::easing::StepPosition::JumpEnd,
+                    },
+                },
+                CompiledKeyframe {
+                    time: RationalTime::new(22, 30).unwrap(),
+                    value: 1.0,
+                    easing: Easing::Linear,
+                },
+            ],
+        };
+        for frame in 0..22 {
+            assert_eq!(
+                curve.evaluate(RationalTime::new(frame, 30).unwrap()),
+                frame as f64 / 22.0,
+                "frame {frame}"
+            );
+        }
     }
 }
 
