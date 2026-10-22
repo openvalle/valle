@@ -4331,24 +4331,81 @@ impl LayoutTree {
                 let width = box_layout.size.width;
                 let height = box_layout.size.height;
                 let plane = self.css_3d_planes.get(key).filter(|plane| plane.project);
-                let corners = plane.map_or_else(
-                    || {
-                        let point = |x: f32, y: f32| {
-                            valle_draw::Point::new(
-                                f64::from(matrix.a * x + matrix.c * y + matrix.x),
-                                f64::from(matrix.b * x + matrix.d * y + matrix.y),
-                            )
-                        };
-                        [
-                            point(0.0, 0.0),
-                            point(width, 0.0),
-                            point(width, height),
-                            point(0.0, height),
-                        ]
-                    },
-                    |plane| plane.quad,
-                );
-                let position = if plane.is_some() {
+                let painted = node
+                    .context
+                    .style
+                    .background_color
+                    .resolve(node.context.current_color)
+                    .0[3]
+                    != 0
+                    || node
+                        .context
+                        .style
+                        .background_image
+                        .as_ref()
+                        .is_some_and(|images| !images.is_empty())
+                    || [
+                        (box_layout.border.top, node.context.style.border_top_color),
+                        (
+                            box_layout.border.right,
+                            node.context.style.border_right_color,
+                        ),
+                        (
+                            box_layout.border.bottom,
+                            node.context.style.border_bottom_color,
+                        ),
+                        (box_layout.border.left, node.context.style.border_left_color),
+                    ]
+                    .iter()
+                    .any(|(width, color)| {
+                        *width > 0.0 && color.resolve(node.context.current_color).0[3] != 0
+                    });
+                // A path paints its points, which need not lie in its box: a bare `<Path>` in a
+                // block has a box of no height. `None` inside when it paints nothing.
+                let path = self.paths.get(key).map(|path| {
+                    path_paint_rect(
+                        path,
+                        painted.then_some([0.0, 0.0, f64::from(width), f64::from(height)]),
+                    )
+                });
+                let place = |x: f64, y: f64| match plane {
+                    Some(plane) => plane
+                        .matrix
+                        .try_apply(valle_draw::Point::new(x, y))
+                        .unwrap_or(valle_draw::Point::new(f64::NAN, f64::NAN)),
+                    None => valle_draw::Point::new(
+                        f64::from(matrix.a) * x + f64::from(matrix.c) * y + f64::from(matrix.x),
+                        f64::from(matrix.b) * x + f64::from(matrix.d) * y + f64::from(matrix.y),
+                    ),
+                };
+                let corners = match path.flatten() {
+                    Some([left, top, right, bottom]) => [
+                        place(left, top),
+                        place(right, top),
+                        place(right, bottom),
+                        place(left, bottom),
+                    ],
+                    None => plane.map_or_else(
+                        || {
+                            let point = |x: f32, y: f32| {
+                                valle_draw::Point::new(
+                                    f64::from(matrix.a * x + matrix.c * y + matrix.x),
+                                    f64::from(matrix.b * x + matrix.d * y + matrix.y),
+                                )
+                            };
+                            [
+                                point(0.0, 0.0),
+                                point(width, 0.0),
+                                point(width, height),
+                                point(0.0, height),
+                            ]
+                        },
+                        |plane| plane.quad,
+                    ),
+                };
+                let position = if let Some(Some([left, top, right, bottom])) = path {
+                    place((left + right) * 0.5, (top + bottom) * 0.5)
+                } else if plane.is_some() {
                     valle_draw::Point::new(
                         corners.iter().map(|point| point.x).sum::<f64>() / 4.0,
                         corners.iter().map(|point| point.y).sum::<f64>() / 4.0,
@@ -4398,41 +4455,13 @@ impl LayoutTree {
                             opacity: f64::from(opacity),
                             cycle: 0,
                             group: None,
-                            painted: node
-                                .context
-                                .style
-                                .background_color
-                                .resolve(node.context.current_color)
-                                .0[3]
-                                != 0
-                                || node
-                                    .context
-                                    .style
-                                    .background_image
-                                    .as_ref()
-                                    .is_some_and(|images| !images.is_empty())
-                                || [
-                                    (box_layout.border.top, node.context.style.border_top_color),
-                                    (
-                                        box_layout.border.right,
-                                        node.context.style.border_right_color,
-                                    ),
-                                    (
-                                        box_layout.border.bottom,
-                                        node.context.style.border_bottom_color,
-                                    ),
-                                    (box_layout.border.left, node.context.style.border_left_color),
-                                ]
-                                .iter()
-                                .any(|(width, color)| {
-                                    *width > 0.0
-                                        && color.resolve(node.context.current_color).0[3] != 0
-                                }),
+                            painted,
                             position,
                             bounds: [left, top, right, bottom],
                             visible: node.context.style.visibility == Visibility::Visible
                                 && opacity > 0.0
-                                && !plane.is_some_and(|plane| plane.hidden),
+                                && !plane.is_some_and(|plane| plane.hidden)
+                                && !matches!(path, Some(None)),
                             on_screen,
                             motion_blurred: blurred,
                         },
@@ -4536,6 +4565,30 @@ impl LayoutTree {
         }
         samples
     }
+}
+
+/// The local rectangle a path node paints: the hull of its points, outset by half its stroke, and
+/// `painted_box` when its box paints a background or a border. `None` when it paints neither.
+fn path_paint_rect(
+    path: &crate::layout::bridge::PathContent,
+    painted_box: Option<[f64; 4]>,
+) -> Option<[f64; 4]> {
+    let pad = path
+        .stroke
+        .as_ref()
+        .map_or(0.0, |stroke| stroke.width * 0.5);
+    path.points
+        .iter()
+        .map(|point| [point.x - pad, point.y - pad, point.x + pad, point.y + pad])
+        .chain(painted_box)
+        .reduce(|a, b| {
+            [
+                a[0].min(b[0]),
+                a[1].min(b[1]),
+                a[2].max(b[2]),
+                a[3].max(b[3]),
+            ]
+        })
 }
 
 fn resolve_advanced_filters(

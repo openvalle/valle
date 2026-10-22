@@ -399,3 +399,48 @@ fn a_shutter_that_samples_an_open_exposure_blurs_rows_and_nodes_like_motion_blur
         }
     }
 }
+
+#[test]
+fn a_path_is_reviewed_where_it_paints_not_where_its_box_lies() {
+    // A bare Path lays out as a block of no height at the top of its parent; its star paints
+    // the parent's whole 40 px square.
+    let moving = r##"const STAR = path("M 20 0 L 25 15 L 40 20 L 25 25 L 20 40 L 15 25 L 0 20 L 15 15 Z");
+export default function Main() { const time = useCurrentTime(); return <Scene>
+        <View className="absolute" style={{left:20,top:100,width:40,height:40,translate:point(600 * time.seconds,0)}}>
+          <Path key="star" d={STAR} fill="#ffffff" />
+        </View>
+    </Scene>; }"##;
+    let reviewed = report(moving);
+    let first = &reviewed
+        .trajectories
+        .iter()
+        .find(|t| t.node == "star")
+        .expect("the star is reviewed")
+        .points[0];
+    let near = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3);
+    assert!(
+        near(&first.bounds, &[20.0, 100.0, 60.0, 140.0]),
+        "{first:?}"
+    );
+    assert!(near(&first.position, &[40.0, 120.0]), "{first:?}");
+    // It moves 20 px a frame, half its size: it strobes.
+    let found = strobes(&reviewed);
+    assert_eq!(found.len(), 1, "{:?}", reviewed.issues);
+    assert_eq!(found[0].node, "star");
+    // A star that pops in place, turned by a degree, stays where it is.
+    let popping = r##"const STAR = path("M 50 0 L 61 39 L 100 50 L 61 61 L 50 100 L 39 61 L 0 50 L 39 39 Z");
+export default function Main() { const time = useCurrentTime(); const pop = spring(time.seconds - 0.2, { preset: "bouncy" }); return <Scene>
+        <View className="absolute" style={{left:270,top:130,width:100,height:100,rotate:"1deg",scale:0.4 + 0.6 * pop}}>
+          <Path key="star" d={STAR} fill="#ffffff" />
+        </View>
+    </Scene>; }"##;
+    let reviewed = report(popping);
+    assert!(
+        reviewed
+            .issues
+            .iter()
+            .all(|i| !matches!(i.code, "strobe" | "linear_motion")),
+        "{:?}",
+        reviewed.issues
+    );
+}
