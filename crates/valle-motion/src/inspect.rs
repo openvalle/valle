@@ -70,6 +70,17 @@ pub fn sample_properties(
         .ok_or("unknown Motion node")?;
     let props =
         crate::resolve_props(&artifact.controls, &request.props).map_err(|e| e.to_string())?;
+    // A scene without a delivery contract plays once over the requested frames.
+    let clock = match &artifact.composition {
+        Some(composition) => composition
+            .clock(artifact.role, request.fps, None)
+            .map_err(|error| error.to_string())?,
+        None => {
+            crate::motion_context_at_frame(0, request.duration_frames, request.fps)
+                .ok_or("invalid sample range, viewport or point limit (2..=240)")?
+                .clock
+        }
+    };
     let span = request.end_frame - request.start_frame;
     let count = request.max_points.min(span.saturating_add(1));
     let frames: Vec<_> = (0..count)
@@ -114,12 +125,9 @@ pub fn sample_properties(
             continue;
         }
         let at = |frame| -> Result<(Vec<f64>, Vec<MotionValue>), String> {
-            let mut ctx =
-                crate::motion_context_at_frame(frame, request.duration_frames, request.fps)
-                    .ok_or("frame outside scene")?;
-            if let Some(composition) = &artifact.composition {
-                ctx.host.duration = composition.duration().map_err(|error| error.to_string())?;
-            }
+            let ctx = crate::MotionContext::new(clock, i64::from(frame))
+                .filter(|_| frame < clock.frames())
+                .ok_or("frame outside scene")?;
             let values = eval_roots_planned(
                 artifact,
                 &plan,

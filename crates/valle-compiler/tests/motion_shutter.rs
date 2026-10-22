@@ -90,8 +90,9 @@ fn shutter_samples_are_exact_output_times() {
         .unwrap()
         .dependencies()
         .temporal_window();
-    assert_eq!(window.past_frames, RationalTime::new(23, 32).unwrap());
-    assert_eq!(window.future_frames, RationalTime::new(23, 32).unwrap());
+    // Each subframe blurs over a quarter of a frame on each side of its own time.
+    assert_eq!(window.past_frames, RationalTime::new(15, 32).unwrap());
+    assert_eq!(window.future_frames, RationalTime::new(15, 32).unwrap());
     let context = motion_context_at_frame(20, 60, FrameRate::new(30, 1).unwrap()).unwrap();
     let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
     let fonts = Fonts::default();

@@ -162,6 +162,7 @@ pub(super) fn evaluate_visual_program(
                         from_clip,
                         sources,
                         snapshot,
+                        frame,
                         composition_time,
                         &format!("visual/{}/transition/from", track.order),
                         resources,
@@ -170,6 +171,7 @@ pub(super) fn evaluate_visual_program(
                         to_clip,
                         sources,
                         snapshot,
+                        frame,
                         composition_time,
                         &format!("visual/{}/transition/to", track.order),
                         resources,
@@ -200,6 +202,7 @@ pub(super) fn evaluate_visual_program(
                     clip,
                     sources,
                     snapshot,
+                    frame,
                     composition_time,
                     &format!("visual/{}/clip", track.order),
                     resources,
@@ -260,6 +263,7 @@ fn evaluate_visual_layer(
     clip: &CompiledVisualClip,
     sources: &CompiledSourceCatalog,
     snapshot: &ResolvedResourceSnapshot,
+    frame: i64,
     composition_time: RationalTime,
     role: &str,
     resources: &mut Vec<EvaluatedResourceRef>,
@@ -267,10 +271,12 @@ fn evaluate_visual_layer(
     let clip_time = composition_time
         .checked_sub(clip.exact_start)
         .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-    let clocks = EvaluationClocks {
-        composition: composition_time,
-        clip: clip_time,
-    };
+    let clocks = EvaluationClocks::clip(
+        composition_time,
+        clip_time,
+        frame == clip.range.end() - 1,
+        clip.exact_duration,
+    );
     let mask = clip.layer.mask.as_ref().map(|mask| match mask {
         CompiledMask::Rect {
             rect,
@@ -330,7 +336,12 @@ fn evaluate_source_ref(
     let source = sources
         .source(source_index)
         .expect("admitted source index exists");
-    let mapped_time = source.map_time(composition_time)?;
+    // A Motion source reads every clock from the clock of its placement.
+    let motion_context = source.motion_context(composition_time)?;
+    let mapped_time = match motion_context {
+        Some(context) => MappedSourceTime::Exact(context.sample.composition()),
+        None => source.map_time(composition_time)?,
+    };
     let sample_time = match mapped_time {
         MappedSourceTime::Exact(time) => time,
         MappedSourceTime::Static | MappedSourceTime::HoldStart => RationalTime::ZERO,
@@ -341,32 +352,18 @@ fn evaluate_source_ref(
     let clip_time = composition_time
         .checked_sub(source.placement_start)
         .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-    let clocks = EvaluationClocks {
-        composition: composition_time,
-        clip: clip_time,
-    };
-    let motion_props = source.motion().map(|motion| motion.evaluate_props(clocks));
-    let motion_host = source
-        .motion()
-        .map(|motion| {
-            let frame = valle_timeline::internal::quantize::quantize_frame_boundary(
-                composition_time,
-                motion.host_fps,
-            )
-            .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-            let local_frame = u32::try_from(frame - motion.host_range.start())
-                .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-            let frames = u32::try_from(motion.host_range.end() - motion.host_range.start())
-                .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-            valle_motion::MotionHostContext::new(
-                valle_timeline::internal::SampleTime::new(clip_time),
-                motion.host_duration,
-                local_frame,
-                frames,
-            )
-            .ok_or(RuntimeFault::ExactTimeOverflow)
-        })
-        .transpose()?;
+    let motion_props = source.motion().map(|motion| {
+        let clock = motion.clock();
+        let last_frame = motion_context.is_some_and(|context| {
+            context.frame == clock.first_frame() + i64::from(clock.frames()) - 1
+        });
+        motion.evaluate_props(EvaluationClocks::clip(
+            composition_time,
+            clip_time,
+            last_frame,
+            clock.duration(),
+        ))
+    });
     let mut motion_resources = BTreeMap::new();
     let mut motion_artifact_dependencies = Vec::new();
     if let Some(motion) = source.motion() {
@@ -398,7 +395,7 @@ fn evaluate_source_ref(
         sample_time,
         resource,
         motion_props,
-        motion_host,
+        motion_context,
         motion_resources,
         motion_artifact_dependencies,
     })
@@ -467,10 +464,12 @@ pub(super) fn evaluate_caption_program(
                 .checked_sub(caption.range.start())
                 .ok_or(RuntimeFault::ExactTimeOverflow)?;
             let local_time = frame_sample_time(local_frame, frame_rate)?;
-            let clocks = EvaluationClocks {
-                composition: composition_time,
-                clip: local_time,
-            };
+            let clocks = EvaluationClocks::clip(
+                composition_time,
+                local_time,
+                frame == caption.range.end() - 1,
+                caption.duration,
+            );
             evaluated.push(EvaluatedCaption::Text(super::EvaluatedTextCaption {
                 track_order: track.order,
                 range: caption.range,
@@ -591,7 +590,7 @@ fn evaluate_audio_endpoint(
             sample_time,
             resource,
             motion_props: None,
-            motion_host: None,
+            motion_context: None,
             motion_resources: BTreeMap::new(),
             motion_artifact_dependencies: Vec::new(),
         },

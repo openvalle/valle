@@ -185,6 +185,15 @@ time or fade its gain when silence is intended.
 `trimStart`. For example, an offset into a three-second source wraps back to source
 time zero at its end. Prepare a trimmed asset first when only a subrange should loop.
 
+A Motion source follows the same map, and a one-shot one reaches its end on screen:
+the last frame before the source plays out shows `composition.duration`, stepping
+there from the frame before it, and under `hold` the frames after it show it too. A
+source that declares `loop: true` wraps without a cut under `end: "loop"`, so
+`Shutter`, `Echo` and motion blur run on across the seam; a one-shot source in a
+looping clip restarts with a cut at each wrap. The start and end of a clip are cuts
+too: a subframe sample past them reads the scene clock at the cut. See
+[Motion time](motion.md#current-time-and-composition).
+
 ## Tracks and compositing
 
 | Band | Clip content | Behavior |
@@ -325,7 +334,11 @@ Visual transforms, audio gain/pan, caption presentation and Motion `props` curve
 use **clip-local seconds**, regardless of the clip’s `start`. Source trimming,
 rate, looping and hold do not retime these curves. Motion exposes the same
 clip-local clock as `clipSeconds` from `useCurrentTime()` and the authored clip
-length as `clipDuration` from `useComposition()`.
+length as `clipDuration` from `useComposition()`. A clip's interval excludes its
+end, so its last frame comes before `duration`; on that frame, visual transforms,
+caption presentation and Motion `props` curves read at `duration`, so a curve that
+ends with the clip arrives on screen. Audio gain and pan are read per sample and
+reach it anyway.
 
 Keyframes must be non-empty, strictly increasing and lie in the owning duration
 (the last time may equal that duration). Values before the first and after the
@@ -706,8 +719,11 @@ A Motion entry may instead declare `role = overlay({ intro, outro, hold: "once" 
 supplied `fit`, `trimStart`, `rate` and `end` are rejected, including neutral values.
 Overlays lay out directly in `size` (rounded to positive pixels, halves away from
 zero), or the Timeline canvas. They preserve intro/outro and map only the middle
-segment to the host duration. Component duration and role travel together as exact
-prepared metadata; Timeline JSON does not repeat the declaration.
+segment to the host duration. The jump into the outro is a cut, and the last frame
+of the outro shows the template's end; an outro shorter than a frame can hold no
+frame, and `timeline check` then warns `unsampled-end`. Component duration and role
+travel together as exact prepared metadata; Timeline JSON does not repeat the
+declaration.
 
 A component declaring `transition()` belongs in a track's [`transitions`](#transitions).
 Placed as a clip it lays out like an overlay that stretches over the clip, with
@@ -846,7 +862,12 @@ declared track/clip order. Avoid stacking them accidentally.
 contract, then prepares used resources, compiles Motion components and opens the
 same verified package as rendering. Missing used files, source overruns and invalid
 Motion prop values fail this check. Unused resources are not opened. Checking does
-not render a frame or verify every glyph/encoder combination.
+not render a frame or verify every glyph/encoder combination. Its report lists
+`warnings` about what the Timeline's frames leave out of a Motion clip, each with
+the clip's `path` in the document, such as `/tracks/visual/0/clips/1`:
+`unsampled-end` when no frame shows the end of a one-shot source, and
+`under-one-frame` when an `onset` lasts less than a frame of output through the
+clip's rate.
 
 Use PNG previews at boundaries and representative animation times, then export a
 short MP4 when audio/video delivery matters. Validate input dimensions and source

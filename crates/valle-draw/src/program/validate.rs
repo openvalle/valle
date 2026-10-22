@@ -812,22 +812,11 @@ fn validate_filter(filter: &Filter, location: &str) -> Result<(), DrawProgramErr
             }
             finite_f32(*scale, &format!("{location}.scale"))?;
         }
-        Filter::VelocityBlur {
-            velocity,
-            shutter_angle_degrees,
-        } => {
-            finite_f32(velocity[0], &format!("{location}.velocity[0]"))?;
-            finite_f32(velocity[1], &format!("{location}.velocity[1]"))?;
-            finite_nonnegative(
-                *shutter_angle_degrees,
-                &format!("{location}.shutterAngleDegrees"),
-            )?;
-            if *shutter_angle_degrees > 360.0 {
-                return invalid(
-                    format!("{location}.shutterAngleDegrees"),
-                    "must not exceed 360",
-                );
-            }
+        Filter::VelocityBlur { from, to } => {
+            finite_f32(from[0], &format!("{location}.from[0]"))?;
+            finite_f32(from[1], &format!("{location}.from[1]"))?;
+            finite_f32(to[0], &format!("{location}.to[0]"))?;
+            finite_f32(to[1], &format!("{location}.to[1]"))?;
         }
     }
     Ok(())
@@ -1811,19 +1800,8 @@ fn apply_filter_bounds(
                 offset[1].abs() * 0.5 + 1.0,
             ),
         )?,
-        Filter::VelocityBlur {
-            velocity,
-            shutter_angle_degrees,
-        } => {
-            let scale = *shutter_angle_degrees / 360.0;
-            let dx = velocity[0].abs() * scale;
-            let dy = velocity[1].abs() * scale;
-            Rect::from_edges(
-                rect.left() - f64::from(dx),
-                rect.top() - f64::from(dy),
-                rect.right() + f64::from(dx),
-                rect.bottom() + f64::from(dy),
-            )
+        Filter::VelocityBlur { from, to } => {
+            outset_rect(rect, Filter::velocity_blur_reach(*from, *to))?
         }
         Filter::FilmGrain { .. }
         | Filter::LensDistortion { .. }
@@ -1999,15 +1977,7 @@ fn filter_footprint(filter: &Filter) -> Insets {
             offset[0].abs() * 0.5 + 1.0,
             offset[1].abs() * 0.5 + 1.0,
         ),
-        Filter::VelocityBlur {
-            velocity,
-            shutter_angle_degrees,
-        } => {
-            let scale = *shutter_angle_degrees / 360.0;
-            let dx = velocity[0].abs() * scale;
-            let dy = velocity[1].abs() * scale;
-            Insets::new(dx, dy, dx, dy)
-        }
+        Filter::VelocityBlur { from, to } => Filter::velocity_blur_reach(*from, *to),
         Filter::FilmGrain { .. }
         | Filter::LensDistortion { .. }
         | Filter::ColorMatrix { .. }

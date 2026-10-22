@@ -125,8 +125,8 @@ fn native_css_filters_obey_opacity_and_color_oracles() {
             turbulence: true,
         },
         Filter::VelocityBlur {
-            velocity: [2.0, 0.0],
-            shutter_angle_degrees: 180.0,
+            from: [-0.5, 0.0],
+            to: [0.5, 0.0],
         },
     ];
     for filter in filters {

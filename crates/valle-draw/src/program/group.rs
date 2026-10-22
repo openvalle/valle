@@ -173,25 +173,55 @@ pub enum Filter {
         scale: f32,
         turbulence: bool,
     },
-    /// The average of copies spread evenly along the travel of the shutter, `velocity` scaled by
-    /// the open fraction of the frame and centred on the input; see
-    /// [`Filter::velocity_blur_samples`] for how many.
+    /// The average of copies of the input spread evenly over one exposure, the trail of a moving
+    /// input: the first half travels from `from` to the input's own place, the second half from
+    /// there to `to`, both offsets from that place. See [`Filter::velocity_blur_offsets`].
     VelocityBlur {
-        velocity: [f32; 2],
-        shutter_angle_degrees: f32,
+        from: [f32; 2],
+        to: [f32; 2],
     },
 }
 
 impl Filter {
-    /// The copies a velocity blur averages for its velocity in device pixels: one for every 2px
-    /// of travel along the larger axis, so a long trail stays smooth, but at least 9 and at most
-    /// 32, which bounds the cost; past 62px the copies spread further apart.
-    pub fn velocity_blur_samples(velocity: [f32; 2], shutter_angle_degrees: f32) -> usize {
-        let shutter = (shutter_angle_degrees / 360.0).clamp(0.0, 1.0);
-        let travel = velocity[0].abs().max(velocity[1].abs()) * shutter;
-        ((travel / 2.0).ceil() as usize)
-            .saturating_add(1)
-            .clamp(9, 32)
+    /// The offset of each copy a velocity blur averages, in its trail's order, or `None` where
+    /// the trail stays within a millionth of a pixel and the blur leaves its input unchanged.
+    ///
+    /// The copies sit at even steps of the exposure, so a half of the trail that moves less
+    /// holds its copies closer together. There is one for every 2px of travel along the larger
+    /// axis of the longer half, so a long trail stays smooth, but at least 9 and at most 32,
+    /// which bounds the cost; past a 31px half the copies spread further apart. A trail whose
+    /// halves are opposite, a constant speed, is the straight line between its ends.
+    pub fn velocity_blur_offsets(from: [f32; 2], to: [f32; 2]) -> Option<Vec<[f32; 2]>> {
+        let reach = from[0]
+            .abs()
+            .max(from[1].abs())
+            .max(to[0].abs())
+            .max(to[1].abs());
+        if reach <= 1.0e-6 {
+            return None;
+        }
+        let samples = (reach.ceil() as usize).saturating_add(1).clamp(9, 32);
+        Some(
+            (0..samples)
+                .map(|index| {
+                    let phase = 2.0 * index as f32 / (samples - 1) as f32 - 1.0;
+                    let end = if phase < 0.0 { from } else { to };
+                    let share = phase.abs();
+                    [end[0] * share, end[1] * share]
+                })
+                .collect(),
+        )
+    }
+
+    /// How far a velocity blur's trail reaches from its input on each side: the box of its two
+    /// ends and the input's own place.
+    pub fn velocity_blur_reach(from: [f32; 2], to: [f32; 2]) -> Insets {
+        Insets::new(
+            (-from[0].min(to[0])).max(0.0),
+            (-from[1].min(to[1])).max(0.0),
+            from[0].max(to[0]).max(0.0),
+            from[1].max(to[1]).max(0.0),
+        )
     }
 
     /// Whether the filter leaves every pixel unchanged, so canonical programs omit it. Only
@@ -213,10 +243,7 @@ impl Filter {
             Self::LensDistortion { k1, k2 } => *k1 == 0.0 && *k2 == 0.0,
             Self::ChromaticAberration { offset } => offset[0] == 0.0 && offset[1] == 0.0,
             Self::NoiseDisplacement { scale, .. } => *scale == 0.0,
-            Self::VelocityBlur {
-                velocity,
-                shutter_angle_degrees,
-            } => (velocity[0] == 0.0 && velocity[1] == 0.0) || *shutter_angle_degrees == 0.0,
+            Self::VelocityBlur { from, to } => *from == [0.0; 2] && *to == [0.0; 2],
             Self::ColorMatrix { .. }
             | Self::Brightness { .. }
             | Self::Contrast { .. }
@@ -498,12 +525,14 @@ mod tests {
 
     #[test]
     fn a_velocity_blur_takes_a_copy_for_every_two_pixels_of_travel_within_bounds() {
-        let samples = Filter::velocity_blur_samples;
-        assert_eq!(samples([0.0, 0.0], 180.0), 9);
-        assert_eq!(samples([16.0, 0.0], 360.0), 9);
-        assert_eq!(samples([-17.0, 3.0], 360.0), 10);
-        assert_eq!(samples([5.0, -40.0], 180.0), 11);
-        assert_eq!(samples([62.0, 0.0], 360.0), 32);
-        assert_eq!(samples([1.0e9, 0.0], 720.0), 32);
+        let samples = |from, to| Filter::velocity_blur_offsets(from, to).map(|copies| copies.len());
+        assert_eq!(samples([0.0, 0.0], [0.0, 1.0e-6]), None);
+        assert_eq!(samples([-8.0, 0.0], [8.0, 0.0]), Some(9));
+        assert_eq!(samples([8.5, -1.5], [-8.5, 1.5]), Some(10));
+        assert_eq!(samples([-1.25, 10.0], [1.25, -10.0]), Some(11));
+        // The longer half sets the spacing.
+        assert_eq!(samples([-20.0, 0.0], [0.0, 0.0]), Some(21));
+        assert_eq!(samples([-31.0, 0.0], [31.0, 0.0]), Some(32));
+        assert_eq!(samples([-5.0e8, 0.0], [5.0e8, 0.0]), Some(32));
     }
 }

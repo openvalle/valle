@@ -5,7 +5,7 @@ export default function AudioPulses() { const time = useCurrentTime();
   return <Scene style={{ width: 64, height: 64 }}>
     <View style={{ width: 8, height: A.level(time.seconds) * 60,
       opacity: A.band(3, time.seconds), backgroundColor: "#ffffff" }} />
-    <View style={{ width: 8, height: A.onset(time.seconds) * 60,
+    <View style={{ width: 8, height: A.onset(time.seconds, 0.1) * 60,
       opacity: A.beatPhase(time.seconds), backgroundColor: "#ffffff" }} />
   </Scene>;
 }

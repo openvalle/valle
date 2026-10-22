@@ -102,7 +102,7 @@ function standaloneTimeline(
   artifact: Record<string, unknown>,
 ): Timeline {
   const composition = artifact.composition as {
-    width?: unknown; height?: unknown; fps?: unknown; duration?: unknown;
+    width?: unknown; height?: unknown; fps?: unknown; duration?: unknown; loop?: unknown;
   } | undefined;
   if (!composition || !Number.isInteger(composition.width) || !Number.isInteger(composition.height)
     || typeof composition.duration !== "string") {
@@ -153,6 +153,8 @@ function standaloneTimeline(
     resources,
     tracks: { visual: [{ clips: [{
       kind: "motion", component: "motion", start: 0, duration,
+      // The clip loops a looping scene, as the CLI's standalone render does.
+      ...(composition.loop === true ? { end: "loop" } : {}),
       ...(input.props && Object.keys(input.props).length ? { props: input.props } : {}),
       ...(input.data && Object.keys(input.data).length ? { data: input.data } : {}),
       ...(Object.keys(assetBindings).length ? { resources: assetBindings } : {}),

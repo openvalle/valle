@@ -58,8 +58,8 @@ describe("scheduled DrawProgram filter space", () => {
     )).toEqual({ kind: "blur", sigmaX: 10, sigmaY: 15 });
   });
 
-  test("maps velocity blur vectors through any affine transform", () => {
-    const velocity = (vector: number[]) => ({ kind: "velocityBlur", velocity: vector, shutterAngleDegrees: 180 });
+  test("maps the ends of a velocity blur's trail through any affine transform", () => {
+    const velocity = (vector: number[]) => ({ kind: "velocityBlur", from: vector.map(value => -value), to: vector });
     expect(programFilterInDeviceSpace(velocity([2, 1]), [0, -2, 8, 2, 0, 9, 0, 0, 1]))
       .toEqual(velocity([-2, 4]));
     // A shear keeps a one-dimensional blur exact.

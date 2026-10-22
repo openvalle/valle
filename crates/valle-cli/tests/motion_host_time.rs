@@ -132,7 +132,8 @@ fn assert_host_endpoint(path: &Path, frame: u32) {
     let info = reader.next_frame(&mut pixels).unwrap();
     assert_eq!((info.width, info.height), (64, 32));
     assert_eq!(info.color_type, png::ColorType::Rgba);
-    let (left, top) = if frame == 0 { (0, 0) } else { (40, 6) };
+    // The last frame of the host shows the end of the scene, which it holds from 1 s.
+    let (left, top) = if frame == 0 { (0, 0) } else { (40, 8) };
     let at = (top * 64 + left) * 4;
     assert_eq!(&pixels[at..at + 4], &[255, 255, 255, 255]);
     let outside = (top * 64 + left + 12) * 4;
@@ -249,7 +250,8 @@ export default function Main() { const time = useCurrentTime(); const comp = use
                 let info = reader.next_frame(&mut pixels).unwrap();
                 let (width, height) = if size == "64x32" { (64, 32) } else { (32, 64) };
                 assert_eq!((info.width, info.height), (width, height));
-                let left = if frame == "0" { 0 } else { 14 };
+                // The last frame shows the end of the template: 2 s.
+                let left = if frame == "0" { 0 } else { 16 };
                 assert_eq!(&pixels[left * 4..left * 4 + 4], &[255, 255, 255, 255]);
                 let outside = (height / 2 * width + left as u32) as usize * 4;
                 assert_eq!(&pixels[outside..outside + 4], &[0, 0, 0, 0]);
@@ -275,4 +277,71 @@ export default function Main() { const time = useCurrentTime(); const comp = use
         .status
         .success()
     );
+}
+
+#[test]
+fn an_outro_shorter_than_a_frame_warns_that_no_frame_shows_the_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |outro: &str| {
+        std::fs::write(
+            dir.path().join("title.motion.tsx"),
+            format!(
+                r#"export const composition={{width:64,height:32,fps:4,duration:4}};
+export const role=overlay({{intro:0,outro:{outro},hold:"once"}});
+export default function Title() {{ const time = useCurrentTime(); return <Scene><View key="bar" className="absolute"
+ style={{{{left:time.seconds*8,width:8,height:8,backgroundColor:"white"}}}}/></Scene>; }}
+"#
+            ),
+        )
+        .unwrap();
+    };
+    std::fs::write(
+        dir.path().join("title.timeline.json"),
+        serde_json::json!({"canvas":{"width":64,"height":32,"fps":4},"resources":{"title":"title.motion.tsx"},
+            "tracks":{"visual":[{"clips":[{"kind":"motion","component":"title","start":0,"duration":3}]}]}})
+        .to_string(),
+    )
+    .unwrap();
+    let warned = |args: &[&str]| {
+        let output = run(dir.path(), args);
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let warnings = report(output)["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|warning| warning["code"] == "unsampled-end")
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            stderr.contains("[warning:UnsampledEnd]"),
+            !warnings.is_empty(),
+            "{stderr}"
+        );
+        warnings
+    };
+    let check = [
+        "motion",
+        "check",
+        "title.motion.tsx",
+        "--host-duration",
+        "3",
+        "--json",
+    ];
+    let timeline = ["timeline", "check", "title.timeline.json", "--json"];
+    // Four seconds of title in a clip of three cut into the outro where it starts. At 4 fps
+    // the last frame of 3 seconds is at 2.75 s, before an outro of 0.1 s starts.
+    write("0.1");
+    let found = warned(&check);
+    assert_eq!(found.len(), 1);
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(message.contains("`outro: 0.25`"), "{message}");
+    let found = warned(&timeline);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0]["path"], "/tracks/visual/0/clips/0");
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(message.contains(" at 0–3 s"), "{message}");
+    // An outro of a frame starts on the last frame, which steps to the end.
+    write("0.25");
+    assert!(warned(&check).is_empty());
+    assert!(warned(&timeline).is_empty());
 }

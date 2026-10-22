@@ -1294,6 +1294,22 @@ struct EvaluationClocks {
     clip: RationalTime,
 }
 
+impl EvaluationClocks {
+    /// The clocks of a clip's curves at clip time `clip`. The clip's last frame reads the
+    /// clip's length, so a curve keyed at the end of the clip shows its last key there.
+    const fn clip(
+        composition: RationalTime,
+        clip: RationalTime,
+        last_frame: bool,
+        duration: RationalTime,
+    ) -> Self {
+        Self {
+            composition,
+            clip: if last_frame { duration } else { clip },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CompiledSourceKind {
@@ -1362,9 +1378,8 @@ pub struct CompiledMotionInstance {
     role: valle_timeline::MotionRole,
     component_target: u32,
     reads_destination: bool,
-    host_duration: RationalTime,
-    host_range: FrameRange,
-    host_fps: FrameRate,
+    /// The clock of the placement: how its output frames map to the scene's time.
+    clock: valle_timeline::ClipClock,
     props: BTreeMap<String, CompiledMotionParam>,
     resources: BTreeMap<String, u32>,
     artifact_dependencies: Vec<CompiledMotionArtifactDependency>,
@@ -1387,6 +1402,10 @@ impl CompiledMotionInstance {
 
     pub const fn reads_destination(&self) -> bool {
         self.reads_destination
+    }
+
+    pub const fn clock(&self) -> valle_timeline::ClipClock {
+        self.clock
     }
 
     /// The admitted executable artifact. It is carried by the immutable
@@ -1548,30 +1567,32 @@ impl CompiledSource {
         self.rate
     }
 
+    /// Every clock a Motion source reads on the frame at `composition_time`, from the clock of
+    /// its placement; `None` for other sources.
+    fn motion_context(
+        &self,
+        composition_time: RationalTime,
+    ) -> Result<Option<valle_motion::MotionContext>, RuntimeFault> {
+        let Some(motion) = self.motion() else {
+            return Ok(None);
+        };
+        let frame = quantize_frame_boundary(composition_time, motion.clock.fps())
+            .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
+        valle_motion::MotionContext::new(motion.clock, frame)
+            .map(Some)
+            .ok_or(RuntimeFault::ExactTimeOverflow)
+    }
+
     fn map_time(&self, composition_time: RationalTime) -> Result<MappedSourceTime, RuntimeFault> {
         if self.end_behavior == CompiledEndBehavior::Static {
             return Ok(MappedSourceTime::Static);
         }
+        if let Some(context) = self.motion_context(composition_time)? {
+            return Ok(MappedSourceTime::Exact(context.sample.composition()));
+        }
         let clip_local = composition_time
             .checked_sub(self.placement_start)
             .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-        if let Some(motion) = self.motion() {
-            if !matches!(motion.role, valle_timeline::MotionRole::Clip) {
-                let duration = self.source_duration.expect("admitted Motion duration");
-                let sample = motion
-                    .role
-                    .template_time(clip_local, motion.host_duration, duration)
-                    .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-                let frames = quantized_motion_source_frame_count(duration, motion.host_fps)
-                    .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-                let boundary = frame_sample_time(i64::from(frames), motion.host_fps)?.min(duration);
-                return Ok(if sample >= boundary {
-                    MappedSourceTime::HoldEnd
-                } else {
-                    MappedSourceTime::Exact(sample)
-                });
-            }
-        }
         let raw = self
             .source_start
             .checked_add(
@@ -1692,6 +1713,8 @@ pub struct CompiledVisualClip {
     id: String,
     range: FrameRange,
     exact_start: RationalTime,
+    /// The authored length of the clip, `clipDuration`.
+    exact_duration: RationalTime,
     source: u32,
     layer: CompiledVisualLayer,
     /// The sources of the layer's effect templates, in order.
@@ -1977,6 +2000,8 @@ struct CompiledCaptionPresentation {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompiledCaptionClip {
     range: FrameRange,
+    /// The authored length of the caption.
+    duration: RationalTime,
     runs: Vec<String>,
     run_timings: Vec<Option<CompiledCaptionRunTiming>>,
     run_styles: Vec<CompiledCaptionRunStyle>,
@@ -2435,9 +2460,8 @@ impl CompiledRender {
             .collect()
     }
 
-    /// Resolves a Motion source frame under this render's exact clock and
-    /// source end-behavior. The explicit RenderId prevents stale inspector
-    /// requests from crossing a replacement boundary.
+    /// Resolves a Motion source frame under the clock of its placement. The explicit RenderId
+    /// prevents stale inspector requests from crossing a replacement boundary.
     pub fn motion_frame_address(
         &self,
         render_id: RenderId,
@@ -2460,22 +2484,16 @@ impl CompiledRender {
                 source_index,
                 source_count: self.sources.len(),
             })?;
-        if source.kind != CompiledSourceKind::Motion {
-            return Err(RuntimeFault::MotionSourceRequired { source_index });
-        }
-        let duration = source
-            .source_duration
-            .ok_or(RuntimeFault::MotionSourceDurationMissing { source_index })?;
         let composition_time =
             frame_sample_time(composition_frame.index(), self.canvas.frame_rate)?;
-        let mapped = source.map_time(composition_time)?;
-        let source_frame =
-            quantize_motion_source_frame(mapped, duration, self.canvas.frame_rate, source_index)?;
+        let context = source
+            .motion_context(composition_time)?
+            .ok_or(RuntimeFault::MotionSourceRequired { source_index })?;
         Ok(MotionFrameAddress {
             render_id: self.render_id,
             composition_frame,
             source_index,
-            source_frame,
+            source_frame: context.local_frame,
         })
     }
 
@@ -2680,40 +2698,6 @@ impl CompiledRender {
     }
 }
 
-fn quantize_motion_source_frame(
-    mapped: MappedSourceTime,
-    duration: RationalTime,
-    frame_rate: FrameRate,
-    source_index: u32,
-) -> Result<u32, RuntimeFault> {
-    let frame_count = u32::try_from(
-        quantized_motion_source_frame_count(duration, frame_rate)
-            .map_err(|_| RuntimeFault::MotionSourceDurationMissing { source_index })?,
-    )
-    .map_err(|_| RuntimeFault::ExactTimeOverflow)?;
-    match mapped {
-        MappedSourceTime::Static | MappedSourceTime::HoldStart => Ok(0),
-        MappedSourceTime::HoldEnd => Ok(frame_count - 1),
-        MappedSourceTime::Exact(time) => {
-            let frame = quantize_frame_boundary(time, frame_rate)
-                .map_err(|_| RuntimeFault::ExactTimeOverflow)?
-                .clamp(0, i64::from(frame_count) - 1);
-            u32::try_from(frame).map_err(|_| RuntimeFault::ExactTimeOverflow)
-        }
-    }
-}
-
-/// ABI-defined discrete extent of a Motion source on its output frame clock.
-fn quantized_motion_source_frame_count(
-    duration: RationalTime,
-    frame_rate: FrameRate,
-) -> Result<i64, ()> {
-    let frame_count = quantize_frame_interval(RationalTime::ZERO, duration, frame_rate)
-        .map_err(|_| ())?
-        .duration_frames;
-    (frame_count > 0).then_some(frame_count).ok_or(())
-}
-
 /// The resource's own payload, then the shaders a Motion artifact writes inline: a backend
 /// fetches those by content and ABI, as it fetches a descriptor's shader.
 fn compiled_execution_resource_refs(
@@ -2793,7 +2777,7 @@ pub struct EvaluatedSourceRef {
     sample_time: RationalTime,
     resource: Option<EvaluatedResourceRef>,
     motion_props: Option<BTreeMap<String, EvaluatedMotionValue>>,
-    motion_host: Option<valle_motion::MotionHostContext>,
+    motion_context: Option<valle_motion::MotionContext>,
     motion_resources: BTreeMap<String, EvaluatedResourceRef>,
     motion_artifact_dependencies: Vec<EvaluatedResourceRef>,
 }
@@ -2831,8 +2815,9 @@ impl EvaluatedSourceRef {
         self.resource.as_ref()
     }
 
-    pub const fn motion_host(&self) -> Option<valle_motion::MotionHostContext> {
-        self.motion_host
+    /// Every clock a Motion source reads on this frame.
+    pub const fn motion_context(&self) -> Option<valle_motion::MotionContext> {
+        self.motion_context
     }
 
     pub fn motion_props(&self) -> Option<&BTreeMap<String, EvaluatedMotionValue>> {
@@ -3434,8 +3419,6 @@ pub enum RuntimeFault {
     },
     #[error("compiled source {source_index} is not a Motion source")]
     MotionSourceRequired { source_index: u32 },
-    #[error("compiled Motion source {source_index} has no positive admitted duration")]
-    MotionSourceDurationMissing { source_index: u32 },
     #[error("compiled visual source {source_index} has no admitted HoldEnd left-limit sample")]
     VisualSourceHoldEndMissing { source_index: u32 },
     #[error("sample {sample} is outside [0, {sample_count})")]
@@ -4618,36 +4601,6 @@ mod compiled_canvas_tests {
         // frame_count/fps is 1/12s, while the exact duration is 1/10s.
         assert_eq!(canvas.sample_boundary_at_frame(2).unwrap(), 4_800);
         assert!(canvas.sample_boundary_at_frame(3).is_err());
-    }
-
-    #[test]
-    fn motion_source_frame_quantization_is_exact_and_clamps_end_sentinels() {
-        let fps = FrameRate::new(30, 1).unwrap();
-        let duration = RationalTime::new(1, 1).unwrap();
-        assert_eq!(
-            quantize_motion_source_frame(
-                MappedSourceTime::Exact(RationalTime::new(7, 30).unwrap()),
-                duration,
-                fps,
-                0,
-            )
-            .unwrap(),
-            7
-        );
-        assert_eq!(
-            quantize_motion_source_frame(MappedSourceTime::HoldStart, duration, fps, 0).unwrap(),
-            0
-        );
-        assert_eq!(
-            quantize_motion_source_frame(MappedSourceTime::HoldEnd, duration, fps, 0).unwrap(),
-            29
-        );
-        // Exact duration is a boundary sentinel, never a source frame 30.
-        assert_eq!(
-            quantize_motion_source_frame(MappedSourceTime::Exact(duration), duration, fps, 0,)
-                .unwrap(),
-            29
-        );
     }
 
     #[test]

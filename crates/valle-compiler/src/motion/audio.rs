@@ -1,5 +1,5 @@
 //! Prepare-time audio analysis. The host supplies frozen, decoded PCM; the compiler writes only
-//! bounded numeric sample tables into the artifact, so frame evaluation never reads a media file.
+//! bounded numeric signals into the artifact, so frame evaluation never reads a media file.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -64,24 +64,49 @@ impl AudioAnalysisEnv {
 
 #[derive(Debug, Clone)]
 pub(super) struct AudioTable {
-    /// Samples per second.
+    /// Bins per second.
     rate: u32,
+    /// The length of the asset in seconds.
+    end: f64,
+    /// The value of each bin, at its start.
     level: Vec<f64>,
     bands: Vec<Vec<f64>>,
-    onset: Vec<f64>,
-    beat_phase: Vec<f64>,
-    beat_confidence: Vec<f64>,
+    /// The start of each bin with an onset, in seconds.
+    onsets: Vec<f64>,
+    /// The tracked beats in seconds and one more after the last interval.
+    beats: Vec<f64>,
+    beat_confidence: f64,
     stable_beats: bool,
 }
 
 impl AudioTable {
-    fn series(&self, method: &str, band: Option<usize>) -> Option<&[f64]> {
+    /// The signal a method reads; `length` is how long each onset lasts.
+    fn signal(
+        &self,
+        method: &str,
+        band: Option<usize>,
+        length: Option<f64>,
+    ) -> Option<valle_motion::AudioSignal> {
+        use valle_motion::AudioSignal;
+        let series = |values: &Vec<f64>| AudioSignal::Series {
+            rate: self.rate,
+            end: self.end,
+            values: values.clone(),
+        };
         match method {
-            "level" => Some(&self.level),
-            "band" => self.bands.get(band?).map(Vec::as_slice),
-            "onset" => Some(&self.onset),
-            "beatPhase" => Some(&self.beat_phase),
-            "beatConfidence" => Some(&self.beat_confidence),
+            "level" => Some(series(&self.level)),
+            "band" => self.bands.get(band?).map(series),
+            "onset" => Some(AudioSignal::Onsets {
+                times: self.onsets.clone(),
+                length: length?,
+            }),
+            "beatPhase" if self.stable_beats => Some(AudioSignal::Beats {
+                times: self.beats.clone(),
+            }),
+            "beatPhase" => Some(AudioSignal::Constant { value: 0.0 }),
+            "beatConfidence" => Some(AudioSignal::Constant {
+                value: self.beat_confidence,
+            }),
             _ => None,
         }
     }
@@ -135,9 +160,9 @@ pub(super) fn analyze(pcm: &AudioPcm, bands: u8, rate: u32) -> Result<AudioTable
         ));
     }
     let frames = frames as usize;
-    let mut level = vec![0.0; frames + 1];
-    let mut band_series = vec![vec![0.0; frames + 1]; bands as usize];
-    let mut flux = vec![0.0; frames + 1];
+    let mut level = vec![0.0; frames];
+    let mut band_series = vec![vec![0.0; frames]; bands as usize];
+    let mut flux = vec![0.0; frames];
     let mut planner = FftPlanner::<f64>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
     let window = (0..FFT_SIZE)
@@ -199,52 +224,88 @@ pub(super) fn analyze(pcm: &AudioPcm, bands: u8, rate: u32) -> Result<AudioTable
     let peak = flux.iter().copied().fold(0.0, f64::max);
     let mean = flux.iter().sum::<f64>() / frames as f64;
     let gate = (peak * 0.15).max(mean * 1.5);
-    let mut onset = vec![0.0; frames + 1];
-    let mut positions = Vec::new();
+    // An onset is timed at the start of its bin.
+    let mut onsets = Vec::new();
+    let mut last = None;
     for frame in 0..frames {
         if flux[frame] >= gate
             && flux[frame] > 0.0
             && (frame == 0 || flux[frame] >= flux[frame - 1])
             && (frame + 1 == frames || flux[frame] > flux[frame + 1])
-            && positions.last().is_none_or(|last| frame >= *last + 2)
+            && last.is_none_or(|last| frame >= last + 2)
         {
-            onset[frame] = 1.0;
-            positions.push(frame);
+            onsets.push(frame as f64 / f64::from(rate));
+            last = Some(frame);
         }
     }
-    // Track at audio resolution instead of rounding a tempo to an integer number
-    // of video frames. Interpolate between tracked beats so timing error cannot
-    // accumulate over the duration of the asset.
+    // Track at audio resolution instead of rounding a tempo to an integer number of video
+    // frames. The phase runs between tracked beats, so timing error cannot accumulate over the
+    // duration of the asset.
     let tracked = valle_media::analysis::beat::detect(&pcm.samples, pcm.sample_rate, 40.0, 240.0);
     let stable_beats = tracked.beats.len() >= 3 && tracked.support >= MIN_BEAT_SUPPORT;
-    let beat_confidence = vec![quantize(tracked.support.clamp(0.0, 1.0)); frames + 1];
-    let mut beat_phase = vec![0.0; frames + 1];
+    let mut beats = Vec::new();
     if stable_beats {
-        let mut beats = tracked.beats;
-        // Continue the final tracked interval only to the next expected beat. Long
-        // silence after the last event does not fabricate an endless beat grid.
+        beats = tracked.beats.iter().map(|beat| quantize(*beat)).collect();
+        // Continue the final tracked interval only to the next expected beat. Long silence after
+        // the last event does not fabricate an endless beat grid.
         let n = beats.len();
-        beats.push(beats[n - 1] + beats[n - 1] - beats[n - 2]);
-        for (frame, phase) in beat_phase.iter_mut().enumerate() {
-            let time = frame as f64 / rate as f64;
-            let next = beats.partition_point(|beat| *beat <= time);
-            if next > 0 && next < beats.len() {
-                *phase = quantize((time - beats[next - 1]) / (beats[next] - beats[next - 1]));
-            }
-        }
+        beats.push(quantize(beats[n - 1] + beats[n - 1] - beats[n - 2]));
+        beats.dedup();
     }
     Ok(AudioTable {
         rate,
+        end: pcm.samples.len() as f64 / f64::from(pcm.sample_rate),
         level,
         bands: band_series,
-        onset,
-        beat_phase,
-        beat_confidence,
+        onsets,
+        beats,
+        beat_confidence: quantize(tracked.support.clamp(0.0, 1.0)),
         stable_beats,
     })
 }
 
 impl<'s> Compiler<'s> {
+    /// Warn of an onset shorter than a frame of the composition, through the slope of its `time`,
+    /// which includes the speed of the TimeScopes around the call: frames can miss it.
+    fn check_onset_length(&mut self, length: f64, time: ExprId, span: Span) {
+        let Some(rate) = self
+            .composition
+            .as_ref()
+            .and_then(|composition| composition.frame_rate().ok().flatten())
+        else {
+            return;
+        };
+        let fps = rate.numerator() as f64 / f64::from(rate.denominator());
+        // A time that is not a straight line of the clock runs at the speed of the scopes.
+        let speed =
+            valle_motion::time_function::TimeFunction::compile(&self.expr_arena.values, time)
+                .filter(|time| time.input() == ContextInput::CompositionSeconds)
+                .map_or_else(
+                    || {
+                        self.time_scopes
+                            .iter()
+                            .map(|transform| transform.speed.abs())
+                            .product::<f64>()
+                    },
+                    |time| time.derivative().abs(),
+                );
+        if speed == 0.0 || length / speed * fps >= 1.0 {
+            return;
+        }
+        self.warn(
+            DiagCode::UnderOneFrame,
+            span,
+            format!(
+                "each onset lasts {} seconds, {} seconds of output, shorter than a frame at {} \
+                 fps: frames can miss an onset; make it at least `{}`",
+                super::clock::seconds_text(length),
+                super::clock::seconds_text(length / speed),
+                super::clock::seconds_text(fps),
+                super::clock::seconds_text(speed / fps),
+            ),
+        );
+    }
+
     pub(super) fn lower_audio_analysis_call(
         &mut self,
         member: &oxc::ast::ast::StaticMemberExpression<'_>,
@@ -256,14 +317,27 @@ impl<'s> Compiler<'s> {
             return None;
         }
         let method = member.property.name.as_str();
-        let expected = if method == "band" { 2 } else { 1 };
+        let expected = if matches!(method, "band" | "onset") {
+            2
+        } else {
+            1
+        };
+        if method == "onset" && arguments.len() == 1 {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                span,
+                "onset takes how long each onset lasts, in seconds, after the time: \
+                 `onset(t, length)`, such as `BEAT.onset(seconds, 0.2)`",
+            );
+            return Some(None);
+        }
         if !["level", "band", "onset", "beatPhase", "beatConfidence"].contains(&method)
             || arguments.len() != expected
         {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                "audioAnalysis supports level(t), band(index, t), onset(t), beatPhase(t), and beatConfidence(t)",
+                "audioAnalysis supports level(t), band(index, t), onset(t, length), beatPhase(t), and beatConfidence(t)",
             );
             return Some(None);
         }
@@ -369,9 +443,9 @@ impl<'s> Compiler<'s> {
             self.audio_tables.insert(key.clone(), table);
         }
         if method == "beatPhase" && !self.audio_tables[&key].stable_beats {
-            let confidence = self.audio_tables[&key].beat_confidence[0];
+            let confidence = self.audio_tables[&key].beat_confidence;
             self.warn(DiagCode::AudioBeatUncertain, span, format!(
-                "audioAnalysis asset `{control}` has no reliable beat grid (confidence {confidence:.3}); beatPhase returns 0. Use onset(t) for individual events or beatConfidence(t) to inspect periodic support"
+                "audioAnalysis asset `{control}` has no reliable beat grid (confidence {confidence:.3}); beatPhase returns 0. Use onset(t, length) for individual events or beatConfidence(t) to inspect periodic support"
             ));
         }
         let band = if method == "band" {
@@ -391,7 +465,29 @@ impl<'s> Compiler<'s> {
         } else {
             None
         };
-        let time_argument = &arguments[expected - 1];
+        let length = if method == "onset" {
+            let length = arguments[1]
+                .as_expression()
+                .and_then(|expr| self.eval_static(expr))
+                .and_then(|value| value.as_f64())
+                .filter(|length| length.is_finite() && *length > 0.0);
+            let Some(length) = length else {
+                self.illegal(
+                    DiagCode::BuiltinRejected,
+                    arguments[1].span(),
+                    "onset length must be a static positive number of seconds, such as `0.2`",
+                );
+                return Some(None);
+            };
+            Some(length)
+        } else {
+            None
+        };
+        let time_argument = if method == "band" {
+            &arguments[1]
+        } else {
+            &arguments[0]
+        };
         let Some(time_expr) = time_argument.as_expression() else {
             self.illegal(
                 DiagCode::GrammarForbidden,
@@ -403,20 +499,23 @@ impl<'s> Compiler<'s> {
         let Some(time) = self.lower_expr(time_expr) else {
             return Some(None);
         };
-        let table = &self.audio_tables[&key];
-        let samples = table
-            .series(method, band)
-            .expect("validated audio field")
-            .to_vec();
-        Some(Some(self.push(
-            Expr::AudioSample {
-                time,
-                rate: table.rate,
-                samples,
-            },
-            span,
-        )))
+        if let Some(length) = length {
+            self.check_onset_length(length, time, arguments[1].span());
+        }
+        let signal = self.audio_tables[&key]
+            .signal(method, band, length)
+            .expect("validated audio field");
+        Some(Some(self.push(Expr::AudioSample { time, signal }, span)))
     }
+}
+
+/// The beat phase of a table analysed at 30 bins a second, at the start of bin `frame`.
+#[cfg(test)]
+fn phase_at(table: &AudioTable, frame: usize) -> f64 {
+    table
+        .signal("beatPhase", None, None)
+        .unwrap()
+        .at(frame as f64 / 30.0)
 }
 
 #[cfg(test)]
@@ -457,10 +556,9 @@ mod tests {
         let first = analyze(&pcm(samples.clone()), 8, 30).unwrap();
         let second = analyze(&pcm(samples), 8, 30).unwrap();
         let onsets = first
-            .onset
+            .onsets
             .iter()
-            .enumerate()
-            .filter_map(|(frame, value)| (*value == 1.0).then_some(frame))
+            .map(|time| (time * 30.0).round() as usize)
             .collect::<Vec<_>>();
         for expected in [8, 23, 38, 53] {
             assert!(
@@ -470,19 +568,19 @@ mod tests {
         }
         assert_eq!(first.level, second.level);
         assert_eq!(first.bands, second.bands);
-        assert_eq!(first.onset, second.onset);
-        assert_eq!(first.beat_phase, second.beat_phase);
-        assert!(first.beat_phase[16] > 0.35 && first.beat_phase[16] < 0.65);
+        assert_eq!(first.onsets, second.onsets);
+        assert_eq!(first.beats, second.beats);
+        assert!(phase_at(&first, 16) > 0.35 && phase_at(&first, 16) < 0.65);
         let bytes = valle_motion::canonical_bytes(&(
             &first.level,
             &first.bands,
-            &first.onset,
-            &first.beat_phase,
+            &first.onsets,
+            &first.beats,
         ))
         .unwrap();
         assert_eq!(
             ContentDigest::of_bytes(&bytes).as_hex(),
-            "0d85569df8e834ee2c878c3934b9695ff86528fe69c1c17ee9865975355e1697"
+            "2845c6126bc2fafa8259cc041b82245125a37b990986f1e0be7aa009408531bd"
         );
     }
 }
@@ -511,14 +609,10 @@ mod offbeat_regressions {
     fn fractional_beat_period_does_not_drift_over_three_minutes() {
         let times: Vec<_> = (0..380).map(|i| 0.25 + i as f64 * 60.0 / 128.0).collect();
         let table = analyze(&clicks(&times, 180), 4, 30).unwrap();
-        assert!(
-            table.stable_beats,
-            "confidence={}",
-            table.beat_confidence[0]
-        );
+        assert!(table.stable_beats, "confidence={}", table.beat_confidence);
         for &beat in times.iter().skip(4).take(372) {
             let frame = (beat * 30.0).round() as usize;
-            let phase = table.beat_phase[frame];
+            let phase = phase_at(&table, frame);
             assert!(
                 phase.min(1.0 - phase) < 0.12,
                 "beat {beat}, frame {frame}, phase {phase}"
@@ -538,12 +632,11 @@ mod offbeat_regressions {
         }
         for pcm in [clicks(&times, 30), clicks(&[], 3)] {
             let table = analyze(&pcm, 4, 30).unwrap();
-            assert!(
-                !table.stable_beats,
-                "confidence={}",
-                table.beat_confidence[0]
+            assert!(!table.stable_beats, "confidence={}", table.beat_confidence);
+            assert_eq!(
+                table.signal("beatPhase", None, None),
+                Some(valle_motion::AudioSignal::Constant { value: 0.0 })
             );
-            assert!(table.beat_phase.iter().all(|phase| *phase == 0.0));
         }
     }
 
@@ -565,7 +658,7 @@ mod offbeat_regressions {
             30,
         )
         .unwrap();
-        assert!(table.beat_phase[16] > 0.35 && table.beat_phase[16] < 0.65);
-        assert!(table.beat_phase[76] > 0.35 && table.beat_phase[76] < 0.65);
+        assert!(phase_at(&table, 16) > 0.35 && phase_at(&table, 16) < 0.65);
+        assert!(phase_at(&table, 76) > 0.35 && phase_at(&table, 76) < 0.65);
     }
 }

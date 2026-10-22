@@ -566,12 +566,14 @@ fn animated_scale_keeps_geometry_at_identity_and_seeks_without_history() {
     let requested = [0, 60, 0, 30, 89, 60, 0];
     let actual = frames(&source, &requested);
     for (i, frame) in requested.into_iter().enumerate() {
+        // The last frame shows the end of the scene.
+        let shown = if frame == 89 { 90 } else { frame };
         assert_eq!(
             actual[i],
             frames(
                 &scene(
                     "",
-                    &format!("scale:{}", 1.0 + f64::from(frame) / 90.0),
+                    &format!("scale:{}", 1.0 + f64::from(shown) / 90.0),
                     "fixed"
                 ),
                 &[0]
@@ -683,6 +685,8 @@ fn dynamic_transform_lists_and_conditional_none_seek_directly() {
         &requested,
     );
     for (i, frame) in requested.into_iter().enumerate() {
+        // The last frame shows the end of the scene.
+        let shown = if frame == 89 { 90 } else { frame };
         assert_eq!(
             actual[i],
             frames(
@@ -690,7 +694,7 @@ fn dynamic_transform_lists_and_conditional_none_seek_directly() {
                     "",
                     &format!(
                         "transform:'scale({}) translateX(10px)'",
-                        1.0 + f64::from(frame) / 90.0
+                        1.0 + f64::from(shown) / 90.0
                     ),
                     "fixed"
                 ),

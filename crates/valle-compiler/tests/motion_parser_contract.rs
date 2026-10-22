@@ -305,7 +305,7 @@ float4 valle_main(float2 uv) {
   return mix(sampleContent(uv), tint, progress * sample_field(uv).r);
 }`;
 export const controls = { assets: { field: asset({ kind: "image" }) } };
-export default function Contract() {
+export default function Contract() { const time = useCurrentTime();
   return <Scene>LAYERS</Scene>;
 }"##;
 

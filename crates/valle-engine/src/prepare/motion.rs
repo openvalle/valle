@@ -121,8 +121,6 @@ pub(crate) fn host_viewport(size: [f64; 2]) -> Result<Extent2d, &'static str> {
 pub(crate) struct CompiledMotionProgramContext<'a> {
     pub prepared: &'a valle_motion::PreparedScene,
     pub evaluated: &'a crate::render::EvaluatedSourceRef,
-    pub source_frame: u32,
-    pub source_time: valle_timeline::RationalTime,
     pub source_duration: RationalTime,
     pub viewport: Extent2d,
     pub source_clip: Option<valle_draw::Rect>,
@@ -202,35 +200,20 @@ pub(super) fn resolve_motion_input(
         });
     }
 
-    let total_frames = composition.duration_frames(context.fps).map_err(|error| {
+    let motion_context = context.evaluated.motion_context().ok_or_else(|| {
         ProgramPrepareError::CompiledInvariant {
-            reason: format!("invalid Motion frame count: {error}"),
+            reason: "compiled Motion clock is missing".into(),
         }
     })?;
-    let local_frame = context.source_frame;
-    if local_frame >= total_frames {
+    if motion_context.clock.fps() != context.fps {
         return Err(ProgramPrepareError::CompiledInvariant {
             reason: format!(
-                "compiled source frame {local_frame} is outside Motion duration {total_frames}"
+                "the Motion clock runs at {} fps, the render at {}",
+                motion_context.clock.fps(),
+                context.fps
             ),
         });
     }
-    let mut motion_context = valle_motion::motion_context_at_source(
-        local_frame,
-        valle_timeline::internal::SampleTime::new(context.source_time),
-        total_frames,
-        context.fps,
-    )
-    .ok_or_else(|| ProgramPrepareError::CompiledInvariant {
-        reason: format!("local frame {local_frame} is outside Motion duration {total_frames}"),
-    })?;
-    motion_context.host =
-        context
-            .evaluated
-            .motion_host()
-            .ok_or_else(|| ProgramPrepareError::CompiledInvariant {
-                reason: "compiled Motion host context is missing".into(),
-            })?;
     Ok(MotionFrameInput {
         props: props.as_map().clone(),
         motion_context,

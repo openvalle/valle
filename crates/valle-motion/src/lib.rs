@@ -71,10 +71,7 @@ pub use canonical::{CanonicalError, canonical_bytes, canonical_bytes_with_member
 pub use composition::{
     COMPOSITION_TEMPLATE, Composition, DEFAULT_DPR, MAX_DURATION_FRAMES, ROOT_FONT_SIZE,
 };
-pub use context::{
-    MotionContext, MotionHostContext, duration_frames, motion_context_at_frame,
-    motion_context_at_host, motion_context_at_sample, motion_context_at_source,
-};
+pub use context::{MotionContext, duration_frames, motion_context_at_frame};
 pub use controls::{
     AssetControl, AssetKind, ControlType, ControlsSchema, MAX_PREPARE_DATA_ARRAY_ITEMS,
     MAX_PREPARE_DATA_BYTES, MAX_PREPARE_DATA_DEPTH, MAX_PREPARE_DATA_TOTAL_ITEMS, PrepareDataType,
@@ -93,10 +90,10 @@ pub use eval::{
     subtree_reads_runtime_inputs,
 };
 pub use expr::{
-    CaptionInput, CompareOp, ContextInput, Expr, ExprId, ExprType, Extrapolation, GeometryField, InterpolateStop,
-    MAX_TEMPLATE_OUTPUT_BYTES, MAX_TEMPLATE_PARTS, MAX_TEMPLATE_STATIC_BYTES, MathBinaryOp,
-    MathUnaryOp, NumberFormat, RangeShape, TemplatePart, bounds_dependent, geometry_eval_policy,
-    post_layout_dependent, projection_dependent,
+    AudioSignal, CaptionInput, CompareOp, ContextInput, Expr, ExprId, ExprType, Extrapolation,
+    GeometryField, InterpolateStop, MAX_TEMPLATE_OUTPUT_BYTES, MAX_TEMPLATE_PARTS,
+    MAX_TEMPLATE_STATIC_BYTES, MathBinaryOp, MathUnaryOp, NumberFormat, RangeShape, TemplatePart,
+    bounds_dependent, geometry_eval_policy, post_layout_dependent, projection_dependent,
 };
 pub use geometry::{
     GeometryError, GeometryEvalPolicy, MAX_FRAME_GEOMETRY_POINTS, MAX_GEOMETRY_TRAJECTORY_FRAMES,
@@ -105,10 +102,10 @@ pub use geometry::{
 };
 pub use glass::{MOTION_GLASS_CAPABILITY, validate_glass_schema};
 pub use layout::{
-    FrameEvaluationStats, LAYOUT_ENGINE_ID, LayoutError, LayoutOptions, LayoutTree, MotionReview, MotionReviewIssue, MotionTrajectory, MotionTrajectoryPoint,
-    PreparedScene, Scene3DFrameRequest, Scene3DRequest, SealedScene3DFrame, StyleCache, Viewport,
-    build_tree, layout_box_at_point, layout_boxes, prepare_owned_scene, prepare_scene,
-    review_motion,
+    FrameEvaluationStats, LAYOUT_ENGINE_ID, LayoutError, LayoutOptions, LayoutTree, MotionReview,
+    MotionReviewIssue, MotionTrajectory, MotionTrajectoryPoint, PreparedScene, Scene3DFrameRequest,
+    Scene3DRequest, SealedScene3DFrame, StyleCache, Viewport, build_tree, layout_box_at_point,
+    layout_boxes, prepare_owned_scene, prepare_scene, review_motion,
 };
 pub use lock::{
     ArtifactEnvelope, BuildFingerprint, BundledAsset, BundledFont, BundledSource, EnvelopeDigest,

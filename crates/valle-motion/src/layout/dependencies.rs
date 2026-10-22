@@ -5,7 +5,7 @@
 //! references, and identifies paint sources and composition boundaries independently of layout.
 
 use std::collections::{BTreeMap, BTreeSet};
-use valle_timeline::{FrameRate, RationalTime};
+use valle_timeline::RationalTime;
 
 use crate::eval::EvalPlan;
 use crate::tailwind::CompositionClassFacts;
@@ -51,7 +51,7 @@ pub(crate) enum TemporalSampling {
 }
 
 impl TemporalSampling {
-    /// Shutter offsets in output frames, Echo offsets in seconds.
+    /// Shutter offsets in output frames, Echo offsets in output seconds.
     fn offsets(self) -> Vec<RationalTime> {
         match self {
             Self::Shutter {
@@ -82,8 +82,8 @@ impl TemporalSampling {
     }
 }
 
-/// Conservative reach of all temporal effects in a prepared scene: Shutter and automatic blur
-/// in output frames, Echo in seconds.
+/// Conservative reach of all temporal effects in a prepared scene in output time: Shutter and
+/// automatic blur in frames, Echo in seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TemporalWindow {
     pub past_frames: RationalTime,
@@ -127,8 +127,8 @@ impl TemporalWindow {
 pub(crate) struct TemporalNode {
     pub node: NodeId,
     pub sampling: TemporalSampling,
-    /// Exact offsets in paint order: output frames for Shutter, seconds for Echo. Sampling uses
-    /// these same values.
+    /// Exact offsets in paint order: output frames for Shutter, output seconds for Echo. Sampling
+    /// uses these same values.
     pub offsets: Vec<RationalTime>,
 }
 
@@ -394,16 +394,17 @@ impl SceneDependencies {
             })
             .collect::<Vec<_>>();
         if !auto_blur_nodes.is_empty() {
-            let half_frame = RationalTime::new(1, 2).expect("half frame is exact");
-            // Temporal sample layouts also evaluate automatic blur, so its two neighbors can
-            // extend either side of every Shutter/Echo offset by another half frame.
+            let quarter_frame = RationalTime::new(1, 4).expect("quarter frame is exact");
+            // Temporal sample layouts also evaluate automatic blur, so the two ends of its
+            // 180-degree exposure extend either side of every Shutter/Echo offset by another
+            // quarter frame.
             temporal_window.past_frames = temporal_window
                 .past_frames
-                .checked_add(half_frame)
+                .checked_add(quarter_frame)
                 .expect("validated temporal window fits an exact rational");
             temporal_window.future_frames = temporal_window
                 .future_frames
-                .checked_add(half_frame)
+                .checked_add(quarter_frame)
                 .expect("validated temporal window fits an exact rational");
         }
         Self {
@@ -439,18 +440,6 @@ impl SceneDependencies {
 
     pub(crate) fn auto_blur_nodes(&self) -> &[NodeId] {
         &self.auto_blur_nodes
-    }
-
-    pub(crate) fn auto_blur_offset(&self, fps: FrameRate) -> Option<RationalTime> {
-        if self.auto_blur_nodes.is_empty() {
-            return None;
-        }
-        fps.numerator()
-            .checked_mul(2)
-            .and_then(|denominator| u32::try_from(denominator).ok())
-            .and_then(|denominator| {
-                RationalTime::new(i64::from(fps.denominator()), denominator).ok()
-            })
     }
 
     /// Resolve each node's local time through its structural parent chain. Retaining the

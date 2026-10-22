@@ -128,12 +128,23 @@ fn simulation_exposes_each_state_field_and_interpolates_fractional_time() {
 #[test]
 fn simulation_uses_scoped_time_without_mutating_the_baked_table() {
     let original = compile_motion(SPRING_SIMULATION).unwrap().artifact;
+    // The dot reads the time in a component drawn inside the TimeScope.
+    let scene =
+        "<Scene className=\"relative h-full w-full\" style={{ backgroundColor: \"#101010\" }}>";
     let scoped = SPRING_SIMULATION
         .replace(
-            "<View key=\"dot\" className=\"absolute\" style={{",
-            "<TimeScope key=\"scope\" offset={0.5} speed={2}><View key=\"dot\" className=\"absolute\" style={{",
+            &format!(
+                "export default function Simulated() {{ const time = useCurrentTime();\n  return (\n    {scene}"
+            ),
+            "function Dot() { const time = useCurrentTime();\n  return (",
         )
-        .replace("      }} />\n    </Scene>", "      }} /></TimeScope>\n    </Scene>");
+        .replace(
+            "      }} />\n    </Scene>\n  );\n}",
+            &format!(
+                "      }}}} />\n  );\n}}\nexport default function Simulated() {{\n  return {scene}<TimeScope key=\"scope\" offset={{0.5}} speed={{2}}><Dot /></TimeScope></Scene>;\n}}"
+            ),
+        );
+    assert!(scoped.contains("function Dot()") && scoped.contains("<Dot />"));
     let scoped = compile_motion(&scoped).unwrap().artifact;
     assert_eq!(left(&scoped, 15).to_bits(), left(&original, 0).to_bits());
     assert_eq!(left(&scoped, 30).to_bits(), left(&original, 30).to_bits());

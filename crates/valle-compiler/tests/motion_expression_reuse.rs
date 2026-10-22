@@ -74,14 +74,21 @@ fn host_source_and_time_scopes_remain_distinct_after_reuse() {
     let scoped = binding(&artifact, &scoped.key, "width");
     assert_ne!(scoped, binding(&artifact, "source", "width"));
     let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
-    let mut ctx = motion_context_at_frame(45, 60, FrameRate::new(30, 1).unwrap()).unwrap();
-    ctx.host = valle_motion::MotionHostContext::new(
-        valle_timeline::internal::SampleTime::new(valle_timeline::RationalTime::new(7, 1).unwrap()),
+    // The source holds its end at 1.5 s while the clip clock reads 7 s.
+    let clock = valle_timeline::ClipClock::new(
+        FrameRate::new(30, 1).unwrap(),
+        valle_timeline::RationalTime::ZERO,
         valle_timeline::RationalTime::new(10, 1).unwrap(),
-        45,
-        60,
+        valle_timeline::ClipMap::Clip {
+            trim: valle_timeline::RationalTime::ZERO,
+            rate: valle_timeline::RationalRate::ONE,
+            end: valle_timeline::SourceEnd::Hold,
+        },
+        valle_timeline::RationalTime::new(3, 2).unwrap(),
+        false,
     )
     .unwrap();
+    let ctx = valle_motion::MotionContext::new(clock, 210).unwrap();
     let values = eval_all(
         &artifact,
         EvalInputs {

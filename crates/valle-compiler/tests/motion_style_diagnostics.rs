@@ -232,26 +232,26 @@ fn transform_type_diagnostics_have_stable_source_spans_and_replacements() {
         (
             "rotate",
             "time.seconds",
-            104,
-            115,
+            157,
+            169,
             35,
-            "`rotate: <expression>`: expected Angle or a finite CSS string; received Number; use rotate: `${time.seconds * 90}deg`",
+            "`rotate: <expression>`: expected Angle or a finite CSS string; received Number; use rotate: `${seconds * 90}deg`",
         ),
         (
             "translate",
             "time.seconds",
-            107,
-            118,
+            160,
+            172,
             38,
-            "`translate: <expression>`: expected Length2, Length, Point, Vec2 or a finite CSS string; received Number; use translate: point(time.seconds * 100, 0) or translate: `${time.seconds * 100}px 0px`",
+            "`translate: <expression>`: expected Length2, Length, Point, Vec2 or a finite CSS string; received Number; use translate: point(seconds * 100, 0) or translate: `${seconds * 100}px 0px`",
         ),
         (
             "scale",
             "time.seconds > 0",
-            103,
-            118,
+            156,
+            172,
             34,
-            "`scale: <expression>`: expected Number, Point, Length, Length2 or a finite CSS string; received Bool; use scale: 1 + time.seconds or scale: `${1 + time.seconds} 1`",
+            "`scale: <expression>`: expected Number, Point, Length, Length2 or a finite CSS string; received Bool; use scale: 1 + seconds or scale: `${1 + seconds} 1`",
         ),
     ] {
         let authored = source(&format!("style={{{{{property}: {expression}}}}}"));
@@ -285,7 +285,7 @@ fn transform_structure_diagnostic_rejects_text_injection_at_the_template() {
     assert_eq!(diagnostic.code, DiagCode::StyleInvalidValue);
     assert_eq!(
         diagnostic.message,
-        "`rotate: <expression>`: dynamic CSS must use literal strings, typed templates, or finite conditional branches; template holes must be numbers, lengths, angles, or colors; use rotate: `${time.seconds * 90}deg`"
+        "`rotate: <expression>`: dynamic CSS must use literal strings, typed templates, or finite conditional branches; template holes must be numbers, lengths, angles, or colors; use rotate: `${seconds * 90}deg`"
     );
     assert_eq!(
         (
@@ -294,7 +294,7 @@ fn transform_structure_diagnostic_rejects_text_injection_at_the_template() {
             diagnostic.span.line,
             diagnostic.span.column
         ),
-        (104, 104 + expression.len() as u32, 2, 35)
+        (157, 157 + expression.len() as u32, 2, 35)
     );
     assert_eq!(
         &authored[diagnostic.span.start as usize..diagnostic.span.end as usize],

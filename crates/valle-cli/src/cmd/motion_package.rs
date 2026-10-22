@@ -170,6 +170,13 @@ fn build_timeline(
     artifact_digest: &ContentDigest,
 ) -> Result<CanonicalTimeline> {
     let props = authored_default_props(input.artifact, input.prop_bindings)?;
+    let composition = input
+        .artifact
+        .composition
+        .as_ref()
+        .context("standalone Motion needs a composition")?;
+    // The clip holds a one-shot scene and loops a looping one, as its standalone clock does.
+    let end_behavior = if composition.r#loop { "loop" } else { "hold" };
     let mut document = json!({
         "document": {
             "canvas": {
@@ -195,11 +202,10 @@ fn build_timeline(
                             "component": COMPONENT_RESOURCE_ID,
                             "fit": "contain",
                             "sourceStart": "0/1",
-                            "role": input.artifact.role, "sourceDuration": input.artifact.composition.as_ref()
-                                .context("standalone Motion needs a composition")?.duration()
-                                .map_err(|error| anyhow!(error))?,
+                            "role": input.artifact.role,
+                            "sourceDuration": composition.duration().map_err(|error| anyhow!(error))?,
                             "rate": "1/1",
-                            "endBehavior": "hold",
+                            "endBehavior": end_behavior,
                             "props": props,
                             "resources": resource_ids,
                         },

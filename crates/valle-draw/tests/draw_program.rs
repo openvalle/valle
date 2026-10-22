@@ -1282,8 +1282,28 @@ fn shader_output_budget_includes_padding_even_without_content() {
 }
 
 #[test]
-fn directional_gaussian_bounds_include_both_sides_for_either_velocity_sign() {
-    for velocity in [[20.0, -10.0], [-20.0, 10.0]] {
+fn a_velocity_blur_grows_its_bounds_by_its_trail_on_each_side() {
+    for (from, to, footprint, bounds) in [
+        (
+            [-10.0, 5.0],
+            [10.0, -5.0],
+            Insets::new(10.0, 5.0, 10.0, 5.0),
+            Rect::new(0.0, 5.0, 40.0, 30.0),
+        ),
+        (
+            [10.0, -5.0],
+            [-10.0, 5.0],
+            Insets::new(10.0, 5.0, 10.0, 5.0),
+            Rect::new(0.0, 5.0, 40.0, 30.0),
+        ),
+        // The last frame before a hold: only the half behind.
+        (
+            [-12.0, 0.0],
+            [0.0, 0.0],
+            Insets::new(12.0, 0.0, 0.0, 0.0),
+            Rect::new(-2.0, 10.0, 32.0, 20.0),
+        ),
+    ] {
         let mut b = builder();
         let path = b.push_path(PathData {
             verbs: vec![
@@ -1302,22 +1322,38 @@ fn directional_gaussian_bounds_include_both_sides_for_either_velocity_sign() {
             stroke: None,
         }));
         let mut group = Group::plain(vec![leaf]);
-        group.filters.push(Filter::VelocityBlur {
-            velocity,
-            shutter_angle_degrees: 180.0,
-        });
+        group.filters.push(Filter::VelocityBlur { from, to });
         let root = b.push_node(Node::Group(group));
         b.add_root(root);
         let program = b.finish().unwrap();
-        assert_eq!(
-            program.requirements().filter_footprint,
-            Insets::new(10.0, 5.0, 10.0, 5.0)
-        );
-        assert_eq!(
-            program.requirements().output_bounds.rect(),
-            Some(Rect::new(0.0, 5.0, 40.0, 30.0))
-        );
+        assert_eq!(program.requirements().filter_footprint, footprint);
+        assert_eq!(program.requirements().output_bounds.rect(), Some(bounds));
     }
+}
+
+#[test]
+fn velocity_blur_copies_spend_half_the_exposure_on_each_side() {
+    // A constant speed: the straight line between the ends, as many copies as before.
+    let line = Filter::velocity_blur_offsets([-8.0, 2.0], [8.0, -2.0]).unwrap();
+    assert_eq!(line.len(), 9);
+    for (index, offset) in line.iter().enumerate() {
+        let phase = index as f32 / 8.0 - 0.5;
+        assert!((offset[0] - 16.0 * phase).abs() < 1e-6);
+        assert!((offset[1] + 4.0 * phase).abs() < 1e-6);
+    }
+    // Arriving: half the copies trail behind, the other half stay where the input is.
+    let arriving = Filter::velocity_blur_offsets([-40.0, 0.0], [0.0, 0.0]).unwrap();
+    assert_eq!(arriving.len(), 32);
+    assert_eq!(arriving[0], [-40.0, 0.0]);
+    assert!(arriving[16..].iter().all(|offset| *offset == [0.0, 0.0]));
+    assert!(Filter::velocity_blur_offsets([0.0, 0.0], [1.0e-7, 0.0]).is_none());
+    assert!(
+        Filter::VelocityBlur {
+            from: [0.0; 2],
+            to: [0.0; 2]
+        }
+        .is_identity()
+    );
 }
 
 #[test]

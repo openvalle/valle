@@ -199,7 +199,7 @@ pub struct PreparedScene {
     dependencies: Arc<SceneDependencies>,
     activation: ActivationPlan,
     layout_reusable: bool,
-    /// Output-seconds derivatives of inline translations, when the entire scene has static
+    /// Scene-seconds derivatives of inline translations, when the entire scene has static
     /// geometry and no other time-varying transforms. `None` selects the sampled layout path.
     auto_blur_translations: Option<HashMap<String, valle_draw::Point>>,
     stylesheet: Arc<takumi_core::style::StyleSheet>,
@@ -216,6 +216,9 @@ pub struct PreparedScene {
     /// gives paper grain the remainder. Unpainted samples may be skipped only when the scene has
     /// no batch or no paper grain, so that remainder cannot change.
     skip_unpainted_samples: bool,
+    /// Whether a temporal sample's tree depends on its output time beyond the scene time it
+    /// shows, so samples that show the same scene time cannot share one.
+    samples_read_output_time: bool,
     /// The admitted packages of the artifact's inline shaders, in artifact order.
     inline_shaders: Arc<[crate::shader::ShaderPackage]>,
 }
@@ -625,6 +628,7 @@ fn prepare_admitted(
         layout_reusable,
         auto_blur_translations,
         skip_unpainted_samples: !super::temporal::sample_trees_share_batch_budget(&artifact),
+        samples_read_output_time: super::temporal::samples_read_output_time(&artifact),
         artifact: Arc::new(artifact),
         stylesheet,
         layout_probes,
@@ -1080,8 +1084,8 @@ pub(super) fn build_tree_inner(
         &mut render_keys,
         &inactive_nodes,
     );
-    let auto_velocities = if auto_blur {
-        let (velocities, neighbor_layouts) = auto_blur_velocities(
+    let auto_trails = if auto_blur {
+        let (trails, neighbor_layouts) = auto_blur_trails(
             prepared,
             ctx,
             props,
@@ -1095,7 +1099,7 @@ pub(super) fn build_tree_inner(
         if let Some(timings) = timings.as_deref_mut() {
             timings.auto_blur_neighbor_layouts = neighbor_layouts;
         }
-        velocities
+        trails
     } else {
         HashMap::new()
     };
@@ -1202,9 +1206,9 @@ pub(super) fn build_tree_inner(
                 blend_spaces.insert(node.key.clone(), space);
             }
         }
-        let auto_velocity = auto_velocities.get(&node.key).copied();
-        let filters = resolve_advanced_filters(node, &values, at, auto_velocity)?;
-        if auto_velocity.is_some()
+        let auto_trail = auto_trails.get(&node.key).copied();
+        let filters = resolve_advanced_filters(node, &values, at, ctx, auto_trail)?;
+        if auto_trail.is_some()
             && filters.iter().any(|filter| {
                 matches!(
                     filter,
@@ -1635,14 +1639,14 @@ pub(super) fn build_tree_inner(
         } else {
             None
         };
-        let mut at_time = HashMap::new();
+        let mut trees = SampleTrees::new();
         let shutters = resolve_shutter_samples(
             prepared,
             ctx,
             props,
             opts,
             painted.as_ref(),
-            &mut at_time,
+            &mut trees,
             shared.as_deref_mut(),
         )?;
         let echoes = resolve_echo_samples(
@@ -1651,7 +1655,7 @@ pub(super) fn build_tree_inner(
             props,
             opts,
             painted.as_ref(),
-            &mut at_time,
+            &mut trees,
             shared.as_deref_mut(),
         )?;
         (shutters, echoes)
@@ -3776,34 +3780,65 @@ fn normalized(matrix: Homography) -> Homography {
     }
 }
 
-// Overlay templates keep their authored exclusive endpoint when duration quantization rounds up.
-fn temporal_context_at_sample(
+/// The trees of one frame's temporal samples, by what each shows: its scene time, and its output
+/// time where the tree also depends on that (see `PreparedScene::samples_read_output_time`).
+type SampleTrees = HashMap<
+    (
+        valle_timeline::internal::SampleTime,
+        Option<valle_timeline::RationalTime>,
+    ),
+    Rc<LayoutTree>,
+>;
+
+/// The tree of one temporal sample, shared by every sample of the frame that shows the same.
+fn sample_tree(
     prepared: &PreparedScene,
-    ctx: &valle_motion::MotionContext,
-    sample: valle_timeline::internal::SampleTime,
-) -> Option<valle_motion::MotionContext> {
-    let artifact = prepared.artifact();
-    if !matches!(artifact.role, valle_timeline::MotionRole::Clip)
-        && sample.composition() >= artifact.composition.as_ref()?.duration().ok()?
-    {
-        return None;
-    }
-    crate::motion_context_at_sample(sample, ctx.duration_frames, ctx.fps)
+    sample: &valle_motion::MotionContext,
+    props: &ResolvedProps,
+    opts: &LayoutOptions<'_>,
+    trees: &mut SampleTrees,
+    shared: Option<&mut RequestValueCache>,
+) -> Result<TemporalSample, LayoutError> {
+    let key = (
+        sample.sample,
+        prepared.samples_read_output_time.then_some(sample.at),
+    );
+    let tree = if let Some(tree) = trees.get(&key) {
+        Rc::clone(tree)
+    } else {
+        let tree = Rc::new(build_tree_inner(
+            prepared.sample_scene.as_deref().unwrap_or(prepared),
+            sample,
+            props,
+            opts,
+            None,
+            None,
+            shared,
+            true,
+            false,
+        )?);
+        trees.insert(key, Rc::clone(&tree));
+        tree
+    };
+    Ok(TemporalSample {
+        at: sample.at,
+        time: sample.sample,
+        tree,
+    })
 }
 
-/// Evaluate each exposure at an exact output-time offset. A distinct evaluation round and layout
-/// belong to every sample; repeated times across Shutter nodes share one immutable result.
+/// Evaluate each exposure at an exact output-time offset from the frame, through the host's
+/// clock. A distinct evaluation round and layout belong to every sample; samples across Shutter
+/// nodes that show the same share one immutable result.
 fn resolve_shutter_samples(
     prepared: &PreparedScene,
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
     opts: &LayoutOptions<'_>,
     painted: Option<&HashSet<String>>,
-    at_time: &mut HashMap<valle_timeline::internal::SampleTime, Rc<LayoutTree>>,
+    trees: &mut SampleTrees,
     mut shared: Option<&mut RequestValueCache>,
 ) -> Result<HashMap<String, Vec<TemporalSample>>, LayoutError> {
-    use valle_timeline::{RationalTime, internal::SampleTime};
-
     let artifact = prepared.artifact();
     let shutters = prepared
         .dependencies
@@ -3826,89 +3861,49 @@ fn resolve_shutter_samples(
             reason: "one frame may request at most 128 temporal samples".into(),
         });
     }
-    let last =
-        crate::motion_context_at_frame(ctx.duration_frames - 1, ctx.duration_frames, ctx.fps)
-            .ok_or_else(|| LayoutError::BadShutter {
-                node: shutters[0].0.to_owned(),
-                reason: "last output frame has no exact sample time".into(),
-            })?;
     let mut out = HashMap::new();
     for (key, phases) in shutters {
-        let paint = painted.is_none_or(|scopes| scopes.contains(key));
-        let bad_time = |reason: &str| LayoutError::BadShutter {
+        if painted.is_some_and(|scopes| !scopes.contains(key)) {
+            continue;
+        }
+        let bad_time = || LayoutError::BadShutter {
             node: key.to_owned(),
-            reason: reason.into(),
+            reason: "shutter sample overflows exact time".into(),
         };
-        let frame_duration = RationalTime::new(
-            i64::from(ctx.fps.denominator()),
-            u32::try_from(ctx.fps.numerator())
-                .map_err(|_| bad_time("output frame rate cannot form exact shutter offsets"))?,
-        )
-        .map_err(|_| bad_time("output frame rate cannot form exact shutter offsets"))?;
+        let frame_duration = ctx.frame_duration().ok_or_else(bad_time)?;
         let mut exposure = Vec::with_capacity(phases.len());
         for &phase in phases {
-            let offset = frame_duration
+            let sample = frame_duration
                 .checked_mul(phase)
-                .map_err(|_| bad_time("shutter offset overflows exact time"))?;
-            let requested = ctx
-                .sample
-                .checked_offset(offset)
-                .map_err(|_| bad_time("shutter sample overflows exact time"))?;
-            let mut sample =
-                temporal_context_at_sample(prepared, ctx, requested).unwrap_or_else(|| {
-                    if requested < SampleTime::ZERO {
-                        crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
-                            .expect("validated nonempty composition")
-                    } else {
-                        last
-                    }
-                });
-            sample.host = ctx.host;
-            if !paint {
-                continue;
-            }
-            let tree = if let Some(tree) = at_time.get(&sample.sample) {
-                Rc::clone(tree)
-            } else {
-                let tree = Rc::new(build_tree_inner(
-                    prepared.sample_scene.as_deref().unwrap_or(prepared),
-                    &sample,
-                    props,
-                    opts,
-                    None,
-                    None,
-                    shared.as_deref_mut(),
-                    true,
-                    false,
-                )?);
-                at_time.insert(sample.sample, Rc::clone(&tree));
-                tree
-            };
-            exposure.push(TemporalSample {
-                time: sample.sample,
-                tree,
-            });
+                .ok()
+                .and_then(|offset| ctx.offset(offset))
+                .ok_or_else(bad_time)?;
+            exposure.push(sample_tree(
+                prepared,
+                &sample,
+                props,
+                opts,
+                trees,
+                shared.as_deref_mut(),
+            )?);
         }
-        if paint {
-            out.insert(key.to_owned(), exposure);
-        }
+        out.insert(key.to_owned(), exposure);
     }
     Ok(out)
 }
 
-/// Evaluate prior output frames, oldest first. The current subtree is painted separately above
-/// these samples, so a stationary subject naturally covers all of its converged echoes.
+/// Evaluate earlier output times, oldest first, through the host's clock. The current subtree is
+/// painted separately above these samples, so a stationary subject naturally covers all of its
+/// converged echoes.
 fn resolve_echo_samples(
     prepared: &PreparedScene,
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
     opts: &LayoutOptions<'_>,
     painted: Option<&HashSet<String>>,
-    at_time: &mut HashMap<valle_timeline::internal::SampleTime, Rc<LayoutTree>>,
+    trees: &mut SampleTrees,
     mut shared: Option<&mut RequestValueCache>,
 ) -> Result<HashMap<String, Vec<EchoSample>>, LayoutError> {
-    use valle_timeline::internal::SampleTime;
-
     let artifact = prepared.artifact();
     let echoes = prepared
         .dependencies
@@ -3935,58 +3930,23 @@ fn resolve_echo_samples(
     }
     let mut out = HashMap::new();
     for (key, count, decay, offsets) in echoes {
-        let paint = painted.is_none_or(|scopes| scopes.contains(key));
-        let bad_time = |reason: &str| LayoutError::BadEcho {
-            node: key.to_owned(),
-            reason: reason.into(),
-        };
+        if painted.is_some_and(|scopes| !scopes.contains(key)) {
+            continue;
+        }
         let mut trail = Vec::with_capacity(offsets.len());
-        // Echo offsets are seconds of source time.
+        // Echo offsets are output seconds.
         for (index, &offset) in offsets.iter().enumerate() {
             let lag = count - index as u8;
-            let requested = ctx
-                .sample
-                .checked_offset(offset)
-                .map_err(|_| bad_time("echo sample overflows exact time"))?;
-            let mut sample = if requested < SampleTime::ZERO {
-                crate::motion_context_at_frame(0, ctx.duration_frames, ctx.fps)
-                    .ok_or_else(|| bad_time("first output frame has no exact sample time"))?
-            } else {
-                temporal_context_at_sample(prepared, ctx, requested)
-                    .ok_or_else(|| bad_time("echo sample lies outside the composition"))?
-            };
-            sample.host = ctx.host;
-            if !paint {
-                continue;
-            }
-            let tree = if let Some(tree) = at_time.get(&sample.sample) {
-                Rc::clone(tree)
-            } else {
-                let tree = Rc::new(build_tree_inner(
-                    prepared.sample_scene.as_deref().unwrap_or(prepared),
-                    &sample,
-                    props,
-                    opts,
-                    None,
-                    None,
-                    shared.as_deref_mut(),
-                    true,
-                    false,
-                )?);
-                at_time.insert(sample.sample, Rc::clone(&tree));
-                tree
-            };
+            let sample = ctx.offset(offset).ok_or_else(|| LayoutError::BadEcho {
+                node: key.to_owned(),
+                reason: "echo sample overflows exact time".into(),
+            })?;
             trail.push(EchoSample {
-                sample: TemporalSample {
-                    time: sample.sample,
-                    tree,
-                },
+                sample: sample_tree(prepared, &sample, props, opts, trees, shared.as_deref_mut())?,
                 opacity: valle_draw::math::pow(decay, f64::from(lag)) as f32,
             });
         }
-        if paint {
-            out.insert(key.to_owned(), trail);
-        }
+        out.insert(key.to_owned(), trail);
     }
     Ok(out)
 }
@@ -4110,19 +4070,44 @@ fn analytic_translate_derivative(exprs: &[Expr], id: ExprId) -> Option<valle_dra
     (velocity.x.is_finite() && velocity.y.is_finite()).then_some(velocity)
 }
 
+/// Automatic motion blur exposes a 180-degree shutter: a quarter of a frame on each side.
+const AUTO_BLUR_SHUTTER_DEGREES: f64 = 180.0;
+
+/// The samples at the two ends of an exposure around the sample `ctx`, half of a shutter of
+/// `degrees` on each side, counted in whole degrees as Shutter counts them.
+fn exposure_ends(
+    ctx: &valle_motion::MotionContext,
+    degrees: f64,
+) -> Option<[valle_motion::MotionContext; 2]> {
+    let half = valle_timeline::RationalTime::new(degrees.round() as i64, 720)
+        .ok()
+        .and_then(|share| ctx.frame_duration()?.checked_mul(share).ok())?;
+    Some([
+        ctx.at(ctx.at.checked_sub(half).ok()?)?,
+        ctx.at(ctx.at.checked_add(half).ok()?)?,
+    ])
+}
+
+/// Whether a trail end stays within the reach the filter accepts.
+fn trail_end_fits(end: valle_draw::Point) -> bool {
+    end.x.is_finite() && end.y.is_finite() && end.x.abs() <= 2048.0 && end.y.abs() <= 2048.0
+}
+
 /// Apply the derivative of each CSS `translate` before its fixed local rotation/scale. The parent
 /// matrix's linear part carries the local velocity into screen space; the accumulated parent
 /// velocity then carries ancestor translations to every descendant. Geometry is already laid out.
-fn analytic_auto_blur_velocities(
+/// Each end of a trail is that screen velocity over the change of the scene clock to the end,
+/// `elapsed`, which is where the sampled path would find the node.
+fn analytic_auto_blur_trails(
     root: &RenderNode,
     layout: &LayoutResults,
     keys: &HashMap<u64, String>,
     translations: &HashMap<String, valle_draw::Point>,
     targets: &[&str],
-    fps: f64,
-) -> HashMap<String, valle_draw::Point> {
+    elapsed: [f64; 2],
+) -> HashMap<String, [valle_draw::Point; 2]> {
     let target_keys: std::collections::HashSet<_> = targets.iter().copied().collect();
-    let mut velocities = HashMap::new();
+    let mut trails = HashMap::new();
     let mut pending = vec![(
         root,
         takumi_core::geometry::NodeId::ROOT,
@@ -4146,14 +4131,10 @@ fn analytic_auto_blur_velocities(
                 screen.x += f64::from(parent.a) * velocity.x + f64::from(parent.c) * velocity.y;
                 screen.y += f64::from(parent.b) * velocity.x + f64::from(parent.d) * velocity.y;
             }
-            let velocity = valle_draw::Point::new(screen.x / fps, screen.y / fps);
-            if target_keys.contains(key.as_str())
-                && velocity.x.is_finite()
-                && velocity.y.is_finite()
-                && velocity.x.abs() <= 2048.0
-                && velocity.y.abs() <= 2048.0
-            {
-                velocities.insert(key.clone(), velocity);
+            let trail = elapsed
+                .map(|seconds| valle_draw::Point::new(screen.x * seconds, screen.y * seconds));
+            if target_keys.contains(key.as_str()) && trail.into_iter().all(trail_end_fits) {
+                trails.insert(key.clone(), trail);
             }
         }
         if let (Some(children), Ok(boxes)) = (&node.children, layout.box_children(id)) {
@@ -4164,13 +4145,16 @@ fn analytic_auto_blur_velocities(
             }
         }
     }
-    velocities
+    trails
 }
 
-/// Sample final screen positions in output time. The regular layout path is reused for the two
-/// neighbors, so flow layout, ancestor transforms, and camera movement contribute to velocity.
-/// Failed or discontinuous neighbors suppress blur without changing the requested main frame.
-fn auto_blur_velocities(
+/// The trail of each automatically blurred node over the exposure around the sample `ctx`: its
+/// final screen place at either end, relative to its place now. The regular layout path is
+/// reused for the two ends, so flow layout, ancestor transforms and camera movement contribute.
+/// The ends follow the host's clock, so a trail stops at a cut and stays still while the source
+/// holds; a value that jumps inside the exposure draws a streak across the jump. A node missing at
+/// either end, or reaching past 2048px, has no blur; the requested frame does not change.
+fn auto_blur_trails(
     prepared: &PreparedScene,
     ctx: &valle_motion::MotionContext,
     props: &ResolvedProps,
@@ -4180,7 +4164,7 @@ fn auto_blur_velocities(
     keys: &Arc<HashMap<u64, String>>,
     css_3d_planes: &HashMap<String, crate::layout::bridge::Css3dPlane>,
     mut shared: Option<&mut RequestValueCache>,
-) -> (HashMap<String, valle_draw::Point>, u8) {
+) -> (HashMap<String, [valle_draw::Point; 2]>, u8) {
     let targets = prepared
         .dependencies
         .auto_blur_nodes()
@@ -4190,111 +4174,52 @@ fn auto_blur_velocities(
     if targets.is_empty() {
         return (HashMap::new(), 0);
     }
+    let Some(ends) = exposure_ends(ctx, AUTO_BLUR_SHUTTER_DEGREES) else {
+        return (HashMap::new(), 0);
+    };
     if let Some(translations) = prepared.auto_blur_translations.as_ref()
         && css_3d_planes.is_empty()
     {
+        let now = ctx.sample.composition().as_f64();
+        let elapsed = ends.map(|end| end.sample.composition().as_f64() - now);
         return (
-            analytic_auto_blur_velocities(
-                root,
-                layout,
-                keys,
-                translations,
-                &targets,
-                crate::frame_rate_as_f64(ctx.fps),
-            ),
+            analytic_auto_blur_trails(root, layout, keys, translations, &targets, elapsed),
             0,
         );
     }
-    let Some(offset) = prepared.dependencies.auto_blur_offset(ctx.fps) else {
-        return (HashMap::new(), 0);
-    };
-    let previous_context = offset
-        .checked_neg()
+    let mut anchors_at = |sample: &valle_motion::MotionContext| {
+        build_tree_inner(
+            prepared.sample_scene.as_deref().unwrap_or(prepared),
+            sample,
+            props,
+            opts,
+            None,
+            None,
+            shared.as_deref_mut(),
+            false,
+            false,
+        )
         .ok()
-        .and_then(|negative| ctx.sample.checked_offset(negative).ok())
-        .and_then(|sample| temporal_context_at_sample(prepared, ctx, sample));
-    let next_context = ctx
-        .sample
-        .checked_offset(offset)
-        .ok()
-        .and_then(|sample| temporal_context_at_sample(prepared, ctx, sample));
-    let mut sample_anchors = |sample: Option<valle_motion::MotionContext>| {
-        sample.map(|mut sample| {
-            sample.host = ctx.host;
-            build_tree_inner(
-                prepared.sample_scene.as_deref().unwrap_or(prepared),
-                &sample,
-                props,
-                opts,
-                None,
-                None,
-                shared.as_deref_mut(),
-                false,
-                false,
-            )
-            .ok()
-            .map(|tree| screen_anchors(&tree.root, &tree.layout, &tree.keys, &tree.css_3d_planes))
-            .map(|anchors| (sample.sample.composition().as_f64(), anchors))
-        })
+        .map(|tree| screen_anchors(&tree.root, &tree.layout, &tree.keys, &tree.css_3d_planes))
     };
-    let previous = sample_anchors(previous_context).flatten();
-    let next = sample_anchors(next_context).flatten();
+    let before = anchors_at(&ends[0]);
+    let after = anchors_at(&ends[1]);
     let center = screen_anchors(root, layout, keys, css_3d_planes);
-    let center_time = ctx.sample.composition().as_f64();
-    let fps = crate::frame_rate_as_f64(ctx.fps);
-    let mut velocities = HashMap::new();
+    let mut trails = HashMap::new();
     for key in targets {
-        let Some(current) = center.get(key) else {
+        let (Some(now), Some(before), Some(after)) = (
+            center.get(key),
+            before.as_ref().and_then(|anchors| anchors.get(key)),
+            after.as_ref().and_then(|anchors| anchors.get(key)),
+        ) else {
             continue;
         };
-        let before = previous.as_ref().and_then(|(_, anchors)| anchors.get(key));
-        let after = next.as_ref().and_then(|(_, anchors)| anchors.get(key));
-        // A missing node or a failed layout at a valid neighbor is a temporal cut.
-        if previous_context.is_some() && before.is_none()
-            || next_context.is_some() && after.is_none()
-        {
-            continue;
-        }
-        let derivative = |from: &valle_draw::Point, to: &valle_draw::Point, seconds: f64| {
-            valle_draw::Point::new(
-                (to.x - from.x) / seconds / fps,
-                (to.y - from.y) / seconds / fps,
-            )
-        };
-        let velocity = match (before, after) {
-            (Some(before), Some(after)) => {
-                let before_time = previous.as_ref().unwrap().0;
-                let after_time = next.as_ref().unwrap().0;
-                let left = derivative(before, current, center_time - before_time);
-                let right = derivative(current, after, after_time - center_time);
-                let jump = valle_draw::math::hypot(left.x - right.x, left.y - right.y);
-                let speed = valle_draw::math::hypot(left.x, left.y)
-                    .max(valle_draw::math::hypot(right.x, right.y));
-                if jump > 2.0_f64.max(speed * 0.2) {
-                    continue;
-                }
-                derivative(before, after, after_time - before_time)
-            }
-            (Some(before), None) => {
-                derivative(before, current, center_time - previous.as_ref().unwrap().0)
-            }
-            (None, Some(after)) => {
-                derivative(current, after, next.as_ref().unwrap().0 - center_time)
-            }
-            (None, None) => continue,
-        };
-        if velocity.x.is_finite()
-            && velocity.y.is_finite()
-            && velocity.x.abs() <= 2048.0
-            && velocity.y.abs() <= 2048.0
-        {
-            velocities.insert(key.to_owned(), velocity);
+        let trail = [before, after].map(|end| valle_draw::Point::new(end.x - now.x, end.y - now.y));
+        if trail.into_iter().all(trail_end_fits) {
+            trails.insert(key.to_owned(), trail);
         }
     }
-    (
-        velocities,
-        u8::from(previous_context.is_some()) + u8::from(next_context.is_some()),
-    )
+    (trails, 2)
 }
 
 fn screen_anchors(
@@ -4611,7 +4536,8 @@ fn resolve_advanced_filters(
     node: &valle_motion::SceneNode,
     values: &[MotionValue],
     at: usize,
-    auto_velocity: Option<valle_draw::Point>,
+    ctx: &valle_motion::MotionContext,
+    auto_trail: Option<[valle_draw::Point; 2]>,
 ) -> Result<Vec<valle_draw::program::recording::FilterOp>, LayoutError> {
     use valle_draw::program::recording::FilterOp;
 
@@ -4922,11 +4848,17 @@ fn resolve_advanced_filters(
                 "motion blur shutter angle must be a number",
             ));
         };
-        let velocity = if is_auto {
-            let Some(velocity) = auto_velocity else {
+        if !shutter_angle.is_finite() || !(0.0..=360.0).contains(shutter_angle) {
+            return Err(bad_advanced_filter(
+                node,
+                "motion blur requires a shutter angle in 0..=360",
+            ));
+        }
+        let trail = if is_auto {
+            let Some(trail) = auto_trail else {
                 return Ok(filters);
             };
-            velocity
+            trail
         } else {
             let Some(MotionValue::Point(velocity)) =
                 resolved_style(node, values, at, "motion-velocity-blur-velocity")?
@@ -4936,27 +4868,34 @@ fn resolve_advanced_filters(
                     "motion blur velocity is missing or is not point(x, y)",
                 ));
             };
-            *velocity
+            // The velocity counts per second of the scene clock, so each end is what the clock
+            // runs to it: unwrapped through a declared loop, stopped at a cut and still in a hold.
+            let ends = exposure_ends(ctx, *shutter_angle).ok_or_else(|| {
+                bad_advanced_filter(node, "motion blur exposure overflows exact time")
+            })?;
+            let trail = ends.map(|end| {
+                let seconds = end.elapsed.as_f64() - ctx.elapsed.as_f64();
+                valle_draw::Point::new(velocity.x * seconds, velocity.y * seconds)
+            });
+            if !trail.into_iter().all(trail_end_fits) {
+                return Err(bad_advanced_filter(
+                    node,
+                    "motion blur must stay within 2048 px of the node on each side of the exposure",
+                ));
+            }
+            trail
         };
-        if !velocity.x.is_finite()
-            || !velocity.y.is_finite()
-            || velocity.x.abs() > 2048.0
-            || velocity.y.abs() > 2048.0
-            || !shutter_angle.is_finite()
-            || !(0.0..=360.0).contains(shutter_angle)
+        if trail
+            .iter()
+            .all(|end| end.x.abs() < 0.001 && end.y.abs() < 0.001)
         {
-            return Err(bad_advanced_filter(
-                node,
-                "motion blur requires velocity components within ±2048 px/frame and shutterAngle 0..=360",
-            ));
-        }
-        if is_auto && velocity.x.abs() < 0.001 && velocity.y.abs() < 0.001 {
             return Ok(filters);
         }
         filters.push(FilterOp::VelocityBlur {
-            velocity_x: velocity.x,
-            velocity_y: velocity.y,
-            shutter_angle: *shutter_angle,
+            from_x: trail[0].x,
+            from_y: trail[0].y,
+            to_x: trail[1].x,
+            to_y: trail[1].y,
         });
     }
     Ok(filters)

@@ -69,9 +69,9 @@ pub(super) fn compile_admitted_timeline(
             role: instance.role,
             component_target: instance.component_target,
             reads_destination: instance.reads_destination,
-            host_duration: instance.host_duration,
-            host_range: instance.host_range,
-            host_fps: instance.host_fps,
+            clock: instance
+                .clock
+                .expect("an admitted Motion source has its clock"),
             props: instance
                 .props
                 .into_iter()
@@ -226,6 +226,7 @@ pub(super) fn compile_admitted_timeline(
                     id: clip.id,
                     range: clip.range,
                     exact_start: clip.exact_start,
+                    exact_duration: clip.exact_duration,
                     source: clip.source,
                     layer: compile_visual_layer(clip.layer),
                     effects: clip.effects,
@@ -329,6 +330,7 @@ pub(super) fn compile_admitted_timeline(
                                 CompiledCaptionItem::Clip {
                                     clip: CompiledCaptionClip {
                                         range: caption.range,
+                                        duration: caption.duration,
                                         runs: caption.runs,
                                         run_timings: caption
                                             .run_timings

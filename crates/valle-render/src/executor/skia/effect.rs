@@ -1249,14 +1249,11 @@ pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawE
                 "noise displacement requires its kernel".into(),
             ));
         }
-        Filter::VelocityBlur {
-            velocity,
-            shutter_angle_degrees,
-        } => {
-            let Some(offsets) = super::velocity::offsets(*velocity, *shutter_angle_degrees) else {
+        Filter::VelocityBlur { from, to } => {
+            let Some(offsets) = super::velocity::offsets(*from, *to) else {
                 return Ok(None);
             };
-            // Uniformly weighted shutter positions use the same public Skia primitives on native
+            // Uniformly weighted positions along the trail use the same public Skia primitives on native
             // and CanvasKit. Their Gaussian blur kernels differ at the tails across Skia builds,
             // while translated samples have stable coverage on both backends.
             let alpha =

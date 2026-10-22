@@ -17,7 +17,8 @@ type Fixture = { name:string; command:"motion"|"timeline"; content:string; width
 const motion = (body:string) => `export const composition={width:96,height:64,fps:4,duration:1.25};
 export default function T(){const time = useCurrentTime();return <Scene style={{width:96,height:64,backgroundColor:"#ffffff"}}>${body}</Scene>;}`;
 const view = (color:string,extra="") => `<View style={{width:96,height:64,backgroundColor:"${color}"${extra}}}/>`;
-const transition = (kind:string,from:string,to:string,extra="",progress="time.seconds") => `<Transition kind="${kind}" progress={${progress}} style={{width:96,height:64${extra}}}>${from}${to}</Transition>`;
+// clipProgress runs from 0 on the first frame to 1 on the last, as a Timeline transition does.
+const transition = (kind:string,from:string,to:string,extra="",progress="time.clipProgress") => `<Transition kind="${kind}" progress={${progress}} style={{width:96,height:64${extra}}}>${from}${to}</Transition>`;
 const diff = (a:Uint8Array,b:Uint8Array) => { let max=0; expect(a.length).toBe(b.length); for(let i=0;i<a.length;i++) max=Math.max(max,Math.abs(a[i]!-b[i]!));return max; };
 const pixel = (pixels:Uint8Array,width:number,x:number,y:number,rgba:number[]) => {
   for(const [c,value] of rgba.entries()) expect(Math.abs(pixels[(y*width+x)*4+c]!-value)).toBeLessThanOrEqual(2);
@@ -66,7 +67,7 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
       }),width:96,height:64,frames:[3,1,5,3],reference:`param-motion-${kind}`,referenceOffset:-1});
       // Animate the first parameter at fixed transition progress to catch stale geometry/schedules.
       const [animated, value] = Object.entries(params)[0]!;
-      const expression = JSON.stringify(params).replace(`"${animated}":${value}`, `"${animated}":${value}*(0.5+time.seconds)`);
+      const expression = JSON.stringify(params).replace(`"${animated}":${value}`, `"${animated}":${value}*(0.5+time.clipProgress)`);
       cases.push({name:`param-dynamic-${kind}`,command:"motion",content:motion(transition(kind,from,to,"","0.5").replace(" progress=",` params={${expression}} progress=`)),width:96,height:64,frames:[2,0,4,2],probe:(pixels,frame)=>{
         if(frame===2)expect(diff(pixels,images.get(`param-motion-${kind}/2`)!)).toBeLessThanOrEqual(2);
         if(frame===4)expect(diff(pixels,images.get(`param-dynamic-${kind}/0`)!),`${kind} animated parameter changes pixels`).toBeGreaterThan(2);
@@ -81,13 +82,14 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
   }
   // Endpoint identity must hold for any kernel; intermediate patterns deliberately differ.
   const motionTransition = await readFile(join(root,"crates/valle-compiler/tests/fixtures/motion/composition/motion-transition.motion.tsx"),"utf8");
-  cases.push({name:"motion-transition",command:"motion",content:motionTransition,width:640,height:360,frames:[30,0,59,30],probe:(p,f)=>{
+  // The scene's last frame shows its end, the open circle, a frame before the Timeline's does.
+  cases.push({name:"motion-transition",command:"motion",content:motionTransition,width:640,height:360,frames:[30,0,58,59,30],probe:(p,f)=>{
     pixel(p,640,320,180,f===0?[33,64,255,255]:[255,74,36,255]);
-    pixel(p,640,0,0,[33,64,255,255]);
+    pixel(p,640,0,0,f===59?[255,74,36,255]:[33,64,255,255]);
   }});
   cases.push({name:"motion-transition-timeline",command:"timeline",content:JSON.stringify({canvas:{width:640,height:360,fps:30,background:"#101010"},tracks:{visual:[{clips:[
     {kind:"solid",color:"#2140ff",start:0,duration:91/30},{kind:"solid",color:"#ff4a24",start:1,duration:3},
-  ],transitions:[{from:0,to:1,kind:"circleOpen"}]}]}}),width:640,height:360,frames:[60,30,89,60],reference:"motion-transition",referenceOffset:-30});
+  ],transitions:[{from:0,to:1,kind:"circleOpen"}]}]}}),width:640,height:360,frames:[60,30,88,60],reference:"motion-transition",referenceOffset:-30});
   const extra: Array<[string,string,(p:Uint8Array,f:number)=>void]> = [
     ["simpleZoom-settles",transition("simpleZoom",patternedFrom,patternedTo,"","0.9999"),(p)=>{
       pixel(p,96,48,32,[0,255,0,255]);pixel(p,96,0,0,[255,255,255,255]);pixel(p,96,95,63,[255,255,255,255]);

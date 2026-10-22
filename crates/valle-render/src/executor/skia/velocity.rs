@@ -1,5 +1,5 @@
-//! Velocity blur: copies of the input along its velocity, averaged. Skia's image filter defines
-//! it on every backend; on Raster, `draw` computes the filter's bytes pixel by pixel instead of
+//! Velocity blur: copies of the input along its trail, averaged. Skia's image filter defines it
+//! on every backend; on Raster, `draw` computes the filter's bytes pixel by pixel instead of
 //! through the filter's intermediate surfaces.
 
 use skia_safe::{IRect, Image, Surface};
@@ -7,20 +7,13 @@ use valle_draw::program::Filter;
 
 use super::draw::DrawError;
 
-/// The offset of each shutter position, as many as the travel takes, or `None` where the blur
-/// leaves its input unchanged.
-pub(super) fn offsets(velocity: [f32; 2], shutter_angle_degrees: f32) -> Option<Vec<(f32, f32)>> {
-    let shutter = (shutter_angle_degrees / 360.0).clamp(0.0, 1.0);
-    if velocity[0].abs().max(velocity[1].abs()) * shutter <= 1.0e-6 {
-        return None;
-    }
-    let samples = Filter::velocity_blur_samples(velocity, shutter_angle_degrees);
+/// The offset of each copy along the trail from `from` to `to`, or `None` where the blur leaves
+/// its input unchanged.
+pub(super) fn offsets(from: [f32; 2], to: [f32; 2]) -> Option<Vec<(f32, f32)>> {
     Some(
-        (0..samples)
-            .map(|index| {
-                let phase = index as f32 / (samples - 1) as f32 - 0.5;
-                (velocity[0] * shutter * phase, velocity[1] * shutter * phase)
-            })
+        Filter::velocity_blur_offsets(from, to)?
+            .into_iter()
+            .map(|[x, y]| (x, y))
             .collect(),
     )
 }
@@ -48,17 +41,10 @@ pub(super) fn draw(
     input: &Image,
     source: IRect,
     origin: [i32; 2],
-    velocity: [f32; 2],
-    shutter_angle_degrees: f32,
+    from: [f32; 2],
+    to: [f32; 2],
 ) -> Result<bool, DrawError> {
-    fused::draw(
-        surface,
-        input,
-        source,
-        origin,
-        velocity,
-        shutter_angle_degrees,
-    )
+    fused::draw(surface, input, source, origin, from, to)
 }
 
 /// The kernel repeats the instructions of Skia's raster pipeline on aarch64; elsewhere the
@@ -69,8 +55,8 @@ pub(super) fn draw(
     _input: &Image,
     _source: IRect,
     _origin: [i32; 2],
-    _velocity: [f32; 2],
-    _shutter_angle_degrees: f32,
+    _from: [f32; 2],
+    _to: [f32; 2],
 ) -> Result<bool, DrawError> {
     Ok(false)
 }
@@ -97,10 +83,10 @@ mod fused {
         input: &Image,
         source: IRect,
         origin: [i32; 2],
-        velocity: [f32; 2],
-        shutter_angle_degrees: f32,
+        from: [f32; 2],
+        to: [f32; 2],
     ) -> Result<bool, DrawError> {
-        let Some(offsets) = offsets(velocity, shutter_angle_degrees) else {
+        let Some(offsets) = offsets(from, to) else {
             return Ok(false);
         };
         let (Some(clip), Some(pixels)) = (rows_clip(surface), input.peek_pixels()) else {

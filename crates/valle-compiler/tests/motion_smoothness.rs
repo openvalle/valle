@@ -77,7 +77,7 @@ fn seeking_repeating_reversing_and_parallel_sampling_produce_identical_values() 
 }
 
 #[test]
-fn velocity_uses_seconds_and_blur_explicitly_converts_to_pixels_per_frame() {
+fn velocity_and_blur_velocity_are_per_second_at_any_frame_rate() {
     let artifact = compile_motion(&SPRING.replace("time.seconds - 2 / 30", "time.seconds"))
         .unwrap()
         .artifact;
@@ -97,12 +97,13 @@ fn velocity_uses_seconds_and_blur_explicitly_converts_to_pixels_per_frame() {
         let MotionValue::Point(v60) = style(&artifact, &b, "motion-velocity-blur-velocity") else {
             panic!()
         };
-        assert_eq!(v30.x, v60.x * 2.0);
+        assert_eq!(v30.x, v60.x);
     }
 }
 
 #[test]
-fn constant_time_velocity_is_not_folded_and_initial_conditions_are_validated() {
+fn constant_time_springs_fold_and_initial_conditions_are_validated() {
+    // A spring of a constant time in seconds is one value at every frame rate.
     let source = SPRING.replace("time.seconds - 2 / 30", "1 / 3");
     let artifact = compile_motion(&source).unwrap().artifact;
     assert_eq!(
@@ -111,7 +112,7 @@ fn constant_time_velocity_is_not_folded_and_initial_conditions_are_validated() {
             .iter()
             .filter(|e| matches!(e, Expr::Spring { .. }))
             .count(),
-        2
+        0
     );
     for invalid in ["time.progress", "1 / 0", "\"fast\""] {
         let diagnostics = compile_motion(&SPRING.replace(
@@ -133,15 +134,19 @@ fn constant_time_velocity_is_not_folded_and_initial_conditions_are_validated() {
         ))
         .is_err()
     );
-    let mut invalid = artifact;
+    // A spring of the clock stays one, and its initial conditions are validated.
+    let mut invalid = compile_motion(SPRING).unwrap().artifact;
+    let mut springs = 0;
     for expr in &mut invalid.exprs {
         if let Expr::Spring {
             initial_velocity, ..
         } = expr
         {
             *initial_velocity = f64::NAN;
+            springs += 1;
         }
     }
+    assert!(springs > 0);
     assert!(invalid.validate().is_err());
 }
 

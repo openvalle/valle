@@ -1210,19 +1210,8 @@ fn program_filter_bounds(bounds: LocalBounds, filter: &Filter) -> LocalBounds {
                 offset[1].abs() * 0.5 + 1.0,
             ),
         )),
-        Filter::VelocityBlur {
-            velocity,
-            shutter_angle_degrees,
-        } => {
-            let scale = *shutter_angle_degrees / 360.0;
-            let dx = velocity[0].abs() * scale;
-            let dy = velocity[1].abs() * scale;
-            LocalBounds::from_rect(Rect::from_edges(
-                rect.left() - f64::from(dx),
-                rect.top() - f64::from(dy),
-                rect.right() + f64::from(dx),
-                rect.bottom() + f64::from(dy),
-            ))
+        Filter::VelocityBlur { from, to } => {
+            LocalBounds::from_rect(outset(rect, Filter::velocity_blur_reach(*from, *to)))
         }
         Filter::FilmGrain { .. }
         | Filter::LensDistortion { .. }
@@ -1381,8 +1370,12 @@ mod tests {
     }
 
     #[test]
-    fn velocity_blur_pass_bounds_match_centered_gaussian_geometry_in_both_directions() {
-        for velocity in [[20.0, -10.0], [-20.0, 10.0]] {
+    fn velocity_blur_pass_bounds_follow_the_trail() {
+        for (from, to, bounds) in [
+            ([-10.0, 5.0], [10.0, -5.0], Rect::new(0.0, 5.0, 40.0, 30.0)),
+            ([10.0, -5.0], [-10.0, 5.0], Rect::new(0.0, 5.0, 40.0, 30.0)),
+            ([-12.0, 0.0], [0.0, 0.0], Rect::new(-2.0, 10.0, 32.0, 20.0)),
+        ] {
             let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 48.0));
             let leaf = rect_path(
                 &mut builder,
@@ -1390,16 +1383,16 @@ mod tests {
                 LinearColor::new(1.0, 0.0, 0.0, 1.0),
             );
             let mut group = Group::plain(vec![leaf]);
-            group.filters.push(Filter::VelocityBlur {
-                velocity,
-                shutter_angle_degrees: 180.0,
-            });
+            group.filters.push(Filter::VelocityBlur { from, to });
             let root = builder.push_node(Node::Group(group));
             builder.add_root(root);
             let program = builder.finish().unwrap();
             let plan = ProgramPlan::derive(&program).unwrap();
-            assert!(plan.resources().iter().any(|resource| resource.bounds
-                == LocalBounds::from_rect(Rect::new(0.0, 5.0, 40.0, 30.0))));
+            assert!(
+                plan.resources()
+                    .iter()
+                    .any(|resource| resource.bounds == LocalBounds::from_rect(bounds))
+            );
         }
     }
 

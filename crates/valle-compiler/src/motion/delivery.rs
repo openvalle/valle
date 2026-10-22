@@ -34,7 +34,13 @@ impl Compiler<'_> {
             return;
         };
         match composition_from_value(&value) {
-            Ok(composition) => self.composition = Some(composition),
+            Ok(composition) => {
+                if let Some(message) = loop_seam(&composition) {
+                    let span = named_control_span(self.source, container, "loop");
+                    self.warn(DiagCode::LoopSeam, span, message);
+                }
+                self.composition = Some(composition);
+            }
             Err(problem) => {
                 let span = match problem.field {
                     Some(field) => named_control_span(self.source, container, field),
@@ -44,6 +50,35 @@ impl Compiler<'_> {
             }
         }
     }
+}
+
+/// Why a looping scene does not loop evenly at its own frame rate: its duration is not a whole
+/// number of frames, so a file that plays its frames over and over takes a different step across
+/// the seam.
+fn loop_seam(composition: &Composition) -> Option<String> {
+    let rate = composition.frame_rate().ok().flatten()?;
+    let duration = composition.duration().ok()?;
+    let frames = duration
+        .into_exact()
+        .checked_mul(rate.into_exact())
+        .ok()?;
+    if !composition.r#loop || frames.denominator() == 1 {
+        return None;
+    }
+    let fps = rate.numerator() as f64 / f64::from(rate.denominator());
+    let whole = (frames.numerator() as f64 / f64::from(frames.denominator()))
+        .round()
+        .max(1.0);
+    Some(format!(
+        "a looping scene of {} seconds lasts {} frames at {} fps, not a whole number: a file \
+         that loops its frames takes a step of a different length across the seam; make it \
+         {} frames long, `duration: {}`",
+        super::clock::seconds_text(duration.as_f64()),
+        super::clock::seconds_text(frames.numerator() as f64 / f64::from(frames.denominator())),
+        super::clock::seconds_text(fps),
+        whole,
+        super::clock::seconds_text(whole / fps),
+    ))
 }
 
 /// Read a contract whose values are literals or literal arithmetic, without running the sandbox.

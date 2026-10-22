@@ -31,9 +31,14 @@ fn report(source: &str) -> valle_motion::layout::MotionReview {
             viewport: Viewport::new((640, 360)),
             styles: None,
         },
-        FrameRate::new(30, 1).unwrap(),
-        60,
-        valle_timeline::RationalTime::new(2, 1).unwrap(),
+        valle_timeline::ClipClock::standalone(
+            FrameRate::new(30, 1).unwrap(),
+            compiled.artifact.role,
+            valle_timeline::RationalTime::new(2, 1).unwrap(),
+            false,
+            None,
+        )
+        .unwrap(),
         60,
         true,
         &compiled.shared_source_elements(),

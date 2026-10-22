@@ -710,7 +710,7 @@ impl Emitter<'_> {
         key: &str,
         samples: &[crate::layout::bridge::TemporalSample],
     ) -> Result<(), EmitError> {
-        if samples.is_empty() || samples.windows(2).any(|pair| pair[0].time > pair[1].time) {
+        if samples.is_empty() || samples.windows(2).any(|pair| pair[0].at > pair[1].at) {
             return Err(EmitError::Program(format!(
                 "Shutter '{key}' has no ordered exposure samples"
             )));
@@ -3827,9 +3827,9 @@ fn push_rrect<S: valle_draw::PathSink>(
     }
 }
 
-/// Auto motion blur measures velocity in screen pixels per frame, while the filter applies it in
-/// the node's local units: carry it back through the node's linear transform, which `begin_node`
-/// has already found invertible.
+/// Auto motion blur measures its trail in screen pixels, while the filter applies it in the
+/// node's local units: carry both ends back through the node's linear transform, which
+/// `begin_node` has already found invertible.
 fn local_velocity_blurs(
     filters: &[valle_draw::program::recording::FilterOp],
     transform: TAffine,
@@ -3837,18 +3837,25 @@ fn local_velocity_blurs(
     use valle_draw::program::recording::FilterOp;
     let [a, b, c, d] = [transform.a, transform.b, transform.c, transform.d].map(f64::from);
     let determinant = a * d - b * c;
+    let local = |x: f64, y: f64| ((d * x - c * y) / determinant, (a * y - b * x) / determinant);
     filters
         .iter()
         .map(|filter| match *filter {
             FilterOp::VelocityBlur {
-                velocity_x,
-                velocity_y,
-                shutter_angle,
-            } => FilterOp::VelocityBlur {
-                velocity_x: (d * velocity_x - c * velocity_y) / determinant,
-                velocity_y: (a * velocity_y - b * velocity_x) / determinant,
-                shutter_angle,
-            },
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            } => {
+                let (from_x, from_y) = local(from_x, from_y);
+                let (to_x, to_y) = local(to_x, to_y);
+                FilterOp::VelocityBlur {
+                    from_x,
+                    from_y,
+                    to_x,
+                    to_y,
+                }
+            }
             other => other,
         })
         .collect()

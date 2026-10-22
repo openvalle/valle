@@ -330,7 +330,10 @@ mod tests {
             panic!("member");
         };
         member.material = Some(GlassMaterialBinding::defaults());
-        assert_eq!(messages(&artifact), ["Glass 'left' takes its field's material"]);
+        assert_eq!(
+            messages(&artifact),
+            ["Glass 'left' takes its field's material"]
+        );
 
         let mut artifact = field_artifact();
         artifact.nodes[1].kind = NodeKind::Group;
@@ -362,7 +365,9 @@ mod tests {
         artifact.nodes[2].kind = member();
         artifact.nodes[3].kind = field();
         artifact.nodes[3].children = ChildRange { start: 3, end: 4 };
-        artifact.nodes.push(node("inner", member(), ChildRange::EMPTY));
+        artifact
+            .nodes
+            .push(node("inner", member(), ChildRange::EMPTY));
         artifact.node_children.push(NodeId(4));
         validate_glass_schema(&artifact).unwrap();
         assert_eq!(

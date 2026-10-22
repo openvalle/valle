@@ -136,13 +136,11 @@ fn filter_growth(ops: &[FilterOp]) -> f64 {
                 offset_x.abs().max(offset_y.abs()) * 0.5
             }
             FilterOp::VelocityBlur {
-                velocity_x,
-                velocity_y,
-                shutter_angle,
-            } => {
-                let exposure = (shutter_angle / 360.0).clamp(0.0, 1.0);
-                velocity_x.abs().max(velocity_y.abs()) * exposure
-            }
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            } => from_x.abs().max(from_y.abs()).max(to_x.abs()).max(to_y.abs()),
             _ => 0.0,
         })
         .sum::<f64>()

@@ -28,14 +28,24 @@ fn program(source: &str, frame: u32) -> valle_draw::program::DrawProgram {
     emit(&tree, &default_font_naming).unwrap().program
 }
 
-fn velocity(program: &valle_draw::program::DrawProgram) -> Option<[f32; 2]> {
+/// The trail of the first velocity blur: where the node is at either end of the exposure,
+/// relative to where it is now, in its local units.
+fn trail(program: &valle_draw::program::DrawProgram) -> Option<[[f32; 2]; 2]> {
     program.nodes().iter().find_map(|node| match node {
         Node::Group(group) => group.filters.iter().find_map(|filter| match filter {
-            Filter::VelocityBlur { velocity, .. } => Some(*velocity),
+            Filter::VelocityBlur { from, to } => Some([*from, *to]),
             _ => None,
         }),
         _ => None,
     })
+}
+
+fn near(trail: [[f32; 2]; 2], expected: [[f32; 2]; 2], tolerance: f32) -> bool {
+    trail
+        .iter()
+        .flatten()
+        .zip(expected.iter().flatten())
+        .all(|(value, expected)| (value - expected).abs() < tolerance)
 }
 
 fn profiled_program(source: &str, frame: u32) -> (valle_draw::program::DrawProgram, u8) {
@@ -69,15 +79,21 @@ fn auto_blur_tracks_motion_and_stops_when_stationary() {
         .unwrap()
         .dependencies()
         .temporal_window();
-    assert_eq!(window.past_frames, RationalTime::new(1, 2).unwrap());
-    assert_eq!(window.future_frames, RationalTime::new(1, 2).unwrap());
-    let moving = program(source, 10);
-    let measured = velocity(&moving).expect("moving bar has directional blur");
-    assert!((measured[0] - 20.0).abs() < 0.5, "{measured:?}");
-    assert!(measured[1].abs() < 0.01, "{measured:?}");
+    // A 180-degree shutter: a quarter of a frame on each side.
+    assert_eq!(window.past_frames, RationalTime::new(1, 4).unwrap());
+    assert_eq!(window.future_frames, RationalTime::new(1, 4).unwrap());
+    // 20 px a frame: 5 px to either end of the exposure.
+    let moving = trail(&program(source, 10)).expect("moving bar has directional blur");
+    assert!(near(moving, [[-5.0, 0.0], [5.0, 0.0]], 0.01), "{moving:?}");
+    // The bar stops on frame 15: the trail only reaches back.
+    let stopping = trail(&program(source, 15)).expect("the bar moves before it stops");
+    assert!(
+        near(stopping, [[-5.0, 0.0], [0.0, 0.0]], 0.01),
+        "{stopping:?}"
+    );
 
     let stopped = program(source, 45);
-    assert!(velocity(&stopped).is_none(), "stationary bar is sharp");
+    assert!(trail(&stopped).is_none(), "stationary bar is sharp");
     assert_eq!(
         stopped.packed_bytes().unwrap(),
         program(&source.replace("motionBlur: \"auto\"", ""), 45)
@@ -105,14 +121,14 @@ fn auto_blur_includes_layout_and_ancestor_motion() {
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 export default function Flow() { const time = useCurrentTime();
   return <Scene className="flex" style={{ width:640,height:360,backgroundColor:"#101010" }}>
-    <View style={{ width:100+time.seconds*60,height:40,backgroundColor:"#101010" }}/>
+    <View style={{ width:100+time.seconds*120,height:40,backgroundColor:"#101010" }}/>
     <View key="follower" style={{ width:40,height:40,backgroundColor:"#ffffff",motionBlur:"auto" }}/>
   </Scene>;
 }
 "##;
-    let flow = velocity(&program(source, 10)).expect("flow shifts the follower");
-    assert!((flow[0] - 2.0).abs() < 0.5, "{flow:?}");
-    assert!(flow[1].abs() < 0.01, "{flow:?}");
+    // 4 px a frame; the ends of the exposure land on whole pixels of the layout.
+    let flow = trail(&program(source, 10)).expect("flow shifts the follower");
+    assert!(near(flow, [[-1.0, 0.0], [1.0, 0.0]], 0.01), "{flow:?}");
 
     let ancestor = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
@@ -125,12 +141,15 @@ export default function ParentMotion() { const time = useCurrentTime();
   </Scene>;
 }
 "##;
-    let translated = velocity(&program(ancestor, 10)).expect("ancestor shifts the follower");
-    assert!((translated[0] - 2.0).abs() < 0.5, "{translated:?}");
+    let translated = trail(&program(ancestor, 10)).expect("ancestor shifts the follower");
+    assert!(
+        near(translated, [[-0.5, 0.0], [0.5, 0.0]], 0.01),
+        "{translated:?}"
+    );
 }
 
 #[test]
-fn auto_blur_suppresses_a_position_cut() {
+fn auto_blur_streaks_across_a_jump_inside_the_exposure() {
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 export default function Cut() { const time = useCurrentTime();
@@ -140,7 +159,13 @@ export default function Cut() { const time = useCurrentTime();
   </Scene>;
 }
 "##;
-    assert!(velocity(&program(source, 15)).is_none());
+    // The jump at 0.5 s falls inside the exposure of frame 15 only.
+    assert!(trail(&program(source, 14)).is_none());
+    assert_eq!(
+        trail(&program(source, 15)),
+        Some([[-100.0, 0.0], [0.0, 0.0]])
+    );
+    assert!(trail(&program(source, 16)).is_none());
 }
 
 #[test]
@@ -163,11 +188,13 @@ export default function Affine() { const time = useCurrentTime();
         neighbors, 0,
         "affine translation should avoid neighbor layouts"
     );
-    let measured = velocity(&affine_program).expect("combined parent and child translation");
-    // One screen pixel per frame along x, carried into the bar's local units under the parent's
-    // 90 degree rotation.
-    assert!(measured[0].abs() < 0.05, "{measured:?}");
-    assert!((measured[1] + 1.0).abs() < 0.05, "{measured:?}");
+    let measured = trail(&affine_program).expect("combined parent and child translation");
+    // One screen pixel per frame along x, a quarter pixel to either end, carried into the bar's
+    // local units under the parent's 90 degree rotation.
+    assert!(
+        near(measured, [[0.0, 0.25], [0.0, -0.25]], 0.01),
+        "{measured:?}"
+    );
 
     // Enabling geometry reuse for blur must preserve the complete program on random seeks.
     let artifact = compile_motion(source).unwrap().artifact;
@@ -196,6 +223,13 @@ export default function Affine() { const time = useCurrentTime();
         include_str!("fixtures/motion/composition/auto-motion-blur.motion.tsx"),
         10,
     );
-    assert_eq!(neighbors, 2, "nonlinear motion needs neighboring samples");
-    assert!((velocity(&nonlinear).unwrap()[0] - 20.0).abs() < 0.5);
+    assert_eq!(
+        neighbors, 2,
+        "nonlinear motion needs the ends of the exposure"
+    );
+    assert!(near(
+        trail(&nonlinear).unwrap(),
+        [[-5.0, 0.0], [5.0, 0.0]],
+        0.01
+    ));
 }

@@ -226,8 +226,8 @@ test("300 Timeline captions compile their track's template once and retain exact
         if (seen.has(frame)) expect(json).toBe(seen.get(frame)!);
         seen.set(frame, json);
         // At 4 fps the first admitted sample is 0.25 s; authored start 0.125 s
-        // leaves source time 0.125 s, whose nearest source frame is 1.
-        if (frame === 1) expect(JSON.parse(json).motion[0].sourceFrame).toBe(1);
+        // leaves source time 0.125 s, in source frame 0.
+        if (frame === 1) expect(JSON.parse(json).motion[0].sourceFrame).toBe(0);
       } finally { engine.release_ticket(ticket); }
     }
   } finally { engine.free(); }

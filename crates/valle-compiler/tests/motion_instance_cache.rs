@@ -91,15 +91,21 @@ fn props_viewport_host_and_scene_changes_do_not_reuse_stale_batches() {
             (2, 3.0, (1280, 720)),
             (1, 0.0, (640, 360)),
         ] {
-            ctx.host = valle_motion::MotionHostContext::new(
-                valle_timeline::internal::SampleTime::new(
-                    valle_timeline::RationalTime::new(host, 1).unwrap(),
-                ),
+            // The source holds its end while the clip clock runs on.
+            let clock = valle_timeline::ClipClock::new(
+                FrameRate::new(60, 1).unwrap(),
+                valle_timeline::RationalTime::ZERO,
                 valle_timeline::RationalTime::new(host + 10, 1).unwrap(),
-                host as u32,
-                600,
+                valle_timeline::ClipMap::Clip {
+                    trim: valle_timeline::RationalTime::ZERO,
+                    rate: valle_timeline::RationalRate::ONE,
+                    end: valle_timeline::SourceEnd::Hold,
+                },
+                valle_timeline::RationalTime::new(1, 2).unwrap(),
+                false,
             )
             .unwrap();
+            ctx = valle_motion::MotionContext::new(clock, host * 60).unwrap();
             assert_eq!(
                 program(&cached, &ctx, shift, size),
                 program(&reference, &ctx, shift, size)

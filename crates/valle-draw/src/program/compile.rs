@@ -1272,12 +1272,13 @@ fn filter_of(value: recording::FilterOp) -> Filter {
             turbulence,
         },
         recording::FilterOp::VelocityBlur {
-            velocity_x,
-            velocity_y,
-            shutter_angle,
+            from_x,
+            from_y,
+            to_x,
+            to_y,
         } => Filter::VelocityBlur {
-            velocity: [velocity_x as f32, velocity_y as f32],
-            shutter_angle_degrees: shutter_angle as f32,
+            from: [from_x as f32, from_y as f32],
+            to: [to_x as f32, to_y as f32],
         },
     }
 }
@@ -1313,15 +1314,10 @@ fn recording_filter_footprint(filter: &Filter) -> Insets {
             offset[0].abs() * 0.5 + 1.0,
             offset[1].abs() * 0.5 + 1.0,
         ),
-        Filter::VelocityBlur {
-            velocity,
-            shutter_angle_degrees,
-        } => {
-            let scale = *shutter_angle_degrees / 360.0;
-            // Executors sample shutter positions around the center, so support grows on both sides.
-            let dx = velocity[0].abs() * scale;
-            let dy = velocity[1].abs() * scale;
-            Insets::new(dx, dy, dx, dy)
+        Filter::VelocityBlur { from, to } => {
+            // A pixel reads the input where each copy came from: the trail turned around.
+            let reach = Filter::velocity_blur_reach(*from, *to);
+            Insets::new(reach.right, reach.bottom, reach.left, reach.top)
         }
         _ => Insets::default(),
     }

@@ -14,6 +14,15 @@ use valle_timeline::FrameRate;
 const MOTION_TRANSITION: &str =
     include_str!("fixtures/motion/composition/motion-transition.motion.tsx");
 
+/// The progress of the 60-frame scene on `frame`: the last frame shows the end.
+fn progress_at(frame: u32) -> f32 {
+    if frame == 59 {
+        1.0
+    } else {
+        frame as f32 / 60.0
+    }
+}
+
 fn program(source: &str, frame: u32) -> Result<DrawProgram, String> {
     let artifact = compile_motion(source)
         .map_err(|e| format!("{e:?}"))?
@@ -64,7 +73,7 @@ fn all_kernels_keep_two_independent_inputs_and_frame_progress() {
             assert!(
                 matches!(transition.kernel, TransitionKernel::Builtin { kind, .. } if kind == effect)
             );
-            assert_eq!(transition.progress, frame as f32 / 60.0);
+            assert_eq!(transition.progress, progress_at(frame));
             assert_eq!(
                 (transition.bounds.width, transition.bounds.height),
                 (640.0, 360.0)
@@ -141,7 +150,7 @@ fn parameters_are_typed_animated_validated_and_emitted() {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(params.0, [frame as f32 / 60.0, 0.25, 3.0, 0.0]);
+        assert_eq!(params.0, [progress_at(frame), 0.25, 3.0, 0.0]);
         if frame == 30 {
             if let Some(first) = &previous {
                 assert_eq!(&output.packed_bytes().unwrap(), first);
@@ -264,7 +273,7 @@ fn code_reads_both_children_and_the_progress() {
         };
         assert_eq!(shader.uri, uri);
         assert!(textures.is_empty());
-        let progress = frame as f32 / 60.0;
+        let progress = progress_at(frame);
         assert_eq!(transition.progress, progress);
         assert_eq!(uniforms.len(), 1);
         assert_eq!(uniforms[0].name, "softness");

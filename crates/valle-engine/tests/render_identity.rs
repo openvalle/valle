@@ -1279,7 +1279,7 @@ fn motion_source_duration_is_resolved_and_validated_during_admission() {
 }
 
 #[test]
-fn hold_end_preserves_the_sentinel_and_uses_each_producers_abi_boundary() {
+fn a_held_motion_source_shows_its_end_and_its_videos_follow_its_clock() {
     let artifact = video_motion_artifact();
     let mut motion_value = motion_document("component:held-video");
     motion_value["document"]["canvas"]["fps"] = json!("3/1");
@@ -1343,12 +1343,13 @@ fn hold_end_preserves_the_sentinel_and_uses_each_producers_abi_boundary() {
     let EvaluatedVisualOperation::Clip(motion_clip) = &motion_frame.visual()[0] else {
         panic!("held Motion source must remain a visual clip")
     };
+    // The scene shows its end from its last displayed frame, frame 2, on.
+    let end = valle_timeline::RationalTime::ONE;
     assert_eq!(
         motion_clip.source().mapped_time(),
-        valle_engine::render::MappedSourceTime::HoldEnd
+        valle_engine::render::MappedSourceTime::Exact(end)
     );
-    let motion_frame_boundary = valle_timeline::RationalTime::new(2, 3).unwrap();
-    assert_eq!(motion_clip.source().sample_time(), motion_frame_boundary);
+    assert_eq!(motion_clip.source().sample_time(), end);
     assert_eq!(
         motion_clip.source().motion_props().unwrap()["opacity"],
         valle_engine::render::EvaluatedMotionValue::Scalar(0.75),
@@ -1382,8 +1383,10 @@ fn hold_end_preserves_the_sentinel_and_uses_each_producers_abi_boundary() {
         &mut valle_engine::prepare::ProductPrepareCaches::new(),
     )
     .unwrap();
-    let embedded_video_time = valle_timeline::RationalTime::new(3, 4).unwrap();
-    let second_embedded_video_time = valle_timeline::RationalTime::new(1, 2).unwrap();
+    // Each video samples `sourceStart + seconds × speed` at the end of the scene; the first one
+    // reaches the end of the footage and shows its last frame.
+    let embedded_video_time = valle_timeline::RationalTime::ONE;
+    let second_embedded_video_time = valle_timeline::RationalTime::new(7, 10).unwrap();
     assert!(
         motion_output
             .resource_requests
@@ -1406,28 +1409,6 @@ fn hold_end_preserves_the_sentinel_and_uses_each_producers_abi_boundary() {
                     )
             })
     );
-    assert!(
-        motion_output
-            .resource_requests
-            .requests()
-            .iter()
-            .all(|request| {
-                request.sample()
-                    != valle_engine::resource::ResourceSample::SourceTime(motion_frame_boundary)
-            })
-    );
-    assert!(
-        motion_output
-            .resource_requests
-            .requests()
-            .iter()
-            .all(|request| {
-                request.sample()
-                    != valle_engine::resource::ResourceSample::SourceTime(
-                        valle_timeline::RationalTime::ONE,
-                    )
-            })
-    );
     let motion_program_index = motion_output
         .frame
         .programs
@@ -1447,7 +1428,7 @@ fn hold_end_preserves_the_sentinel_and_uses_each_producers_abi_boundary() {
             .iter()
             .map(|texture| texture.sample_time_micros)
             .collect::<Vec<_>>(),
-        vec![Some(500_000), Some(750_000)]
+        vec![Some(700_000), Some(1_000_000)]
     );
     let mut tampered = motion_output.clone();
     let second_handle = tampered.frame.programs[motion_program_index]
@@ -1528,8 +1509,8 @@ fn hold_end_preserves_the_sentinel_and_uses_each_producers_abi_boundary() {
             .map(|texture| (&texture.key, texture.sample_time_micros))
             .collect::<Vec<_>>(),
         vec![
-            (&lowered_motion.resources.textures[0].key, Some(500_000)),
-            (&lowered_motion.resources.textures[1].key, Some(750_000)),
+            (&lowered_motion.resources.textures[0].key, Some(700_000)),
+            (&lowered_motion.resources.textures[1].key, Some(1_000_000)),
         ],
         "lowering must preserve the positional full texture identity"
     );
@@ -2952,7 +2933,13 @@ fn author_transition_preserves_video_source_and_layer_clocks_in_the_overlap() {
             t.to().sample_time(),
             valle_timeline::RationalTime::new(frame - 30, 60).unwrap()
         );
-        assert!((t.from_layer().opacity() - frame as f64 / 75.0).abs() < 1e-9);
+        // The last frame of the first clip reads its curve at the clip's end.
+        let from_opacity = if frame == 74 {
+            1.0
+        } else {
+            frame as f64 / 75.0
+        };
+        assert!((t.from_layer().opacity() - from_opacity).abs() < 1e-9);
         assert!((t.to_layer().opacity() - (frame - 45) as f64 / 75.0).abs() < 1e-9);
     }
     for (frame, id) in [
@@ -3133,22 +3120,25 @@ fn motion_host_clock_and_props_ignore_source_retiming() {
             let EvaluatedVisualOperation::Clip(clip) = &evaluated.visual()[0] else {
                 panic!("expected clip")
             };
-            let host = clip.source().motion_host().unwrap();
+            let context = clip.source().motion_context().unwrap();
             let seconds = valle_timeline::RationalTime::new(frame * 1001 - 30, 30000).unwrap();
-            assert_eq!(host.sample.composition(), seconds);
+            assert_eq!(context.clip_seconds, seconds);
             assert_eq!(
-                host.duration,
+                context.clock.duration(),
                 valle_timeline::RationalTime::new(2, 1).unwrap()
             );
             assert_eq!(
-                host.progress,
+                context.clip_progress,
                 valle_timeline::RationalTime::new(frame, 59).unwrap()
             );
+            // The clip's last frame reads its curve at the clip's length.
             assert_eq!(
                 clip.source().motion_props().unwrap()["opacity"],
-                valle_engine::render::EvaluatedMotionValue::Scalar(
+                valle_engine::render::EvaluatedMotionValue::Scalar(if frame == 59 {
+                    1.0
+                } else {
                     (seconds.as_f64() / 2.0).max(0.0)
-                )
+                })
             );
         }
     }
@@ -3203,16 +3193,16 @@ fn motion_host_progress_uses_both_absolute_quantized_boundaries() {
             let EvaluatedVisualOperation::Clip(clip) = &evaluated.visual()[0] else {
                 panic!("expected clip")
             };
-            let host = clip.source().motion_host().unwrap();
+            let context = clip.source().motion_context().unwrap();
             assert_eq!(
-                host.progress,
+                context.clip_progress,
                 if expected_frames == 1 {
                     valle_timeline::RationalTime::new(1, 2).unwrap()
                 } else {
                     valle_timeline::RationalTime::new(frame, expected_frames as u32 - 1).unwrap()
                 }
             );
-            assert_eq!(host.duration.to_string(), duration);
+            assert_eq!(context.clock.duration().to_string(), duration);
         }
     }
 }
@@ -3279,15 +3269,23 @@ export default function Main() {{ const time = useCurrentTime(); const comp = us
                     let EvaluatedVisualOperation::Clip(clip) = &evaluated.visual()[0] else {
                         panic!("clip")
                     };
-                    let source = artifact
-                        .role
-                        .template_time(
-                            RationalTime::new(frame, 4).unwrap(),
-                            RationalTime::from_exact(host),
-                            RationalTime::new(2, 1).unwrap(),
-                        )
-                        .unwrap();
+                    let clock = valle_timeline::ClipClock::new(
+                        valle_timeline::FrameRate::new(4, 1).unwrap(),
+                        RationalTime::ZERO,
+                        RationalTime::from_exact(host),
+                        valle_timeline::ClipMap::template(artifact.role).unwrap(),
+                        RationalTime::new(2, 1).unwrap(),
+                        false,
+                    )
+                    .unwrap();
+                    let context = clip.source().motion_context().unwrap();
+                    assert_eq!(context.clock, clock);
+                    let source = context.sample.composition();
                     assert_eq!(clip.source().sample_time(), source);
+                    // The last frame shows the end of the template.
+                    if frame == frames - 1 {
+                        assert_eq!(source, RationalTime::new(2, 1).unwrap());
+                    }
                     let output = valle_engine::prepare::prepare_compiled_render_frame_cached(
                         &render,
                         &evaluated,
@@ -3388,7 +3386,7 @@ fn overlay_host_clock_props_and_outer_curves_share_the_authored_start() {
                     .checked_sub(start)
                     .unwrap();
                 assert_eq!(
-                    clip.source().motion_host().unwrap().sample.composition(),
+                    clip.source().motion_context().unwrap().clip_seconds,
                     seconds
                 );
                 let valle_engine::render::EvaluatedMotionValue::Scalar(prop) =
@@ -3398,13 +3396,8 @@ fn overlay_host_clock_props_and_outer_curves_share_the_authored_start() {
                 };
                 assert_eq!(prop, clip.layer().opacity());
                 assert_eq!(prop, (seconds.as_f64() / 2.0).max(0.0));
-                assert_eq!(
-                    clip.source().sample_time(),
-                    artifact
-                        .role
-                        .template_time(seconds, RationalTime::new(2, 1).unwrap(), RationalTime::ONE)
-                        .unwrap()
-                );
+                // The intro and the start of the middle play at speed from the authored start.
+                assert_eq!(clip.source().sample_time(), seconds.max(RationalTime::ZERO));
             }
         }
     }

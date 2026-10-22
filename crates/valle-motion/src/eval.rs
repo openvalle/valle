@@ -1089,18 +1089,12 @@ fn reads_runtime_inputs(expr: &Expr) -> bool {
 /// Dummy folding context required by the evaluator signature; runtime-dependent branches are never
 /// evaluated during folding.
 fn folding_context() -> MotionContext {
-    MotionContext {
-        host: crate::MotionHostContext {
-            sample: valle_timeline::internal::SampleTime::ZERO,
-            duration: valle_timeline::RationalTime::ZERO,
-            progress: valle_timeline::RationalTime::ZERO,
-        },
-        local_frame: 0,
-        sample: valle_timeline::internal::SampleTime::ZERO,
-        progress: 0.0,
-        duration_frames: 0,
-        fps: valle_timeline::FrameRate::new(1, 1).expect("valid rate"),
-    }
+    crate::motion_context_at_frame(
+        0,
+        1,
+        valle_timeline::FrameRate::new(1, 1).expect("valid rate"),
+    )
+    .expect("a one-frame clock")
 }
 
 pub fn fold_constants(
@@ -1626,22 +1620,9 @@ fn eval_one_with<'a>(
                 ),
             )
         }
-        Expr::AudioSample {
-            time,
-            rate,
-            samples,
-        } => {
+        Expr::AudioSample { time, signal } => {
             let time = as_number(at, "audioAnalysis", child(*time)?)?;
-            if *rate == 0 || samples.is_empty() {
-                return Err(EvalError::BadInterpolate { at });
-            }
-            let index = if time <= 0.0 {
-                0
-            } else {
-                crate::time::clock_floor(time * f64::from(*rate)) as usize
-            }
-            .min(samples.len() - 1);
-            finite(at, "audioAnalysis", MotionValue::Number(samples[index]))
+            finite(at, "audioAnalysis", MotionValue::Number(signal.at(time)))
         }
     }
 }
@@ -1659,9 +1640,9 @@ fn context_value(
         ContextInput::LocalFrame => number(ctx.local_frame),
         ContextInput::LocalProgress => MotionValue::Number(ctx.progress),
         ContextInput::CompositionSeconds => MotionValue::Number(ctx.sample.composition().as_f64()),
-        ContextInput::HostSeconds => MotionValue::Number(ctx.host.sample.composition().as_f64()),
-        ContextInput::HostDuration => MotionValue::Number(ctx.host.duration.as_f64()),
-        ContextInput::HostProgress => MotionValue::Number(ctx.host.progress.as_f64()),
+        ContextInput::HostSeconds => MotionValue::Number(ctx.clip_seconds.as_f64()),
+        ContextInput::HostDuration => MotionValue::Number(ctx.clock.duration().as_f64()),
+        ContextInput::HostProgress => MotionValue::Number(ctx.clip_progress.as_f64()),
         ContextInput::DurationFrames => number(ctx.duration_frames),
         ContextInput::FpsNum => MotionValue::Number(ctx.fps.numerator() as f64),
         ContextInput::FpsDen => number(ctx.fps.denominator()),
@@ -2057,21 +2038,20 @@ mod tests {
     }
 
     #[test]
-    fn audio_samples_hold_onset_and_wrapped_phase_within_each_frame() {
-        let sample_at = |time| {
+    fn audio_signals_interpolate_decay_and_fall_silent_outside_the_sound() {
+        let at = |signal: &crate::AudioSignal, time: f64| {
             let artifact = artifact(vec![
                 Expr::Const {
                     value: MotionValue::Number(time),
                 },
                 Expr::AudioSample {
                     time: ExprId(0),
-                    rate: 30,
-                    samples: vec![0.0, 1.0, 0.0],
+                    signal: signal.clone(),
                 },
             ]);
             artifact.validate().unwrap();
             let ctx = context(0);
-            eval_all(
+            let MotionValue::Number(value) = eval_all(
                 &artifact,
                 EvalInputs {
                     ctx: &ctx,
@@ -2080,13 +2060,43 @@ mod tests {
                     viewport: None,
                 },
             )
-            .unwrap()[1]
-                .clone()
+            .unwrap()[1] else {
+                panic!("an audio sample is a number")
+            };
+            value
         };
-        assert_eq!(sample_at(0.0), MotionValue::Number(0.0));
-        assert_eq!(sample_at(0.05), MotionValue::Number(1.0));
-        assert_eq!(sample_at(0.066), MotionValue::Number(1.0));
-        assert_eq!(sample_at(2.0 / 30.0), MotionValue::Number(0.0));
+        // At the start of a bin its value; between two starts a straight line.
+        let series = crate::AudioSignal::Series {
+            rate: 30,
+            end: 0.1,
+            values: vec![0.0, 1.0, 0.5],
+        };
+        assert_eq!(at(&series, 1.0 / 30.0), 1.0);
+        assert_eq!(at(&series, 0.05), 0.75);
+        // The last bin holds to the end of the sound, and there is none outside it.
+        assert_eq!(at(&series, 0.09), 0.5);
+        assert_eq!(at(&series, 0.1), 0.5);
+        assert_eq!(at(&series, 0.11), 0.0);
+        assert_eq!(at(&series, -0.01), 0.0);
+        // Onsets fall over their length; where two overlap the later one counts.
+        let onsets = crate::AudioSignal::Onsets {
+            times: vec![0.1, 0.15],
+            length: 0.1,
+        };
+        assert_eq!(at(&onsets, 0.05), 0.0);
+        assert_eq!(at(&onsets, 0.1), 1.0);
+        assert!((at(&onsets, 0.125) - 0.75).abs() < 1e-12);
+        assert_eq!(at(&onsets, 0.15), 1.0);
+        assert_eq!(at(&onsets, 0.3), 0.0);
+        // The beat phase rises from each beat to the next and is 0 outside the beats.
+        let beats = crate::AudioSignal::Beats {
+            times: vec![0.5, 1.0, 1.5],
+        };
+        assert_eq!(at(&beats, 0.25), 0.0);
+        assert_eq!(at(&beats, 0.75), 0.5);
+        assert_eq!(at(&beats, 1.0), 0.0);
+        assert_eq!(at(&beats, 1.25), 0.5);
+        assert_eq!(at(&beats, 1.5), 0.0);
     }
 
     #[test]

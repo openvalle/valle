@@ -25,7 +25,8 @@ pub struct ExprId(pub u32);
 )]
 pub enum ContextInput {
     LocalFrame,
-    /// Continuous clip progress in `[0, 1)`. Glass track-affecting time base.
+    /// Scene progress, `seconds / duration`: 1 on the last frame of a one-shot scene. Glass
+    /// track-affecting time base.
     LocalProgress,
     /// Clip-local composition seconds as a finite f64 projection of the exact sample identity.
     CompositionSeconds,
@@ -359,6 +360,107 @@ pub enum TemplatePart {
     Expr { expr: ExprId },
 }
 
+/// An audio analysis over the seconds of its asset.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "kind",
+    deny_unknown_fields
+)]
+pub enum AudioSignal {
+    /// One value at the start of each of `rate` bins a second, linear between the starts of two
+    /// bins. The last bin's value holds to the end of the asset, `end` seconds; before the start
+    /// and past the end there is no sound, and the signal is 0.
+    Series {
+        rate: u32,
+        end: f64,
+        values: Vec<f64>,
+    },
+    /// Each onset falls linearly from 1 at its time to 0 `length` seconds later. Where onsets
+    /// overlap the latest is the highest, and it is the value.
+    Onsets { times: Vec<f64>, length: f64 },
+    /// The phase from each beat to the next: 0 on a beat, rising towards 1. Before the first beat
+    /// and from the last one on it is 0.
+    Beats { times: Vec<f64> },
+    /// One value at every time.
+    Constant { value: f64 },
+}
+
+impl AudioSignal {
+    /// The signal at `time` seconds of the asset. Times that reach a bin start, an onset, a beat
+    /// or the end of the asset within the clock tolerance reach it exactly.
+    pub fn at(&self, time: f64) -> f64 {
+        let reached = |mark: f64| time >= mark || crate::time::clock_equal(time, mark);
+        match self {
+            Self::Series { rate, end, values } => {
+                if !reached(0.0) || !(time <= *end || crate::time::clock_equal(time, *end)) {
+                    return 0.0;
+                }
+                let position = time.clamp(0.0, *end) * f64::from(*rate);
+                let index = crate::time::clock_floor(position).max(0.0) as usize;
+                match (values.get(index), values.get(index + 1)) {
+                    (Some(from), Some(to)) => {
+                        from + (to - from) * (position - index as f64).clamp(0.0, 1.0)
+                    }
+                    _ => values.last().copied().unwrap_or(0.0),
+                }
+            }
+            Self::Onsets { times, length } => {
+                let count = times.partition_point(|onset| reached(*onset));
+                count.checked_sub(1).map_or(0.0, |last| {
+                    (1.0 - (time - times[last]).max(0.0) / length).max(0.0)
+                })
+            }
+            Self::Beats { times } => {
+                let next = times.partition_point(|beat| reached(*beat));
+                if next == 0 || next >= times.len() {
+                    return 0.0;
+                }
+                let (from, to) = (times[next - 1], times[next]);
+                ((time - from) / (to - from)).clamp(0.0, 1.0)
+            }
+            Self::Constant { value } => *value,
+        }
+    }
+
+    /// Every value the signal takes, as an inclusive range.
+    pub fn range(&self) -> (f64, f64) {
+        match self {
+            Self::Series { values, .. } => {
+                values.iter().fold((0.0, 0.0), |(lower, upper), value| {
+                    (value.min(lower), value.max(upper))
+                })
+            }
+            Self::Onsets { .. } | Self::Beats { .. } => (0.0, 1.0),
+            Self::Constant { value } => (*value, *value),
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        let times_valid = |times: &[f64]| {
+            times.len() <= MAX_SIMULATION_STEPS + 2
+                && times.iter().all(|time| time.is_finite() && *time >= 0.0)
+                && times.windows(2).all(|pair| pair[0] < pair[1])
+        };
+        match self {
+            Self::Series { rate, end, values } => {
+                (1..=120).contains(rate)
+                    && end.is_finite()
+                    && *end > 0.0
+                    && !values.is_empty()
+                    && values.len() <= MAX_SIMULATION_STEPS
+                    && values.iter().all(|value| value.is_finite())
+            }
+            Self::Onsets { times, length } => {
+                times_valid(times) && length.is_finite() && *length > 0.0
+            }
+            Self::Beats { times } => times_valid(times) && times.len() != 1,
+            Self::Constant { value } => value.is_finite(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     rename_all = "camelCase",
@@ -601,13 +703,11 @@ pub enum Expr {
         duration: f64,
         samples: Vec<f64>,
     },
-    /// Prepare-time audio analysis, `rate` entries per second of the asset. Lookup is held
-    /// within each entry; onset pulses and wrapped beat phases must not interpolate into
-    /// neighbors.
+    /// Prepare-time audio analysis: a pure function of the time it reads, in seconds of the
+    /// asset.
     AudioSample {
         time: ExprId,
-        rate: u32,
-        samples: Vec<f64>,
+        signal: AudioSignal,
     },
     /// Closed-form damped harmonic oscillator, normalized from 0 to 1. Physical parameters are
     /// compile-time constants; presets and explicit parameters are mutually exclusive. Use
@@ -2013,20 +2113,12 @@ pub fn validate_next_expr(
             }
             Some(ExprType::Number)
         }
-        Expr::AudioSample {
-            time,
-            rate,
-            samples,
-        } => {
-            if child(*time) != Some(ExprType::Number)
-                || !(1..=120).contains(rate)
-                || samples.len() < 2
-                || samples.len() > MAX_SIMULATION_STEPS + 1
-                || samples.iter().any(|sample| !sample.is_finite())
-            {
+        Expr::AudioSample { time, signal } => {
+            if child(*time) != Some(ExprType::Number) || !signal.is_valid() {
                 errors.push(ValidationError::new(
                     path,
-                    "audio sample needs numeric time, rate 1..=120, and a finite bounded table",
+                    "audio sample needs numeric time and a finite bounded signal: rate 1..=120, \
+                     a positive end and length, and increasing times",
                 ));
             }
             Some(ExprType::Number)

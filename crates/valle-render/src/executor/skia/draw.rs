@@ -2964,10 +2964,7 @@ fn apply_filter_program_into(
     {
         return Ok(());
     }
-    if let Filter::VelocityBlur {
-        velocity,
-        shutter_angle_degrees,
-    } = filter
+    if let Filter::VelocityBlur { from, to } = filter
         && super::velocity::draw(
             surface,
             &input.image,
@@ -2976,8 +2973,8 @@ fn apply_filter_program_into(
                 input.roi.x - target_origin[0],
                 input.roi.y - target_origin[1],
             ],
-            velocity,
-            shutter_angle_degrees,
+            from,
+            to,
         )?
     {
         return Ok(());
@@ -3618,12 +3615,9 @@ fn program_filter_in_device_space(
                 "chromatic aberration",
             )?,
         }),
-        Filter::VelocityBlur {
-            velocity,
-            shutter_angle_degrees,
-        } => Ok(Filter::VelocityBlur {
-            velocity: program_vector_in_device_space(*velocity, local_to_device, "velocity blur")?,
-            shutter_angle_degrees: *shutter_angle_degrees,
+        Filter::VelocityBlur { from, to } => Ok(Filter::VelocityBlur {
+            from: program_vector_in_device_space(*from, local_to_device, "velocity blur")?,
+            to: program_vector_in_device_space(*to, local_to_device, "velocity blur")?,
         }),
         // Its noise lattice stays local too; `apply_noise_displacement_program_into` draws it.
         Filter::NoiseDisplacement { .. } => Ok(filter.clone()),
@@ -5747,19 +5741,23 @@ mod tests {
         ] {
             let image = backing(pixels.0, pixels.1);
             let source = IRect::from_wh(size.0, size.1);
-            // Velocity and shutter: fractional and whole-pixel offsets, offsets within a
-            // thousandth of whole pixels, every copy within one pixel, copies past the clip, and
-            // the 9, 11, 27 and 32 copies of longer and longer travel.
-            for (velocity, shutter) in [
-                ([13.0, 0.0], 180.0),
-                ([-7.3, 2.9], 360.0),
-                ([0.0, 21.7], 180.0),
-                ([16.0, 0.0], 180.0),
-                ([8.002, -0.001], 180.0),
-                ([0.6, 0.0], 90.0),
-                ([40.0, 10.0], 180.0),
-                ([-50.5, 3.0], 360.0),
-                ([300.0, -40.0], 720.0),
+            // The ends of the trail: fractional and whole-pixel offsets, offsets within a
+            // thousandth of whole pixels, every copy within one pixel, copies past the clip, the
+            // 9, 11, 27 and 32 copies of longer and longer travel, a trail that ends where the
+            // input is, one that turns and one that comes back.
+            for (from, to) in [
+                ([-3.25, 0.0], [3.25, 0.0]),
+                ([3.65, -1.45], [-3.65, 1.45]),
+                ([0.0, -5.425], [0.0, 5.425]),
+                ([-4.0, 0.0], [4.0, 0.0]),
+                ([-4.001, 0.0005], [4.001, -0.0005]),
+                ([-0.075, 0.0], [0.075, 0.0]),
+                ([-10.0, -2.5], [10.0, 2.5]),
+                ([25.25, -1.5], [-25.25, 1.5]),
+                ([-150.0, 20.0], [150.0, -20.0]),
+                ([-9.5, 0.0], [0.0, 0.0]),
+                ([-6.0, 2.0], [3.0, 5.0]),
+                ([4.0, 0.0], [4.0, 0.0]),
             ] {
                 for clip in [None, Some(IRect::from_ltrb(4, 9, 190, 270))] {
                     let draw = |fused: bool| {
@@ -5775,22 +5773,19 @@ mod tests {
                                 &image,
                                 source,
                                 origin,
-                                velocity,
-                                shutter,
+                                from,
+                                to,
                             )
                             .unwrap();
                         assert_eq!(
                             drawn,
                             fused && cfg!(all(target_arch = "aarch64", target_endian = "little")),
-                            "{size:?} at {origin:?}, velocity {velocity:?}, clip {clip:?}"
+                            "{size:?} at {origin:?}, trail {from:?} to {to:?}, clip {clip:?}"
                         );
                         if !drawn {
                             // As a program pass draws it through Skia's image filter.
                             clear_surface(&mut target).unwrap();
-                            let filter = Filter::VelocityBlur {
-                                velocity,
-                                shutter_angle_degrees: shutter,
-                            };
+                            let filter = Filter::VelocityBlur { from, to };
                             draw_filters(target.canvas(), &image, source, origin, &[filter])
                                 .unwrap();
                         }
@@ -5798,8 +5793,8 @@ mod tests {
                     };
                     assert!(
                         draw(true) == draw(false),
-                        "{pixels:?} {size:?} at {origin:?}, velocity {velocity:?} at \
-                         {shutter} degrees, clip {clip:?}"
+                        "{pixels:?} {size:?} at {origin:?}, trail {from:?} to {to:?}, \
+                         clip {clip:?}"
                     );
                 }
             }
@@ -7167,15 +7162,15 @@ mod tests {
         assert_eq!(
             program_filter_in_device_space(
                 &Filter::VelocityBlur {
-                    velocity: [2.0, 1.0],
-                    shutter_angle_degrees: 180.0,
+                    from: [-1.0, -0.5],
+                    to: [2.0, 1.0],
                 },
                 [0.0, -2.0, 8.0, 2.0, 0.0, 9.0, 0.0, 0.0, 1.0],
             )
             .unwrap(),
             Filter::VelocityBlur {
-                velocity: [-2.0, 4.0],
-                shutter_angle_degrees: 180.0,
+                from: [1.0, -2.0],
+                to: [-2.0, 4.0],
             }
         );
 
@@ -7388,9 +7383,9 @@ mod tests {
             ));
         }
         // A shear keeps a one-dimensional velocity blur exact; the other transforms still fail.
-        let velocity = |velocity| Filter::VelocityBlur {
-            velocity,
-            shutter_angle_degrees: 180.0,
+        let velocity = |to: [f32; 2]| Filter::VelocityBlur {
+            from: to.map(|end| -end),
+            to,
         };
         assert_eq!(
             program_filter_in_device_space(&velocity([2.0, 1.0]), matrices[0]).unwrap(),

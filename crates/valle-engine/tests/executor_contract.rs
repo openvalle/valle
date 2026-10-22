@@ -211,8 +211,8 @@ fn unsupported_reference_operations_are_rejected_without_publishing_a_frame() {
             turbulence: true,
         },
         Filter::VelocityBlur {
-            velocity: [2.0, 0.0],
-            shutter_angle_degrees: 180.0,
+            from: [-0.5, 0.0],
+            to: [0.5, 0.0],
         },
     ] {
         draws.push(program(Some(filter), 0, None, false));

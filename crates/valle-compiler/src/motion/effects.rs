@@ -397,7 +397,7 @@ impl<'s> Compiler<'s> {
         ])
     }
 
-    /// Auto blur derives screen-space velocity from nearby output-time layouts. An explicit
+    /// Auto blur finds the node's screen place at both ends of the exposure. An explicit
     /// `motionBlur({ velocity, angle })` gives the velocity in pixels per second of the scene
     /// clock the node is drawn on; the streak is what the node moves while the shutter is open.
     pub(super) fn lower_node_motion_blur_style(
@@ -485,8 +485,9 @@ impl<'s> Compiler<'s> {
                 call.span(),
             ),
         };
-        // The renderer takes the movement of one output frame: the scene seconds a frame spans,
-        // through the speeds of the TimeScopes around the node, over the frame rate.
+        // The renderer runs the velocity over the composition's scene time at each end of the
+        // exposure: through the speeds of the TimeScopes around the node, those seconds are the
+        // node's own.
         let span = call.span();
         let speed = self
             .time_scopes
@@ -499,19 +500,7 @@ impl<'s> Compiler<'s> {
             },
             span,
         );
-        let numerator = self.push(
-            Expr::Context {
-                input: ContextInput::FpsNum,
-            },
-            span,
-        );
-        let denominator = self.push(
-            Expr::Context {
-                input: ContextInput::FpsDen,
-            },
-            span,
-        );
-        let per_frame = |compiler: &mut Self, field: GeometryField| {
+        let scaled = |compiler: &mut Self, field: GeometryField| {
             let component = compiler.push(
                 Expr::GeometryField {
                     input: velocity,
@@ -519,30 +508,16 @@ impl<'s> Compiler<'s> {
                 },
                 span,
             );
-            let scaled = compiler.push(
+            compiler.push(
                 Expr::Mul {
                     lhs: component,
                     rhs: speed,
                 },
                 span,
-            );
-            let scaled = compiler.push(
-                Expr::Mul {
-                    lhs: scaled,
-                    rhs: denominator,
-                },
-                span,
-            );
-            compiler.push(
-                Expr::Div {
-                    lhs: scaled,
-                    rhs: numerator,
-                },
-                span,
             )
         };
-        let x = per_frame(self, GeometryField::X);
-        let y = per_frame(self, GeometryField::Y);
+        let x = scaled(self, GeometryField::X);
+        let y = scaled(self, GeometryField::Y);
         let velocity = self.push(Expr::MakePoint { x, y }, span);
         self.extra_capabilities
             .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());

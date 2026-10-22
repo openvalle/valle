@@ -63,6 +63,29 @@ impl<'s> Compiler<'s> {
         if input == ContextInput::CompositionSeconds {
             return seconds;
         }
+        if input == ContextInput::LocalProgress {
+            // The scoped seconds over the scene's duration. Without a delivery contract nothing
+            // samples the scene, and any duration keeps the expression well formed.
+            let duration = self
+                .composition
+                .as_ref()
+                .and_then(|composition| composition.duration().ok())
+                .map_or(1.0, |duration| duration.as_f64());
+            let duration = self.push(
+                Expr::Const {
+                    value: MotionValue::Number(duration),
+                },
+                span,
+            );
+            let progress = self.push(
+                Expr::Div {
+                    lhs: seconds,
+                    rhs: duration,
+                },
+                span,
+            );
+            return self.clamp_unit(progress, span);
+        }
         let numerator = self.push(
             Expr::Context {
                 input: ContextInput::FpsNum,
@@ -89,28 +112,18 @@ impl<'s> Compiler<'s> {
             },
             span,
         );
-        if input == ContextInput::LocalFrame {
-            return self.push(
-                Expr::MathUnary {
-                    op: MathUnaryOp::ClockFloor,
-                    input: frames,
-                },
-                span,
-            );
-        }
-        let duration = self.push(
-            Expr::Context {
-                input: ContextInput::DurationFrames,
+        debug_assert_eq!(input, ContextInput::LocalFrame);
+        self.push(
+            Expr::MathUnary {
+                op: MathUnaryOp::ClockFloor,
+                input: frames,
             },
             span,
-        );
-        let progress = self.push(
-            Expr::Div {
-                lhs: frames,
-                rhs: duration,
-            },
-            span,
-        );
+        )
+    }
+
+    /// `value` clamped to [0, 1].
+    fn clamp_unit(&mut self, value: ExprId, span: Span) -> ExprId {
         let zero = self.push(
             Expr::Const {
                 value: MotionValue::Number(0.0),
@@ -126,7 +139,7 @@ impl<'s> Compiler<'s> {
         let before = self.push(
             Expr::Compare {
                 op: CompareOp::Lt,
-                lhs: progress,
+                lhs: value,
                 rhs: zero,
             },
             span,
@@ -135,7 +148,7 @@ impl<'s> Compiler<'s> {
             Expr::Select {
                 condition: before,
                 when_true: zero,
-                when_false: progress,
+                when_false: value,
             },
             span,
         );

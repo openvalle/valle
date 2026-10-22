@@ -25,6 +25,23 @@ fn run(dir: &Path, source: &str, extra: &[&str]) -> (bool, Value) {
     (output.status.success(), value)
 }
 
+/// The issues of a review but two clock hints: the last frame shows the start of a new sweep,
+/// the picture of the first frame, so the scene may be a loop; and at full speed the bar is off
+/// screen on the frame before, so it shows on that last frame alone.
+fn without_clock_hints(report: &Value) -> Vec<&Value> {
+    report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|issue| {
+            !matches!(
+                issue["code"].as_str(),
+                Some("loop_candidate" | "single_frame")
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn review_reports_continuous_strobing_and_accepts_two_controls() {
     let dir = tempfile::tempdir().unwrap();
@@ -62,7 +79,7 @@ fn review_reports_continuous_strobing_and_accepts_two_controls() {
     let slow = STROBE.replace("* 1200", "* 60");
     let (ok, report) = run(dir.path(), &slow, &[]);
     assert!(ok, "{report}");
-    assert_eq!(report["issues"].as_array().unwrap().len(), 0, "{report}");
+    assert!(without_clock_hints(&report).is_empty(), "{report}");
 
     let blurred = STROBE.replace(
         "backgroundColor: \"#ffffff\", translate:",
@@ -70,7 +87,7 @@ fn review_reports_continuous_strobing_and_accepts_two_controls() {
     );
     let (ok, report) = run(dir.path(), &blurred, &[]);
     assert!(ok, "{report}");
-    assert_eq!(report["issues"].as_array().unwrap().len(), 0, "{report}");
+    assert!(without_clock_hints(&report).is_empty(), "{report}");
 
     let hidden = STROBE.replace(
         "backgroundColor: \"#ffffff\", translate:",
@@ -78,7 +95,7 @@ fn review_reports_continuous_strobing_and_accepts_two_controls() {
     );
     let (ok, report) = run(dir.path(), &hidden, &[]);
     assert!(ok, "{report}");
-    assert_eq!(report["issues"].as_array().unwrap().len(), 0, "{report}");
+    assert!(without_clock_hints(&report).is_empty(), "{report}");
 }
 
 #[test]
@@ -320,7 +337,7 @@ fn review_uses_bound_motion_props_for_the_trajectory() {
     std::fs::write(dir.path().join("props.json"), r#"{"speed":60}"#).unwrap();
     let (ok, report) = run(dir.path(), &source, &["--props", "props.json"]);
     assert!(ok, "{report}");
-    assert!(report["issues"].as_array().unwrap().is_empty(), "{report}");
+    assert!(without_clock_hints(&report).is_empty(), "{report}");
 }
 
 #[test]

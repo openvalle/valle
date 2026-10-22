@@ -112,7 +112,8 @@ impl ActivationDomain {
         if duration_frames == 0 {
             return None;
         }
-        let end = crate::time::sample_time_at_frame(i64::from(duration_frames), fps).ok()?;
+        // The scene clock reaches the duration on the last displayed frame and holds it.
+        let end = SampleTime::new(composition.duration().ok()?);
         let end_seconds_upper = end.composition().as_f64().next_up();
         if !end_seconds_upper.is_finite() {
             return None;
@@ -130,7 +131,7 @@ impl ActivationDomain {
             && ctx.duration_frames == self.duration_frames
             && ctx.local_frame < self.duration_frames
             && ctx.sample >= SampleTime::ZERO
-            && ctx.sample < self.end;
+            && ctx.sample <= self.end;
         if !in_domain {
             return None;
         }

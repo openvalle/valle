@@ -376,7 +376,7 @@ fn documented_caption_presenter_draws_each_run() {
 }
 
 #[test]
-fn caption_timing_equals_once_overlay_at_exact_endpoints_and_fractional_frames() {
+fn caption_timing_maps_like_a_once_overlay() {
     let t = |n, d| RationalTime::new(n, d).unwrap();
     let role = MotionRole::CaptionPresenter {
         intro: t(3, 20),
@@ -387,20 +387,12 @@ fn caption_timing_equals_once_overlay_at_exact_endpoints_and_fractional_frames()
         outro: t(3, 20),
         hold: OverlayHold::Once,
     };
+    assert_eq!(
+        valle_timeline::ClipMap::template(role),
+        valle_timeline::ClipMap::template(overlay)
+    );
     for host in [t(3, 10), t(3, 2), t(4, 1)] {
         role.validate(t(1, 1), Some(host)).unwrap();
-        for sample in [
-            t(0, 1),
-            t(3, 20),
-            t(19 * 1001, 30000),
-            host.checked_sub(t(1, 30)).unwrap(),
-            host,
-        ] {
-            assert_eq!(
-                role.template_time(sample, host, t(1, 1)).unwrap(),
-                overlay.template_time(sample, host, t(1, 1)).unwrap()
-            );
-        }
     }
     assert!(role.validate(t(1, 1), Some(t(299999, 1000000))).is_err());
 }

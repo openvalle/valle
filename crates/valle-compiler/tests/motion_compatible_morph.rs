@@ -84,7 +84,13 @@ fn author_compatible_pair_serializes_and_evaluates_the_prepared_mesh() {
     for frame in [0, 9, 18, 27, 36, 45, 59] {
         let path = evaluated_path(&decoded, index, frame);
         assert_eq!(path.points.len(), 5);
-        assert_eq!(path, prepared.outline_path(frame as f64 / 60.0).unwrap());
+        // The last frame shows the end of the scene, the second shape.
+        let progress = if frame == 59 {
+            1.0
+        } else {
+            frame as f64 / 60.0
+        };
+        assert_eq!(path, prepared.outline_path(progress).unwrap());
     }
     let unsupported = PAIR.replace(
         "method: \"compatible\"",

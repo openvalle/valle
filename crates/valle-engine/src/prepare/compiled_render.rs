@@ -669,8 +669,6 @@ fn prepare_endpoint(
                     motion::CompiledMotionProgramContext {
                         prepared: prepared_scene,
                         evaluated: source,
-                        source_frame: frame_address.source_frame(),
-                        source_time: source.sample_time(),
                         source_duration: render
                             .sources()
                             .source(source.source_index())

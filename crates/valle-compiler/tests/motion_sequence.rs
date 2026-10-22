@@ -187,7 +187,7 @@ fn malformed_stage_graphs_fail_with_authored_labels() {
         ),
         (
             r#"const s=defineSequence({a:stage({duration:0})}); export default function P(){ return <View/>;}"#,
-            "positive duration",
+            "a finite positive number of seconds",
         ),
         (
             r#"const s=defineSequence({a:stage({duration:1}),b:stage({duration:1})}); export default function P(){ return <View/>;}"#,
@@ -286,10 +286,11 @@ export default function P(){{ const {{ seconds }} = useCurrentTime();return <Vie
         compile_motion(&repeat).unwrap().artifact,
         compile_motion(&yoyo).unwrap().artifact,
     ] {
+        // A remainder of the clock takes the clock tolerance.
         assert!(artifact.exprs.iter().any(|expr| matches!(
             expr,
             valle_motion::Expr::MathBinary {
-                op: valle_motion::MathBinaryOp::Mod | valle_motion::MathBinaryOp::PingPong,
+                op: valle_motion::MathBinaryOp::ClockMod | valle_motion::MathBinaryOp::PingPong,
                 ..
             }
         )));

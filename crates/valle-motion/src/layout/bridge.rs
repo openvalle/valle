@@ -234,10 +234,13 @@ pub(crate) enum ResolvedTransitionKernel {
     Shader(ResolvedShaderLayer),
 }
 
-/// One exact output-time exposure sample. Its layout and expressions are independent of the
-/// requested frame and of the other shutter samples.
+/// One temporal sample of a frame, taken at an exact output time. Its layout and expressions are
+/// independent of the requested frame and of the other samples.
 #[derive(Clone)]
 pub(crate) struct TemporalSample {
+    /// The output time of the sample.
+    pub at: valle_timeline::RationalTime,
+    /// The scene time it shows.
     pub time: valle_timeline::internal::SampleTime,
     pub tree: Rc<LayoutTree>,
 }
@@ -326,7 +329,8 @@ pub struct LayoutTree {
 }
 
 impl LayoutTree {
-    /// Exact output times used for a Shutter scope in this requested frame.
+    /// The scene times a Shutter scope shows in this frame, one for each exposure sample in
+    /// output-time order.
     pub fn shutter_sample_times(
         &self,
         key: &str,
@@ -336,7 +340,7 @@ impl LayoutTree {
             .map(|samples| samples.iter().map(|sample| sample.time).collect())
     }
 
-    /// Exact output times used for an Echo scope, oldest first.
+    /// The scene times an Echo scope shows in this frame, oldest first.
     pub fn echo_sample_times(
         &self,
         key: &str,

@@ -33,8 +33,10 @@ test("Wasm reuses closed expressions while random seeks keep current frame input
       const ticket = engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),64,32,false);
       try {
         const boxes = JSON.parse(engine.frame_inspection_json(ticket)).motion[0].boxes;
-        expect(boxes.a).toEqual([0,0,10+frame*5,10]);
-        expect(boxes.b).toEqual([32,0,10+frame*5,10]);
+        // The last frame shows the end of the second.
+        const seconds = frame === 3 ? 1 : frame / 4;
+        expect(boxes.a).toEqual([0,0,10+seconds*20,10]);
+        expect(boxes.b).toEqual([32,0,10+seconds*20,10]);
       } finally {engine.release_ticket(ticket);}
     }
   } finally {engine.free();}
@@ -84,7 +86,8 @@ test("prepared inspection keeps visible Scene3D placement through nested transfo
         seen.set(frame,json);
       } finally {engine.release_ticket(ticket);}
     }
-    expect(transforms.get(3)![2]! - transforms.get(0)![2]!).toBeCloseTo(6,6);
+    // The last frame shows the end of the second: 8 px to the right of the first.
+    expect(transforms.get(3)![2]! - transforms.get(0)![2]!).toBeCloseTo(8,6);
   } finally {engine.free();}
 });
 
@@ -140,7 +143,8 @@ test("Wasm keeps host endpoints and geometry moving while the source holds", () 
         const json = engine.frame_inspection_json(ticket);
         const inspection = JSON.parse(json).motion[0];
         expect(inspection.sourceFrame).toBe(Math.min(frame,3));
-        expect(inspection.boxes.bar).toEqual([Math.round(frame*40/7),Math.min(frame,3)*2,12,12]);
+        // From the source's last frame on, the scene shows its end.
+        expect(inspection.boxes.bar).toEqual([Math.round(frame*40/7),frame>=3?8:frame*2,12,12]);
         if (seen.has(frame)) expect(json).toBe(seen.get(frame)!);
         seen.set(frame,json);
       } finally { engine.release_ticket(ticket); }
@@ -178,8 +182,9 @@ test("Wasm maps overlay timing and rounds the host viewport through the shared e
           try {
             const json=engine.frame_inspection_json(ticket),inspection=JSON.parse(json).motion[0];
             const t=frame/4,exit=duration-0.5;
-            const source=t<0.5?t:t>=exit?1.5+t-exit:0.5+(hold==="once"?Math.min(t-0.5,1):hold==="loop"?(t-0.5)%1:(t-0.5)/(duration-1));
-            expect(inspection.sourceFrame).toBe(Math.floor(source*4));
+            // The last frame of the outro shows the template's end.
+            const source=frame===frames-1?2:t<0.5?t:t>=exit?1.5+t-exit:0.5+(hold==="once"?Math.min(t-0.5,1):hold==="loop"?(t-0.5)%1:(t-0.5)/(duration-1));
+            expect(inspection.sourceFrame).toBe(Math.min(Math.floor(source*4),7));
             expect(inspection.boxes.bar).toEqual([Math.round(source*12),Math.round(frame/(frames-1)*20),16,63]);
             if(seen.has(frame)) expect(json).toBe(seen.get(frame)!);
             seen.set(frame,json);
@@ -222,8 +227,8 @@ test("merged Engine Wasm freezes supplied PCM for audio-driven Motion", () => {
   const options = { resources: [{ control: "beat", contentHash: hash }],
     audioSources: [{ control: "beat", contentHash: hash, sampleRate: 8000, samples }] };
   const compiled = compileMotionJsxWithWasm({ compile_motion_jsx }, source, options);
-  const table = (compiled.artifact.exprs as Array<{ kind: string; samples?: number[] }>)
-    .find((expr) => expr.kind === "audioSample")?.samples;
+  const table = (compiled.artifact.exprs as Array<{ kind: string; signal?: { values?: number[] } }>)
+    .find((expr) => expr.kind === "audioSample")?.signal?.values;
   expect(table).toBeTruthy();
   expect(table![8]).toBe(0);
   expect(table![23]).toBeGreaterThan(0.6);
@@ -241,7 +246,7 @@ test("pulse audio analysis produces the Native artifact digest in WASM", async (
     audioSources: [{ control: "beat", contentHash: hash, sampleRate: 8000, samples }],
   });
   expect(compiled.artifactDigest)
-    .toBe("sha256:3bd2ca4c3bf459bead821ab858055e315f837aefb2a71d7ef836d6bc0b9b2389");
+    .toBe("sha256:7429daa056b0be9052e51b669f63b614d37e2a56c36e84b6fec4f7e937d9afcb");
 });
 
 test("WASM admits shared staggered stops and a local frame-time path paint", () => {

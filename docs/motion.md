@@ -601,7 +601,10 @@ outside the canvas, and `text_overlap` for overlapping glyph ink bounds. Informa
 `motion_while_reading` and `simultaneous_main_actions` hints identify competing prominent
 motion over consecutive frames. `linear_motion` flags a prominent subject whose long move has
 nearly constant screen speed. `stagger_timing` compares observed starts in a consecutively
-numbered moving group against a 30–100 ms gap. The same bindings and FPS options apply. `--trajectories`
+numbered moving group against a 30–100 ms gap. Clock hints name content shown on a single frame
+(`single_frame`), a one-shot scene that ends as it starts (`loop_candidate`), a loop that jumps at
+its seam (`loop_seam`), and values that switch with the clock inside a `Shutter`
+(`shutter_switch`) or jump under motion blur (`blur_jump`). The same bindings and FPS options apply. `--trajectories`
 adds screen positions, bounds, velocity and acceleration
 per visible frame to the JSON report. `--trajectory-sheet review.png` renders a contact sheet
 with the same trajectories and sampled frame markers; see the
@@ -610,13 +613,23 @@ with the same trajectories and sampled frame markers; see the
 Audio assets can drive Motion through `audioAnalysis("asset://beat", { bands: 8, rate: 30 })`:
 `rate` is the number of analysis values per second; it defaults to `composition.fps`
 when that is an integer and is required otherwise.
-The prepared object provides `level(t)`, `band(index, t)`, `onset(t)`, `beatPhase(t)`, and `beatConfidence(t)`;
-its numeric tables are frozen into the compiled artifact and are read without decoding at
-frame time. Bind the declared audio control with `--asset beat=beat.wav`.
-`beatPhase` interpolates between tracked beat times, including fractional frame periods.
+The prepared object provides `level(t)`, `band(index, t)`, `onset(t, length)`, `beatPhase(t)`,
+and `beatConfidence(t)`, each read at `t` seconds of the sound; its signals are frozen into the
+compiled artifact and are read without decoding at frame time. Bind the declared audio control
+with `--asset beat=beat.wav`.
+`level` and `band` run in straight lines between analysis values and hold the last value to the
+end of the sound; before its start and past its end there is no sound, and they are 0.
+`onset(t, length)` is 1 at each detected onset and falls to 0 over `length` seconds, a static
+positive number such as `BEAT.onset(seconds, 0.2)`; where onsets overlap the latest counts.
+Compilation warns with `under-one-frame` when an onset lasts less than a frame of output, after
+the slope of its time and the speed of the TimeScopes around it: frames can miss it.
+`timeline check` repeats the check through the rate of each clip.
+`beatPhase` rises from 0 on each tracked beat towards 1 at the next, including fractional frame
+periods; the last tracked interval runs once more, and the phase is 0 before the first beat and
+after that.
 When periodic support is below 0.35 or fewer than three beats are tracked, it returns zero
 and compilation emits an `audio-beat-uncertain` warning. `beatConfidence(t)` returns the
-whole-asset periodic support in 0–1; use `onset(t)` for irregular individual events.
+whole-asset periodic support in 0–1; use `onset(t, length)` for irregular individual events.
 Studio downloads the same frozen FFmpeg 48 kHz mono PCM used by CLI. Its compiler Worker
 keeps decoded PCM and analysis tables across source edits; browser audio decoders are not used.
 
@@ -742,10 +755,10 @@ the values that hold for the whole frame. Both return plain numbers.
 
 | Field | Meaning |
 | --- | --- |
-| `useCurrentTime().seconds` | Scene time in seconds at the sample, subframes included: the source time after trim, rate, looping, hold, the template map and the enclosing `TimeScope`s |
-| `useCurrentTime().progress` | `seconds` over the duration rounded to whole frames at the actual FPS, clamped to 0–1 |
-| `useCurrentTime().clipSeconds` | Exact output sample minus the clip's authored start, in seconds |
-| `useCurrentTime().clipProgress` | Frame position in the admitted host interval: `i / (N - 1)`; `0.5` for one frame |
+| `useCurrentTime().seconds` | Scene time in seconds at the sample, subframes included: the source time after trim, rate, looping, hold, the template map and the enclosing `TimeScope`s; `duration` on the last frame of a one-shot scene |
+| `useCurrentTime().progress` | `seconds / duration`, clamped to 0–1: 1 on the last frame of a one-shot scene |
+| `useCurrentTime().clipSeconds` | The sample's output time minus the clip's authored start, in seconds; the last frame is before `clipDuration` |
+| `useCurrentTime().clipProgress` | 0 on the host's first frame and 1 on its last: `i / (M - 1)` on frame `i` of `M`, in straight lines between frames; `0.5` for one frame |
 | `useComposition().width`, `.height` | Layout size in pixels: the composition's canvas, or the host's size for an overlay, transition, effect or caption presenter |
 | `useComposition().duration` | `composition.duration` in seconds |
 | `useComposition().fps` | Actual output frame rate as a number, such as 29.97002997… |
@@ -756,10 +769,28 @@ Write animation in seconds, with `seconds`, sequences and expressions:
 `--fps` changes the number of frames and not the speed. Reading `fps` in a frame
 expression warns `frame-rate-dependent`. To step through items at a fixed rate, such
 as an image sequence or data recorded per frame, use the data's own rate and clamp the
-index: `list[clamp(Math.floor(seconds * rate), 0, list.length - 1)]`. The last
-displayed source frame precedes the quantized duration boundary. A time constant
+index: `list[clamp(Math.floor(seconds * rate), 0, list.length - 1)]`. A time constant
 compared with or interpolated over `seconds` that lies past `duration` warns
 `time-unit`: times are seconds, not milliseconds or frames.
+
+Animation reaches its end; events exclude it. The last frame of a one-shot scene shows
+the end: `seconds` is `duration` and `progress` is 1, so
+`interpolate(seconds, [0, duration], [0, 1])` arrives at 1 on screen. That frame steps
+to the end from the frame before it, so when `duration` is not a whole number of frames
+the last step is longer than the others: 4.6 seconds at 24 fps are 110 frames, and frame
+109 shows 4.6 instead of 4.542. Frames after the end, such as those of a longer host or
+a held clip, show `duration` too. Like a clip's interval and a caption run,
+`seconds < duration` and `seconds >= duration` split time at the end, so they flip on
+the last frame alone: in a one-shot scene they are an error, as are `progress < 1` and
+`progress >= 1`; compare with a time before the end, such as `seconds >= duration - 0.5`.
+
+A scene that repeats declares `loop: true` in its composition. The end of a loop is its
+start, so it never shows `duration`: the last of the 90 frames of a 3-second loop at
+30 fps shows 2.967, and the next play starts at 0. A loop should last a whole number of
+frames; otherwise a file that repeats its frames takes a step of a different length
+across the seam, and the composition warns `loop-seam`. A one-shot scene whose last
+frame shows the same picture as its first shows that picture twice when played in a
+loop; `motion review` hints `loop_candidate` for it.
 
 Comparisons, rounding and remainders of a value computed from the time hold exactly
 at frame boundaries. `<`, `<=`, `>`, `>=`, `===`, `!==`, `==`, `!=`, `Math.floor`,
@@ -770,29 +801,38 @@ other as equal, with ε = 2⁻⁵². At 0.3 seconds `Math.floor(seconds / 0.1)` 
 0.09999999999999998. Values that do not depend on the time, such as data, props and
 constants, keep JavaScript's arithmetic.
 
-Host time advances independently of source trim, rate, looping and hold. Both absolute
-host boundaries are quantized at the actual output FPS; `N` is their difference and
-`i` is the requested output frame minus the first boundary. For `N > 1`, the first
-and last `clipProgress` values are exactly 0 and 1. A start between frame boundaries
-can produce a slightly negative first `clipSeconds`; the authored start is preserved.
-This applies to ordinary clips, overlays and caption presenters. Template time
-maps that same exact local time through its intro/hold/outro rule; it does not
-replace the authored start with the first admitted frame.
-Motion `props` curves also use host-local seconds and are validated against the
-clip duration, using the same start as the clip's outer opacity and transform curves.
-`clipSeconds` meeting `clipDuration` as the end of an interpolation or a comparison is
-an error: the last frame starts before the clip's end, so write `clipProgress`.
+The clip clock runs on the host and does not follow the source's trim, rate, looping
+and hold. Both host boundaries are rounded to the nearest frame at the output FPS; the
+host shows the `M` frames between them. `clipSeconds` is the output time of the sample
+minus the clip's authored start, so a start between frame boundaries can give a
+slightly negative first `clipSeconds`; the authored start is preserved. `clipProgress`
+is exactly 0 on the host's first frame and 1 on its last. `clipSeconds` meeting
+`clipDuration` as the end of an interpolation or a comparison is an error: the last
+frame is before the clip's end, so write `clipProgress`. This applies to ordinary
+clips, overlays and caption presenters. A template maps the same clip time through its
+intro, hold and outro, and the last frame of the outro shows the template's end. An
+outro shorter than a frame can hold no frame, and then no frame shows the end: the
+check warns `unsampled-end`. Motion `props` curves also use host-local seconds and are
+validated against the clip duration; on the clip's last frame they read at
+`clipDuration`, like the clip's outer opacity and transform curves.
 
-`TimeScope` changes source time only. `Shutter`, `Echo` and automatic motion blur
-keep the request frame's host inputs frozen while sampling source time. Motion
-driven only by the clip clock therefore receives no temporal sampling blur.
+`Shutter`, `Echo` and motion blur sample other output times of the frame through the
+same clock: the scene clock with its end, hold and loop, and the clip clock. The start
+and end of a clip and the jump into a template's outro are cuts: a sample past a cut
+reads the scene clock at the cut, as if the shutter closed there, so one exposure never
+mixes the two sides of a cut; `clipSeconds` keeps the sample's own output time. The
+wrap of a declared loop is not a cut, and motion blurs on across the seam. On the last
+displayed frame, the exposure before the frame follows the last step and the exposure
+after it stays at the end; held frames are still. Values a host passes in hold for the
+whole frame: `props` from Timeline curves, `input://` frames and `useComposition()`.
+`TimeScope` changes source time only.
 
 Standalone `motion check/render/review` use the composition as host by default.
 `--host-duration S` supplies a different positive host duration in decimal seconds.
 The output FPS determines its frame interval; a duration that produces no frames
-is rejected. A longer host holds the source on its last valid frame while host
-time continues; a shorter host ends delivery earlier. This does not change the
-composition canvas or its source duration.
+is rejected. A longer host shows the end of a one-shot source from the frame that
+reaches it on, while the clip clock continues; a shorter host ends delivery earlier.
+This does not change the composition canvas or its source duration.
 
 ### Time functions and visibility evaluation
 
@@ -2166,23 +2206,35 @@ the result. `displacement` and `motionBlur` apply after the node's `filter` list
 order, so whatever the list adds, such as a glow, moves with the node.
 
 `style.motionBlur: "auto"` derives directional blur from the element's final
-screen position. It samples the scene half a frame before and after the requested
-output time, so layout changes, ancestor transforms, and camera movement also
-contribute. The measured screen velocity is carried into the element's own units,
-so the blur keeps its length relative to the frame at any output size. The
-built-in shutter angle is 180°. At a temporal cut or when the element is
-stationary, no blur filter is emitted. The result is determined by the requested
+screen position. It takes that position at the two ends of the exposure, a quarter
+of an output frame before and after the requested time with its built-in 180°
+shutter, so layout changes, ancestor transforms, and camera movement also
+contribute. The trail runs from the position at the start of the exposure through
+the position on the frame to the one at its end, carried into the element's own
+units, so the blur keeps its length relative to the frame at any output size. The
+ends follow the [clock](#current-time-and-composition): past a cut they stop at the
+cut, and while the source holds they stay still, so held frames have no blur. A
+value that jumps inside the exposure, such as `seconds < 0.5 ? 0 : 100`, streaks
+across the jump; `motion review` hints `blur_jump` where one does. When the element
+is stationary, no blur filter is emitted. The result is determined by the requested
 time, including for out-of-order frame requests.
 
 `style.motionBlur: motionBlur({ velocity, angle? })` supplies explicit velocity in the
 element's own units per second of the scene clock it is drawn on: composition pixels
 per second when neither the element nor its ancestors rotate or scale, and otherwise
 turned and stretched by that transform like other filter lengths. Inside a
-`TimeScope` the scope's speed scales it. The shutter `angle` defaults to 180°, so the
-streak is the distance the element travels in half an output frame. Both forms use a spatial directional blur based on the element's anchor
-velocity: the average of copies of the element spread evenly along the shutter's
-travel, one for every 2 output pixels of travel, at least 9 and at most 32. Past 62
-pixels of travel the copies spread further apart and can show as separate steps.
+`TimeScope` the scope's speed scales it. Each end of the trail is the velocity times
+the scene time the clock runs from the frame to that end of the exposure: across the
+seam of a declared loop it runs on, at a cut it stops, and while the source holds it
+is zero, so the last displayed frame trails only behind and held frames have no blur.
+The shutter `angle` defaults to 180°, so on steady motion the trail is the distance
+the element travels in half an output frame. Both forms average copies of the
+element at even steps of the exposure: the first half of the copies runs from its
+place at the start of the exposure to its place on the frame, the second half on to
+its place at the end, so the half that moves less holds its copies closer together,
+and steady motion gives the straight line between the ends. The longer half holds one
+copy for every 2 output pixels of its travel, at least 9 copies and at most 32 in all;
+past a 31-pixel half the copies spread further apart and can show as separate steps.
 For such long trails, and for rotation and scaling, which give different velocities
 to different pixels, use [`Shutter`](#shutter-sampling): it renders the subframes
 themselves.
@@ -2191,9 +2243,9 @@ Use `springVelocity` for an exact spring derivative. For an arbitrary pure posit
 helper `position(t)`, a centered difference
 `(position(t + 0.01) - position(t - 0.01)) / 0.02` gives px/s. This is an
 approximation of instantaneous velocity and explicitly samples the same authored
-trajectory on both sides of the target time. It never reads the last displayed
-frame. With explicit velocity, a step cut still needs an authored blur decision;
-`"auto"` suppresses blur when adjacent screen-space slopes disagree sharply.
+trajectory on both sides of the target time. A jump needs an authored blur decision
+with either form: explicit velocity ignores it, and `"auto"` streaks across it, so
+leave motion blur off an element whose jump should stay sharp.
 
 Effects on a group include its descendants. Keep the affected bounds small and
 inspect clipping near edges. See
@@ -2210,8 +2262,12 @@ intensities clamped to 0–1. They are Motion layer effects, not browser CSS pro
 output-time samples across a 180° exposure (half a frame) and averages their
 premultiplied pixels in linear light. This reproduces rotation and scaling blur
 that one anchor velocity cannot describe. Every requested frame computes its own
-subframes, so seeking and out-of-order rendering give the same result. Samples
-outside the composition hold its first or last frame.
+subframes, so seeking and out-of-order rendering give the same result. The samples
+follow the [clock](#current-time-and-composition): past a cut, such as the start of
+a clip, they read the scene clock at the cut, and while the source holds they all
+show the held frame, so it stays sharp. Text or an image that switches with the
+clock shows both states on the frame it switches; `motion review` hints
+`shutter_switch` there.
 
 `samples` is a static integer from 1 to 32; `angle` is a static integer from 0°
 to 360°. A frame may request at most 128 samples across Shutter and Echo nodes. The
@@ -2232,9 +2288,10 @@ output frame rate. It paints the oldest
 sample first with opacity `decay^4`, then successively newer samples with
 `decay^3` through `decay`, and finally paints the current children at full
 opacity. Each sample reevaluates Motion expressions, layout, and media time, so
-the trail follows the scene rather than a fixed spatial offset. Samples before
-the composition starts hold the first frame; seeking does not depend on earlier
-render requests.
+the trail follows the scene rather than a fixed spatial offset. Samples past a
+cut, such as the start of a clip, read the scene clock at the cut, so after a cut
+the trail waits at the start of the new segment until the scene has run `count ×
+delay` seconds past it; seeking does not depend on earlier render requests.
 
 `count` is a static integer from 1 to 32, `delay` is a positive static number of
 seconds, and `decay` is a finite static number from 0 to 1. A trail, `count ×

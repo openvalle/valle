@@ -146,7 +146,7 @@ fn identity_scope_retains_every_integer_frame_at_non_binary_rates() {
             .unwrap();
         for frame in 0..1000 {
             let ctx =
-                motion_context_at_frame(frame, 1000, FrameRate::new(fps, 1).unwrap()).unwrap();
+                motion_context_at_frame(frame, 1001, FrameRate::new(fps, 1).unwrap()).unwrap();
             let values = eval_all(
                 &artifact,
                 EvalInputs {

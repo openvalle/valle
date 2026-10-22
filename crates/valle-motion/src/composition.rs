@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use valle_timeline::internal::quantize::quantize_frame_boundary;
 use valle_timeline::time::{ExactRational, FrameRate, RationalTime, TimeError};
+use valle_timeline::{ClipClock, ClockError, MotionRole};
 
 use crate::artifact::ValidationError;
 use crate::domain::MotionViewport;
@@ -57,6 +58,17 @@ impl Composition {
 
     pub fn duration(&self) -> Result<RationalTime, TimeError> {
         ExactRational::parse_canonical(&self.duration).map(RationalTime::from_exact)
+    }
+
+    /// The clock of a standalone render at `fps`: the scene itself, or a template over a host of
+    /// `host` seconds, by default the duration.
+    pub fn clock(
+        &self,
+        role: MotionRole,
+        fps: FrameRate,
+        host: Option<RationalTime>,
+    ) -> Result<ClipClock, ClockError> {
+        ClipClock::standalone(fps, role, self.duration()?, self.r#loop, host)
     }
 
     pub fn duration_frames(&self, fps: FrameRate) -> Result<u32, TimeError> {

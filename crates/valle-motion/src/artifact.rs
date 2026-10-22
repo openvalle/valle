@@ -2621,6 +2621,47 @@ fn node_reads_frame(node: &SceneNode, key: HostFrame) -> bool {
 }
 
 impl SceneArtifact {
+    /// The onset of `audioAnalysis` that a node shows for the shortest time: its authored
+    /// `length`, and how long it lasts on the scene clock, through the slope of its time, which
+    /// includes the speed of the TimeScopes it is read in. A host divides the second by its own
+    /// speed to meet it with a frame.
+    pub fn shortest_onset(&self) -> Option<(f64, f64)> {
+        // The shortest onset each expression reads, on the clock it is read on.
+        let mut reads: Vec<Option<(f64, f64)>> = Vec::with_capacity(self.exprs.len());
+        let shorter = |a: Option<(f64, f64)>, b: Option<(f64, f64)>| match (a, b) {
+            (Some(a), Some(b)) => Some(if b.1 < a.1 { b } else { a }),
+            (a, b) => a.or(b),
+        };
+        for expr in &self.exprs {
+            let own = match expr {
+                Expr::AudioSample {
+                    time,
+                    signal: crate::AudioSignal::Onsets { length, .. },
+                } => crate::time_function::TimeFunction::compile(&self.exprs, *time)
+                    .filter(|time| {
+                        time.input() == ContextInput::CompositionSeconds && time.derivative() != 0.0
+                    })
+                    .map(|time| (*length, length / time.derivative().abs())),
+                _ => None,
+            };
+            let read = expr
+                .children()
+                .into_iter()
+                .map(|child| reads.get(child.0 as usize).copied().flatten())
+                .fold(own, shorter);
+            reads.push(read);
+        }
+        self.nodes
+            .iter()
+            .flat_map(|node| {
+                node.expr_refs_outside_per_unit()
+                    .into_iter()
+                    .chain(node.per_unit_expr_refs())
+            })
+            .map(|(_, expr)| reads.get(expr.0 as usize).copied().flatten())
+            .fold(None, shorter)
+    }
+
     /// Whether evaluating this artifact samples the immutable compositor entry
     /// backdrop. This is derived from the admitted IR so package builders and
     /// Engine admission cannot disagree about Glass/backdrop semantics.

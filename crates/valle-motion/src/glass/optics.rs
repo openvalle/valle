@@ -113,6 +113,10 @@ mod tests {
             ]
         );
         // Four height reads for the slope and at most three backdrop reads.
-        assert!(package.work_per_pixel().samples <= 7, "{:?}", package.work_per_pixel());
+        assert!(
+            package.work_per_pixel().samples <= 7,
+            "{:?}",
+            package.work_per_pixel()
+        );
     }
 }

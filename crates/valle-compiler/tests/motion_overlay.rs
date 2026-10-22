@@ -32,15 +32,15 @@ fn overlay_declaration_is_closed_exact_and_validated_with_composition() {
         MotionRole::Clip
     );
     for declaration in [
-        "overlay({intro:0.6,outro:0.4,hold:'once'})",
-        "overlay({intro:0.25,outro:0,hold:'once'})",
-        "overlay({intro:seconds(-0.1),outro:0,hold:'loop'})",
+        "overlay({intro:seconds(0.6),outro:0.4,hold:'once'})",
+        "overlay({intro:frames(1),outro:0,hold:'once'})",
+        "overlay({intro:-0.1,outro:0,hold:'loop'})",
         "overlay({intro:1.6,outro:0.5,hold:'stretch'})",
         "overlay({intro:0.5,outro:0.5,hold:'repeat'})",
         "overlay({intro:0.5,outro:0.5,hold:'once',extra:1})",
         "overlay({intro:0.5,outro:0.5})",
         "{type:'overlay',intro:0.5,outro:0.5,hold:'once'}",
-        "overlay({intro:seconds(Infinity),outro:0,hold:'once'})",
+        "overlay({intro:Infinity,outro:0,hold:'once'})",
     ] {
         assert!(
             compile_motion(&source(&format!("export const role={declaration};"))).is_err(),
@@ -116,12 +116,11 @@ fn timeline_admits_host_placement_and_rejects_media_fields_and_short_hosts() {
 }
 
 #[test]
-fn overlay_temporal_samples_hold_at_the_authored_exclusive_boundary() {
+fn overlay_temporal_samples_on_the_last_frame_follow_the_end_step() {
     use valle_motion::{
-        Fonts, LayoutOptions, Viewport, build_tree, motion_context_at_sample, prepare_scene,
-        resolve_props,
+        Fonts, LayoutOptions, MotionContext, Viewport, build_tree, prepare_scene, resolve_props,
     };
-    use valle_timeline::{FrameRate, internal::SampleTime};
+    use valle_timeline::FrameRate;
     let compiled = compile_motion(
         r#"export const composition={width:64,height:32,fps:4,duration:1.14};
 export const role=overlay({intro:0,outro:0,hold:"once"});
@@ -133,10 +132,14 @@ export default function Main(){ const time = useCurrentTime();return <Scene><Shu
     let prepared = prepare_scene(&compiled.artifact).unwrap();
     let props = resolve_props(&compiled.artifact.controls, &Default::default()).unwrap();
     let fonts = Fonts::default();
-    let ctx = motion_context_at_sample(
-        SampleTime::new(RationalTime::new(28, 25).unwrap()),
-        5,
+    // Frame 4 at 1 s is the last of five frames: it shows the end, 1.14 s.
+    let ctx = MotionContext::standalone(
+        compiled.artifact.role,
+        RationalTime::new(57, 50).unwrap(),
+        false,
+        None,
         FrameRate::new(4, 1).unwrap(),
+        4,
     )
     .unwrap();
     let tree = build_tree(
@@ -151,16 +154,18 @@ export default function Main(){ const time = useCurrentTime();return <Scene><Shu
     )
     .unwrap();
     let times = tree.shutter_sample_times("exposure").unwrap();
+    // The first half of the exposure runs along the step from 0.75 s to the end; the second
+    // half stays at the end.
     assert_eq!(
         times
             .iter()
             .map(|time| time.composition())
             .collect::<Vec<_>>(),
         vec![
-            RationalTime::new(821, 800).unwrap(),
-            RationalTime::new(871, 800).unwrap(),
-            RationalTime::ONE,
-            RationalTime::ONE,
+            RationalTime::new(159, 160).unwrap(),
+            RationalTime::new(873, 800).unwrap(),
+            RationalTime::new(57, 50).unwrap(),
+            RationalTime::new(57, 50).unwrap(),
         ]
     );
 }

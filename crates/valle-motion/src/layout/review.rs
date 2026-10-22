@@ -1,12 +1,12 @@
 //! Read-only, random-access Motion quality checks over final screen geometry.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use serde::Serialize;
 use valle_timeline::FrameRate;
 
 use super::{LayoutCache, LayoutOptions, PreparedScene, build_tree};
-use crate::{NodeKind, ResolvedProps};
+use crate::{NodeKind, ResolvedProps, SceneArtifact};
 
 const STROBE_EXTENT_FRACTION: f64 = 0.25;
 const MIN_FAST_INTERVALS: u32 = 3;
@@ -572,8 +572,8 @@ fn painted_nodes(prepared: &PreparedScene) -> BTreeSet<String> {
     keys
 }
 
-/// Inspect every output frame using the same post-layout anchors and resolved blur filters as
-/// rendering. The caller can impose an explicit frame budget; every admitted
+/// Inspect every output frame of `clock`'s host using the same post-layout anchors and resolved
+/// blur filters as rendering. The caller can impose an explicit frame budget; every admitted
 /// frame is inspected, without silently skipping long compositions. `source_elements` names the
 /// source element of nodes that share one, such as the rows of an expanded `.map`, whose strobes
 /// then merge under it.
@@ -582,13 +582,13 @@ pub fn review_motion(
     prepared: &PreparedScene,
     props: &ResolvedProps,
     opts: &LayoutOptions<'_>,
-    fps: FrameRate,
-    duration_frames: u32,
-    host_duration: valle_timeline::RationalTime,
+    clock: valle_timeline::ClipClock,
     max_frames: u32,
     include_trajectories: bool,
     source_elements: &BTreeMap<String, String>,
 ) -> Result<MotionReview, String> {
+    let fps = clock.fps();
+    let duration_frames = clock.frames();
     if duration_frames == 0 || max_frames < 2 || duration_frames > max_frames {
         return Err(format!(
             "review needs 1..={max_frames} output frames; use --max-frames to cover this composition"
@@ -649,25 +649,10 @@ pub fn review_motion(
     let mut motion_onsets = HashMap::<String, u32>::new();
     let mut trajectories = BTreeMap::<String, Vec<MotionTrajectoryPoint>>::new();
     let mut issues = Vec::new();
-    let artifact = prepared.artifact();
-    let source_duration = artifact
-        .composition
-        .as_ref()
-        .map(|composition| composition.duration())
-        .transpose()
-        .map_err(|error| error.to_string())?
-        .unwrap_or(host_duration);
+    let mut clock_hints = ClockHints::new(prepared.artifact(), clock);
     for frame in 0..duration_frames {
-        let host = crate::MotionHostContext::new(
-            crate::time::sample_time_at_frame(i64::from(frame), fps)
-                .map_err(|error| error.to_string())?,
-            host_duration,
-            frame,
-            duration_frames,
-        )
-        .ok_or_else(|| format!("review frame {frame} has an invalid host interval"))?;
-        let ctx = crate::motion_context_at_host(artifact.role, source_duration, host, fps)
-            .ok_or_else(|| format!("review frame {frame} is outside the template"))?;
+        let ctx = crate::MotionContext::new(clock, i64::from(frame))
+            .ok_or_else(|| format!("review frame {frame} has no exact time"))?;
         let tree = match &cache {
             Some(cache) => cache.build_tree(&ctx, props, opts.viewport, opts.styles),
             None => build_tree(prepared, &ctx, props, opts),
@@ -753,6 +738,7 @@ pub fn review_motion(
                 hosts.insert(key.clone(), group.clone());
             }
         }
+        clock_hints.observe(frame, &current, &tree.node_texts, &candidates);
         // A reborn particle is a new trajectory even when its semantic key stays
         // stable. Also handle source-frame expressions that jump across cycles.
         previous.retain(|key, before| {
@@ -1110,6 +1096,7 @@ pub fn review_motion(
         emit_linear_motion(&node, run, viewport, &mut issues);
     }
     emit_stagger_timing(&candidates, &motion_onsets, fps, &mut issues);
+    clock_hints.finish(&mut issues, &hosts, source_elements);
     merge_row_strobes(&mut issues, &hosts, source_elements);
     issues.sort_by(|a, b| {
         a.node
@@ -1127,4 +1114,432 @@ pub fn review_motion(
             .map(|(node, points)| MotionTrajectory { node, points })
             .collect(),
     })
+}
+
+/// A node as one frame shows it.
+#[derive(Debug, Clone, Copy)]
+struct Shown {
+    position: [f64; 2],
+    bounds: [f64; 4],
+    opacity: f64,
+    blurred: bool,
+}
+
+impl Shown {
+    fn of(sample: &super::scene::ReviewNodeSample) -> Option<Self> {
+        (sample.visible && sample.on_screen && sample.group.is_none()).then_some(Self {
+            position: [sample.position.x, sample.position.y],
+            bounds: sample.bounds,
+            opacity: sample.opacity,
+            blurred: sample.motion_blurred,
+        })
+    }
+
+    /// Whether two frames show a node alike, within half a pixel and 2% of opacity.
+    fn alike(a: Option<&Self>, b: Option<&Self>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.position
+                    .iter()
+                    .chain(&a.bounds)
+                    .zip(b.position.iter().chain(&b.bounds))
+                    .all(|(a, b)| (a - b).abs() <= 0.5)
+                    && (a.opacity - b.opacity).abs() <= 0.02
+            }
+            _ => false,
+        }
+    }
+
+    fn step(from: &Self, to: &Self) -> f64 {
+        valle_draw::math::hypot(
+            to.position[0] - from.position[0],
+            to.position[1] - from.position[1],
+        )
+    }
+}
+
+/// Hints about the clock: a one-shot scene that ends as it starts, a loop that jumps at its seam,
+/// content shown on a single frame, and what switches inside a Shutter or jumps under motion blur.
+/// The rows of a batch or an instance group are left out.
+struct ClockHints {
+    frames: u32,
+    looping: bool,
+    /// The scene's own clock, not a template's: loop hints apply.
+    scene: bool,
+    root: String,
+    /// The nodes drawn inside a Shutter.
+    shuttered: BTreeSet<String>,
+    first: HashMap<String, Shown>,
+    second: HashMap<String, Shown>,
+    /// The last three frames, the oldest first.
+    recent: VecDeque<HashMap<String, Shown>>,
+    /// The text of the shuttered nodes on the last frame.
+    texts: HashMap<String, String>,
+    /// The nodes some frame shows otherwise than the first.
+    changed: BTreeSet<String>,
+    /// The frame each node's current run of shown frames starts on.
+    runs: HashMap<String, u32>,
+    single: Vec<(String, u32)>,
+    switches: BTreeMap<String, FastRun>,
+    jumps: BTreeMap<String, FastRun>,
+}
+
+impl ClockHints {
+    fn new(artifact: &SceneArtifact, clock: valle_timeline::ClipClock) -> Self {
+        let mut shuttered = BTreeSet::new();
+        let mut pending = vec![(artifact.root, false)];
+        while let Some((id, inside)) = pending.pop() {
+            let Some(node) = artifact.nodes.get(id.0 as usize) else {
+                continue;
+            };
+            if inside {
+                shuttered.insert(node.key.clone());
+            }
+            let inside = inside || matches!(node.kind, NodeKind::Shutter { .. });
+            let children = artifact
+                .node_children
+                .get(node.children.start as usize..node.children.end as usize)
+                .unwrap_or_default();
+            pending.extend(children.iter().map(|child| (*child, inside)));
+        }
+        Self {
+            frames: clock.frames(),
+            looping: clock.looping(),
+            scene: matches!(clock.map(), valle_timeline::ClipMap::Clip { .. }),
+            root: artifact
+                .nodes
+                .get(artifact.root.0 as usize)
+                .map(|node| node.key.clone())
+                .unwrap_or_default(),
+            shuttered,
+            first: HashMap::new(),
+            second: HashMap::new(),
+            recent: VecDeque::new(),
+            texts: HashMap::new(),
+            changed: BTreeSet::new(),
+            runs: HashMap::new(),
+            single: Vec::new(),
+            switches: BTreeMap::new(),
+            jumps: BTreeMap::new(),
+        }
+    }
+
+    fn observe(
+        &mut self,
+        frame: u32,
+        current: &HashMap<String, super::scene::ReviewNodeSample>,
+        texts: &HashMap<String, String>,
+        candidates: &BTreeSet<String>,
+    ) {
+        let shown = candidates
+            .iter()
+            .filter_map(|key| {
+                current
+                    .get(key)
+                    .and_then(Shown::of)
+                    .map(|shown| (key.clone(), shown))
+            })
+            .collect::<HashMap<_, _>>();
+        match frame {
+            0 => self.first = shown.clone(),
+            _ => {
+                if frame == 1 {
+                    self.second = shown.clone();
+                }
+                for key in candidates {
+                    if !self.changed.contains(key)
+                        && !Shown::alike(self.first.get(key), shown.get(key))
+                    {
+                        self.changed.insert(key.clone());
+                    }
+                }
+            }
+        }
+        for key in shown.keys() {
+            self.runs.entry(key.clone()).or_insert(frame);
+        }
+        let ended = self
+            .runs
+            .keys()
+            .filter(|key| !shown.contains_key(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in ended {
+            let start = self.runs.remove(&key).unwrap_or(frame);
+            if frame - start == 1 {
+                self.single.push((key, start));
+            }
+        }
+        // A jump: one step four times longer than the steps on either side of it.
+        if let (Some(before), Some(from), Some(to)) =
+            (self.recent.front(), self.recent.get(1), self.recent.get(2))
+        {
+            for (key, after) in &shown {
+                let (Some(a), Some(b), Some(c)) = (before.get(key), from.get(key), to.get(key))
+                else {
+                    continue;
+                };
+                let step = Shown::step(b, c);
+                if step >= 4.0
+                    && step > 4.0 * Shown::step(a, b)
+                    && step > 4.0 * Shown::step(c, after)
+                {
+                    if self.shuttered.contains(key) {
+                        record(&mut self.switches, key, frame - 1, step);
+                    } else if b.blurred || c.blurred {
+                        record(&mut self.jumps, key, frame - 1, step);
+                    }
+                }
+            }
+        }
+        // Text that changes, and content that appears or disappears, inside a Shutter.
+        if let Some(before) = self.recent.back() {
+            for key in &self.shuttered {
+                let text = shown.contains_key(key)
+                    && before.contains_key(key)
+                    && texts
+                        .get(key)
+                        .zip(self.texts.get(key))
+                        .is_some_and(|(now, then)| now != then);
+                let cut = match (before.get(key), shown.get(key)) {
+                    (Some(seen), None) | (None, Some(seen)) => seen.opacity > 0.05,
+                    _ => false,
+                };
+                if text || cut {
+                    record(&mut self.switches, key, frame, 0.0);
+                }
+            }
+        }
+        self.texts = self
+            .shuttered
+            .iter()
+            .filter_map(|key| texts.get(key).map(|text| (key.clone(), text.clone())))
+            .collect();
+        self.recent.push_back(shown);
+        if self.recent.len() > 3 {
+            self.recent.pop_front();
+        }
+    }
+
+    fn finish(
+        self,
+        issues: &mut Vec<MotionReviewIssue>,
+        hosts: &BTreeMap<String, String>,
+        elements: &BTreeMap<String, String>,
+    ) {
+        if self.frames < 3 {
+            return;
+        }
+        let last_frame = self.frames - 1;
+        let empty = HashMap::new();
+        let last = self.recent.back().unwrap_or(&empty);
+        let single_frame = |frame| FrameRun {
+            start_frame: frame,
+            end_frame: frame,
+        };
+        // In a loop, a run on the first frame continues one on the last, and the other way round.
+        let wraps = |key: &String, frame: u32, across: &HashMap<String, Shown>| {
+            self.looping && frame == 0 && across.contains_key(key)
+        };
+        let mut single = self
+            .single
+            .iter()
+            .filter(|(key, frame)| !wraps(key, *frame, last))
+            .map(|(key, frame)| (key.clone(), single_frame(*frame), None))
+            .collect::<Vec<_>>();
+        single.extend(
+            self.runs
+                .iter()
+                .filter(|(key, start)| **start == last_frame && !wraps(*key, 0, &self.first))
+                .map(|(key, start)| (key.clone(), single_frame(*start), None)),
+        );
+        push_grouped(
+            issues,
+            ("single_frame", "warning"),
+            "Shown on a single frame only: content this short flickers, and another frame rate \
+             can miss it; make it last at least two frames.",
+            single,
+            hosts,
+            elements,
+        );
+        // Something on screen at the start changes and comes back: a scene that starts and ends
+        // blank is not a loop.
+        if self.scene
+            && !self.looping
+            && self.changed.iter().any(|key| self.first.contains_key(key))
+        {
+            let keys = self
+                .first
+                .keys()
+                .chain(last.keys())
+                .collect::<BTreeSet<_>>();
+            if keys
+                .into_iter()
+                .all(|key| Shown::alike(self.first.get(key), last.get(key)))
+            {
+                issues.push(hint(
+                    ("loop_candidate", "info"),
+                    &self.root,
+                    FrameRun {
+                        start_frame: 0,
+                        end_frame: last_frame,
+                    },
+                    None,
+                    "The first and last frames show the same picture: played in a loop it shows \
+                     twice at the seam. If the scene repeats, declare `loop: true` in the \
+                     composition; the last frame then leads into the first.",
+                ));
+            }
+        }
+        if self.scene && self.looping && self.frames >= 4 && self.recent.len() >= 2 {
+            let before = &self.recent[self.recent.len() - 2];
+            let mut seams = Vec::new();
+            for (key, end) in last {
+                let Some(start) = self.first.get(key) else {
+                    continue;
+                };
+                let seam = Shown::step(end, start);
+                let around = before
+                    .get(key)
+                    .map_or(0.0, |before| Shown::step(before, end))
+                    .max(
+                        self.second
+                            .get(key)
+                            .map_or(0.0, |second| Shown::step(start, second)),
+                    );
+                let threshold = 3.0 * around + 2.0;
+                if seam >= 4.0 && seam > threshold {
+                    seams.push((
+                        key.clone(),
+                        single_frame(last_frame),
+                        Some((seam, threshold)),
+                    ));
+                }
+            }
+            push_grouped(
+                issues,
+                ("loop_seam", "warning"),
+                "The loop jumps at its seam: from the last frame back to the first this moves \
+                 much further than on the frames around it. End the scene where it starts, a \
+                 frame's step before it.",
+                seams,
+                hosts,
+                elements,
+            );
+        }
+        let runs = |runs: BTreeMap<String, FastRun>| {
+            runs.into_iter()
+                .map(|(key, run)| {
+                    let frames = FrameRun {
+                        start_frame: run.start_frame,
+                        end_frame: run.end_frame,
+                    };
+                    (key, frames, (run.peak > 0.0).then_some((run.peak, 0.0)))
+                })
+                .collect::<Vec<_>>()
+        };
+        push_grouped(
+            issues,
+            ("shutter_switch", "info"),
+            "Text, visibility or a position here switches with the clock inside a Shutter: on \
+             the frame it switches the Shutter lays both states over each other. To keep text \
+             and images crisp, use motionBlur instead; it only stretches the frame's own picture \
+             along the motion.",
+            runs(self.switches),
+            hosts,
+            elements,
+        );
+        push_grouped(
+            issues,
+            ("blur_jump", "info"),
+            "This jumps with the clock under motionBlur: on the frame it jumps the blur streaks \
+             across the jump. To keep the jump sharp, leave motionBlur off it.",
+            runs(self.jumps),
+            hosts,
+            elements,
+        );
+    }
+}
+
+/// Hints of one code about nodes, one per element that draws them: the rows of an instance group
+/// merge under their host, and copies of a source element, such as the rows of an expanded
+/// `.map`, under the element.
+fn push_grouped(
+    issues: &mut Vec<MotionReviewIssue>,
+    kind: (&'static str, &'static str),
+    message: &'static str,
+    found: Vec<(String, FrameRun, Option<(f64, f64)>)>,
+    hosts: &BTreeMap<String, String>,
+    elements: &BTreeMap<String, String>,
+) {
+    let mut groups = BTreeMap::<String, (FrameRun, Option<(f64, f64)>, BTreeSet<String>)>::new();
+    for (key, run, displacement) in found {
+        let group = hosts
+            .get(&key)
+            .map(|host| elements.get(host).unwrap_or(host))
+            .or_else(|| elements.get(&key))
+            .cloned()
+            .unwrap_or_else(|| key.clone());
+        match groups.get_mut(&group) {
+            Some((all, peak, keys)) => {
+                all.start_frame = all.start_frame.min(run.start_frame);
+                all.end_frame = all.end_frame.max(run.end_frame);
+                if displacement.map(|(step, _)| step) > peak.map(|(step, _)| step) {
+                    *peak = displacement;
+                }
+                keys.insert(key);
+            }
+            None => {
+                groups.insert(group, (run, displacement, BTreeSet::from([key])));
+            }
+        }
+    }
+    for (node, (run, displacement, keys)) in groups {
+        let mut issue = hint(kind, &node, run, displacement, message);
+        if keys.len() > 1 || !keys.contains(&node) {
+            issue.affected_rows = Some(keys.len());
+            issue.example_keys = keys.into_iter().take(3).collect();
+        }
+        issues.push(issue);
+    }
+}
+
+/// Count a switch or a jump of `key` on `frame`.
+fn record(runs: &mut BTreeMap<String, FastRun>, key: &str, frame: u32, step: f64) {
+    let run = runs.entry(key.to_owned()).or_insert(FastRun {
+        start_frame: frame,
+        end_frame: frame,
+        peak: step,
+        peak_threshold: 0.0,
+    });
+    run.end_frame = frame;
+    run.peak = run.peak.max(step);
+}
+
+fn hint(
+    (code, severity): (&'static str, &'static str),
+    node: &str,
+    run: FrameRun,
+    displacement: Option<(f64, f64)>,
+    message: &'static str,
+) -> MotionReviewIssue {
+    MotionReviewIssue {
+        affected_rows: None,
+        example_keys: Vec::new(),
+        code,
+        severity,
+        node: node.to_owned(),
+        other_node: None,
+        start_frame: run.start_frame,
+        end_frame: run.end_frame,
+        peak_displacement_px_per_frame: displacement.map(|(peak, _)| peak),
+        threshold_px_per_frame: displacement
+            .map(|(_, threshold)| threshold)
+            .filter(|threshold| *threshold > 0.0),
+        visible_seconds: None,
+        recommended_seconds: None,
+        word_count: None,
+        message,
+    }
 }

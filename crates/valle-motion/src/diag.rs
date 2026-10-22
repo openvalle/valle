@@ -70,6 +70,14 @@ pub enum DiagCode {
     /// A time written in seconds is longer than the scene, as a time in milliseconds or frames
     /// would be.
     TimeUnit,
+    /// Something lasts less than a frame of output, so frames can miss it.
+    UnderOneFrame,
+    /// A looping scene does not last a whole number of frames, so the step across its seam
+    /// differs from the others.
+    LoopSeam,
+    /// No frame of a host shows the end of a one-shot source, such as a template outro shorter
+    /// than a frame.
+    UnsampledEnd,
     /// Valid syntax not supported by the current implementation.
     UnsupportedSyntax,
 }
@@ -99,7 +107,10 @@ impl DiagCode {
             | DiagCode::AudioBeatUncertain
             | DiagCode::ParameterRange
             | DiagCode::FrameRateDependent
-            | DiagCode::TimeUnit => DiagClass::Warning,
+            | DiagCode::TimeUnit
+            | DiagCode::UnderOneFrame
+            | DiagCode::LoopSeam
+            | DiagCode::UnsampledEnd => DiagClass::Warning,
         }
     }
 
@@ -128,6 +139,9 @@ impl DiagCode {
             DiagCode::InstanceFallback => "instance-fallback",
             DiagCode::FrameRateDependent => "frame-rate-dependent",
             DiagCode::TimeUnit => "time-unit",
+            DiagCode::UnderOneFrame => "under-one-frame",
+            DiagCode::LoopSeam => "loop-seam",
+            DiagCode::UnsampledEnd => "unsampled-end",
             DiagCode::UnsupportedSyntax => "unsupported-syntax",
         }
     }

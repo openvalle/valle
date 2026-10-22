@@ -274,11 +274,13 @@ pub fn numeric_range(
                 }
             }
             Expr::Noise1D { .. } | Expr::Noise2D { .. } => ValueRange::new(-1.0, 1.0),
-            Expr::SimulationSample { samples, .. } | Expr::AudioSample { samples, .. } => {
-                ValueRange::new(
-                    samples.iter().copied().fold(f64::INFINITY, f64::min),
-                    samples.iter().copied().fold(f64::NEG_INFINITY, f64::max),
-                )
+            Expr::SimulationSample { samples, .. } => ValueRange::new(
+                samples.iter().copied().fold(f64::INFINITY, f64::min),
+                samples.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            ),
+            Expr::AudioSample { signal, .. } => {
+                let (lower, upper) = signal.range();
+                ValueRange::new(lower, upper)
             }
             Expr::Spring {
                 mass,

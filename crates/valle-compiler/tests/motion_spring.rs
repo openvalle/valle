@@ -58,7 +58,8 @@ fn spring_value(source: &str, fps_num: u32, duration_frames: u32, frame: u32) ->
 
 // A spring is a function of time in seconds.
 
-/// A spring of a constant time is one value, whatever the frame and the frame rate.
+/// A spring of a constant time is one value, whatever the frame and the frame rate: the compiler
+/// folds it to the value the spring of the time takes then.
 #[test]
 fn a_spring_of_a_constant_time_is_the_same_at_every_frame_rate() {
     const CONSTANT_TIME: &str = r##"
@@ -69,15 +70,44 @@ export default function P() {
   </Scene>);
 }
 "##;
-    let at_rest = spring_value(CONSTANT_TIME, 30, 60, 0);
-    for (fps, frame) in [(30, 20), (60, 0), (60, 90)] {
+    let artifact = compile_motion(CONSTANT_TIME).expect("compiles").artifact;
+    assert!(
+        !artifact
+            .exprs
+            .iter()
+            .any(|expr| matches!(expr, Expr::Spring { .. }))
+    );
+    let width = artifact
+        .nodes
+        .iter()
+        .flat_map(|node| &node.styles)
+        .find(|style| style.property == "width")
+        .unwrap();
+    let folded = match &width.value {
+        valle_motion::StyleValue::Static { value } => value.clone(),
+        valle_motion::StyleValue::Expr { expr } => match &artifact.exprs[expr.0 as usize] {
+            Expr::Const { value } => value.clone(),
+            other => panic!("the spring folds to a constant, got {other:?}"),
+        },
+    };
+    let MotionValue::Number(folded) = folded else {
+        panic!("a width is a number, got {folded:?}");
+    };
+    let timed = CONSTANT_TIME
+        .replace(
+            "export default function P() {",
+            "export default function P() { const time = useCurrentTime();",
+        )
+        .replace("spring(1 / 3,", "spring(time.seconds,");
+    for (fps, frame) in [(30, 10), (60, 20)] {
         assert_eq!(
-            spring_value(CONSTANT_TIME, fps, 120, frame).to_bits(),
-            at_rest.to_bits(),
+            spring_value(&timed, fps, 120, frame).to_bits(),
+            folded.to_bits(),
             "{fps} fps frame {frame}"
         );
     }
-    assert!(at_rest > 0.0 && at_rest < 1.0, "{at_rest}");
+    // Still on its way at a third of a second: past its target and not yet settled.
+    assert!(folded > 1.0 && folded < 1.2, "{folded}");
 }
 
 // Frame-rate independence.

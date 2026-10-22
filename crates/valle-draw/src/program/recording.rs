@@ -542,11 +542,13 @@ pub enum FilterOp {
         scale: f64,
         turbulence: bool,
     },
-    /// Node-local directional blur using velocity and shutter parameters.
+    /// Node-local blur along the trail of one exposure, from `from` through the node's own place
+    /// to `to`, both offsets from that place.
     VelocityBlur {
-        velocity_x: f64,
-        velocity_y: f64,
-        shutter_angle: f64,
+        from_x: f64,
+        from_y: f64,
+        to_x: f64,
+        to_y: f64,
     },
 }
 
@@ -1617,17 +1619,13 @@ mod finite {
                     && scale.abs() <= 512.0
             }
             FilterOp::VelocityBlur {
-                velocity_x,
-                velocity_y,
-                shutter_angle,
-            } => {
-                velocity_x.is_finite()
-                    && velocity_y.is_finite()
-                    && shutter_angle.is_finite()
-                    && velocity_x.abs() <= 2048.0
-                    && velocity_y.abs() <= 2048.0
-                    && (0.0..=360.0).contains(shutter_angle)
-            }
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            } => [from_x, from_y, to_x, to_y]
+                .iter()
+                .all(|end| end.is_finite() && end.abs() <= 2048.0),
         }
     }
 

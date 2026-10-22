@@ -29,7 +29,8 @@ pub(super) struct BatchKey {
     progress_bits: u64,
     duration_frames: u32,
     fps: valle_timeline::FrameRate,
-    host: Option<crate::MotionHostContext>,
+    /// The clip clock and the host's length, when the group reads them.
+    host: Option<[valle_timeline::RationalTime; 3]>,
     viewport: Option<(u64, u64)>,
     rows: Range<usize>,
     props: Vec<u8>,
@@ -53,7 +54,7 @@ impl BatchKey {
             progress_bits: ctx.progress.to_bits(),
             duration_frames: ctx.duration_frames,
             fps: ctx.fps,
-            host: reads_host.then_some(ctx.host),
+            host: reads_host.then_some([ctx.clip_seconds, ctx.clip_progress, ctx.clock.duration()]),
             viewport: viewport.map(|(x, y)| (x.to_bits(), y.to_bits())),
             rows,
             props: key.0,

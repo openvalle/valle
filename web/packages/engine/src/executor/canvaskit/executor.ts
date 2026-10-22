@@ -3448,13 +3448,15 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
     fail("unsupported_filter", "noise displacement requires its kernel");
   }
   if (filter.kind === "velocityBlur") {
-    const velocity = pair(filter.velocity, "velocity blur vector");
-    const shutter = Math.min(1, Math.max(0, finiteNumber(filter.shutterAngleDegrees, "shutter angle") / 360));
-    const travel = Math.max(Math.abs(velocity[0]), Math.abs(velocity[1])) * shutter;
-    if (travel <= 1e-6) return input;
+    const from = pair(filter.from, "velocity blur trail start");
+    const to = pair(filter.to, "velocity blur trail end");
+    const reach = Math.max(Math.abs(from[0]), Math.abs(from[1]), Math.abs(to[0]), Math.abs(to[1]));
+    if (reach <= 1e-6) return input;
     const sampling = { filter: CanvasKit.FilterMode.Nearest, mipmap: CanvasKit.MipmapMode.None };
-    // As Filter::velocity_blur_samples counts them: a copy for every 2px of travel, 9 to 32.
-    const samples = Math.min(32, Math.max(9, Math.ceil(travel / 2) + 1));
+    // As Filter::velocity_blur_offsets places them: even steps of the exposure, half from `from`
+    // to the input's place and half from there to `to`; a copy for every 2px of travel along the
+    // longer half, 9 to 32.
+    const samples = Math.min(32, Math.max(9, Math.ceil(reach) + 1));
     const weight = 1 / samples;
     const alpha = CanvasKit.ColorFilter.MakeMatrix([
       1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,weight,0,
@@ -3462,9 +3464,11 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
     let sum: ImageFilter | null = null;
     try {
       for (let index = 0; index < samples; index++) {
-        const phase = index / (samples - 1) - 0.5;
+        const phase = 2 * index / (samples - 1) - 1;
+        const end = phase < 0 ? from : to;
+        const share = Math.abs(phase);
         const shifted = CanvasKit.ImageFilter.MakeMatrixTransform(
-          CanvasKit.Matrix.translated(velocity[0] * shutter * phase, velocity[1] * shutter * phase), sampling, input,
+          CanvasKit.Matrix.translated(end[0] * share, end[1] * share), sampling, input,
         );
         let tap: ImageFilter;
         try { tap = CanvasKit.ImageFilter.MakeColorFilter(alpha, shifted); }
@@ -3619,8 +3623,11 @@ export function programFilterInDeviceSpace(
       pair(filter.offset, "chromatic aberration offset"), matrix, "chromatic aberration") };
   }
   if (filter.kind === "velocityBlur") {
-    return { ...filter, velocity: programVectorInDeviceSpace(
-      pair(filter.velocity, "velocity blur vector"), matrix, "velocity blur") };
+    return {
+      ...filter,
+      from: programVectorInDeviceSpace(pair(filter.from, "velocity blur trail start"), matrix, "velocity blur"),
+      to: programVectorInDeviceSpace(pair(filter.to, "velocity blur trail end"), matrix, "velocity blur"),
+    };
   }
   if (filter.kind === "glow" || filter.kind === "bloom") {
     const radius = finiteNumber(filter.radius, `${filter.kind} radius`);

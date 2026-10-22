@@ -17,30 +17,21 @@ fn decl<T: TS + ?Sized>() -> String {
 #[test]
 fn motion_context_ts_matches_the_wire_shape() {
     let declaration = decl::<MotionContext>();
-    assert!(declaration.contains("localFrame: number"), "{declaration}");
-    assert!(
-        declaration.contains("host: MotionHostContext"),
-        "{declaration}"
-    );
-    let host = decl::<valle_motion::MotionHostContext>();
     for field in [
+        "clock: Record<string, unknown>",
+        "frame: number",
+        "at: string",
         "sample: { composition: string }",
-        "duration: string",
-        "progress: string",
+        "elapsed: string",
+        "progress: number",
+        "clipSeconds: string",
+        "clipProgress: string",
+        "localFrame: number",
+        "durationFrames: number",
+        "fps: string",
     ] {
-        assert!(host.contains(field), "{host}");
+        assert!(declaration.contains(field), "{declaration}");
     }
-    assert!(declaration.contains("progress: number"), "{declaration}");
-    assert!(declaration.contains("sample:"), "{declaration}");
-    assert!(
-        declaration.contains("durationFrames: number"),
-        "{declaration}"
-    );
-    assert!(declaration.contains("fps: string"), "{declaration}");
-    assert!(
-        declaration.contains("sample: { composition: string }"),
-        "{declaration}"
-    );
 }
 
 #[test]

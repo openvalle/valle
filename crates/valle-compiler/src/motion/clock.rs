@@ -110,6 +110,9 @@ impl<'s> Compiler<'s> {
         {
             self.illegal(DiagCode::GrammarForbidden, span, CLIP_END_MESSAGE);
         }
+        if let Some(message) = self.end_flip(op, lhs, rhs) {
+            self.illegal(DiagCode::GrammarForbidden, span, message);
+        }
         for (time, constant) in [(lhs, rhs), (rhs, lhs)] {
             if self.time_reads(time).scene_seconds
                 && let Some(Expr::Const {
@@ -121,6 +124,51 @@ impl<'s> Compiler<'s> {
         }
         let op = self.compare_op(op, lhs, rhs);
         self.push(Expr::Compare { op, lhs, rhs }, span)
+    }
+
+    /// Why `<` or `>=` of the scene clock with the end of a one-shot scene flips on the last frame
+    /// alone: the last frame shows the end, `seconds` at `duration` and `progress` at 1.
+    fn end_flip(&self, op: CompareOp, lhs: ExprId, rhs: ExprId) -> Option<String> {
+        let composition = self.composition.as_ref()?;
+        if composition.r#loop || !self.time_scopes.is_empty() {
+            return None;
+        }
+        let duration = composition.duration().ok()?.as_f64();
+        let value = |expr: ExprId| match self.expr_arena.values.get(expr.0 as usize) {
+            Some(Expr::Const {
+                value: MotionValue::Number(value),
+            }) => Some(*value),
+            _ => None,
+        };
+        let clock = |expr: ExprId| match self.expr_arena.values.get(expr.0 as usize) {
+            Some(Expr::Context {
+                input: ContextInput::CompositionSeconds,
+            }) => Some(("seconds", "duration", duration, "seconds >= duration - 0.5")),
+            Some(Expr::Context {
+                input: ContextInput::LocalProgress,
+            }) => Some(("progress", "1", 1.0, "progress >= 0.9")),
+            _ => None,
+        };
+        let (name, end, _, example) = match (clock(lhs), clock(rhs)) {
+            (Some(found), None)
+                if matches!(op.exact(), CompareOp::Lt | CompareOp::Gte)
+                    && value(rhs) == Some(found.2) =>
+            {
+                found
+            }
+            (None, Some(found))
+                if matches!(op.exact(), CompareOp::Gt | CompareOp::Lte)
+                    && value(lhs) == Some(found.2) =>
+            {
+                found
+            }
+            _ => return None,
+        };
+        Some(format!(
+            "`{name}` reaches `{end}` on the last frame, which shows the end of the scene, so this \
+             comparison flips on the last frame alone; compare with a time before the end, such \
+             as `{example}`, or leave the condition out"
+        ))
     }
 
     /// Reject a caption run's time met with the scene time: the run is timed on the clip clock.

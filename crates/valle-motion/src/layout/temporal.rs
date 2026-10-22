@@ -4,7 +4,34 @@
 //! subtrees, even if currently inactive.
 
 use super::dependencies::SceneDependencies;
-use crate::{MotionValue, NodeId, NodeKind, SceneArtifact, StyleBinding, StyleValue};
+use crate::{
+    ContextInput, Expr, MotionValue, NodeId, NodeKind, SceneArtifact, StyleBinding, StyleValue,
+};
+
+/// Whether a temporal sample's tree depends on its output time beyond the scene time it shows:
+/// the scene reads the clip clock, or blurs by motion, whose trail lies around the sample.
+pub(super) fn samples_read_output_time(artifact: &SceneArtifact) -> bool {
+    let reads_clip_clock = |exprs: &[Expr]| {
+        exprs.iter().any(|expr| {
+            matches!(
+                expr,
+                Expr::Context {
+                    input: ContextInput::HostSeconds | ContextInput::HostProgress
+                }
+            )
+        })
+    };
+    reads_clip_clock(&artifact.exprs)
+        || artifact
+            .instance_groups
+            .iter()
+            .any(|group| reads_clip_clock(&group.exprs))
+        || artifact.any_node(|node| {
+            node.styles
+                .iter()
+                .any(|style| style.property.starts_with("motion-velocity-blur-"))
+        })
+}
 
 /// Emission reserves display instances for the batches of every built temporal sample tree and
 /// gives paper grain the remainder. Which sample trees are built, and what they contain, can

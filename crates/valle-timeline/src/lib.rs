@@ -10,6 +10,7 @@ mod canonical_json;
 pub mod motion;
 pub use motion::{MotionRole, MotionSourceMetadata, OverlayHold};
 pub mod caption_presets;
+pub mod clock;
 pub mod color_value;
 pub mod easing;
 pub mod edit;
@@ -26,6 +27,7 @@ pub use caption_presets::{
     CAPTION_PRESET_COUNT, CAPTION_PRESET_PACK_ID, CaptionPreset, CaptionPresetDescriptor,
     CaptionPresetPhase, DisplayCaptionPresetName, EnterCaptionPresetName, ExitCaptionPresetName,
 };
+pub use clock::{ClipClock, ClipMap, ClockError, ClockSample, SourceEnd};
 pub use color_value::Color;
 pub use edit::{EditDecodeError, EditJsonIssue, decode_edit_request};
 pub use time::{ExactRational, FrameRate, RationalRate, RationalTime, TimeError};

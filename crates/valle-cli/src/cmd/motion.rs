@@ -206,9 +206,7 @@ fn review(
         scene,
         &props,
         &opts,
-        delivery.fps,
-        delivery.duration_frames,
-        delivery.duration,
+        delivery.clock(artifact)?,
         max_frames.unwrap_or(delivery.duration_frames.max(2)),
         trajectories || trajectory_sheet.is_some(),
         &prepared.compiled.shared_source_elements(),
@@ -297,6 +295,11 @@ fn render(
     let delivery = Delivery::of(artifact, tuning.fps.as_deref())?
         .with_host_duration(host_duration)?
         .with_host_size(host_size, artifact)?;
+    let host_warnings = clock_warnings(&delivery.clock(artifact)?, artifact, false)?;
+    for (code, message) in &host_warnings {
+        eprintln!("{}: [warning:{code:?}] {message}", input.display());
+    }
+    let warnings = warnings_report(&prepared.compiled.warnings, &host_warnings)?;
     let caption = prepared.presenter_caption(delivery.duration)?;
     let scene = caption
         .as_ref()
@@ -397,30 +400,14 @@ fn render(
         let checked_frame = frame.unwrap_or(0);
         let host_frame =
             u32::try_from(checked_frame).context("checked frame must be nonnegative")?;
-        let host = valle_motion::MotionHostContext::new(
-            valle_motion::time::sample_time_at_frame(i64::from(host_frame), fps)
-                .map_err(|error| anyhow!(error))?,
-            duration,
-            host_frame,
-            delivery.duration_frames,
-        )
-        .context("checked frame is outside the host duration")?;
-        let motion_context = valle_motion::motion_context_at_host(
-            artifact.role,
-            artifact
-                .composition
-                .as_ref()
-                .expect("validated composition")
-                .duration()
-                .map_err(|error| anyhow!(error))?,
-            host,
-            fps,
-        )
-        .context("checked frame is outside the template")?;
+        let motion_context =
+            valle_motion::MotionContext::new(delivery.clock(artifact)?, i64::from(host_frame))
+                .filter(|_| host_frame < delivery.duration_frames)
+                .context("checked frame is outside the host duration")?;
         let evaluation = scene.frame_evaluation_stats(&motion_context);
         let compilation = observation.trace.metrics();
         let mut report = serde_json::json!({"status":"ok", "component":artifact.component,
-        "warnings":prepared.compiled.warnings,
+        "warnings":warnings,
         "nodes":artifact.nodes.len(),
         "expressions":artifact.exprs.len() + artifact.instance_groups.iter().map(|group| group.exprs.len()).sum::<usize>(),
         "fullEvaluationExpressions":artifact.exprs.len() + artifact.instance_groups.iter().map(valle_motion::InstanceGroup::frame_expression_evaluations).sum::<usize>(),
@@ -447,7 +434,7 @@ fn render(
             &opened,
             &observation,
             Some(serde_json::json!({
-                "warnings": prepared.compiled.warnings,
+                "warnings": warnings,
                 "targetDurationSeconds": duration.as_f64(),
                 "fps": format!("{}/{}", fps.numerator(), fps.denominator()),
                 "totalFrames": delivery.duration_frames,
@@ -1706,6 +1693,86 @@ fn validate_studio_request(_request: &StudioRequest) -> Result<()> {
     Ok(())
 }
 
+/// What a host's clock leaves out of a scene: an end no frame shows and, on a Timeline, an onset
+/// of `audioAnalysis` shorter than a frame of the clip. A standalone render's onsets are checked
+/// when the scene compiles, at its own frame rate.
+pub(super) fn clock_warnings(
+    clock: &valle_timeline::ClipClock,
+    artifact: &valle_motion::SceneArtifact,
+    on_timeline: bool,
+) -> Result<Vec<(valle_motion::DiagCode, String)>> {
+    let fps = valle_motion::frame_rate_as_f64(clock.fps());
+    let start = clock.start().as_f64();
+    let place = if on_timeline {
+        format!(
+            " at {}–{} s",
+            seconds_text(start),
+            seconds_text(start + clock.duration().as_f64())
+        )
+    } else {
+        String::new()
+    };
+    let mut warnings = Vec::new();
+    if clock.unsampled_end() {
+        let message = match clock.map() {
+            valle_timeline::ClipMap::Template { outro, .. } => format!(
+                "no frame shows the end of the scene{place}: its outro lasts {} seconds and no \
+                 frame at {} fps falls inside it; make the outro at least a frame long, `outro: {}`",
+                seconds_text(outro.as_f64()),
+                seconds_text(fps),
+                seconds_text(1.0 / fps),
+            ),
+            valle_timeline::ClipMap::Clip { .. } => format!(
+                "no frame at {} fps shows the end of the scene{place}",
+                seconds_text(fps)
+            ),
+        };
+        warnings.push((valle_motion::DiagCode::UnsampledEnd, message));
+    }
+    if on_timeline && let Some((length, lasts)) = artifact.shortest_onset() {
+        let output = lasts / clock.max_speed()?.as_f64();
+        if output * fps < 1.0 {
+            warnings.push((
+                valle_motion::DiagCode::UnderOneFrame,
+                format!(
+                    "an onset of `onset(t, {})` lasts {} seconds of output{place}, shorter than a \
+                     frame at {} fps: frames can miss it; make its length at least `{}`",
+                    seconds_text(length),
+                    seconds_text(output),
+                    seconds_text(fps),
+                    seconds_text(length / (output * fps)),
+                ),
+            ));
+        }
+    }
+    Ok(warnings)
+}
+
+/// The compiler's warnings and the host's, as a report lists them.
+fn warnings_report(
+    compiled: &[valle_compiler::motion::CompilerDiagnostic],
+    host: &[(valle_motion::DiagCode, String)],
+) -> Result<serde_json::Value> {
+    let mut warnings = serde_json::to_value(compiled)?;
+    if let Some(list) = warnings.as_array_mut() {
+        list.extend(host.iter().map(|(code, message)| {
+            serde_json::json!({"class": valle_motion::DiagClass::Warning, "code": code, "message": message})
+        }));
+    }
+    Ok(warnings)
+}
+
+/// A number of seconds as an author writes it: at most six decimals, without trailing zeros.
+fn seconds_text(value: f64) -> String {
+    let text = format!("{value:.6}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" {
+        "0".to_owned()
+    } else {
+        text.to_owned()
+    }
+}
+
 /// The delivery contract every rendering path reads back from the artifact.
 ///
 /// The artifact defines the source canvas and duration. CLI output FPS and host duration
@@ -1777,6 +1844,16 @@ impl Delivery {
             self.canvas = validate_pixel_size(MotionViewport { width, height }, "host viewport")?;
         }
         Ok(self)
+    }
+
+    /// The clock of the standalone render: the scene over its host.
+    fn clock(&self, artifact: &valle_motion::SceneArtifact) -> Result<valle_timeline::ClipClock> {
+        artifact
+            .composition
+            .as_ref()
+            .context("composition missing")?
+            .clock(artifact.role, self.fps, Some(self.duration))
+            .map_err(|error| anyhow!(error))
     }
 
     fn with_host_duration(mut self, input: Option<&str>) -> Result<Self> {

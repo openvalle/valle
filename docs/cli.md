@@ -102,6 +102,16 @@ Small motion, motion-blurred subjects, and motion with changing speed are exclud
 `stagger_timing` is an informational hint for three to 64 consecutively numbered painted
 nodes sharing a key prefix. It compares their observed movement starts and reports gaps
 outside 30–100 ms; a simultaneous group, missing starts, or mixed start order is excluded.
+Five rules concern the clock. A `single_frame` warning names content shown on one frame only:
+it flickers, and another frame rate can miss it. In a declared loop the last and first frames
+are neighbours. `loop_candidate` is an informational hint for a one-shot scene whose last frame
+shows the same picture as its first while something on screen changes in between: played in a
+loop, that picture shows twice, so declare `loop: true` if the scene repeats. A `loop_seam`
+warning names a node of a declared loop that steps from the last frame back to the first much
+further than on the frames around the seam. The informational `shutter_switch` hint names text,
+visibility or a position inside a `Shutter` that switches with the clock, which the Shutter lays
+over itself on that frame, and `blur_jump` names an element that jumps under motion blur, which
+streaks across the jump. The rows of a batch or an instance group are left out of these rules.
 An empty `issues` array means none of these rules detected a problem.
 Pass `--trajectories` to include each visible painted node's per-frame screen anchor and
 bounds in JSON. Consecutive samples also include velocity in pixels per second and
@@ -114,9 +124,9 @@ when that explicit budget is too small instead of silently skipping frames. It a
 `--props`, `--data`, `--asset`, and `--font` inputs as other Motion authoring commands.
 
 For audio-driven Motion, declare an audio asset and bind it with `--asset beat=beat.wav`.
-`const BEAT = audioAnalysis("asset://beat", { bands: 8, rate: 30 })` prepares a frozen table;
-`BEAT.level(seconds)`, `BEAT.band(3, seconds)`, `BEAT.onset(seconds)`, and
-`BEAT.beatPhase(seconds)` read it at frame time. `rate`, the analysis values per second,
+`const BEAT = audioAnalysis("asset://beat", { bands: 8, rate: 30 })` prepares frozen signals;
+`BEAT.level(seconds)`, `BEAT.band(3, seconds)`, `BEAT.onset(seconds, 0.2)`, where each onset
+lasts 0.2 seconds, and `BEAT.beatPhase(seconds)` read them at frame time. `rate`, the analysis values per second,
 defaults to an integer `composition.fps` when omitted. Analysis uses frozen decoded 48 kHz
 mono PCM, accepts 1–32 logarithmic bands and a rate of 1–120, and limits each table to
 16,384 values.
@@ -382,7 +392,7 @@ The transport is shared; result payloads retain domain-specific information:
 
 | Command | Result shape / success indicator |
 | --- | --- |
-| Motion/Timeline check or render; Project render | `status: "ok"`; delivery includes output, frame count and render ID |
+| Motion/Timeline check or render; Project render | `status: "ok"`; delivery includes output, frame count and render ID; Motion check and render, and Timeline check, list `warnings` with a `code` and a `message`, also printed to stderr |
 | Project create/show/history | Snapshot or revision page; use the process exit code |
 | Project apply/restore | `outcome`: `committed`, `unchanged`, `staleBase`, or `rejected` |
 | Assets | `ok`, `data`, `error`, `warnings`; batch import can contain failed items |

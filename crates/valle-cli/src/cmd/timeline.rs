@@ -26,6 +26,7 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
         TimelineAction::Check { input } => {
             let timeline = decode_timeline(&super::read(&input)?)?;
             let temp = tempfile::tempdir()?;
+            let mut warnings = Vec::new();
             render_document_impl(
                 timeline,
                 input.parent().unwrap_or(Path::new(".")),
@@ -34,10 +35,20 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
                     frame: Some(0),
                     ..Default::default()
                 },
-                true,
+                Some(&mut warnings),
                 RenderBudgetArgs::default(),
             )?;
-            crate::output::emit(serde_json::json!({"status":"ok", "input":input}));
+            for warning in &warnings {
+                eprintln!(
+                    "{}: [warning:{:?}] {}",
+                    input.display(),
+                    warning.code,
+                    warning.message
+                );
+            }
+            crate::output::emit(
+                serde_json::json!({"status":"ok", "input":input, "warnings":warnings}),
+            );
             Ok(std::process::ExitCode::SUCCESS)
         }
         TimelineAction::Render {
@@ -50,7 +61,7 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
                 timeline,
                 input.parent().unwrap_or(Path::new(".")),
                 delivery,
-                false,
+                None,
                 budget,
             )
         }
@@ -62,14 +73,16 @@ pub(super) fn render_document(
     base: &Path,
     delivery: RenderOutputArgs,
 ) -> Result<std::process::ExitCode> {
-    render_document_impl(timeline, base, delivery, false, RenderBudgetArgs::default())
+    render_document_impl(timeline, base, delivery, None, RenderBudgetArgs::default())
 }
 
+/// Render a Timeline document, or with `check` prepare it to render and collect what its Motion
+/// hosts' clocks leave out.
 fn render_document_impl(
     timeline: Timeline,
     base: &Path,
     delivery: RenderOutputArgs,
-    checking: bool,
+    check: Option<&mut Vec<valle_motion::MotionDiagnostic>>,
     budget: RenderBudgetArgs,
 ) -> Result<std::process::ExitCode> {
     let plan = DeliveryPlan::new(delivery)?;
@@ -99,11 +112,62 @@ fn render_document_impl(
             ..NativeRenderOptions::default()
         },
     );
-    if checking {
+    if let Some(warnings) = check {
+        warnings.extend(clock_warnings(opened.compiled())?);
         return Ok(std::process::ExitCode::SUCCESS);
     }
     plan.deliver_and_report(&renderer, &opened, &observation, None)?;
     Ok(std::process::ExitCode::SUCCESS)
+}
+
+/// What the clocks of the Motion hosts leave out: an end no frame shows, and onsets shorter than
+/// a frame of output. A warning names the visual clip that places the source by its path in the
+/// document, such as `/tracks/visual/0/clips/1`.
+fn clock_warnings(
+    render: &valle_engine::render::CompiledRender,
+) -> Result<Vec<valle_motion::MotionDiagnostic>> {
+    use valle_engine::render::CompiledVisualItem;
+    let mut clips = std::collections::BTreeMap::new();
+    for track in render.visual().tracks() {
+        for item in track.items() {
+            if let CompiledVisualItem::Clip { clip } = item {
+                clips.insert(clip.source_index(), document_path(clip.id()));
+            }
+        }
+    }
+    let mut warnings = Vec::new();
+    for index in 0..u32::try_from(render.sources().len())? {
+        let Some(motion) = render
+            .sources()
+            .source(index)
+            .and_then(valle_engine::render::CompiledSource::motion)
+        else {
+            continue;
+        };
+        let path = clips.get(&index).cloned().unwrap_or_default();
+        for (code, message) in
+            super::motion::clock_warnings(&motion.clock(), motion.artifact(), true)?
+        {
+            warnings.push(valle_motion::MotionDiagnostic::new(
+                code,
+                path.clone(),
+                message,
+            ));
+        }
+    }
+    Ok(warnings)
+}
+
+/// The path in the document of a prepared clip, `timeline:visual-track:0:clip:1` as
+/// `/tracks/visual/0/clips/1`.
+fn document_path(id: &str) -> String {
+    id.strip_prefix("timeline:")
+        .and_then(|id| id.split_once("-track:"))
+        .and_then(|(band, id)| {
+            let (track, clip) = id.split_once(":clip:")?;
+            Some(format!("/tracks/{band}/{track}/clips/{clip}"))
+        })
+        .unwrap_or_else(|| id.to_owned())
 }
 
 /// One frozen preparation shared by Native delivery and browser previews.

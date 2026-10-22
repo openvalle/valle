@@ -6,8 +6,7 @@ use valle_motion::layout::SceneReferenceKind;
 use valle_motion::layout::build_tree_profiled;
 use valle_motion::{
     Expr, ExprId, Fonts, IndexFormula, InstanceColumnValues, LayoutOptions, NodeId, Viewport,
-    default_font_naming, emit, layout_boxes, motion_context_at_frame, motion_context_at_source,
-    prepare_scene, resolve_props,
+    default_font_naming, emit, layout_boxes, motion_context_at_frame, prepare_scene, resolve_props,
 };
 use valle_timeline::{FrameRate, RationalTime, internal::SampleTime};
 
@@ -83,15 +82,16 @@ fn time_scope_keeps_independent_leaves_lazy_at_mapped_and_random_access_times() 
     let source = r##"
         export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
         const DOTS = Array.from({ length: 64 }, (_, i) => ({ id: `d${i}`, i, x: 4 + (i % 8) * 8, y: 4 + Math.floor(i / 8) * 14 }));
-        export default function Scoped() { const time = useCurrentTime();
+        function Dots() { const time = useCurrentTime();
+          return <>{DOTS.map((dot) => (
+            <View key={dot.id} className="absolute " visible={time.seconds * 30 >= dot.i}
+              style={{ left: dot.x, top: dot.y, width: 4, height: 4, backgroundColor: "#ffffff",
+                opacity: clamp(time.seconds * 30 - dot.i, 0, 1) }} />
+          ))}</>;
+        }
+        export default function Scoped() {
           return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
-            <TimeScope key="scope" offset={0.5} speed={2}>
-              {DOTS.map((dot) => (
-                <View key={dot.id} className="absolute " visible={time.seconds * 30 >= dot.i}
-                  style={{ left: dot.x, top: dot.y, width: 4, height: 4, backgroundColor: "#ffffff",
-                    opacity: clamp(time.seconds * 30 - dot.i, 0, 1) }} />
-              ))}
-            </TimeScope>
+            <TimeScope key="scope" offset={0.5} speed={2}><Dots key="dots" /></TimeScope>
           </Scene>;
         }
     "##;
@@ -109,7 +109,7 @@ fn time_scope_keeps_independent_leaves_lazy_at_mapped_and_random_access_times() 
     let dot = artifact
         .nodes
         .iter()
-        .position(|node| node.key == "d0")
+        .position(|node| node.key == "dots/d0")
         .unwrap();
     assert!(
         prepared
@@ -125,7 +125,9 @@ fn time_scope_keeps_independent_leaves_lazy_at_mapped_and_random_access_times() 
         fonts: &fonts,
         styles: None,
     };
-    for (frame, visible) in [(30, 31), (0, 0), (59, 64), (16, 2), (15, 1), (30, 31)] {
+    // Inside the scope dot `i` appears at frame 15 + i / 2, on the frame within the clock
+    // tolerance.
+    for (frame, visible) in [(30, 31), (0, 0), (59, 64), (16, 3), (15, 1), (30, 31)] {
         let ctx = motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap()).unwrap();
         let (tree, timings) = build_tree_profiled(&prepared, &ctx, &props, &options).unwrap();
         let (full, full_timings) =
@@ -318,27 +320,18 @@ fn local_visibility_certificates_skip_gates_away_from_a_threshold() {
     let contexts = [
         motion_context_at_frame(0, 60, fps).unwrap(),
         motion_context_at_frame(1, 60, fps).unwrap(),
-        motion_context_at_source(
-            0,
-            SampleTime::new(RationalTime::new(1_999_999, 100_000_000).unwrap()),
-            60,
-            fps,
-        )
-        .unwrap(),
-        motion_context_at_source(
-            0,
-            SampleTime::new(RationalTime::new(1, 50).unwrap()),
-            60,
-            fps,
-        )
-        .unwrap(),
-        motion_context_at_source(
-            0,
-            SampleTime::new(RationalTime::new(2_000_001, 100_000_000).unwrap()),
-            60,
-            fps,
-        )
-        .unwrap(),
+        motion_context_at_frame(0, 60, fps)
+            .unwrap()
+            .at(RationalTime::new(1_999_999, 100_000_000).unwrap())
+            .unwrap(),
+        motion_context_at_frame(0, 60, fps)
+            .unwrap()
+            .at(RationalTime::new(1, 50).unwrap())
+            .unwrap(),
+        motion_context_at_frame(0, 60, fps)
+            .unwrap()
+            .at(RationalTime::new(2_000_001, 100_000_000).unwrap())
+            .unwrap(),
         motion_context_at_frame(30, 60, fps).unwrap(),
     ];
     for (index, ctx) in contexts.iter().enumerate() {
@@ -396,13 +389,10 @@ fn whole_duration_visibility_certificate_skips_only_proven_hidden_leaves() {
     let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
     let fonts = Fonts::default();
     let fps = FrameRate::new(30, 1).unwrap();
-    let outside = motion_context_at_source(
-        0,
-        SampleTime::new(RationalTime::new(20, 1).unwrap()),
-        60,
-        fps,
-    )
-    .unwrap();
+    // No clock reads past the end of a one-shot scene; a context there still evaluates every
+    // leaf.
+    let mut outside = motion_context_at_frame(0, 60, fps).unwrap();
+    outside.sample = SampleTime::new(RationalTime::new(20, 1).unwrap());
     for ctx in [
         motion_context_at_frame(0, 60, fps).unwrap(),
         motion_context_at_frame(30, 60, fps).unwrap(),
@@ -591,15 +581,12 @@ fn frame_one_evaluates_less_than_one_fifth_of_full_work() {
     assert_eq!(initial_batch.instances.len(), 34);
     let initial_bytes = initial.packed_bytes().unwrap();
 
-    // The same local frame may be sampled at an earlier shutter/echo time. Its activation must
+    // The same frame may be sampled at an earlier shutter/echo time. Its activation must
     // follow that sample, and a later request for the original time must recover identical bytes.
-    let earlier = motion_context_at_source(
-        1,
-        SampleTime::new(RationalTime::new(1, 60).unwrap()),
-        60,
-        FrameRate::new(30, 1).unwrap(),
-    )
-    .unwrap();
+    let earlier = motion_context_at_frame(1, 60, FrameRate::new(30, 1).unwrap())
+        .unwrap()
+        .at(RationalTime::new(1, 60).unwrap())
+        .unwrap();
     let (earlier_tree, earlier_timings) = build_tree_profiled(
         &prepared,
         &earlier,
@@ -755,14 +742,11 @@ fn shifted_reversed_time_gate_selects_instance_range() {
         }
     }
 
-    // The local frame remains 8 while a shutter sample moves to an earlier composition time.
-    let earlier = motion_context_at_source(
-        8,
-        SampleTime::new(RationalTime::new(1, 5).unwrap()),
-        60,
-        FrameRate::new(30, 1).unwrap(),
-    )
-    .unwrap();
+    // Frame 8 stays the frame while a shutter sample moves to an earlier time.
+    let earlier = motion_context_at_frame(8, 60, FrameRate::new(30, 1).unwrap())
+        .unwrap()
+        .at(RationalTime::new(1, 5).unwrap())
+        .unwrap();
     let options = LayoutOptions {
         viewport: Viewport::new((640, 360)),
         fonts: &fonts,

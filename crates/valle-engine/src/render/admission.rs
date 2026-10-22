@@ -607,14 +607,6 @@ struct CompiledPrograms {
     camera: Option<CompiledCameraProgram>,
 }
 
-fn motion_hold_end_frame_time(
-    duration: RationalTime,
-    frame_rate: FrameRate,
-) -> Result<RationalTime, ()> {
-    let frame_count = quantized_motion_source_frame_count(duration, frame_rate)?;
-    frame_sample_time(frame_count - 1, frame_rate).map_err(|_| ())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdmittedOwnerClock {
     CompositionGlobal,
@@ -696,9 +688,8 @@ struct AdmittedMotionInstance {
     role: valle_timeline::MotionRole,
     component_target: u32,
     reads_destination: bool,
-    host_duration: RationalTime,
-    host_range: FrameRange,
-    host_fps: FrameRate,
+    /// `None` only beside a diagnostic, which stops admission.
+    clock: Option<valle_timeline::ClipClock>,
     props: BTreeMap<String, AdmittedMotionParam>,
     resources: BTreeMap<String, u32>,
     artifact_dependencies: Vec<AdmittedMotionArtifactDependency>,
@@ -839,6 +830,7 @@ struct AdmittedVisualClip {
     id: String,
     range: FrameRange,
     exact_start: RationalTime,
+    exact_duration: RationalTime,
     source: u32,
     layer: AdmittedVisualLayer,
     /// The admitted sources of the layer's effect templates, in order.
@@ -949,6 +941,7 @@ enum AdmittedCaptionBehavior {
 #[derive(Debug, Clone)]
 struct AdmittedCaptionClip {
     range: FrameRange,
+    duration: RationalTime,
     runs: Vec<String>,
     run_timings: Vec<Option<AdmittedCaptionRunTiming>>,
     run_styles: Vec<AdmittedCaptionRunStyle>,
@@ -1360,6 +1353,7 @@ fn admit_visual_program(
                             id: clip.id.clone(),
                             range,
                             exact_start: cursor,
+                            exact_duration: duration,
                             source,
                             layer,
                             effects,
@@ -1716,31 +1710,22 @@ fn admit_visual_source(
             let instance = admit_motion_instance(
                 source,
                 target,
+                placement_start,
                 host_duration,
-                range,
                 frame_rate,
                 resource_targets,
                 resources,
                 path,
                 diagnostics,
             );
-            let source_duration = source.source_duration;
-            let hold_end_time = (source.end_behavior == MediaEndBehavior::Hold)
-                .then(|| {
-                    motion_hold_end_frame_time(source_duration, frame_rate)
-                        .map_err(|_| {
-                            diagnostics.push(admit_fault(path, "motion-hold-end-frame-time"));
-                        })
-                        .ok()
-                })
-                .flatten();
+            // The clock of the placement maps every frame, its end included.
             AdmittedSource {
                 kind: AdmittedSourceKind::Motion,
                 resource_target: Some(target),
                 placement_start,
                 source_start: source.source_start,
-                source_duration: Some(source_duration),
-                hold_end_time,
+                source_duration: Some(source.source_duration),
+                hold_end_time: None,
                 rate: source.rate,
                 end_behavior: admit_end_behavior(source.end_behavior),
                 dependency_range: AdmittedDependencyRange::Frames { range },
@@ -1773,8 +1758,8 @@ fn admit_visual_source(
 fn admit_motion_instance(
     source: &MotionInstance,
     component_target: u32,
+    placement_start: RationalTime,
     host_duration: RationalTime,
-    host_range: FrameRange,
     frame_rate: FrameRate,
     resource_targets: &BTreeMap<String, u32>,
     resources: &[ResolvedResource],
@@ -1922,14 +1907,47 @@ fn admit_motion_instance(
         "source-duration",
         diagnostics,
     );
+    let map =
+        valle_timeline::ClipMap::template(source.role).unwrap_or(valle_timeline::ClipMap::Clip {
+            trim: source.source_start,
+            rate: source.rate,
+            end: match source.end_behavior {
+                MediaEndBehavior::Hold => valle_timeline::SourceEnd::Hold,
+                MediaEndBehavior::Loop => valle_timeline::SourceEnd::Loop,
+                MediaEndBehavior::Error => valle_timeline::SourceEnd::Error,
+            },
+        });
+    let looping = artifact
+        .composition
+        .as_ref()
+        .is_some_and(|composition| composition.r#loop);
+    let clock = valle_timeline::ClipClock::new(
+        frame_rate,
+        placement_start,
+        host_duration,
+        map,
+        source.source_duration,
+        looping,
+    )
+    .map_err(|error| {
+        diagnostics.push(diagnostic(
+            EngineOpenDiagnosticCode::MotionTimingMismatch,
+            path.to_owned(),
+            EngineOpenPhase::Admission,
+            None,
+            details([
+                ("reason", "clip-clock".into()),
+                ("error", error.to_string()),
+            ]),
+        ));
+    })
+    .ok();
 
     AdmittedMotionInstance {
         role: source.role,
         component_target,
         reads_destination: descriptor.reads_destination,
-        host_duration,
-        host_range,
-        host_fps: frame_rate,
+        clock,
         props,
         resources: compiled_resources,
         artifact_dependencies,
@@ -2457,6 +2475,7 @@ fn admit_caption_program(
                     items.push(AdmittedCaptionItem::Clip {
                         clip: AdmittedCaptionClip {
                             range: FrameRange::new(interval.start_frame, interval.end_frame),
+                            duration,
                             runs: caption.runs.iter().map(|run| run.text.clone()).collect(),
                             run_timings: caption
                                 .runs
