@@ -4,7 +4,7 @@ const DOTS = Array.from({ length: 64 }, (_, i) => ({
 }));
 const MARK = path("M 0 0 L 20 0 L 20 4 Z");
 
-export default function MaskSibling() { const ctx = useTime();
+export default function MaskSibling() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     <Path key="marker" d={MARK} fill="#ff0000"
       style={{ opacity: bounds("d20").width / 4 }} />
@@ -19,7 +19,7 @@ export default function MaskSibling() { const ctx = useTime();
       style={{ position: "absolute", left: 180, top: 20, width: 40, height: 40 }}>
       <View key="clip-content" style={{ width: 40, height: 40, backgroundColor: "#ff4a24" }} />
     </Clip>
-    <Transition key="transition" kind="circleOpen" progress={ctx.progress}
+    <Transition key="transition" kind="circleOpen" progress={time.progress}
       style={{ position: "absolute", left: 240, top: 20, width: 40, height: 40 }}>
       <View key="from" style={{ width: 40, height: 40, backgroundColor: "#2140ff" }} />
       <View key="to" style={{ width: 40, height: 40, backgroundColor: "#ff4a24" }} />
@@ -30,13 +30,13 @@ export default function MaskSibling() { const ctx = useTime();
         style={{ width: 40, height: 40, backgroundColor: "#406020" }} />
     </Group>
     <Text key="label" split="char"
-      perUnit={{ opacity: clamp(ctx.seconds - ctx.unit.index * 0.1, 0, 1) }}
+      perUnit={(unit) => ({ opacity: clamp(time.seconds - unit.index * 0.1, 0, 1) })}
       style={{ position: "absolute", left: 380, top: 20, width: 100, height: 40,
         fontSize: 16, color: "#ffffff" }}>ABC</Text>
     {DOTS.map((dot) => {
-      return <View key={dot.id} className="absolute" visible={ctx.seconds * 100 >= dot.i}
+      return <View key={dot.id} className="absolute" visible={time.seconds * 100 >= dot.i}
         style={{ left: dot.x, top: dot.y, width: 4, height: 4, backgroundColor: "#ffffff",
-          opacity: clamp(ctx.seconds * 100 - dot.i, 0, 1) }} />;
+          opacity: clamp(time.seconds * 100 - dot.i, 0, 1) }} />;
     })}
   </Scene>;
 }

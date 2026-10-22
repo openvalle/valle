@@ -53,7 +53,7 @@ export const controls = ({ props: {
   angle: number({ default: 0.25 }), value: number({ default: -5.5 }), divisor: number({ default: 2 }),
   huge: number({ default: 1e308 }), tiny: number({ default: 1e-308 }),
 }});
-export default function P(props) { const ctx = useTime(); return <Scene>
+export default function P(props) { return <Scene>
   <View key="sin" style={{ opacity: Math.sin(props.angle) }} />
   <View key="sqrt" style={{ opacity: Math.sqrt(props.angle) }} />
   <View key="exp" style={{ opacity: Math.exp(-props.angle) }} />
@@ -134,7 +134,7 @@ fn exponentiation_is_the_deterministic_math_pow_at_frame_and_prepare_time() {
 export const controls = ({ props: { base: number({ default: 1.7 }) } });
 const SQUARE = 3 ** 2;
 function cube(x) { return x ** 3; }
-export default function P(props) { const ctx = useTime(); return <Scene>
+export default function P(props) { return <Scene>
   <View key="frame" style={{ opacity: props.base ** 2.5, left: Math.pow(props.base, 2.5) }} />
   <View key="prepare" style={{ opacity: 1.7 ** 2.5, left: SQUARE + cube(1.5) }} />
   <View key="nested" style={{ opacity: 2 ** 3 ** 2, left: (2 ** 3) ** 2 }} />
@@ -171,12 +171,12 @@ fn dynamic_number_text_angle_helpers_transform_axes_and_wiggle2d_are_author_suga
 export const controls = ({ props: {
   angle: number({ default: 90 }), value: number({ default: -5.5 }), x: number({ default: 24 }), y: number({ default: 12 }),
 }});
-export default function P(props) { const ctx = useTime(); return <Scene>
+export default function P(props) { const time = useCurrentTime(); return <Scene>
   <Text key="value">{props.value}</Text>
   <Path key="arc" d={arc(point(100, 100), 40, 0, deg(props.angle))} fill="none" stroke="#fff" />
   <View key="transform" style={{ transform: `translateX(${props.x}px) translateY(${props.y}px) rotate(${props.angle}deg) scale(1)` }} />
-  <View key="wiggle" style={{ translate: wiggle2D(ctx.localFrame, ctx.fps, { seed: 7, frequency: 2, amplitude: [8, 4] }) }} />
-  <View key="tau" style={{ opacity: (ctx.progress * TAU) / TAU }} />
+  <View key="wiggle" style={{ translate: wiggle2D(time.seconds, { seed: 7, frequency: 2, amplitude: [8, 4] }) }} />
+  <View key="tau" style={{ opacity: (time.progress * TAU) / TAU }} />
 </Scene>; }
 "##;
     let (artifact, values) = evaluate(source);
@@ -216,7 +216,7 @@ export default function P(props) { const ctx = useTime(); return <Scene>
 fn unsupported_math_zero_remainder_and_bad_arc_keep_pointed_diagnostics() {
     let cases = [
         (
-            r#"export default function P(){ const ctx = useTime();return <View style={{opacity:Math.log(ctx.progress)}}/>;}"#,
+            r#"export default function P(){ const time = useCurrentTime();return <View style={{opacity:Math.log(time.progress)}}/>;}"#,
             "Math.log",
         ),
         (
@@ -224,7 +224,7 @@ fn unsupported_math_zero_remainder_and_bad_arc_keep_pointed_diagnostics() {
             "helper `sqrt`",
         ),
         (
-            r#"export default function P(){ const ctx = useTime();return <View style={{left:ctx.localFrame % 0}}/>;}"#,
+            r#"export default function P(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <View style={{left:frame % 0}}/>;}"#,
             "divisor",
         ),
         (
@@ -236,7 +236,7 @@ fn unsupported_math_zero_remainder_and_bad_arc_keep_pointed_diagnostics() {
             "sweep",
         ),
         (
-            r#"export default function P(){ const ctx = useTime();return <View style={{translate:wiggle2D(ctx.localFrame,ctx.fps,{seed:1,frequency:2,amplitude:5})}}/>;}"#,
+            r#"export default function P(){ const time = useCurrentTime();return <View style={{translate:wiggle2D(time.seconds,{seed:1,frequency:2,amplitude:5})}}/>;}"#,
             "[x, y]",
         ),
     ];
@@ -256,8 +256,8 @@ fn unsupported_math_zero_remainder_and_bad_arc_keep_pointed_diagnostics() {
 fn existing_noise_name_accepts_dynamic_coordinates() {
     let compiled = compile_motion(
         r##"
-export default function Card() { const ctx = useTime();
-  const n = noise1d(7, ctx.progress * 10);
+export default function Card() { const time = useCurrentTime();
+  const n = noise1d(7, time.progress * 10);
   return <View style={{ opacity: n }} />;
 }
 "##,
@@ -278,8 +278,8 @@ fn number_formatting_reaches_dynamic_text() {
     let compiled = compile_motion(
         r##"
 export const controls = ({ props: { value: number({ default: 1234 }) } });
-export default function Card(props) { const ctx = useTime();
-  const amount = formatNumber(props.value * ctx.progress, { decimals: 1, grouping: true });
+export default function Card(props) { const time = useCurrentTime();
+  const amount = formatNumber(props.value * time.progress, { decimals: 1, grouping: true });
   return <Text>{amount}</Text>;
 }
 "##,

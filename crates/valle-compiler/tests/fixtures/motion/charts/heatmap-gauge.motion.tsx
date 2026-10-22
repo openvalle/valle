@@ -24,8 +24,8 @@ const GAUGE_SPAN = deg(260);
 const GX = 1542;
 const GY = 585;
 
-function Cell({ row, col, value }) { const ctx = useTime();
-  const show = interpolate(ctx.progress - (row * 7 + col) * 0.012, [0, 0.28], [0, 1], {
+function Cell({ row, col, value }) { const time = useCurrentTime();
+  const show = interpolate(time.progress - (row * 7 + col) * 0.012, [0, 0.28], [0, 1], {
     easing: "easeOut",
   });
   return (
@@ -45,11 +45,11 @@ function Cell({ row, col, value }) { const ctx = useTime();
   );
 }
 
-export default function HeatmapGauge() { const ctx = useTime();
-  const needle = interpolate(ctx.progress, [0.15, 0.85], [GAUGE_START, GAUGE_START + GAUGE_SPAN * LOAD], {
+export default function HeatmapGauge() { const time = useCurrentTime();
+  const needle = interpolate(time.progress, [0.15, 0.85], [GAUGE_START, GAUGE_START + GAUGE_SPAN * LOAD], {
     easing: "easeOut",
   });
-  const track = interpolate(ctx.progress, [0.08, 0.4], [0, 1], { easing: "easeOut" });
+  const track = interpolate(time.progress, [0.08, 0.4], [0, 1], { easing: "easeOut" });
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#050b14" }}>
       <Text key="eyebrow" className="absolute" style={{ left: 108, top: 54, fontSize: 27, letterSpacing: 4.5, color: "#22d3ee" }}>

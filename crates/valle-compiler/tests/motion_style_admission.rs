@@ -10,7 +10,7 @@ use valle_timeline::FrameRate;
 
 fn scene(attributes: &str) -> String {
     format!(
-        r#"export default function Demo() {{ const ctx = useTime(); return <Scene style={{{{width:320,height:180}}}}>
+        r#"export default function Demo() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); return <Scene style={{{{width:320,height:180}}}}>
         <View key="grid" {attributes}><View key="first" style={{{{height:20,backgroundColor:"red"}}}} />
         <View key="second" style={{{{height:20,backgroundColor:"blue"}}}} /></View></Scene>; }}"#
     )
@@ -80,7 +80,7 @@ fn blend_admission_and_emission_share_the_supported_set() {
     for attributes in [
         r#"style={{mixBlendMode:"plus-darker"}}"#,
         r#"className="mix-blend-plus-darker""#,
-        r#"style={{mixBlendMode:ctx.progress<0.5?"normal":"plus-darker"}}"#,
+        r#"style={{mixBlendMode:time.progress<0.5?"normal":"plus-darker"}}"#,
     ] {
         let errors = compile_motion(&scene(attributes)).unwrap_err();
         assert!(
@@ -132,7 +132,7 @@ fn compiler_and_direct_artifacts_reject_invalid_css_values() {
     }
     assert!(
         compile_motion(&scene(
-            r#"style={{gridTemplateColumns: ctx.localFrame < 30 ? "1fr 2fr" : "subgrid"}}"#
+            r#"style={{gridTemplateColumns: frame < 30 ? "1fr 2fr" : "subgrid"}}"#
         ))
         .is_err()
     );
@@ -142,7 +142,7 @@ fn compiler_and_direct_artifacts_reject_invalid_css_values() {
 fn grid_geometry_and_programs_are_identical_for_cold_warm_and_reverse_seeks() {
     let artifact = compile_motion(&scene(
         r#"style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:20,
-        width:320,translate:point(ctx.localFrame,0)}}"#,
+        width:320,translate:point(frame,0)}}"#,
     ))
     .unwrap()
     .artifact;

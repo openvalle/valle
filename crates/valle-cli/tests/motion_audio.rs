@@ -5,11 +5,11 @@ use std::{path::Path, process::Command};
 const SOURCE: &str = r##"
 export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
 export const controls = { assets: { beat: asset({ kind: "audio", required: true }) } };
-const BEAT = audioAnalysis("asset://beat", { bands: 8, fps: 30 });
-export default function AudioBars() { const ctx = useTime();
+const BEAT = audioAnalysis("asset://beat", { bands: 8, rate: 30 });
+export default function AudioBars() { const time = useCurrentTime();
   return <Scene style={{width:320,height:180}}>
     <View key="bar" style={{position:"absolute",left:20,top:20,width:30,
-      height:BEAT.level(ctx.seconds)*100,backgroundColor:"#ffffff"}} />
+      height:BEAT.level(time.seconds)*100,backgroundColor:"#ffffff"}} />
   </Scene>;
 }
 "##;

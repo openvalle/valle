@@ -7,7 +7,7 @@ use valle_motion::{MotionValue, StyleBinding, StyleValue};
 
 fn source(attributes: &str) -> String {
     format!(
-        "export default function Demo() {{ const ctx = useTime();return <Scene>\n  <View key=\"bad\" {attributes}/>\n</Scene>;}}"
+        "export default function Demo() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene>\n  <View key=\"bad\" {attributes}/>\n</Scene>;}}"
     )
 }
 
@@ -107,7 +107,7 @@ fn css_and_arbitrary_properties_share_error_classification_and_value_details() {
 
 #[test]
 fn unselected_class_branch_points_to_the_bad_candidate() {
-    let authored = source("className={ctx.localFrame<30?'w-20':'[mask-size:cover]'}");
+    let authored = source("className={frame<30?'w-20':'[mask-size:cover]'}");
     let diagnostics = compile_motion(&authored).unwrap_err();
     let diagnostic = diagnostics.iter().find(|d| d.utility.is_some()).unwrap();
     assert_eq!(diagnostic.code, DiagCode::StyleUnsupportedProperty);
@@ -121,7 +121,7 @@ fn unselected_class_branch_points_to_the_bad_candidate() {
 
 #[test]
 fn finite_inline_css_and_direct_artifacts_retain_the_shared_issue() {
-    let authored = source("style={{width:ctx.localFrame<30?'calc(80px)':'min-content'}}");
+    let authored = source("style={{width:frame<30?'calc(80px)':'min-content'}}");
     let diagnostics = compile_motion(&authored).unwrap_err();
     let diagnostic = diagnostics
         .iter()
@@ -130,8 +130,7 @@ fn finite_inline_css_and_direct_artifacts_retain_the_shared_issue() {
     assert_eq!(diagnostic.code, DiagCode::StyleUnsupportedValue);
     assert_eq!(diagnostic.style.as_ref().unwrap().value, "min-content");
     assert!(
-        authored[diagnostic.span.start as usize..diagnostic.span.end as usize]
-            .contains("ctx.localFrame")
+        authored[diagnostic.span.start as usize..diagnostic.span.end as usize].contains("frame")
     );
 
     let mut artifact = compile_motion(&source("")).unwrap().artifact;
@@ -232,27 +231,27 @@ fn transform_type_diagnostics_have_stable_source_spans_and_replacements() {
     for (property, expression, start, end, column, expected) in [
         (
             "rotate",
-            "ctx.seconds",
+            "time.seconds",
             104,
             115,
             35,
-            "`rotate: <expression>`: expected Angle or a finite CSS string; received Number; use rotate: `${ctx.seconds * 90}deg`",
+            "`rotate: <expression>`: expected Angle or a finite CSS string; received Number; use rotate: `${time.seconds * 90}deg`",
         ),
         (
             "translate",
-            "ctx.seconds",
+            "time.seconds",
             107,
             118,
             38,
-            "`translate: <expression>`: expected Length2, Length, Point, Vec2 or a finite CSS string; received Number; use translate: point(ctx.seconds * 100, 0) or translate: `${ctx.seconds * 100}px 0px`",
+            "`translate: <expression>`: expected Length2, Length, Point, Vec2 or a finite CSS string; received Number; use translate: point(time.seconds * 100, 0) or translate: `${time.seconds * 100}px 0px`",
         ),
         (
             "scale",
-            "ctx.seconds > 0",
+            "time.seconds > 0",
             103,
             118,
             34,
-            "`scale: <expression>`: expected Number, Point, Length, Length2 or a finite CSS string; received Bool; use scale: 1 + ctx.seconds or scale: `${1 + ctx.seconds} 1`",
+            "`scale: <expression>`: expected Number, Point, Length, Length2 or a finite CSS string; received Bool; use scale: 1 + time.seconds or scale: `${1 + time.seconds} 1`",
         ),
     ] {
         let authored = source(&format!("style={{{{{property}: {expression}}}}}"));
@@ -279,14 +278,14 @@ fn transform_type_diagnostics_have_stable_source_spans_and_replacements() {
 
 #[test]
 fn transform_structure_diagnostic_rejects_text_injection_at_the_template() {
-    let expression = "`${ctx.localFrame < 30 ? '0' : '45'}deg`";
+    let expression = "`${frame < 30 ? '0' : '45'}deg`";
     let authored = source(&format!("style={{{{rotate: {expression}}}}}"));
     let diagnostics = compile_motion(&authored).unwrap_err();
     let diagnostic = diagnostics.iter().find(|d| d.style.is_some()).unwrap();
     assert_eq!(diagnostic.code, DiagCode::StyleInvalidValue);
     assert_eq!(
         diagnostic.message,
-        "`rotate: <expression>`: dynamic CSS must use literal strings, typed templates, or finite conditional branches; template holes must be numbers, lengths, angles, or colors; use rotate: `${ctx.seconds * 90}deg`"
+        "`rotate: <expression>`: dynamic CSS must use literal strings, typed templates, or finite conditional branches; template holes must be numbers, lengths, angles, or colors; use rotate: `${time.seconds * 90}deg`"
     );
     assert_eq!(
         (
@@ -303,8 +302,8 @@ fn transform_structure_diagnostic_rejects_text_injection_at_the_template() {
     );
     // Branch on complete CSS values, or keep the choice numeric inside the hole.
     for replacement in [
-        "ctx.localFrame < 30 ? '0deg' : '45deg'",
-        "`${ctx.localFrame < 30 ? 0 : 45}deg`",
+        "frame < 30 ? '0deg' : '45deg'",
+        "`${frame < 30 ? 0 : 45}deg`",
     ] {
         assert!(compile_motion(&source(&format!("style={{{{rotate: {replacement}}}}}"))).is_ok());
     }

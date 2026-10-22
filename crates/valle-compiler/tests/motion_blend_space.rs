@@ -22,7 +22,7 @@ fn blend_space_survives_lowering_and_geometry_reuse_without_becoming_inherited()
         (
             LINEAR_LIGHT_BLEND.replace(
                 "mixBlendSpace: \"linear\"",
-                "mixBlendSpace: useTime().seconds < 0.5 ? \"linear\" : \"srgb\"",
+                "mixBlendSpace: useCurrentTime().seconds < 0.5 ? \"linear\" : \"srgb\"",
             ),
             [
                 BlendSpace::Srgb,
@@ -87,8 +87,8 @@ fn invalid_spaces_are_rejected_before_frame_evaluation() {
         "\"unknown\"",
         "1",
         "true",
-        "useTime().seconds < 0.5 ? \"srgb\" : \"unknown\"",
-        "`${useTime().seconds}`",
+        "useCurrentTime().seconds < 0.5 ? \"srgb\" : \"unknown\"",
+        "`${useCurrentTime().seconds}`",
     ] {
         let source = LINEAR_LIGHT_BLEND.replace(
             "mixBlendSpace: \"linear\"",

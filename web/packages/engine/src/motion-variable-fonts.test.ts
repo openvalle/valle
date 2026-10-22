@@ -31,15 +31,15 @@ test("variable Noto axes produce continuous ink and identical random-access fram
   const cjk=new Uint8Array(await readFile(join(root,"assets/fonts/noto/NotoSansCJKsc-Variable.otf")));
   const fontBytes=new Map([font,cjk].map(bytes=>[`sha256:${new Bun.CryptoHasher("sha256").update(bytes).digest("hex")}`,bytes]));
   const variableFontWeight=await readFile(join(root,"crates/valle-compiler/tests/fixtures/motion/composition/variable-font-weight.motion.tsx"),"utf8");
-  const exact=variableFontWeight.replace("fps: 30, duration: 2","fps: 16, duration: 1.0625").replace("ctx.progress","ctx.seconds");
+  const exact=variableFontWeight.replace("fps: 30, duration: 2","fps: 16, duration: 1.0625").replace("time.progress","time.seconds");
   const frames=[...Array.from({length:17},(_,i)=>i),16,0,8,16];
   const cases=[
     {name:"CJK",source:exact.replace(">WEIGHT</Text>",">中文 AB</Text>"),frames:[0,8,16,8],reference:"",monotonic:true},
     {name:"variable-font-weight",source:variableFontWeight,frames:[...Array.from({length:9},(_,i)=>i*7),30,0,56,30],reference:"",monotonic:true},
     {name:"weight",source:exact,frames,reference:"",monotonic:true},
-    {name:"axis",source:exact.replace("fontWeight: 100 + ctx.seconds * 800",'fontVariationSettings: `"wght" ${100 + ctx.seconds * 800}`'),frames,reference:"weight",monotonic:true},
-    {name:"span",source:exact.replace("fontWeight: 100 + ctx.seconds * 800","fontWeight: 400").replace(">WEIGHT</Text>",'><Span style={{fontVariationSettings:`"wght" ${100 + ctx.seconds * 800}`}}>WEIGHT</Span></Text>'),frames:[0,8,16,8],reference:"weight",monotonic:true},
-    {name:"width",source:exact.replace("fontWeight: 100 + ctx.seconds * 800",'fontVariationSettings: `"wght" 500, "wdth" ${62.5 + ctx.seconds * 37.5}`'),frames:[0,4,8,12,16,0],reference:"",monotonic:false},
+    {name:"axis",source:exact.replace("fontWeight: 100 + time.seconds * 800",'fontVariationSettings: `"wght" ${100 + time.seconds * 800}`'),frames,reference:"weight",monotonic:true},
+    {name:"span",source:exact.replace("fontWeight: 100 + time.seconds * 800","fontWeight: 400").replace(">WEIGHT</Text>",'><Span style={{fontVariationSettings:`"wght" ${100 + time.seconds * 800}`}}>WEIGHT</Span></Text>'),frames:[0,8,16,8],reference:"weight",monotonic:true},
+    {name:"width",source:exact.replace("fontWeight: 100 + time.seconds * 800",'fontVariationSettings: `"wght" 500, "wdth" ${62.5 + time.seconds * 37.5}`'),frames:[0,4,8,12,16,0],reference:"",monotonic:false},
   ];
   const measuredWidths:number[]=[];
   for (const width of [62.5,75,100]) {

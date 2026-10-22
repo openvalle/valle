@@ -51,13 +51,13 @@ const CY = G.centers.map((c) => c[1] + OFFSET_Y);
 const BEND = CANVAS_H * 0.055 * 0.6;
 const LABEL_FONT = CANVAS_H * 0.024;
 
-export default function ArchitectureDiagram() { const ctx = useTime();
-  const sx = ctx.viewport.width / CANVAS_W;
-  const sy = ctx.viewport.height / CANVAS_H;
+export default function ArchitectureDiagram() { const time = useCurrentTime(); const comp = useComposition();
+  const sx = comp.width / CANVAS_W;
+  const sy = comp.height / CANVAS_H;
 
   // Stagger entrance by the computed layer index.
   const appear = (i) =>
-    interpolate(ctx.progress, [G.ranks[i] * 0.12, G.ranks[i] * 0.12 + 0.4], [0, 1]);
+    interpolate(time.progress, [G.ranks[i] * 0.12, G.ranks[i] * 0.12 + 0.4], [0, 1]);
 
   return (
     <Scene className="h-full w-full bg-slate-950">

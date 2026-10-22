@@ -18,8 +18,8 @@ function CardBar({ index, accent, progress }) {
   return <View key="bar" className="absolute" style={{ left: X.band(index)[0], top, width: X.bandwidth(), height: 525 - top, backgroundColor: accent, opacity: 0.7 + index * 0.08 }} />;
 }
 
-function ChartCard({ accent, title }) { const ctx = useTime();
-  const p = ctx.progress;
+function ChartCard({ accent, title }) { const time = useCurrentTime();
+  const p = time.progress;
   return (
     <View key="card" className="absolute" style={{ borderStyle: "solid", width: 810, height: 660, borderRadius: 42, backgroundColor: "#0f172acc", borderWidth: 1.5, borderColor: accent, displacement: displacement(19, point(0.008, 0.006), 4.5 + p * 3, { octaves: 2, mode: "fractal" }) }}>
       <Text key="title" style={{ marginLeft: 51, marginTop: 42, fontFamily: "asset://brandFont", fontSize: 42, color: accent }}>{title}</Text>
@@ -28,8 +28,8 @@ function ChartCard({ accent, title }) { const ctx = useTime();
   );
 }
 
-export default function ChartIntegration() { const ctx = useTime();
-  const p = ctx.progress;
+export default function ChartIntegration() { const time = useCurrentTime();
+  const p = time.progress;
   const first = bounds("primary/card");
   const second = bounds("secondary/card");
   const ax = first.x + first.width * 0.5;

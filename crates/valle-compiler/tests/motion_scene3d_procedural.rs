@@ -7,10 +7,10 @@ const EXTRUDED_TEXT: &str = include_str!("fixtures/motion/composition/extruded-t
 
 const SOURCE: &str = r##"
 export const composition={width:128,height:128,duration:1};
-export default function T(){ const ctx = useTime();return <Scene style={{width:128,height:128}}>
+export default function T(){ const time = useCurrentTime();return <Scene style={{width:128,height:128}}>
   <Scene3D key="s" camera={{position:[0,0,5],target:[0,0,0]}} style={{width:128,height:128}}>
     <Mesh key="shape" geometry={extrude(path("M -1 -1 L 1 -1 L 1 1 L -1 1 Z"),{depth:0.8,bevel:0.1})}
-      material={{type:"lambert",color:"#ffffff"}} rotateY={ctx.seconds*30}/>
+      material={{type:"lambert",color:"#ffffff"}} rotateY={time.seconds*30}/>
     <AmbientLight intensity={0.3}/>
   </Scene3D>
 </Scene>}
@@ -53,7 +53,7 @@ fn extrude_is_prepared_geometry_with_no_model_asset() {
         SOURCE.replace("depth:0.8,bevel:0.1", "depth:0.8,bevel:\"bad\""),
         SOURCE.replace("depth:0.8,bevel:0.1", "depth:0.8,bevel:0.1,unknown:1"),
         SOURCE.replace("M -1 -1 L 1 -1 L 1 1 L -1 1 Z", "M -1 -1 L 1 -1 L 1 1"),
-        SOURCE.replace("depth:0.8,bevel:0.1", "depth:ctx.seconds,bevel:0.1"),
+        SOURCE.replace("depth:0.8,bevel:0.1", "depth:time.seconds,bevel:0.1"),
     ] {
         assert!(compile_motion(&bad).is_err(), "{bad}");
     }
@@ -143,12 +143,12 @@ fn lathe_and_tube_reject_dynamic_or_invalid_geometry() {
     for geometry in [
         "lathe(path(\"M 1 1 L 1 -1\"),{segments:2})",
         "lathe(path(\"M 1 1 L 1 -1\"),{segments:8.5})",
-        "lathe(path(\"M 1 1 L 1 -1\"),{segments:ctx.seconds})",
+        "lathe(path(\"M 1 1 L 1 -1\"),{segments:time.seconds})",
         "lathe(path(\"M 1 1 L 1 -1\"),{radius:1})",
         "lathe(path(\"M -1 1 L 1 -1\"))",
         "tube(path(\"M -1 0 L 1 0\"),{radius:0})",
         "tube(path(\"M -1 0 L 1 0\"),{radius:0.2,sides:2})",
-        "tube(path(\"M -1 0 L 1 0\"),{radius:0.2,sides:ctx.seconds})",
+        "tube(path(\"M -1 0 L 1 0\"),{radius:0.2,sides:time.seconds})",
         "tube(path(\"M -1 0 L 1 0\"),{radius:0.2,unknown:1})",
     ] {
         let source = SOURCE.replace(

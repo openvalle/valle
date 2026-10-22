@@ -72,7 +72,7 @@ fn every_math_primitive_and_dynamic_noise_reaches_the_shared_evaluator() {
 export const controls = ({ props: {
   x: number({ default: -1.25 }), y: number({ default: 0.75 }), period: number({ default: 5 })
 }});
-export default function P(props) { const ctx = useTime();
+export default function P(props) {
   return <Scene>
     <View key="sin" style={{ opacity: sin(props.y) }} />
     <View key="cos" style={{ opacity: cos(props.y) }} />
@@ -143,7 +143,7 @@ fn ecmascript_round_keeps_negative_zero_on_static_and_dynamic_paths() {
         r#"export default function P(){return <View key="v" style={{opacity:round(-0.5)}}/>;}"#;
     let dynamic_source = r#"
 export const controls=({props:{x:number({default:-0.5})}});
-export default function P(props){ const ctx = useTime();return <View key="v" style={{opacity:round(props.x)}}/>;}
+export default function P(props){ return <View key="v" style={{opacity:round(props.x)}}/>;}
 "#;
     let (static_artifact, static_values) = evaluate(static_source, BTreeMap::new());
     let (dynamic_artifact, dynamic_values) = evaluate(dynamic_source, BTreeMap::new());
@@ -165,7 +165,7 @@ export default function P(props){ const ctx = useTime();return <View key="v" sty
 fn formatting_is_locale_free_bounded_and_composes_with_text() {
     let source = r##"
 export const controls=({props:{n:number({default:1234.5}),p:number({default:.125}),i:number({default:-7})}});
-export default function P(props){ const ctx = useTime();return <Scene>
+export default function P(props){ return <Scene>
   <Text key="number">{formatNumber(props.n,{decimals:2,grouping:true})}</Text>
   <Text key="percent">{formatPercent(props.p,{decimals:1})}</Text>
   <Text key="pad">{padNumber(props.i,{width:3})}</Text>
@@ -188,11 +188,11 @@ export default function P(props){ const ctx = useTime();return <Scene>
 fn bad_domains_options_and_dynamic_seeds_fail_closed() {
     let cases = [
         (
-            r#"export default function P(){ const ctx = useTime();return <View style={{opacity:mod(ctx.localFrame,0)}}/>;}"#,
+            r#"export default function P(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <View style={{opacity:mod(frame,0)}}/>;}"#,
             "period",
         ),
         (
-            r#"export default function P(){ const ctx = useTime();return <Text>{formatNumber(ctx.localFrame,{decimals:13})}</Text>;}"#,
+            r#"export default function P(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Text>{formatNumber(frame,{decimals:13})}</Text>;}"#,
             "0..=12",
         ),
         (
@@ -200,11 +200,11 @@ fn bad_domains_options_and_dynamic_seeds_fail_closed() {
             "0..=12",
         ),
         (
-            r#"export default function P(){ const ctx = useTime();return <Text>{padNumber(ctx.localFrame,{width:0})}</Text>;}"#,
+            r#"export default function P(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Text>{padNumber(frame,{width:0})}</Text>;}"#,
             "1..=64",
         ),
         (
-            r#"export default function P(){ const ctx = useTime();return <View style={{opacity:noise1d(ctx.localFrame,.5)}}/>;}"#,
+            r#"export default function P(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <View style={{opacity:noise1d(frame,.5)}}/>;}"#,
             "seed",
         ),
     ];

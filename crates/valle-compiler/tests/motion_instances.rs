@@ -492,8 +492,8 @@ fn component_instance_item_supports_props_paths_and_local_destructuring() {
     let source = component_card_rows(4);
     let props_path = source
         .replace(
-            "function Card({ item }) { const ctx = useTime();",
-            "function Card(props) { const ctx = useTime();",
+            "function Card({ item }) { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);",
+            "function Card(props) { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);",
         )
         .replace(
             "const height = item.height;",
@@ -555,7 +555,7 @@ fn component_instance_item_supports_props_paths_and_local_destructuring() {
 #[test]
 fn nested_component_instance_forwards_item_and_keeps_nested_keys() {
     let source = component_card_rows(4)
-        .replace("function Card({ item }) { const ctx = useTime();", "function CardBody({ item }) { const ctx = useTime();")
+        .replace("function Card({ item }) { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);", "function CardBody({ item }) { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);")
         .replace(
             "export default function Cards() {",
             "function Card({ item }) { return <CardBody key=\"inner\" item={item} />; }\n\nexport default function Cards() {",
@@ -845,8 +845,8 @@ fn layout_instance_classes_match_expanded_static_and_row_conditional_styles() {
             "<Group className=\"relative\" style={{ width: 106, height: 16 }}>",
         )
         .replace(
-            "<Text visible={ctx.localFrame < card.height - 6}",
-            "<Text className={card.height > 36 ? \"font-bold\" : \"font-normal\"} visible={ctx.localFrame < card.height - 6}",
+            "<Text visible={frame < card.height - 6}",
+            "<Text className={card.height > 36 ? \"font-bold\" : \"font-normal\"} visible={frame < card.height - 6}",
         );
     let compact = compile_motion(&source).unwrap().artifact;
     let expanded = compile_motion(&source.replace("key={card.id}", "key={`${card.id}`}"))
@@ -1167,8 +1167,8 @@ fn static_path_template_shares_geometry_and_keeps_row_values_in_columns() {
 #[test]
 fn static_path_template_carries_row_and_time_opacity() {
     let source = path_grid(8).replace(
-        "translate: point(dot.x + ctx.seconds * 3, dot.y)",
-        "translate: point(dot.x + ctx.seconds * 3, dot.y), opacity: 0.4 + dot.delay * 0.4 + ctx.progress * 0.1",
+        "translate: point(dot.x + time.seconds * 3, dot.y)",
+        "translate: point(dot.x + time.seconds * 3, dot.y), opacity: 0.4 + dot.delay * 0.4 + time.progress * 0.1",
     );
     let compact = compile_motion(&source).unwrap().artifact;
     assert_eq!(compact.instance_groups.len(), 1);
@@ -1217,8 +1217,8 @@ fn static_path_template_carries_row_and_time_opacity() {
 #[test]
 fn static_path_template_rotates_each_row_around_explicit_zero_origin() {
     let source = path_grid(8).replace(
-        "translate: point(dot.x + ctx.seconds * 3, dot.y)",
-        "translate: point(dot.x + ctx.seconds * 3, dot.y), rotate: `${dot.delay * 180 + ctx.seconds * 30}deg`, transformOrigin: point(0, 0)",
+        "translate: point(dot.x + time.seconds * 3, dot.y)",
+        "translate: point(dot.x + time.seconds * 3, dot.y), rotate: `${dot.delay * 180 + time.seconds * 30}deg`, transformOrigin: point(0, 0)",
     );
     let compact = compile_motion(&source).unwrap().artifact;
     assert_eq!(compact.instance_groups.len(), 1);
@@ -1282,8 +1282,8 @@ fn static_path_template_rotates_each_row_around_explicit_zero_origin() {
 #[test]
 fn static_path_template_scales_each_row_around_explicit_zero_origin() {
     let source = path_grid(8).replace(
-        "translate: point(dot.x + ctx.seconds * 3, dot.y)",
-        "translate: point(dot.x + ctx.seconds * 3, dot.y), scale: point(0.6 + dot.delay * 0.4, 0.7 + ctx.progress * 0.2), transformOrigin: point(0, 0)",
+        "translate: point(dot.x + time.seconds * 3, dot.y)",
+        "translate: point(dot.x + time.seconds * 3, dot.y), scale: point(0.6 + dot.delay * 0.4, 0.7 + time.progress * 0.2), transformOrigin: point(0, 0)",
     );
     let large_source = source.replace("const COLS = 8;", "const COLS = 64;");
     let compact = compile_motion(&source).unwrap().artifact;
@@ -1346,7 +1346,7 @@ fn static_path_template_scales_each_row_around_explicit_zero_origin() {
             .is_empty()
     );
     let zero = source.replace(
-        "scale: point(0.6 + dot.delay * 0.4, 0.7 + ctx.progress * 0.2)",
+        "scale: point(0.6 + dot.delay * 0.4, 0.7 + time.progress * 0.2)",
         "scale: 0",
     );
     assert!(
@@ -1372,8 +1372,8 @@ fn static_path_template_scales_each_row_around_explicit_zero_origin() {
 #[test]
 fn static_path_template_skews_each_row_around_explicit_zero_origin() {
     let source = path_grid(8).replace(
-        "translate: point(dot.x + ctx.seconds * 3, dot.y)",
-        "translate: point(dot.x + ctx.seconds * 3, dot.y), transform: `skewX(${dot.delay * 40 + ctx.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0)",
+        "translate: point(dot.x + time.seconds * 3, dot.y)",
+        "translate: point(dot.x + time.seconds * 3, dot.y), transform: `skewX(${dot.delay * 40 + time.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0)",
     );
     let large_source = source.replace("const COLS = 8;", "const COLS = 64;");
     let compact = compile_motion(&source).unwrap().artifact;
@@ -1390,7 +1390,7 @@ fn static_path_template_skews_each_row_around_explicit_zero_origin() {
     large.validate().unwrap();
 
     let static_skew = source.replace(
-        "`skewX(${dot.delay * 40 + ctx.seconds * 10 - 20}deg)`",
+        "`skewX(${dot.delay * 40 + time.seconds * 10 - 20}deg)`",
         "\"skewX(-15deg)\"",
     );
     assert_eq!(
@@ -1433,9 +1433,9 @@ fn static_path_template_skews_each_row_around_explicit_zero_origin() {
 fn static_path_template_folds_rotate_and_scale_of_its_transform_list() {
     let row = |transform: &str| {
         path_grid(8).replace(
-            "translate: point(dot.x + ctx.seconds * 3, dot.y)",
+            "translate: point(dot.x + time.seconds * 3, dot.y)",
             &format!(
-                "translate: point(dot.x + ctx.seconds * 3, dot.y), transform: {transform}, transformOrigin: point(0, 0)"
+                "translate: point(dot.x + time.seconds * 3, dot.y), transform: {transform}, transformOrigin: point(0, 0)"
             ),
         )
     };
@@ -1508,20 +1508,20 @@ fn static_path_scale_rotation_matrices_match_expanded_paths() {
         }
     }
     let source = path_grid(8).replace(
-        "translate: point(dot.x + ctx.seconds * 3, dot.y)",
-        "translate: point(dot.x + ctx.seconds * 3, dot.y), scale: point(0.6 - dot.delay, 0.7 + ctx.progress * 0.2), rotate: `${dot.delay * 180 + ctx.seconds * 30 - 40}deg`, transform: `skewX(${dot.delay * 40 + ctx.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0), opacity: 0.4 + dot.delay * 0.4 + ctx.progress * 0.1",
+        "translate: point(dot.x + time.seconds * 3, dot.y)",
+        "translate: point(dot.x + time.seconds * 3, dot.y), scale: point(0.6 - dot.delay, 0.7 + time.progress * 0.2), rotate: `${dot.delay * 180 + time.seconds * 30 - 40}deg`, transform: `skewX(${dot.delay * 40 + time.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0), opacity: 0.4 + dot.delay * 0.4 + time.progress * 0.1",
     );
     let zero_row = source.replace(
-        "scale: point(0.6 - dot.delay, 0.7 + ctx.progress * 0.2)",
+        "scale: point(0.6 - dot.delay, 0.7 + time.progress * 0.2)",
         "scale: dot.delay === 0.5 ? 0 : 1",
     );
     let listed = path_grid(8).replace(
-        "translate: point(dot.x + ctx.seconds * 3, dot.y)",
-        "translate: point(dot.x + ctx.seconds * 3, dot.y), transform: `rotate(${dot.delay * 180 + ctx.seconds * 30 - 40}deg) scale(${0.6 - dot.delay}, ${0.7 + ctx.progress * 0.2}) skewX(${dot.delay * 40 + ctx.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0), opacity: 0.4 + dot.delay * 0.4 + ctx.progress * 0.1",
+        "translate: point(dot.x + time.seconds * 3, dot.y)",
+        "translate: point(dot.x + time.seconds * 3, dot.y), transform: `rotate(${dot.delay * 180 + time.seconds * 30 - 40}deg) scale(${0.6 - dot.delay}, ${0.7 + time.progress * 0.2}) skewX(${dot.delay * 40 + time.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0), opacity: 0.4 + dot.delay * 0.4 + time.progress * 0.1",
     );
     let skew_only = path_grid(8).replace(
-        "translate: point(dot.x + ctx.seconds * 3, dot.y)",
-        "translate: point(dot.x + ctx.seconds * 3, dot.y), transform: `skewX(${dot.delay * 40 + ctx.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0)",
+        "translate: point(dot.x + time.seconds * 3, dot.y)",
+        "translate: point(dot.x + time.seconds * 3, dot.y), transform: `skewX(${dot.delay * 40 + time.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0)",
     );
     let stroked = source.replace(
         "fill={dot.color}",
@@ -1594,8 +1594,8 @@ fn static_path_template_shares_same_color_dynamic_stroke() {
             "fill={dot.color} stroke={dot.color} strokeWidth={1.5}",
         )
         .replace(
-            "translate: point(dot.x + ctx.seconds * 3, dot.y)",
-            "translate: point(dot.x + ctx.seconds * 3, dot.y), opacity: 0.4 + dot.delay * 0.4",
+            "translate: point(dot.x + time.seconds * 3, dot.y)",
+            "translate: point(dot.x + time.seconds * 3, dot.y), opacity: 0.4 + dot.delay * 0.4",
         );
     let large_source = source.replace("const COLS = 8;", "const COLS = 64;");
     let compact = compile_motion(&source).unwrap().artifact;
@@ -1664,7 +1664,7 @@ fn static_path_template_shares_same_color_dynamic_stroke() {
     }
     let dynamic = source.replace(
         "strokeWidth={1.5}",
-        "strokeWidth={0.25 + dot.delay + ctx.progress}",
+        "strokeWidth={0.25 + dot.delay + time.progress}",
     );
     let dynamic_artifact = compile_motion(&dynamic).unwrap().artifact;
     let dynamic_large = compile_motion(&dynamic.replace("const COLS = 8;", "const COLS = 64;"))
@@ -1716,7 +1716,7 @@ fn static_path_template_shares_same_color_dynamic_stroke() {
     );
     let dynamic_zero = source.replace(
         "strokeWidth={1.5}",
-        "strokeWidth={dot.delay + ctx.progress}",
+        "strokeWidth={dot.delay + time.progress}",
     );
     let zero_artifact = compile_motion(&dynamic_zero).unwrap().artifact;
     assert_eq!(zero_artifact.instance_groups.len(), 1);
@@ -1759,7 +1759,7 @@ fn static_path_template_keeps_independent_row_and_time_stroke_colors() {
 
     let source = path_grid(8).replace(
         "fill={dot.color}",
-        "fill={dot.color} stroke={dot.delay < ctx.progress ? '#ff0000' : '#00ff00'} strokeWidth={0.25 + dot.delay + ctx.progress}",
+        "fill={dot.color} stroke={dot.delay < time.progress ? '#ff0000' : '#00ff00'} strokeWidth={0.25 + dot.delay + time.progress}",
     );
     let compact = compile_motion(&source).unwrap().artifact;
     let expanded = compile_motion(&source.replace("<Path ", "<path "))
@@ -1816,7 +1816,7 @@ fn stroke_only_path_instances_share_caps_joins_and_dashes_with_dynamic_phase() {
 
     let source = path_grid(8).replace(
         "fill={dot.color}",
-        "fill=\"none\" stroke={dot.color} strokeWidth={1.5} strokeLinecap=\"round\" strokeLinejoin=\"bevel\" strokeMiterlimit=\"6\" strokeDasharray=\"3 2\" strokeDashoffset={dot.delay * 5 + ctx.progress}",
+        "fill=\"none\" stroke={dot.color} strokeWidth={1.5} strokeLinecap=\"round\" strokeLinejoin=\"bevel\" strokeMiterlimit=\"6\" strokeDasharray=\"3 2\" strokeDashoffset={dot.delay * 5 + time.progress}",
     );
     let compact = compile_motion(&source).unwrap().artifact;
     let expanded = compile_motion(&source.replace("<Path ", "<path "))
@@ -2306,12 +2306,12 @@ fn template_style_values_match_expanded_rows() {
 }
 
 #[test]
-fn index_and_count_bind_to_each_instance_row() {
+fn the_index_binds_to_each_instance_row() {
     let source = grid(8)
         .replace("CELLS.map((cell) =>", "CELLS.map((cell, i) =>")
         .replace(
-            "clamp(ctx.seconds * 2 - cell.d, 0, 1)",
-            "clamp(ctx.seconds * 2 - cell.d + i / ctx.instance.count, 0, 1)",
+            "clamp(time.seconds * 2 - cell.d, 0, 1)",
+            "clamp(time.seconds * 2 - cell.d + i / CELLS.length, 0, 1)",
         );
     let instanced = compile_motion(&source).unwrap().artifact;
     let group = &instanced.instance_groups[0];
@@ -2321,16 +2321,10 @@ fn index_and_count_bind_to_each_instance_row() {
             .iter()
             .any(|expr| matches!(expr, valle_motion::Expr::InstanceIndex))
     );
-    assert!(
-        group
-            .exprs
-            .iter()
-            .any(|expr| matches!(expr, valle_motion::Expr::InstanceCount))
-    );
     let expanded = compile_motion(
         &source
             .replace("className=\"absolute\"", "className=\"absolute \"")
-            .replace("ctx.instance.count", "64"),
+            .replace("CELLS.length", "64"),
     )
     .unwrap()
     .artifact;

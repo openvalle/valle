@@ -719,7 +719,7 @@ fn bare_specifier_message(specifier: &str) -> String {
         ),
         "remotion" | "@remotion" => format!(
             "Motion is not Remotion and has no `{specifier}`; its primitives and hooks come from \
-             \"valle\", and `useTime().localFrame` is `useCurrentFrame()`"
+             \"valle\", and `useCurrentFrame()` is written in seconds with `useCurrentTime()`"
         ),
         _ => format!(
             "module specifier `{specifier}` is not relative; npm, URL, absolute and host \

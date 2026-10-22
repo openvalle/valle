@@ -4,6 +4,7 @@
 //! expression tree and its floating-point operation order, so a threshold at a frame boundary
 //! does not move when the analysis is used for activation.
 
+use crate::time::CLOCK_TOLERANCE_CAP;
 use crate::{CompareOp, ContextInput, Expr, ExprId, MotionContext, MotionValue};
 
 const MAX_TIME_FUNCTION_NODES: usize = 64;
@@ -240,11 +241,31 @@ pub fn numeric_range(
                     return ValueRange::new(-1.0, 1.0);
                 }
                 let r = child(*input)?;
+                // Every rounding is non-decreasing, so it maps the bounds to the bounds.
                 match op {
                     Floor => ValueRange::new(r.lower.floor(), r.upper.floor()),
                     Ceil => ValueRange::new(r.lower.ceil(), r.upper.ceil()),
-                    Round => ValueRange::new(r.lower.round(), r.upper.round()),
+                    Round => ValueRange::new(
+                        crate::builtin::ecma_round(r.lower),
+                        crate::builtin::ecma_round(r.upper),
+                    ),
                     Trunc => ValueRange::new(r.lower.trunc(), r.upper.trunc()),
+                    ClockFloor => ValueRange::new(
+                        crate::time::clock_floor(r.lower),
+                        crate::time::clock_floor(r.upper),
+                    ),
+                    ClockCeil => ValueRange::new(
+                        crate::time::clock_ceil(r.lower),
+                        crate::time::clock_ceil(r.upper),
+                    ),
+                    ClockRound => ValueRange::new(
+                        crate::time::clock_round(r.lower),
+                        crate::time::clock_round(r.upper),
+                    ),
+                    ClockTrunc => ValueRange::new(
+                        crate::time::clock_trunc(r.lower),
+                        crate::time::clock_trunc(r.upper),
+                    ),
                     Sqrt if r.lower >= 0.0 => ValueRange::outward(
                         valle_draw::math::sqrt(r.lower),
                         valle_draw::math::sqrt(r.upper),
@@ -405,7 +426,15 @@ impl TimeFunction {
             return None;
         }
         let range = self.range_on(start, end)?;
-        match op {
+        // A clock comparison differs from the exact one only within roundoff of the threshold,
+        // at most the tolerance cap: decide it only outside that band.
+        if op.is_clock()
+            && range.lower <= threshold + CLOCK_TOLERANCE_CAP
+            && range.upper >= threshold - CLOCK_TOLERANCE_CAP
+        {
+            return None;
+        }
+        match op.exact() {
             CompareOp::Eq if range.upper < threshold || range.lower > threshold => Some(false),
             CompareOp::Eq if range.lower == threshold && range.upper == threshold => Some(true),
             CompareOp::NotEq if range.upper < threshold || range.lower > threshold => Some(true),
@@ -598,6 +627,15 @@ mod tests {
         );
         assert_eq!(
             function.compare_on_interval(0.2, 0.2, CompareOp::Gte, 0.0),
+            None
+        );
+        // A clock comparison is decided only away from roundoff of its threshold.
+        assert_eq!(
+            function.compare_on_interval(0.3, 0.4, CompareOp::ClockGte, 0.0),
+            Some(true)
+        );
+        assert_eq!(
+            function.compare_on_interval(0.0, 0.2, CompareOp::ClockLt, 0.0),
             None
         );
     }

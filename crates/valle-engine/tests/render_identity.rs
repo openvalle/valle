@@ -238,7 +238,7 @@ export const controls = ({
   props: { opacity: number({ default: 1, min: 0, max: 1 }) },
   assets: { logo: asset({ kind: "image", required: true }) },
 });
-export default function Title(props) { const ctx = useTime();
+export default function Title(props) {
   return <View style={{ width: 1920, height: 1080, opacity: props.opacity }} />;
 }
 "#,
@@ -264,7 +264,7 @@ export const controls = ({
   },
   assets: { footage: asset({ kind: "video", required: true }) },
 });
-export default function HeldVideo(props) { const ctx = useTime();
+export default function HeldVideo(props) {
   return (
     <View style={{ width: 1920, height: 1080 }}>
       <Video src="asset://footage" sourceStart={0.25} speed={0.75} style={{ display: "block", width: 1920, height: 1080, opacity: props.opacity }} />
@@ -1604,6 +1604,54 @@ fn motion_artifact_payload_is_fail_closed() {
     assert!(report.contains(EngineOpenDiagnosticCode::MotionArtifactPayloadMismatch));
 }
 
+/// A package written before compositions declared `loop` does not open: the field has no default.
+#[test]
+fn a_package_from_before_the_loop_field_does_not_open() {
+    let artifact = motion_artifact();
+    let timeline = timeline(&motion_document("component:title"));
+    let manifest = manifest(json!({
+        "component:title": motion_entry(&artifact),
+        "asset:logo": image_entry()
+    }));
+    let bindings = ResourceBindings::new()
+        .with_binding(
+            "component:title",
+            motion_binding(&manifest, "component:title", artifact, 2),
+        )
+        .unwrap()
+        .with_binding("asset:logo", binding(&manifest, "asset:logo", None, 3))
+        .unwrap();
+    let capabilities = Capabilities::new().with_artifact_abi("valle.motion/artifact@1");
+    let mut bundle: Value =
+        serde_json::from_str(&canonical_verified_binding_bundle(&bindings, &capabilities).unwrap())
+            .unwrap();
+    fn forget_loop(value: &mut Value) -> usize {
+        match value {
+            Value::Object(object) => {
+                let here = object.contains_key("duration") && object.remove("loop").is_some();
+                usize::from(here) + object.values_mut().map(forget_loop).sum::<usize>()
+            }
+            Value::Array(items) => items.iter_mut().map(forget_loop).sum(),
+            _ => 0,
+        }
+    }
+    assert_eq!(forget_loop(&mut bundle), 1, "one composition");
+
+    let timeline_json = String::from_utf8(canonical_bytes(&timeline).unwrap()).unwrap();
+    let manifest_json = std::str::from_utf8(manifest.canonical_bytes()).unwrap();
+    let bundle_json = serde_json::to_string(&bundle).unwrap();
+    let profile_json = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).unwrap();
+    let files = fixed_package_files(&timeline_json, manifest_json, &bundle_json, &profile_json);
+    let package_manifest = canonical_fixed_package_manifest(&files).unwrap();
+    let error = open_verified_fixed_package(&package_manifest, &files)
+        .err()
+        .expect("a package without `loop` must not open");
+    assert!(
+        error.to_string().contains("missing field `loop`"),
+        "{error}"
+    );
+}
+
 #[test]
 fn verified_transitive_dependencies_enter_render_id() {
     let timeline = timeline(&image_document("asset:hero"));
@@ -2776,8 +2824,8 @@ fn motion_backdrop_fractional_projection_keeps_canonical_sample_bounds() {
         valle_compiler::motion::compile_motion(
             r##"
 export const composition = { width: 1920, height: 1080, duration: 10 };
-export default function Demo() { const ctx = useTime();
-  const t = ctx.localFrame / 300;
+export default function Demo() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 4);
+  const t = frame / 300;
   return <Scene style={{ width: 1920, height: 1080, backgroundColor: "#0891b2" }}>
     <View style={{ position: "absolute", left: 90, top: 190, width: 550, height: 350,
       backgroundColor: "#ffffff22", backdropFilter: `blur(${4 + 4 * sin(t * 6.283185307)}px)` }} />
@@ -3175,9 +3223,9 @@ fn overlay_host_time_and_viewport_are_exact_in_any_request_order() {
     for hold in ["once", "loop", "stretch"] {
         let artifact = Arc::new(valle_compiler::motion::compile_motion(&format!(r#"
 export const composition={{width:64,height:32,fps:4,duration:2}};
-export const role=overlay({{intro:seconds(0.5),outro:seconds(0.5),hold:"{hold}"}});
-export default function Main() {{ const ctx = useTime();return <Scene><View key="bar" className="absolute"
- style={{{{left:ctx.seconds*12,top:ctx.host.progress*20,width:ctx.viewport.width/2,height:ctx.viewport.height,backgroundColor:"white"}}}}/></Scene>;}}
+export const role=overlay({{intro:0.5,outro:0.5,hold:"{hold}"}});
+export default function Main() {{ const time = useCurrentTime(); const comp = useComposition(); const frame = Math.floor(time.seconds * 4);return <Scene><View key="bar" className="absolute"
+ style={{{{left:time.seconds*12,top:time.clipProgress*20,width:comp.width/2,height:comp.height,backgroundColor:"white"}}}}/></Scene>;}}
 "#)).unwrap().artifact);
         let resources = manifest(json!({"component:title":motion_entry(&artifact)}));
         let bindings = ResourceBindings::new()

@@ -10,14 +10,19 @@ impl<'s> Compiler<'s> {
         arguments: &[Argument<'_>],
         span: Span,
     ) -> Option<ExprId> {
-        let [argument] = arguments else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "rangeSelector({ start, end, offset?, softness?, shape? }) takes one object",
-            );
+        const FORM: &str = "rangeSelector(unit, { start, end, offset?, softness?, shape? }) \
+             takes the unit of the perUnit function and the options";
+        let [unit, argument] = arguments else {
+            self.illegal(DiagCode::GrammarForbidden, span, FORM);
             return None;
         };
+        if !unit.as_expression().is_some_and(|unit| {
+            self.time_path(unit)
+                .is_some_and(|unit| unit.hook == super::time::TimeHook::Unit && unit.is_object())
+        }) {
+            self.illegal(DiagCode::GrammarForbidden, unit.span(), FORM);
+            return None;
+        }
         let Some(Expression::ObjectExpression(options)) =
             argument.as_expression().map(strip_parens)
         else {
@@ -136,32 +141,31 @@ impl<'s> Compiler<'s> {
         ))
     }
 
-    /// Freeze a component-local frame clock over one compile-time interval.
+    /// Hold a time over one compile-time interval, in seconds.
     ///
-    /// This is authoring sugar for
-    /// `frame < from ? frame : frame < to ? from : frame - (to - from)`. It intentionally grows
-    /// no new wire node: the result is composed from the existing compare/select/arithmetic Exprs.
-    pub(super) fn lower_freeze_frame(
+    /// This is authoring sugar for `t < from ? t : t < to ? from : t - (to - from)`. It grows no
+    /// wire node: the result is composed from the existing compare/select/arithmetic Exprs.
+    pub(super) fn lower_freeze_time(
         &mut self,
         arguments: &[Argument<'_>],
         span: Span,
     ) -> Option<ExprId> {
-        let [frame_argument, options_argument] = arguments else {
+        let [time_argument, options_argument] = arguments else {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                "freezeFrame(frame, { from, to }) takes exactly two arguments",
+                "freezeTime(t, { from, to }) takes the time and the interval, in seconds",
             );
             return None;
         };
-        let frame_expression = frame_argument.as_expression()?;
+        let time_expression = time_argument.as_expression()?;
         let Some(Expression::ObjectExpression(options)) =
             options_argument.as_expression().map(strip_parens)
         else {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 options_argument.span(),
-                "freezeFrame's second argument must be an object literal: { from, to }",
+                "freezeTime's second argument must be an object literal: { from, to }",
             );
             return None;
         };
@@ -173,7 +177,7 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     entry.span(),
-                    "freezeFrame options cannot spread",
+                    "freezeTime options cannot spread",
                 );
                 return None;
             };
@@ -181,7 +185,7 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     property.key.span(),
-                    "freezeFrame option names must be static identifiers",
+                    "freezeTime option names must be static identifiers",
                 );
                 return None;
             };
@@ -193,7 +197,7 @@ impl<'s> Compiler<'s> {
                         DiagCode::GrammarForbidden,
                         property.key.span(),
                         format!(
-                            "unknown freezeFrame option `{other}`; only `from` and `to` are admitted"
+                            "unknown freezeTime option `{other}`; only `from` and `to` are admitted"
                         ),
                     );
                     return None;
@@ -203,7 +207,7 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     property.key.span(),
-                    format!("freezeFrame option `{name}` is duplicated"),
+                    format!("freezeTime option `{name}` is duplicated"),
                 );
                 return None;
             }
@@ -211,7 +215,9 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::BuiltinRejected,
                     property.value.span(),
-                    format!("freezeFrame `{name}` must be an integer known at compile time"),
+                    format!(
+                        "freezeTime `{name}` must be a number of seconds known at compile time"
+                    ),
                 );
                 return None;
             };
@@ -222,24 +228,20 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 options_argument.span(),
-                "freezeFrame requires both `from` and `to`",
+                "freezeTime requires both `from` and `to`",
             );
             return None;
         };
-        if from_value.fract() != 0.0
-            || to_value.fract() != 0.0
-            || from_value < 0.0
-            || to_value <= from_value
-        {
+        if !from_value.is_finite() || !to_value.is_finite() || to_value <= from_value {
             self.illegal(
                 DiagCode::BuiltinRejected,
                 options_argument.span(),
-                "freezeFrame needs integer frames with 0 <= from < to",
+                "freezeTime needs finite seconds with from < to",
             );
             return None;
         }
 
-        let frame = self.lower_expr(frame_expression)?;
+        let time = self.lower_expr(time_expression)?;
         let from = self.push(
             Expr::Const {
                 value: MotionValue::Number(from_value),
@@ -258,25 +260,11 @@ impl<'s> Compiler<'s> {
             },
             options_argument.span(),
         );
-        let before = self.push(
-            Expr::Compare {
-                op: CompareOp::Lt,
-                lhs: frame,
-                rhs: from,
-            },
-            span,
-        );
-        let inside = self.push(
-            Expr::Compare {
-                op: CompareOp::Lt,
-                lhs: frame,
-                rhs: to,
-            },
-            span,
-        );
+        let before = self.compare(CompareOp::Lt, time, from, from_span);
+        let inside = self.compare(CompareOp::Lt, time, to, to_span);
         let after = self.push(
             Expr::Sub {
-                lhs: frame,
+                lhs: time,
                 rhs: duration,
             },
             span,
@@ -292,7 +280,7 @@ impl<'s> Compiler<'s> {
         Some(self.push(
             Expr::Select {
                 condition: before,
-                when_true: frame,
+                when_true: time,
                 when_false: held_or_after,
             },
             span,
@@ -307,33 +295,30 @@ impl<'s> Compiler<'s> {
         span: Span,
         staggered: bool,
     ) -> Option<ExprId> {
-        let expected = if staggered { 5 } else { 3 };
-        let name = if staggered {
-            "staggerProgress"
+        let (name, form) = if staggered {
+            ("staggerProgress", "staggerProgress(t, stage, index, gap)")
         } else {
-            "stageProgress"
+            ("stageProgress", "stageProgress(t, stage)")
         };
+        let expected = if staggered { 4 } else { 2 };
         if arguments.len() != expected {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                format!("{name} takes exactly {expected} arguments"),
-            );
-            return None;
-        }
-        let frame_expression = arguments[0].as_expression()?;
-        let fps_expression = arguments[1].as_expression()?;
-        if !self.is_time_fps(fps_expression) {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                fps_expression.span(),
                 format!(
-                    "{name}'s second argument must be `ctx.fps`, the frame rate from `useTime()`; Sequence seconds use the versioned frame × fps.den / fps.num conversion"
+                    "{form} takes {expected} arguments: the time in seconds, such as \
+                     `seconds`, and the stage{}; the frame rate argument is gone",
+                    if staggered {
+                        ", the item index and the gap in seconds"
+                    } else {
+                        ""
+                    }
                 ),
             );
             return None;
         }
-        let stage_expression = arguments[2].as_expression()?;
+        let time_expression = arguments[0].as_expression()?;
+        let stage_expression = arguments[1].as_expression()?;
         let stage_value = self.eval_static(stage_expression).or_else(|| {
             self.illegal(
                 DiagCode::GrammarForbidden,
@@ -364,39 +349,7 @@ impl<'s> Compiler<'s> {
             return None;
         }
 
-        let frame = self.lower_expr(frame_expression)?;
-        let sample = match stage.unit {
-            SequenceUnit::Frames => frame,
-            SequenceUnit::Seconds => {
-                // Keep the authored contract's exact operation order: frame × den / num.
-                let den = self.push(
-                    Expr::Context {
-                        input: ContextInput::FpsDen,
-                    },
-                    fps_expression.span(),
-                );
-                let numerator = self.push(
-                    Expr::Mul {
-                        lhs: frame,
-                        rhs: den,
-                    },
-                    span,
-                );
-                let num = self.push(
-                    Expr::Context {
-                        input: ContextInput::FpsNum,
-                    },
-                    fps_expression.span(),
-                );
-                self.push(
-                    Expr::Div {
-                        lhs: numerator,
-                        rhs: num,
-                    },
-                    span,
-                )
-            }
-        };
+        let sample = self.lower_expr(time_expression)?;
         let start = self.push(
             Expr::Const {
                 value: MotionValue::Number(stage.start),
@@ -404,40 +357,24 @@ impl<'s> Compiler<'s> {
             stage_expression.span(),
         );
         let start = if staggered {
-            let index_expression = arguments[3].as_expression()?;
+            let index_expression = arguments[2].as_expression()?;
             let index = self.lower_expr(index_expression)?;
-            let gap_expression = arguments[4].as_expression()?;
-            let gap_value = self.eval_static(gap_expression).or_else(|| {
+            let gap_expression = arguments[3].as_expression()?;
+            let Some(gap) = self
+                .fold_to_number(gap_expression)
+                .filter(|gap| gap.is_finite() && *gap >= 0.0)
+            else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     gap_expression.span(),
-                    "staggerProgress gap must be a prepare-time seconds(...) or frames(...) value",
-                );
-                None
-            })?;
-            let gap: SequenceTime = serde_json::from_value(gap_value).ok().or_else(|| {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    gap_expression.span(),
-                    "staggerProgress gap must use seconds(...) or frames(...)",
-                );
-                None
-            })?;
-            if gap.marker != "sequenceTime"
-                || gap.unit != stage.unit
-                || !gap.value.is_finite()
-                || gap.value < 0.0
-            {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    gap_expression.span(),
-                    "staggerProgress gap must be finite, non-negative, and use the stage's unit",
+                    "staggerProgress gap must be a finite, non-negative number of seconds known \
+                     at compile time",
                 );
                 return None;
-            }
+            };
             let gap = self.push(
                 Expr::Const {
-                    value: MotionValue::Number(gap.value),
+                    value: MotionValue::Number(gap),
                 },
                 gap_expression.span(),
             );
@@ -507,11 +444,14 @@ impl<'s> Compiler<'s> {
         } else {
             "repeatProgress"
         };
-        let [frame, fps, stage, cycles] = arguments else {
+        let [time, stage, cycles] = arguments else {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                format!("{name}(frame, fps, stage, cycles) takes exactly four arguments"),
+                format!(
+                    "{name}(t, stage, count) takes the time in seconds, the stage and the count; \
+                     the frame rate argument is gone"
+                ),
             );
             return None;
         };
@@ -531,7 +471,7 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        let base_arguments = [frame, fps, stage];
+        let base_arguments = [time, stage];
         let base = self.lower_stage_progress(&base_arguments, span, false)?;
         let cycles = self.push(
             Expr::Const {
@@ -556,6 +496,8 @@ impl<'s> Compiler<'s> {
             Expr::MathBinary {
                 op: if yoyo {
                     MathBinaryOp::PingPong
+                } else if self.reads_clock(scaled) {
+                    MathBinaryOp::ClockMod
                 } else {
                     MathBinaryOp::Mod
                 },
@@ -572,7 +514,7 @@ impl<'s> Compiler<'s> {
         // Repeat returns the completed state at the right edge instead of snapping to zero.
         let done = self.push(
             Expr::Compare {
-                op: CompareOp::Gte,
+                op: self.compare_op(CompareOp::Gte, base, one),
                 lhs: base,
                 rhs: one,
             },
@@ -603,6 +545,13 @@ impl<'s> Compiler<'s> {
             return None;
         };
         let input = self.lower_expr(argument.as_expression()?)?;
+        // Rounding a value of the clock takes the clock tolerance, so a step written in seconds
+        // lands on its frame.
+        let op = if self.reads_clock(input) {
+            op.on_clock()
+        } else {
+            op
+        };
         self.extra_capabilities
             .insert(MOTION_MATH_CAPABILITY.to_owned());
         Some(self.push(Expr::MathUnary { op, input }, span))
@@ -660,14 +609,12 @@ impl<'s> Compiler<'s> {
         }
         self.extra_capabilities
             .insert(MOTION_MATH_CAPABILITY.to_owned());
-        Some(self.push(
-            Expr::MathBinary {
-                op: MathBinaryOp::Remainder,
-                lhs,
-                rhs,
-            },
-            span,
-        ))
+        let op = if self.reads_clock(lhs) || self.reads_clock(rhs) {
+            MathBinaryOp::ClockRemainder
+        } else {
+            MathBinaryOp::Remainder
+        };
+        Some(self.push(Expr::MathBinary { op, lhs, rhs }, span))
     }
 
     /// `deg(number)` converts degrees to the radians used by geometry constructors; `rad(number)`
@@ -733,15 +680,22 @@ impl<'s> Compiler<'s> {
                 match op {
                     MathBinaryOp::Mod => "mod period must be finite and positive",
                     MathBinaryOp::PingPong => "pingPong length must be finite and positive",
-                    MathBinaryOp::Atan2 | MathBinaryOp::Pow | MathBinaryOp::Remainder => {
-                        unreachable!()
-                    }
+                    MathBinaryOp::Atan2
+                    | MathBinaryOp::Pow
+                    | MathBinaryOp::Remainder
+                    | MathBinaryOp::ClockMod
+                    | MathBinaryOp::ClockRemainder => unreachable!(),
                 },
             );
             return None;
         }
         let lhs = self.lower_expr(lhs.as_expression()?)?;
         let rhs = self.lower_expr(rhs.as_expression()?)?;
+        let op = if self.reads_clock(lhs) || self.reads_clock(rhs) {
+            op.on_clock()
+        } else {
+            op
+        };
         self.extra_capabilities
             .insert(MOTION_MATH_CAPABILITY.to_owned());
         Some(self.push(Expr::MathBinary { op, lhs, rhs }, span))
@@ -808,23 +762,16 @@ impl<'s> Compiler<'s> {
         arguments: &[Argument<'_>],
         span: Span,
     ) -> Option<ExprId> {
-        let [frame, fps, options] = arguments else {
+        let [time, options] = arguments else {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                "wiggle(frame, fps, options) takes exactly three arguments",
+                "wiggle(t, options) takes the time in seconds and the options, such as \
+                 `wiggle(seconds, { seed: 1, frequency: 2, amplitude: 10 })`; the frame rate \
+                 argument is gone",
             );
             return None;
         };
-        let fps_expression = fps.as_expression()?;
-        if !self.is_time_fps(fps_expression) {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                fps_expression.span(),
-                "wiggle's second argument must be `ctx.fps`, the frame rate from `useTime()`, so frequency is measured in physical seconds",
-            );
-            return None;
-        }
         let options_expression = options.as_expression()?;
         let options = self.eval_static(options_expression).or_else(|| {
             self.illegal(
@@ -910,33 +857,7 @@ impl<'s> Compiler<'s> {
             return None;
         };
 
-        let frame = self.lower_expr(frame.as_expression()?)?;
-        let fps_den = self.push(
-            Expr::Context {
-                input: ContextInput::FpsDen,
-            },
-            fps_expression.span(),
-        );
-        let frame_den = self.push(
-            Expr::Mul {
-                lhs: frame,
-                rhs: fps_den,
-            },
-            span,
-        );
-        let fps_num = self.push(
-            Expr::Context {
-                input: ContextInput::FpsNum,
-            },
-            fps_expression.span(),
-        );
-        let seconds = self.push(
-            Expr::Div {
-                lhs: frame_den,
-                rhs: fps_num,
-            },
-            span,
-        );
+        let seconds = self.lower_expr(time.as_expression()?)?;
         let frequency = self.push(
             Expr::Const {
                 value: MotionValue::Number(frequency),
@@ -1013,23 +934,16 @@ impl<'s> Compiler<'s> {
         arguments: &[Argument<'_>],
         span: Span,
     ) -> Option<ExprId> {
-        let [frame, fps, options] = arguments else {
+        let [time, options] = arguments else {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 span,
-                "wiggle2D(frame, fps, options) takes exactly three arguments",
+                "wiggle2D(t, options) takes the time in seconds and the options, such as \
+                 `wiggle2D(seconds, { seed: 1, frequency: 2, amplitude: 10 })`; the frame rate \
+                 argument is gone",
             );
             return None;
         };
-        let fps_expression = fps.as_expression()?;
-        if !self.is_time_fps(fps_expression) {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                fps_expression.span(),
-                "wiggle2D's second argument must be `ctx.fps`, the frame rate from `useTime()`",
-            );
-            return None;
-        }
         let options_expression = options.as_expression()?;
         let options = self.eval_static(options_expression).or_else(|| {
             self.illegal(
@@ -1131,33 +1045,7 @@ impl<'s> Compiler<'s> {
             return None;
         };
 
-        let frame = self.lower_expr(frame.as_expression()?)?;
-        let fps_den = self.push(
-            Expr::Context {
-                input: ContextInput::FpsDen,
-            },
-            fps_expression.span(),
-        );
-        let frame_den = self.push(
-            Expr::Mul {
-                lhs: frame,
-                rhs: fps_den,
-            },
-            span,
-        );
-        let fps_num = self.push(
-            Expr::Context {
-                input: ContextInput::FpsNum,
-            },
-            fps_expression.span(),
-        );
-        let seconds = self.push(
-            Expr::Div {
-                lhs: frame_den,
-                rhs: fps_num,
-            },
-            span,
-        );
+        let seconds = self.lower_expr(time.as_expression()?)?;
         let frequency = self.push(
             Expr::Const {
                 value: MotionValue::Number(frequency),

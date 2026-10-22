@@ -60,12 +60,12 @@ fn assert_progress_times(compiled: &valle_compiler::motion::CompiledMotion, at: 
 fn a_helper_parameter_shadows_the_outer_constant_it_is_named_after() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() { const time = useCurrentTime();
   const gap = 12;
   const f = (gap) => gap * 2;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: f(ctx.progress) }} />
+                           width: f(time.progress) }} />
   </Scene>);
 }
 "##,
@@ -83,8 +83,8 @@ fn a_component_local_binding_shadows_the_module_constant_it_is_named_after() {
     let compiled = compile_motion(
         r##"
 const size = 40;
-export default function P() { const ctx = useTime();
-  const size = ctx.progress * 100;
+export default function P() { const time = useCurrentTime();
+  const size = time.progress * 100;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10, width: size }} />
   </Scene>);
@@ -103,8 +103,8 @@ fn an_unshadowed_module_constant_still_folds_in_the_same_component() {
         r##"
 const size = 40;
 const other = 7;
-export default function P() { const ctx = useTime();
-  const size = ctx.progress * 100;
+export default function P() { const time = useCurrentTime();
+  const size = time.progress * 100;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: other, width: size }} />
   </Scene>);
@@ -130,8 +130,8 @@ export default function P() { const ctx = useTime();
 fn an_inner_constant_shadows_an_outer_frame_time_binding_of_the_same_name() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  const v = ctx.progress * 100;
+export default function P() { const time = useCurrentTime();
+  const v = time.progress * 100;
   const box = (i) => {
     const v = 33;
     return v + i;
@@ -159,12 +159,12 @@ export default function P() { const ctx = useTime();
 fn a_local_helper_can_call_its_sibling() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() { const time = useCurrentTime();
   const h1 = (v) => v * 2;
   const h2 = (v) => h1(v) + 1;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: h2(ctx.progress) }} />
+                           width: h2(time.progress) }} />
   </Scene>);
 }
 "##,
@@ -192,12 +192,12 @@ export default function P() { const ctx = useTime();
 fn mutually_recursive_helpers_are_still_rejected() {
     let diagnostics = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() { const time = useCurrentTime();
   const f = (v) => g(v) + 1;
   const g = (v) => f(v) * 2;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: f(ctx.progress) }} />
+                           width: f(time.progress) }} />
   </Scene>);
 }
 "##,
@@ -221,8 +221,8 @@ export default function P() { const ctx = useTime();
 fn a_static_map_parameter_shadows_the_outer_frame_time_binding() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  const v = ctx.progress * 100;
+export default function P() { const time = useCurrentTime();
+  const v = time.progress * 100;
   return (<Scene className="h-full w-full">
     {[1, 2].map((v, i) => <View key={`k-${i}`} style={{ position: "absolute", left: 0, top: 0,
                                                         height: 10, width: v * 2 }} />)}
@@ -247,8 +247,8 @@ export default function P() { const ctx = useTime();
 fn the_outer_frame_time_binding_survives_the_map_when_not_shadowed() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  const v = ctx.progress * 100;
+export default function P() { const time = useCurrentTime();
+  const v = time.progress * 100;
   return (<Scene className="h-full w-full">
     {[1, 2].map((k, i) => <View key={`k-${i}`} style={{ position: "absolute", left: 0, top: 0,
                                                         height: 10, width: v + k }} />)}
@@ -285,8 +285,8 @@ export default function P() { const ctx = useTime();
 fn an_arrow_parameter_sharing_a_frame_time_name_does_not_block_static_folding() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  const t = ctx.progress;
+export default function P() { const time = useCurrentTime();
+  const t = time.progress;
   const DOUBLED = [1, 2, 3].map((t) => t * 2);
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
@@ -309,8 +309,8 @@ export default function P() { const ctx = useTime();
 fn a_free_use_outside_the_arrow_still_blocks_static_folding() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  const t = ctx.progress * 50;
+export default function P() { const time = useCurrentTime();
+  const t = time.progress * 50;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
                            width: t + [1].map((t) => t)[0] }} />

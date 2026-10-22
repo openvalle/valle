@@ -1103,25 +1103,17 @@ impl<'s> Compiler<'s> {
         if let Expression::CallExpression(call) = strip_parens(expression)
             && matches!(&call.callee, Expression::Identifier(callee) if callee.name == "particles")
         {
-            if call.arguments.len() != 3 {
+            if call.arguments.len() != 2 {
                 self.illegal(
                     DiagCode::GrammarForbidden,
                     call.span(),
-                    "particles(frame, ctx.fps, options) takes exactly three arguments",
+                    "particles(t, options) takes the time in seconds and the options, such as \
+                     `particles(seconds, { … })`; the frame rate argument is gone",
                 );
                 return None;
             }
-            let fps = call.arguments[1].as_expression()?;
-            if !self.is_time_fps(fps) {
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    fps.span(),
-                    "particles' second argument must be `ctx.fps`, the frame rate from `useTime()`",
-                );
-                return None;
-            }
-            let frame = self.lower_expr(call.arguments[0].as_expression()?)?;
-            let options_expression = call.arguments[2].as_expression()?;
+            let time = self.lower_expr(call.arguments[0].as_expression()?)?;
+            let options_expression = call.arguments[1].as_expression()?;
             let value = self.eval_static(options_expression).or_else(|| {
                 self.illegal(
                     DiagCode::BuiltinRejected,
@@ -1256,7 +1248,7 @@ impl<'s> Compiler<'s> {
             };
             return Some((
                 BatchPositions::Particles {
-                    frame,
+                    time,
                     spec: ParticleSpec {
                         seed,
                         count: u32::try_from(count).unwrap_or(u32::MAX),

@@ -1,8 +1,8 @@
 export const composition = { width: 640, height: 360, fps: 60, duration: 10 };
 
 // A glow under a clip: the bar extends far beyond the window, which shows only a small part.
-export default function ClipGlow() { const ctx = useTime();
-  const x = -900 + clamp(ctx.localFrame, 0, 90) * 4;
+export default function ClipGlow() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 60);
+  const x = -900 + clamp(frame, 0, 90) * 4;
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <View key="window" className="absolute" style={{ left: 200, top: 100, width: 240, height: 160, overflow: "hidden" }}>

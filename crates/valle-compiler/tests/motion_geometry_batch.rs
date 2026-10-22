@@ -31,7 +31,7 @@ fn distance_stagger_uses_per_instance_delays_and_zero_matches_scalar_zero() {
         opacity: 0.5,
         ..Default::default()
     };
-    let resolved = resolve_geometry_batch(batch, 15.0, 30.0, progress);
+    let resolved = resolve_geometry_batch(batch, 0.5, progress);
     let alphas = resolved
         .iter()
         .map(|instance| instance.color.alpha)
@@ -47,8 +47,8 @@ fn distance_stagger_uses_per_instance_delays_and_zero_matches_scalar_zero() {
         .unwrap()
         .artifact;
     assert_eq!(
-        resolve_geometry_batch(batch_of(&zero_array), 15.0, 30.0, progress),
-        resolve_geometry_batch(batch_of(&zero_scalar), 15.0, 30.0, progress)
+        resolve_geometry_batch(batch_of(&zero_array), 0.5, progress),
+        resolve_geometry_batch(batch_of(&zero_scalar), 0.5, progress)
     );
     for invalid in ["[0,0]", "[-0.1,0,0,0,0]", "[1,0,0,0,0]"] {
         assert!(
@@ -267,8 +267,8 @@ fn batch_path_must_be_prepared() {
         compile_motion(
             r##"
 const STAR = path("M 0 0 L 10 0 L 0 10 Z");
-export default function P() { const ctx = useTime();
-  return <GeometryBatch geometry={ctx.seconds < 1 ? STAR : STAR}
+export default function P() { const time = useCurrentTime();
+  return <GeometryBatch geometry={time.seconds < 1 ? STAR : STAR}
     positions={[point(20,20)]} sizes={1} fills="#fff" />;
 }
 "##
@@ -283,7 +283,7 @@ fn geometry_batch_lowers_to_one_explicit_leaf() {
     let compiled = compile_motion(
         r##"
 const PTS = [point(10, 10), point(20, 20)];
-export default function P() { const ctx = useTime();
+export default function P() {
   return <GeometryBatch key="dots" geometry="circle" positions={PTS} sizes={4} fills="#fff" />;
 }
 "##,
@@ -303,7 +303,7 @@ fn ordinary_static_nodes_keep_independent_styles_not_a_hidden_batch() {
     let compiled = compile_motion(
         r##"
 const PTS = [{x:10,y:10},{x:20,y:20}];
-export default function P() { const ctx = useTime();
+export default function P() {
   return <View>{PTS.map((p, i) => <View key={`p-${i}`} style={{position:"absolute",left:p.x,top:p.y,width:4,height:4}} />)}</View>;
 }
 "##,
@@ -331,11 +331,11 @@ fn rotations_are_per_instance_and_support_frame_fields() {
         r##"
 export const composition = { width: 320, height: 180, fps: 30, duration: 1 };
 const PTS = [point(60, 90), point(220, 90)];
-export default function P() { const ctx = useTime();
+export default function P() { const time = useCurrentTime();
   return <Scene style={{width:320,height:180}}>
     <GeometryBatch key="rects" geometry="rect" positions={PTS}
       sizes={[point(80, 40)]} fills="#ffd000" opacities={[1, 0.5]}
-      rotations={field({ from: [0, 0], to: [0, 36], progress: ctx.progress })}
+      rotations={field({ from: [0, 0], to: [0, 36], progress: time.progress })}
       style={{position:"absolute",left:0,top:0,width:320,height:180}} />
   </Scene>;
 }
@@ -354,8 +354,7 @@ export default function P() { const ctx = useTime();
         .unwrap();
     let resolved = resolve_geometry_batch(
         batch,
-        15.0,
-        30.0,
+        0.5,
         BatchFieldProgress {
             rotation: 0.5,
             ..Default::default()
@@ -421,12 +420,12 @@ fn skew_and_stroke_fields_reach_packed_instance_columns() {
         r##"
 export const composition = { width: 320, height: 180, fps: 30, duration: 1 };
 const PTS = [point(60, 90), point(220, 90)];
-export default function P() { const ctx = useTime();
+export default function P() { const time = useCurrentTime();
   return <Scene style={{width:320,height:180}}>
     <GeometryBatch key="rects" geometry="rect" positions={PTS}
       sizes={point(80,40)} fills="#ffd000"
-      skewXs={field({ from: [0, 0], to: [0, 30], progress: ctx.progress })}
-      strokeWidths={field({ from: [0, 0], to: [0, 0.05], progress: ctx.progress })}
+      skewXs={field({ from: [0, 0], to: [0, 30], progress: time.progress })}
+      strokeWidths={field({ from: [0, 0], to: [0, 0.05], progress: time.progress })}
       style={{position:"absolute",left:0,top:0,width:320,height:180}} />
   </Scene>;
 }
@@ -444,8 +443,7 @@ export default function P() { const ctx = useTime();
         .unwrap();
     let resolved = resolve_geometry_batch(
         batch,
-        15.0,
-        30.0,
+        0.5,
         BatchFieldProgress {
             skew_x: 0.5,
             stroke_width: 0.5,

@@ -15,9 +15,9 @@ const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as 
 };
 type Fixture = { name:string; command:"motion"|"timeline"; content:string; width:number; height:number; frames:number[]; reference?:string; referenceOffset?:number; different?:string; parity?:number; native?:false; probe?:(pixels:Uint8Array,frame:number)=>void };
 const motion = (body:string) => `export const composition={width:96,height:64,fps:4,duration:1.25};
-export default function T(){const ctx=useTime();return <Scene style={{width:96,height:64,backgroundColor:"#ffffff"}}>${body}</Scene>;}`;
+export default function T(){const time = useCurrentTime();return <Scene style={{width:96,height:64,backgroundColor:"#ffffff"}}>${body}</Scene>;}`;
 const view = (color:string,extra="") => `<View style={{width:96,height:64,backgroundColor:"${color}"${extra}}}/>`;
-const transition = (kind:string,from:string,to:string,extra="",progress="ctx.seconds") => `<Transition kind="${kind}" progress={${progress}} style={{width:96,height:64${extra}}}>${from}${to}</Transition>`;
+const transition = (kind:string,from:string,to:string,extra="",progress="time.seconds") => `<Transition kind="${kind}" progress={${progress}} style={{width:96,height:64${extra}}}>${from}${to}</Transition>`;
 const diff = (a:Uint8Array,b:Uint8Array) => { let max=0; expect(a.length).toBe(b.length); for(let i=0;i<a.length;i++) max=Math.max(max,Math.abs(a[i]!-b[i]!));return max; };
 const pixel = (pixels:Uint8Array,width:number,x:number,y:number,rgba:number[]) => {
   for(const [c,value] of rgba.entries()) expect(Math.abs(pixels[(y*width+x)*4+c]!-value)).toBeLessThanOrEqual(2);
@@ -66,14 +66,14 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
       }),width:96,height:64,frames:[3,1,5,3],reference:`param-motion-${kind}`,referenceOffset:-1});
       // Animate the first parameter at fixed transition progress to catch stale geometry/schedules.
       const [animated, value] = Object.entries(params)[0]!;
-      const expression = JSON.stringify(params).replace(`"${animated}":${value}`, `"${animated}":${value}*(0.5+ctx.seconds)`);
+      const expression = JSON.stringify(params).replace(`"${animated}":${value}`, `"${animated}":${value}*(0.5+time.seconds)`);
       cases.push({name:`param-dynamic-${kind}`,command:"motion",content:motion(transition(kind,from,to,"","0.5").replace(" progress=",` params={${expression}} progress=`)),width:96,height:64,frames:[2,0,4,2],probe:(pixels,frame)=>{
         if(frame===2)expect(diff(pixels,images.get(`param-motion-${kind}/2`)!)).toBeLessThanOrEqual(2);
         if(frame===4)expect(diff(pixels,images.get(`param-dynamic-${kind}/0`)!),`${kind} animated parameter changes pixels`).toBeGreaterThan(2);
       }});
     }
     for (const customized of params ? [false,true] : [false]) {
-      let body = transition(kind,from,to,"","ctx.seconds < 0.5 ? 0.000001 : 0.999999");
+      let body = transition(kind,from,to,"","time.seconds < 0.5 ? 0.000001 : 0.999999");
       if (customized) body = body.replace(" progress=", ` params={${JSON.stringify(params)}} progress=`);
       cases.push({name:`edge-${customized?"param-":""}${kind}`,command:"motion",content:motion(body),
         width:96,height:64,frames:[0,4],reference:customized?`param-motion-${kind}`:`pattern-${kind}`});
@@ -114,7 +114,7 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
   // The wipe's smallest edge weights leave its result a hair under opaque over the white scene.
   // Skia stores F16 by truncation in WASM and to nearest on NEON, one step (2^-11) apart in alpha,
   // which next to black is 1.6 sRGB levels.
-  cases.push({name:"code-wipe",command:"motion",content:code(wipeCode,"code={wipe} uniforms={{softness:0.1+ctx.seconds/10}}",patternedFrom,patternedTo),width:96,height:64,frames:[2,0,4,2],parity:3,probe:(p,f)=>{
+  cases.push({name:"code-wipe",command:"motion",content:code(wipeCode,"code={wipe} uniforms={{softness:0.1+time.seconds/10}}",patternedFrom,patternedTo),width:96,height:64,frames:[2,0,4,2],parity:3,probe:(p,f)=>{
     if(f===4)pixel(p,96,48,32,[0,255,0,255]);
   }});
   // Motion templates draw a Timeline transition from the clips' frames: the documented dissolve
@@ -122,11 +122,11 @@ test("Motion Transition shares all Timeline kernels and preserves nested subtree
   // translucent clips, and in previews that scale or letterbox the canvas.
   await writeFile(join(dir,"dissolve.motion.tsx"),`export const composition={width:48,height:48,duration:1,fps:4};
 export const role=transition();
-export default function D(){const ctx=useTime();return <Scene className="relative h-full w-full"><Image src="input://from" className="absolute inset-0 h-full w-full"/><Image src="input://to" className="absolute inset-0 h-full w-full" style={{opacity:ctx.host.progress}}/></Scene>;}`);
+export default function D(){const time = useCurrentTime();return <Scene className="relative h-full w-full"><Image src="input://from" className="absolute inset-0 h-full w-full"/><Image src="input://to" className="absolute inset-0 h-full w-full" style={{opacity:time.clipProgress}}/></Scene>;}`);
   await writeFile(join(dir,"mix.motion.tsx"),"const mix=`uniform float progress;\nuniform shader outgoing;\nuniform shader incoming;\nfloat4 valle_main(float2 uv){float4 p=sample_outgoing(uv);float4 q=sample_incoming(uv);float4 m=mix(float4(p.rgb*p.a,p.a),float4(q.rgb*q.a,q.a),progress);return float4(m.rgb/m.a,m.a);}`;\n"
     +`export const composition={width:96,height:64,duration:1,fps:4};
 export const role=transition();
-export default function M(){const ctx=useTime();return <Scene><ShaderLayer code={mix} inputs={{outgoing:"input://from",incoming:"input://to"}} uniforms={{progress:ctx.host.progress}} style={{width:ctx.viewport.width,height:ctx.viewport.height}}/></Scene>;}`);
+export default function M(){const time = useCurrentTime(); const comp = useComposition();return <Scene><ShaderLayer code={mix} inputs={{outgoing:"input://from",incoming:"input://to"}} uniforms={{progress:time.clipProgress}} style={{width:comp.width,height:comp.height}}/></Scene>;}`);
   const templated = (clips:unknown[],effect:Record<string,unknown>) => JSON.stringify({canvas:{width:96,height:64,fps:4,background:"#ffffff"},
     resources:{dissolve:"dissolve.motion.tsx",mix:"mix.motion.tsx",from:"param-from.motion.tsx",to:"param-to.motion.tsx"},
     tracks:{visual:[{clips,transitions:[{from:0,to:1,...effect}]}]}});
@@ -162,7 +162,7 @@ export default function K(){return <Scene className="relative h-full w-full"><Im
   await writeFile(join(dir,"invert.motion.tsx"),"const invert=`uniform shader source;\nfloat4 valle_main(float2 uv){float4 c=sample_source(uv);return float4(1.0-c.rgb,c.a);}`;\n"
     +`export const composition={width:96,height:64,duration:1,fps:4};
 export const role=effect();
-export default function I(){const ctx=useTime();return <Scene><ShaderLayer code={invert} inputs={{source:"input://source"}} style={{width:ctx.viewport.width,height:ctx.viewport.height}}/></Scene>;}`);
+export default function I(){const comp = useComposition();return <Scene><ShaderLayer code={invert} inputs={{source:"input://source"}} style={{width:comp.width,height:comp.height}}/></Scene>;}`);
   const effected = (tracks:unknown[][],adjustment?:unknown[]) => JSON.stringify({canvas:{width:96,height:64,fps:4,background:"#ffffff"},
     resources:{same:"same.motion.tsx",mark:"mark.motion.tsx",invert:"invert.motion.tsx",from:"param-from.motion.tsx",to:"param-to.motion.tsx"},
     tracks:{visual:tracks.map(clips=>({clips})),...(adjustment ? {adjustment:[{clips:adjustment}]} : {})}});

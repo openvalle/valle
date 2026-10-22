@@ -7,21 +7,21 @@ export const controls = {
 };
 
 const reveal = defineSequence({
-  label: stage({ duration: seconds(0.75) }),
-  amount: stage({ after: "label", overlap: seconds(0.25), duration: seconds(1.15) }),
-  detail: stage({ after: "amount", overlap: seconds(0.4), duration: seconds(1.0) }),
-  chart: stage({ after: "detail", overlap: seconds(0.25), duration: seconds(1.7) }),
-  settle: stage({ after: "chart", overlap: seconds(0.7), duration: seconds(2.1) }),
+  label: stage({ duration: 0.75 }),
+  amount: stage({ after: "label", overlap: 0.25, duration: 1.15 }),
+  detail: stage({ after: "amount", overlap: 0.4, duration: 1.0 }),
+  chart: stage({ after: "detail", overlap: 0.25, duration: 1.7 }),
+  settle: stage({ after: "chart", overlap: 0.7, duration: 2.1 }),
 });
 
 const BARS = [0.38, 0.52, 0.46, 0.68, 0.59, 0.77, 0.72, 0.91];
 
-export default function RichMetricTitle() { const ctx = useTime();
-  const label = stageProgress(ctx.localFrame, ctx.fps, reveal.label);
-  const amount = stageProgress(ctx.localFrame, ctx.fps, reveal.amount);
-  const detail = stageProgress(ctx.localFrame, ctx.fps, reveal.detail);
-  const chart = stageProgress(ctx.localFrame, ctx.fps, reveal.chart);
-  const settle = yoyoProgress(ctx.localFrame, ctx.fps, reveal.settle, 2);
+export default function RichMetricTitle() { const time = useCurrentTime();
+  const label = stageProgress(time.seconds, reveal.label);
+  const amount = stageProgress(time.seconds, reveal.amount);
+  const detail = stageProgress(time.seconds, reveal.detail);
+  const chart = stageProgress(time.seconds, reveal.chart);
+  const settle = yoyoProgress(time.seconds, reveal.settle, 2);
   const revenue = 1284500 + round(amount * 932700);
   const margin = 0.284 + settle * 0.026;
 
@@ -50,7 +50,7 @@ export default function RichMetricTitle() { const ctx = useTime();
 
       <View key="chart" className="absolute" style={{ borderStyle: "solid", left: 103.5, bottom: 84, width: 1713, height: 321, borderTopWidth: 1.5, borderColor: "#a8a29e", opacity: chart }}>
         {BARS.map((value, i) => (
-          <View key={`bar-${i}`} className="absolute" style={{ left: 36 + i * 207, bottom: 54, width: 129, height: value * 213 * staggerProgress(ctx.localFrame, ctx.fps, reveal.chart, i, seconds(0.08)), backgroundColor: i === 7 ? "#c2410c" : "#292524", opacity: 0.35 + i * 0.08 }} />
+          <View key={`bar-${i}`} className="absolute" style={{ left: 36 + i * 207, bottom: 54, width: 129, height: value * 213 * staggerProgress(time.seconds, reveal.chart, i, 0.08), backgroundColor: i === 7 ? "#c2410c" : "#292524", opacity: 0.35 + i * 0.08 }} />
         ))}
         {BARS.map((value, i) => (
           <Text key={`month-${i}`} className="absolute" style={{ left: 36 + i * 207, bottom: 12, width: 129, textAlign: "center", fontSize: 22.5, color: "#78716c" }}>M{padNumber(i + 1, { width: 2 })}</Text>

@@ -11,8 +11,8 @@ use valle_timeline::FrameRate;
 
 fn source(style: &str) -> String {
     format!(
-        r#"export default function Demo() {{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}>
-    <View key="target" style={{{{position:'absolute',left:0,top:0,width:80+ctx.localFrame,height:20}}}}/>
+        r#"export default function Demo() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene style={{{{width:320,height:180}}}}>
+    <View key="target" style={{{{position:'absolute',left:0,top:0,width:80+frame,height:20}}}}/>
     <View key="consumer" style={{{{position:'absolute',left:40,top:30,width:100,height:60,
         borderWidth:3,padding:8,backgroundColor:'red',{style}}}}}>
         <View key="child" style={{{{position:'fixed',left:5,top:7,width:20,height:10,backgroundColor:'blue'}}}}/>
@@ -110,39 +110,39 @@ fn post_layout_css_uses_valid_probes_and_matches_direct_frame_expressions() {
     for (bound, direct) in [
         (
             "translate:`${bounds('target').width/2}px 10%`",
-            "translate:`${(80+ctx.localFrame)/2}px 10%`",
+            "translate:`${(80+frame)/2}px 10%`",
         ),
         (
             "rotate:`${bounds('target').width}deg`",
-            "rotate:`${80+ctx.localFrame}deg`",
+            "rotate:`${80+frame}deg`",
         ),
         (
             "scale:`${bounds('target').width/100} 1`",
-            "scale:`${(80+ctx.localFrame)/100} 1`",
+            "scale:`${(80+frame)/100} 1`",
         ),
         (
             "transform:`translateX(${bounds('target').width/2}px)`",
-            "transform:`translateX(${(80+ctx.localFrame)/2}px)`",
+            "transform:`translateX(${(80+frame)/2}px)`",
         ),
         (
             "filter:`blur(${bounds('target').width/40}px)`",
-            "filter:`blur(${(80+ctx.localFrame)/40}px)`",
+            "filter:`blur(${(80+frame)/40}px)`",
         ),
         (
             "backdropFilter:`blur(${bounds('target').width/40}px)`",
-            "backdropFilter:`blur(${(80+ctx.localFrame)/40}px)`",
+            "backdropFilter:`blur(${(80+frame)/40}px)`",
         ),
         (
             "backgroundColor:interpolate(bounds('target').width,[80,170],['red','blue'])",
-            "backgroundColor:interpolate(80+ctx.localFrame,[80,170],['red','blue'])",
+            "backgroundColor:interpolate(80+frame,[80,170],['red','blue'])",
         ),
         (
             "boxShadow:`0px 0px ${bounds('target').width/20}px blue`",
-            "boxShadow:`0px 0px ${(80+ctx.localFrame)/20}px blue`",
+            "boxShadow:`0px 0px ${(80+frame)/20}px blue`",
         ),
         (
             "backgroundImage:`linear-gradient(90deg, red 0px, blue ${bounds('target').width/2}px)`",
-            "backgroundImage:`linear-gradient(90deg, red 0px, blue ${(80+ctx.localFrame)/2}px)`",
+            "backgroundImage:`linear-gradient(90deg, red 0px, blue ${(80+frame)/2}px)`",
         ),
     ] {
         assert_eq!(
@@ -194,7 +194,7 @@ fn post_layout_branches_must_preserve_containing_block_presence() {
             .any(|d| d.message.contains("cannot switch !important"))
         );
         let bound = format!("{property}:bounds('target').width>100?'{list}':'{other}'");
-        let direct = format!("{property}:80+ctx.localFrame>100?'{list}':'{other}'");
+        let direct = format!("{property}:80+frame>100?'{list}':'{other}'");
         assert_eq!(
             snapshots(&source(&bound), &[60, 0, 20, 21, 60, 0]),
             snapshots(&source(&direct), &[60, 0, 20, 21, 60, 0])
@@ -245,11 +245,11 @@ fn post_layout_text_paint_reaches_real_glyphs_including_inherited_runs() {
     for (bound, direct) in [
         (
             "interpolate(bounds('target').width,[80,170],['red','blue'])",
-            "interpolate(80+ctx.localFrame,[80,170],['red','blue'])",
+            "interpolate(80+frame,[80,170],['red','blue'])",
         ),
         (
             "`rgb(${bounds('target').width} 20 40)`",
-            "`rgb(${80+ctx.localFrame} 20 40)`",
+            "`rgb(${80+frame} 20 40)`",
         ),
     ] {
         assert_eq!(

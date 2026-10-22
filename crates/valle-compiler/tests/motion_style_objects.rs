@@ -54,10 +54,10 @@ fn object_reuse_preserves_js_key_order_lexical_scope_and_frame_values() {
         const unit = 20;
         const base = { width: unit * 8, paddingLeft: 4, padding: 8, height: unit * 2 };
         const alias = base;
-        export default function Demo() { const ctx = useTime();
+        export default function Demo() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
             const unit = 2;
             const dimension = 'width';
-            const width = 120 + ctx.localFrame;
+            const width = 120 + frame;
             const animated = { ...alias, [dimension]: width, backgroundColor: 'red' } as const;
             const reused = animated;
             return <Scene style={{ width: 320, height: 180 }}>
@@ -68,9 +68,9 @@ fn object_reuse_preserves_js_key_order_lexical_scope_and_frame_values() {
         }
     "#;
     let explicit = r#"
-        export default function Demo() { const ctx = useTime();
+        export default function Demo() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
             return <Scene style={{ width: 320, height: 180 }}>
-                <View key="target" style={{ width: 120 + ctx.localFrame, paddingLeft: 12, padding: 8,
+                <View key="target" style={{ width: 120 + frame, paddingLeft: 12, padding: 8,
                     height: 40, backgroundColor: 'red' }}>
                     <View key="child" style={{ width: 10, height: 10, backgroundColor: 'blue' }} />
                 </View>
@@ -88,7 +88,7 @@ fn object_reuse_preserves_js_key_order_lexical_scope_and_frame_values() {
 
 #[test]
 fn duplicate_keys_replace_values_without_moving_declaration_positions() {
-    let authored = r#"export default function Demo() { const ctx = useTime();
+    let authored = r#"export default function Demo() {
         return <Scene style={{width:320,height:180}}><View key="target"
             style={{width:160,height:80,paddingLeft:2,padding:10,paddingLeft:20,backgroundColor:'red'}}>
             <View key="child" style={{width:10,height:10,backgroundColor:'blue'}} />
@@ -104,8 +104,8 @@ fn duplicate_keys_replace_values_without_moving_declaration_positions() {
 #[test]
 fn reused_styles_keep_typed_transforms_and_span_admission() {
     let source = r#"const textStyle = {color:'red',fontSize:24};
-        export default function Demo() { const ctx = useTime();
-            const movement = {translate:point(ctx.localFrame, 4),rotate:interpolate(ctx.localFrame,[0,60],["0deg","60deg"])};
+        export default function Demo() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
+            const movement = {translate:point(frame, 4),rotate:interpolate(frame,[0,60],["0deg","60deg"])};
             return <Scene><View style={movement}/><Text><Span style={{...textStyle,fontWeight:700}}>Hello</Span></Text></Scene>;
         }"#;
     compile_motion(source).unwrap();
@@ -114,8 +114,8 @@ fn reused_styles_keep_typed_transforms_and_span_admission() {
 
 #[test]
 fn local_object_capture_survives_map_shadowing_and_new_iterations() {
-    let source = r#"export default function Demo() { const ctx = useTime();
-        const width = 30 + ctx.localFrame;
+    let source = r#"export default function Demo() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
+        const width = 30 + frame;
         const shared = {width, height:20, backgroundColor:'red'};
         return <Scene style={{width:320,height:180}}>
             {[0,1].map(width => <View key={`item-${width}`} style={shared}/>)}
@@ -123,7 +123,7 @@ fn local_object_capture_survives_map_shadowing_and_new_iterations() {
     }"#;
     let reference = source.replace(
         "style={shared}",
-        "style={{width:30 + ctx.localFrame,height:20,backgroundColor:'red'}}",
+        "style={{width:30 + frame,height:20,backgroundColor:'red'}}",
     );
     assert_eq!(frames(source), frames(&reference));
 }
@@ -132,14 +132,14 @@ fn local_object_capture_survives_map_shadowing_and_new_iterations() {
 fn shape_changes_getters_and_shadowed_nonobjects_fail_at_compile_time() {
     for body in [
         "const style = {get width(){return 10;}}; return <Scene style={style}/>;",
-        "const style = {[ctx.localFrame > 0 ? 'width' : 'height']:10}; return <Scene style={style}/>;",
-        "const style = ctx.localFrame > 0 ? {width:10} : {height:20}; return <Scene style={style}/>;",
-        "const style = {width:10}; return <Scene style={{...style,...(ctx.localFrame > 0 ? {height:20} : {})}}/>;",
+        "const style = {[frame > 0 ? 'width' : 'height']:10}; return <Scene style={style}/>;",
+        "const style = frame > 0 ? {width:10} : {height:20}; return <Scene style={style}/>;",
+        "const style = {width:10}; return <Scene style={{...style,...(frame > 0 ? {height:20} : {})}}/>;",
         "const base = 42; return <Scene style={base}/>;",
-        "const base = ctx.localFrame; return <Scene style={base}/>;",
+        "const base = frame; return <Scene style={base}/>;",
     ] {
         let source = format!(
-            "const base = {{width:10}}; export default function Demo() {{ const ctx = useTime(); {body} }}"
+            "const base = {{width:10}}; export default function Demo() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); {body} }}"
         );
         assert!(compile_motion(&source).is_err(), "{body}");
     }

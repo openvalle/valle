@@ -1,6 +1,6 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-function Bar() { const ctx = useTime();
-  return <View key="bar" className="absolute" style={{ left: 20, top: 160, width: 100 + ctx.seconds * 100,
+function Bar() { const time = useCurrentTime();
+  return <View key="bar" className="absolute" style={{ left: 20, top: 160, width: 100 + time.seconds * 100,
     height: 40, backgroundColor: "#ffffff" }} />;
 }
 export default function Scope() {

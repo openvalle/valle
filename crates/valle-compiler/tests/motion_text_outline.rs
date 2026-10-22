@@ -144,7 +144,7 @@ fn text_outline_rejects_missing_fonts_dynamic_inputs_and_bad_typography() {
             .iter()
             .any(|d| d.message.contains("--font"))
     );
-    let dynamic = TEXT_OUTLINE.replace("fontSize: 150", "fontSize: 150 + ctx.progress");
+    let dynamic = TEXT_OUTLINE.replace("fontSize: 150", "fontSize: 150 + time.progress");
     assert!(compile_motion_with_env(&dynamic, &[], Some(&env())).is_err());
     for replacement in ["fontSize: -1", "fontSize: 150, align: \"middle\""] {
         let source = TEXT_OUTLINE.replace("fontSize: 150", replacement);

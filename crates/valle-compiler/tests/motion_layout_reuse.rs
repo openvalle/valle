@@ -11,9 +11,9 @@ use valle_timeline::FrameRate;
 const SOURCE: &str = r##"
 export const controls=({props:{alpha:number({default:1,min:0,max:1})}});
 const items=defineRepeater({count:12,keyPrefix:"row"});
-export default function Scene(props) { const ctx = useTime();
+export default function Scene(props) { const time = useCurrentTime();
  return <Scene className="w-full h-full flex flex-wrap" style={{padding:12,gap:6}}>
-  {items.map(row=><View key={row.key} style={{width:140,height:54,position:"relative",backgroundColor:"#28445b",translate:point(ctx.seconds*6,row.index%3),opacity:props.alpha*interpolate(ctx.seconds,[0,1],[0,1]),scale:point(1+ctx.progress*.05,1),rotate:interpolate(ctx.progress,[0,1],["0deg","4deg"])}}>
+  {items.map(row=><View key={row.key} style={{width:140,height:54,position:"relative",backgroundColor:"#28445b",translate:point(time.seconds*6,row.index%3),opacity:props.alpha*interpolate(time.seconds,[0,1],[0,1]),scale:point(1+time.progress*.05,1),rotate:interpolate(time.progress,[0,1],["0deg","4deg"])}}>
     <Text style={{fontSize:16}}>One fixed paragraph.</Text>
     <Text style={{position:"absolute",left:4,top:30,fontSize:10}}>Stable geometry / current paint</Text>
   </View>)}
@@ -153,11 +153,11 @@ fn fonts_are_frozen_per_cache_and_new_font_configuration_rebuilds_geometry() {
 fn unsupported_and_geometry_changing_scenes_use_the_full_path() {
     let fonts = fonts("NotoSans-Regular.ttf");
     for (from, to) in [
-        ("width:140", "width:140+ctx.seconds"),
-        ("One fixed paragraph.", "{ctx.localFrame}"),
+        ("width:140", "width:140+time.seconds"),
+        ("One fixed paragraph.", "{Math.floor(time.seconds * 30)}"),
         (
             "backgroundColor:\"#28445b\"",
-            "backgroundColor:\"#28445b\",filter:ctx.localFrame<30?'none':'blur(2px)'",
+            "backgroundColor:\"#28445b\",filter:time.seconds<1?'none':'blur(2px)'",
         ),
     ] {
         let source = SOURCE.replace(from, to);
@@ -171,10 +171,10 @@ fn unsupported_and_geometry_changing_scenes_use_the_full_path() {
 #[test]
 fn css_3d_projection_and_filters_reuse_boxes_without_retaining_previous_paint() {
     let source = r##"
-export default function Projection() { const ctx = useTime();
+export default function Projection() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
  return <Scene style={{width:640,height:480,perspective:1200}}>
-  <Group style={{width:640,height:480,transformStyle:"preserve-3d",transform:`rotateX(${ctx.localFrame*.1}deg) scale(1.05)`}}>
-   <View style={{position:"absolute",left:90,top:60,width:300,height:180,transformOrigin:"15% 70%",backfaceVisibility:"hidden",transform:`translate3d(${ctx.localFrame}px,20px,${ctx.localFrame*.2}px) rotateY(${ctx.localFrame*.3}deg)`,filter:`blur(${ctx.localFrame*.01}px) brightness(0.9)`,backgroundColor:"#28445b",opacity:.85}}>
+  <Group style={{width:640,height:480,transformStyle:"preserve-3d",transform:`rotateX(${frame*.1}deg) scale(1.05)`}}>
+   <View style={{position:"absolute",left:90,top:60,width:300,height:180,transformOrigin:"15% 70%",backfaceVisibility:"hidden",transform:`translate3d(${frame}px,20px,${frame*.2}px) rotateY(${frame*.3}deg)`,filter:`blur(${frame*.01}px) brightness(0.9)`,backgroundColor:"#28445b",opacity:.85}}>
     <Text style={{fontSize:24}}>Fixed text / current projection</Text>
    </View>
   </Group>

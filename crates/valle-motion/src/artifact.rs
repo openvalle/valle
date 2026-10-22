@@ -46,7 +46,8 @@ pub const BASE_CAPABILITIES: &[&str] = &[
 /// Scene camera capability, declared only when the artifact uses camera binding.
 pub const CAMERA_CAPABILITY: &str = "scene-camera";
 
-/// Viewport-context capability, declared only when expressions read `ctx.viewport.*`.
+/// Viewport-context capability, declared only when expressions read the composition width or
+/// height.
 pub const VIEWPORT_CAPABILITY: &str = "viewport-context";
 
 /// Optional capabilities are declared only when used.
@@ -550,8 +551,14 @@ pub enum ParticleForce {
     tag = "kind"
 )]
 pub enum BatchPositions {
-    Static { values: Vec<valle_draw::Point> },
-    Particles { frame: ExprId, spec: ParticleSpec },
+    Static {
+        values: Vec<valle_draw::Point>,
+    },
+    /// Particles at `time`, in seconds since the first one was born.
+    Particles {
+        time: ExprId,
+        spec: ParticleSpec,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -720,9 +727,10 @@ pub enum NodeKind {
         samples: u8,
         angle_degrees: u16,
     },
+    /// Past samples of the subtree, `delay` seconds apart, painted under it.
     Echo {
         count: u8,
-        interval_frames: u32,
+        delay: valle_timeline::RationalTime,
         decay: f64,
     },
     TimeScope {
@@ -1388,8 +1396,8 @@ impl SceneNode {
                 number("/kind/trimEnd".into(), trim_end, &mut refs);
             }
             NodeKind::GeometryBatch { batch } => {
-                if let BatchPositions::Particles { frame, .. } = &batch.positions {
-                    refs.push(("/kind/batch/positions/frame".into(), *frame));
+                if let BatchPositions::Particles { time, .. } = &batch.positions {
+                    refs.push(("/kind/batch/positions/time".into(), *time));
                 }
                 for (path, expr) in [
                     (
@@ -3506,7 +3514,7 @@ impl SceneArtifact {
                 {
                     errors.push(ValidationError::new(
                         format!("{path}{slot}"),
-                        "ctx.unit.* is only available inside a Text per-unit style",
+                        "the unit is only available inside the perUnit function of a Text",
                     ));
                 }
             }
@@ -3786,14 +3794,15 @@ impl SceneArtifact {
             (true, false) => errors.push(ValidationError::new(
                 "/capabilitySet/names",
                 format!(
-                    "scene reads `ctx.viewport.*` but does not declare `{VIEWPORT_CAPABILITY}`; \
-                     a consumer without it cannot supply the value"
+                    "scene reads the composition width or height but does not declare \
+                     `{VIEWPORT_CAPABILITY}`; a consumer without it cannot supply the value"
                 ),
             )),
             (false, true) => errors.push(ValidationError::new(
                 "/capabilitySet/names",
                 format!(
-                    "`{VIEWPORT_CAPABILITY}` is declared but the scene never reads ctx.viewport"
+                    "`{VIEWPORT_CAPABILITY}` is declared but the scene never reads the \
+                     composition width or height"
                 ),
             )),
             _ => {}
@@ -4846,11 +4855,11 @@ impl SceneArtifact {
                 }
                 let count = match &batch.positions {
                     BatchPositions::Static { values } => values.len(),
-                    BatchPositions::Particles { frame, spec } => {
-                        if expr_types.get(frame.0 as usize) != Some(&Some(ExprType::Number)) {
+                    BatchPositions::Particles { time, spec } => {
+                        if expr_types.get(time.0 as usize) != Some(&Some(ExprType::Number)) {
                             errors.push(ValidationError::new(
-                                format!("{path}/kind/batch/positions/frame"),
-                                "particle frame must be a Number expression",
+                                format!("{path}/kind/batch/positions/time"),
+                                "particle time must be a Number expression",
                             ));
                         }
                         spec.count as usize
@@ -5114,7 +5123,7 @@ impl SceneArtifact {
             }
             if let NodeKind::Echo {
                 count,
-                interval_frames,
+                delay,
                 decay,
             } = &node.kind
             {
@@ -5130,7 +5139,7 @@ impl SceneArtifact {
                             })
                     });
                 if !(1..=32).contains(count)
-                    || *interval_frames == 0
+                    || delay.is_non_positive()
                     || !decay.is_finite()
                     || !(0.0..=1.0).contains(decay)
                     || !has_children
@@ -5141,7 +5150,7 @@ impl SceneArtifact {
                 {
                     errors.push(ValidationError::new(
                         format!("{path}/kind"),
-                        "Echo needs 1..=32 past samples, a positive integer frame interval, finite decay in [0,1], child layout boxes, and no wrapper styles or visibility",
+                        "Echo needs 1..=32 past samples, a positive delay in seconds, finite decay in [0,1], child layout boxes, and no wrapper styles or visibility",
                     ));
                 }
             }

@@ -8,11 +8,11 @@ const DOTS = Array.from({ length: COLS * COLS }, (_, i) => ({
   color: i % 2 === 0 ? "#8b7bff80" : "#22d3ee",
   delay: i / (COLS * COLS),
 }));
-export default function PathGrid() { const ctx = useTime();
+export default function PathGrid() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     {DOTS.map((dot) => (
       <Path key={dot.id} d={STAR} fill={dot.color}
-        style={{ translate: point(dot.x + ctx.seconds * 3, dot.y) }} />
+        style={{ translate: point(dot.x + time.seconds * 3, dot.y) }} />
     ))}
   </Scene>;
 }

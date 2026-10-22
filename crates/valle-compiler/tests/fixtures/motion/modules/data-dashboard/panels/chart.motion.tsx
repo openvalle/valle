@@ -1,4 +1,4 @@
-export function ChartPanel({ rows, x, y, width, height }) { const ctx = useTime();
+export function ChartPanel({ rows, x, y, width, height }) { const time = useCurrentTime();
   const theme = useTheme();
   const { panel, accent, ink, hairline } = theme.colors;
   const values = rows.map((row) => row.value);
@@ -13,7 +13,7 @@ export function ChartPanel({ rows, x, y, width, height }) { const ctx = useTime(
         const top = yScale.map(row.value);
         const band = xScale.band(index);
         return (
-          <View key={row.id} className="absolute" style={{ left: band[0], top, width: xScale.bandwidth(), height: baseline - top, borderRadius: theme.radius.mark, backgroundColor: accent, opacity: 0.28 + ctx.progress * 0.72 }}>
+          <View key={row.id} className="absolute" style={{ left: band[0], top, width: xScale.bandwidth(), height: baseline - top, borderRadius: theme.radius.mark, backgroundColor: accent, opacity: 0.28 + time.progress * 0.72 }}>
             <Text key={`label-${row.id}`} className="absolute" style={{ left: 0, top: baseline - top + 18, width: xScale.bandwidth(), fontSize: 16, color: ink, textAlign: "center" }}>{row.label}</Text>
           </View>
         );

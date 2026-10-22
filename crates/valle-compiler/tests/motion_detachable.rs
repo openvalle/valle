@@ -28,9 +28,12 @@ fn fonts() -> Fonts {
     fonts
 }
 
-/// Layout a scene at a given viewport and return its node boxes.
+/// Layout a scene composed at a given size and return its node boxes.
 fn boxes_at(source: &str, width: u32, height: u32) -> BTreeMap<String, [f32; 4]> {
-    let compiled = compile_motion(source).expect("reference film compiles");
+    const SIZE: &str = "{ width: 1920, height: 1080,";
+    assert!(source.contains(SIZE), "the film declares its size");
+    let source = source.replacen(SIZE, &format!("{{ width: {width}, height: {height},"), 1);
+    let compiled = compile_motion(&source).expect("reference film compiles");
     let prepared = prepare_scene(&compiled.artifact).expect("prepare");
     let props = resolve_props(&compiled.artifact.controls, &Default::default()).expect("props");
     let ctx = motion_context_at_frame(30, 60, FrameRate::new(30, 1).unwrap()).expect("frame 30");
@@ -92,7 +95,7 @@ fn node_counts_follow_the_data_not_a_hand_written_list() {
 
 // Resolution independence.
 
-/// Doubling the viewport doubles boxes within a two-pixel rounding tolerance.
+/// Doubling the composition size doubles boxes within a two-pixel rounding tolerance.
 #[test]
 fn every_film_lays_out_proportionally_at_two_resolutions() {
     for (name, source) in FILMS {
@@ -111,7 +114,7 @@ fn every_film_lays_out_proportionally_at_two_resolutions() {
             for axis in 0..4 {
                 assert!(
                     (b[axis] - a[axis] * 2.0).abs() <= 2.0,
-                    "{name}: {key}[{axis}] must double with the viewport — {} vs {}",
+                    "{name}: {key}[{axis}] must double with the composition size — {} vs {}",
                     a[axis],
                     b[axis]
                 );
@@ -175,7 +178,6 @@ fn the_reference_films_only_use_the_public_surface() {
         "linearGradient",
         "radialGradient",
         "gradientStop",
-        "frames",
         "number",
         "string",
         "boolean",
@@ -184,7 +186,8 @@ fn the_reference_films_only_use_the_public_surface() {
         "angle",
         "select",
         "asset",
-        "useTime",
+        "useCurrentTime",
+        "useComposition",
         "useData",
         "useTheme",
     ];

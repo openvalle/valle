@@ -16,7 +16,7 @@ fn env() -> MeasureEnv {
 fn source(expr: &str) -> String {
     format!(
         "const M = measureText(\"全球业务网络\", {{ fontSize: 48 }});\n\
-         export default function Card() {{ const ctx = useTime();\n\
+         export default function Card() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);\n\
          \x20 return <Scene key=\"scene\" style={{{{ opacity: {expr} }}}} />;\n\
          }}\n"
     )
@@ -99,8 +99,8 @@ fn an_empty_font_list_uses_the_canonical_default_font() {
 #[test]
 fn frame_varying_measure_inputs_fail_closed() {
     // A ctx-dependent measureText argument must produce a preparation-time capability diagnostic.
-    let source = "export default function Card() { const ctx = useTime();\n  \
-                  const m = measureText(\"x\", { maxWidth: ctx.progress * 100 });\n  \
+    let source = "export default function Card() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);\n  \
+                  const m = measureText(\"x\", { maxWidth: time.progress * 100 });\n  \
                   return <Scene key=\"scene\" style={{ opacity: m.width }} />;\n}\n";
     let diagnostics =
         compile_motion_with_env(source, &[], Some(&env())).expect_err("frame-varying measure");
@@ -133,7 +133,7 @@ fn measurement_is_reproducible_across_compiles() {
 #[test]
 fn bad_measure_options_surface_as_authored_diagnostics_not_panics() {
     let source = "const M = measureText(\"x\", { fontSize: 16, maxWidth: -5 });\n\
-                  export default function Card() { const ctx = useTime();\n  \
+                  export default function Card() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);\n  \
                   return <Scene key=\"scene\" style={{ opacity: M.width }} />;\n}\n";
     let diagnostics =
         compile_motion_with_env(source, &[], Some(&env())).expect_err("negative maxWidth");
@@ -153,7 +153,7 @@ fn bad_measure_options_surface_as_authored_diagnostics_not_panics() {
 fn measure_cannot_be_used_to_smuggle_nondeterminism_into_prepare() {
     // Installing measurement capabilities must preserve sandbox determinism restrictions.
     let source = "const M = measureText(String(Date.now()));\n\
-                  export default function Card() { const ctx = useTime();\n  \
+                  export default function Card() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);\n  \
                   return <Scene key=\"scene\" style={{ opacity: M.width }} />;\n}\n";
     let diagnostics = compile_motion_with_env(source, &[], Some(&env()))
         .expect_err("Date must stay forbidden with measure installed");
@@ -242,8 +242,8 @@ fn variable_axis_measurement_matches_the_rendered_layout_box() {
 const label='WEIGHT';
 const type={fontSize:80,fontVariationSettings:'"wght" 650.25, "wdth" 75'};
 const M=measureText(label,type);
-export default function Card(){ const ctx = useTime();return <Scene style={{width:640,height:360}}>
-  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,opacity:ctx.localFrame/100}}/>
+export default function Card(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene style={{width:640,height:360}}>
+  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,opacity:frame/100}}/>
   <Text key='actual' style={{...type,position:'absolute',top:100}}>{label}</Text>
 </Scene>}
 "#;
@@ -264,8 +264,8 @@ fn constrained_measurement_matches_wrapped_rendered_text() {
     let source = r#"
 const label='全球业务网络 Overview: shared measurement';
 const M=measureText(label,{fontFamily:'monospace',fontSize:28,lineHeight:1.25,maxWidth:200});
-export default function Card(){ const ctx = useTime();return <Scene style={{width:'100%',height:480}}>
-  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,backgroundColor:'#334455',opacity:ctx.localFrame/100}}/>
+export default function Card(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene style={{width:'100%',height:480}}>
+  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,backgroundColor:'#334455',opacity:frame/100}}/>
   <Text key='actual' style={{position:'absolute',top:100,fontFamily:'monospace',fontSize:28,lineHeight:1.25,width:200}}>{label}</Text>
 </Scene>}
 "#;
@@ -286,8 +286,8 @@ fn entry_measurement_uses_composition_canvas_even_with_a_small_host_viewport() {
 export const composition = { width: 320, height: 180, duration: 1 };
 const label = 'iiii WWWW iiii WWWW';
 const M = measureText(label, { fontFamily: 'monospace, sans-serif', fontSize: 32, fontWeight: 700, letterSpacing: 1.5, lineHeight: 1.25, maxWidth: 120 });
-export default function Card() { const ctx = useTime(); return <Scene style={{ width: 320, height: 180 }}>
-  <View key='measured' style={{ position: 'absolute', width: M.width, height: M.height, opacity: ctx.localFrame / 100 }} />
+export default function Card() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); return <Scene style={{ width: 320, height: 180 }}>
+  <View key='measured' style={{ position: 'absolute', width: M.width, height: M.height, opacity: frame / 100 }} />
   <Text key='actual' style={{ position: 'absolute', top: 0, fontFamily: 'monospace, sans-serif', fontSize: 32, fontWeight: 700, letterSpacing: 1.5, lineHeight: 1.25, width: 120 }}>{label}</Text>
 </Scene>; }
 "#;
@@ -318,8 +318,8 @@ fn font_lists_measure_like_text_with_and_without_wrapping() {
 const label='iiii WWWW iiii WWWW';
 const family={family:?};
 const M=measureText(label,{{fontFamily:family,fontSize:32{constraint}}});
-export default function Card(){{ const ctx = useTime();return <Scene style={{{{width:640,height:480}}}}>
-  <View key='measured' style={{{{position:'absolute',width:M.width,height:M.height,opacity:ctx.localFrame/100}}}}/>
+export default function Card(){{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene style={{{{width:640,height:480}}}}>
+  <View key='measured' style={{{{position:'absolute',width:M.width,height:M.height,opacity:frame/100}}}}/>
   <Text key='actual' style={{{{position:'absolute',top:100,fontFamily:family,fontSize:32{text_width}}}}}>{{label}}</Text>
 </Scene>}}
 "#
@@ -377,8 +377,8 @@ fn literal_font_alias_matches_rendering() {
 export const controls=({assets:{brandFont:asset({kind:'font',required:true})}});
 const label='iiii WWWW';
 const M=measureText(label,{fontFamily:'asset://brandFont',fontSize:32,lineHeight:1.5});
-export default function Card(){ const ctx = useTime();return <Scene style={{width:960,height:480}}>
-  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,backgroundColor:'#334455',opacity:ctx.localFrame/100}}/>
+export default function Card(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene style={{width:960,height:480}}>
+  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,backgroundColor:'#334455',opacity:frame/100}}/>
   <Text key='actual' style={{position:'absolute',top:100,fontFamily:'asset://brandFont',fontSize:32,lineHeight:1.5}}>{label}</Text>
 </Scene>}
 "#;
@@ -407,8 +407,8 @@ fn explicit_typography_measurement_matches_rendered_text() {
     let source = r#"
 const label='iiii 全球 Overview';
 const M=measureText(label,{fontFamily:'monospace',fontSize:24,lineHeight:1.5,letterSpacing:2,fontWeight:700});
-export default function Card(){ const ctx = useTime();return <Scene style={{width:640,height:480}}>
-  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,backgroundColor:'#334455',opacity:ctx.localFrame/100}}/>
+export default function Card(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene style={{width:640,height:480}}>
+  <View key='measured' style={{position:'absolute',width:M.width,height:M.height,backgroundColor:'#334455',opacity:frame/100}}/>
   <Text key='actual' style={{position:'absolute',top:100,fontFamily:'monospace',fontSize:24,lineHeight:1.5,letterSpacing:2,fontWeight:700}}>{label}</Text>
 </Scene>}
 "#;

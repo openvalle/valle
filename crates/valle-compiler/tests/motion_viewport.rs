@@ -49,14 +49,14 @@ fn lay_out(source: &str, width: u32, height: u32) -> Laid {
     }
 }
 
-/// Compute both boxes and geometry from ctx.viewport.
+/// Compute both boxes and geometry from the composition size.
 const RESOLUTION_INDEPENDENT: &str = r##"
 const DATA = [12, 45, 78, 33];
 const maxV = DATA.reduce((a, b) => (a > b ? a : b), 0);
 
-export default function Chart() { const ctx = useTime();
-  const w = ctx.viewport.width;
-  const h = ctx.viewport.height;
+export default function Chart() { const comp = useComposition();
+  const w = comp.width;
+  const h = comp.height;
   const plotHeight = h * 0.6;
   const barWidth = w / (DATA.length * 2);
   const barX = (i) => w * 0.1 + i * barWidth * 2;
@@ -137,12 +137,12 @@ fn reading_the_viewport_declares_the_capability_and_not_otherwise() {
             .names
             .iter()
             .any(|name| name == valle_motion::VIEWPORT_CAPABILITY),
-        "reading ctx.viewport must declare the capability"
+        "reading the composition size must declare the capability"
     );
 
     let without = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: "10%", top: 0, width: "50%", height: 10 }} />
   </Scene>);
@@ -157,27 +157,27 @@ export default function P() { const ctx = useTime();
             .names
             .iter()
             .any(|name| name == valle_motion::VIEWPORT_CAPABILITY),
-        "a scene that never reads ctx.viewport must not declare the capability"
+        "a scene that never reads the composition size must not declare the capability"
     );
 }
 
-/// Reject viewport fields other than width and height.
+/// Reject composition fields that do not exist.
 #[test]
 fn unknown_viewport_fields_fail_closed() {
     let diagnostics = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
-    <View key="a" style={{ position: "absolute", left: ctx.viewport.dpr, top: 0, width: 10, height: 10 }} />
+    <View key="a" style={{ position: "absolute", left: useComposition().dpr, top: 0, width: 10, height: 10 }} />
   </Scene>);
 }
 "##,
     )
-    .expect_err("unknown viewport field must be rejected");
+    .expect_err("an unknown composition field must be rejected");
     assert!(
         diagnostics
             .iter()
-            .any(|d| d.message.contains("`viewport.dpr`")),
+            .any(|d| d.message.contains("`dpr` is not in `useComposition()`")),
         "got {diagnostics:#?}"
     );
 }

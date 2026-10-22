@@ -38,10 +38,10 @@ const CONTACT: &str = include_str!(
 );
 
 const COST: &str = r##"export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
-export default function Cost() { const ctx = useTime();
+export default function Cost() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 4);
   return (
     <Scene className="relative h-full w-full">
-      <View key="card" className="absolute" style={{ left: 8, top: 8, width: 16 + ctx.localFrame * 8,
+      <View key="card" className="absolute" style={{ left: 8, top: 8, width: 16 + frame * 8,
         height: 20, backgroundColor: "#ff8040", filter: "blur(2px)" }} />
     </Scene>
   );
@@ -49,8 +49,8 @@ export default function Cost() { const ctx = useTime();
 "##;
 
 const COST_TRANSITION: &str = r##"export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
-export default function Blur() { const ctx = useTime();
-  return <Transition kind="linearBlur" progress={ctx.progress} style={{ width: 64, height: 36 }}>
+export default function Blur() { const time = useCurrentTime();
+  return <Transition kind="linearBlur" progress={time.progress} style={{ width: 64, height: 36 }}>
     <View style={{ backgroundColor: "#2140ff" }} />
     <View style={{ backgroundColor: "#ff4a24" }} />
   </Transition>;
@@ -59,8 +59,8 @@ export default function Blur() { const ctx = useTime();
 
 const COST_SHADER: &str = r##"export const controls = { assets: { effect: asset({ kind: "shader" }) } };
 export const composition = { width: 64, height: 36, fps: 4, duration: 1 };
-export default function Work() { const ctx = useTime();
-  const size = { width: ctx.viewport.width, height: ctx.viewport.height };
+export default function Work() { const comp = useComposition();
+  const size = { width: comp.width, height: comp.height };
   return <Scene style={size}><ShaderLayer source="asset://effect" style={size}>NESTED</ShaderLayer></Scene>;
 }
 "##;
@@ -295,7 +295,7 @@ export default function Control() {
     );
 
     let filled_outline = TEXT_OUTLINE.replace(
-        "fill=\"none\" stroke=\"#ffffff\" strokeWidth={3} trimEnd={ctx.progress}",
+        "fill=\"none\" stroke=\"#ffffff\" strokeWidth={3} trimEnd={time.progress}",
         "fill=\"#ffffff\"",
     );
     std::fs::write(dir.path().join("filled-outline.motion.tsx"), filled_outline).unwrap();
@@ -316,11 +316,11 @@ fn range_selector_feathers_one_letter_with_unit_local_blur() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("selector.motion.tsx"), RANGE_SELECTOR).unwrap();
     let no_blur = RANGE_SELECTOR.replace(
-        "blur: 8 * (1 - rangeSelector({ start: 0, end: ctx.progress, softness: 0.15, shape: \"ramp\" }))",
+        "blur: 8 * (1 - rangeSelector(unit, { start: 0, end: time.progress, softness: 0.15, shape: \"ramp\" }))",
         "blur: 0",
     );
     let full = no_blur.replace(
-        "opacity: rangeSelector({ start: 0, end: ctx.progress, softness: 0.15, shape: \"ramp\" })",
+        "opacity: rangeSelector(unit, { start: 0, end: time.progress, softness: 0.15, shape: \"ramp\" })",
         "opacity: 1",
     );
     std::fs::write(dir.path().join("no-blur.motion.tsx"), no_blur).unwrap();
@@ -1134,7 +1134,7 @@ fn bare_filename_import_check_matches_dot_relative_entry() {
     std::fs::write(dir.path().join("module-entry.motion.tsx"), r##"
 import { SIZE } from "./lib";
 export const composition = { width: 640, height: 360, fps: 30, duration: 1 };
-export default function Main() { const ctx = useTime(); return <Scene className="relative h-full w-full" style={{backgroundColor:"#101010"}}>
+export default function Main() { return <Scene className="relative h-full w-full" style={{backgroundColor:"#101010"}}>
 <View key="box" className="absolute" style={{left:20,top:20,width:SIZE,height:SIZE,backgroundColor:"#ffffff"}} /></Scene>; }
 "##).unwrap();
     let mut bare = success(run(

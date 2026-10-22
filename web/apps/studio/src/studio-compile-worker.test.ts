@@ -76,8 +76,8 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
   const digest = `sha256:${new Bun.CryptoHasher("sha256").update(font).digest("hex")}`;
   const descriptor = { faceIndex: 0, variationAxes: {} };
   const source = `export const composition={width:320,height:180,fps:4,duration:1};
-    export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-    export default function Caption(props){ const ctx = useTime(); const caption = useCaption();return <Scene>{caption.runs.map((run,index)=><Text key={index} style={{fontFamily:caption.style.font,fontSize:caption.style.fontSize,color:ctx.host.seconds>=run.start&&ctx.host.seconds<run.end?"#facc15":"#ffffff"}}>{run.text}</Text>)}</Scene>;}`;
+    export const role=captionPresenter({intro:0.25,outro:0.25});
+    export default function Caption(props){ const time = useCurrentTime(); const caption = useCaption();return <Scene>{caption.runs.map((run,index)=><Text key={index} style={{fontFamily:caption.style.font,fontSize:caption.style.fontSize,color:time.clipSeconds>=run.start&&time.clipSeconds<run.end?"#facc15":"#ffffff"}}>{run.text}</Text>)}</Scene>;}`;
   const data = { text: "Build story", runs: [{ text: "Build ", start: 0, end: 0.5 }, { text: "story", start: 0.5, end: 1 }],
     style: { font: "asset://caption", fontSize: 28, color: "#ffffff" }, region: [32, 54, 256, 90], align: "bottom-center" };
   const instance = { clipPath: "/tracks/visual/0/clips/0", entry: "caption.motion.tsx", modules: { "caption.motion.tsx": source },
@@ -132,9 +132,9 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
 test("Timeline Motion transitions compile at their transition path as transition() templates", async () => {
   const dissolve = `export const composition={width:64,height:32,fps:4,duration:1};
     export const role=transition();
-    export default function Dissolve(){ const ctx = useTime(); return <Scene className="relative h-full w-full">
+    export default function Dissolve(){ const time = useCurrentTime(); return <Scene className="relative h-full w-full">
       <Image src="input://from" className="absolute inset-0 h-full w-full"/>
-      <Image src="input://to" className="absolute inset-0 h-full w-full" style={{opacity:ctx.host.progress}}/>
+      <Image src="input://to" className="absolute inset-0 h-full w-full" style={{opacity:time.clipProgress}}/>
     </Scene>;}`;
   const request = (source: string) => ({
     id: 40, runtimeAssets, runtimeBaseUrl,
@@ -159,8 +159,8 @@ test("Timeline effects compile at their effect and adjustment paths as effect() 
   const invert = "const invert=`uniform shader source;\nfloat4 valle_main(float2 uv){float4 c=sample_source(uv);return float4(1.0-c.rgb,c.a);}`;\n"
     + `export const composition={width:64,height:32,fps:4,duration:1};
     export const role=effect();
-    export default function Invert(){ const ctx = useTime(); return <Scene>
-      <ShaderLayer code={invert} inputs={{source:"input://source"}} style={{width:ctx.viewport.width,height:ctx.viewport.height}}/>
+    export default function Invert(){ const comp = useComposition(); return <Scene>
+      <ShaderLayer code={invert} inputs={{source:"input://source"}} style={{width:comp.width,height:comp.height}}/>
     </Scene>;}`;
   const request = (source: string) => ({
     id: 41, runtimeAssets, runtimeBaseUrl,
@@ -188,8 +188,8 @@ test("300 Timeline captions compile their track's template once and retain exact
   const digest = `sha256:${new Bun.CryptoHasher("sha256").update(font).digest("hex")}`;
   const descriptor = { faceIndex: 0, variationAxes: {} };
   const source = `export const composition={width:160,height:48,fps:4,duration:1};
-    export const role=captionPresenter({intro:seconds(0.25),outro:seconds(0.25)});
-    export default function Caption(props){ const ctx = useTime(); const caption = useCaption();return <Scene><Text key="word" style={{fontFamily:caption.style.font,fontSize:caption.style.fontSize,color:ctx.host.seconds<1?"#facc15":"white"}}>{caption.text}</Text></Scene>;}`;
+    export const role=captionPresenter({intro:0.25,outro:0.25});
+    export default function Caption(props){ const time = useCurrentTime(); const caption = useCaption();return <Scene><Text key="word" style={{fontFamily:caption.style.font,fontSize:caption.style.fontSize,color:time.clipSeconds<1?"#facc15":"white"}}>{caption.text}</Text></Scene>;}`;
   const clips = Array.from({ length: 300 }, (_, i) => ({ start: i * 2 + 0.125, duration: 2,
     runs: [{ text: `Word ${i % 100}`, start: 0, end: 1.75 }] }));
   const request = {
@@ -244,8 +244,8 @@ test("300 Timeline captions compile their track's template once and retain exact
 
 test("Studio diagnoses misplaced roles before compiling host data with author names", async () => {
   for (const [component, track, declaration, expected] of [
-    ["words", "visual", "captionPresenter({intro:seconds(0),outro:seconds(0)})", "captionPresenter belongs on a caption track"],
-    ["title", "caption", "overlay({intro:seconds(0),outro:seconds(0),hold:'once'})", "a caption track presenter must declare captionPresenter"],
+    ["words", "visual", "captionPresenter({intro:0,outro:0})", "captionPresenter belongs on a caption track"],
+    ["title", "caption", "overlay({intro:0,outro:0,hold:'once'})", "a caption track presenter must declare captionPresenter"],
   ] as const) {
     const source = `export const composition={width:64,height:32,duration:1}; export const role=${declaration};
       export default function Template(props){ const data = useData();return <Scene/>;}`;

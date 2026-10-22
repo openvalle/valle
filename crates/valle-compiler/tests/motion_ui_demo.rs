@@ -139,7 +139,7 @@ fn component_names_compile_away_and_ai_edits_keep_state_topology() {
     let edited = SOURCE
         .replace("default: \"#7c3aed\"", "default: \"#2563eb\"")
         .replace("Launch film / 4K master", "Review film / 4K master")
-        .replace("duration: seconds(1.05)", "duration: seconds(1.18)");
+        .replace("duration: 1.05", "duration: 1.18");
     let edited = compile(&edited);
     assert_eq!(original.artifact.nodes.len(), edited.artifact.nodes.len());
     assert_eq!(

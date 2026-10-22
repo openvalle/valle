@@ -12,8 +12,8 @@ fn source(easing: &str) -> String {
 
 fn with_options(options: &str) -> String {
     format!(
-        r#"export default function E() {{ const ctx = useTime(); return <View style={{{{
-        left: interpolate(ctx.seconds, [0, 1], [40, 440], {options})
+        r#"export default function E() {{ const time = useCurrentTime(); return <View style={{{{
+        left: interpolate(time.seconds, [0, 1], [40, 440], {options})
     }}}}/>; }}"#
     )
 }

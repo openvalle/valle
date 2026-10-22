@@ -12,7 +12,7 @@ use valle_timeline::FrameRate;
 
 fn scene(class: &str, style: &str, position: &str) -> String {
     format!(
-        r#"export default function Demo() {{ const ctx = useTime(); return <Scene style={{{{width:320,height:180}}}}>
+        r#"export default function Demo() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); return <Scene style={{{{width:320,height:180}}}}>
         <View key="parent" {class} style={{{{marginLeft:70,marginTop:40,width:100,height:60,
             borderWidth:3,padding:8,backgroundColor:'red',{style}}}}}>
             <View key="child" style={{{{position:'{position}',left:5,top:7,width:20,height:10,backgroundColor:'blue'}}}}/>
@@ -75,7 +75,7 @@ fn frames(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, Vec<
 
 fn css_3d_scene(class: &str, inline: &str) -> String {
     format!(
-        r#"export default function Demo(){{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}>
+        r#"export default function Demo(){{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene style={{{{width:320,height:180}}}}>
         <View key='red' {class} style={{{{position:'absolute',left:100,top:30,width:100,height:100,
             backgroundColor:'red',rotateY:45,{inline}}}}}/>
         <View key='blue' style={{{{position:'absolute',left:100,top:30,width:100,height:100,
@@ -163,11 +163,8 @@ fn css_3d_origin_uses_the_effective_author_transform_origin() {
 
 #[test]
 fn conditional_3d_styles_and_rotation_seek_without_history() {
-    let dynamic = css_3d_scene(
-        "className={ctx.localFrame<30?'z-20 origin-top-left':''}",
-        "",
-    )
-    .replace("rotateY:45,", "rotateY:ctx.localFrame,");
+    let dynamic = css_3d_scene("className={frame<30?'z-20 origin-top-left':''}", "")
+        .replace("rotateY:45,", "rotateY:frame,");
     let requested = [60, 0, 30, 60, 15, 0];
     let actual = frames(&dynamic, &requested);
     for (index, frame) in requested.into_iter().enumerate() {
@@ -240,7 +237,7 @@ fn css_3d_lists_draw_the_matrices_css_defines_for_perspective_matrix3d_skew_and_
     let requested = [60, 0, 30];
     let dynamic = css_3d_scene(
         "",
-        "transform:`perspective(${400 + ctx.localFrame}px) rotateX(${ctx.localFrame}deg)`",
+        "transform:`perspective(${400 + frame}px) rotateX(${frame}deg)`",
     );
     let actual = frames(&dynamic, &requested);
     for (index, frame) in requested.into_iter().enumerate() {
@@ -260,7 +257,7 @@ fn css_3d_lists_draw_the_matrices_css_defines_for_perspective_matrix3d_skew_and_
 
 fn stage_scene(transform_style: &str, backface: &str) -> String {
     format!(
-        r#"export default function Demo(){{ const ctx = useTime();return <Scene style={{{{width:320,height:180}}}}>
+        r#"export default function Demo(){{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene style={{{{width:320,height:180}}}}>
         <View key='stage' style={{{{position:'absolute',left:60,top:20,width:200,height:140,
             perspective:400,rotateY:50,transformStyle:{transform_style}}}}}>
             <View key='card' style={{{{position:'absolute',left:50,top:20,width:100,height:100,
@@ -283,8 +280,8 @@ fn transform_style_and_backface_visibility_can_change_per_frame() {
         frames(&stage_scene("'flat'", "'hidden'"), &[0])[0].1
     );
     let dynamic = stage_scene(
-        "ctx.localFrame<30?'preserve-3d':'flat'",
-        "ctx.localFrame<15||ctx.localFrame>=45?'hidden':'visible'",
+        "frame<30?'preserve-3d':'flat'",
+        "frame<15||frame>=45?'hidden':'visible'",
     );
     let requested = [60, 0, 30, 15, 45, 0];
     let actual = frames(&dynamic, &requested);
@@ -401,20 +398,14 @@ fn translate_single_value_defaults_y_to_zero() {
 fn dynamic_transform_values_match_literal_css_and_preserve_geometry_reuse() {
     let requested = [60, 0, 30, 60, 15, 0];
     for (dynamic, reference) in [
+        ("translate:`${frame}px 10%`", "translate:'FRAMEpx 10%'"),
+        ("translate:`${frame}px`", "translate:'FRAMEpx'"),
+        ("translate:point(frame,5)", "translate:'FRAMEpx 5px'"),
+        ("rotate:`${frame}deg`", "rotate:'FRAMEdeg'"),
+        ("scale:`${1+frame/90} 1`", "scale:'SCALE 1'"),
+        ("scale:`${100+frame}%`", "scale:'PERCENT%'"),
         (
-            "translate:`${ctx.localFrame}px 10%`",
-            "translate:'FRAMEpx 10%'",
-        ),
-        ("translate:`${ctx.localFrame}px`", "translate:'FRAMEpx'"),
-        (
-            "translate:point(ctx.localFrame,5)",
-            "translate:'FRAMEpx 5px'",
-        ),
-        ("rotate:`${ctx.localFrame}deg`", "rotate:'FRAMEdeg'"),
-        ("scale:`${1+ctx.localFrame/90} 1`", "scale:'SCALE 1'"),
-        ("scale:`${100+ctx.localFrame}%`", "scale:'PERCENT%'"),
-        (
-            "transformOrigin:`${ctx.localFrame}% 20%`,rotate:'20deg'",
+            "transformOrigin:`${frame}% 20%`,rotate:'20deg'",
             "transformOrigin:'FRAME% 20%',rotate:'20deg'",
         ),
     ] {
@@ -450,7 +441,7 @@ fn dynamic_transform_presence_switches_rebuild_positioned_descendants() {
         ("scale", "1 1"),
     ] {
         for position in ["absolute", "fixed"] {
-            let dynamic = format!("{property}:ctx.localFrame<30?'none':'{identity}'");
+            let dynamic = format!("{property}:frame<30?'none':'{identity}'");
             let authored = scene("", &dynamic, position);
             let artifact = compile_motion(&authored).unwrap().artifact;
             assert!(!prepare_scene(&artifact).unwrap().can_reuse_layout());
@@ -470,13 +461,13 @@ fn dynamic_transform_presence_switches_rebuild_positioned_descendants() {
 #[test]
 fn transform_templates_can_be_reused_through_constants_helpers_and_components() {
     let source = r#"function angle(t) { return `${t}deg`; }
-    function Item(props) { const ctx = useTime(); return <View key='parent' style={{width:80,height:60,backgroundColor:'red',
+    function Item(props) { return <View key='parent' style={{width:80,height:60,backgroundColor:'red',
         translate:props.move,rotate:props.turn,scale:props.zoom,transform:props.skew}}/>; }
-    export default function Demo() { const ctx = useTime();
-        const move = `${ctx.localFrame}px 5px`;
-        const turn = angle(ctx.localFrame);
-        const zoom = `${1+ctx.localFrame/90} 1`;
-        const skew = ctx.localFrame<30 ? `skew(${ctx.localFrame}deg)` : `skew(10deg,${ctx.localFrame}deg)`;
+    export default function Demo() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
+        const move = `${frame}px 5px`;
+        const turn = angle(frame);
+        const zoom = `${1+frame/90} 1`;
+        const skew = frame<30 ? `skew(${frame}deg)` : `skew(10deg,${frame}deg)`;
         return <Scene style={{width:320,height:180}}><Item move={move} turn={turn} zoom={zoom} skew={skew}/></Scene>;
     }"#;
     let actual = frames(source, &[60, 0, 15, 60, 0]);
@@ -489,15 +480,15 @@ fn transform_templates_can_be_reused_through_constants_helpers_and_components() 
 #[test]
 fn css_template_choices_keep_literal_keywords_through_local_bindings() {
     for (property, value) in [
-        ("translate", "${ctx.localFrame}px"),
-        ("rotate", "${ctx.localFrame}deg"),
-        ("scale", "${1+ctx.localFrame/90}"),
+        ("translate", "${frame}px"),
+        ("rotate", "${frame}deg"),
+        ("scale", "${1+frame/90}"),
     ] {
         let dynamic = scene("", &format!("{property}:chosen"), "fixed")
-            .replace("useTime(); return <Scene", &format!("useTime(); const reset = 'none'; const chosen = ctx.localFrame<30 ? reset : `{value}`; return <Scene"));
+            .replace("* 30); return <Scene", &format!("* 30); const reset = 'none'; const chosen = frame<30 ? reset : `{value}`; return <Scene"));
         let inline = scene(
             "",
-            &format!("{property}:ctx.localFrame<30?'none':`{value}`"),
+            &format!("{property}:frame<30?'none':`{value}`"),
             "fixed",
         );
         assert_eq!(
@@ -512,28 +503,16 @@ fn css_template_choices_keep_literal_keywords_through_local_bindings() {
 fn css_choices_can_mix_typed_scalars_and_literal_strings() {
     let dynamic = scene(
         "",
-        "rotate:ctx.localFrame<30?'15deg':interpolate(ctx.localFrame,[0,90],['0deg','90deg'])",
+        "rotate:frame<30?'15deg':interpolate(frame,[0,90],['0deg','90deg'])",
         "fixed",
     );
-    let inline = scene(
-        "",
-        "rotate:ctx.localFrame<30?'15deg':`${ctx.localFrame}deg`",
-        "fixed",
-    );
+    let inline = scene("", "rotate:frame<30?'15deg':`${frame}deg`", "fixed");
     assert_eq!(
         frames(&dynamic, &[60, 0, 15, 30, 60, 0]),
         frames(&inline, &[60, 0, 15, 30, 60, 0])
     );
-    let scale = scene(
-        "",
-        "scale:ctx.localFrame<30?'none':1+ctx.localFrame/90",
-        "fixed",
-    );
-    let inline = scene(
-        "",
-        "scale:ctx.localFrame<30?'none':`${1+ctx.localFrame/90}`",
-        "fixed",
-    );
+    let scale = scene("", "scale:frame<30?'none':1+frame/90", "fixed");
+    let inline = scene("", "scale:frame<30?'none':`${1+frame/90}`", "fixed");
     assert_eq!(
         frames(&scale, &[60, 0, 15, 30, 60, 0]),
         frames(&inline, &[60, 0, 15, 30, 60, 0])
@@ -550,7 +529,7 @@ fn dynamic_priority_must_not_reuse_a_different_containing_block() {
         let class = format!("className='{class}'");
         let dynamic = scene(
             &class,
-            &format!("{property}:ctx.localFrame<30?'{identity}':'{identity} !important'"),
+            &format!("{property}:frame<30?'{identity}':'{identity} !important'"),
             "fixed",
         );
         let artifact = compile_motion(&dynamic).unwrap().artifact;
@@ -583,7 +562,7 @@ fn dynamic_priority_must_not_reuse_a_different_containing_block() {
 
 #[test]
 fn animated_scale_keeps_geometry_at_identity_and_seeks_without_history() {
-    let source = scene("", "scale:1+ctx.localFrame/90", "fixed");
+    let source = scene("", "scale:1+frame/90", "fixed");
     let requested = [0, 60, 0, 30, 89, 60, 0];
     let actual = frames(&source, &requested);
     for (i, frame) in requested.into_iter().enumerate() {
@@ -600,7 +579,7 @@ fn animated_scale_keeps_geometry_at_identity_and_seeks_without_history() {
         );
     }
     let class = scene(
-        "className={ctx.localFrame < 30 ? 'scale-none' : 'scale-100'}",
+        "className={frame < 30 ? 'scale-none' : 'scale-100'}",
         "",
         "fixed",
     );
@@ -698,7 +677,7 @@ fn dynamic_transform_lists_and_conditional_none_seek_directly() {
     let actual = frames(
         &scene(
             "",
-            "transform:`scale(${1+ctx.localFrame/90}) translateX(10px)`",
+            "transform:`scale(${1+frame/90}) translateX(10px)`",
             "fixed",
         ),
         &requested,
@@ -722,7 +701,7 @@ fn dynamic_transform_lists_and_conditional_none_seek_directly() {
     let actual = frames(
         &scene(
             "",
-            "transform:ctx.localFrame < 30 ? 'none' : 'matrix(1,0,0,1,0,0)'",
+            "transform:frame < 30 ? 'none' : 'matrix(1,0,0,1,0,0)'",
             "fixed",
         ),
         &requested,

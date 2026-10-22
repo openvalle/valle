@@ -9,12 +9,12 @@ use valle_motion::{
 use valle_timeline::internal::SampleTime;
 use valle_timeline::{FrameRate, RationalTime};
 
-const BODY: &str = r##"<View key="bar" className="absolute" style={{left:ctx.host.seconds*40,
-    width:ctx.host.duration*20,height:20,backgroundColor:"white",opacity:ctx.host.progress}} />"##;
+const BODY: &str = r##"<View key="bar" className="absolute" style={{left:time.clipSeconds*40,
+    width:comp.clipDuration*20,height:20,backgroundColor:"white",opacity:time.clipProgress}} />"##;
 
 fn source(body: &str) -> String {
     format!(
-        "export default function Main() {{ const ctx = useTime(); return <Scene>{body}</Scene>; }}"
+        "export default function Main() {{ const time = useCurrentTime(); const comp = useComposition(); return <Scene>{body}</Scene>; }}"
     )
 }
 
@@ -22,7 +22,7 @@ fn source(body: &str) -> String {
 fn temporal_samples_freeze_host_inputs_even_at_source_boundaries() {
     for wrapper in [
         "<Shutter key=\"sampling\" samples={4} angle={180}>BODY</Shutter>",
-        "<Echo key=\"sampling\" count={3} interval={2} decay={0.5}>BODY</Echo>",
+        "<Echo key=\"sampling\" count={3} delay={2 / 30} decay={0.5}>BODY</Echo>",
     ] {
         for frame in [0, 29] {
             let fps = FrameRate::new(30, 1).unwrap();
@@ -36,9 +36,9 @@ fn temporal_samples_freeze_host_inputs_even_at_source_boundaries() {
             .unwrap();
             let dynamic = source(&wrapper.replace("BODY", BODY));
             let frozen = dynamic
-                .replace("ctx.host.seconds", "1.5")
-                .replace("ctx.host.duration", "2")
-                .replace("ctx.host.progress", "(45/59)");
+                .replace("time.clipSeconds", "1.5")
+                .replace("comp.clipDuration", "2")
+                .replace("time.clipProgress", "(45/59)");
             let render = |input: &str| {
                 let artifact = compile_motion(input).unwrap().artifact;
                 let scene = prepare_scene(&artifact).unwrap();
@@ -75,12 +75,12 @@ fn held_source_recomputes_host_geometry_in_any_request_order() {
     for body in [
         BODY.to_owned(),
         BODY.replace(
-            "left:ctx.host.seconds*40",
-            "left:0,translate:point(ctx.host.seconds*40,0)",
+            "left:time.clipSeconds*40",
+            "left:0,translate:point(time.clipSeconds*40,0)",
         )
         .replace(
-            "width:ctx.host.duration*20",
-            "width:40,scale:point(ctx.host.duration/2,1)",
+            "width:comp.clipDuration*20",
+            "width:40,scale:point(comp.clipDuration/2,1)",
         ),
     ] {
         let artifact = compile_motion(&source(&body)).unwrap().artifact;

@@ -16,13 +16,13 @@ const hash = (bytes: Uint8Array | string) => `sha256:${new Bun.CryptoHasher("sha
 const sourcePath = "/fixtures/scene.motion.tsx";
 const source = `export const composition={width:640,height:360,fps:30,duration:3};
 export const controls={props:{size:number({default:60,min:20,max:160})}};
-export default function SceneClip(props){ const ctx = useTime();return <Scene style={{width:640,height:360,backgroundColor:"#102030"}}>
-  <View key="box" style={{position:"absolute",left:30+ctx.progress*450,top:140,width:props.size,height:props.size,backgroundColor:"#67e8f9",borderRadius:12}}/>
-  <View style={{position:"absolute",left:30,top:300,width:580*ctx.progress,height:8,backgroundColor:"#ffffff"}}/>
+export default function SceneClip(props){ const time = useCurrentTime();return <Scene style={{width:640,height:360,backgroundColor:"#102030"}}>
+  <View key="box" style={{position:"absolute",left:30+time.progress*450,top:140,width:props.size,height:props.size,backgroundColor:"#67e8f9",borderRadius:12}}/>
+  <View style={{position:"absolute",left:30,top:300,width:580*time.progress,height:8,backgroundColor:"#ffffff"}}/>
 </Scene>;}`;
 // From frame 30 the blurred card needs more local intermediate pixels than a surface holds.
 const overBudgetSource = `export const composition={width:640,height:360,fps:30,duration:3};
-export default function Grow(){ const ctx = useTime();const size=interpolate(ctx.localFrame,[29,30],[16,20000]);
+export default function Grow(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);const size=interpolate(frame,[29,30],[16,20000]);
 return <Scene style={{width:640,height:360,backgroundColor:"#102030"}}>
   <View key="card" style={{position:"absolute",left:8,top:8,width:size,height:size,backgroundColor:"#ff8040",filter:"blur(2px)"}}/>
 </Scene>;}`;

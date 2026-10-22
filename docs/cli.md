@@ -114,11 +114,12 @@ when that explicit budget is too small instead of silently skipping frames. It a
 `--props`, `--data`, `--asset`, and `--font` inputs as other Motion authoring commands.
 
 For audio-driven Motion, declare an audio asset and bind it with `--asset beat=beat.wav`.
-`const BEAT = audioAnalysis("asset://beat", { bands: 8, fps: 30 })` prepares a frozen table;
-`BEAT.level(ctx.seconds)`, `BEAT.band(3, ctx.seconds)`, `BEAT.onset(ctx.seconds)`, and
-`BEAT.beatPhase(ctx.seconds)` read it at frame time. `fps` defaults to an integer
-`composition.fps` when omitted. Analysis uses frozen decoded 48 kHz mono PCM, accepts 1–32
-logarithmic bands and 1–120 analysis frames per second, and limits each table to 16,384 frames.
+`const BEAT = audioAnalysis("asset://beat", { bands: 8, rate: 30 })` prepares a frozen table;
+`BEAT.level(seconds)`, `BEAT.band(3, seconds)`, `BEAT.onset(seconds)`, and
+`BEAT.beatPhase(seconds)` read it at frame time. `rate`, the analysis values per second,
+defaults to an integer `composition.fps` when omitted. Analysis uses frozen decoded 48 kHz
+mono PCM, accepts 1–32 logarithmic bands and a rate of 1–120, and limits each table to
+16,384 values.
 
 `--frame` selects a zero-based frame and requires a `.png` output. Full exports
 accept H.264 or HEVC `.mp4`, transparent qtrle or ProRes 4444 `.mov`, or a PNG filename pattern such as
@@ -143,7 +144,7 @@ shared across all selected frames. See [Motion delivery](motion.md) for limits.
 The entry file declares its base canvas and duration in
 seconds: `export const composition = { width, height, duration, fps? }`.
 `--host-duration S` overrides the host duration for `check`, `render` and `review`
-using positive decimal seconds. It changes output frame count and `ctx.host`,
+using positive decimal seconds. It changes output frame count and the clip clock,
 while preserving the source composition duration and canvas. For ordinary clips, a longer host holds
 the source on its last valid frame; a shorter host stops delivery earlier. Overlay
 templates preserve their declared intro and outro and map the middle with once,

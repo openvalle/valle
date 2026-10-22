@@ -108,7 +108,7 @@ fn geometry_dependency_remapping_preserves_order_and_nonreference_metadata() {
             vec![1],
         ),
         (
-            json!({"kind":"audioSample","time":1,"fps":30,"samples":[0.0,1.0]}),
+            json!({"kind":"audioSample","time":1,"rate":30,"samples":[0.0,1.0]}),
             vec![1],
         ),
         (
@@ -137,7 +137,7 @@ fn geometry_dependency_remapping_preserves_order_and_nonreference_metadata() {
         );
         let changed = serde_json::to_value(&expr).unwrap();
         for key in [
-            "seed", "ridges", "count", "dt", "duration", "samples", "fps", "verbs", "stops",
+            "seed", "ridges", "count", "dt", "duration", "samples", "rate", "verbs", "stops",
             "segments",
         ] {
             assert_eq!(

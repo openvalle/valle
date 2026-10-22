@@ -34,8 +34,8 @@ fn explicit_polar_rejects_nonoverlapping_kernels_and_auto_uses_checked_correspon
     let disjoint = source.replace("point(320, 180)", "point(620, 180)");
     assert!(compile_motion(&disjoint).is_ok());
     let forced_polar = disjoint.replace(
-        "morph(STAR, CIRCLE, ctx.progress)",
-        "morph(STAR, CIRCLE, ctx.progress, { method: \"polar\" })",
+        "morph(STAR, CIRCLE, time.progress)",
+        "morph(STAR, CIRCLE, time.progress, { method: \"polar\" })",
     );
     assert!(compile_motion(&forced_polar).is_err());
 }

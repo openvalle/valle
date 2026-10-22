@@ -57,8 +57,8 @@ function Legend({ accent, labelColor }) {
   );
 }
 
-function BarChart({ accent, grid, label }) { const ctx = useTime();
-  const progress = ctx.progress;
+function BarChart({ accent, grid, label }) { const time = useCurrentTime();
+  const progress = time.progress;
   return (
     <View key="chart" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080 }}>
       <Axis key="from-axis" values={TICKS_FROM} positions={TICK_Y_FROM} opacity={1 - progress} grid={grid} label={label} />

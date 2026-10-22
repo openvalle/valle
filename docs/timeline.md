@@ -324,8 +324,8 @@ example `[0,[0.25,0.5]]`.
 Visual transforms, audio gain/pan, caption presentation and Motion `props` curves
 use **clip-local seconds**, regardless of the clip’s `start`. Source trimming,
 rate, looping and hold do not retime these curves. Motion exposes the same
-host-local clock through `ctx.host.seconds` and the authored clip length through
-`ctx.host.duration`.
+clip-local clock as `clipSeconds` from `useCurrentTime()` and the authored clip
+length as `clipDuration` from `useComposition()`.
 
 Keyframes must be non-empty, strictly increasing and lie in the owning duration
 (the last time may equal that duration). Values before the first and after the
@@ -536,7 +536,7 @@ The template compiles once for the track, with its `style`, `region` and `align`
 the track's font resource. Each caption's text and runs are bound as it draws, and
 the template reads them with `useCaption()`. Do not bind a `caption` resource slot or
 supply a presenter `data` field. Word times are clip-local q6 seconds, ordered and
-contained within the caption duration. Compare them with `ctx.host.seconds` in the
+contained within the caption duration. Compare them with `clipSeconds` in the
 template.
 
 ```json
@@ -700,8 +700,8 @@ target rectangle (the Timeline canvas unless the clip sets `size`). The default
 `data` is validated and bound before component preparation; clips with distinct
 data or resources produce distinct prepared instances.
 
-A Motion entry may instead declare `role = overlay({ intro: seconds(...),
-outro: seconds(...), hold: "once" | "loop" | "stretch" })`. Placement uses the same
+A Motion entry may instead declare `role = overlay({ intro, outro, hold: "once" |
+"loop" | "stretch" })`, with `intro` and `outro` in seconds. Placement uses the same
 `kind: "motion"` clip. Its `duration` must be at least intro plus outro; explicitly
 supplied `fit`, `trimStart`, `rate` and `end` are rejected, including neutral values.
 Overlays lay out directly in `size` (rounded to positive pixels, halves away from
@@ -732,7 +732,7 @@ prepared object inline:
 
 The component receives `data.rows` as its third root argument. The values are
 validated against its bounded data schema and can determine prepared node
-topology. Source-time visibility can still use `ctx.seconds` for each row.
+topology. Source-time visibility can still use `seconds` for each row.
 
 ### Complete Motion overlay example
 
@@ -751,8 +751,8 @@ export const controls = {
 };
 
 export default function Overlay(props) {
-  const ctx = useTime();
-  const opacity = interpolate(ctx.seconds, [0,0.9], [0,1]);
+  const { seconds } = useCurrentTime();
+  const opacity = interpolate(seconds, [0,0.9], [0,1]);
   return (
     <Scene className="relative h-full w-full">
       <Image src="asset://hero" style={{ position: "absolute", left: 32, top: 32,
@@ -795,8 +795,8 @@ shows the canvas background.
 When retiming, the source duration remains the composition duration. For example,
 a three-second Motion source
 played at `rate: 2` needs an output `duration: 1.5` to play once. Outer clip opacity/position still use
-clip-local time; Motion prop curves use host-local seconds, while expressions such
-as `ctx.seconds` follow the mapped source clock.
+clip-local time; Motion prop curves use host-local seconds, while `seconds` from
+`useCurrentTime()` follows the mapped source clock.
 
 Repeated clips can use the same component alias with different data or resource bindings.
 The CLI prepares each distinct binding set internally; no duplicate aliases are needed.

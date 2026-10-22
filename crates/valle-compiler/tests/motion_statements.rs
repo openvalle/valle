@@ -68,7 +68,7 @@ fn expect_message(source: &str, needles: &[&str]) {
 
 const BAR: &str = r##"MODULE
 export default function P() {
-  const { progress } = useTime();
+  const { progress } = useCurrentTime();
   BODY
   return (<Scene className="h-full w-full">
     <View key="bar" style={{ position: "absolute", left: 0, top: 0, height: 10, width: WIDTH, backgroundColor: "#f00" }} />
@@ -191,10 +191,7 @@ fn block_scoped_names_end_with_their_block() {
     const w = 1;
   }
   w = grow(w);"#;
-    assert_eq!(
-        frames(&bar("", body, "w")),
-        frames(&bar("", "", "10"))
-    );
+    assert_eq!(frames(&bar("", body, "w")), frames(&bar("", "", "10")));
 }
 
 #[test]
@@ -208,18 +205,18 @@ fn an_early_return_of_jsx_is_the_conditional_it_stands_for() {
     let off = r##"<View key="off" style={{ position: "absolute", left: 0, top: 20, width: 20, height: 10, backgroundColor: "#00f" }} />"##;
     assert_eq!(
         frames(&scene(&format!(
-            "function Badge() {{\n  const {{ progress }} = useTime();\n  if (progress > 0.5) {{\n    return {on};\n  }}\n  return {off};\n}}"
+            "function Badge() {{\n  const {{ progress }} = useCurrentTime();\n  if (progress > 0.5) {{\n    return {on};\n  }}\n  return {off};\n}}"
         ))),
         frames(&scene(&format!(
-            "function Badge() {{\n  const {{ progress }} = useTime();\n  return progress > 0.5 ? {on} : {off};\n}}"
+            "function Badge() {{\n  const {{ progress }} = useCurrentTime();\n  return progress > 0.5 ? {on} : {off};\n}}"
         )))
     );
     assert_eq!(
         frames(&scene(&format!(
-            "function Badge() {{\n  const {{ progress }} = useTime();\n  if (progress < 0.5) return null;\n  return {on};\n}}"
+            "function Badge() {{\n  const {{ progress }} = useCurrentTime();\n  if (progress < 0.5) return null;\n  return {on};\n}}"
         ))),
         frames(&scene(&format!(
-            "function Badge() {{\n  const {{ progress }} = useTime();\n  return progress < 0.5 ? null : {on};\n}}"
+            "function Badge() {{\n  const {{ progress }} = useCurrentTime();\n  return progress < 0.5 ? null : {on};\n}}"
         )))
     );
 }
@@ -233,7 +230,7 @@ fn jsx_pushed_under_a_frame_dependent_condition_shows_when_it_holds() {
     };
     let pushed = format!(
         r##"export default function P() {{
-  const {{ progress }} = useTime();
+  const {{ progress }} = useCurrentTime();
   const dots = [];
   for (const i of [0, 1, 2, 3]) {{
     if (progress > i / 4) {{
@@ -247,7 +244,7 @@ fn jsx_pushed_under_a_frame_dependent_condition_shows_when_it_holds() {
     );
     let unrolled = format!(
         r##"export default function P() {{
-  const {{ progress }} = useTime();
+  const {{ progress }} = useCurrentTime();
   return (<Scene className="h-full w-full">
     {{progress > 0 && {}}}
     {{progress > 0.25 && {}}}
@@ -267,7 +264,7 @@ fn jsx_pushed_under_a_frame_dependent_condition_shows_when_it_holds() {
 #[test]
 fn a_map_callback_takes_statements_for_each_item() {
     let mapped = r##"export default function P() {
-  const { progress } = useTime();
+  const { progress } = useCurrentTime();
   return (<Scene className="h-full w-full">
     {[1, 2, 3].map((n) => {
       let w = n * 10;
@@ -278,7 +275,7 @@ fn a_map_callback_takes_statements_for_each_item() {
 }
 "##;
     let unrolled = r##"export default function P() {
-  const { progress } = useTime();
+  const { progress } = useCurrentTime();
   return (<Scene className="h-full w-full">
     <View key="b1" style={{ position: "absolute", left: 40, top: 0, width: 10, height: 10, backgroundColor: "#f00" }} />
     <View key="b2" style={{ position: "absolute", left: 80, top: 0, width: 25, height: 10, backgroundColor: "#f00" }} />
@@ -349,7 +346,7 @@ fn statements_the_frame_cannot_choose_point_at_what_can() {
     );
     expect_message(
         r##"export default function P() {
-  const { progress } = useTime();
+  const { progress } = useCurrentTime();
   return (<Scene className="h-full w-full">
     {[0, 1].map((i) => {
       if (progress > 0.5) return <View key={`k${i}`} style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10 }} />;

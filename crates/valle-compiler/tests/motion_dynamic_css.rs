@@ -10,8 +10,8 @@ use valle_timeline::FrameRate;
 
 fn source(style: &str) -> String {
     format!(
-        r##"export default function Demo() {{ const ctx = useTime();
-      const t = ctx.localFrame / 30;
+        r##"export default function Demo() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
+      const t = frame / 30;
       return <Scene style={{{{ width: 320, height: 180 }}}}>
         <View style={{{{ width: 160, height: 100, {style} }}}} />
       </Scene>;
@@ -78,10 +78,10 @@ fn every_gradient_branch_is_checked_and_css_structure_injection_stays_closed() {
 
 #[test]
 fn map_index_can_choose_a_finite_filter_structure() {
-    let source = r##"export default function Demo() { const ctx = useTime();
+    let source = r##"export default function Demo() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
         return <Scene>{[0,1].map((i) => <View key={`card-${i}`} style={{
             width: 100, height: 100, backgroundColor: "red",
-            filter: i === 0 ? `blur(${ctx.localFrame / 30}px)` : `contrast(${1 + ctx.localFrame / 30})`
+            filter: i === 0 ? `blur(${frame / 30}px)` : `contrast(${1 + frame / 30})`
         }} />)}</Scene>;
     }"##;
     assert_ne!(display(source, 0), display(source, 20));

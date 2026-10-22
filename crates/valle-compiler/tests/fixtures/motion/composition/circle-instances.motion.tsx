@@ -8,11 +8,11 @@ const DOTS = Array.from({ length: COLS * COLS }, (_, i) => ({
   color: i % 2 === 0 ? "#8b7bff" : "#22d3ee",
   delay: i / (COLS * COLS),
 }));
-export default function CircleGrid() { const ctx = useTime();
+export default function CircleGrid() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     {DOTS.map((dot) => (
       <Circle key={dot.id} cx={dot.x} cy={dot.y} r={dot.radius} fill={dot.color}
-        style={{ opacity: clamp(ctx.seconds * 2 - dot.delay, 0, 1) }} />
+        style={{ opacity: clamp(time.seconds * 2 - dot.delay, 0, 1) }} />
     ))}
   </Scene>;
 }

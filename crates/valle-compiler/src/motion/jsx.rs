@@ -167,7 +167,7 @@ impl<'s> Compiler<'s> {
         let mut shutter_samples = None;
         let mut shutter_angle = None;
         let mut echo_count = None;
-        let mut echo_interval = None;
+        let mut echo_delay = None;
         let mut echo_decay = None;
         let mut time_offset = None;
         let mut time_speed = None;
@@ -471,12 +471,23 @@ impl<'s> Compiler<'s> {
                         }
                     }
                 }
-                "interval" if kind_tag == "echo" => {
-                    if let Some(value) = self.attr_static_number(&attribute.value, attribute.span(), "Echo interval") {
-                        if value.fract() == 0.0 && (1.0..=u32::MAX as f64).contains(&value) {
-                            echo_interval = Some(value as u32);
+                "interval" if kind_tag == "echo" => self.illegal(
+                    DiagCode::GrammarForbidden,
+                    attribute.span(),
+                    "Echo `interval` counted output frames; write the time between samples in \
+                     seconds with `delay`, such as `delay={0.1}`",
+                ),
+                "delay" if kind_tag == "echo" => {
+                    if let Some(value) = self.attr_static_number(&attribute.value, attribute.span(), "Echo delay") {
+                        let delay = (value.is_finite() && value > 0.0)
+                            .then(|| valle_timeline::wire::timeline::TimelineTimeWire::new(value.to_string()).ok())
+                            .flatten()
+                            .map(|wire| valle_timeline::RationalTime::from_exact(wire.to_exact()))
+                            .filter(|delay| !delay.is_non_positive());
+                        if delay.is_some() {
+                            echo_delay = delay;
                         } else {
-                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "Echo interval must be a positive integer frame count");
+                            self.illegal(DiagCode::GrammarForbidden, attribute.span(), "Echo delay must be a positive number of seconds, at least 0.000001");
                         }
                     }
                 }
@@ -650,24 +661,24 @@ impl<'s> Compiler<'s> {
                     }
                 }
                 "perUnit" if kind_tag == "text" => {
-                    let Some(JSXAttributeValue::ExpressionContainer(container)) = &attribute.value
-                    else {
+                    let arrow = match &attribute.value {
+                        Some(JSXAttributeValue::ExpressionContainer(container)) => {
+                            match &container.expression {
+                                JSXExpression::ArrowFunctionExpression(arrow) => Some(&**arrow),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    let Some(arrow) = arrow else {
                         self.illegal(
                             DiagCode::GrammarForbidden,
                             attribute.span(),
-                            "perUnit must be an object literal",
+                            super::style::PER_UNIT_FORM,
                         );
                         continue;
                     };
-                    let JSXExpression::ObjectExpression(object) = &container.expression else {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            container.span(),
-                            "perUnit must be an object literal",
-                        );
-                        continue;
-                    };
-                    text_per_unit = Some(self.lower_unit_style(object));
+                    text_per_unit = self.lower_per_unit(arrow);
                 }
                 "trimStart" if kind_tag == "path" => {
                     if let Some(value) =
@@ -908,7 +919,7 @@ impl<'s> Compiler<'s> {
                 name if matches!(kind_tag, "glass" | "glass-field") => {
                     self.lower_glass_attribute(kind_tag, name, attribute, &mut glass_props);
                 }
-                other if other.starts_with("on") => self.illegal(DiagCode::GrammarForbidden, attribute.span(), format!("event handler `{other}` is a side effect, and a frame draws from time and props alone; remove it, and drive the change with `useTime()` or a prop")),
+                other if other.starts_with("on") => self.illegal(DiagCode::GrammarForbidden, attribute.span(), format!("event handler `{other}` is a side effect, and a frame draws from time and props alone; remove it, and drive the change with `useCurrentTime()` or a prop")),
                 other => self.unsupported(attribute.span(), format!("attribute `{other}` is legal on some frontend elements but is not in the admitted capability set")),
             }
         }
@@ -947,7 +958,8 @@ impl<'s> Compiler<'s> {
                 .iter()
                 .any(|style| style.property == "motion-filter-frame")
             {
-                let expr = self.scoped_context_expr(ContextInput::LocalFrame, element.span());
+                let clock = self.position_clock();
+                let expr = self.scene_clock_expr(ContextInput::LocalFrame, clock, element.span());
                 styles.push(StyleBinding {
                     property: "motion-filter-frame".into(),
                     value: StyleValue::Expr { expr },
@@ -1594,7 +1606,7 @@ impl<'s> Compiler<'s> {
         if children.is_empty()
             && let Some(spread_children) = spread_children
         {
-            children = spread_children;
+            children = self.child_nodes(&spread_children);
         }
         if scoped_time.is_some() {
             self.time_scopes.pop();
@@ -1707,7 +1719,7 @@ impl<'s> Compiler<'s> {
         }
         if kind_tag == "echo" {
             if echo_count.is_none()
-                || echo_interval.is_none()
+                || echo_delay.is_none()
                 || echo_decay.is_none()
                 || children.is_empty()
                 || children
@@ -1719,8 +1731,11 @@ impl<'s> Compiler<'s> {
                 || visibility.is_some()
             {
                 self.illegal(DiagCode::GrammarForbidden, element.span(),
-                    "Echo requires static count, interval and decay plus child layout boxes; put styles and visibility on a surrounding View");
+                    "Echo requires static count, delay and decay plus child layout boxes; put styles and visibility on a surrounding View");
                 return None;
+            }
+            if let (Some(count), Some(delay)) = (echo_count, echo_delay) {
+                self.check_echo_span(count, delay.as_f64(), element.span());
             }
             self.extra_capabilities
                 .insert(valle_motion::ECHO_CAPABILITY.into());
@@ -1824,7 +1839,7 @@ impl<'s> Compiler<'s> {
                 },
                 "echo" => NodeKind::Echo {
                     count: echo_count.expect("checked above"),
-                    interval_frames: echo_interval.expect("checked above"),
+                    delay: echo_delay.expect("checked above"),
                     decay: echo_decay.expect("checked above"),
                 },
                 "time-scope" => NodeKind::TimeScope {

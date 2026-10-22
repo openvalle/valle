@@ -61,8 +61,8 @@ fn disjoint_convex_pair_and_sequence_prepare_one_edge_direction_grid() {
 
     let star = include_str!("fixtures/motion/composition/star-to-circle-morph.motion.tsx");
     let polar = star.replace(
-        "morph(STAR, CIRCLE, ctx.progress)",
-        "morph(STAR, CIRCLE, ctx.progress, { method: \"polar\" })",
+        "morph(STAR, CIRCLE, time.progress)",
+        "morph(STAR, CIRCLE, time.progress, { method: \"polar\" })",
     );
     assert!(compile_motion(&polar).is_ok());
     assert!(compile_motion(&polar.replace("method: \"polar\"", "method: \"convex\"")).is_err());

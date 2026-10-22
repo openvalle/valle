@@ -1,6 +1,6 @@
 export const composition = { width: 64, height: 64, fps: 30, duration: 5 };
 export const controls = {assets:{model:asset({kind:"model3d",required:true})}};
-export default function Model() { const ctx = useTime();return <Scene style={{width:64,height:64,backgroundColor:"#000000"}}>
+export default function Model() { const time = useCurrentTime();return <Scene style={{width:64,height:64,backgroundColor:"#000000"}}>
 <Scene3D key="test" camera={{position:[0,0,3],target:[0,0,0],fov:45}} style={{width:64,height:64}}>
-<Mesh key="tri" src="asset://model" rotateY={ctx.seconds * 60} material={{type:"unlit",color:"#efb343"}} />
+<Mesh key="tri" src="asset://model" rotateY={time.seconds * 60} material={{type:"unlit",color:"#efb343"}} />
 </Scene3D></Scene>;}

@@ -11,7 +11,7 @@ use valle_timeline::FrameRate;
 
 fn scene(attributes: &str, styles: &str) -> String {
     format!(
-        r##"export default function Demo() {{ const ctx = useTime(); return <Scene style={{{{width:320,height:180}}}}>
+        r##"export default function Demo() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); return <Scene style={{{{width:320,height:180}}}}>
         <View key="card" {attributes} style={{{{width:120,height:80,borderWidth:4,padding:5,
             backgroundColor:"#168ddd",borderColor:"#fff",{styles}}}}}>
             <View key="child" style={{{{width:20,height:10,backgroundColor:"red"}}}} />
@@ -181,7 +181,7 @@ fn advanced_filters_chain_with_css_filters_in_written_order() {
     let lens = samples(
         &scene(
             "",
-            "filter:`blur(${ctx.progress * 2}px) lens-distortion(${ctx.progress * 0.4 - 0.2} 0)`",
+            "filter:`blur(${time.progress * 2}px) lens-distortion(${time.progress * 0.4 - 0.2} 0)`",
         ),
         &[0, 89],
     );
@@ -303,7 +303,7 @@ fn backdrop_filter_lists_take_advanced_filters_in_written_order() {
     let dynamic = samples(
         &scene(
             "",
-            "backdropFilter:`blur(${ctx.progress * 2 + 1}px) glow(${ctx.progress * 24}px 1 #22d3ee)`",
+            "backdropFilter:`blur(${time.progress * 2 + 1}px) glow(${time.progress * 24}px 1 #22d3ee)`",
         ),
         &[0, 45],
     );
@@ -585,7 +585,7 @@ fn scene_bloom_is_a_bounded_threshold_filter() {
         "{ threshold: 0.8, intensity: 4.1, radius: 48 }",
         "{ threshold: 0.8, intensity: 1.2, radius: 129 }",
         "{ threshold: 0.8, intensity: 1.2 }",
-        "{ threshold: 0.8, intensity: 1.2, radius: 129 + ctx.progress }",
+        "{ threshold: 0.8, intensity: 1.2, radius: 129 + time.progress }",
         "{ threshold: 0.8, intensity: 1.2, radius: 48, bad: 1 }",
     ] {
         let source = animated(source, invalid);
@@ -598,7 +598,7 @@ fn animated(source: &str, bloom: &str) -> String {
     source
         .replace(
             "  return <Scene",
-            "  const ctx = useTime();\n  return <Scene",
+            "  const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);\n  return <Scene",
         )
         .replace("{ threshold: 0.8, intensity: 1.2, radius: 48 }", bloom)
 }
@@ -607,7 +607,7 @@ fn animated(source: &str, bloom: &str) -> String {
 fn scene_bloom_parameters_animate() {
     let source = animated(
         include_str!("fixtures/motion/composition/scene-bloom.motion.tsx"),
-        "{ threshold: 0.8, intensity: 1.2, radius: 96 * ctx.progress, knee: ctx.progress }",
+        "{ threshold: 0.8, intensity: 1.2, radius: 96 * time.progress, knee: time.progress }",
     );
     let blooms = samples(&source, &[30, 60])
         .iter()
@@ -643,7 +643,7 @@ fn bloom_is_a_bounded_threshold_node_filter() {
             .any(|filter| matches!(filter, Filter::Bloom { knee, .. } if *knee == 0.25))
     );
     let animated = samples(
-        &scene("", "filter:`bloom(${ctx.progress * 96}px 1.2 0.8)`"),
+        &scene("", "filter:`bloom(${time.progress * 96}px 1.2 0.8)`"),
         &[30, 60],
     );
     let radii = animated
@@ -670,7 +670,13 @@ fn bloom_is_a_bounded_threshold_node_filter() {
             "{value}"
         );
     }
-    assert!(compile_motion(&scene("", "filter:`bloom(48px 1.2 ${1.5 + ctx.progress})`")).is_err());
+    assert!(
+        compile_motion(&scene(
+            "",
+            "filter:`bloom(48px 1.2 ${1.5 + time.progress})`"
+        ))
+        .is_err()
+    );
 }
 
 #[test]
@@ -756,7 +762,7 @@ fn radial_blur_is_a_bounded_local_center_filter() {
 #[test]
 fn finite_effect_choices_seek_without_state_and_mark_destination_reads() {
     let source = scene(
-        r#"className={ctx.localFrame < 30 ? 'translate-x-4 blur-sm' : '-translate-y-1/2 backdrop-blur-md'}"#,
+        r#"className={frame < 30 ? 'translate-x-4 blur-sm' : '-translate-y-1/2 backdrop-blur-md'}"#,
         "",
     );
     let frames = [60, 0, 29, 30, 12, 60, 0];
@@ -877,11 +883,11 @@ fn advanced_filters_follow_cascade_and_can_animate() {
         );
     }
     for value in [
-        "`glow(${ctx.localFrame}px 1 #ffffff)`",
-        "`chromatic-aberration(${ctx.localFrame}px)`",
-        "`radial-blur(40px 20px ${ctx.localFrame}px)`",
-        "`film-grain(7 ${ctx.progress} 2px)`",
-        "`lens-distortion(${ctx.progress * 0.4} 0)`",
+        "`glow(${frame}px 1 #ffffff)`",
+        "`chromatic-aberration(${frame}px)`",
+        "`radial-blur(40px 20px ${frame}px)`",
+        "`film-grain(7 ${time.progress} 2px)`",
+        "`lens-distortion(${time.progress * 0.4} 0)`",
     ] {
         let programs = samples(
             &scene("className=\"blur-[8px]\"", &format!("filter:{value}")),
@@ -894,10 +900,7 @@ fn advanced_filters_follow_cascade_and_can_animate() {
         );
     }
     let programs = samples(
-        &scene(
-            "",
-            "filter:ctx.localFrame > 10 ? 'glow(12px 1 #ffffff)' : 'none'",
-        ),
+        &scene("", "filter:frame > 10 ? 'glow(12px 1 #ffffff)' : 'none'"),
         &[0, 15, 0],
     );
     assert!(filters(&programs[0]).is_empty());

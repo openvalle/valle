@@ -14,14 +14,14 @@ use valle_motion::{ContentDigest, Expr, ResourceRef};
 const SOURCE: &str = r##"
 export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
 export const controls = { assets: { beat: asset({ kind: "audio", required: true }) } };
-const BEAT = audioAnalysis("asset://beat", { bands: 8, fps: 30 });
-export default function AudioBars() { const ctx = useTime();
+const BEAT = audioAnalysis("asset://beat", { bands: 8, rate: 30 });
+export default function AudioBars() { const time = useCurrentTime();
   return <Scene style={{width:320,height:180}}>
-    <View key="bar" style={{width:20,height:BEAT.level(ctx.seconds)*100,
+    <View key="bar" style={{width:20,height:BEAT.level(time.seconds)*100,
       backgroundColor:"#ffffff"}} />
-    <View key="onset" style={{width:20,height:BEAT.onset(ctx.seconds)*20,
+    <View key="onset" style={{width:20,height:BEAT.onset(time.seconds)*20,
       backgroundColor:"#ffffff"}} />
-    <View key="frequency" style={{width:20,height:BEAT.band(3,ctx.seconds)*100,
+    <View key="frequency" style={{width:20,height:BEAT.band(3,time.seconds)*100,
       backgroundColor:"#ffffff"}} />
   </Scene>;
 }
@@ -163,7 +163,7 @@ fn pulse_pcm_artifact_digest_is_shared_with_wasm() {
     let bytes = valle_motion::canonical_bytes(&compiled.artifact).unwrap();
     assert_eq!(
         ContentDigest::of_bytes(&bytes).to_wire(),
-        "sha256:82d61da73ab94fb5464aaeb6be988695b0937bae457a67af3a892d32f6b36787"
+        "sha256:3bd2ca4c3bf459bead821ab858055e315f837aefb2a71d7ef836d6bc0b9b2389"
     );
 }
 

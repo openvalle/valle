@@ -55,12 +55,12 @@ const LINKS = SITE_XY.slice(1).map((xy) => [SITE_XY[0], xy]);
 const DOT = CANVAS_H * 0.012;
 const NAME_FONT = CANVAS_H * 0.022;
 
-export default function WorldMap() { const ctx = useTime();
-  const sx = ctx.viewport.width / CANVAS_W;
-  const sy = ctx.viewport.height / CANVAS_H;
+export default function WorldMap() { const time = useCurrentTime(); const comp = useComposition();
+  const sx = comp.width / CANVAS_W;
+  const sy = comp.height / CANVAS_H;
 
   // Prepare staggered site entrances.
-  const pop = (i) => interpolate(ctx.progress, [0.2 + i * 0.12, 0.6 + i * 0.12], [0, 1]);
+  const pop = (i) => interpolate(time.progress, [0.2 + i * 0.12, 0.6 + i * 0.12], [0, 1]);
 
   return (
     <Scene className="h-full w-full bg-slate-950">

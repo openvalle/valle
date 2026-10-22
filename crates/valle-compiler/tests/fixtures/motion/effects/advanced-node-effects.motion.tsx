@@ -19,14 +19,14 @@ function Pattern(props) {
   );
 }
 
-export default function AdvancedNodeEffects() { const ctx = useTime();
-  const seconds = ctx.localFrame * ctx.fps.den / ctx.fps.num;
-  const reveal = interpolate(ctx.progress, [0, 1], [0, 1], { easing: "easeOut" });
+export default function AdvancedNodeEffects() { const time = useCurrentTime();
+  const seconds = time.seconds;
+  const reveal = interpolate(time.progress, [0, 1], [0, 1], { easing: "easeOut" });
   const displacementScale = 18 + sin(seconds * 2.1) * 10;
   const travel = sin(seconds * 2.4);
   const travelY = cos(seconds * 1.7) * 18;
-  const velocityX = cos(seconds * 2.4) * 230 * 2.4 / 60;
-  const velocityY = -sin(seconds * 1.7) * 18 * 1.7 / 60;
+  const velocityX = cos(seconds * 2.4) * 230 * 2.4 / 2;
+  const velocityY = -sin(seconds * 1.7) * 18 * 1.7 / 2;
 
   return (
     <Scene style={{ width: "100%", height: "100%", backgroundColor: "#050816", color: "#f8fafc" }}>
@@ -51,9 +51,9 @@ export default function AdvancedNodeEffects() { const ctx = useTime();
 
       <View style={{ position: "absolute", left: 954, top: 316, width: 870, height: 640, borderRadius: 30, border: "2px solid #1e293b", backgroundColor: "#080d1f", overflow: "hidden" }}>
         <Text style={{ position: "absolute", left: 40, top: 32, fontSize: 28, letterSpacing: 2, color: "#22d3ee" }}>B / VELOCITY + SHUTTER</Text>
-        <Text style={{ position: "absolute", left: 40, top: 78, fontSize: 22, color: "#94a3b8" }}>explicit px/frame velocity · shutter angle 210°</Text>
+        <Text style={{ position: "absolute", left: 40, top: 78, fontSize: 22, color: "#94a3b8" }}>explicit px/s velocity · shutter angle 210°</Text>
         <View style={{ position: "absolute", left: 42, top: 144, width: 786, height: 274, borderRadius: 137, backgroundColor: "#060a18", border: "2px solid #172036" }}>
-          <View style={{ position: "absolute", left: `${50 + travel * 31}%`, top: `${48 + travelY / 15}%`, width: 250, height: 130, translate: "-50% -50%", motionBlur: motionBlur(point(velocityX, velocityY), 210) }}>
+          <View style={{ position: "absolute", left: `${50 + travel * 31}%`, top: `${48 + travelY / 15}%`, width: 250, height: 130, translate: "-50% -50%", motionBlur: motionBlur({ velocity: point(velocityX, velocityY), angle: 210 }) }}>
             <Pattern accent="#22d3ee" />
           </View>
           <View style={{ position: "absolute", left: "50%", top: 28, width: 2, height: 216, backgroundColor: "#1e293b" }} />

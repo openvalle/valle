@@ -6,12 +6,12 @@ const DOTS = Array.from({ length: 128 }, (_, i) => ({
   y: 4 + Math.floor(i / 80) * 14,
 }));
 
-export default function AffineTime() { const ctx = useTime();
+export default function AffineTime() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     {DOTS.map((dot) => <View key={dot.id} className="absolute"
-      visible={dot.i <= (ctx.seconds - 0.2) * 1000}
+      visible={dot.i <= (time.seconds - 0.2) * 1000}
       style={{ left: dot.x, top: dot.y, width: 4, height: 4,
         backgroundColor: "#ffffff",
-        opacity: clamp(ctx.seconds * 1000 - dot.i, 0, 1) }} />)}
+        opacity: clamp(time.seconds * 1000 - dot.i, 0, 1) }} />)}
   </Scene>;
 }

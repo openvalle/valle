@@ -55,13 +55,13 @@ const TICK_Y = TICKS.map((t) => Y.map(t));
 const AXIS_FONT = CANVAS_H * 0.022;
 const LABEL_FONT = CANVAS_H * 0.024;
 
-export default function BarChart() { const ctx = useTime();
-  // The viewport supplies the frame-time scale factors.
-  const sx = ctx.viewport.width / CANVAS_W;
-  const sy = ctx.viewport.height / CANVAS_H;
+export default function BarChart() { const time = useCurrentTime(); const comp = useComposition();
+  // The composition size supplies the scale factors.
+  const sx = comp.width / CANVAS_W;
+  const sy = comp.height / CANVAS_H;
 
   // Prepare staggered bar entrance timing.
-  const grow = (i) => interpolate(ctx.progress, [i * 0.08, i * 0.08 + 0.45], [0, 1]);
+  const grow = (i) => interpolate(time.progress, [i * 0.08, i * 0.08 + 0.45], [0, 1]);
 
   return (
     <Scene className="h-full w-full bg-slate-950">

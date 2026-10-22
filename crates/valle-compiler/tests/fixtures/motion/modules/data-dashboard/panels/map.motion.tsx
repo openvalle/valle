@@ -1,4 +1,4 @@
-export function MapPanel({ regions, x, y, width, height }) { const ctx = useTime();
+export function MapPanel({ regions, x, y, width, height }) { const time = useCurrentTime();
   const theme = useTheme();
   const { panel, accent, ink, hairline, region: regionFill } = theme.colors;
   const geometries = geoPath({
@@ -14,7 +14,7 @@ export function MapPanel({ regions, x, y, width, height }) { const ctx = useTime
       <View key="map" className="absolute" style={{ left: 34, top: 94, width: width - 68, height: height - 150 }}>
         {geometries.map((geometry, index) => {
           const regionData = regions[index];
-          return <Path key={regionData.id} d={path(geometry.d)} fill={regionFill} stroke={accent} strokeWidth="3" style={{ opacity: 0.4 + ctx.progress * 0.6 }} />;
+          return <Path key={regionData.id} d={path(geometry.d)} fill={regionFill} stroke={accent} strokeWidth="3" style={{ opacity: 0.4 + time.progress * 0.6 }} />;
         })}
       </View>
       <Text key="caption" className="absolute" style={{ left: 30, top: height - 44, fontSize: 16, color: ink }}>Synthetic regions from JSON rings</Text>

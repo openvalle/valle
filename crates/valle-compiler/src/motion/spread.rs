@@ -26,7 +26,7 @@ impl<'s> Compiler<'s> {
     pub(super) fn jsx_attributes(
         &mut self,
         element: &'s JSXElement<'s>,
-    ) -> (Vec<&'s JSXAttribute<'s>>, Option<Vec<PendingNode>>) {
+    ) -> (Vec<&'s JSXAttribute<'s>>, Option<ChildNodes>) {
         let attributes = &element.opening_element.attributes;
         if !attributes
             .iter()

@@ -13,11 +13,11 @@ const SOURCE: &str = r##"
 export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
 const OUTLINE = path("M 20 20 L 80 20 L 80 80 L 20 80 Z");
 const PREPARED = resamplePath(OUTLINE, 32);
-export default function Resampled() { const ctx = useTime();
+export default function Resampled() { const time = useCurrentTime();
   return <Scene style={{ width: 320, height: 180, backgroundColor: "#101010" }}>
     <Path key="prepared" d={PREPARED} fill="#ffffff" />
     <Path key="animated" d={resamplePath(
-      arc(point(180 + ctx.progress * 10, 90), 40, 0, TAU), 64
+      arc(point(180 + time.progress * 10, 90), 40, 0, TAU), 64
     )} fill="#f472b6" />
   </Scene>;
 }
@@ -56,7 +56,7 @@ fn resample_path_works_in_preparation_and_frame_evaluation() {
 
 #[test]
 fn resample_path_rejects_dynamic_counts_and_tampered_budgets() {
-    assert!(compile_motion(&SOURCE.replace("), 64", "), ctx.localFrame + 64")).is_err());
+    assert!(compile_motion(&SOURCE.replace("), 64", "), frame + 64")).is_err());
     assert!(compile_motion(&SOURCE.replace("), 64", "), 64.5")).is_err());
     let mut artifact = compile_motion(SOURCE).unwrap().artifact;
     let count = artifact

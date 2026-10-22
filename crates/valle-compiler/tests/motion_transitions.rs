@@ -78,7 +78,7 @@ fn all_kernels_keep_two_independent_inputs_and_frame_progress() {
 fn hidden_and_empty_endpoints_still_supply_two_inputs() {
     for attributes in ["visible={false}", r#"style={{display:"none"}}"#, ""] {
         let source = format!(
-            r#"export default function T() {{ const ctx = useTime(); return <Transition kind="fade" progress={{0.5}} style={{{{width:64,height:64}}}}><View key="from" {attributes}/><View key="to"/></Transition>; }}"#
+            r#"export default function T() {{ const time = useCurrentTime(); return <Transition kind="fade" progress={{0.5}} style={{{{width:64,height:64}}}}><View key="from" {attributes}/><View key="to"/></Transition>; }}"#
         );
         let output = program(&source, 0).unwrap();
         assert!(output.nodes().iter().any(
@@ -101,7 +101,7 @@ fn invalid_children_kind_progress_and_capability_are_rejected() {
     ] {
         assert!(
             compile_motion(&format!(
-                "export default function T() {{ const ctx = useTime(); return {body}; }}"
+                "export default function T() {{ const time = useCurrentTime(); return {body}; }}"
             ))
             .is_err(),
             "{body}"
@@ -114,7 +114,7 @@ fn invalid_children_kind_progress_and_capability_are_rejected() {
         .retain(|name| name != TRANSITION_CAPABILITY);
     assert!(artifact.validate().is_err());
     let error = program(
-        &MOTION_TRANSITION.replace("ctx.progress", "ctx.seconds"),
+        &MOTION_TRANSITION.replace("time.progress", "time.seconds"),
         59,
     )
     .unwrap_err();
@@ -124,8 +124,8 @@ fn invalid_children_kind_progress_and_capability_are_rejected() {
 #[test]
 fn parameters_are_typed_animated_validated_and_emitted() {
     let source = MOTION_TRANSITION.replace(
-        "progress={ctx.progress}",
-        "progress={0.5} params={{centerX:ctx.seconds/2,centerY:0.25,softness:3}}",
+        "progress={time.progress}",
+        "progress={0.5} params={{centerX:time.seconds/2,centerY:0.25,softness:3}}",
     );
     let mut previous = None;
     for frame in [30, 0, 59, 30] {
@@ -157,29 +157,29 @@ fn parameters_are_typed_animated_validated_and_emitted() {
         "{centerX:0,centerX:1}",
     ] {
         let bad = MOTION_TRANSITION.replace(
-            "progress={ctx.progress}",
+            "progress={time.progress}",
             &format!("progress={{0.5}} params={{{params}}}"),
         );
         assert!(compile_motion(&bad).is_err(), "{params}");
     }
     let nonfinite = MOTION_TRANSITION.replace(
-        "progress={ctx.progress}",
+        "progress={time.progress}",
         "progress={0.5} params={{softness:1/0}}",
     );
     assert!(program(&nonfinite, 0).is_err());
     let dynamic_bad = MOTION_TRANSITION.replace(
-        "progress={ctx.progress}",
-        "progress={0.5} params={{centerX:ctx.seconds}}",
+        "progress={time.progress}",
+        "progress={0.5} params={{centerX:time.seconds}}",
     );
     assert!(program(&dynamic_bad, 59).unwrap_err().contains("centerX"));
     let zero_direction = MOTION_TRANSITION
         .replace("circleOpen", "directionalWarp")
         .replace(
-            "progress={ctx.progress}",
+            "progress={time.progress}",
             "progress={0.5} params={{directionX:0,directionY:0}}",
         );
     assert!(compile_motion(&zero_direction).is_err());
-    let animated_direction = zero_direction.replace("directionX:0", "directionX:ctx.seconds/2");
+    let animated_direction = zero_direction.replace("directionX:0", "directionX:time.seconds/2");
     assert!(compile_motion(&animated_direction).is_ok());
     assert!(
         program(&animated_direction, 0)
@@ -236,7 +236,7 @@ fn messages(source: &str) -> Vec<String> {
 
 #[test]
 fn code_reads_both_children_and_the_progress() {
-    let source = wipe_scene("code={wipe} uniforms={{ softness: 0.1 + ctx.progress / 10 }}");
+    let source = wipe_scene("code={wipe} uniforms={{ softness: 0.1 + time.progress / 10 }}");
     let artifact = compile_motion(&source).unwrap().artifact;
     artifact.validate().unwrap();
     assert_eq!(artifact.shaders.len(), 1);

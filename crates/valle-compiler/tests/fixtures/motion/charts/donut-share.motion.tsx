@@ -63,12 +63,12 @@ function layoutCallouts(slices) {
 
 const CALLOUTS = layoutCallouts(SLICES);
 
-function Slice({ index, color }) { const ctx = useTime();
+function Slice({ index, color }) { const time = useCurrentTime();
   const slice = SLICES[index];
-  const opened = interpolate(ctx.progress - index * 0.05, [0, 0.55], [0, 1], {
+  const opened = interpolate(time.progress - index * 0.05, [0, 0.55], [0, 1], {
     easing: "easeOut",
   });
-  const hole = interpolate(ctx.progress, [0.12, 0.55], [0, 138], { easing: "easeOut" });
+  const hole = interpolate(time.progress, [0.12, 0.55], [0, 138], { easing: "easeOut" });
   return (
     <Path
       key="wedge"
@@ -85,9 +85,9 @@ function Slice({ index, color }) { const ctx = useTime();
   );
 }
 
-function Callout({ index, label, color }) { const ctx = useTime();
+function Callout({ index, label, color }) { const time = useCurrentTime();
   const layout = CALLOUTS[index];
-  const fade = interpolate(ctx.progress - 0.28 - index * 0.04, [0, 0.35], [0, 1], {
+  const fade = interpolate(time.progress - 0.28 - index * 0.04, [0, 0.35], [0, 1], {
     easing: "easeOut",
   });
   const leader =
@@ -138,8 +138,8 @@ function Callout({ index, label, color }) { const ctx = useTime();
   );
 }
 
-export default function DonutShare(props) { const ctx = useTime();
-  const total = interpolate(ctx.progress, [0.2, 0.75], [0, 1], { easing: "easeOut" });
+export default function DonutShare(props) { const time = useCurrentTime();
+  const total = interpolate(time.progress, [0.2, 0.75], [0, 1], { easing: "easeOut" });
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#071018" }}>
       <Text key="eyebrow" className="absolute" style={{ left: 108, top: 66, fontSize: 27, letterSpacing: 4.5, color: "#38bdf8" }}>

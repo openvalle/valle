@@ -32,9 +32,9 @@ fn complex_strokes_are_admitted_and_stay_bounded_at_every_sampled_frame() {
         let source = format!(
             r##"
 const A = path("{}"); const B = path("{}");
-export default function Main() {{ const ctx = useTime(); return <Scene>
+export default function Main() {{ const time = useCurrentTime(); return <Scene>
  <Path key="static" d={{strokeToPath(A,6)}} fill="white" />
- <Path key="dynamic" d={{strokeToPath(morphPath(A,B,ctx.progress),2+ctx.progress*4)}} fill="white" />
+ <Path key="dynamic" d={{strokeToPath(morphPath(A,B,time.progress),2+time.progress*4)}} fill="white" />
 </Scene>; }}"##,
             circle(segments, 70.0),
             circle(segments, 80.0)

@@ -177,7 +177,7 @@ fn duplicate_datum_ids_fail_at_the_existing_stable_key_gate() {
 
     let bad = r#"
 const DATA = [{id:"same"},{id:"same"}];
-function Mark({datum}) { const ctx = useTime(); return <View key="mark" style={{width:10,height:10}}/>; }
+function Mark({datum}) { return <View key="mark" style={{width:10,height:10}}/>; }
 export default function Chart(){return <Scene key="scene">{DATA.map((datum)=><Mark key={datum.id} datum={datum}/>)}</Scene>;}
 "#;
     let diagnostics = compile_motion(bad).expect_err("duplicate stable ids must fail");

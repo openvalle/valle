@@ -17,17 +17,6 @@ use crate::{
     MotionContext, MotionValue, NodeId, NodeKind, ResolvedProps, SceneArtifact, StyleValue,
 };
 
-fn swapped(op: CompareOp) -> CompareOp {
-    match op {
-        CompareOp::Eq => CompareOp::Eq,
-        CompareOp::NotEq => CompareOp::NotEq,
-        CompareOp::Lt => CompareOp::Gt,
-        CompareOp::Lte => CompareOp::Gte,
-        CompareOp::Gt => CompareOp::Lt,
-        CompareOp::Gte => CompareOp::Lte,
-    }
-}
-
 #[derive(Debug, Clone)]
 struct ThresholdGate {
     driver: TimeFunction,
@@ -172,7 +161,7 @@ impl ThresholdGate {
                 (
                     TimeFunction::compile(&artifact.exprs, *rhs)?,
                     *constant_number(&artifact.exprs, *lhs)?,
-                    swapped(*op),
+                    op.swapped(),
                 )
             };
         Some(Self {
@@ -204,17 +193,7 @@ impl ThresholdGate {
         if !value.is_finite() {
             return None;
         }
-        Some((
-            match self.op {
-                CompareOp::Eq => value == self.threshold,
-                CompareOp::NotEq => value != self.threshold,
-                CompareOp::Lt => value < self.threshold,
-                CompareOp::Lte => value <= self.threshold,
-                CompareOp::Gt => value > self.threshold,
-                CompareOp::Gte => value >= self.threshold,
-            },
-            cost,
-        ))
+        Some((self.op.numbers(value, self.threshold), cost))
     }
 }
 
@@ -250,12 +229,12 @@ impl InstanceRangeGate {
         let (driver, op) = if indexed_operand(group, *rhs) {
             (TimeFunction::compile(&group.exprs, *lhs)?, *op)
         } else if indexed_operand(group, *lhs) {
-            (TimeFunction::compile(&group.exprs, *rhs)?, swapped(*op))
+            (TimeFunction::compile(&group.exprs, *rhs)?, op.swapped())
         } else {
             return None;
         };
         if !matches!(
-            op,
+            op.exact(),
             CompareOp::Gte | CompareOp::Gt | CompareOp::Lt | CompareOp::Lte
         ) {
             return None;
@@ -274,9 +253,15 @@ impl InstanceRangeGate {
         while low < high {
             let middle = low + (high - low) / 2;
             comparisons += 1;
-            let in_prefix = match self.op {
-                CompareOp::Gte | CompareOp::Lt => time >= middle as f64,
-                CompareOp::Gt | CompareOp::Lte => time > middle as f64,
+            // Row `middle` is in the prefix where `time >= middle` (or `>`), compared as the
+            // gate compares; both hold for every row below a row that holds.
+            let in_prefix = match self.op.exact() {
+                CompareOp::Gte | CompareOp::Lt => CompareOp::Gte
+                    .on_clock_if(self.op)
+                    .numbers(time, middle as f64),
+                CompareOp::Gt | CompareOp::Lte => CompareOp::Gt
+                    .on_clock_if(self.op)
+                    .numbers(time, middle as f64),
                 _ => unreachable!("only interval comparisons are admitted"),
             };
             if in_prefix {
@@ -285,7 +270,7 @@ impl InstanceRangeGate {
                 high = middle;
             }
         }
-        let rows = match self.op {
+        let rows = match self.op.exact() {
             CompareOp::Gte | CompareOp::Gt => 0..low,
             CompareOp::Lt | CompareOp::Lte => low..count,
             _ => unreachable!("only interval comparisons are admitted"),

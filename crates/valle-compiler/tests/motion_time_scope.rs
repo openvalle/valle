@@ -12,15 +12,15 @@ const TIME_SCOPE: &str = include_str!("fixtures/motion/composition/time-scope.mo
 #[test]
 fn time_scope_preserves_host_inputs() {
     for (expression, expected) in [
-        ("ctx.host.seconds * 100", 250.0),
-        ("ctx.host.duration * 100", 300.0),
-        ("ctx.host.progress * 59", 145.0),
+        ("time.clipSeconds * 100", 250.0),
+        ("useComposition().clipDuration * 100", 300.0),
+        ("time.clipProgress * 59", 145.0),
     ] {
-        let source = TIME_SCOPE.replace("ctx.seconds * 100", expression);
+        let source = TIME_SCOPE.replace("time.seconds * 100", expression);
         let artifact = compile_motion(&source).unwrap().artifact;
         assert!((width(&artifact, "bar", 45) - expected).abs() < 1e-9);
     }
-    assert!(compile_motion(&TIME_SCOPE.replace("ctx.seconds", "ctx.host.frame")).is_err());
+    assert!(compile_motion(&TIME_SCOPE.replace("time.seconds", "time.frame")).is_err());
 }
 
 fn width(artifact: &SceneArtifact, key: &str, frame: u32) -> f64 {
@@ -68,12 +68,15 @@ fn maps_component_time_and_restores_parent_scope() {
     assert!((width(&artifact, "bar", 15) - 100.0).abs() < 1e-9);
     assert!((width(&artifact, "bar", 45) - 300.0).abs() < 1e-9);
 
-    let frame_source = TIME_SCOPE.replace("ctx.seconds * 100", "ctx.localFrame * (100 / 30)");
+    let frame_source = TIME_SCOPE.replace(
+        "time.seconds * 100",
+        "Math.floor(time.seconds * 30) * (100 / 30)",
+    );
     let frames = compile_motion(&frame_source).unwrap().artifact;
     assert!((width(&frames, "bar", 15) - 100.0).abs() < 1e-9);
     assert!((width(&frames, "bar", 45) - 300.0).abs() < 1e-9);
 
-    let progress_source = TIME_SCOPE.replace("ctx.seconds * 100", "ctx.progress * 200");
+    let progress_source = TIME_SCOPE.replace("time.seconds * 100", "time.progress * 200");
     let progress = compile_motion(&progress_source).unwrap().artifact;
     assert!((width(&progress, "bar", 15) - 100.0).abs() < 1e-9);
     assert!((width(&progress, "bar", 45) - 300.0).abs() < 1e-9);
@@ -86,7 +89,7 @@ fn maps_component_time_and_restores_parent_scope() {
     assert!((width(&nested, "bar", 45) - 187.5).abs() < 1e-9);
     let with_sibling = TIME_SCOPE.replace(
         "</TimeScope>",
-        "</TimeScope><View key=\"outside\" className=\"absolute\" style={{width:100+useTime().seconds*100,height:10}}/>",
+        "</TimeScope><View key=\"outside\" className=\"absolute\" style={{width:100+useCurrentTime().seconds*100,height:10}}/>",
     );
     let siblings = compile_motion(&with_sibling).unwrap().artifact;
     assert!((width(&siblings, "outside", 45) - 250.0).abs() < 1e-9);
@@ -96,7 +99,8 @@ fn maps_component_time_and_restores_parent_scope() {
 fn time_scope_rejects_missing_or_invalid_parameters() {
     assert!(compile_motion(&TIME_SCOPE.replace(" speed={2}", "")).is_err());
     assert!(
-        compile_motion(&TIME_SCOPE.replace("offset={0.5}", "offset={useTime().seconds}")).is_err()
+        compile_motion(&TIME_SCOPE.replace("offset={0.5}", "offset={useCurrentTime().seconds}"))
+            .is_err()
     );
     assert!(
         compile_motion(&TIME_SCOPE.replace(
@@ -120,24 +124,26 @@ fn time_scope_rejects_missing_or_invalid_parameters() {
 
 #[test]
 fn identity_scope_retains_every_integer_frame_at_non_binary_rates() {
-    let source = r#"function Bar() { const ctx = useTime(); return <View key="bar" style={{width:ctx.localFrame,height:10}} />; }
-    export default function Main() { return <Scene><TimeScope key="scope" offset={0} speed={1}><Bar /></TimeScope></Scene>; }"#;
-    let artifact = compile_motion(source).unwrap().artifact;
-    let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
-    let expr = artifact
-        .nodes
-        .iter()
-        .flat_map(|node| &node.styles)
-        .find_map(|style| {
-            if style.property == "width" {
-                if let StyleValue::Expr { expr } = style.value {
-                    return Some(expr);
-                }
-            }
-            None
-        })
-        .unwrap();
     for fps in [25, 30, 60] {
+        let source = format!(
+            r#"function Bar() {{ const time = useCurrentTime(); return <View key="bar" style={{{{width:Math.floor(time.seconds * {fps}),height:10}}}} />; }}
+    export default function Main() {{ return <Scene><TimeScope key="scope" offset={{0}} speed={{1}}><Bar /></TimeScope></Scene>; }}"#
+        );
+        let artifact = compile_motion(&source).unwrap().artifact;
+        let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+        let expr = artifact
+            .nodes
+            .iter()
+            .flat_map(|node| &node.styles)
+            .find_map(|style| {
+                if style.property == "width" {
+                    if let StyleValue::Expr { expr } = style.value {
+                        return Some(expr);
+                    }
+                }
+                None
+            })
+            .unwrap();
         for frame in 0..1000 {
             let ctx =
                 motion_context_at_frame(frame, 1000, FrameRate::new(fps, 1).unwrap()).unwrap();

@@ -7,11 +7,11 @@ use valle_motion::{
 
 const SOURCE: &str = r##"
 export const controls=({assets:{model:asset({kind:"model3d"}),sky:asset({kind:"environment"})}});
-export default function Pbr() { const ctx = useTime();
+export default function Pbr() { const time = useCurrentTime();
  return <Scene><Scene3D key="scene" camera={{position:[0,0,4],target:[0,0,0]}}
- pbr={{environment:{src:"asset://sky",intensity:1,rotation:ctx.seconds*30,background:false},toneMapping:"aces",exposure:1.1}} style={{width:64,height:64}}>
- <Mesh key="model" src="asset://model" rotateY={ctx.seconds*60} material={{type:"pbr",color:"#ffffff"}} />
- <HemisphereLight skyColor="#bad6ff" groundColor="#1a1a22" intensity={1+ctx.seconds*0} />
+ pbr={{environment:{src:"asset://sky",intensity:1,rotation:time.seconds*30,background:false},toneMapping:"aces",exposure:1.1}} style={{width:64,height:64}}>
+ <Mesh key="model" src="asset://model" rotateY={time.seconds*60} material={{type:"pbr",color:"#ffffff"}} />
+ <HemisphereLight skyColor="#bad6ff" groundColor="#1a1a22" intensity={1+time.seconds*0} />
  </Scene3D></Scene>;
 }
 "##;
@@ -81,7 +81,7 @@ fn directional_shadow_setting_is_static_and_frozen_in_scene() {
         .unwrap();
     assert!(scene.pbr.shadows);
     assert_eq!(scene.lights.last(), Some(&LightKind::Directional));
-    for bad in ["shadows:1", "shadows:ctx.seconds>0", "shadows:\"true\""] {
+    for bad in ["shadows:1", "shadows:time.seconds>0", "shadows:\"true\""] {
         assert!(
             compile_motion(&source.replace("shadows:true", bad)).is_err(),
             "{bad}"
@@ -93,7 +93,7 @@ fn directional_shadow_setting_is_static_and_frozen_in_scene() {
 fn depth_of_field_focus_and_radius_are_frame_bindings() {
     let source = SOURCE.replace(
         "target:[0,0,0]",
-        "target:[0,0,0],depthOfField:{focusDistance:3+ctx.seconds,maxBlurRadius:8}",
+        "target:[0,0,0],depthOfField:{focusDistance:3+time.seconds,maxBlurRadius:8}",
     );
     let artifact = compile_motion(&source).unwrap().artifact;
     artifact.validate().unwrap();
@@ -123,7 +123,7 @@ fn depth_of_field_focus_and_radius_are_frame_bindings() {
     ] {
         assert!(
             compile_motion(&source.replace(
-                "depthOfField:{focusDistance:3+ctx.seconds,maxBlurRadius:8}",
+                "depthOfField:{focusDistance:3+time.seconds,maxBlurRadius:8}",
                 bad
             ))
             .is_err(),
@@ -150,10 +150,10 @@ fn pbr_unknown_options_dynamic_configuration_and_transparency_fail_closed() {
 
 #[test]
 fn camera_vectors_light_colors_and_exposure_use_frame_expressions() {
-    let source=SOURCE.replace("position:[0,0,4],target:[0,0,0]","position:[ctx.seconds*0.1,0,4],target:[0,ctx.seconds*0.05,0],near:0.1+ctx.seconds*0.01,far:10+ctx.seconds,fov:45-ctx.seconds,orbitYaw:ctx.seconds*20")
-        .replace("exposure:1.1","exposure:0.5+ctx.seconds*0.1")
-        .replace("skyColor=\"#bad6ff\"","skyColor={interpolate(ctx.seconds,[0,2],[\"#ff0000\",\"#0000ff\"])} direction={[ctx.seconds,1,0]}")
-        .replace("</Scene3D>","<DirectionalLight color={interpolate(ctx.seconds,[0,2],[\"#00ff00\",\"#ff0000\"])} direction={[ctx.seconds,0,1]} intensity={ctx.seconds*0.1}/></Scene3D>");
+    let source=SOURCE.replace("position:[0,0,4],target:[0,0,0]","position:[time.seconds*0.1,0,4],target:[0,time.seconds*0.05,0],near:0.1+time.seconds*0.01,far:10+time.seconds,fov:45-time.seconds,orbitYaw:time.seconds*20")
+        .replace("exposure:1.1","exposure:0.5+time.seconds*0.1")
+        .replace("skyColor=\"#bad6ff\"","skyColor={interpolate(time.seconds,[0,2],[\"#ff0000\",\"#0000ff\"])} direction={[time.seconds,1,0]}")
+        .replace("</Scene3D>","<DirectionalLight color={interpolate(time.seconds,[0,2],[\"#00ff00\",\"#ff0000\"])} direction={[time.seconds,0,1]} intensity={time.seconds*0.1}/></Scene3D>");
     let artifact = compile_motion(&source).unwrap().artifact;
     artifact.validate().unwrap();
     let (scene, frame) = artifact
@@ -199,16 +199,16 @@ fn camera_vectors_light_colors_and_exposure_use_frame_expressions() {
 fn vector_parameters_take_bindings_of_frame_dependent_arrays() {
     let source = SOURCE
         .replace(
-            "const ctx = useTime();",
-            "const ctx = useTime(); const position = [ctx.seconds * 0.1, 0, 4]; \
-             let target = [0, 0, 0]; if (ctx.seconds > 1) target = [0, 1, 0]; \
-             const spin = [0, 1, 0].map((axis) => axis * ctx.seconds * 30);",
+            "const time = useCurrentTime();",
+            "const time = useCurrentTime(); const position = [time.seconds * 0.1, 0, 4]; \
+             let target = [0, 0, 0]; if (time.seconds > 1) target = [0, 1, 0]; \
+             const spin = [0, 1, 0].map((axis) => axis * time.seconds * 30);",
         )
         .replace(
             "camera={{position:[0,0,4],target:[0,0,0]}}",
             "camera={{position,target}}",
         )
-        .replace("rotateY={ctx.seconds*60}", "rotation={spin}");
+        .replace("rotateY={time.seconds*60}", "rotation={spin}");
     let artifact = compile_motion(&source).unwrap().artifact;
     artifact.validate().unwrap();
     let frame = artifact
@@ -230,8 +230,8 @@ fn vector_parameters_take_bindings_of_frame_dependent_arrays() {
         );
     }
     for (from, to) in [
-        ("[ctx.seconds * 0.1, 0, 4]", "[ctx.seconds * 0.1, 0]"),
-        ("[ctx.seconds * 0.1, 0, 4]", "[`${ctx.seconds}`, 0, 4]"),
+        ("[time.seconds * 0.1, 0, 4]", "[time.seconds * 0.1, 0]"),
+        ("[time.seconds * 0.1, 0, 4]", "[`${time.seconds}`, 0, 4]"),
     ] {
         let diagnostics = compile_motion(&source.replace(from, to)).unwrap_err();
         assert!(
@@ -245,10 +245,10 @@ fn vector_parameters_take_bindings_of_frame_dependent_arrays() {
 
 #[test]
 fn mesh_vectors_and_model_node_replacements_are_typed_complete_transforms() {
-    let bindings = r#"position={[ctx.seconds,0,0]} translateX={2} rotation={[0,10,0]} scale={[2,1,1]} scaleX={ctx.seconds+1} nodes={[{id:2,position:[ctx.seconds,0,0],rotation:[0,ctx.seconds*10,0],scale:[-1,2,1]},{id:0}]}"#;
+    let bindings = r#"position={[time.seconds,0,0]} translateX={2} rotation={[0,10,0]} scale={[2,1,1]} scaleX={time.seconds+1} nodes={[{id:2,position:[time.seconds,0,0],rotation:[0,time.seconds*10,0],scale:[-1,2,1]},{id:0}]}"#;
     let source = SOURCE.replace(
-        "rotateY={ctx.seconds*60}",
-        &format!("rotateY={{ctx.seconds*60}} {bindings}"),
+        "rotateY={time.seconds*60}",
+        &format!("rotateY={{time.seconds*60}} {bindings}"),
     );
     let artifact = compile_motion(&source).unwrap().artifact;
     artifact.validate().unwrap();
@@ -276,14 +276,14 @@ fn mesh_vectors_and_model_node_replacements_are_typed_complete_transforms() {
     for bad in [
         "nodes={[{id:2},{id:2}]}",
         "nodes={[{id:256}]}",
-        "nodes={[{id:ctx.seconds}]}",
+        "nodes={[{id:time.seconds}]}",
         "nodes={[{id:0,scale:[0,1,1]}]}",
         "nodes={[{id:0,position:[true,0,0]}]}",
         "nodes={[{id:0,unknown:1}]}",
         "scale={[1001,1,1]}",
     ] {
         assert!(
-            compile_motion(&SOURCE.replace("rotateY={ctx.seconds*60}", bad)).is_err(),
+            compile_motion(&SOURCE.replace("rotateY={time.seconds*60}", bad)).is_err(),
             "must reject {bad}"
         );
     }
@@ -293,7 +293,7 @@ fn mesh_vectors_and_model_node_replacements_are_typed_complete_transforms() {
 fn mesh_animation_freezes_clip_and_binds_explicit_frame_time() {
     let source = SOURCE.replace(
         "src=\"asset://model\"",
-        r#"src="asset://model" animation={{clip:0,time:ctx.seconds}}"#,
+        r#"src="asset://model" animation={{clip:0,time:time.seconds}}"#,
     );
     let artifact = compile_motion(&source).unwrap().artifact;
     artifact.validate().unwrap();
@@ -312,14 +312,14 @@ fn mesh_animation_freezes_clip_and_binds_explicit_frame_time() {
     ));
     assert_eq!(scene.frame_scalar_count(), 50);
     for bad in [
-        r#"animation={{clip:ctx.seconds,time:0}}"#,
+        r#"animation={{clip:time.seconds,time:0}}"#,
         r#"animation={{clip:32,time:0}}"#,
         r#"animation={{clip:0}}"#,
         r#"animation={{clip:0,time:-1}}"#,
         r#"animation={{clip:0,time:0,unknown:1}}"#,
     ] {
         assert!(
-            compile_motion(&SOURCE.replace("rotateY={ctx.seconds*60}", bad)).is_err(),
+            compile_motion(&SOURCE.replace("rotateY={time.seconds*60}", bad)).is_err(),
             "must reject {bad}"
         );
     }
@@ -328,7 +328,7 @@ fn mesh_animation_freezes_clip_and_binds_explicit_frame_time() {
 #[test]
 fn material_values_and_texture_roles_lower_through_global_and_indexed_overrides() {
     let source = SOURCE.replace("sky:asset", r#"map:asset({kind:"image"}),sky:asset"#)
-        .replace(r##"material={{type:"pbr",color:"#ffffff"}}"##,r##"material={{type:"pbr",color:interpolate(ctx.seconds,[0,2],["#ff0000","#0000ff"]),metallic:ctx.seconds/3,roughness:0.5,textures:{baseColor:"asset://map",normal:{src:"asset://map",wrapU:"mirror",wrapV:"clamp",minFilter:"nearest",mipmap:"none"}}}} materials={[{id:0,alphaMode:"mask",alphaCutoff:ctx.seconds/3,emissive:"#ff0000",emissiveIntensity:ctx.seconds,normalScale:ctx.seconds,occlusionStrength:ctx.seconds/3,doubleSided:true,textures:{normal:null}}]}"##);
+        .replace(r##"material={{type:"pbr",color:"#ffffff"}}"##,r##"material={{type:"pbr",color:interpolate(time.seconds,[0,2],["#ff0000","#0000ff"]),metallic:time.seconds/3,roughness:0.5,textures:{baseColor:"asset://map",normal:{src:"asset://map",wrapU:"mirror",wrapV:"clamp",minFilter:"nearest",mipmap:"none"}}}} materials={[{id:0,alphaMode:"mask",alphaCutoff:time.seconds/3,emissive:"#ff0000",emissiveIntensity:time.seconds,normalScale:time.seconds,occlusionStrength:time.seconds/3,doubleSided:true,textures:{normal:null}}]}"##);
     let compile = |source: &str| {
         compile_motion_with_resources(
             source,
@@ -372,10 +372,10 @@ fn material_values_and_texture_roles_lower_through_global_and_indexed_overrides(
     );
     for (from, to) in [
         ("roughness:0.5", "roughness:2"),
-        ("occlusionStrength:ctx.seconds/3", "occlusionStrength:true"),
+        ("occlusionStrength:time.seconds/3", "occlusionStrength:true"),
         (r#"wrapU:"mirror""#, r#"wrapU:"bad""#),
         ("normal:null", "unknown:null"),
-        ("id:0", "id:ctx.seconds"),
+        ("id:0", "id:time.seconds"),
         (r##"emissive:"#ff0000""##, r##"emissive:"#ff000080""##),
         ("asset://map", "asset://missing"),
     ] {

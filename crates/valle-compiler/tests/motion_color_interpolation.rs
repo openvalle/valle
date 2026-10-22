@@ -81,11 +81,11 @@ fn interpolate_rejects_invalid_color_space_and_hue_options() {
 fn animated_gradient_stop_reaches_draw_program_without_byte_rounding() {
     let source = r##"
 export const composition = { width: 160, height: 80, fps: 30, duration: 2 };
-export default function FloatGradient() { const ctx = useTime();
+export default function FloatGradient() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full">
     <Path key="gradient" d="M 0 0 L 160 0 L 160 80 L 0 80 Z"
       fill={linearGradient(point(0, 0), point(160, 0), [
-        gradientStop(0, interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
+        gradientStop(0, interpolate(time.progress, [0, 1], ["#2140ff", "#ffd000"],
           { colorSpace: "oklch" })),
         gradientStop(1, "#ffd000"),
       ])} />
@@ -137,11 +137,11 @@ export default function FloatGradient() { const ctx = useTime();
 fn animated_per_unit_text_color_reaches_draw_program_without_byte_rounding() {
     let source = r##"
 export const composition = { width: 160, height: 80, fps: 30, duration: 2 };
-export default function FloatLetters() { const ctx = useTime();
+export default function FloatLetters() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full">
     <Text key="letters" split="char" style={{ fontSize: 56, color: "#ffffff" }}
-      perUnit={{ color: interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
-        { colorSpace: "oklch" }) }}>AB</Text>
+      perUnit={() => ({ color: interpolate(time.progress, [0, 1], ["#2140ff", "#ffd000"],
+        { colorSpace: "oklch" }) })}>AB</Text>
   </Scene>;
 }
 
@@ -193,10 +193,10 @@ export default function FloatLetters() { const ctx = useTime();
 fn animated_text_fill_reaches_draw_program_without_byte_rounding() {
     let source = r##"
 export const composition = { width: 160, height: 80, fps: 30, duration: 2 };
-export default function FloatText() { const ctx = useTime();
+export default function FloatText() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full">
     <Text key="letters" style={{ fontSize: 56,
-      color: interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
+      color: interpolate(time.progress, [0, 1], ["#2140ff", "#ffd000"],
         { colorSpace: "oklch" }) }}>AB</Text>
   </Scene>;
 }
@@ -240,11 +240,11 @@ export default function FloatText() { const ctx = useTime();
 fn geometry_batch_fill_field_reaches_float_instance_column() {
     let source = r##"
 export const composition = { width: 160, height: 80, fps: 30, duration: 2 };
-export default function FloatBatch() { const ctx = useTime();
+export default function FloatBatch() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full">
     <GeometryBatch key="tiles" geometry="rect" positions={[point(80, 40)]}
       sizes={point(80, 40)}
-      fills={field({ from: "#2140ff", to: "#ffd000", progress: ctx.progress })}
+      fills={field({ from: "#2140ff", to: "#ffd000", progress: time.progress })}
       style={{ position: "absolute", left: 0, top: 0, width: 160, height: 80 }} />
   </Scene>;
 }
@@ -266,8 +266,7 @@ export default function FloatBatch() { const ctx = useTime();
     );
     let color = resolve_geometry_batch(
         batch,
-        30.0,
-        30.0,
+        1.0,
         BatchFieldProgress {
             fill: 0.5,
             ..Default::default()

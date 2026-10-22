@@ -183,8 +183,8 @@ fn shutter_prunes_unrelated_layout_beside_backdrop_readers_and_preserves_pixels(
     let background = (0..400).map(|i| format!(r##"<View key="static-{i}" className="absolute" style={{{{left:{},top:{},width:6,height:6,backgroundColor:"#456",mixBlendMode:"{}"}}}}/>"##,i%40*16,i/40*16,if i%2==0 {"multiply"} else {"normal"})).collect::<String>();
     let source = format!(
         r##"export const composition={{width:640,height:360,fps:30,duration:2}};
-        export default function SceneMain() {{ const ctx = useTime();return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>{background}
-        <Shutter key="shutter" samples={{8}} angle={{180}}><View key="moving" style={{{{position:"absolute",left:ctx.seconds*100,top:80,width:24,height:24,backgroundColor:"white",mixBlendMode:"screen"}}}}/></Shutter></Scene>}}"##
+        export default function SceneMain() {{ const time = useCurrentTime();return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>{background}
+        <Shutter key="shutter" samples={{8}} angle={{180}}><View key="moving" style={{{{position:"absolute",left:time.seconds*100,top:80,width:24,height:24,backgroundColor:"white",mixBlendMode:"screen"}}}}/></Shutter></Scene>}}"##
     );
     let artifact = compile_motion(&source).unwrap().artifact;
     let ctx = motion_context_at_frame(20, 60, FrameRate::new(30, 1).unwrap()).unwrap();
@@ -211,11 +211,11 @@ fn shutter_prunes_unrelated_layout_beside_backdrop_readers_and_preserves_pixels(
 
 #[test]
 fn shutter_prunes_unrelated_absolute_layout_and_preserves_pixels_and_bounds_readers() {
-    let background = (0..1600).map(|i| format!(r##"<View key="static-{i}" className="absolute" style={{{{left:{},top:{},width:4,height:4,backgroundColor:"#456",opacity:0.5+ctx.progress*0.5}}}}/>"##,i%160*4,i/160*4)).collect::<String>();
+    let background = (0..1600).map(|i| format!(r##"<View key="static-{i}" className="absolute" style={{{{left:{},top:{},width:4,height:4,backgroundColor:"#456",opacity:0.5+time.progress*0.5}}}}/>"##,i%160*4,i/160*4)).collect::<String>();
     let source = format!(
         r##"export const composition={{width:640,height:360,fps:30,duration:2}};
-        export default function SceneMain() {{ const ctx = useTime();return <Scene style={{{{width:640,height:360}}}}>{background}
-        <Shutter key="shutter" samples={{16}} angle={{180}}><View key="moving" style={{{{position:"absolute",left:ctx.seconds*100,top:80,width:24,height:24,backgroundColor:"white"}}}}/></Shutter></Scene>}}"##
+        export default function SceneMain() {{ const time = useCurrentTime();return <Scene style={{{{width:640,height:360}}}}>{background}
+        <Shutter key="shutter" samples={{16}} angle={{180}}><View key="moving" style={{{{position:"absolute",left:time.seconds*100,top:80,width:24,height:24,backgroundColor:"white"}}}}/></Shutter></Scene>}}"##
     );
     let artifact = compile_motion(&source).unwrap().artifact;
     let scene = prepare_scene(&artifact).unwrap();
@@ -239,8 +239,8 @@ fn shutter_prunes_unrelated_absolute_layout_and_preserves_pixels_and_bounds_read
         program(&complete, 20).packed_bytes().unwrap()
     );
     let with_reader = source.replace(
-        "left:ctx.seconds*100,top:80",
-        "left:0,top:0,translate:point(ctx.seconds*100+bounds(\"static-7\").width,80)",
+        "left:time.seconds*100,top:80",
+        "left:0,top:0,translate:point(time.seconds*100+bounds(\"static-7\").width,80)",
     );
     let artifact = compile_motion(&with_reader).unwrap().artifact;
     let (_, timing) =
@@ -254,9 +254,9 @@ fn shutter_prunes_absolute_branches_with_other_classes_and_preserves_pixels() {
     let cells = (0..400).map(|i| format!(r##"<View key="cell-{i}" style={{{{width:6,height:6,margin:1,backgroundColor:"#456"}}}}/>"##)).collect::<String>();
     let source = format!(
         r##"export const composition={{width:640,height:360,fps:30,duration:2}};
-        export default function SceneMain() {{ const ctx = useTime();return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>
+        export default function SceneMain() {{ const time = useCurrentTime();return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>
         <View key="panel" className="absolute inset-0 flex flex-wrap" style={{{{padding:4}}}}>{cells}</View>
-        <Shutter key="shutter" samples={{8}} angle={{180}}><View key="moving" style={{{{position:"absolute",left:ctx.seconds*100,top:80,width:24,height:24,backgroundColor:"white"}}}}/></Shutter></Scene>}}"##
+        <Shutter key="shutter" samples={{8}} angle={{180}}><View key="moving" style={{{{position:"absolute",left:time.seconds*100,top:80,width:24,height:24,backgroundColor:"white"}}}}/></Shutter></Scene>}}"##
     );
     let sampled_nodes = |source: &str| {
         let artifact = compile_motion(source).unwrap().artifact;

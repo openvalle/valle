@@ -30,8 +30,8 @@ export const controls = {
   },
 };
 
-export default function ReleaseDashboard(props) { const ctx = useTime(); const data = useData();
-  const reveal = interpolate(ctx.progress, [0, 1], [0, 1], { easing: "easeOut" });
+export default function ReleaseDashboard(props) { const time = useCurrentTime(); const data = useData();
+  const reveal = interpolate(time.progress, [0, 1], [0, 1], { easing: "easeOut" });
   return (
     <ThemeProvider value={brandTheme}>
       <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: useTheme().colors.background }}>

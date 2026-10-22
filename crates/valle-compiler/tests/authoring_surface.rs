@@ -86,7 +86,7 @@ fn every_rejection_names_a_documented_replacement() {
         ),
         (
             r#"<View className="animate-wiggle" />"#,
-            "`animate-*` is not a Motion loop; use `interpolate` over local time, for example `interpolate(ctx.seconds % 1, [0, 1], [0, 360])`",
+            "`animate-*` is not a Motion loop; use `interpolate` over local time, for example `interpolate(seconds % 1, [0, 1], [0, 360])`",
         ),
         (
             r#"<View style={{ animation: "spin 1s linear infinite" }} />"#,
@@ -94,11 +94,11 @@ fn every_rejection_names_a_documented_replacement() {
         ),
         (
             r#"<View style={{ animation: "spin 1s linear infinite" }} />"#,
-            "use `interpolate` over local time, for example `interpolate(ctx.seconds % 1, [0, 1], [0, 360])`",
+            "use `interpolate` over local time, for example `interpolate(seconds % 1, [0, 1], [0, 360])`",
         ),
         (
             r#"<View style={{ transition: "opacity 0.2s" }} />"#,
-            "an explicit range: `interpolate(ctx.seconds, [start, end], [a, b])`",
+            "an explicit range: `interpolate(seconds, [start, end], [a, b])`",
         ),
         (
             r#"<View style={{ width: "fit-content" }} />"#,
@@ -145,7 +145,7 @@ fn every_rejection_names_a_documented_replacement() {
 fn module_and_text_shape_rejections_are_documented() {
     for (body, phrase) in [
         (
-            r#"function Inner({ card: { title } }) { const ctx = useTime(); return <View style={{ opacity: title }} />; }
+            r#"function Inner({ card: { title } }) { return <View style={{ opacity: title }} />; }
 export default function D(){return <Scene style={{width:320,height:180}}><Inner card={{ title: 1 }} /></Scene>;}"#,
             "nested props destructuring is not supported; bind one scalar field at a time",
         ),
@@ -176,7 +176,7 @@ export default function D(){return <Scene style={{width:320,height:180}}/>;}"#,
 /// `body` among its children.
 fn scene(helpers: &str, body: &str) -> String {
     format!(
-        "{helpers}\nexport default function D(){{const ctx = useTime();\n\
+        "{helpers}\nexport default function D(){{const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);\n\
          return <Scene style={{{{width:320,height:180}}}}>{body}</Scene>;}}\n"
     )
 }
@@ -184,7 +184,7 @@ fn scene(helpers: &str, body: &str) -> String {
 /// A module whose component runs `statements` before it returns the scene.
 fn body(statements: &str) -> String {
     format!(
-        "export default function D(){{const ctx = useTime();\n{statements}\n\
+        "export default function D(){{const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);\n{statements}\n\
          return <Scene style={{{{width:320,height:180}}}}><View style={{{{ width: 10, height: 10 }}}} /></Scene>;}}\n"
     )
 }
@@ -211,7 +211,7 @@ fn language_rejections_name_a_replacement() {
         (
             scene(
                 "function fact(n) { return n <= 1 ? 1 : n * fact(n - 1); }",
-                "<View style={{ width: fact(ctx.localFrame), height: 10 }} />",
+                "<View style={{ width: fact(frame), height: 10 }} />",
             ),
             "write the repetition as a `for` loop whose bound is known while the scene is prepared"
                 .into(),
@@ -235,14 +235,14 @@ fn language_rejections_name_a_replacement() {
         (
             scene(
                 "const xs = [1, 2, 3];",
-                "{xs.filter((x) => x > ctx.seconds).map((x) => <View key={`f${x}`} style={{ width: x, height: 4 }} />)}",
+                "{xs.filter((x) => x > time.seconds).map((x) => <View key={`f${x}`} style={{ width: x, height: 4 }} />)}",
             ),
             "map the whole prepared array and decide each item per frame".into(),
         ),
         (
             scene(
                 "",
-                "{Array.from({ length: ctx.localFrame }, (_, i) => <View key={`a${i}`} style={{ width: 4, height: 4 }} />)}",
+                "{Array.from({ length: frame }, (_, i) => <View key={`a${i}`} style={{ width: 4, height: 4 }} />)}",
             ),
             "the array it repeats cannot change with the frame".into(),
         ),
@@ -251,7 +251,7 @@ fn language_rejections_name_a_replacement() {
                 "",
                 "<View onClick={() => {}} style={{ width: 10, height: 10 }} />",
             ),
-            "remove it, and drive the change with `useTime()` or a prop".into(),
+            "remove it, and drive the change with `useCurrentTime()` or a prop".into(),
         ),
         (
             scene("class Box { constructor(w) { this.w = w; } }", ""),
@@ -273,7 +273,7 @@ fn language_rejections_name_a_replacement() {
         (
             scene(
                 "function Vec(x) { this.x = x; }",
-                "<View style={{ width: new Vec(ctx.seconds).x, height: 10 }} />",
+                "<View style={{ width: new Vec(time.seconds).x, height: 10 }} />",
             ),
             "`new` does not run per frame".into(),
         ),
@@ -292,25 +292,25 @@ fn language_rejections_name_a_replacement() {
             "give a prop its default in the parameter, as in `function Card({ width = 100 })`".into(),
         ),
         (
-            scene("", "<View style={{ width: (ctx.localFrame | 0) + 1, height: 10 }} />"),
+            scene("", "<View style={{ width: (frame | 0) + 1, height: 10 }} />"),
             "write `Math.trunc(x)` for `x | 0`".into(),
         ),
         (
-            scene("", "<View style={{ width: ~ctx.localFrame, height: 10 }} />"),
+            scene("", "<View style={{ width: ~frame, height: 10 }} />"),
             "write `-x - 1` for `~x`".into(),
         ),
         (
-            scene("", "<View style={{ width: ctx.seconds > 1 ? 5 : null, height: 10 }} />"),
+            scene("", "<View style={{ width: time.seconds > 1 ? 5 : null, height: 10 }} />"),
             "`null` is not a value of the frame".into(),
         ),
         (
-            body("let w = 1;\nconst x = (w = ctx.seconds);"),
+            body("let w = 1;\nconst x = (w = time.seconds);"),
             "assign on a line of its own in the body".into(),
         ),
         (
             scene(
                 "",
-                "<View style={{ width: [1, 2].indexOf(ctx.localFrame), height: 10 }} />",
+                "<View style={{ width: [1, 2].indexOf(frame), height: 10 }} />",
             ),
             "compute a method call such as `list.indexOf(x)` in a module-level `const`".into(),
         ),
@@ -344,11 +344,11 @@ fn the_named_replacements_compile() {
         ),
         scene(
             r#"const items = [{ id: "a", at: 0.2 }, { id: "b", at: 0.6 }];"#,
-            "{items.map((item) => (item.at < ctx.seconds ? <View key={item.id} style={{ width: 4, height: 4 }} /> : null))}",
+            "{items.map((item) => (item.at < time.seconds ? <View key={item.id} style={{ width: 4, height: 4 }} /> : null))}",
         ),
         scene(
             "function fact(n) { let r = 1; for (let i = 2; i <= 6; i++) { r = i <= n ? r * i : r; } return r; }",
-            "<View style={{ width: fact(ctx.localFrame % 4), height: 10 }} />",
+            "<View style={{ width: fact(frame % 4), height: 10 }} />",
         ),
         scene(
             r#"function flatten(node, depth) { return [{ id: node.id, depth }, ...node.children.flatMap((child) => flatten(child, depth + 1))]; }
@@ -365,15 +365,15 @@ const rows = flatten({ id: "a", children: [{ id: "b", children: [{ id: "c", chil
         ),
         scene(
             "",
-            "<View style={{ width: Math.trunc(ctx.seconds * 10) + 1, height: 10 }} />",
+            "<View style={{ width: Math.trunc(time.seconds * 10) + 1, height: 10 }} />",
         ),
         scene(
             "",
-            "<View style={{ width: Math.floor(ctx.progress * 3) < 1 ? 10 : Math.floor(ctx.progress * 3) < 2 ? 20 : 30, height: 10 }} />",
+            "<View style={{ width: Math.floor(time.progress * 3) < 1 ? 10 : Math.floor(time.progress * 3) < 2 ? 20 : 30, height: 10 }} />",
         ),
         body("const o = { a: 1, b: 2 };\nconst { a, ...rest } = o;\nconst width = rest.b * 5;"),
         body(
-            "const i = Math.floor(ctx.progress * 3);\nlet w = 30;\nif (i < 1) { w = 10; } else if (i < 2) { w = 20; }",
+            "const i = Math.floor(time.progress * 3);\nlet w = 30;\nif (i < 1) { w = 10; } else if (i < 2) { w = 20; }",
         ),
     ] {
         let source = format!("{COMPOSITION}{module}");

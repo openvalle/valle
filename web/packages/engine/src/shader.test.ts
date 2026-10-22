@@ -97,9 +97,9 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
     await writeFile(join(dir, "effect.motion.tsx"), `
       export const composition = { width: 64, height: 64, duration: 3 };
       export const controls={assets:{effect:asset({kind:"shader"}),image:asset({kind:"image"})}};
-      export default function T() { const ctx = useTime(); return <Scene style={{width:64,height:64}}>
+      export default function T() { const time = useCurrentTime(); return <Scene style={{width:64,height:64}}>
         <ShaderLayer source="asset://effect" inputs={{steps:"asset://image"}}
-          uniforms={{basis:[1,0,0,1],offset:[ctx.seconds*0.1,0,0],amount:ctx.seconds*0.05,tint:"#ff000000",enabled:true}}
+          uniforms={{basis:[1,0,0,1],offset:[time.seconds*0.1,0,0],amount:time.seconds*0.05,tint:"#ff000000",enabled:true}}
           style={{width:64,height:64}}><View style={{width:64,height:64,backgroundColor:"#fff"}}/></ShaderLayer>
       </Scene>; }
     `);
@@ -133,13 +133,13 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           <View style={{width:16,height:16,backgroundColor:"#fff"}}/>
         </ShaderLayer>`, source: "return sampleContent(uv + float2(0.5,0.0));", points: [[20,32,255,255,255], [28,32,255,255,255], [40,32,0,0,0], [12,32,0,0,0]], samples: 36*26 },
       { name: "scene3d", body: `<ShaderLayer source="asset://effect" style={{position:"absolute",left:8,top:8,width:48,height:48}}>
-          <Scene3D key="model" camera={{position:[ctx.seconds*0.03,0,3],target:[0,0,0],near:0.1+ctx.seconds*0.01,fov:45}} style={{width:48,height:48}}>
-            <Mesh key="part" src="asset://model" rotateY={ctx.seconds*20} nodes={[{id:0,rotation:[0,0,ctx.seconds*5],scale:[-1,1,1]}]} material={{type:"unlit",color:ctx.seconds<1?"#ff0000":"#0000ff"}}/>
+          <Scene3D key="model" camera={{position:[time.seconds*0.03,0,3],target:[0,0,0],near:0.1+time.seconds*0.01,fov:45}} style={{width:48,height:48}}>
+            <Mesh key="part" src="asset://model" rotateY={time.seconds*20} nodes={[{id:0,rotation:[0,0,time.seconds*5],scale:[-1,1,1]}]} material={{type:"unlit",color:time.seconds<1?"#ff0000":"#0000ff"}}/>
           </Scene3D>
         </ShaderLayer>`, source: "float4 c = sampleContent(uv); return float4(c.b,c.g,c.r,c.a);", points: [[32,32,0,0,255],[10,10,0,0,0]], samples: 48*48 },
       // Inline code with an input, a frame uniform and an outset that the right side of `steps` fills.
       { name: "inline", body: `<ShaderLayer code={"uniform float amount; uniform shader steps; float4 valle_main(float2 uv) { return float4(sample_steps(uv).rgb * amount, 1.0); }"}
-          inputs={{steps:{src:"asset://image",sampling:"nearest"}}} uniforms={{amount:0.5+ctx.seconds*0.25}} outset={[0,8]}
+          inputs={{steps:{src:"asset://image",sampling:"nearest"}}} uniforms={{amount:0.5+time.seconds*0.25}} outset={[0,8]}
           style={{position:"absolute",left:16,top:16,width:32,height:32}}/>`,
         source: "return float4(0.0);", points: [[12,32,0,0,0], [24,32,0,0,0], [40,32,255,255,255], [52,32,255,255,255], [60,32,0,0,0]] },
       // The backdrop under a scaled layer, read in place a quarter of its height lower and kept
@@ -167,7 +167,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
       await writeFile(join(dir, "effect.motion.tsx"), content ? `
         export const composition = { width: 64, height: 64, duration: 3 };
         export const controls={assets:{${inline?'':'effect:asset({kind:"shader"}),'}image:asset({kind:"image"})${scene3d?',model:asset({kind:"model3d"})':''}}};
-        export default function T() { const ctx = useTime(); return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${content.body}</Scene>; }
+        export default function T() { const time = useCurrentTime(); return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${content.body}</Scene>; }
       ` : fieldMotion);
       if (data) {
         await writeFile(join(dir, "effect.vsksl"), precision

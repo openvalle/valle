@@ -89,18 +89,18 @@ test("Motion composition, easing and color interpolation match analytic pixels o
   const cases: Case[] = [
     { name:"regression-captured-map", source:`export const composition={width:64,height:64,fps:30,duration:2};
       const rows=[{id:"a",x:0},{id:"b",x:16},{id:"c",x:32}];
-      export default function Main(){ const ctx = useTime();const k=ctx.progress*2;return <Scene style={{width:64,height:64,backgroundColor:"black"}}>
+      export default function Main(){ const time = useCurrentTime();const k=time.progress*2;return <Scene style={{width:64,height:64,backgroundColor:"black"}}>
         {rows.map(row=><View key={row.id} className="absolute" style={{left:row.x+k*10,top:20,width:8,height:8,backgroundColor:"white"}}/>)}</Scene>}`, body:"", probes:[],
       frameProbes:{0:[[1,24,255,255,255],[9,24,0,0,0]],30:[[11,24,255,255,255],[1,24,0,0,0]]} },
     { name:"regression-chromatic-alpha", source:`export const composition={width:64,height:64,fps:30,duration:2};
-      export default function Main(){ const ctx = useTime();return <Scene style={{width:64,height:64}}><View style={{width:64,height:64,
-        backgroundColor:"#ffffff80",filter:\`chromatic-aberration(\${ctx.seconds}px)\`}}/></Scene>}`, body:"",
+      export default function Main(){ const time = useCurrentTime(); const tick = Math.floor(time.seconds * 30);return <Scene style={{width:64,height:64}}><View style={{width:64,height:64,
+        backgroundColor:"#ffffff80",filter:\`chromatic-aberration(\${time.seconds}px)\`}}/></Scene>}`, body:"",
       probes:[[32,32,255,255,255,128]], frames:[0,30,0] },
     { name:"noise-displacement", source:noiseDisplacementSource, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
     // One panel moves inside the frame and one crosses its left edge, where the pass target is
     // clipped: neither the noise nor its vectors may follow where a target starts.
     { name:"noise-displacement-stripes", source:`export const composition={width:160,height:96,fps:30,duration:2};
-      export default function Main(){ const ctx = useTime();const drift=ctx.localFrame*0.5;return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+      export default function Main(){ const time = useCurrentTime(); const tick = Math.floor(time.seconds * 30);const drift=tick*0.5;return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
         <View key="inner" className="absolute" style={{left:60+drift,top:8,width:84,height:80,overflow:"hidden",
           displacement:displacement(7,point(0.071,0.057),14,{octaves:2})}}>${stripes("inner",84,80)}</View>
         <View key="edge" className="absolute" style={{left:-20,top:10,width:70,height:76,overflow:"hidden",
@@ -109,10 +109,10 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       </Scene>}`, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
     // Backdrop displacement in output pixels, alone and after a backdrop blur.
     { name:"backdrop-displacement", source:`export const composition={width:160,height:96,fps:30,duration:2};
-      export default function Main(){ const ctx = useTime();return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+      export default function Main(){ const time = useCurrentTime();return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
         <View key="backdrop" className="absolute" style={{left:0,top:0,width:160,height:96}}>${stripes("backdrop",160,96)}</View>
         <View key="lens" className="absolute" style={{left:16,top:14,width:56,height:68,
-          backdropDisplacement:displacement(7,point(0.071,0.057),12+ctx.progress*8,{octaves:2})}}/>
+          backdropDisplacement:displacement(7,point(0.071,0.057),12+time.progress*8,{octaves:2})}}/>
         <View key="frosted" className="absolute" style={{left:88,top:14,width:56,height:68,backdropFilter:"blur(2px)",
           backdropDisplacement:displacement(19,point(0.043,0.089),10,{mode:"turbulence"})}}/>
       </Scene>}`, body:"", width:160, height:96, frames:[0,30,0], probes:[] },
@@ -127,11 +127,11 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       </Scene>}`, body:"", width:160, height:96, frames:[0], probes:[] },
     // A backdrop blur mixes in what lies just outside the node, across its edges and its corner radii.
     { name:"backdrop-blur-edge", source:`export const composition={width:96,height:64,fps:30,duration:2};
-      export default function Main(){ const ctx = useTime();return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
+      export default function Main(){ const time = useCurrentTime(); const tick = Math.floor(time.seconds * 30);return <Scene className="relative h-full w-full" style={{backgroundColor:"#e2e8f0"}}>
         <View key="backdrop" className="absolute" style={{left:0,top:0,width:96,height:64}}>${stripes("backdrop",96,64)}</View>
         <View key="bar-top" className="absolute" style={{left:0,top:8,width:96,height:4,backgroundColor:"#16a34a"}}/>
         <View key="bar-bottom" className="absolute" style={{left:0,top:47,width:96,height:4,backgroundColor:"#16a34a"}}/>
-        <View key="frosted" className="absolute" style={{left:12,top:10,width:44,height:39,borderRadius:10,backdropFilter:\`blur(\${2+ctx.progress*2}px)\`}}/>
+        <View key="frosted" className="absolute" style={{left:12,top:10,width:44,height:39,borderRadius:10,backdropFilter:\`blur(\${2+time.progress*2}px)\`}}/>
       </Scene>}`, body:"", width:96, height:64, frames:[0,30,0], probes:[] },
     // Backdrop lengths are node units: a node scaled by 2 with blur(2px) blurs like an unscaled one
     // with blur(4px) over the same backdrop.
@@ -153,9 +153,9 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       style={{position:"absolute",left:0,top:0,width:64,height:64}}/>`, probes:[[16,20,255,208,0],[48,20,255,208,0]] },
     { name:"batch-skew-stroke", body:`<GeometryBatch geometry="rect" positions={[point(8,16),point(40,16)]}
       sizes={[point(16,8)]} fills="#ffd000"
-      rotations={field({from:[0,0],to:[0,12],progress:ctx.progress})}
-      skewXs={field({from:[0,0],to:[0,24],progress:ctx.progress})}
-      strokeWidths={field({from:[0,0],to:[0,0.1],progress:ctx.progress})}
+      rotations={field({from:[0,0],to:[0,12],progress:time.progress})}
+      skewXs={field({from:[0,0],to:[0,24],progress:time.progress})}
+      strokeWidths={field({from:[0,0],to:[0,0.1],progress:time.progress})}
       style={{position:"absolute",left:0,top:0,width:64,height:64}}/>`, probes:[[16,20,255,208,0],[48,20,255,208,0]] },
     { name:"geometry-batch-atlas", source:atlasSource,
       body:"", width:320, height:160, frames:[0,30,0], atlasAsset:true,
@@ -186,7 +186,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"screen-linear-transparent", body:`<Group style={{position:"relative",width:64,height:64,opacity:0.5,isolation:"isolate"}}>${view("#800000",',opacity:0.5')}${view("#800000",',opacity:0.5,mixBlendMode:"screen",mixBlendSpace:"linear"')}</Group>`, probes:[[32,32,90,0,0]] },
     { name:"screen-linear-mask", body:view("#800000")+`<Mask rect={rect(0,0,64,64)} style={{width:64,height:64,mixBlendMode:"screen",mixBlendSpace:"linear"}}><MaskSource>${circle()}</MaskSource>${view("#800000")}</Mask>`, probes:[[32,32,167,0,0],[2,2,128,0,0]] },
     { name:"screen-linear-gradient", body:`<View style={{position:"absolute",width:64,height:64,backgroundImage:"linear-gradient(90deg in srgb, #206080, #803010)"}}/>`+view("#80a040", ',mixBlendMode:"screen",mixBlendSpace:"linear",opacity:0.5,transform:"rotate(10deg)"'), probes:[] },
-    { name:"blend-space-dynamic", body:view("#800000")+view("#800000", ',mixBlendMode:"screen",mixBlendSpace:ctx.seconds<0.5?"linear":"srgb"'), probes:[], frameProbes:{0:[[32,32,167,0,0]],30:[[32,32,192,0,0]]} },
+    { name:"blend-space-dynamic", body:view("#800000")+view("#800000", ',mixBlendMode:"screen",mixBlendSpace:time.seconds<0.5?"linear":"srgb"'), probes:[], frameProbes:{0:[[32,32,167,0,0]],30:[[32,32,192,0,0]]} },
     { name:"blend-space-not-inherited", body:`<Group style={{mixBlendSpace:"linear",width:64,height:64}}>${view("#800000")}${view("#800000", ',mixBlendMode:"screen"')}</Group>`, probes:[[32,32,192,0,0]] },
     { name:"multiply-linear", body:view("#800000")+view("#800000", ',mixBlendMode:"multiply",mixBlendSpace:"linear"'), probes:[[32,32,61,0,0]] },
     { name:"plus-space-independent", body:view("#800000")+view("#800000", ',mixBlendMode:"plus-lighter",mixBlendSpace:"linear",width:32'), probes:[[16,32,175,0,0],[48,32,128,0,0]] },
@@ -216,38 +216,38 @@ test("Motion composition, easing and color interpolation match analytic pixels o
   const instances = await readFile(join(fixtureDir,"grid-instances.motion.tsx"),"utf8");
   const instancesCircle = await readFile(join(fixtureDir,"circle-instances.motion.tsx"),"utf8");
   const instancesPath = await readFile(join(fixtureDir,"path-instances.motion.tsx"),"utf8");
-  const instancesPathOpacity = instancesPath.replace('translate: point(dot.x + ctx.seconds * 3, dot.y)',
-    'translate: point(dot.x + ctx.seconds * 3, dot.y), opacity: 0.4 + dot.delay * 0.4 + ctx.progress * 0.1');
+  const instancesPathOpacity = instancesPath.replace('translate: point(dot.x + time.seconds * 3, dot.y)',
+    'translate: point(dot.x + time.seconds * 3, dot.y), opacity: 0.4 + dot.delay * 0.4 + time.progress * 0.1');
   const instancesPathStroke = instancesPathOpacity.replace('fill={dot.color}',
     'fill={dot.color} stroke={dot.color} strokeWidth={1.5}');
   const instancesPathStrokeDynamic = instancesPathStroke.replace('strokeWidth={1.5}',
-    'strokeWidth={0.25 + dot.delay + ctx.progress}');
+    'strokeWidth={0.25 + dot.delay + time.progress}');
   const instancesPathStrokeColors = instancesPathStroke.replace('stroke={dot.color}',
-    "stroke={dot.delay < ctx.progress ? '#ff0000' : '#00ff00'}");
+    "stroke={dot.delay < time.progress ? '#ff0000' : '#00ff00'}");
   const instancesPathStrokeColorsDynamic = instancesPathStrokeDynamic.replace('stroke={dot.color}',
-    "stroke={dot.delay < ctx.progress ? '#ff0000' : '#00ff00'}");
+    "stroke={dot.delay < time.progress ? '#ff0000' : '#00ff00'}");
   const instancesPathStrokeOnly = instancesPathStrokeColors.replace('fill={dot.color}', 'fill="#00000000"');
   const instancesPathStrokeStyle = instancesPath.replace('fill={dot.color}',
-    'fill="none" stroke={dot.color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="bevel" strokeMiterlimit="6" strokeDasharray="3 2" strokeDashoffset={dot.delay * 5 + ctx.progress}');
+    'fill="none" stroke={dot.color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="bevel" strokeMiterlimit="6" strokeDasharray="3 2" strokeDashoffset={dot.delay * 5 + time.progress}');
   const instancesPathStrokeMiter = instancesPathStrokeStyle.replace('strokeLinecap="round" strokeLinejoin="bevel" strokeMiterlimit="6"',
-    'strokeLinecap="square" strokeLinejoin="miter" strokeMiterlimit="8"').replace('strokeDashoffset={dot.delay * 5 + ctx.progress}', 'strokeDashoffset={1.25}');
+    'strokeLinecap="square" strokeLinejoin="miter" strokeMiterlimit="8"').replace('strokeDashoffset={dot.delay * 5 + time.progress}', 'strokeDashoffset={1.25}');
   const instancesPathStrokeStyleColors = instancesPath.replace('fill={dot.color}',
-    'fill={dot.color} stroke={dot.delay < ctx.progress ? "#ff0000" : "#00ff00"} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="bevel" strokeDasharray="3 2" strokeDashoffset={dot.delay * 5 + ctx.progress}');
-  const instancesPathRotation = instancesPath.replace('translate: point(dot.x + ctx.seconds * 3, dot.y)',
-    'translate: point(dot.x + ctx.seconds * 3, dot.y), rotate: `${dot.delay * 180 + ctx.seconds * 30}deg`, transformOrigin: point(0, 0), opacity: 0.4 + dot.delay * 0.4 + ctx.progress * 0.1');
-  const instancesPathScale = instancesPath.replace('translate: point(dot.x + ctx.seconds * 3, dot.y)',
-    'translate: point(dot.x + ctx.seconds * 3, dot.y), scale: point(0.6 + dot.delay * 0.4, 0.7 + ctx.progress * 0.2), transformOrigin: point(0, 0)');
+    'fill={dot.color} stroke={dot.delay < time.progress ? "#ff0000" : "#00ff00"} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="bevel" strokeDasharray="3 2" strokeDashoffset={dot.delay * 5 + time.progress}');
+  const instancesPathRotation = instancesPath.replace('translate: point(dot.x + time.seconds * 3, dot.y)',
+    'translate: point(dot.x + time.seconds * 3, dot.y), rotate: `${dot.delay * 180 + time.seconds * 30}deg`, transformOrigin: point(0, 0), opacity: 0.4 + dot.delay * 0.4 + time.progress * 0.1');
+  const instancesPathScale = instancesPath.replace('translate: point(dot.x + time.seconds * 3, dot.y)',
+    'translate: point(dot.x + time.seconds * 3, dot.y), scale: point(0.6 + dot.delay * 0.4, 0.7 + time.progress * 0.2), transformOrigin: point(0, 0)');
   const instancesPathScaleMirror = instancesPathScale.replace('0.6 + dot.delay * 0.4', '0.6 - dot.delay');
-  const instancesPathSkew = instancesPath.replace('translate: point(dot.x + ctx.seconds * 3, dot.y)',
-    'translate: point(dot.x + ctx.seconds * 3, dot.y), transform: `skewX(${dot.delay * 40 + ctx.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0)');
-  const instancesPathScaleRotation = instancesPath.replace('translate: point(dot.x + ctx.seconds * 3, dot.y)',
-    'translate: point(dot.x + ctx.seconds * 3, dot.y), scale: point(0.6 + dot.delay * 0.4, 0.7 + ctx.progress * 0.2), rotate: `${dot.delay * 180 + ctx.seconds * 30}deg`, transformOrigin: point(0, 0), opacity: 0.4 + dot.delay * 0.4 + ctx.progress * 0.1');
+  const instancesPathSkew = instancesPath.replace('translate: point(dot.x + time.seconds * 3, dot.y)',
+    'translate: point(dot.x + time.seconds * 3, dot.y), transform: `skewX(${dot.delay * 40 + time.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0)');
+  const instancesPathScaleRotation = instancesPath.replace('translate: point(dot.x + time.seconds * 3, dot.y)',
+    'translate: point(dot.x + time.seconds * 3, dot.y), scale: point(0.6 + dot.delay * 0.4, 0.7 + time.progress * 0.2), rotate: `${dot.delay * 180 + time.seconds * 30}deg`, transformOrigin: point(0, 0), opacity: 0.4 + dot.delay * 0.4 + time.progress * 0.1');
   const instancesPathScaleRotationSkew = instancesPathScaleRotation.replace('transformOrigin: point(0, 0)',
-    'transform: `skewX(${dot.delay * 40 + ctx.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0)');
+    'transform: `skewX(${dot.delay * 40 + time.seconds * 10 - 20}deg)`, transformOrigin: point(0, 0)');
   const instancesPathStrokeAffine = instancesPathScaleRotationSkew.replace('fill={dot.color}',
     'fill={dot.color} stroke={dot.color} strokeWidth={1.5}');
   const instancesPathStrokeAffineOpaque = instancesPathStrokeAffine.replace(
-    ', opacity: 0.4 + dot.delay * 0.4 + ctx.progress * 0.1', '');
+    ', opacity: 0.4 + dot.delay * 0.4 + time.progress * 0.1', '');
   const instancesPathStrokeCurve = instancesPathStrokeAffine.replace(
     'M 0 -8 L 2 -2 L 8 0 L 2 2 L 0 8 L -2 2 L -8 0 L -2 -2 Z',
     'M 0.1 -8.2 C 4.3 -8.6 8.4 -3.5 8.1 0.2 C 8.3 4.1 3.1 8.2 0 8.4 C -4 8.2 -8.1 3.7 -8.2 0 C -8.1 -3.4 -4.3 -8.5 0.1 -8.2 Z');
@@ -265,8 +265,8 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     .replace('<View key={card.id} style=',
       '<View key={card.id} className={card.height > 36 ? "flex flex-col rounded-lg opacity-50" : "flex flex-col rounded-lg"} style=')
     .replace('<Group style={{ width: 106, height: 16 }}>', '<Group className="relative" style={{ width: 106, height: 16 }}>')
-    .replace('<Text visible={ctx.localFrame < card.height - 6}',
-      '<Text className={card.height > 36 ? "font-bold" : "font-normal"} visible={ctx.localFrame < card.height - 6}');
+    .replace('<Text visible={tick < card.height - 6}',
+      '<Text className={card.height > 36 ? "font-bold" : "font-normal"} visible={tick < card.height - 6}');
   const instancesCircleVaried = instancesCircle
     .replace('20.3 + (i % COLS) * (600 / COLS)', '8.13 + ((i * 73) % 600) + (i % 7) * 0.07')
     .replace('20.6 + Math.floor(i / COLS) * (320 / COLS)', '8.17 + ((i * 47) % 340) + (i % 5) * 0.09')
@@ -274,11 +274,11 @@ test("Motion composition, easing and color interpolation match analytic pixels o
   const instancesShutter = await readFile(join(fixtureDir,"shutter-instances.motion.tsx"),"utf8");
   const lazyEvaluationMixed = await readFile(join(fixtureDir,"mixed-lazy-evaluation.motion.tsx"),"utf8");
   const lazyEvaluationNested = await readFile(join(fixtureDir,"nested-lazy-evaluation.motion.tsx"),"utf8");
-  const lazyEvaluationCertifiedHidden = lazyEvaluationNested.replace("ctx.seconds * 100 >= dot.i","ctx.seconds * 100 >= dot.i + 1000");
+  const lazyEvaluationCertifiedHidden = lazyEvaluationNested.replace("time.seconds * 100 >= dot.i","time.seconds * 100 >= dot.i + 1000");
   const lazyEvaluation = await readFile(join(fixtureDir,"lazy-evaluation.motion.tsx"),"utf8");
   const lazyEvaluationAffine = await readFile(join(fixtureDir,"affine-time-dependency.motion.tsx"),"utf8");
-  const lazyEvaluationAffineEager = lazyEvaluationAffine.replace("dot.i <= (ctx.seconds - 0.2) * 1000",
-    "(dot.i <= (ctx.seconds - 0.2) * 1000 ? true : false)");
+  const lazyEvaluationAffineEager = lazyEvaluationAffine.replace("dot.i <= (time.seconds - 0.2) * 1000",
+    "(dot.i <= (time.seconds - 0.2) * 1000 ? true : false)");
   const lazyEvaluationComposed = await readFile(join(fixtureDir,"mask-sibling-lazy-evaluation.motion.tsx"),"utf8");
   const particleForces = await readFile(join(fixtureDir,"particle-forces.motion.tsx"),"utf8");
   const particleForcesForces = "forces: [curlNoise({ seed: 3, scale: 0.012, strength: 220 }), drag(0.8)],";
@@ -306,13 +306,13 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     .replace("left: 52, top: 20", "left: 30, top: 20");
   const starToCircleMorph = await readFile(join(fixtureDir,"star-to-circle-morph.motion.tsx"),"utf8");
   const pathMorphSequence = await readFile(join(fixtureDir,"path-morph-sequence.motion.tsx"),"utf8");
-  const pathMorphSequenceControl = pathMorphSequence.replace("morphSequence([STAR, SQUARE, CIRCLE], [0, 0.5, 1], ctx.progress)","SQUARE");
+  const pathMorphSequenceControl = pathMorphSequence.replace("morphSequence([STAR, SQUARE, CIRCLE], [0, 0.5, 1], time.progress)","SQUARE");
   const convexMorph = await readFile(join(fixtureDir,"convex-morph.motion.tsx"),"utf8");
-  const convexControl = convexMorph.replace('morphSequence([SA, SB, SC], [0, 0.5, 1], ctx.progress, { method: "convex" })',"SB");
+  const convexControl = convexMorph.replace('morphSequence([SA, SB, SC], [0, 0.5, 1], time.progress, { method: "convex" })',"SB");
   const arcLengthMorph = await readFile(join(fixtureDir,"arc-length-morph.motion.tsx"),"utf8");
-  const arcLengthControl = arcLengthMorph.replace('morphSequence([SA, SB, SC], [0, 0.5, 1], ctx.progress, { method: "arcLength" })',"resamplePath(SB, 256)");
+  const arcLengthControl = arcLengthMorph.replace('morphSequence([SA, SB, SC], [0, 0.5, 1], time.progress, { method: "arcLength" })',"resamplePath(SB, 256)");
   const compatibleMorph = await readFile(join(fixtureDir,"compatible-morph.motion.tsx"),"utf8");
-  const compatibleControl = compatibleMorph.replace('morphSequence([SA, SB, SC], [0, 0.5, 1], ctx.progress, { method: "compatible" })',"SB");
+  const compatibleControl = compatibleMorph.replace('morphSequence([SA, SB, SC], [0, 0.5, 1], time.progress, { method: "compatible" })',"SB");
   const anchorMorph = await readFile(join(fixtureDir,"anchor-morph.motion.tsx"),"utf8");
   const anchorRotation = await readFile(join(fixtureDir,"anchor-rotation.motion.tsx"),"utf8");
   const pairedContours = await readFile(join(fixtureDir,"paired-contours.motion.tsx"),"utf8");
@@ -329,15 +329,15 @@ test("Motion composition, easing and color interpolation match analytic pixels o
   const reversePathTrail = await readFile(join(fixtureDir,"reverse-path-trail.motion.tsx"),"utf8");
   const reversePathTrailForward = reversePathTrail.replace("reversePath(ORBIT)","ORBIT");
   const colorInterpolationInstances = await readFile(join(fixtureDir,"float-color-instances.motion.tsx"),"utf8");
-  const richTextUnitsUniform = richTextUnits.replace("ctx.unit.index * 0.8 +", "0 +");
-  const rangeSelectorNoBlur = rangeSelector.replace('blur: 8 * (1 - rangeSelector({ start: 0, end: ctx.progress, softness: 0.15, shape: "ramp" }))','blur: 0');
-  const rangeSelectorFull = rangeSelectorNoBlur.replace('opacity: rangeSelector({ start: 0, end: ctx.progress, softness: 0.15, shape: "ramp" })','opacity: 1');
+  const richTextUnitsUniform = richTextUnits.replace("unit.index * 0.8 +", "0 +");
+  const rangeSelectorNoBlur = rangeSelector.replace('blur: 8 * (1 - rangeSelector(unit, { start: 0, end: time.progress, softness: 0.15, shape: "ramp" }))','blur: 0');
+  const rangeSelectorFull = rangeSelectorNoBlur.replace('opacity: rangeSelector(unit, { start: 0, end: time.progress, softness: 0.15, shape: "ramp" })','opacity: 1');
   const textOutlineControl = `export const composition={width:640,height:360,fps:30,duration:2};
     export default function Control(){return <Scene className="relative h-full w-full" style={{backgroundColor:"#101010"}}>
       <Text className="absolute" style={{left:60,top:80,fontSize:150,fontWeight:800,color:"transparent",
         WebkitTextStrokeWidth:3,WebkitTextStrokeColor:"#ffffff"}}>VALLE</Text></Scene>;}`;
   const textOutlineFilledText = textOutlineControl.replace('color:"transparent",\n        WebkitTextStrokeWidth:3,WebkitTextStrokeColor:"#ffffff"','color:"#ffffff"');
-  const textOutlineFilledPath = textOutline.replace('fill="none" stroke="#ffffff" strokeWidth={3} trimEnd={ctx.progress}', 'fill="#ffffff"');
+  const textOutlineFilledPath = textOutline.replace('fill="none" stroke="#ffffff" strokeWidth={3} trimEnd={time.progress}', 'fill="#ffffff"');
   const defaultFont = new Uint8Array(await readFile(join(root,"assets/fonts/noto/NotoSans-Variable.ttf")));
   cases.push(
     { name:"instances", source:instances, body:"", width:640, height:360, frames:[0,15,30], probes:[] },
@@ -447,7 +447,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"scene-bloom-half", source:sceneBloom.replace("intensity: 1.2", "intensity: 0.6"), body:"", width:640, height:360, frames:[0], probes:[] },
     { name:"scene-bloom-no-filter", source:sceneBloom.replace(' bloom={{ threshold: 0.8, intensity: 1.2, radius: 48 }}', ''), body:"", width:640, height:360, frames:[0], probes:[] },
     // Halfway through, the animated intensity is the half fixture's.
-    { name:"scene-bloom-animated", source:sceneBloom.replace("  return <Scene", "  const ctx = useTime();\n  return <Scene").replace("intensity: 1.2", "intensity: 1.2 * ctx.progress"), body:"", width:640, height:360, frames:[30], probes:[] },
+    { name:"scene-bloom-animated", source:sceneBloom.replace("  return <Scene", "  const time = useCurrentTime();\n  return <Scene").replace("intensity: 1.2", "intensity: 1.2 * time.progress"), body:"", width:640, height:360, frames:[30], probes:[] },
     { name:"node-bloom", source:nodeBloom, body:"", width:640, height:360, frames:[0,30,0], probes:[] },
     { name:"node-bloom-no-filter", source:nodeBloom.replace(', filter: "bloom(32px 1.5 0.4)"', ''), body:"", width:640, height:360, frames:[0], probes:[] },
     { name:"chromatic-aberration", source:chromaticAberration, body:"", width:640, height:360, frames:[0,30,0], probes:[] },
@@ -479,7 +479,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"instances-shutter", source:instancesShutter, body:"", width:320, height:120, frames:[0,20,40,20], probes:[] },
     { name:"instances-shutter-expanded", source:instancesShutter.replace('className="absolute"','className="absolute "'), body:"", width:320, height:120, frames:[0,20,40], probes:[] },
     { name:"echo-trails", source:echoTrails, body:"", width:640, height:360, frames:[30,50,30], probes:[] },
-    { name:"echo-trails-no-echo", source:echoTrails.replace('<Echo key="echo" count={4} interval={3} decay={0.5}>','<Group>').replace('</Echo>','</Group>'), body:"", width:640, height:360, frames:[30], probes:[] },
+    { name:"echo-trails-no-echo", source:echoTrails.replace('<Echo key="echo" count={4} delay={0.1} decay={0.5}>','<Group>').replace('</Echo>','</Group>'), body:"", width:640, height:360, frames:[30], probes:[] },
     { name:"time-scope", source:timeScope, body:"", width:640, height:360, frames:[15,45,15], probes:[], frameProbes:{15:[[100,180,255,255,255],[130,180,16,16,16]],45:[[300,180,255,255,255],[321,180,16,16,16]]} },
     { name:"time-scope-no-scope", source:timeScope.replace('<TimeScope key="scope" offset={0.5} speed={2}>','').replace('</TimeScope>',''), body:"", width:640, height:360, frames:[15,45], probes:[] },
     { name:"time-scope-identity", source:timeScope.replace('offset={0.5} speed={2}','offset={0} speed={1}'), body:"", width:640, height:360, frames:[15,45], probes:[] },
@@ -559,7 +559,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"gradient-linear", body:gradient("linear-gradient(90deg in srgb-linear, red, blue)"), probes:[[32,32,186,0,189]] },
     { name:"gradient-oklab", body:gradient("linear-gradient(90deg in oklab, red, blue)"), probes:[[32,32,139,83,163]] },
     { name:"gradient-default", body:gradient("linear-gradient(90deg, red, blue)"), probes:[[32,32,139,83,163]] },
-    { name:"gradient-dynamic", body:`<View style={{width:64,height:64,backgroundImage:ctx.seconds<0.5?"linear-gradient(90deg in srgb, red, blue)":"linear-gradient(90deg in oklab, red, blue)"}}/>`, probes:[], frameProbes:{0:[[32,32,126,0,129]],30:[[32,32,139,83,163]]} },
+    { name:"gradient-dynamic", body:`<View style={{width:64,height:64,backgroundImage:time.seconds<0.5?"linear-gradient(90deg in srgb, red, blue)":"linear-gradient(90deg in oklab, red, blue)"}}/>`, probes:[], frameProbes:{0:[[32,32,126,0,129]],30:[[32,32,139,83,163]]} },
     { name:"gradient-hard", body:gradient("linear-gradient(90deg in oklab, red 0% 50%, blue 50% 100%)"), probes:[[31,32,255,0,0],[32,32,0,0,255]] },
     { name:"gradient-alpha", body:gradient("linear-gradient(90deg in oklab, #ff000000, blue)"), probes:[[32,32,0,0,189]] },
     { name:"gradient-radial", body:gradient("radial-gradient(circle in oklab, red, blue)"), probes:[] },
@@ -589,7 +589,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
       const width = fixture.width ?? 64, height = fixture.height ?? 64;
       const info = { width,height,colorType:ck.ColorType.RGBA_8888,alphaType:ck.AlphaType.Unpremul,colorSpace:ck.ColorSpace.SRGB };
       await writeFile(join(dir,"scene.motion.tsx"), fixture.source ?? `export const composition={width:64,height:64,fps:30,duration:2};
-        export default function SceneTest() { const ctx = useTime(); return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${fixture.body}</Scene>; }`);
+        export default function SceneTest() { const time = useCurrentTime(); return <Scene style={{width:64,height:64,backgroundColor:"#000"}}>${fixture.body}</Scene>; }`);
       const assetArgs = fixture.atlasAsset ? ["--asset","sprites=atlas-sprites.png"] : [];
       const server = spawn(["motion","studio","scene.motion.tsx",...assetArgs,"--port","0","--web-assets-dir",join(root,"web/dist")]);
       const surface = ck.MakeSurface(width,height)!;

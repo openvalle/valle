@@ -58,11 +58,11 @@ const CASES: Case[] = [
 
 const G01_SOURCE = `export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 export const controls = { assets: { beat: asset({ kind: "audio", required: true }) } };
-const BEAT = audioAnalysis("asset://beat", { bands: 4, fps: 30 });
-export default function AudioDriven() { const ctx = useTime();
+const BEAT = audioAnalysis("asset://beat", { bands: 4, rate: 30 });
+export default function AudioDriven() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
     <View key="bar" className="absolute" style={{ left: 300, bottom: 20, width: 40,
-      height: 10 + BEAT.level(ctx.seconds) * 250, backgroundColor: "#ffffff" }} />
+      height: 10 + BEAT.level(time.seconds) * 250, backgroundColor: "#ffffff" }} />
   </Scene>;
 }
 `;
@@ -82,7 +82,7 @@ export const controls = { assets: {
   model: asset({ kind: "model3d", required: true }),
   surface: asset({ kind: "image", required: true }),
 } };
-export default function LitSphere() { const ctx = useTime();
+export default function LitSphere() { const time = useCurrentTime();
   return <Scene style={{ width: 1920, height: 1080, backgroundColor: "#07101d" }}>
     <Scene3D key="stage" style={{ width: 1920, height: 1080 }}
       camera={{ position: [0, 0, 3.2], target: [0, 0, 0], fov: 45 }}
@@ -90,7 +90,7 @@ export default function LitSphere() { const ctx = useTime();
       <AmbientLight intensity={0.25} />
       <DirectionalLight color="#fff1ce" direction={[0.7, 0.8, 1]} intensity={2.8} />
       <DirectionalLight color="#69bfff" direction={[-1, -0.2, 0.2]} intensity={0.7} />
-      <Mesh key="sphere" src="asset://model" rotation={[12, ctx.seconds * 120, 0]}
+      <Mesh key="sphere" src="asset://model" rotation={[12, time.seconds * 120, 0]}
         material={{ type: "pbr", color: "#ffffff", metallic: 0.05, roughness: 0.45,
           textures: { baseColor: "asset://surface" } }} />
     </Scene3D>

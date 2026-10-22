@@ -65,6 +65,11 @@ pub enum DiagCode {
     ParameterRange,
     /// A static JSX map is valid but cannot use the current instance template path.
     InstanceFallback,
+    /// A frame value reads the output frame rate, so `--fps` changes it.
+    FrameRateDependent,
+    /// A time written in seconds is longer than the scene, as a time in milliseconds or frames
+    /// would be.
+    TimeUnit,
     /// Valid syntax not supported by the current implementation.
     UnsupportedSyntax,
 }
@@ -92,7 +97,9 @@ impl DiagCode {
             DiagCode::MorphContact
             | DiagCode::InstanceFallback
             | DiagCode::AudioBeatUncertain
-            | DiagCode::ParameterRange => DiagClass::Warning,
+            | DiagCode::ParameterRange
+            | DiagCode::FrameRateDependent
+            | DiagCode::TimeUnit => DiagClass::Warning,
         }
     }
 
@@ -119,6 +126,8 @@ impl DiagCode {
             DiagCode::AudioBeatUncertain => "audio-beat-uncertain",
             DiagCode::ParameterRange => "parameter-range",
             DiagCode::InstanceFallback => "instance-fallback",
+            DiagCode::FrameRateDependent => "frame-rate-dependent",
+            DiagCode::TimeUnit => "time-unit",
             DiagCode::UnsupportedSyntax => "unsupported-syntax",
         }
     }

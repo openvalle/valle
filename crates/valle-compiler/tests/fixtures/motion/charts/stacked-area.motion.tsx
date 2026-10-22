@@ -33,8 +33,8 @@ function LegendItem({ index, label, color }) {
   );
 }
 
-export default function StackedArea() { const ctx = useTime();
-  const reveal = interpolate(ctx.progress, [0.06, 0.82], [0, 1], { easing: "easeInOut" });
+export default function StackedArea() { const time = useCurrentTime();
+  const reveal = interpolate(time.progress, [0.06, 0.82], [0, 1], { easing: "easeInOut" });
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#07111a" }}>
       <Text key="eyebrow" className="absolute" style={{ left: 108, top: 60, fontSize: 27, letterSpacing: 4.5, color: "#22d3ee" }}>

@@ -6,7 +6,8 @@ use valle_draw::{
     Rect,
     program::{
         BackdropScope, BlendMode, Clip, DrawProgram, FILTER_GAUSSIAN_SUPPORT_SIGMAS, Filter, Group,
-        MaskMode, Node, NodeId, SHADER_BACKDROP_FOOTPRINT, ShaderLayer, ShaderTextureSource, Transform2d,
+        MaskMode, Node, NodeId, SHADER_BACKDROP_FOOTPRINT, ShaderLayer, ShaderTextureSource,
+        Transform2d,
     },
     requirements::{DestinationOperation, Insets, LocalBounds, SamplingMode},
 };
@@ -1589,10 +1590,10 @@ mod tests {
         use valle_timeline::FrameRate;
 
         let source = r##"
-export default function Scene() { const ctx = useTime();
+export default function Scene() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return <Scene className="relative" style={{width:100,height:40}}>
     <View key="before" className="absolute" style={{left:0,top:0,width:10,height:10,backgroundColor:"#ff0000"}} />
-    <View key="reader" className="absolute" style={{left:20,top:0,width:20+ctx.localFrame*5,height:10,backdropFilter:"blur(2px)",backgroundColor:"#ffffff80"}} />
+    <View key="reader" className="absolute" style={{left:20,top:0,width:20+frame*5,height:10,backdropFilter:"blur(2px)",backgroundColor:"#ffffff80"}} />
     <View key="after" className="absolute" style={{left:80,top:0,width:10,height:10,backgroundColor:"#0000ff"}} />
   </Scene>;
 }
@@ -1725,7 +1726,7 @@ export default function Scene() { const ctx = useTime();
     fn motion_backdrop_displacement_lays_out_into_a_backdrop_read() {
         let program = motion_program(
             r##"
-export default function Scene() { const ctx = useTime();
+export default function Scene() {
   return <Scene className="relative" style={{width:100,height:40}}>
     <View key="lens" className="absolute" style={{left:50,top:0,width:40,height:40,
       backdropDisplacement:displacement(17,point(0.01,0.02),4)}} />
@@ -1921,7 +1922,7 @@ export default function Scene() {
     fn motion_backdrop_read_is_clipped_to_corner_radii_and_nothing_else() {
         let program = motion_program(
             r##"
-export default function Scene() { const ctx = useTime();
+export default function Scene() {
   return <Scene className="relative" style={{width:100,height:40}}>
     <View key="round" className="absolute" style={{left:0,top:0,width:40,height:40,borderRadius:20,
       boxShadow:"0 0 6px #000000",backdropFilter:"blur(2px)",backgroundColor:"#ffffff80"}} />

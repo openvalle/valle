@@ -46,7 +46,8 @@ impl<'s> Compiler<'s> {
         }];
         if frame_dependent {
             // Grain changes once per local frame, including random seeks and TimeScope.
-            let frame = self.scoped_context_expr(ContextInput::LocalFrame, expression.span());
+            let clock = self.position_clock();
+            let frame = self.scene_clock_expr(ContextInput::LocalFrame, clock, expression.span());
             styles.push(StyleBinding {
                 property: "motion-filter-frame".into(),
                 value: StyleValue::Expr { expr: frame },
@@ -396,8 +397,9 @@ impl<'s> Compiler<'s> {
         ])
     }
 
-    /// Auto blur derives screen-space velocity from nearby output-time layouts. Explicit velocity
-    /// remains a frame-pure spatial shutter approximation in pixels per frame.
+    /// Auto blur derives screen-space velocity from nearby output-time layouts. An explicit
+    /// `motionBlur({ velocity, angle })` gives the velocity in pixels per second of the scene
+    /// clock the node is drawn on; the streak is what the node moves while the shutter is open.
     pub(super) fn lower_node_motion_blur_style(
         &mut self,
         expression: &'s Expression<'s>,
@@ -421,12 +423,11 @@ impl<'s> Compiler<'s> {
                 },
             ]);
         }
+        const FORM: &str = "style.motionBlur must be \"auto\" or motionBlur({ velocity, angle }): \
+             the velocity in pixels per second, such as `motionBlur({ velocity: point(240, 0) })`, \
+             and the shutter angle in degrees, 180 by default";
         let Expression::CallExpression(call) = strip_parens(expression) else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                expression.span(),
-                "style.motionBlur must be \"auto\" or motionBlur(velocityPoint, shutterAngle?)",
-            );
+            self.illegal(DiagCode::GrammarForbidden, expression.span(), FORM);
             return None;
         };
         let Expression::Identifier(callee) = &call.callee else {
@@ -437,25 +438,112 @@ impl<'s> Compiler<'s> {
             );
             return None;
         };
-        if callee.name != "motionBlur" || !(1..=2).contains(&call.arguments.len()) {
+        let options = match call.arguments.as_slice() {
+            [options] => options.as_expression().map(strip_parens),
+            _ => None,
+        };
+        let Some(Expression::ObjectExpression(options)) =
+            options.filter(|_| callee.name == "motionBlur")
+        else {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 call.span(),
-                "motionBlur(velocityPoint, shutterAngle?) takes one or two arguments",
+                format!(
+                    "{FORM}; the positional `motionBlur(velocity, angle)` took pixels per frame"
+                ),
             );
             return None;
+        };
+        let mut velocity = None;
+        let mut angle = None;
+        for property in &options.properties {
+            let ObjectPropertyKind::ObjectProperty(property) = property else {
+                self.illegal(DiagCode::GrammarForbidden, property.span(), FORM);
+                return None;
+            };
+            let slot = match static_property_name(&property.key).as_deref() {
+                Some("velocity") => &mut velocity,
+                Some("angle") => &mut angle,
+                _ => {
+                    self.illegal(DiagCode::GrammarForbidden, property.span(), FORM);
+                    return None;
+                }
+            };
+            *slot = Some(&property.value);
         }
-        let velocity = self.lower_expr(call.arguments[0].as_expression()?)?;
-        let shutter = if let Some(value) = call.arguments.get(1) {
-            self.lower_expr(value.as_expression()?)?
-        } else {
-            self.push(
+        let Some(velocity) = velocity else {
+            self.illegal(DiagCode::GrammarForbidden, options.span(), FORM);
+            return None;
+        };
+        let velocity = self.lower_expr(velocity)?;
+        let shutter = match angle {
+            Some(angle) => self.lower_expr(angle)?,
+            None => self.push(
                 Expr::Const {
                     value: MotionValue::Number(180.0),
                 },
                 call.span(),
+            ),
+        };
+        // The renderer takes the movement of one output frame: the scene seconds a frame spans,
+        // through the speeds of the TimeScopes around the node, over the frame rate.
+        let span = call.span();
+        let speed = self
+            .time_scopes
+            .iter()
+            .map(|transform| transform.speed)
+            .product::<f64>();
+        let speed = self.push(
+            Expr::Const {
+                value: MotionValue::Number(speed),
+            },
+            span,
+        );
+        let numerator = self.push(
+            Expr::Context {
+                input: ContextInput::FpsNum,
+            },
+            span,
+        );
+        let denominator = self.push(
+            Expr::Context {
+                input: ContextInput::FpsDen,
+            },
+            span,
+        );
+        let per_frame = |compiler: &mut Self, field: GeometryField| {
+            let component = compiler.push(
+                Expr::GeometryField {
+                    input: velocity,
+                    field,
+                },
+                span,
+            );
+            let scaled = compiler.push(
+                Expr::Mul {
+                    lhs: component,
+                    rhs: speed,
+                },
+                span,
+            );
+            let scaled = compiler.push(
+                Expr::Mul {
+                    lhs: scaled,
+                    rhs: denominator,
+                },
+                span,
+            );
+            compiler.push(
+                Expr::Div {
+                    lhs: scaled,
+                    rhs: numerator,
+                },
+                span,
             )
         };
+        let x = per_frame(self, GeometryField::X);
+        let y = per_frame(self, GeometryField::Y);
+        let velocity = self.push(Expr::MakePoint { x, y }, span);
         self.extra_capabilities
             .insert(valle_motion::NODE_ADVANCED_FILTER_CAPABILITY.to_owned());
         Some(vec![

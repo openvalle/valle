@@ -259,11 +259,10 @@ fn number_field_at(
     lerp(from, to, staggered_progress(progress, stagger, index))
 }
 
-/// Evaluate directly at `frame / fps`; standalone callers bake force trajectories on demand.
+/// Evaluate directly at `seconds`; standalone callers bake force trajectories on demand.
 pub fn resolve_geometry_batch(
     batch: &GeometryBatchSpec,
-    frame: f64,
-    fps: f64,
+    seconds: f64,
     field_progress: BatchFieldProgress,
 ) -> Vec<BatchInstance> {
     let baked = match &batch.positions {
@@ -273,18 +272,17 @@ pub fn resolve_geometry_batch(
         },
         BatchPositions::Static { .. } => None,
     };
-    resolve_geometry_batch_with_trajectories(batch, baked.as_ref(), frame, fps, field_progress)
+    resolve_geometry_batch_with_trajectories(batch, baked.as_ref(), seconds, field_progress)
 }
 
 /// Frame path: immutable trajectories were built once during scene preparation.
 pub(crate) fn resolve_geometry_batch_with_trajectories(
     batch: &GeometryBatchSpec,
     baked: Option<&BakedParticleTrajectories>,
-    frame: f64,
-    fps: f64,
+    seconds: f64,
     field_progress: BatchFieldProgress,
 ) -> Vec<BatchInstance> {
-    resolve_geometry_batch_with_identity(batch, baked, frame, fps, field_progress, &mut Vec::new())
+    resolve_geometry_batch_with_identity(batch, baked, seconds, field_progress, &mut Vec::new())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -296,8 +294,7 @@ pub(crate) struct BatchRowIdentity {
 pub(crate) fn resolve_geometry_batch_with_identity(
     batch: &GeometryBatchSpec,
     baked: Option<&BakedParticleTrajectories>,
-    frame: f64,
-    fps: f64,
+    seconds: f64,
     field_progress: BatchFieldProgress,
     identity: &mut Vec<BatchRowIdentity>,
 ) -> Vec<BatchInstance> {
@@ -427,7 +424,6 @@ pub(crate) fn resolve_geometry_batch_with_identity(
             })
             .collect(),
         BatchPositions::Particles { spec, .. } => {
-            let seconds = frame / fps;
             let cycle = spec.count as f64 * spec.birth_interval;
             (0..spec.count as usize)
                 .filter_map(|index| {
@@ -489,7 +485,7 @@ mod tests {
         GeometryBatchSpec {
             geometry: GeometryBatchGeometry::Circle,
             positions: BatchPositions::Particles {
-                frame: crate::ExprId(0),
+                time: crate::ExprId(0),
                 spec: ParticleSpec {
                     seed: 42,
                     count: 4,
@@ -523,11 +519,11 @@ mod tests {
     #[test]
     fn direct_seek_is_deterministic() {
         let batch = fixture();
-        let later = resolve_geometry_batch(&batch, 30.0, 60.0, BatchFieldProgress::default());
-        let _earlier = resolve_geometry_batch(&batch, 5.0, 60.0, BatchFieldProgress::default());
+        let later = resolve_geometry_batch(&batch, 0.5, BatchFieldProgress::default());
+        let _earlier = resolve_geometry_batch(&batch, 5.0 / 60.0, BatchFieldProgress::default());
         assert_eq!(
             later,
-            resolve_geometry_batch(&batch, 30.0, 60.0, BatchFieldProgress::default())
+            resolve_geometry_batch(&batch, 0.5, BatchFieldProgress::default())
         );
     }
 
@@ -541,8 +537,8 @@ mod tests {
         spec.seed += 1;
 
         assert_ne!(
-            resolve_geometry_batch(&first, 30.0, 60.0, BatchFieldProgress::default()),
-            resolve_geometry_batch(&second, 30.0, 60.0, BatchFieldProgress::default())
+            resolve_geometry_batch(&first, 0.5, BatchFieldProgress::default()),
+            resolve_geometry_batch(&second, 0.5, BatchFieldProgress::default())
         );
     }
 
@@ -564,15 +560,13 @@ mod tests {
         let at_45 = resolve_geometry_batch_with_trajectories(
             &batch,
             Some(&baked),
-            45.0,
-            30.0,
+            1.5,
             BatchFieldProgress::default(),
         );
         let _at_3 = resolve_geometry_batch_with_trajectories(
             &batch,
             Some(&baked),
-            3.0,
-            30.0,
+            0.1,
             BatchFieldProgress::default(),
         );
         assert_eq!(
@@ -580,14 +574,13 @@ mod tests {
             resolve_geometry_batch_with_trajectories(
                 &batch,
                 Some(&baked),
-                45.0,
-                30.0,
+                1.5,
                 BatchFieldProgress::default(),
             )
         );
         assert_eq!(
             at_45,
-            resolve_geometry_batch(&batch, 45.0, 30.0, BatchFieldProgress::default())
+            resolve_geometry_batch(&batch, 1.5, BatchFieldProgress::default())
         );
     }
 
@@ -596,15 +589,15 @@ mod tests {
         let batch = fixture();
 
         assert_eq!(
-            resolve_geometry_batch(&batch, 0.0, 60.0, BatchFieldProgress::default()).len(),
+            resolve_geometry_batch(&batch, 0.0, BatchFieldProgress::default()).len(),
             1
         );
         assert_eq!(
-            resolve_geometry_batch(&batch, 6.0, 60.0, BatchFieldProgress::default()).len(),
+            resolve_geometry_batch(&batch, 0.1, BatchFieldProgress::default()).len(),
             2
         );
         assert_eq!(
-            resolve_geometry_batch(&batch, 60.0, 60.0, BatchFieldProgress::default()).len(),
+            resolve_geometry_batch(&batch, 1.0, BatchFieldProgress::default()).len(),
             3
         );
     }
@@ -652,8 +645,8 @@ mod tests {
             size: 0.5,
             ..BatchFieldProgress::default()
         };
-        let first = resolve_geometry_batch(&batch, 0.0, 30.0, progress);
-        let second = resolve_geometry_batch(&batch, 999.0, 30.0, progress);
+        let first = resolve_geometry_batch(&batch, 0.0, progress);
+        let second = resolve_geometry_batch(&batch, 33.3, progress);
         assert_eq!(
             first, second,
             "fixed fields do not depend on render history"

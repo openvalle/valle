@@ -64,7 +64,9 @@ fn echo_samples_past_frames_and_decays() {
         .unwrap()
         .dependencies()
         .temporal_window();
-    assert_eq!(window.past_frames, RationalTime::new(12, 1).unwrap());
+    // Four samples 0.1 seconds apart reach 0.4 seconds into the past, whatever the frame rate.
+    assert_eq!(window.past_seconds, RationalTime::new(2, 5).unwrap());
+    assert_eq!(window.past_frames, RationalTime::ZERO);
     assert_eq!(window.future_frames, RationalTime::ZERO);
     assert!(
         artifact
@@ -109,7 +111,7 @@ fn echo_samples_past_frames_and_decays() {
 #[test]
 fn echo_admission_rejects_invalid_parameters_and_nested_sampling() {
     assert!(compile_motion(&ECHO_TRAILS.replace("count={4}", "count={0}")).is_err());
-    assert!(compile_motion(&ECHO_TRAILS.replace("interval={3}", "interval={0}")).is_err());
+    assert!(compile_motion(&ECHO_TRAILS.replace("delay={0.1}", "delay={0}")).is_err());
     assert!(compile_motion(&ECHO_TRAILS.replace("decay={0.5}", "decay={1.5}")).is_err());
     assert!(
         compile_motion(&ECHO_TRAILS.replace(
@@ -126,7 +128,7 @@ fn echo_admission_rejects_invalid_parameters_and_nested_sampling() {
         .unwrap();
     echo.kind = valle_motion::NodeKind::Echo {
         count: 4,
-        interval_frames: 0,
+        delay: RationalTime::ZERO,
         decay: 0.5,
     };
     assert!(invalid.validate().is_err());
@@ -157,10 +159,10 @@ fn echo_prunes_unrelated_layout_beside_backdrop_readers_and_preserves_pixels() {
     let source = |extra: &str| {
         format!(
             r##"export const composition={{width:640,height:360,fps:30,duration:2}};
-export default function SceneMain() {{ const ctx = useTime();return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>{background}{extra}
-<Echo key="echo" count={{4}} interval={{2}} decay={{0.6}}>
-  <View key="moving" style={{{{position:"absolute",left:ctx.seconds*100,top:80,width:24,height:24,backgroundColor:"#f80"}}}}/>
-  <View key="screen" style={{{{position:"absolute",left:ctx.seconds*120,top:90,width:30,height:12,backgroundColor:"#0af",mixBlendMode:"screen"}}}}/>
+export default function SceneMain() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Scene style={{{{width:640,height:360,backgroundColor:"#203040"}}}}>{background}{extra}
+<Echo key="echo" count={{4}} delay={{2 / 30}} decay={{0.6}}>
+  <View key="moving" style={{{{position:"absolute",left:time.seconds*100,top:80,width:24,height:24,backgroundColor:"#f80"}}}}/>
+  <View key="screen" style={{{{position:"absolute",left:time.seconds*120,top:90,width:30,height:12,backgroundColor:"#0af",mixBlendMode:"screen"}}}}/>
 </Echo></Scene>}}"##
         )
     };
@@ -197,14 +199,14 @@ fn echo_below_a_hidden_ancestor_skips_its_unpainted_samples() {
     let source = |extra: &str| {
         format!(
             r##"export const composition = {{ width: 640, height: 360, fps: 30, duration: 2 }};
-export default function HiddenEcho() {{ const ctx = useTime();
+export default function HiddenEcho() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return (
     <Scene className="relative h-full w-full" style={{{{ backgroundColor: "#101010" }}}}>
-      <View key="gate" className="absolute" visible={{ctx.localFrame < 20}}
+      <View key="gate" className="absolute" visible={{frame < 20}}
         style={{{{ left: 0, top: 0, width: 640, height: 360 }}}}>
-        <Echo key="echo" count={{4}} interval={{3}} decay={{0.5}}>
+        <Echo key="echo" count={{4}} delay={{0.1}} decay={{0.5}}>
           <View key="dot" className="absolute" style={{{{ left: 50, top: 170, width: 20, height: 20,
-            backgroundColor: "#ffffff", translate: point(ctx.localFrame * 10, 0) }}}} />
+            backgroundColor: "#ffffff", translate: point(frame * 10, 0) }}}} />
         </Echo>
       </View>
       {extra}
@@ -226,7 +228,7 @@ export default function HiddenEcho() {{ const ctx = useTime();
     let (hidden, _, _) = profiled_tree(&plain, 40);
     assert!(hidden.echo_sample_times("echo").is_none());
     let empty = source("").replace(
-        r#"<Echo key="echo" count={4} interval={3} decay={0.5}>"#,
+        r#"<Echo key="echo" count={4} delay={0.1} decay={0.5}>"#,
         r#"<View key="echo" className="absolute" style={{ left: 0, top: 0, width: 640, height: 360 }}>"#,
     ).replace("</Echo>", "</View>");
     assert_eq!(

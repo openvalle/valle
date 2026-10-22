@@ -24,7 +24,7 @@ import { accent } from "./theme.motion";
 
 export const controls = ({});
 
-export default function ModuleDashboard(props) { const ctx = useTime();
+export default function ModuleDashboard(props) {
   return <Scene key="root">
     <Panel key="panel" label="Linked" color={accent} />
   </Scene>;
@@ -32,7 +32,7 @@ export default function ModuleDashboard(props) { const ctx = useTime();
 "#;
 
 const CARD: &str = r#"
-export function Card(props) { const ctx = useTime();
+export function Card(props) {
   return <View key="card" style={{ backgroundColor: props.color }}>
     <Text key="label">{props.label}</Text>
   </View>;
@@ -56,8 +56,8 @@ export function paint() { return `${tone}`; }
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { timing, presence, paint } from './helpers';
 const span = timing(0.25);
-export default function Scene() { const ctx = useTime();
-  return <View style={{ width: span.close, opacity: presence(ctx.seconds), color: paint() }} />;
+export default function Scene() { const time = useCurrentTime();
+  return <View style={{ width: span.close, opacity: presence(time.seconds), color: paint() }} />;
 }
 "#;
     let linked = compile_motion_modules(&graph(
@@ -283,17 +283,17 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Left } from "./left";
 import { Right } from "./right";
 
-export default function Twins() { const ctx = useTime();
+export default function Twins() {
   return <Scene key="root"><Left key="left" /><Right key="right" /></Scene>;
 }
 "#;
     let left = r#"
 const label = "LEFT";
-export function Left() { const ctx = useTime(); return <Text key="text">{label}</Text>; }
+export function Left() { return <Text key="text">{label}</Text>; }
 "#;
     let right = r#"
 const label = "RIGHT";
-export function Right() { const ctx = useTime(); return <Text key="text">{label}</Text>; }
+export function Right() { return <Text key="text">{label}</Text>; }
 "#;
     let compiled = compile_motion_modules(&graph(
         "entry.motion.tsx",
@@ -485,11 +485,11 @@ fn missing_exports_report_the_complete_import_chain_at_the_import_site() {
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Mid } from "./mid";
 
-export default function Broken() { const ctx = useTime(); return <Mid />; }
+export default function Broken() { return <Mid />; }
 "#;
     let mid = r#"
 import { Missing } from "./leaf";
-export function Mid() { const ctx = useTime(); return <Missing />; }
+export function Mid() { return <Missing />; }
 "#;
     let leaf = "export const present = 1;";
     let diagnostics = compile_motion_modules(&graph(
@@ -509,7 +509,7 @@ fn cycles_and_root_escape_are_rejected_before_lowering() {
         &[
             (
                 "a.tsx",
-                "import { b } from './b'; export default function A() { const ctx = useTime(); return <View />; }",
+                "import { b } from './b'; export default function A() { return <View />; }",
             ),
             ("b.ts", "import A from './a'; export const b = 1;"),
         ],
@@ -521,7 +521,7 @@ fn cycles_and_root_escape_are_rejected_before_lowering() {
         "entry.tsx",
         &[(
             "entry.tsx",
-            "import { x } from '../outside'; export default function Entry() { const ctx = useTime(); return <View />; }",
+            "import { x } from '../outside'; export default function Entry() { return <View />; }",
         )],
     ))
     .expect_err("root escape must fail");
@@ -535,7 +535,7 @@ fn cycles_and_root_escape_are_rejected_before_lowering() {
         "entry.tsx",
         &[(
             "entry.tsx",
-            "import { x } from 'some-package'; export default function Entry() { const ctx = useTime(); return <View />; }",
+            "import { x } from 'some-package'; export default function Entry() { return <View />; }",
         )],
     ))
     .expect_err("npm resolution must fail");
@@ -546,7 +546,7 @@ fn cycles_and_root_escape_are_rejected_before_lowering() {
         &[
             (
                 "entry.tsx",
-                "const later = import('./other'); export default function Entry() { const ctx = useTime(); return <View />; }",
+                "const later = import('./other'); export default function Entry() { return <View />; }",
             ),
             ("other.ts", "export const value = 1;"),
         ],
@@ -561,7 +561,7 @@ fn reexports_resolve_without_emitting_runtime_module_objects() {
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { Card } from "./public";
 
-export default function Reexport() { const ctx = useTime(); return <Scene key="root"><Card key="card" label="ok" color="#fff" /></Scene>; }
+export default function Reexport() { return <Scene key="root"><Card key="card" label="ok" color="#fff" /></Scene>; }
 "##;
     let public = "export { Card } from './components/card.motion';";
     let compiled = compile_motion_modules(&graph(
@@ -589,13 +589,13 @@ export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 import { TypedCard } from "./card";
 import type { Theme } from "./types";
 import { accent } from "./theme";
-export default function Typed() { const ctx = useTime();
+export default function Typed() {
   return <Scene key="root"><TypedCard key="card" color={accent} /></Scene>;
 }
 "#;
     let card = r#"
 import type { Theme } from "./types";
-export function TypedCard(props: { color: string }) { const ctx = useTime();
+export function TypedCard(props: { color: string }) {
   return <View key="box" style={{ backgroundColor: props.color }} />;
 }
 "#;
@@ -628,19 +628,19 @@ export const accent: string = ("#22d3ee" as const) satisfies string;
 fn builtins_can_be_imported_from_valle_in_every_module() {
     let entry = r#"
 export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
-import { Scene, View, interpolate, useTime } from "valle";
+import { Scene, View, interpolate, useCurrentTime } from "valle";
 import type { Unused } from "valle";
 import { fade } from "./fade";
 export default function Imported() {
-  const ctx = useTime();
+  const time = useCurrentTime();
   return <Scene key="root">
-    <View key="box" style={{ width: 10, height: 10, opacity: fade(0.5), left: interpolate(ctx.progress, [0, 1], [0, 100]) }} />
+    <View key="box" style={{ width: 10, height: 10, opacity: fade(0.5), left: interpolate(time.progress, [0, 1], [0, 100]) }} />
   </Scene>;
 }
 "#;
     let fade = r#"
-import { clamp, useTime } from "valle";
-export const fade = (at) => clamp(useTime().seconds - at, 0, 1);
+import { clamp, useCurrentTime } from "valle";
+export const fade = (at) => clamp(useCurrentTime().seconds - at, 0, 1);
 "#;
     let imported = compile_motion_modules(&graph(
         "entry.tsx",
@@ -650,11 +650,11 @@ export const fade = (at) => clamp(useTime().seconds - at, 0, 1);
     .artifact;
     let plain_entry = entry
         .replace(
-            "import { Scene, View, interpolate, useTime } from \"valle\";\n",
+            "import { Scene, View, interpolate, useCurrentTime } from \"valle\";\n",
             "",
         )
         .replace("import type { Unused } from \"valle\";\n", "");
-    let plain_fade = fade.replace("import { clamp, useTime } from \"valle\";\n", "");
+    let plain_fade = fade.replace("import { clamp, useCurrentTime } from \"valle\";\n", "");
     let plain = compile_motion_modules(&graph(
         "entry.tsx",
         &[

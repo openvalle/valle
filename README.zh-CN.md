@@ -23,15 +23,13 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 3 };
 
 export default function Launch() {
-  const ctx = useTime();
-  const shown = clamp(ctx.seconds * 2 - ctx.unit.index * 0.1, 0, 1);
+  const { seconds } = useCurrentTime();
   return (
     <Scene className="grid size-full place-items-center
       bg-linear-to-br from-indigo-600 via-fuchsia-500 to-orange-400">
-      <Text split="char" className="text-9xl font-black tracking-tight text-white" perUnit={{
-        opacity: shown,
-        blur: 16 * (1 - shown),
-        translate: point(0, 40 * (1 - shown)),
+      <Text split="char" className="text-9xl font-black tracking-tight text-white" perUnit={(unit) => {
+        const shown = clamp(seconds * 2 - unit.index * 0.1, 0, 1);
+        return { opacity: shown, blur: 16 * (1 - shown), translate: point(0, 40 * (1 - shown)) };
       }}>
         Hello, Valle!
       </Text>

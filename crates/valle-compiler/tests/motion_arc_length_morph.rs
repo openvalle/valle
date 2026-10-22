@@ -47,8 +47,8 @@ fn disjoint_concave_pair_and_sequence_are_certified_at_prepare_time() {
     }));
     assert!(compile_motion(&source.replace("method: \"arcLength\"", "method: \"polar\"")).is_err());
     let forced_pair = source.replace(
-        "morph(A, B, ctx.progress)",
-        "morph(A, B, ctx.progress, { method: \"arcLength\" })",
+        "morph(A, B, time.progress)",
+        "morph(A, B, time.progress, { method: \"arcLength\" })",
     );
     assert!(compile_motion(&forced_pair).is_ok());
 
@@ -56,9 +56,9 @@ fn disjoint_concave_pair_and_sequence_are_certified_at_prepare_time() {
         export const composition = { width: 64, height: 64, fps: 30, duration: 2 };
         const FROM = path("M 26 6 L 5 18 L 23 17 L 14 15 L 28 16 Z");
         const TO = path("M 7 5 L 19 2 L 28 20 L 28 28 L 15 24 Z");
-        export default function Unsafe() { const ctx = useTime();
+        export default function Unsafe() { const time = useCurrentTime();
           return <Scene style={{width:64,height:64}}>
-            <Path d={morph(FROM, TO, ctx.progress, { method: "arcLength" })} fill="#fff" />
+            <Path d={morph(FROM, TO, time.progress, { method: "arcLength" })} fill="#fff" />
           </Scene>;
         }
     "##;
@@ -75,8 +75,8 @@ fn disjoint_concave_pair_and_sequence_are_certified_at_prepare_time() {
 
     let anchored = source
         .replace(
-            "morph(A, B, ctx.progress)",
-            "morph(A, B, ctx.progress, { anchors: [[point(140, 40), point(450, 40)], [point(140, 120), point(450, 120)]] })",
+            "morph(A, B, time.progress)",
+            "morph(A, B, time.progress, { anchors: [[point(140, 40), point(450, 40)], [point(140, 120), point(450, 120)]] })",
         )
         .replace(
             "method: \"arcLength\"",

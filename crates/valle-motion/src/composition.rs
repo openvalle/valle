@@ -23,6 +23,9 @@ pub struct Composition {
     pub fps: Option<String>,
     /// Positive seconds stored as a canonical exact rational after public q6 normalization.
     pub duration: String,
+    /// Whether the source loops seamlessly: its end is its start, so a looping clock never takes
+    /// the end itself. Always written, so an artifact from before the field fails to open.
+    pub r#loop: bool,
 }
 
 impl Composition {
@@ -32,7 +35,13 @@ impl Composition {
             height,
             fps: fps.map(|value| value.into_exact().to_string()),
             duration: duration.into_exact().to_string(),
+            r#loop: false,
         }
+    }
+
+    /// The same composition, declared as a seamless loop or not.
+    pub fn looping(self, r#loop: bool) -> Self {
+        Self { r#loop, ..self }
     }
 
     pub fn frame_rate(&self) -> Result<Option<FrameRate>, TimeError> {
@@ -120,7 +129,20 @@ mod tests {
 
     #[test]
     fn removed_author_fields_are_rejected() {
-        let json = r#"{"width":320,"height":180,"duration":"5/1","durationInFrames":150}"#;
+        let json =
+            r#"{"width":320,"height":180,"duration":"5/1","loop":false,"durationInFrames":150}"#;
         assert!(serde_json::from_str::<Composition>(json).is_err());
+    }
+
+    #[test]
+    fn a_composition_without_loop_is_rejected() {
+        let json = r#"{"width":320,"height":180,"duration":"5/1"}"#;
+        let error = serde_json::from_str::<Composition>(json).unwrap_err();
+        assert!(
+            error.to_string().contains("missing field `loop`"),
+            "{error}"
+        );
+        let json = r#"{"width":320,"height":180,"duration":"5/1","loop":true}"#;
+        assert!(serde_json::from_str::<Composition>(json).unwrap().r#loop);
     }
 }

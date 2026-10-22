@@ -10,7 +10,7 @@ use valle_motion::Composition;
 use valle_timeline::wire::timeline::{TimelineFrameRateWire, TimelineTimeWire};
 
 /// Fields the contract admits, in the order diagnostics should mention them.
-const FIELDS: &[&str] = &["width", "height", "fps", "duration"];
+const FIELDS: &[&str] = &["width", "height", "fps", "duration", "loop"];
 
 struct Problem {
     field: Option<&'static str>,
@@ -82,6 +82,7 @@ fn literal_value(expression: &Expression<'_>) -> Option<serde_json::Value> {
         Expression::StringLiteral(literal) => {
             Some(serde_json::Value::String(literal.value.to_string()))
         }
+        Expression::BooleanLiteral(literal) => Some(serde_json::Value::Bool(literal.value)),
         Expression::UnaryExpression(unary) if unary.operator == UnaryOperator::UnaryNegation => {
             json_number(-literal_value(&unary.argument)?.as_f64()?)
         }
@@ -197,11 +198,23 @@ fn composition_from_value(value: &serde_json::Value) -> Result<Composition, Prob
                 })
         })
         .transpose()?;
+    let r#loop = match object.get("loop") {
+        None => false,
+        Some(serde_json::Value::Bool(value)) => *value,
+        Some(_) => {
+            return Err(Problem::new(
+                Some("loop"),
+                "loop must be true or false: true declares that the scene loops seamlessly, so \
+                 its end is its start",
+            ));
+        }
+    };
     Ok(Composition {
         width,
         height,
         fps,
         duration: duration.to_string(),
+        r#loop,
     })
 }
 

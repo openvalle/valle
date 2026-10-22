@@ -55,7 +55,7 @@ of its time and inputs.
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 4 };
 
 export default function Title() {
-  const { seconds } = useTime();
+  const { seconds } = useCurrentTime();
   const reveal = interpolate(seconds, [0, 0.8], [0, 1], { easing: "easeOutCubic" });
   return (
     <Scene className="relative h-full w-full flex items-center justify-center"
@@ -69,8 +69,10 @@ export default function Title() {
 }
 ```
 
-- Components take `(props)`. Read the frame's time with `useTime()` (`seconds`, `progress`,
-  `localFrame`) and prepared data with `useData()`. Built-ins need no import;
+- Components take `(props)`. Read the time in seconds with `useCurrentTime()` (`seconds`,
+  `progress`), the size, duration and frame rate with `useComposition()`, and prepared data
+  with `useData()`. Write animation in seconds; `--fps` changes the frame count, not the
+  speed. Built-ins need no import;
   `import { … } from "valle"` and relative imports of local modules work, npm packages do not.
 - Nothing persists between frames and nothing runs after one: there is no `useState`,
   `useEffect`, `useRef`, DOM, `fetch`, `Date` or `Math.random`. Compute values from the time,

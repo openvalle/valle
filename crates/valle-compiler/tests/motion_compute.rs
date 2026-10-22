@@ -43,7 +43,7 @@ const [lo, hi] = niceDomain(0, extent(DATA)[1], 5);
 const x = scaleBand({ range: [80, 1840], count: DATA.length, paddingInner: 0.2 });
 const y = scaleLinear({ domain: [lo, hi], range: [960, 120] });
 
-export default function Chart() { const ctx = useTime();
+export default function Chart() {
   return (
     <Scene className="h-full w-full">
       {DATA.map((v, i) => (
@@ -103,7 +103,7 @@ fn ticks_reaching_the_author_match_the_d3_golden_exactly() {
     let compiled = compile_motion(
         r##"
 const T = ticks(0, 1, 5);
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     {T.map((v, i) => (
       <View key={`t-${i}`} style={{ position: "absolute", left: v * 1000, top: 0, width: 4, height: 10 }} />
@@ -126,7 +126,7 @@ fn bad_compute_input_fails_closed_with_a_pointed_message() {
     let messages = diagnostics_of(
         r##"
 const S = scaleLinear({ domain: [0], range: [0, 100] });
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: S.map(1), top: 0, width: 10, height: 10 }} />
   </Scene>);
@@ -147,7 +147,7 @@ fn an_unknown_scale_name_is_just_an_undefined_identifier_not_a_silent_zero() {
     let messages = diagnostics_of(
         r##"
 const S = scaleLogarithmic({ domain: [1, 100], range: [0, 100] });
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: S.map(1), top: 0, width: 10, height: 10 }} />
   </Scene>);
@@ -175,7 +175,7 @@ fn an_author_can_project_coordinates_at_prepare_time() {
         r##"
 const RING = [[100, 20], [110, 20], [110, 40], [100, 40]];
 const PTS = geoProject({ points: RING, projection: "albers", width: 1920, height: 1080 });
-export default function Map() { const ctx = useTime();
+export default function Map() {
   return (<Scene className="h-full w-full">
     {PTS.map((p, i) => (
       <View key={`p-${i}`} style={{ position: "absolute", left: p[0], top: p[1], width: 8, height: 8 }} />
@@ -212,7 +212,7 @@ fn an_author_can_lay_out_a_graph_at_prepare_time() {
 const SIZES = [[160, 60], [160, 60], [160, 60], [160, 60]];
 const EDGES = [[0, 1], [0, 2], [1, 3], [2, 3]];
 const G = graphLayout({ sizes: SIZES, edges: EDGES, nodeGap: 40, rankGap: 80 });
-export default function Diagram() { const ctx = useTime();
+export default function Diagram() {
   return (<Scene className="h-full w-full">
     {G.centers.map((c, i) => (
       <View key={`n-${i}`} style={{ position: "absolute", left: c[0] - 80, top: c[1] - 30, width: 160, height: 60 }} />
@@ -248,7 +248,7 @@ fn randomness_is_available_only_with_an_explicit_seed() {
         let source = format!(
             r##"
 const J = seededRandom({seed}, 4, [-10, 10]);
-export default function P() {{ const ctx = useTime();
+export default function P() {{ const time = useCurrentTime(); const comp = useComposition();
   return (<Scene className="h-full w-full">
     {{J.map((v, i) => (
       <View key={{`j-${{i}}`}} style={{{{ position: "absolute", left: 100 + v, top: 0, width: 8, height: 8 }}}} />
@@ -273,7 +273,7 @@ export default function P() {{ const ctx = useTime();
     // Accessing Math.random must still fail.
     let messages = diagnostics_of(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: Math.random() * 10, top: 0, width: 8, height: 8 }} />
   </Scene>);
@@ -292,7 +292,7 @@ fn value_noise_reaching_the_author_is_continuous() {
     let compiled = compile_motion(
         r##"
 const STEPS = [0, 1, 2, 3, 4, 5, 6, 7];
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     {STEPS.map((s, i) => (
       <View key={`n-${i}`} style={{ position: "absolute", left: i * 40, top: 500 + noise1d(3, i * 0.05) * 100, width: 8, height: 8 }} />
@@ -324,7 +324,7 @@ export default function P() { const ctx = useTime();
 fn a_scale_bound_inside_the_component_keeps_its_methods() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   const s = scaleLinear({ domain: [0, 1], range: [0, 100] });
   const v = s.map(0.5);
   return (<Scene className="h-full w-full">
@@ -355,7 +355,7 @@ fn every_author_facing_builtin_is_listed_in_the_shared_surface() {
     for name in valle_motion::compute::AUTHOR_SURFACE {
         let source = format!(
             r##"
-export default function P() {{ const ctx = useTime();
+export default function P() {{ const time = useCurrentTime(); const comp = useComposition();
   const v = {name};
   return (<Scene className="h-full w-full">
     <View key="a" style={{{{ position: "absolute", left: 0, top: 0, width: 10, height: 10 }}}} />
@@ -379,15 +379,15 @@ export default function P() {{ const ctx = useTime();
 fn feeding_a_frame_time_value_to_a_prepare_time_builtin_points_at_the_canvas_space_pattern() {
     let diagnostics = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  const y = scaleLinear({ domain: [0, 100], range: [ctx.viewport.height * 0.86, 0] });
+export default function P() { const comp = useComposition();
+  const y = scaleLinear({ domain: [0, 100], range: [comp.height * 0.86, 0] });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10, width: y.map(50) }} />
   </Scene>);
 }
 "##,
     )
-    .expect_err("a prepare-time builtin cannot take ctx.*");
+    .expect_err("a prepare-time builtin cannot take a value of the frame");
     let message = diagnostics
         .iter()
         .map(|diagnostic| diagnostic.message.as_str())
@@ -409,10 +409,10 @@ export default function P() { const ctx = useTime();
 fn a_builtin_rejection_survives_the_folding_probe_in_a_stop_position() {
     let diagnostics = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() { const time = useCurrentTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-      width: interpolate(ctx.progress, [0, scaleLinear({ domain: [0] }).map(0)], [0, 1]) }} />
+      width: interpolate(time.progress, [0, scaleLinear({ domain: [0] }).map(0)], [0, 1]) }} />
   </Scene>);
 }
 "##,

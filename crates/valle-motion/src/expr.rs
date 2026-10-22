@@ -40,14 +40,14 @@ pub enum ContextInput {
     UnitIndex,
     /// Total unit count for this text node.
     UnitCount,
-    /// Unit start byte relative to its own text node.
+    /// Unit start as a JavaScript string index (UTF-16 code units) into its text.
     UnitStart,
-    /// Unit end byte relative to its own text node.
+    /// Unit end as a JavaScript string index (UTF-16 code units) into its text.
     UnitEnd,
     /// Render-request viewport width in pixels. Unlike post-layout node bounds, viewport dimensions
     /// are available before layout and may drive layout properties.
     ViewportWidth,
-    /// Viewport height in pixels (`ctx.viewport.height`).
+    /// Viewport height in pixels.
     ViewportHeight,
 }
 
@@ -110,6 +110,9 @@ pub enum GeometryField {
     Height,
 }
 
+/// A comparison. The `Clock` forms compare values computed from the clock: two numbers within
+/// roundoff of each other are equal (see [`crate::time::clock_equal`]), so a switch written in
+/// seconds flips exactly on its frame. Other values keep JavaScript semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CompareOp {
@@ -119,6 +122,86 @@ pub enum CompareOp {
     Lte,
     Gt,
     Gte,
+    ClockEq,
+    ClockNotEq,
+    ClockLt,
+    ClockLte,
+    ClockGt,
+    ClockGte,
+}
+
+impl CompareOp {
+    /// The same comparison of values computed from the clock.
+    pub fn on_clock(self) -> Self {
+        match self {
+            Self::Eq | Self::ClockEq => Self::ClockEq,
+            Self::NotEq | Self::ClockNotEq => Self::ClockNotEq,
+            Self::Lt | Self::ClockLt => Self::ClockLt,
+            Self::Lte | Self::ClockLte => Self::ClockLte,
+            Self::Gt | Self::ClockGt => Self::ClockGt,
+            Self::Gte | Self::ClockGte => Self::ClockGte,
+        }
+    }
+
+    /// The same comparison with JavaScript semantics.
+    pub fn exact(self) -> Self {
+        match self {
+            Self::Eq | Self::ClockEq => Self::Eq,
+            Self::NotEq | Self::ClockNotEq => Self::NotEq,
+            Self::Lt | Self::ClockLt => Self::Lt,
+            Self::Lte | Self::ClockLte => Self::Lte,
+            Self::Gt | Self::ClockGt => Self::Gt,
+            Self::Gte | Self::ClockGte => Self::Gte,
+        }
+    }
+
+    pub fn is_clock(self) -> bool {
+        self != self.exact()
+    }
+
+    /// This comparison, on the clock when `like` is.
+    pub fn on_clock_if(self, like: Self) -> Self {
+        if like.is_clock() {
+            self.on_clock()
+        } else {
+            self.exact()
+        }
+    }
+
+    /// The comparison with its operands swapped: `a < b` is `b > a`.
+    pub fn swapped(self) -> Self {
+        match self.exact() {
+            Self::Lt => Self::Gt,
+            Self::Lte => Self::Gte,
+            Self::Gt => Self::Lt,
+            Self::Gte => Self::Lte,
+            other => other,
+        }
+        .on_clock_if(self)
+    }
+
+    /// Compare two numbers.
+    pub fn numbers(self, lhs: f64, rhs: f64) -> bool {
+        if self.is_clock() {
+            let equal = crate::time::clock_equal(lhs, rhs);
+            return match self.exact() {
+                Self::Eq => equal,
+                Self::NotEq => !equal,
+                Self::Lt => !equal && lhs < rhs,
+                Self::Lte => equal || lhs < rhs,
+                Self::Gt => !equal && lhs > rhs,
+                _ => equal || lhs > rhs,
+            };
+        }
+        match self {
+            Self::Eq => lhs == rhs,
+            Self::NotEq => lhs != rhs,
+            Self::Lt => lhs < rhs,
+            Self::Lte => lhs <= rhs,
+            Self::Gt => lhs > rhs,
+            _ => lhs >= rhs,
+        }
+    }
 }
 
 /// Spatial profile of a text range selector. The selection is evaluated once per text unit.
@@ -147,12 +230,48 @@ pub enum MathUnaryOp {
     Cos,
     Tan,
     Floor,
-    /// Discrete frame/bin addressing: absorb only floating-point roundoff at integer boundaries.
-    FrameFloor,
     Ceil,
     Round,
     Trunc,
     Fract,
+    /// The rounding of values computed from the clock: a value within roundoff of an integer is
+    /// that integer (see [`crate::time::clock_floor`]).
+    ClockFloor,
+    ClockCeil,
+    ClockRound,
+    ClockTrunc,
+    ClockFract,
+}
+
+impl MathUnaryOp {
+    /// The same operation on a value computed from the clock, if rounding makes it differ.
+    pub fn on_clock(self) -> Self {
+        match self {
+            Self::Floor => Self::ClockFloor,
+            Self::Ceil => Self::ClockCeil,
+            Self::Round => Self::ClockRound,
+            Self::Trunc => Self::ClockTrunc,
+            Self::Fract => Self::ClockFract,
+            other => other,
+        }
+    }
+
+    /// Whether the result is a whole number or the fractional part, so it changes in steps.
+    pub fn is_stepped(self) -> bool {
+        matches!(
+            self,
+            Self::Floor
+                | Self::Ceil
+                | Self::Round
+                | Self::Trunc
+                | Self::Fract
+                | Self::ClockFloor
+                | Self::ClockCeil
+                | Self::ClockRound
+                | Self::ClockTrunc
+                | Self::ClockFract
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +282,29 @@ pub enum MathBinaryOp {
     Mod,
     Remainder,
     PingPong,
+    /// The remainders of values computed from the clock: zero on a multiple of the divisor up to
+    /// roundoff (see [`crate::time::clock_mod`]).
+    ClockMod,
+    ClockRemainder,
+}
+
+impl MathBinaryOp {
+    /// The same operation on a value computed from the clock, if rounding makes it differ.
+    pub fn on_clock(self) -> Self {
+        match self {
+            Self::Mod => Self::ClockMod,
+            Self::Remainder => Self::ClockRemainder,
+            other => other,
+        }
+    }
+
+    /// Whether the result is a remainder, so it jumps back at each multiple.
+    pub fn is_stepped(self) -> bool {
+        matches!(
+            self,
+            Self::Mod | Self::Remainder | Self::ClockMod | Self::ClockRemainder
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -459,20 +601,20 @@ pub enum Expr {
         duration: f64,
         samples: Vec<f64>,
     },
-    /// Prepare-time audio analysis sampled at one output frame per entry. Lookup is held within
-    /// each frame; onset pulses and wrapped beat phases must not interpolate into neighbors.
+    /// Prepare-time audio analysis, `rate` entries per second of the asset. Lookup is held
+    /// within each entry; onset pulses and wrapped beat phases must not interpolate into
+    /// neighbors.
     AudioSample {
         time: ExprId,
-        fps: u32,
+        rate: u32,
         samples: Vec<f64>,
     },
     /// Closed-form damped harmonic oscillator, normalized from 0 to 1. Physical parameters are
-    /// compile-time constants; presets and explicit parameters are mutually exclusive. The frame
-    /// rate comes from `MotionContext`. Use arithmetic or interpolation to map the output to
-    /// another range.
+    /// compile-time constants; presets and explicit parameters are mutually exclusive. Use
+    /// arithmetic or interpolation to map the output to another range.
     Spring {
-        /// Unclamped phase-relative frame, usually `ctx.<phase>.elapsedFrames`.
-        elapsed_frames: ExprId,
+        /// Unclamped time since the spring started, in seconds, such as `seconds - 0.4`.
+        time: ExprId,
         mass: f64,
         stiffness: f64,
         damping: f64,
@@ -639,7 +781,7 @@ impl Expr {
             Expr::SimulationSample { time, .. } | Expr::AudioSample { time, .. } => vec![*time],
             Expr::MathBinary { lhs, rhs, .. } => vec![*lhs, *rhs],
             Expr::Noise2D { x, y, .. } => vec![*x, *y],
-            Expr::Spring { elapsed_frames, .. } => vec![*elapsed_frames],
+            Expr::Spring { time, .. } => vec![*time],
             Expr::Add { lhs, rhs }
             | Expr::Sub { lhs, rhs }
             | Expr::Mul { lhs, rhs }
@@ -844,8 +986,8 @@ impl Expr {
                 *x = map(*x);
                 *y = map(*y);
             }
-            Expr::Spring { elapsed_frames, .. } => {
-                *elapsed_frames = map(*elapsed_frames);
+            Expr::Spring { time, .. } => {
+                *time = map(*time);
             }
             Expr::Add { lhs, rhs }
             | Expr::Sub { lhs, rhs }
@@ -1654,7 +1796,7 @@ pub fn validate_next_expr(
         Expr::Compare { op, lhs, rhs } => {
             let lhs = child(*lhs);
             let rhs = child(*rhs);
-            let equality = matches!(op, CompareOp::Eq | CompareOp::NotEq);
+            let equality = matches!(op.exact(), CompareOp::Eq | CompareOp::NotEq);
             let text_enum_pair = matches!(
                 (lhs, rhs),
                 (Some(ExprType::String), Some(ExprType::Enum))
@@ -1807,16 +1949,16 @@ pub fn validate_next_expr(
             Some(ExprType::String)
         }
         Expr::Spring {
-            elapsed_frames,
+            time,
             mass,
             stiffness,
             damping,
             initial_velocity,
             ..
         } => {
-            if child(*elapsed_frames) != Some(ExprType::Number) {
+            if child(*time) != Some(ExprType::Number) {
                 errors.push(ValidationError::new(
-                    format!("{path}/elapsedFrames"),
+                    format!("{path}/time"),
                     "spring time input must be a number",
                 ));
             }
@@ -1871,16 +2013,20 @@ pub fn validate_next_expr(
             }
             Some(ExprType::Number)
         }
-        Expr::AudioSample { time, fps, samples } => {
+        Expr::AudioSample {
+            time,
+            rate,
+            samples,
+        } => {
             if child(*time) != Some(ExprType::Number)
-                || !(1..=120).contains(fps)
+                || !(1..=120).contains(rate)
                 || samples.len() < 2
                 || samples.len() > MAX_SIMULATION_STEPS + 1
                 || samples.iter().any(|sample| !sample.is_finite())
             {
                 errors.push(ValidationError::new(
                     path,
-                    "audio sample needs numeric time, fps 1..=120, and a finite bounded table",
+                    "audio sample needs numeric time, rate 1..=120, and a finite bounded table",
                 ));
             }
             Some(ExprType::Number)

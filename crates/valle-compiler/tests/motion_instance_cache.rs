@@ -70,10 +70,15 @@ fn main_echo_and_worker_clones_share_exact_results_under_seek_and_eviction() {
 fn props_viewport_host_and_scene_changes_do_not_reuse_stale_batches() {
     for source in [
         SOURCE.to_owned(),
-        SOURCE.replace(
-            "+props.shift",
-            "+props.shift+ctx.host.seconds+ctx.host.progress+ctx.host.duration",
-        ),
+        SOURCE
+            .replace(
+                "const time = useCurrentTime();",
+                "const time = useCurrentTime(); const comp = useComposition();",
+            )
+            .replace(
+                "+props.shift",
+                "+props.shift+time.clipSeconds+time.clipProgress+comp.clipDuration",
+            ),
     ] {
         let artifact = compile_motion(&source).unwrap().artifact;
         let cached = prepare_scene(&artifact).unwrap();

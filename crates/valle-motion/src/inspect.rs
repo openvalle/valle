@@ -160,24 +160,11 @@ pub fn sample_properties(
             Ok((numeric, branches))
         };
         // A conservative guard, not an assertion that all other expressions are continuous.
-        let discrete = order.iter().any(|id| {
-            matches!(
-                &artifact.exprs[id.0 as usize],
-                Expr::MathUnary {
-                    op: crate::expr::MathUnaryOp::Floor
-                        | crate::expr::MathUnaryOp::FrameFloor
-                        | crate::expr::MathUnaryOp::Ceil
-                        | crate::expr::MathUnaryOp::Round
-                        | crate::expr::MathUnaryOp::Trunc
-                        | crate::expr::MathUnaryOp::Fract,
-                    ..
-                } | Expr::MathBinary {
-                    op: crate::expr::MathBinaryOp::Mod | crate::expr::MathBinaryOp::Remainder,
-                    ..
-                } | Expr::PathTrajectory { .. }
-                    | Expr::Pick { .. }
-                    | Expr::Template { .. }
-            )
+        let discrete = order.iter().any(|id| match &artifact.exprs[id.0 as usize] {
+            Expr::MathUnary { op, .. } => op.is_stepped(),
+            Expr::MathBinary { op, .. } => op.is_stepped(),
+            Expr::PathTrajectory { .. } | Expr::Pick { .. } | Expr::Template { .. } => true,
+            _ => false,
         });
         for &frame in &frames {
             let sample = (|| -> Result<PropertyPoint, String> {

@@ -35,8 +35,8 @@ Save this complete file as `title.motion.tsx`:
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 
 export default function Title() {
-  const ctx = useTime();
-  const reveal = interpolate(ctx.progress, [0, 0.25], [0, 1], { easing: "easeOut" });
+  const { progress } = useCurrentTime();
+  const reveal = interpolate(progress, [0, 0.25], [0, 1], { easing: "easeOut" });
   return (
     <Scene className="relative h-full w-full flex items-center justify-center"
       style={{ backgroundColor: "#102030" }}>
@@ -123,9 +123,10 @@ rendering needs no FFmpeg; video encoding and decoding need compatible FFmpeg sh
 
 Canvas and duration come from the file's `composition`; `fps` is optional there and
 can be supplied or overridden with `--fps`. A standalone file without a composition
-is an error. `--output-size` scales delivery without changing layout or
-`ctx.viewport`. `duration` is in seconds; output frames are the nearest frame
-boundary at the actual FPS. For example, 4.6 seconds at 24 FPS produces 110 frames.
+is an error. `--output-size` scales delivery without changing layout or the `width`
+and `height` of `useComposition()`. `duration` is in seconds; output frames are the
+nearest frame boundary at the actual FPS. `--fps` changes how many frames there are,
+not how fast the scene moves. For example, 4.6 seconds at 24 FPS produces 110 frames.
 Keep data, assets and fonts consistent between previews and export; a rational
 `fps` such as `30000/1001` is accepted in `composition` and `--fps`.
 
@@ -154,23 +155,25 @@ and components.
 A component takes `(props)`, as in React: the root receives the declared
 props, and a child component receives the attributes it is written with. Name the
 parameter `props` or destructure it, and omit it when unused. Read the time of the
-frame being drawn with `const ctx = useTime()`, or destructure it, as in
-`const { progress, seconds } = useTime()`, and the prepared data with
-`const data = useData()`; a [caption presenter](#caption-presenter-role) reads the
-caption it draws with `const caption = useCaption()` instead. These hooks work in any
-component or helper, but not in module constants, which run once before the first
-frame. A name bound to the time, or to an object in it such as `ctx.unit`, can be
-passed to a helper or a component like any other value; its numbers are read where
-they are used, so a `TimeScope` around that use applies. A caption is passed the
-same way.
+sample being drawn with `const { seconds, progress } = useCurrentTime()`, the size,
+duration and frame rate with `const { width, height, duration, fps } =
+useComposition()` (see [the fields](#current-time-and-composition)), and the prepared
+data with `const data = useData()`; a [caption presenter](#caption-presenter-role)
+reads the caption it draws with `const caption = useCaption()` instead. These hooks
+work in any component or helper, but not in module constants, which run once before
+the first frame. They return plain values: destructuring them, reading a field and
+naming it read the same numbers, and those numbers can be passed to a helper or a
+component like any other value. `useCurrentTime()` is the clock of the component that
+calls it, so a component rendered inside a [`TimeScope`](#time-scopes) reads the
+scope's time. A caption is passed like any other value.
 
 Nothing persists from one frame to the next: each frame is a pure function of its
 time. React's `useState`, `useReducer`, `useRef`, `useEffect`, `useMemo`,
 `useCallback` and `useContext` do not exist; compute values from the time, pass
 values through props, and share a theme with `<ThemeProvider>` and `useTheme()`.
-Remotion's `useCurrentFrame()` is `useTime().localFrame`, and its
-`useVideoConfig()` values come from `composition` and from `useTime()` as `fps`
-and `durationFrames`.
+Animation is written in seconds, where Remotion's `useCurrentFrame()` counts frames:
+`const { seconds } = useCurrentTime()`. Its `useVideoConfig()` values are
+`useComposition()`'s `width`, `height`, `fps` and `duration`, in seconds.
 
 Module declarations use `const` and functions. They run in the scope of Motion's
 built-in helpers, so a module-level `const` cannot take one of their names, such as
@@ -210,11 +213,14 @@ and `do...while` are not supported.
 | Destructuring | Object fields, array entries, supported defaults, computed keys that are prepare-time strings, and `...rest`; the rest of `props` reads and spreads like `props` |
 | TypeScript | Types are erased: annotations, type parameters and arguments, `type` and `interface` declarations, `as const`, `satisfies`, assertions and non-null wrappers; this is not a TypeScript type checker |
 | JSX fragments | `<>…</>` puts its children in its place, as in React; so does a component that returns one. A fragment in a list cannot take a `key`, so key its children |
-| Spread | JSX attributes spread an object literal, `props` or its rest, a map row or a prepare-time object; as in React, the last setting of a name wins and a spread never sets `key`. Arrays spread a fixed tuple or a prepare-time array. Style objects spread fixed-shape objects. Option objects such as `perUnit` or `spring` options and call arguments do not spread, and arrays have no holes |
+| Spread | JSX attributes spread an object literal, `props` or its rest, a map row or a prepare-time object; as in React, the last setting of a name wins and a spread never sets `key`. Arrays spread a fixed tuple or a prepare-time array. Style objects spread fixed-shape objects. Option objects such as `spring` options, the style a `perUnit` function returns, and call arguments do not spread, and arrays have no holes |
 
-Prepare-time means independent of `useTime()` and runtime `props`. Module
-constants, the data from `useData()`, static component arguments, a theme and
-explicit resources can participate in preparation. `props` have typed runtime
+Prepare-time means independent of `useCurrentTime()`, runtime `props`, and the
+values of `useComposition()` that a render decides: `fps`, `clipDuration`, and the
+`width` and `height` of a template, which its host sizes. Module constants, the data
+from `useData()`, static component arguments, a theme, explicit resources,
+`duration`, and the `width` and `height` of an ordinary scene can participate in
+preparation. `props` have typed runtime
 bindings even when a default exists; use `data` for a collection that determines
 node count.
 
@@ -231,9 +237,9 @@ const cards = [
 const theme = { background: "#0f172a", card: "#1e293b", accent: "#38bdf8" };
 
 function Card({ title, index, children }) {
-  const ctx = useTime();
+  const { progress } = useCurrentTime();
   const palette = useTheme();
-  const reveal = clamp(ctx.progress * 4 - index * 0.2, 0, 1);
+  const reveal = clamp(progress * 4 - index * 0.2, 0, 1);
   return (
     <View key="body" className="flex flex-col" style={{ width: 176, padding: 20,
       borderRadius: 16, backgroundColor: palette.card, opacity: reveal }}>
@@ -282,16 +288,17 @@ can declare an overlay to preserve its intro and outro when the host duration ch
 
 ```tsx
 export const composition = { width: 640, height: 360, duration: 2, fps: 30 };
-export const role = overlay({ intro: seconds(0.6), outro: seconds(0.4), hold: "once" });
+export const role = overlay({ intro: 0.6, outro: 0.4, hold: "once" });
 
 export default function Banner() {
-  const ctx = useTime();
-  return <Scene><View style={{ width: ctx.viewport.width, height: ctx.viewport.height,
-    opacity: interpolate(ctx.seconds, [0, 0.6, 1.6, 2], [0, 1, 1, 0]) }} /></Scene>;
+  const { seconds } = useCurrentTime();
+  const { width, height } = useComposition();
+  return <Scene><View style={{ width, height,
+    opacity: interpolate(seconds, [0, 0.6, 1.6, 2], [0, 1, 1, 0]) }} /></Scene>;
 }
 ```
 
-`intro` and `outro` must use finite nonnegative `seconds(...)`. Their sum cannot
+`intro` and `outro` are finite nonnegative numbers of seconds. Their sum cannot
 exceed the composition duration or the host duration. All three fields are required.
 Helper modules cannot export a role. `hold` maps the middle segment:
 
@@ -304,9 +311,10 @@ directly to the outro. Mapping uses exact rational seconds. The source's right
 endpoint remains exclusive: mapped times at or beyond the earlier of the authored
 and quantized endpoint hold the last valid source frame.
 
-`ctx.seconds` follows this template map; `ctx.host` and prop curves follow the host
-window. Overlay layout uses the Timeline clip's `size`, or the Timeline canvas when
-size is absent. Fractional dimensions round to positive integer pixels, with halves
+`seconds` and `progress` follow this template map; `clipSeconds`, `clipProgress`,
+`clipDuration` and prop curves follow the host window. Overlay layout uses the
+Timeline clip's `size`, or the Timeline canvas when size is absent, and
+`useComposition()` gives that size as `width` and `height`. Fractional dimensions round to positive integer pixels, with halves
 away from zero, before layout. The composition canvas is its standalone default;
 overlays do not apply media fit. Compile-time text measurements still require fixed
 numeric typography and constraints; viewport-relative measurements are rejected.
@@ -325,29 +333,30 @@ changes the host window without adding `trimStart`.
 
 ### Caption presenter role
 
-Declare `captionPresenter({ intro: seconds(...), outro: seconds(...) })` in the
-entry module to draw a Timeline caption through Motion. It uses the same exact
+Declare `captionPresenter({ intro, outro })`, in seconds, in the entry module to
+draw a Timeline caption through Motion. It uses the same exact
 intro/outro mapping as an overlay with `hold: "once"`. The template reads the caption
 it draws with `const caption = useCaption()`: `{ text, runs, style, region, align }`.
 `region` uses canvas pixels. A run has `text`, `start`, `end`, `fontSize` and `color`:
 timed runs use ordered, nonoverlapping clip-local q6 seconds, a run without times spans
-the caption, and a run without a size or color takes the track style's. Compare the
-times with `ctx.host.seconds` so word highlighting continues when the template's source
-clock holds.
+the caption, and a run without a size or color takes the track style's. The run
+times are on the clip clock: compare them with `clipSeconds`, so word highlighting
+continues when the template's source clock holds. Comparing them with `seconds` is
+an error.
 
 ```tsx
 export const composition = { width: 640, height: 360, duration: 1, fps: 30 };
-export const role = captionPresenter({ intro: seconds(0.2), outro: seconds(0.2) });
+export const role = captionPresenter({ intro: 0.2, outro: 0.2 });
 
 export default function Words() {
-  const ctx = useTime();
+  const { clipSeconds } = useCurrentTime();
   const caption = useCaption();
   const [x, y, width] = caption.region;
   return <Scene>
     <Text className="absolute" style={{ left: x, top: y, width,
       fontFamily: caption.style.font, fontSize: caption.style.fontSize }}>
       {caption.runs.map((run) => <Span style={{ fontSize: run.fontSize,
-        color: ctx.host.seconds >= run.start && ctx.host.seconds < run.end ? "#facc15" : run.color,
+        color: clipSeconds >= run.start && clipSeconds < run.end ? "#facc15" : run.color,
       }}>{run.text}</Span>)}
     </Text>
   </Scene>;
@@ -387,8 +396,8 @@ layout and presenter bindings, and reopens with the same prepared input.
 
 Declare `transition()` in the entry module to draw a Timeline transition between
 two clips ([Timeline transitions](timeline.md#transitions)). The template stretches
-over the transition window: `ctx.seconds` maps the whole composition onto it, and
-`ctx.host.progress` is exactly 0 on the window's first frame and exactly 1 on its
+over the transition window: `seconds` maps the whole composition onto it, and
+`clipProgress` is exactly 0 on the window's first frame and exactly 1 on its
 last, as a built-in kernel's progress is. Prop curves use seconds from the start of
 the window. Like an overlay, the template lays out on the Timeline canvas.
 
@@ -404,11 +413,11 @@ export const composition = { width: 1920, height: 1080, duration: 1, fps: 30 };
 export const role = transition();
 
 export default function Dissolve() {
-  const ctx = useTime();
+  const { clipProgress } = useCurrentTime();
   return <Scene className="relative h-full w-full">
     <Image src="input://from" className="absolute inset-0 h-full w-full" />
     <Image src="input://to" className="absolute inset-0 h-full w-full"
-      style={{ opacity: ctx.host.progress }} />
+      style={{ opacity: clipProgress }} />
   </Scene>;
 }
 ```
@@ -430,11 +439,12 @@ export const composition = { width: 1920, height: 1080, duration: 1, fps: 30 };
 export const role = transition();
 
 export default function Wipe() {
-  const ctx = useTime();
+  const { clipProgress } = useCurrentTime();
+  const { width, height } = useComposition();
   return <Scene>
     <ShaderLayer code={wipe} inputs={{ a: "input://from", b: "input://to" }}
-      uniforms={{ progress: ctx.host.progress }}
-      style={{ width: ctx.viewport.width, height: ctx.viewport.height }} />
+      uniforms={{ progress: clipProgress }}
+      style={{ width, height }} />
   </Scene>;
 }
 ```
@@ -457,7 +467,7 @@ template as an ordinary clip. As a clip it behaves like an overlay with
 Declare `effect()` to draw a Timeline effect: an entry of a visual clip's `effects`,
 or an adjustment clip of kind `"motion"` ([Timeline effects](timeline.md#effects)).
 Like a transition, the template stretches over its host, the clip or the adjustment:
-`ctx.host.progress` is exactly 0 on the host's first frame and exactly 1 on its last,
+`clipProgress` is exactly 0 on the host's first frame and exactly 1 on its last,
 and prop curves use seconds from the host's start. It lays out on the Timeline canvas.
 
 The template reads the picture it applies to as `input://source`, as a transition
@@ -481,10 +491,10 @@ export const composition = { width: 1920, height: 1080, duration: 1, fps: 30 };
 export const role = effect();
 
 export default function Invert() {
-  const ctx = useTime();
+  const { width, height } = useComposition();
   return <Scene>
     <ShaderLayer code={invert} inputs={{ source: "input://source" }}
-      style={{ width: ctx.viewport.width, height: ctx.viewport.height }} />
+      style={{ width, height }} />
   </Scene>;
 }
 ```
@@ -504,7 +514,7 @@ use `.ts`/`.tsx` files and unambiguous relative paths. Explicit named imports an
 supported default imports are linked before compilation. Type-only imports do
 not create runtime dependencies.
 
-Built-ins need no import. `import { interpolate, useTime, View } from "valle"`
+Built-ins need no import. `import { interpolate, useCurrentTime, View } from "valle"`
 names them, as frontend code imports what it uses; each keeps its own name, and
 `"valle"` has no default or namespace export.
 
@@ -568,8 +578,7 @@ Prop constructors: `number`, `string`, `boolean`, `color`, `length`, `angle`,
 `point({ default: point(40, 60) })`.
 
 The constructors `point`, `rect` and `boolean` have schema forms
-distinct from their geometry forms. `path(svgD)` draws path geometry, and
-`frames(n)` supplies a sequence time value.
+distinct from their geometry forms. `path(svgD)` draws path geometry.
 Length and angle defaults are strings such as `"24px"` and `"15deg"`.
 
 Use `--props props.json` for constant prop values and `--data data.json` for
@@ -598,7 +607,9 @@ per visible frame to the JSON report. `--trajectory-sheet review.png` renders a 
 with the same trajectories and sampled frame markers; see the
 [CLI guide](cli.md#motion-jsx-to-video) for the frame budget and report details.
 
-Audio assets can drive Motion through `audioAnalysis("asset://beat", { bands: 8, fps: 30 })`.
+Audio assets can drive Motion through `audioAnalysis("asset://beat", { bands: 8, rate: 30 })`:
+`rate` is the number of analysis values per second; it defaults to `composition.fps`
+when that is an integer and is required otherwise.
 The prepared object provides `level(t)`, `band(index, t)`, `onset(t)`, `beatPhase(t)`, and `beatConfidence(t)`;
 its numeric tables are frozen into the compiled artifact and are read without decoding at
 frame time. Bind the declared audio control with `--asset beat=beat.wav`.
@@ -623,9 +634,9 @@ export const controls = {
 };
 
 export default function Bars() {
-  const ctx = useTime();
+  const { progress } = useCurrentTime();
   const data = useData();
-  const reveal = interpolate(ctx.progress, [0, 0.5], [0, 1]);
+  const reveal = interpolate(progress, [0, 0.5], [0, 1]);
   return (
     <Scene className="h-full w-full flex flex-col justify-center"
       style={{ padding: 40, gap: 16, backgroundColor: "#0f172a" }}>
@@ -724,38 +735,57 @@ Formula faces and explicit `asset://` font bindings remain resources of the work
 
 ## Time and animation
 
-### Context fields
+### Current time and composition
 
-| Expression | Meaning |
+`useCurrentTime()` gives the time of the sample being drawn, and `useComposition()`
+the values that hold for the whole frame. Both return plain numbers.
+
+| Field | Meaning |
 | --- | --- |
-| `ctx.host.seconds` | Exact output sample minus the clip’s authored start, projected to seconds |
-| `ctx.host.duration` | Exact authored clip duration, projected to seconds |
-| `ctx.host.progress` | Frame position in the admitted host interval: `i / (N - 1)`; `0.5` for one frame |
-| `ctx.localFrame` | Clamped zero-based source frame |
-| `ctx.seconds` | Exact mapped source sample time in seconds, including subframes |
-| `ctx.progress` | `clamp(sourceTime × actualFPS / durationFrames, 0, 1)` |
-| `ctx.durationFrames` | Composition duration quantized at the actual FPS |
-| `ctx.fps.num`, `ctx.fps.den` | Rational frame-rate numerator/denominator |
-| `ctx.viewport.width`, `.height` | Logical canvas dimensions in pixels |
-| `ctx.unit.index`, `.count`, `.start`, `.end` | Only inside `Text perUnit`; start/end are text byte offsets |
+| `useCurrentTime().seconds` | Scene time in seconds at the sample, subframes included: the source time after trim, rate, looping, hold, the template map and the enclosing `TimeScope`s |
+| `useCurrentTime().progress` | `seconds` over the duration rounded to whole frames at the actual FPS, clamped to 0–1 |
+| `useCurrentTime().clipSeconds` | Exact output sample minus the clip's authored start, in seconds |
+| `useCurrentTime().clipProgress` | Frame position in the admitted host interval: `i / (N - 1)`; `0.5` for one frame |
+| `useComposition().width`, `.height` | Layout size in pixels: the composition's canvas, or the host's size for an overlay, transition, effect or caption presenter |
+| `useComposition().duration` | `composition.duration` in seconds |
+| `useComposition().fps` | Actual output frame rate as a number, such as 29.97002997… |
+| `useComposition().clipDuration` | Exact authored clip duration in seconds; the host duration when rendered alone |
 
-Define animation windows explicitly with `ctx.seconds`, sequences and expressions.
-The last displayed source frame precedes the quantized duration boundary.
+Write animation in seconds, with `seconds`, sequences and expressions:
+`interpolate(seconds, [0.2, 0.8], [0, 1])` takes the same time at any frame rate, so
+`--fps` changes the number of frames and not the speed. Reading `fps` in a frame
+expression warns `frame-rate-dependent`. To step through items at a fixed rate, such
+as an image sequence or data recorded per frame, use the data's own rate and clamp the
+index: `list[clamp(Math.floor(seconds * rate), 0, list.length - 1)]`. The last
+displayed source frame precedes the quantized duration boundary. A time constant
+compared with or interpolated over `seconds` that lies past `duration` warns
+`time-unit`: times are seconds, not milliseconds or frames.
+
+Comparisons, rounding and remainders of a value computed from the time hold exactly
+at frame boundaries. `<`, `<=`, `>`, `>=`, `===`, `!==`, `==`, `!=`, `Math.floor`,
+`Math.ceil`, `Math.round`, `Math.trunc`, `floor`, `ceil`, `round`, `fract`, `mod` and
+`%` of such a value treat two numbers within `min(4ε · max(|a|, |b|, 1), 2⁻²⁴)` of each
+other as equal, with ε = 2⁻⁵². At 0.3 seconds `Math.floor(seconds / 0.1)` is 3,
+`seconds >= 0.3` holds and `seconds % 0.1` is 0, where JavaScript's `0.3 % 0.1` is
+0.09999999999999998. Values that do not depend on the time, such as data, props and
+constants, keep JavaScript's arithmetic.
 
 Host time advances independently of source trim, rate, looping and hold. Both absolute
 host boundaries are quantized at the actual output FPS; `N` is their difference and
 `i` is the requested output frame minus the first boundary. For `N > 1`, the first
-and last progress values are exactly 0 and 1. A start between frame boundaries can
-produce a slightly negative first `ctx.host.seconds`; the authored start is preserved.
+and last `clipProgress` values are exactly 0 and 1. A start between frame boundaries
+can produce a slightly negative first `clipSeconds`; the authored start is preserved.
 This applies to ordinary clips, overlays and caption presenters. Template time
 maps that same exact local time through its intro/hold/outro rule; it does not
 replace the authored start with the first admitted frame.
 Motion `props` curves also use host-local seconds and are validated against the
 clip duration, using the same start as the clip's outer opacity and transform curves.
+`clipSeconds` meeting `clipDuration` as the end of an interpolation or a comparison is
+an error: the last frame starts before the clip's end, so write `clipProgress`.
 
 `TimeScope` changes source time only. `Shutter`, `Echo` and automatic motion blur
-keep the request frame’s host inputs frozen while sampling source time. Motion
-driven only by `ctx.host` therefore receives no temporal sampling blur.
+keep the request frame's host inputs frozen while sampling source time. Motion
+driven only by the clip clock therefore receives no temporal sampling blur.
 
 Standalone `motion check/render/review` use the composition as host by default.
 `--host-duration S` supplies a different positive host duration in decimal seconds.
@@ -767,7 +797,7 @@ composition canvas or its source duration.
 ### Time functions and visibility evaluation
 
 Motion's time-function intermediate representation recognizes bounded numeric
-expressions that are affine in one time input: `ctx.seconds` or `ctx.localFrame`.
+expressions that are affine in the scene time `seconds`.
 It accepts finite constants, addition, subtraction, negation, multiplication by a
 time-independent expression, and division by a finite nonzero time-independent
 expression. Mixed time inputs, nonlinear terms, and unsupported operations stay
@@ -787,22 +817,21 @@ threshold. For authored compositions with a fixed default frame rate, leaf
 activation precomputes certificates over the full composition time domain. The
 certificate is used only when the requested sample, frame rate, and duration
 belong to that domain and the sample's projected seconds lie inside the proved
-numeric interval. Requests outside it evaluate the gate directly.
+numeric interval. Requests outside it evaluate the gate directly. A comparison of the
+time counts its frame-boundary tolerance as part of the threshold.
 
 If a comparison changes somewhere during the composition, activation inspects
 bounded binary subdivisions (at most eight splits along a branch and 31 visited
 intervals per leaf). It retains only proven intervals and merges adjacent intervals
 with the same result. Samples in unresolved gaps, including threshold crossings,
-evaluate the original gate. This works for both composition seconds and local
-frames without quantizing subframe requests. The selected expression roots then
+evaluate the original gate. This works without quantizing subframe requests. The selected expression roots then
 run against a dense arena-indexed value table.
 
 Absolute-leaf visibility gates and [instance-row range gates](#automatic-instances-for-prepared-maps)
 consume this representation. Comparisons work with the time expression on either
 side, and instance ranges use a binary search over row indices. Structurally
 identical leaf time functions share one result within a sample. Each Shutter or
-Echo sample gets a new result cache, including when it carries the same local
-frame number. Non-finite values or unrecognized expressions fall back to full
+Echo sample gets a new result cache. Non-finite values or unrecognized expressions fall back to full
 evaluation.
 
 The compiler lowers [TimeScope](#time-scopes) time reads through the authored
@@ -819,7 +848,7 @@ interval proofs for other node kinds, screen-space bounds, or SIMD evaluation.
 input range. Ranges must have equal length ≥ 2, strictly increasing finite input
 stops, and compatible output types. Stops are normally known at compile time: literals or
 immutable constant arrays. One exception is the same numeric shift added to every input stop,
-such as `interpolate(ctx.seconds, [ctx.unit.index * 0.1, 1 + ctx.unit.index * 0.1], [0, 1])`.
+such as `interpolate(seconds, [unit.index * 0.1, 1 + unit.index * 0.1], [0, 1])`.
 The compiler subtracts that shift from the input. Different shifts, spreads and holes are
 rejected.
 
@@ -833,10 +862,10 @@ Color interpolation uses `colorSpace: "srgb"` by default. Choose `"linear"`,
 For OKLCH, `hue` can be `"shorter"` (default), `"longer"`, `"increasing"`,
 or `"decreasing"`; it is invalid in other color spaces. Authored colors stay
 floating point through expression evaluation and DrawProgram emission for solid
-paints, Path gradient stops, Text fills, and `perUnit.color`. For example:
+paints, Path gradient stops, Text fills, and the `color` of a `perUnit` style. For example:
 
 ```tsx
-backgroundColor: interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
+backgroundColor: interpolate(progress, [0, 1], ["#2140ff", "#ffd000"],
   { colorSpace: "oklch", hue: "shorter" })
 ```
 
@@ -870,9 +899,9 @@ Save as `spring.motion.tsx`:
 ```tsx
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export default function SpringTitle() {
-  const ctx = useTime();
-  const enter = spring({ elapsedFrames: ctx.seconds * ctx.fps.num / ctx.fps.den, fps: ctx.fps, preset: "gentle" });
-  const exit = interpolate(ctx.seconds, [4.4, 4.8], [1, 0]);
+  const { seconds } = useCurrentTime();
+  const enter = spring(seconds, { preset: "gentle" });
+  const exit = interpolate(seconds, [4.4, 4.8], [1, 0]);
   return (
     <Scene className="h-full w-full flex items-center justify-center"
       style={{ backgroundColor: "#0f172a" }}>
@@ -883,16 +912,17 @@ export default function SpringTitle() {
 }
 ```
 
-`spring({ elapsedFrames, fps: ctx.fps, preset })` starts at 0 with zero velocity by default
-and converges to 1; it can overshoot. It continues settling after its authored window when
-given `elapsedFrames`. Presets: `gentle`, `wobbly`, `stiff`, `slow`, `bouncy`.
+`spring(t, { preset })` takes a time in seconds, such as `seconds - 0.4` for a spring
+that starts 0.4 seconds in. It is 0 before time zero, starts with zero velocity by
+default and converges to 1; it can overshoot, and it keeps settling as its time grows.
+Presets: `gentle`, `wobbly`, `stiff`, `slow`, `bouncy`.
 Or describe it with static `duration` in seconds (default 0.5) and `bounce` above -1
 and below 1 (default 0), as SwiftUI's `spring(duration:bounce:)` defines them:
 `duration` is one swing of the undamped spring, and with `bounce: 0` the spring is
 within 2% of 1 by then without overshooting; higher `bounce` overshoots more, and
 negative `bounce` settles more slowly. Or provide static `mass`, `stiffness`, `damping`
 (defaults 1, 100, 10); mass and stiffness must be positive and damping non-negative.
-Use one of the three. There are no `from`, `to` or `overshootClamping` options: scale, offset or
+Use one of the three; without options the spring takes the default physical parameters. There are no `from`, `to` or `overshootClamping` options: scale, offset or
 clamp the result explicitly.
 
 Optional `initialVelocity` is a finite, compile-time number in **normalized distance
@@ -902,18 +932,18 @@ to 300px with an incoming velocity of 100px/s, use `initialVelocity: 0.5`
 incoming velocity at that authored boundary. It does not infer an initial condition
 from playback history or automatically smooth arbitrary keyframe joins.
 
-`springVelocity({ elapsedFrames, fps: ctx.fps, ... })` accepts the same options and
+`springVelocity(t, { ... })` accepts the same arguments and
 returns the **analytic derivative per second** of the normalized spring position.
 Multiply by the travel distance to obtain px/s. Before time zero both position and
 velocity are zero; at zero the velocity equals `initialVelocity`. Neither function
 uses iterative simulation or a settling threshold, including for zero damping.
 
 ```tsx
-const p = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "gentle" });
-const v = springVelocity({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "gentle" });
+const p = spring(seconds, { preset: "gentle" });
+const v = springVelocity(seconds, { preset: "gentle" });
 // For a 120px horizontal movement:
 // translate: point(120 * p, 0)
-// motionBlur: motionBlur(point(120 * v * ctx.fps.den / ctx.fps.num, 0), 180)
+// motionBlur: motionBlur({ velocity: point(120 * v, 0) })
 ```
 
 For an authored state update rather than the analytic spring, bake it once at prepare time:
@@ -927,7 +957,7 @@ const motion = simulate({
     return { x: state.x + velocity * dt, velocity };
   },
 });
-// In the component: left: motion.at(ctx.seconds).x
+// In the component: left: motion.at(seconds).x
 ```
 
 `simulate({ dt, duration, init, step })` runs `step` at fixed `dt` increments in the
@@ -950,20 +980,20 @@ Save as `sequence.motion.tsx`:
 
 ```tsx
 const sequence = defineSequence({
-  title: stage({ duration: seconds(0.6) }),
-  items: stage({ after: "title", overlap: seconds(0.15), duration: seconds(0.8) }),
+  title: stage({ duration: 0.6 }),
+  items: stage({ after: "title", overlap: 0.15, duration: 0.8 }),
 });
 const labels = ["Prepare", "Preview", "Export"];
 export default function Sequence() {
-  const ctx = useTime();
-  const title = stageProgress(ctx.localFrame, ctx.fps, sequence.title);
+  const { seconds } = useCurrentTime();
+  const title = stageProgress(seconds, sequence.title);
   return (
     <Scene className="h-full w-full flex flex-col items-center justify-center"
       style={{ gap: 18, backgroundColor: "#0f172a" }}>
       <Text style={{ fontSize: 36, color: "#ffffff", opacity: title }}>A clear sequence</Text>
       {labels.map((label, index) => (
         <Text key={label} style={{ fontSize: 24, color: "#38bdf8",
-          opacity: staggerProgress(ctx.localFrame, ctx.fps, sequence.items, index, seconds(0.15)) }}>
+          opacity: staggerProgress(seconds, sequence.items, index, 0.15) }}>
           {label}
         </Text>
       ))}
@@ -972,23 +1002,24 @@ export default function Sequence() {
 }
 ```
 
-`stage({ duration, at?, after?, delay?, overlap? })` declares a positive duration.
-The first stage defaults to zero; later stages need `at` or an earlier `after`
-label. `at` and `after` are exclusive, as are `delay` and `overlap`; delay/overlap
-require `after`. A sequence uses either `seconds(...)` or `frames(...)` throughout.
-Sequence stages do not extend the render duration automatically.
+`stage({ duration, at?, after?, delay?, overlap? })` declares a positive duration in
+seconds. The first stage defaults to zero; later stages need `at` or an earlier
+`after` label. `at` and `after` are exclusive, as are `delay` and `overlap`;
+delay/overlap require `after`. Sequence stages do not extend the render duration
+automatically. In the helpers below, `t` is any time in seconds, such as `seconds`,
+`clipSeconds` or `seconds - 0.4`, and the result depends on it alone.
 
 | Helper | Contract |
 | --- | --- |
-| `stageProgress(frame, ctx.fps, stage)` | Clamped progress through one named stage |
-| `staggerProgress(frame, ctx.fps, stage, index, gap)` | Shift the stage start by index × gap; gap uses the sequence's units |
-| `repeatProgress(frame, ctx.fps, stage, count)` | Repeat within the stage; positive static integer count |
-| `yoyoProgress(frame, ctx.fps, stage, count)` | Repeated forward/backward progress within the stage |
-| `freezeFrame(frame, { from, to })` | Hold at `from` during `[from,to)`, then subtract the frozen interval; static integers `0 ≤ from < to` |
+| `stageProgress(t, stage)` | Clamped progress through one named stage |
+| `staggerProgress(t, stage, index, gap)` | Shift the stage start by index × gap seconds |
+| `repeatProgress(t, stage, count)` | Repeat within the stage; positive static integer count |
+| `yoyoProgress(t, stage, count)` | Repeated forward/backward progress within the stage |
+| `freezeTime(t, { from, to })` | Hold at `from` during `[from,to)`, then subtract the frozen interval; static seconds with `from < to` |
 | `defineRepeater({ count, keyPrefix? })` | Prepared list of `{ index, count, progress, key }`; count 1–2048 |
 | `trail(progress, index, { gap, mode? })` | Sample `progress + index × gap`; negative gap places later indices behind the head. Mode `clamp` (default) or `wrap` |
-| `wiggle(frame, ctx.fps, { seed, frequency, amplitude, phase? })` | Seeded scalar displacement; frequency in seconds, non-negative amplitude |
-| `wiggle2D(frame, ctx.fps, { seed, frequency, amplitude: [x,y], phase? })` | Seeded point displacement; suitable for `style.translate` |
+| `wiggle(t, { seed, frequency, amplitude, phase? })` | Seeded scalar displacement; frequency in cycles per second, non-negative amplitude |
+| `wiggle2D(t, { seed, frequency, amplitude: [x,y], phase? })` | Seeded point displacement; suitable for `style.translate` |
 
 ### Deterministic math and formatting
 
@@ -1028,8 +1059,8 @@ as long as their property set is fixed:
 ```tsx
 const cardStyle = { padding: 24, borderRadius: 20, backgroundColor: "#123456" };
 export default function Demo() {
-  const ctx = useTime();
-  const style = { ...cardStyle, width: 240 + ctx.localFrame, height: 120 };
+  const { seconds } = useCurrentTime();
+  const style = { ...cardStyle, width: 240 + seconds * 30, height: 120 };
   return <Scene><View style={style} /></Scene>;
 }
 ```
@@ -1049,7 +1080,7 @@ Inherited typography follows the parent where appropriate; a primitive's implied
 class supplies only its documented layout shortcut.
 
 CSS has no independent animation clock here. Drive a numeric/typed style binding
-with `ctx` or a supported helper. A dynamic template literal must retain a known
+with the time or a supported helper. A dynamic template literal must retain a known
 CSS structure, for example `` `blur(${radius}px)` ``. For filters/gradients, a
 conditional can select among finite valid structures; every branch is checked.
 Do not build function names, units, selectors or complete CSS fragments from
@@ -1062,7 +1093,7 @@ values. Typed lengths support `px`, `%`, `em`, `rem`, `vw`, `vh`; typed angles
 support `deg`, `rad`, `turn`. Units resolve in the property context; percentages
 are not universally percentages of the viewport.
 
-For geometry that follows the logical canvas, use `ctx.viewport.width`/`.height` in numeric expressions.
+For geometry that follows the logical canvas, use `width` and `height` from `useComposition()` in numeric expressions.
 For percentage translations use a typed pair such as `"-50% -50%"`.
 When interpolating lengths, keep the units the same at corresponding stops.
 
@@ -1084,8 +1115,8 @@ replacement shown here. The tables are generated from the records the compiler r
 
 | Property | Why | Write instead |
 | --- | --- | --- |
-| `animation`, `animation-*` | CSS keyframes are permanently unsupported: the timeline must be a function of the sampled frame | `interpolate` over local time, for example `interpolate(ctx.seconds % 1, [0, 1], [0, 360])` |
-| `transition`, `transition-*` | transitions need an explicit state timeline; a previous rendered frame cannot be used as an event | an explicit range: `interpolate(ctx.seconds, [start, end], [a, b])` |
+| `animation`, `animation-*` | CSS keyframes are permanently unsupported: the timeline must be a function of the sampled frame | `interpolate` over local time, for example `interpolate(seconds % 1, [0, 1], [0, 360])` |
+| `transition`, `transition-*` | transitions need an explicit state timeline; a previous rendered frame cannot be used as an event | an explicit range: `interpolate(seconds, [start, end], [a, b])` |
 | `clip-path` | CSS clip-path lowering is not implemented | `<Clip path={...} />` |
 | `mask`, `mask-image`, `mask-size`, `mask-position`, `mask-repeat`, `mask-origin`, `mask-clip`, `mask-mode`, `mask-composite`, `mask-type` | CSS mask lowering is not implemented | `<Mask paint={...} />` or a bound image source |
 | `offset`, `offset-path`, `offset-distance`, `offset-rotate`, `offset-anchor`, `offset-position` | CSS offset-path lowering is not implemented | the `motionPath` helper |
@@ -1228,11 +1259,11 @@ and finite conditional branches as the ordered `transform` list. Templates can b
 stored in local constants, returned from helpers, and passed as component props:
 
 ```tsx
-const move = `${ctx.seconds * 100}px 10%`;
-const turn = ctx.seconds < 1 ? "none" : `${ctx.seconds * 90}deg`;
-const zoom = `${1 + ctx.seconds * 0.1} 1`;
+const move = `${seconds * 100}px 10%`;
+const turn = seconds < 1 ? "none" : `${seconds * 90}deg`;
+const zoom = `${1 + seconds * 0.1} 1`;
 return <View style={{ translate: move, rotate: turn, scale: zoom,
-  transform: `skew(${ctx.seconds * 10}deg, 0deg)` }} />;
+  transform: `skew(${seconds * 10}deg, 0deg)` }} />;
 ```
 
 Skew uses the ordered list's `skew`/`skewX`/`skewY` functions. Numeric template
@@ -1337,7 +1368,7 @@ from its border box, and `lens-distortion()` bends around the centre of the bord
 box. Under a skew or perspective, where a function would need the node's transform to
 be a similarity, it uses the similarity described for `backdropFilter` lengths.
 Template strings and conditional expressions can animate parameters,
-for example ``filter: `glow(${ctx.progress * 24}px 1 #22d3ee)` ``. Each frame must
+for example ``filter: `glow(${progress * 24}px 1 #22d3ee)` ``. Each frame must
 satisfy the parameter bounds below.
 The compiler checks numeric ranges it can establish for template parameters and
 transition bindings. A range wholly outside the domain is an error; a range that
@@ -1363,7 +1394,7 @@ in 0–128 px; intensity is in 0–4.
 pixels from the whole scene and adds a soft halo through a five-level F16
 downsample/upsample pyramid. `threshold` is in 0–1, `intensity` in 0–4, and
 `radius` in 0–128 px. The optional `knee` is in 0–1 and defaults to 0.1. Each
-value may be an expression, as in `intensity: 1.2 * ctx.progress`, and each frame's
+value may be an expression, as in `intensity: 1.2 * progress`, and each frame's
 value must stay within these bounds. The effect runs after the scene's children are
 composed.
 
@@ -1390,8 +1421,7 @@ Save as `paint.motion.tsx`:
 
 ```tsx
 export default function Paint() {
-  const ctx = useTime();
-  const t = ctx.progress;
+  const t = useCurrentTime().progress;
   return (
     <Scene className="relative h-full w-full" style={{
       backgroundImage: `linear-gradient(${30 + t * 90}deg in srgb, #0f172a, #2563eb)` }}>
@@ -1416,10 +1446,10 @@ groups and many overlapping translucent layers can dominate CPU/GPU work.
 Motion validates every candidate in `className` against its supported catalog.
 There is no config/plugin processing, unbounded class generation or implicit
 interaction state. Responsive variants use the logical canvas; finite choices
-may also depend on `ctx` or props:
+may also depend on the time or props:
 
 ```tsx
-<View className={`p-4 ${ctx.localFrame >= 30 ? "w-40" : "w-20"} bg-${active ? "blue-500" : "red-500"}`} />
+<View className={`p-4 ${seconds >= 1 ? "w-40" : "w-20"} bg-${active ? "blue-500" : "red-500"}`} />
 ```
 
 String constants, ternaries, finite template holes, local bindings and pure helpers
@@ -1427,7 +1457,7 @@ that lower to those expressions are supported. Every candidate is checked before
 rendering, including inactive branches. Independent whitespace-separated choices
 remain separate selectors rather than combinations of entire style objects.
 One token can have at most 64 finite choices; arbitrary numeric/string substitutions
-such as `` `w-${ctx.localFrame}` `` are rejected. Selection is discrete and does
+such as `` `w-${Math.floor(seconds)}` `` are rejected. Selection is discrete and does
 not start an implicit transition or animation. Post-layout bounds cannot control
 class selection, since classes can affect layout.
 
@@ -1435,11 +1465,12 @@ Variants are permanently rejected: `sm:`/`md:`/`lg:`/`xl:`/`2xl:`, `min-*`, `max
 `portrait:`, `landscape:`, `dark:`, `hover:`, `focus:` and `press:`. The canvas is fixed by
 the entry file's `composition` for standalone preview, so a breakpoint would be a constant.
 Keep one file per deliverable shape, or branch on props or data. Do not compare
-`ctx.viewport.width` as if it were a CSS breakpoint.
+the `width` of `useComposition()` as if it were a CSS breakpoint.
 
-`ctx.viewport.width`/`.height` are numeric expressions for geometry (bar widths, positions).
-They read the Motion composition's logical canvas in standalone and Timeline use.
-Timeline fits that completed canvas into the clip target rectangle. They are not the
+The `width` and `height` of `useComposition()` are numbers for geometry (bar widths,
+positions). They read the layout size: the Motion composition's logical canvas for a
+standalone scene or a clip, which Timeline fits into the clip target rectangle, and
+the host's size for an overlay, transition, effect or caption presenter. They are not the
 display window, `--output-size`, or system preferences. The low-level Rust
 `LayoutOptions.viewport` takes device-pixel extents: its logical canvas is `size / DPR`.
 Normal Native/Wasm hosts use DPR 1 and scale delivery afterward. The same rules prepare
@@ -1594,7 +1625,7 @@ layout, animate opacity/translation instead of inserting/removing characters.
 JSX indentation is not a reliable way to author spaces between rich runs: use
 explicit `{" "}` or string expressions where spacing matters.
 For outlined text, use `color: "transparent"` with `WebkitTextStrokeColor: "#ffffff"`
-and `WebkitTextStrokeWidth: 1 + ctx.progress * 3`; the glyph outline stays attached
+and `WebkitTextStrokeWidth: 1 + progress * 3`; the glyph outline stays attached
 to the shaped text. This is available on `Text`, outside `Span`'s restricted styles.
 For a padded caption/card, put padding on a containing `View` and use flex/grid
 alignment or explicit positioning. Text in an inline formatting context does not
@@ -1602,11 +1633,11 @@ behave like a standalone block box with vertical margins.
 
 The default sans face is variable Noto Sans: `fontWeight` maps directly to `wght`
 (100–900), including fractional weights. It also has a `wdth` axis (62.5–100,
-default 100). For example, `fontWeight: 100 + ctx.progress * 800` animates weight.
+default 100). For example, `fontWeight: 100 + progress * 800` animates weight.
 To animate width, use:
 
 ```tsx
-fontVariationSettings: `"wght" 500, "wdth" ${62.5 + ctx.progress * 37.5}`
+fontVariationSettings: `"wght" 500, "wdth" ${62.5 + progress * 37.5}`
 ```
 
 Explicit `"wght"` in `fontVariationSettings` overrides `fontWeight`.
@@ -1633,19 +1664,20 @@ Save as `text.motion.tsx`:
 
 ```tsx
 export default function Typography() {
-  const ctx = useTime();
-  const progress = interpolate(ctx.progress, [0, 0.5], [0, 1]);
+  const reveal = interpolate(useCurrentTime().progress, [0, 0.5], [0, 1]);
   return (
     <Scene className="h-full w-full flex flex-col items-center justify-center"
       style={{ gap: 32, backgroundColor: "#0f172a" }}>
       <Text style={{ fontSize: 36, color: "#e2e8f0" }}>
         {"Growth "}<Span style={{ color: "#38bdf8", fontWeight: 700 }}>
-          {formatPercent(progress * 0.245, { decimals: 1 })}
+          {formatPercent(reveal * 0.245, { decimals: 1 })}
         </Span>
       </Text>
       <Text split="char" style={{ fontSize: 38, color: "#ffffff" }}
-        perUnit={{ opacity: clamp(progress * 3 - ctx.unit.index * 0.12, 0, 1),
-          translate: point(0, (1 - clamp(progress * 3 - ctx.unit.index * 0.12, 0, 1)) * 18) }}>
+        perUnit={(unit) => {
+          const shown = clamp(reveal * 3 - unit.index * 0.12, 0, 1);
+          return { opacity: shown, translate: point(0, (1 - shown) * 18) };
+        }}>
         Every letter moves
       </Text>
     </Scene>
@@ -1654,27 +1686,31 @@ export default function Typography() {
 ```
 
 `split` is `char`, `word` or `line`; `line` refers to source newlines, not wrapped
-layout lines. `split` and a non-empty `perUnit` must be supplied together.
+layout lines. `split` and `perUnit` must be supplied together. `perUnit` is a
+function of the unit that returns its style, such as `(unit) => ({ opacity: x })`;
+wrap the object in parentheses, as `(unit) => { opacity: x }` is a block. The unit
+has `index`, `count`, `start` and `end`, where `start` and `end` are JavaScript string
+indexes (UTF-16 code units) into the text, and it exists only inside the function.
 Per-unit properties are `opacity` (0–1), `translate` (point), `scale` (point),
 `rotate` (numeric angle), `color`, and `blur` (Gaussian sigma in CSS pixels,
-0–128). `ctx.unit.*` is unavailable in ordinary styles.
+0–128); the style must set at least one.
 When one `Text` contains styled `Span` runs, its units span the full authored
-text: `ctx.unit.index`, `count`, `start`, and `end` do not restart at a `Span`.
+text: `unit.index`, `count`, `start`, and `end` do not restart at a `Span`.
 Each run keeps its color, weight, and shaping; the unit style is applied to its
 glyphs. Inline images are excluded from character counts and separate word units.
 
-`rangeSelector({ start, end, offset?, softness?, shape? })` returns a 0–1 weight
-for the current text unit, so use it inside `perUnit`. `start` and `end` are
+`rangeSelector(unit, { start, end, offset?, softness?, shape? })` returns a 0–1 weight
+for the unit of a `perUnit` function. `start` and `end` are
 normalized positions in 0–1; the selector samples each unit at `index / count`.
 `offset` shifts both ends, while `softness` (0–1) feathers the boundaries. `shape`
 is a static `"square"` (default), `"ramp"`, `"triangle"`, or `"smooth"`.
 Numeric options may depend on the frame. An empty or reversed range selects nothing.
 
 ```tsx
-<Text split="char" perUnit={{
-  opacity: rangeSelector({ start: 0, end: ctx.progress, softness: 0.15, shape: "ramp" }),
-  blur: 8 * (1 - rangeSelector({ start: 0, end: ctx.progress, softness: 0.15, shape: "ramp" })),
-}}>SELECTOR</Text>
+<Text split="char" perUnit={(unit) => ({
+  opacity: rangeSelector(unit, { start: 0, end: progress, softness: 0.15, shape: "ramp" }),
+  blur: 8 * (1 - rangeSelector(unit, { start: 0, end: progress, softness: 0.15, shape: "ramp" })),
+})}>SELECTOR</Text>
 ```
 
 `Text path={path(...)}` lays out each shaped line along a parallel offset copy
@@ -1739,9 +1775,9 @@ must supply the same font bytes used for rendering.
 ```tsx
 const word = textOutline("VALLE", { fontSize: 150, fontWeight: 800, origin: point(60, 240) });
 export default function DrawOn() {
-  const ctx = useTime();
+  const { progress } = useCurrentTime();
   return <Scene style={{ width: 640, height: 360, backgroundColor: "#101010" }}>
-    <Path d={word.path} fill="none" stroke="#ffffff" strokeWidth={3} trimEnd={ctx.progress} />
+    <Path d={word.path} fill="none" stroke="#ffffff" strokeWidth={3} trimEnd={progress} />
   </Scene>;
 }
 ```
@@ -1949,8 +1985,8 @@ Save as `path.motion.tsx`:
 ```tsx
 const route = path("M 60 260 C 170 40 420 40 580 240");
 export default function Route() {
-  const ctx = useTime();
-  const p = interpolate(ctx.progress, [0, 0.8], [0, 1], { easing: "easeInOut" });
+  const { progress } = useCurrentTime();
+  const p = interpolate(progress, [0, 0.8], [0, 1], { easing: "easeInOut" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
       <Path d={route} fill="none" stroke="#334155" strokeWidth={8} strokeLinecap="round" />
@@ -2011,7 +2047,7 @@ use encoded sRGB by default. Set `mixBlendSpace: "linear"` to calculate them on
 linear sRGB channels: screening two opaque `#800000` layers produces about
 `#a70000`, compared with `#c00000` in the default space. The setting applies to
 the node's composed subtree, is not inherited, and can switch per frame using
-a finite choice such as `ctx.seconds < 1 ? "linear" : "srgb"`.
+a finite choice such as `seconds < 1 ? "linear" : "srgb"`.
 `normal` and `plus-lighter` always use linear working-space compositing, regardless
 of this setting. Alpha coverage is unchanged. Unsupported operators such as
 `plus-darker` and unknown spaces are rejected during admission.
@@ -2049,7 +2085,7 @@ subtrees: outgoing first, incoming second. `kind` is static and supports the sam
 
 Optional `params={{...}}` accepts the [same names, defaults and ranges as Timeline](timeline.md#transitions).
 The object keys must be static; each value may be a number or admitted numeric
-animation expression. For example, `params={{centerX:0.2+0.6*ctx.progress,softness:4}}`
+animation expression. For example, `params={{centerX:0.2+0.6*progress,softness:4}}`
 animates a circle reveal's center while holding its edge softness at four local
 pixels. Values are checked after evaluation on every frame. Unknown names,
 non-numeric or non-finite values, out-of-range results, and a zero direction for
@@ -2070,8 +2106,8 @@ reads inside an input start with that input's own transparent canvas.
 ```tsx
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 export default function Reveal() {
-  const ctx = useTime();
-  const p = clamp(ctx.seconds, 0, 1);
+  const { seconds } = useCurrentTime();
+  const p = clamp(seconds, 0, 1);
   return <Transition kind="circleOpen" progress={p} style={{width:640,height:360}}>
     <View style={{backgroundColor:"#2140ff"}} />
     <View style={{backgroundColor:"#ff4a24"}} />
@@ -2098,8 +2134,8 @@ float4 valle_main(float2 uv) {
 
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 export default function Wipe() {
-  const ctx = useTime();
-  const p = clamp(ctx.seconds, 0, 1);
+  const { seconds } = useCurrentTime();
+  const p = clamp(seconds, 0, 1);
   return <Transition code={wipe} uniforms={{ softness: 0.1 }} progress={p}
     style={{width:640,height:360}}>
     <View style={{backgroundColor:"#2140ff"}} />
@@ -2108,10 +2144,10 @@ export default function Wipe() {
 }
 ```
 
-`ctx.progress` is `localFrame / durationFrames`: for a 60-frame composition, frame
-30 is exactly 0.5 and frame 59 is 59/60. Use an explicit time expression when the
-last rendered frame must reach 1. The [E06 fixture](../crates/valle-compiler/tests/fixtures/motion/composition/motion-transition.motion.tsx)
-uses `ctx.progress` as authored in the refactor acceptance scene.
+`progress` is the frame position over the frame count: for a 60-frame composition,
+frame 30 is exactly 0.5 and frame 59 is 59/60. Use an explicit time expression when
+the last rendered frame must reach 1. The [E06 fixture](../crates/valle-compiler/tests/fixtures/motion/composition/motion-transition.motion.tsx)
+uses `progress` as authored in the refactor acceptance scene.
 
 ### Displacement and motion blur
 
@@ -2138,11 +2174,12 @@ built-in shutter angle is 180°. At a temporal cut or when the element is
 stationary, no blur filter is emitted. The result is determined by the requested
 time, including for out-of-order frame requests.
 
-`style.motionBlur: motionBlur(velocityPoint, shutterAngle?)` supplies explicit
-velocity in the element's own units per frame: composition pixels per frame when
-neither the element nor its ancestors rotate or scale, and otherwise turned and
-stretched by that transform like other filter lengths. Its shutter angle defaults
-to 180°. Both forms use a spatial directional blur based on the element's anchor
+`style.motionBlur: motionBlur({ velocity, angle? })` supplies explicit velocity in the
+element's own units per second of the scene clock it is drawn on: composition pixels
+per second when neither the element nor its ancestors rotate or scale, and otherwise
+turned and stretched by that transform like other filter lengths. Inside a
+`TimeScope` the scope's speed scales it. The shutter `angle` defaults to 180°, so the
+streak is the distance the element travels in half an output frame. Both forms use a spatial directional blur based on the element's anchor
 velocity: the average of copies of the element spread evenly along the shutter's
 travel, one for every 2 output pixels of travel, at least 9 and at most 32. Past 62
 pixels of travel the copies spread further apart and can show as separate steps.
@@ -2151,8 +2188,8 @@ to different pixels, use [`Shutter`](#shutter-sampling): it renders the subframe
 themselves.
 
 Use `springVelocity` for an exact spring derivative. For an arbitrary pure position
-helper `position(t)`, a centered one-frame displacement is
-`position(t + 0.5 / fps) - position(t - 0.5 / fps)`, already in px/frame. This is an
+helper `position(t)`, a centered difference
+`(position(t + 0.01) - position(t - 0.01)) / 0.02` gives px/s. This is an
 approximation of instantaneous velocity and explicitly samples the same authored
 trajectory on both sides of the target time. It never reads the last displayed
 frame. With explicit velocity, a step cut still needs an authored blur decision;
@@ -2189,8 +2226,9 @@ keep a large flow layout inside an absolutely positioned container.
 
 ### Echo trails
 
-`<Echo count={4} interval={3} decay={0.5}>...</Echo>` samples its children at
-3, 6, 9, and 12 output frames before the requested frame. It paints the oldest
+`<Echo count={4} delay={0.1} decay={0.5}>...</Echo>` samples its children 0.1, 0.2,
+0.3 and 0.4 seconds before the requested time, so the trail keeps its spacing at any
+output frame rate. It paints the oldest
 sample first with opacity `decay^4`, then successively newer samples with
 `decay^3` through `decay`, and finally paints the current children at full
 opacity. Each sample reevaluates Motion expressions, layout, and media time, so
@@ -2198,8 +2236,9 @@ the trail follows the scene rather than a fixed spatial offset. Samples before
 the composition starts hold the first frame; seeking does not depend on earlier
 render requests.
 
-`count` is a static integer from 1 to 32, `interval` is a positive integer
-number of output frames, and `decay` is a finite static number from 0 to 1.
+`count` is a static integer from 1 to 32, `delay` is a positive static number of
+seconds, and `decay` is a finite static number from 0 to 1. A trail, `count ×
+delay`, longer than `duration` warns `time-unit`.
 Shutter and Echo together may request at most 128 temporal samples in one
 frame. The Echo wrapper fills its parent and takes no authored styles, classes,
 or visibility; use a surrounding `View` for those properties. Nesting Shutter
@@ -2207,14 +2246,18 @@ or Echo within either temporal sampling effect is currently rejected.
 
 ### Time scopes
 
-`<TimeScope offset={0.5} speed={2}>...</TimeScope>` maps the time seen by
-its descendants to `(parentSeconds - offset) * speed`. It applies to
-`ctx.seconds`, the derived `ctx.localFrame` and `ctx.progress`, and Video source
-time. Nested scopes compose from outside in; siblings outside the scope keep
-the parent clock. `ctx.fps` and `ctx.durationFrames` retain the composition
-contract. Speed zero freezes the subtree; a negative speed reverses its local
-clock. Expressions can see a local time outside the composition's output
-interval.
+`<TimeScope offset={0.5} speed={2}>...</TimeScope>` gives the components rendered
+inside it the clock `(parentSeconds - offset) * speed`, as Remotion's `Sequence`
+does: their `useCurrentTime()` reads it as `seconds`, `progress` follows it, and so
+does Video source time. Nested scopes compose from outside in; siblings outside the
+scope keep the parent clock. The clip clock and `useComposition()` are not scoped.
+Speed zero freezes the subtree; a negative speed reverses its local clock. The
+mapped time is not clamped, so it can lie outside the composition's output interval.
+
+A scene time read by a component belongs to that component's clock. Drawing it inside
+a TimeScope, directly or through props, is a compile error: read the time in a child
+component rendered inside the scope, or move the element out of the scope, which has
+no layout box, so the layout stays the same.
 
 `offset` and `speed` must be finite static numbers. TimeScope contributes no
 layout box or paint of its own and takes no authored styles, classes, or
@@ -2230,8 +2273,8 @@ const layouts = defineLayoutStates({
   large: { card: rect(280,60,320,240) },
 });
 export default function Flip() {
-  const ctx = useTime();
-  const p = interpolate(ctx.progress, [0,0.7], [0,1], { easing: "easeInOut" });
+  const { progress } = useCurrentTime();
+  const p = interpolate(progress, [0,0.7], [0,1], { easing: "easeInOut" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
       <View className="flex items-center justify-center" layoutId="card"
@@ -2316,8 +2359,8 @@ function glassMaterial(clarity: number, depth: number, tint = "#ffffff14") {
 }
 
 export default function GlassDemo() {
-  const ctx = useTime();
-  const x = interpolate(ctx.progress, [0, 1], [330, 470]);
+  const { progress } = useCurrentTime();
+  const x = interpolate(progress, [0, 1], [330, 470]);
   return (
     <Scene className="relative h-full w-full"
       style={{ backgroundImage: "linear-gradient(30deg, #7c3aed, #2563eb, #22d3ee)" }}>
@@ -2348,7 +2391,7 @@ it is projected onto: its shape follows the projection, and its lengths scale as
 projection scales its center. A blur has no single radius under a projection, so a
 Glass inside another element's 3D transform is refused; give the transform to the
 Glass itself. Every value is a function of the frame, so bindings may use any time
-value, `localFrame` included.
+value.
 
 ## Data visualization and repeated geometry
 
@@ -2420,7 +2463,7 @@ when every item returns the same supported shape with a direct `key={item.id}` f
 For a batch-drawn `View`, the leaf needs
 `className="absolute"`, and a literal style containing `left`, `top`, `width`, `height`, and
 `backgroundColor`. The optional `opacity` expression and `rotate(...deg)` transform may depend on
-time, item fields, the callback index, and `ctx.instance.index` / `ctx.instance.count`. These views
+time, item fields, the callback index, and the array's `length`. These views
 draw as one rectangle batch. A full solid `Circle` with no stroke also shares one template;
 its center, radius, fill and optional opacity can vary by row. Each circle still draws its exact
 authored arc. A `Path` can share one static nonempty geometry and solid fill with pixel `translate`,
@@ -2508,11 +2551,11 @@ Save as `particles.motion.tsx`:
 
 ```tsx
 export default function Particles() {
-  const ctx = useTime();
+  const { seconds } = useCurrentTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}>
       <GeometryBatch geometry="circle"
-        positions={particles(ctx.localFrame, ctx.fps, {
+        positions={particles(seconds, {
           seed: 17, count: 240, emitter: rect(300,300,40,4),
           birth: { interval: 0.01 }, lifetime: 2,
           velocity: { x: [-80,80], y: [-180,-80] },
@@ -2526,7 +2569,8 @@ export default function Particles() {
 }
 ```
 
-`particles(frame,ctx.fps,options)` is admitted as a batch position field. Options
+`particles(t, options)` is admitted as a batch position field; `t` is the time in
+seconds. Options
 are prepare-time values: integer seed/count, typed emitter Rect, positive
 `birth.interval` and `lifetime` in seconds, velocity ranges in pixels/second,
 typed gravity and optional loop. With particle fields, two-element sizes, fills,
@@ -2560,8 +2604,8 @@ Save as `camera.motion.tsx`:
 
 ```tsx
 export default function Camera() {
-  const ctx = useTime();
-  const zoom = 1 + ctx.progress * 0.4;
+  const { progress } = useCurrentTime();
+  const zoom = 1 + progress * 0.4;
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0f172a" }}
       camera={{ center: point(320,180), zoom, rotation: 0 }}>
@@ -2588,7 +2632,7 @@ Four more fields move the camera in depth:
 
 ```tsx
 camera={{ center: point(320,180), zoom: 1, perspective: 900,
-  z: -300 * ctx.progress, rotateY: interpolate(ctx.progress, [0, 1], [-20, 20]) }}
+  z: -300 * progress, rotateY: interpolate(progress, [0, 1], [-20, 20]) }}
 ```
 
 The camera looks at `center` at depth `z` (default 0; negative is into the scene, as in
@@ -2613,7 +2657,7 @@ which its rows are then drawn on.
 width/height and `camera={{ position:[x,y,z], target:[x,y,z], ... }}`.
 Position/target components, `orbitYaw`, `orbitPitch`, `distance`, `fov`, `near`
 and `far` may use frame expressions. A vector can also be a binding of a frame-dependent
-array, as in `const position = [0, 0, 5 - ctx.progress]` or a `let` that an `if`
+array, as in `const position = [0, 0, 5 - progress]` or a `let` that an `if`
 reassigns, or a `.map` that builds one. Motion resolves orbit controls into the final
 position before submitting the frame; the renderer receives one complete camera.
 FOV defaults to 38° and is restricted to 10–120°; near defaults to 0.1 and far to 1000.
@@ -2679,7 +2723,7 @@ than measuring GPU transfer time in isolation.
 ```tsx
 <Scene3D
   camera={{ position: [0, 0, 3], target: [0, 0, 0],
-    depthOfField: { focusDistance: 3 + ctx.seconds * 0.5, maxBlurRadius: 12 } }}
+    depthOfField: { focusDistance: 3 + seconds * 0.5, maxBlurRadius: 12 } }}
   style={{ width: 640, height: 360 }}>
   <Mesh key="model" src="asset://model" />
 </Scene3D>
@@ -2724,7 +2768,7 @@ const glyph = textOutline("V", { fontSize: 220, fontWeight: 800, align: "center"
 <Mesh key="letter" geometry={extrude(glyph.path, { depth: 60, bevel: 6 })}
   material={{ type: "pbr", color: "#8b7bff", metallic: 0, roughness: 0.4 }}
   position={[0, -80, 0]}
-  rotateY={ctx.seconds * 40} />
+  rotateY={seconds * 40} />
 
 <Mesh key="vase" geometry={lathe(path("M 0.4 1 L 0.7 0 L 0.3 -1"), { segments: 64 })}
   material={{ type: "lambert", color: "#77bbee" }} />
@@ -2734,10 +2778,10 @@ const glyph = textOutline("V", { fontSize: 220, fontWeight: 800, align: "center"
 
 ```tsx
 <Mesh key="model" src="asset://model"
-  material={{ type: "pbr", roughness: 0.3 + ctx.seconds * 0.1,
+  material={{ type: "pbr", roughness: 0.3 + seconds * 0.1,
     textures: { baseColor: "asset://paint", normal: "asset://normal" } }}
   materials={[{ id: 0, color: "#2878ff", metallic: 0.8,
-    emissive: "#102040", emissiveIntensity: ctx.seconds * 0.2,
+    emissive: "#102040", emissiveIntensity: seconds * 0.2,
     alphaMode: "mask", alphaCutoff: 0.5, doubleSided: true,
     textures: { normal: null } }]} />
 ```
@@ -2791,7 +2835,7 @@ To animate model nodes, bind their original GLB indices:
 ```tsx
 <Mesh key="model" src="asset://model" material={{ type: "pbr", color: "#ffffff" }}
   nodes={[
-    { id: 2, position: [0, ctx.seconds * 0.1, 0], rotation: [0, ctx.seconds * 30, 0], scale: [1, 1, 1] },
+    { id: 2, position: [0, seconds * 0.1, 0], rotation: [0, seconds * 30, 0], scale: [1, 1, 1] },
   ]} />
 ```
 
@@ -2806,7 +2850,7 @@ An imported glTF node animation can be sampled at an explicit time in seconds:
 
 ```tsx
 <Mesh key="model" src="asset://model"
-  animation={{ clip: 0, time: ctx.seconds }} />
+  animation={{ clip: 0, time: seconds }} />
 ```
 
 `clip` is a static zero-based index in the GLB (at most 32 clips); `time` may be a
@@ -2856,7 +2900,7 @@ Environment lighting uses an explicitly bound `asset({kind: "environment"})` res
 
 ```tsx
 <Scene3D pbr={{
-  environment: { src: "asset://sky", intensity: 1, rotation: ctx.seconds * 30, background: false },
+  environment: { src: "asset://sky", intensity: 1, rotation: seconds * 30, background: false },
   toneMapping: "aces", exposure: 1.1, shadows: true,
 }} /* camera and model children as above */ />
 ```
@@ -2927,12 +2971,12 @@ export const controls = {
   assets: { noise: asset({ kind: "image", required: true }) },
 };
 export default function Dissolve() {
-  const ctx = useTime();
+  const time = useCurrentTime();
   return (
     <Scene>
       <ShaderLayer code={dissolve}
         inputs={{ noise: { src: "asset://noise", sampling: "nearest" } }}
-        uniforms={{ progress: ctx.progress, edgeWidth: 0.06, edgeColor: "#38bdf8" }}
+        uniforms={{ progress: time.progress, edgeWidth: 0.06, edgeColor: "#38bdf8" }}
         style={{ width: 520, height: 200 }}>
         <View style={{ width: 520, height: 200, backgroundColor: "#ffffff" }} />
       </ShaderLayer>
@@ -2969,11 +3013,11 @@ export const controls = {
   },
 };
 export default function Dissolve() {
-  const ctx = useTime();
+  const time = useCurrentTime();
   return (
     <Scene>
       <ShaderLayer source="asset://effect" inputs={{ noise: "asset://noise" }}
-        uniforms={{ progress: ctx.progress, edgeWidth: 0.06, edgeColor: "#38bdf8" }}
+        uniforms={{ progress: time.progress, edgeWidth: 0.06, edgeColor: "#38bdf8" }}
         style={{ width: 520, height: 200 }}>
         <View style={{ width: 520, height: 200, backgroundColor: "#ffffff" }} />
       </ShaderLayer>
@@ -3040,7 +3084,7 @@ float4 valle_main(float2 uv) {
 }`;
 
 <ShaderLayer code={ripple} inputs={{ behind: "input://backdrop" }}
-  uniforms={{ time: ctx.seconds }}
+  uniforms={{ time: seconds }}
   style={{ position: "absolute", left: 80, top: 60, width: 320, height: 180 }} />
 ```
 

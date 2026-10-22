@@ -34,8 +34,8 @@ fn remaining_path_modifiers_compile_for_preparation_and_frames() {
             .iter()
             .any(|expr| matches!(expr, Expr::PathStrokeToPath { .. }))
     );
-    assert!(compile_motion(&source.replace("sin(ctx.seconds * 2) * 0.7", "2")).is_err());
-    assert!(compile_motion(&source.replace("ctx.progress * 18", "-1")).is_err());
-    assert!(compile_motion(&source.replace("8 + ctx.progress * 32", "-1")).is_err());
-    assert!(compile_motion(&source.replace("ctx.progress * 1.3", "'bad'")).is_err());
+    assert!(compile_motion(&source.replace("sin(time.seconds * 2) * 0.7", "2")).is_err());
+    assert!(compile_motion(&source.replace("time.progress * 18", "-1")).is_err());
+    assert!(compile_motion(&source.replace("8 + time.progress * 32", "-1")).is_err());
+    assert!(compile_motion(&source.replace("time.progress * 1.3", "'bad'")).is_err());
 }

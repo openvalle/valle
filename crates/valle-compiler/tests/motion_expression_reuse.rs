@@ -25,9 +25,9 @@ fn binding(artifact: &SceneArtifact, key: &str, property: &str) -> valle_motion:
 fn identical_lowered_helpers_share_one_expression_and_keep_random_access_values() {
     let source = r#"
     const repeat = (t) => sin(t * 2) * 10 + 20;
-    export default function Main() { const ctx = useTime(); return <Scene>
-      <View key="a" style={{width:repeat(ctx.seconds),height:10}} />
-      <View key="b" style={{width:repeat(ctx.seconds),height:10}} />
+    export default function Main() { const time = useCurrentTime(); return <Scene>
+      <View key="a" style={{width:repeat(time.seconds),height:10}} />
+      <View key="b" style={{width:repeat(time.seconds),height:10}} />
     </Scene>; }"#;
     let compiled = compile_motion(source).unwrap();
     let artifact = &compiled.artifact;
@@ -55,10 +55,10 @@ fn identical_lowered_helpers_share_one_expression_and_keep_random_access_values(
 #[test]
 fn host_source_and_time_scopes_remain_distinct_after_reuse() {
     let source = r#"
-    function Bar() { const ctx = useTime(); return <View key="bar" style={{width:ctx.seconds*10,height:10}} />; }
-    export default function Main() { const ctx = useTime(); return <Scene>
-      <View key="source" style={{width:ctx.seconds*10,height:10}} />
-      <View key="host" style={{width:ctx.host.seconds*10,height:10}} />
+    function Bar() { const time = useCurrentTime(); return <View key="bar" style={{width:time.seconds*10,height:10}} />; }
+    export default function Main() { const time = useCurrentTime(); return <Scene>
+      <View key="source" style={{width:time.seconds*10,height:10}} />
+      <View key="host" style={{width:time.clipSeconds*10,height:10}} />
       <TimeScope key="scope" offset={0.5} speed={2}><Bar /></TimeScope>
     </Scene>; }"#;
     let artifact = compile_motion(source).unwrap().artifact;
@@ -108,10 +108,10 @@ fn instance_rollback_folding_and_later_nodes_do_not_share_discarded_ids() {
     let source = r#"
     const A = Array.from({length:80}, (_,i)=>({id:`a${i}`,x:i*2}));
     const B = Array.from({length:80}, (_,i)=>({id:`b${i}`,x:i*3}));
-    export default function Main() { const ctx = useTime(); return <Scene>
-      {A.map(row=><View key={row.id} style={{width:row.x+ctx.seconds*2,height:10}} />)}
-      {B.map(row=><View key={row.id} style={{width:row.x+ctx.seconds*3,height:10}} />)}
-      <View key="later" style={{width:ctx.seconds*2+Math.sqrt(81),height:10}} />
+    export default function Main() { const time = useCurrentTime(); return <Scene>
+      {A.map(row=><View key={row.id} style={{width:row.x+time.seconds*2,height:10}} />)}
+      {B.map(row=><View key={row.id} style={{width:row.x+time.seconds*3,height:10}} />)}
+      <View key="later" style={{width:time.seconds*2+Math.sqrt(81),height:10}} />
     </Scene>; }"#;
     for _ in 0..2 {
         let artifact = compile_motion(source).unwrap().artifact;

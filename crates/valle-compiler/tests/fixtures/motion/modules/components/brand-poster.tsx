@@ -19,9 +19,9 @@ const SIGNAL = Array.from({ length: COUNT }, (_, index) => {
   return point(120 + row * 16.8 + (column % 10) * 4.2, 40 + column * 9.8 + (row % 8) * 5.4);
 });
 
-export default function BrandPoster(props) { const ctx = useTime();
-  const progress = ctx.progress;
-  const viewportScale = Math.min(ctx.viewport.width / 1920, ctx.viewport.height / 1080);
+export default function BrandPoster(props) { const time = useCurrentTime(); const comp = useComposition();
+  const progress = time.progress;
+  const viewportScale = Math.min(comp.width / 1920, comp.height / 1080);
   const metric = 72 + progress * 27.9;
   return (
     <ThemeProvider value={releaseTheme}>
@@ -36,7 +36,7 @@ export default function BrandPoster(props) { const ctx = useTime();
           <View key="glass" className="absolute" style={{ borderStyle: "solid", left: 84, top: 82, width: 1752, height: 916, borderRadius: 44, backgroundColor: "#020617ad", borderWidth: 1, borderColor: "#ffffff35", backdropFilter: "blur(18px)", overflow: "hidden" }}>
             <View key="grid" className="absolute" style={{ left: 0, top: 0, width: 1752, height: 916, backgroundImage: "repeating-linear-gradient(0deg, transparent 0 79px, #ffffff12 79px 80px), repeating-linear-gradient(90deg, transparent 0 79px, #ffffff12 79px 80px)", opacity: props.accentStrength }} />
             <Text key="issue" className="absolute" style={{ left: 54, top: 46, fontSize: 16, letterSpacing: 4, color: useTheme().colors.accent }}>VALLE FIELD NOTES / 2026</Text>
-            <Text key="headline" className="absolute whitespace-pre" split="char" perUnit={{ opacity: interpolate(progress - ctx.unit.index * 0.012, [0, 0.24], [0, 1]), translate: point(0, interpolate(progress - ctx.unit.index * 0.012, [0, 0.3], [48, 0], { easing: "easeOut" })) }} style={{ left: 48, top: 128, width: 1080, fontSize: 164, lineHeight: 0.88, letterSpacing: -7, color: useTheme().colors.ink }}>{"FRAME\nPURE"}</Text>
+            <Text key="headline" className="absolute whitespace-pre" split="char" perUnit={(unit) => ({ opacity: interpolate(progress - unit.index * 0.012, [0, 0.24], [0, 1]), translate: point(0, interpolate(progress - unit.index * 0.012, [0, 0.3], [48, 0], { easing: "easeOut" })) })} style={{ left: 48, top: 128, width: 1080, fontSize: 164, lineHeight: 0.88, letterSpacing: -7, color: useTheme().colors.ink }}>{"FRAME\nPURE"}</Text>
             <Text key="manifesto" className="absolute" style={{ left: 62, top: 520, width: 860, fontSize: 30, lineHeight: 1.35, color: useTheme().colors.muted }}>Ten thousand marks. One command. Every parameter remains editable by a human or an agent.</Text>
             <View key="metric-card" className="absolute" style={{ borderStyle: "solid", right: 54, top: 84, width: 510, height: 430, borderRadius: 30, backgroundColor: "#0f172acc", borderWidth: 1, borderColor: useTheme().colors.hairline, filter: "drop-shadow(0px 28px 70px #00000088)" }}>
               <Text key="metric-label" className="absolute" style={{ left: 36, top: 34, fontSize: 16, letterSpacing: 3, color: useTheme().colors.signal }}>DETERMINISM</Text>

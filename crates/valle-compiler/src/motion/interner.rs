@@ -24,9 +24,19 @@ impl ExprInterner {
     /// Return an earlier identical expression, or remember this ID when capacity permits.
     /// Call only after type/finite-value validation; JSON then preserves all finite float bit
     /// patterns, including signed zero. Hash collisions still compare the complete key bytes.
-    pub(super) fn intern(&mut self, expression: &Expr, id: ExprId) -> Option<ExprId> {
+    /// `clock` tags the seconds of one TimeScope clock: an equal expression on another clock,
+    /// or one an author writes, is a different value.
+    pub(super) fn intern(
+        &mut self,
+        expression: &Expr,
+        clock: Option<u32>,
+        id: ExprId,
+    ) -> Option<ExprId> {
         let mut key = LimitedKey(Vec::new());
         serde_json::to_writer(&mut key, expression).ok()?;
+        if let Some(clock) = clock {
+            io::Write::write_all(&mut key, format!("@clock{clock}").as_bytes()).ok()?;
+        }
         let key = key.0;
         if let Some(existing) = self.entries.get(&key) {
             return Some(*existing);
@@ -84,16 +94,26 @@ mod tests {
     #[test]
     fn rollback_never_returns_an_id_from_a_discarded_instance_or_fold() {
         let mut pool = ExprInterner::default();
-        assert_eq!(pool.intern(&number(1.0), ExprId(0)), None);
-        assert_eq!(pool.intern(&number(2.0), ExprId(1)), None);
-        assert_eq!(pool.intern(&number(3.0), ExprId(2)), None);
+        assert_eq!(pool.intern(&number(1.0), None, ExprId(0)), None);
+        assert_eq!(pool.intern(&number(2.0), None, ExprId(1)), None);
+        assert_eq!(pool.intern(&number(3.0), None, ExprId(2)), None);
         pool.truncate(1);
-        assert_eq!(pool.intern(&number(1.0), ExprId(1)), Some(ExprId(0)));
-        assert_eq!(pool.intern(&number(3.0), ExprId(1)), None);
-        assert_eq!(pool.intern(&number(3.0), ExprId(2)), Some(ExprId(1)));
+        assert_eq!(pool.intern(&number(1.0), None, ExprId(1)), Some(ExprId(0)));
+        assert_eq!(pool.intern(&number(3.0), None, ExprId(1)), None);
+        assert_eq!(pool.intern(&number(3.0), None, ExprId(2)), Some(ExprId(1)));
         pool.truncate(0);
         assert_eq!(pool.retained_bytes, 0);
         assert!(pool.entries.is_empty());
+    }
+
+    #[test]
+    fn equal_expressions_on_different_clocks_stay_apart() {
+        let mut pool = ExprInterner::default();
+        assert_eq!(pool.intern(&number(1.0), None, ExprId(0)), None);
+        assert_eq!(pool.intern(&number(1.0), Some(0), ExprId(1)), None);
+        assert_eq!(pool.intern(&number(1.0), Some(1), ExprId(2)), None);
+        assert_eq!(pool.intern(&number(1.0), Some(0), ExprId(3)), Some(ExprId(1)));
+        assert_eq!(pool.intern(&number(1.0), None, ExprId(3)), Some(ExprId(0)));
     }
 
     #[test]
@@ -110,9 +130,9 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            assert_eq!(pool.intern(&number(value), ExprId(at as u32)), None);
+            assert_eq!(pool.intern(&number(value), None, ExprId(at as u32)), None);
             assert_eq!(
-                pool.intern(&number(value), ExprId(99)),
+                pool.intern(&number(value), None, ExprId(99)),
                 Some(ExprId(at as u32))
             );
         }
@@ -124,8 +144,8 @@ mod tests {
             lhs: ExprId(1),
             rhs: ExprId(0),
         };
-        assert_eq!(pool.intern(&a, ExprId(6)), None);
-        assert_eq!(pool.intern(&b, ExprId(7)), None);
+        assert_eq!(pool.intern(&a, None, ExprId(6)), None);
+        assert_eq!(pool.intern(&b, None, ExprId(7)), None);
     }
 
     #[test]
@@ -134,15 +154,18 @@ mod tests {
         let large = Expr::Const {
             value: MotionValue::Str("x".repeat(MAX_KEY_BYTES)),
         };
-        assert_eq!(pool.intern(&large, ExprId(0)), None);
+        assert_eq!(pool.intern(&large, None, ExprId(0)), None);
         assert!(pool.entries.is_empty());
         for at in 0..100_000 {
-            pool.intern(&number(f64::from(at)), ExprId(at));
+            pool.intern(&number(f64::from(at)), None, ExprId(at));
         }
         assert!(pool.entries.len() <= MAX_ENTRIES);
         assert!(pool.retained_bytes <= MAX_RETAINED_BYTES);
         assert!(pool.entries.len() < 100_000);
-        assert_eq!(pool.intern(&number(0.0), ExprId(100_000)), Some(ExprId(0)));
+        assert_eq!(
+            pool.intern(&number(0.0), None, ExprId(100_000)),
+            Some(ExprId(0))
+        );
         pool.truncate(0);
         assert_eq!(pool.retained_bytes, 0);
     }

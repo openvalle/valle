@@ -9,7 +9,7 @@ const anchors = [
   [point(0.75, 1.25), point(-0.25, 1.25)],
   [point(-0.25, 0.25), point(-1.25, 0.25)],
 ];
-export default function Contact() { const ctx = useTime();
-  return <Scene><Path d={morph(A, B, ctx.progress,
+export default function Contact() { const time = useCurrentTime();
+  return <Scene><Path d={morph(A, B, time.progress,
     { method: "arcLength", pairs: [[0, 0], [1, 1]], anchors, contactPolicy: "warn" })} fill="#fff" /></Scene>;
 }

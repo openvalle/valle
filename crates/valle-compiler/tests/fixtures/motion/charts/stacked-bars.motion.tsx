@@ -11,11 +11,11 @@ const DOMAIN = niceDomain(0, extent(STACK.positiveTotals)[1], 5);
 const X = scaleBand({ range: [240, 1395], count: LABELS.length, paddingInner: 0.32 });
 const Y = scaleLinear({ domain: DOMAIN, range: [900, 225] });
 
-function Segment({ seriesIndex, categoryIndex, color }) { const ctx = useTime();
+function Segment({ seriesIndex, categoryIndex, color }) { const time = useCurrentTime();
   const pair = STACK.layers[seriesIndex][categoryIndex];
   const top = Y.map(pair[1]);
   const bottom = Y.map(pair[0]);
-  const reveal = interpolate(ctx.progress - categoryIndex * 0.055 - seriesIndex * 0.035, [0, 0.52], [0, 1], { easing: "easeOut" });
+  const reveal = interpolate(time.progress - categoryIndex * 0.055 - seriesIndex * 0.035, [0, 0.52], [0, 1], { easing: "easeOut" });
   return <View key="segment" style={{ position: "absolute", left: X.band(categoryIndex)[0], top: bottom - (bottom - top) * reveal, width: X.bandwidth(), height: (bottom - top) * reveal, backgroundColor: color, borderRadius: seriesIndex === SERIES.length - 1 ? 18 : 3 }} />;
 }
 

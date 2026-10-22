@@ -2,7 +2,92 @@
 
 use super::*;
 
+/// How a per-unit style is written.
+pub(super) const PER_UNIT_FORM: &str = "perUnit takes a function of the unit that returns the \
+     style, such as `perUnit={(unit) => ({ opacity: clamp(progress * 2 - unit.index * 0.1, 0, \
+     1) })}`; the unit has `index`, `count`, `start` and `end`";
+
 impl<'s> Compiler<'s> {
+    /// Lower a `perUnit` callback: its parameter is the unit, and it returns the unit's style,
+    /// directly or after `const` declarations.
+    pub(super) fn lower_per_unit(
+        &mut self,
+        arrow: &'s oxc::ast::ast::ArrowFunctionExpression<'s>,
+    ) -> Option<UnitStyle> {
+        let params = &arrow.params;
+        if params.items.len() > 1 || params.rest.is_some() {
+            self.illegal(DiagCode::GrammarForbidden, params.span(), PER_UNIT_FORM);
+            return None;
+        }
+        let saved = self.bindings.snapshot_frame();
+        if let Some(parameter) = params.items.first() {
+            let unit = super::time::TimePath {
+                hook: super::time::TimeHook::Unit,
+                path: Vec::new(),
+            };
+            self.bind_time_value(&parameter.pattern, unit, parameter.span());
+        }
+        let style = self.lower_per_unit_body(arrow);
+        self.bindings.restore_frame(saved);
+        style
+    }
+
+    fn lower_per_unit_body(
+        &mut self,
+        arrow: &'s oxc::ast::ast::ArrowFunctionExpression<'s>,
+    ) -> Option<UnitStyle> {
+        let returned = if let Some(expression) = arrow.get_expression() {
+            expression
+        } else {
+            let Some(body) = arrow.body.as_function_body() else {
+                self.illegal(DiagCode::GrammarForbidden, arrow.body.span(), PER_UNIT_FORM);
+                return None;
+            };
+            let mut returned = None;
+            for statement in &body.statements {
+                match statement {
+                    Statement::VariableDeclaration(declaration)
+                        if declaration.kind.is_const() && returned.is_none() =>
+                    {
+                        for declarator in &declaration.declarations {
+                            if let Some(initializer) = &declarator.init {
+                                self.bind_local_pattern(&declarator.id, initializer);
+                            }
+                        }
+                    }
+                    Statement::ReturnStatement(statement) if returned.is_none() => {
+                        returned = statement.argument.as_ref();
+                    }
+                    other => {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            other.span(),
+                            "a perUnit function holds `const` declarations and returns the \
+                             style",
+                        );
+                        return None;
+                    }
+                }
+            }
+            let Some(returned) = returned else {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    arrow.body.span(),
+                    "this perUnit function returns nothing: `(unit) => { opacity: x }` is a \
+                     block with a label, not an object; wrap the object in parentheses, \
+                     `(unit) => ({ opacity: x })`",
+                );
+                return None;
+            };
+            returned
+        };
+        let Expression::ObjectExpression(object) = strip_parens(returned) else {
+            self.illegal(DiagCode::GrammarForbidden, returned.span(), PER_UNIT_FORM);
+            return None;
+        };
+        Some(self.lower_unit_style(object))
+    }
+
     /// Lower per-unit text styles using a closed set of supported properties.
     pub(super) fn lower_unit_style(&mut self, object: &'s ObjectExpression<'s>) -> UnitStyle {
         let mut style = UnitStyle::default();

@@ -18,8 +18,8 @@ fn arrow_const_helpers_take_context_dependent_arguments_like_declared_ones() {
         format!(
             r##"
 {declaration}
-export default function P() {{ const ctx = useTime();
-  const t = ctx.progress;
+export default function P() {{ const time = useCurrentTime();
+  const t = time.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{{{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
                            opacity: fade(t, 0.5) }}}} />
@@ -48,8 +48,8 @@ const bar = (i, v, o) => {
   return (<View key={`bar-${i}`} style={{ position: "absolute", left: x, top: 200 - v,
                                           width: 60, height: v, opacity: o }} />);
 };
-export default function P() { const ctx = useTime();
-  const t = ctx.progress;
+export default function P() { const time = useCurrentTime();
+  const t = time.progress;
   return (<Scene className="h-full w-full">{[42, 68].map((v, i) => bar(i, v, t))}</Scene>);
 }
 "##,
@@ -95,8 +95,8 @@ export default function P() { const ctx = useTime();
 fn helpers_declared_inside_a_component_close_over_the_enclosing_scope() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  const t = ctx.progress;
+export default function P() { const time = useCurrentTime();
+  const t = time.progress;
   const span = 200;
   const place = (i) => span * i + t * 10;
   return (<Scene className="h-full w-full">
@@ -131,10 +131,10 @@ export default function P() { const ctx = useTime();
 fn a_component_local_helper_does_not_leak_into_another_component() {
     let diagnostics = diagnostics_of(
         r##"
-function Other() { const ctx = useTime();
+function Other() {
   return (<View key="x" style={{ position: "absolute", left: place(1), top: 0, width: 10, height: 10 }} />);
 }
-export default function P() { const ctx = useTime();
+export default function P() {
   const place = (i) => i * 10;
   return (<Scene className="h-full w-full"><Other key="o" /></Scene>);
 }

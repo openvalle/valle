@@ -12,7 +12,7 @@ fn reverses_the_path_and_accepts_negative_trail_gap() {
     assert!(artifact.validate().is_ok());
     let dynamic = source.replace(
         "reversePath(ORBIT)",
-        "reversePath(arc(point(320 + ctx.progress, 180), 140, 0, TAU))",
+        "reversePath(arc(point(320 + time.progress, 180), 140, 0, TAU))",
     );
     let dynamic_artifact = compile_motion(&dynamic)
         .expect("dynamic path reversal compiles")

@@ -71,7 +71,7 @@ impl<'s> Compiler<'s> {
                                 item.span(),
                                 "interpolate input stops must be finite numbers known at compile time; \
                                  for per-unit stagger use a shared shift on every stop, such as \
-                                 [ctx.unit.index * 0.1, 1 + ctx.unit.index * 0.1]",
+                                 [unit.index * 0.1, 1 + unit.index * 0.1]",
                             );
                             None
                         })
@@ -249,7 +249,7 @@ impl<'s> Compiler<'s> {
         self.shadowed_by_dynamic(expression)
             || referenced_identifiers(expression)
                 .iter()
-                .any(|name| matches!(name.as_str(), "useTime" | "props"))
+                .any(|name| matches!(name.as_str(), "useCurrentTime" | "useComposition" | "props"))
     }
 
     /// Lower a fixed-length collection to frame-time Exprs.
@@ -290,7 +290,10 @@ impl<'s> Compiler<'s> {
                 DiagCode::GrammarForbidden,
                 expression.span(),
                 format!(
-                    "{role} length cannot depend on `useTime()`, `props` or other frame values"
+                    "{role} length cannot depend on frame values: the clock, `fps`, \
+                     `clipDuration`, a template's `width` and `height`, or `props`; bind the \
+                     duration, or a scene's size, by name first: `const {{ duration }} = \
+                     useComposition()`"
                 ),
             );
             return None;
@@ -362,7 +365,10 @@ impl<'s> Compiler<'s> {
                 DiagCode::GrammarForbidden,
                 member.object.span(),
                 format!(
-                    "{role} .map() length cannot depend on `useTime()`, `props` or other frame values; the expanded topology is fixed at compile time"
+                    "{role} .map() length cannot depend on frame values: the clock, `fps`, \
+                     `clipDuration`, a template's `width` and `height`, or `props`, because the \
+                     expanded topology is fixed at compile time; bind the duration, or a \
+                     scene's size, by name first: `const {{ duration }} = useComposition()`"
                 ),
             );
             return None;
@@ -530,7 +536,7 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        let input = self.lower_expr(arguments[0].as_expression()?)?;
+        let time = self.lower_expr(arguments[0].as_expression()?)?;
         let range = arguments[1].as_expression()?;
         let (input, inputs) = if let Some((inputs, shift)) = self.shifted_interpolate_inputs(range)
         {
@@ -543,10 +549,11 @@ impl<'s> Compiler<'s> {
                 );
                 return None;
             }
+            self.check_time_pair(time, offset, span);
             (
                 self.push(
                     Expr::Sub {
-                        lhs: input,
+                        lhs: time,
                         rhs: offset,
                     },
                     span,
@@ -554,8 +561,9 @@ impl<'s> Compiler<'s> {
                 inputs,
             )
         } else {
-            (input, self.collect_interpolate_inputs(range)?)
+            (time, self.collect_interpolate_inputs(range)?)
         };
+        self.check_interpolate_times(time, input, &inputs, span);
         let outputs = self.collect_interpolate_outputs(arguments[2].as_expression()?)?;
         if inputs.len() < 2 || inputs.len() != outputs.len() {
             self.illegal(
@@ -602,42 +610,56 @@ impl<'s> Compiler<'s> {
         ))
     }
 
-    /// Lower a closed-form spring with unclamped time and mutually exclusive presets and physical
-    /// parameters. Require `fps: ctx.fps` without lowering it so elapsed frames use the render
-    /// clock and frame rate only changes sampling density.
+    /// Lower a closed-form spring of unclamped time in seconds, `spring(t, { preset })`. The
+    /// spring is described by a preset, by `duration` and `bounce`, or by its physical
+    /// parameters.
     pub(super) fn lower_spring(
         &mut self,
         arguments: &[Argument<'_>],
         span: Span,
         builtin: &str,
     ) -> Option<ExprId> {
-        let [argument] = arguments else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "spring takes exactly one options object",
-            );
+        let new_form = format!(
+            "{builtin} takes the time in seconds and its options: \
+             `{builtin}(seconds - 0.4, {{ preset: \"gentle\" }})`"
+        );
+        let (time, options) = match arguments {
+            [time] => (time, None),
+            [time, options] => (time, Some(options)),
+            _ => {
+                self.illegal(DiagCode::GrammarForbidden, span, new_form);
+                return None;
+            }
+        };
+        let Some(time) = time.as_expression() else {
+            self.illegal(DiagCode::GrammarForbidden, time.span(), new_form);
             return None;
         };
-        let Some(Expression::ObjectExpression(object)) = argument.as_expression().map(strip_parens)
-        else {
+        if matches!(strip_parens(time), Expression::ObjectExpression(_)) {
             self.illegal(
                 DiagCode::GrammarForbidden,
-                argument.span(),
-                "spring takes an options object: spring({ elapsedFrames, fps, preset })",
+                time.span(),
+                format!("{new_form}; `elapsedFrames` and `fps` are gone, the time is in seconds"),
             );
             return None;
+        }
+        let object = match options.map(|options| options.as_expression().map(strip_parens)) {
+            None => None,
+            Some(Some(Expression::ObjectExpression(object))) => Some(object),
+            Some(_) => {
+                self.illegal(DiagCode::GrammarForbidden, span, new_form);
+                return None;
+            }
         };
+        let time = self.lower_expr(time)?;
 
-        let mut elapsed = None;
-        let mut saw_fps = false;
         let mut preset: Option<(String, Span)> = None;
         let mut bare: Vec<(&'static str, f64, Span)> = Vec::new();
         let mut duration: Option<(f64, Span)> = None;
         let mut bounce: Option<(f64, Span)> = None;
         let mut initial_velocity = 0.0;
         let mut seen = BTreeSet::new();
-        for property in &object.properties {
+        for property in object.iter().flat_map(|object| &object.properties) {
             let ObjectPropertyKind::ObjectProperty(property) = property else {
                 self.illegal(
                     DiagCode::GrammarForbidden,
@@ -663,7 +685,17 @@ impl<'s> Compiler<'s> {
                 return None;
             }
             match name.as_str() {
-                "elapsedFrames" => elapsed = self.lower_expr(&property.value),
+                "elapsedFrames" | "fps" => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        property.span(),
+                        format!(
+                            "{new_form}; `elapsedFrames` and `fps` are gone, the time is in \
+                             seconds"
+                        ),
+                    );
+                    return None;
+                }
                 "initialVelocity" => {
                     let Some(value) = self
                         .fold_to_number(&property.value)
@@ -674,20 +706,6 @@ impl<'s> Compiler<'s> {
                         return None;
                     };
                     initial_velocity = value;
-                }
-                "fps" => {
-                    if !self.is_time_fps(&property.value) {
-                        self.illegal(
-                            DiagCode::GrammarForbidden,
-                            property.value.span(),
-                            "spring's `fps` must be `ctx.fps`, the frame rate from `useTime()`: \
-                             the spring is sampled at the frame rate this render actually uses, so \
-                             that changing the frame rate changes only the sampling density, never \
-                             the physical feel",
-                        );
-                        return None;
-                    }
-                    saw_fps = true;
                 }
                 "preset" => {
                     let Some(MotionValue::Str(value)) = self.fold_to_value(&property.value) else {
@@ -758,33 +776,13 @@ impl<'s> Compiler<'s> {
                         DiagCode::GrammarForbidden,
                         property.span(),
                         format!(
-                            "`{other}` is not a spring option; use elapsedFrames, fps, \
-                             initialVelocity, and preset, duration/bounce or \
-                             mass/stiffness/damping"
+                            "`{other}` is not a spring option; use initialVelocity, and \
+                             preset, duration/bounce or mass/stiffness/damping"
                         ),
                     );
                     return None;
                 }
             }
-        }
-
-        let Some(elapsed_frames) = elapsed else {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "spring needs `elapsedFrames` — pass `ctx.<phase>.elapsedFrames`, which is not \
-                 clamped at the window edges so the spring keeps converging after the phase ends",
-            );
-            return None;
-        };
-        if !saw_fps {
-            self.illegal(
-                DiagCode::GrammarForbidden,
-                span,
-                "spring needs `fps: ctx.fps` so the source says in what unit `elapsedFrames` is \
-                 counted",
-            );
-            return None;
         }
 
         // Reject a preset combined with explicit physical parameters.
@@ -872,7 +870,7 @@ impl<'s> Compiler<'s> {
 
         Some(self.push(
             Expr::Spring {
-                elapsed_frames,
+                time,
                 mass: params.mass,
                 stiffness: params.stiffness,
                 damping: params.damping,

@@ -8,12 +8,12 @@ use valle_timeline::FrameRate;
 
 const GRID: &str = r##"
 const ROWS = Array.from({length: 4}, (_, i) => ({id:`row${i}`, i}));
-export default function Main() { const ctx = useTime();
-  const k = ctx.progress * 2;
-  const active = ctx.localFrame >= 0;
+export default function Main() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
+  const k = time.progress * 2;
+  const active = frame >= 0;
   return <Scene style={{width:640,height:360}}>{ROWS.map(row => <View key={row.id}
     visible={active} className="absolute" style={{left:20 + row.i*60 + k*150,
-    top:20, width:ctx.localFrame, height:10, backgroundColor:"#ffffff"}} />)}</Scene>;
+    top:20, width:frame, height:10, backgroundColor:"#ffffff"}} />)}</Scene>;
 }
 "##;
 
@@ -89,7 +89,7 @@ fn captured_animation_and_zero_size_match_expansion_in_review() {
 
 #[test]
 fn class_paint_and_inline_paint_have_identical_review_trajectories() {
-    let inline = "export default function Main() { const ctx = useTime(); return <Scene><View key=\"box\" className=\"absolute\" style={{left:ctx.localFrame*8,top:20,width:10,height:10,backgroundColor:'white'}} /></Scene>; }";
+    let inline = "export default function Main() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); return <Scene><View key=\"box\" className=\"absolute\" style={{left:frame*8,top:20,width:10,height:10,backgroundColor:'white'}} /></Scene>; }";
     let class = inline
         .replace("className=\"absolute\"", "className=\"absolute bg-white\"")
         .replace(",backgroundColor:'white'", "");
@@ -103,7 +103,7 @@ fn class_paint_and_inline_paint_have_identical_review_trajectories() {
 
 #[test]
 fn counters_do_not_generate_one_reading_warning_per_frame() {
-    let source = "export default function Main() { const ctx = useTime(); return <Scene><Text key=\"counter\">{`${ctx.localFrame} USD`}</Text></Scene>; }";
+    let source = "export default function Main() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); return <Scene><Text key=\"counter\">{`${frame} USD`}</Text></Scene>; }";
     let review = report(source);
     assert!(
         review
@@ -144,8 +144,8 @@ fn identity_time_scope_preserves_geometry_and_siblings() {
 
 fn particles(size: f64, alpha: f64, lifetime: f64) -> String {
     format!(
-        r##"export default function Main() {{ const ctx = useTime(); return <Scene>
-      <GeometryBatch key="dust" geometry="circle" positions={{particles(ctx.localFrame, ctx.fps, {{
+        r##"export default function Main() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); return <Scene>
+      <GeometryBatch key="dust" geometry="circle" positions={{particles(time.seconds, {{
         seed: 7, count: 4, emitter: rect(20, 100, 1, 1), birth: {{interval:0.25}}, lifetime:{lifetime},
         velocity: {{x:[300,300],y:[0,0]}}, gravity:point(0,0),loop:true
       }})}} sizes={{[{size},{size}]}} fills={{["#ffffff"]}} opacities={{[{alpha}]}}
@@ -264,9 +264,9 @@ fn reading_time_counts_words_and_cjk_characters() {
 
 const RUNNERS: &str = r##"
 const ROWS = Array.from({length: 4}, (_, i) => ({id:`runner${i}`, i}));
-export default function Main() { const ctx = useTime();
+export default function Main() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return <Scene style={{width:640,height:360}}>{ROWS.map(row => <View key={row.id}
-    className="absolute" style={{left:20 + ctx.localFrame*12, top:20 + row.i*40,
+    className="absolute" style={{left:20 + frame*12, top:20 + row.i*40,
     width:10, height:10, backgroundColor:"#ffffff"}} />)}</Scene>;
 }
 "##;
@@ -315,8 +315,8 @@ fn strobing_rows_of_one_map_merge_whichever_way_it_lowers() {
     assert_eq!(merged[0].example_keys, ["runner0", "runner1", "runner2"]);
     // Rows of a flow map lay out as instance rows and merge under their host.
     let flow = RUNNERS.replace("className=\"absolute\" ", "").replace(
-        "left:20 + ctx.localFrame*12, top:20 + row.i*40,",
-        "marginLeft:ctx.localFrame*12,",
+        "left:20 + frame*12, top:20 + row.i*40,",
+        "marginLeft:frame*12,",
     );
     let layout = compile_motion(&flow).unwrap().artifact;
     let host = layout
@@ -335,9 +335,9 @@ fn strobing_rows_of_one_map_merge_whichever_way_it_lowers() {
 
 #[test]
 fn short_text_at_the_last_frame_is_information() {
-    let source = r##"export default function Main() { const ctx = useTime(); return <Scene>
-        <Text key="flash" visible={ctx.localFrame >= 10 && ctx.localFrame < 15} style={{position:"absolute",left:10,top:30,fontSize:24}}>Read this caption</Text>
-        <Text key="ending" visible={ctx.localFrame >= 55} style={{position:"absolute",left:10,top:120,fontSize:24}}>Read this caption</Text>
+    let source = r##"export default function Main() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); return <Scene>
+        <Text key="flash" visible={frame >= 10 && frame < 15} style={{position:"absolute",left:10,top:30,fontSize:24}}>Read this caption</Text>
+        <Text key="ending" visible={frame >= 55} style={{position:"absolute",left:10,top:120,fontSize:24}}>Read this caption</Text>
     </Scene>; }"##;
     let reviewed = report(source);
     let severity = |node: &str| {

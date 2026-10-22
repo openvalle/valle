@@ -18,8 +18,8 @@ fn tangent_contact_warns_by_default_and_can_be_an_error() {
     assert_eq!(default_warnings.len(), 1);
     assert_eq!(default_warnings[0].code, DiagCode::MorphContact);
     let sequence = SOURCE.replace(
-        "morph(A, B, ctx.progress,",
-        "morphSequence([A, B], [0, 1], ctx.progress,",
+        "morph(A, B, time.progress,",
+        "morphSequence([A, B], [0, 1], time.progress,",
     );
     assert_eq!(compile_motion(&sequence).unwrap().warnings.len(), 1);
 

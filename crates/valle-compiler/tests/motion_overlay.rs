@@ -9,13 +9,13 @@ fn source(role: &str) -> String {
     format!(
         r#"export const composition={{width:64,height:32,duration:2}};
 {role}
-export default function Main() {{ const ctx = useTime();return <Scene><View style={{{{width:ctx.viewport.width,height:ctx.viewport.height}}}}/></Scene>;}}"#
+export default function Main() {{ const time = useCurrentTime(); const comp = useComposition();return <Scene><View style={{{{width:comp.width,height:comp.height}}}}/></Scene>;}}"#
     )
 }
 #[test]
 fn overlay_declaration_is_closed_exact_and_validated_with_composition() {
     let a = compile_motion(&source(
-        "export const role=overlay({intro:seconds(0.6),outro:seconds(0.4),hold:'once'});",
+        "export const role=overlay({intro:0.6,outro:0.4,hold:'once'});",
     ))
     .unwrap()
     .artifact;
@@ -32,22 +32,22 @@ fn overlay_declaration_is_closed_exact_and_validated_with_composition() {
         MotionRole::Clip
     );
     for declaration in [
-        "overlay({intro:0.6,outro:seconds(0.4),hold:'once'})",
-        "overlay({intro:frames(1),outro:seconds(0),hold:'once'})",
-        "overlay({intro:seconds(-0.1),outro:seconds(0),hold:'loop'})",
-        "overlay({intro:seconds(1.6),outro:seconds(0.5),hold:'stretch'})",
-        "overlay({intro:seconds(0.5),outro:seconds(0.5),hold:'repeat'})",
-        "overlay({intro:seconds(0.5),outro:seconds(0.5),hold:'once',extra:1})",
-        "overlay({intro:seconds(0.5),outro:seconds(0.5)})",
+        "overlay({intro:0.6,outro:0.4,hold:'once'})",
+        "overlay({intro:0.25,outro:0,hold:'once'})",
+        "overlay({intro:seconds(-0.1),outro:0,hold:'loop'})",
+        "overlay({intro:1.6,outro:0.5,hold:'stretch'})",
+        "overlay({intro:0.5,outro:0.5,hold:'repeat'})",
+        "overlay({intro:0.5,outro:0.5,hold:'once',extra:1})",
+        "overlay({intro:0.5,outro:0.5})",
         "{type:'overlay',intro:0.5,outro:0.5,hold:'once'}",
-        "overlay({intro:seconds(Infinity),outro:seconds(0),hold:'once'})",
+        "overlay({intro:seconds(Infinity),outro:0,hold:'once'})",
     ] {
         assert!(
             compile_motion(&source(&format!("export const role={declaration};"))).is_err(),
             "{declaration}"
         );
     }
-    assert!(compile_motion("export const role=overlay({intro:seconds(0),outro:seconds(0),hold:'once'}); export default function Main(){return <Scene/>;}").is_err());
+    assert!(compile_motion("export const role=overlay({intro:0,outro:0,hold:'once'}); export default function Main(){return <Scene/>;}").is_err());
 }
 fn author(duration: f64) -> Value {
     json!({"canvas":{"width":64,"height":32,"fps":30},"resources":{"card":"card.motion.tsx"},"tracks":{"visual":[{"clips":[{"kind":"motion","component":"card","start":0,"duration":duration}]}]}})
@@ -124,9 +124,9 @@ fn overlay_temporal_samples_hold_at_the_authored_exclusive_boundary() {
     use valle_timeline::{FrameRate, internal::SampleTime};
     let compiled = compile_motion(
         r#"export const composition={width:64,height:32,fps:4,duration:1.14};
-export const role=overlay({intro:seconds(0),outro:seconds(0),hold:"once"});
-export default function Main(){ const ctx = useTime();return <Scene><Shutter key="exposure" samples={4} angle={360}>
-<View style={{width:ctx.seconds*10,height:10,backgroundColor:"white"}}/></Shutter></Scene>;}
+export const role=overlay({intro:0,outro:0,hold:"once"});
+export default function Main(){ const time = useCurrentTime();return <Scene><Shutter key="exposure" samples={4} angle={360}>
+<View style={{width:time.seconds*10,height:10,backgroundColor:"white"}}/></Shutter></Scene>;}
 "#,
     )
     .unwrap();
@@ -170,7 +170,7 @@ fn only_the_entry_module_may_declare_a_role() {
     use valle_compiler::motion::{MotionModuleGraph, compile_motion_modules};
     let graph=MotionModuleGraph::new("entry.motion.tsx",BTreeMap::from([
         ("entry.motion.tsx".into(),"export const composition={width:64,height:32,duration:2}; import {Card} from './card'; export default function Main(){return <Scene><Card/></Scene>; }".into()),
-        ("card.tsx".into(),"export const role=overlay({intro:seconds(0),outro:seconds(0),hold:'once'}); export function Card(){return <View/>;}".into()),
+        ("card.tsx".into(),"export const role=overlay({intro:0,outro:0,hold:'once'}); export function Card(){return <View/>;}".into()),
     ])).unwrap();
     let diagnostics = compile_motion_modules(&graph).unwrap_err();
     assert!(

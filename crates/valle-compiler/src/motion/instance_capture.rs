@@ -29,6 +29,8 @@ pub(super) fn extract(arena: &ExprArena, template: &mut PendingNode) -> Option<E
             .expansion_stacks
             .push(arena.expansion_stacks[at].clone());
         compact.reads_runtime.push(arena.reads_runtime[at]);
+        compact.time_reads.push(arena.time_reads[at]);
+        compact.scene_clock.push(arena.scene_clock[at]);
     }
     visit(template, &mut |id| {
         *id = remap[id.0 as usize].expect("captured template root");

@@ -16,13 +16,13 @@ const source = join(temporary, "scene.motion.tsx");
 const timeline = join(temporary, "timeline.json");
 await writeFile(source, `
   export const composition = { width: 48, height: 48, fps: 30, duration: 1 };
-  ${isCaption ? `export const role=captionPresenter({intro:seconds(0.2),outro:seconds(0.2)});` : ""}
-  ${isOverlay ? `export const role=overlay({intro:seconds(0.2),outro:seconds(0.2),hold:"once"});` : ""}
-  export default function CacheScene(props) { const ctx = useTime(); ${isCaption ? "const caption = useCaption();" : "const data = useData();"}
-    return <Scene style={{ width: ctx.viewport.width, height: ctx.viewport.height, backgroundColor: "#000" }}>
-      <View style={{ position: "absolute", left: ctx.host.progress * 24,
-        top: ctx.seconds * 8, width: 16, height: 16, backgroundColor: "#0f0" }} />
-      ${isCaption ? `<Text style={{position:"absolute",top:24,fontFamily:caption.style.font,fontSize:14,color:ctx.host.seconds<1.2?"#facc15":"white"}}>{caption.text}</Text>` : ""}
+  ${isCaption ? `export const role=captionPresenter({intro:0.2,outro:0.2});` : ""}
+  ${isOverlay ? `export const role=overlay({intro:0.2,outro:0.2,hold:"once"});` : ""}
+  export default function CacheScene(props) { const time = useCurrentTime(); const comp = useComposition(); ${isCaption ? "const caption = useCaption();" : "const data = useData();"}
+    return <Scene style={{ width: comp.width, height: comp.height, backgroundColor: "#000" }}>
+      <View style={{ position: "absolute", left: time.clipProgress * 24,
+        top: time.seconds * 8, width: 16, height: 16, backgroundColor: "#0f0" }} />
+      ${isCaption ? `<Text style={{position:"absolute",top:24,fontFamily:caption.style.font,fontSize:14,color:time.clipSeconds<1.2?"#facc15":"white"}}>{caption.text}</Text>` : ""}
     </Scene>;
   }
 `);

@@ -1,4 +1,4 @@
-export function ChartPanel({ rows, x, y, width, height }) { const ctx = useTime();
+export function ChartPanel({ rows, x, y, width, height }) { const time = useCurrentTime();
   const theme = useTheme();
   const values = rows.map((row) => row.value);
   const domain = niceDomain(0, extent(values)[1], 4);
@@ -11,7 +11,7 @@ export function ChartPanel({ rows, x, y, width, height }) { const ctx = useTime(
       {rows.map((row, index) => {
         const top = yScale.map(row.value);
         const band = xScale.band(index);
-        return <View key={row.id} className="absolute" style={{ left: band[0], top, width: xScale.bandwidth(), height: baseline - top, borderRadius: theme.radius.mark, backgroundColor: theme.colors.accent, opacity: 0.28 + ctx.progress * 0.72 }}><Text key={`label-${row.id}`} className="absolute" style={{ left: 0, top: baseline - top + 18, width: xScale.bandwidth(), fontSize: 16, color: theme.colors.ink, textAlign: "center" }}>{row.label}</Text></View>;
+        return <View key={row.id} className="absolute" style={{ left: band[0], top, width: xScale.bandwidth(), height: baseline - top, borderRadius: theme.radius.mark, backgroundColor: theme.colors.accent, opacity: 0.28 + time.progress * 0.72 }}><Text key={`label-${row.id}`} className="absolute" style={{ left: 0, top: baseline - top + 18, width: xScale.bandwidth(), fontSize: 16, color: theme.colors.ink, textAlign: "center" }}>{row.label}</Text></View>;
       })}
     </View>
   );

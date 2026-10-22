@@ -45,13 +45,14 @@ pub(crate) enum TemporalSampling {
     },
     Echo {
         count: u8,
-        interval_frames: u32,
+        delay: RationalTime,
         decay: f64,
     },
 }
 
 impl TemporalSampling {
-    fn frame_offsets(self) -> Vec<RationalTime> {
+    /// Shutter offsets in output frames, Echo offsets in seconds.
+    fn offsets(self) -> Vec<RationalTime> {
         match self {
             Self::Shutter {
                 samples,
@@ -66,12 +67,13 @@ impl TemporalSampling {
                 .collect(),
             Self::Echo {
                 count,
-                interval_frames,
+                delay,
                 decay,
             } if decay > 0.0 => (1..=count)
                 .rev()
                 .map(|lag| {
-                    RationalTime::new(-i64::from(lag) * i64::from(interval_frames), 1)
+                    RationalTime::new(-i64::from(lag), 1)
+                        .and_then(|lag| delay.checked_mul(lag))
                         .expect("validated echo offset fits an exact rational")
                 })
                 .collect(),
@@ -80,11 +82,13 @@ impl TemporalSampling {
     }
 }
 
-/// Conservative output-frame reach of all temporal effects in a prepared scene.
+/// Conservative reach of all temporal effects in a prepared scene: Shutter and automatic blur
+/// in output frames, Echo in seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TemporalWindow {
     pub past_frames: RationalTime,
     pub future_frames: RationalTime,
+    pub past_seconds: RationalTime,
 }
 
 impl Default for TemporalWindow {
@@ -92,12 +96,13 @@ impl Default for TemporalWindow {
         Self {
             past_frames: RationalTime::ZERO,
             future_frames: RationalTime::ZERO,
+            past_seconds: RationalTime::ZERO,
         }
     }
 }
 
 impl TemporalWindow {
-    fn include(&mut self, offset: RationalTime) {
+    fn include_frames(&mut self, offset: RationalTime) {
         if offset.is_negative() {
             self.past_frames = self.past_frames.max(
                 offset
@@ -108,13 +113,22 @@ impl TemporalWindow {
             self.future_frames = self.future_frames.max(offset);
         }
     }
+
+    fn include_seconds(&mut self, offset: RationalTime) {
+        self.past_seconds = self.past_seconds.max(
+            offset
+                .checked_neg()
+                .expect("validated sample offset can be negated"),
+        );
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct TemporalNode {
     pub node: NodeId,
     pub sampling: TemporalSampling,
-    /// Exact output-frame offsets, in paint order. Sampling uses these same values.
+    /// Exact offsets in paint order: output frames for Shutter, seconds for Echo. Sampling uses
+    /// these same values.
     pub offsets: Vec<RationalTime>,
 }
 
@@ -262,11 +276,11 @@ impl SceneDependencies {
                 }),
                 NodeKind::Echo {
                     count,
-                    interval_frames,
+                    delay,
                     decay,
                 } => Some(TemporalSampling::Echo {
                     count,
-                    interval_frames,
+                    delay,
                     decay,
                 }),
                 _ => None,
@@ -350,7 +364,7 @@ impl SceneDependencies {
             .enumerate()
             .filter_map(|(at, facts)| {
                 let sampling = facts.temporal_sampling?;
-                let offsets = sampling.frame_offsets();
+                let offsets = sampling.offsets();
                 (!offsets.is_empty()).then_some(TemporalNode {
                     node: NodeId(at as u32),
                     sampling,
@@ -362,7 +376,10 @@ impl SceneDependencies {
         let mut temporal_window = TemporalWindow::default();
         for node in &temporal_nodes {
             for &offset in &node.offsets {
-                temporal_window.include(offset);
+                match node.sampling {
+                    TemporalSampling::Shutter { .. } => temporal_window.include_frames(offset),
+                    TemporalSampling::Echo { .. } => temporal_window.include_seconds(offset),
+                }
             }
         }
         let auto_blur_nodes = artifact

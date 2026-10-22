@@ -1,13 +1,13 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 
-export default function ParticleDataStream() { const ctx = useTime();
-  const t = ctx.progress;
+export default function ParticleDataStream() { const time = useCurrentTime();
+  const t = time.progress;
   const reveal = interpolate(t, [0, 0.14], [0, 1], { easing: "easeOut" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#020617" }}>
       <View key="field-glow" className="absolute" style={{ left: 525, top: 90, width: 870, height: 870, borderRadius: 435, backgroundColor: "#0e7490", opacity: 0.18, filter: "blur(165px)" }} />
       <GeometryBatch key="stream" geometry="circle"
-        positions={particles(ctx.localFrame, ctx.fps, {
+        positions={particles(time.seconds, {
           seed: 20260810,
           count: 12000,
           emitter: rect(907.5, 975, 105, 12),

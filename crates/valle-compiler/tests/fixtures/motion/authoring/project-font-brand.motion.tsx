@@ -7,20 +7,20 @@ export const controls = {
 };
 
 const intro = defineSequence({
-  mark: stage({ duration: seconds(1.1) }),
-  name: stage({ after: "mark", overlap: seconds(0.35), duration: seconds(1.25) }),
-  line: stage({ after: "name", overlap: seconds(0.45), duration: seconds(1.1) }),
-  settle: stage({ after: "line", duration: seconds(2.5) }),
+  mark: stage({ duration: 1.1 }),
+  name: stage({ after: "mark", overlap: 0.35, duration: 1.25 }),
+  line: stage({ after: "name", overlap: 0.45, duration: 1.1 }),
+  settle: stage({ after: "line", duration: 2.5 }),
 });
 
 const ORBIT = path("M 960 195 C 1353 195 1665 264 1665 540 C 1665 816 1353 945 960 945 C 567 945 255 816 255 540 C 255 264 567 195 960 195 Z");
 
-export default function ProjectFontBrand() { const ctx = useTime();
-  const mark = stageProgress(ctx.localFrame, ctx.fps, intro.mark);
-  const name = stageProgress(ctx.localFrame, ctx.fps, intro.name);
-  const line = stageProgress(ctx.localFrame, ctx.fps, intro.line);
-  const breathe = yoyoProgress(ctx.localFrame, ctx.fps, intro.settle, 3);
-  const orbit = repeatProgress(ctx.localFrame, ctx.fps, intro.settle, 2);
+export default function ProjectFontBrand() { const time = useCurrentTime();
+  const mark = stageProgress(time.seconds, intro.mark);
+  const name = stageProgress(time.seconds, intro.name);
+  const line = stageProgress(time.seconds, intro.line);
+  const breathe = yoyoProgress(time.seconds, intro.settle, 3);
+  const orbit = repeatProgress(time.seconds, intro.settle, 2);
 
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#05070c", fontFamily: "asset://brandFont" }}>

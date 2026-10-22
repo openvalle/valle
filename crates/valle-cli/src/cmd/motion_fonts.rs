@@ -447,7 +447,7 @@ mod tests {
     fn finite_font_utilities_package_all_candidate_families() {
         let defaults = valle_motion::default_motion_fonts();
         let fonts = select(
-            "export default function T(){ const ctx = useTime();return <View className={ctx.localFrame<30?'font-serif!':'font-mono'}><Text>Hello</Text></View>}",
+            "export default function T(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <View className={frame<30?'font-serif!':'font-mono'}><Text>Hello</Text></View>}",
         );
         assert!(
             [
@@ -478,7 +478,7 @@ mod tests {
     fn finite_class_choices_package_inactive_candidates_too() {
         assert_eq!(
             select(
-                "export default function T(){ const ctx = useTime();return <Text className={ctx.localFrame<30?'font-sans':'font-serif!'}>Hello</Text>}"
+                "export default function T(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Text className={frame<30?'font-sans':'font-serif!'}>Hello</Text>}"
             ),
             select(
                 "export default function T(){return <Text className='font-sans font-serif!'>Hello</Text>}"
@@ -490,7 +490,7 @@ mod tests {
     fn dynamic_text_and_weights_keep_later_frame_choices() {
         let defaults = valle_motion::default_motion_fonts();
         let dynamic = select(
-            "export default function T(){ const ctx = useTime();return <Text>{ctx.seconds > 0.5 ? '中文' : 'Hello'}</Text>}",
+            "export default function T(){ const time = useCurrentTime();return <Text>{time.seconds > 0.5 ? '中文' : 'Hello'}</Text>}",
         );
         assert!(dynamic.len() < defaults.len());
         assert!(
@@ -504,7 +504,7 @@ mod tests {
                 .any(|font| font.as_ref() == bundled_font("Noto-COLRv1.ttf"))
         );
         let dynamic_weight = select(
-            "export default function T(){ const ctx = useTime();return <Text style={{fontWeight:ctx.seconds > 0.5 ? 700 : 400}}>Hello</Text>}",
+            "export default function T(){ const time = useCurrentTime();return <Text style={{fontWeight:time.seconds > 0.5 ? 700 : 400}}>Hello</Text>}",
         );
         assert_eq!(
             dynamic_weight,
@@ -514,11 +514,11 @@ mod tests {
         );
         for style in [
             "fontWeight:403.25",
-            "fontVariationSettings:`\"wght\" ${100 + ctx.seconds * 800}, \"wdth\" 75`",
+            "fontVariationSettings:`\"wght\" ${100 + time.seconds * 800}, \"wdth\" 75`",
         ] {
             assert_eq!(
                 select(&format!(
-                    "export default function T(){{ const ctx = useTime();return <Text style={{{{{style}}}}}>Hello</Text>}}"
+                    "export default function T(){{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Text style={{{{{style}}}}}>Hello</Text>}}"
                 )),
                 dynamic_weight
             );
@@ -532,14 +532,14 @@ mod tests {
         let defaults = valle_motion::default_motion_fonts();
         assert_eq!(
             select(
-                "export default function T(){ const ctx = useTime();return <Text style={{fontFamily:'monospace'}}>{`CH ${padNumber(ctx.localFrame,{width:2})} ${formatNumber(ctx.seconds,{decimals:1})}`}</Text>}"
+                "export default function T(){ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);return <Text style={{fontFamily:'monospace'}}>{`CH ${padNumber(frame,{width:2})} ${formatNumber(time.seconds,{decimals:1})}`}</Text>}"
             ),
             ["NotoSans-Variable.ttf", "NotoSansMono-Regular.ttf"]
                 .map(|name| std::sync::Arc::<[u8]>::from(bundled_font(name)))
                 .to_vec()
         );
         let choice = select(
-            "export const controls={props:{mode:select({default:'晴',values:['晴','雨']}),count:number({default:3})}}; export default function T(props){ const ctx = useTime();return <Text>{`${props.mode} ${props.count}`}</Text>}",
+            "export const controls={props:{mode:select({default:'晴',values:['晴','雨']}),count:number({default:3})}}; export default function T(props){ return <Text>{`${props.mode} ${props.count}`}</Text>}",
         );
         assert!(choice.len() < defaults.len());
         assert!(
@@ -548,7 +548,7 @@ mod tests {
                 .any(|font| font.as_ref() == bundled_font("NotoSansCJKsc-Variable.otf"))
         );
         let free = select(
-            "export const controls={props:{title:string({default:'Hello'})}}; export default function T(props){ const ctx = useTime();return <Text>{props.title}</Text>}",
+            "export const controls={props:{title:string({default:'Hello'})}}; export default function T(props){ return <Text>{props.title}</Text>}",
         );
         assert_eq!(free.len(), defaults.len());
     }

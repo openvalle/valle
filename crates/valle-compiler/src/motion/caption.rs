@@ -13,7 +13,7 @@ use valle_motion::CaptionInput;
 const RUN: &str = "#";
 
 /// What prepare-time code that reads the text or the runs is told.
-pub(super) const CAPTION_CONTENT: &str = "the caption's text and runs are bound as each caption is drawn, like `useTime()`: read them in JSX and frame expressions, not in prepare-time code; change case with CSS `textTransform`, and style a keyword with its run's color or fontSize in the Timeline";
+pub(super) const CAPTION_CONTENT: &str = "the caption's text and runs are bound as each caption is drawn, like `useCurrentTime()`: read them in JSX and frame expressions, not in prepare-time code; change case with CSS `textTransform`, and style a keyword with its run's color or fontSize in the Timeline";
 
 /// Whether `call` is `useCaption()`.
 pub(super) fn is_use_caption(call: &CallExpression<'_>) -> bool {

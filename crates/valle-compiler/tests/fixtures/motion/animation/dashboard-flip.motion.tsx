@@ -17,8 +17,8 @@ const layouts = defineLayoutStates({
 
 const BARS = [87, 123, 100.5, 141, 114, 162, 189, 177, 217.5];
 
-export default function DashboardFlip() { const ctx = useTime();
-  const p = interpolate(ctx.progress, [0, 0.24, 0.76, 1], [0, 1, 1, 0], { easing: "easeInOut" });
+export default function DashboardFlip() { const time = useCurrentTime();
+  const p = interpolate(time.progress, [0, 0.24, 0.76, 1], [0, 1, 1, 0], { easing: "easeInOut" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#080b12" }}>
       <Text key="eyebrow" className="absolute" style={{ left: 105, top: 72, fontSize: 22.5, letterSpacing: 6, color: "#f59e0b" }}>CONTROL ROOM / FLIP LAYOUT</Text>

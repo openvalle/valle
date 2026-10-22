@@ -5,8 +5,8 @@ const riders = defineRepeater({ count: 24, keyPrefix: "rider" });
 const FLOW_A = path("M 135 558 C 345 198 621 885 864 513 C 1113 135 1353 858 1785 468");
 const FLOW_B = path("M 135 480 C 381 861 606 129 903 585 C 1155 972 1422 177 1785 576");
 
-export default function VectorTurbulenceProxy() { const ctx = useTime();
-  const t = ctx.progress;
+export default function VectorTurbulenceProxy() { const time = useCurrentTime();
+  const t = time.progress;
   const phase = (sin(t * 12.566370614 - 1.2) + 1) * 0.5;
   const flow = morphPath(FLOW_A, FLOW_B, phase);
   const reveal = interpolate(t, [0, 0.2], [0, 1], { easing: "easeOut" });

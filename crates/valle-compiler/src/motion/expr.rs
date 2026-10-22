@@ -3,15 +3,22 @@
 use super::*;
 
 impl<'s> Compiler<'s> {
-    pub(super) fn scoped_context_expr(&mut self, input: ContextInput, span: Span) -> ExprId {
-        if self.time_scopes.is_empty()
-            || !matches!(
-                input,
-                ContextInput::CompositionSeconds
-                    | ContextInput::LocalFrame
-                    | ContextInput::LocalProgress
-            )
-        {
+    /// A scene-clock input on `clock`: the seconds, frame or progress seen inside its chain of
+    /// TimeScopes. The value is marked with that clock, so a node outside the chain cannot use it.
+    pub(super) fn scene_clock_expr(
+        &mut self,
+        input: ContextInput,
+        clock: ClockId,
+        span: Span,
+    ) -> ExprId {
+        debug_assert!(matches!(
+            input,
+            ContextInput::CompositionSeconds
+                | ContextInput::LocalFrame
+                | ContextInput::LocalProgress
+        ));
+        let chain = self.clock_chains[clock.0 as usize].clone();
+        if chain.is_empty() {
             return self.push(Expr::Context { input }, span);
         }
         let mut seconds = self.push(
@@ -20,7 +27,8 @@ impl<'s> Compiler<'s> {
             },
             span,
         );
-        for transform in self.time_scopes.clone() {
+        let last = chain.len() - 1;
+        for (at, transform) in chain.into_iter().enumerate() {
             let offset = self.push(
                 Expr::Const {
                     value: MotionValue::Number(transform.offset_seconds),
@@ -40,13 +48,17 @@ impl<'s> Compiler<'s> {
                 },
                 span,
             );
-            seconds = self.push(
-                Expr::Mul {
-                    lhs: seconds,
-                    rhs: speed,
-                },
-                span,
-            );
+            let scaled = Expr::Mul {
+                lhs: seconds,
+                rhs: speed,
+            };
+            // The scoped seconds are this clock's own value: an equal expression an author writes
+            // outside the scope is a different value of the outer clock.
+            seconds = if at == last {
+                self.push_on_clock(scaled, clock, span)
+            } else {
+                self.push(scaled, span)
+            };
         }
         if input == ContextInput::CompositionSeconds {
             return seconds;
@@ -80,7 +92,7 @@ impl<'s> Compiler<'s> {
         if input == ContextInput::LocalFrame {
             return self.push(
                 Expr::MathUnary {
-                    op: MathUnaryOp::FrameFloor,
+                    op: MathUnaryOp::ClockFloor,
                     input: frames,
                 },
                 span,
@@ -283,7 +295,7 @@ impl<'s> Compiler<'s> {
                     self.illegal(
                         DiagCode::UnknownIdentifier,
                         expression.span(),
-                        "`ctx` is not defined; components take `(props)` as in React, so read the time with `const ctx = useTime()`",
+                        "`ctx` is not defined; components take `(props)` as in React, so read the clock with `const { seconds } = useCurrentTime()` and the size, duration and frame rate with `useComposition()`",
                     );
                     return None;
                 } else {
@@ -322,6 +334,12 @@ impl<'s> Compiler<'s> {
             Expression::BinaryExpression(binary) => {
                 let lhs = self.lower_expr(&binary.left)?;
                 let rhs = self.lower_expr(&binary.right)?;
+                if matches!(
+                    binary.operator,
+                    BinaryOperator::Addition | BinaryOperator::Subtraction
+                ) {
+                    self.check_time_pair(lhs, rhs, binary.span());
+                }
                 match binary.operator {
                     BinaryOperator::Addition => Expr::Add { lhs, rhs },
                     BinaryOperator::Subtraction => Expr::Sub { lhs, rhs },
@@ -339,38 +357,24 @@ impl<'s> Compiler<'s> {
                             rhs,
                         }
                     }
-                    BinaryOperator::Equality | BinaryOperator::StrictEquality => Expr::Compare {
-                        op: CompareOp::Eq,
-                        lhs,
-                        rhs,
-                    },
-                    BinaryOperator::Inequality | BinaryOperator::StrictInequality => {
-                        Expr::Compare {
-                            op: CompareOp::NotEq,
-                            lhs,
-                            rhs,
-                        }
+                    BinaryOperator::Equality | BinaryOperator::StrictEquality => {
+                        return Some(self.compare(CompareOp::Eq, lhs, rhs, binary.span()));
                     }
-                    BinaryOperator::LessThan => Expr::Compare {
-                        op: CompareOp::Lt,
-                        lhs,
-                        rhs,
-                    },
-                    BinaryOperator::LessEqualThan => Expr::Compare {
-                        op: CompareOp::Lte,
-                        lhs,
-                        rhs,
-                    },
-                    BinaryOperator::GreaterThan => Expr::Compare {
-                        op: CompareOp::Gt,
-                        lhs,
-                        rhs,
-                    },
-                    BinaryOperator::GreaterEqualThan => Expr::Compare {
-                        op: CompareOp::Gte,
-                        lhs,
-                        rhs,
-                    },
+                    BinaryOperator::Inequality | BinaryOperator::StrictInequality => {
+                        return Some(self.compare(CompareOp::NotEq, lhs, rhs, binary.span()));
+                    }
+                    BinaryOperator::LessThan => {
+                        return Some(self.compare(CompareOp::Lt, lhs, rhs, binary.span()));
+                    }
+                    BinaryOperator::LessEqualThan => {
+                        return Some(self.compare(CompareOp::Lte, lhs, rhs, binary.span()));
+                    }
+                    BinaryOperator::GreaterThan => {
+                        return Some(self.compare(CompareOp::Gt, lhs, rhs, binary.span()));
+                    }
+                    BinaryOperator::GreaterEqualThan => {
+                        return Some(self.compare(CompareOp::Gte, lhs, rhs, binary.span()));
+                    }
                     _ => {
                         let advice = match binary.operator {
                             BinaryOperator::In | BinaryOperator::Instanceof => {
@@ -554,16 +558,20 @@ impl<'s> Compiler<'s> {
                     return None;
                 };
                 match callee.name.as_str() {
-                    "useTime" => {
-                        if !call.arguments.is_empty() {
+                    "useCurrentTime" | "useComposition" => {
+                        let Some(hook) = self.time_hook(call) else {
                             self.illegal(
                                 DiagCode::GrammarForbidden,
                                 call.span(),
-                                "useTime() takes no arguments",
+                                format!("{}() takes no arguments", callee.name),
                             );
                             return None;
-                        }
-                        return self.lower_time_path(&[], call.span());
+                        };
+                        let time = super::time::TimePath {
+                            hook,
+                            path: Vec::new(),
+                        };
+                        return self.lower_time_path(&time, call.span());
                     }
                     "useCaption" => return self.lower_caption_path(&[], call.span()),
                     "useData" => {
@@ -611,8 +619,8 @@ impl<'s> Compiler<'s> {
                     "yoyoProgress" => {
                         return self.lower_sequence_loop(&call.arguments, call.span(), true);
                     }
-                    "freezeFrame" => {
-                        return self.lower_freeze_frame(&call.arguments, call.span());
+                    "freezeTime" => {
+                        return self.lower_freeze_time(&call.arguments, call.span());
                     }
                     "sin" => {
                         return self.lower_math_unary(
@@ -825,11 +833,12 @@ impl<'s> Compiler<'s> {
                         let advice = if valle_motion::compute::AUTHOR_SURFACE.contains(&other) {
                             format!(
                                 "`{other}` is a prepare-time builtin: it runs once at compile \
-                                 time, so every argument must be known then. `ctx.*` (viewport, \
-                                 phase, frame) is only known per frame. Compute the layout in a \
+                                 time, so every argument must be known then. The time and the \
+                                 render size are only known per frame. Compute the layout in a \
                                  fixed Canvas space and scale it at frame time — \
                                  `const S = {other}(…)` at module scope, then \
-                                 `S.map(i) * (ctx.viewport.width / CANVAS_W)` inside the component"
+                                 `S.map(i) * (width / CANVAS_W)` inside the component, with \
+                                 `const {{ width }} = useComposition()`"
                             )
                         } else {
                             format!(
@@ -1072,7 +1081,7 @@ impl<'s> Compiler<'s> {
                     self.illegal(
                         DiagCode::GrammarForbidden,
                         expression.span(),
-                        "only static paths from `useTime()` and `props` are allowed",
+                        "only static paths from `useCurrentTime()`, `useComposition()` and `props` are allowed",
                     );
                     return None;
                 }
@@ -1322,7 +1331,7 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::UnknownIdentifier,
                     expression.span(),
-                    "`ctx` is not defined; components take `(props)` as in React, so read the time with `const ctx = useTime()`",
+                    "`ctx` is not defined; components take `(props)` as in React, so read the clock with `const { seconds } = useCurrentTime()` and the size, duration and frame rate with `useComposition()`",
                 );
                 None
             }
@@ -1330,7 +1339,7 @@ impl<'s> Compiler<'s> {
                 self.illegal(
                     DiagCode::UnknownIdentifier,
                     expression.span(),
-                    "a frame-time path starts at `useTime()`, a name bound to it, or `props`",
+                    "a frame-time path starts at `useCurrentTime()`, `useComposition()`, a name bound to them, or `props`",
                 );
                 None
             }

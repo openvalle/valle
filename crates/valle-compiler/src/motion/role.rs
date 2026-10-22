@@ -35,19 +35,11 @@ impl Compiler<'_> {
                 _ => {}
             }
             let time = |name: &str| -> Result<RationalTime, String> {
-                let v = obj
+                let value = obj
                     .get(name)
-                    .ok_or_else(|| format!("{kind} needs `{name}: seconds(...)`"))?;
-                if v.get("__valleType").and_then(|v| v.as_str()) != Some("sequenceTime")
-                    || v.get("unit").and_then(|v| v.as_str()) != Some("seconds")
-                    || v.as_object().is_none_or(|v| v.len() != 3)
-                {
-                    return Err(format!("{kind} {name} must use seconds(...)"));
-                }
-                let value = v
-                    .get("value")
-                    .and_then(|v| v.as_number())
-                    .ok_or_else(|| format!("{kind} {name} needs finite seconds"))?;
+                    .ok_or_else(|| format!("{kind} needs `{name}`, a number of seconds"))?
+                    .as_number()
+                    .ok_or_else(|| format!("{kind} {name} must be a number of seconds"))?;
                 let t = TimelineTimeWire::new(value.to_string()).map_err(|e| e.to_string())?;
                 Ok(RationalTime::from_exact(t.to_exact()))
             };

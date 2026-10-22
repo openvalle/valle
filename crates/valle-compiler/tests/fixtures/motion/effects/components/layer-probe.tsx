@@ -7,8 +7,8 @@ export const controls = {
 
 const bars = defineRepeater({ count: 10, keyPrefix: "bar" });
 
-export default function LayerProbe(props) { const ctx = useTime();
-  const t = ctx.progress;
+export default function LayerProbe(props) { const time = useCurrentTime();
+  const t = time.progress;
   const pulse = (sin(t * 12.566370614) + 1) * 0.5;
   const localBlur = 2 + pulse * 11;
 

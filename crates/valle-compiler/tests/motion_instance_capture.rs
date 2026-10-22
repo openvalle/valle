@@ -7,12 +7,12 @@ fn source(prefix: &str, suffix: &str) -> String {
     format!(
         r##"
 const ROWS = Array.from({{length:80}}, (_, i) => ({{id:`row${{i}}`, x:i*4}}));
-export default function Main() {{ const ctx = useTime();
- const k = ctx.progress * 2;
+export default function Main() {{ const time = useCurrentTime();
+ const k = time.progress * 2;
  return <Scene style={{{{width:640,height:200}}}}>
  {prefix}
  {{ROWS.map(row => <View key={{row.id}} className="absolute"
-   style={{{{left:row.x+k,top:40,width:3,height:10,opacity:ctx.progress,backgroundColor:"white"}}}} />)}}
+   style={{{{left:row.x+k,top:40,width:3,height:10,opacity:time.progress,backgroundColor:"white"}}}} />)}}
  {suffix}
  </Scene>;
 }}
@@ -27,12 +27,12 @@ fn unrelated_prefixes_do_not_change_instance_admission_or_expression_closure() {
     let animated = (0..400)
         .map(|i| {
             format!(
-                "<View key=\"v{i}\" style={{{{width:10,height:10,opacity:ctx.progress*0.5}}}} />"
+                "<View key=\"v{i}\" style={{{{width:10,height:10,opacity:time.progress*0.5}}}} />"
             )
         })
         .collect::<String>();
     for prefix in [
-        r#"<Text key="title" split="char" perUnit={{opacity:clamp(ctx.progress*3-ctx.unit.index*0.1,0,1)}}>Hello</Text>"#,
+        r#"<Text key="title" split="char" perUnit={(unit) => ({opacity:clamp(time.progress*3-unit.index*0.1,0,1)})}>Hello</Text>"#,
         r#"<View key="target" style={{width:10,height:10}} /><View key="overlay" style={{opacity:bounds("target").width/100}} />"#,
         r##"<Scene3D key="three" camera={{position:[0,0,5],target:[0,0,0]}} style={{width:128,height:128}}>
           <Mesh key="mesh" geometry={extrude(path("M -1 -1 L 1 -1 L 1 1 L -1 1 Z"),{depth:0.8})} material={{type:"lambert",color:"#ffffff"}} />

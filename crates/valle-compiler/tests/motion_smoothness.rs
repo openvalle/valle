@@ -35,11 +35,11 @@ fn style(artifact: &SceneArtifact, values: &[MotionValue], property: &str) -> Mo
 }
 
 const SPRING: &str = r#"
-export default function Spring() { const ctx = useTime();
-  const p = spring({elapsedFrames: ctx.localFrame - 2, fps: ctx.fps, preset: "gentle", initialVelocity: -2});
-  const v = springVelocity({elapsedFrames: ctx.localFrame - 2, fps: ctx.fps, preset: "gentle", initialVelocity: -2});
+export default function Spring() { const time = useCurrentTime();
+  const p = spring(time.seconds - 2 / 30, { preset: "gentle", initialVelocity: -2 });
+  const v = springVelocity(time.seconds - 2 / 30, { preset: "gentle", initialVelocity: -2 });
   return <View style={{width: 100, height: 20, translate: point(p * 100, 0),
-    motionBlur: motionBlur(point(v * 100 * ctx.fps.den / ctx.fps.num, 0))}} />;
+    motionBlur: motionBlur({ velocity: point(v * 100, 0) })}} />;
 }
 "#;
 
@@ -78,7 +78,7 @@ fn seeking_repeating_reversing_and_parallel_sampling_produce_identical_values() 
 
 #[test]
 fn velocity_uses_seconds_and_blur_explicitly_converts_to_pixels_per_frame() {
-    let artifact = compile_motion(&SPRING.replace("ctx.localFrame - 2", "ctx.localFrame"))
+    let artifact = compile_motion(&SPRING.replace("time.seconds - 2 / 30", "time.seconds"))
         .unwrap()
         .artifact;
     let fps30 = FrameRate::new(30, 1).unwrap();
@@ -103,7 +103,7 @@ fn velocity_uses_seconds_and_blur_explicitly_converts_to_pixels_per_frame() {
 
 #[test]
 fn constant_time_velocity_is_not_folded_and_initial_conditions_are_validated() {
-    let source = SPRING.replace("ctx.localFrame - 2", "10");
+    let source = SPRING.replace("time.seconds - 2 / 30", "1 / 3");
     let artifact = compile_motion(&source).unwrap().artifact;
     assert_eq!(
         artifact
@@ -113,7 +113,7 @@ fn constant_time_velocity_is_not_folded_and_initial_conditions_are_validated() {
             .count(),
         2
     );
-    for invalid in ["ctx.progress", "1 / 0", "\"fast\""] {
+    for invalid in ["time.progress", "1 / 0", "\"fast\""] {
         let diagnostics = compile_motion(&SPRING.replace(
             "initialVelocity: -2",
             &format!("initialVelocity: {invalid}"),
@@ -150,7 +150,7 @@ fn flip(progress: &str) -> SceneArtifact {
 const layouts = defineLayoutStates({{
   a: {{card: rect(0, 20, 100, 80)}}, b: {{card: rect(200, 40, 200, 40)}}
 }});
-export default function Flip() {{ const ctx = useTime();
+export default function Flip() {{ const time = useCurrentTime();
   return <View layoutId="card" style={{{{layoutTransition: flip(layouts, "a", "b", {progress})}}}} />;
 }}
 "#)).unwrap().artifact
@@ -188,7 +188,7 @@ fn flip_preserves_overshoot_but_does_not_reflect_a_collapsed_axis() {
             );
         }
     }
-    let artifact = flip("spring({elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: 'wobbly'})");
+    let artifact = flip("spring(time.seconds, { preset: 'wobbly' })");
     let frames: Vec<_> = (0..120).map(|f| values(&artifact, f, rate)).collect();
     assert!(frames.iter().any(|v| matches!(style(&artifact, v, "translate"), MotionValue::Length2(t) if t.x.value > 0.0)),
         "spring overshoot must reach the actual FLIP transform");

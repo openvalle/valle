@@ -21,7 +21,7 @@ export const controls = ({
   },
 });
 
-export default function DataBars(props) { const ctx = useTime(); const data = useData();
+export default function DataBars(props) { const data = useData();
   const visible = data.rows.filter((item) => item.value > 0);
   const total = data.rows.reduce((sum, item) => sum + item.value, 0);
   return <Group key="root">
@@ -134,8 +134,8 @@ fn data_binding_is_required_and_reports_json_pointer_against_its_source() {
 #[test]
 fn frame_values_still_cannot_choose_prepare_cardinality() {
     let source = r#"
-export default function IllegalTopology() { const ctx = useTime();
-  return <Group>{Array.from({ length: ctx.frame }, (_, i) => i).map((i) => <View key={i} />)}</Group>;
+export default function IllegalTopology() { const { seconds } = useCurrentTime();
+  return <Group>{Array.from({ length: Math.floor(seconds * 30) }, (_, i) => i).map((i) => <View key={i} />)}</Group>;
 }
 "#;
     let errors = valle_compiler::motion::compile_motion(source).unwrap_err();
@@ -154,7 +154,7 @@ export const controls = ({
     rows: array(record({ id: string(), value: number() }), { maxItems: 8, key: "id" }),
   },
 });
-export default function ForOfBars(props) { const ctx = useTime(); const data = useData();
+export default function ForOfBars(props) { const data = useData();
   const bars = [];
   for (const item of data.rows) {
     const width = item.value * 10;

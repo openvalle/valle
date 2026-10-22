@@ -52,7 +52,7 @@ fn repeater_expands_to_stable_keys_indices_and_progress() {
     let compiled = compile_motion(
         r##"
 const copies = defineRepeater({ count: 4, keyPrefix: "echo" });
-export default function P() { const ctx = useTime();
+export default function P() {
   return <View>{copies.map((copy) => (
     <View key={copy.key} style={{ opacity: copy.progress, left: copy.index * 10 }} />
   ))}</View>;
@@ -91,8 +91,8 @@ export default function P() { const ctx = useTime();
 #[test]
 fn wiggle_reuses_noise_and_is_bit_identical_at_shared_times() {
     const SOURCE: &str = r#"
-export default function P() { const ctx = useTime();
-  return <View style={{ left: wiggle(ctx.localFrame, ctx.fps, {
+export default function P() { const time = useCurrentTime();
+  return <View style={{ left: wiggle(time.seconds, {
     seed: 7, frequency: 1.75, amplitude: 24, phase: 0.25,
   }) }} />;
 }
@@ -118,8 +118,8 @@ fn follow_is_exact_sugar_for_motion_path() {
         format!(
             r#"
 const P = path("M 0 0 C 20 0 80 100 100 100");
-export default function Card() {{ const ctx = useTime();
-  return <View key="dot" style={{{{ motionPath: {name}(P, ctx.progress, {{anchor:"center",rotate:"auto",angleOffset:12}}) }}}} />;
+export default function Card() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
+  return <View key="dot" style={{{{ motionPath: {name}(P, time.progress, {{anchor:"center",rotate:"auto",angleOffset:12}}) }}}} />;
 }}
 "#
         )
@@ -134,13 +134,13 @@ export default function Card() {{ const ctx = useTime();
 #[test]
 fn trail_clamps_or_wraps_without_frame_history() {
     const CLAMPED: &str = r#"
-export default function P() { const ctx = useTime();
-  return <View style={{ opacity: trail(ctx.progress, 2, { gap: 0.2, mode: "clamp" }) }} />;
+export default function P() { const time = useCurrentTime();
+  return <View style={{ opacity: trail(time.progress, 2, { gap: 0.2, mode: "clamp" }) }} />;
 }
 "#;
     const WRAPPED: &str = r#"
-export default function P() { const ctx = useTime();
-  return <View style={{ opacity: trail(ctx.progress, 2, { gap: 0.2, mode: "wrap" }) }} />;
+export default function P() { const time = useCurrentTime();
+  return <View style={{ opacity: trail(time.progress, 2, { gap: 0.2, mode: "wrap" }) }} />;
 }
 "#;
     let clamp_artifact = compile_motion(CLAMPED).expect("clamped trail").artifact;
@@ -176,8 +176,8 @@ fn auto_rotate_reuses_the_existing_path_angle_expression() {
     let artifact = compile_motion(
         r#"
 const P = path("M 0 0 L 100 100");
-export default function Card() { const ctx = useTime();
-  return <View style={{ rotate: autoRotate(P, ctx.progress) }} />;
+export default function Card() { const time = useCurrentTime();
+  return <View style={{ rotate: autoRotate(P, time.progress) }} />;
 }
 "#,
     )
@@ -208,23 +208,23 @@ fn modifier_options_and_budgets_fail_closed() {
             "unknown option",
         ),
         (
-            r#"export default function P(){ const ctx = useTime();return <View style={{left:wiggle(ctx.localFrame,60,{seed:1,frequency:2,amplitude:3})}}/>;}"#,
-            "must be `ctx.fps`",
+            r#"export default function P(){ const time = useCurrentTime();return <View style={{left:wiggle(time.seconds,60,{seed:1,frequency:2,amplitude:3})}}/>;}"#,
+            "the frame rate argument is gone",
         ),
         (
-            r#"export default function P(){ const ctx = useTime();return <View style={{left:wiggle(ctx.localFrame,ctx.fps,{seed:-1,frequency:2,amplitude:3})}}/>;}"#,
+            r#"export default function P(){ const time = useCurrentTime();return <View style={{left:wiggle(time.seconds,{seed:-1,frequency:2,amplitude:3})}}/>;}"#,
             "seed",
         ),
         (
-            r#"export default function P(){ const ctx = useTime();return <View style={{opacity:trail(ctx.progress,1,{gap:'bad'})}}/>;}"#,
+            r#"export default function P(){ const time = useCurrentTime();return <View style={{opacity:trail(time.progress,1,{gap:'bad'})}}/>;}"#,
             "gap",
         ),
         (
-            r#"export default function P(){ const ctx = useTime();return <View style={{opacity:trail(ctx.progress,1,{gap:.1,mode:"bounce"})}}/>;}"#,
+            r#"export default function P(){ const time = useCurrentTime();return <View style={{opacity:trail(time.progress,1,{gap:.1,mode:"bounce"})}}/>;}"#,
             "clamp",
         ),
         (
-            r#"const P=path("M0 0L1 1"); export default function C(){ const ctx = useTime();return <View style={{rotate:autoRotate(P,ctx.progress,{angleOffset:1})}}/>;}"#,
+            r#"const P=path("M0 0L1 1"); export default function C(){ const time = useCurrentTime();return <View style={{rotate:autoRotate(P,time.progress,{angleOffset:1})}}/>;}"#,
             "exactly two arguments",
         ),
     ];
@@ -242,10 +242,10 @@ fn follow_and_auto_rotate_already_share_the_path_sampling_truth() {
     let compiled = compile_motion(
         r##"
 const ROUTE = path("M 0 0 C 40 0 60 80 100 80");
-export default function P() { const ctx = useTime();
+export default function P() { const time = useCurrentTime();
   return <View key="dot" style={{
     width: 10, height: 10,
-    motionPath: motionPath(ROUTE, ctx.progress),
+    motionPath: motionPath(ROUTE, time.progress),
   }} />;
 }
 "##,
@@ -280,8 +280,8 @@ export default function P() { const ctx = useTime();
 fn dynamic_noise_is_the_only_wire_needed_by_the_named_wiggle_surface() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  return <View style={{ opacity: noise1d(7, ctx.localFrame * ctx.fps.den / ctx.fps.num) }} />;
+export default function P() { const time = useCurrentTime();
+  return <View style={{ opacity: noise1d(7, time.seconds) }} />;
 }
 "##,
     )
@@ -295,7 +295,7 @@ export default function P() { const ctx = useTime();
     );
 
     let wiggle = compile_motion(
-        r#"export default function P(){ const ctx = useTime();return <View style={{left:wiggle(ctx.localFrame,ctx.fps,{seed:7,frequency:2,amplitude:10})}}/>;}"#,
+        r#"export default function P(){ const time = useCurrentTime();return <View style={{left:wiggle(time.seconds,{seed:7,frequency:2,amplitude:10})}}/>;}"#,
     )
     .expect("named wiggle compiles");
     assert!(
@@ -317,7 +317,7 @@ fn static_map_expands_while_named_repeater_uses_layout_instances() {
     let compiled = compile_motion(
         r##"
 const ITEMS = [0, 1, 2, 3];
-export default function P() { const ctx = useTime();
+export default function P() {
   return <View>{ITEMS.map((index) => <View key={`copy-${index}`} style={{opacity:index / 3}} />)}</View>;
 }
 "##,

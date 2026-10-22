@@ -84,15 +84,15 @@ fn fragments_put_their_children_in_their_place() {
         r##"
 const theme = {{ colors: {{ accent: "#38bdf8" }} }};
 const ROWS = [{{ id: "x" }}, {{ id: "y" }}];
-function Pair() {{ const ctx = useTime();
+function Pair() {{ const clock = useCurrentTime();
   return <><View key="a" {BOX} /><View key="b" {BOX} /></>;
 }}
-export default function D() {{ const ctx = useTime();
+export default function D() {{ const clock = useCurrentTime();
   return <Scene>
     <View key="row" className="flex">
       <><View key="first" {BOX} /><View key="second" {BOX} /></>
       <Pair key="pair" />
-      {{ctx.progress > 0.5 && <><View key="late" {BOX} /><View key="later" {BOX} /></>}}
+      {{clock.progress > 0.5 && <><View key="late" {BOX} /><View key="later" {BOX} /></>}}
       {{ROWS.map((row) => <><View key={{`${{row.id}}-a`}} {BOX} /><View key={{`${{row.id}}-b`}} {BOX} /></>)}}
       <ThemeProvider value={{theme}}>
         <View key="themed-a" style={{{{ width: 20, height: 20, backgroundColor: useTheme().colors.accent }}}} />
@@ -139,16 +139,16 @@ fn spread_attributes_set_what_the_object_holds_and_the_last_setting_wins() {
         r##"
 const SHARED = { className: "absolute", style: { width: 10, height: 10 } };
 const ITEMS = [{ id: "one", label: "One", size: 12 }, { id: "two", label: "Two", size: 14 }];
-function Tag({ id, label, size, ...rest }) { const ctx = useTime();
+function Tag({ id, label, size, ...rest }) {
   return <View key="tag" {...rest} style={{ width: size, height: size }}>
     <Text key="label">{label}</Text>
   </View>;
 }
-function Box(props) { const ctx = useTime();
+function Box(props) {
   return <View key="box" {...props} />;
 }
-export default function D() { const ctx = useTime();
-  const local = { style: { width: 30, height: 30, opacity: ctx.progress } };
+export default function D() { const clock = useCurrentTime();
+  const local = { style: { width: 30, height: 30, opacity: clock.progress } };
   return <Scene>
     <View key="shared" {...SHARED} />
     <View key="local" {...local} />
@@ -180,7 +180,7 @@ fn spread_attributes_reach_scene3d_children_and_spans() {
         r##"
 const LAMBERT = { material: { type: "lambert", color: "#ffffff" }, rotateY: 15 };
 const STRONG = { style: { fontWeight: 700 } };
-export default function D() { const ctx = useTime();
+export default function D() {
   return <Scene style={{ width: 128, height: 128 }}>
     <Scene3D key="s" camera={{ position: [0, 0, 5], target: [0, 0, 0] }} style={{ width: 128, height: 128 }}>
       <Mesh key="shape" geometry={extrude(path("M -1 -1 L 1 -1 L 1 1 L -1 1 Z"), { depth: 0.8 })} {...LAMBERT} />
@@ -227,10 +227,10 @@ export const controls = { props: { size: number({ default: 24 }), tint: number({
 const POINT = { x: 4, y: 6, z: 8 };
 const LIST = [1, 2, 3, 4];
 const FIELD = "z";
-function Swatch({ label, ...style }) { const ctx = useTime();
+function Swatch({ label, ...style }) {
   return <View key="swatch" style={{ width: style.size, height: style.size, opacity: style.tint }} />;
 }
-export default function D({ size, ...others }) { const ctx = useTime();
+export default function D({ size, ...others }) {
   const { x, ...rest } = POINT;
   const { [FIELD]: picked, ...flat } = POINT;
   const [first, ...more] = LIST;
@@ -255,11 +255,11 @@ fn array_spreads_write_out_prepared_arrays_and_fixed_tuples() {
         r##"
 const BASE = [10, 20];
 const INPUT = [0, 1];
-export default function D() { const ctx = useTime();
-  const moving = [...BASE, ctx.progress * 100];
+export default function D() { const clock = useCurrentTime();
+  const moving = [...BASE, clock.progress * 100];
   const both = [...moving, ...BASE];
   return <Scene>
-    <View key="a" style={{ left: moving[2], top: both[4], width: interpolate(ctx.progress, [...INPUT], [...BASE]), height: 5 }} />
+    <View key="a" style={{ left: moving[2], top: both[4], width: interpolate(clock.progress, [...INPUT], [...BASE]), height: 5 }} />
   </Scene>;
 }
 "##,
@@ -270,11 +270,11 @@ export default function D() { const ctx = useTime();
 }
 
 #[test]
-fn use_time_is_read_where_it_is_used_and_passes_on_like_a_value() {
+fn the_time_is_read_where_it_is_used_and_passes_on_like_a_value() {
     let artifact = compile(
         r##"
 const later = (time, at) => time.seconds - at;
-const now = () => useTime().seconds;
+const now = () => useCurrentTime().seconds;
 function Probe({ time }) {
   return <View key="probe" style={{ width: 10, height: 10, left: time.seconds * 10 }} />;
 }
@@ -282,23 +282,22 @@ function Clock(props) {
   return <View key="clock" style={{ width: 10, height: 10, left: props.time.seconds * 10 }} />;
 }
 function Own() {
-  const { seconds } = useTime();
+  const { seconds } = useCurrentTime();
   return <View key="own" style={{ width: 10, height: 10, left: seconds * 10 }} />;
 }
 export default function D() {
-  const ctx = useTime();
-  const { seconds, fps: rate } = useTime();
+  const clock = useCurrentTime();
+  const { seconds } = useCurrentTime();
+  const { fps: rate } = useComposition();
   return <Scene>
-    <View key="alias" style={{ width: 10, height: 10, left: ctx.seconds * 10 }} />
-    <View key="inline" style={{ width: 10, height: 10, left: useTime().seconds * 10 }} />
-    <View key="destructured" style={{ width: 10, height: 10, left: seconds * 10, top: rate.num }} />
-    <View key="helper" style={{ width: 10, height: 10, left: (later(ctx, 0.5) + 0.5) * 10 }} />
+    <View key="alias" style={{ width: 10, height: 10, left: clock.seconds * 10 }} />
+    <View key="inline" style={{ width: 10, height: 10, left: useCurrentTime().seconds * 10 }} />
+    <View key="destructured" style={{ width: 10, height: 10, left: seconds * 10, top: rate }} />
+    <View key="helper" style={{ width: 10, height: 10, left: (later(clock, 0.5) + 0.5) * 10 }} />
     <View key="hook-helper" style={{ width: 10, height: 10, left: now() * 10 }} />
-    <Probe key="prop" time={ctx} />
-    <Clock key="member" time={ctx} />
+    <Probe key="prop" time={clock} />
+    <Clock key="member" time={clock} />
     <TimeScope key="scope" offset={0.25} speed={1}>
-      <View key="scoped-alias" style={{ width: 10, height: 10, left: ctx.seconds * 10 }} />
-      <View key="scoped-number" style={{ width: 10, height: 10, left: seconds * 10 }} />
       <Own key="scoped-hook" />
     </TimeScope>
   </Scene>;
@@ -314,15 +313,41 @@ export default function D() {
         "hook-helper",
         "prop/probe",
         "member/clock",
-        "scoped-number",
     ] {
         assert_eq!(style_number(&artifact, key, "left"), 10.0, "{key}");
     }
     assert_eq!(style_number(&artifact, "destructured", "top"), 30.0);
-    // The time object is read inside the scope; a number read at its binding and a component's
-    // own `useTime()` follow where they were taken.
-    for key in ["scoped-alias", "scoped-hook/own"] {
-        assert_eq!(style_number(&artifact, key, "left"), 7.5, "{key}");
+    // A component drawn inside the TimeScope reads the scope's clock.
+    assert_eq!(style_number(&artifact, "scoped-hook/own", "left"), 7.5);
+}
+
+#[test]
+fn scene_time_of_an_outer_component_cannot_be_drawn_inside_a_time_scope() {
+    for read in ["clock.seconds", "seconds"] {
+        let source = format!(
+            r##"
+export default function D() {{
+  const clock = useCurrentTime();
+  const {{ seconds }} = useCurrentTime();
+  return <Scene>
+    <TimeScope key="scope" offset={{0.25}} speed={{1}}>
+      <View key="scoped" style={{{{ width: 10, height: 10, left: {read} * 10 }}}} />
+    </TimeScope>
+  </Scene>;
+}}
+"##
+        );
+        let diagnostics = compile_motion(&source).expect_err(read);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("drawn inside a TimeScope")),
+            "{read}: {:#?}",
+            diagnostics
+                .iter()
+                .map(|diagnostic| &diagnostic.message)
+                .collect::<Vec<_>>()
+        );
     }
 }
 
@@ -330,10 +355,10 @@ export default function D() {
 fn one_source_imports_builtins_from_valle() {
     let artifact = compile(
         r##"
-import { Scene, View, useTime } from "valle";
+import { Scene, View, useCurrentTime } from "valle";
 export default function D() {
-  const ctx = useTime();
-  return <Scene><View key="a" style={{ width: 10, height: 10, left: ctx.seconds * 10 }} /></Scene>;
+  const clock = useCurrentTime();
+  return <Scene><View key="a" style={{ width: 10, height: 10, left: clock.seconds * 10 }} /></Scene>;
 }
 "##,
     );
@@ -366,7 +391,7 @@ const half = (value: number): number => (value as number) / 2;
 function tinted(size: Size): Size & Tinted {
   return { width: size.width!, height: size.height, opacity: 0.5 };
 }
-export default function D() { const ctx = useTime();
+export default function D() {
   const size = tinted({ width: scaled(BASE), height: half(BASE) + SCALE.large });
   return <Scene>
     <View key="a" style={{ width: size.width, height: size.height, opacity: size.opacity }} />

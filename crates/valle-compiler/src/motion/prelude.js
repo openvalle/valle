@@ -80,8 +80,8 @@ const strokeToPath = (input, width) => __typed({ __valleType: "pathStrokeToPath"
 const displacement = (seed, frequency, scale, options = {}) => __typed({
   __valleType: "nodeDisplacement", seed, frequency, scale, options,
 });
-const motionBlur = (velocity, shutterAngle = 180) => __typed({
-  __valleType: "nodeMotionBlur", velocity, shutterAngle,
+const motionBlur = (options = {}) => __typed({
+  __valleType: "nodeMotionBlur", velocity: options.velocity, angle: options.angle ?? 180,
 });
 const motionPath = (input, progress, options = {}) => __typed({
   __valleType: "motionPath", input, progress, options,
@@ -98,22 +98,22 @@ const clamp = (value, low, high) => {
   const lifted = value > low ? value : low;   // = fold_pairwise(Gt, [value, low])
   return lifted < high ? lifted : high;       // = fold_pairwise(Lt, [lifted, high])
 };
-// Freeze a component-local frame clock while the scene camera keeps sampling the real frame.
-// The runtime lowering in `lower_freeze_frame` is deliberately isomorphic to this prepare-time
+// Hold a time over one interval in seconds while the scene camera keeps sampling the real clock.
+// The runtime lowering in `lower_freeze_time` is deliberately isomorphic to this prepare-time
 // implementation so a static call and a frame-varying call cannot disagree at the boundaries.
-const freezeFrame = (frame, options) => {
+const freezeTime = (time, options) => {
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
-    throw new Error("valle:compute:freezeFrame(frame, { from, to }) expects an options object");
+    throw new Error("valle:compute:freezeTime(t, { from, to }) expects an options object");
   }
   const keys = Object.keys(options);
   if (keys.some((key) => key !== "from" && key !== "to")) {
-    throw new Error("valle:compute:freezeFrame accepts only from and to");
+    throw new Error("valle:compute:freezeTime accepts only from and to");
   }
   const { from, to } = options;
-  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to <= from) {
-    throw new Error("valle:compute:freezeFrame needs integer frames with 0 <= from < to");
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) {
+    throw new Error("valle:compute:freezeTime needs finite seconds with from < to");
   }
-  return frame < from ? frame : frame < to ? from : frame - (to - from);
+  return time < from ? time : time < to ? from : time - (to - from);
 };
 const gradientStop = (offset, color) => __typed({ __valleType: "gradientStop", offset, color });
 const fitText = (options = {}) => {
@@ -142,9 +142,6 @@ const conicGradient = (center, startAngle, stops, spread = "pad") => __typed({
   __valleType: "conicGradient", center, startAngle, stops, spread,
 });
 const select = (options = {}) => __control("select", options);
-const __sequenceTime = (unit, value) => ({ __valleType: "sequenceTime", unit, value });
-const frames = (value) => __sequenceTime("frames", value);
-const seconds = (value) => __sequenceTime("seconds", value);
 const stage = (options = {}) => ({ __valleType: "sequenceStageInput", ...options });
 const defineSequence = (input) => {
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
@@ -158,7 +155,6 @@ const defineSequence = (input) => {
     throw new Error("valle:compute:defineSequence exceeds the 256-stage budget");
   }
   const out = {};
-  let sequenceUnit = null;
   for (let index = 0; index < entries.length; index += 1) {
     const [label, spec] = entries[index];
     if (!spec || spec.__valleType !== "sequenceStageInput") {
@@ -171,13 +167,9 @@ const defineSequence = (input) => {
       }
     }
     const duration = spec.duration;
-    if (!duration || duration.__valleType !== "sequenceTime" ||
-        !Number.isFinite(duration.value) || duration.value <= 0) {
-      throw new Error("valle:compute:sequence stage `" + label + "` needs a finite positive duration");
-    }
-    if (sequenceUnit === null) sequenceUnit = duration.unit;
-    if (duration.unit !== sequenceUnit) {
-      throw new Error("valle:compute:sequence cannot mix seconds() and frames() units");
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error("valle:compute:sequence stage `" + label +
+        "` needs a duration: a finite positive number of seconds");
     }
     if (spec.at !== undefined && spec.after !== undefined) {
       throw new Error("valle:compute:sequence stage `" + label + "` cannot use both at and after");
@@ -190,12 +182,11 @@ const defineSequence = (input) => {
     }
     const timeValue = (name, value, fallback = 0) => {
       if (value === undefined) return fallback;
-      if (!value || value.__valleType !== "sequenceTime" || value.unit !== sequenceUnit ||
-          !Number.isFinite(value.value) || value.value < 0) {
+      if (!Number.isFinite(value) || value < 0) {
         throw new Error("valle:compute:sequence stage `" + label + "` `" + name +
-          "` must be a finite non-negative " + sequenceUnit + " value");
+          "` must be a finite non-negative number of seconds");
       }
-      return value.value;
+      return value;
     };
     let start;
     if (spec.at !== undefined) {
@@ -215,8 +206,7 @@ const defineSequence = (input) => {
     if (!Number.isFinite(start) || start < 0) {
       throw new Error("valle:compute:sequence stage `" + label + "` starts before zero");
     }
-    out[label] = { __valleType: "sequenceStage", unit: sequenceUnit,
-      start, duration: duration.value };
+    out[label] = { __valleType: "sequenceStage", start, duration };
   }
   return out;
 };
@@ -374,7 +364,7 @@ const defineLayoutStates = (input) => {
 };
 const asset = (options = {}) => ({ kind: "asset", assetKind: options.kind, required: options.required ?? false });
 const audioAnalysis = (source, options = {}) => __typed({
-  __valleType: "audioAnalysis", source, bands: options.bands, fps: options.fps,
+  __valleType: "audioAnalysis", source, bands: options.bands, rate: options.rate, fps: options.fps,
 });
 
 const overlay = (options) => ({ __valleType: "overlay", ...options });

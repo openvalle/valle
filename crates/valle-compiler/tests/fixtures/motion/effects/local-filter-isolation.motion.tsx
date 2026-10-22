@@ -4,8 +4,8 @@ const scanlines = defineRepeater({ count: 13, keyPrefix: "scanline" });
 const satellites = defineRepeater({ count: 12, keyPrefix: "satellite" });
 const ORBIT = path("M 960 264 C 1236 264 1458 387 1458 540 C 1458 693 1236 816 960 816 C 684 816 462 693 462 540 C 462 387 684 264 960 264 Z");
 
-export default function LocalFilterIsolation() { const ctx = useTime();
-  const t = ctx.progress;
+export default function LocalFilterIsolation() { const time = useCurrentTime();
+  const t = time.progress;
   const pulse = (sin(t * 12.566370614) + 1) * 0.5;
   const blur = 2 + pulse * 14;
   const hue = -24 + pulse * 76;

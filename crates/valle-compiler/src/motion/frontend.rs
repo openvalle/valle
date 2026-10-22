@@ -273,8 +273,9 @@ pub(super) fn first_async(program: &Program<'_>) -> Option<Span> {
     scan.0
 }
 
-/// The first call of a React or Remotion hook that Motion has no counterpart for, with what to
-/// write instead. A module that declares a function of that name calls its own helper.
+/// The first call of a React or Remotion hook that Motion has no counterpart for, or of a helper
+/// it no longer has, with what to write instead. A module that declares a function of that name
+/// calls its own helper.
 pub(super) fn foreign_hook(program: &Program<'_>) -> Option<(Span, String)> {
     use oxc::ast_visit::{Visit, walk};
 
@@ -282,7 +283,7 @@ pub(super) fn foreign_hook(program: &Program<'_>) -> Option<(Span, String)> {
         Some(match name {
             "useState" | "useReducer" | "useRef" | "useEffect" | "useLayoutEffect" => {
                 "there is no state and nothing runs after a frame; each frame is a pure function \
-                 of time, so compute the value from `useTime()`"
+                 of time, so compute the value from `useCurrentTime()`"
             }
             "useMemo" | "useCallback" => {
                 "each value is computed once for its frame; write the value or the function \
@@ -292,10 +293,31 @@ pub(super) fn foreign_hook(program: &Program<'_>) -> Option<(Span, String)> {
                 "pass values through props, or share a theme with `<ThemeProvider>` and \
                  `useTheme()`"
             }
-            "useCurrentFrame" => "it is Remotion's; read the frame with `useTime().localFrame`",
+            "useTime" => {
+                "the time is in two hooks: the clock with `const { seconds, progress } = \
+                 useCurrentTime()`, and the size, duration and frame rate with `const { width, \
+                 height, duration, fps } = useComposition()`"
+            }
+            "useCurrentFrame" => {
+                "it is Remotion's; write the animation in seconds, with `const { seconds } = \
+                 useCurrentTime()`"
+            }
             "useVideoConfig" => {
-                "it is Remotion's; the canvas comes from `composition`, and the frame rate and \
-                 duration from `useTime()` as `fps` and `durationFrames`"
+                "it is Remotion's; read the size, duration and frame rate with `const { width, \
+                 height, duration, fps } = useComposition()`"
+            }
+            "useFrame" => {
+                "nothing runs on each frame; compute the value from `const { seconds } = \
+                 useCurrentTime()`"
+            }
+            "seconds" => "times are plain numbers of seconds; write `0.6` for `seconds(0.6)`",
+            "frames" => {
+                "times are seconds; write the frame count over the frame rate, such as `0.5` \
+                 for `frames(15)` at 30 fps"
+            }
+            "freezeFrame" => {
+                "it took frames; hold a time in seconds with `freezeTime(seconds, { from: 1, to: \
+                 2 })`"
             }
             _ => return None,
         })

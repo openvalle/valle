@@ -128,7 +128,7 @@ impl core::fmt::Display for LayoutError {
             LayoutError::Instance { group, node, reason } => write!(f, "node `{node}`: instance group {group}: {reason}"),
             LayoutError::BadNode { at } => write!(f, "node {at}: out of range"),
             LayoutError::BadViewport => f.write_str(
-                "viewport dimensions must be non-zero and DPR finite and positive; a scene that reads ctx.viewport also requires both dimensions and a finite positive initial font size",
+                "viewport dimensions must be non-zero and DPR finite and positive; a scene that reads the composition width or height also requires both dimensions and a finite positive initial font size",
             ),
             LayoutError::BadStyle {
                 node,
@@ -615,7 +615,7 @@ fn prepare_admitted(
         particle_trajectories: Arc::new(particle_trajectories),
         instance_activation: Arc::new(instance_activation),
         layout_classes,
-        // Only expressions that read `ctx.viewport` still need both dimensions; the canvas itself
+        // Only expressions that read the viewport still need both dimensions; the canvas itself
         // comes from the artifact's delivery contract.
         requires_explicit_viewport: artifact
             .capability_set
@@ -1329,14 +1329,14 @@ pub(super) fn build_tree_inner(
                 );
             }
             NodeKind::GeometryBatch { batch } => {
-                let frame = match &batch.positions {
+                let seconds = match &batch.positions {
                     BatchPositions::Static { .. } => 0.0,
-                    BatchPositions::Particles { frame, .. } => match values.get(frame.0 as usize) {
+                    BatchPositions::Particles { time, .. } => match values.get(time.0 as usize) {
                         Some(MotionValue::Number(value)) => *value,
                         _ => {
                             return Err(LayoutError::Eval(EvalError::TypeMismatch {
                                 at,
-                                op: "particles frame",
+                                op: "particles time",
                             }));
                         }
                     },
@@ -1388,8 +1388,7 @@ pub(super) fn build_tree_inner(
                         .particle_trajectories
                         .get(at)
                         .and_then(Option::as_ref),
-                    frame,
-                    crate::frame_rate_as_f64(ctx.fps),
+                    seconds,
                     valle_motion::BatchFieldProgress {
                         position: position_progress,
                         size: size_progress,
@@ -1572,7 +1571,7 @@ pub(super) fn build_tree_inner(
                 speed,
             } => {
                 // Temporal effects must sample video at the same exact subframe chosen for the
-                // rest of the subtree, not at its quantized localFrame address.
+                // rest of the subtree, not at its quantized frame address.
                 let local_seconds = scoped_seconds[at];
                 videos.insert(
                     node.key.clone(),
@@ -3908,7 +3907,7 @@ fn resolve_echo_samples(
     at_time: &mut HashMap<valle_timeline::internal::SampleTime, Rc<LayoutTree>>,
     mut shared: Option<&mut RequestValueCache>,
 ) -> Result<HashMap<String, Vec<EchoSample>>, LayoutError> {
-    use valle_timeline::{RationalTime, internal::SampleTime};
+    use valle_timeline::internal::SampleTime;
 
     let artifact = prepared.artifact();
     let echoes = prepared
@@ -3941,18 +3940,10 @@ fn resolve_echo_samples(
             node: key.to_owned(),
             reason: reason.into(),
         };
-        let frame_duration = RationalTime::new(
-            i64::from(ctx.fps.denominator()),
-            u32::try_from(ctx.fps.numerator())
-                .map_err(|_| bad_time("output frame rate cannot form exact echo offsets"))?,
-        )
-        .map_err(|_| bad_time("output frame rate cannot form exact echo offsets"))?;
         let mut trail = Vec::with_capacity(offsets.len());
-        for (index, &offset_frames) in offsets.iter().enumerate() {
+        // Echo offsets are seconds of source time.
+        for (index, &offset) in offsets.iter().enumerate() {
             let lag = count - index as u8;
-            let offset = frame_duration
-                .checked_mul(offset_frames)
-                .map_err(|_| bad_time("echo offset overflows exact time"))?;
             let requested = ctx
                 .sample
                 .checked_offset(offset)
@@ -6022,6 +6013,19 @@ fn unit_boundaries(source: &str, split: TextSplit) -> Vec<(u32, u32)> {
     }
 }
 
+/// The JavaScript string index, in UTF-16 code units, of every character boundary of `text`,
+/// by byte offset. A unit's `start` and `end` are these indexes, as `text.slice(start, end)`.
+fn utf16_offsets(text: &str) -> Vec<u32> {
+    let mut offsets = vec![0; text.len() + 1];
+    let mut units = 0;
+    for (byte, ch) in text.char_indices() {
+        offsets[byte] = units;
+        units += ch.len_utf16() as u32;
+    }
+    offsets[text.len()] = units;
+    offsets
+}
+
 /// Takumi stores device extents; expressions and media queries use CSS pixels. Native/Wasm
 /// hosts lay out at DPR 1 and apply delivery scaling later. Low-level callers may supply a
 /// different DPR, so convert here too. Missing dimensions must not produce guessed values.
@@ -6045,11 +6049,12 @@ fn resolve_units(
     struct RichUnitGroup {
         boundaries: Vec<(u32, u32)>,
         run_ranges: HashMap<usize, (u32, u32)>,
+        utf16: Vec<u32>,
     }
 
     // A rich Text is an inline Group of styled Text runs. Join their authored source in child
-    // order before splitting, so ctx.unit.index/count/start/end address the whole Text and a
-    // word or line crossing a Span boundary remains one animation unit.
+    // order before splitting, so a unit's index, count, start and end address the whole Text and
+    // a word or line crossing a Span boundary remains one animation unit.
     let mut rich_groups = HashMap::<String, RichUnitGroup>::new();
     for group in &artifact.nodes {
         if !matches!(&group.kind, NodeKind::Group) {
@@ -6090,6 +6095,7 @@ fn resolve_units(
             RichUnitGroup {
                 boundaries: unit_boundaries(&source, split),
                 run_ranges,
+                utf16: utf16_offsets(&source),
             },
         );
     }
@@ -6131,8 +6137,8 @@ fn resolve_units(
                         valle_motion::UnitContext {
                             index: index as u32,
                             count,
-                            start,
-                            end,
+                            start: group.utf16[start as usize],
+                            end: group.utf16[end as usize],
                         },
                     ));
                 }
@@ -6140,6 +6146,7 @@ fn resolve_units(
         } else {
             let source = text_value(text, values, at)?;
             let units = unit_boundaries(&source, per_unit.split);
+            let utf16 = utf16_offsets(&source);
             let count = units.len() as u32;
             boundaries.extend(units.into_iter().enumerate().map(|(index, (start, end))| {
                 (
@@ -6148,8 +6155,8 @@ fn resolve_units(
                     valle_motion::UnitContext {
                         index: index as u32,
                         count,
-                        start,
-                        end,
+                        start: utf16[start as usize],
+                        end: utf16[end as usize],
                     },
                 )
             }));

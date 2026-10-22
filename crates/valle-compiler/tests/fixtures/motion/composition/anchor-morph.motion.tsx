@@ -12,11 +12,11 @@ const sequenceAnchors = [
   [point(140, 220), point(380, 220), point(590, 220)],
   [point(140, 300), point(380, 300), point(590, 300)],
 ];
-export default function AnchorMorph() { const ctx = useTime();
+export default function AnchorMorph() { const time = useCurrentTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
-      <Path key="pair" d={morph(A, B, ctx.progress, { anchors: pairAnchors })} fill="#ffffff" />
-      <Path key="sequence" d={morphSequence([SA, SB, SC], [0, 0.5, 1], ctx.progress, { method: "arcLength", anchors: sequenceAnchors })} fill="#22d3ee" />
+      <Path key="pair" d={morph(A, B, time.progress, { anchors: pairAnchors })} fill="#ffffff" />
+      <Path key="sequence" d={morphSequence([SA, SB, SC], [0, 0.5, 1], time.progress, { method: "arcLength", anchors: sequenceAnchors })} fill="#22d3ee" />
     </Scene>
   );
 }

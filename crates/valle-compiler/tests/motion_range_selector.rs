@@ -77,8 +77,14 @@ fn selector_rejects_invalid_options_and_unit_use_outside_text() {
     ] {
         assert!(compile_motion(&invalid).is_err());
     }
-    let outside = r#"export default function Bad() {
-      return <View style={{ opacity: rangeSelector({start:0,end:1}) }} />;
+    let outside = r#"export default function Bad() { const time = useCurrentTime();
+      return <View style={{ opacity: rangeSelector(time, {start:0,end:1}) }} />;
     }"#;
-    assert!(compile_motion(outside).is_err());
+    let diagnostics = compile_motion(outside).unwrap_err();
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.message.contains("takes the unit of the perUnit function")),
+        "{diagnostics:?}"
+    );
 }

@@ -79,7 +79,7 @@ impl TailwindClassError {
             }
             Self::Forbidden if candidate.starts_with("animate-") => {
                 "`animate-*` is not a Motion loop; use `interpolate` over local time, for example \
-                 `interpolate(ctx.seconds % 1, [0, 1], [0, 360])`"
+                 `interpolate(seconds % 1, [0, 1], [0, 360])`"
             }
             Self::Forbidden if candidate.starts_with("transition") => {
                 "transitions require an explicit state timeline; previous render requests are not state changes"

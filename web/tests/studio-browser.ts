@@ -30,8 +30,8 @@ const dir = await mkdtemp(join(tmpdir(), "valle-studio-machine-"));
 const source = `export const composition={width:240,height:140,fps:30,duration:3};
 export const controls={props:{size:number({default:40,min:10,max:200})} AUDIO_CONTROL};
 AUDIO_ANALYSIS
-export default function Main(props){ const ctx = useTime();return <Scene style={{width:240,height:140,backgroundColor:"#101010"}}>
-<View key="box" style={{position:"absolute",left:10,top:10,width:props.size,height:props.size AUDIO_HEIGHT,backgroundColor:"#67e8f9",opacity:0.5+ctx.progress*0.5}}/></Scene>;}`;
+export default function Main(props){ const time = useCurrentTime();return <Scene style={{width:240,height:140,backgroundColor:"#101010"}}>
+<View key="box" style={{position:"absolute",left:10,top:10,width:props.size,height:props.size AUDIO_HEIGHT,backgroundColor:"#67e8f9",opacity:0.5+time.progress*0.5}}/></Scene>;}`;
 function assert(ok: unknown, message: string): asserts ok {
   if (!ok) throw new Error(message);
 }
@@ -455,7 +455,7 @@ try {
     // One source fails to compile and one fails to parse; both open with their error.
     for (const [name, from, to] of [
       ["compile", '<View key="box"', '<Missing key="box"'],
-      ["syntax", "export default function Main(props){ const ctx = useTime();", "export default function Main(props){("],
+      ["syntax", "export default function Main(props){ const time = useCurrentTime();", "export default function Main(props){("],
     ] as const) {
       const valid = source.replace(/AUDIO_CONTROL|AUDIO_ANALYSIS|AUDIO_HEIGHT/g, "");
       const input = join(dir, `${name}.motion.tsx`);
@@ -476,12 +476,12 @@ try {
         .replace(
           "AUDIO_ANALYSIS",
           audio
-            ? 'const BEAT=audioAnalysis("asset://beat",{bands:8,fps:30});'
+            ? 'const BEAT=audioAnalysis("asset://beat",{bands:8,rate:30});'
             : "",
         )
-        .replace("AUDIO_HEIGHT", audio ? "+BEAT.level(ctx.seconds)*10" : "")
+        .replace("AUDIO_HEIGHT", audio ? "+BEAT.level(time.seconds)*10" : "")
         .replace("backgroundColor:\"#101010\"", mode === "effects" ? 'backgroundColor:"#101010",filter:"film-grain(4294967295 0.5 2px)"' : 'backgroundColor:"#101010"')
-        .replace('opacity:0.5+ctx.progress*0.5', mode === "effects" ? 'opacity:0.5+ctx.progress*0.5,filter:"radial-blur(120px 70px 128px)"' : 'opacity:0.5+ctx.progress*0.5'),
+        .replace('opacity:0.5+time.progress*0.5', mode === "effects" ? 'opacity:0.5+time.progress*0.5,filter:"radial-blur(120px 70px 128px)"' : 'opacity:0.5+time.progress*0.5'),
     );
     const args: string[] = [];
     if (audio) {

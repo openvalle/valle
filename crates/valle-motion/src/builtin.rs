@@ -18,11 +18,15 @@ pub fn math_unary(op: MathUnaryOp, value: f64) -> Result<f64, &'static str> {
         MathUnaryOp::Cos => valle_draw::math::cos(value),
         MathUnaryOp::Tan => valle_draw::math::tan(value),
         MathUnaryOp::Floor => value.floor(),
-        MathUnaryOp::FrameFloor => crate::time::frame_index_floor(value),
         MathUnaryOp::Ceil => value.ceil(),
         MathUnaryOp::Round => ecma_round(value),
         MathUnaryOp::Trunc => value.trunc(),
         MathUnaryOp::Fract => value - value.floor(),
+        MathUnaryOp::ClockFloor => crate::time::clock_floor(value),
+        MathUnaryOp::ClockCeil => crate::time::clock_ceil(value),
+        MathUnaryOp::ClockRound => crate::time::clock_round(value),
+        MathUnaryOp::ClockTrunc => crate::time::clock_trunc(value),
+        MathUnaryOp::ClockFract => crate::time::clock_mod(value, 1.0),
     };
     result
         .is_finite()
@@ -48,6 +52,18 @@ pub fn math_binary(op: MathBinaryOp, lhs: f64, rhs: f64) -> Result<f64, &'static
                 return Err("remainder divisor must not be zero");
             }
             lhs % rhs
+        }
+        MathBinaryOp::ClockMod => {
+            if rhs <= 0.0 {
+                return Err("mod period must be finite and positive");
+            }
+            crate::time::clock_mod(lhs, rhs)
+        }
+        MathBinaryOp::ClockRemainder => {
+            if rhs == 0.0 {
+                return Err("remainder divisor must not be zero");
+            }
+            crate::time::clock_remainder(lhs, rhs)
         }
         MathBinaryOp::PingPong => {
             if rhs <= 0.0 {

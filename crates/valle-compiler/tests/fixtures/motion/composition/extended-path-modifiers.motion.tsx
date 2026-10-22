@@ -4,13 +4,13 @@ const CROSS = path("M 430 30 L 490 30 L 490 70 L 530 70 L 530 110 L 490 110 L 49
 const WAVE = zigzag(line([point(40, 260), point(280, 260)]), { size: 14, ridges: 8 });
 const ROUTE = line([point(390, 260), point(570, 260)]);
 const RING = strokeToPath(arc(point(320, 190), 34, 0, TAU), 12);
-export default function MoreModifiers() { const ctx = useTime();
+export default function MoreModifiers() { const time = useCurrentTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
-      <Path key="pucker" d={puckerBloat(STAR, sin(ctx.seconds * 2) * 0.7)} fill="#f472b6" />
-      <Path key="twist" d={twist(CROSS, ctx.progress * 1.3)} fill="#8b7bff" />
-      <Path key="simplify" d={simplify(WAVE, ctx.progress * 18)} fill="none" stroke="#22d3ee" strokeWidth={3} />
-      <Path key="stroke" d={strokeToPath(ROUTE, 8 + ctx.progress * 32)} fill="#ffd000" />
+      <Path key="pucker" d={puckerBloat(STAR, sin(time.seconds * 2) * 0.7)} fill="#f472b6" />
+      <Path key="twist" d={twist(CROSS, time.progress * 1.3)} fill="#8b7bff" />
+      <Path key="simplify" d={simplify(WAVE, time.progress * 18)} fill="none" stroke="#22d3ee" strokeWidth={3} />
+      <Path key="stroke" d={strokeToPath(ROUTE, 8 + time.progress * 32)} fill="#ffd000" />
       <Path key="ring" d={RING} fill="#a3e635" />
     </Scene>
   );

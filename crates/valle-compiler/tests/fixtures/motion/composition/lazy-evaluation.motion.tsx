@@ -6,13 +6,13 @@ const DOTS = Array.from({ length: 2000 }, (_, i) => ({
   y: 4 + Math.floor(i / 80) * 14,
 }));
 
-export default function LazyEval() { const ctx = useTime();
+export default function LazyEval() { const time = useCurrentTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       {DOTS.map((dot) => (
-        <View key={dot.id} className="absolute" visible={ctx.seconds * 1000 >= dot.i}
+        <View key={dot.id} className="absolute" visible={time.seconds * 1000 >= dot.i}
           style={{ left: dot.x, top: dot.y, width: 4, height: 4, backgroundColor: "#ffffff",
-            opacity: clamp(ctx.seconds * 1000 - dot.i, 0, 1) }} />
+            opacity: clamp(time.seconds * 1000 - dot.i, 0, 1) }} />
       ))}
     </Scene>
   );

@@ -5,13 +5,13 @@ const RIGHT_REVERSED = path("M 280 30 L 360 30 L 360 110 L 280 110 Z M 80 30 L 1
 const SOLID = path("M 400 200 L 520 200 L 520 320 L 400 320 Z");
 const HOLED = path("M 400 200 L 520 200 L 520 320 L 400 320 Z M 440 240 L 480 240 L 480 280 L 440 280 Z");
 
-export default function PairedContours() { const ctx = useTime();
+export default function PairedContours() { const time = useCurrentTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
-      <Path key="outers" d={morph(LEFT, RIGHT_REVERSED, ctx.progress, {
+      <Path key="outers" d={morph(LEFT, RIGHT_REVERSED, time.progress, {
         pairs: [[0, 1], [1, 0]],
       })} fill="#ffffff" />
-      <Path key="hole" d={morphSequence([SOLID, HOLED, SOLID], [0, 0.5, 1], ctx.progress, {
+      <Path key="hole" d={morphSequence([SOLID, HOLED, SOLID], [0, 0.5, 1], time.progress, {
         pairs: [[0, 0, 0], [null, 1, null]],
       })} fill="#22d3ee" />
     </Scene>

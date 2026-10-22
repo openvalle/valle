@@ -27,8 +27,8 @@ fn expect_message(source: &str, needles: &[&str]) {
 fn exactly_specified_math_members_work_at_frame_time_without_new_ir() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  const t = ctx.progress;
+export default function P() { const time = useCurrentTime();
+  const t = time.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
                            opacity: clamp(Math.abs(t - 0.5) * Math.min(2, 3) + Math.max(0, t), 0, 1) }} />
@@ -61,8 +61,8 @@ export default function P() { const ctx = useTime();
 fn approximated_math_members_stay_rejected() {
     let messages = diagnostics_of(
         r##"
-export default function P() { const ctx = useTime();
-  const t = ctx.progress;
+export default function P() { const time = useCurrentTime();
+  const t = time.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
                            opacity: Math.log(t) }} />
@@ -82,8 +82,8 @@ export default function P() { const ctx = useTime();
 fn comparing_a_length_against_a_number_names_the_call_the_author_wrote() {
     let messages = diagnostics_of(
         r##"
-export default function P() { const ctx = useTime();
-  const t = ctx.progress;
+export default function P() { const time = useCurrentTime();
+  const t = time.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: Math.min(t, "10px"), top: 0, width: 10, height: 10 }} />
   </Scene>);
@@ -103,7 +103,7 @@ fn exponentiation_assignment_points_at_the_plain_operator() {
     let messages = diagnostics_of(
         r##"
 function grow(x) { let y = x; y **= 2; return y; }
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: grow(3), top: 0, width: 10, height: 10 }} />
   </Scene>);
@@ -122,7 +122,7 @@ export default function P() { const ctx = useTime();
 fn a_literal_double_star_in_authored_text_is_not_mistaken_for_the_operator() {
     compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <Text key="t" style={{ position: "absolute", left: 0, top: 0, fontSize: 20, color: "#fff" }}>a ** b</Text>
   </Scene>);
@@ -136,8 +136,8 @@ export default function P() { const ctx = useTime();
 fn a_frame_dependent_loop_points_at_the_prepare_time_map_that_replaces_it() {
     let messages = diagnostics_of(
         r##"
-export default function P() { const ctx = useTime();
-  for (let i = 0; i < ctx.progress * 3; i++) {}
+export default function P() { const time = useCurrentTime();
+  for (let i = 0; i < time.progress * 3; i++) {}
   return (<Scene className="h-full w-full" />);
 }
 "##,
@@ -155,7 +155,7 @@ fn reversed_clamp_bounds_are_rejected_on_every_path() {
     // Constant arguments inside a component.
     let diagnostics = diagnostics_of(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
                            width: clamp(5, 10, 3) }} />
@@ -174,7 +174,7 @@ export default function P() { const ctx = useTime();
     let diagnostics = diagnostics_of(
         r##"
 const x = clamp(5, 10, 3);
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10, width: x }} />
   </Scene>);
@@ -191,10 +191,10 @@ export default function P() { const ctx = useTime();
     // Frame-time value with static bounds.
     let diagnostics = diagnostics_of(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() { const time = useCurrentTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: clamp(ctx.progress, 10, 3) }} />
+                           width: clamp(time.progress, 10, 3) }} />
   </Scene>);
 }
 "##,
@@ -212,10 +212,10 @@ fn well_formed_clamp_still_works_on_both_paths() {
     let folded = compile_motion(
         r##"
 const x = clamp(5, 0, 3);
-export default function P() { const ctx = useTime();
+export default function P() { const time = useCurrentTime();
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10, width: x,
-                           opacity: clamp(ctx.progress, 0, 1) }} />
+                           opacity: clamp(time.progress, 0, 1) }} />
   </Scene>);
 }
 "##,
@@ -243,7 +243,7 @@ fn kept_restrictions_name_what_to_write_instead() {
         r#"<Scene><View key="a" style={{ width: 10, height: 10, opacity: VALUE }} /></Scene>"#;
     let component = |value: &str| {
         format!(
-            "export default function P() {{ const ctx = useTime(); return {}; }}",
+            "export default function P() {{ const time = useCurrentTime(); return {}; }}",
             scene.replace("VALUE", value)
         )
     };
@@ -293,7 +293,10 @@ fn kept_restrictions_name_what_to_write_instead() {
 fn components_take_props_and_read_the_time_and_data_through_hooks() {
     let scene = r#"<Scene><View key="a" style={{ width: 10, height: 10 }} /></Scene>"#;
     let root = |params: &str| format!("export default function P({params}) {{ return {scene}; }}");
-    expect_message(&root("ctx"), &["takes `(props)`", "const ctx = useTime()"]);
+    expect_message(
+        &root("ctx"),
+        &["takes `(props)`", "const { seconds } = useCurrentTime()"],
+    );
     expect_message(
         &root("props, data"),
         &["takes `(props)`", "const data = useData()"],
@@ -312,23 +315,52 @@ fn components_take_props_and_read_the_time_and_data_through_hooks() {
     };
     expect_message(
         &body("", "ctx.progress"),
-        &["`ctx` is not defined", "const ctx = useTime()"],
-    );
-    expect_message(&body("", "useTime()"), &["holds several numbers"]);
-    expect_message(
-        &body("const ctx = useTime();", "ctx.nope"),
-        &["is not a number in `useTime()`"],
+        &["`ctx` is not defined", "useCurrentTime()"],
     );
     expect_message(
-        &body("const t = useTime(1);", "1"),
-        &["useTime() takes no arguments"],
+        &body("", "useCurrentTime()"),
+        &["holds several numbers", "`seconds`"],
     );
     expect_message(
-        &format!("const NOW = useTime();\n{}", root("")),
+        &body("const time = useCurrentTime();", "time.nope"),
+        &["`nope` is not in `useCurrentTime()`"],
+    );
+    expect_message(
+        &body("const time = useCurrentTime();", "time.localFrame"),
+        &[
+            "`localFrame` is not in `useCurrentTime()`",
+            "Math.floor(seconds * rate)",
+        ],
+    );
+    expect_message(
+        &body("const view = useComposition();", "view.durationFrames"),
+        &[
+            "`durationFrames` is not in `useComposition()`",
+            "Math.round(duration * fps)",
+        ],
+    );
+    expect_message(
+        &body("const time = useCurrentTime();", "time.seconds.value"),
+        &["is a number and has no fields"],
+    );
+    expect_message(
+        &body("const t = useCurrentTime(1);", "1"),
+        &["useCurrentTime() takes no arguments"],
+    );
+    expect_message(
+        &body("const [seconds] = useCurrentTime();", "seconds"),
+        &["destructure it by name"],
+    );
+    expect_message(
+        &format!("const NOW = useCurrentTime();\n{}", root("")),
         &["inside a component or a helper"],
     );
     expect_message(
-        &format!("const useTime = () => 1;\n{}", root("")),
+        &format!("const SIZE = useComposition();\n{}", root("")),
+        &["inside a component or a helper"],
+    );
+    expect_message(
+        &format!("const useCurrentTime = () => 1;\n{}", root("")),
         &["reserved Motion intrinsics"],
     );
     expect_message(
@@ -340,12 +372,23 @@ fn components_take_props_and_read_the_time_and_data_through_hooks() {
         &["`useState` is not available", "pure function of time"],
     );
     expect_message(
+        &body("const time = useTime();", "1"),
+        &[
+            "`useTime` is not available",
+            "useCurrentTime()",
+            "useComposition()",
+        ],
+    );
+    expect_message(
         &body("const frame = useCurrentFrame();", "1"),
-        &["useTime().localFrame"],
+        &[
+            "`useCurrentFrame` is not available",
+            "const { seconds } = useCurrentTime()",
+        ],
     );
     expect_message(
         &body("const config = useVideoConfig();", "1"),
-        &["composition", "durationFrames"],
+        &["`useVideoConfig` is not available", "useComposition()"],
     );
     // A module's own function of that name is not React's.
     compile_motion(&format!(

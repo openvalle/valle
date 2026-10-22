@@ -17,10 +17,8 @@ fn diagnostics_of(source: &str) -> Vec<String> {
 }
 
 const SPRING: &str = r##"
-export default function P() { const ctx = useTime();
-  const enter = spring({
-    elapsedFrames: ctx.localFrame,
-    fps: ctx.fps,
+export default function P() { const time = useCurrentTime();
+  const enter = spring(time.seconds, {
     damping: 18,
     stiffness: 140,
   });
@@ -58,37 +56,28 @@ fn spring_value(source: &str, fps_num: u32, duration_frames: u32, frame: u32) ->
     value
 }
 
-// Springs must never fold to constants.
+// A spring is a function of time in seconds.
 
-/// Spring reads render-time fps directly, even when elapsedFrames is constant. Preserve its IR node rather than evaluating with a placeholder context.
+/// A spring of a constant time is one value, whatever the frame and the frame rate.
 #[test]
-fn a_spring_with_a_constant_time_input_is_never_folded_away() {
+fn a_spring_of_a_constant_time_is_the_same_at_every_frame_rate() {
     const CONSTANT_TIME: &str = r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, height: 10,
-                           width: spring({ elapsedFrames: 10, fps: ctx.fps, preset: "gentle" }) }} />
+                           width: spring(1 / 3, { preset: "gentle" }) }} />
   </Scene>);
 }
 "##;
-    let compiled = compile_motion(CONSTANT_TIME).expect("compiles");
-    assert!(
-        compiled
-            .artifact
-            .exprs
-            .iter()
-            .any(|expr| matches!(expr, Expr::Spring { .. })),
-        "a spring must survive constant folding even when its time input is a literal; \
-         folding it bakes the dummy fps=1 answer into the artifact"
-    );
-
-    // The same artifact produces different values at different frame rates for a fixed frame index.
-    let slow = spring_value(CONSTANT_TIME, 30, 60, 0);
-    let fast = spring_value(CONSTANT_TIME, 60, 120, 0);
-    assert_ne!(
-        slow, fast,
-        "a constant elapsedFrames still means different wall-clock times at different fps"
-    );
+    let at_rest = spring_value(CONSTANT_TIME, 30, 60, 0);
+    for (fps, frame) in [(30, 20), (60, 0), (60, 90)] {
+        assert_eq!(
+            spring_value(CONSTANT_TIME, fps, 120, frame).to_bits(),
+            at_rest.to_bits(),
+            "{fps} fps frame {frame}"
+        );
+    }
+    assert!(at_rest > 0.0 && at_rest < 1.0, "{at_rest}");
 }
 
 // Frame-rate independence.
@@ -108,7 +97,7 @@ fn the_spring_is_frame_rate_invariant_bit_for_bit() {
     }
 }
 
-// Explicit source-frame windows.
+// Authored windows.
 
 /// Continue spring evolution after an authored window instead of clamping elapsed time.
 #[test]
@@ -126,12 +115,12 @@ fn the_spring_keeps_converging_after_its_authored_window_closes() {
     );
 }
 
-/// Before an explicit source-frame start, return the initial value.
+/// Before its start time, the spring holds its initial value.
 #[test]
 fn the_spring_sits_at_its_start_value_before_its_authored_window_begins() {
     let source = r##"
-export default function P() { const ctx = useTime();
-  const out = spring({ elapsedFrames: ctx.localFrame - 30, fps: ctx.fps, preset: "gentle" });
+export default function P() { const time = useCurrentTime();
+  const out = spring(time.seconds - 1, { preset: "gentle" });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: out }} />
   </Scene>);
@@ -153,8 +142,8 @@ export default function P() { const ctx = useTime();
 fn a_preset_and_bare_parameters_together_are_rejected_at_compile_time() {
     let messages = diagnostics_of(
         r##"
-export default function P() { const ctx = useTime();
-  const e = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "gentle", stiffness: 200 });
+export default function P() { const time = useCurrentTime();
+  const e = spring(time.seconds, { preset: "gentle", stiffness: 200 });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
   </Scene>);
@@ -173,8 +162,8 @@ export default function P() { const ctx = useTime();
 fn an_unknown_preset_lists_the_ones_that_exist() {
     let messages = diagnostics_of(
         r##"
-export default function P() { const ctx = useTime();
-  const e = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, preset: "springy" });
+export default function P() { const time = useCurrentTime();
+  const e = spring(time.seconds, { preset: "springy" });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
   </Scene>);
@@ -189,27 +178,33 @@ export default function P() { const ctx = useTime();
     );
 }
 
-// Require ctx.fps as the frame-rate input.
+// The frame form is gone.
 
-/// The spring frame rate must match the render context to preserve sampling invariance.
+/// The old frame form names the form in seconds.
 #[test]
-fn a_hand_written_frame_rate_is_rejected() {
-    let messages = diagnostics_of(
-        r##"
-export default function P() { const ctx = useTime();
-  const e = spring({ elapsedFrames: ctx.localFrame, fps: 60, preset: "gentle" });
+fn the_old_frame_form_names_the_form_in_seconds() {
+    for spring in [
+        r#"spring({ elapsedFrames: 10, fps: 30, preset: "gentle" })"#,
+        r#"spring(seconds, { fps: 30, preset: "gentle" })"#,
+    ] {
+        let messages = diagnostics_of(&format!(
+            r##"
+export default function P() {{ const {{ seconds }} = useCurrentTime();
+  const e = {spring};
   return (<Scene className="h-full w-full">
-    <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
+    <View key="a" style={{{{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }}}} />
   </Scene>);
-}
-"##,
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|message| message.contains("must be `ctx.fps`")),
-        "got {messages:#?}"
-    );
+}}
+"##
+        ));
+        assert!(
+            messages.iter().any(|message| {
+                message.contains("`elapsedFrames` and `fps` are gone")
+                    && message.contains("spring(seconds - 0.4")
+            }),
+            "{spring}: {messages:#?}"
+        );
+    }
 }
 
 /// Physical parameters must be compile-time constants.
@@ -217,8 +212,8 @@ export default function P() { const ctx = useTime();
 fn frame_varying_physical_parameters_are_rejected() {
     let messages = diagnostics_of(
         r##"
-export default function P() { const ctx = useTime();
-  const e = spring({ elapsedFrames: ctx.localFrame, fps: ctx.fps, stiffness: ctx.progress * 100 });
+export default function P() { const time = useCurrentTime();
+  const e = spring(time.seconds, { stiffness: time.progress * 100 });
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10, opacity: e }} />
   </Scene>);
@@ -240,8 +235,8 @@ export default function P() { const ctx = useTime();
 fn keyframes_are_multi_stop_interpolate_with_per_segment_easing() {
     let compiled = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
-  const t = ctx.progress;
+export default function P() { const time = useCurrentTime();
+  const t = time.progress;
   return (<Scene className="h-full w-full">
     <View key="a" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
                            opacity: interpolate(t, [0, 0.3, 0.7, 1], [0, 1, 1, 0], { easing: ["easeOut", "linear", "easeIn"] }) }} />
@@ -273,8 +268,8 @@ fn staggered_sequences_are_computed_at_compile_time() {
         r##"
 const CARDS = [0, 1, 2, 3];
 const stagger = (i, each, overlap) => i * (each - overlap);
-export default function P() { const ctx = useTime();
-  const t = ctx.progress;
+export default function P() { const time = useCurrentTime();
+  const t = time.progress;
   return (<Scene className="h-full w-full">
     {CARDS.map((c, i) => (
       <View key={`c-${i}`} style={{ position: "absolute", left: i * 100, top: 0, width: 80, height: 80,

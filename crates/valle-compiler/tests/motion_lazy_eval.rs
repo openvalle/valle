@@ -16,12 +16,12 @@ fn expanded_absolute_leaves_match_full_evaluation() {
     let source = r##"
         export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
         const DOTS = Array.from({ length: 64 }, (_, i) => ({ id: `d${i}`, i, x: 4 + (i % 8) * 8, y: 4 + Math.floor(i / 8) * 14 }));
-        export default function LazyEval() { const ctx = useTime();
+        export default function LazyEval() { const time = useCurrentTime();
           return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
             {DOTS.map((dot) => (
-              <View key={dot.id} className="absolute" visible={ctx.seconds * 1000 >= dot.i}
+              <View key={dot.id} className="absolute" visible={time.seconds * 1000 >= dot.i}
                 style={{ left: dot.x, top: dot.y, width: 4, height: 4, backgroundColor: "#ffffff",
-                  opacity: clamp(ctx.seconds * 1000 - dot.i, 0, 1) }} />
+                  opacity: clamp(time.seconds * 1000 - dot.i, 0, 1) }} />
             ))}
           </Scene>;
         }
@@ -30,8 +30,8 @@ fn expanded_absolute_leaves_match_full_evaluation() {
     let artifact = compile_motion(&expanded).unwrap().artifact;
     // The ternary preserves the visibility condition but prevents the simple time-gate fast path.
     let eager = compile_motion(&expanded.replace(
-        "visible={ctx.seconds * 1000 >= dot.i}",
-        "visible={(ctx.seconds * 1000 >= dot.i ? true : false)}",
+        "visible={time.seconds * 1000 >= dot.i}",
+        "visible={(time.seconds * 1000 >= dot.i ? true : false)}",
     ))
     .unwrap()
     .artifact;
@@ -83,13 +83,13 @@ fn time_scope_keeps_independent_leaves_lazy_at_mapped_and_random_access_times() 
     let source = r##"
         export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
         const DOTS = Array.from({ length: 64 }, (_, i) => ({ id: `d${i}`, i, x: 4 + (i % 8) * 8, y: 4 + Math.floor(i / 8) * 14 }));
-        export default function Scoped() { const ctx = useTime();
+        export default function Scoped() { const time = useCurrentTime();
           return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
             <TimeScope key="scope" offset={0.5} speed={2}>
               {DOTS.map((dot) => (
-                <View key={dot.id} className="absolute " visible={ctx.seconds * 30 >= dot.i}
+                <View key={dot.id} className="absolute " visible={time.seconds * 30 >= dot.i}
                   style={{ left: dot.x, top: dot.y, width: 4, height: 4, backgroundColor: "#ffffff",
-                    opacity: clamp(ctx.seconds * 30 - dot.i, 0, 1) }} />
+                    opacity: clamp(time.seconds * 30 - dot.i, 0, 1) }} />
               ))}
             </TimeScope>
           </Scene>;
@@ -97,8 +97,8 @@ fn time_scope_keeps_independent_leaves_lazy_at_mapped_and_random_access_times() 
     "##;
     let artifact = compile_motion(source).unwrap().artifact;
     let eager = compile_motion(&source.replace(
-        "visible={ctx.seconds * 30 >= dot.i}",
-        "visible={(ctx.seconds * 30 >= dot.i ? true : false)}",
+        "visible={time.seconds * 30 >= dot.i}",
+        "visible={(time.seconds * 30 >= dot.i ? true : false)}",
     ))
     .unwrap()
     .artifact;
@@ -255,8 +255,8 @@ fn nested_absolute_leaves_keep_container_layout_and_eager_draw_program() {
 fn shifted_reversed_time_gate_keeps_absolute_leaves_lazy() {
     let source = include_str!("fixtures/motion/composition/nested-lazy-evaluation.motion.tsx")
         .replace(
-            "ctx.seconds * 100 >= dot.i",
-            "dot.i <= (ctx.seconds - 0.25) * 100",
+            "time.seconds * 100 >= dot.i",
+            "dot.i <= (time.seconds - 0.25) * 100",
         );
     let artifact = compile_motion(&source).unwrap().artifact;
     let eager =
@@ -380,8 +380,8 @@ fn local_visibility_certificates_skip_gates_away_from_a_threshold() {
 fn whole_duration_visibility_certificate_skips_only_proven_hidden_leaves() {
     let source = include_str!("fixtures/motion/composition/nested-lazy-evaluation.motion.tsx")
         .replace(
-            "ctx.seconds * 100 >= dot.i",
-            "ctx.seconds * 100 >= dot.i + 1000",
+            "time.seconds * 100 >= dot.i",
+            "time.seconds * 100 >= dot.i + 1000",
         );
     let artifact = compile_motion(&source).unwrap().artifact;
     let eager =
@@ -708,8 +708,8 @@ fn shifted_reversed_time_gate_selects_instance_range() {
     let artifact = compile_motion(source).unwrap().artifact;
     assert_eq!(artifact.instance_groups.len(), 1);
     let eager = compile_motion(&source.replace(
-        "dot.i <= (ctx.seconds - 0.2) * 1000",
-        "(dot.i <= (ctx.seconds - 0.2) * 1000 ? true : false)",
+        "dot.i <= (time.seconds - 0.2) * 1000",
+        "(dot.i <= (time.seconds - 0.2) * 1000 ? true : false)",
     ))
     .unwrap()
     .artifact;
@@ -795,12 +795,12 @@ fn nonmonotone_instance_visibility_evaluates_rows_individually() {
     let source = r##"
         export const composition = { width: 64, height: 32, fps: 30, duration: 1 };
         const DOTS = Array.from({ length: 8 }, (_, i) => ({ id: `d${i}`, i, x: i * 8 }));
-        export default function Alternating() { const ctx = useTime();
+        export default function Alternating() { const time = useCurrentTime();
           return <Scene className="relative h-full w-full">
             {DOTS.map((dot) => <View key={dot.id} className="absolute"
               visible={dot.i % 2 === 0}
               style={{ left: dot.x, top: 4, width: 4, height: 4,
-                backgroundColor: "#ffffff", opacity: ctx.progress }} />)}
+                backgroundColor: "#ffffff", opacity: time.progress }} />)}
           </Scene>;
         }
     "##;
@@ -922,9 +922,9 @@ fn callback_index_drives_the_same_visible_prefix() {
 #[test]
 fn hidden_flow_node_still_positions_its_sibling() {
     let artifact = compile_motion(
-        r##"export default function Flow() { const ctx = useTime(); return (
+        r##"export default function Flow() { const time = useCurrentTime(); return (
           <Scene key="root" style={{display:"flex",width:160,height:60}}>
-            <View key="hidden" visible={ctx.seconds > 1} style={{width:50,height:20}} />
+            <View key="hidden" visible={time.seconds > 1} style={{width:50,height:20}} />
             <View key="sibling" style={{width:10,height:20,backgroundColor:"#fff"}} />
           </Scene>
         ); }"##,
@@ -955,9 +955,9 @@ fn hidden_flow_node_still_positions_its_sibling() {
 #[test]
 fn bounds_reference_keeps_hidden_absolute_geometry() {
     let artifact = compile_motion(
-        r##"export default function Referenced() { const ctx = useTime(); return (
+        r##"export default function Referenced() { const time = useCurrentTime(); return (
           <Scene key="root" style={{width:160,height:60}}>
-            <View key="hidden" className="absolute" visible={ctx.seconds > 1}
+            <View key="hidden" className="absolute" visible={time.seconds > 1}
               style={{left:10,top:4,width:40,height:20,backgroundColor:"#fff"}} />
             <View key="reader" className="absolute"
               style={{left:70,top:4,width:10,height:10,backgroundColor:"#fff",
@@ -995,9 +995,9 @@ fn bounds_reference_keeps_hidden_absolute_geometry() {
 #[test]
 fn visible_descendant_keeps_its_hidden_parent_in_layout() {
     let artifact = compile_motion(
-        r##"export default function Descendant() { const ctx = useTime(); return (
+        r##"export default function Descendant() { const time = useCurrentTime(); return (
           <Scene key="root" style={{width:160,height:60}}>
-            <View key="parent" className="absolute" visible={ctx.seconds > 1}
+            <View key="parent" className="absolute" visible={time.seconds > 1}
               style={{left:10,top:4,width:40,height:20,backgroundColor:"#f00"}}>
               <View key="child" visible={true}
                 style={{width:10,height:10,backgroundColor:"#fff"}} />

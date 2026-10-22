@@ -10,7 +10,7 @@ use valle_timeline::FrameRate;
 
 fn source(class: &str) -> String {
     format!(
-        r#"export default function Demo() {{ const ctx = useTime();
+        r#"export default function Demo() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
         return <Scene style={{{{width:320,height:180}}}}>
             <View key="target" className={class} style={{{{height:40}}}} />
         </Scene>;
@@ -61,7 +61,7 @@ fn snapshots(source: &str, frames: &[u32]) -> Vec<(BTreeMap<String, [f32; 4]>, V
 #[test]
 fn independent_conditions_and_token_fragments_select_the_right_frame_styles() {
     let dynamic = source(
-        r#"{`w-20 ${ctx.localFrame >= 30 ? 'w-40' : ''} bg-${ctx.localFrame >= 50 ? 'blue-500' : 'red-500'}`}"#,
+        r#"{`w-20 ${frame >= 30 ? 'w-40' : ''} bg-${frame >= 50 ? 'blue-500' : 'red-500'}`}"#,
     );
     let frames = [60, 0, 30, 49, 50, 0, 60];
     let actual = snapshots(&dynamic, &frames);
@@ -82,27 +82,24 @@ fn independent_conditions_and_token_fragments_select_the_right_frame_styles() {
 #[test]
 fn reused_class_choices_and_pure_helpers_preserve_important_and_inline_precedence() {
     let authored = r#"function color(active) { return active ? 'bg-blue-500' : 'bg-red-500'; }
-        export default function Demo() { const ctx = useTime();
-            const width = ctx.localFrame >= 30 ? 'w-40' : 'w-20!';
+        export default function Demo() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
+            const width = frame >= 30 ? 'w-40' : 'w-20!';
             return <Scene style={{width:320,height:180}}>
-                <View key="target" className={`${width} ${color(ctx.localFrame >= 50)}`} style={{height:40,width:100}}/>
+                <View key="target" className={`${width} ${color(frame >= 50)}`} style={{height:40,width:100}}/>
             </Scene>;
         }"#;
     let actual = snapshots(authored, &[60, 0, 30]);
     assert_eq!(actual[0].0["target"][2], 100.0);
     assert_eq!(actual[1].0["target"][2], 80.0);
     assert_eq!(actual[2].0["target"][2], 100.0);
-    let static_classes = authored.replace(
-        "`${width} ${color(ctx.localFrame >= 50)}`",
-        "'w-20! bg-red-500'",
-    );
+    let static_classes = authored.replace("`${width} ${color(frame >= 50)}`", "'w-20! bg-red-500'");
     assert_eq!(actual[1], snapshots(&static_classes, &[0])[0]);
 }
 
 #[test]
 fn repeated_candidates_merge_conditions_and_unconditional_classes_win() {
     let authored = source(
-        r#"{`${ctx.localFrame > 10 ? 'w-40 bg-red-500' : 'w-20'} ${ctx.localFrame < 30 ? 'bg-red-500' : ''} w-20`}"#,
+        r#"{`${frame > 10 ? 'w-40 bg-red-500' : 'w-20'} ${frame < 30 ? 'bg-red-500' : ''} w-20`}"#,
     );
     let actual = snapshots(&authored, &[0, 20, 60]);
     for (i, class) in [
@@ -120,7 +117,7 @@ fn repeated_candidates_merge_conditions_and_unconditional_classes_win() {
 #[test]
 fn independent_class_conditions_do_not_expand_complete_style_combinations() {
     let holes = (0..20)
-        .map(|n| format!("${{ctx.localFrame > {n} ? 'w-{}' : ''}}", n + 1))
+        .map(|n| format!("${{frame > {n} ? 'w-{}' : ''}}", n + 1))
         .collect::<Vec<_>>()
         .join(" ");
     let artifact = compile_motion(&source(&format!("{{`{holes}`}}")))
@@ -135,16 +132,16 @@ fn independent_class_conditions_do_not_expand_complete_style_combinations() {
     assert_eq!(node.class_conditions.len(), 20);
     assert!(artifact.exprs.len() < 200, "{}", artifact.exprs.len());
 
-    let mut aliases = "const c0 = ctx.localFrame > 30 ? 'w-20' : 'w-40';".to_owned();
+    let mut aliases = "const c0 = frame > 30 ? 'w-20' : 'w-40';".to_owned();
     for n in 1..25 {
         aliases.push_str(&format!(
-            "const c{n} = ctx.localFrame > {n} ? c{} : c{};",
+            "const c{n} = frame > {n} ? c{} : c{};",
             n - 1,
             n - 1
         ));
     }
     let shared = format!(
-        "export default function Demo() {{ const ctx = useTime(); {aliases} return <Scene className={{c24}}/>; }}"
+        "export default function Demo() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30); {aliases} return <Scene className={{c24}}/>; }}"
     );
     let artifact = compile_motion(&shared).unwrap().artifact;
     assert_eq!(artifact.nodes[0].class_names.len(), 2);
@@ -152,10 +149,10 @@ fn independent_class_conditions_do_not_expand_complete_style_combinations() {
 
 #[test]
 fn conditional_composition_utilities_enter_the_scene_dependency_graph() {
-    let authored = r#"export default function Demo() { const ctx = useTime();
+    let authored = r#"export default function Demo() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
         return <Scene style={{width:320,height:180}}>
             <Group key="conditional"
-                className={ctx.localFrame > 0 ? 'backdrop-blur-sm [mix-blend-mode:screen]' : ''}
+                className={frame > 0 ? 'backdrop-blur-sm [mix-blend-mode:screen]' : ''}
                 style={{width:20,height:20}}><View style={{width:20,height:20}}/></Group>
             <Group key="isolated" className="isolate opacity-50"
                 style={{width:20,height:20}}><View style={{width:20,height:20}}/></Group>
@@ -189,10 +186,10 @@ fn conditional_composition_utilities_enter_the_scene_dependency_graph() {
 #[test]
 fn all_choices_and_direct_artifact_conditions_are_validated() {
     for class in [
-        "{ctx.localFrame > 30 ? 'w-20' : 'unknown-class'}",
-        "{ctx.localFrame > 30 ? 'w-20' : 'animate-spin'}",
-        "{`w-${ctx.localFrame}`}",
-        "{ctx.localFrame}",
+        "{frame > 30 ? 'w-20' : 'unknown-class'}",
+        "{frame > 30 ? 'w-20' : 'animate-spin'}",
+        "{`w-${frame}`}",
+        "{frame}",
         "{bounds('target').width > 0 ? 'w-20' : 'w-40'}",
         "{unit.index > 0 ? 'w-20' : 'w-40'}",
     ] {

@@ -2145,7 +2145,7 @@ mod contract_tests {
     fn studio_freezes_authored_font_image_data_and_source_dependencies() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("card.motion.tsx");
-        std::fs::write(&input,"export const composition={width:32,height:32,fps:4,duration:1};export const controls={assets:{image:asset({kind:'image'}),font:asset({kind:'font'})},data:{label:string()}};export default function Card(props){ const ctx = useTime(); const data = useData();return <Scene><Image src='asset://image' style={{width:32,height:32}}/><Text style={{fontFamily:'asset://font',fontSize:10}}>{data.label}</Text></Scene>;}").unwrap();
+        std::fs::write(&input,"export const composition={width:32,height:32,fps:4,duration:1};export const controls={assets:{image:asset({kind:'image'}),font:asset({kind:'font'})},data:{label:string()}};export default function Card(props){ const data = useData();return <Scene><Image src='asset://image' style={{width:32,height:32}}/><Text style={{fontFamily:'asset://font',fontSize:10}}>{data.label}</Text></Scene>;}").unwrap();
         let image = dir.path().join("image.png");
         std::fs::write(
             &image,

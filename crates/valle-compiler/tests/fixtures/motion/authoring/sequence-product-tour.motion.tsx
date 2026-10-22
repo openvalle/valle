@@ -1,24 +1,24 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 
 const tour = defineSequence({
-  chrome: stage({ duration: seconds(0.8) }),
-  navigation: stage({ after: "chrome", overlap: seconds(0.25), duration: seconds(0.9) }),
-  workspace: stage({ after: "navigation", overlap: seconds(0.2), duration: seconds(1.2) }),
-  insights: stage({ after: "workspace", overlap: seconds(0.35), duration: seconds(1.15) }),
-  complete: stage({ after: "insights", overlap: seconds(0.15), duration: seconds(1.2) }),
-  pulse: stage({ after: "complete", overlap: seconds(0.8), duration: seconds(1.8) }),
+  chrome: stage({ duration: 0.8 }),
+  navigation: stage({ after: "chrome", overlap: 0.25, duration: 0.9 }),
+  workspace: stage({ after: "navigation", overlap: 0.2, duration: 1.2 }),
+  insights: stage({ after: "workspace", overlap: 0.35, duration: 1.15 }),
+  complete: stage({ after: "insights", overlap: 0.15, duration: 1.2 }),
+  pulse: stage({ after: "complete", overlap: 0.8, duration: 1.8 }),
 });
 
 const STEPS = ["Connect", "Shape", "Publish"];
 const VALUES = [72, 91, 84, 96, 78, 100];
 
-export default function SequenceProductTour() { const ctx = useTime();
-  const chrome = stageProgress(ctx.localFrame, ctx.fps, tour.chrome);
-  const nav = stageProgress(ctx.localFrame, ctx.fps, tour.navigation);
-  const work = stageProgress(ctx.localFrame, ctx.fps, tour.workspace);
-  const insights = stageProgress(ctx.localFrame, ctx.fps, tour.insights);
-  const done = stageProgress(ctx.localFrame, ctx.fps, tour.complete);
-  const pulse = yoyoProgress(ctx.localFrame, ctx.fps, tour.pulse, 3);
+export default function SequenceProductTour() { const time = useCurrentTime();
+  const chrome = stageProgress(time.seconds, tour.chrome);
+  const nav = stageProgress(time.seconds, tour.navigation);
+  const work = stageProgress(time.seconds, tour.workspace);
+  const insights = stageProgress(time.seconds, tour.insights);
+  const done = stageProgress(time.seconds, tour.complete);
+  const pulse = yoyoProgress(time.seconds, tour.pulse, 3);
 
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#0a0d14" }}>
@@ -37,7 +37,7 @@ export default function SequenceProductTour() { const ctx = useTime();
 
         <View key="sidebar" className="absolute" style={{ borderStyle: "solid", left: 0, top: 93, width: 327, height: 582, borderRightWidth: 1, borderColor: "#273247", opacity: nav }}>
           {STEPS.map((label, i) => (
-            <View key={`nav-${i}`} className="absolute flex items-center" style={{ left: 27, top: 36 + i * 108, width: 273, height: 78, borderRadius: 21, backgroundColor: i === 1 ? "#6d28d933" : "#00000000", opacity: staggerProgress(ctx.localFrame, ctx.fps, tour.navigation, i, seconds(0.1)), translate: point((1 - staggerProgress(ctx.localFrame, ctx.fps, tour.navigation, i, seconds(0.1))) * -36, 0) }}>
+            <View key={`nav-${i}`} className="absolute flex items-center" style={{ left: 27, top: 36 + i * 108, width: 273, height: 78, borderRadius: 21, backgroundColor: i === 1 ? "#6d28d933" : "#00000000", opacity: staggerProgress(time.seconds, tour.navigation, i, 0.1), translate: point((1 - staggerProgress(time.seconds, tour.navigation, i, 0.1)) * -36, 0) }}>
               <View key={`nav-icon-${i}`} style={{ marginLeft: 19.5, width: 39, height: 39, borderRadius: 13.5, backgroundColor: i === 1 ? "#8b5cf6" : "#263247" }} />
               <Text key={`nav-label-${i}`} style={{ marginLeft: 18, fontSize: 25.5, color: i === 1 ? "#ede9fe" : "#718096" }}>{label}</Text>
             </View>
@@ -47,7 +47,7 @@ export default function SequenceProductTour() { const ctx = useTime();
         <View key="workspace" className="absolute" style={{ borderStyle: "solid", left: 366, top: 129, width: 825, height: 501, borderRadius: 30, backgroundColor: "#0c111a", borderWidth: 1.5, borderColor: "#222e41", opacity: work, translate: point(0, (1 - work) * 39) }}>
           <Text key="workspace-label" className="absolute" style={{ left: 36, top: 33, fontSize: 22.5, letterSpacing: 1.5, color: "#64748b" }}>SEQUENCE GRAPH</Text>
           {STEPS.map((label, i) => (
-            <View key={`stage-${i}`} className="absolute" style={{ borderStyle: "solid", left: 37.5 + i * 258, top: 129, width: 222, height: 174, borderRadius: 27, backgroundColor: i === 1 ? "#6d28d944" : "#182131", borderWidth: 1.5, borderColor: i === 1 ? "#a78bfa" : "#314057", opacity: staggerProgress(ctx.localFrame, ctx.fps, tour.workspace, i, seconds(0.12)), transform: `scale(${0.82 + staggerProgress(ctx.localFrame, ctx.fps, tour.workspace, i, seconds(0.12)) * 0.18})` }}>
+            <View key={`stage-${i}`} className="absolute" style={{ borderStyle: "solid", left: 37.5 + i * 258, top: 129, width: 222, height: 174, borderRadius: 27, backgroundColor: i === 1 ? "#6d28d944" : "#182131", borderWidth: 1.5, borderColor: i === 1 ? "#a78bfa" : "#314057", opacity: staggerProgress(time.seconds, tour.workspace, i, 0.12), transform: `scale(${0.82 + staggerProgress(time.seconds, tour.workspace, i, 0.12) * 0.18})` }}>
               <Text key={`stage-num-${i}`} className="absolute" style={{ left: 24, top: 19.5, fontSize: 21, color: "#8b9ab0" }}>{padNumber(i + 1, { width: 2 })}</Text>
               <Text key={`stage-name-${i}`} className="absolute" style={{ left: 24, top: 73.5, fontSize: 28.5, color: "#f1f5f9" }}>{label}</Text>
             </View>

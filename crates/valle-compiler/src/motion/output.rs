@@ -70,36 +70,3 @@ pub(super) fn emit_node(
     }
     id
 }
-
-pub(super) fn context_input(segments: &[String]) -> Option<ContextInput> {
-    match segments {
-        [name] if name == "localFrame" => Some(ContextInput::LocalFrame),
-        [name] if name == "progress" => Some(ContextInput::LocalProgress),
-        [name] if name == "seconds" => Some(ContextInput::CompositionSeconds),
-        [name] if name == "durationFrames" => Some(ContextInput::DurationFrames),
-        [fps, name] if fps == "fps" && name == "num" => Some(ContextInput::FpsNum),
-        [fps, name] if fps == "fps" && name == "den" => Some(ContextInput::FpsDen),
-        [host, field] if host == "host" => match field.as_str() {
-            "seconds" => Some(ContextInput::HostSeconds),
-            "duration" => Some(ContextInput::HostDuration),
-            "progress" => Some(ContextInput::HostProgress),
-            _ => None,
-        },
-        // Recognize per-unit fields; artifact admission restricts their use to Text perUnit
-        // expressions.
-        [unit, field] if unit == "unit" => match field.as_str() {
-            "index" => Some(ContextInput::UnitIndex),
-            "count" => Some(ContextInput::UnitCount),
-            "start" => Some(ContextInput::UnitStart),
-            "end" => Some(ContextInput::UnitEnd),
-            _ => None,
-        },
-        // Viewport dimensions for numeric geometry expressions.
-        [viewport, field] if viewport == "viewport" => match field.as_str() {
-            "width" => Some(ContextInput::ViewportWidth),
-            "height" => Some(ContextInput::ViewportHeight),
-            _ => None,
-        },
-        _ => None,
-    }
-}

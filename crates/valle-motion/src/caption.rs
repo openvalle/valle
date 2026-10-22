@@ -619,8 +619,8 @@ pub(crate) fn remap_node_exprs(
             number(trim_end, map);
         }
         NodeKind::GeometryBatch { batch } => {
-            if let BatchPositions::Particles { frame, .. } = &mut batch.positions {
-                *frame = map(*frame);
+            if let BatchPositions::Particles { time, .. } = &mut batch.positions {
+                *time = map(*time);
             }
             if let Some(field) = &mut batch.position_field {
                 field.progress = map(field.progress);

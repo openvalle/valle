@@ -29,8 +29,8 @@ const LOWER = curve(
 );
 const BAND = areaBand(UPPER, LOWER);
 
-export default function ChartEngine() { const ctx = useTime();
-  const needle = interpolate(ctx.progress, [0, 1], [deg(-120), deg(120)]);
+export default function ChartEngine() { const time = useCurrentTime();
+  const needle = interpolate(time.progress, [0, 1], [deg(-120), deg(120)]);
   return (
     <Scene key="scene" className="relative h-full w-full" style={{ backgroundColor: "#020617" }}>
       <View key="plot-surface" className="absolute" style={{ borderStyle: "solid", left: 60, top: 63, width: 1140, height: 930, borderRadius: 39, backgroundColor: "#0c1830", borderWidth: 1.5, borderColor: "#263959" }} />
@@ -60,7 +60,7 @@ export default function ChartEngine() { const ctx = useTime();
         )),
       )}
       <Path key="area" d={FILL} fill="#164e63" />
-      <Path key="line" d={TREND} fill="none" stroke="#22d3ee" strokeWidth="6" trimEnd={ctx.progress} />
+      <Path key="line" d={TREND} fill="none" stroke="#22d3ee" strokeWidth="6" trimEnd={time.progress} />
       <Path key="band" d={BAND} fill="#334155" />
       {PIE.map((slice, index) => (
         <Path
@@ -70,7 +70,7 @@ export default function ChartEngine() { const ctx = useTime();
             inner: 36,
             outer: 105,
             start: slice.startAngle,
-            end: interpolate(ctx.progress, [0, 1], [slice.startAngle, slice.endAngle], {
+            end: interpolate(time.progress, [0, 1], [slice.startAngle, slice.endAngle], {
               easing: "easeOut",
             }),
           })}

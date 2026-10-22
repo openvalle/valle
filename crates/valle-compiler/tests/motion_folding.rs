@@ -10,8 +10,8 @@ const VALUES = [42, 68, 91];
 const BASE = 120;
 const scaled = (v) => BASE - v;
 
-export default function Bars() { const ctx = useTime();
-  const t = ctx.progress;
+export default function Bars() { const time = useCurrentTime();
+  const t = time.progress;
   return (
     <Scene className="h-full w-full">
       {VALUES.map((v, i) => (
@@ -34,8 +34,8 @@ export default function Bars() { const ctx = useTime();
 
 /// Equivalent scene using literal values.
 const LITERAL: &str = r##"
-export default function Bars() { const ctx = useTime();
-  const t = ctx.progress;
+export default function Bars() { const time = useCurrentTime();
+  const t = time.progress;
   return (
     <Scene className="h-full w-full">
       <View key="bar-0" style={{ position: "absolute", left: 100, top: 78, width: 60, height: 42, opacity: interpolate(t, [0, 1], [0, 0.42]) }} />
@@ -88,11 +88,11 @@ fn context_dependent_values_are_not_folded() {
     // Preserve ctx-dependent expressions at frame time.
     let compiled = compile_motion(
         r##"
-export default function Probe() { const ctx = useTime();
+export default function Probe() { const time = useCurrentTime();
   return (
     <Scene className="h-full w-full">
       <View key="b" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
-                             opacity: ctx.progress * 0.5 }} />
+                             opacity: time.progress * 0.5 }} />
     </Scene>
   );
 }
@@ -128,8 +128,8 @@ fn a_stop_that_depends_on_context_still_fails_with_a_pointed_diagnostic() {
     // Interpolation stops must remain static; diagnostics explain that boundary.
     let diagnostics = compile_motion(
         r##"
-export default function Probe() { const ctx = useTime();
-  const t = ctx.progress;
+export default function Probe() { const time = useCurrentTime();
+  const t = time.progress;
   return (
     <Scene className="h-full w-full">
       <View key="b" style={{ position: "absolute", left: 0, top: 0, width: 10, height: 10,
@@ -155,7 +155,7 @@ export default function Probe() { const ctx = useTime();
 fn a_typed_value_cannot_be_coerced_into_a_string_by_concatenation() {
     let diagnostics = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <Text key="a" style={{ position: "absolute", left: 0, top: 0, fontSize: 40 }}>
       {"score: " + point(1, 2)}
@@ -203,7 +203,7 @@ export default function GoodGradient() {
 fn one_mistake_is_reported_once() {
     let diagnostics = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <Text key="a" style={{ position: "absolute", left: 0, top: 0, fontSize: 40 }}>
       {"score: " + point(1, 2)}
@@ -225,7 +225,7 @@ export default function P() { const ctx = useTime();
 fn stringified_typed_internals_are_rejected_at_the_fold_boundary() {
     let diagnostics = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   return (<Scene className="h-full w-full">
     <Text key="a" style={{ position: "absolute", left: 0, top: 0, fontSize: 40 }}>
       {JSON.stringify(point(1, 2)) + "px"}
@@ -251,7 +251,7 @@ export default function P() { const ctx = useTime();
 fn a_proto_key_does_not_become_a_prototype_through_the_binding_round_trip() {
     let diagnostics = compile_motion(
         r##"
-export default function P() { const ctx = useTime();
+export default function P() {
   const o = { ["__proto__"]: { hidden: 77 } };
   const v = o.hidden;
   return (<Scene className="h-full w-full">

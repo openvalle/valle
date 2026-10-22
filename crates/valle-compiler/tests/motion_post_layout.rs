@@ -8,7 +8,7 @@ use valle_motion::Expr;
 
 fn scene(body: &str) -> String {
     format!(
-        "export default function Probe() {{ const ctx = useTime();\n  return (\n    <Scene key=\"scene\">\n\
+        "export default function Probe() {{ const time = useCurrentTime();\n  return (\n    <Scene key=\"scene\">\n\
          \x20     <View key=\"a\" style={{{{ width: 100, height: 40 }}}} />\n\
          \x20     <View key=\"b\" style={{{{ width: 100, height: 40 }}}} />\n{body}    </Scene>\n  );\n}}\n"
     )
@@ -131,7 +131,7 @@ fn bounds_targets_must_exist_and_be_static() {
         "is not a node in this scene",
     );
     reject(
-        "      <View key=\"c\" style={{ width: 10, height: 10, opacity: bounds(ctx.progress > 0 ? \"a\" : \"b\").width }} />\n",
+        "      <View key=\"c\" style={{ width: 10, height: 10, opacity: bounds(time.progress > 0 ? \"a\" : \"b\").width }} />\n",
         "statically known node key",
     );
 }
@@ -186,7 +186,7 @@ fn lowering_diagnostics(source: &str) -> Vec<String> {
 #[test]
 fn post_layout_bounds_cannot_be_reused_as_a_flip_feedback_loop() {
     let diagnostics = lowering_diagnostics(
-        r#"export default function P(){ const ctx = useTime();return <View key="a" style={{left:bounds("a").x * ctx.progress}}/>;}"#,
+        r#"export default function P(){ const time = useCurrentTime();return <View key="a" style={{left:bounds("a").x * time.progress}}/>;}"#,
     );
     assert!(
         diagnostics

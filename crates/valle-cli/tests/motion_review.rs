@@ -87,9 +87,9 @@ fn review_merges_the_strobes_of_an_expanded_map_under_its_element() {
     // A template key expands the map into one node per row.
     let source = r##"export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 const ROWS = Array.from({ length: 4 }, (_, i) => ({ id: `runner${i}`, i }));
-export default function Main() { const ctx = useTime();
+export default function Main() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return <Scene style={{ width: 640, height: 360 }}>{ROWS.map((row) =>
-    <View key={`${row.id}`} className="absolute" style={{ left: 20 + ctx.localFrame * 12,
+    <View key={`${row.id}`} className="absolute" style={{ left: 20 + frame * 12,
       top: 20 + row.i * 40, width: 10, height: 10, backgroundColor: "#ffffff" }} />)}</Scene>;
 }
 "##;
@@ -111,10 +111,10 @@ fn review_flags_sustained_linear_motion_but_not_eased_motion_or_a_sliver() {
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Motion() { const ctx = useTime();
+export default function Motion() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <View key="lead" style={{position:"absolute",left:20,top:100,width:80,height:80,
-      backgroundColor:"#ffffff",translate:point(ctx.localFrame < 20 ? ctx.localFrame * 5 : 100,0)}} />
+      backgroundColor:"#ffffff",translate:point(frame < 20 ? frame * 5 : 100,0)}} />
   </Scene>;
 }
 "##;
@@ -131,10 +131,7 @@ export default function Motion() { const ctx = useTime();
         "{report}"
     );
 
-    let eased = source.replace(
-        "ctx.localFrame * 5",
-        "ctx.localFrame * ctx.localFrame * 0.25",
-    );
+    let eased = source.replace("frame * 5", "frame * frame * 0.25");
     let (ok, report) = run(dir.path(), &eased, &[]);
     assert!(ok, "{report}");
     assert!(
@@ -150,8 +147,8 @@ export default function Motion() { const ctx = useTime();
         .replace("left:20", "left:-995")
         .replace("width:80", "width:1000")
         .replace(
-            "point(ctx.localFrame < 20 ? ctx.localFrame * 5 : 100,0)",
-            "point(0,ctx.localFrame < 20 ? ctx.localFrame * 5 : 100)",
+            "point(frame < 20 ? frame * 5 : 100,0)",
+            "point(0,frame < 20 ? frame * 5 : 100)",
         );
     let (ok, report) = run(dir.path(), &sliver, &[]);
     assert!(ok, "{report}");
@@ -170,14 +167,14 @@ fn review_checks_observed_stagger_for_numbered_moving_groups() {
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Stagger() { const ctx = useTime();
+export default function Stagger() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <View key="bar-0" style={{position:"absolute",left:20,top:40,width:80,height:40,
-      backgroundColor:"#ffffff",translate:point(clamp(ctx.localFrame - 0,0,100)*5,0)}} />
+      backgroundColor:"#ffffff",translate:point(clamp(frame - 0,0,100)*5,0)}} />
     <View key="bar-1" style={{position:"absolute",left:20,top:100,width:80,height:40,
-      backgroundColor:"#ffffff",translate:point(clamp(ctx.localFrame - 6,0,100)*5,0)}} />
+      backgroundColor:"#ffffff",translate:point(clamp(frame - 6,0,100)*5,0)}} />
     <View key="bar-2" style={{position:"absolute",left:20,top:160,width:80,height:40,
-      backgroundColor:"#ffffff",translate:point(clamp(ctx.localFrame - 12,0,100)*5,0)}} />
+      backgroundColor:"#ffffff",translate:point(clamp(frame - 12,0,100)*5,0)}} />
   </Scene>;
 }
 "##;
@@ -198,39 +195,40 @@ export default function Stagger() { const ctx = useTime();
     assert_eq!(issue["endFrame"], 13);
 
     let valid = source
-        .replace("ctx.localFrame - 6", "ctx.localFrame - 2")
-        .replace("ctx.localFrame - 12", "ctx.localFrame - 4");
+        .replace("frame - 6", "frame - 2")
+        .replace("frame - 12", "frame - 4");
     let (ok, report) = run(dir.path(), &valid, &[]);
     assert!(ok, "{report}");
     assert!(has_stagger(&report).is_none(), "{report}");
 
     let simultaneous = source
-        .replace("ctx.localFrame - 6", "ctx.localFrame - 0")
-        .replace("ctx.localFrame - 12", "ctx.localFrame - 0");
+        .replace("frame - 6", "frame - 0")
+        .replace("frame - 12", "frame - 0");
     let (ok, report) = run(dir.path(), &simultaneous, &[]);
     assert!(ok, "{report}");
     assert!(has_stagger(&report).is_none(), "{report}");
 
     let fast = source
         .replace("fps: 30, duration: 2", "fps: 60, duration: 1")
-        .replace("ctx.localFrame - 6", "ctx.localFrame - 1")
-        .replace("ctx.localFrame - 12", "ctx.localFrame - 2");
+        .replace("time.seconds * 30", "time.seconds * 60")
+        .replace("frame - 6", "frame - 1")
+        .replace("frame - 12", "frame - 2");
     let (ok, report) = run(dir.path(), &fast, &[]);
     assert!(ok, "{report}");
     assert!(has_stagger(&report).is_some(), "{report}");
 
     let reversed = source
-        .replace("ctx.localFrame - 0", "ctx.localFrame - 99")
-        .replace("ctx.localFrame - 12", "ctx.localFrame - 0")
-        .replace("ctx.localFrame - 99", "ctx.localFrame - 12");
+        .replace("frame - 0", "frame - 99")
+        .replace("frame - 12", "frame - 0")
+        .replace("frame - 99", "frame - 12");
     let (ok, report) = run(dir.path(), &reversed, &[]);
     assert!(ok, "{report}");
     assert!(has_stagger(&report).is_some(), "{report}");
 
     let mixed = source
-        .replace("ctx.localFrame - 6", "ctx.localFrame - 99")
-        .replace("ctx.localFrame - 12", "ctx.localFrame - 6")
-        .replace("ctx.localFrame - 99", "ctx.localFrame - 12");
+        .replace("frame - 6", "frame - 99")
+        .replace("frame - 12", "frame - 6")
+        .replace("frame - 99", "frame - 12");
     let (ok, report) = run(dir.path(), &mixed, &[]);
     assert!(ok, "{report}");
     assert!(has_stagger(&report).is_none(), "{report}");
@@ -330,10 +328,10 @@ fn review_uses_final_layout_motion_when_a_sibling_pushes_the_target() {
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function LayoutPush() { const ctx = useTime();
+export default function LayoutPush() { const time = useCurrentTime();
   return <Scene style={{width:640,height:360}}>
     <View key="row" style={{display:"flex",width:640,height:120}}>
-      <View key="spacer" style={{width:clamp(ctx.seconds,0,0.5)*900,height:20}}/>
+      <View key="spacer" style={{width:clamp(time.seconds,0,0.5)*900,height:20}}/>
       <View key="bar" style={{width:20,height:120,backgroundColor:"#ffffff"}}/>
     </View>
   </Scene>;
@@ -360,10 +358,10 @@ fn review_reports_short_text_dwell_and_accepts_long_hidden_or_offscreen_controls
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Readability() { const ctx = useTime();
+export default function Readability() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <Text key="caption" style={{position:"absolute",left:100,top:100,fontSize:32,
-      color:"#ffffff",opacity:ctx.localFrame >= 10 && ctx.localFrame < 15 ? 1 : 0}}>
+      color:"#ffffff",opacity:frame >= 10 && frame < 15 ? 1 : 0}}>
       Read these three words
     </Text>
   </Scene>;
@@ -399,7 +397,7 @@ export default function Readability() { const ctx = useTime();
 
     let changing = source.replace(
         "Read these three words",
-        "{ctx.localFrame < 13 ? 'One two' : 'Three four five six'}",
+        "{frame < 13 ? 'One two' : 'Three four five six'}",
     );
     let (ok, changed) = run(dir.path(), &changing, &[]);
     assert!(ok, "{changed}");
@@ -426,8 +424,8 @@ export default function Readability() { const ctx = useTime();
     );
 
     for control in [
-        source.replace("ctx.localFrame < 15", "ctx.localFrame < 56"),
-        source.replace("ctx.localFrame >= 10 && ctx.localFrame < 15 ? 1 : 0", "0"),
+        source.replace("frame < 15", "frame < 56"),
+        source.replace("frame >= 10 && frame < 15 ? 1 : 0", "0"),
     ] {
         let (ok, report) = run(dir.path(), &control, &[]);
         assert!(ok, "{report}");
@@ -488,9 +486,9 @@ export default function Overlap() {
     let timed = source
         .replace(
             "function Overlap() {",
-            "function Overlap() { const ctx = useTime();",
+            "function Overlap() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);",
         )
-        .replace("left:110", "left:ctx.localFrame < 30 ? 110 : 400");
+        .replace("left:110", "left:frame < 30 ? 110 : 400");
     let (ok, timed_report) = run(dir.path(), &timed, &[]);
     assert!(ok, "{timed_report}");
     let overlaps = timed_report["issues"]
@@ -509,11 +507,11 @@ fn review_hints_when_prominent_actions_compete_with_reading_or_each_other() {
     let dir = tempfile::tempdir().unwrap();
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 1 };
-export default function CompetingActions() { const ctx = useTime();
+export default function CompetingActions() { const time = useCurrentTime();
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <Text key="caption" style={{position:"absolute",left:60,top:30,fontSize:28,color:"#ffffff"}}>Read this title</Text>
-    <View key="left" style={{position:"absolute",left:20 + ctx.seconds * 360,top:160,width:80,height:80,backgroundColor:"#ff0000"}}/>
-    <View key="right" style={{position:"absolute",left:350 + ctx.seconds * 360,top:160,width:80,height:80,backgroundColor:"#0000ff"}}/>
+    <View key="left" style={{position:"absolute",left:20 + time.seconds * 360,top:160,width:80,height:80,backgroundColor:"#ff0000"}}/>
+    <View key="right" style={{position:"absolute",left:350 + time.seconds * 360,top:160,width:80,height:80,backgroundColor:"#0000ff"}}/>
   </Scene>;
 }
 "##;
@@ -559,7 +557,7 @@ export default function CompetingActions() { const ctx = useTime();
 
     let (ok, one_action) = run(
         dir.path(),
-        &source.replace("left:350 + ctx.seconds * 360", "left:350"),
+        &source.replace("left:350 + time.seconds * 360", "left:350"),
         &[],
     );
     assert!(ok, "{one_action}");
@@ -574,7 +572,7 @@ export default function CompetingActions() { const ctx = useTime();
 
     let (ok, slow) = run(
         dir.path(),
-        &source.replace("ctx.seconds * 360", "ctx.seconds * 30"),
+        &source.replace("time.seconds * 360", "time.seconds * 30"),
         &[],
     );
     assert!(ok, "{slow}");
@@ -586,8 +584,8 @@ export default function CompetingActions() { const ctx = useTime();
     );
 
     let sliver = source.replace(
-        "left:20 + ctx.seconds * 360,top:160,width:80",
-        "left:-995,top:160 + ctx.seconds * 360,width:1000",
+        "left:20 + time.seconds * 360,top:160,width:80",
+        "left:-995,top:160 + time.seconds * 360,width:1000",
     );
     let (ok, sliver) = run(dir.path(), &sliver, &[]);
     assert!(ok, "{sliver}");

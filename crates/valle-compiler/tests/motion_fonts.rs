@@ -32,7 +32,7 @@ fn font_control_lowers_to_a_content_addressed_family() {
 export const controls = ({
   assets: { brandFont: asset({ kind: "font", required: true }) },
 });
-export default function Card() { const ctx = useTime();
+export default function Card() {
   return <Text style={{ fontFamily: "asset://brandFont" }}>VALLE</Text>;
 }
 "##,
@@ -75,7 +75,7 @@ fn used_font_control_without_a_binding_still_fails_closed() {
 export const controls = ({
   assets: { brandFont: asset({ kind: "font", required: true }) },
 });
-export default function Card() { const ctx = useTime();
+export default function Card() {
   return <Text style={{ fontFamily: "asset://brandFont" }}>VALLE</Text>;
 }
 "##,

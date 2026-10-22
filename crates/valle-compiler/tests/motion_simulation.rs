@@ -81,14 +81,14 @@ fn bakes_structured_spring_and_seeks_any_frame() {
 #[test]
 fn simulation_exposes_each_state_field_and_interpolates_fractional_time() {
     let velocity = compile_motion(
-        &SPRING_SIMULATION.replace("SPRING.at(ctx.seconds).x", "SPRING.at(ctx.seconds).v"),
+        &SPRING_SIMULATION.replace("SPRING.at(time.seconds).x", "SPRING.at(time.seconds).v"),
     )
     .unwrap()
     .artifact;
     assert_eq!(left(&velocity, 0), 0.0);
     assert!(left(&velocity, 5) > 0.0);
     let half_speed =
-        compile_motion(&SPRING_SIMULATION.replace("ctx.seconds).x", "ctx.seconds * 0.73).x"))
+        compile_motion(&SPRING_SIMULATION.replace("time.seconds).x", "time.seconds * 0.73).x"))
             .unwrap()
             .artifact;
     // Frame 15 at 0.73 speed lands between two fixed simulation steps.
@@ -108,18 +108,18 @@ fn simulation_exposes_each_state_field_and_interpolates_fractional_time() {
     assert!((x - expected).abs() < 1e-9);
 
     let static_at = compile_motion(
-        &SPRING_SIMULATION.replace("SPRING.at(ctx.seconds).x", "SPRING.at(0.365).x"),
+        &SPRING_SIMULATION.replace("SPRING.at(time.seconds).x", "SPRING.at(0.365).x"),
     )
     .unwrap()
     .artifact;
     assert!((left(&static_at, 0) - expected).abs() < 1e-9);
     let clamped_before =
-        compile_motion(&SPRING_SIMULATION.replace("SPRING.at(ctx.seconds).x", "SPRING.at(-1).x"))
+        compile_motion(&SPRING_SIMULATION.replace("SPRING.at(time.seconds).x", "SPRING.at(-1).x"))
             .unwrap()
             .artifact;
     assert_eq!(left(&clamped_before, 0), 100.0);
     let clamped_after =
-        compile_motion(&SPRING_SIMULATION.replace("SPRING.at(ctx.seconds).x", "SPRING.at(10).x"))
+        compile_motion(&SPRING_SIMULATION.replace("SPRING.at(time.seconds).x", "SPRING.at(10).x"))
             .unwrap()
             .artifact;
     assert_eq!(left(&clamped_after, 0), *samples.last().unwrap());
@@ -152,7 +152,10 @@ fn simulation_rejects_invalid_input_and_tampered_table() {
             "return { x: state.x + v * dt, v };",
             "return { x: 0 / 0, v };",
         ),
-        SPRING_SIMULATION.replace("SPRING.at(ctx.seconds).x", "SPRING.at(ctx.seconds).missing"),
+        SPRING_SIMULATION.replace(
+            "SPRING.at(time.seconds).x",
+            "SPRING.at(time.seconds).missing",
+        ),
     ] {
         assert!(compile_motion(&source).is_err());
     }

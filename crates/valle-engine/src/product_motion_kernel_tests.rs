@@ -10,9 +10,9 @@ fn render() -> EngineRender {
         valle_compiler::motion::compile_motion(
             r##"
 export const composition = { width: 320, height: 180, duration: 1 };
-export default function Card() { const ctx = useTime();
+export default function Card() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return <Scene style={{ width: 320, height: 180, backgroundColor: "#123456" }}>
-    <View style={{ width: 30, height: 40, left: ctx.localFrame, backgroundColor: "#ff0033" }} />
+    <View style={{ width: 30, height: 40, left: frame, backgroundColor: "#ff0033" }} />
   </Scene>;
 }
 "##,

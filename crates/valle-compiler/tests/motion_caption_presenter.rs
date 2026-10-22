@@ -7,12 +7,12 @@ use valle_compiler::{
 use valle_motion::{AssetControl, AssetKind, ContentDigest, ResourceRef, SceneArtifact};
 use valle_timeline::{MotionRole, OverlayHold, RationalTime, wire::timeline::*};
 
-const ROLE: &str = "captionPresenter({intro:seconds(0.15),outro:seconds(0.15)})";
+const ROLE: &str = "captionPresenter({intro:0.15,outro:0.15})";
 fn source(role: &str, controls: &str) -> String {
     format!(
         r#"export const composition={{width:240,height:80,fps:30,duration:1}};
 export const role={role}; {controls}
-export default function Words(props) {{ const ctx = useTime(); const caption = useCaption();return <Scene>{{caption.runs.map((run,index)=><View key={{index}} className="absolute" style={{{{left:index*30,width:24,height:12,top:ctx.seconds*10,backgroundColor:ctx.host.seconds>=run.start && ctx.host.seconds<run.end?"yellow":"white"}}}}/>)}}</Scene>;}}"#
+export default function Words(props) {{ const time = useCurrentTime(); const caption = useCaption();return <Scene>{{caption.runs.map((run,index)=><View key={{index}} className="absolute" style={{{{left:index*30,width:24,height:12,top:time.seconds*10,backgroundColor:time.clipSeconds>=run.start && time.clipSeconds<run.end?"yellow":"white"}}}}/>)}}</Scene>;}}"#
     )
 }
 fn input() -> Value {
@@ -146,11 +146,11 @@ fn caption_role_draws_a_row_per_run_and_reserves_the_host_font() {
 #[test]
 fn caption_role_and_data_shapes_are_closed() {
     for role in [
-        "captionPresenter({intro:0,outro:seconds(0)})",
-        "captionPresenter({intro:seconds(0),outro:seconds(0),hold:'once'})",
-        "captionPresenter({intro:seconds(0),outro:seconds(0),extra:true})",
-        "captionPresenter({intro:seconds(-0.1),outro:seconds(0)})",
-        "captionPresenter({intro:seconds(0.6),outro:seconds(0.5)})",
+        "captionPresenter({intro:'0',outro:0})",
+        "captionPresenter({intro:0,outro:0,hold:'once'})",
+        "captionPresenter({intro:0,outro:0,extra:true})",
+        "captionPresenter({intro:-0.1,outro:0})",
+        "captionPresenter({intro:0.6,outro:0.5})",
     ] {
         assert!(compile(&source(role, ""), input()).is_err(), "{role}");
     }
@@ -420,7 +420,7 @@ fn native_caption_fixture_has_a_canonical_artifact_shared_with_wasm() {
     );
     assert_eq!(
         digest.to_string(),
-        "sha256:ddda40286d58b1c34b678ea351d80bb347e3d37cf09577a04dd597cc881ae206"
+        "sha256:0af16c3a9138ad1ce1dc80d20aa8d38f0bfe30e27486634d1f04e6cd993a14a0"
     );
 }
 

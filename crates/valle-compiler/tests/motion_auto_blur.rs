@@ -103,9 +103,9 @@ fn auto_blur_tracks_motion_and_stops_when_stationary() {
 fn auto_blur_includes_layout_and_ancestor_motion() {
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Flow() { const ctx = useTime();
+export default function Flow() { const time = useCurrentTime();
   return <Scene className="flex" style={{ width:640,height:360,backgroundColor:"#101010" }}>
-    <View style={{ width:100+ctx.seconds*60,height:40,backgroundColor:"#101010" }}/>
+    <View style={{ width:100+time.seconds*60,height:40,backgroundColor:"#101010" }}/>
     <View key="follower" style={{ width:40,height:40,backgroundColor:"#ffffff",motionBlur:"auto" }}/>
   </Scene>;
 }
@@ -116,10 +116,10 @@ export default function Flow() { const ctx = useTime();
 
     let ancestor = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function ParentMotion() { const ctx = useTime();
+export default function ParentMotion() { const time = useCurrentTime();
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <View key="parent" className="absolute"
-      style={{left:0,top:80,width:40,height:40,translate:point(ctx.seconds*60,0)}}>
+      style={{left:0,top:80,width:40,height:40,translate:point(time.seconds*60,0)}}>
       <View key="follower" style={{width:40,height:40,backgroundColor:"#ffffff",motionBlur:"auto"}} />
     </View>
   </Scene>;
@@ -133,10 +133,10 @@ export default function ParentMotion() { const ctx = useTime();
 fn auto_blur_suppresses_a_position_cut() {
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Cut() { const ctx = useTime();
+export default function Cut() { const time = useCurrentTime();
   return <Scene style={{width:640,height:360,backgroundColor:"#101010"}}>
     <View key="bar" className="absolute" style={{left:40,top:120,width:40,height:120,
-      backgroundColor:"#ffffff",translate:point(ctx.seconds < 0.5 ? 0 : 100,0),motionBlur:"auto"}}/>
+      backgroundColor:"#ffffff",translate:point(time.seconds < 0.5 ? 0 : 100,0),motionBlur:"auto"}}/>
   </Scene>;
 }
 "##;
@@ -147,13 +147,13 @@ export default function Cut() { const ctx = useTime();
 fn affine_translation_uses_screen_space_chain_rule_without_neighbor_layouts() {
     let source = r##"
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
-export default function Affine() { const ctx = useTime();
+export default function Affine() { const time = useCurrentTime();
   return <Scene style={{width:640,height:360}}>
     <View key="parent" className="absolute" style={{
       left:100,top:100,width:40,height:40,rotate:"90deg",
-      translate:point(ctx.seconds*60,0) }}>
+      translate:point(time.seconds*60,0) }}>
       <View key="bar" style={{width:40,height:40,backgroundColor:"#ffffff",
-        translate:point(0,ctx.seconds*30),motionBlur:"auto"}} />
+        translate:point(0,time.seconds*30),motionBlur:"auto"}} />
     </View>
   </Scene>;
 }

@@ -22,8 +22,8 @@ function Grid({ color }) {
   ));
 }
 
-function Marker({ index, value, accent, label }) { const ctx = useTime();
-  const reveal = interpolate(ctx.progress - index * 0.045, [0, 0.45], [0, 1], { easing: "easeOut" });
+function Marker({ index, value, accent, label }) { const time = useCurrentTime();
+  const reveal = interpolate(time.progress - index * 0.045, [0, 0.45], [0, 1], { easing: "easeOut" });
   return (
     <View key="marker" style={{ position: "absolute", left: X.at(index) - 12, top: Y.map(value) - 12, width: 24, height: 24, borderRadius: 12, backgroundColor: accent, opacity: reveal, filter: `drop-shadow(0px 0px ${12 + reveal * 15}px ${accent})` }}>
       <Text key="label" style={{ position: "absolute", left: -42, top: 42, width: 108, fontSize: 24, color: label, textAlign: "center" }}>{LABELS[index]}</Text>
@@ -39,8 +39,8 @@ function Line({ pathValue, stroke, reveal }) {
   return <Path key="line" d={pathValue} fill="none" stroke={stroke} strokeWidth="9" strokeLinecap="round" trimEnd={reveal} />;
 }
 
-function LineChart({ accent, areaColor, label }) { const ctx = useTime();
-  const reveal = interpolate(ctx.progress, [0.08, 0.88], [0, 1], { easing: "easeInOut" });
+function LineChart({ accent, areaColor, label }) { const time = useCurrentTime();
+  const reveal = interpolate(time.progress, [0.08, 0.88], [0, 1], { easing: "easeInOut" });
   return (
     <View key="chart" className="absolute" style={{ left: 0, top: 0, width: 1920, height: 1080 }}>
       <Grid key="grid" color="#334155" />

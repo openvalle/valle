@@ -32,14 +32,14 @@ fn project() -> NativeProject {
     let artifact = Arc::new(valle_compiler::motion::compile_motion(r##"
 export const composition = { width: 96, height: 64, fps: 30, duration: 2 };
 const BALL = lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"), { segments: 16 });
-export default function Animated() { const ctx = useTime();
+export default function Animated() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return <Scene style={{backgroundColor: "#102030"}}>
     <Scene3D key="depth" style={{width:96,height:64}}
       camera={{position:[0,0,5],target:[0,0,0],fov:45,depthOfField:{focusDistance:5,maxBlurRadius:4}}}>
       <Mesh key="far" geometry={BALL} position={[0.4,0,-1]} material={{type:"unlit",color:"#3366EE"}} />
-      <Mesh key="near" geometry={BALL} position={[ctx.seconds-1,0,1]} scale={[0.45,0.45,0.45]} material={{type:"unlit",color:"#FF553399"}} />
+      <Mesh key="near" geometry={BALL} position={[time.seconds-1,0,1]} scale={[0.45,0.45,0.45]} material={{type:"unlit",color:"#FF553399"}} />
     </Scene3D>
-    <View style={{position:"absolute",left:ctx.localFrame,top:2,width:8,height:4,backgroundColor:"#33CC99"}} />
+    <View style={{position:"absolute",left:frame,top:2,width:8,height:4,backgroundColor:"#33CC99"}} />
   </Scene>;
 }
 "##).unwrap().artifact);

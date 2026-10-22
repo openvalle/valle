@@ -42,8 +42,9 @@ const useTheme = (...args) => {
 "#;
 
 /// `useData()` returns the prepared data that `bind_data` installs once module constants have
-/// run, so only components and helpers read it. `useTime()` is lowered by the compiler; here it
-/// only fails, without a builtin mark, so preparation falls back to frame-time lowering.
+/// run, so only components and helpers read it. `useCurrentTime()` and `useComposition()` are
+/// lowered by the compiler; here they only fail, without a builtin mark, so preparation falls back
+/// to frame-time lowering.
 const HOOKS_JS: &str = r#"
 const __valleNoData = Symbol("valle:no-data");
 let __valleActiveData = __valleNoData;
@@ -54,8 +55,11 @@ const useData = (...args) => {
   }
   return __valleActiveData;
 };
-const useTime = () => {
-  throw new Error("useTime() reads the time of the frame being drawn, so call it inside a component or a helper");
+const useCurrentTime = () => {
+  throw new Error("useCurrentTime() reads the clock of the sample being drawn, so call it inside a component or a helper");
+};
+const useComposition = () => {
+  throw new Error("useComposition() reads the values of the frame being drawn, so call it inside a component or a helper");
 };
 "#;
 

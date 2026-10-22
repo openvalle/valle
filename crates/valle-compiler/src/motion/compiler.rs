@@ -20,7 +20,7 @@ impl<'s> Compiler<'s> {
                 source,
                 DiagCode::GrammarForbidden,
                 span,
-                "`ThemeProvider`, `useTheme`, `useTime`, `useData` and `useCaption` are reserved Motion intrinsics; do not declare or import replacements",
+                "`ThemeProvider`, `useTheme`, `useCurrentTime`, `useComposition`, `useData` and `useCaption` are reserved Motion intrinsics; do not declare or import replacements",
             )]);
         }
         if let Some(diagnostic) = scan_forbidden(source, "module") {
@@ -215,6 +215,9 @@ impl<'s> Compiler<'s> {
             module_const_inits,
             current_theme: None,
             time_scopes: Vec::new(),
+            clock_chains: vec![Vec::new()],
+            component_clock: ClockId(0),
+            deferred_children: Vec::new(),
             key_prefix: String::new(),
             component_stack: Vec::new(),
             helper_stack: Vec::new(),
@@ -315,6 +318,7 @@ impl<'s> Compiler<'s> {
         }
         self.bind_caption_contract();
         self.check_caption_hooks(program);
+        self.check_template_size(program);
         self.validate_prepare_data();
         if !self.diagnostics.is_empty() {
             return Err(std::mem::take(&mut self.diagnostics));
@@ -409,6 +413,10 @@ impl<'s> Compiler<'s> {
             &mut self.source_ledger.node_spans,
             &mut self.source_ledger.node_expansion_stacks,
         );
+        self.check_scene_clocks(&nodes, &node_children, root);
+        if !self.diagnostics.is_empty() {
+            return Err(std::mem::take(&mut self.diagnostics));
+        }
         let resource_refs = std::mem::take(&mut self.resource_refs)
             .into_iter()
             .filter(|resource| {
@@ -737,7 +745,8 @@ impl<'s> Compiler<'s> {
     }
 
     /// A component takes one parameter, as in React: `props`, a destructure of it, or nothing.
-    /// The time and the prepared data come from `useTime()` and `useData()`.
+    /// The time comes from `useCurrentTime()` and `useComposition()`, and the prepared data from
+    /// `useData()`.
     pub(super) fn validate_component_params(&mut self, params: &FormalParameters<'_>) -> bool {
         let first = params.items.first();
         let first_name = first
@@ -747,7 +756,7 @@ impl<'s> Compiler<'s> {
             self.illegal(
                 DiagCode::ModuleShape,
                 params.span(),
-                "a component takes `(props)`, as in React; read the time with `const ctx = useTime()` and prepared data with `const data = useData()`",
+                "a component takes `(props)`, as in React; read the clock with `const { seconds } = useCurrentTime()`, the size and duration with `useComposition()`, and prepared data with `const data = useData()`",
             );
             return false;
         }
@@ -929,6 +938,16 @@ impl<'s> Compiler<'s> {
     }
 
     pub(super) fn push(&mut self, expression: Expr, span: Span) -> ExprId {
+        self.push_tagged(expression, None, span)
+    }
+
+    /// [`Self::push`] for the seconds a TimeScope chain gives `clock`: a value of that clock
+    /// alone, distinct from an equal expression on the composition's clock.
+    pub(super) fn push_on_clock(&mut self, expression: Expr, clock: ClockId, span: Span) -> ExprId {
+        self.push_tagged(expression, Some(clock), span)
+    }
+
+    fn push_tagged(&mut self, expression: Expr, clock: Option<ClockId>, span: Span) -> ExprId {
         let id = ExprId(self.expr_arena.values.len() as u32);
         let mut errors = Vec::new();
         let ty = valle_motion::expr::validate_next_expr(
@@ -943,14 +962,18 @@ impl<'s> Compiler<'s> {
         // Invalid expressions retain their own source location for the final admission report.
         if ty.is_some()
             && errors.is_empty()
-            && let Some(existing) = self.expr_arena.interner.intern(&expression, id)
+            && let Some(existing) =
+                self.expr_arena
+                    .interner
+                    .intern(&expression, clock.map(|clock| clock.0), id)
         {
             return existing;
         }
         self.expr_arena.types.push(ty);
         // Children precede parents in the arena; treat invalid indices as runtime-dependent.
+        let children = expression.children();
         let flag = valle_motion::expr_reads_runtime_inputs(&expression)
-            || expression.children().iter().any(|child| {
+            || children.iter().any(|child| {
                 self.expr_arena
                     .reads_runtime
                     .get(child.0 as usize)
@@ -958,6 +981,24 @@ impl<'s> Compiler<'s> {
                     .unwrap_or(true)
             });
         self.expr_arena.reads_runtime.push(flag);
+        let time_reads = self.time_reads_of(&expression, clock);
+        self.expr_arena.time_reads.push(time_reads);
+        let scene_clock = match (clock, &expression) {
+            (Some(clock), _) => SceneClock::On(clock),
+            (None, Expr::Context { input }) if clock::reads_scene_clock(*input) => {
+                SceneClock::On(ClockId(0))
+            }
+            (None, _) => children.iter().fold(SceneClock::None, |clock, child| {
+                clock.merge(
+                    self.expr_arena
+                        .scene_clock
+                        .get(child.0 as usize)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+            }),
+        };
+        self.expr_arena.scene_clock.push(scene_clock);
         self.expr_arena.values.push(expression);
         self.expr_arena.spans.push(span);
         self.expr_arena

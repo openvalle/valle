@@ -7,7 +7,7 @@ const CARDS = Array.from({ length: 4 }, (_, index) => ({
   color: index % 2 === 0 ? "#3154ad" : "#ac5732",
 }));
 
-function Card({ item }) { const ctx = useTime();
+function Card({ item }) { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   const height = item.height;
   const color = item.color;
   const label = item.label;
@@ -16,7 +16,7 @@ function Card({ item }) { const ctx = useTime();
       backgroundColor: "#202020" }}>
     <View style={{ width: 12, height: 8, backgroundColor: "#e9c456" }} />
     <Group style={{ width: 106, height: 16 }}>
-      <Text visible={ctx.localFrame < height - 6}
+      <Text visible={frame < height - 6}
         style={{ fontSize: 12, color }}>{label}</Text>
     </Group>
   </View>;

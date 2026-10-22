@@ -12,14 +12,14 @@ export const controls = {
 };
 
 const FLOW = defineSequence({
-  idle: stage({ duration: seconds(0.45) }),
-  moveTitle: stage({ after: "idle", duration: seconds(0.75) }),
-  focusTitle: stage({ after: "moveTitle", overlap: seconds(0.18), duration: seconds(0.55) }),
-  typeTitle: stage({ after: "focusTitle", overlap: seconds(0.22), duration: seconds(1.05) }),
-  movePublish: stage({ after: "typeTitle", overlap: seconds(0.18), duration: seconds(0.72) }),
-  tap: stage({ after: "movePublish", overlap: seconds(0.08), duration: seconds(0.42) }),
-  success: stage({ after: "tap", overlap: seconds(0.08), duration: seconds(1.25) }),
-  settle: stage({ after: "success", overlap: seconds(0.42), duration: seconds(1.5) }),
+  idle: stage({ duration: 0.45 }),
+  moveTitle: stage({ after: "idle", duration: 0.75 }),
+  focusTitle: stage({ after: "moveTitle", overlap: 0.18, duration: 0.55 }),
+  typeTitle: stage({ after: "focusTitle", overlap: 0.22, duration: 1.05 }),
+  movePublish: stage({ after: "typeTitle", overlap: 0.18, duration: 0.72 }),
+  tap: stage({ after: "movePublish", overlap: 0.08, duration: 0.42 }),
+  success: stage({ after: "tap", overlap: 0.08, duration: 1.25 }),
+  settle: stage({ after: "success", overlap: 0.42, duration: 1.5 }),
 });
 
 const GRID = Array.from({ length: 1200 }, (_, index) => point(15 + (index % 60) * 22.05, 18 + Math.floor(index / 60) * 35.4));
@@ -91,13 +91,13 @@ function AppShell({ focus, typed, publish, success, surface, accent, successColo
   );
 }
 
-export default function PublishFlow(props) { const ctx = useTime();
-  const moveTitle = stageProgress(ctx.localFrame, ctx.fps, FLOW.moveTitle);
-  const focus = stageProgress(ctx.localFrame, ctx.fps, FLOW.focusTitle);
-  const typed = stageProgress(ctx.localFrame, ctx.fps, FLOW.typeTitle);
-  const movePublish = stageProgress(ctx.localFrame, ctx.fps, FLOW.movePublish);
-  const tap = stageProgress(ctx.localFrame, ctx.fps, FLOW.tap);
-  const success = stageProgress(ctx.localFrame, ctx.fps, FLOW.success);
+export default function PublishFlow(props) { const time = useCurrentTime();
+  const moveTitle = stageProgress(time.seconds, FLOW.moveTitle);
+  const focus = stageProgress(time.seconds, FLOW.focusTitle);
+  const typed = stageProgress(time.seconds, FLOW.typeTitle);
+  const movePublish = stageProgress(time.seconds, FLOW.movePublish);
+  const tap = stageProgress(time.seconds, FLOW.tap);
+  const success = stageProgress(time.seconds, FLOW.success);
   const cursorX = interpolate(moveTitle, [0, 1], [1680, 1059], { easing: "easeInOut" }) + interpolate(movePublish, [0, 1], [0, 78], { easing: "easeInOut" });
   const cursorY = interpolate(moveTitle, [0, 1], [930, 531], { easing: "easeInOut" }) + interpolate(movePublish, [0, 1], [0, 273], { easing: "easeInOut" });
   const active = success > 0.2 ? 4 : tap > 0.1 ? 3 : typed > 0.08 ? 2 : focus > 0.08 ? 1 : 0;

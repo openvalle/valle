@@ -11,7 +11,7 @@ use super::*;
 
 const FFT_SIZE: usize = 2048;
 const MAX_BANDS: u8 = 32;
-const MAX_FPS: u32 = 120;
+const MAX_RATE: u32 = 120;
 const MIN_BEAT_SUPPORT: f64 = 0.35;
 
 #[derive(Debug, Clone)]
@@ -64,7 +64,8 @@ impl AudioAnalysisEnv {
 
 #[derive(Debug, Clone)]
 pub(super) struct AudioTable {
-    fps: u32,
+    /// Samples per second.
+    rate: u32,
     level: Vec<f64>,
     bands: Vec<Vec<f64>>,
     onset: Vec<f64>,
@@ -97,39 +98,39 @@ thread_local! {
     static TABLE_CACHE: std::cell::RefCell<std::collections::VecDeque<(std::sync::Weak<AudioPcm>, u8, u32, Arc<AudioTable>)>> = const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
 }
 
-fn analyze_cached(pcm: &Arc<AudioPcm>, bands: u8, fps: u32) -> Result<Arc<AudioTable>, String> {
+fn analyze_cached(pcm: &Arc<AudioPcm>, bands: u8, rate: u32) -> Result<Arc<AudioTable>, String> {
     TABLE_CACHE.with_borrow_mut(|cache| {
         cache.retain(|(source, _, _, _)| source.strong_count() > 0);
-        if let Some(at) = cache.iter().position(|(source, b, f, _)| {
-            *b == bands && *f == fps && source.ptr_eq(&Arc::downgrade(pcm))
+        if let Some(at) = cache.iter().position(|(source, b, r, _)| {
+            *b == bands && *r == rate && source.ptr_eq(&Arc::downgrade(pcm))
         }) {
             let entry = cache.remove(at).unwrap();
             let table = Arc::clone(&entry.3);
             cache.push_back(entry);
             return Ok(table);
         }
-        let table = Arc::new(analyze(pcm, bands, fps)?);
+        let table = Arc::new(analyze(pcm, bands, rate)?);
         if cache.len() == 16 {
             cache.pop_front();
         }
-        cache.push_back((Arc::downgrade(pcm), bands, fps, Arc::clone(&table)));
+        cache.push_back((Arc::downgrade(pcm), bands, rate, Arc::clone(&table)));
         Ok(table)
     })
 }
 
-pub(super) fn analyze(pcm: &AudioPcm, bands: u8, fps: u32) -> Result<AudioTable, String> {
+pub(super) fn analyze(pcm: &AudioPcm, bands: u8, rate: u32) -> Result<AudioTable, String> {
     if pcm.sample_rate == 0 || pcm.samples.is_empty() || pcm.samples.iter().any(|s| !s.is_finite())
     {
         return Err("audioAnalysis needs non-empty finite mono PCM".into());
     }
-    if !(1..=MAX_BANDS).contains(&bands) || !(1..=MAX_FPS).contains(&fps) {
-        return Err("audioAnalysis bands must be 1..=32 and fps 1..=120".into());
+    if !(1..=MAX_BANDS).contains(&bands) || !(1..=MAX_RATE).contains(&rate) {
+        return Err("audioAnalysis bands must be 1..=32 and rate 1..=120".into());
     }
     let frames =
-        (pcm.samples.len() as u128 * u128::from(fps)).div_ceil(u128::from(pcm.sample_rate));
+        (pcm.samples.len() as u128 * u128::from(rate)).div_ceil(u128::from(pcm.sample_rate));
     if frames == 0 || frames > valle_motion::expr::MAX_SIMULATION_STEPS as u128 {
         return Err(format!(
-            "audioAnalysis exceeds {} frame samples; shorten the asset or lower fps",
+            "audioAnalysis exceeds {} samples; shorten the asset or lower rate",
             valle_motion::expr::MAX_SIMULATION_STEPS
         ));
     }
@@ -152,8 +153,8 @@ pub(super) fn analyze(pcm: &AudioPcm, bands: u8, fps: u32) -> Result<AudioTable,
     }
     let log_range = libm::log(nyquist / 20.0);
     for frame in 0..frames {
-        let from = (frame as u128 * u128::from(pcm.sample_rate) / u128::from(fps)) as usize;
-        let until = (((frame + 1) as u128 * u128::from(pcm.sample_rate) / u128::from(fps))
+        let from = (frame as u128 * u128::from(pcm.sample_rate) / u128::from(rate)) as usize;
+        let until = (((frame + 1) as u128 * u128::from(pcm.sample_rate) / u128::from(rate))
             as usize)
             .min(pcm.samples.len());
         if from < until {
@@ -225,7 +226,7 @@ pub(super) fn analyze(pcm: &AudioPcm, bands: u8, fps: u32) -> Result<AudioTable,
         let n = beats.len();
         beats.push(beats[n - 1] + beats[n - 1] - beats[n - 2]);
         for (frame, phase) in beat_phase.iter_mut().enumerate() {
-            let time = frame as f64 / fps as f64;
+            let time = frame as f64 / rate as f64;
             let next = beats.partition_point(|beat| *beat <= time);
             if next > 0 && next < beats.len() {
                 *phase = quantize((time - beats[next - 1]) / (beats[next] - beats[next - 1]));
@@ -233,7 +234,7 @@ pub(super) fn analyze(pcm: &AudioPcm, bands: u8, fps: u32) -> Result<AudioTable,
         }
     }
     Ok(AudioTable {
-        fps,
+        rate,
         level,
         bands: band_series,
         onset,
@@ -266,10 +267,19 @@ impl<'s> Compiler<'s> {
             );
             return Some(None);
         }
+        if value.get("fps").is_some_and(|fps| !fps.is_null()) {
+            self.illegal(
+                DiagCode::BuiltinRejected,
+                member.object.span(),
+                "audioAnalysis names its samples per second `rate`, such as \
+                 `audioAnalysis(\"asset://music\", { bands: 8, rate: 30 })`",
+            );
+            return Some(None);
+        }
         let source = value.get("source").and_then(serde_json::Value::as_str);
         let bands = value.get("bands").and_then(serde_json::Value::as_u64);
-        let fps = value
-            .get("fps")
+        let rate = value
+            .get("rate")
             .and_then(serde_json::Value::as_u64)
             .or_else(|| {
                 self.composition
@@ -278,21 +288,22 @@ impl<'s> Compiler<'s> {
                     .filter(|rate| rate.denominator() == 1)
                     .and_then(|rate| u64::try_from(rate.numerator()).ok())
             });
-        let (Some(control), Some(bands), Some(fps)) = (
+        let (Some(control), Some(bands), Some(rate)) = (
             source.and_then(|source| source.strip_prefix("asset://")),
             bands,
-            fps,
+            rate,
         ) else {
             self.illegal(DiagCode::BuiltinRejected, member.object.span(),
-                "audioAnalysis requires asset://<audio-control>, a literal band count, and an integer fps option or composition.fps");
+                "audioAnalysis requires asset://<audio-control>, a literal band count, and an integer rate option or an integer composition.fps");
             return Some(None);
         };
-        if !(1..=u64::from(MAX_BANDS)).contains(&bands) || !(1..=u64::from(MAX_FPS)).contains(&fps)
+        if !(1..=u64::from(MAX_BANDS)).contains(&bands)
+            || !(1..=u64::from(MAX_RATE)).contains(&rate)
         {
             self.illegal(
                 DiagCode::BuiltinRejected,
                 member.object.span(),
-                "audioAnalysis bands must be 1..=32 and fps 1..=120",
+                "audioAnalysis bands must be 1..=32 and rate 1..=120",
             );
             return Some(None);
         }
@@ -345,9 +356,9 @@ impl<'s> Compiler<'s> {
             );
             return Some(None);
         }
-        let key = (control.to_owned(), bands as u8, fps as u32);
+        let key = (control.to_owned(), bands as u8, rate as u32);
         if !self.audio_tables.contains_key(&key) {
-            let analyzed = analyze_cached(&pcm, bands as u8, fps as u32);
+            let analyzed = analyze_cached(&pcm, bands as u8, rate as u32);
             let table = match analyzed {
                 Ok(table) => table,
                 Err(message) => {
@@ -400,7 +411,7 @@ impl<'s> Compiler<'s> {
         Some(Some(self.push(
             Expr::AudioSample {
                 time,
-                fps: table.fps,
+                rate: table.rate,
                 samples,
             },
             span,

@@ -7,11 +7,11 @@ export const composition = { width: 160, height: 96, fps: 30, duration: 2 };
 // edges, which Ganesh and Raster cover differently, stay out of sight.
 const RAMP = "linear-gradient(135deg, rgb(50 70 210), rgb(180 180 80))";
 
-export default function NoiseDisplacement() { const ctx = useTime();
+export default function NoiseDisplacement() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#101820" }}>
     <View key="fractal" className="absolute" style={{
       left: 4, top: 6, width: 72, height: 84, backgroundImage: RAMP,
-      displacement: displacement(7, point(0.21, 0.17), 24 + ctx.progress * 8, { octaves: 4, mode: "fractal" }),
+      displacement: displacement(7, point(0.21, 0.17), 24 + time.progress * 8, { octaves: 4, mode: "fractal" }),
     }} />
     <View key="clip" className="absolute overflow-hidden" style={{ left: 84, top: 6, width: 72, height: 84 }}>
       <View key="turbulence" className="absolute" style={{

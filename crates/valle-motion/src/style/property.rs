@@ -97,12 +97,12 @@ pub const UNAVAILABLE_PROPERTIES: &[UnavailableProperty] = &[
     UnavailableProperty {
         names: &["animation", "animation-*"],
         reason: "CSS keyframes are permanently unsupported: the timeline must be a function of the sampled frame",
-        suggestion: "`interpolate` over local time, for example `interpolate(ctx.seconds % 1, [0, 1], [0, 360])`",
+        suggestion: "`interpolate` over local time, for example `interpolate(seconds % 1, [0, 1], [0, 360])`",
     },
     UnavailableProperty {
         names: &["transition", "transition-*"],
         reason: "transitions need an explicit state timeline; a previous rendered frame cannot be used as an event",
-        suggestion: "an explicit range: `interpolate(ctx.seconds, [start, end], [a, b])`",
+        suggestion: "an explicit range: `interpolate(seconds, [start, end], [a, b])`",
     },
     UnavailableProperty {
         names: &["clip-path"],
@@ -623,13 +623,13 @@ impl PropertySpec<'_> {
 
     pub(crate) fn dynamic_example(&self) -> Option<&'static str> {
         match self.name {
-            "translate" => Some(
-                "translate: point(ctx.seconds * 100, 0) or translate: `${ctx.seconds * 100}px 0px`",
-            ),
-            "rotate" => Some("rotate: `${ctx.seconds * 90}deg`"),
-            "scale" => Some("scale: 1 + ctx.seconds or scale: `${1 + ctx.seconds} 1`"),
+            "translate" => {
+                Some("translate: point(seconds * 100, 0) or translate: `${seconds * 100}px 0px`")
+            }
+            "rotate" => Some("rotate: `${seconds * 90}deg`"),
+            "scale" => Some("scale: 1 + seconds or scale: `${1 + seconds} 1`"),
             "transform" => Some(
-                "transform: `translateX(${ctx.seconds * 100}px) rotate(${ctx.seconds * 90}deg) skew(${ctx.seconds * 10}deg)`",
+                "transform: `translateX(${seconds * 100}px) rotate(${seconds * 90}deg) skew(${seconds * 10}deg)`",
             ),
             _ => None,
         }

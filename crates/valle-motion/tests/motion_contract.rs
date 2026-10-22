@@ -247,7 +247,8 @@ fn unit_context_outside_a_per_unit_style_is_refused_at_admission() {
     let errors = artifact.validate().unwrap_err();
     assert!(
         errors.iter().any(|error| {
-            error.path.ends_with("/styles/1/value") && error.message.contains("ctx.unit.*")
+            error.path.ends_with("/styles/1/value")
+                && error.message.contains("the unit is only available")
         }),
         "{errors:?}"
     );

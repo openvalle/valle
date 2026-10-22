@@ -5,11 +5,11 @@ const SA = path("M 12 70 L 60 70 L 60 110 L 36 92 L 12 110 Z");
 const SB = path("M 86 70 L 144 70 L 134 90 L 144 112 L 86 112 Z");
 const SC = path("M 12 68 L 146 68 L 146 112 L 80 88 L 12 112 Z");
 
-export default function Compatible() { const ctx = useTime();
+export default function Compatible() { const time = useCurrentTime();
   return (
     <Scene style={{ width: 160, height: 120, backgroundColor: "#101010" }}>
-      <Path key="pair" d={morph(A, B, ctx.progress, { method: "compatible" })} fill="#ffffff" />
-      <Path key="sequence" d={morphSequence([SA, SB, SC], [0, 0.5, 1], ctx.progress, { method: "compatible" })} fill="#22d3ee" />
+      <Path key="pair" d={morph(A, B, time.progress, { method: "compatible" })} fill="#ffffff" />
+      <Path key="sequence" d={morphSequence([SA, SB, SC], [0, 0.5, 1], time.progress, { method: "compatible" })} fill="#22d3ee" />
     </Scene>
   );
 }

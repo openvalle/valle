@@ -59,11 +59,11 @@ fn ink_width(program: &DrawProgram) -> f64 {
 
 #[test]
 fn default_pack_instances_continuous_weight_and_reuses_no_stale_glyphs() {
-    let source = VARIABLE_FONT_WEIGHT.replace("ctx.progress", "ctx.seconds");
+    let source = VARIABLE_FONT_WEIGHT.replace("time.progress", "time.seconds");
     let weight = compile_motion(&source).unwrap().artifact;
     let axis_source = source.replace(
-        "fontWeight: 100 + ctx.seconds * 800",
-        "fontVariationSettings: `\"wght\" ${100 + ctx.seconds * 800}`",
+        "fontWeight: 100 + time.seconds * 800",
+        "fontVariationSettings: `\"wght\" ${100 + time.seconds * 800}`",
     );
     let axes = compile_motion(&axis_source).unwrap().artifact;
     let weight_scene = prepare_scene(&weight).unwrap();
@@ -104,8 +104,9 @@ fn default_pack_instances_continuous_weight_and_reuses_no_stale_glyphs() {
 fn axes_work_in_rich_text_and_measurement_and_preserve_fractional_weights() {
     let fonts = fonts();
     let render = |body: &str| {
-        let source =
-            format!("export default function T() {{ const ctx = useTime();return {body};}}");
+        let source = format!(
+            "export default function T() {{ const time = useCurrentTime();return {body};}}"
+        );
         let artifact = compile_motion(&source).unwrap().artifact;
         program(&prepare_scene(&artifact).unwrap(), &artifact, &fonts, 8)
     };
@@ -113,7 +114,7 @@ fn axes_work_in_rich_text_and_measurement_and_preserve_fractional_weights() {
     let b = render(r#"<Text style={{fontSize:80,fontWeight:403.75}}>WEIGHT</Text>"#);
     assert_ne!(a.packed_bytes().unwrap(), b.packed_bytes().unwrap());
     let span = render(
-        r#"<Text style={{fontSize:80}}><Span style={{fontVariationSettings:`"wght" ${100+ctx.seconds*800}, "wdth" 75`}}>WEIGHT</Span></Text>"#,
+        r#"<Text style={{fontSize:80}}><Span style={{fontVariationSettings:`"wght" ${100+time.seconds*800}, "wdth" 75`}}>WEIGHT</Span></Text>"#,
     );
     let direct = render(
         r#"<Text style={{fontSize:80,fontVariationSettings:'"wght" 500, "wdth" 75'}}>WEIGHT</Text>"#,
@@ -146,7 +147,7 @@ fn axes_work_in_rich_text_and_measurement_and_preserve_fractional_weights() {
 
 #[test]
 fn default_chinese_fallback_has_real_continuous_bold_outlines() {
-    let source = "export default function Main() { const ctx = useTime(); return <Scene><Text style={{fontSize:64,fontWeight:400+ctx.seconds*400}}>中文</Text></Scene>; }";
+    let source = "export default function Main() { const time = useCurrentTime(); return <Scene><Text style={{fontSize:64,fontWeight:400+time.seconds*400}}>中文</Text></Scene>; }";
     let artifact = compile_motion(source).unwrap().artifact;
     let prepared = prepare_scene(&artifact).unwrap();
     let fonts = fonts();

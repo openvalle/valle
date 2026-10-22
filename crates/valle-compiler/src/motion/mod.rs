@@ -60,6 +60,7 @@ mod audio;
 mod builtins;
 mod caption;
 mod classes;
+mod clock;
 mod collections;
 mod compiler;
 mod controls;
@@ -100,6 +101,7 @@ mod transform;
 mod values;
 pub use audio::{AudioAnalysisEnv, AudioPcm};
 use caption::{CAPTION_CONTENT, is_caption_object, returns_jsx};
+use clock::TimeReads;
 use controls::*;
 use css::*;
 use diagnostics::*;
@@ -164,7 +166,7 @@ const REST_INSTEAD_OF_DELETE: &str = "`delete` cannot change an object, which ne
 /// What a JSX list repeats over: rows fixed while the scene is prepared.
 const PREPARED_LIST: &str = "a JSX list is built while the scene is prepared, so the array it \
     repeats cannot change with the frame; map the whole prepared array and decide each item per \
-    frame, as in `items.map((item) => (item.at < ctx.seconds ? <View key={item.id} /> : null))`";
+    frame, as in `items.map((item) => (item.at < seconds ? <View key={item.id} /> : null))`";
 /// What replaces loading at run time: Motion prepares synchronously.
 const SYNCHRONOUS_PREPARATION: &str = "preparation runs synchronously; declare files with \
     `asset()` in `controls.assets`, reference them as `asset://name`, and bind prepared data \
@@ -180,30 +182,14 @@ const MAX_EXPR_NESTING: usize = 256;
 const MAX_EXPR_MAP_UNROLL: usize = 4096;
 pub const MOTION_COMPILER_ID: &str = concat!("valle-compiler@", env!("CARGO_PKG_VERSION"));
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum SequenceUnit {
-    Seconds,
-    Frames,
-}
-
+/// A named stage of `defineSequence`, in seconds.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SequenceStage {
     #[serde(rename = "__valleType")]
     marker: String,
-    unit: SequenceUnit,
     start: f64,
     duration: f64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SequenceTime {
-    #[serde(rename = "__valleType")]
-    marker: String,
-    unit: SequenceUnit,
-    value: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -674,10 +660,10 @@ enum AuthorValue {
     /// A compile-time-fixed collection whose elements are frame-time expressions.
     /// It is expanded by the compiler and never becomes an Artifact/runtime array.
     DynamicTuple(Vec<ExprId>),
-    Children(Vec<PendingNode>),
-    /// The time, or an object in it, passed on as an argument or prop. Its numbers lower where
-    /// they are read, as with `useTime()` itself.
-    Time(Vec<String>),
+    Children(ChildNodes),
+    /// A time hook's object, passed on as an argument or prop. Its numbers lower where they are
+    /// read, on the clock of the component that called the hook.
+    Time(time::TimePath),
     /// The caption, its runs or one run, passed on as an argument or prop. Like the time, its
     /// fields lower where they are read.
     Caption(Vec<String>),
@@ -737,13 +723,15 @@ fn authored_fn_of<'a>(initializer: &'a Expression<'a>) -> Option<AuthoredFn<'a>>
 const RESERVED_INTRINSICS: &[&str] = &[
     "ThemeProvider",
     "useTheme",
-    "useTime",
+    "useCurrentTime",
+    "useComposition",
     "useData",
     "useCaption",
 ];
 
-const SHADOWED_INTRINSIC: &str = "`ThemeProvider`, `useTheme`, `useTime`, `useData` and \
-     `useCaption` are reserved Motion intrinsics and cannot be shadowed";
+const SHADOWED_INTRINSIC: &str = "`ThemeProvider`, `useTheme`, `useCurrentTime`, \
+     `useComposition`, `useData` and `useCaption` are reserved Motion intrinsics and cannot be \
+     shadowed";
 
 fn reserved_intrinsic_binding(pattern: &BindingPattern<'_>) -> Option<Span> {
     match pattern {
@@ -841,13 +829,13 @@ struct Bindings<'s> {
     /// Fixed-shape object syntax with its declaration scope. Kept compiler-only.
     objects: BTreeMap<String, style_objects::AuthoredObject<'s>>,
     /// JSX child fragments bound by component/helper expansion.
-    children: BTreeMap<String, Vec<PendingNode>>,
+    children: BTreeMap<String, ChildNodes>,
     /// Props of the component currently being expanded.
     component_props: Option<BTreeMap<String, AuthorValue>>,
     /// The rest of destructured props, `{ title, ...rest }`: the props it leaves out.
     prop_rests: BTreeMap<String, BTreeSet<String>>,
-    /// Names bound to the time `useTime()` returns, or to an object in it: the path under it.
-    times: BTreeMap<String, Vec<String>>,
+    /// Names bound to the object `useCurrentTime()` or `useComposition()` returns.
+    times: BTreeMap<String, time::TimePath>,
     /// Names bound to the caption `useCaption()` returns, its runs, or one run: the path under
     /// it, where `#` stands for the run of a `runs.map(...)` row.
     captions: BTreeMap<String, Vec<String>>,
@@ -864,9 +852,9 @@ struct NameBinding<'s> {
     instance_object: Option<BTreeMap<String, (u32, valle_motion::expr::ExprType)>>,
     statik: Option<serde_json::Value>,
     object: Option<style_objects::AuthoredObject<'s>>,
-    children: Option<Vec<PendingNode>>,
+    children: Option<ChildNodes>,
     prop_rest: Option<BTreeSet<String>>,
-    time: Option<Vec<String>>,
+    time: Option<time::TimePath>,
     caption: Option<Vec<String>>,
 }
 
@@ -879,8 +867,8 @@ struct BindingFrame<'s> {
     instance_objects: BTreeMap<String, BTreeMap<String, (u32, valle_motion::expr::ExprType)>>,
     statics: BTreeMap<String, serde_json::Value>,
     objects: BTreeMap<String, style_objects::AuthoredObject<'s>>,
-    children: BTreeMap<String, Vec<PendingNode>>,
-    times: BTreeMap<String, Vec<String>>,
+    children: BTreeMap<String, ChildNodes>,
+    times: BTreeMap<String, time::TimePath>,
     captions: BTreeMap<String, Vec<String>>,
 }
 
@@ -1061,6 +1049,11 @@ struct ExprArena {
     expansion_stacks: Vec<Vec<String>>,
     /// Incremental mirror of `expr_reads_runtime_inputs` for each expression.
     reads_runtime: Vec<bool>,
+    /// What each expression reads of time.
+    time_reads: Vec<TimeReads>,
+    /// The scene clock each expression reads, so a value of one component's clock cannot be drawn
+    /// inside a TimeScope that gives its nodes another.
+    scene_clock: Vec<SceneClock>,
     /// Compile-local reuse only: no values survive props, scenes, or instance rollback.
     interner: interner::ExprInterner,
     /// Current recursive lowering depth, guarded by `MAX_EXPR_NESTING`.
@@ -1075,6 +1068,8 @@ impl ExprArena {
         self.spans.truncate(len);
         self.expansion_stacks.truncate(len);
         self.reads_runtime.truncate(len);
+        self.time_reads.truncate(len);
+        self.scene_clock.truncate(len);
     }
 }
 
@@ -1087,10 +1082,72 @@ struct SourceLedger {
     object_spans: Vec<(String, String, Span, Vec<String>)>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct TimeTransform {
     offset_seconds: f64,
     speed: f64,
+}
+
+/// A scene clock: an index into the TimeScope chains of `Compiler::clock_chains`. Clock 0 is the
+/// composition's own, outside every TimeScope.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+struct ClockId(u32);
+
+/// The scene clock an expression reads.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum SceneClock {
+    /// None: the value holds wherever it is drawn.
+    #[default]
+    None,
+    On(ClockId),
+    /// More than one clock, which no node can draw.
+    Mixed,
+}
+
+impl SceneClock {
+    fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::None, clock) | (clock, Self::None) => clock,
+            (Self::On(a), Self::On(b)) if a == b => self,
+            _ => Self::Mixed,
+        }
+    }
+}
+
+/// The children a component receives. As in React they are elements, drawn where the component
+/// places them: a component among them reads the clock of the TimeScopes around that place.
+#[derive(Clone)]
+enum ChildNodes {
+    Lowered(Vec<PendingNode>),
+    /// An index into `Compiler::deferred_children`.
+    Deferred(usize),
+}
+
+impl ChildNodes {
+    /// Whether no child is passed: children are deferred only when some are written.
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Lowered(nodes) => nodes.is_empty(),
+            Self::Deferred(_) => false,
+        }
+    }
+}
+
+/// Component children kept as written, with what they read at the call: its names, keys, hooks
+/// and theme.
+struct DeferredChildren<'s> {
+    children: &'s [JSXChild<'s>],
+    /// Children a spread passed in, taken when the element writes none of its own.
+    spread: Option<ChildNodes>,
+    path: String,
+    key_prefix: String,
+    bindings: Bindings<'s>,
+    component_stack: Vec<String>,
+    helper_stack: Vec<String>,
+    component_clock: ClockId,
+    current_theme: Option<serde_json::Value>,
+    list_depth: usize,
+    caption_row: Option<u32>,
 }
 
 struct Compiler<'s> {
@@ -1153,6 +1210,12 @@ struct Compiler<'s> {
     current_theme: Option<serde_json::Value>,
     /// Nested TimeScope transforms, ordered from outermost to innermost.
     time_scopes: Vec<TimeTransform>,
+    /// Every chain of TimeScopes a value has been read on, by `ClockId`; the first is empty.
+    clock_chains: Vec<Vec<TimeTransform>>,
+    /// The clock `useCurrentTime()` reads in the component being expanded: the TimeScopes around
+    /// the place it is drawn.
+    component_clock: ClockId,
+    deferred_children: Vec<DeferredChildren<'s>>,
     key_prefix: String,
     component_stack: Vec<String>,
     helper_stack: Vec<String>,

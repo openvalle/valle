@@ -3,7 +3,7 @@ use valle_compiler::motion::{compile_motion, compile_motion_with_full_env};
 
 fn scene(style: &str) -> String {
     format!(
-        "export const composition = {{ width:64,height:64,fps:30,duration:1 }}; export default function Contract() {{ const ctx = useTime(); return <Scene><View style={{{{width:32,height:32,{style}}}}}/></Scene>; }}"
+        "export const composition = {{ width:64,height:64,fps:30,duration:1 }}; export default function Contract() {{ const time = useCurrentTime(); return <Scene><View style={{{{width:32,height:32,{style}}}}}/></Scene>; }}"
     )
 }
 
@@ -13,12 +13,12 @@ fn ordered_css_3d_transforms_accept_static_and_typed_template_arguments() {
         "'translate3d(10px,20%,0) scale3d(1,2,3) rotate3d(1,0,0,45deg)'",
         "'rotateX(20deg) translate(10%,20px) translateX(10px) translateY(20%) translateZ(0)'",
         "'rotateY(0.5rad) rotateZ(0.25turn) rotate(30deg) scale(2) scale(1,2) scaleX(1) scaleY(2) scaleZ(3)'",
-        "`translate3d(${ctx.progress}px,${ctx.progress}%,${ctx.progress}px) scale3d(${ctx.progress},2,3) rotate3d(1,0,0,${ctx.progress}turn)`",
-        "`rotateX(${ctx.progress}rad) rotateY(${ctx.progress}deg) scale(${ctx.progress},2) translate(${ctx.progress}%,0)`",
+        "`translate3d(${time.progress}px,${time.progress}%,${time.progress}px) scale3d(${time.progress},2,3) rotate3d(1,0,0,${time.progress}turn)`",
+        "`rotateX(${time.progress}rad) rotateY(${time.progress}deg) scale(${time.progress},2) translate(${time.progress}%,0)`",
         "'perspective(400px) rotateY(30deg) skew(10deg, 5deg) skewX(1deg) skewY(2deg) matrix(1,0,0,1,4,5)'",
         "'matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,10,20,0,1)'",
         "'perspective(none) rotateX(10deg)'",
-        "`perspective(${200 + ctx.progress * 100}px) rotateX(20deg) skew(${ctx.progress}deg, 0deg) matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,${ctx.progress},0,0,1)`",
+        "`perspective(${200 + time.progress * 100}px) rotateX(20deg) skew(${time.progress}deg, 0deg) matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,${time.progress},0,0,1)`",
     ] {
         let compiled = compile_motion(&scene(&format!("transform:{transform}")))
             .unwrap_or_else(|diagnostics| panic!("{transform}: {diagnostics:#?}"));
@@ -29,8 +29,8 @@ fn ordered_css_3d_transforms_accept_static_and_typed_template_arguments() {
     }
     for style in [
         "transformStyle:'flat'",
-        "transformStyle:ctx.progress<0.5?'flat':'preserve-3d'",
-        "backfaceVisibility:ctx.progress<0.5?'hidden':'visible'",
+        "transformStyle:time.progress<0.5?'flat':'preserve-3d'",
+        "backfaceVisibility:time.progress<0.5?'hidden':'visible'",
     ] {
         compile_motion(&scene(style))
             .unwrap_or_else(|diagnostics| panic!("{style}: {diagnostics:#?}"))
@@ -43,7 +43,7 @@ fn ordered_css_3d_transforms_accept_static_and_typed_template_arguments() {
         "'right bottom'",
         "'center center'",
         "'12px 30%'",
-        "`${ctx.progress}px ${ctx.progress}%`",
+        "`${time.progress}px ${time.progress}%`",
     ] {
         let compiled = compile_motion(&scene(&format!(
             "perspectiveOrigin:{origin},perspective:'200px'"
@@ -64,7 +64,7 @@ fn malformed_css_3d_arguments_produce_diagnostics_instead_of_partial_transforms(
         "perspectiveOrigin:'center'",
         "perspectiveOrigin:'left top extra'",
         "perspectiveOrigin:'bad top'",
-        "perspectiveOrigin:`${ctx.progress} ${ctx.progress}px`",
+        "perspectiveOrigin:`${time.progress} ${time.progress}px`",
         "transform:'translate3d(1px,2px)'",
         "transform:'scale3d(1,2)'",
         "transform:'rotate3d(1,0,45deg)'",
@@ -73,11 +73,11 @@ fn malformed_css_3d_arguments_produce_diagnostics_instead_of_partial_transforms(
         "transform:'translateZ(10%)'",
         "transform:'translateZ(10em)'",
         "transform:'rotateX(10px)'",
-        "transform:`translateZ(${ctx.progress}%)`",
-        "transform:`rotateX(${ctx.progress}px)`",
-        "transform:`rotateX(20deg) scaleX(${ctx.progress}px)`",
-        "transform:`rotateX(2${ctx.progress}deg)`",
-        "transform:`rotateX(20deg) translateX(2${ctx.progress}px)`",
+        "transform:`translateZ(${time.progress}%)`",
+        "transform:`rotateX(${time.progress}px)`",
+        "transform:`rotateX(20deg) scaleX(${time.progress}px)`",
+        "transform:`rotateX(2${time.progress}deg)`",
+        "transform:`rotateX(20deg) translateX(2${time.progress}px)`",
         "transform:'rotateX(20deg) scaleX(Infinity)'",
         "transform:'matrix3d(1,2,3)'",
         "transform:'rotateX(20deg) matrix(1,0,0,1)'",
@@ -85,10 +85,10 @@ fn malformed_css_3d_arguments_produce_diagnostics_instead_of_partial_transforms(
         "transform:'perspective(10em) rotateX(1deg)'",
         "transform:'rotateX(20deg) skew(1deg,2deg,3deg)'",
         "transform:'rotateX(20deg) skewX(1px)'",
-        "transform:`perspective(${ctx.progress}) rotateX(1deg)`",
+        "transform:`perspective(${time.progress}) rotateX(1deg)`",
         "transformStyle:'none'",
-        "transformStyle:ctx.progress",
-        "backfaceVisibility:ctx.progress<0.5?'hidden':'nope'",
+        "transformStyle:time.progress",
+        "backfaceVisibility:time.progress<0.5?'hidden':'nope'",
     ] {
         let diagnostics = compile_motion(&scene(style)).expect_err(style);
         assert!(!diagnostics.is_empty(), "{style}");
@@ -97,7 +97,7 @@ fn malformed_css_3d_arguments_produce_diagnostics_instead_of_partial_transforms(
 
 fn body(value: &str) -> String {
     format!(
-        "export default function Contract() {{ const ctx = useTime(); return <Scene>{value}</Scene>; }}"
+        "export default function Contract() {{ const time = useCurrentTime(); return <Scene>{value}</Scene>; }}"
     )
 }
 
@@ -129,7 +129,7 @@ fn spans_reject_unsupported_attributes_children_and_layout_styles() {
 fn geometry_helpers_admit_fixed_topology_and_reject_invalid_arity_or_svg_commands() {
     for expression in [
         "pathTemplate`M 0 0 L 10 0 Q 15 5 10 10 C 5 15 0 15 0 10 Z`",
-        "pathTemplate`M ${ctx.progress} 0 L 10 0 L 10 10 Z`",
+        "pathTemplate`M ${time.progress} 0 L 10 0 L 10 10 Z`",
         "area(line([point(0,0),point(10,10)]),0)",
     ] {
         let source = body(&format!("<Path d={{{expression}}} fill='red'/>"));
@@ -253,9 +253,9 @@ fn shader_manifest_defaults_become_typed_artifact_bindings() {
         })
         .unwrap();
     assert_eq!(node.len(), 9);
-    let authored = "{u0:ctx.progress,u1:point(0.2,0.4),u2:[ctx.progress,0.2,0.3],u3:[0.1,0.2,0.3,0.4],u4:[1,0,0,1],u5:[1,0,0,0,1,0,0,0,1],u6:[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],u7:'red',u8:ctx.progress>0}";
+    let authored = "{u0:time.progress,u1:point(0.2,0.4),u2:[time.progress,0.2,0.3],u3:[0.1,0.2,0.3,0.4],u4:[1,0,0,1],u5:[1,0,0,0,1,0,0,0,1],u6:[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],u7:'red',u8:time.progress>0}";
     let explicit = source
-        .replace("Contract(){", "Contract(){const ctx=useTime();")
+        .replace("Contract(){", "Contract(){const time = useCurrentTime();")
         .replace("style={{", &format!("uniforms={{{authored}}} style={{{{"));
     let compiled = compile_motion_with_full_env(
         &explicit,
@@ -273,12 +273,12 @@ fn shader_manifest_defaults_become_typed_artifact_bindings() {
         "{u1:point(3,0)}",
         "{u2:[0,0]}",
         "{u3:[0,0,0,3]}",
-        "{u4:[ctx.progress]}",
+        "{u4:[time.progress]}",
         "{u8:2}",
         "{unknown:1}",
     ] {
         let invalid = source
-            .replace("Contract(){", "Contract(){const ctx=useTime();")
+            .replace("Contract(){", "Contract(){const time = useCurrentTime();")
             .replace("style={{", &format!("uniforms={{{uniforms}}} style={{{{"));
         assert!(
             compile_motion_with_full_env(
@@ -306,11 +306,10 @@ float4 valle_main(float2 uv) {
 }`;
 export const controls = { assets: { field: asset({ kind: "image" }) } };
 export default function Contract() {
-  const ctx = useTime();
   return <Scene>LAYERS</Scene>;
 }"##;
 
-const SHADER_CODE_LAYER: &str = r##"code={shade} inputs={{ field: "asset://field" }} uniforms={{ progress: ctx.progress, tint: "#38bdf8" }}"##;
+const SHADER_CODE_LAYER: &str = r##"code={shade} inputs={{ field: "asset://field" }} uniforms={{ progress: time.progress, tint: "#38bdf8" }}"##;
 
 fn shader_code_scene(layers: &[&str]) -> String {
     let layers = layers
@@ -430,7 +429,10 @@ fn shader_layer_code_declares_its_uniforms_and_inputs() {
             "ShaderLayer code requires uniform `tint`",
         ),
         (
-            edited("progress: ctx.progress", "progress: ctx.progress, glow: 1"),
+            edited(
+                "progress: time.progress",
+                "progress: time.progress, glow: 1",
+            ),
             "ShaderLayer code has no uniform `glow`",
         ),
         (
@@ -457,7 +459,7 @@ fn shader_layer_code_declares_its_uniforms_and_inputs() {
             "ShaderLayer outset must be a whole number of pixels",
         ),
         (
-            edited("code={shade}", "code={ctx.progress > 0.5 ? shade : shade}"),
+            edited("code={shade}", "code={time.progress > 0.5 ? shade : shade}"),
             "ShaderLayer code must be a static string",
         ),
         (
@@ -529,9 +531,9 @@ fn shader_layer_code_reads_the_backdrop_in_place() {
 #[test]
 fn dynamic_gradients_preserve_spread_and_geometry_batches_keep_semantic_keys() {
     for (kind, geometry) in [
-        ("linearGradient", "point(ctx.progress,0),point(10,10)"),
-        ("radialGradient", "point(5,5),2+ctx.progress"),
-        ("conicGradient", "point(5,5),ctx.progress"),
+        ("linearGradient", "point(time.progress,0),point(10,10)"),
+        ("radialGradient", "point(5,5),2+time.progress"),
+        ("conicGradient", "point(5,5),time.progress"),
     ] {
         for spread in ["pad", "repeat", "reflect"] {
             let paint = format!(
@@ -556,7 +558,7 @@ fn dynamic_gradients_preserve_spread_and_geometry_batches_keep_semantic_keys() {
     for keys in [
         "semanticKeys='one'",
         "semanticKeys",
-        "semanticKeys={ctx.progress}",
+        "semanticKeys={time.progress}",
         "semanticKeys={[1,2]}",
     ] {
         let source = body(&format!(
@@ -598,7 +600,7 @@ fn fit_text_and_per_unit_styles_admit_closed_contracts_and_report_invalid_inputs
     assert!(wire.contains("text-fit"));
     assert!(wire.contains("shrink 40%"));
     for value in [
-        "ctx.progress",
+        "time.progress",
         "3",
         "fitText({minFontSize:0,maxFontSize:20})",
         "fitText({minFontSize:20,maxFontSize:8})",
@@ -613,12 +615,12 @@ fn fit_text_and_per_unit_styles_admit_closed_contracts_and_report_invalid_inputs
     }
     for text in [
         "<Text split='char'>x</Text>",
-        "<Text perUnit={{opacity:1}}>x</Text>",
-        "<Text split='char' perUnit={{}}>x</Text>",
-        "<Text split='char' perUnit={{bad:1}}>x</Text>",
-        "<Text split='char' perUnit={{...{opacity:1}}}>x</Text>",
-        "<Text split='char' perUnit={{[ctx.progress]:1}}>x</Text>",
-        "<Text split='char' perUnit={{opacity:2}}>x</Text>",
+        "<Text perUnit={() => ({opacity:1})}>x</Text>",
+        "<Text split='char' perUnit={() => ({})}>x</Text>",
+        "<Text split='char' perUnit={() => ({bad:1})}>x</Text>",
+        "<Text split='char' perUnit={() => ({...{opacity:1}})}>x</Text>",
+        "<Text split='char' perUnit={() => ({[time.progress]:1})}>x</Text>",
+        "<Text split='char' perUnit={() => ({opacity:2})}>x</Text>",
     ] {
         assert!(compile_motion(&body(text)).is_err(), "{text}");
     }
@@ -633,14 +635,14 @@ fn interpolation_options_reject_ambiguous_and_malformed_ranges() {
         "{colorSpace:'oklch',hue:'decreasing'}",
     ] {
         let source = body(&format!(
-            "<View style={{{{backgroundColor:interpolate(ctx.progress,[0,0.5,1],['red','blue','green'],{options})}}}}/>"
+            "<View style={{{{backgroundColor:interpolate(time.progress,[0,0.5,1],['red','blue','green'],{options})}}}}/>"
         ));
         compile_motion(&source).unwrap_or_else(|d| panic!("{options}: {d:#?}"));
     }
     for options in [
         "false",
         "{...{easing:'linear'}}",
-        "{[ctx.progress]:'linear'}",
+        "{[time.progress]:'linear'}",
         "{unknown:1}",
         "{colorSpace:1}",
         "{colorSpace:'bad'}",
@@ -651,7 +653,7 @@ fn interpolation_options_reject_ambiguous_and_malformed_ranges() {
         "{easing:[1,2]}",
     ] {
         let source = body(&format!(
-            "<View style={{{{backgroundColor:interpolate(ctx.progress,[0,0.5,1],['red','blue','green'],{options})}}}}/>"
+            "<View style={{{{backgroundColor:interpolate(time.progress,[0,0.5,1],['red','blue','green'],{options})}}}}/>"
         ));
         assert!(compile_motion(&source).is_err(), "{options}");
     }
@@ -659,11 +661,11 @@ fn interpolation_options_reject_ambiguous_and_malformed_ranges() {
         "[0,'bad'],[0,1]",
         "[0,1],[0,{}]",
         "[0,,1],[0,1,2]",
-        "[0,ctx.progress],[0,1]",
+        "[0,time.progress],[0,1]",
     ] {
         assert!(
             compile_motion(&body(&format!(
-                "<View style={{{{opacity:interpolate(ctx.progress,{ranges})}}}}/>"
+                "<View style={{{{opacity:interpolate(time.progress,{ranges})}}}}/>"
             )))
             .is_err(),
             "{ranges}"
@@ -673,7 +675,7 @@ fn interpolation_options_reject_ambiguous_and_malformed_ranges() {
 
 #[test]
 fn interpolation_resolves_constant_object_arrays_and_validates_every_stop() {
-    let source = "const ranges={input:[0,0.5,1],output:[0,0.5,1],easing:['linear','easeIn']}; export default function Contract(){ const ctx = useTime();return <Scene><View style={{opacity:interpolate(ctx.progress,ranges.input,ranges.output,{easing:ranges.easing})}}/></Scene>; }";
+    let source = "const ranges={input:[0,0.5,1],output:[0,0.5,1],easing:['linear','easeIn']}; export default function Contract(){ const time = useCurrentTime();return <Scene><View style={{opacity:interpolate(time.progress,ranges.input,ranges.output,{easing:ranges.easing})}}/></Scene>; }";
     compile_motion(source).unwrap_or_else(|d| panic!("{d:#?}"));
     for (from, to) in [
         ("input:[0,0.5,1]", "input:[0,'bad',1]"),

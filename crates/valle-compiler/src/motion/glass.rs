@@ -460,8 +460,8 @@ function glassMaterial(clarity: number, depth: number, tint = "#ffffff14") {
 }
 const light = { direction: point(1, 0), intensity: 0.5 };
 export default function Scene() {
-  const ctx = useTime();
-  return <Glass material={{ ...glassMaterial(0.75, 0.5), dispersion: ctx.progress }}
+  const time = useCurrentTime();
+  return <Glass material={{ ...glassMaterial(0.75, 0.5), dispersion: time.progress }}
     light={light} style={{ width: 200, height: 100 }} />;
 }
 "##,

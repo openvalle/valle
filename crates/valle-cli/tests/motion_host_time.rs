@@ -8,9 +8,9 @@ use std::{
 };
 
 const SOURCE: &str = r##"export const composition={width:64,height:32,fps:4,duration:1};
-export default function Main() { const ctx = useTime();return <Scene><View className="absolute" style={{
-    left:ctx.host.progress*40,width:12,height:12,top:ctx.seconds*8,
-    backgroundColor:ctx.host.duration===2?"white":"red"}}/></Scene>; }"##;
+export default function Main() { const time = useCurrentTime(); const comp = useComposition();return <Scene><View className="absolute" style={{
+    left:time.clipProgress*40,width:12,height:12,top:time.seconds*8,
+    backgroundColor:comp.clipDuration===2?"white":"red"}}/></Scene>; }"##;
 
 fn run(dir: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_valle"))
@@ -183,9 +183,9 @@ fn overlay_delivery_preserves_endpoints_and_uses_the_host_viewport() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("overlay.motion.tsx"),r#"
 export const composition={width:64,height:32,fps:4,duration:2};
-export const role=overlay({intro:seconds(0.5),outro:seconds(0.5),hold:"once"});
-export default function Main() { const ctx = useTime();return <Scene><View key="bar" className="absolute"
- style={{left:ctx.seconds*8,width:ctx.viewport.width/4,height:ctx.viewport.height/2,backgroundColor:"white"}}/></Scene>;}
+export const role=overlay({intro:0.5,outro:0.5,hold:"once"});
+export default function Main() { const time = useCurrentTime(); const comp = useComposition();return <Scene><View key="bar" className="absolute"
+ style={{left:time.seconds*8,width:comp.width/4,height:comp.height/2,backgroundColor:"white"}}/></Scene>;}
 "#).unwrap();
     for size in ["64x32", "32x64"] {
         let mut endpoints = Vec::new();

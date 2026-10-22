@@ -421,10 +421,15 @@ impl<'s> Compiler<'s> {
         &mut self,
         expression: &Expression<'_>,
     ) -> Option<AuthorValue> {
-        if let Some(path) = self.time_path(expression)
-            && super::time::is_time_object(&path)
-        {
-            return Some(AuthorValue::Time(path));
+        if let Some(time) = self.time_path(expression) {
+            if time.is_object() {
+                return Some(AuthorValue::Time(time));
+            }
+            if let Some(value) = self.static_time_value(&time)
+                && let Some(number) = serde_json::Number::from_f64(value)
+            {
+                return Some(AuthorValue::Static(serde_json::Value::Number(number)));
+            }
         }
         if let Some(path) = self.caption_path(expression)
             && is_caption_object(&path)
@@ -460,7 +465,7 @@ impl<'s> Compiler<'s> {
     }
 
     /// Bind JSX children in the same namespace as scalar and tuple values.
-    pub(super) fn bind_children(&mut self, name: String, children: Vec<PendingNode>) {
+    pub(super) fn bind_children(&mut self, name: String, children: ChildNodes) {
         self.bindings.unbind(&name);
         self.bindings.children.insert(name, children);
     }
@@ -949,38 +954,47 @@ impl<'s> Compiler<'s> {
                 "fragment children must be Motion JSX nodes; wrap text in `<Text>`",
             )),
             Expression::NullLiteral(_) => Some(Vec::new()),
-            Expression::Identifier(identifier) => self
-                .bindings
-                .children
-                .get(identifier.name.as_str())
-                .cloned()
-                .or_else(|| {
-                    self.unsupported(
-                        expression.span(),
-                        format!("`{}` is not a JSX children binding", identifier.name),
-                    );
-                    None
-                }),
+            Expression::Identifier(identifier) => {
+                match self
+                    .bindings
+                    .children
+                    .get(identifier.name.as_str())
+                    .cloned()
+                {
+                    Some(children) => Some(self.child_nodes(&children)),
+                    None => {
+                        self.unsupported(
+                            expression.span(),
+                            format!("`{}` is not a JSX children binding", identifier.name),
+                        );
+                        None
+                    }
+                }
+            }
             Expression::StaticMemberExpression(member)
                 if matches!(&member.object, Expression::Identifier(id) if id.name == "props")
                     && member.property.name == "children" =>
             {
-                self.bindings
+                let children = self
+                    .bindings
                     .component_props
                     .as_ref()
                     .and_then(|props| props.get("children"))
                     .and_then(|value| match value {
                         AuthorValue::Children(children) => Some(children.clone()),
                         _ => None,
-                    })
-                    .or_else(|| {
+                    });
+                match children {
+                    Some(children) => Some(self.child_nodes(&children)),
+                    None => {
                         self.illegal(
                             DiagCode::GrammarForbidden,
                             expression.span(),
                             "`props.children` is only available inside a called component",
                         );
                         None
-                    })
+                    }
+                }
             }
             Expression::ConditionalExpression(conditional) => {
                 if let Some(value) = self.eval_static(&conditional.test)
@@ -2003,6 +2017,18 @@ impl<'s> Compiler<'s> {
             *fallback_reason = Some("template contains unsupported node fields".into());
             return None;
         };
+        let clock = self.position_clock();
+        if group_arena
+            .scene_clock
+            .iter()
+            .any(|tag| !matches!(tag, SceneClock::None) && *tag != SceneClock::On(clock))
+        {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                element.span(),
+                super::clock::scene_clock_message(!self.time_scopes.is_empty()),
+            );
+        }
         if is_path
             && has_path_stroke
             && path_fill_source == path_stroke_source
@@ -2528,22 +2554,14 @@ impl<'s> Compiler<'s> {
             }
         }
         let instance_key = instance_key.unwrap_or_else(|| path.to_string());
-        let caller_prefix = self.key_prefix.clone();
         let component_prefix =
             scoped_instance_key.unwrap_or_else(|| self.scoped_key(&instance_key));
-        self.key_prefix = component_prefix.clone();
-
-        let mut children = self.lower_child_nodes(
+        let children = self.defer_children(
             &element.children,
-            &format!("{path}.children."),
-            "component children must be Motion JSX nodes; wrap text in `<Text>`",
+            spread_children,
+            format!("{path}.children."),
+            component_prefix.clone(),
         );
-        if children.is_empty()
-            && let Some(spread_children) = spread_children
-        {
-            children = spread_children;
-        }
-        self.key_prefix = caller_prefix;
         props.insert("children".into(), AuthorValue::Children(children));
 
         if function.body().is_none() && function.expression_body().is_none() {
@@ -2564,6 +2582,9 @@ impl<'s> Compiler<'s> {
         self.key_prefix = component_prefix;
         self.bindings.component_props = Some(props);
         self.component_stack.push(name.to_string());
+        // The component reads the clock of the TimeScopes around the place it is drawn.
+        let clock = self.position_clock();
+        let caller_clock = std::mem::replace(&mut self.component_clock, clock);
 
         if let Some(first) = params.items.first()
             && let BindingPattern::ObjectPattern(pattern) = &first.pattern
@@ -2578,10 +2599,94 @@ impl<'s> Compiler<'s> {
                 props_names(params),
             )
         };
+        self.component_clock = caller_clock;
         self.component_stack.pop();
         self.bindings.restore(saved_bindings);
         self.key_prefix = saved_prefix;
         result
+    }
+
+    /// Keep a component's children as written. As in React they lower where the component places
+    /// them, so a component among them reads the clock of the TimeScopes there; names, keys,
+    /// hooks and the theme stay those of the call.
+    fn defer_children(
+        &mut self,
+        children: &'s [JSXChild<'s>],
+        spread: Option<ChildNodes>,
+        path: String,
+        key_prefix: String,
+    ) -> ChildNodes {
+        let written = children.iter().any(|child| match child {
+            JSXChild::Text(text) => !text.value.trim().is_empty(),
+            JSXChild::ExpressionContainer(container) => {
+                !matches!(container.expression, JSXExpression::EmptyExpression(_))
+            }
+            _ => true,
+        });
+        if !written {
+            return spread.unwrap_or(ChildNodes::Lowered(Vec::new()));
+        }
+        self.deferred_children.push(DeferredChildren {
+            children,
+            spread,
+            path,
+            key_prefix,
+            bindings: self.bindings.clone(),
+            component_stack: self.component_stack.clone(),
+            helper_stack: self.helper_stack.clone(),
+            component_clock: self.component_clock,
+            current_theme: self.current_theme.clone(),
+            list_depth: self.list_depth,
+            caption_row: self.caption_row,
+        });
+        ChildNodes::Deferred(self.deferred_children.len() - 1)
+    }
+
+    /// The nodes of component children, placed here.
+    pub(super) fn child_nodes(&mut self, children: &ChildNodes) -> Vec<PendingNode> {
+        let at = match children {
+            ChildNodes::Lowered(nodes) => return nodes.clone(),
+            ChildNodes::Deferred(at) => *at,
+        };
+        let deferred = &self.deferred_children[at];
+        let children = deferred.children;
+        let path = deferred.path.clone();
+        let spread = deferred.spread.clone();
+        let bindings = deferred.bindings.clone();
+        let key_prefix = deferred.key_prefix.clone();
+        let component_stack = deferred.component_stack.clone();
+        let helper_stack = deferred.helper_stack.clone();
+        let component_clock = deferred.component_clock;
+        let current_theme = deferred.current_theme.clone();
+        let list_depth = deferred.list_depth;
+        let caption_row = deferred.caption_row;
+        let saved_bindings = std::mem::replace(&mut self.bindings, bindings);
+        let saved_prefix = std::mem::replace(&mut self.key_prefix, key_prefix);
+        let saved_components = std::mem::replace(&mut self.component_stack, component_stack);
+        let saved_helpers = std::mem::replace(&mut self.helper_stack, helper_stack);
+        let saved_clock = std::mem::replace(&mut self.component_clock, component_clock);
+        let saved_theme = std::mem::replace(&mut self.current_theme, current_theme);
+        let saved_list_depth = std::mem::replace(&mut self.list_depth, list_depth);
+        let saved_caption_row = std::mem::replace(&mut self.caption_row, caption_row);
+        let mut nodes = self.lower_child_nodes(
+            children,
+            &path,
+            "component children must be Motion JSX nodes; wrap text in `<Text>`",
+        );
+        if nodes.is_empty()
+            && let Some(spread) = spread
+        {
+            nodes = self.child_nodes(&spread);
+        }
+        self.bindings = saved_bindings;
+        self.key_prefix = saved_prefix;
+        self.component_stack = saved_components;
+        self.helper_stack = saved_helpers;
+        self.component_clock = saved_clock;
+        self.current_theme = saved_theme;
+        self.list_depth = saved_list_depth;
+        self.caption_row = saved_caption_row;
+        nodes
     }
 
     pub(super) fn lower_dynamic_helper(

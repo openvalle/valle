@@ -1,7 +1,7 @@
 export const composition = { width: 1920, height: 1080, fps: 30, duration: 5 };
 export default function Hello() {
-  const ctx = useTime();
-  const opacity = interpolate(ctx.progress, [0, 0.6], [0, 1]);
+  const time = useCurrentTime();
+  const opacity = interpolate(time.progress, [0, 0.6], [0, 1]);
 
   return (
     <Scene className="relative h-full w-full flex flex-col items-center justify-center"

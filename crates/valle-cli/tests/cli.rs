@@ -947,7 +947,7 @@ fn project_create_and_apply_preserve_motion_inline_data() {
         dir.path().join("title.motion.tsx"),
         r#"export const composition = { width: 64, height: 64, fps: 24, duration: 1 };
 export const controls = { data: { title: string() } };
-export default function Title(props) { const ctx = useTime(); const data = useData(); return <Scene><Text>{data.title}</Text></Scene>; }"#,
+export default function Title(props) { const data = useData(); return <Scene><Text>{data.title}</Text></Scene>; }"#,
     )
     .unwrap();
     let timeline_path = dir.path().join("timeline.json");
@@ -1095,10 +1095,10 @@ fn motion_render_exports_mp4_and_preserves_existing_output() {
         &source,
         r##"
 export const composition = { width: 160, height: 90, fps: 10, duration: 0.3 };
-export default function Demo() { const ctx = useTime();
+export default function Demo() { const time = useCurrentTime();
   return <Scene className="relative h-full w-full" style={{ backgroundColor: "#123456" }}>
     <Text style={{ color: "#ffffff", fontSize: 24 }}>你好 Noto</Text>
-    <View style={{ width: 20, height: 20, backgroundColor: "#ff5500", opacity: ctx.progress }} />
+    <View style={{ width: 20, height: 20, backgroundColor: "#ff5500", opacity: time.progress }} />
   </Scene>;
 }
 
@@ -1337,7 +1337,7 @@ fn timeline_and_project_render_without_internal_package_arguments() {
 fn timeline_renders_motion_source_with_internal_fonts() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("title.motion.tsx"), r##"export const composition = { width: 160, height: 90, fps: 10, duration: 1 };
-export default function Title() { const ctx = useTime(); return <Scene><Text style={{ fontSize: 24, color: "#ffffff" }}>Hello</Text></Scene>; }"##).unwrap();
+export default function Title() { return <Scene><Text style={{ fontSize: 24, color: "#ffffff" }}>Hello</Text></Scene>; }"##).unwrap();
     let timeline = dir.path().join("timeline.json");
     std::fs::write(&timeline, serde_json::json!({
         "canvas":{"width":160,"height":90,"fps":10},
@@ -1436,7 +1436,7 @@ fn motion_compile_errors_include_source_diagnostics_in_machine_output() {
     let input = dir.path().join("broken.motion.tsx");
     std::fs::write(
         &input,
-        "export default function Broken() { const ctx = useTime(); return <Scene><Unknown /></Scene>; }",
+        "export default function Broken() { return <Scene><Unknown /></Scene>; }",
     )
     .unwrap();
     for mode in ["--json", "--events"] {

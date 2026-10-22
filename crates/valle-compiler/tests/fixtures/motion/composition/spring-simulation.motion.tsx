@@ -11,11 +11,11 @@ const SPRING = simulate({
   },
 });
 
-export default function Simulated() { const ctx = useTime();
+export default function Simulated() { const time = useCurrentTime();
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       <View key="dot" className="absolute" style={{
-        left: SPRING.at(ctx.seconds).x,
+        left: SPRING.at(time.seconds).x,
         top: 170,
         width: 20,
         height: 20,

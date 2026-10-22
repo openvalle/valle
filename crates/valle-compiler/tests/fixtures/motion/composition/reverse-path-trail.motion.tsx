@@ -1,8 +1,8 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 const ORBIT = arc(point(320, 180), 140, 0, TAU);
 const TAIL = defineRepeater({ count: 10, keyPrefix: "tail" });
-export default function Reverse() { const ctx = useTime();
-  const base = fract(ctx.seconds * 0.4);
+export default function Reverse() { const time = useCurrentTime();
+  const base = fract(time.seconds * 0.4);
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>
       {TAIL.map((tail) => (

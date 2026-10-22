@@ -1,7 +1,7 @@
 export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
 
-export default function FloatGradient() { const ctx = useTime();
-  const color = interpolate(ctx.progress, [0, 1], ["#2140ff", "#ffd000"],
+export default function FloatGradient() { const time = useCurrentTime();
+  const color = interpolate(time.progress, [0, 1], ["#2140ff", "#ffd000"],
     { colorSpace: "oklch" });
   return (
     <Scene className="relative h-full w-full" style={{ backgroundColor: "#101010" }}>

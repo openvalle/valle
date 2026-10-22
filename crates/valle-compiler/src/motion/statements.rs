@@ -403,7 +403,10 @@ impl<'s> Compiler<'s> {
         let pushed = before
             .children
             .iter()
-            .map(|(name, nodes)| (name.clone(), nodes.len()))
+            .filter_map(|(name, nodes)| match nodes {
+                ChildNodes::Lowered(nodes) => Some((name.clone(), nodes.len())),
+                ChildNodes::Deferred(_) => None,
+            })
             .collect::<BTreeMap<_, _>>();
         for branches in &mut body.loops {
             *branches += 1;
@@ -686,7 +689,7 @@ impl<'s> Compiler<'s> {
                     if let (Some(xs), Some(ys)) = (a.nodes(), b.nodes()) {
                         let before = pushed.get(&name).copied().unwrap_or(0);
                         if let Some(nodes) = self.join_nodes(condition, before, xs, ys, span) {
-                            self.bind_children(name, nodes);
+                            self.bind_children(name, ChildNodes::Lowered(nodes));
                             continue;
                         }
                     }
@@ -1106,7 +1109,21 @@ impl<'s> Compiler<'s> {
             );
             return None;
         }
-        let index = self.bindings.children.get(&name).map_or(0, Vec::len);
+        let index = match self.bindings.children.get(&name) {
+            None => 0,
+            Some(ChildNodes::Lowered(nodes)) => nodes.len(),
+            Some(ChildNodes::Deferred(_)) => {
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    target.span,
+                    format!(
+                        "`{name}` holds the children the component received; push JSX onto a \
+                         list of your own, `const items = []`"
+                    ),
+                );
+                return None;
+            }
+        };
         // JSX pushed in a loop is a list item, as in a `.map`.
         let in_loop = usize::from(!body.loops.is_empty());
         self.list_depth += in_loop;
@@ -1114,11 +1131,14 @@ impl<'s> Compiler<'s> {
         self.list_depth -= in_loop;
         let mut nodes = nodes?;
         self.bindings.statics.remove(&name);
-        self.bindings
+        if let ChildNodes::Lowered(list) = self
+            .bindings
             .children
             .entry(name)
-            .or_default()
-            .append(&mut nodes);
+            .or_insert_with(|| ChildNodes::Lowered(Vec::new()))
+        {
+            list.append(&mut nodes);
+        }
         Some(())
     }
 
@@ -1342,9 +1362,10 @@ impl NameBinding<'_> {
                 (a, b) => a.is_none() && b.is_none(),
             }
             && match (&self.children, &other.children) {
-                (Some(a), Some(b)) => {
+                (Some(ChildNodes::Lowered(a)), Some(ChildNodes::Lowered(b))) => {
                     a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.key == b.key)
                 }
+                (Some(ChildNodes::Deferred(a)), Some(ChildNodes::Deferred(b))) => a == b,
                 (a, b) => a.is_none() && b.is_none(),
             }
     }
@@ -1352,7 +1373,8 @@ impl NameBinding<'_> {
     /// The JSX a list holds. An empty array holds none yet.
     fn nodes(&self) -> Option<&[PendingNode]> {
         match (&self.children, &self.statik) {
-            (Some(nodes), _) => Some(nodes),
+            (Some(ChildNodes::Lowered(nodes)), _) => Some(nodes),
+            (Some(ChildNodes::Deferred(_)), _) => None,
             (None, Some(serde_json::Value::Array(items))) if items.is_empty() => Some(&[]),
             _ => None,
         }

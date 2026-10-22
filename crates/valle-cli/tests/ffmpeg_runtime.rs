@@ -203,9 +203,9 @@ fn audio_analysis_reports_missing_ffmpeg_before_compilation_diagnostics() {
         dir.join("audio.motion.tsx"),
         r#"export const composition = { width: 160, height: 90, fps: 30, duration: 0.2 };
 export const controls = { assets: { beat: asset({ kind: "audio", required: true }) } };
-const BEAT = audioAnalysis("asset://beat", { bands: 8, fps: 30 });
-export default function AudioBars() { const ctx = useTime();
-    return <Scene><View style={{width:30,height:BEAT.level(ctx.seconds)*90}} /></Scene>;
+const BEAT = audioAnalysis("asset://beat", { bands: 8, rate: 30 });
+export default function AudioBars() { const time = useCurrentTime();
+    return <Scene><View style={{width:30,height:BEAT.level(time.seconds)*90}} /></Scene>;
 }"#,
     )
     .unwrap();

@@ -47,7 +47,8 @@ pub struct EvalInputs<'a> {
     pub viewport: Option<(f64, f64)>,
 }
 
-/// Text-unit identity with byte offsets relative to its own node text.
+/// Text-unit identity. `start` and `end` are JavaScript string indexes (UTF-16 code units) into
+/// the text of its node, or of the whole rich Text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnitContext {
     pub index: u32,
@@ -182,7 +183,7 @@ impl core::fmt::Display for EvalError {
             }
             EvalError::UnitOutsidePerUnit { at } => write!(
                 f,
-                "expression {at}: ctx.unit.* is only defined inside a Text per-unit style"
+                "expression {at}: the unit is only defined inside the perUnit function of a Text"
             ),
             EvalError::InstanceOutsideGroup { at } => write!(
                 f,
@@ -195,8 +196,8 @@ impl core::fmt::Display for EvalError {
             ),
             EvalError::ViewportUnavailable { at } => write!(
                 f,
-                "expression {at}: ctx.viewport.* needs a render viewport, but none was supplied \
-                 to the evaluator"
+                "expression {at}: the composition width and height need a render viewport, but \
+                 none was supplied to the evaluator"
             ),
             EvalError::BoundsOutsidePostLayout { at } => write!(
                 f,
@@ -1032,10 +1033,9 @@ fn reads_runtime_inputs(expr: &Expr) -> bool {
         | Expr::Prop { .. }
         | Expr::NodeBounds { .. }
         | Expr::Project3D { .. } => true,
-        // Spring reads frame rate directly from EvalInputs.
-        Expr::Spring { .. } => true,
         // Pure operations depend only on child values.
         Expr::Const { .. }
+        | Expr::Spring { .. }
         | Expr::MakePoint { .. }
         | Expr::MakeRect { .. }
         | Expr::PathLine { .. }
@@ -1567,23 +1567,16 @@ fn eval_one_with<'a>(
                     op: "number formatting",
                 })
         }
-        // Convert elapsed frames to seconds with the actual render frame rate so equal physical
-        // times share the same spring result.
         Expr::Spring {
-            elapsed_frames,
+            time,
             mass,
             stiffness,
             damping,
             initial_velocity,
             output,
         } => {
-            let frames = as_number(at, "spring", child(*elapsed_frames)?)?;
-            let fps = crate::frame_rate_as_f64(inputs.ctx.fps);
-            if !fps.is_finite() || fps <= 0.0 {
-                return Err(EvalError::TypeMismatch { at, op: "spring" });
-            }
             let sample = crate::spring::spring_sample_at(
-                frames / fps,
+                as_number(at, "spring", child(*time)?)?,
                 crate::spring::SpringParams {
                     mass: *mass,
                     stiffness: *stiffness,
@@ -1633,15 +1626,19 @@ fn eval_one_with<'a>(
                 ),
             )
         }
-        Expr::AudioSample { time, fps, samples } => {
+        Expr::AudioSample {
+            time,
+            rate,
+            samples,
+        } => {
             let time = as_number(at, "audioAnalysis", child(*time)?)?;
-            if *fps == 0 || samples.is_empty() {
+            if *rate == 0 || samples.is_empty() {
                 return Err(EvalError::BadInterpolate { at });
             }
             let index = if time <= 0.0 {
                 0
             } else {
-                crate::time::frame_index_floor(time * f64::from(*fps)) as usize
+                crate::time::clock_floor(time * f64::from(*rate)) as usize
             }
             .min(samples.len() - 1);
             finite(at, "audioAnalysis", MotionValue::Number(samples[index]))
@@ -1794,23 +1791,23 @@ fn compare(
         (lhs, rhs),
         (MotionValue::Str(_), MotionValue::Enum(_)) | (MotionValue::Enum(_), MotionValue::Str(_))
     );
-    if core::mem::discriminant(lhs) != core::mem::discriminant(rhs)
-        && !(matches!(op, CompareOp::Eq | CompareOp::NotEq) && text_enum_pair)
+    let equality = matches!(op.exact(), CompareOp::Eq | CompareOp::NotEq);
+    if core::mem::discriminant(lhs) != core::mem::discriminant(rhs) && !(equality && text_enum_pair)
     {
         return Err(EvalError::TypeMismatch { at, op: "compare" });
+    }
+    if let (MotionValue::Number(lhs), MotionValue::Number(rhs)) = (lhs, rhs) {
+        return Ok(MotionValue::Bool(op.numbers(*lhs, *rhs)));
     }
     let equal = match (lhs, rhs) {
         (MotionValue::Str(lhs), MotionValue::Enum(rhs))
         | (MotionValue::Enum(lhs), MotionValue::Str(rhs)) => lhs == rhs,
         _ => lhs == rhs,
     };
-    let value = match op {
+    let value = match op.exact() {
         CompareOp::Eq => equal,
         CompareOp::NotEq => !equal,
-        CompareOp::Lt => as_number(at, "compare", lhs)? < as_number(at, "compare", rhs)?,
-        CompareOp::Lte => as_number(at, "compare", lhs)? <= as_number(at, "compare", rhs)?,
-        CompareOp::Gt => as_number(at, "compare", lhs)? > as_number(at, "compare", rhs)?,
-        CompareOp::Gte => as_number(at, "compare", lhs)? >= as_number(at, "compare", rhs)?,
+        _ => return Err(EvalError::TypeMismatch { at, op: "compare" }),
     };
     Ok(MotionValue::Bool(value))
 }
@@ -2068,7 +2065,7 @@ mod tests {
                 },
                 Expr::AudioSample {
                     time: ExprId(0),
-                    fps: 30,
+                    rate: 30,
                     samples: vec![0.0, 1.0, 0.0],
                 },
             ]);

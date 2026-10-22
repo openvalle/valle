@@ -9,14 +9,14 @@ use valle_timeline::FrameRate;
 fn filter(amount: &str) -> String {
     format!(
         r##"export const composition={{width:320,height:180,fps:30,duration:2}};
-export default function Main() {{ const ctx = useTime();
+export default function Main() {{ const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
  const amount = {amount};
  return <Scene><View key="blur" style={{{{width:320,height:180,
  filter:`radial-blur(160px 90px ${{amount}}px)`}}}} /></Scene>;
 }}"##
     )
 }
-const BOUNCY: &str = "spring({elapsedFrames:ctx.localFrame,fps:ctx.fps,preset:'bouncy'}) * 120";
+const BOUNCY: &str = "spring(time.seconds, { preset:'bouncy' }) * 120";
 
 #[test]
 fn spring_overshoot_is_reported_before_render_without_changing_values() {
@@ -66,23 +66,23 @@ fn spring_overshoot_is_reported_before_render_without_changing_values() {
 
 #[test]
 fn known_bad_ranges_fail_and_unknown_inputs_do_not_forge_proofs() {
-    let errors = compile_motion(&filter("200 + ctx.progress * 2")).unwrap_err();
+    let errors = compile_motion(&filter("200 + time.progress * 2")).unwrap_err();
     assert!(
         errors
             .iter()
             .any(|e| e.message.contains("radial-blur amount range")),
         "{errors:?}"
     );
-    assert!(compile_motion(&filter("clamp(200 + ctx.progress * 2,0,128)")).is_ok());
+    assert!(compile_motion(&filter("clamp(200 + time.progress * 2,0,128)")).is_ok());
     // Source frames are host-defined; the compiler must not invent a 30fps limit.
-    assert!(compile_motion(&filter("ctx.localFrame")).is_ok());
+    assert!(compile_motion(&filter("frame")).is_ok());
 }
 
 #[test]
 fn transitions_share_strict_range_diagnostics() {
     let source = r##"export const composition={width:320,height:180,fps:30,duration:2};
-    export default function Main() { const ctx = useTime();return <Scene><Transition kind="circleOpen" progress={0.5}
-        params={{centerX:ctx.progress*2,softness:3}}><View/><View/></Transition></Scene>; }"##;
+    export default function Main() { const time = useCurrentTime();return <Scene><Transition kind="circleOpen" progress={0.5}
+        params={{centerX:time.progress*2,softness:3}}><View/><View/></Transition></Scene>; }"##;
     let compiled = compile_motion(source).unwrap();
     assert!(
         compiled
@@ -91,7 +91,7 @@ fn transitions_share_strict_range_diagnostics() {
             .any(|w| w.code == DiagCode::ParameterRange && w.message.contains("centerX"))
     );
     let clamped =
-        compile_motion(&source.replace("ctx.progress*2", "clamp(ctx.progress*2,0,1)")).unwrap();
+        compile_motion(&source.replace("time.progress*2", "clamp(time.progress*2,0,1)")).unwrap();
     assert!(
         clamped
             .warnings
