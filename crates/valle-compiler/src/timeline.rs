@@ -1322,9 +1322,7 @@ fn presenter_runs(
             color: None,
         });
         run_style.font_size.get_or_insert(style.font_size);
-        run_style
-            .color
-            .get_or_insert_with(|| style.color.clone());
+        run_style.color.get_or_insert_with(|| style.color.clone());
     }
     Ok(runs)
 }

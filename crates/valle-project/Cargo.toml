@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 valle-timeline.workspace = true
 valle-compiler.workspace = true
 serde.workspace = true

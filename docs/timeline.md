@@ -120,9 +120,9 @@ also reference aliases. A filesystem path is not a replacement for an alias in
 those fields.
 
 Aliases contain 1–64 ASCII letters, digits, dots, underscores or hyphens. Locators
-must be non-empty and contain no whitespace/control characters. For a directory
-or filename containing spaces, use a suitable path without spaces; a JSON-escaped
-space still becomes a space after decoding.
+must be non-empty and contain no control characters. Local paths may contain spaces
+and colons. Values containing `scheme://` are checked as URLs and must not contain
+whitespace; JSON escaping does not change this URL restriction.
 
 Local relative paths resolve from the **Timeline file's directory**, independent
 of the shell's current directory. Absolute filesystem paths also work. The CLI

@@ -58,10 +58,7 @@ impl Compiler<'_> {
 fn loop_seam(composition: &Composition) -> Option<String> {
     let rate = composition.frame_rate().ok().flatten()?;
     let duration = composition.duration().ok()?;
-    let frames = duration
-        .into_exact()
-        .checked_mul(rate.into_exact())
-        .ok()?;
+    let frames = duration.into_exact().checked_mul(rate.into_exact()).ok()?;
     if !composition.r#loop || frames.denominator() == 1 {
         return None;
     }

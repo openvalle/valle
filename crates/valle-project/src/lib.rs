@@ -8,6 +8,9 @@
 pub use valle_timeline::internal::ContentDigest;
 
 #[cfg(feature = "host")]
+pub mod folder;
+
+#[cfg(feature = "host")]
 pub mod assets;
 #[cfg(feature = "host")]
 mod resource_gc;
