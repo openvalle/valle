@@ -32,6 +32,7 @@ pub struct EncoderTimings {
     pub automatic_silence_ns: u64,
 }
 
+#[cfg(feature = "libav")]
 impl EncoderTimings {
     pub(crate) fn from_env() -> Option<Self> {
         env::var("VALLE_PERF")
@@ -42,6 +43,7 @@ impl EncoderTimings {
 }
 
 /// Return elapsed time to the owning muxer; simultaneous exports never reset each other.
+#[cfg(feature = "libav")]
 pub(crate) fn time_encoder_part<T>(enabled: bool, f: impl FnOnce() -> T) -> (T, u64) {
     let start = enabled.then(Instant::now);
     let result = f();

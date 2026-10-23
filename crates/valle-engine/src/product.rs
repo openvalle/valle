@@ -109,7 +109,9 @@ pub struct FrameCompiler {
     plan_cache: Arc<Mutex<PlanTemplateCache>>,
 }
 
+#[cfg(any(feature = "web", test))]
 impl FrameCompiler {
+    #[cfg(feature = "web")]
     pub(crate) fn motion_kernel_available(&self) -> bool {
         let render = self.render.compiled();
         (0..render.sources().len())
@@ -174,7 +176,9 @@ impl FrameCompiler {
         }
         Ok(ticket)
     }
+}
 
+impl FrameCompiler {
     /// Evaluate and prepare one frame without waiting for any platform resource. The returned
     /// request set is complete and may be fulfilled while [`PreparedTicket::lower`] runs.
     pub fn evaluate_prepare(

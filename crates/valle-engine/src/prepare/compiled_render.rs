@@ -660,39 +660,39 @@ fn prepare_endpoint(
                 .motion_fonts
                 .get(&font_dependencies)
                 .map_err(|error| PrepareError::at(format!("{path}.motion"), error))?;
-            let built = state
-                .motion_preparation
-                .build(
-                    path,
-                    source.source_index(),
-                    &font_dependencies,
-                    motion::CompiledMotionProgramContext {
-                        prepared: prepared_scene,
-                        evaluated: source,
-                        source_duration: render
-                            .sources()
-                            .source(source.source_index())
-                            .and_then(|compiled| compiled.source_duration())
-                            .ok_or_else(|| {
-                                PrepareError::at(path, "Motion source duration is missing")
-                            })?,
-                        viewport,
-                        source_clip,
-                        fps: render.canvas().frame_rate(),
-                        styles: state.motion_styles,
-                        faces: state.motion_faces,
-                        fonts,
-                        assets: &assets,
-                        model_resources: &model_resources,
-                    },
-                )
-                .map_err(|error| match error {
-                    // Name the over-budget group the way Shader budget errors name their pass.
-                    motion::ProgramPrepareError::MotionBudget { node, .. } => {
-                        PrepareError::over_budget(format!("{path}.draw.node[{node}]"), error)
-                    }
-                    error => PrepareError::at(format!("{path}.motion"), error),
-                })?;
+            let context = motion::CompiledMotionProgramContext {
+                prepared: prepared_scene,
+                evaluated: source,
+                source_duration: render
+                    .sources()
+                    .source(source.source_index())
+                    .and_then(|compiled| compiled.source_duration())
+                    .ok_or_else(|| PrepareError::at(path, "Motion source duration is missing"))?,
+                viewport,
+                source_clip,
+                fps: render.canvas().frame_rate(),
+                styles: state.motion_styles,
+                faces: state.motion_faces,
+                fonts,
+                assets: &assets,
+                model_resources: &model_resources,
+            };
+            #[cfg(any(feature = "web", test))]
+            let built = state.motion_preparation.build(
+                path,
+                source.source_index(),
+                &font_dependencies,
+                context,
+            );
+            #[cfg(not(any(feature = "web", test)))]
+            let built = motion::build_compiled_motion_program(context);
+            let built = built.map_err(|error| match error {
+                // Name the over-budget group the way Shader budget errors name their pass.
+                motion::ProgramPrepareError::MotionBudget { node, .. } => {
+                    PrepareError::over_budget(format!("{path}.draw.node[{node}]"), error)
+                }
+                error => PrepareError::at(format!("{path}.motion"), error),
+            })?;
             let used: std::collections::BTreeSet<_> = built
                 .scene3d_frames
                 .iter()

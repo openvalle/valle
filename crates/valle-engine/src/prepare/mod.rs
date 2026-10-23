@@ -11,6 +11,7 @@ mod external;
 mod image;
 mod mask;
 mod motion;
+#[cfg(any(feature = "web", test))]
 pub(crate) mod motion_kernel;
 mod request;
 mod transition;
@@ -385,6 +386,7 @@ pub struct ProductPrepareCaches {
     motion_styles: valle_motion::StyleCache,
     motion_faces: valle_motion::FaceCache,
     motion_fonts: motion::MotionFontCache,
+    #[cfg(any(feature = "web", test))]
     pub(crate) motion_preparation: motion_kernel::MotionPreparation,
     #[cfg(feature = "text")]
     text_semantics: crate::text_semantic::TextSemantics,
@@ -396,6 +398,7 @@ impl ProductPrepareCaches {
             motion_styles: valle_motion::StyleCache::new(),
             motion_faces: valle_motion::FaceCache::new(),
             motion_fonts: motion::MotionFontCache::default(),
+            #[cfg(any(feature = "web", test))]
             motion_preparation: motion_kernel::MotionPreparation::default(),
             #[cfg(feature = "text")]
             text_semantics: crate::text_semantic::TextSemantics::product(),
@@ -424,6 +427,7 @@ struct PrepareState<'a> {
     motion_styles: &'a valle_motion::StyleCache,
     motion_faces: &'a valle_motion::FaceCache,
     motion_fonts: &'a mut motion::MotionFontCache,
+    #[cfg(any(feature = "web", test))]
     motion_preparation: &'a mut motion_kernel::MotionPreparation,
     #[cfg(feature = "text")]
     text_semantics: Option<&'a mut crate::text_semantic::TextSemantics>,
@@ -452,6 +456,7 @@ impl<'a> PrepareState<'a> {
             motion_styles: &caches.motion_styles,
             motion_faces: &caches.motion_faces,
             motion_fonts: &mut caches.motion_fonts,
+            #[cfg(any(feature = "web", test))]
             motion_preparation: &mut caches.motion_preparation,
             #[cfg(feature = "text")]
             text_semantics: Some(&mut caches.text_semantics),
