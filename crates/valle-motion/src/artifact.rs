@@ -1211,6 +1211,7 @@ impl SceneNode {
                 ("refraction", material.refraction.as_ref()),
                 ("dispersion", Some(&material.dispersion)),
                 ("frost", Some(&material.frost)),
+                ("saturation", Some(&material.saturation)),
             ] {
                 if let Some(value) = value {
                     number_at(format!("/kind/material/{name}"), value, refs);

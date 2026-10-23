@@ -17,6 +17,7 @@ pub(crate) struct GlassMaterial {
     pub(crate) refraction: Option<f64>,
     pub(crate) dispersion: f64,
     pub(crate) frost: f64,
+    pub(crate) saturation: f64,
     pub(crate) tint: valle_draw::program::AuthorColor,
     /// Screen direction the light comes from, y down.
     pub(crate) light: [f64; 2],

@@ -242,8 +242,8 @@ export default function CardsDeck() {
       <Badge key="badge" />
 
       <Glass key="caption" className="absolute flex items-center justify-center"
-        material={{ bevel: 24, refraction: 14, dispersion: 0.35, frost: 3, tint: "#FFF8F04D" }}
-        light={{ intensity: 0.85 }} presence={caption}
+        material={{ bevel: 24, refraction: 14, dispersion: 0.35, frost: 3, tint: "#FFF8F033" }}
+        light={{ intensity: 0.4 }} presence={caption}
         style={{ left: 570, top: 908, width: 780, height: 96, borderRadius: 48,
           translate: point(0, (1 - caption) * 36) }}>
         <Text key="caption-text" style={{ fontSize: 29, fontWeight: 600, letterSpacing: 0.5,

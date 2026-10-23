@@ -104,6 +104,7 @@ fn validate_material(
         ("refraction", material.refraction.as_ref()),
         ("frost", Some(&material.frost)),
         ("dispersion", Some(&material.dispersion)),
+        ("saturation", Some(&material.saturation)),
     ] {
         if let Some(value) = value {
             reject_outside(

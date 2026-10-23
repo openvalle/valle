@@ -1,8 +1,11 @@
-//! Glass draws with ordinary groups and the optics shader. A Glass frosts the backdrop inside its
-//! shape before its own layers, then draws its surface at its shell: the optics shader over its
-//! shape blurred into a height field, reading the frosted backdrop. A GlassField draws once,
+//! Glass draws with ordinary groups and two shaders. A Glass frosts the backdrop inside its
+//! shape before its own layers, then draws its surface at its shell: the optics shader, clipped to
+//! its shape, over its shape blurred into a height field and reading the frosted backdrop; then
+//! the rim shader, unclipped, over its shape barely blurred and reading what lies under it, for
+//! the line of light its edge catches and the dark edge just outside. A GlassField draws once,
 //! before the first of its nodes paints: the union of its members' shapes, bridged where they
-//! come within its merge distance, masks its frost and its surface.
+//! come within its merge distance, masks its frost and its optics, and its rim draws over them.
+//! Both shaders read a member's presence from the gray its shape is drawn in.
 
 use takumi_core::scene::{NodePaint, PaintItemKind};
 use takumi_core::style::Affine as TAffine;
@@ -14,7 +17,10 @@ use valle_draw::program::recording::{
 use valle_draw::{PathRef, PathVerb, Point, Rect};
 
 use super::{EmitError, Emitter, affine_of, radii_of};
-use crate::glass::{DEFAULT_BEVEL_OF_SHORTER_SIDE, DEFAULT_REFRACTION_OF_BEVEL};
+use crate::glass::{
+    DEFAULT_BEVEL_MAX, DEFAULT_BEVEL_OF_SHORTER_SIDE, DEFAULT_REFRACTION_OF_BEVEL,
+    DEFAULT_REFRACTION_OF_SHORTER_SIDE,
+};
 use crate::layout::bridge::{GlassMaterial, ResolvedGlass, ResolvedShaderLayer};
 use valle_motion::PathData;
 
@@ -52,65 +58,81 @@ impl Outline {
     }
 }
 
-/// The optics shader's inputs for one surface.
+/// The width of the line of light inside the silhouette and of the dark edge outside it, as
+/// shares of the bevel, and their least widths in layer pixels.
+const GLINT_OF_BEVEL: f64 = 0.15;
+const GLINT_MIN: f64 = 2.0;
+const CONTOUR_OF_BEVEL: f64 = 0.15;
+const CONTOUR_MIN: f64 = 1.0;
+/// The widest blur Skia draws exactly; it draws wider ones through a smaller image. The rim reads
+/// distance from its blur steeply at the silhouette, where that error lights or darkens a pixel.
+const RIM_SIGMA_MAX: f64 = 4.0;
+
+/// The optics and rim shaders' inputs for one surface.
 struct Optics {
     /// The height field's blur.
     sigma: f64,
+    bevel: f64,
     refraction: f64,
     dispersion: f64,
+    saturation: f64,
     tint: [f32; 4],
     light: [f32; 3],
     intensity: f64,
-    presence: f64,
+    glint: f64,
+    contour: f64,
 }
 
 impl Optics {
-    /// `shorter` is the shorter side the default bevel takes its share of; `to_viewport` maps the
-    /// layer to the viewport near `at`, where the screen light turns into the layer's.
-    fn of(
-        material: &GlassMaterial,
-        shorter: f64,
-        presence: f64,
-        to_viewport: Homography,
-        at: Point,
-    ) -> Self {
+    /// `shorter` is the shorter side the defaults take their shares of; `to_viewport` maps the
+    /// layer to the viewport near `at`, where the screen light turns into the layer's. Presence is
+    /// not here: the shaders read it from their content, a member's own in a field.
+    fn of(material: &GlassMaterial, shorter: f64, to_viewport: Homography, at: Point) -> Self {
+        let shorter = shorter.max(0.0);
         let bevel = material
             .bevel
-            .unwrap_or(DEFAULT_BEVEL_OF_SHORTER_SIDE * shorter.max(0.0));
+            .unwrap_or((DEFAULT_BEVEL_OF_SHORTER_SIDE * shorter).min(DEFAULT_BEVEL_MAX));
+        let refraction = material.refraction.unwrap_or(
+            (DEFAULT_REFRACTION_OF_BEVEL * bevel).min(DEFAULT_REFRACTION_OF_SHORTER_SIDE * shorter),
+        );
         Optics {
             sigma: bevel / 2.0,
-            refraction: material
-                .refraction
-                .unwrap_or(DEFAULT_REFRACTION_OF_BEVEL * bevel),
+            bevel,
+            refraction,
             dispersion: material.dispersion,
+            saturation: material.saturation,
             tint: material.tint.to_srgb_straight(),
             light: layer_light(material, to_viewport, at),
             intensity: material.intensity,
-            presence,
+            glint: (GLINT_OF_BEVEL * bevel).max(GLINT_MIN),
+            contour: (CONTOUR_OF_BEVEL * bevel).max(CONTOUR_MIN),
         }
     }
 
     /// Whether the surface changes what lies behind it.
     fn is_visible(&self) -> bool {
-        self.presence > 0.0
-            && ((self.refraction > 0.0 && self.sigma > 0.0)
-                || self.intensity > 0.0
-                || self.tint[3] > 0.0)
+        (self.refraction > 0.0 && self.sigma > 0.0)
+            || self.intensity > 0.0
+            || self.tint[3] > 0.0
+            || self.saturation != 1.0
+    }
+
+    /// The rim's content blur: the distance it reads reaches about three of it, across the glow
+    /// inside the line of light and the dark edge outside it. At [`RIM_SIGMA_MAX`] the glow tapers
+    /// off short of its 4.5 glints.
+    fn rim_sigma(&self) -> f64 {
+        (1.5 * self.glint).min(RIM_SIGMA_MAX)
     }
 
     fn shader(&self) -> ResolvedShaderLayer {
-        let float = |name: &str, value: f64| ShaderUniformBinding {
-            name: name.into(),
-            value: ShaderUniformValue::Float {
-                value: value as f32,
-            },
-        };
         ResolvedShaderLayer {
             program: crate::glass::optics::optics_program(),
             uniforms: vec![
                 float("sigma", self.sigma),
+                float("bevel", self.bevel),
                 float("refraction", self.refraction),
                 float("dispersion", self.dispersion),
+                float("saturation", self.saturation),
                 ShaderUniformBinding {
                     name: "tint".into(),
                     value: ShaderUniformValue::Color { value: self.tint },
@@ -120,16 +142,46 @@ impl Optics {
                     value: ShaderUniformValue::Float3 { value: self.light },
                 },
                 float("intensity", self.intensity),
-                float("presence", self.presence),
             ],
-            inputs: vec![crate::ShaderTextureInput {
-                kind: crate::shader::InputKind::Backdrop,
-                name: "backdrop".into(),
-                source: Some(crate::shader::BACKDROP_INPUT.into()),
-                sampling: crate::shader::InputSampling::Linear,
-                wrap: crate::shader::InputWrap::Clamp,
-            }],
+            inputs: vec![backdrop()],
         }
+    }
+
+    fn rim(&self) -> ResolvedShaderLayer {
+        ResolvedShaderLayer {
+            program: crate::glass::optics::rim_program(),
+            uniforms: vec![
+                float("sigma", self.rim_sigma()),
+                float("glint", self.glint),
+                float("contour", self.contour),
+                ShaderUniformBinding {
+                    name: "light".into(),
+                    value: ShaderUniformValue::Float3 { value: self.light },
+                },
+                float("intensity", self.intensity),
+            ],
+            inputs: vec![backdrop()],
+        }
+    }
+}
+
+fn float(name: &str, value: f64) -> ShaderUniformBinding {
+    ShaderUniformBinding {
+        name: name.into(),
+        value: ShaderUniformValue::Float {
+            value: value as f32,
+        },
+    }
+}
+
+/// What a shader layer draws over, read in place.
+fn backdrop() -> crate::ShaderTextureInput {
+    crate::ShaderTextureInput {
+        kind: crate::shader::InputKind::Backdrop,
+        name: "backdrop".into(),
+        source: Some(crate::shader::BACKDROP_INPUT.into()),
+        sampling: crate::shader::InputSampling::Linear,
+        wrap: crate::shader::InputWrap::Clamp,
     }
 }
 
@@ -149,7 +201,8 @@ struct Member {
 struct Coverage {
     path: PathRef,
     fill_rule: FillRule,
-    alpha: f64,
+    /// The presence of the Glass it is the shape of.
+    presence: f64,
 }
 
 impl Emitter<'_> {
@@ -245,11 +298,10 @@ impl Emitter<'_> {
         let optics = Optics::of(
             material,
             bounds.width.min(bounds.height),
-            glass.presence,
             to_viewport,
             center,
         );
-        if !optics.is_visible() {
+        if glass.presence <= 0.0 || !optics.is_visible() {
             return Ok(());
         }
         check_layer_area(key, bounds)?;
@@ -258,7 +310,8 @@ impl Emitter<'_> {
         };
         // A shader layer's box starts at its origin.
         let (path, fill_rule) = outline.path();
-        let path = if bounds.x != 0.0 || bounds.y != 0.0 {
+        let offset = bounds.x != 0.0 || bounds.y != 0.0;
+        let path = if offset {
             self.push(RecordCmd::BeginTransform {
                 transform: Affine::translate(bounds.x, bounds.y),
             });
@@ -270,16 +323,30 @@ impl Emitter<'_> {
         } else {
             Some(path)
         };
-        if let Some(path) = path.and_then(|path| self.path_ref(&path)) {
-            let shapes = [Coverage {
-                path,
-                fill_rule,
-                alpha: 1.0,
-            }];
-            let size = Rect::new(0.0, 0.0, bounds.width, bounds.height);
-            self.optics_layer(&optics, size, (crossed + depth) as u32, &shapes, None);
-        }
+        let Some(path) = path.and_then(|path| self.path_ref(&path)) else {
+            self.close(depth);
+            return Ok(());
+        };
+        let shapes = [Coverage {
+            path,
+            fill_rule,
+            presence: glass.presence,
+        }];
+        let size = Rect::new(0.0, 0.0, bounds.width, bounds.height);
+        self.optics_layer(&optics, size, (crossed + depth) as u32, &shapes, None);
         self.close(depth);
+        // The rim draws over the clipped surface and reaches just outside it.
+        if optics.intensity > 0.0 {
+            if offset {
+                self.push(RecordCmd::BeginTransform {
+                    transform: Affine::translate(bounds.x, bounds.y),
+                });
+            }
+            self.rim_layer(&optics, size, &shapes, None);
+            if offset {
+                self.push(RecordCmd::End);
+            }
+        }
         Ok(())
     }
 
@@ -364,7 +431,7 @@ impl Emitter<'_> {
             bounds.x + bounds.width / 2.0,
             bounds.y + bounds.height / 2.0,
         );
-        let optics = Optics::of(&field.material, shorter, 1.0, to_viewport, center);
+        let optics = Optics::of(&field.material, shorter, to_viewport, center);
 
         // Draw at the bounds' origin: a shader layer's box starts at its origin.
         let target = Affine::translate(bounds.x, bounds.y).then(space);
@@ -397,34 +464,32 @@ impl Emitter<'_> {
                 shapes.push(Coverage {
                     path,
                     fill_rule: member.fill_rule,
-                    alpha: member.presence,
+                    presence: member.presence,
                 });
             }
         }
         let size = Rect::new(0.0, 0.0, bounds.width, bounds.height);
         let bridge = field.merge / 1.35;
-        self.push(RecordCmd::BeginMask {
-            source: MaskSource::Subtree,
-            mode: MaskMode::Alpha,
-            rect: size,
-        });
-        self.push(RecordCmd::BeginMaskSource);
-        self.coverage(&shapes, Some(bridge), size);
-        self.push(RecordCmd::End);
-        if field.material.frost > 0.0 {
-            let filters = self.out.recording.intern_filters(&[FilterOp::Blur {
-                sigma: field.material.frost,
-            }]);
-            self.push(RecordCmd::BeginBackdropFilter {
-                filters,
-                bounds: Some(size),
-            });
+        let frost = field.material.frost;
+        // A member coming in brings its frost in with it: while one does, the frost is masked by
+        // the shapes' gray, their presences, and the surface by their coverage.
+        let fading = shapes.iter().any(|shape| shape.presence < 1.0);
+        if frost > 0.0 && fading {
+            self.begin_coverage_mask(MaskMode::Luminance, &shapes, bridge, size);
+            self.frost(frost, size);
             self.push(RecordCmd::End);
+        }
+        self.begin_coverage_mask(MaskMode::Alpha, &shapes, bridge, size);
+        if frost > 0.0 && !fading {
+            self.frost(frost, size);
         }
         if optics.is_visible() {
             self.optics_layer(&optics, size, 0, &shapes, Some(bridge));
         }
         self.push(RecordCmd::End);
+        if optics.intensity > 0.0 {
+            self.rim_layer(&optics, size, &shapes, Some(bridge));
+        }
         self.close(depth);
         Ok(())
     }
@@ -462,50 +527,135 @@ impl Emitter<'_> {
         self.push(RecordCmd::End);
     }
 
-    /// The shapes in white at their alphas. A bridge blurs them by its sigma and thresholds the
-    /// blur at half, adding the necks between shapes nearer than about 1.35 sigma.
-    fn coverage(&mut self, shapes: &[Coverage], bridge: Option<f64>, size: Rect) {
-        for shape in shapes {
-            self.fill_white(shape);
-        }
-        let Some(sigma) = bridge else {
-            return;
+    /// The rim shader over the shapes barely blurred, reading what lies under it. Its box reaches
+    /// past `size` for the dark edge outside the shapes, unless that box would be too large.
+    fn rim_layer(&mut self, optics: &Optics, size: Rect, shapes: &[Coverage], bridge: Option<f64>) {
+        let margin = (optics.contour + 2.0).ceil();
+        let pixels = (size.width + 2.0 * margin).ceil() * (size.height + 2.0 * margin).ceil();
+        let margin = if pixels > valle_draw::program::MAX_SHADER_LAYER_PIXELS as f64 {
+            0.0
+        } else {
+            margin
         };
-        // Across a straight blurred edge, the gain makes the threshold's ramp one pixel wide.
-        let gain = (sigma * valle_draw::math::sqrt(2.0 * core::f64::consts::PI)).max(1.0);
-        let mut matrix = [0.0; 20];
-        matrix[0] = 1.0;
-        matrix[6] = 1.0;
-        matrix[12] = 1.0;
-        matrix[18] = gain;
-        matrix[19] = 0.5 - 0.5 * gain;
-        let filters = self
-            .out
-            .recording
-            .intern_filters(&[FilterOp::Blur { sigma }, FilterOp::ColorMatrix { matrix }]);
+        let outer = Rect::new(
+            0.0,
+            0.0,
+            size.width + 2.0 * margin,
+            size.height + 2.0 * margin,
+        );
+        let (program, uniforms, inputs) = self.intern_shader(optics.rim(), outer, Some(0));
+        let shifted = margin > 0.0;
+        if shifted {
+            self.push(RecordCmd::BeginTransform {
+                transform: Affine::translate(-margin, -margin),
+            });
+        }
+        self.push(RecordCmd::BeginShaderLayer {
+            program,
+            uniforms,
+            inputs,
+            bounds: outer,
+        });
+        if shifted {
+            self.push(RecordCmd::BeginTransform {
+                transform: Affine::translate(margin, margin),
+            });
+        }
+        let filters = self.out.recording.intern_filters(&[FilterOp::Blur {
+            sigma: optics.rim_sigma(),
+        }]);
         self.push(RecordCmd::BeginFilter {
             filters,
-            bounds: Some(size),
+            bounds: None,
         });
-        for shape in shapes {
-            self.fill_white(shape);
+        self.coverage(shapes, bridge, size);
+        self.push(RecordCmd::End);
+        if shifted {
+            self.push(RecordCmd::End);
         }
+        self.push(RecordCmd::End);
+        if shifted {
+            self.push(RecordCmd::End);
+        }
+    }
+
+    /// Open a mask of the shapes' coverage, by `mode`, around the groups that follow.
+    fn begin_coverage_mask(
+        &mut self,
+        mode: MaskMode,
+        shapes: &[Coverage],
+        bridge: f64,
+        size: Rect,
+    ) {
+        self.push(RecordCmd::BeginMask {
+            source: MaskSource::Subtree,
+            mode,
+            rect: size,
+        });
+        self.push(RecordCmd::BeginMaskSource);
+        self.coverage(shapes, Some(bridge), size);
         self.push(RecordCmd::End);
     }
 
-    fn fill_white(&mut self, shape: &Coverage) {
-        let alpha = shape.alpha as f32;
+    /// The shapes opaque, each in the gray of its presence. A bridge adds, under them, the necks
+    /// between shapes nearer than about 1.35 sigma: their blur at their presences' alphas,
+    /// thresholded at half, so a neck forms as the shapes on either side come in, in the gray
+    /// of their presences.
+    fn coverage(&mut self, shapes: &[Coverage], bridge: Option<f64>, size: Rect) {
+        if let Some(sigma) = bridge {
+            // Across a straight blurred edge, the gain makes the threshold's ramp one pixel wide.
+            let gain = (sigma * valle_draw::math::sqrt(2.0 * core::f64::consts::PI)).max(1.0);
+            let mut matrix = [0.0; 20];
+            matrix[0] = 1.0;
+            matrix[6] = 1.0;
+            matrix[12] = 1.0;
+            matrix[18] = gain;
+            matrix[19] = 0.5 - 0.5 * gain;
+            let filters = self
+                .out
+                .recording
+                .intern_filters(&[FilterOp::Blur { sigma }, FilterOp::ColorMatrix { matrix }]);
+            self.push(RecordCmd::BeginFilter {
+                filters,
+                bounds: Some(size),
+            });
+            for shape in shapes {
+                let presence = shape.presence.clamp(0.0, 1.0) as f32;
+                self.fill_gray(shape, presence, presence);
+            }
+            self.push(RecordCmd::End);
+        }
+        for shape in shapes {
+            self.fill_gray(shape, shape.presence.clamp(0.0, 1.0) as f32, 1.0);
+        }
+    }
+
+    fn fill_gray(&mut self, shape: &Coverage, gray: f32, alpha: f32) {
+        let value = gray * alpha;
         self.push(RecordCmd::Path {
             path: shape.path,
             fill_rule: shape.fill_rule,
             fill: Some(Paint::FloatSolid(LinearColor {
-                red: alpha,
-                green: alpha,
-                blue: alpha,
+                red: value,
+                green: value,
+                blue: value,
                 alpha,
             })),
             stroke: None,
         });
+    }
+
+    /// Blur what lies behind the box, within the mask the caller opened.
+    fn frost(&mut self, sigma: f64, size: Rect) {
+        let filters = self
+            .out
+            .recording
+            .intern_filters(&[FilterOp::Blur { sigma }]);
+        self.push(RecordCmd::BeginBackdropFilter {
+            filters,
+            bounds: Some(size),
+        });
+        self.push(RecordCmd::End);
     }
 
     /// Paint outer shadows outside a Glass's shape, where CSS paints them.
@@ -653,9 +803,9 @@ fn check_layer_area(key: &str, bounds: Rect) -> Result<(), EmitError> {
     Ok(())
 }
 
-/// The light as a unit vector in layer space. Its screen direction maps back through the inverse
-/// of the layer's local-to-viewport Jacobian at `at`, so a turning glass keeps its highlights
-/// where the screen's light puts them; its elevation stays.
+/// The light's direction as a unit vector in layer space, and its elevation. The screen direction
+/// maps back through the inverse of the layer's local-to-viewport Jacobian at `at`, so a turning
+/// glass keeps its highlights where the screen's light puts them.
 fn layer_light(material: &GlassMaterial, to_viewport: Homography, at: Point) -> [f32; 3] {
     let [x, y] = material.light;
     let [a, b, _, d, e, _, g, h, i] = to_viewport.0;
@@ -680,9 +830,7 @@ fn layer_light(material: &GlassMaterial, to_viewport: Homography, at: Point) -> 
         let length = valle_draw::math::hypot(x, y);
         [x / length, y / length]
     });
-    let elevation = material.elevation;
-    let planar = valle_draw::math::sqrt((1.0 - elevation * elevation).max(0.0));
-    [(x * planar) as f32, (y * planar) as f32, elevation as f32]
+    [x as f32, y as f32, material.elevation as f32]
 }
 
 /// A Glass's shape in the plane its own projection maps it into, its curves flattened, and how

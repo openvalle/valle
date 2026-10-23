@@ -262,6 +262,11 @@ impl<'s> Compiler<'s> {
                         material.frost = value;
                     }
                 }
+                "saturation" => {
+                    if let Some(value) = self.glass_number(field, span, &label, non_negative) {
+                        material.saturation = value;
+                    }
+                }
                 "tint" => {
                     if let Some(value) = self.glass_color(field, span, &label) {
                         material.tint = value;
@@ -425,7 +430,8 @@ mod tests {
     fn every_glass_property_lowers() {
         let artifact = compile(&scene(
             r##"<Glass path={line([point(0, 0), point(160, 0), point(80, 140)])} fillRule="evenOdd"
-      material={{ bevel: 30, refraction: 9, dispersion: 0.2, frost: 12, tint: "#B9D7FF18" }}
+      material={{ bevel: 30, refraction: 9, dispersion: 0.2, frost: 12, saturation: 1.4,
+        tint: "#B9D7FF18" }}
       light={{ direction: point(0.6, -0.8), elevation: 0.4, intensity: 0.9 }}
       presence={0.5}
       style={{ width: 160, height: 140 }} />"##,
@@ -442,6 +448,7 @@ mod tests {
         );
         assert_eq!(material.dispersion, NumberValue::Static { value: 0.2 });
         assert_eq!(material.frost, NumberValue::Static { value: 12.0 });
+        assert_eq!(material.saturation, NumberValue::Static { value: 1.4 });
         let light = glass.light.as_ref().unwrap();
         assert_eq!(light.elevation, NumberValue::Static { value: 0.4 });
         assert_eq!(light.intensity, NumberValue::Static { value: 0.9 });
@@ -600,6 +607,10 @@ export default function Scene() {
             (
                 r#"<Glass material={{ frost: -1 }} />"#,
                 "material.frost has an invalid static value",
+            ),
+            (
+                r#"<Glass material={{ saturation: -0.5 }} />"#,
+                "material.saturation has an invalid static value",
             ),
         ] {
             let message = errors(&scene(element));

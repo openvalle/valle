@@ -13,11 +13,15 @@ pub const DEFAULT_LIGHT_ELEVATION: f64 = 0.55;
 pub const DEFAULT_LIGHT_INTENSITY: f64 = 0.65;
 pub const MERGE_MIN_DISTANCE: f64 = 1.0;
 pub const MERGE_MAX_DISTANCE: f64 = 128.0;
-/// An absent bevel is this fraction of the shorter side of the box: of the smallest member's
-/// box in a field.
-pub const DEFAULT_BEVEL_OF_SHORTER_SIDE: f64 = 0.4;
-/// An absent refraction is this fraction of the bevel.
-pub const DEFAULT_REFRACTION_OF_BEVEL: f64 = 0.3;
+/// An absent bevel is this fraction of the shorter side of the box, of the smallest member's
+/// box in a field, and at most [`DEFAULT_BEVEL_MAX`] local pixels.
+pub const DEFAULT_BEVEL_OF_SHORTER_SIDE: f64 = 0.25;
+pub const DEFAULT_BEVEL_MAX: f64 = 20.0;
+/// An absent refraction is this multiple of the bevel, and at most
+/// [`DEFAULT_REFRACTION_OF_SHORTER_SIDE`] of the shorter side, so the rim's view folds over
+/// without reaching past the middle.
+pub const DEFAULT_REFRACTION_OF_BEVEL: f64 = 3.0;
+pub const DEFAULT_REFRACTION_OF_SHORTER_SIDE: f64 = 0.5;
 
 /// What the glass is made of. Lengths are local pixels of the Glass, or of a field's parent, and
 /// scale with its transforms.
@@ -25,18 +29,22 @@ pub const DEFAULT_REFRACTION_OF_BEVEL: f64 = 0.3;
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GlassMaterialBinding {
-    /// Width of the curved rim; absent, [`DEFAULT_BEVEL_OF_SHORTER_SIDE`] of the shorter side.
+    /// Width of the curved rim; absent, [`DEFAULT_BEVEL_OF_SHORTER_SIDE`] of the shorter side, at
+    /// most [`DEFAULT_BEVEL_MAX`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bevel: Option<NumberValue>,
-    /// How far the backdrop shifts across a straight rim; absent, [`DEFAULT_REFRACTION_OF_BEVEL`]
-    /// of the bevel.
+    /// The backdrop's shift at the edge, falling to none `bevel` inward; absent,
+    /// [`DEFAULT_REFRACTION_OF_BEVEL`] times the bevel, at most
+    /// [`DEFAULT_REFRACTION_OF_SHORTER_SIDE`] of the shorter side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refraction: Option<NumberValue>,
     /// How much further blue and less far red shift than green, as a fraction of `refraction`.
     pub dispersion: NumberValue,
     /// Backdrop blur, a standard deviation as in CSS `blur()`.
     pub frost: NumberValue,
-    /// The glass's own color, mixed in under the highlights by its alpha.
+    /// Backdrop saturation, as in CSS `saturate()`: 1 leaves it, 0 is gray.
+    pub saturation: NumberValue,
+    /// The glass's own color, mixed in under the light by its alpha.
     pub tint: ColorValue,
 }
 
@@ -47,6 +55,7 @@ impl GlassMaterialBinding {
             refraction: None,
             dispersion: NumberValue::Static { value: 0.0 },
             frost: NumberValue::Static { value: 0.0 },
+            saturation: NumberValue::Static { value: 1.0 },
             tint: ColorValue::Static {
                 value: valle_draw::program::AuthorColor::from_srgb8(valle_draw::Rgba::TRANSPARENT),
             },
@@ -62,9 +71,11 @@ impl GlassMaterialBinding {
 pub struct GlassLightBinding {
     /// Screen direction the light comes from, y down.
     pub direction: PointValue,
-    /// 0 grazes the glass, 1 shines straight at it.
+    /// How far the glint wraps round the rim from the walls along the light's axis: 0 keeps it
+    /// on them, 1 spreads it over the whole rim.
     pub elevation: NumberValue,
-    /// Highlight strength; 0 draws none.
+    /// Strength of the glint, its glow, the rim's shading and the dark edge; 0 draws none of
+    /// them.
     pub intensity: NumberValue,
 }
 
@@ -111,6 +122,7 @@ pub struct GlassNode {
     pub fill_rule: FillRule,
     pub material: Option<GlassMaterialBinding>,
     pub light: Option<GlassLightBinding>,
+    /// 0–1: scales every effect, the frost included, so the glass forms rather than fades in.
     pub presence: NumberValue,
 }
 

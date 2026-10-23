@@ -114,6 +114,7 @@ fn glass_authoring_types_are_generated_for_tooling() {
         "refraction?: NumberValue",
         "dispersion: NumberValue",
         "frost: NumberValue",
+        "saturation: NumberValue",
         "tint: ColorValue",
     ] {
         assert!(material.contains(field), "{material}");

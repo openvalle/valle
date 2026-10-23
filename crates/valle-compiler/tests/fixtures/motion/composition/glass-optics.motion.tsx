@@ -7,7 +7,7 @@ export default function GlassOptics() {
       <Glass material={{ refraction: 10, dispersion: 0.4, frost: 1, tint: "#ffffff18" }}
         style={{ position: "absolute", left: 12, top: 18, width: 100, height: 100, borderRadius: 32,
           boxShadow: "0 6px 12px #00000066" }} />
-      <Glass path="M 40 0 L 80 70 L 0 70 Z" material={{ bevel: 18 }}
+      <Glass path="M 40 0 L 80 70 L 0 70 Z" material={{ bevel: 18, refraction: 10 }}
         light={{ direction: point(1, -0.5), intensity: 0.9 }}
         style={{ position: "absolute", left: 140, top: 20, width: 80, height: 70,
           transform: "perspective(300px) rotateY(30deg)" }} />

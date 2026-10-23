@@ -438,13 +438,14 @@ pub fn prepare_owned(artifact: SceneArtifact) -> Result<PreparedScene, LayoutErr
     let mut inline_shaders = artifact
         .inline_shader_packages()
         .map_err(LayoutError::InvalidArtifact)?;
-    // Glass draws with a built-in shader, which backends fetch as they fetch an inline one.
+    // Glass draws with built-in shaders, which backends fetch as they fetch an inline one.
     if artifact
         .nodes
         .iter()
         .any(|node| matches!(node.kind, NodeKind::Glass(_) | NodeKind::GlassField(_)))
     {
         inline_shaders.push(crate::glass::optics::optics_package().clone());
+        inline_shaders.push(crate::glass::optics::rim_package().clone());
     }
     let mut scene = prepare_admitted(artifact, false)?;
     scene.inline_shaders = inline_shaders.into();
@@ -1786,6 +1787,7 @@ fn resolve_glass(
                 .transpose()?,
             dispersion: length(&material.dispersion, "glass dispersion")?,
             frost: length(&material.frost, "glass frost")?,
+            saturation: length(&material.saturation, "glass saturation")?,
             tint: color_value(&material.tint, values, at)?,
             light: [direction.x, direction.y],
             elevation,

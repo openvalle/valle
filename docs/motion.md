@@ -2374,51 +2374,57 @@ If a transition should stop at its endpoints, pass `clamp(progress, 0, 1)` expli
 ### Glass
 
 `Glass` lays out and paints like a `View` whose background is glass: it frosts and
-bends what lies behind it and catches a light. Its shape is its border box rounded
-by `borderRadius` (`"50%"` makes a circle, a radius of half the height a capsule), or
-`path` in its local pixels. Its background, border and shadows paint as a View's do;
+bends what lies behind it, catches a light along its edge and darkens just outside
+it. Its shape is its border box rounded by `borderRadius` (`"50%"` makes a circle, a
+radius of half the height a capsule), or `path` in its local pixels. Its background, border and shadows paint as a View's do;
 outer shadows show only outside the shape. Children are its foreground: they paint
 over the glass and, as in CSS, are not clipped unless `overflow` or a `Clip` says so.
 
 | Attribute | Contract |
 | --- | --- |
 | `path`, `fillRule` | Optional shape, as on `Clip`: path data in local pixels, `"nonZero"` (default) or `"evenOdd"` |
-| `material` | `{ bevel, refraction, dispersion, frost, tint }`, each optional and animatable |
+| `material` | `{ bevel, refraction, dispersion, frost, saturation, tint }`, each optional and animatable |
 | `light` | `{ direction, elevation, intensity }`, each optional and animatable |
-| `presence` | 0–1, default 1; scales the frost and the glass's opacity |
+| `presence` | 0–1, default 1; scales every effect, the frost included, so the glass forms rather than fades in |
 
 `material` lengths are local pixels of the Glass and scale with its transforms:
 
 | Field | Meaning | Default |
 | --- | --- | --- |
-| `bevel` | Width of the curved rim | 40% of the shorter side |
-| `refraction` | How far the backdrop shifts across a straight rim; beyond about 80% of `bevel` the image folds over | 30% of `bevel` |
+| `bevel` | Width of the curved rim, where the backdrop bends | 25% of the shorter side, at most 20 |
+| `refraction` | The backdrop's shift at the edge, falling to none `bevel` inward; above `bevel` the rim shows the backdrop from further in, mirrored, as a thick lens's edge does | 3 × `bevel`, at most half the shorter side |
 | `dispersion` | How much further blue and less far red shift than green, as a fraction of `refraction`; 0 samples the backdrop once | 0 |
 | `frost` | Backdrop blur, a standard deviation as in CSS `blur()` | 0 |
-| `tint` | The glass's own color, mixed in by its alpha under the highlights | transparent |
+| `saturation` | Backdrop saturation, as in CSS `saturate()`: 1 leaves it, 0 is gray, above 1 is more vivid | 1 |
+| `tint` | The glass's own color, mixed in by its alpha under the light | transparent |
 
 `light.direction` is the screen direction the light comes from, y down (default
-`point(-0.35, -0.94)`, upper left). `elevation` 0 grazes the glass and 1 shines
-straight at it (default 0.55). `intensity` scales the highlight and the rim, and 0
-draws neither (default 0.65). The light stays fixed on the screen, so a turning glass
-keeps its highlights where the light puts them.
+`point(-0.35, -0.94)`, upper left). The edge catches it as a thin line that glows
+inward, brightest on the wall facing the light, dimmer on the wall facing away, and
+in the color of what lies under it. `elevation` is how far the line wraps round the
+edge from those walls: 0 keeps it on them, 1 spreads it round the whole edge (default
+0.55). `intensity` scales the line, its glow, the rim's shading and the dark edge
+just outside the glass, and 0 draws none of them (default 0.65). The light stays
+fixed on the screen, so a turning glass keeps its highlights where the light puts
+them.
 
 `material` and `light` take an object literal, a static object, or a literal that
-spreads static objects. A helper in place of fixed presets:
+spreads static objects. Apple's setting from ultra clear to fully tinted is frost,
+saturation and tint moving together:
 
 ```tsx
-// clarity 1 is clear glass, 0 fully frosted; depth 0 is a thin pane, 1 a thick lens.
-function glassMaterial(clarity: number, depth: number, tint = "#ffffff14") {
-  const bevel = 8 + 40 * depth;
-  return { bevel, refraction: bevel * (0.25 + 0.5 * depth), frost: 20 * (1 - clarity), tint };
-}
+// clarity 1 is the clearest glass, 0 fully tinted.
+const clarity = 0.7;
+<Glass material={{ frost: interpolate(clarity, [0, 1], [20, 1]),
+  saturation: interpolate(clarity, [0, 1], [1.5, 1]),
+  tint: interpolate(clarity, [0, 1], ["#1c2433a6", "#0a0f1a1f"]) }} />
 ```
 
 `GlassField` merges the Glass inside it, through any wrappers, into one surface:
 shapes closer than about `merge.distance` join with a smooth bridge. The field takes
 `material`, `light` and `merge={{ distance }}` (static, 1–128, default 24). Its
-members set none of them; a member's `presence` thins it in the union and shrinks
-its bridges. The field draws once, behind its first member. A member's children are
+members set none of them; a member's `presence` forms it as a Glass's does, and its
+bridges grow with it. The field draws once, behind its first member. A member's children are
 its foreground and may hold their own Glass or GlassField. A GlassField is not a
 layout box: its children lay out as its parent's.
 
@@ -2427,10 +2433,7 @@ Save as `glass.motion.tsx`:
 ```tsx
 export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
 
-function glassMaterial(clarity: number, depth: number, tint = "#ffffff14") {
-  const bevel = 8 + 40 * depth;
-  return { bevel, refraction: bevel * (0.25 + 0.5 * depth), frost: 20 * (1 - clarity), tint };
-}
+const clarity = 0.7;
 
 export default function GlassDemo() {
   const { progress } = useCurrentTime();
@@ -2441,25 +2444,29 @@ export default function GlassDemo() {
       <Text style={{ position: "absolute", left: 24, top: 100, fontSize: 132,
         fontWeight: 800, color: "#fde047" }}>VALLE</Text>
       <Glass className="flex items-center justify-center"
-        material={glassMaterial(0.8, 0.6)}
+        material={{ frost: interpolate(clarity, [0, 1], [20, 1]),
+          saturation: interpolate(clarity, [0, 1], [1.5, 1]),
+          tint: interpolate(clarity, [0, 1], ["#1c2433a6", "#0a0f1a1f"]) }}
         style={{ position: "absolute", left: 40, top: 60, width: 250, height: 240,
           borderRadius: 40, boxShadow: "0 18px 40px #0f172a55" }}>
         <Text style={{ fontSize: 32, color: "#ffffff" }}>Glass</Text>
       </Glass>
-      <GlassField material={{ refraction: 18, tint: "#ffffff1a" }} merge={{ distance: 32 }}>
+      <GlassField merge={{ distance: 32 }}>
         <Glass style={{ position: "absolute", left: x, top: 130, width: 100, height: 100,
           borderRadius: "50%" }} />
-        <Glass style={{ position: "absolute", left: 500, top: 130, width: 100, height: 100,
-          borderRadius: "50%" }} />
+        <Glass presence={interpolate(progress, [0, 0.4], [0, 1])}
+          style={{ position: "absolute", left: 500, top: 130, width: 100, height: 100,
+            borderRadius: "50%" }} />
       </GlassField>
     </Scene>
   );
 }
 ```
 
-Glass draws with a backdrop blur and one built-in shader layer, so it costs about
-what a `ShaderLayer` over a `backdropFilter` costs. One Glass or GlassField covers at
-most 1920×1080 local pixels, and its layer counts toward the frame's shader budget.
+Glass draws with a backdrop blur and two built-in shader layers, one bending the
+backdrop and one for the light on its edge, so it costs about what two `ShaderLayer`s
+over a `backdropFilter` cost. One Glass or GlassField covers at most 1920×1080 local
+pixels, and its layers count toward the frame's shader budget.
 A Glass under its own CSS 3D transform or `perspective` frosts and bends on the plane
 it is projected onto: its shape follows the projection, and its lengths scale as the
 projection scales its center. A blur has no single radius under a projection, so a

@@ -27,7 +27,7 @@ const metalRuleGroups: Array<[Partial<PixelRule>, string[]]> = [
   [{ rgb: 6, edge: 2 }, ["instances-path-stroke-colors"]],
   [{ rgb: 6 }, ["instances-path-stroke-only", "lazy-evaluation-composed"]],
   [{ rgb: 10, edge: 2 }, ["instances-path-stroke", "instances-path-stroke-style"]],
-  [{ rgb: 12, edge: 2 }, ["instances-path-stroke-dynamic"]],
+  [{ rgb: 12, edge: 2 }, ["instances-path-stroke-dynamic", "oklch-color-interpolation-glass"]],
   [{ rgb: 14, edge: 2 }, ["instances-path-stroke-affine", "instances-path-stroke-curve"]],
   [{ rgb: 16, edge: 2 }, ["glass-optics", "instances-path-stroke-affine-opaque"]],
   [{ rgb: 18, edge: 2 }, ["instances-path-stroke-colors-dynamic"]],
@@ -425,7 +425,10 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     { name:"oklch-color-interpolation-batch", source:await readFile(join(fixtureDir,"float-color-batch.motion.tsx"),"utf8"), body:"", width:640, height:360, frames:[0,30,59,30], probes:[], frameProbes:{0:[[320,180,33,64,255]],30:[[320,180,144,136,128]]} },
     { name:"oklch-color-interpolation-instances", source:colorInterpolationInstances, body:"", width:640, height:360, frames:[0,30,59,30], probes:[], frameProbes:{0:[[40,22,33,64,255],[360,202,33,64,255]],30:[[40,22,0,196,159],[360,202,0,196,159]]} },
     { name:"oklch-color-interpolation-instances-expanded", source:colorInterpolationInstances.replace('className="absolute"','className="absolute "'), body:"", width:640, height:360, frames:[0,30,59,30], probes:[] },
-    { name:"oklch-color-interpolation-glass", source:await readFile(join(fixtureDir,"float-color-glass.motion.tsx"),"utf8"), body:"", width:640, height:360, frames:[0,30,59,30], probes:[], crossParityTolerance:3 },
+    // Over the opaque tint the rim's glow clips toward white; at the rounded corners the edge of
+    // that clip moves by a fraction of a pixel between backends.
+    { name:"oklch-color-interpolation-glass", source:await readFile(join(fixtureDir,"float-color-glass.motion.tsx"),"utf8"), body:"", width:640, height:360, frames:[0,30,59,30], probes:[], crossParityTolerance:3,
+      crossParityRule:{ edge: 1 } },
     { name:"glass-optics", source:await readFile(join(fixtureDir,"glass-optics.motion.tsx"),"utf8"), body:"", width:240, height:136, frames:[0], probes:[],
       crossParityRule:{ rgb: 8, edge: 2 } },
     { name:"glass-frost", source:glassFrost, body:"", width:96, height:64, frames:[0], probes:[], crossParityTolerance:3 },
@@ -727,14 +730,14 @@ test("Motion composition, easing and color interpolation match analytic pixels o
             expect(teal,`${label} oklch-color-interpolation float text stroke area`).toBeGreaterThan(500);
           }
           if (fixture.name === "glass-corner") for (const [label,pixels] of [["CanvasKit",web],["Native",native]] as const) {
-            // Across the top-left corner's diagonal, 8 px inside the rim, the refracted ramp changes
-            // smoothly; a crease in the rim's slope would step by about 14 levels.
+            // Across the top-left corner's diagonal, 4 px inside the rim, the refracted ramp changes
+            // smoothly; a crease in the rim's slope would step by about 8 levels.
             const red = (x:number,y:number) => pixels[(Math.round(y)*width+Math.round(x))*4]!;
-            const along = (t:number) => red(112-40*Math.SQRT1_2+t*Math.SQRT1_2,80-40*Math.SQRT1_2-t*Math.SQRT1_2);
+            const along = (t:number) => red(112-44*Math.SQRT1_2+t*Math.SQRT1_2,80-44*Math.SQRT1_2-t*Math.SQRT1_2);
             let step = 0;
             for (let t=-12;t<12;t++) step = Math.max(step,Math.abs(along(t+1)-along(t)));
-            expect(step,`${label} glass-corner step across the diagonal`).toBeLessThanOrEqual(6);
-            expect(along(0)-red(112-40*Math.SQRT1_2,210),`${label} glass-corner bends the ramp in from the rim`).toBeGreaterThanOrEqual(4);
+            expect(step,`${label} glass-corner step across the diagonal`).toBeLessThanOrEqual(3);
+            expect(along(0)-red(112-44*Math.SQRT1_2,210),`${label} glass-corner bends the ramp in from the rim`).toBeGreaterThanOrEqual(4);
           }
           if (fixture.name === "batch-skew-stroke") for (const [label,pixels] of [["CanvasKit",web],["Native",native]] as const) {
             let different = 0;
