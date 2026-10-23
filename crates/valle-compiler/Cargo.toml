@@ -7,6 +7,16 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 publish.workspace = true
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[[test]]
+name = "motion"
+path = "tests/motion.rs"
+required-features = ["motion"]
 
 [dependencies]
 anyhow.workspace = true

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { renderNativeFrames } from "../tests/native-frames.ts";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -77,6 +78,9 @@ test("variable Noto axes produce continuous ink and identical random-access fram
         engine=new ProductEngine();
         const receipt=JSON.parse(engine.open_fixed_package(config.fixedPackageManifestJson!,config.timelineJson!,config.resourceManifestJson!,config.verifiedBindingBundleJson!));
         executor=new CanvasKitExecutor(ck,{transform_srgb_preview_pixels:engine.transform_srgb_preview_pixels.bind(engine)});
+        const nativeBatch=await renderNativeFrames(ck,{cwd:dir,
+          args:["motion","render","scene.motion.tsx","--backend","raster"],frames:fixture.frames,
+          output:join(dir,`${fixture.name}-native.png`),width:640,height:360});
         for (const [request,frame] of fixture.frames.entries()) {
           const ticket=engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),640,360,false);
           let web:Uint8Array;
@@ -94,12 +98,7 @@ test("variable Noto axes produce continuous ink and identical random-access fram
             await executor.execute(engine.plan_template_bytes(ticket),engine.binding_bytes(ticket),engine.bound_schedule_bytes(ticket),{generation:1n,objects},{surface});
             web=Uint8Array.from(surface.getCanvas().readPixels(0,0,info)!);
           } finally { engine.release_ticket(ticket); }
-          const output=join(dir,`${fixture.name}-${request}.png`);
-          const render=spawn(["motion","render","scene.motion.tsx","--frame",String(frame),"--backend","raster","-o",output]);
-          const [stdout,stderr,code]=await Promise.all([new Response(render.stdout).text(),new Response(render.stderr).text(),render.exited]);
-          if(code!==0)throw new Error(`${stdout}\n${stderr}`);
-          const image=ck.MakeImageFromEncoded(await readFile(output))!;
-          const native=Uint8Array.from(image.readPixels(0,0,info)!);image.delete();
+          const native=nativeBatch.frames[request]!;
           let max=0;for(let i=0;i<web.length;i++)max=Math.max(max,Math.abs(web[i]!-native[i]!));
           expect(max,`${fixture.name}/${frame} parity`).toBeLessThanOrEqual(2);
           const key=`${fixture.name}/${frame}`;

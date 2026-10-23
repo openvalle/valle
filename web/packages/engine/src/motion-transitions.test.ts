@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { renderNativeFrames } from "../tests/native-frames.ts";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -218,6 +219,9 @@ export default function I(){const comp = useComposition();return <Scene><ShaderL
         engine=new ProductEngine();
         const receipt=JSON.parse(engine.open_fixed_package(config.fixedPackageManifestJson!,config.timelineJson!,config.resourceManifestJson!,config.verifiedBindingBundleJson!));
         executor=new CanvasKitExecutor(ck,{transform_srgb_preview_pixels:engine.transform_srgb_preview_pixels.bind(engine)});
+        const nativeBatch = fixture.native === false ? undefined : await renderNativeFrames(ck, { cwd:dir,
+          args:[fixture.command,"render",entry,...(fixture.command==="motion"?["--backend","raster"]:[])],
+          frames:fixture.frames,output:join(dir,`${fixture.name}-native.png`),width,height });
         for(const [request,frame] of fixture.frames.entries()) {
           const ticket=engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),width,height,false);
           let web:Uint8Array;
@@ -233,12 +237,7 @@ export default function I(){const comp = useComposition();return <Scene><ShaderL
             web=Uint8Array.from(surface.getCanvas().readPixels(0,0,info)!);
           } finally {engine.release_ticket(ticket);}
           if (fixture.native !== false) {
-            const output=join(dir,`${fixture.name}-${request}.png`);
-            const nativeRun=spawn([fixture.command,"render",entry,"--frame",String(frame),...(fixture.command==="motion"?["--backend","raster"]:[]),"-o",output]);
-            const [stdout,stderr,code]=await Promise.all([new Response(nativeRun.stdout).text(),new Response(nativeRun.stderr).text(),nativeRun.exited]);
-            if(code!==0)throw new Error(`${stdout}\n${stderr}`);
-            const image=ck.MakeImageFromEncoded(await readFile(output))!;
-            const native=Uint8Array.from(image.readPixels(0,0,info)!);image.delete();
+            const native=nativeBatch!.frames[request]!;
             const parity=diff(web,native);
             if(parity>(fixture.parity??2)) {
               const points=[];

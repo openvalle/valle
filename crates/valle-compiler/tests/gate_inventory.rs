@@ -16,6 +16,29 @@ fn files_under(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 #[test]
+fn every_integration_test_module_is_registered_once() {
+    let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let suites = [include_str!("integration.rs"), include_str!("motion.rs")];
+    for entry in fs::read_dir(tests).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|extension| extension != "rs") {
+            continue;
+        }
+        let name = path.file_stem().unwrap().to_str().unwrap();
+        if matches!(name, "integration" | "motion") {
+            continue;
+        }
+        let declaration = format!("mod {name};");
+        let registrations = suites
+            .iter()
+            .flat_map(|suite| suite.lines())
+            .filter(|line| *line == declaration)
+            .count();
+        assert_eq!(registrations, 1, "register {name} in exactly one test suite");
+    }
+}
+
+#[test]
 fn every_motion_fixture_has_a_consumer() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut files = Vec::new();

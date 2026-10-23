@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { renderNativeFrames } from "../tests/native-frames.ts";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -300,15 +301,13 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
         };
         let first: Uint8Array<ArrayBuffer> | undefined;
         let firstNative: Uint8Array<ArrayBuffer> | undefined;
-        for (const [request, frame] of (content && !scene3d ? [60, 60] : [60, 0, 30, 60]).entries()) {
-          const path = join(dir, `native-${sampling}-${request}.png`);
-          const nativeRun = spawn(["motion", "render", "effect.motion.tsx", ...caseAssets, "--frame", String(frame), "--backend", nativeBackend, "-o", path]);
-          const [stdout, stderr, code] = await Promise.all([new Response(nativeRun.stdout).text(), new Response(nativeRun.stderr).text(), nativeRun.exited]);
-          if (code !== 0) throw new Error(`${stdout}\n${stderr}`);
-          expect(JSON.parse(stdout).delivery.backend).toBe(nativeBackend);
-          const image = ck.MakeImageFromEncoded(await readFile(path))!;
-          const native = Uint8Array.from(image.readPixels(0, 0, info)!);
-          image.delete();
+        const frames = content && !scene3d ? [60, 60] : [60, 0, 30, 60];
+        const nativeBatch = await renderNativeFrames(ck, { cwd:dir,
+          args:["motion","render","effect.motion.tsx",...caseAssets,"--backend",nativeBackend], frames,
+          output:join(dir,`native-${sampling}.png`),width:64,height:64 });
+        expect(nativeBatch.report.delivery.backend).toBe(nativeBackend);
+        for (const [request, frame] of frames.entries()) {
+          const native = nativeBatch.frames[request]!;
           if (frame === 60) {
             if (firstNative) expect(native, `${nativeBackend}/${sampling}: repeated frame 60`).toEqual(firstNative);
             else firstNative = native;

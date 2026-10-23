@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { renderNativeFrames } from "../tests/native-frames.ts";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -627,7 +628,11 @@ test("Motion composition, easing and color interpolation match analytic pixels o
         });
         let previous: Uint8Array | undefined;
         let previousNative: Uint8Array<ArrayBuffer> | undefined;
-        for (const [request, frame] of (fixture.frames ?? [30,0,30]).entries()) {
+        const frames = fixture.frames ?? [30,0,30];
+        const nativeBatch = await renderNativeFrames(ck, { cwd:dir,
+          args:["motion","render","scene.motion.tsx",...assetArgs,"--backend",backend], frames,
+          output:join(dir,`${fixture.name}-native.png`), width, height });
+        for (const [request, frame] of frames.entries()) {
           const ticket = engine.evaluate_prepare_preview(receipt.renderId, BigInt(frame),width,height,false);
           let web: Uint8Array;
           try {
@@ -661,13 +666,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
               web = Uint8Array.from(surface.getCanvas().readPixels(0,0,info)!);
             } finally { for (const object of owned) object.delete(); }
           } finally { engine.release_ticket(ticket); }
-          const output = join(dir,`${fixture.name}-${request}.png`);
-          const nativeRun = spawn(["motion","render","scene.motion.tsx",...assetArgs,"--frame",String(frame),"--backend",backend,"-o",output]);
-          const [stdout,stderr,code] = await Promise.all([new Response(nativeRun.stdout).text(),new Response(nativeRun.stderr).text(),nativeRun.exited]);
-          if (code !== 0) throw new Error(`${fixture.name}: ${stdout}\n${stderr}`);
-          const image = ck.MakeImageFromEncoded(await readFile(output))!;
-          const native = Uint8Array.from(image.readPixels(0,0,info)!);
-          image.delete();
+          const native = nativeBatch.frames[request]!;
           const rangeSelectorBlurredFront = backend !== "metal" && fixture.name === "range-selector" && frame === 30;
           let maximum = 0, maximumAt = 0;
           let interiorMaximum = 0, totalDifference = 0;
