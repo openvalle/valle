@@ -9,7 +9,7 @@ no source checkout; for a source build, use `cargo xtask build --release` and se
 | --- | --- | --- |
 | `motion` | Author animated graphics in JSX, check, preview, render | `valle motion check examples/hello.motion.tsx` |
 | `timeline` | Validate, edit and render a timeline document | `valle timeline studio examples/timeline.json` |
-| `project` | Keep timeline revisions, apply edits, restore, preview, render | `valle project create demo --timeline examples/timeline.json` |
+| `project` | Create project folders, import files, snapshot, restore and render | `valle project create demo` |
 | `assets` | Import, organize, annotate and search local media | `valle assets add cover.png --tag demo` |
 | `media` | Process individual media files with local models | `valle media enhance speech.wav -o clean.wav` |
 | `models` | Discover, install and verify model weights | `valle models list` |
@@ -24,7 +24,8 @@ demo_dir=$(mktemp -d)
 export VALLE_HOME="$demo_dir/library"
 ```
 
-`VALLE_HOME` contains the asset library and project history (normally `~/.valle`).
+`VALLE_HOME` contains the asset library and recent-project list (normally `~/.valle`).
+Project files and history live in each project directory.
 It does not relocate model weights. `VALLE_MODEL_CACHE` selects the model directory;
 otherwise models use the platform cache directory, or `$VALLE_CACHE_DIR/models`.
 Each demo uses new output paths. Keep `demo_dir` for the following sections.
@@ -241,42 +242,29 @@ If a source file cannot compile, the author document and code editor stay open s
 the error can be corrected. Source and Timeline conflicts keep the local draft.
 Use `--web-assets-dir web/dist` when running a development binary without embedded assets.
 
-## Project: versioned timeline editing
+## Project: ordinary folders and source snapshots
 
-See the [Project editing reference](project.md), also available through
-`valle docs project`, for revision handling, resource storage and Studio workflows.
-`project studio` takes a project ID from this store, not a JSON path; use
-`timeline studio` to edit a standalone file.
-
-```sh
-valle project create demo --timeline examples/timeline.json --json
-valle project show demo -o "$demo_dir/edited.timeline.json" --json
-# Edit the exported document before applying it.
-valle project apply demo --base-revision 1 \
-  --timeline "$demo_dir/edited.timeline.json" --intent "Adjust the edit" --json
-valle project history demo --limit 20 --json
-valle project render demo -o "$demo_dir/project.mp4" --events
-valle project studio demo --port 0 --events
-```
-
-`apply` submits a complete timeline document. Unchanged content returns
-`outcome: "unchanged"` without adding a revision. Changed content returns
-`outcome: "committed"`; reuse its returned revision as the next `--base-revision`.
-A stale base returns `outcome: "staleBase"` and a nonzero exit code. Fetch `show`
-and reconcile the edit before retrying. Validation rejection returns
-`outcome: "rejected"` with errors.
-
-After a changed edit creates revision 2, restore the first version with:
+Projects are ordinary directories containing `project.json` and an entry Timeline. Edit
+Timeline JSON and Motion source directly. `add` returns resource aliases and paths without
+editing the Timeline. See the [Project guide](project.md), or `valle docs project`.
 
 ```sh
-valle project restore demo --base-revision 2 --revision 1 --json
-valle project render demo --revision 1 --frame 0 -o "$demo_dir/original.png"
+valle project create demo --width 1920 --height 1080 --fps 30 --json
+valle project add examples/title.motion.tsx -C demo --json
+# Edit demo/timeline.json to reference components/title.motion.tsx.
+valle project check -C demo --json
+valle project save -m "First cut" -C demo --json
+valle project history -C demo --json
+valle project render -C demo --events
+valle project studio -C demo --port 0 --events
+valle project restore 1 -C demo --json
 ```
 
-Restore appends a revision; it does not delete history. Project import resolves
-relative resources to absolute paths, so changing directories does not break them.
-Referenced files must remain available. Public timeline JSON has no version field;
-project revision numbers describe saved edits.
+Commands find the project from the current directory or `-C DIR`. Imports are independent
+copies by default; `--link` keeps an absolute external reference. Full exports save a source
+snapshot and an export record. Preview frames and storyboards do not save snapshots.
+Binary media is recorded by digest and is not restored. Media changes during export produce
+warnings; the output still uses the captured inputs. Old project stores are not migrated.
 
 ## Assets: import, annotate and find media
 
@@ -395,8 +383,8 @@ The transport is shared; result payloads retain domain-specific information:
 | Command | Result shape / success indicator |
 | --- | --- |
 | Motion/Timeline check or render; Project render | `status: "ok"`; delivery includes output, frame count and render ID; Motion check and render, and Timeline check, list `warnings` with a `code` and a `message`, also printed to stderr |
-| Project create/show/history | Snapshot or revision page; use the process exit code |
-| Project apply/restore | `outcome`: `committed`, `unchanged`, `staleBase`, or `rejected` |
+| Project create/show/history/save/restore | `status: "ok"` with the operation result |
+| Project add | `status: "ok"` or `"partial"`, with one result per input |
 | Assets | `ok`, `data`, `error`, `warnings`; batch import can contain failed items |
 | Media | `format: "valle.media-run"`, `formatVersion: 1`, `status`, `result`, `report`, `warnings`, `error` |
 | Models | List array, install result, or verification report; inspect artifact `state` and exit code |
@@ -423,7 +411,7 @@ the sequence paths in `delivery.outputs`, and the optional `delivery.storyboard`
 | Exit code | Meaning |
 | --- | --- |
 | 0 | Success |
-| 1 | General failure, rejected/stale project edit, or asset command/batch failure |
+| 1 | General failure, project failure, or asset command/batch failure |
 | 2 | CLI argument error; Media invalid input |
 | 3 | Media/model dependency, installation or runtime unavailable; failed model verification |
 | 4 | Media execution/inference/output validation failure |
@@ -438,8 +426,7 @@ An NDJSON line has `ts_ms` (UTC epoch milliseconds), increasing `seq`, `level`,
 - `media.progress`: `phase`, optional `completed`, `total`, and `message`.
 - `models.progress` and `analyze.progress`: a human-readable `message`.
 - `report`: the command's unchanged result payload in `data`.
-- `ready`: Studio URL, actual port, `runtime_version`, `runtime_source`; Project
-  Studio additionally includes `projectId` and `revision`.
+- `ready`: Studio URL, actual port, `runtime_version`, `runtime_source`.
 - `reload` and `browser_report`: service events during Studio sessions.
 
 Studio is long-running: `--json` emits one `status: "ready"` value;

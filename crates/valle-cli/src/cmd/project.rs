@@ -1,516 +1,306 @@
-//! Timeline project CLI.
-//!
-//! Every authoring save carries one complete sparse document. There are no
-//! clip/track patch commands in this adapter.
+//! CLI and Studio operations for ordinary project folders.
 
+mod render;
+
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
 use std::{
-    io::Write as _,
+    collections::BTreeSet,
+    fs,
     path::{Path, PathBuf},
     process::ExitCode,
-    sync::{Arc, RwLock},
 };
-
-use anyhow::{Context, Result, anyhow};
-use serde_json::{Value, json};
-use valle_project::revision::{
-    Actor, AuthenticatedContext, ProjectId, ProjectStore, ProjectTimelineSnapshot,
-    SnapshotWriteResult,
+use valle_project::{
+    files::Kind,
+    folder::{CapturedInput, Project, absolute, app_home, digest_file, now_millis, write_json},
 };
-use valle_timeline::{
-    Timeline, decode_timeline, timeline_bytes, wire::edit::EditTimelineResultWire,
-};
+use valle_timeline::decode_timeline;
 
 use crate::ProjectAction;
 
-pub(crate) fn run(json_output: bool, action: ProjectAction) -> Result<ExitCode> {
-    let store = ProjectStore::at(project_root()?);
-    let auth = AuthenticatedContext::new(
-        Actor::new("cli:local").map_err(|error| anyhow!(error.to_string()))?,
-    );
+pub(crate) fn run(
+    _json: bool,
+    directory: Option<&Path>,
+    action: ProjectAction,
+) -> Result<ExitCode> {
+    let start = absolute(directory.unwrap_or(Path::new(".")))?;
+    let rendering = matches!(&action, ProjectAction::Render { .. });
+    match run_inner(&start, action) {
+        Ok((code, Some(report))) => {
+            crate::output::emit(report);
+            Ok(code)
+        }
+        Ok((code, None)) => Ok(code),
+        Err(error) if rendering => Err(error),
+        Err(error) => {
+            crate::output::error_with_details(
+                "project_failed",
+                &format!("{error:#}"),
+                Default::default(),
+                Some("valle project check"),
+            );
+            Ok(ExitCode::FAILURE)
+        }
+    }
+}
 
-    match action {
-        ProjectAction::Create {
-            project_id,
-            timeline,
-            intent,
-        } => {
-            let project_id = parse_project_id(project_id)?;
-            let timeline = load_timeline(&timeline)?;
-            let captured = capture_project_sources(&timeline)?;
-            let snapshot = store
-                .create_project_with_compiler(
-                    &project_id,
-                    &timeline,
-                    intent.as_deref(),
-                    &auth,
-                    &|document| captured.compile(document),
-                )
-                .context("creating project genesis")?;
-            print_value(&snapshot_value(&snapshot)?, json_output);
-            Ok(ExitCode::SUCCESS)
+fn run_inner(start: &Path, action: ProjectAction) -> Result<(ExitCode, Option<Value>)> {
+    if let ProjectAction::Create {
+        directory,
+        width,
+        height,
+        fps,
+    } = &action
+    {
+        let project = Project::create(&start.join(directory), *width, *height, fps)?;
+        remember(&project)?;
+        return Ok((
+            ExitCode::SUCCESS,
+            Some(
+                json!({"status":"ok","root":project.root,"files":["project.json","timeline.json","components/","media/","renders/",".valle/history/"]}),
+            ),
+        ));
+    }
+    let project = Project::discover(start)?;
+    remember(&project)?;
+    let report = match action {
+        ProjectAction::Create { .. } => unreachable!(),
+        ProjectAction::Show => summary(&project)?,
+        ProjectAction::Add { files, link } => {
+            let report = add(&project, &files, link)?;
+            return Ok((
+                if report["status"] == "partial" {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                },
+                Some(report),
+            ));
         }
-        ProjectAction::GetTimeline {
-            project_id,
-            revision,
-            output,
-        } => {
-            let project_id = parse_project_id(project_id)?;
-            let snapshot = store
-                .get_timeline(&project_id, revision)
-                .context("reading project Timeline snapshot")?;
-            if let Some(path) = output {
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)?
-                    .write_all(&timeline_bytes(snapshot.timeline())?)
-                    .with_context(|| format!("writing {}", path.display()))?;
-            }
-            print_value(&snapshot_value(&snapshot)?, json_output);
-            Ok(ExitCode::SUCCESS)
+        ProjectAction::Check => check(&project)?,
+        ProjectAction::Save { message } => {
+            let _lock = project.lock()?;
+            let inputs = capture_inputs(&project)?;
+            let saved = project.save_captured(inputs, message.as_deref(), "save")?;
+            json!({"status":"ok","snapshot":saved.snapshot,"unchanged":saved.unchanged})
         }
-        ProjectAction::ListTimelineRevisions {
-            project_id,
-            cursor,
-            limit,
-        } => {
-            let project_id = parse_project_id(project_id)?;
-            let page = store
-                .list_revisions_with_limit(&project_id, cursor, limit)
-                .context("listing project Timeline revisions")?;
-            print_value(
-                &json!({
-                    "projectId": project_id,
-                    "revisions": page.revisions,
-                    "nextCursor": page.next_cursor,
-                }),
-                json_output,
-            );
-            Ok(ExitCode::SUCCESS)
-        }
-        ProjectAction::EditTimeline {
-            project_id,
-            base_revision,
-            timeline,
-            intent,
-        } => {
-            let project_id = parse_project_id(project_id)?;
-            let request = load_edit_request(&timeline, base_revision, intent.as_deref())?;
-            let captured = capture_project_sources_from_edit_request(&request);
-            let response = store
-                .edit_timeline_json_with_compiler(&project_id, &request, &auth, &|document| {
-                    match &captured {
-                        Ok(captured) => captured.compile(document),
-                        Err(error) => {
-                            Err(valle_compiler::CompileTimelineError::MotionPreparation {
-                                reason: error.to_string(),
-                            })
-                        }
-                    }
-                })
-                .context("submitting complete Timeline document")?;
-            let success = matches!(
-                response.result,
-                EditTimelineResultWire::Committed { .. } | EditTimelineResultWire::Unchanged { .. }
-            );
-            print_serializable(&response, json_output)?;
-            Ok(if success {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
-            })
+        ProjectAction::History => json!({"status":"ok","snapshots":project.history()?}),
+        ProjectAction::Restore { snapshot } => {
+            let _lock = project.lock()?;
+            let current = capture_inputs(&project).unwrap_or_default();
+            let mut value = serde_json::to_value(project.restore(snapshot, current)?)?;
+            value["status"] = json!("ok");
+            value
         }
         ProjectAction::Studio {
-            project_id,
-            revision,
             web_assets_dir,
             port,
         } => {
-            let project_id = parse_project_id(project_id).context("project studio expects a project ID; open a JSON file with: valle timeline studio <file>")?;
-            let snapshot = store
-                .get_timeline(&project_id, revision)
-                .context("reading Project Studio initial revision")?;
-            let initial_revision = snapshot.revision().revision;
-            let token = project_studio_token()?;
-
-            let runtime = crate::webruntime::resolve(web_assets_dir.as_deref())?;
-            let config = serde_json::json!({
-                "runtimeAssets": crate::webruntime::runtime_assets_json()
-            })
-            .to_string();
-            let library_home = valle_project::assets::Home::resolve()?;
-            let mut runtime_files = runtime.serving_map();
-            super::motion::mount_motion_runtime_fonts(&mut runtime_files)?;
-            let state = Arc::new(crate::webhost::StudioHost {
-                runtime_files,
-                assets_dir: None,
-                config_json: Arc::new(RwLock::new(config)),
-                sse: crate::webhost::SseBroadcaster::default(),
-                capture_dir: None,
-                library: Some(crate::webhost::LibraryCtx {
-                    token: token.clone(),
-                    make_ctx: Box::new(move || super::assets::studio_context(library_home.clone())),
-                    thumbnail: None,
-                    analyzing: std::sync::atomic::AtomicBool::new(false),
-                    run_analyze: None,
-                }),
-                timeline_file: None,
-                project: Some(crate::webhost::ProjectStudioCtx {
-                    token,
-                    project_id: project_id.clone(),
-                    initial_revision,
-                    store,
-                    auth: AuthenticatedContext::new(
-                        Actor::new(format!("studio:{project_id}"))
-                            .map_err(|error| anyhow!(error.to_string()))?,
-                    ),
-                }),
-                source_paths: std::sync::Mutex::new(Default::default()),
-                last_report: RwLock::new(None),
-                preview_files: Arc::new(Default::default()),
-                motion_source: None,
-            });
-            let (server, addr) = crate::webhost::bind(port)?;
-            let url = format!("http://{addr}/studio?project={project_id}");
-            if crate::output::events() {
-                crate::events::emit(crate::events::EventKind::Ready {
-                    url: url.clone(),
-                    port: addr.port(),
-                    runtime_version: runtime.manifest.runtime_version.clone(),
-                    runtime_source: runtime.source.as_str().to_owned(),
-                    project_id: Some(project_id.to_string()),
-                    revision: Some(initial_revision),
-                });
-            } else if json_output {
-                crate::output::emit(json!({
-                    "status": "ready",
-                    "url": url,
-                    "port": addr.port(),
-                    "projectId": project_id,
-                    "revision": state.project.as_ref().map(|project| project.initial_revision),
-                    "runtime_version": runtime.manifest.runtime_version,
-                    "runtime_source": runtime.source.as_str(),
-                }));
-                std::io::stdout().flush()?;
-            } else {
-                eprintln!("project studio: {url} (Ctrl-C to stop)");
-            }
-            crate::webhost::serve_forever(server, state)?;
-            Ok(ExitCode::SUCCESS)
+            return Ok((
+                crate::timeline_file::serve(
+                    &project.timeline_path(),
+                    web_assets_dir.as_deref(),
+                    port,
+                )?,
+                None,
+            ));
         }
-        ProjectAction::Render {
-            project_id,
-            revision,
-            delivery,
-        } => {
-            let id = parse_project_id(project_id)?;
-            let snapshot = store.get_timeline(&id, revision)?;
-            super::timeline::render_document(
-                snapshot.timeline().clone(),
-                &std::env::current_dir()?,
-                delivery,
-            )
+        ProjectAction::Render { delivery, budget } => {
+            render::render(&project, delivery.into(), budget)?
         }
-        ProjectAction::RestoreTimelineRevision {
-            project_id,
-            base_revision,
-            source_revision,
-            intent,
-        } => {
-            let project_id = parse_project_id(project_id)?;
-            let result = store
-                .restore_timeline_revision(
-                    &project_id,
-                    base_revision,
-                    source_revision,
-                    intent.as_deref(),
-                    &auth,
-                )
-                .context("restoring Timeline revision")?;
-            let success = matches!(
-                result,
-                SnapshotWriteResult::Committed { .. } | SnapshotWriteResult::Unchanged { .. }
-            );
-            print_value(&write_result_value(result), json_output);
-            Ok(if success {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::FAILURE
-            })
-        }
-    }
-}
-
-fn project_root() -> Result<PathBuf> {
-    if let Some(root) = std::env::var_os("VALLE_HOME") {
-        return Ok(PathBuf::from(root));
-    }
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .ok_or_else(|| anyhow!("set VALLE_HOME because no user home directory is available"))?;
-    Ok(PathBuf::from(home).join(".valle"))
-}
-
-fn parse_project_id(value: String) -> Result<ProjectId> {
-    ProjectId::new(value).map_err(|error| anyhow!(error.to_string()))
-}
-
-fn load_timeline(path: &Path) -> Result<Timeline> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    decode_timeline(&normalize_resource_paths(&text, path)?)
-        .with_context(|| format!("decoding Timeline {}", path.display()))
-}
-
-pub(crate) struct CapturedProjectSources {
-    author_bytes: Vec<u8>,
-    motion: super::timeline::CapturedMotionSources,
-}
-
-pub(crate) fn capture_project_sources_from_edit_request(
-    request: &str,
-) -> Result<CapturedProjectSources> {
-    let value: Value = serde_json::from_str(request)?;
-    let timeline = decode_timeline(&value["timeline"].to_string())?;
-    capture_project_sources(&timeline)
-}
-
-pub(crate) fn capture_project_sources(timeline: &Timeline) -> Result<CapturedProjectSources> {
-    let author_bytes = timeline_bytes(timeline)?;
-    let mut document: Value = serde_json::from_slice(&author_bytes)?;
-    super::timeline::prepare_motion_instances(&mut document)?;
-    let motion = super::timeline::capture_motion_sources(&document, Path::new("."))?;
-    Ok(CapturedProjectSources {
-        author_bytes,
-        motion,
-    })
-}
-
-impl CapturedProjectSources {
-    pub(crate) fn dependency_digests(
-        &self,
-    ) -> Result<std::collections::BTreeMap<String, valle_motion::ContentDigest>> {
-        self.motion.dependency_digests()
-    }
-
-    pub(crate) fn verify_expected_dependencies(
-        &self,
-        expected: Option<&std::collections::BTreeMap<String, valle_motion::ContentDigest>>,
-    ) -> Result<()> {
-        self.motion.verify_expected_dependencies(expected)
-    }
-
-    pub(crate) fn compile(
-        &self,
-        timeline: &Timeline,
-    ) -> Result<valle_timeline::internal::CanonicalTimeline, valle_compiler::CompileTimelineError>
-    {
-        let prepare = || -> Result<_> {
-            if timeline_bytes(timeline)? != self.author_bytes {
-                anyhow::bail!("Project Timeline changed after Motion inputs were captured");
-            }
-            let (_, sources) = self.motion.prepare()?;
-            Ok(sources)
-        };
-        let sources = prepare().map_err(|error: anyhow::Error| {
-            valle_compiler::CompileTimelineError::MotionPreparation {
-                reason: error.to_string(),
-            }
-        })?;
-        let canonical =
-            valle_compiler::compile_timeline_with_motion_sources(timeline.clone(), &sources)?;
-        self.motion.verify_dependencies().map_err(|error| {
-            valle_compiler::CompileTimelineError::MotionPreparation {
-                reason: error.to_string(),
-            }
-        })?;
-        Ok(canonical)
-    }
-}
-
-fn load_edit_request(path: &Path, base_revision: u64, intent: Option<&str>) -> Result<String> {
-    let timeline =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let timeline = normalize_resource_paths(&timeline, path)?;
-    let intent = serde_json::to_string(&intent)?;
-    Ok(format!(
-        "{{\"baseRevision\":{base_revision},\"timeline\":{timeline},\"intent\":{intent}}}"
+    };
+    Ok((
+        if report["status"] == "error" {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        },
+        Some(report),
     ))
 }
 
-pub(crate) fn resolve_studio_edit_request(body: &str, base: &Path) -> Result<String> {
-    let mut request: Value = match serde_json::from_str(body) {
-        Ok(request) => request,
-        Err(_) => return Ok(body.to_owned()),
-    };
-    let Some(raw_timeline) = request.get("timeline") else {
-        return Ok(body.to_owned());
-    };
-    let document = normalize_resource_paths(
-        &serde_json::to_string(raw_timeline)?,
-        &base.join("studio-timeline.json"),
-    )?;
-    if decode_timeline(&document).is_err() {
-        return Ok(body.to_owned());
-    }
-    request["timeline"] = serde_json::from_str(&document)?;
-    Ok(serde_json::to_string(&request)?)
+pub(crate) fn remember(project: &Project) -> Result<()> {
+    let path = app_home()?.join("recent-projects.json");
+    let mut entries = fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<Value>>(&bytes).ok())
+        .unwrap_or_default();
+    let root = project.root.to_string_lossy();
+    entries.retain(|entry| entry["path"].as_str() != Some(root.as_ref()));
+    entries.insert(
+        0,
+        json!({"path":project.root,"name":project.config.name,"lastOpened":now_millis()}),
+    );
+    entries.truncate(30);
+    write_json(&path, &entries, true)
 }
 
-fn normalize_resource_paths(text: &str, path: &Path) -> Result<String> {
-    let mut value: Value = serde_json::from_str(text)?;
-    let base = std::path::absolute(path)?.parent().unwrap().to_path_buf();
-    if let Some(resources) = value.get_mut("resources").and_then(Value::as_object_mut) {
-        for locator in resources.values_mut() {
-            if let Some(s) = locator.as_str() {
-                if !s.contains("://") && !Path::new(s).is_absolute() {
-                    *locator = Value::String(base.join(s).to_string_lossy().into_owned());
-                }
-            }
-        }
+pub(crate) fn validate_component(path: &Path) -> Result<()> {
+    if Kind::detect(path) != Kind::Component {
+        return Ok(());
     }
-    Ok(serde_json::to_string(&value)?)
-}
-
-#[cfg(test)]
-mod motion_duration_tests {
-    use super::*;
-
-    #[test]
-    fn studio_edit_resolves_motion_duration_before_project_admission() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("title.motion.tsx"),
-            "export const composition = { width: 64, height: 64, fps: 24, duration: 1 };\nexport default function Title() { return <Scene />; }",
-        )
-        .unwrap();
-        let request = serde_json::json!({
-            "baseRevision": 1,
-            "timeline": {
-                "canvas": {"width":64,"height":64,"fps":24},
-                "resources": {"title":"title.motion.tsx"},
-                "tracks": {"visual":[{"clips":[{"kind":"motion","component":"title","start":0,"duration":1}]}]}
-            }
-        });
-        let resolved = resolve_studio_edit_request(&request.to_string(), dir.path()).unwrap();
-        let resolved: Value = serde_json::from_str(&resolved).unwrap();
-        assert!(
-            resolved["timeline"]["tracks"]["visual"][0]["clips"][0]
-                .get("sourceDuration")
-                .is_none()
-        );
-        assert!(
-            Path::new(resolved["timeline"]["resources"]["title"].as_str().unwrap()).is_absolute()
+    let graph = valle_compiler::motion::MotionModuleGraph::from_entry_path(path)
+        .map_err(|diagnostics| anyhow::anyhow!("cannot read component imports: {diagnostics:?}"))?;
+    if graph.modules.len() > 1 {
+        bail!(
+            "component imports other source files: {}; copy the component and these files together, preserving their relative paths, into components/",
+            graph
+                .modules
+                .keys()
+                .filter(|key| *key != &graph.entry)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
-
-    #[test]
-    fn project_compiler_rejects_source_changes_after_capture() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("title.motion.tsx");
-        std::fs::write(
-            &source,
-            "export const composition = { width: 64, height: 64, fps: 24, duration: 1 };\nexport default function Title() { return <Scene />; }",
-        )
-        .unwrap();
-        let timeline = decode_timeline(
-            &json!({
-                "canvas": {"width":64,"height":64,"fps":24},
-                "resources": {"title":source},
-                "tracks": {"visual":[{"clips":[{"kind":"motion","component":"title","start":0,"duration":1}]}]}
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let captured = capture_project_sources(&timeline).unwrap();
-        let confirmed = captured.dependency_digests().unwrap();
-        captured
-            .verify_expected_dependencies(Some(&confirmed))
-            .unwrap();
-        let compiled = captured.compile(&timeline).unwrap();
-        assert!(
-            !valle_timeline::internal::canonical_bytes(&compiled)
-                .unwrap()
-                .is_empty()
-        );
-        std::fs::write(
-            &source,
-            "export const composition = { width: 64, height: 64, fps: 24, duration: 2 };\nexport default function Title() { return <Scene />; }",
-        )
-        .unwrap();
-        let newly_captured = capture_project_sources(&timeline).unwrap();
-        let mismatch = newly_captured
-            .verify_expected_dependencies(Some(&confirmed))
-            .unwrap_err();
-        assert!(mismatch.to_string().contains("changed since it was loaded"));
-        let error = captured.compile(&timeline).unwrap_err();
-        assert!(error.to_string().contains("changed during save"));
-    }
-}
-
-fn project_studio_token() -> Result<String> {
-    let mut token = [0_u8; 32];
-    getrandom::fill(&mut token).context("generating local Studio authentication token")?;
-    Ok(hex::encode(token))
-}
-
-fn snapshot_value(snapshot: &ProjectTimelineSnapshot) -> Result<Value> {
-    let timeline: Value = serde_json::from_slice(&timeline_bytes(snapshot.timeline())?)?;
-    Ok(json!({
-        "projectId": snapshot.project_id(),
-        "revision": snapshot.revision().revision,
-        "timeline": timeline,
-    }))
-}
-
-fn write_result_value(result: SnapshotWriteResult) -> Value {
-    match result {
-        SnapshotWriteResult::Committed { snapshot } => json!({
-            "outcome": "committed",
-            "revision": snapshot.revision().revision,
-        }),
-        SnapshotWriteResult::Unchanged { snapshot } => json!({
-            "outcome": "unchanged",
-            "revision": snapshot.revision().revision,
-        }),
-        SnapshotWriteResult::StaleBase { actual } => json!({
-            "outcome": "staleBase",
-            "revision": actual.revision().revision,
-        }),
-        SnapshotWriteResult::Rejected { errors } => json!({
-            "outcome": "rejected",
-            "errors": errors,
-        }),
-    }
-}
-
-fn print_serializable(value: &impl serde::Serialize, json_output: bool) -> Result<()> {
-    let value = serde_json::to_value(value)?;
-    print_value(&value, json_output);
     Ok(())
 }
 
-fn print_value(value: &Value, _json_output: bool) {
-    crate::output::emit(value.clone());
+pub(crate) fn add(project: &Project, files: &[PathBuf], link: bool) -> Result<Value> {
+    let _lock = project.lock()?;
+    let mut items = Vec::new();
+    let mut aliases = BTreeSet::new();
+    for file in files {
+        let result = (|| -> Result<Value> {
+            validate_component(file)?;
+            let mut imported = project.import_file(file, link)?;
+            let base = imported.alias.clone();
+            let mut number = 2;
+            while !aliases.insert(imported.alias.clone()) {
+                imported.alias = format!("{base}-{number}");
+                number += 1;
+            }
+            let mut item = serde_json::to_value(&imported)?;
+            item["status"] = json!("ok");
+            item["resource"] = json!({imported.alias:imported.path});
+            item["info"] = probe(file, imported.kind);
+            Ok(item)
+        })();
+        items.push(match result {Ok(item)=>item,Err(error)=>json!({"status":"error","input":file,"error":{"code":"import_failed","message":format!("{error:#}"),"hint":"valle project show"}})});
+    }
+    let failed = items
+        .iter()
+        .filter(|item| item["status"] == "error")
+        .count();
+    Ok(json!({"status":if failed==0 {"ok"}else{"partial"},"items":items,"failed":failed}))
 }
 
-#[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use super::project_studio_token;
-
-    #[test]
-    fn studio_token_has_fresh_256_bit_hex_encoding() {
-        let tokens = (0..32)
-            .map(|_| project_studio_token().unwrap())
-            .collect::<Vec<_>>();
-        assert!(tokens.iter().all(|token| {
-            token.len() == 64
-                && token
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        }));
-        assert_eq!(tokens.iter().collect::<HashSet<_>>().len(), tokens.len());
+pub(crate) fn probe(path: &Path, kind: Kind) -> Value {
+    match kind {
+        Kind::Video|Kind::Audio=>valle_media::codec::probe_av(path).ok().map(|info| {
+            let fps=if kind==Kind::Video {valle_media::codec::decode::probe_video_presentation(path).ok().map(|probe|probe.display.nominal_fps)}else{None};
+            json!({"duration":info.video.map(|(_,_,d)|d).or(info.audio),"width":info.video.map(|(w,_,_)|w),"height":info.video.map(|(_,h,_)|h),"fps":fps,"hasAudio":info.audio.is_some()})
+        }).unwrap_or(Value::Null),
+        Kind::Image=>fs::read(path).ok().and_then(|b|valle_render::host::probe_image_extent(&b).ok()).map(|(width,height)|json!({"width":width,"height":height})).unwrap_or(Value::Null),
+        _=>Value::Null,
     }
+}
+
+pub(crate) fn capture_inputs(project: &Project) -> Result<Vec<CapturedInput>> {
+    let bytes = fs::read(project.timeline_path())?;
+    let timeline = decode_timeline(std::str::from_utf8(&bytes)?)?;
+    let mut doc: Value = serde_json::from_slice(&bytes)?;
+    super::timeline::prepare_motion_instances(&mut doc)?;
+    let base = project.timeline_path().parent().unwrap().to_path_buf();
+    let motion = super::timeline::capture_motion_sources(&doc, &base)?;
+    let mut inputs = motion.snapshot_inputs();
+    let mut used = BTreeSet::new();
+    super::timeline::collect_used_resources(&doc["tracks"], &mut used);
+    let components = valle_compiler::motion_preparation_inputs(&timeline)?
+        .into_iter()
+        .map(|input| input.component)
+        .collect::<BTreeSet<_>>();
+    for alias in used {
+        if components.contains(&alias) {
+            continue;
+        }
+        let Some(locator) = doc["resources"][&alias].as_str() else {
+            continue;
+        };
+        let path = if locator.starts_with("http://") || locator.starts_with("https://") {
+            valle_render::AssetCache::new(valle_render::default_cache_dir())?
+                .fetch(locator, "bin")?
+        } else {
+            base.join(locator)
+        };
+        if inputs
+            .iter()
+            .any(|input| absolute(&input.path).ok() == absolute(&path).ok())
+        {
+            continue;
+        }
+        if Kind::detect(&path).snapshot_source() {
+            let (_, captured) = super::motion::capture_asset(&path)?;
+            inputs.extend(captured);
+        } else {
+            inputs.push(CapturedInput::media(
+                path.clone(),
+                digest_file(&path)
+                    .with_context(|| format!("reading {alias}: {}", path.display()))?,
+            ));
+        }
+    }
+    motion.verify_dependencies()?;
+    inputs.push(CapturedInput::source(project.timeline_path(), bytes));
+    Ok(inputs)
+}
+
+pub(crate) fn summary(project: &Project) -> Result<Value> {
+    let document: Value = serde_json::from_slice(&fs::read(project.timeline_path())?)?;
+    let base = project.timeline_path().parent().unwrap().to_path_buf();
+    let mut resources = Vec::new();
+    let mut outside = Vec::new();
+    let mut missing = Vec::new();
+    for (alias, value) in document["resources"].as_object().into_iter().flatten() {
+        let Some(locator) = value.as_str() else {
+            continue;
+        };
+        let remote = locator.contains("://");
+        let path = base.join(locator);
+        let external = remote || absolute(&path)?.strip_prefix(&project.root).is_err();
+        let entry = json!({"alias":alias,"path":if remote{locator.to_owned()}else{project.path_key(&path)?},"kind":Kind::detect(&path),"external":external,"missing":!remote&&!path.is_file()});
+        if external {
+            outside.push(entry.clone());
+        }
+        if !remote && !path.is_file() {
+            missing.push(entry.clone());
+        }
+        resources.push(entry);
+    }
+    let history = project.history()?;
+    let mut exports = Vec::new();
+    for snapshot in &history {
+        let dir = project.snapshot_dir(snapshot.number).join("exports");
+        if !dir.is_dir() {
+            continue;
+        }
+        for file in fs::read_dir(dir)? {
+            let path = file?.path();
+            if path.extension().is_some_and(|e| e == "json") {
+                exports.push(serde_json::from_slice::<Value>(&fs::read(path)?)?);
+            }
+        }
+    }
+    exports.sort_by_key(|entry| entry["createdAt"].as_u64().unwrap_or(0));
+    Ok(
+        json!({"status":"ok","root":project.root,"name":project.config.name,"timeline":project.config.timeline,"canvas":document["canvas"],"tracks":document["tracks"],"resources":resources,"outsideReferences":outside,"missing":missing,"snapshots":history.len(),"lastExport":exports.last()}),
+    )
+}
+
+pub(crate) fn check(project: &Project) -> Result<Value> {
+    let report = summary(project)?;
+    let timeline = decode_timeline(&fs::read_to_string(project.timeline_path())?)?;
+    let base = project.timeline_path().parent().unwrap().to_path_buf();
+    let mut result = json!({"status":"ok","outsideReferences":report["outsideReferences"],"missing":report["missing"],"warnings":[]});
+    match super::timeline::prepare_timeline_package(timeline, &base) {
+        Ok(prepared) => {
+            result["warnings"] =
+                serde_json::to_value(super::timeline::clock_warnings(prepared.opened.compiled())?)?;
+        }
+        Err(error) => {
+            result["status"] = json!("error");
+            result["error"] = json!({"code":"project_check_failed","message":format!("{error:#}"),"hint":"valle project show"});
+        }
+    }
+    Ok(result)
 }

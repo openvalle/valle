@@ -87,7 +87,7 @@ Studio 会打印一个本地地址，用浏览器打开即可。文件一改它�
 | --- | --- |
 | [Motion](docs/motion.md) | 场景、动画、CSS 与 Tailwind、文字、3D 和着色器 |
 | [Timeline](docs/timeline.md) | 把素材、Motion 片段、音频和字幕剪到一起 |
-| [Project](docs/project.md) | 修订、恢复和并发编辑 |
+| [Project](docs/project.md) | 项目文件夹、源码快照、恢复和导出 |
 | [Assets](docs/assets.md) | 本地素材库 |
 | [Media](docs/media.md) | 处理音频、图片和视频的本地模型 |
 | [CLI](docs/cli.md) | 输出约定、退出码和运行时说明 |

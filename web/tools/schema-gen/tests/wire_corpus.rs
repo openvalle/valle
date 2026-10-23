@@ -54,7 +54,6 @@ fn non_timeline_host_protocols_remain_closed() {
       "session":{"kind":"timeline-file","input":"timeline.json","token":"file-token"},
       "capabilities":{
         "saveTimeline":false,
-        "editProject":false,
         "editMotionProps":false,
         "writeMotionSource":false
       },

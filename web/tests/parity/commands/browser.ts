@@ -167,7 +167,6 @@ async function handleRequest(request: any, state: any) {
                 session: { kind: "timeline-file", input: "parity-timeline" },
                 capabilities: {
                     saveTimeline: false,
-                    editProject: false,
                     editMotionProps: false,
                     writeMotionSource: false,
                 },

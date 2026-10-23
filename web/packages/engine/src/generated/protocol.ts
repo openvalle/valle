@@ -13,17 +13,19 @@ export type MotionFrameRateWire = { num: number, den: number, };
 
 export type CodeWire = string;
 
-export type StudioSessionWire = { "kind": "project", projectId: string, revision: number, token: string, } | { "kind": "timeline-file", input: string, token: string, } | { "kind": "motion-file", input: string, generation: number, token: string, authorInputs?: StudioMotionInputsWire, };
+export type StudioSessionWire = { "kind": "timeline-file", input: string, token: string, } | { "kind": "motion-file", input: string, generation: number, token: string, authorInputs?: StudioMotionInputsWire, };
 
 export type StudioMotionInputsWire = { fpsOverride?: string, props: Record<string, unknown>, data?: Record<string, unknown>, dataPath?: string, assetSpecs: Array<string>, inputDigests: Record<string, string>, extraFonts: Array<string>, fontUrls: Array<StudioFontUrlWire>, };
 
 export type StudioFontUrlWire = { url: string, role: string, };
 
-export type StudioCapabilitiesWire = { saveTimeline: boolean, editProject: boolean, editMotionProps: boolean, writeMotionSource: boolean, };
+export type StudioCapabilitiesWire = { saveTimeline: boolean, editMotionProps: boolean, writeMotionSource: boolean, };
+
+export type StudioProjectWire = { root: string, name: string, timeline: string, entry: boolean, };
 
 export type StudioRuntimeWire = { assetBaseUrl: string, proxyBase?: string, assetUrls: { [key in string]: string }, fontUrls: Array<StudioFontUrlWire>, };
 
-export type StudioBootWire = { protocolVersion: number, session: StudioSessionWire, capabilities: StudioCapabilitiesWire, runtime: StudioRuntimeWire, };
+export type StudioBootWire = { project?: StudioProjectWire, protocolVersion: number, session: StudioSessionWire, capabilities: StudioCapabilitiesWire, runtime: StudioRuntimeWire, };
 
 export type MotionViewportWire = { width: number, height: number, };
 

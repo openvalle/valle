@@ -9,7 +9,7 @@ fn valle() -> Command {
 }
 
 #[test]
-fn timeline_studio_accepts_files_and_project_studio_explains_its_id_argument() {
+fn timeline_studio_accepts_files_and_project_studio_discovers_a_folder() {
     let help = valle()
         .args(["timeline", "studio", "--help"])
         .output()
@@ -18,18 +18,14 @@ fn timeline_studio_accepts_files_and_project_studio_explains_its_id_argument() {
     let text = String::from_utf8(help.stdout).unwrap();
     assert!(text.contains("<INPUT>"));
     assert!(text.contains("Save writes back"));
-    let home = tempfile::tempdir().unwrap();
-    let rejected = valle()
-        .env("VALLE_HOME", home.path())
-        .args(["project", "studio", "examples/timeline.json"])
+    let project = valle()
+        .args(["project", "studio", "--help"])
         .output()
         .unwrap();
-    assert!(!rejected.status.success());
-    assert!(
-        String::from_utf8(rejected.stderr)
-            .unwrap()
-            .contains("valle timeline studio <file>")
-    );
+    assert!(project.status.success());
+    let help = String::from_utf8(project.stdout).unwrap();
+    assert!(help.contains("--directory"));
+    assert!(!help.contains("PROJECT_ID"));
 }
 
 fn listed_help_commands(help: &str) -> Vec<&str> {
@@ -782,7 +778,7 @@ fn internal_render_commands_are_not_public() {
 }
 
 #[test]
-fn project_surface_is_sparse_full_document_only() {
+fn project_surface_uses_folders_and_source_snapshots() {
     let output = valle()
         .args(["project", "--help"])
         .output()
@@ -790,7 +786,9 @@ fn project_surface_is_sparse_full_document_only() {
     assert!(output.status.success());
     let help = String::from_utf8(output.stdout).expect("UTF-8 help");
 
-    for command in ["create", "show", "history", "apply", "studio", "restore"] {
+    for command in [
+        "create", "show", "add", "check", "save", "history", "render", "studio", "restore",
+    ] {
         assert!(help.contains(command), "missing `{command}` in:\n{help}");
     }
     for retired in [
@@ -800,213 +798,13 @@ fn project_surface_is_sparse_full_document_only() {
         "commit",
         "undo",
         "update-resource-manifest",
+        "apply",
     ] {
         assert!(
             !help.contains(retired),
             "retired `{retired}` leaked into:\n{help}"
         );
     }
-}
-
-#[test]
-fn project_create_persists_one_author_timeline_without_a_manifest() {
-    let temporary = tempfile::tempdir().unwrap();
-    let timeline =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/timeline/base.timeline.json");
-    let create = valle()
-        .env("VALLE_HOME", temporary.path())
-        .args(["project", "--json", "create", "quickstart", "--timeline"])
-        .arg(&timeline)
-        .output()
-        .expect("create sparse Timeline project");
-    assert!(
-        create.status.success(),
-        "project create failed: {}",
-        String::from_utf8_lossy(&create.stderr)
-    );
-    let created: Value = serde_json::from_slice(&create.stdout).expect("create JSON response");
-    assert!(created["timeline"].get("version").is_none());
-    assert!(created.get("resourceManifest").is_none());
-    assert_eq!(created["revision"], 1);
-
-    let get = valle()
-        .env("VALLE_HOME", temporary.path())
-        .args(["project", "--json", "show", "quickstart"])
-        .output()
-        .expect("get sparse Timeline project");
-    assert!(
-        get.status.success(),
-        "project get failed: {}",
-        String::from_utf8_lossy(&get.stderr)
-    );
-    let loaded: Value = serde_json::from_slice(&get.stdout).expect("get JSON response");
-    assert_eq!(loaded["timeline"], created["timeline"]);
-    assert_eq!(loaded["revision"], created["revision"]);
-    assert!(loaded.get("resourceManifest").is_none());
-}
-
-#[test]
-fn project_create_and_apply_resolve_missing_motion_source_duration() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let component = dir.path().join("title.motion.tsx");
-    std::fs::write(&component, "export const composition = { width: 64, height: 64, fps: 24, duration: 1 };\nexport default function Title() { return <Scene />; }").unwrap();
-    let timeline_path = dir.path().join("timeline.json");
-    let timeline = serde_json::json!({
-        "canvas":{"width":64,"height":64,"fps":24},
-        "resources":{"title":"title.motion.tsx"},
-        "tracks":{"visual":[{"clips":[{"kind":"motion","component":"title","start":0,"duration":1}]}]}
-    });
-    std::fs::write(&timeline_path, timeline.to_string()).unwrap();
-    let create = valle()
-        .env("VALLE_HOME", &home)
-        .args([
-            "project",
-            "--json",
-            "create",
-            "motion-duration",
-            "--timeline",
-        ])
-        .arg(&timeline_path)
-        .output()
-        .unwrap();
-    assert!(
-        create.status.success(),
-        "{}",
-        String::from_utf8_lossy(&create.stderr)
-    );
-    let created: Value = serde_json::from_slice(&create.stdout).unwrap();
-    assert!(
-        created["timeline"]["tracks"]["visual"][0]["clips"][0]
-            .get("sourceDuration")
-            .is_none()
-    );
-    let canonical: Value = serde_json::from_slice(
-        &std::fs::read(home.join("projects/motion-duration/revisions/1/canonical.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        canonical["document"]["visual"]["tracks"][0]["items"][0]["source"]["sourceDuration"],
-        "1/1"
-    );
-
-    let mut edited = timeline;
-    edited["tracks"]["visual"][0]["clips"][0]["duration"] = serde_json::json!(0.5);
-    std::fs::write(&timeline_path, edited.to_string()).unwrap();
-    let apply = valle()
-        .env("VALLE_HOME", &home)
-        .args([
-            "project",
-            "--json",
-            "apply",
-            "motion-duration",
-            "--base-revision",
-            "1",
-            "--timeline",
-        ])
-        .arg(&timeline_path)
-        .output()
-        .unwrap();
-    assert!(
-        apply.status.success(),
-        "{}",
-        String::from_utf8_lossy(&apply.stderr)
-    );
-    let show = valle()
-        .env("VALLE_HOME", &home)
-        .args(["project", "--json", "show", "motion-duration"])
-        .output()
-        .unwrap();
-    assert!(
-        show.status.success(),
-        "{}",
-        String::from_utf8_lossy(&show.stderr)
-    );
-    let snapshot: Value = serde_json::from_slice(&show.stdout).unwrap();
-    assert_eq!(snapshot["revision"], 2);
-    assert!(
-        snapshot["timeline"]["tracks"]["visual"][0]["clips"][0]
-            .get("sourceDuration")
-            .is_none()
-    );
-    let canonical: Value = serde_json::from_slice(
-        &std::fs::read(home.join("projects/motion-duration/revisions/2/canonical.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        canonical["document"]["visual"]["tracks"][0]["items"][0]["source"]["sourceDuration"],
-        "1/1"
-    );
-}
-
-#[test]
-fn project_create_and_apply_preserve_motion_inline_data() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    std::fs::write(
-        dir.path().join("title.motion.tsx"),
-        r#"export const composition = { width: 64, height: 64, fps: 24, duration: 1 };
-export const controls = { data: { title: string() } };
-export default function Title(props) { const data = useData(); return <Scene><Text>{data.title}</Text></Scene>; }"#,
-    )
-    .unwrap();
-    let timeline_path = dir.path().join("timeline.json");
-    let timeline = |title: &str| {
-        serde_json::json!({
-            "canvas":{"width":64,"height":64,"fps":24},
-            "resources":{"title":"title.motion.tsx"},
-            "tracks":{"visual":[{"clips":[{"kind":"motion","component":"title","start":0,"duration":1,
-                "data":{"title":title}}]}]}
-        })
-    };
-    std::fs::write(&timeline_path, timeline("first").to_string()).unwrap();
-    let create = valle()
-        .env("VALLE_HOME", &home)
-        .args(["project", "--json", "create", "motion-data", "--timeline"])
-        .arg(&timeline_path)
-        .output()
-        .unwrap();
-    assert!(
-        create.status.success(),
-        "{}",
-        String::from_utf8_lossy(&create.stderr)
-    );
-    std::fs::write(&timeline_path, timeline("second").to_string()).unwrap();
-    let apply = valle()
-        .env("VALLE_HOME", &home)
-        .args([
-            "project",
-            "--json",
-            "apply",
-            "motion-data",
-            "--base-revision",
-            "1",
-            "--timeline",
-        ])
-        .arg(&timeline_path)
-        .output()
-        .unwrap();
-    assert!(
-        apply.status.success(),
-        "{}",
-        String::from_utf8_lossy(&apply.stderr)
-    );
-    let show = valle()
-        .env("VALLE_HOME", &home)
-        .args(["project", "--json", "show", "motion-data"])
-        .output()
-        .unwrap();
-    assert!(
-        show.status.success(),
-        "{}",
-        String::from_utf8_lossy(&show.stderr)
-    );
-    let loaded: Value = serde_json::from_slice(&show.stdout).unwrap();
-    assert_eq!(loaded["revision"], 2);
-    assert_eq!(
-        loaded["timeline"]["tracks"]["visual"][0]["clips"][0]["data"]["title"],
-        "second"
-    );
 }
 
 #[test]
@@ -1294,20 +1092,17 @@ fn timeline_and_project_render_without_internal_package_arguments() {
         frame.to_str().unwrap(),
     ]);
     assert_eq!(&std::fs::read(&frame).unwrap()[..8], b"\x89PNG\r\n\x1a\n");
-    invoke(&[
-        "project",
-        "create",
-        "demo",
-        "--timeline",
-        input.to_str().unwrap(),
-    ]);
+    std::fs::write(
+        dir.path().join("project.json"),
+        r#"{"name":"demo","timeline":"timeline.json"}"#,
+    )
+    .unwrap();
     let project_frame = dir.path().join("project.png");
     invoke(&[
         "project",
         "render",
-        "demo",
-        "--revision",
-        "1",
+        "-C",
+        dir.path().to_str().unwrap(),
         "--frame",
         "1",
         "-o",
@@ -1536,23 +1331,17 @@ fn timeline_and_project_delivery_preserve_authored_background() {
                 .zip(expected)
                 .all(|(actual, expected)| actual.abs_diff(expected) <= 1)
         }));
-        let id = format!("background-{index}");
-        invoke(
-            vec![
-                "project".into(),
-                "create".into(),
-                id.clone(),
-                "--timeline".into(),
-                input.display().to_string(),
-            ],
-            true,
-        );
+        std::fs::write(
+            dir.path().join("project.json"),
+            serde_json::json!({"name":format!("background-{index}"),"timeline":format!("{index}.json")}).to_string(),
+        ).unwrap();
         let project_preview = dir.path().join(format!("project-{index}.png"));
         invoke(
             vec![
                 "project".into(),
                 "render".into(),
-                id,
+                "-C".into(),
+                dir.path().display().to_string(),
                 "--frame".into(),
                 "0".into(),
                 "-o".into(),

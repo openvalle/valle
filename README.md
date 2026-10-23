@@ -69,7 +69,7 @@ keeps a searchable media library and runs open models locally. No cloud service,
 | **Motion graphics** | Kinetic type with per-letter animation, springs, path drawing and morphing, masks, blur, glow, motion blur, transitions, LaTeX formulas, charts and particles |
 | **3D and shaders** | GLB models and extruded geometry with PBR lighting, shadows, camera moves and depth of field; your own shaders |
 | **Audio-driven motion** | Animation that follows the levels, bands, onsets and beats of a track |
-| **Edits** | Footage, images, Motion clips, audio and captions on a Timeline; a Project keeps every revision |
+| **Edits** | Footage, images, Motion clips, audio and captions on a Timeline; a Project keeps source snapshots |
 | **Media processing** | Word-timed transcripts, voice cloning, speech cleanup, stem separation, matting, object tracking, inpainting, 4× upscaling and frame interpolation |
 | **Delivery** | MP4 (H.264, or HEVC on macOS), transparent ProRes 4444 or lossless MOV, PNG frames; 4K from a 1080p layout; Metal rendering and hardware encoding on macOS |
 
@@ -102,7 +102,7 @@ guides offline, matching the installed version, and every command answers in `--
 | --- | --- |
 | [Motion](docs/motion.md) | Scenes, animation, CSS and Tailwind, text, 3D and shaders |
 | [Timeline](docs/timeline.md) | Footage, Motion clips, audio and captions cut together |
-| [Project](docs/project.md) | Revisions, restore and concurrent edits |
+| [Project](docs/project.md) | Project folders, source snapshots, restore and rendering |
 | [Assets](docs/assets.md) | The local media library |
 | [Media](docs/media.md) | Local models for audio, images and video |
 | [CLI](docs/cli.md) | Output contract, exit codes and runtime notes |

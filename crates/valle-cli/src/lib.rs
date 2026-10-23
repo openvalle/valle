@@ -87,7 +87,7 @@ pub fn tune_process_allocators() {
     name = "valle",
     version,
     about = "Valle: a video creation and editing engine built for AI agents",
-    after_help = "Examples:\n  valle motion check examples/hello.motion.tsx\n  valle timeline render examples/timeline.json -o timeline.mp4\n  valle project create demo --timeline examples/timeline.json\n  valle assets add cover.png --tag demo\n  valle models install dpdfnet\n  valle media enhance speech.wav -o clean.wav\n\nUse --json for one result or --events for NDJSON progress and a final report.\nRun `valle docs` for bundled guides, or `valle docs cli` for workflows and output contracts."
+    after_help = "Examples:\n  valle motion check examples/hello.motion.tsx\n  valle timeline render examples/timeline.json -o timeline.mp4\n  valle project create demo\n  valle assets add cover.png --tag demo\n  valle models install dpdfnet\n  valle media enhance speech.wav -o clean.wav\n\nUse --json for one result or --events for NDJSON progress and a final report.\nRun `valle docs` for bundled guides, or `valle docs cli` for workflows and output contracts."
 )]
 pub struct Cli {
     /// Emit one JSON result. Studio emits readiness and keeps serving.
@@ -155,8 +155,11 @@ pub enum Cmd {
         #[command(subcommand)]
         action: ModelsAction,
     },
-    /// Create, edit, inspect and render versioned projects.
+    /// Create, inspect and render ordinary project folders.
     Project {
+        /// Find a project from this directory instead of the current directory.
+        #[arg(short = 'C', long = "directory", global = true)]
+        project_directory: Option<PathBuf>,
         /// Emit a machine-readable JSON envelope.
         #[arg(skip)]
         json: bool,
@@ -1052,85 +1055,80 @@ pub enum EntityCmd {
     },
 }
 
-/// Timeline full-document project operations.
+/// File-backed project operations.
 #[derive(Subcommand)]
 pub enum ProjectAction {
-    /// Create a project from one complete sparse timeline.json.
+    /// Create a project directory with an empty Timeline.
     Create {
-        project_id: String,
-        #[arg(long)]
-        timeline: PathBuf,
-        #[arg(long)]
-        intent: Option<String>,
+        directory: PathBuf,
+        #[arg(long, default_value_t = 1920)]
+        width: u32,
+        #[arg(long, default_value_t = 1080)]
+        height: u32,
+        #[arg(long, default_value = "30")]
+        fps: String,
     },
-    /// Read HEAD or one pinned historical full snapshot.
-    #[command(name = "show")]
-    GetTimeline {
-        project_id: String,
-        #[arg(long, value_parser = parse_project_revision)]
-        revision: Option<u64>,
-        /// Write the sparse timeline.json to a new file.
+    /// Show the project canvas, resources, history, and latest export.
+    Show,
+    /// Copy files into components/ or media/ and return suggested resource aliases.
+    Add {
+        #[arg(required = true, num_args = 1..)]
+        files: Vec<PathBuf>,
+        /// Return references to the original files instead of copying them.
+        #[arg(long)]
+        link: bool,
+    },
+    /// Validate the entry Timeline and report missing and external inputs.
+    Check,
+    /// Save a snapshot of the entry Timeline's actual source dependencies.
+    Save {
         #[arg(short, long)]
-        output: Option<PathBuf>,
+        message: Option<String>,
     },
-    /// Page through the single linear immutable revision history.
-    #[command(name = "history")]
-    ListTimelineRevisions {
-        project_id: String,
-        #[arg(long, value_parser = parse_project_revision)]
-        cursor: Option<u64>,
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
-    },
-    /// Submit one complete sparse Timeline against a base revision.
-    #[command(name = "apply")]
-    EditTimeline {
-        project_id: String,
-        #[arg(long, value_parser = parse_project_revision)]
-        base_revision: u64,
-        #[arg(long)]
-        timeline: PathBuf,
-        #[arg(long)]
-        intent: Option<String>,
-    },
-    /// Serve the local Project Studio authoring host for one fixed initial revision.
+    /// List source snapshots.
+    History,
+    /// Restore a source snapshot after backing up every file that will be overwritten.
+    Restore { snapshot: u64 },
+    /// Open the project entry Timeline in Studio.
     Studio {
-        project_id: String,
-        #[arg(long, value_parser = parse_project_revision)]
-        revision: Option<u64>,
-        /// Override the bundled Web assets directory.
         #[arg(long)]
         web_assets_dir: Option<PathBuf>,
-        /// Local loopback port; 0 asks the OS for an available port.
         #[arg(long, default_value_t = 9527)]
         port: u16,
     },
-    /// Append a new revision containing one prior complete Timeline.
-    #[command(name = "restore")]
-    RestoreTimelineRevision {
-        project_id: String,
-        #[arg(long, value_parser = parse_project_revision)]
-        base_revision: u64,
-        #[arg(long = "revision", value_parser = parse_project_revision)]
-        source_revision: u64,
-        #[arg(long)]
-        intent: Option<String>,
-    },
-    /// Render the current or a historical project revision.
+    /// Render the entry Timeline; default output goes into renders/.
     Render {
-        project_id: String,
-        #[arg(long, value_parser = parse_project_revision)]
-        revision: Option<u64>,
         #[command(flatten)]
-        delivery: RenderOutputArgs,
+        delivery: ProjectRenderArgs,
+        #[command(flatten)]
+        budget: RenderBudgetArgs,
     },
 }
 
-fn parse_project_revision(value: &str) -> Result<u64, String> {
-    let revision = value
-        .parse::<u64>()
-        .map_err(|_| "revision must be an integer from 1 through 9007199254740991".to_owned())?;
-    valle_project::revision::validate_public_revision(revision).map_err(|error| error.to_string())
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ProjectRenderArgs {
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+    #[arg(long, conflicts_with_all = ["frames", "storyboard", "codec"])]
+    pub frame: Option<i64>,
+    #[arg(long, value_delimiter = ',', num_args = 1, conflicts_with = "codec")]
+    pub frames: Vec<i64>,
+    #[arg(long, value_name = "PATH", conflicts_with = "codec")]
+    pub storyboard: Option<PathBuf>,
+    #[arg(long, value_enum)]
+    pub codec: Option<RenderVideoCodec>,
+}
+
+impl From<ProjectRenderArgs> for RenderOutputArgs {
+    fn from(args: ProjectRenderArgs) -> Self {
+        Self {
+            output: args.output,
+            frame: args.frame,
+            frames: args.frames,
+            storyboard: args.storyboard,
+            codec: args.codec,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -1273,7 +1271,15 @@ pub fn dispatch(cmd: Cmd) -> Result<std::process::ExitCode> {
                 json || output::machine(),
             ),
         },
-        Cmd::Project { json, action } => cmd::project::run(json || output::machine(), action),
+        Cmd::Project {
+            json,
+            project_directory,
+            action,
+        } => cmd::project::run(
+            json || output::machine(),
+            project_directory.as_deref(),
+            action,
+        ),
         Cmd::Assets {
             json,
             events,
@@ -1524,55 +1530,6 @@ fn ffmpeg_unavailable(error: &anyhow::Error) -> bool {
                 Some(NativeRenderError::Media(inner)) if ffmpeg_unavailable(inner)
             )
     })
-}
-
-#[cfg(test)]
-mod project_revision_tests {
-    use super::*;
-
-    #[test]
-    fn project_revision_flags_accept_only_positive_javascript_safe_integers() {
-        let valid = parse_project_revision("9007199254740991").unwrap();
-        assert_eq!(valid, 9_007_199_254_740_991);
-
-        for argv in [
-            vec!["valle", "project", "show", "p1", "--revision", "0"],
-            vec![
-                "valle",
-                "project",
-                "history",
-                "p1",
-                "--cursor",
-                "9007199254740992",
-            ],
-            vec![
-                "valle",
-                "project",
-                "apply",
-                "p1",
-                "--base-revision",
-                "0",
-                "--timeline",
-                "timeline.json",
-            ],
-            vec![
-                "valle",
-                "project",
-                "restore",
-                "p1",
-                "--base-revision",
-                "1",
-                "--revision",
-                "9007199254740992",
-            ],
-        ] {
-            let error = Cli::try_parse_from(argv)
-                .err()
-                .expect("unsafe Project revision must be rejected by clap");
-            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-            assert!(error.to_string().contains("1 through 9007199254740991"));
-        }
-    }
 }
 
 #[cfg(test)]

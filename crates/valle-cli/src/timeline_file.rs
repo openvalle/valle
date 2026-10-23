@@ -45,6 +45,7 @@ fn bind_file_timeline_captured(
 pub(crate) struct TimelineFile {
     pub input: PathBuf,
     pub token: String,
+    pub project: Option<valle_project::folder::Project>,
     observed: Mutex<ObservedFile>,
 }
 
@@ -63,6 +64,7 @@ impl TimelineFile {
         let mut token = [0_u8; 32];
         getrandom::fill(&mut token).context("generating Timeline Studio token")?;
         Ok(Self {
+            project: valle_project::folder::Project::discover(&input).ok(),
             input,
             token: hex::encode(token),
             observed: Mutex::new(ObservedFile { bytes, revision: 1 }),
@@ -235,6 +237,11 @@ impl TimelineFile {
     }
 
     pub fn save(&self, body: &str) -> Result<Value> {
+        let _project_lock = self
+            .project
+            .as_ref()
+            .map(|project| project.lock())
+            .transpose()?;
         #[derive(serde::Deserialize)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
         struct Edit {
@@ -497,9 +504,22 @@ pub(crate) fn serve(
 ) -> Result<std::process::ExitCode> {
     let file = Arc::new(TimelineFile::open(input)?);
     let runtime = crate::webruntime::resolve(web_assets_dir)?;
-    let config = json!({"input":file.input,"timelineFile":{"token":file.token},"runtimeAssets":crate::webruntime::runtime_assets_json()});
+    let project = file.project.as_ref().map(|project| json!({"name":project.config.name,"root":project.root,"timeline":project.config.timeline,"entry":project.timeline_path().canonicalize().ok().as_ref()==Some(&file.input)}));
+    let config = json!({"input":file.input,"timelineFile":{"token":file.token},"project":project,"runtimeAssets":crate::webruntime::runtime_assets_json()});
     let mut runtime_files = runtime.serving_map();
     crate::cmd::motion::mount_motion_runtime_fonts(&mut runtime_files)?;
+    let library = if file.project.is_some() {
+        let home = valle_project::assets::Home::resolve()?;
+        Some(crate::webhost::LibraryCtx {
+            token: file.token.clone(),
+            make_ctx: Box::new(move || crate::cmd::assets::studio_context(home.clone())),
+            thumbnail: None,
+            analyzing: std::sync::atomic::AtomicBool::new(false),
+            run_analyze: None,
+        })
+    } else {
+        None
+    };
     let state = Arc::new(crate::webhost::StudioHost {
         runtime_files,
         assets_dir: None,
@@ -508,8 +528,7 @@ pub(crate) fn serve(
         config_json: Arc::new(RwLock::new(config.to_string())),
         sse: Default::default(),
         capture_dir: None,
-        library: None,
-        project: None,
+        library,
         timeline_file: Some(file),
         source_paths: std::sync::Mutex::new(Default::default()),
         last_report: RwLock::new(None),
@@ -832,7 +851,6 @@ mod contract_tests {
             sse: Default::default(),
             capture_dir: None,
             library: None,
-            project: None,
             timeline_file: None,
             source_paths: Mutex::new(Default::default()),
             last_report: RwLock::new(None),

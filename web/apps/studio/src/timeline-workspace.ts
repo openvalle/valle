@@ -52,7 +52,6 @@ import { initializeTimelineWorkspaceRuntime } from "./timeline-workspace-runtime
 import {
   assertReloadedTimelineSave,
   captureTimelineSaveSnapshot,
-  reconcileLostProjectSave,
 } from "./timeline-save-snapshot.ts";
 import { hitAtDisplayPoint, topHitForClip } from "./timeline-selection.ts";
 import {
@@ -320,8 +319,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   const editQueue = new TimelineEditQueue();
   const canSaveTimeline = boot.capabilities.saveTimeline || Boolean(options.saveTimeline);
   let forceConversion = false;
-  const storageKind = boot.session.kind === "timeline-file" ? "file"
-    : boot.session.kind === "motion-file" ? "motion" : "project";
+  const storageKind = boot.session.kind === "timeline-file" ? "file" : "motion";
   const canvas = workingCopy.canvas;
   player.style.aspectRatio = `${canvas.width} / ${canvas.height}`;
 
@@ -1883,25 +1881,12 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       scheduleDraftPreview();
       return true;
     }
-    let response;
-    try {
-      response = await saveTimeline({
-        baseRevision,
-        timeline: submitted.timeline,
-        intent: "studio save",
-        expectedDependencies: confirmedDependencies ?? undefined,
-      });
-    } catch (error) {
-      if (storageKind !== "project") throw error;
-      let revision: number | null = null;
-      try {
-        revision = reconcileLostProjectSave(baseRevision, submitted, await loadTimeline());
-      } catch { /* The outcome remains unconfirmed. */ }
-      if (revision === null) {
-        throw new Error(`Project save outcome is unconfirmed; reload HEAD before retrying: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      response = { outcome: "committed" as const, revision };
-    }
+    const response = await saveTimeline({
+      baseRevision,
+      timeline: submitted.timeline,
+      intent: "studio save",
+      expectedDependencies: confirmedDependencies ?? undefined,
+    });
     if (response.outcome === "staleBase") {
       setConflict(
         `${Object.keys(sourceResult?.saved ?? {}).length ? "Source saved; " : ""}${storageKind === "file" ? "The JSON file changed externally; reload explicitly before saving again" : `stale base · HEAD is revision ${response.revision}; reload explicitly before saving again`}`,
@@ -2068,46 +2053,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     });
   }
 
-  async function runProjectAuthoringSmoke(): Promise<void> {
-    if (boot.session.kind !== "project") {
-      throw new Error("Project authoring smoke requires a project Studio session");
-    }
-    const beforeRevision = baseRevision;
-    const marker = "#14532dff";
-    const edited = structuredClone(workingCopy);
-    edited.canvas.background = marker;
-    await commitWorkingCopy(edited);
-    if (!await requestSave()) throw new Error("Project authoring smoke save was not committed");
-    if (baseRevision === beforeRevision) {
-      throw new Error("Project authoring smoke did not advance the Project revision");
-    }
-
-    const reloaded = await loadTimeline() as StudioConfig;
-    if (reloaded.timeline.canvas.background !== marker) {
-      throw new Error("Project authoring smoke reload lost the complete working-copy edit");
-    }
-    if (reloaded.timelineRevision.revision !== baseRevision) {
-      throw new Error("Project authoring smoke reload returned a different Timeline revision");
-    }
-
-    await fetch("/result", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        status: "ok",
-        implementation: "valle-project-studio-authoring",
-        userAgent: navigator.userAgent,
-        stats: {
-          previewAvailable,
-          beforeRevision,
-          afterRevision: baseRevision,
-          marker,
-        },
-        captures: [],
-      }),
-    });
-  }
-
   const layoutObserver = new ResizeObserver(() => {
     setTimelineZoom(zoomScale); positionSelectionBox();
   });
@@ -2161,13 +2106,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   window.addEventListener("beforeunload", (event) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } });
   if (!previewAvailable || sourceEditor?.dirty) scheduleDraftPreview();
   const search = new URLSearchParams(location.search);
-  const authoringSmokeToken = search.get("authoringSmoke");
-  if (authoringSmokeToken !== null) {
-    if (boot.session.kind !== "project" || authoringSmokeToken !== boot.session.token) {
-      throw new Error("Project authoring smoke requires the bound Studio session token");
-    }
-    await runProjectAuthoringSmoke();
-  } else if (search.get("smoke") === "1") await runSmoke();
+  if (search.get("smoke") === "1") await runSmoke();
 }
 
 window.addEventListener("error", (event) => {

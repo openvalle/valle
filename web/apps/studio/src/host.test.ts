@@ -5,7 +5,6 @@ import type { TimelineDocument } from "valle-engine/internal";
 
 import {
   MotionFileHost,
-  ProjectHost,
   TimelineFileHost,
   assertMotionContext,
   assertStudioBoot,
@@ -31,7 +30,6 @@ const runtime = {
 };
 const capabilities = {
   saveTimeline: false,
-  editProject: false,
   editMotionProps: false,
   writeMotionSource: false,
 };
@@ -139,11 +137,11 @@ describe("Studio host adapters", () => {
   test("source file reads and writes carry the bound Studio token", async () => {
     const boot = assertStudioBoot({
       protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      session: { kind: "project", projectId: "p1", revision: 1, token: "secret" },
+      session: { kind: "timeline-file", input: "/project/timeline.json", token: "secret" },
       capabilities, runtime,
     });
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const host = new ProjectHost(boot as ConstructorParameters<typeof ProjectHost>[0], async (url, init) => {
+    const host = new TimelineFileHost(boot as ConstructorParameters<typeof TimelineFileHost>[0], async (url, init) => {
       calls.push({ url: String(url), init });
       return json(String(url) === "/source/files"
         ? { files: [{ path: "/card.motion.tsx", status: "ok", text: "hello", baseDigest: "sha256:a" }] }
@@ -179,9 +177,8 @@ describe("Studio host adapters", () => {
     expect(JSON.parse(String(calls[2]?.init?.body))).toEqual(edit);
   });
 
-  test("selects all three hosts only from the explicit session discriminator", async () => {
+  test("selects the two file hosts only from the explicit session discriminator", async () => {
     const fixtures = [
-      [{ kind: "project", projectId: "p1", revision: 3, token: "tok" }, ProjectHost],
       [{ kind: "timeline-file", input: "cut.valle.json", token: "file-token" }, TimelineFileHost],
       [{ kind: "motion-file", input: "card.motion.tsx", generation: 2, token: "motion-token" }, MotionFileHost],
     ] as const;
@@ -225,12 +222,12 @@ describe("Studio host adapters", () => {
     unsubscribe();
   });
 
-  test("project host submits the generated full-document edit contract", async () => {
+  test("Timeline file host submits the generated full-document edit contract", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const boot = assertStudioBoot({
       protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      session: { kind: "project", projectId: "p 1", revision: 7, token: "secret" },
-      capabilities: { ...capabilities, saveTimeline: true, editProject: true },
+      session: { kind: "timeline-file", input: "/project/timeline.json", token: "secret" },
+      capabilities: { ...capabilities, saveTimeline: true },
       runtime,
     });
     const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -243,8 +240,8 @@ describe("Studio host adapters", () => {
             revision: 8,
           });
     });
-    const host = new ProjectHost(
-      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "project" }> },
+    const host = new TimelineFileHost(
+      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
       fetcher,
     );
 
@@ -256,19 +253,19 @@ describe("Studio host adapters", () => {
     };
     const report = await host.saveTimeline(edit);
 
-    expect(calls[0]?.url).toBe("/timeline/get?project=p%201");
-    expect(calls[1]?.url).toBe("/timeline/edit?project=p%201");
+    expect(calls[0]?.url).toBe("/timeline/get");
+    expect(calls[1]?.url).toBe("/timeline/edit");
     expect(new Headers(calls[1]?.init?.headers).get("x-valle-token")).toBe("secret");
     expect(JSON.parse(String(calls[1]?.init?.body))).toEqual(edit);
     expect(report).toMatchObject({ outcome: "committed", revision: 8 });
   });
 
-  test("project host requests frozen media facts without persisting", async () => {
+  test("Timeline file host requests frozen media facts without persisting", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const boot = assertStudioBoot({
       protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      session: { kind: "project", projectId: "p1", revision: 3, token: "secret" },
-      capabilities: { ...capabilities, saveTimeline: true, editProject: true },
+      session: { kind: "timeline-file", input: "/project/timeline.json", token: "secret" },
+      capabilities: { ...capabilities, saveTimeline: true },
       runtime,
     });
     const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -276,8 +273,8 @@ describe("Studio host adapters", () => {
       calls.push({ url, init });
       return json({ status: "ok", resources: [], assets: [], inputDependencies: {} });
     });
-    const host = new ProjectHost(
-      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "project" }> },
+    const host = new TimelineFileHost(
+      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
       fetcher,
     );
 
@@ -285,7 +282,7 @@ describe("Studio host adapters", () => {
     const result = await host.loadMediaFacts?.({ timeline: draft });
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("/timeline/media-facts?project=p1");
+    expect(calls[0]?.url).toBe("/timeline/media-facts");
     expect(new Headers(calls[0]?.init?.headers).get("x-valle-token")).toBe("secret");
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ timeline: draft });
     expect(result).toEqual({ status: "ok", resources: [], assets: [], inputDependencies: {} });
@@ -357,11 +354,11 @@ describe("Studio host adapters", () => {
     );
   });
 
-  test("project host loads and saves an authoritative snapshot with preview explicitly unavailable", async () => {
+  test("Timeline file host loads and saves an authoritative snapshot with preview explicitly unavailable", async () => {
     const boot = assertStudioBoot({
       protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      session: { kind: "project", projectId: "p1", revision: 7, token: "secret" },
-      capabilities: { ...capabilities, saveTimeline: true, editProject: true },
+      session: { kind: "timeline-file", input: "/project/timeline.json", token: "secret" },
+      capabilities: { ...capabilities, saveTimeline: true },
       runtime,
     });
     const current = fixedPackage();
@@ -374,8 +371,8 @@ describe("Studio host adapters", () => {
     } = current.render;
     const snapshot = { ...current, render };
     const calls: string[] = [];
-    const host = new ProjectHost(
-      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "project" }> },
+    const host = new TimelineFileHost(
+      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
       async (input) => {
         const url = String(input);
         calls.push(url);
@@ -452,15 +449,15 @@ describe("Studio host adapters", () => {
     });
     expect(saved).toMatchObject({ outcome: "unchanged", revision: 1 });
     expect(calls).toEqual([
-      "/timeline/get?project=p1",
-      "/timeline/edit?project=p1",
+      "/timeline/get",
+      "/timeline/edit",
     ]);
   });
 
-  test("project host derives a selected clip MotionContext from admitted structure and Timeline", async () => {
+  test("Timeline file host derives a selected clip MotionContext from admitted structure and Timeline", async () => {
     const boot = assertStudioBoot({
       protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      session: { kind: "project", projectId: "p1", revision: 7, token: "secret" },
+      session: { kind: "timeline-file", input: "/project/timeline.json", token: "secret" },
       capabilities: { ...capabilities, editMotionProps: true },
       runtime: { ...runtime, assetBaseUrl: "/passets/p1/" },
     });
@@ -549,8 +546,8 @@ describe("Studio host adapters", () => {
         problems: [],
       },
     };
-    const host = new ProjectHost(
-      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "project" }> },
+    const host = new TimelineFileHost(
+      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
       async () => json(config),
     );
 
@@ -574,8 +571,8 @@ describe("Studio host adapters", () => {
     const withoutVerifiedArtifact = structuredClone(config);
     const artifactEntries = withoutVerifiedArtifact.render.resourceManifest.entries as Record<string, unknown>;
     delete artifactEntries["component:Card"];
-    const artifactRejectedHost = new ProjectHost(
-      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "project" }> },
+    const artifactRejectedHost = new TimelineFileHost(
+      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
       async () => json(withoutVerifiedArtifact),
     );
     const artifactRejected = projectMotionContextFromAdmittedPreview(
@@ -594,8 +591,8 @@ describe("Studio host adapters", () => {
     };
     bundle.bindings["component:Card"].digest = `sha256:${"c".repeat(64)}`;
     mismatchedBinding.render.verifiedBindingBundleJson = JSON.stringify(bundle);
-    const bindingRejectedHost = new ProjectHost(
-      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "project" }> },
+    const bindingRejectedHost = new TimelineFileHost(
+      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
       async () => json(mismatchedBinding),
     );
     const bindingRejected = projectMotionContextFromAdmittedPreview(
@@ -609,15 +606,15 @@ describe("Studio host adapters", () => {
     });
   });
 
-  test("project host fails closed when the selected clip lacks source-map format 1", async () => {
+  test("Timeline file host fails closed when the selected clip lacks source-map format 1", async () => {
     const boot = assertStudioBoot({
       protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      session: { kind: "project", projectId: "p1", revision: 7, token: "secret" },
+      session: { kind: "timeline-file", input: "/project/timeline.json", token: "secret" },
       capabilities,
       runtime,
     });
-    const host = new ProjectHost(
-      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "project" }> },
+    const host = new TimelineFileHost(
+      boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
       async () => json({
         ...fixedPackage(),
         render: {
@@ -647,21 +644,6 @@ describe("Studio host adapters", () => {
     })).toThrow("unknown Studio session kind");
   });
 
-  test("project boot accepts only positive JavaScript-safe numeric revisions", () => {
-    const projectBoot = (revision: unknown) => ({
-      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      session: { kind: "project", projectId: "p1", revision, token: "secret" },
-      capabilities,
-      runtime,
-    });
-
-    expect(assertStudioBoot(projectBoot(1)).session).toMatchObject({ revision: 1 });
-    for (const revision of ["sha256:r1", 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
-      expect(() => assertStudioBoot(projectBoot(revision))).toThrow(
-        "project Studio session is incomplete",
-      );
-    }
-  });
 
   test("MotionContext accepts explicit success/error states and rejects implicit unsupported state", () => {
     expect(assertMotionContext({

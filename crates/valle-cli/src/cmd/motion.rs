@@ -651,7 +651,6 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
         capture_dir: None,
         library: None,
         timeline_file: None,
-        project: None,
         source_paths: std::sync::Mutex::new(Default::default()),
         last_report: RwLock::new(None),
         preview_files: Arc::clone(&request.preview_files),
@@ -749,9 +748,13 @@ pub(crate) struct CapturedTimelineComponent {
     assets: BTreeMap<String, BoundAsset>,
     data_binding: Option<valle_compiler::motion::PrepareDataBinding>,
     dependencies: Vec<(PathBuf, ContentDigest)>,
+    inputs: Vec<valle_project::folder::CapturedInput>,
 }
 
 impl CapturedTimelineComponent {
+    pub(crate) fn snapshot_inputs(&self) -> Vec<valle_project::folder::CapturedInput> {
+        self.inputs.clone()
+    }
     pub(crate) fn dependency_digests(&self) -> impl Iterator<Item = (&Path, ContentDigest)> {
         self.dependencies
             .iter()
@@ -778,6 +781,7 @@ pub(crate) fn capture_timeline_component(
     let graph = load_motion_module_graph(input)?;
     let root = input.parent().unwrap_or_else(|| Path::new("."));
     let mut dependencies = Vec::new();
+    let mut inputs = Vec::new();
     for (module, source) in &graph.modules {
         let path = root.join(module);
         let bytes = std::fs::read(&path)
@@ -785,7 +789,8 @@ pub(crate) fn capture_timeline_component(
         if bytes != source.as_bytes() {
             bail!("Motion module changed during capture: {}", path.display());
         }
-        dependencies.push((path, ContentDigest::of_bytes(&bytes)));
+        dependencies.push((path.clone(), ContentDigest::of_bytes(&bytes)));
+        inputs.push(valle_project::folder::CapturedInput::source(path, bytes));
     }
     let mut assets = BTreeMap::new();
     for spec in asset_specs {
@@ -799,8 +804,13 @@ pub(crate) fn capture_timeline_component(
             bail!("asset control `{name}` is bound more than once");
         }
         let path = PathBuf::from(path);
-        let (asset, asset_dependencies) = load_asset_with_dependencies(&path)?;
-        dependencies.extend(asset_dependencies);
+        let (asset, asset_inputs) = capture_asset(&path)?;
+        dependencies.extend(
+            asset_inputs
+                .iter()
+                .map(|input| (input.path.clone(), input.digest)),
+        );
+        inputs.extend(asset_inputs);
         assets.insert(name.to_owned(), asset);
     }
     let captured = CapturedTimelineComponent {
@@ -812,6 +822,7 @@ pub(crate) fn capture_timeline_component(
             value: value.clone(),
         }),
         dependencies,
+        inputs,
     };
     captured.verify_dependencies()?;
     Ok(captured)
@@ -1551,14 +1562,32 @@ pub(super) fn load_asset(path: &Path) -> Result<BoundAsset> {
 pub(super) fn load_asset_with_dependencies(
     path: &Path,
 ) -> Result<(BoundAsset, Vec<(PathBuf, ContentDigest)>)> {
+    let (asset, inputs) = capture_asset(path)?;
+    Ok((
+        asset,
+        inputs
+            .into_iter()
+            .map(|input| (input.path, input.digest))
+            .collect(),
+    ))
+}
+
+pub(super) fn capture_asset(
+    path: &Path,
+) -> Result<(BoundAsset, Vec<valle_project::folder::CapturedInput>)> {
+    use valle_project::{files::Kind, folder::CapturedInput};
     let bytes = std::fs::read(path).with_context(|| format!("reading asset {}", path.display()))?;
-    let mut dependencies = vec![(path.to_owned(), ContentDigest::of_bytes(&bytes))];
+    let mut inputs = vec![if Kind::detect(path).snapshot_source() {
+        CapturedInput::source(path.to_owned(), bytes.clone())
+    } else {
+        CapturedInput::media(path.to_owned(), ContentDigest::of_bytes(&bytes))
+    }];
     let frozen = if path.to_string_lossy().ends_with(".shader.json") {
         valle_motion::shader::ShaderPackage::admit_with_resolver(&bytes, |entry| {
             let source_path = path.parent().unwrap_or_else(|| Path::new(".")).join(entry);
             let source = std::fs::read(&source_path)
                 .map_err(|error| format!("reading {}: {error}", source_path.display()))?;
-            dependencies.push((source_path, ContentDigest::of_bytes(&source)));
+            inputs.push(CapturedInput::source(source_path, source.clone()));
             Ok(source)
         })?
         .frozen_bytes()?
@@ -1571,7 +1600,7 @@ pub(super) fn load_asset_with_dependencies(
             hash: ContentDigest::of_bytes(&frozen),
             bytes: frozen.into(),
         },
-        dependencies,
+        inputs,
     ))
 }
 
