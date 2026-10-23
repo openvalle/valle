@@ -1,130 +1,206 @@
-use serde_json::json;
-use std::{path::Path, process::Command};
+use serde_json::{Value, json};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Output},
+};
 
-fn command(root: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_valle"));
-    command
+fn command(root: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_valle"))
         .env("VALLE_HOME", root.join("home"))
-        .current_dir(root);
-    command
+        .current_dir(root)
+        .arg("--json")
+        .args(args)
+        .output()
+        .unwrap()
+}
+fn ok(root: &Path, args: &[&str]) -> Value {
+    let output = command(root, args);
+    assert!(
+        output.status.success(),
+        "{:?}\n{}\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
+}
+fn timeline() -> Value {
+    json!({"canvas":{"width":32,"height":32,"fps":4},"tracks":{"visual":[{"clips":[{"kind":"solid","color":"#ff0000","start":0,"duration":1}]}]}})
 }
 
 #[test]
-fn project_cli_exports_sparse_snapshots_and_preserves_existing_output_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let source = json!({"canvas":{"width":32,"height":32,"fps":4},"tracks":{"visual":[{"clips":[{"kind":"solid","color":"#ff0000","start":0,"duration":1}]}]}});
-    std::fs::write(dir.path().join("cut.json"), source.to_string()).unwrap();
-    let create = command(dir.path())
-        .args(["project", "create", "contract", "--timeline", "cut.json"])
-        .output()
-        .unwrap();
-    assert!(
-        create.status.success(),
-        "{}",
-        String::from_utf8_lossy(&create.stderr)
+fn folder_cli_add_save_restore_and_render_survive_a_project_move() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    ok(
+        root,
+        &[
+            "project", "create", "promo", "--width", "32", "--height", "32", "--fps", "4",
+        ],
     );
-    let show = command(dir.path())
-        .args([
-            "--json",
-            "project",
-            "show",
-            "contract",
-            "--output",
-            "export.json",
-        ])
-        .output()
-        .unwrap();
+    fs::write(root.join("notes.txt"), "independent input").unwrap();
+    let added = ok(root, &["project", "add", "notes.txt", "-C", "promo"]);
+    let imported = added["items"][0]["path"].as_str().unwrap();
+    assert_eq!(imported, "media/notes.txt");
     assert!(
-        show.status.success(),
-        "{}",
-        String::from_utf8_lossy(&show.stderr)
+        ok(root, &["project", "add", "notes.txt", "-C", "promo"])["items"][0]["alreadyExists"]
+            .as_bool()
+            .unwrap()
     );
-    let exported = std::fs::read(dir.path().join("export.json")).unwrap();
-    let value: serde_json::Value = serde_json::from_slice(&exported).unwrap();
-    assert_eq!(value["canvas"]["width"], 32);
-    let repeated = command(dir.path())
-        .args(["project", "show", "contract", "--output", "export.json"])
-        .output()
-        .unwrap();
-    assert!(!repeated.status.success());
+    fs::write(root.join("notes.txt"), "changed original").unwrap();
     assert_eq!(
-        std::fs::read(dir.path().join("export.json")).unwrap(),
-        exported
+        fs::read_to_string(root.join("promo").join(imported)).unwrap(),
+        "independent input"
     );
-    let mut edited = source;
+    fs::write(root.join("promo/timeline.json"), timeline().to_string()).unwrap();
+    assert_eq!(ok(root, &["project", "save", "-C", "promo"])["snapshot"], 1);
+    assert_eq!(
+        ok(root, &["project", "save", "-C", "promo"])["unchanged"],
+        true
+    );
+    let mut edited = timeline();
     edited["canvas"]["background"] = json!("#123456");
-    std::fs::write(dir.path().join("edit.json"), edited.to_string()).unwrap();
-    for extra in [
-        [
+    fs::write(root.join("promo/timeline.json"), edited.to_string()).unwrap();
+    let restored = ok(root, &["project", "restore", "1", "-C", "promo"]);
+    assert_eq!(restored["beforeSnapshot"], 2);
+    fs::rename(root.join("promo"), root.join("moved")).unwrap();
+    let output = ok(
+        root,
+        &[
             "project",
-            "apply",
-            "contract",
-            "--timeline",
-            "edit.json",
-            "--base-revision",
-            "1",
+            "render",
+            "--frame",
+            "0",
+            "-o",
+            "renders/frame.png",
+            "-C",
+            "moved",
         ],
-        [
-            "project", "history", "contract", "--limit", "1", "--cursor", "1",
-        ],
-    ] {
-        let result = command(dir.path()).args(extra).output().unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-    }
-    let stale = command(dir.path())
-        .args([
-            "project",
-            "apply",
-            "contract",
-            "--timeline",
-            "edit.json",
-            "--base-revision",
-            "1",
-        ])
-        .output()
-        .unwrap();
-    assert!(!stale.status.success());
+    );
+    assert_eq!(output["outputs"][0]["path"], "renders/frame.png");
+    assert!(root.join("moved/renders/frame.png").is_file());
+    assert_eq!(
+        ok(root, &["project", "show", "-C", "moved"])["name"],
+        "promo"
+    );
+    // Full PNG delivery needs no codec installation and must have one record for every run.
+    let exported = ok(
+        root,
+        &["project", "render", "-o", "renders/%03d.png", "-C", "moved"],
+    );
+    assert_eq!(exported["outputs"].as_array().unwrap().len(), 4);
+    let number = exported["snapshot"].as_u64().unwrap();
+    let record = root.join(format!(
+        "moved/.valle/history/{number}/exports/{}.json",
+        exported["exportId"].as_str().unwrap()
+    ));
+    let record: Value = serde_json::from_slice(&fs::read(record).unwrap()).unwrap();
+    assert_eq!(record["outputs"], exported["outputs"]);
+    assert!(
+        record["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|input| !input["path"].as_str().unwrap().starts_with('/'))
+    );
+    let image = fs::read(root.join("moved/renders/000.png")).unwrap();
+    assert!(
+        !command(
+            root,
+            &["project", "render", "-o", "renders/%03d.png", "-C", "moved"]
+        )
+        .status
+        .success()
+    );
+    assert_eq!(fs::read(root.join("moved/renders/000.png")).unwrap(), image);
+}
 
-    for (base, outcome, success) in [
-        ("2", "committed", true),
-        ("3", "unchanged", true),
-        ("2", "staleBase", false),
-    ] {
-        let restored = command(dir.path())
-            .args([
-                "--json",
-                "project",
-                "restore",
-                "contract",
-                "--base-revision",
-                base,
-                "--revision",
-                "1",
-                "--intent",
-                "restore original canvas",
-            ])
-            .output()
-            .unwrap();
-        assert_eq!(
-            restored.status.success(),
-            success,
-            "{}",
-            String::from_utf8_lossy(&restored.stderr)
-        );
-        let result: serde_json::Value = serde_json::from_slice(&restored.stdout).unwrap();
-        assert_eq!(result["outcome"], outcome);
-        assert_eq!(result["revision"], 3);
-    }
-    let restored = command(dir.path())
-        .args(["--json", "project", "show", "contract"])
-        .output()
-        .unwrap();
-    assert!(restored.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&restored.stdout).unwrap();
-    assert_eq!(value["revision"], 3);
-    assert_ne!(value["timeline"]["canvas"]["background"], "#123456");
+#[test]
+fn imports_report_partial_success_and_reject_multifile_components_before_copying() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    ok(root, &["project", "create", "project"]);
+    fs::write(root.join("existing.txt"), "keep").unwrap();
+    let output = command(
+        root,
+        &[
+            "project",
+            "add",
+            "existing.txt",
+            "missing.txt",
+            "-C",
+            "project",
+        ],
+    );
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "partial");
+    assert_eq!(report["failed"], 1);
+    assert_eq!(
+        fs::read_to_string(root.join("project/media/existing.txt")).unwrap(),
+        "keep"
+    );
+    fs::write(root.join("helper.ts"), "export const color = '#ff0000';").unwrap();
+    fs::write(root.join("title.motion.tsx"),"import { color } from './helper'; export default function Title() { return <Scene><Rect width={32} height={32} fill={color}/></Scene>; }").unwrap();
+    let output = command(
+        root,
+        &["project", "add", "title.motion.tsx", "-C", "project"],
+    );
+    assert!(!output.status.success());
+    assert!(!root.join("project/components/title.motion.tsx").exists());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        report["items"][0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("helper.ts")
+    );
+}
+
+#[test]
+fn source_snapshots_include_relative_modules_and_restore_broken_timelines() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    ok(root, &["project", "create", "project"]);
+    let source = "import { color } from './helper'; export const composition = { width:32, height:32, duration:1 }; export default function Title() { return <Scene><Rect width={32} height={32} fill={color}/></Scene>; }";
+    fs::write(root.join("project/components/title.motion.tsx"), source).unwrap();
+    fs::write(
+        root.join("project/components/helper.ts"),
+        "export const color = '#ff0000';",
+    )
+    .unwrap();
+    let mut document = timeline();
+    document["resources"] = json!({"title":"components/title.motion.tsx"});
+    document["tracks"]["visual"][0]["clips"][0] =
+        json!({"kind":"motion","component":"title","start":0,"duration":1});
+    fs::write(root.join("project/timeline.json"), document.to_string()).unwrap();
+    ok(root, &["project", "save", "-C", "project"]);
+    let snapshot: Value = serde_json::from_slice(
+        &fs::read(root.join("project/.valle/history/1/snapshot.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        snapshot["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == "components/helper.ts")
+    );
+    fs::write(root.join("project/timeline.json"), "broken json").unwrap();
+    fs::write(
+        root.join("project/components/helper.ts"),
+        "export const color = '#0000ff';",
+    )
+    .unwrap();
+    ok(root, &["project", "restore", "1", "-C", "project"]);
+    assert!(
+        fs::read_to_string(root.join("project/components/helper.ts"))
+            .unwrap()
+            .contains("#ff0000")
+    );
+    assert!(
+        serde_json::from_slice::<Value>(&fs::read(root.join("project/timeline.json")).unwrap())
+            .is_ok()
+    );
 }

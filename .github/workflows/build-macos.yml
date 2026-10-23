@@ -222,7 +222,7 @@ jobs:
           VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
           VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
         run: |
-          cargo test --locked --release --target '${{ inputs.target }}' -p valle-cli --features embedded-runtime --lib --test web_runtime --test edit_timeline_consistency --test ffmpeg_runtime -- --include-ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-tests.log"
+          cargo test --locked --release --target '${{ inputs.target }}' -p valle-cli --features embedded-runtime --lib --test web_runtime --test ffmpeg_runtime -- --include-ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-tests.log"
       - name: Test Rust workspace
         if: inputs.ci
         env:

@@ -12,17 +12,6 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Context, Result};
-use valle_project::revision::{AuthenticatedContext, ProjectId, ProjectStore};
-
-/// Bound Project authoring session. The token and project id are fixed when
-/// the local server starts; every request is checked against both.
-pub struct ProjectStudioCtx {
-    pub token: String,
-    pub project_id: ProjectId,
-    pub initial_revision: u64,
-    pub store: ProjectStore,
-    pub auth: AuthenticatedContext,
-}
 
 pub struct MotionSourceCtx {
     pub token: String,
@@ -48,73 +37,11 @@ pub struct StudioHost {
     pub capture_dir: Option<PathBuf>,
     /// Enable the asset library command endpoint when configured.
     pub library: Option<LibraryCtx>,
-    /// Project mode exposes the authoritative snapshot and complete-document
-    /// edit endpoint. It never fabricates renderer fulfillment data.
-    pub project: Option<ProjectStudioCtx>,
     pub timeline_file: Option<Arc<crate::timeline_file::TimelineFile>>,
     /// Latest browser report, exposed through GET /smoke-report.
     pub last_report: RwLock<Option<String>>,
 }
 
-fn project_snapshot_json(project: &ProjectStudioCtx) -> Result<String> {
-    let snapshot = project
-        .store
-        .get_timeline(&project.project_id, None)
-        .context("reading Project Studio HEAD")?;
-    // `timeline` is the sole authoring and persistence shape. The expanded
-    // document is exposed only under the explicitly internal `render` key so
-    // Studio can inspect the compiled projection without mistaking it for the
-    // working copy that editTimeline replaces. No renderer fulfillment is
-    // implied until a complete fixed package is admitted elsewhere.
-    let timeline_json = String::from_utf8(valle_timeline::timeline_bytes(snapshot.timeline())?)
-        .context("Timeline was not UTF-8")?;
-    let timeline: serde_json::Value = serde_json::from_str(&timeline_json)?;
-    let render_timeline_json = String::from_utf8(valle_timeline::internal::canonical_bytes(
-        snapshot.canonical(),
-    )?)
-    .context("compiled Timeline was not UTF-8")?;
-    let render_timeline: serde_json::Value = serde_json::from_str(&render_timeline_json)?;
-    let motion_source_metadata =
-        crate::cmd::timeline::motion_source_metadata(&render_timeline, &timeline)?;
-    let (input_dependencies, input_dependency_error) =
-        match crate::cmd::project::capture_project_sources(snapshot.timeline())
-            .and_then(|captured| captured.dependency_digests())
-        {
-            Ok(dependencies) => (Some(dependencies), None),
-            Err(error) => (None, Some(error.to_string())),
-        };
-    let revision = snapshot.revision();
-    let timeline_revision = serde_json::json!({
-        "revision": revision.revision,
-        "parentRevision": revision.parent_revision,
-        "createdAt": revision.created_at,
-        "actor": revision.actor,
-        "cause": revision.cause,
-        "intent": revision.intent,
-    });
-    Ok(serde_json::json!({
-        "projectId": snapshot.project_id(),
-        "timelineRevision": timeline_revision,
-        "timelineJson": timeline_json,
-        "timeline": timeline,
-        "motionSourceMetadata": motion_source_metadata,
-        "inputDependencies": input_dependencies,
-        "inputDependencyError": input_dependency_error,
-        "render": {
-            "timelineJson": render_timeline_json,
-            "timeline": render_timeline,
-        },
-        "preview": {
-            "status": "unavailable",
-            "code": "verified_binding_bundle_unavailable"
-        }
-    })
-    .to_string())
-}
-
-/// The runtime files Studio boots from. They belong to the host, whose verified build must use
-/// these canonical paths, and not to one generation of the preview: a source that does not compile
-/// still boots the compile Worker that reports why.
 fn studio_runtime_asset_urls() -> serde_json::Value {
     use crate::webruntime::{
         CANVASKIT_GLUE_PATH, CANVASKIT_WASM_PATH, ENGINE_GLUE_PATH, ENGINE_WASM_PATH,
@@ -130,31 +57,6 @@ fn studio_runtime_asset_urls() -> serde_json::Value {
     })
 }
 
-fn project_boot(project: &ProjectStudioCtx) -> Result<String> {
-    Ok(serde_json::json!({
-        "protocolVersion": crate::webruntime::PROTOCOL_VERSION,
-        "session": {
-            "kind": "project",
-            "projectId": project.project_id,
-            "revision": project.initial_revision,
-            "token": project.token,
-        },
-        "capabilities": {
-            "saveTimeline": true,
-            "editProject": true,
-            "editMotionProps": false,
-            "writeMotionSource": true,
-        },
-        "runtime": {
-            "assetBaseUrl": "/assets/",
-            "assetUrls": studio_runtime_asset_urls(),
-            "fontUrls": studio_runtime_font_urls(),
-        },
-    })
-    .to_string())
-}
-
-/// Motion Studio boot protocol.
 fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Result<String> {
     let config: serde_json::Value =
         serde_json::from_str(config_json).context("parse Studio config")?;
@@ -167,7 +69,7 @@ fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Res
     {
         (
             serde_json::json!({"kind":"timeline-file", "input":input, "token":file["token"]}),
-            serde_json::json!({"saveTimeline":true,"editProject":false,"editMotionProps":false,"writeMotionSource":true}),
+            serde_json::json!({"saveTimeline":true,"editMotionProps":false,"writeMotionSource":true}),
             "/assets/".to_owned(),
         )
     } else if config.get("generation").is_some() && config.get("input").is_some() {
@@ -183,7 +85,6 @@ fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Res
             }),
             serde_json::json!({
                 "saveTimeline": false,
-                "editProject": false,
                 "editMotionProps": true,
                 "writeMotionSource": true,
             }),
@@ -203,13 +104,16 @@ fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Res
         "fontUrls": studio_runtime_font_urls(),
     });
 
-    Ok(serde_json::json!({
+    let mut boot = serde_json::json!({
         "protocolVersion": crate::webruntime::PROTOCOL_VERSION,
         "session": session,
         "capabilities": capabilities,
         "runtime": runtime,
-    })
-    .to_string())
+    });
+    if let Some(project) = config.get("project").filter(|value| !value.is_null()) {
+        boot["project"] = project.clone();
+    }
+    Ok(boot.to_string())
 }
 
 fn studio_runtime_font_urls() -> Vec<serde_json::Value> {
@@ -324,17 +228,8 @@ pub fn bind(port: u16) -> Result<(TcpListener, SocketAddr)> {
 
 /// Serve each accepted connection on its own thread to support parallel asset requests.
 pub fn serve_forever(listener: TcpListener, state: Arc<StudioHost>) -> Result<()> {
-    if state.project.is_some() || state.timeline_file.is_some() {
-        let initial_revision = state
-            .project
-            .as_ref()
-            .map(|project| project.initial_revision)
-            .or_else(|| {
-                state
-                    .timeline_file
-                    .as_ref()
-                    .and_then(|file| file.revision().ok())
-            });
+    if let Some(file) = &state.timeline_file {
+        let initial_revision = file.revision().ok();
         let weak = Arc::downgrade(&state);
         std::thread::spawn(move || {
             let mut revision = initial_revision;
@@ -343,27 +238,15 @@ pub fn serve_forever(listener: TcpListener, state: Arc<StudioHost>) -> Result<()
                 let Some(state) = weak.upgrade() else {
                     break;
                 };
-                let current = if let Some(project) = &state.project {
-                    project
-                        .store
-                        .get_timeline(&project.project_id, None)
-                        .ok()
-                        .map(|snapshot| snapshot.revision().revision)
-                } else {
-                    state
-                        .timeline_file
-                        .as_ref()
-                        .and_then(|file| file.revision().ok())
-                };
-                if let Some(current) = current {
+                if let Some(current) = state
+                    .timeline_file
+                    .as_ref()
+                    .and_then(|file| file.revision().ok())
+                {
                     if revision.is_some_and(|previous| previous != current) {
                         state.sse.broadcast(
-                            if state.timeline_file.is_some() {
-                                "timeline"
-                            } else {
-                                "project"
-                            },
-                            &serde_json::json!({"revision": current}).to_string(),
+                            "timeline",
+                            &serde_json::json!({"revision":current}).to_string(),
                         );
                     }
                     revision = Some(current);
@@ -416,10 +299,9 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
         || (method == "POST" && (path == "/source/files" || path == "/source/write"))
     {
         let token = state
-            .project
+            .timeline_file
             .as_ref()
-            .map(|project| project.token.as_str())
-            .or_else(|| state.timeline_file.as_ref().map(|file| file.token.as_str()))
+            .map(|file| file.token.as_str())
             .or_else(|| {
                 state
                     .motion_source
@@ -546,19 +428,13 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default();
-        let boot = match &state.project {
-            Some(project) if request_matches_project(&raw_path, project) => project_boot(project),
-            Some(_) => Err(anyhow::anyhow!(
-                "Project Studio request does not match the bound project"
-            )),
-            None => studio_boot_from_config(
-                &config,
-                state
-                    .motion_source
-                    .as_ref()
-                    .map(|source| source.token.as_str()),
-            ),
-        };
+        let boot = studio_boot_from_config(
+            &config,
+            state
+                .motion_source
+                .as_ref()
+                .map(|source| source.token.as_str()),
+        );
         return match boot {
             Ok(boot) => write_simple(
                 &mut out,
@@ -581,35 +457,9 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
     }
 
     if path == "/timeline/get" {
-        if let Some(file) = &state.timeline_file {
-            return serve_file_json(&mut out, file.snapshot());
-        }
-        let Some(project) = &state.project else {
-            return write_simple(&mut out, 404, "Not Found", &[], b"");
-        };
-        if !request_matches_project(&raw_path, project) {
-            return write_simple(&mut out, 404, "Not Found", &[], b"");
-        }
-        return match project_snapshot_json(project) {
-            Ok(snapshot) => write_simple(
-                &mut out,
-                200,
-                "OK",
-                &[
-                    ("Content-Type", "application/json"),
-                    ("Cache-Control", "no-store"),
-                ],
-                snapshot.as_bytes(),
-            ),
-            Err(error) => write_simple(
-                &mut out,
-                500,
-                "Internal Server Error",
-                &[("Content-Type", "application/json")],
-                serde_json::json!({"error":{"code":"project_snapshot_failed","message":format!("{error:#}")}})
-                    .to_string()
-                    .as_bytes(),
-            ),
+        return match &state.timeline_file {
+            Some(file) => serve_file_json(&mut out, file.snapshot()),
+            None => write_simple(&mut out, 404, "Not Found", &[], b""),
         };
     }
 
@@ -663,7 +513,7 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
         let config = serde_json::json!({
             "token": state.library.as_ref().map(|library| &library.token),
             "library": state.library.is_some(),
-            "projectId": state.project.as_ref().map(|project| project.project_id.to_string()),
+            "projectId": serde_json::Value::Null,
         });
         return write_simple(
             &mut out,
@@ -688,23 +538,6 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
                     config
                 });
             return serve_file_json(&mut out, result);
-        }
-        if let Some(project) = &state.project {
-            let snapshot = project.store.get_timeline(&project.project_id, None)?;
-            let package = prepare_project_preview(snapshot.timeline().clone(), state)?;
-            let mut config = package["render"].clone();
-            config["assets"] = package["assets"].clone();
-            config["runtimeAssets"] = crate::webruntime::runtime_assets_json();
-            return write_simple(
-                &mut out,
-                200,
-                "OK",
-                &[
-                    ("Content-Type", "application/json"),
-                    ("Cache-Control", "no-store"),
-                ],
-                config.to_string().as_bytes(),
-            );
         }
         // Resolve a project-specific compiled configuration; return a reason when unavailable.
         let config = state
@@ -778,159 +611,35 @@ fn serve_hosted_file(
 
 fn serve_project_edit(
     out: &mut TcpStream,
-    raw_path: &str,
+    _raw_path: &str,
     headers: &[(String, String)],
     body: &str,
     state: &Arc<StudioHost>,
 ) -> Result<()> {
-    if let Some(file) = &state.timeline_file {
-        if !local_request_authorized(
-            header_value(headers, "x-valle-token").unwrap_or(""),
-            &file.token,
-            header_value(headers, "origin").or_else(|| header_value(headers, "host")),
-        ) {
-            return write_simple(out, 403, "Forbidden", &[], b"");
-        }
-        return serve_file_json(out, file.save(body));
-    }
-    let Some(project) = &state.project else {
+    let Some(file) = &state.timeline_file else {
         return write_simple(out, 404, "Not Found", &[], b"");
     };
-    if !request_matches_project(raw_path, project) {
-        return write_simple(out, 404, "Not Found", &[], b"");
-    }
-    let token = header_value(headers, "x-valle-token").unwrap_or("");
-    let origin = header_value(headers, "origin").or_else(|| header_value(headers, "host"));
-    if !local_request_authorized(token, &project.token, origin) {
-        return write_simple(
-            out,
-            403,
-            "Forbidden",
-            &[("Content-Type", "application/json")],
-            br#"{"error":{"code":"refused","message":"token/origin check failed"}}"#,
-        );
-    }
-    let (body, expected_dependencies) = match split_studio_edit_request(body) {
-        Ok(parts) => parts,
-        Err(error) => {
-            return write_simple(
-                out,
-                400,
-                "Bad Request",
-                &[("Content-Type", "application/json")],
-                serde_json::json!({"error":{"code":"edit_request_decode","message":error.to_string()}})
-                    .to_string()
-                    .as_bytes(),
-            );
-        }
-    };
-    let request = match crate::cmd::project::resolve_studio_edit_request(
-        &body,
-        &std::env::current_dir()?,
+    if !local_request_authorized(
+        header_value(headers, "x-valle-token").unwrap_or(""),
+        &file.token,
+        header_value(headers, "origin").or_else(|| header_value(headers, "host")),
     ) {
-        Ok(request) => request,
-        Err(error) => {
-            return write_simple(
-                out,
-                400,
-                "Bad Request",
-                &[("Content-Type", "application/json")],
-                serde_json::json!({"error":{"code":"motion_duration_resolution","message":error.to_string()}})
-                    .to_string()
-                    .as_bytes(),
-            );
-        }
-    };
-    let captured = crate::cmd::project::capture_project_sources_from_edit_request(&request);
-    match project.store.edit_timeline_json_with_compiler(
-        &project.project_id,
-        &request,
-        &project.auth,
-        &|document| match &captured {
-            Ok(captured) => {
-                captured
-                    .verify_expected_dependencies(expected_dependencies.as_ref())
-                    .map_err(
-                        |error| valle_compiler::CompileTimelineError::MotionPreparation {
-                            reason: error.to_string(),
-                        },
-                    )?;
-                captured.compile(document)
-            }
-            Err(error) => Err(valle_compiler::CompileTimelineError::MotionPreparation {
-                reason: error.to_string(),
-            }),
-        },
-    ) {
-        Ok(response) => {
-            let json = serde_json::to_vec(&response)?;
-            write_simple(
-                out,
-                200,
-                "OK",
-                &[
-                    ("Content-Type", "application/json"),
-                    ("Cache-Control", "no-store"),
-                ],
-                &json,
-            )
-        }
-        Err(valle_project::revision::EditTimelineServiceError::Decode(error)) => write_simple(
-            out,
-            400,
-            "Bad Request",
-            &[("Content-Type", "application/json")],
-            serde_json::json!({"error":{"code":"edit_request_decode","message":error.to_string()}})
-                .to_string()
-                .as_bytes(),
-        ),
-        Err(valle_project::revision::EditTimelineServiceError::Store(error)) => write_simple(
-            out,
-            500,
-            "Internal Server Error",
-            &[("Content-Type", "application/json")],
-            serde_json::json!({"error":{"code":"project_store","message":error.to_string()}})
-                .to_string()
-                .as_bytes(),
-        ),
+        return write_simple(out, 403, "Forbidden", &[], b"");
     }
+    serve_file_json(out, file.save(body))
 }
 
-fn split_studio_edit_request(
-    body: &str,
-) -> Result<(
-    String,
-    Option<BTreeMap<String, valle_motion::ContentDigest>>,
-)> {
-    let mut value: serde_json::Value = serde_json::from_str(body)?;
-    let raw_dependencies = value
-        .as_object_mut()
-        .and_then(|object| object.remove("expectedDependencies"));
-    let dependencies = raw_dependencies
-        .map(serde_json::from_value)
-        .transpose()
-        .context("invalid expectedDependencies")?;
-    Ok((value.to_string(), dependencies))
-}
-
-/// Capture frozen media facts for a browser-prepared draft without persisting a revision.
 fn serve_project_media_facts(
     out: &mut TcpStream,
-    raw_path: &str,
+    _raw_path: &str,
     headers: &[(String, String)],
     body: &str,
     state: &Arc<StudioHost>,
 ) -> Result<()> {
-    let expected_token = if let Some(project) = &state.project {
-        if !request_matches_project(raw_path, project) {
-            return write_simple(out, 404, "Not Found", &[], b"");
-        }
-        &project.token
-    } else if let Some(file) = &state.timeline_file {
-        &file.token
-    } else {
+    let Some(file) = &state.timeline_file else {
         return write_simple(out, 404, "Not Found", &[], b"");
     };
+    let expected_token = &file.token;
     let token = header_value(headers, "x-valle-token").unwrap_or("");
     let origin = header_value(headers, "origin").or_else(|| header_value(headers, "host"));
     if !local_request_authorized(token, expected_token, origin) {
@@ -1124,19 +833,6 @@ fn serve_file_json(out: &mut TcpStream, result: Result<serde_json::Value>) -> Re
     }
 }
 
-fn request_matches_project(raw_path: &str, project: &ProjectStudioCtx) -> bool {
-    query_value(raw_path, "project").as_deref() == Some(project.project_id.as_str())
-}
-
-fn query_value(raw_path: &str, name: &str) -> Option<String> {
-    raw_path.split_once('?')?.1.split('&').find_map(|pair| {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        (percent_decode(key) == name).then(|| percent_decode(value))
-    })
-}
-
-/// Verify token and Origin, enforce the command allowlist, then return the kernel report.
-/// Authorization failures use HTTP 403; command failures use HTTP 200 with an error envelope.
 fn serve_library_execute(
     out: &mut TcpStream,
     headers: &[(String, String)],
@@ -1660,23 +1356,6 @@ mod tests {
         );
     }
 
-    fn timeline_fixture(background: &str) -> valle_timeline::Timeline {
-        valle_timeline::decode_timeline(&format!(
-            r##"{{
-              "canvas": {{"width": 640, "height": 360, "fps": 30, "background": "{background}"}},
-              "tracks": {{"visual": [{{
-                "clips": [{{"start": 0, "duration": 2, "kind": "solid", "color": "#000000ff"}}]
-              }}]}}
-            }}"##
-        ))
-        .unwrap()
-    }
-
-    fn timeline_json(background: &str) -> String {
-        String::from_utf8(valle_timeline::timeline_bytes(&timeline_fixture(background)).unwrap())
-            .unwrap()
-    }
-
     fn request_round_trip(
         state: &Arc<StudioHost>,
         method: &str,
@@ -1705,28 +1384,6 @@ mod tests {
         response
     }
 
-    fn project_edit_round_trip_with_headers(
-        state: &Arc<StudioHost>,
-        body: &[u8],
-        headers: &str,
-    ) -> Vec<u8> {
-        request_round_trip(
-            state,
-            "POST",
-            "/timeline/edit?project=http-contract",
-            body,
-            headers,
-        )
-    }
-
-    fn project_edit_round_trip(state: &Arc<StudioHost>, body: &[u8]) -> Vec<u8> {
-        project_edit_round_trip_with_headers(
-            state,
-            body,
-            "Host: localhost\r\nOrigin: http://localhost\r\nX-Valle-Token: studio-token\r\n",
-        )
-    }
-
     #[test]
     fn source_routes_require_the_session_token_and_local_origin() {
         let dir = tempfile::tempdir().unwrap();
@@ -1749,7 +1406,6 @@ mod tests {
             sse: SseBroadcaster::default(),
             capture_dir: None,
             library: None,
-            project: None,
             timeline_file: None,
             source_paths: std::sync::Mutex::new(Default::default()),
             last_report: RwLock::new(None),
@@ -1794,258 +1450,6 @@ mod tests {
             manifest["files"][0]["text"],
             "export default function Card() { return <Scene />; }"
         );
-    }
-
-    #[test]
-    fn project_edit_rejects_motion_changed_after_studio_load() {
-        let temporary = tempfile::tempdir().unwrap();
-        let source = temporary.path().join("card.motion.tsx");
-        std::fs::write(&source, "export const composition = { width: 64, height: 64, duration: 1 }; export default function Card() { return <Scene />; }").unwrap();
-        let timeline = valle_timeline::decode_timeline(&serde_json::json!({
-            "canvas":{"width":64,"height":64,"fps":30},
-            "resources":{"card":source},
-            "tracks":{"visual":[{"clips":[{"kind":"motion","component":"card","start":0,"duration":1}]}]}
-        }).to_string()).unwrap();
-        let captured = crate::cmd::project::capture_project_sources(&timeline).unwrap();
-        let store = ProjectStore::at(temporary.path().join("projects"));
-        let project_id = ProjectId::new("http-contract").unwrap();
-        let auth =
-            AuthenticatedContext::new(valle_project::revision::Actor::new("studio:test").unwrap());
-        store
-            .create_project_with_compiler(&project_id, &timeline, None, &auth, &|document| {
-                captured.compile(document)
-            })
-            .unwrap();
-        let state = Arc::new(StudioHost {
-            runtime_files: BTreeMap::new(),
-            assets_dir: None,
-            config_json: Arc::new(RwLock::new("{}".to_owned())),
-            sse: SseBroadcaster::default(),
-            capture_dir: None,
-            library: None,
-            timeline_file: None,
-            project: Some(ProjectStudioCtx {
-                token: "studio-token".to_owned(),
-                project_id,
-                initial_revision: 1,
-                store,
-                auth,
-            }),
-            source_paths: std::sync::Mutex::new(Default::default()),
-            last_report: RwLock::new(None),
-            preview_files: Arc::new(Default::default()),
-            motion_source: None,
-        });
-        let loaded: serde_json::Value =
-            serde_json::from_str(&project_snapshot_json(state.project.as_ref().unwrap()).unwrap())
-                .unwrap();
-        assert_eq!(loaded["inputDependencies"].as_object().unwrap().len(), 1);
-        std::fs::write(&source, "export const composition = { width: 64, height: 64, duration: 2 }; export default function Card() { return <Scene />; }").unwrap();
-        let mut edited = loaded["timeline"].clone();
-        edited["canvas"]["background"] = serde_json::json!("#123456ff");
-        let request = serde_json::json!({
-            "baseRevision":1,
-            "timeline":edited,
-            "expectedDependencies":loaded["inputDependencies"],
-        });
-        let response = String::from_utf8(project_edit_round_trip(
-            &state,
-            request.to_string().as_bytes(),
-        ))
-        .unwrap();
-        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
-        let report: serde_json::Value =
-            serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-        assert_eq!(report["outcome"], "rejected");
-        assert_eq!(
-            state
-                .project
-                .as_ref()
-                .unwrap()
-                .store
-                .get_timeline(&state.project.as_ref().unwrap().project_id, None,)
-                .unwrap()
-                .revision()
-                .revision,
-            1
-        );
-    }
-
-    #[test]
-    fn project_edit_rejects_invalid_utf8_and_never_echoes_requester_sse() {
-        let temporary = tempfile::tempdir().unwrap();
-        let store = ProjectStore::at(temporary.path());
-        let project_id = ProjectId::new("http-contract").unwrap();
-        let auth = AuthenticatedContext::new(
-            valle_project::revision::Actor::new("studio:http-contract").unwrap(),
-        );
-        let base_json = timeline_json("#000000ff");
-        let candidate_json = timeline_json("#14532dff");
-        let rejected_json = r##"{
-          "canvas": {"width": 640, "height": 360, "fps": 30},
-          "tracks": {"visual":[{"clips":[{"start":0,"duration":2,"kind":"video","src":"missing"}]}]}
-        }"##;
-        let base = timeline_fixture("#000000ff");
-        let genesis = store
-            .create_project(&project_id, &base, None, &auth)
-            .unwrap();
-        let base_revision = genesis.revision().revision;
-        let state = Arc::new(StudioHost {
-            runtime_files: BTreeMap::new(),
-            assets_dir: None,
-            config_json: Arc::new(RwLock::new("{}".to_owned())),
-            sse: SseBroadcaster::default(),
-            capture_dir: None,
-            library: None,
-            timeline_file: None,
-            project: Some(ProjectStudioCtx {
-                token: "studio-token".to_owned(),
-                project_id,
-                initial_revision: base_revision,
-                store,
-                auth,
-            }),
-            source_paths: std::sync::Mutex::new(Default::default()),
-            last_report: RwLock::new(None),
-            preview_files: Arc::new(Default::default()),
-            motion_source: None,
-        });
-        let events = state.sse.subscribe();
-
-        let snapshot: serde_json::Value =
-            serde_json::from_str(&project_snapshot_json(state.project.as_ref().unwrap()).unwrap())
-                .unwrap();
-        assert!(snapshot["timeline"].get("version").is_none());
-        assert!(snapshot["render"]["timeline"]["document"].is_object());
-        assert!(snapshot.get("resourceManifest").is_none());
-        assert!(snapshot["render"].get("resourceManifest").is_none());
-        assert!(snapshot["timelineRevision"].get("documentHash").is_none());
-        assert!(
-            snapshot["timelineRevision"]
-                .get("resourceManifestHash")
-                .is_none()
-        );
-
-        // Media capture freezes draft resources without publishing a render package or changing HEAD.
-        let preview_request = format!("{{\"timeline\":{}}}", timeline_json("#f97316ff"));
-        let preview = request_round_trip(
-            &state,
-            "POST",
-            "/timeline/media-facts?project=http-contract",
-            preview_request.as_bytes(),
-            "Host: localhost\r\nOrigin: http://localhost\r\nX-Valle-Token: studio-token\r\n",
-        );
-        let preview = String::from_utf8(preview).unwrap();
-        assert!(preview.starts_with("HTTP/1.1 200 OK"), "{preview}");
-        let result: serde_json::Value =
-            serde_json::from_str(preview.split("\r\n\r\n").nth(1).unwrap()).unwrap();
-        assert_eq!(result["status"], "ok");
-        assert!(result["resources"].is_array());
-        assert!(result["assets"].is_array());
-        assert!(result.get("render").is_none());
-        let forbidden = request_round_trip(
-            &state,
-            "POST",
-            "/timeline/media-facts?project=http-contract",
-            preview_request.as_bytes(),
-            "Host: localhost\r\nOrigin: https://example.com\r\nX-Valle-Token: studio-token\r\n",
-        );
-        assert!(
-            String::from_utf8(forbidden)
-                .unwrap()
-                .starts_with("HTTP/1.1 403")
-        );
-        let unchanged: serde_json::Value =
-            serde_json::from_str(&project_snapshot_json(state.project.as_ref().unwrap()).unwrap())
-                .unwrap();
-        assert_eq!(unchanged["timelineRevision"], snapshot["timelineRevision"]);
-        assert_eq!(unchanged["timeline"], snapshot["timeline"]);
-        assert_eq!(events.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
-
-        let invalid = project_edit_round_trip(&state, b"{\"timeline\":\xff}");
-        let invalid = String::from_utf8(invalid).unwrap();
-        assert!(invalid.starts_with("HTTP/1.1 400 Bad Request"), "{invalid}");
-        assert!(invalid.contains("invalid_request_body"), "{invalid}");
-
-        let request = |timeline: &str| {
-            format!("{{\"baseRevision\":{base_revision},\"timeline\":{timeline}}}",)
-        };
-        for (timeline, expected) in [
-            (candidate_json.as_str(), "\"outcome\":\"committed\""),
-            (rejected_json, "\"outcome\":\"rejected\""),
-            (base_json.as_str(), "\"outcome\":\"staleBase\""),
-        ] {
-            let response = project_edit_round_trip(&state, request(timeline).as_bytes());
-            let response = String::from_utf8(response).unwrap();
-            assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
-            assert!(response.contains(expected), "{response}");
-            assert_eq!(
-                events.try_recv(),
-                Err(std::sync::mpsc::TryRecvError::Empty),
-                "the requester's HTTP outcome must not be reflected as an external update"
-            );
-        }
-    }
-
-    #[test]
-    fn project_edit_requires_the_bound_token_and_local_origin() {
-        let temporary = tempfile::tempdir().unwrap();
-        let store = ProjectStore::at(temporary.path());
-        let project_id = ProjectId::new("http-contract").unwrap();
-        let auth = AuthenticatedContext::new(
-            valle_project::revision::Actor::new("studio:http-contract").unwrap(),
-        );
-        let timeline = timeline_fixture("#000000ff");
-        let genesis = store
-            .create_project(&project_id, &timeline, None, &auth)
-            .unwrap();
-        let state = Arc::new(StudioHost {
-            runtime_files: BTreeMap::new(),
-            assets_dir: None,
-            config_json: Arc::new(RwLock::new("{}".to_owned())),
-            sse: SseBroadcaster::default(),
-            capture_dir: None,
-            library: None,
-            timeline_file: None,
-            project: Some(ProjectStudioCtx {
-                token: "studio-token".to_owned(),
-                project_id,
-                initial_revision: genesis.revision().revision,
-                store,
-                auth,
-            }),
-            source_paths: std::sync::Mutex::new(Default::default()),
-            last_report: RwLock::new(None),
-            preview_files: Arc::new(Default::default()),
-            motion_source: None,
-        });
-
-        for (label, headers) in [
-            (
-                "wrong token",
-                "Host: localhost\r\nOrigin: http://localhost\r\nX-Valle-Token: wrong-token\r\n",
-            ),
-            (
-                "non-local Origin",
-                "Host: localhost\r\nOrigin: https://attacker.example\r\nX-Valle-Token: studio-token\r\n",
-            ),
-            (
-                "missing token",
-                "Host: localhost\r\nOrigin: http://localhost\r\n",
-            ),
-            ("missing Origin and Host", "X-Valle-Token: studio-token\r\n"),
-        ] {
-            let response = project_edit_round_trip_with_headers(&state, b"{}", headers);
-            let response = String::from_utf8(response).unwrap();
-            assert!(
-                response.starts_with("HTTP/1.1 403 Forbidden"),
-                "{label} must be forbidden: {response}"
-            );
-            assert!(
-                response.contains("token/origin check failed"),
-                "{label}: {response}"
-            );
-        }
     }
 
     #[test]
@@ -2104,7 +1508,6 @@ mod tests {
                 run_analyze: None,
             }),
             timeline_file: None,
-            project: None,
             source_paths: std::sync::Mutex::new(Default::default()),
             last_report: RwLock::new(None),
             preview_files: Arc::new(Default::default()),
@@ -2226,7 +1629,6 @@ mod tests {
                 run_analyze: None,
             }),
             timeline_file: None,
-            project: None,
             source_paths: std::sync::Mutex::new(Default::default()),
             last_report: RwLock::new(None),
             preview_files: Arc::new(Default::default()),
@@ -2369,7 +1771,6 @@ mod tests {
                 run_analyze: None,
             }),
             timeline_file: None,
-            project: None,
             source_paths: std::sync::Mutex::new(Default::default()),
             last_report: RwLock::new(None),
             preview_files: Arc::new(Default::default()),
@@ -2473,7 +1874,6 @@ mod tests {
             capture_dir: None,
             library: None,
             timeline_file: None,
-            project: None,
             source_paths: std::sync::Mutex::new(Default::default()),
             last_report: RwLock::new(None),
             preview_files: Arc::new(Default::default()),

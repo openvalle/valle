@@ -102,7 +102,7 @@ const client = await Bun.build({ entrypoints: [path.join(web, "tests/browser-exp
 if (!client.success) throw new Error(client.logs.map((log) => log.message).join("\n"));
 const boot = { protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
   session: { kind: "timeline-file", input: `/fixtures/${selected}.timeline.json`, token: "browser-export-test" },
-  capabilities: { saveTimeline: false, editProject: false, editMotionProps: false, writeMotionSource: true },
+  capabilities: { saveTimeline: false, editMotionProps: false, writeMotionSource: true },
   runtime: { assetBaseUrl: "/fixtures/", fontUrls: [], assetUrls: { engineGlue: runtimeAssets.engine.glue,
     engineWasm: runtimeAssets.engine.wasm, canvasKitGlue: runtimeAssets.canvasKit.glue,
     canvasKitWasm: runtimeAssets.canvasKit.wasm, productFrameWorker: runtimeAssets.workers.productFrame,

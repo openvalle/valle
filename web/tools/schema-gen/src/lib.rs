@@ -20,13 +20,6 @@ pub struct CodeWire(pub String);
 #[serde(tag = "kind", rename_all = "kebab-case")]
 #[ts(tag = "kind", rename_all = "kebab-case")]
 pub enum StudioSessionWire {
-    Project {
-        #[serde(rename = "projectId")]
-        #[ts(rename = "projectId")]
-        project_id: String,
-        revision: u64,
-        token: String,
-    },
     TimelineFile {
         input: String,
         token: String,
@@ -80,7 +73,6 @@ pub struct StudioFontUrlWire {
 #[ts(rename_all = "camelCase")]
 pub struct StudioCapabilitiesWire {
     pub save_timeline: bool,
-    pub edit_project: bool,
     pub edit_motion_props: bool,
     pub write_motion_source: bool,
 }
@@ -101,10 +93,23 @@ pub struct StudioRuntimeWire {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(rename_all = "camelCase")]
 pub struct StudioBootWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project: Option<StudioProjectWire>,
     pub protocol_version: u32,
     pub session: StudioSessionWire,
     pub capabilities: StudioCapabilitiesWire,
     pub runtime: StudioRuntimeWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(rename_all = "camelCase")]
+pub struct StudioProjectWire {
+    pub root: String,
+    pub name: String,
+    pub timeline: String,
+    pub entry: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -334,6 +339,7 @@ pub fn render_types(include_drift_probe: bool) -> String {
         declaration::<StudioMotionInputsWire>(),
         declaration::<StudioFontUrlWire>(),
         declaration::<StudioCapabilitiesWire>(),
+        declaration::<StudioProjectWire>(),
         declaration::<StudioRuntimeWire>(),
         declaration::<StudioBootWire>(),
         declaration::<MotionViewportWire>(),

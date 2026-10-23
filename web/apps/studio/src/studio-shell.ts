@@ -126,7 +126,7 @@ export class ValleStudioApp extends LitElement {
   }
 
   #projectLabel(boot: StudioBoot): string {
-    if (boot.session.kind === "project") return boot.session.projectId;
+    if (boot.project) return boot.project.name;
     if (boot.session.kind === "timeline-file") {
       return boot.session.input.split(/[\\/]/).pop() || boot.session.input;
     }
@@ -311,9 +311,7 @@ export class ValleStudioApp extends LitElement {
 
     this.#text("projectName", state.projectName);
     const badge = this.#req<HTMLElement>("sessionBadge");
-    badge.textContent = state.session?.kind === "project"
-      ? "Project"
-      : state.session?.kind === "timeline-file"
+    badge.textContent = state.session?.kind === "timeline-file"
         ? "Timeline"
         : state.session?.kind === "motion-file"
           ? "Motion"

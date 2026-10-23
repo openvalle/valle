@@ -1,6 +1,6 @@
 ---
 name: valle
-description: Create, edit and render video with the Valle CLI. Use for Valle or OpenValle work, including Motion scenes written in TSX, Timeline JSON edits, versioned projects, the local asset library, and local media processing such as transcription, voice cloning, matting and upscaling, with its model setup.
+description: Create, edit and render video with the Valle CLI. Use for Valle or OpenValle work, including Motion scenes written in TSX, Timeline JSON edits, project folders and source snapshots, the local asset library, and local media processing such as transcription, voice cloning, matting and upscaling, with its model setup.
 ---
 
 # Valle
@@ -21,11 +21,11 @@ valle motion render --help
 | --- | --- | --- |
 | Make animated titles, graphics, charts or a whole scene | `motion check`, `review`, `render`, `studio` | `motion` |
 | Cut footage, images, Motion, audio and captions together | `timeline check`, `render`, `studio` | `timeline` |
-| Edit a saved project, keeping its history | `project show`, `apply`, `history`, `restore`, `render`, `studio` | `project` |
+| Work on a project folder and keep source snapshots | `project create`, `add`, `show`, `check`, `save`, `history`, `restore`, `render`, `studio` | `project` |
 | Find or organize local media | `assets add`, `search`, `show`, `tag`, `annotate`, `resolve` | `assets` |
 | Process a media file | `media transcribe`, `synthesize`, `matte`, `enhance`, `separate`, `shots`, `segment`, `inpaint`, `upscale`, `interpolate`, with weights from `models` | `media` |
 
-Use `timeline` for a standalone file and `project` when the user wants revisions or already
+Use `timeline` for a standalone file and `project` when the user wants snapshots or already
 has a project. A Motion scene can be a clip in a Timeline. Media commands write standalone
 files; they never change a timeline, a project or the asset library.
 
@@ -35,8 +35,8 @@ files; they never change a timeline, a project or the asset library.
   event carrying the same payload. Parse stdout; diagnostics go to stderr.
 - The exit code decides success: 0 ok; 1 a general, project or asset failure; 2 invalid
   arguments or media input; 3 a missing media or model dependency; 4 a failed media operation.
-- Payloads differ by group: checks and renders report `status`, `project apply` and `restore`
-  report `outcome`, assets report `ok`, and media returns a `valle.media-run` envelope.
+- Checks, renders and project operations report `status`; batch project imports can report
+  `partial`. Assets report `ok`, and media returns a `valle.media-run` envelope.
 - On failure, read `error.code`, the message and its `hint:` before retrying.
   `motion_compile_failed` lists `error.diagnostics` with source spans; a failed render names
   its frame.
@@ -138,19 +138,26 @@ Validate with `valle timeline check FILE --json`, then render with the same `-o`
 `--frames` and `--storyboard` options as Motion. `timeline studio FILE` writes the file back
 on Save.
 
-For a project, submit a complete document against the revision you read:
+For a project, edit the files directly:
 
 ```sh
-valle project show PROJECT -o edit.timeline.json --json # returns its revision
-valle project apply PROJECT --base-revision REVISION --timeline edit.timeline.json --json
-valle project render PROJECT -o output.mp4 --events
+valle project create promo --json
+valle project add /path/to/title.motion.tsx -C promo --json
+# Add the returned resource entries and clips to promo/timeline.json.
+valle project check -C promo --json
+valle project save -m "First cut" -C promo --json
+valle project render -C promo --events
 ```
 
-`committed` and `unchanged` both succeed. On `staleBase` someone saved first: `show` again and
-redo the change on the new document; never resubmit the old document with a newer revision.
-`restore --base-revision CURRENT --revision OLD` appends a revision, so history is never
-erased, and `project create PROJECT --timeline FILE` starts a project. `VALLE_HOME` selects
-where projects and the asset library live; keep it when working on existing data.
+`add` copies files but does not edit the Timeline. `--link` returns an external reference;
+otherwise the project contains independent copies. Commands discover `project.json` above
+the working directory or use `-C DIR`. Snapshots include reachable source files and media
+digests; drafts and binary preimages need Git or a separate backup. `restore N` backs up
+sources before overwriting them, preserves new files and does not restore media. Full
+exports automatically save a snapshot and input/output records; media changes during
+rendering produce warnings. When Studio is open, reread a file before changing it so an
+external edit does not overwrite a person's newer work. `VALLE_HOME` selects the global
+asset library and recent-project list; projects live in their own directories.
 
 ## Assets and Media
 

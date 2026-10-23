@@ -1,12 +1,9 @@
-//! Immutable Timeline projects and the content-addressed asset library.
-//!
-//! Project history is a linear sequence of complete sparse Timeline
-//! snapshots. Canonical Timeline and ResourceManifest values remain internal
-//! render views. New authoring content has exactly one public persistence
-//! entry point: revision::ProjectStore::edit_timeline.
+//! File-backed projects, source snapshots, and the cross-project asset library.
 
 pub use valle_timeline::internal::ContentDigest;
 
+#[cfg(feature = "host")]
+pub mod files;
 #[cfg(feature = "host")]
 pub mod folder;
 
@@ -14,7 +11,6 @@ pub mod folder;
 pub mod assets;
 #[cfg(feature = "host")]
 mod resource_gc;
-pub mod revision;
 
 #[cfg(feature = "host")]
 mod fs;

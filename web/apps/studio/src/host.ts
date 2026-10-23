@@ -252,64 +252,6 @@ abstract class BaseStudioHost implements StudioHost {
   }
 }
 
-export class ProjectHost extends BaseStudioHost {
-  declare readonly boot: StudioBoot & { session: Extract<StudioSession, { kind: "project" }> };
-
-  constructor(
-    boot: StudioBoot & { session: Extract<StudioSession, { kind: "project" }> },
-    fetcher?: Fetcher,
-    eventSourceFactory?: EventSourceFactory,
-  ) {
-    super(boot, fetcher, eventSourceFactory);
-    this.boot = boot;
-  }
-
-  async loadTimeline(): Promise<TimelineContext> {
-    const config = await this.fetchJson(
-      `/timeline/get?project=${encodeURIComponent(this.boot.session.projectId)}`,
-    );
-    return assertTimelineContext({
-      ...config,
-      runtimeAssets: playerRuntimeAssetsFromStudioBoot(this.boot),
-      assetBaseUrl: this.boot.runtime.assetBaseUrl,
-      proxyBase: this.boot.runtime.proxyBase ?? null,
-    });
-  }
-
-  async saveTimeline(edit: TimelineEdit): Promise<SaveReport> {
-    const report = await this.fetchJson(
-      `/timeline/edit?project=${encodeURIComponent(this.boot.session.projectId)}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-valle-token": this.boot.session.token,
-        },
-        body: JSON.stringify(edit),
-      },
-    );
-    return report as unknown as SaveReport;
-  }
-
-  async loadMediaFacts(
-    request: TimelinePreviewRequest,
-  ): Promise<MediaFactsResult> {
-    const report = await this.fetchJson(
-      `/timeline/media-facts?project=${encodeURIComponent(this.boot.session.projectId)}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-valle-token": this.boot.session.token,
-        },
-        body: JSON.stringify({ timeline: request.timeline }),
-      },
-    );
-    return report as unknown as MediaFactsResult;
-  }
-
-}
-
 export function playerRuntimeAssetsFromStudioBoot(boot: StudioBoot): PlayerRuntimeAssets {
   const urls = boot.runtime.assetUrls;
   const required = (name: string): string => {
@@ -390,22 +332,12 @@ export async function loadStudioHost(
   fetcher: Fetcher = globalThis.fetch.bind(globalThis),
   eventSourceFactory?: EventSourceFactory,
 ): Promise<StudioHost> {
-  const params = new URLSearchParams(search);
-  const project = params.get("project");
-  const url = project
-    ? `/studio/boot.json?project=${encodeURIComponent(project)}`
-    : "/studio/boot.json";
+  const url = "/studio/boot.json";
   const response = await fetcher(url);
   if (!response.ok) throw new Error(`${url} returned ${response.status}`);
   const raw: unknown = await response.json();
   const boot = assertStudioBoot(raw);
   switch (boot.session.kind) {
-    case "project":
-      return new ProjectHost(
-        boot as StudioBoot & { session: Extract<StudioSession, { kind: "project" }> },
-        fetcher,
-        eventSourceFactory,
-      );
     case "timeline-file":
       return new TimelineFileHost(boot, fetcher, eventSourceFactory);
     case "motion-file":
@@ -422,15 +354,7 @@ export function assertStudioBoot(value: unknown): StudioBoot {
   if (!isRecord(value.capabilities) || !isRecord(value.runtime)) {
     throw new Error("Studio boot must contain capabilities and runtime");
   }
-  if (kind === "project") {
-    if (
-      typeof value.session.projectId !== "string"
-      || !isRevision(value.session.revision)
-      || typeof value.session.token !== "string"
-    ) {
-      throw new Error("project Studio session is incomplete");
-    }
-  } else if (kind === "timeline-file") {
+  if (kind === "timeline-file") {
     if (typeof value.session.input !== "string" || typeof value.session.token !== "string") throw new Error("timeline-file input and token are required");
   } else if (kind === "motion-file") {
     if (typeof value.session.input !== "string" || typeof value.session.generation !== "number" || typeof value.session.token !== "string") {
@@ -613,7 +537,7 @@ function isTimeline(value: unknown): value is Timeline {
 /** Project a Motion editor context only after the caller's Product admission has succeeded. */
 export function projectMotionContextFromAdmittedPreview(
   config: TimelineContext,
-  boot: StudioBoot & { session: Exclude<StudioSession, { kind: "motion-file" }> },
+  boot: StudioBoot,
   request: MotionRequest,
   authoringTimeline: TimelineDocument = config.render.timeline,
 ): MotionContext {
@@ -632,7 +556,7 @@ export function projectMotionContextFromAdmittedPreview(
     .find((item) => item.type === "clip" && item.id === clipId);
   const component = admittedClip?.type === "clip" && admittedClip.source.type === "motion" ? admittedClip.source.component : null;
   const missingContext = (missing: string) => motionContextError(
-    clipId ?? (boot.session.kind === "project" ? boot.session.projectId : boot.session.input),
+    clipId ?? boot.session.input,
     Number(config.generation ?? config.timelineRevision.revision),
     "motion-context-missing",
     `Selected project clip is missing ${missing}`,

@@ -1,0 +1,337 @@
+//! File naming, classification, and independent copies shared by projects and the asset library.
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use std::{
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
+use unicode_normalization::UnicodeNormalization;
+
+use crate::{
+    ContentDigest,
+    folder::{Project, absolute, digest_file},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Video,
+    Audio,
+    Image,
+    Font,
+    Model3d,
+    Environment,
+    Shader,
+    Component,
+    Data,
+    Other,
+}
+
+impl Kind {
+    pub fn detect(path: &Path) -> Self {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        if name.ends_with(".motion.tsx") {
+            return Self::Component;
+        }
+        match path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase()
+            .as_str()
+        {
+            "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" => Self::Video,
+            "mp3" | "wav" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "aif" | "aiff" => Self::Audio,
+            "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "svg" | "avif" => {
+                Self::Image
+            }
+            "ttf" | "otf" | "ttc" | "woff" | "woff2" => Self::Font,
+            "glb" | "gltf" => Self::Model3d,
+            "hdr" | "exr" => Self::Environment,
+            "sksl" | "glsl" | "wgsl" | "frag" | "vert" => Self::Shader,
+            "json" | "csv" | "tsv" => Self::Data,
+            _ => {
+                let mut bytes = [0; 16];
+                let count = fs::File::open(path)
+                    .and_then(|mut f| f.read(&mut bytes))
+                    .unwrap_or(0);
+                let bytes = &bytes[..count];
+                if bytes.starts_with(b"\x89PNG\r\n")
+                    || bytes.starts_with(b"\xff\xd8\xff")
+                    || bytes.starts_with(b"GIF8")
+                {
+                    Self::Image
+                } else if bytes.starts_with(b"glTF") {
+                    Self::Model3d
+                } else if bytes.starts_with(b"OTTO")
+                    || bytes.starts_with(b"\0\x01\0\0")
+                    || bytes.starts_with(b"ttcf")
+                {
+                    Self::Font
+                } else if bytes.starts_with(b"fLaC")
+                    || bytes.starts_with(b"ID3")
+                    || bytes.starts_with(b"OggS")
+                    || (bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE"))
+                {
+                    Self::Audio
+                } else {
+                    Self::Other
+                }
+            }
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Image => "image",
+            Self::Font => "font",
+            Self::Model3d => "model3d",
+            Self::Environment => "environment",
+            Self::Shader => "shader",
+            Self::Component => "component",
+            Self::Data => "data",
+            Self::Other => "other",
+        }
+    }
+    pub fn directory(self) -> &'static str {
+        match self {
+            Self::Video => "videos",
+            Self::Audio => "music",
+            Self::Image => "images",
+            Self::Font => "fonts",
+            Self::Model3d | Self::Environment => "3d",
+            Self::Shader => "shaders",
+            Self::Component => "components",
+            Self::Data => "data",
+            Self::Other => "other",
+        }
+    }
+    pub fn snapshot_source(self) -> bool {
+        matches!(self, Self::Component | Self::Data | Self::Shader)
+    }
+}
+
+pub fn folded(value: &str) -> String {
+    value.nfc().flat_map(char::to_lowercase).collect()
+}
+
+pub fn files_in(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    if !root.exists() {
+        return Ok(files);
+    }
+    let mut entries = fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            files.extend(files_in(&entry.path())?);
+        } else if kind.is_file() {
+            files.push(entry.path());
+        }
+    }
+    Ok(files)
+}
+
+pub fn occupied(directory: &Path, name: &str) -> Result<bool> {
+    if !directory.exists() {
+        return Ok(false);
+    }
+    let key = folded(name);
+    for entry in fs::read_dir(directory)? {
+        if folded(&entry?.file_name().to_string_lossy()) == key {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+pub fn suffixed(name: &str, number: usize) -> String {
+    if number == 1 {
+        return name.to_owned();
+    }
+    if name.to_ascii_lowercase().ends_with(".motion.tsx") {
+        let split = name.len() - ".motion.tsx".len();
+        return format!("{}-{number}{}", &name[..split], &name[split..]);
+    }
+    let path = Path::new(name);
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    match path.extension() {
+        Some(extension) => format!("{stem}-{number}.{}", extension.to_string_lossy()),
+        None => format!("{name}-{number}"),
+    }
+}
+
+/// Make an independent clone or copy, then publish without replacing any existing file.
+pub fn copy_new(
+    source: &Path,
+    destination: &Path,
+    staging: &Path,
+    expected: ContentDigest,
+) -> Result<()> {
+    fs::create_dir_all(staging)?;
+    fs::create_dir_all(destination.parent().context("destination has no parent")?)?;
+    let (file, path) = tempfile::Builder::new()
+        .prefix(".import-")
+        .tempfile_in(staging)?
+        .into_parts();
+    drop(file);
+    fs::remove_file(&path)?;
+    reflink_copy::reflink_or_copy(source, &path)?;
+    let mut permissions = fs::metadata(&path)?.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(permissions.mode() | 0o200);
+    }
+    #[cfg(windows)]
+    permissions.set_readonly(false);
+    fs::set_permissions(&path, permissions)?;
+    let file = fs::OpenOptions::new().read(true).write(true).open(&path)?;
+    file.sync_all()?;
+    if digest_file(&path)? != expected {
+        bail!("source changed during import: {}", source.display());
+    }
+    let temp = tempfile::NamedTempFile::from_parts(file, path);
+    temp.persist_noclobber(destination).map_err(|e| e.error)?;
+    crate::sync_directory(destination.parent().unwrap())?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedFile {
+    pub alias: String,
+    pub path: String,
+    pub kind: Kind,
+    pub already_exists: bool,
+    pub renamed: bool,
+}
+
+impl Project {
+    /// The caller holds the project lock and validates component imports before invoking this.
+    pub fn import_file(&self, source: &Path, link: bool) -> Result<ImportedFile> {
+        let source = source
+            .canonicalize()
+            .with_context(|| format!("opening {}", source.display()))?;
+        if !source.is_file() {
+            bail!("not a file: {}", source.display());
+        }
+        let kind = Kind::detect(&source);
+        let name = source
+            .file_name()
+            .context("source has no filename")?
+            .to_string_lossy();
+        let (path, already_exists, renamed) = if link {
+            (source.clone(), true, false)
+        } else {
+            let digest = digest_file(&source)?;
+            let length = fs::metadata(&source)?.len();
+            let mut existing = None;
+            for folder in ["components", "media"] {
+                for path in files_in(&self.root.join(folder))? {
+                    if fs::metadata(&path)?.len() == length && digest_file(&path)? == digest {
+                        existing = Some(path);
+                        break;
+                    }
+                }
+                if existing.is_some() {
+                    break;
+                }
+            }
+            if let Some(path) = existing {
+                (path, true, false)
+            } else {
+                let directory = self.root.join(if kind == Kind::Component {
+                    "components"
+                } else {
+                    "media"
+                });
+                fs::create_dir_all(&directory)?;
+                if directory.canonicalize()?.strip_prefix(&self.root).is_err() {
+                    bail!("import directory is outside the project");
+                }
+                let mut number = 1;
+                loop {
+                    let filename = suffixed(&name, number);
+                    if occupied(&directory, &filename)? {
+                        number += 1;
+                        continue;
+                    }
+                    let target = directory.join(&filename);
+                    match copy_new(&source, &target, &self.root.join(".valle/tmp"), digest) {
+                        Ok(()) => break (target, false, number > 1),
+                        Err(error)
+                            if error
+                                .downcast_ref::<std::io::Error>()
+                                .is_some_and(|e| e.kind() == std::io::ErrorKind::AlreadyExists) =>
+                        {
+                            number += 1;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+        };
+        let document = fs::read(self.timeline_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .unwrap_or_default();
+        let resources = document["resources"].as_object();
+        let timeline_base = self.timeline_path().parent().unwrap().to_path_buf();
+        let reused = resources.and_then(|r| {
+            r.iter().find_map(|(alias, value)| {
+                let value = value.as_str()?;
+                if value.contains("://") {
+                    return None;
+                }
+                (absolute(&timeline_base.join(value)).ok().as_ref() == Some(&path))
+                    .then(|| alias.clone())
+            })
+        });
+        let alias = if let Some(alias) = reused {
+            alias
+        } else {
+            let stem = source.file_stem().unwrap_or_default().to_string_lossy();
+            let base = stem
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                .take(48)
+                .collect::<String>();
+            let base = if base.chars().any(|c| c.is_ascii_alphanumeric()) {
+                base
+            } else {
+                kind.as_str().to_owned()
+            };
+            let mut alias = base.clone();
+            let mut number = 2;
+            while resources.is_some_and(|r| r.contains_key(&alias)) {
+                alias = format!("{base}-{number}");
+                number += 1;
+            }
+            alias
+        };
+        Ok(ImportedFile {
+            alias,
+            path: if link {
+                path.to_string_lossy().into_owned()
+            } else {
+                self.path_key(&path)?
+            },
+            kind,
+            already_exists,
+            renamed,
+        })
+    }
+}

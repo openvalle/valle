@@ -197,10 +197,11 @@ export default function Grow() { const time = useCurrentTime(); const frame = Ma
         "resources":{"motion":"grow.motion.tsx"},
         "tracks":{"visual":[{"clips":[{"kind":"motion","component":"motion","start":0,"duration":2}]}]}}),
     );
-    success(run(
+    put(
         dir,
-        &["project", "create", "grow", "--timeline", "grow.json"],
-    ));
+        "project.json",
+        json!({"name":"grow","timeline":"grow.json"}),
+    );
 
     let cost = run(dir, &["motion", "check", "grow.motion.tsx", "--cost"]);
     assert!(!cost.status.success());
@@ -238,7 +239,7 @@ export default function Grow() { const time = useCurrentTime(); const frame = Ma
         ],
         vec!["motion", "render", "grow.motion.tsx"],
         vec!["timeline", "render", "grow.json"],
-        vec!["project", "render", "grow"],
+        vec!["project", "render"],
     ]
     .into_iter()
     .enumerate()

@@ -68,14 +68,6 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
     }
 }
 
-pub(super) fn render_document(
-    timeline: Timeline,
-    base: &Path,
-    delivery: RenderOutputArgs,
-) -> Result<std::process::ExitCode> {
-    render_document_impl(timeline, base, delivery, None, RenderBudgetArgs::default())
-}
-
 /// Render a Timeline document, or with `check` prepare it to render and collect what its Motion
 /// hosts' clocks leave out.
 fn render_document_impl(
@@ -123,7 +115,7 @@ fn render_document_impl(
 /// What the clocks of the Motion hosts leave out: an end no frame shows, and onsets shorter than
 /// a frame of output. A warning names the visual clip that places the source by its path in the
 /// document, such as `/tracks/visual/0/clips/1`.
-fn clock_warnings(
+pub(super) fn clock_warnings(
     render: &valle_engine::render::CompiledRender,
 ) -> Result<Vec<valle_motion::MotionDiagnostic>> {
     use valle_engine::render::CompiledVisualItem;
@@ -172,6 +164,7 @@ fn document_path(id: &str) -> String {
 
 /// One frozen preparation shared by Native delivery and browser previews.
 pub(crate) struct TimelinePreviewPackage {
+    pub snapshot_inputs: Vec<valle_project::folder::CapturedInput>,
     pub timeline_json: String,
     pub canonical_timeline_json: String,
     pub fixed_package_manifest_json: String,
@@ -180,9 +173,9 @@ pub(crate) struct TimelinePreviewPackage {
     pub motion: serde_json::Value,
     pub blobs: std::collections::BTreeMap<String, PreviewFile>,
     pub input_dependencies: std::collections::BTreeMap<String, ContentDigest>,
-    catalog: NativeResourceCatalog,
+    pub(super) catalog: NativeResourceCatalog,
     /// The package opened by the closed-package admission check, reused by native renders.
-    opened: OpenedFixedPackage,
+    pub(super) opened: OpenedFixedPackage,
 }
 
 pub(crate) fn prepare_timeline_package(
@@ -572,6 +565,7 @@ fn prepare_timeline_package_impl(
             .collect();
     prepare_motion_instances(&mut doc)?;
     let captured_motions = capture_motion_sources(&doc, base)?;
+    let mut snapshot_inputs = captured_motions.snapshot_inputs();
     let input_dependencies = captured_motions.dependency_digests()?;
     let (mut prepared_motions, motion_sources) = captured_motions.prepare()?;
     let compiled = valle_compiler::compile_timeline_with_motion_sources(timeline, &motion_sources)?;
@@ -734,14 +728,21 @@ fn prepare_timeline_package_impl(
             let (bytes, hash, file) =
                 if matches!(declared_kind, Some(AssetKind::Video | AssetKind::Audio)) {
                     let (hash, file) = media.get(&path)?;
+                    snapshot_inputs.push(valle_project::folder::CapturedInput::media(
+                        path.clone(),
+                        hash,
+                    ));
                     (Vec::new(), hash, file)
                 } else {
                     let asset = if let Some(asset) = motion_environments.remove(name) {
                         asset
                     } else {
-                        super::motion::load_asset(&path).with_context(|| {
-                            format!("reading resource {name}: {}", path.display())
-                        })?
+                        let (asset, inputs) =
+                            super::motion::capture_asset(&path).with_context(|| {
+                                format!("reading resource {name}: {}", path.display())
+                            })?;
+                        snapshot_inputs.extend(inputs);
+                        asset
                     };
                     let path = frozen.path().join(asset.hash.as_hex());
                     std::fs::write(&path, &asset.bytes)?;
@@ -805,6 +806,7 @@ fn prepare_timeline_package_impl(
     let (package, opened) = build_fixed_package(&files).map_err(|e| anyhow!(e))?;
     captured_motions.verify_dependencies()?;
     Ok(TimelinePreviewPackage {
+        snapshot_inputs,
         timeline_json,
         canonical_timeline_json: canonical,
         fixed_package_manifest_json: package,
@@ -896,6 +898,12 @@ pub(crate) struct CapturedMotionSources {
 }
 
 impl CapturedMotionSources {
+    pub(crate) fn snapshot_inputs(&self) -> Vec<valle_project::folder::CapturedInput> {
+        self.instances
+            .values()
+            .flat_map(|instance| instance.snapshot_inputs())
+            .collect()
+    }
     pub(crate) fn dependency_digests(
         &self,
     ) -> Result<std::collections::BTreeMap<String, ContentDigest>> {
@@ -1131,7 +1139,7 @@ fn insert_motion_metadata(
     Ok(())
 }
 
-fn collect_used_resources(
+pub(super) fn collect_used_resources(
     value: &serde_json::Value,
     used: &mut std::collections::BTreeSet<String>,
 ) {

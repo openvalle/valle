@@ -25,10 +25,7 @@ struct WriteSourceRequest {
 }
 
 fn session_paths(state: &StudioHost) -> Result<BTreeSet<PathBuf>> {
-    let mut paths = if let Some(project) = &state.project {
-        let snapshot = project.store.get_timeline(&project.project_id, None)?;
-        crate::cmd::timeline::motion_source_paths(snapshot.timeline(), Path::new("."))?
-    } else if let Some(file) = &state.timeline_file {
+    let mut paths = if let Some(file) = &state.timeline_file {
         file.source_paths()?
     } else if let Some(motion) = &state.motion_source {
         let mut paths = crate::cmd::motion::motion_module_paths(&motion.input)
@@ -157,6 +154,8 @@ pub(crate) fn write(state: &StudioHost, body: &str) -> Result<Value> {
         bail!("source exceeds 4 MiB");
     }
     let path = allowed_path(state, &request.path)?;
+    let project = valle_project::folder::Project::discover(&path).ok();
+    let _project_lock = project.as_ref().map(|project| project.lock()).transpose()?;
     // Serialize writes within this local Host, including two browser requests for one file.
     static WRITES: OnceLock<Mutex<()>> = OnceLock::new();
     let _write_guard = WRITES
@@ -236,7 +235,6 @@ mod tests {
             sse: Default::default(),
             capture_dir: None,
             library: None,
-            project: None,
             timeline_file: None,
             last_report: RwLock::new(None),
         }
