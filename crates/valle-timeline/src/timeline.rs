@@ -779,27 +779,23 @@ fn valid_resource_key(value: &str) -> bool {
 fn valid_resource_url(value: &str) -> bool {
     if value.is_empty()
         || value.len() > 8192
-        || value
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
+        || value.chars().any(|character| character.is_control())
     {
         return false;
     }
     // canonicalize() produces verbatim Windows paths, whose prefix is not a URL scheme.
     let value = value.strip_prefix(r"\\?\").unwrap_or(value);
-    if let Some((scheme, rest)) = value.split_once(':') {
+    if let Some((scheme, authority)) = value.split_once("://") {
         let valid_scheme = !scheme.is_empty()
             && scheme.as_bytes()[0].is_ascii_alphabetic()
             && scheme
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'));
-        if !valid_scheme || rest.is_empty() {
+        if !valid_scheme || authority.is_empty() || authority.chars().any(char::is_whitespace) {
             return false;
         }
         if matches!(scheme, "http" | "https") {
-            return rest
-                .strip_prefix("//")
-                .is_some_and(|authority| !authority.is_empty() && !authority.starts_with('/'));
+            return !authority.starts_with('/');
         }
     }
     true
@@ -817,14 +813,18 @@ mod resource_url_tests {
             r"\\?\UNC\server\share\font.ttf",
             "file:///C:/assets/font.ttf",
             "https://example.com/font.ttf",
+            "media/my recording.mp4",
+            "media/12:30.mp4",
+            "media/中文 文件.png",
         ] {
             assert!(valid_resource_url(value), "{value}");
         }
         for value in [
-            r"\\?\C:",
             "https:///font.ttf",
             "https://",
-            "bad scheme:value",
+            "bad scheme://value",
+            "https://example.com/my file.png",
+            "media/invalid\nfile.png",
         ] {
             assert!(!valid_resource_url(value), "{value}");
         }

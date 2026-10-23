@@ -34,7 +34,10 @@ fn every_integration_test_module_is_registered_once() {
             .flat_map(|suite| suite.lines())
             .filter(|line| *line == declaration)
             .count();
-        assert_eq!(registrations, 1, "register {name} in exactly one test suite");
+        assert_eq!(
+            registrations, 1,
+            "register {name} in exactly one test suite"
+        );
     }
 }
 

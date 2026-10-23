@@ -5182,6 +5182,7 @@ dependencies = [
 name = "valle-project"
 version = "0.1.0-rc.2"
 dependencies = [
+ "anyhow",
  "fs2",
  "hex",
  "reflink-copy",

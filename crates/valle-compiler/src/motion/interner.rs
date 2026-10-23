@@ -112,7 +112,10 @@ mod tests {
         assert_eq!(pool.intern(&number(1.0), None, ExprId(0)), None);
         assert_eq!(pool.intern(&number(1.0), Some(0), ExprId(1)), None);
         assert_eq!(pool.intern(&number(1.0), Some(1), ExprId(2)), None);
-        assert_eq!(pool.intern(&number(1.0), Some(0), ExprId(3)), Some(ExprId(1)));
+        assert_eq!(
+            pool.intern(&number(1.0), Some(0), ExprId(3)),
+            Some(ExprId(1))
+        );
         assert_eq!(pool.intern(&number(1.0), None, ExprId(3)), Some(ExprId(0)));
     }
 
