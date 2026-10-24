@@ -158,6 +158,12 @@ exports automatically save a snapshot and input/output records; media changes du
 rendering produce warnings. When Studio is open, reread a file before changing it so an
 external edit does not overwrite a person's newer work. `VALLE_HOME` selects the global
 asset library and recent-project list; projects live in their own directories.
+Studio is at `/`. `project studio` outside a project opens recent projects and creation.
+Its Assets panel imports files and edits library tags/notes; dragging into the Timeline
+imports all files before saving one draft. Failed imports leave the Timeline unchanged,
+and undo leaves copied files in place. History and native project Exports operate only
+on the entry Timeline, saving dirty drafts first. Other Timeline files retain file export.
+Motion's **Save as project** copies the component and media into a new project.
 
 ## Assets and Media
 

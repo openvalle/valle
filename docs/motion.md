@@ -136,9 +136,10 @@ a `captionPresenter` starts with a caption track whose words and times are edita
 The component panel writes supported `composition` values and declared prop
 defaults back to JSX; the code pane edits the source directly. Preview compiles
 the current source in a browser Worker. The ordinary **Save** action writes source
-files; arrangement changes can be stored with **Save as Timeline**. The resulting
-JSON contains the explicit `--props`, inline `--data`, `--asset` bindings and
-effective frame rate, with resource paths resolved relative to the saved JSON.
+files; arrangement changes can be stored with **Save as project**. This creates a project
+directory and copies the component and its media. Its entry Timeline contains the
+explicit `--props`, inline `--data`, `--asset` bindings and effective frame rate,
+using paths relative to the new project. The new project opens as a Timeline file session.
 Extra `--font` stacks cannot be represented by a Timeline clip, so Studio disables
 that conversion until those fonts are declared and bound as font assets. Source
 editing and source saving remain available.
@@ -388,7 +389,7 @@ For standalone CLI check/review/render, supply one caption as
 `motion studio` accepts those same data and font bindings. Its caption wrapper
 uses Timeline's existing q6 layout precision. When conversion changes the pixel
 region or style, Studio reports `caption-input-normalized` and prepares the
-normalized layout for both preview and **Save as Timeline**. This conversion can
+normalized layout for both preview and **Save as project**. This conversion can
 compile the original and normalized layouts on first preparation; repeated inputs
 reuse the existing bounded cache. The saved track contains its timed runs, style,
 layout and presenter bindings, and reopens with the same prepared input.

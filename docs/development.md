@@ -129,3 +129,11 @@ A package needs macOS 15 or later; on Linux, glibc 2.39 with Fontconfig and Free
 Windows, possibly the Visual C++ Redistributable. `valle licenses` prints the embedded
 dependency notices and their source links; see the
 [third-party acknowledgements](../THIRD_PARTY.md).
+
+Studio is the only shipped Web app and is served at `/`. Console has been removed.
+The playback-only Preview fixture lives in `web/tests/preview`; `bun run build:test-preview`
+outputs it under `web/test-dist`, outside the public runtime manifest and distribution.
+`bun web/tests/project-studio-browser.ts` verifies the project home, imports, library
+metadata, source reload/conflict, native exports, restore, folder moves, and Motion conversion
+in a real Chrome process. The Rust `motion_studio` suite includes this flow. Build the CLI
+and `web/dist` first; browser evidence is retained in a `valle-project-studio-*` temp directory.

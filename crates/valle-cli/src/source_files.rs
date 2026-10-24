@@ -61,7 +61,9 @@ pub(crate) fn list(state: &StudioHost) -> Result<Value> {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DraftManifestRequest {
+    #[serde(default)]
     drafts: BTreeMap<String, String>,
+    timeline: Option<Value>,
 }
 
 pub(crate) fn list_with_drafts(state: &StudioHost, body: &str) -> Result<Value> {
@@ -70,6 +72,23 @@ pub(crate) fn list_with_drafts(state: &StudioHost, body: &str) -> Result<Value> 
         bail!("too many source drafts");
     }
     let mut paths = session_paths(state)?;
+    if let Some(document) = request.timeline {
+        let file = state
+            .timeline_file
+            .as_ref()
+            .context("draft source discovery needs a Timeline file")?;
+        let project = valle_project::folder::Project::discover(&file.input)?;
+        let timeline = valle_timeline::decode_timeline(&document.to_string())?;
+        for path in
+            crate::cmd::timeline::motion_source_paths(&timeline, file.input.parent().unwrap())?
+        {
+            let path = path.canonicalize()?;
+            if !paths.contains(&path) && path.strip_prefix(&project.root).is_err() {
+                bail!("new draft sources must be inside the project; import them first");
+            }
+            paths.insert(path);
+        }
+    }
     for (name, text) in request.drafts {
         if text.len() as u64 > MAX_SOURCE_BYTES {
             bail!("source exceeds 4 MiB");

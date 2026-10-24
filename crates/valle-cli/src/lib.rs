@@ -10,6 +10,7 @@ mod output;
 mod preview_store;
 mod source_files;
 mod timeline_file;
+mod watch;
 mod webhost;
 pub mod webruntime;
 

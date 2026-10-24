@@ -60,6 +60,9 @@ fn studio_runtime_asset_urls() -> serde_json::Value {
 fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Result<String> {
     let config: serde_json::Value =
         serde_json::from_str(config_json).context("parse Studio config")?;
+    if config.get("home").is_some() {
+        return Ok(serde_json::json!({"home":config["home"]}).to_string());
+    }
     let input = config
         .get("input")
         .and_then(|value| value.as_str())
@@ -112,6 +115,8 @@ fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Res
     });
     if let Some(project) = config.get("project").filter(|value| !value.is_null()) {
         boot["project"] = project.clone();
+    } else if let Ok(project) = valle_project::folder::Project::discover(Path::new(input)) {
+        boot["project"] = serde_json::json!({"root":project.root,"name":project.config.name,"timeline":project.config.timeline,"entry":false});
     }
     Ok(boot.to_string())
 }
@@ -198,28 +203,27 @@ pub fn bind(port: u16) -> Result<(TcpListener, SocketAddr)> {
 /// Serve each accepted connection on its own thread to support parallel asset requests.
 pub fn serve_forever(listener: TcpListener, state: Arc<StudioHost>) -> Result<()> {
     if let Some(file) = &state.timeline_file {
-        let initial_revision = file.revision().ok();
+        let mut paths = crate::watch::timeline_paths(file);
+        let mut previous = crate::watch::stamps(&paths);
         let weak = Arc::downgrade(&state);
         std::thread::spawn(move || {
-            let mut revision = initial_revision;
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(300));
                 let Some(state) = weak.upgrade() else {
                     break;
                 };
-                if let Some(current) = state
-                    .timeline_file
-                    .as_ref()
-                    .and_then(|file| file.revision().ok())
-                {
-                    if revision.is_some_and(|previous| previous != current) {
-                        state.sse.broadcast(
-                            "timeline",
-                            &serde_json::json!({"revision":current}).to_string(),
-                        );
-                    }
-                    revision = Some(current);
+                let current = crate::watch::stamps(&paths);
+                if current == previous {
+                    continue;
                 }
+                if let Some(file) = &state.timeline_file {
+                    paths.extend(crate::watch::timeline_paths(file));
+                }
+                previous = crate::watch::stamps(&paths);
+                state.sse.broadcast(
+                    "timeline",
+                    &serde_json::json!({"dependenciesChanged":true}).to_string(),
+                );
             }
         });
     }
@@ -260,6 +264,34 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
         handle_browser_report(&body, state);
         return resp;
     }
+    if method == "POST" && path == "/project/execute" {
+        let expected = state
+            .library
+            .as_ref()
+            .map(|library| library.token.as_str())
+            .or_else(|| {
+                state
+                    .motion_source
+                    .as_ref()
+                    .map(|motion| motion.token.as_str())
+            });
+        if expected.is_none_or(|expected| {
+            !local_request_authorized(
+                header_value(&headers, "x-valle-token").unwrap_or(""),
+                expected,
+                header_value(&headers, "origin").or_else(|| header_value(&headers, "host")),
+            )
+        }) {
+            return write_simple(&mut out, 403, "Forbidden", &[], b"");
+        }
+        let result = if let Some(name) = header_value(&headers, "x-valle-filename") {
+            import_uploaded_file(&mut reader, &headers, &percent_decode(name), state)
+        } else {
+            read_body(&mut reader, &headers)
+                .and_then(|body| crate::cmd::project::web::execute(state, &body))
+        };
+        return serve_file_json(&mut out, result);
+    }
     if method == "POST" && path == "/library/execute" {
         let body = read_body(&mut reader, &headers)?;
         return serve_library_execute(&mut out, &headers, &body, state);
@@ -298,7 +330,7 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
         };
         return serve_file_json(&mut out, result);
     }
-    if method == "POST" && path == "/motion/save-timeline" {
+    if method == "POST" && path == "/motion/save-project" {
         let Some(motion) = &state.motion_source else {
             return write_simple(&mut out, 404, "Not Found", &[], b"");
         };
@@ -310,22 +342,19 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
             return write_simple(&mut out, 403, "Forbidden", &[], b"");
         }
         let result = read_body(&mut reader, &headers)
-            .and_then(|body| crate::timeline_file::save_motion_timeline_as(state, &body));
-        return serve_file_json(&mut out, result);
-    }
-    if method == "POST" && path == "/motion/saved-timeline" {
-        let Some(motion) = &state.motion_source else {
-            return write_simple(&mut out, 404, "Not Found", &[], b"");
-        };
-        if !local_request_authorized(
-            header_value(&headers, "x-valle-token").unwrap_or(""),
-            &motion.token,
-            header_value(&headers, "origin").or_else(|| header_value(&headers, "host")),
-        ) {
-            return write_simple(&mut out, 403, "Forbidden", &[], b"");
-        }
-        let result = read_body(&mut reader, &headers)
-            .and_then(|body| crate::timeline_file::load_saved_motion_timeline(state, &body));
+            .and_then(|body| crate::timeline_file::save_motion_project(state, &body))
+            .and_then(|mut saved| {
+                let project = valle_project::folder::Project::open(Path::new(
+                    saved["root"]
+                        .as_str()
+                        .context("missing saved project root")?,
+                ))?;
+                crate::cmd::project::remember(&project)?;
+                saved["url"] =
+                    crate::cmd::project::web::open(&project, state.runtime_files.clone())?["url"]
+                        .clone();
+                Ok(saved)
+            });
         return serve_file_json(&mut out, result);
     }
     if method == "POST" && path == "/timeline/edit" {
@@ -478,23 +507,6 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
             None => write_simple(&mut out, 404, "Not Found", &[], b""),
         };
     }
-    if path == "/console/config.json" {
-        let config = serde_json::json!({
-            "token": state.library.as_ref().map(|library| &library.token),
-            "library": state.library.is_some(),
-            "projectId": serde_json::Value::Null,
-        });
-        return write_simple(
-            &mut out,
-            200,
-            "OK",
-            &[
-                ("Content-Type", "application/json"),
-                ("Cache-Control", "no-store"),
-            ],
-            config.to_string().as_bytes(),
-        );
-    }
     if path == "/config.json" {
         if let Some(file) = &state.timeline_file {
             let result = file
@@ -527,6 +539,32 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
         );
     }
 
+    if let Some(relative) = path.strip_prefix("/project/file/") {
+        let result = (|| -> Result<PathBuf> {
+            let project = crate::cmd::project::web::project(state)?;
+            if !["media/", "components/", "renders/"]
+                .iter()
+                .any(|prefix| relative.starts_with(prefix))
+            {
+                anyhow::bail!("file outside public project folders");
+            }
+            let candidate =
+                sandboxed_join(&project.root, relative).context("invalid project file path")?;
+            if candidate
+                .canonicalize()?
+                .strip_prefix(&project.root)
+                .is_err()
+            {
+                anyhow::bail!("file outside project");
+            }
+            Ok(candidate)
+        })();
+        return match result {
+            Ok(file) => serve_file(&mut out, &headers, &file, content_type_for(relative)),
+            Err(_) => write_simple(&mut out, 404, "Not Found", &[], b""),
+        };
+    }
+
     // Resolve project-local assets within the project directory sandbox.
     if let Some(rel) = path.strip_prefix("/library/blob/") {
         return serve_library_blob(&mut out, &headers, rel, state);
@@ -536,11 +574,6 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
     }
 
     let runtime_rel = if path == "/" {
-        "preview.html"
-    } else if path == "/console" {
-        "console.html"
-    } else if path == "/studio" || path == "/studio/" {
-        // Route the Studio alias through the runtime allowlist.
         "studio.html"
     } else {
         path.strip_prefix('/').unwrap_or("")
@@ -781,6 +814,40 @@ fn prepare_project_media_facts(
         "status": "ok", "resources": resources, "assets": assets,
         "inputDependencies": input_dependencies,
     }))
+}
+
+fn import_uploaded_file(
+    reader: &mut impl Read,
+    headers: &[(String, String)],
+    name: &str,
+    state: &StudioHost,
+) -> Result<serde_json::Value> {
+    let name_path = Path::new(name);
+    if name.is_empty()
+        || name.starts_with('.')
+        || name.contains(['/', '\\'])
+        || name.chars().any(char::is_control)
+        || name_path.components().count() != 1
+    {
+        anyhow::bail!("upload requires an ordinary filename");
+    }
+    let project = crate::cmd::project::web::project(state)?;
+    let directory = project.root.join(".valle/tmp");
+    std::fs::create_dir_all(&directory)?;
+    let stage = tempfile::tempdir_in(directory)?;
+    let path = stage.path().join(name);
+    let size = header_value(headers, "content-length")
+        .context("upload needs content-length")?
+        .parse::<u64>()?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    if std::io::copy(&mut reader.take(size), &mut file)? != size {
+        anyhow::bail!("incomplete upload; retry the file");
+    }
+    file.sync_all()?;
+    crate::cmd::project::add(&project, &[path], false)
 }
 
 fn serve_file_json(out: &mut TcpStream, result: Result<serde_json::Value>) -> Result<()> {

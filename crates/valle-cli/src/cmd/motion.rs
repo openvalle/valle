@@ -649,7 +649,10 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
         config_json: Arc::new(RwLock::new(config)),
         sse: crate::webhost::SseBroadcaster::default(),
         capture_dir: None,
-        library: None,
+        library: Some(crate::webhost::LibraryCtx {
+            token: source_token.clone(),
+            root: valle_project::folder::app_home()?.join("assets"),
+        }),
         timeline_file: None,
         source_paths: std::sync::Mutex::new(Default::default()),
         last_report: RwLock::new(None),
@@ -661,7 +664,7 @@ fn studio(request: StudioRequest) -> Result<std::process::ExitCode> {
         }),
     });
     let (server, addr) = crate::webhost::bind(request.port)?;
-    let url = format!("http://{addr}/studio");
+    let url = format!("http://{addr}/");
     spawn_motion_studio_watcher(request.clone(), Arc::clone(&state), generation);
     if crate::output::machine() && !crate::output::events() {
         crate::output::emit(
@@ -1310,7 +1313,9 @@ fn spawn_motion_studio_watcher(
         let mut last = path_fingerprints(&paths);
         loop {
             std::thread::sleep(Duration::from_millis(200));
-            paths = motion_watch_paths(&request);
+            paths.extend(motion_watch_paths(&request));
+            paths.sort();
+            paths.dedup();
             let now = path_fingerprints(&paths);
             if now == last {
                 continue;
@@ -1404,16 +1409,10 @@ pub(crate) fn motion_module_paths(input: &Path) -> Result<Vec<PathBuf>> {
     Ok(graph.modules.keys().map(|path| root.join(path)).collect())
 }
 
-fn path_fingerprints(paths: &[PathBuf]) -> Vec<(PathBuf, Option<(std::time::SystemTime, u64)>)> {
-    paths
-        .iter()
-        .map(|path| {
-            let fingerprint = std::fs::metadata(path)
-                .ok()
-                .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
-            (path.clone(), fingerprint)
-        })
-        .collect()
+fn path_fingerprints(
+    paths: &[PathBuf],
+) -> std::collections::BTreeMap<PathBuf, Option<valle_project::files::FileStamp>> {
+    crate::watch::stamps(&paths.iter().cloned().collect())
 }
 
 /// Compile-time measurements are baked into the artifact. Load fonts before compiling and use the

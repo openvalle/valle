@@ -153,18 +153,14 @@ export interface StudioHost {
   saveTimeline?(edit: TimelineEdit): Promise<SaveReport>;
   loadMotion?(request: MotionRequest): Promise<MotionContext>;
   loadMediaFacts?(request: TimelinePreviewRequest): Promise<MediaFactsResult>;
-  loadSourceFiles(drafts?: Record<string, string>): Promise<SourceFile[]>;
+  loadSourceFiles(drafts?: Record<string, string>, timeline?: Timeline): Promise<SourceFile[]>;
   writeSourceFile(request: WriteSourceRequest): Promise<WriteSourceResult>;
-  saveStandaloneTimeline?(request: {
-    target: string;
-    baseDigest: string | null;
+  saveProject?(request: {
+    directory: string;
     timeline: Timeline;
     expectedDependencies: Record<string, string>;
-  }): Promise<
-    | { status: "saved"; target: string; digest: string; timeline: Timeline }
-    | { status: "conflict"; currentDigest: string | null }
-  >;
-  loadSavedStandaloneTimeline?(target: string): Promise<{ target: string; digest: string; timeline: Timeline }>;
+  }): Promise<{ status: "saved"; target: string; root: string; digest: string; timeline: Timeline; url: string }>;
+
 }
 
 interface EventSourceLike {
@@ -196,10 +192,10 @@ abstract class BaseStudioHost implements StudioHost {
     return this.boot;
   }
 
-  async loadSourceFiles(drafts?: Record<string, string>): Promise<SourceFile[]> {
+  async loadSourceFiles(drafts?: Record<string, string>, timeline?: Timeline): Promise<SourceFile[]> {
     const result = await this.fetchJson("/source/files", {
-      ...(drafts && Object.keys(drafts).length ? {
-        method: "POST", body: JSON.stringify({ drafts }),
+      ...(timeline || (drafts && Object.keys(drafts).length) ? {
+        method: "POST", body: JSON.stringify({ drafts, timeline }),
         headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
       } : {
       headers: { "x-valle-token": this.boot.session.token },
@@ -303,22 +299,13 @@ export class TimelineFileHost extends BaseStudioHost {
 }
 
 export class MotionFileHost extends BaseStudioHost {
-  async loadSavedStandaloneTimeline(target: string) {
+  async saveProject(request: Parameters<NonNullable<StudioHost["saveProject"]>>[0]) {
     if (this.boot.session.kind !== "motion-file") throw new Error("Motion file session required");
-    return await this.fetchJson("/motion/saved-timeline", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
-      body: JSON.stringify({ target }),
-    }) as { target: string; digest: string; timeline: Timeline };
-  }
-
-  async saveStandaloneTimeline(request: Parameters<NonNullable<StudioHost["saveStandaloneTimeline"]>>[0]) {
-    if (this.boot.session.kind !== "motion-file") throw new Error("Motion file session required");
-    return await this.fetchJson("/motion/save-timeline", {
+    return await this.fetchJson("/motion/save-project", {
       method: "POST",
       headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
       body: JSON.stringify(request),
-    }) as Awaited<ReturnType<NonNullable<StudioHost["saveStandaloneTimeline"]>>>;
+    }) as Awaited<ReturnType<NonNullable<StudioHost["saveProject"]>>>;
   }
 
   async loadMotion(_request: MotionRequest = {}): Promise<MotionContext> {

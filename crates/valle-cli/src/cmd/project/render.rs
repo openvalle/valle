@@ -162,7 +162,7 @@ pub(super) fn render(
         }
         return Err(error);
     }
-    let mut report = super::super::fixed_render::delivery_report(
+    let mut report = super::super::delivery_report::delivery_report(
         &prepared.opened,
         if complete { "export" } else { "preview" },
         &project.root.join(

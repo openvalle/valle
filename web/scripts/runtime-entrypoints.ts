@@ -1,8 +1,4 @@
-export const APP_BUILDS = [
-  ["preview", "apps/preview/index.html"],
-  ["studio", "apps/studio/index.html"],
-  ["console", "apps/console/index.html"],
-] as const;
+export const APP_BUILDS = [["studio", "apps/studio/index.html"]] as const;
 
 export const PACKAGE_BUILDS = [
   ["engine", [

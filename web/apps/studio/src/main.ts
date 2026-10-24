@@ -1,3 +1,5 @@
+import { ProjectPanels, mountProjectHome } from "./project-panels.ts";
+import { StudioServices, appendImportedAssets, requireImported, type ImportIntent } from "./project-client.ts";
 import { loadStudioHost, type StudioHost } from "./host.ts";
 import type { ValleStudioApp } from "./studio-shell.ts";
 import { startTimelineStudio } from "./timeline-workspace.ts";
@@ -20,6 +22,15 @@ hydrateIcons();
 const shell = document.querySelector<ValleStudioApp>("valle-studio-app");
 if (!shell) throw new Error("missing <valle-studio-app> root");
 
+const bootResponse = await (await fetch("/studio/boot.json")).json();
+if (bootResponse.home || new URLSearchParams(location.search).has("home")) {
+  shell.classList.add("project-home");
+  await mountProjectHome(shell, bootResponse.home?.token ?? bootResponse.session.token);
+} else {
+  await startDocument(shell);
+}
+
+async function startDocument(shell: ValleStudioApp): Promise<void> {
 const host = await loadStudioHost(location.search);
 globalThis.valleStudioHost = host;
 await shell.initialize(host);
@@ -88,12 +99,12 @@ window.addEventListener("keydown", (event) => {
 
 if (host.boot.session.kind === "motion-file") {
   const standalone = new StandaloneTimelineSession(host.boot, sourceEditor, host);
-  const saveAsButton = document.getElementById("saveAsTimeline") as HTMLButtonElement;
+  const saveAsButton = document.getElementById("saveAsProject") as HTMLButtonElement;
   saveAsButton.hidden = false;
   saveAsButton.disabled = true;
-  saveAsButton.title = standalone.conversionBlockedReason ?? "Save the current arrangement as a Timeline file";
+  saveAsButton.title = standalone.conversionBlockedReason ?? "Save the current arrangement as a project";
   saveAsButton.addEventListener("click", () => {
-    shell.dispatchEvent(new CustomEvent("studio-save-as-timeline", { bubbles: true, composed: true }));
+    shell.dispatchEvent(new CustomEvent("studio-save-as-project", { bubbles: true, composed: true }));
   });
   shell.addEventListener("studio-host-event", (event) => {
     if ((event as CustomEvent<{ type: string }>).detail.type === "motion") {
@@ -111,7 +122,6 @@ if (host.boot.session.kind === "motion-file") {
       preparePreview: (timeline) => standalone.prepareTimelinePreview(timeline),
       saveTimeline: (edit) => standalone.saveTimeline(edit),
       prepareTimelineSave: () => standalone.chooseTarget(),
-      beforeReload: () => standalone.reloadSavedTimeline(),
       motionInstance: (path) => standalone.motionInstance(path),
     });
     timelineSessionStarted = true;
@@ -154,9 +164,51 @@ if (host.boot.session.kind === "motion-file") {
     if (type === "timeline" || type === "project") browserSession.invalidateMedia();
   });
   window.addEventListener("pagehide", (event) => { if (!event.persisted) browserSession.close(); });
-  await startTimelineStudio({
-    sourceEditor,
-    preparePreview: (timeline) => browserSession.prepareTimelinePreview(timeline),
-  });
+  const initial = await (await fetch("/timeline/get", { headers: { "x-valle-token": host.boot.session.token } })).json();
+  if (initial.empty) {
+    shell.dispatchIntent({ type: "preview-status", status: "empty", message: "Import media to start" });
+    document.getElementById("loading")!.hidden = true;
+    document.getElementById("stageBanner")!.textContent = "Import media in Assets, then drag it onto the Timeline.";
+    document.getElementById("stageBanner")!.hidden = false;
+    shell.addEventListener("studio-prepare-project-operation", (event) => {
+      (event as CustomEvent<{complete:(saved:boolean)=>void}>).detail.complete(true);
+    });
+    const services = new StudioServices(host.boot.session.token);
+    const add = async (intent: ImportIntent) => {
+      try {
+        const imported = intent.files ? await services.importFiles(intent.files) : await services.importAssets(intent.assets ?? []);
+        requireImported(imported);
+        const candidate = appendImportedAssets(initial.timeline, imported, host.boot, 0);
+        await sourceEditor.includeTimeline(candidate);
+        const preview = await browserSession.prepareTimelinePreview(candidate);
+        if (preview.status === "error") throw new Error(preview.diagnostics.map((d) => d.message).join("; "));
+        const result = await host.saveTimeline!({ baseRevision: initial.timelineRevision.revision, timeline: candidate, intent: "import media", expectedDependencies: preview.inputDependencies });
+        if (result.outcome !== "committed" && result.outcome !== "unchanged") throw new Error(`Timeline save ${result.outcome}; copied files remain in the project.`);
+        intent.complete(); location.reload();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const status = document.getElementById("timelineImportStatus")!; status.textContent = message; status.hidden = false;
+        intent.complete(message);
+      }
+    };
+    shell.addEventListener("studio-import-assets", (event) => { void add((event as CustomEvent<ImportIntent>).detail); });
+    const pane = document.getElementById("timelinePane")!;
+    pane.addEventListener("dragover", (event) => { if (host.boot.project) event.preventDefault(); });
+    pane.addEventListener("drop", (event) => {
+      if (!host.boot.project) return; event.preventDefault();
+      const complete = (message?: string) => { if (message) { const status = document.getElementById("timelineImportStatus")!; status.textContent = message; status.hidden = false; } };
+      const raw = event.dataTransfer?.getData("application/x-valle-asset");
+      if (raw) void add({ assets: [JSON.parse(raw)], complete });
+      else if (event.dataTransfer?.files.length) void add({ files: [...event.dataTransfer.files], complete });
+    });
+  } else {
+    await startTimelineStudio({
+      sourceEditor,
+      preparePreview: (timeline) => browserSession.prepareTimelinePreview(timeline),
+    });
+  }
   timelineSessionStarted = true;
+}
+
+new ProjectPanels(host, shell);
 }

@@ -236,13 +236,18 @@ invalid source ranges; it does not test every frame or encoder.
 `timeline studio <file>` opens a JSON file directly. Relative resource paths resolve
 from that file's directory. Edits preview without changing the file; **Save** atomically
 writes the complete JSON back to the opened path. External file changes cause a conflict
-until explicitly reloaded. This session does not create a project or persistent revisions.
+until explicitly reloaded. This session writes files directly. If the file is inside a project, Studio also shows
+its project name and Assets; only the entry Timeline has History and project Exports.
 Studio shows the authored Timeline and referenced Motion source in one editor. JSX
 changes update the browser preview before saving; **Save** writes changed source
 files first, then the Timeline when its arrangement or instance bindings changed.
 If a source file cannot compile, the author document and code editor stay open so
 the error can be corrected. Source and Timeline conflicts keep the local draft.
 Use `--web-assets-dir web/dist` when running a development binary without embedded assets.
+Studio is served at `/`; its home page (`project studio` outside a project) lists recent
+projects and creates new ones. Assets supports imports, search, tags, timed notes and
+media/font previews. Dragging onto the Timeline imports and saves clips as one edit.
+Motion arrangements use **Save as project** and open the new entry Timeline.
 
 ## Project: ordinary folders and source snapshots
 
@@ -376,7 +381,7 @@ The transport is shared; result payloads retain domain-specific information:
 | Motion/Timeline check or render; Project render | `status: "ok"`; delivery includes output, frame count and render ID; Motion check and render, and Timeline check, list `warnings` with a `code` and a `message`, also printed to stderr |
 | Project create/show/history/save/restore | `status: "ok"` with the operation result |
 | Project add | `status: "ok"` or `"partial"`, with one result per input |
-| Assets | `ok`, `data`, `error`, `warnings`; batch import can contain failed items |
+| Assets | `status: "ok"`, `"partial"`, or `"error"`; batch import has one item per file and reports failures |
 | Media | `format: "valle.media-run"`, `formatVersion: 1`, `status`, `result`, `report`, `warnings`, `error` |
 | Models | List array, install result, or verification report; inspect artifact `state` and exit code |
 | Docs | `status: "ok"`, executable `version`, plus `topics` or the selected Markdown `content` |
@@ -391,8 +396,8 @@ render budget at the output size uses `frame_budget_exceeded` with a `hint` to r
 loadable FFmpeg libraries uses `ffmpeg_unavailable`; its message ends with a
 platform install hint (see [Runtime notes](#runtime-notes)). Motion compile failures use
 `motion_compile_failed` and include `error.diagnostics` with messages, codes,
-source spans and, where available, source paths. Media and Assets retain their
-typed error codes and optional hints.
+source spans and, where available, source paths. Media retains its typed error codes and optional hints. Assets reports `assets_failed`
+or per-file `import_failed` details.
 
 Render reports include the actual Motion compiler-entry count in `compilations`
 (zero for a Timeline without Motion), and separate `compileMs`, `prepareMs`, and

@@ -3,6 +3,7 @@
 **/target/
 **/node_modules/
 /web/dist/
+/web/test-dist/
 /web/packages/engine/generated/
 *.rs.bk
 Cargo.lock.bak

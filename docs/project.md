@@ -100,6 +100,37 @@ files are published atomically. Direct edits by external tools remain possible: 
 Studio is open, reread a file before changing it. Studio retains the existing Timeline
 and source conflict checks.
 
+## Studio
+
+`project studio` opens the entry Timeline at the server root `/`. Outside a project it
+opens a home page with recent projects, a directory field for opening a project, and
+project creation with canvas settings. Home can open projects for as long as its server
+process is running; Ctrl-C stops those local Studio windows together.
+
+The Assets panel browses project files and the global library by directory and type.
+It supports local search, library tags and timed notes, image/video/audio preview, and
+font samples. Timed library notes seek the preview; notes are not copied into projects.
+Drop local files into Assets to import them, or drag local/library/project files onto
+the Timeline to import and create resources and clips. Non-clip types are added as resources.
+
+A Timeline drop first imports every file. If any import fails, the Timeline is unchanged;
+successful copies remain available for retry. A successful batch is validated as one draft
+and saved with the existing Timeline save protocol. Save conflicts preserve the draft.
+Undo affects the Timeline and leaves copied files in the project.
+
+History lists snapshots, saves the current files, and restores an earlier source snapshot.
+Exports lists `renders/` and export records and starts the same native render as the CLI.
+These operations save a dirty draft first; a conflict must be resolved before proceeding.
+Only the entry Timeline has History and project Exports. Other Timeline files in a project
+show its name and Assets and retain their browser file export.
+
+Studio watches referenced modules, data, shaders and media using file metadata. A clean
+workspace reloads automatically; an external change while a draft is dirty shows a conflict
+and preserves the draft. Reopen or explicitly reload after deciding which version to keep.
+Motion's **Save as project** creates a new directory, copies its component and media,
+and opens the new entry Timeline in a normal file session. Multi-file components still
+need manual copying into a project, and extra `--font` stacks must first become declared assets.
+
 ## Render and move
 
 ```sh

@@ -1,6 +1,7 @@
 //! CLI and Studio operations for ordinary project folders.
 
 mod render;
+pub(crate) mod web;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -61,6 +62,18 @@ fn run_inner(start: &Path, action: ProjectAction) -> Result<(ExitCode, Option<Va
             ),
         ));
     }
+    if let ProjectAction::Studio {
+        web_assets_dir,
+        port,
+    } = &action
+    {
+        if !start
+            .ancestors()
+            .any(|root| root.join("project.json").is_file())
+        {
+            return Ok((web::serve_home(web_assets_dir.as_deref(), *port)?, None));
+        }
+    }
     let project = Project::discover(start)?;
     remember(&project)?;
     let report = match action {
@@ -78,20 +91,9 @@ fn run_inner(start: &Path, action: ProjectAction) -> Result<(ExitCode, Option<Va
             ));
         }
         ProjectAction::Check => check(&project)?,
-        ProjectAction::Save { message } => {
-            let _lock = project.lock()?;
-            let inputs = capture_inputs(&project)?;
-            let saved = project.save_captured(inputs, message.as_deref(), "save")?;
-            json!({"status":"ok","snapshot":saved.snapshot,"unchanged":saved.unchanged})
-        }
+        ProjectAction::Save { message } => save(&project, message.as_deref())?,
         ProjectAction::History => json!({"status":"ok","snapshots":project.history()?}),
-        ProjectAction::Restore { snapshot } => {
-            let _lock = project.lock()?;
-            let current = capture_inputs(&project).unwrap_or_default();
-            let mut value = serde_json::to_value(project.restore(snapshot, current)?)?;
-            value["status"] = json!("ok");
-            value
-        }
+        ProjectAction::Restore { snapshot } => restore(&project, snapshot)?,
         ProjectAction::Studio {
             web_assets_dir,
             port,
@@ -117,6 +119,21 @@ fn run_inner(start: &Path, action: ProjectAction) -> Result<(ExitCode, Option<Va
         },
         Some(report),
     ))
+}
+
+pub(crate) fn save(project: &Project, message: Option<&str>) -> Result<Value> {
+    let _lock = project.lock()?;
+    let saved = project.save_captured(capture_inputs(project)?, message, "save")?;
+    Ok(json!({"status":"ok","snapshot":saved.snapshot,"unchanged":saved.unchanged}))
+}
+
+pub(crate) fn restore(project: &Project, snapshot: u64) -> Result<Value> {
+    let _lock = project.lock()?;
+    let mut value = serde_json::to_value(
+        project.restore(snapshot, capture_inputs(project).unwrap_or_default())?,
+    )?;
+    value["status"] = json!("ok");
+    Ok(value)
 }
 
 pub(crate) fn remember(project: &Project) -> Result<()> {
@@ -187,6 +204,12 @@ pub(crate) fn add(project: &Project, files: &[PathBuf], link: bool) -> Result<Va
 
 pub(crate) fn probe(path: &Path, kind: Kind) -> Value {
     match kind {
+        Kind::Component => (|| -> Option<Value> {
+            let graph=valle_compiler::motion::MotionModuleGraph::from_entry_path(path).ok()?;
+            let compiled=valle_compiler::motion::compile_motion_modules(&graph).ok()?;
+            let composition=compiled.artifact.composition?;
+            Some(json!({"duration":composition.duration().ok()?.as_f64(),"width":composition.width,"height":composition.height,"fps":composition.fps}))
+        })().unwrap_or(Value::Null),
         Kind::Video|Kind::Audio=>valle_media::codec::probe_av(path).ok().map(|info| {
             let fps=if kind==Kind::Video {valle_media::codec::decode::probe_video_presentation(path).ok().map(|probe|probe.display.nominal_fps)}else{None};
             json!({"duration":info.video.map(|(_,_,d)|d).or(info.audio),"width":info.video.map(|(w,_,_)|w),"height":info.video.map(|(_,h,_)|h),"fps":fps,"hasAudio":info.audio.is_some()})
@@ -268,6 +291,26 @@ pub(crate) fn summary(project: &Project) -> Result<Value> {
         resources.push(entry);
     }
     let history = project.history()?;
+    let seconds = |value: &Value| -> f64 {
+        value
+            .as_f64()
+            .or_else(|| {
+                value.as_str().and_then(|s| {
+                    s.split_once('/')
+                        .and_then(|(a, b)| Some(a.parse::<f64>().ok()? / b.parse::<f64>().ok()?))
+                        .or_else(|| s.parse().ok())
+                })
+            })
+            .unwrap_or(0.0)
+    };
+    let duration = document["tracks"]
+        .as_object()
+        .into_iter()
+        .flat_map(|tracks| tracks.values())
+        .flat_map(|tracks| tracks.as_array().into_iter().flatten())
+        .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+        .map(|clip| seconds(&clip["start"]) + seconds(&clip["duration"]))
+        .fold(0.0, f64::max);
     let mut exports = Vec::new();
     for snapshot in &history {
         let dir = project.snapshot_dir(snapshot.number).join("exports");
@@ -283,7 +326,7 @@ pub(crate) fn summary(project: &Project) -> Result<Value> {
     }
     exports.sort_by_key(|entry| entry["createdAt"].as_u64().unwrap_or(0));
     Ok(
-        json!({"status":"ok","root":project.root,"name":project.config.name,"timeline":project.config.timeline,"canvas":document["canvas"],"tracks":document["tracks"],"resources":resources,"outsideReferences":outside,"missing":missing,"snapshots":history.len(),"lastExport":exports.last()}),
+        json!({"status":"ok","root":project.root,"name":project.config.name,"timeline":project.config.timeline,"canvas":document["canvas"],"duration":duration,"tracks":document["tracks"],"resources":resources,"outsideReferences":outside,"missing":missing,"snapshots":history.len(),"lastExport":exports.last()}),
     )
 }
 

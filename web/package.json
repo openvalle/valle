@@ -5,17 +5,16 @@
   "workspaces": {
     "packages": [
       "packages/engine",
-      "apps/studio",
-      "apps/preview",
-      "apps/console"
+      "apps/studio"
     ],
     "catalog": {
       "canvaskit-wasm": "0.42.0"
     }
   },
   "scripts": {
-    "build": "bun run build:engine && bun run build:runtime && bun run build:sdk",
+    "build": "bun run build:engine && bun run build:runtime && bun run build:test-preview && bun run build:sdk",
     "build:engine": "bun run scripts/build-engine.ts",
+    "build:test-preview": "bun run scripts/build-test-preview.ts",
     "build:runtime": "bun run scripts/build-runtime.ts",
     "generate:packed-abi": "bun run scripts/generate-packed-abi.ts --write",
     "generate:protocol": "cargo run --quiet --manifest-path tools/schema-gen/Cargo.toml -- --write && bun run generate:packed-abi",

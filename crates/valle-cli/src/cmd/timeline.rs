@@ -247,7 +247,12 @@ pub(crate) fn prepare_timeline_media_facts(
                 });
             }
         }
-        for transition in track["transitions"].as_array_mut().into_iter().flatten() {
+        for transition in track
+            .get_mut("transitions")
+            .and_then(serde_json::Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
             if transition["kind"] != "motion" {
                 continue;
             }
@@ -312,7 +317,12 @@ pub(crate) fn prepare_timeline_media_facts(
             // This copy collects media facts through the built-in text path. Word timing
             // belongs to the original presenter input and does not affect font facts.
             for clip in track["clips"].as_array_mut().into_iter().flatten() {
-                for run in clip["runs"].as_array_mut().into_iter().flatten() {
+                for run in clip
+                    .get_mut("runs")
+                    .and_then(serde_json::Value::as_array_mut)
+                    .into_iter()
+                    .flatten()
+                {
                     if let Some(run) = run.as_object_mut() {
                         run.remove("start");
                         run.remove("end");
@@ -1218,6 +1228,17 @@ mod motion_source_metadata_tests {
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+
+    #[test]
+    fn media_facts_accept_a_sparse_visual_track_without_optional_transitions() {
+        let directory = tempfile::tempdir().unwrap();
+        let author = serde_json::json!({"canvas":{"width":32,"height":32,"fps":4},"tracks":{"visual":[{"clips":[{"kind":"solid","start":0,"duration":1,"color":"#123456"}]}]}});
+        let timeline = decode_timeline(&author.to_string()).unwrap();
+        let result =
+            prepare_timeline_media_facts(timeline, directory.path(), &mut Default::default())
+                .unwrap();
+        assert!(result.0.is_empty());
+    }
 
     #[test]
     fn caption_baseline_compiles_one_template_for_three_hundred_clips() {
