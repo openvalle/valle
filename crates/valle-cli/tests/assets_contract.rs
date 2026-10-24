@@ -1,252 +1,174 @@
 use serde_json::{Value, json};
-use std::{path::Path, process::Command};
-use valle_media::{
-    codec::{FloatWavWriter, TransparentVideoMuxer, write_rgba_png},
-    frame::{AudioBuffer, RgbaFrame},
-};
-use valle_project::assets::{
-    Ctx, Home,
-    analysis::{AnalyzerOutput, write_slot},
-};
+use std::{fs, path::Path, process::Command};
 
-fn run(root: &Path, args: &[&str], json: bool) -> String {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_valle"));
-    command.env("VALLE_HOME", root).arg("assets");
-    if json {
-        command.arg("--json");
-    }
-    let result = command.args(args).output().unwrap();
-    assert!(
-        result.status.success(),
-        "{args:?}: {} {}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
+fn run(home: &Path, args: &[&str], success: bool) -> Value {
+    let out = Command::new(env!("CARGO_BIN_EXE_valle"))
+        .env("VALLE_HOME", home)
+        .arg("--json")
+        .arg("assets")
+        .args(args)
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.success(),
+        success,
+        "{} {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
-    let text = String::from_utf8(result.stdout).unwrap();
-    if json {
-        assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["ok"], true);
-    }
-    text
+    serde_json::from_slice(&out.stdout).unwrap()
 }
 
 #[test]
-fn assets_cli_exposes_read_write_analyze_and_maintenance_contracts() {
-    let root = tempfile::tempdir().unwrap();
-    let home = root.path().join("home");
-    let wav = root.path().join("speech.wav");
-    let mut writer = FloatWavWriter::create(&wav, 22_050, 1).unwrap();
-    let samples = (0..88_200)
-        .map(|i| if i % 11_025 < 80 { 0.5 } else { 0.0 })
-        .collect();
-    writer
-        .write(&AudioBuffer {
-            samples,
-            sample_rate: 22_050,
-            channels: 1,
-        })
-        .unwrap();
-    writer.finish().unwrap();
-    let added: Value = serde_json::from_str(&run(
+fn library_cli_paths_tags_ranges_and_projects_share_the_same_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let source = temp.path().join("whoosh.wav");
+    // The library can retain arbitrary files even when no playable facts can be extracted.
+    fs::write(&source, b"unprobed audio bytes").unwrap();
+    let imported = run(
         &home,
         &[
             "add",
-            wav.to_str().unwrap(),
-            "--mode",
-            "copy",
-            "--title",
-            "Greeting",
+            source.to_str().unwrap(),
+            "--to",
+            "sfx",
             "--tag",
-            "speech",
+            "转场",
+            "--note",
+            "短促风声",
         ],
         true,
-    ))
-    .unwrap();
-    let hash = added["data"]["items"][0]["content_digest"]
-        .as_str()
-        .unwrap()
-        .strip_prefix("sha256:")
-        .unwrap()
-        .to_owned();
-    let context = Ctx::bare(Home::at(&home));
-    write_slot(
-        &context,
-        &hash,
-        "asr",
-        1,
-        &json!({}),
-        &AnalyzerOutput {
-            items: vec![
-                json!({"text":"Hello ","start_ms":100,"end_ms":300}),
-                json!({"text":"world.","start_ms":300,"end_ms":800}),
-            ],
-            cost_ms: 25,
-            cost_fen: 3,
-        },
-    )
-    .unwrap();
-    let video = root.path().join("sample.mov");
-    let mut muxer = TransparentVideoMuxer::open(&video, 32, 32, 10, 1).unwrap();
-    let mut frame = RgbaFrame::new(32, 32);
-    for color in [
-        [255, 0, 0, 255],
-        [0, 255, 0, 255],
-        [0, 0, 255, 255],
-        [0, 0, 255, 255],
-    ] {
-        frame.fill(color);
-        muxer.encode_video(&frame).unwrap();
-    }
-    muxer.finish().unwrap();
-    let added: Value = serde_json::from_str(&run(
+    );
+    assert_eq!(imported["status"], "ok");
+    assert_eq!(imported["items"][0]["path"], "sfx/whoosh.wav");
+    run(
         &home,
-        &["add", video.to_str().unwrap(), "--mode", "reference"],
+        &[
+            "annotate",
+            "sfx/whoosh.wav",
+            "--range",
+            "1,3",
+            "--text",
+            "可用片段",
+        ],
         true,
-    ))
-    .unwrap();
-    let video_hash = added["data"]["items"][0]["content_digest"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    for json in [false, true] {
-        run(&home, &["list", "--kind", "audio", "--tag", "speech"], json);
-        run(&home, &["list", "--stale"], json);
-        run(&home, &["show", &hash], json);
-        run(&home, &["stats"], json);
-        run(&home, &["resolve", &hash], json);
-        run(&home, &["transcript", &hash, "--level", "word"], json);
-        run(&home, &["transcript", &hash], json);
-        run(
-            &home,
-            &["edit", &hash, "--title", "Revised", "--subkind", "sfx"],
-            json,
-        );
-        run(
-            &home,
-            &["tag", &hash, "--add", "new", "--rm", "unused"],
-            json,
-        );
-        run(
-            &home,
-            &[
-                "annotate", &hash, "--range", "0.1", "0.3", "--text", "Opening", "--tag", "intro",
-            ],
-            json,
-        );
-        run(&home, &["search", "Opening", "--limit", "2"], json);
-        run(&home, &["search", "absent-query"], json);
-        run(
-            &home,
-            &[
-                "entity",
-                "add",
-                "--name",
-                if json { "Second speaker" } else { "Speaker" },
-                "--kind",
-                "person",
-                "--alias",
-                if json { "Second narrator" } else { "Narrator" },
-            ],
-            json,
-        );
-        run(&home, &["entity", "list"], json);
-        run(&home, &["analyze", &hash, "--with", "beats"], json);
-        run(&home, &["analyze", &video_hash, "--with", "shots"], json);
-        run(&home, &["maintenance", "verify", "--deep"], json);
-        run(
-            &home,
-            &[
-                "maintenance",
-                "sql",
-                "SELECT hash, width, stale, title FROM assets",
-            ],
-            json,
-        );
-        run(&home, &["maintenance", "gc"], json);
-        run(&home, &["maintenance", "reindex"], json);
-    }
-    let result = Command::new(env!("CARGO_BIN_EXE_valle"))
+    );
+    let note = run(&home, &["show", "sfx/whoosh.wav"], true);
+    assert_eq!(note["notes"][1]["range"], json!([1.0, 3.0]));
+    let search = run(
+        &home,
+        &[
+            "search", "风声", "--kind", "audio", "--in", "sfx", "--tag", "转场",
+        ],
+        true,
+    );
+    assert_eq!(search["total"], 1);
+    run(
+        &home,
+        &[
+            "edit",
+            "sfx/whoosh.wav",
+            "--name",
+            "wind.wav",
+            "--to",
+            "brand/acme",
+        ],
+        true,
+    );
+    let new = run(&home, &["show", "brand/acme/wind.wav"], true);
+    assert_eq!(new["notes"].as_array().unwrap().len(), 2);
+    let project = temp.path().join("promo");
+    let binary = env!("CARGO_BIN_EXE_valle");
+    assert!(
+        Command::new(binary)
+            .env("VALLE_HOME", &home)
+            .args(["project", "create"])
+            .arg(&project)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let out = Command::new(binary)
         .env("VALLE_HOME", &home)
-        .args(["assets", "--events", "stats"])
+        .arg("--json")
+        .args(["project", "add"])
+        .arg(new["absolutePath"].as_str().unwrap())
+        .arg("-C")
+        .arg(&project)
         .output()
         .unwrap();
-    assert!(result.status.success());
     assert!(
-        String::from_utf8(result.stdout)
-            .unwrap()
-            .lines()
-            .all(|line| serde_json::from_str::<Value>(line).is_ok())
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
     );
-    run(&home, &["remove", &hash], false);
-    let removed = run(&home, &["list", "--removed"], false);
-    assert!(removed.contains("removed"));
-    let revived = run(
-        &home,
-        &["add", wav.to_str().unwrap(), "--mode", "copy"],
-        false,
+    assert_eq!(
+        fs::read(project.join("media/wind.wav")).unwrap(),
+        b"unprobed audio bytes"
     );
-    assert!(revived.contains("revived"));
-    let existing = run(
-        &home,
-        &["add", wav.to_str().unwrap(), "--mode", "reflink"],
-        false,
+    run(&home, &["sql", "DELETE FROM tags"], false);
+    assert_eq!(
+        run(&home, &["sql", "SELECT count(*) FROM tags"], true)["rows"][0][0],
+        1
     );
-    assert!(existing.contains("existing"));
-    for args in [
-        vec!["add", wav.to_str().unwrap(), "--mode", "invalid"],
-        vec!["list", "--kind", "invalid"],
-        vec!["transcript", &hash, "--level", "invalid"],
-        vec!["analyze", "--all", "--with", "asr"],
-    ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_valle"))
-            .env("VALLE_HOME", &home)
-            .arg("assets")
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        assert!(!output.stderr.is_empty());
-    }
 }
 
 #[test]
-fn assets_native_probes_admit_fonts_and_scene3d_and_reject_corrupt_media() {
-    let root = tempfile::tempdir().unwrap();
-    let home = root.path().join("home");
-    let fixtures = [
-        (
-            "face.ttf",
-            "font",
-            &include_bytes!("../../../assets/fonts/noto/NotoSans-Regular.ttf")[..],
-        ),
-        (
-            "scene.glb",
-            "model3d",
-            &include_bytes!("../../valle-motion/tests/fixtures/scene3d/triangle.glb")[..],
-        ),
-    ];
-    for (name, kind, bytes) in fixtures {
-        let path = root.path().join(name);
-        std::fs::write(&path, bytes).unwrap();
-        run(
-            &home,
-            &["add", path.to_str().unwrap(), "--kind", kind],
-            true,
-        );
-    }
-    let image = root.path().join("picture.png");
-    let mut frame = RgbaFrame::new(2, 2);
-    frame.fill([80, 100, 120, 255]);
-    write_rgba_png(&image, &frame).unwrap();
-    run(&home, &["add", image.to_str().unwrap()], true);
-    let invalid = root.path().join("corrupt.mp4");
-    std::fs::write(&invalid, b"corrupt").unwrap();
-    let result = Command::new(env!("CARGO_BIN_EXE_valle"))
-        .env("VALLE_HOME", &home)
-        .args(["assets", "add"])
-        .arg(&image)
-        .arg(&invalid)
-        .output()
-        .unwrap();
-    assert!(!result.status.success());
-    assert!(String::from_utf8(result.stdout).unwrap().contains('✗'));
+fn imports_report_partial_success_reject_multifile_components_and_retry_safely() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let source = temp.path().join("file.bin");
+    fs::write(&source, b"file").unwrap();
+    let component = temp.path().join("card.motion.tsx");
+    fs::write(
+        &component,
+        "import {color} from './shared'; export default function Card(){return <Scene/>;}",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("shared.ts"),
+        "export const color='#ffffff';",
+    )
+    .unwrap();
+    let report = run(
+        &home,
+        &["add", source.to_str().unwrap(), component.to_str().unwrap()],
+        false,
+    );
+    assert_eq!(report["status"], "partial");
+    assert_eq!(report["failed"], 1);
+    assert_eq!(run(&home, &["list"], true)["total"], 1);
+    let retry = run(
+        &home,
+        &["add", source.to_str().unwrap(), "--tag", "retry"],
+        true,
+    );
+    assert_eq!(retry["items"][0]["alreadyExists"], true);
+    assert_eq!(run(&home, &["list", "--tag", "retry"], true)["total"], 1);
+    fs::create_dir_all(home.join("assets/.hidden")).unwrap();
+    fs::write(home.join("assets/.hidden/ignored.txt"), b"hidden").unwrap();
+    assert_eq!(run(&home, &["list"], true)["total"], 1);
+    assert!(!home.join("assets/components/card.motion.tsx").exists());
+}
+
+#[test]
+fn remove_uses_system_trash_and_new_files_do_not_inherit_deleted_notes() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let source = temp.path().join("valle-trash-contract.txt");
+    fs::write(&source, b"disposable library trash contract").unwrap();
+    run(
+        &home,
+        &["add", source.to_str().unwrap(), "--note", "old note"],
+        true,
+    );
+    run(&home, &["remove", "other/valle-trash-contract.txt"], true);
+    assert!(!home.join("assets/other/valle-trash-contract.txt").exists());
+    run(&home, &["add", source.to_str().unwrap()], true);
+    assert_eq!(
+        run(&home, &["show", "other/valle-trash-contract.txt"], true)["notes"],
+        json!([])
+    );
 }

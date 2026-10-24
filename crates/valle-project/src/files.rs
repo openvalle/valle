@@ -14,6 +14,134 @@ use crate::{
     folder::{Project, absolute, digest_file},
 };
 
+/// The existing preview identity checks, also used by scans and source digest caches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileStamp {
+    pub len: u64,
+    pub modified: String,
+    pub identity: String,
+    pub changed: Option<(i64, i64)>,
+}
+
+impl FileStamp {
+    pub fn read(path: &Path) -> Result<Self> {
+        Self::from_file(&fs::File::open(path)?)
+    }
+
+    pub fn from_file(file: &fs::File) -> Result<Self> {
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            bail!("expected an ordinary file");
+        }
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Ok(Self {
+            len: metadata.len(),
+            modified: format!("{:?}", metadata.modified()?),
+            #[cfg(unix)]
+            identity: format!("{}:{}", metadata.dev(), metadata.ino()),
+            #[cfg(windows)]
+            identity: windows_file_identity(file)?,
+            #[cfg(not(any(unix, windows)))]
+            identity: String::new(),
+            #[cfg(unix)]
+            changed: Some((metadata.ctime(), metadata.ctime_nsec())),
+            #[cfg(not(unix))]
+            changed: None,
+        })
+    }
+}
+
+#[cfg(windows)]
+fn windows_file_identity(file: &fs::File) -> std::io::Result<String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO, FileIdInfo, GetFileInformationByHandle,
+        GetFileInformationByHandleEx,
+    };
+    let mut extended = std::mem::MaybeUninit::<FILE_ID_INFO>::uninit();
+    // The successful call initializes the complete FILE_ID_INFO for this open handle.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            extended.as_mut_ptr().cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    } != 0
+    {
+        let info = unsafe { extended.assume_init() };
+        return Ok(format!(
+            "{}:{}",
+            info.VolumeSerialNumber,
+            hex::encode(info.FileId.Identifier)
+        ));
+    }
+    let mut legacy = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), legacy.as_mut_ptr()) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let info = unsafe { legacy.assume_init() };
+    Ok(format!(
+        "{}:{}",
+        info.dwVolumeSerialNumber,
+        (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow)
+    ))
+}
+
+/// Rename within a volume with the OS's exclusive-destination primitive.
+pub fn rename_new(source: &Path, destination: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let from = CString::new(source.as_os_str().as_bytes())?;
+        let to = CString::new(destination.as_os_str().as_bytes())?;
+        #[cfg(target_os = "macos")]
+        let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+        #[cfg(target_os = "linux")]
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            bail!("exclusive renaming is unsupported on this platform");
+        }
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if result != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let from = source
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let to = destination
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        if unsafe {
+            windows_sys::Win32::Storage::FileSystem::MoveFileExW(from.as_ptr(), to.as_ptr(), 0)
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    crate::sync_directory(destination.parent().context("destination has no parent")?)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {

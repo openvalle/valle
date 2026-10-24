@@ -60,7 +60,7 @@ fn render(dir: &Path, libraries: &Path, hardware: bool) {
     success(&run(
         dir,
         libraries,
-        &["--json", "assets", "add", "video.mp4", "--mode", "copy"],
+        &["--json", "assets", "add", "video.mp4"],
     ));
 }
 
@@ -100,7 +100,7 @@ fn one_binary_renders_with_all_ffmpeg_abis() {
         success(&run(
             dir,
             &libraries,
-            &["--json", "assets", "add", "alpha.mov", "--mode", "copy"],
+            &["--json", "assets", "add", "alpha.mov"],
         ));
         let prores = success(&run(
             dir,
@@ -123,7 +123,7 @@ fn one_binary_renders_with_all_ffmpeg_abis() {
         success(&run(
             dir,
             &libraries,
-            &["--json", "assets", "add", "prores.mov", "--mode", "copy"],
+            &["--json", "assets", "add", "prores.mov"],
         ));
         std::thread::sleep(Duration::from_secs(2));
     }

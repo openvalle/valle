@@ -1,7 +1,6 @@
 //! Shared filesystem helpers for the narrow Timeline CLI surface.
 
 pub mod assets;
-pub mod assets_analyzers;
 pub(crate) mod docs;
 pub mod enhance;
 

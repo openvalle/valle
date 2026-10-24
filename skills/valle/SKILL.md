@@ -22,7 +22,7 @@ valle motion render --help
 | Make animated titles, graphics, charts or a whole scene | `motion check`, `review`, `render`, `studio` | `motion` |
 | Cut footage, images, Motion, audio and captions together | `timeline check`, `render`, `studio` | `timeline` |
 | Work on a project folder and keep source snapshots | `project create`, `add`, `show`, `check`, `save`, `history`, `restore`, `render`, `studio` | `project` |
-| Find or organize local media | `assets add`, `search`, `show`, `tag`, `annotate`, `resolve` | `assets` |
+| Find or organize local media | `assets add`, `search`, `show`, `edit`, `tag`, `annotate` | `assets` |
 | Process a media file | `media transcribe`, `synthesize`, `matte`, `enhance`, `separate`, `shots`, `segment`, `inpaint`, `upscale`, `interpolate`, with weights from `models` | `media` |
 
 Use `timeline` for a standalone file and `project` when the user wants snapshots or already
@@ -161,10 +161,16 @@ asset library and recent-project list; projects live in their own directories.
 
 ## Assets and Media
 
-- `assets add FILE --mode copy --json` imports a file. Its ID is `data.items[].content_digest`,
-  and a unique prefix also works. `assets search QUERY --json` finds assets and
-  `assets resolve ID --json` returns a path. Analysis runs only when asked, as in
-  `assets analyze ID --with shots,beats`.
+- `assets add FILE --to DIR --tag TAG --note TEXT --json` copies reusable files into
+  the global library. Commands use library-relative paths, such as `sfx/whoosh.wav`;
+  `items[].absolutePath` can go directly into `project add`. `assets search QUERY --json`
+  searches names, directories, tags, notes, and font names. `assets annotate PATH --at 45
+  --text TEXT` or `--range 1,3` records selection hints. Read those notes to choose clip trims;
+  project imports contain files only. Use `media` tools on the absolute path for analysis.
+  Repeated adds deduplicate content and merge knowledge. Inspect current state with `show`
+  before retrying an interrupted edit or remove. Missing files retain notes until removed.
+  If the primary catalog cannot open, use `assets recover` to list backups, close Studio and
+  other library commands, then restore a chosen backup; do not delete the database.
 - `valle media capabilities --json` shows the FFmpeg libraries in use. For model-backed work,
   read `models list --json` and install only what a command's error names, with
   `models install ID`. Verify the `artifact` that install returned with

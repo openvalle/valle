@@ -9,8 +9,6 @@ pub mod folder;
 
 #[cfg(feature = "host")]
 pub mod assets;
-#[cfg(feature = "host")]
-mod resource_gc;
 
 #[cfg(feature = "host")]
 mod fs;

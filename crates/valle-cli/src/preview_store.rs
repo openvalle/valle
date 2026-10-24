@@ -16,76 +16,8 @@ pub(crate) enum PreviewFile {
     },
 }
 
-#[derive(PartialEq, Eq)]
-struct SourceStamp {
-    len: u64,
-    modified: std::time::SystemTime,
-    #[cfg(unix)]
-    identity: (u64, u64, i64, i64),
-    #[cfg(windows)]
-    identity: (u64, [u8; 16]),
-}
-
-impl SourceStamp {
-    fn read(file: &std::fs::File) -> Result<Self> {
-        #[cfg(unix)]
-        use std::os::unix::fs::MetadataExt;
-        let metadata = file.metadata()?;
-        Ok(Self {
-            len: metadata.len(),
-            modified: metadata.modified()?,
-            #[cfg(unix)]
-            identity: (
-                metadata.dev(),
-                metadata.ino(),
-                metadata.ctime(),
-                metadata.ctime_nsec(),
-            ),
-            #[cfg(windows)]
-            identity: windows_file_identity(file)?,
-        })
-    }
-}
-
-#[cfg(windows)]
-fn windows_file_identity(file: &std::fs::File) -> std::io::Result<(u64, [u8; 16])> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        BY_HANDLE_FILE_INFORMATION, FILE_ID_INFO, FileIdInfo, GetFileInformationByHandle,
-        GetFileInformationByHandleEx,
-    };
-
-    let mut extended = std::mem::MaybeUninit::<FILE_ID_INFO>::uninit();
-    // Query the opened source so an atomic path replacement cannot mix identities.
-    let found = unsafe {
-        GetFileInformationByHandleEx(
-            file.as_raw_handle(),
-            FileIdInfo,
-            extended.as_mut_ptr().cast(),
-            std::mem::size_of::<FILE_ID_INFO>() as u32,
-        )
-    };
-    if found != 0 {
-        // The successful call initialized the complete FILE_ID_INFO buffer.
-        let info = unsafe { extended.assume_init() };
-        return Ok((info.VolumeSerialNumber, info.FileId.Identifier));
-    }
-
-    // Filesystems without extended IDs still expose the legacy volume/file index.
-    let mut legacy = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
-    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), legacy.as_mut_ptr()) } == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // The successful call initialized the complete BY_HANDLE_FILE_INFORMATION buffer.
-    let info = unsafe { legacy.assume_init() };
-    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
-    let mut identity = [0; 16];
-    identity[..8].copy_from_slice(&index.to_le_bytes());
-    Ok((u64::from(info.dwVolumeSerialNumber), identity))
-}
-
 struct CachedMedia {
-    stamp: SourceStamp,
+    stamp: valle_project::files::FileStamp,
     digest: ContentDigest,
     path: PathBuf,
     directory: Weak<tempfile::TempDir>,
@@ -106,7 +38,7 @@ impl FrozenMediaCache {
             .retain(|_, entry| entry.directory.strong_count() > 0);
         let source = source.canonicalize()?;
         let mut input = std::fs::File::open(&source)?;
-        let stamp = SourceStamp::read(&input)?;
+        let stamp = valle_project::files::FileStamp::from_file(&input)?;
         if let Some(entry) = self.entries.get(&source) {
             if entry.stamp == stamp {
                 if let Some(directory) = entry.directory.upgrade() {
@@ -132,8 +64,8 @@ impl FrozenMediaCache {
             hash.update(&buffer[..count]);
             output.write_all(&buffer[..count])?;
         }
-        if stamp != SourceStamp::read(&input)?
-            || stamp != SourceStamp::read(&std::fs::File::open(&source)?)?
+        if stamp != valle_project::files::FileStamp::from_file(&input)?
+            || stamp != valle_project::files::FileStamp::from_file(&std::fs::File::open(&source)?)?
         {
             bail!(
                 "media changed while preparing preview: {}",

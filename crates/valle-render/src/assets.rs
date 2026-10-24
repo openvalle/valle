@@ -58,20 +58,25 @@ struct UrlCacheLocator {
     last_modified: Option<String>,
 }
 
-/// Shared cache under `VALLE_CACHE_DIR/assets` or `~/.cache/valle/assets`. Align with preview and
-/// web-runtime caches so projects reuse downloads. Fall back to `.valle/cache` when HOME is
-/// unavailable.
-pub fn default_cache_dir() -> PathBuf {
+/// Shared cache root. Models keep their separate model store.
+pub fn cache_dir() -> PathBuf {
     if let Some(root) = std::env::var_os("VALLE_CACHE_DIR") {
-        return PathBuf::from(root).join("assets");
+        return PathBuf::from(root);
     }
-    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-        return PathBuf::from(home)
-            .join(".cache")
-            .join("valle")
-            .join("assets");
-    }
-    PathBuf::from(".valle").join("cache")
+    let home = std::env::var_os("VALLE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(|home| PathBuf::from(home).join(".valle"))
+        })
+        .unwrap_or_else(|| PathBuf::from(".valle"));
+    home.join("cache")
+}
+
+/// URL downloads live apart from reusable user assets.
+pub fn default_cache_dir() -> PathBuf {
+    cache_dir().join("url")
 }
 
 /// Remote-asset cache with revalidated URL locators and content-addressed response blobs.

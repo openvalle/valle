@@ -73,9 +73,6 @@ pub(crate) enum EventKind {
     /// Final event with the report envelope used directly as `data`.
     #[serde(rename = "report")]
     Report(Value),
-    /// Analysis progress forwarded from the kernel.
-    #[serde(rename = "analyze.progress")]
-    AnalyzeProgress { message: String },
     /// Preserve the media kernel's phase, counts, and optional message.
     #[serde(rename = "media.progress")]
     MediaProgress(valle_media::tools::ToolEvent),
@@ -105,9 +102,7 @@ impl EventKind {
     /// Render an optional human-readable stderr line. Service events remain exclusive to NDJSON.
     fn human(&self) -> Option<String> {
         match self {
-            EventKind::AnalyzeProgress { message } | EventKind::ModelsProgress { message } => {
-                Some(message.clone())
-            }
+            EventKind::ModelsProgress { message } => Some(message.clone()),
             _ => None,
         }
     }

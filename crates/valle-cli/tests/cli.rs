@@ -730,22 +730,31 @@ fn enhance_report_cannot_replace_the_primary_output() {
 }
 
 #[test]
-fn assets_rejects_asr_execution_and_points_to_media_tool() {
-    let temporary = tempfile::tempdir().unwrap();
-    let output = valle()
-        .env("VALLE_HOME", temporary.path())
-        .args(["assets", "--json", "analyze", "--all", "--with", "asr"])
-        .output()
-        .expect("reject Assets-owned ASR execution");
-    assert!(!output.status.success());
-    let report: Value = serde_json::from_slice(&output.stdout).expect("Assets error envelope");
-    assert_eq!(report["ok"], false);
-    assert_eq!(report["error"]["code"], "bad_query");
-    assert!(
-        report["error"]["hint"]
-            .as_str()
-            .is_some_and(|hint| hint.contains("valle media transcribe"))
-    );
+fn assets_exposes_only_folder_and_catalog_operations() {
+    let output = valle().args(["assets", "--help"]).output().unwrap();
+    let help = String::from_utf8(output.stdout).unwrap();
+    for command in [
+        "add", "list", "search", "show", "edit", "tag", "annotate", "remove", "recover", "sql",
+    ] {
+        assert!(help.contains(command), "{help}");
+    }
+    for command in [
+        "analyze",
+        "entity",
+        "maintenance",
+        "resolve",
+        "transcript",
+        "stats",
+    ] {
+        assert!(
+            !valle()
+                .args(["assets", command, "--help"])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
 }
 
 #[test]
@@ -808,56 +817,43 @@ fn project_surface_uses_folders_and_source_snapshots() {
 }
 
 #[test]
-fn assets_add_human_and_json_outputs_use_the_typed_digest_contract() {
+fn assets_add_outputs_paths_that_compose_into_show() {
     let temporary = tempfile::tempdir().unwrap();
     let source = temporary.path().join("sample.bin");
-    let bytes = b"asset-add-digest-contract";
-    std::fs::write(&source, bytes).unwrap();
-    let expected = valle_project::ContentDigest::of_bytes(bytes);
-
+    std::fs::write(&source, b"asset path contract").unwrap();
     let human = valle()
         .env("VALLE_HOME", temporary.path())
         .args(["assets", "add"])
         .arg(&source)
-        .args(["--kind", "other", "--mode", "copy"])
         .output()
-        .expect("add asset with human output");
+        .unwrap();
     assert!(
         human.status.success(),
-        "asset add failed: {}",
+        "{}",
         String::from_utf8_lossy(&human.stderr)
     );
-    let human_stdout = String::from_utf8(human.stdout).unwrap();
     assert!(
-        human_stdout.starts_with(&expected.as_hex()[..12]),
-        "{human_stdout}"
+        String::from_utf8(human.stdout)
+            .unwrap()
+            .starts_with("other/sample.bin")
     );
-    assert!(!human_stdout.contains('✗'), "{human_stdout}");
-
-    let json = valle()
+    let output = valle()
         .env("VALLE_HOME", temporary.path())
         .args(["assets", "--json", "add"])
         .arg(&source)
-        .args(["--kind", "other", "--mode", "copy"])
         .output()
-        .expect("add asset with JSON output");
-    assert!(json.status.success());
-    let report: Value = serde_json::from_slice(&json.stdout).unwrap();
-    let wire = report["data"]["items"][0]["content_digest"]
-        .as_str()
-        .expect("typed add digest");
-    assert_eq!(wire, expected.to_wire());
-
+        .unwrap();
+    assert!(output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "ok");
+    let path = report["items"][0]["path"].as_str().unwrap();
+    assert!(report["items"][0].get("digest").is_none());
     let show = valle()
         .env("VALLE_HOME", temporary.path())
-        .args(["assets", "--json", "show", wire])
+        .args(["assets", "--json", "show", path])
         .output()
-        .expect("compose add digest into show");
-    assert!(
-        show.status.success(),
-        "typed digest was not accepted by a downstream asset command: {}",
-        String::from_utf8_lossy(&show.stderr)
-    );
+        .unwrap();
+    assert!(show.status.success());
 }
 
 #[test]
