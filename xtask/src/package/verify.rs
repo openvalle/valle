@@ -148,7 +148,7 @@ fn verify_runtime(
     );
     let port = boot["port"].as_u64().context("Studio port missing")?;
     let base = format!("http://127.0.0.1:{port}");
-    fetch(&format!("{base}/studio"), &temp.path().join("studio.html"))?;
+    fetch(&format!("{base}/"), &temp.path().join("studio.html"))?;
     let manifest_path = temp.path().join("web-manifest.json");
     fetch(&format!("{base}/runtime/manifest.json"), &manifest_path)?;
     let runtime: Value = serde_json::from_slice(&fs::read(manifest_path)?)?;
