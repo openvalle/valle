@@ -399,10 +399,10 @@ impl Root {
     }
 
     fn approximate(&self) -> f64 {
-        if let Self::Rational(value) = self {
-            if let Some(approximation) = value.to_f64() {
-                return approximation;
-            }
+        if let Self::Rational(value) = self
+            && let Some(approximation) = value.to_f64()
+        {
+            return approximation;
         }
         let mut lo = BigRational::from_integer(BigInt::zero());
         let mut hi = BigRational::from_integer(BigInt::from(1));
@@ -1046,12 +1046,12 @@ pub(super) fn scan_linear_morph(
         .map(|edge| vertex_bounds[edge].union(&vertex_bounds[(edge + 1) % count]))
         .collect::<Vec<_>>();
     let mut first_contact = None;
-    for vertex in 0..count {
-        for edge in 0..count {
+    for (vertex, vertex_bound) in vertex_bounds.iter().enumerate() {
+        for (edge, edge_bound) in edge_bounds.iter().enumerate() {
             if vertex == edge || vertex == (edge + 1) % count {
                 continue;
             }
-            if !vertex_bounds[vertex].overlaps(&edge_bounds[edge]) {
+            if !vertex_bound.overlaps(edge_bound) {
                 continue;
             }
             if let Some(problem) = vertex_edge_event(&points, vertex, edge, (edge + 1) % count) {
@@ -1072,7 +1072,7 @@ pub(super) fn scan_linear_morph(
             0,
         ));
     }
-    for time in area.roots().into_iter().filter(Root::in_open_unit) {
+    if let Some(time) = area.roots().into_iter().find(Root::in_open_unit) {
         return Err(issue(MorphIssueKind::AreaCollapse, &time, &time, 0, 0));
     }
     Ok(first_contact)

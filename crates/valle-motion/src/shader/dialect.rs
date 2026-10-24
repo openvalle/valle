@@ -864,7 +864,7 @@ fn arithmetic_type(a: Type, b: Type) -> Option<Type> {
     if a == Type::Bool || b == Type::Bool {
         return None;
     }
-    common_type(a, b).or_else(|| match (a, b) {
+    common_type(a, b).or(match (a, b) {
         (Type::Float(n), Type::Float(1) | Type::Int)
         | (Type::Float(1) | Type::Int, Type::Float(n)) => Some(Type::Float(n)),
         (Type::Matrix(n), Type::Float(1) | Type::Int)

@@ -14,6 +14,10 @@ const CHECK_INTERVAL: Duration = Duration::from_millis(10);
 
 /// A frame's outcome. Failed frames are delivered in frame order like completed ones, so the
 /// render reports the earliest failed frame, as rendering one frame at a time would.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Completed frames are the normal queue item; keep delivery evidence inline without a per-frame allocation."
+)]
 enum Outcome {
     Completed(CompletedFrame),
     Failed(usize, PipelineError),
@@ -89,8 +93,7 @@ fn actor(
     control: &RenderControl,
     work: impl FnOnce() -> Result<(), PipelineError>,
 ) {
-    let result =
-        catch_unwind(AssertUnwindSafe(work)).unwrap_or_else(|_| Err(PipelineError::StagePanicked));
+    let result = catch_unwind(AssertUnwindSafe(work)).unwrap_or(Err(PipelineError::StagePanicked));
     if let Err(error) = result {
         // The failed job has no completed frame, so its window slot is available in this queue.
         let _ = output.try_send(Err(error));

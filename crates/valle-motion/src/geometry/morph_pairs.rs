@@ -531,7 +531,7 @@ pub(super) fn prepare_with_contacts(
     let mut by_depth = (0..rows.len()).collect::<Vec<_>>();
     by_depth.sort_by_key(|row| rows[*row].depth);
     for row in by_depth {
-        for key in 0..paths.len() {
+        for (key, _) in paths.iter().enumerate() {
             if rows[row].paths[key].is_some() {
                 continue;
             }

@@ -2192,9 +2192,7 @@ impl Emitter<'_> {
         // Ellipsis is an intentionally synthetic run created by Takumi and has no authored span.
         // It remains drawable but must not pretend to point at source text or create an
         // unsupported bill entry.
-        let Some(span_id) = shaped.brush.source_span_id else {
-            return None;
-        };
+        let span_id = shaped.brush.source_span_id?;
         let anchor = anchors
             .get(span_id as usize)
             .ok_or(ClusterReject::Unattributed)
@@ -3580,7 +3578,7 @@ impl Emitter<'_> {
         let mut ops = Vec::with_capacity(list.len());
         for stage in list {
             match stage {
-                Some(filter) => ops.push(filter.clone()),
+                Some(filter) => ops.push(*filter),
                 None => {
                     let filter = css.next().ok_or_else(|| EmitError::BadStyle {
                         node: key.to_owned(),
@@ -3807,7 +3805,7 @@ impl Emitter<'_> {
                         font: interned,
                         glyphs: span,
                         outline: None,
-                        paint: paint.clone(),
+                        paint: *paint,
                         stroke: stroke.clone(),
                         source: None,
                     });
@@ -3857,7 +3855,7 @@ impl Emitter<'_> {
                     self.push(RecordCmd::Path {
                         path: path_ref,
                         fill_rule: *fill_rule,
-                        fill: fill.clone(),
+                        fill: *fill,
                         stroke: stroke.clone(),
                     });
                 }

@@ -4,6 +4,7 @@
 
 use super::*;
 use oxc::ast::ast::{ObjectProperty, PropertyKind};
+use std::rc::Rc;
 
 #[derive(Clone)]
 pub(super) struct StyleScope<'s> {
@@ -14,13 +15,13 @@ pub(super) struct StyleScope<'s> {
 #[derive(Clone)]
 pub(super) struct AuthoredObject<'s> {
     expression: &'s Expression<'s>,
-    scope: Arc<StyleScope<'s>>,
+    scope: Rc<StyleScope<'s>>,
 }
 
 pub(super) struct StyleProperty<'s> {
     pub name: String,
     pub property: &'s ObjectProperty<'s>,
-    pub scope: Arc<StyleScope<'s>>,
+    pub scope: Rc<StyleScope<'s>>,
 }
 
 pub(super) struct ResolvedStyle<'s> {
@@ -35,7 +36,7 @@ impl<'s> AuthoredObject<'s> {
 
     /// Whether both are the same object syntax captured in the same scope.
     pub(super) fn same_object(&self, other: &Self) -> bool {
-        std::ptr::eq(self.expression, other.expression) && Arc::ptr_eq(&self.scope, &other.scope)
+        std::ptr::eq(self.expression, other.expression) && Rc::ptr_eq(&self.scope, &other.scope)
     }
 }
 
@@ -48,8 +49,8 @@ impl ResolvedStyle<'_> {
 }
 
 impl<'s> Compiler<'s> {
-    pub(super) fn style_scope(&self) -> Arc<StyleScope<'s>> {
-        Arc::new(StyleScope {
+    pub(super) fn style_scope(&self) -> Rc<StyleScope<'s>> {
+        Rc::new(StyleScope {
             bindings: self.bindings.clone(),
             theme: self.current_theme.clone(),
         })
@@ -119,7 +120,7 @@ impl<'s> Compiler<'s> {
     fn collect_style_properties(
         &mut self,
         expression: &'s Expression<'s>,
-        scope: Arc<StyleScope<'s>>,
+        scope: Rc<StyleScope<'s>>,
         out: &mut Vec<StyleProperty<'s>>,
         depth: usize,
     ) {
@@ -142,7 +143,7 @@ impl<'s> Compiler<'s> {
                 if !self.has_local_style_name(name)
                     && let Some(init) = self.module_const_inits.get(name).copied()
                 {
-                    let module = Arc::new(StyleScope {
+                    let module = Rc::new(StyleScope {
                         bindings: Bindings::default(),
                         theme: None,
                     });

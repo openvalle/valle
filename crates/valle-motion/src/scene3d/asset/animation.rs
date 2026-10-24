@@ -359,8 +359,10 @@ fn read_floats(
         .elements()
         .flat_map(|element| {
             element
-                .chunks_exact(4)
-                .map(|component| f32::from_le_bytes(component.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|component| f32::from_le_bytes(*component))
         })
         .collect())
 }

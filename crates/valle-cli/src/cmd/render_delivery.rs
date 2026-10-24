@@ -124,10 +124,8 @@ impl DeliveryPlan {
         } else if args.storyboard.is_none() {
             bail!("provide -o or --storyboard");
         }
-        if let Some(frame) = args.frame {
-            if frame < 0 {
-                bail!("frame keys must be nonnegative");
-            }
+        if args.frame.is_some_and(|frame| frame < 0) {
+            bail!("frame keys must be nonnegative");
         }
         if args.frames.iter().any(|frame| *frame < 0) {
             bail!("frame keys must be nonnegative");

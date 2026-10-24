@@ -1455,6 +1455,10 @@ impl CompiledMotionInstance {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Render evaluation keeps source payloads inline to avoid allocations while cloning or evaluating frames."
+)]
 enum CompiledSourcePayload {
     Video {
         fit: CompiledRasterFit,
@@ -1802,6 +1806,10 @@ impl CompiledVisualTransition {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Clips are the common timeline item; keep their payload inline without a per-clip allocation."
+)]
 pub enum CompiledVisualItem {
     Clip {
         clip: CompiledVisualClip,
@@ -2079,6 +2087,10 @@ pub struct CompiledCaptionMotion {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Clips are the common timeline item; keep their payload inline without a per-clip allocation."
+)]
 pub enum CompiledCaptionItem {
     Motion { clip: CompiledCaptionMotion },
     Clip { clip: CompiledCaptionClip },
@@ -3053,6 +3065,10 @@ impl EvaluatedVisualTransition {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Render evaluation keeps source payloads inline to avoid allocations while cloning or evaluating frames."
+)]
 pub enum EvaluatedVisualOperation {
     Clip(EvaluatedVisualClip),
     Transition(EvaluatedVisualTransition),
@@ -3084,6 +3100,10 @@ pub struct EvaluatedTextCaption {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Render evaluation keeps source payloads inline to avoid allocations while cloning or evaluating frames."
+)]
 pub enum EvaluatedCaption {
     Text(EvaluatedTextCaption),
     Motion(EvaluatedVisualClip),
@@ -3729,7 +3749,7 @@ impl<'a> Resolver<'a> {
         self.resources.push(ResolvedResource {
             resource_id: resource_id.to_owned(),
             kind: actual_kind,
-            digest: digest.clone(),
+            digest: *digest,
             handle: binding.handle(),
             facts: binding.facts().clone(),
             execution,

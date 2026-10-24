@@ -389,9 +389,7 @@ fn normalize_timeline_time_token(token: &str) -> Result<String, InvalidTimelineT
     if exponent == i64::MIN {
         return Err(InvalidTimelineTime);
     }
-    let (integer, fractional) = mantissa
-        .split_once('.')
-        .map_or((mantissa, ""), |parts| parts);
+    let (integer, fractional) = mantissa.split_once('.').unwrap_or((mantissa, ""));
     let mut digits = String::with_capacity(integer.len() + fractional.len());
     digits.push_str(integer);
     digits.push_str(fractional);

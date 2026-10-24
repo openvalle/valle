@@ -42,10 +42,10 @@ impl ProgramRecording {
                             frame.filter_at = Some(at);
                         }
                         stack.push(frame);
-                    } else if let Some(rect) = leaf_bounds(cmd, self) {
-                        if let Some(top) = stack.last_mut() {
-                            top.add(rect);
-                        }
+                    } else if let Some(rect) = leaf_bounds(cmd, self)
+                        && let Some(top) = stack.last_mut()
+                    {
+                        top.add(rect);
                     }
                 }
             }

@@ -539,7 +539,7 @@ fn apply_alpha(source: &RgbaFrame, alpha: &[u8]) -> Result<RgbaFrame, ToolError>
         ));
     }
     let mut output = source.clone();
-    for (pixel, matte) in output.data.chunks_exact_mut(4).zip(alpha) {
+    for (pixel, matte) in output.data.as_chunks_mut::<4>().0.iter_mut().zip(alpha) {
         pixel[3] = ((u16::from(pixel[3]) * u16::from(*matte) + 127) / 255) as u8;
     }
     Ok(output)

@@ -72,10 +72,10 @@ pub fn emit_formula(
         style.font_size.to_bits(),
         u32::from_be_bytes([style.color.r, style.color.g, style.color.b, style.color.a]),
     );
-    if let Ok(cache) = fragment_cache().lock() {
-        if let Some(hit) = cache.get(&key) {
-            return Ok(hit.clone());
-        }
+    if let Ok(cache) = fragment_cache().lock()
+        && let Some(hit) = cache.get(&key)
+    {
+        return Ok(hit.clone());
     }
     let ink = ratex_types::color::Color::new(
         style.color.r as f32 / 255.0,
@@ -123,10 +123,8 @@ pub fn emit_ratex_list(
                         y: finite(*y, "glyph.y")? * font_size,
                     },
                 };
-                if let Some(last) = run.last() {
-                    if !last.compatible(&glyph) {
-                        flush_run(&mut list, &mut run)?;
-                    }
+                if run.last().is_some_and(|last| !last.compatible(&glyph)) {
+                    flush_run(&mut list, &mut run)?;
                 }
                 run.push(glyph);
             }

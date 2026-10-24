@@ -352,6 +352,10 @@ struct PendingSharedFrame {
 }
 
 #[cfg(target_os = "macos")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the execution stage bindings, surfaces, geometry, and control inputs explicit."
+)]
 fn render_shared_staged(
     project: &NativeProject,
     frames: &[FrameKey],
@@ -523,12 +527,11 @@ fn render_shared_staged(
                 if let Some(trace) = &control.trace {
                     trace.evidence("metal.queue", serde_json::json!({"frame": key.index(), "sequence": sequence,
                         "pending": pending.len(), "limit": MAXIMUM_PENDING_FRAMES, "activeContexts": active_queues, "retainedContexts": executors.len()}));
-                    if sequence % 24 == 0 {
-                        if let Some(memory) = metal_memory() {
+                    if sequence % 24 == 0
+                        && let Some(memory) = metal_memory() {
                             trace.evidence("metal.memory", serde_json::json!({"frame": key.index(), "allocatedBytes": memory.allocated,
                                 "optionalConcurrencyBudgetBytes": memory.budget, "scope": "Metal device allocations attributed to this process"}));
                         }
-                    }
                 }
                 if pending.len() == MAXIMUM_PENDING_FRAMES {
                     let mut sample = deliver_shared_head(
@@ -852,7 +855,7 @@ impl PipelineAccumulator {
         }
         self.requests = add_usize(self.requests, evidence.resource_requests)?;
         self.passes = add_usize(self.passes, evidence.execution_passes)?;
-        self.templates.insert(evidence.template_hash.clone());
+        self.templates.insert(evidence.template_hash);
         if evidence.template_cache_hit {
             self.template_cache_hits = add_usize(self.template_cache_hits, 1)?;
         } else {

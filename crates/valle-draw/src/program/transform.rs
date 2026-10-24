@@ -272,8 +272,8 @@ fn solve8(mut coefficients: [[f64; 8]; 8], mut values: [f64; 8]) -> Option<[f64;
     for column in 0..8 {
         let mut pivot = column;
         let mut best = coefficients[column][column].abs();
-        for row in (column + 1)..8 {
-            let candidate = coefficients[row][column].abs();
+        for (row, row_coefficients) in coefficients.iter().enumerate().skip(column + 1) {
+            let candidate = row_coefficients[column].abs();
             if candidate > best {
                 best = candidate;
                 pivot = row;
@@ -287,13 +287,17 @@ fn solve8(mut coefficients: [[f64; 8]; 8], mut values: [f64; 8]) -> Option<[f64;
             values.swap(column, pivot);
         }
         let diagonal = coefficients[column][column];
+        let pivot_row = coefficients[column];
         for row in (column + 1)..8 {
             let factor = coefficients[row][column] / diagonal;
             if !factor.is_finite() {
                 return None;
             }
-            for index in column..8 {
-                coefficients[row][index] -= factor * coefficients[column][index];
+            for (value, pivot_value) in coefficients[row][column..]
+                .iter_mut()
+                .zip(&pivot_row[column..])
+            {
+                *value -= factor * pivot_value;
             }
             values[row] -= factor * values[column];
         }

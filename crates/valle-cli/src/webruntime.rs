@@ -330,14 +330,14 @@ fn verify_files(read: impl Fn(&str) -> Result<Vec<u8>>) -> Result<VerifiedBuild>
         }
     }
     for (path, asset) in &paths {
-        if let Some(group) = &asset.group {
-            if !group_ids.contains(group) || !grouped_paths.contains(path.as_str()) {
-                bail!(
-                    "web runtime asset '{}' claims undeclared or incomplete group '{}'",
-                    path,
-                    group
-                );
-            }
+        if let Some(group) = &asset.group
+            && (!group_ids.contains(group) || !grouped_paths.contains(path.as_str()))
+        {
+            bail!(
+                "web runtime asset '{}' claims undeclared or incomplete group '{}'",
+                path,
+                group
+            );
         }
     }
     let mut worker_ids = BTreeSet::new();

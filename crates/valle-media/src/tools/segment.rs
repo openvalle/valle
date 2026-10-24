@@ -721,7 +721,8 @@ fn apply_soft_alpha(source: &RgbaFrame, alpha: &Gray8Frame) -> Result<RgbaFrame,
         ));
     }
     let mut foreground = source.clone();
-    for (pixel, model_alpha) in foreground.data.chunks_exact_mut(4).zip(&alpha.data) {
+    let pixels = foreground.data.as_chunks_mut::<4>().0;
+    for (pixel, model_alpha) in pixels.iter_mut().zip(&alpha.data) {
         pixel[3] = ((u16::from(pixel[3]) * u16::from(*model_alpha) + 127) / 255) as u8;
     }
     Ok(foreground)

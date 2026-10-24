@@ -529,11 +529,10 @@ impl<'s> Compiler<'s> {
                             self.illegal(DiagCode::GrammarForbidden, property.span(), "Transition parameter names must be static");
                             continue;
                         };
-                        if let Some(value) = self.expr_number_value(&property.value) {
-                            if transition_params.insert(name.clone(), value).is_some() {
+                        if let Some(value) = self.expr_number_value(&property.value)
+                            && transition_params.insert(name.clone(), value).is_some() {
                                 self.illegal(DiagCode::GrammarForbidden, property.span(), format!("duplicate Transition parameter `{name}`"));
                             }
-                        }
                     }
                 }
                 "source" if kind_tag == "shader-layer" => {
@@ -1014,7 +1013,7 @@ impl<'s> Compiler<'s> {
             enum RichItem {
                 /// A run, and the `runs.map(...)` row it is drawn in.
                 Text(TextValue, Vec<StyleBinding>, Span, Option<u32>),
-                InlineImage(PendingNode),
+                InlineImage(Box<PendingNode>),
             }
             let mut items = Vec::new();
             let mut saw_span = false;
@@ -1094,7 +1093,7 @@ impl<'s> Compiler<'s> {
                                 value: StyleValue::Static { value: MotionValue::Bool(true) },
                             });
                             saw_inline_image = true;
-                            items.push(RichItem::InlineImage(image));
+                            items.push(RichItem::InlineImage(Box::new(image)));
                         }
                     }
                     _ => self.unsupported(
@@ -1221,7 +1220,7 @@ impl<'s> Compiler<'s> {
                             caption_row: row,
                         });
                     }
-                    RichItem::InlineImage(image) => children.push(image),
+                    RichItem::InlineImage(image) => children.push(*image),
                 }
             }
             return Some(PendingNode {
@@ -1354,7 +1353,7 @@ impl<'s> Compiler<'s> {
                 expansion_stack: self.component_stack.clone(),
                 key,
                 kind: NodeKind::GeometryBatch {
-                    batch: GeometryBatchSpec {
+                    batch: Box::new(GeometryBatchSpec {
                         geometry,
                         positions,
                         sizes,
@@ -1371,7 +1370,7 @@ impl<'s> Compiler<'s> {
                         rotation_field: batch_rotation_field,
                         skew_x_field: batch_skew_x_field,
                         stroke_width_field: batch_stroke_width_field,
-                    },
+                    }),
                 },
                 class_names,
                 class_conditions,

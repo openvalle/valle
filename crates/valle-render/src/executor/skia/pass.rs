@@ -223,6 +223,10 @@ pub fn admit_skia_frame<'a>(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the execution stage bindings, surfaces, geometry, and control inputs explicit."
+)]
 fn admit_skia_frame_with_effects<'a>(
     template: &'a RenderPlanTemplate,
     bindings: &'a RenderBindings,

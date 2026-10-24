@@ -286,13 +286,11 @@ fn reject_forbidden_root_features(value: &serde_json::Value) -> Result<(), Contr
         errors.push("/glb/json", "glTF root must be an object");
         return Err(errors);
     };
-    for name in ["cameras"] {
-        if object.contains_key(name) {
-            errors.push(
-                format!("/glb/{name}"),
-                "imported cameras are outside the admitted GLB profile",
-            );
-        }
+    if object.contains_key("cameras") {
+        errors.push(
+            "/glb/cameras",
+            "imported cameras are outside the admitted GLB profile",
+        );
     }
     for name in ["extensionsUsed", "extensionsRequired"] {
         if object

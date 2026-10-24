@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, rc::Rc};
 
 use skia_safe::{
     AlphaType, Bitmap, BlendMode, ClipOp, Color4f, ColorType, Data, FilterMode, IRect, Image,
@@ -36,14 +36,14 @@ const OUTPUT_TRANSFORM: &str =
 
 #[derive(Debug, Clone)]
 pub(crate) struct EffectRuntime {
-    transitions: BTreeMap<valle_draw::transition::TransitionKind, Arc<RuntimeEffect>>,
-    color_grade: Option<Arc<RuntimeEffect>>,
-    mosaic: Option<Arc<RuntimeEffect>>,
-    directional_blur: Option<Arc<RuntimeEffect>>,
-    spotlight: Option<Arc<RuntimeEffect>>,
-    extension_color_gain: Option<Arc<RuntimeEffect>>,
-    chroma_key: Option<Arc<RuntimeEffect>>,
-    output_transform: Option<(OutputSpec, Arc<RuntimeEffect>)>,
+    transitions: BTreeMap<valle_draw::transition::TransitionKind, Rc<RuntimeEffect>>,
+    color_grade: Option<Rc<RuntimeEffect>>,
+    mosaic: Option<Rc<RuntimeEffect>>,
+    directional_blur: Option<Rc<RuntimeEffect>>,
+    spotlight: Option<Rc<RuntimeEffect>>,
+    extension_color_gain: Option<Rc<RuntimeEffect>>,
+    chroma_key: Option<Rc<RuntimeEffect>>,
+    output_transform: Option<(OutputSpec, Rc<RuntimeEffect>)>,
     counters: EffectCacheCounters,
 }
 
@@ -107,7 +107,7 @@ impl EffectRuntime {
                         self.counters.misses = self.counters.misses.saturating_add(1);
                         self.transitions.insert(
                             kernel.builtin(),
-                            Arc::new(compile(transition_source(*kernel)?, "transition")?),
+                            Rc::new(compile(transition_source(*kernel)?, "transition")?),
                         );
                     }
                 }
@@ -139,7 +139,7 @@ impl EffectRuntime {
                     } else {
                         self.counters.misses = self.counters.misses.saturating_add(1);
                         self.output_transform =
-                            Some((*spec, Arc::new(compile_output_transform(*spec)?)));
+                            Some((*spec, Rc::new(compile_output_transform(*spec)?)));
                     }
                 }
                 _ => {}
@@ -153,7 +153,7 @@ impl EffectRuntime {
             PreparedEffectKernel::ColorGrade { .. } => {
                 if self.color_grade.is_none() {
                     self.counters.misses = self.counters.misses.saturating_add(1);
-                    self.color_grade = Some(Arc::new(compile(
+                    self.color_grade = Some(Rc::new(compile(
                         include_str!("../../../../valle-draw/assets/shaders/colorgrade.sksl"),
                         "colorGrade",
                     )?));
@@ -164,7 +164,7 @@ impl EffectRuntime {
             PreparedEffectKernel::Mosaic { .. } => {
                 if self.mosaic.is_none() {
                     self.counters.misses = self.counters.misses.saturating_add(1);
-                    self.mosaic = Some(Arc::new(compile(
+                    self.mosaic = Some(Rc::new(compile(
                         include_str!("../../../../valle-draw/assets/shaders/mosaic.sksl"),
                         "mosaic",
                     )?));
@@ -176,7 +176,7 @@ impl EffectRuntime {
                 if self.directional_blur.is_none() {
                     self.counters.misses = self.counters.misses.saturating_add(1);
                     self.directional_blur =
-                        Some(Arc::new(compile(DIRECTIONAL_BLUR, "directionalBlur")?));
+                        Some(Rc::new(compile(DIRECTIONAL_BLUR, "directionalBlur")?));
                 } else {
                     self.counters.hits = self.counters.hits.saturating_add(1);
                 }
@@ -184,7 +184,7 @@ impl EffectRuntime {
             PreparedEffectKernel::Spotlight { .. } => {
                 if self.spotlight.is_none() {
                     self.counters.misses = self.counters.misses.saturating_add(1);
-                    self.spotlight = Some(Arc::new(compile(
+                    self.spotlight = Some(Rc::new(compile(
                         include_str!("../../../../valle-draw/assets/shaders/spotlight.sksl"),
                         "spotlight",
                     )?));
@@ -195,7 +195,7 @@ impl EffectRuntime {
             PreparedEffectKernel::ChromaKey { .. } => {
                 if self.chroma_key.is_none() {
                     self.counters.misses = self.counters.misses.saturating_add(1);
-                    self.chroma_key = Some(Arc::new(compile(
+                    self.chroma_key = Some(Rc::new(compile(
                         include_str!("../../../../valle-draw/assets/shaders/chromakey.sksl"),
                         "chromaKey",
                     )?));
@@ -207,7 +207,7 @@ impl EffectRuntime {
             PreparedEffectKernel::ExtensionColorGain { .. } => {
                 if self.extension_color_gain.is_none() {
                     self.counters.misses = self.counters.misses.saturating_add(1);
-                    self.extension_color_gain = Some(Arc::new(compile(
+                    self.extension_color_gain = Some(Rc::new(compile(
                         EXTENSION_COLOR_GAIN,
                         "extensionColorGain",
                     )?));
@@ -219,6 +219,10 @@ impl EffectRuntime {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Keep the execution stage bindings, surfaces, geometry, and control inputs explicit."
+    )]
     pub(crate) fn transition(
         &self,
         surfaces: &mut ScratchSurfaces<'_, '_>,
@@ -1649,11 +1653,12 @@ pub(super) fn draw_chromatic_aberration_kernel(
 pub(crate) fn set_working_color(paint: &mut Paint, color: LinearColor) -> Result<(), DrawError> {
     let effect = working_color_effect()?;
     let mut bytes = [0u8; 16];
-    for (slot, value) in
-        bytes
-            .chunks_exact_mut(4)
-            .zip([color.red, color.green, color.blue, color.alpha])
-    {
+    for (slot, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip([
+        color.red,
+        color.green,
+        color.blue,
+        color.alpha,
+    ]) {
         slot.copy_from_slice(&value.to_ne_bytes());
     }
     let shader = effect
@@ -2144,7 +2149,7 @@ mod tests {
         let expected = stage_output(&source, spec, &target_info).unwrap();
 
         let runtime = EffectRuntime {
-            output_transform: Some((spec, Arc::new(compile_output_transform(spec).unwrap()))),
+            output_transform: Some((spec, Rc::new(compile_output_transform(spec).unwrap()))),
             ..EffectRuntime::new()
         };
         let shader = runtime.output_shader(&source, spec).unwrap();

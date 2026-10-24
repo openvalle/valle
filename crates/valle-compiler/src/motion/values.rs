@@ -367,7 +367,7 @@ pub(super) fn path_topology(
 }
 
 pub(super) fn verbs_topology(verbs: &[PathVerb]) -> PathTopology {
-    if verbs.iter().any(|verb| *verb == PathVerb::Close) {
+    if verbs.contains(&PathVerb::Close) {
         PathTopology::Closed
     } else {
         PathTopology::Open

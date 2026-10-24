@@ -38,7 +38,7 @@ fn parse_wire(value: &str) -> Result<[u8; 32], IdentityParseError> {
     }
 
     let mut digest = [0_u8; 32];
-    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         digest[index] = (nibble(pair[0]) << 4) | nibble(pair[1]);
     }
     Ok(digest)

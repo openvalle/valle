@@ -2076,7 +2076,7 @@ pub fn validate_next_expr(
                 || !initial_velocity.is_finite()
             {
                 errors.push(ValidationError::new(
-                    format!("{path}"),
+                    path.to_string(),
                     "spring mass/stiffness must be finite and positive, damping non-negative, initialVelocity finite",
                 ));
             }

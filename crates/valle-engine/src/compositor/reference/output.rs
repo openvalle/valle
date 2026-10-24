@@ -97,7 +97,7 @@ pub fn transform_srgb_preview_pixels(
     // Flat spans are common in both artwork and transparent padding. Reuse only an exactly
     // equal adjacent input; no quantized lookup, retained frame state or resource invalidation.
     let mut previous: Option<([f32; 4], [f32; 4])> = None;
-    for channels in pixels.chunks_exact_mut(4) {
+    for channels in pixels.as_chunks_mut::<4>().0 {
         let input = [channels[0], channels[1], channels[2], channels[3]];
         if let Some((source, encoded)) = previous
             && source == input
@@ -125,8 +125,8 @@ pub fn transform_canvaskit_srgb_preview_f16(
         return Err(OutputMathError::InvalidRgbaBuffer);
     }
     let mut previous: Option<(u64, [f32; 4], [u8; 8])> = None;
-    for bytes in pixels.chunks_exact_mut(8) {
-        let packed = u64::from_le_bytes(bytes.try_into().expect("complete F16 pixel"));
+    for bytes in pixels.as_chunks_mut::<8>().0 {
+        let packed = u64::from_le_bytes(*bytes);
         if let Some((source, _, encoded)) = previous
             && source == packed
         {

@@ -187,7 +187,7 @@ impl Contract {
     }
 }
 
-fn envelope<'a>(bytes: &'a [u8], contract: Contract) -> Result<&'a [u8], PackedPlanError> {
+fn envelope(bytes: &[u8], contract: Contract) -> Result<&[u8], PackedPlanError> {
     check_size(bytes.len(), contract)?;
     if bytes.len() < HEADER_LEN {
         return Err(PackedPlanError::Truncated {

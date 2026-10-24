@@ -84,7 +84,7 @@ pub(super) fn instance_transform(
                 f64::from(y),
             ]);
         }
-        let angle = f64::from((instance.rotation % 360.0) as f32).to_radians();
+        let angle = f64::from(instance.rotation % 360.0).to_radians();
         let (sin, cos) = crate::math::sin_cos(angle);
         let (skew_sin, skew_cos) = crate::math::sin_cos(f64::from(instance.skew_x).to_radians());
         let (sin, cos, skew) = (sin as f32, cos as f32, (skew_sin / skew_cos) as f32);

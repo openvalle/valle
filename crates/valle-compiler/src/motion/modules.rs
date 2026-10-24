@@ -1148,9 +1148,8 @@ fn analyze_module(
             exports,
             display_names: local_names
                 .iter()
-                .filter_map(|(original, linked)| {
-                    (original != linked).then(|| (linked.clone(), original.clone()))
-                })
+                .filter(|&(original, linked)| original != linked)
+                .map(|(original, linked)| (linked.clone(), original.clone()))
                 .collect(),
             chunks,
         })

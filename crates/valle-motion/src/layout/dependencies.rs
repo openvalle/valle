@@ -196,23 +196,25 @@ impl SceneDependencies {
             }))
             .collect::<BTreeSet<_>>();
         for (at, node) in artifact.nodes.iter().enumerate() {
-            if let NodeKind::InstanceLayout { group } = node.kind {
-                if let Some(group) = artifact.instance_groups.get(group as usize) {
-                    for row in 0..group.rows() {
-                        if let Some(key) = group.keys.key_at(row) {
+            let NodeKind::InstanceLayout { group } = node.kind else {
+                continue;
+            };
+            let Some(group) = artifact.instance_groups.get(group as usize) else {
+                continue;
+            };
+            for row in 0..group.rows() {
+                if let Some(key) = group.keys.key_at(row) {
+                    keys.insert(key, at);
+                }
+                if !referenced_instance_keys.is_empty() {
+                    let mut stack = group.template_children.iter().collect::<Vec<_>>();
+                    while let Some(child) = stack.pop() {
+                        if let Some(key) = group.key_for_node(row, &child.node.key)
+                            && referenced_instance_keys.contains(key.as_str())
+                        {
                             keys.insert(key, at);
                         }
-                        if !referenced_instance_keys.is_empty() {
-                            let mut stack = group.template_children.iter().collect::<Vec<_>>();
-                            while let Some(child) = stack.pop() {
-                                if let Some(key) = group.key_for_node(row, &child.node.key)
-                                    && referenced_instance_keys.contains(key.as_str())
-                                {
-                                    keys.insert(key, at);
-                                }
-                                stack.extend(&child.children);
-                            }
-                        }
+                        stack.extend(&child.children);
                     }
                 }
             }

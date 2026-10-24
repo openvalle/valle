@@ -220,6 +220,10 @@ pub struct VisualTrackWire {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Keep wire items aligned with the inline document model without per-clip allocations."
+)]
 pub enum VisualItemWire {
     Clip(VisualClipWire),
     Gap(GapWire),
@@ -600,6 +604,10 @@ pub struct CaptionTrackWire {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Keep wire items aligned with the inline document model without per-clip allocations."
+)]
 pub enum CaptionItemWire {
     Clip(CaptionWire),
     Motion(CaptionMotionWire),

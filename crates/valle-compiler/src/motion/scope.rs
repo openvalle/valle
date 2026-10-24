@@ -1502,45 +1502,45 @@ impl<'s> Compiler<'s> {
         if let Some(name) = style_properties.iter().find(|name| !supported_style(name)) {
             return format!("{tag} style.{name} has no pixel-equivalent instance lowering");
         }
-        if tag == "View" && class_name == Some("absolute") {
-            if let Some(name) = style_properties.iter().find(|name| {
-                matches!(
-                    **name,
-                    "minWidth"
-                        | "minHeight"
-                        | "maxWidth"
-                        | "maxHeight"
-                        | "marginTop"
-                        | "marginRight"
-                        | "marginBottom"
-                        | "marginLeft"
-                        | "paddingTop"
-                        | "paddingRight"
-                        | "paddingBottom"
-                        | "paddingLeft"
-                        | "borderRadius"
-                )
-            }) {
-                return format!(
-                    "View style.{name} needs the per-row layout template instead of the absolute batch template"
-                );
+        if tag == "View" {
+            if class_name == Some("absolute") {
+                let layout_property = style_properties.iter().find(|name| {
+                    matches!(
+                        **name,
+                        "minWidth"
+                            | "minHeight"
+                            | "maxWidth"
+                            | "maxHeight"
+                            | "marginTop"
+                            | "marginRight"
+                            | "marginBottom"
+                            | "marginLeft"
+                            | "paddingTop"
+                            | "paddingRight"
+                            | "paddingBottom"
+                            | "paddingLeft"
+                            | "borderRadius"
+                    )
+                });
+                if let Some(name) = layout_property {
+                    return format!(
+                        "View style.{name} needs the per-row layout template instead of the absolute batch template"
+                    );
+                }
+                let missing_property = ["left", "top", "width", "height", "backgroundColor"]
+                    .into_iter()
+                    .find(|name| !style_properties.contains(name));
+                if let Some(name) = missing_property {
+                    return format!("View style.{name} is required by the absolute box template");
+                }
+            } else {
+                let absolute_property = style_properties
+                    .iter()
+                    .find(|name| matches!(**name, "left" | "top" | "transform"));
+                if let Some(name) = absolute_property {
+                    return format!("View style.{name} needs the exact absolute batch template");
+                }
             }
-        }
-        if tag == "View" && class_name != Some("absolute") {
-            if let Some(name) = style_properties
-                .iter()
-                .find(|name| matches!(**name, "left" | "top" | "transform"))
-            {
-                return format!("View style.{name} needs the exact absolute batch template");
-            }
-        }
-        if tag == "View"
-            && class_name == Some("absolute")
-            && let Some(name) = ["left", "top", "width", "height", "backgroundColor"]
-                .into_iter()
-                .find(|name| !style_properties.contains(name))
-        {
-            return format!("View style.{name} is required by the absolute box template");
         }
         if tag == "Path" {
             if let Some(name) = attributes.iter().find(|name| {
@@ -1565,15 +1565,15 @@ impl<'s> Compiler<'s> {
                 return "Path rotation/scale/skew needs transformOrigin: point(0, 0)".into();
             }
         }
-        if tag == "Circle" {
-            if let Some(name) = attributes.iter().find(|name| {
+        if tag == "Circle"
+            && let Some(name) = attributes.iter().find(|name| {
                 !matches!(
                     **name,
                     "key" | "cx" | "cy" | "r" | "fill" | "style" | "visible"
                 )
-            }) {
-                return format!("Circle {name} has no full-arc instance lowering");
-            }
+            })
+        {
+            return format!("Circle {name} has no full-arc instance lowering");
         }
         if self.geometry_references.unknown_key {
             return "dynamic bounds()/anchor() references need per-row layout".into();
@@ -1791,9 +1791,7 @@ impl<'s> Compiler<'s> {
                     }
                 }
                 "cx" | "cy" | "r" | "fill" if is_circle => {
-                    if attribute.value.is_none() {
-                        return None;
-                    }
+                    attribute.value.as_ref()?;
                     has_circle_radius |= name.name == "r";
                     has_circle_fill |= name.name == "fill";
                 }
@@ -1877,7 +1875,7 @@ impl<'s> Compiler<'s> {
         {
             return None;
         }
-        if self.geometry_references.unknown_key
+        if (self.geometry_references.unknown_key
             || items.iter().any(|item| {
                 item.as_object()
                     .and_then(|object| object.get(&key_field))
@@ -1889,13 +1887,11 @@ impl<'s> Compiler<'s> {
                                 .keys
                                 .contains(&self.scoped_key(key))
                     })
-            })
+            }))
+            && !layout_view
         {
-            if !layout_view {
-                *fallback_reason =
-                    Some("bounds()/anchor() reads an instance row's layout box".into());
-                return None;
-            }
+            *fallback_reason = Some("bounds()/anchor() reads an instance row's layout box".into());
+            return None;
         }
         let first = items.first()?.as_object()?;
         #[cfg(not(target_family = "wasm"))]
@@ -2165,24 +2161,37 @@ impl<'s> Compiler<'s> {
                     },
                     _ => false,
                 },
-                StyleValue::Expr { expr } => match (
-                    style.property.as_str(),
-                    group_arena.types.get(expr.0 as usize).copied().flatten(),
-                ) {
+                StyleValue::Expr { expr } => matches!(
                     (
-                        "left" | "top" | "width" | "height" | "opacity" | "min-width"
-                        | "min-height" | "max-width" | "max-height" | "margin-top" | "margin-right"
-                        | "margin-bottom" | "margin-left" | "padding-top" | "padding-right"
-                        | "padding-bottom" | "padding-left" | "border-radius",
+                        style.property.as_str(),
+                        group_arena.types.get(expr.0 as usize).copied().flatten(),
+                    ),
+                    (
+                        "left"
+                            | "top"
+                            | "width"
+                            | "height"
+                            | "opacity"
+                            | "min-width"
+                            | "min-height"
+                            | "max-width"
+                            | "max-height"
+                            | "margin-top"
+                            | "margin-right"
+                            | "margin-bottom"
+                            | "margin-left"
+                            | "padding-top"
+                            | "padding-right"
+                            | "padding-bottom"
+                            | "padding-left"
+                            | "border-radius",
                         Some(ExprType::Number),
-                    )
-                    | ("background-color", Some(ExprType::Color | ExprType::String))
-                    | ("transform", Some(ExprType::String))
-                    | ("rotate", Some(ExprType::Angle | ExprType::String))
-                    | ("scale", Some(ExprType::Number | ExprType::Point))
-                    | ("translate", Some(ExprType::Point | ExprType::Vec2)) => true,
-                    _ => false,
-                },
+                    ) | ("background-color", Some(ExprType::Color | ExprType::String))
+                        | ("transform", Some(ExprType::String))
+                        | ("rotate", Some(ExprType::Angle | ExprType::String))
+                        | ("scale", Some(ExprType::Number | ExprType::Point))
+                        | ("translate", Some(ExprType::Point | ExprType::Vec2))
+                ),
             }
         });
         let template_inputs_supported = group_arena.values.iter().all(|expr| {

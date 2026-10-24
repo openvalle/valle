@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -354,7 +355,7 @@ impl<K: Ord + Clone, V> BoundedCache<K, V> {
 pub(crate) struct BackendCaches {
     programs: BoundedCache<ContentDigest, Arc<DrawProgram>>,
     fonts: BoundedCache<(ContentDigest, u32), Arc<Typeface>>,
-    shaders: BoundedCache<ResourceKey, Arc<RuntimeEffect>>,
+    shaders: BoundedCache<ResourceKey, Rc<RuntimeEffect>>,
     counters: BackendCacheCounters,
     font_manager: FontMgr,
     pub(crate) opacity_layers: Arc<std::sync::Mutex<SmallOpacityCache>>,
@@ -478,7 +479,7 @@ impl BackendCaches {
         binding: &PlanStructureBinding,
         object: &SkiaExternalObject,
         uri: &str,
-    ) -> Result<Arc<RuntimeEffect>, DrawError> {
+    ) -> Result<Rc<RuntimeEffect>, DrawError> {
         // A cache hit must not bypass the plan's declared structure binding. Physical cache
         // identity and logical admission identity are intentionally checked independently.
         if binding.key != uri {
@@ -487,7 +488,7 @@ impl BackendCaches {
         let key = object.key().clone();
         if let Some(cached) = self.shaders.get(&key) {
             self.counters.shader_hits = self.counters.shader_hits.saturating_add(1);
-            return Ok(Arc::clone(cached));
+            return Ok(Rc::clone(cached));
         }
 
         self.counters.shader_misses = self.counters.shader_misses.saturating_add(1);
@@ -496,7 +497,7 @@ impl BackendCaches {
             .ok_or_else(|| DrawError::MissingShader(uri.to_owned()))?;
         let source = core::str::from_utf8(bytes)
             .map_err(|_| DrawError::InvalidShaderEncoding(uri.to_owned()))?;
-        let effect = Arc::new(
+        let effect = Rc::new(
             RuntimeEffect::make_for_shader(source, None).map_err(|message| {
                 DrawError::ShaderCompile {
                     uri: uri.to_owned(),
@@ -504,7 +505,7 @@ impl BackendCaches {
                 }
             })?,
         );
-        self.shaders.insert(key, Arc::clone(&effect));
+        self.shaders.insert(key, Rc::clone(&effect));
         Ok(effect)
     }
 }

@@ -78,7 +78,7 @@ impl PerlinTables {
                 .flatten()
                 .flat_map(u16::to_be_bytes)
                 .collect::<Vec<_>>();
-            for (row, rgb) in bytes.chunks_exact(3).enumerate() {
+            for (row, rgb) in bytes.as_chunks::<3>().0.iter().enumerate() {
                 let at = (row * width + point) * 4;
                 pixels[at..at + 3].copy_from_slice(rgb);
                 pixels[at + 3] = 255;

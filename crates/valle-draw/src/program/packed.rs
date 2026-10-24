@@ -71,6 +71,10 @@ struct PackedInstanceBatchNode {
     rename_all = "camelCase",
     deny_unknown_fields
 )]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Packed nodes mirror the inline node arena during encoding and decoding."
+)]
 enum PackedNode {
     Group(Group),
     Path(PathNode),
@@ -270,7 +274,9 @@ fn decode_paths(bytes: &[u8], entry: SectionEntry) -> Result<Vec<PathData>, Pack
             .collect::<Result<Vec<_>, _>>()?;
         cursor += verb_count;
         let points = bytes[cursor..cursor + point_count * PATH_POINT_BYTES]
-            .chunks_exact(PATH_POINT_BYTES)
+            .as_chunks::<PATH_POINT_BYTES>()
+            .0
+            .iter()
             .map(|point| {
                 [
                     f64::from_le_bytes(point[..8].try_into().expect("eight coordinate bytes")),
@@ -459,17 +465,14 @@ pub(crate) fn content_hash(program: &DrawProgram) -> Result<[u8; 32], PackedDraw
     Ok(Sha256::digest(bytes).into())
 }
 
-fn encode_nodes(
-    nodes: &[Node],
-) -> Result<
-    (
-        Vec<PackedNode>,
-        InstanceColumns,
-        Vec<super::LinearColor>,
-        Vec<f32>,
-    ),
-    PackedDrawError,
-> {
+type EncodedNodes = (
+    Vec<PackedNode>,
+    InstanceColumns,
+    Vec<super::LinearColor>,
+    Vec<f32>,
+);
+
+fn encode_nodes(nodes: &[Node]) -> Result<EncodedNodes, PackedDrawError> {
     let mut packed = Vec::with_capacity(nodes.len());
     let mut instances = InstanceColumns::with_capacity(0);
     let mut stroke_colors = Vec::new();
@@ -726,12 +729,10 @@ fn decode_dash_offsets(bytes: &[u8], entry: SectionEntry) -> Result<Vec<f32>, Pa
         ));
     }
     Ok(section_bytes(bytes, entry)
-        .chunks_exact(DASH_OFFSET_BYTES)
-        .map(|row| {
-            f32::from_bits(u32::from_le_bytes(
-                row.try_into().expect("fixed dash offset"),
-            ))
-        })
+        .as_chunks::<DASH_OFFSET_BYTES>()
+        .0
+        .iter()
+        .map(|row| f32::from_bits(u32::from_le_bytes(*row)))
         .collect())
 }
 
@@ -746,7 +747,7 @@ fn decode_stroke_colors(
     }
     let section = section_bytes(bytes, entry);
     let mut colors = Vec::with_capacity(entry.count);
-    for row in section.chunks_exact(STROKE_COLOR_BYTES) {
+    for row in section.as_chunks::<STROKE_COLOR_BYTES>().0 {
         let channel = |offset: usize| {
             f32::from_bits(u32::from_le_bytes(
                 row[offset..offset + 4]

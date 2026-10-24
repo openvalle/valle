@@ -379,7 +379,7 @@ fn extrude(
                 "extrude cap triangulation is empty",
             ));
         }
-        for indices in triangles.triangle_indices.chunks_exact(3) {
+        for indices in triangles.triangle_indices.as_chunks::<3>().0 {
             let mut xy = [
                 triangles.vertices[indices[0]],
                 triangles.vertices[indices[1]],
@@ -706,10 +706,10 @@ fn tube(
         ]
     };
     let mut traversed = 0.0;
-    for at in 0..edge_count {
+    for (at, length) in lengths.iter().enumerate().take(edge_count) {
         let next = (at + 1) % points.len();
         let v0 = (traversed / total) as f32;
-        traversed += lengths[at];
+        traversed += length;
         let v1 = (traversed / total) as f32;
         for side in 0..sides {
             let u0 = side as f32 / sides as f32;

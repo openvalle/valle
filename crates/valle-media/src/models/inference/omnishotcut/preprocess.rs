@@ -74,8 +74,10 @@ impl RgbaPreprocessor {
         output.resize(FRAME_BYTES, 0);
         if width == MODEL_WIDTH && height == MODEL_HEIGHT {
             for (rgba, rgb) in source
-                .chunks_exact(RGBA_CHANNELS)
-                .zip(output.chunks_exact_mut(RGB_CHANNELS))
+                .as_chunks::<RGBA_CHANNELS>()
+                .0
+                .iter()
+                .zip(output.as_chunks_mut::<RGB_CHANNELS>().0.iter_mut())
             {
                 rgb.copy_from_slice(&rgba[..RGB_CHANNELS]);
             }
@@ -155,7 +157,9 @@ mod tests {
             ]);
         }
         let expected = source
-            .chunks_exact(RGBA_CHANNELS)
+            .as_chunks::<RGBA_CHANNELS>()
+            .0
+            .iter()
             .flat_map(|pixel| [pixel[0], pixel[1], pixel[2]])
             .collect::<Vec<_>>();
         let mut preprocessor = RgbaPreprocessor::new();

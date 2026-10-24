@@ -318,10 +318,10 @@ pub fn numeric_range(
             _ => None,
         }
     }
-    if let Some(function) = TimeFunction::compile(exprs, root) {
-        if let Some(time) = context(function.input()) {
-            return function.range_on(time.lower, time.upper);
-        }
+    if let Some(function) = TimeFunction::compile(exprs, root)
+        && let Some(time) = context(function.input())
+    {
+        return function.range_on(time.lower, time.upper);
     }
     let result = visit(exprs, root, context, &mut 512)?;
     ValueRange::new(result.lower, result.upper)

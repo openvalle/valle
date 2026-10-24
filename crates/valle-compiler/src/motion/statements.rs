@@ -984,7 +984,7 @@ impl<'s> Compiler<'s> {
                 ..
             } = &iterations
             {
-                self.lower_effect(*update, body)?;
+                self.lower_effect(update, body)?;
             }
         }
         Some(Outcome {

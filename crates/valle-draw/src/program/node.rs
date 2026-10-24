@@ -241,6 +241,10 @@ pub struct ShadowNode {
     rename_all = "camelCase",
     deny_unknown_fields
 )]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The ID-addressed node arena keeps group state inline without a separate allocation per group."
+)]
 pub enum Node {
     Group(Group),
     Path(PathNode),

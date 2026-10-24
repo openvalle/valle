@@ -634,7 +634,7 @@ impl NativeRenderer {
 }
 
 fn require_video_extent(width: u32, height: u32) -> Result<(), NativeRenderError> {
-    if width < 2 || height < 2 || width % 2 != 0 || height % 2 != 0 {
+    if width < 2 || height < 2 || !width.is_multiple_of(2) || !height.is_multiple_of(2) {
         return Err(NativeRenderError::InvalidVideoExtent { width, height });
     }
     Ok(())

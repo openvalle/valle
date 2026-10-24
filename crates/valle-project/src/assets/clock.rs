@@ -3,10 +3,10 @@
 
 /// Current UTC milliseconds, overridden by `VALLE_ASSETS_NOW` when set.
 pub fn now_millis() -> i64 {
-    if let Some(v) = std::env::var_os("VALLE_ASSETS_NOW") {
-        if let Ok(ms) = v.to_string_lossy().trim().parse::<i64>() {
-            return ms;
-        }
+    if let Some(v) = std::env::var_os("VALLE_ASSETS_NOW")
+        && let Ok(ms) = v.to_string_lossy().trim().parse::<i64>()
+    {
+        return ms;
     }
     use std::time::{SystemTime, UNIX_EPOCH};
     match SystemTime::now().duration_since(UNIX_EPOCH) {

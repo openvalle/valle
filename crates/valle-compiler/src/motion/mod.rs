@@ -5,7 +5,6 @@
 //! `valle_motion::Expr`. The compiler never evaluates a frame.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use oxc::allocator::Allocator;
 use oxc::ast::ast::{

@@ -121,6 +121,8 @@ pub(super) fn reads_caption_content(
     scan.found
 }
 
+type SpanRun = (TextValue, Vec<StyleBinding>, Span, Option<u32>);
+
 impl<'s> Compiler<'s> {
     fn is_presenter(&self) -> bool {
         matches!(
@@ -487,7 +489,7 @@ impl<'s> Compiler<'s> {
         &mut self,
         call: &'s CallExpression<'s>,
         path: &str,
-    ) -> Option<Vec<(TextValue, Vec<StyleBinding>, Span, Option<u32>)>> {
+    ) -> Option<Vec<SpanRun>> {
         if self.is_caption_map_call(call) {
             let arrow = self.caption_map_callback(call)?;
             let element = self.span_callback(arrow)?;

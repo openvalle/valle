@@ -187,21 +187,9 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
             role: instance.artifact.role,
         };
         motion_source_metadata.insert(component.to_owned(), metadata);
-        if let Some(old) = durations.insert(
-            key.clone(),
-            valle_timeline::MotionSourceMetadata {
-                duration,
-                role: instance.artifact.role,
-            },
-        ) {
-            if old
-                != (valle_timeline::MotionSourceMetadata {
-                    duration,
-                    role: instance.artifact.role,
-                })
-            {
-                return Err(format!("Motion instance {key} has conflicting durations"));
-            }
+        let previous = durations.insert(key.clone(), metadata);
+        if previous.is_some_and(|old| old != metadata) {
+            return Err(format!("Motion instance {key} has conflicting durations"));
         }
         let bindings = prepared_input.resources;
         if let Some((existing, old_bindings)) = prepared.get(&key) {

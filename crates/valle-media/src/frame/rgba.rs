@@ -22,7 +22,7 @@ impl RgbaFrame {
     /// Create an opaque-black frame.
     pub fn opaque_black(width: u32, height: u32) -> Self {
         let mut f = Self::new(width, height);
-        for px in f.data.chunks_exact_mut(4) {
+        for px in f.data.as_chunks_mut::<4>().0 {
             px[3] = 255; // R=G=B=0, A=255
         }
         f
@@ -53,7 +53,7 @@ impl RgbaFrame {
 
     /// Fill the entire frame.
     pub fn fill(&mut self, rgba: [u8; 4]) {
-        for px in self.data.chunks_exact_mut(4) {
+        for px in self.data.as_chunks_mut::<4>().0 {
             px.copy_from_slice(&rgba);
         }
     }

@@ -220,7 +220,7 @@ impl<'s> Compiler<'s> {
                 'C' => 6,
                 _ => return None,
             };
-            if coordinates.is_empty() || coordinates.len() % arity != 0 {
+            if coordinates.is_empty() || !coordinates.len().is_multiple_of(arity) {
                 return None;
             }
             for (group_index, group) in coordinates.chunks_exact(arity).enumerate() {
@@ -232,7 +232,7 @@ impl<'s> Compiler<'s> {
                     _ => unreachable!(),
                 };
                 verbs.push(verb);
-                for pair in group.chunks_exact(2) {
+                for pair in group.as_chunks::<2>().0 {
                     points.push(this.push(
                         Expr::MakePoint {
                             x: pair[0],

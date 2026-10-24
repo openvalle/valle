@@ -143,7 +143,7 @@ fn finite_inline_css_and_direct_artifacts_retain_the_shared_issue() {
     let errors = artifact.validate().unwrap_err();
     let issue = errors
         .iter()
-        .find_map(|error| error.style.as_ref())
+        .find_map(|error| error.style.as_deref())
         .unwrap();
     assert_eq!(issue, &parse_property("width", "min-content").unwrap_err());
     artifact.nodes[0].styles.clear();

@@ -241,7 +241,7 @@ pub(super) fn build_motion_program(
     let local_frame = motion_context.local_frame;
     let options = valle_motion::LayoutOptions {
         viewport: valle_motion::Viewport::new((input.viewport.width(), input.viewport.height())),
-        fonts: fonts,
+        fonts,
         #[cfg(target_arch = "wasm32")]
         formula_fonts: &fonts.formulas,
         styles: Some(styles),
@@ -688,7 +688,7 @@ pub(crate) fn prepare_program(
             "{}.font[{}:{}]",
             context.semantic_path, semantic.digest, font.face_index
         );
-        let handle = requests.font(semantic.digest.clone(), semantic.face_index, &path)?;
+        let handle = requests.font(semantic.digest, semantic.face_index, &path)?;
         bindings.fonts.push(ProgramFontBinding {
             face_hash: semantic.digest,
             face_index: font.face_index,
@@ -716,8 +716,8 @@ pub(crate) fn prepare_program(
         };
         let path = format!("{}.shader[{}]", context.semantic_path, shader.uri);
         let handle = requests.runtime_shader(
-            structure.digest.clone(),
-            abi_digest.clone(),
+            structure.digest,
+            *abi_digest,
             *color_domain,
             *alpha_behavior,
             &path,

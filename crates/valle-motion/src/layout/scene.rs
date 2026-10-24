@@ -727,6 +727,10 @@ pub fn build_tree_profiled(
     Ok((tree, timings))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the layout pass inputs and its independently borrowed caches explicit."
+)]
 pub(super) fn build_tree_inner(
     prepared: &PreparedScene,
     ctx: &valle_motion::MotionContext,
@@ -1182,7 +1186,6 @@ pub(super) fn build_tree_inner(
     let mut shaders = HashMap::new();
     let mut layer_fx = HashMap::new();
     let mut blend_spaces = HashMap::new();
-    let scene3d = scene3d;
     let scoped_seconds = prepared
         .dependencies
         .mapped_seconds(ctx.sample.composition().as_f64())
@@ -1629,7 +1632,7 @@ pub(super) fn build_tree_inner(
 
     let glass = Rc::new(resolve_glass(artifact, &values)?);
 
-    if let Some(timings) = timings.as_deref_mut() {
+    if let Some(timings) = timings {
         timings.finish_ms = elapsed(&mut started);
     }
     let (shutters, echoes) = if temporal_samples {
@@ -1657,7 +1660,7 @@ pub(super) fn build_tree_inner(
             opts,
             painted.as_ref(),
             &mut trees,
-            shared.as_deref_mut(),
+            shared,
         )?;
         (shutters, echoes)
     } else {
@@ -1928,8 +1931,8 @@ fn resolve_scene3d_requests(
         })?;
         let material = |m: &crate::Scene3DMaterialBinding| -> Result<valle_motion::scene3d::MaterialFrameState, LayoutError> {
             Ok(valle_motion::scene3d::MaterialFrameState {
-                color: m.color.as_ref().map(|v| color(v)).transpose()?,
-                emissive: m.emissive.as_ref().map(|v| color(v)).transpose()?,
+                color: m.color.as_ref().map(color).transpose()?,
+                emissive: m.emissive.as_ref().map(color).transpose()?,
                 metallic: m.metallic.as_ref().map(|v| scalar(v, "material metallic")).transpose()?,
                 roughness: m.roughness.as_ref().map(|v| scalar(v, "material roughness")).transpose()?,
                 emissive_intensity: m.emissive_intensity.as_ref().map(|v| scalar(v, "material emissive_intensity")).transpose()?,
@@ -2265,6 +2268,10 @@ fn resolve_layout_instance_node(
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the layout pass inputs and its independently borrowed caches explicit."
+)]
 fn resolve_instance_batch_cached(
     prepared: &PreparedScene,
     group_index: usize,
@@ -4162,6 +4169,10 @@ fn analytic_auto_blur_trails(
 /// The ends follow the host's clock, so a trail stops at a cut and stays still while the source
 /// holds; a value that jumps inside the exposure draws a streak across the jump. A node missing at
 /// either end, or reaching past 2048px, has no blur; the requested frame does not change.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the layout pass inputs and its independently borrowed caches explicit."
+)]
 fn auto_blur_trails(
     prepared: &PreparedScene,
     ctx: &valle_motion::MotionContext,
@@ -4439,7 +4450,7 @@ impl LayoutTree {
                     .size
                     .width
                     .zip(self.viewport.size.height)
-                    .map_or(true, |(viewport_width, viewport_height)| {
+                    .is_none_or(|(viewport_width, viewport_height)| {
                         right > 0.0
                             && bottom > 0.0
                             && left < f64::from(viewport_width)
@@ -5417,15 +5428,12 @@ fn formula_style_from_node(
     for binding in &node.styles {
         match binding.property.as_str() {
             "fontSize" | "font-size" => {
-                if let StyleValue::Static {
-                    value: MotionValue::Number(n),
-                } = &binding.value
-                {
+                let resolved = match &binding.value {
+                    StyleValue::Static { value } => value,
+                    StyleValue::Expr { expr } => value(values, *expr, at)?,
+                };
+                if let MotionValue::Number(n) = resolved {
                     style.font_size = *n;
-                } else if let StyleValue::Expr { expr } = &binding.value {
-                    if let MotionValue::Number(n) = value(values, *expr, at)? {
-                        style.font_size = *n;
-                    }
                 }
             }
             "color" => {
@@ -5442,6 +5450,10 @@ fn formula_style_from_node(
     Ok(style)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the layout pass inputs and its independently borrowed caches explicit."
+)]
 fn node_of(
     prepared: &PreparedScene,
     at: usize,
@@ -5510,6 +5522,10 @@ fn projected_instance_node(
 
 /// Project one Artifact node into zero or one Takumi boxes. GlassField is a semantic material
 /// scope, not a CSS box, so it contributes its projected children directly to the parent.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the layout pass inputs and its independently borrowed caches explicit."
+)]
 fn projected_nodes_of(
     prepared: &PreparedScene,
     at: usize,
@@ -5806,20 +5822,20 @@ fn projected_nodes_of(
         // These are semantic subtree boundaries even when the author requests isolation:auto.
         declarations.push_str("; isolation: isolate !important");
     }
-    if let NodeKind::MathFormula { .. } = &template.kind {
-        if let Some(fragment) = formulas.get(&template.key) {
-            let total_h = (fragment.height + fragment.depth).max(0.0);
-            let size = format!(
-                "width: {}px; height: {}px",
-                fragment.width.max(0.0),
-                total_h
-            );
-            declarations = if declarations.is_empty() {
-                size
-            } else {
-                format!("{declarations}; {size}")
-            };
-        }
+    if let NodeKind::MathFormula { .. } = &template.kind
+        && let Some(fragment) = formulas.get(&template.key)
+    {
+        let total_h = (fragment.height + fragment.depth).max(0.0);
+        let size = format!(
+            "width: {}px; height: {}px",
+            fragment.width.max(0.0),
+            total_h
+        );
+        declarations = if declarations.is_empty() {
+            size
+        } else {
+            format!("{declarations}; {size}")
+        };
     }
     if !declarations.is_empty() {
         node = node.with_style(parse_style(cache, &declarations).map_err(|reason| {
@@ -6036,6 +6052,10 @@ fn eval_viewport(opts: &LayoutOptions<'_>) -> Option<(f64, f64)> {
     Some((f64::from(width) / dpr, f64::from(height) / dpr))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the layout pass inputs and its independently borrowed caches explicit."
+)]
 fn resolve_units(
     artifact: &SceneArtifact,
     eval_plan: &EvalPlan,
@@ -6391,6 +6411,10 @@ fn projected_child_ids(
 }
 
 /// Match render children to `child_ids`, handling anonymous boxes as in [`walk_render_keys`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the layout pass inputs and its independently borrowed caches explicit."
+)]
 fn match_render_children(
     artifact: &SceneArtifact,
     children: &[RenderNode],
@@ -6472,6 +6496,10 @@ fn walk_instance_render_keys(
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the layout pass inputs and its independently borrowed caches explicit."
+)]
 fn match_instance_render_children(
     group: &InstanceGroup,
     row: usize,
@@ -6544,7 +6572,7 @@ fn walk_pairs(
     root: &RenderNode,
     layout: &LayoutResults,
     inactive_nodes: &[bool],
-    callback: &mut dyn FnMut(Option<usize>, &str, takumi_core::geometry::NodeId, (f32, f32)),
+    callback: &mut impl FnMut(Option<usize>, &str, takumi_core::geometry::NodeId, (f32, f32)),
 ) -> Result<(), LayoutError> {
     let mut render_keys = HashMap::new();
     walk_render_keys(

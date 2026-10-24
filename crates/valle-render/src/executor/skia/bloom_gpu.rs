@@ -216,7 +216,7 @@ fn render_region(
     canvas.clip_rect(Rect::from(output_roi), None, false);
     canvas.clear(Color4f::new(0.0, 0.0, 0.0, 0.0));
     canvas.draw_image(
-        &working.image_snapshot(),
+        working.image_snapshot(),
         (
             (output_roi.left() + region.origin[0]) as f32,
             (output_roi.top() + region.origin[1]) as f32,

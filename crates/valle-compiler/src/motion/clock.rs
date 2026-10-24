@@ -265,7 +265,7 @@ impl<'s> Compiler<'s> {
             return;
         };
         let duration = duration.as_f64();
-        if !(value > duration) {
+        if value.partial_cmp(&duration) != Some(std::cmp::Ordering::Greater) {
             return;
         }
         let mut message = format!(

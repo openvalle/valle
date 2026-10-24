@@ -26,23 +26,22 @@ impl Library {
                 super::relative(d).map(|p| p.to_string_lossy().trim_end_matches('/').to_owned())
             })
             .transpose()?;
-        if let Some(kind) = kind {
-            if ![
-                "video",
-                "audio",
-                "image",
-                "font",
-                "model3d",
-                "environment",
-                "shader",
-                "component",
-                "data",
-                "other",
-            ]
-            .contains(&kind)
-            {
-                bail!("unknown asset kind: {kind}");
-            }
+        let supported_kinds = [
+            "video",
+            "audio",
+            "image",
+            "font",
+            "model3d",
+            "environment",
+            "shader",
+            "component",
+            "data",
+            "other",
+        ];
+        if let Some(kind) = kind
+            && !supported_kinds.contains(&kind)
+        {
+            bail!("unknown asset kind: {kind}");
         }
         let filters = Filters::parse(filter)?;
         let ranks = if let Some(query) = query {

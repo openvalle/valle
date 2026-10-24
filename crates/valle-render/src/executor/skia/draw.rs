@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -105,7 +106,7 @@ pub(crate) struct ProgramRuntime {
     pub(crate) program: Arc<DrawProgram>,
     pub(crate) textures: BTreeMap<ExternalTexture, ProgramTexture>,
     pub(crate) fonts: BTreeMap<(ContentDigest, u32), Typeface>,
-    pub(crate) shaders: BTreeMap<String, Arc<RuntimeEffect>>,
+    pub(crate) shaders: BTreeMap<String, Rc<RuntimeEffect>>,
     scenes: BTreeMap<ContentDigest, SceneImage>,
     blend: Option<BlendRuntime>,
     mask_coverage: Option<RuntimeEffect>,
@@ -242,7 +243,7 @@ impl ProgramRuntime {
                     index: requirement.face_index,
                 })?;
             let key = (digest, requirement.face_index);
-            let face = caches.font(key.clone(), bytes)?;
+            let face = caches.font(key, bytes)?;
             if fonts.insert(key, face).is_some() {
                 return Err(DrawError::DuplicateResource(requirement.face_hash.as_hex()));
             }
@@ -359,15 +360,15 @@ impl ProgramRuntime {
                     "builtin://transition-input".into(),
                     include_str!("../../../../valle-draw/assets/shaders/transitioninput.sksl"),
                 )]) {
-                    if !shaders.contains_key(&uri) {
+                    if let std::collections::btree_map::Entry::Vacant(entry) = shaders.entry(uri) {
                         let effect =
                             RuntimeEffect::make_for_shader(source, None).map_err(|message| {
                                 DrawError::ShaderCompile {
-                                    uri: uri.clone(),
+                                    uri: entry.key().clone(),
                                     message,
                                 }
                             })?;
-                        shaders.insert(uri, Arc::new(effect));
+                        entry.insert(Rc::new(effect));
                     }
                 }
             }
@@ -1734,7 +1735,7 @@ impl ProgramRuntime {
                         &children,
                         None,
                     )
-                    .ok_or_else(|| DrawError::ShaderAbi { uri })?
+                    .ok_or(DrawError::ShaderAbi { uri })?
             }
             TransitionKernel::Shader {
                 shader,
@@ -2152,7 +2153,7 @@ fn preflight_shader_instance(
     bounds: Rect,
     uniforms: &[ShaderUniformBinding],
     texture_bindings: &[ShaderTextureBinding],
-    shaders: &BTreeMap<String, Arc<RuntimeEffect>>,
+    shaders: &BTreeMap<String, Rc<RuntimeEffect>>,
     textures: &BTreeMap<ExternalTexture, ProgramTexture>,
 ) -> Result<(), DrawError> {
     let effect = shaders
@@ -3682,7 +3683,7 @@ fn backdrop_similarity(local_to_device: [f64; 9], at: [f64; 2]) -> Option<[f64; 
     let device_x = a * x + b * y + c;
     let device_y = d * x + e * y + f;
     let w = g * x + h * y + i;
-    if !(w > 0.0) {
+    if w.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
     let w2 = w * w;
@@ -4168,7 +4169,7 @@ fn write_f32s(data: &mut [u8], offset: usize, values: &[f32]) -> Result<(), Draw
     let destination = data
         .get_mut(offset..end)
         .ok_or_else(|| DrawError::Internal("shader uniform outside ABI buffer".into()))?;
-    for (chunk, value) in destination.chunks_exact_mut(4).zip(values) {
+    for (chunk, value) in destination.as_chunks_mut::<4>().0.iter_mut().zip(values) {
         chunk.copy_from_slice(&value.to_ne_bytes());
     }
     Ok(())
@@ -8659,7 +8660,7 @@ mod tests {
             ),
         ] {
             let effect = RuntimeEffect::make_for_shader(source, None).unwrap();
-            shaders.insert(uri, Arc::new(effect));
+            shaders.insert(uri, Rc::new(effect));
         }
         let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 48.0, 48.0));
         let shader_node = builder.push_node(Node::RuntimeShader(RuntimeShaderNode {

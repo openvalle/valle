@@ -80,6 +80,10 @@ pub struct FrameLayer {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The frame execution tables keep pass data inline, without a separate allocation per pass."
+)]
 pub enum LogicalPassKind {
     ClearComposite {
         output: ResourceId,

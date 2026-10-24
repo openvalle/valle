@@ -254,6 +254,10 @@ fn resolve(
     world[index] = Some((transform, depth));
     Ok((transform, depth))
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The parallel GLB tables are admitted together; keep each immutable input explicit."
+)]
 pub(super) fn admit_nodes(
     root: &Root,
     meshes: &[ModelMesh],
@@ -280,17 +284,16 @@ pub(super) fn admit_nodes(
                 "skin must reference an admitted skin and a mesh",
             ));
         }
-        if let Some(weights) = &node.weights {
-            if node
-                .mesh
+        let invalid_weights = node.weights.as_ref().is_some_and(|weights| {
+            node.mesh
                 .is_none_or(|m| meshes[m].morph_target_count as usize != weights.len())
                 || weights.iter().any(|w| !valid_weight(*w))
-            {
-                return Err(one_error(
-                    format!("/glb/nodes/{index}/weights"),
-                    "node weights require a morph mesh and matching finite bounded values",
-                ));
-            }
+        });
+        if invalid_weights {
+            return Err(one_error(
+                format!("/glb/nodes/{index}/weights"),
+                "node weights require a morph mesh and matching finite bounded values",
+            ));
         }
         for &child in &node.children {
             let Some(parent) = parents.get_mut(child) else {
@@ -387,10 +390,10 @@ pub(super) fn admit_nodes(
                     "skin joints must share the declared or inferred skeleton root",
                 ));
             }
-            for primitive_index in mesh.first_primitive as usize
-                ..(mesh.first_primitive + mesh.primitive_count) as usize
+            for attributes in &skin_vertices[mesh.first_primitive as usize
+                ..(mesh.first_primitive + mesh.primitive_count) as usize]
             {
-                let Some(attributes) = &skin_vertices[primitive_index] else {
+                let Some(attributes) = attributes else {
                     return Err(one_error(
                         format!("/glb/nodes/{index}/skin"),
                         "skinned mesh primitives require JOINTS_0 and WEIGHTS_0",

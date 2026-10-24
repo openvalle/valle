@@ -605,27 +605,26 @@ pub(crate) fn validate_value(
                 "uniform value must be finite",
             ));
         }
-        if let (Some(min), Some(max)) = (min, max) {
-            if *number < min || *number > max {
-                return Err(ShaderDiagnostic::new(
-                    DiagnosticCode::UniformRange,
-                    path,
-                    format!("uniform value {number} is outside {min}..={max}"),
-                ));
-            }
-        }
-    }
-    if let UniformValue::Color(channels) = value {
-        if channels
-            .iter()
-            .any(|channel| !(0.0..=1.0).contains(channel))
+        if let (Some(min), Some(max)) = (min, max)
+            && (*number < min || *number > max)
         {
             return Err(ShaderDiagnostic::new(
                 DiagnosticCode::UniformRange,
                 path,
-                "straight color channels must be in 0..=1",
+                format!("uniform value {number} is outside {min}..={max}"),
             ));
         }
+    }
+    if let UniformValue::Color(channels) = value
+        && channels
+            .iter()
+            .any(|channel| !(0.0..=1.0).contains(channel))
+    {
+        return Err(ShaderDiagnostic::new(
+            DiagnosticCode::UniformRange,
+            path,
+            "straight color channels must be in 0..=1",
+        ));
     }
     Ok(())
 }

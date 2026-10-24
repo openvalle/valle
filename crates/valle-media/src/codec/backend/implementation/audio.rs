@@ -244,7 +244,7 @@ impl LibavAudioSource {
             anyhow::bail!("audio PCM decode window exceeds its admitted capacity");
         }
         let bytes = &out.data(0)[..n * size_of::<f32>()];
-        for c in bytes.chunks_exact(size_of::<f32>()) {
+        for c in bytes.as_chunks::<{ size_of::<f32>() }>().0 {
             self.buf
                 .push_back(f32::from_ne_bytes([c[0], c[1], c[2], c[3]]));
         }

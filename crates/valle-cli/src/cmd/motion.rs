@@ -136,6 +136,10 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep review's CLI source, binding, sampling, and report arguments explicit, matching the other command adapters."
+)]
 fn review(
     input: &Path,
     host_duration: Option<&str>,
@@ -374,7 +378,6 @@ fn render(
                 })
                 .unwrap_or_default(),
             progress: crate::output::render_progress(),
-            ..NativeRenderOptions::default()
         },
     );
     if let Some(check) = check {
@@ -840,7 +843,7 @@ pub(crate) fn compile_captured_timeline_component(
         .iter()
         .map(|(control, asset)| ResourceRef {
             control: control.clone(),
-            content_hash: asset.hash.clone(),
+            content_hash: asset.hash,
         })
         .collect::<Vec<_>>();
     let fonts = load_fonts(&[])?;
@@ -993,19 +996,21 @@ fn compile_with_font_assets(
         Err(diagnostics) => return Ok(Err(diagnostics)),
     };
     for (control, schema) in &compiled.artifact.controls.assets {
-        if schema.kind == valle_motion::AssetKind::Environment {
-            if let Some(asset) = assets.get_mut(control) {
-                let environment = valle_motion::scene3d::EnvironmentAsset::from_encoded(
-                    &asset.bytes,
-                    Default::default(),
-                )?;
-                asset.bytes = environment.frozen_bytes()?.into();
-                asset.hash = environment.content_digest();
-                for resource in &mut compiled.artifact.resource_refs {
-                    if resource.control == *control {
-                        resource.content_hash = asset.hash;
-                    }
-                }
+        if schema.kind != valle_motion::AssetKind::Environment {
+            continue;
+        }
+        let Some(asset) = assets.get_mut(control) else {
+            continue;
+        };
+        let environment = valle_motion::scene3d::EnvironmentAsset::from_encoded(
+            &asset.bytes,
+            Default::default(),
+        )?;
+        asset.bytes = environment.frozen_bytes()?.into();
+        asset.hash = environment.content_digest();
+        for resource in &mut compiled.artifact.resource_refs {
+            if resource.control == *control {
+                resource.content_hash = asset.hash;
             }
         }
     }
@@ -1080,7 +1085,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
         .iter()
         .map(|(control, asset)| ResourceRef {
             control: control.clone(),
-            content_hash: asset.hash.clone(),
+            content_hash: asset.hash,
         })
         .collect::<Vec<_>>();
     // Hot reload uses the same fonts and source composition as Studio preview.
@@ -1369,20 +1374,25 @@ fn motion_watch_paths(request: &StudioRequest) -> Vec<PathBuf> {
             .filter_map(|spec| spec.split_once('=').map(|(_, path)| PathBuf::from(path))),
     );
     for spec in &request.asset_specs {
-        if let Some((_, path)) = spec.split_once('=') {
-            if path.ends_with(".shader.json") {
-                let path = Path::new(path);
-                if let Ok(bytes) = std::fs::read(path)
-                    && let Ok(manifest) = valle_motion::shader::ShaderManifest::parse(&bytes)
-                    && manifest.validate_shape().is_ok()
-                {
-                    paths.push(
-                        path.parent()
-                            .unwrap_or_else(|| Path::new("."))
-                            .join(manifest.entry),
-                    );
-                }
-            }
+        let Some((_, path)) = spec.split_once('=') else {
+            continue;
+        };
+        if !path.ends_with(".shader.json") {
+            continue;
+        }
+        let path = Path::new(path);
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let Ok(manifest) = valle_motion::shader::ShaderManifest::parse(&bytes) else {
+            continue;
+        };
+        if manifest.validate_shape().is_ok() {
+            paths.push(
+                path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(manifest.entry),
+            );
         }
     }
     paths.sort();
@@ -1434,7 +1444,7 @@ fn compile_and_prepare(
         .iter()
         .map(|(control, asset)| ResourceRef {
             control: control.clone(),
-            content_hash: asset.hash.clone(),
+            content_hash: asset.hash,
         })
         .collect::<Vec<_>>();
     let data_binding = if let Some(binding) = inline_data {
@@ -1823,11 +1833,8 @@ impl Delivery {
     fn of(artifact: &valle_motion::SceneArtifact, output_fps: Option<&str>) -> Result<Self> {
         let Some(composition) = artifact.composition.as_ref() else {
             bail!(
-                "{}",
-                format!(
-                    "this artifact has no delivery contract; add to the entry file: {}",
-                    valle_motion::COMPOSITION_TEMPLATE
-                )
+                "this artifact has no delivery contract; add to the entry file: {}",
+                valle_motion::COMPOSITION_TEMPLATE
             );
         };
         let default_fps = composition
@@ -2075,7 +2082,6 @@ pub(crate) fn mount_motion_runtime_fonts(
         .zip(valle_motion::DEFAULT_MOTION_FONT_WEIGHTS.iter())
         .map(|(name, bytes)| (format!("runtime/fonts/{name}"), *bytes));
     let formula = valle_motion::math_formula::formula_font_pack()
-        .into_iter()
         .map(|(face, bytes)| (format!("runtime/fonts/katex/{}", face.file_name), bytes));
     for (route, bytes) in default.chain(formula) {
         if let Some(file) = files.get(&route) {

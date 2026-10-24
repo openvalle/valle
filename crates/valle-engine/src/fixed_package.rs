@@ -352,7 +352,7 @@ enum VerifiedResourceFactsWire {
     MotionArtifact {
         abi: MotionArtifactAbiWire,
         descriptor: MotionArtifactDescriptorWire,
-        artifact: valle_motion::SceneArtifact,
+        artifact: Box<valle_motion::SceneArtifact>,
         temporal_footprint: VisualFootprintWire,
     },
     Shader {
@@ -614,7 +614,7 @@ fn package_resource_digests(
         .map_err(|error| format!("[fixed_package_manifest.resourceDigests] {error}"))?;
     let mut digests = BTreeSet::new();
     for entry in manifest.entries().values() {
-        digests.insert(resource_entry_digest(entry).clone());
+        digests.insert(*resource_entry_digest(entry));
     }
     Ok(digests.into_iter().collect())
 }
@@ -701,7 +701,7 @@ pub fn canonical_verified_binding_bundle(
         wire_bindings.insert(
             resource_id.to_owned(),
             ResourceBindingWire {
-                digest: binding.digest().clone(),
+                digest: *binding.digest(),
                 handle: binding.handle().get(),
                 facts: VerifiedResourceFactsWire::from_domain(binding.facts())?,
                 dependencies,
@@ -715,7 +715,7 @@ pub fn canonical_verified_binding_bundle(
             kind.to_owned(),
             ExtensionKernelWire {
                 abi: capability.abi().to_owned(),
-                implementation_digest: capability.implementation_digest().clone(),
+                implementation_digest: *capability.implementation_digest(),
                 visual_footprint: VisualFootprintWire::from_domain(capability.visual_footprint()),
                 audio_footprint: AudioFootprintWire::from_domain(capability.audio_footprint()),
             },
@@ -787,7 +787,7 @@ impl VerifiedResourceFactsWire {
             } => Self::MotionArtifact {
                 abi: *abi,
                 descriptor: descriptor.clone(),
-                artifact: artifact.as_ref().clone(),
+                artifact: Box::new(artifact.as_ref().clone()),
                 temporal_footprint: VisualFootprintWire::from_domain(*temporal_footprint),
             },
             VerifiedResourceFacts::Shader {
@@ -1152,7 +1152,7 @@ impl VerifiedResourceFactsWire {
                 VerifiedResourceFacts::MotionArtifact {
                     abi,
                     descriptor,
-                    artifact: Arc::new(artifact),
+                    artifact: Arc::new(*artifact),
                     temporal_footprint: temporal_footprint.into_domain(),
                 }
             }

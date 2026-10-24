@@ -40,18 +40,18 @@ pub(super) fn delivery_report(
             "audioOnly": summary.audio_only,
         }),
     );
-    if let Some(pipeline) = &summary.pipeline {
-        if let Some(budget) = pipeline.budget {
-            report.get_mut("delivery").expect("delivery report")["budget"] = json!({
-                "cpuThreads":budget.cpu_threads,"peakGrantedCpuSlots":budget.peak_cpu_slots,
-                "memoryBudgetBytes":budget.memory_budget_bytes,"resourceProviders":budget.resource_providers,"executors":budget.executors,
-                "configuredCapacityBytes":budget.configured_capacity_bytes,
-                "managedPeakBytes":budget.memory.peak_bytes,"managedPeakLiveBytes":budget.memory.peak_live_bytes,"managedRemainingBytes":budget.memory.used_bytes,
-                "managedPeakByKindBytes":budget.memory.peak_by_kind,
-                "memoryScope":"shared frame reservations, resource/surface storage, conservative CPU filter/3D scratch and decoded media windows; excludes immutable inputs, bounded plan/topology metadata and driver/codec internals; not process RSS",
-                "frameParallelism":pipeline.preparation_tasks,"maximumInFlightFrames":pipeline.maximum_in_flight_frames,
-            });
-        }
+    if let Some(pipeline) = &summary.pipeline
+        && let Some(budget) = pipeline.budget
+    {
+        report.get_mut("delivery").expect("delivery report")["budget"] = json!({
+            "cpuThreads":budget.cpu_threads,"peakGrantedCpuSlots":budget.peak_cpu_slots,
+            "memoryBudgetBytes":budget.memory_budget_bytes,"resourceProviders":budget.resource_providers,"executors":budget.executors,
+            "configuredCapacityBytes":budget.configured_capacity_bytes,
+            "managedPeakBytes":budget.memory.peak_bytes,"managedPeakLiveBytes":budget.memory.peak_live_bytes,"managedRemainingBytes":budget.memory.used_bytes,
+            "managedPeakByKindBytes":budget.memory.peak_by_kind,
+            "memoryScope":"shared frame reservations, resource/surface storage, conservative CPU filter/3D scratch and decoded media windows; excludes immutable inputs, bounded plan/topology metadata and driver/codec internals; not process RSS",
+            "frameParallelism":pipeline.preparation_tasks,"maximumInFlightFrames":pipeline.maximum_in_flight_frames,
+        });
     }
     if let Some(timing) = timing {
         report.get_mut("delivery").expect("delivery report")["timing"] = timing;

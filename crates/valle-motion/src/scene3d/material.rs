@@ -156,13 +156,13 @@ impl MaterialFrameState {
     }
     pub(super) fn validate_at(&self, path: &str, errors: &mut ContractErrors) {
         for (name, color) in [("color", self.color), ("emissive", self.emissive)] {
-            if let Some(color) = color {
-                if !color.valid() || (name == "emissive" && color.0[3] != 1.0) {
-                    errors.push(
-                        format!("{path}/{name}"),
-                        "material colors must be finite sRGB colors; emissive must be opaque",
-                    );
-                }
+            let invalid_color = color
+                .is_some_and(|color| !color.valid() || (name == "emissive" && color.0[3] != 1.0));
+            if invalid_color {
+                errors.push(
+                    format!("{path}/{name}"),
+                    "material colors must be finite sRGB colors; emissive must be opaque",
+                );
             }
         }
         for (name, value, min, max) in [

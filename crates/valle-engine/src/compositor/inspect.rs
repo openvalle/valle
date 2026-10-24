@@ -113,9 +113,9 @@ pub struct BoundProgramSchedulesInspection {
 impl From<&BoundProgramSchedules> for BoundProgramSchedulesInspection {
     fn from(schedules: &BoundProgramSchedules) -> Self {
         Self {
-            template_hash: schedules.template_hash().clone(),
-            binding_hash: schedules.binding_hash().clone(),
-            capability_fingerprint: schedules.capability_fingerprint().clone(),
+            template_hash: *schedules.template_hash(),
+            binding_hash: *schedules.binding_hash(),
+            capability_fingerprint: *schedules.capability_fingerprint(),
             resources: schedules
                 .resources()
                 .iter()
@@ -400,8 +400,8 @@ impl FramePerfInspection {
             kind: InspectionArtifactKind::CompositorFramePerf,
             render_id: frame.render_id,
             frame: frame.key,
-            graph_hash: plan.graph_hash.clone(),
-            template_hash: plan.template_hash.clone(),
+            graph_hash: plan.graph_hash,
+            template_hash: plan.template_hash,
             stages,
             metrics: FrameStructuralMetrics {
                 logical_passes: plan.counts.logical_passes,

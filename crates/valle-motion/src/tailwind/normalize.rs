@@ -232,13 +232,14 @@ pub(super) fn default_theme(name: &str) -> Option<&'static str> {
 
 /// Replaced media remains atomic even when the author uses `inline`.
 pub(crate) fn layout_class<'a>(kind: &crate::NodeKind, class: &'a str) -> Cow<'a, str> {
-    if matches!(
+    let is_media = matches!(
         kind,
         crate::NodeKind::Image { .. } | crate::NodeKind::Video { .. }
-    ) {
-        if matches!(class, "inline" | "inline!") || explicit_property(class) == Some("display") {
-            return Cow::Owned(format!("motion-media-{class}"));
-        }
+    );
+    let overrides_display =
+        matches!(class, "inline" | "inline!") || explicit_property(class) == Some("display");
+    if is_media && overrides_display {
+        return Cow::Owned(format!("motion-media-{class}"));
     }
     Cow::Borrowed(class)
 }
@@ -290,16 +291,15 @@ fn add_node_candidates(
     Ok((names, facts))
 }
 
+type PreparedStylesheet = (
+    Arc<StyleSheet>,
+    Vec<Vec<String>>,
+    Vec<CompositionClassFacts>,
+);
+
 pub(crate) fn prepare_stylesheet(
     artifact: &crate::SceneArtifact,
-) -> Result<
-    (
-        Arc<StyleSheet>,
-        Vec<Vec<String>>,
-        Vec<CompositionClassFacts>,
-    ),
-    String,
-> {
+) -> Result<PreparedStylesheet, String> {
     let mut candidates = BTreeMap::new();
     let mut classes = Vec::with_capacity(artifact.nodes.len());
     let mut composition = Vec::with_capacity(artifact.nodes.len());
@@ -374,9 +374,9 @@ pub(crate) fn utility_with_values(
     // before anything else and the message explains the replacement.
     let base = reject_variants(candidate)?;
     reject_variable_shorthand(base)?;
-    let mut utility = match token_utility(&base, resolve)? {
+    let mut utility = match token_utility(base, resolve)? {
         Some(utility) => utility,
-        None => base_utility(&base, resolve)?,
+        None => base_utility(base, resolve)?,
     };
     utility.candidate = candidate.into();
     Ok(utility)
@@ -1022,13 +1022,13 @@ fn extra_utility(
         ("max-h-", "max-height"),
     ] {
         if let Some((a, b)) = class.strip_prefix(prefix).and_then(|v| v.split_once('/')) {
-            if let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>()) {
-                if b > 0 {
-                    return Ok(one(
-                        property,
-                        format!("{}%", f64::from(a) / f64::from(b) * 100.0),
-                    ));
-                }
+            if let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>())
+                && b > 0
+            {
+                return Ok(one(
+                    property,
+                    format!("{}%", f64::from(a) / f64::from(b) * 100.0),
+                ));
             }
             return Err(TailwindClassError::Unsupported);
         }

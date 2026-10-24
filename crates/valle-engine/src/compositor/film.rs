@@ -11,6 +11,10 @@ pub struct FilmGrainParams {
     pub size: f32,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the rendering inputs, source and output geometry, and validation context explicit."
+)]
 pub fn apply_film_grain_f16(
     input: &[u8],
     input_width: u32,
