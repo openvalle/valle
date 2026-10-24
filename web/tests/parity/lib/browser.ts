@@ -1,11 +1,17 @@
 // Headless-browser WebCodecs decode orchestration using Bun.serve and Bun.spawn.
 
-import { createTempDirectory, removeDirectory, repositoryPath } from "./files.ts";
+import { createTempDirectory, removeDirectory, repositoryPath, resolveUnder } from "./files.ts";
 
 const DECODE_PAGE = repositoryPath("web/tests/parity/assets/webcodecs-decode.html");
+const ENGINE_DIRECTORY = repositoryPath("web/dist/packages/engine");
 const ENGINE_JS = repositoryPath("web/dist/packages/engine/index.mjs");
 const MAC_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const PATH_CANDIDATES = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser"] as const;
+const PATH_CANDIDATES = [
+  "google-chrome",
+  "google-chrome-stable",
+  "chromium",
+  "chromium-browser",
+] as const;
 
 interface BrowserDecodeOptions {
   timeoutMs?: number;
@@ -58,10 +64,16 @@ let appleSiliconHost: boolean | undefined;
 /** Keep Chrome native even when an x86_64 Rust test selects Rosetta for its descendants. */
 export function browserLaunchCommand(browser: string): string[] {
   if (process.platform !== "darwin") return [browser];
-  appleSiliconHost ??= process.arch === "arm64" || new TextDecoder().decode(Bun.spawnSync(
-    ["/usr/sbin/sysctl", "-in", "hw.optional.arm64"],
-    { stdout: "pipe", stderr: "ignore" },
-  ).stdout).trim() === "1";
+  appleSiliconHost ??=
+    process.arch === "arm64" ||
+    new TextDecoder()
+      .decode(
+        Bun.spawnSync(["/usr/sbin/sysctl", "-in", "hw.optional.arm64"], {
+          stdout: "pipe",
+          stderr: "ignore",
+        }).stdout,
+      )
+      .trim() === "1";
   return appleSiliconHost ? ["/usr/bin/arch", "-arm64", browser] : [browser];
 }
 
@@ -75,19 +87,25 @@ export interface BrowserExitContext {
 }
 
 export function browserExitError(context: BrowserExitContext): Error {
-  const termination = context.signalCode == null
-    ? `exit code ${context.exitCode ?? "unknown"}`
-    : `signal ${context.signalCode}${context.exitCode == null ? "" : `, exit code ${context.exitCode}`}`;
+  const termination =
+    context.signalCode == null
+      ? `exit code ${context.exitCode ?? "unknown"}`
+      : `signal ${context.signalCode}${context.exitCode == null ? "" : `, exit code ${context.exitCode}`}`;
   const stderr = context.stderr.trim();
-  return new Error([
-    `${context.operation}: browser process exited before reporting (${termination})`,
-    `binary: ${context.binary}`,
-    `page: ${context.pageUrl}`,
-    ...(stderr ? [`browser stderr (tail):\n${stderr}`] : ["browser stderr: <empty>"]),
-  ].join("\n"));
+  return new Error(
+    [
+      `${context.operation}: browser process exited before reporting (${termination})`,
+      `binary: ${context.binary}`,
+      `page: ${context.pageUrl}`,
+      ...(stderr ? [`browser stderr (tail):\n${stderr}`] : ["browser stderr: <empty>"]),
+    ].join("\n"),
+  );
 }
 
-export async function readBrowserStderrTail(path: string, maximumBytes = 8 * 1024): Promise<string> {
+export async function readBrowserStderrTail(
+  path: string,
+  maximumBytes = 8 * 1024,
+): Promise<string> {
   try {
     const file = Bun.file(path);
     if (!(await file.exists())) return "";
@@ -236,16 +254,27 @@ export async function decodeVideoFramesInBrowser(
       const url = new URL(request.url);
       if (request.method === "POST" && url.pathname === "/result") {
         try {
-          resolveResult(await request.json() as BrowserDecodeWireResult);
+          resolveResult((await request.json()) as BrowserDecodeWireResult);
           return new Response(null, { status: 204 });
         } catch (error) {
           rejectResult(error);
           return new Response("invalid report", { status: 400 });
         }
       }
-      if (url.pathname === "/decode.html") return new Response(decodePage, { headers: { "content-type": "text/html" } });
-      if (url.pathname === "/packages/engine/index.mjs") return new Response(engineRuntime, { headers: { "content-type": "text/javascript" } });
-      if (url.pathname === "/video.mp4") return new Response(video, { headers: { "content-type": "video/mp4" } });
+      if (url.pathname === "/decode.html")
+        return new Response(decodePage, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/packages/engine/index.mjs")
+        return new Response(engineRuntime, { headers: { "content-type": "text/javascript" } });
+      if (url.pathname.startsWith("/packages/engine/")) {
+        const asset = Bun.file(
+          resolveUnder(ENGINE_DIRECTORY, url.pathname.slice("/packages/engine/".length)),
+        );
+        if (await asset.exists()) {
+          return new Response(asset, { headers: { "content-type": "text/javascript" } });
+        }
+      }
+      if (url.pathname === "/video.mp4")
+        return new Response(video, { headers: { "content-type": "video/mp4" } });
       return new Response("not found", { status: 404 });
     },
   });
@@ -269,7 +298,10 @@ export async function decodeVideoFramesInBrowser(
     stdout: "ignore",
     stderr: Bun.file(stderrPath),
   });
-  const timer = setTimeout(() => rejectResult(new Error(`browser decode timed out after ${timeoutMs}ms`)), timeoutMs);
+  const timer = setTimeout(
+    () => rejectResult(new Error(`browser decode timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
   let completed = false;
   const browserExit = waitForUnexpectedBrowserExit(child, {
     operation: "browser decode",
@@ -282,22 +314,32 @@ export async function decodeVideoFramesInBrowser(
   try {
     const result = await Promise.race([resultPromise, browserExit]);
     completed = true;
-    if (result.status !== "ok") throw new Error(`browser decode failed: ${result.message ?? JSON.stringify(result)}`);
+    if (result.status !== "ok")
+      throw new Error(`browser decode failed: ${result.message ?? JSON.stringify(result)}`);
     if (!result.frames || result.frames.length !== timesS.length) {
-      throw new Error(`browser returned ${result.frames?.length ?? 0} frames for ${timesS.length} times`);
+      throw new Error(
+        `browser returned ${result.frames?.length ?? 0} frames for ${timesS.length} times`,
+      );
     }
     const frames = result.frames.map(({ rgbaBase64, ...frame }): BrowserDecodedFrame => {
       const data = Uint8Array.fromBase64(rgbaBase64);
       const expected = frame.width * frame.height * 4;
-      if (data.length !== expected) throw new Error(`frame at t=${frame.timeS}: got ${data.length} bytes, want ${expected}`);
+      if (data.length !== expected)
+        throw new Error(`frame at t=${frame.timeS}: got ${data.length} bytes, want ${expected}`);
       return { ...frame, data };
     });
     return { implementation: result.implementation, userAgent: result.userAgent, frames };
   } finally {
     completed = true;
     clearTimeout(timer);
-    server.stop(true);
-    await terminateBrowser(child);
-    removeDirectory(profileDir);
+    try {
+      await server.stop(true);
+    } finally {
+      try {
+        await terminateBrowser(child);
+      } finally {
+        removeDirectory(profileDir);
+      }
+    }
   }
 }

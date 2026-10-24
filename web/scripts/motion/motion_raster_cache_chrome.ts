@@ -14,7 +14,9 @@ const isOverlay = process.env.VALLE_TEST_MOTION_ROLE === "overlay";
 const isCaption = process.env.VALLE_TEST_MOTION_ROLE === "captionPresenter";
 const source = join(temporary, "scene.motion.tsx");
 const timeline = join(temporary, "timeline.json");
-await writeFile(source, `
+await writeFile(
+  source,
+  `
   export const composition = { width: 48, height: 48, fps: 30, duration: 1 };
   ${isCaption ? `export const role=captionPresenter({intro:0.2,outro:0.2});` : ""}
   ${isOverlay ? `export const role=overlay({intro:0.2,outro:0.2,hold:"once"});` : ""}
@@ -25,16 +27,58 @@ await writeFile(source, `
       ${isCaption ? `<Text style={{position:"absolute",top:24,fontFamily:caption.style.font,fontSize:14,color:time.clipSeconds<1.2?"#facc15":"white"}}>{caption.text}</Text>` : ""}
     </Scene>;
   }
-`);
-await writeFile(timeline, JSON.stringify({
-  canvas: { width: 48, height: 48, fps: 30 },
-  resources: { scene: "scene.motion.tsx", ...(isCaption ? { font: join(root, "assets/fonts/noto/NotoSans-Regular.ttf") } : {}) },
-  tracks: isCaption ? { caption: [{ presenter: {component:"scene"},style:{font:"font",fontSize:14},layout:{region:[0,0,1,1]},clips:[{start:0,duration:2,runs:[{text:"Host",start:0,end:1.9}]}] }] } : { visual: [{ clips: [{ kind: "motion", component: "scene", start: 0, duration: 2, ...(isOverlay ? {size:[32,48]} : {end:"hold"}) }] }] },
-}));
-const studio = Bun.spawn([
-  process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle"), "--json", "timeline", "studio",
-  timeline, "--port", "0", "--web-assets-dir", dist,
-], { cwd: temporary, stdout: "pipe", stderr: "pipe" });
+`,
+);
+await writeFile(
+  timeline,
+  JSON.stringify({
+    canvas: { width: 48, height: 48, fps: 30 },
+    resources: {
+      scene: "scene.motion.tsx",
+      ...(isCaption ? { font: join(root, "assets/fonts/noto/NotoSans-Regular.ttf") } : {}),
+    },
+    tracks: isCaption
+      ? {
+          caption: [
+            {
+              presenter: { component: "scene" },
+              style: { font: "font", fontSize: 14 },
+              layout: { region: [0, 0, 1, 1] },
+              clips: [{ start: 0, duration: 2, runs: [{ text: "Host", start: 0, end: 1.9 }] }],
+            },
+          ],
+        }
+      : {
+          visual: [
+            {
+              clips: [
+                {
+                  kind: "motion",
+                  component: "scene",
+                  start: 0,
+                  duration: 2,
+                  ...(isOverlay ? { size: [32, 48] } : { end: "hold" }),
+                },
+              ],
+            },
+          ],
+        },
+  }),
+);
+const studio = Bun.spawn(
+  [
+    process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle"),
+    "--json",
+    "timeline",
+    "studio",
+    timeline,
+    "--port",
+    "0",
+    "--web-assets-dir",
+    dist,
+  ],
+  { cwd: temporary, stdout: "pipe", stderr: "pipe" },
+);
 let chrome: ReturnType<typeof Bun.spawn> | null = null;
 let server: ReturnType<typeof Bun.serve> | null = null;
 try {
@@ -46,7 +90,9 @@ try {
       if (part.done) throw new Error(await new Response(studio.stderr).text());
       line += new TextDecoder().decode(part.value);
     }
-  } finally { reader.releaseLock(); }
+  } finally {
+    reader.releaseLock();
+  }
   const upstream = new URL(JSON.parse(line.split("\n")[0]!).url).origin;
   const sourceText = await readFile(source, "utf8");
   const authorTimeline = JSON.parse(await readFile(timeline, "utf8"));
@@ -115,30 +161,52 @@ try {
       await fetch("/result", { method: "POST", body: JSON.stringify({ error: String(error.stack || error) }) });
     }
   `;
-  server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    const url = new URL(request.url);
-    if (process.env.VALLE_CACHE_BROWSER_DEBUG) console.error(request.method, url.pathname);
-    if (url.pathname === "/") return new Response('<canvas width="48" height="48"></canvas><script type="module" src="/client.js"></script>', {
-      headers: { "Content-Type": "text/html" },
-    });
-    if (url.pathname === "/client.js") return new Response(client, { headers: { "Content-Type": "text/javascript" } });
-    if (url.pathname === "/result" && request.method === "POST") {
-      await writeFile(resultPath, await request.text());
-      return new Response("ok");
-    }
-    if (url.pathname === "/config.json") return fetch(`${upstream}/config.json`);
-    const path = resolve(dist, `.${url.pathname}`);
-    if (!path.startsWith(`${dist}${sep}`)) return new Response("Not found", { status: 404 });
-    const file = Bun.file(path);
-    return await file.exists() ? new Response(file) : new Response("Not found", { status: 404 });
-  } });
+  server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (process.env.VALLE_CACHE_BROWSER_DEBUG) console.error(request.method, url.pathname);
+      if (url.pathname === "/")
+        return new Response(
+          '<canvas width="48" height="48"></canvas><script type="module" src="/client.js"></script>',
+          {
+            headers: { "Content-Type": "text/html" },
+          },
+        );
+      if (url.pathname === "/client.js")
+        return new Response(client, { headers: { "Content-Type": "text/javascript" } });
+      if (url.pathname === "/result" && request.method === "POST") {
+        await writeFile(resultPath, await request.text());
+        return new Response("ok");
+      }
+      if (url.pathname === "/config.json") return fetch(`${upstream}/config.json`);
+      const path = resolve(dist, `.${url.pathname}`);
+      if (!path.startsWith(`${dist}${sep}`)) return new Response("Not found", { status: 404 });
+      const file = Bun.file(path);
+      return (await file.exists())
+        ? new Response(file)
+        : new Response("Not found", { status: 404 });
+    },
+  });
   const profile = join(temporary, "chrome-profile");
-  chrome = Bun.spawn([
-    process.env.VALLE_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "--headless=new", "--enable-gpu", "--use-angle=metal", "--disable-software-rasterizer",
-    "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`, String(server.url),
-  ], { stdout: "ignore", stderr: "inherit" });
-  if (process.env.VALLE_CACHE_BROWSER_DEBUG) console.error("Chrome URL", String(server.url), "pid", chrome.pid);
+  chrome = Bun.spawn(
+    [
+      process.env.VALLE_TEST_CHROME ??
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "--headless=new",
+      "--enable-gpu",
+      "--use-angle=metal",
+      "--disable-software-rasterizer",
+      "--no-first-run",
+      "--no-default-browser-check",
+      `--user-data-dir=${profile}`,
+      String(server.url),
+    ],
+    { stdout: "ignore", stderr: "inherit" },
+  );
+  if (process.env.VALLE_CACHE_BROWSER_DEBUG)
+    console.error("Chrome URL", String(server.url), "pid", chrome.pid);
   let result: Record<string, any> | null = null;
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
@@ -158,21 +226,37 @@ try {
     runtimeFlavor: result.runtimeFlavor,
     backend: result.backend,
     first: { hits: result.first.rasterLayerCacheHits, misses: result.first.rasterLayerCacheMisses },
-    repeat: { hits: result.repeat.rasterLayerCacheHits, misses: result.repeat.rasterLayerCacheMisses },
+    repeat: {
+      hits: result.repeat.rasterLayerCacheHits,
+      misses: result.repeat.rasterLayerCacheMisses,
+    },
     moved: { hits: result.moved.rasterLayerCacheHits, misses: result.moved.rasterLayerCacheMisses },
-    revisit: { hits: result.revisit.rasterLayerCacheHits, misses: result.revisit.rasterLayerCacheMisses },
+    revisit: {
+      hits: result.revisit.rasterLayerCacheHits,
+      misses: result.revisit.rasterLayerCacheMisses,
+    },
     sameRepeat: result.sameRepeat,
     changedFrame: result.changedFrame,
     hostContinuesAfterHold: result.hostContinuesAfterHold,
     exitFrameChanges: result.exitFrameChanges,
     sameRevisit: result.sameRevisit,
   };
-  if (!summary.renderer.includes("Apple") || !summary.renderer.includes("Metal")
-    || summary.runtimeFlavor !== "product-gpu" || summary.backend !== "canvaskit-gpu"
+  if (
+    !summary.renderer.includes("Apple") ||
+    !summary.renderer.includes("Metal") ||
+    summary.runtimeFlavor !== "product-gpu" ||
+    summary.backend !== "canvaskit-gpu" ||
     // Font-bound programs retain the existing policy of bypassing the raster pixel cache.
-    || (!isCaption && (!(summary.first.misses >= 1) || !(summary.repeat.hits >= 1) || !(summary.revisit.hits >= 1)))
-    || (isCaption && !summary.browserCompiled)
-    || !summary.sameRepeat || !summary.changedFrame || !summary.sameRevisit || !summary.hostContinuesAfterHold) {
+    (!isCaption &&
+      (!(summary.first.misses >= 1) ||
+        !(summary.repeat.hits >= 1) ||
+        !(summary.revisit.hits >= 1))) ||
+    (isCaption && !summary.browserCompiled) ||
+    !summary.sameRepeat ||
+    !summary.changedFrame ||
+    !summary.sameRevisit ||
+    !summary.hostContinuesAfterHold
+  ) {
     throw new Error(`GPU raster cache smoke failed: ${JSON.stringify(summary)}`);
   }
   console.log(JSON.stringify(summary));

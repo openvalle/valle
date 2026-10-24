@@ -1,9 +1,6 @@
 import type { PreviewResourceInput, Timeline } from "valle-engine";
 import type { ResourceManifest, TimelineDocument } from "valle-engine/internal";
-import {
-  type StudioHost,
-  type TimelinePreviewResult,
-} from "./host.ts";
+import { type StudioHost, type TimelinePreviewResult } from "./host.ts";
 import type { StudioSourceEditor } from "./source-editor.ts";
 import { StudioCompileClient, timelineCompilePayload } from "./studio-compile.ts";
 
@@ -33,16 +30,30 @@ function mediaInputKey(timeline: Timeline): string | null {
     }
   }
   for (const track of timeline.tracks.caption ?? []) {
-    if (track.presenter) { motionComponents.add(track.presenter.component); bindings.push({ ...track.presenter.resources, caption: track.style.font }); }
+    if (track.presenter) {
+      motionComponents.add(track.presenter.component);
+      bindings.push({ ...track.presenter.resources, caption: track.style.font });
+    }
   }
   for (const clip of (timeline.tracks.adjustment ?? []).flatMap((track) => track.clips)) {
-    if (clip.kind === "motion") { motionComponents.add(clip.component); bindings.push(clip.resources ?? null); }
+    if (clip.kind === "motion") {
+      motionComponents.add(clip.component);
+      bindings.push(clip.resources ?? null);
+    }
   }
-  const external = Object.entries(timeline.resources ?? {})
-    .filter(([alias]) => !motionComponents.has(alias));
-  const otherTracks = { audio: timeline.tracks.audio, caption: timeline.tracks.caption,
-    adjustment: timeline.tracks.adjustment };
-  if (!external.length && !media.length && Object.values(otherTracks).every((value) => !value?.length)) {
+  const external = Object.entries(timeline.resources ?? {}).filter(
+    ([alias]) => !motionComponents.has(alias),
+  );
+  const otherTracks = {
+    audio: timeline.tracks.audio,
+    caption: timeline.tracks.caption,
+    adjustment: timeline.tracks.adjustment,
+  };
+  if (
+    !external.length &&
+    !media.length &&
+    Object.values(otherTracks).every((value) => !value?.length)
+  ) {
     return null;
   }
   return JSON.stringify([external, bindings, media, otherTracks]);
@@ -65,9 +76,13 @@ export class TimelineBrowserSession {
     this.#compiler = new StudioCompileClient(host.boot);
   }
 
-  close(): void { this.#compiler.close(); }
+  close(): void {
+    this.#compiler.close();
+  }
 
-  invalidateMedia(): void { this.#mediaKey = null; }
+  invalidateMedia(): void {
+    this.#mediaKey = null;
+  }
 
   async prepareTimelinePreview(timeline: Timeline): Promise<TimelinePreviewResult> {
     try {
@@ -77,9 +92,9 @@ export class TimelineBrowserSession {
       const resourceInputs = this.#resourceInputs;
       const locators = this.#locators;
       const mediaDependencies = this.#mediaDependencies;
-      const result = await this.#compiler.compile(timelineCompilePayload(
-        this.#host.boot, timeline, sources, resourceInputs, locators,
-      ));
+      const result = await this.#compiler.compile(
+        timelineCompilePayload(this.#host.boot, timeline, sources, resourceInputs, locators),
+      );
       if (result.status === "error") throw new Error(result.message);
       const render = {
         timelineJson: result.package.timelineJson,
@@ -89,14 +104,29 @@ export class TimelineBrowserSession {
         resourceManifest: JSON.parse(result.package.resourceManifestJson) as ResourceManifest,
         verifiedBindingBundleJson: result.package.verifiedBindingBundleJson,
       };
-      return { status: "ok", timeline, timelineJson: JSON.stringify(timeline), render,
-        assets: locators, motion: { structures: [] },
+      return {
+        status: "ok",
+        timeline,
+        timelineJson: JSON.stringify(timeline),
+        render,
+        assets: locators,
+        motion: { structures: [] },
         motionSourceMetadata: result.package.motionSourceMetadata,
         inputDependencies: { ...mediaDependencies, ...sourceDependencies },
-        motionInstances: result.instances, warnings: result.warnings };
+        motionInstances: result.instances,
+        warnings: result.warnings,
+      };
     } catch (error) {
-      return { status: "error", diagnostics: [{ class: "compile", code: "studio-preview",
-        message: error instanceof Error ? error.message : String(error) }] };
+      return {
+        status: "error",
+        diagnostics: [
+          {
+            class: "compile",
+            code: "studio-preview",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        ],
+      };
     }
   }
 

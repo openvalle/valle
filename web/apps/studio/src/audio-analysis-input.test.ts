@@ -1,8 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-  motionCompileOptionIdentity,
-  prepareAudioAnalysisInputs,
-} from "./audio-analysis-input.ts";
+import { motionCompileOptionIdentity, prepareAudioAnalysisInputs } from "./audio-analysis-input.ts";
 
 // Millions of samples must remain binary even while the Studio worker computes cache identities.
 test("audio cache keys contain metadata and no PCM samples", async () => {
@@ -38,10 +35,13 @@ test("Studio verifies and reuses canonical Host PCM without browser decoding", a
   globalThis.fetch = (async (url: string) => {
     expect(url).toBe("/frozen/audio/analysis-pcm");
     downloads++;
-    return new Response(bytes, { headers: {
-      "X-Valle-Audio-Source": sourceHash, "X-Valle-Pcm-Digest": `sha256:${digest}`,
-      "X-Valle-Sample-Rate": "48000",
-    }});
+    return new Response(bytes, {
+      headers: {
+        "X-Valle-Audio-Source": sourceHash,
+        "X-Valle-Pcm-Digest": `sha256:${digest}`,
+        "X-Valle-Sample-Rate": "48000",
+      },
+    });
   }) as unknown as typeof fetch;
   try {
     const input = { control: "beat", contentHash: sourceHash, url: "/frozen/audio" };
@@ -50,18 +50,34 @@ test("Studio verifies and reuses canonical Host PCM without browser decoding", a
     const second = await prepareAudioAnalysisInputs([{ ...input, control: "another" }]);
     expect(second[0]!.samples).toBe(first[0]!.samples);
     expect(downloads).toBe(1);
-    await expect(prepareAudioAnalysisInputs([{ ...input, contentHash: `sha256:${"f".repeat(64)}` }]))
-      .rejects.toThrow("changed after preparation");
-  } finally { globalThis.fetch = fetchBefore; }
+    await expect(
+      prepareAudioAnalysisInputs([{ ...input, contentHash: `sha256:${"f".repeat(64)}` }]),
+    ).rejects.toThrow("changed after preparation");
+  } finally {
+    globalThis.fetch = fetchBefore;
+  }
 });
 
 test("binary cache identities use content digests and exclude diagnostic data origins", async () => {
-  const font = new Uint8Array([1,2,3]);
-  Object.defineProperty(font, "toJSON", { value() { throw new Error("font bytes must stay binary"); } });
-  const first = await motionCompileOptionIdentity({ fontAliases: { "asset://caption": font }, data: { source: "first", value: { text: "hello" } } });
-  const second = await motionCompileOptionIdentity({ fontAliases: { "asset://caption": new Uint8Array([1,2,3]) }, data: { source: "second", value: { text: "hello" } } });
+  const font = new Uint8Array([1, 2, 3]);
+  Object.defineProperty(font, "toJSON", {
+    value() {
+      throw new Error("font bytes must stay binary");
+    },
+  });
+  const first = await motionCompileOptionIdentity({
+    fontAliases: { "asset://caption": font },
+    data: { source: "first", value: { text: "hello" } },
+  });
+  const second = await motionCompileOptionIdentity({
+    fontAliases: { "asset://caption": new Uint8Array([1, 2, 3]) },
+    data: { source: "second", value: { text: "hello" } },
+  });
   expect(first).toEqual(second);
-  const changed = await motionCompileOptionIdentity({ fontAliases: { "asset://caption": new Uint8Array([1,2,4]) }, data: { source: "first", value: { text: "hello" } } });
+  const changed = await motionCompileOptionIdentity({
+    fontAliases: { "asset://caption": new Uint8Array([1, 2, 4]) },
+    data: { source: "first", value: { text: "hello" } },
+  });
   expect(changed).not.toEqual(first);
   expect(JSON.stringify(first).length).toBeLessThan(200);
 });

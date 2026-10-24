@@ -10,21 +10,26 @@ interface TimelineCompilerWasmModule {
   compile_timeline(timelineJson: string, motionSourcesJson: string): string;
   motion_preparation_inputs(timelineJson: string): string;
   normalize_timeline(timelineJson: string): string;
-  timeline_source_time_delta_from_frames(
-    frames: number,
-    fpsJson: string,
-    rateJson: string,
-  ): number;
+  timeline_source_time_delta_from_frames(frames: number, fpsJson: string, rateJson: string): number;
   timeline_time_from_frames(frames: number, fpsJson: string): number;
   timeline_document_view(timelineJson: string): string;
   sample_motion_properties(artifactJson: string, requestJson: string): string;
   compile_motion_jsx(
-    source: string, optionsJson: string, fonts: Uint8Array[],
-    aliases: Array<[string, Uint8Array]>, shaders: MotionShaderPackage[], audioSamples: Float32Array[],
+    source: string,
+    optionsJson: string,
+    fonts: Uint8Array[],
+    aliases: Array<[string, Uint8Array]>,
+    shaders: MotionShaderPackage[],
+    audioSamples: Float32Array[],
   ): string;
   compile_motion_modules(
-    entry: string, modulesJson: string, optionsJson: string, fonts: Uint8Array[],
-    aliases: Array<[string, Uint8Array]>, shaders: MotionShaderPackage[], audioSamples: Float32Array[],
+    entry: string,
+    modulesJson: string,
+    optionsJson: string,
+    fonts: Uint8Array[],
+    aliases: Array<[string, Uint8Array]>,
+    shaders: MotionShaderPackage[],
+    audioSamples: Float32Array[],
   ): string;
   prepare_preview_package(inputJson: string): string;
   rewrite_motion_source(inputJson: string): string;
@@ -59,7 +64,11 @@ export interface MotionShaderPackage {
 
 export interface MotionCompileOptions {
   /** Timeline placement for role validation before host data is expanded. */
-  placement?: { component: string; path: string; track: "visual" | "caption" | "transition" | "effect" };
+  placement?: {
+    component: string;
+    path: string;
+    track: "visual" | "caption" | "transition" | "effect";
+  };
   resources?: readonly { control: string; contentHash: string }[];
   data?: { source: string; value: unknown };
   /** Frozen decoded mono PCM matching a resource digest, resampled by the caller. */
@@ -107,7 +116,10 @@ export interface PreviewPackageInput {
 }
 
 export type MotionRole = TimelineDocumentSchema.MotionRole;
-export interface MotionSourceMetadata { duration: string; role: MotionRole }
+export interface MotionSourceMetadata {
+  duration: string;
+  role: MotionRole;
+}
 
 export interface PreparedPreviewPackage {
   fixedPackageManifestJson: string;
@@ -133,7 +145,10 @@ export interface MotionSourceEditResult {
 
 export interface MotionPropertyRequest {
   node: string;
-  startFrame: number; endFrame: number; maxPoints: number; durationFrames: number;
+  startFrame: number;
+  endFrame: number;
+  maxPoints: number;
+  durationFrames: number;
   fps: string;
   props: Record<string, unknown>;
   viewport: [number, number];
@@ -142,8 +157,15 @@ export interface MotionPropertySamples {
   node: string;
   frames: number[];
   channels: Array<{
-    property: string; unit: string; unavailable: string | null;
-    samples: Array<{ frame: number; value: number[]; velocity: number[] | null; boundary: string | null }>;
+    property: string;
+    unit: string;
+    unavailable: string | null;
+    samples: Array<{
+      frame: number;
+      value: number[];
+      velocity: number[] | null;
+      boundary: string | null;
+    }>;
   }>;
 }
 
@@ -159,7 +181,10 @@ export interface TimelineCompilerRuntime {
     rate?: number | null,
   ): number;
   /** Read-only projection used by Studio preview and inspection. */
-  compileTimeline(timeline: Timeline, motionSources?: Record<string, MotionSourceMetadata>): CanonicalTimelineDocument;
+  compileTimeline(
+    timeline: Timeline,
+    motionSources?: Record<string, MotionSourceMetadata>,
+  ): CanonicalTimelineDocument;
   canonicalizeTimelineDocument(timeline: TimelineDocument): CanonicalTimelineDocument;
 }
 
@@ -169,7 +194,11 @@ export interface WebCompilerRuntime extends TimelineCompilerRuntime {
   /** Compile a standalone Motion TSX/JSX source to a Scene artifact. */
   compileMotionJsx(source: string, options?: MotionCompileOptions): CompiledMotion;
   /** Compile an explicit project-relative module closure to a Scene artifact. */
-  compileMotionModules(entry: string, modules: Record<string, string>, options?: MotionCompileOptions): CompiledMotion;
+  compileMotionModules(
+    entry: string,
+    modules: Record<string, string>,
+    options?: MotionCompileOptions,
+  ): CompiledMotion;
   preparePreviewPackage(input: PreviewPackageInput): PreparedPreviewPackage;
   rewriteMotionSource(input: MotionSourceEdit): MotionSourceEditResult;
 }
@@ -193,16 +222,20 @@ export async function createTimelineCompilerRuntime(
   return {
     normalizeTimeline: (timeline) => normalizeTimelineWithWasm(wasm, timeline),
     timelineTimeFromFrames: (frames, fps) => timelineTimeFromFramesWithWasm(wasm, frames, fps),
-    timelineSourceTimeDeltaFromFrames: (frames, fps, rate) => (
-      timelineSourceTimeDeltaFromFramesWithWasm(wasm, frames, fps, rate)
-    ),
-    motionPreparationInputs: (timeline) => JSON.parse(wasm.motion_preparation_inputs(JSON.stringify(timeline))) as MotionPreparationInput[],
-    compileTimeline: (timeline, motionSources) => compileTimelineWithWasm(wasm, timeline, motionSources),
-    canonicalizeTimelineDocument: (timeline) => canonicalizeTimelineDocumentWithWasm(wasm, timeline),
-    compileMotionJsx: (source, compileOptions) => compileMotionJsxWithWasm(wasm, source, compileOptions),
-    compileMotionModules: (entry, modules, compileOptions) => (
-      compileMotionModulesWithWasm(wasm, entry, modules, compileOptions)
-    ),
+    timelineSourceTimeDeltaFromFrames: (frames, fps, rate) =>
+      timelineSourceTimeDeltaFromFramesWithWasm(wasm, frames, fps, rate),
+    motionPreparationInputs: (timeline) =>
+      JSON.parse(
+        wasm.motion_preparation_inputs(JSON.stringify(timeline)),
+      ) as MotionPreparationInput[],
+    compileTimeline: (timeline, motionSources) =>
+      compileTimelineWithWasm(wasm, timeline, motionSources),
+    canonicalizeTimelineDocument: (timeline) =>
+      canonicalizeTimelineDocumentWithWasm(wasm, timeline),
+    compileMotionJsx: (source, compileOptions) =>
+      compileMotionJsxWithWasm(wasm, source, compileOptions),
+    compileMotionModules: (entry, modules, compileOptions) =>
+      compileMotionModulesWithWasm(wasm, entry, modules, compileOptions),
     preparePreviewPackage: (input) => preparePreviewPackageWithWasm(wasm, input),
     rewriteMotionSource: (input) => rewriteMotionSourceWithWasm(wasm, input),
   };
@@ -223,10 +256,16 @@ export function preparePreviewPackageWithWasm(
 }
 
 /** Bounded local-property inspection; no layout or rendering. Run in a diagnostic worker. */
-export async function sampleMotionProperties(options: TimelineCompilerRuntimeOptions, artifact: Record<string, unknown>, request: MotionPropertyRequest): Promise<MotionPropertySamples> {
+export async function sampleMotionProperties(
+  options: TimelineCompilerRuntimeOptions,
+  artifact: Record<string, unknown>,
+  request: MotionPropertyRequest,
+): Promise<MotionPropertySamples> {
   const engine = resolveEngineRuntimeAssets(options.runtimeAssets, options.runtimeBaseUrl);
   const wasm = await loadTimelineCompilerWasm(engine.glue, engine.wasm);
-  return JSON.parse(wasm.sample_motion_properties(JSON.stringify(artifact), JSON.stringify(request))) as MotionPropertySamples;
+  return JSON.parse(
+    wasm.sample_motion_properties(JSON.stringify(artifact), JSON.stringify(request)),
+  ) as MotionPropertySamples;
 }
 
 export function compileMotionJsxWithWasm(
@@ -235,9 +274,16 @@ export function compileMotionJsxWithWasm(
   options: MotionCompileOptions = {},
 ): CompiledMotion {
   const inputs = motionCompileInputs(options);
-  return readMotionCompileResult(wasm.compile_motion_jsx(
-    source, inputs.optionsJson, inputs.fonts, inputs.aliases, inputs.shaders, inputs.audioSamples,
-  ));
+  return readMotionCompileResult(
+    wasm.compile_motion_jsx(
+      source,
+      inputs.optionsJson,
+      inputs.fonts,
+      inputs.aliases,
+      inputs.shaders,
+      inputs.audioSamples,
+    ),
+  );
 }
 
 export function compileMotionModulesWithWasm(
@@ -247,9 +293,17 @@ export function compileMotionModulesWithWasm(
   options: MotionCompileOptions = {},
 ): CompiledMotion {
   const inputs = motionCompileInputs(options);
-  return readMotionCompileResult(wasm.compile_motion_modules(
-    entry, JSON.stringify(modules), inputs.optionsJson, inputs.fonts, inputs.aliases, inputs.shaders, inputs.audioSamples,
-  ));
+  return readMotionCompileResult(
+    wasm.compile_motion_modules(
+      entry,
+      JSON.stringify(modules),
+      inputs.optionsJson,
+      inputs.fonts,
+      inputs.aliases,
+      inputs.shaders,
+      inputs.audioSamples,
+    ),
+  );
 }
 
 function motionCompileInputs(options: MotionCompileOptions): {
@@ -261,16 +315,18 @@ function motionCompileInputs(options: MotionCompileOptions): {
 } {
   return {
     optionsJson: JSON.stringify({
-      resources: options.resources ?? [], data: options.data ?? null,
+      resources: options.resources ?? [],
+      data: options.data ?? null,
       placement: options.placement ?? null,
       audioSources: (options.audioSources ?? []).map((source) => ({
-        control: source.control, contentHash: source.contentHash,
+        control: source.control,
+        contentHash: source.contentHash,
         sampleRate: source.sampleRate,
       })),
     }),
-    fonts: [...options.fonts ?? []],
+    fonts: [...(options.fonts ?? [])],
     aliases: Object.entries(options.fontAliases ?? {}),
-    shaders: [...options.shaders ?? []],
+    shaders: [...(options.shaders ?? [])],
     audioSamples: (options.audioSources ?? []).map((source) => source.samples),
   };
 }
@@ -325,14 +381,14 @@ export function timelineSourceTimeDeltaFromFramesWithWasm(
 
 /** Compile a sparse public Timeline into a renderer-only canonical projection. */
 export function compileTimelineWithWasm(
-  wasm: Pick<
-    TimelineCompilerWasmModule,
-    "compile_timeline" | "timeline_document_view"
-  >,
+  wasm: Pick<TimelineCompilerWasmModule, "compile_timeline" | "timeline_document_view">,
   timeline: Timeline,
   motionSources: Record<string, MotionSourceMetadata> = {},
 ): CanonicalTimelineDocument {
-  const timelineJson = wasm.compile_timeline(JSON.stringify(timeline), JSON.stringify(motionSources));
+  const timelineJson = wasm.compile_timeline(
+    JSON.stringify(timeline),
+    JSON.stringify(motionSources),
+  );
   return canonicalTimelineDocumentFromJson(wasm, timelineJson);
 }
 
@@ -355,7 +411,9 @@ function canonicalTimelineDocumentFromJson(
   return {
     timeline: JSON.parse(timelineJson) as TimelineDocument,
     timelineJson,
-    view: JSON.parse(wasm.timeline_document_view(timelineJson)) as CanonicalTimelineDocument["view"],
+    view: JSON.parse(
+      wasm.timeline_document_view(timelineJson),
+    ) as CanonicalTimelineDocument["view"],
   };
 }
 
@@ -367,7 +425,7 @@ function loadTimelineCompilerWasm(
   const existing = moduleLoads.get(key);
   if (existing) return existing;
   const loading = (async () => {
-    const module = await import(moduleUrl) as unknown as TimelineCompilerWasmModule;
+    const module = (await import(moduleUrl)) as unknown as TimelineCompilerWasmModule;
     await module.default(wasmUrl);
     return module;
   })();
@@ -376,4 +434,10 @@ function loadTimelineCompilerWasm(
   return loading;
 }
 
-export interface MotionPreparationInput { clipPath: string; component: string; locator: string; resources: Record<string, string>; data: unknown; }
+export interface MotionPreparationInput {
+  clipPath: string;
+  component: string;
+  locator: string;
+  resources: Record<string, string>;
+  data: unknown;
+}

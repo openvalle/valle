@@ -1,13 +1,23 @@
-import type { BrowserValleWebPlayerOptions, ProductRenderResult } from "../../packages/engine/src/index.ts";
+import type {
+  BrowserValleWebPlayerOptions,
+  ProductRenderResult,
+} from "../../packages/engine/src/index.ts";
 
 // Load the built runtime in the browser while checking against the source API.
 const runtimeUrl = "/packages/engine/index.mjs";
-const { createBrowserValleWebPlayer } = await import(runtimeUrl) as
-  Pick<typeof import("../../packages/engine/src/index.ts"), "createBrowserValleWebPlayer">;
+const { createBrowserValleWebPlayer } = (await import(runtimeUrl)) as Pick<
+  typeof import("../../packages/engine/src/index.ts"),
+  "createBrowserValleWebPlayer"
+>;
 
-type BenchmarkConfig = Pick<BrowserValleWebPlayerOptions,
-  "fixedPackageManifestJson" | "timelineJson" | "resourceManifestJson" |
-  "verifiedBindingBundleJson" | "runtimeAssets"> & {
+type BenchmarkConfig = Pick<
+  BrowserValleWebPlayerOptions,
+  | "fixedPackageManifestJson"
+  | "timelineJson"
+  | "resourceManifestJson"
+  | "verifiedBindingBundleJson"
+  | "runtimeAssets"
+> & {
   status: string;
   diagnostics?: unknown;
   durationFrames: number;
@@ -18,8 +28,10 @@ const status = document.querySelector<HTMLElement>("#status")!;
 const report = document.querySelector<HTMLElement>("#report")!;
 const canvas = document.querySelector<HTMLCanvasElement>("#preview")!;
 const requestedFrames = Number(new URLSearchParams(location.search).get("frames") ?? 60);
-const frames = Number.isInteger(requestedFrames) && requestedFrames >= 1 && requestedFrames <= 300
-  ? requestedFrames : 60;
+const frames =
+  Number.isInteger(requestedFrames) && requestedFrames >= 1 && requestedFrames <= 300
+    ? requestedFrames
+    : 60;
 
 function percentile(values: number[], fraction: number) {
   const sorted = [...values].sort((a, b) => a - b);
@@ -33,14 +45,21 @@ function gpuIdentity() {
   const extension = gl.getExtension("WEBGL_debug_renderer_info");
   return {
     webgl: true,
-    vendor: extension ? gl.getParameter(extension.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
-    renderer: extension ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
+    vendor: extension
+      ? gl.getParameter(extension.UNMASKED_VENDOR_WEBGL)
+      : gl.getParameter(gl.VENDOR),
+    renderer: extension
+      ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL)
+      : gl.getParameter(gl.RENDERER),
   };
 }
 
 async function run() {
-  const config = await (await fetch("/config.json", { cache: "no-store" })).json() as BenchmarkConfig;
-  if (config.status !== "ok") throw new Error(`Motion preparation failed: ${JSON.stringify(config.diagnostics)}`);
+  const config = (await (
+    await fetch("/config.json", { cache: "no-store" })
+  ).json()) as BenchmarkConfig;
+  if (config.status !== "ok")
+    throw new Error(`Motion preparation failed: ${JSON.stringify(config.diagnostics)}`);
   status.textContent = "Initializing real browser player…";
   const player = await createBrowserValleWebPlayer({
     fixedPackageManifestJson: config.fixedPackageManifestJson,
@@ -71,12 +90,22 @@ async function run() {
     if (!lastResult) throw new Error("No benchmark frames were rendered");
     const after = player.stats;
     const fields = [
-      "perfFrameMs", "perfEvaluatePrepareMs", "perfRequestInspectMs", "perfLowerMs",
-      "perfBindPacketsMs", "perfFramePlannerWorkerMs", "perfExecuteMs",
-      "perfExecutorPacketAdmissionMs", "perfExecutorProgramAdmissionMs",
-      "perfExecutorScheduleAdmissionMs", "perfExecutorRenderMs", "perfPresentMs",
+      "perfFrameMs",
+      "perfEvaluatePrepareMs",
+      "perfRequestInspectMs",
+      "perfLowerMs",
+      "perfBindPacketsMs",
+      "perfFramePlannerWorkerMs",
+      "perfExecuteMs",
+      "perfExecutorPacketAdmissionMs",
+      "perfExecutorProgramAdmissionMs",
+      "perfExecutorScheduleAdmissionMs",
+      "perfExecutorRenderMs",
+      "perfPresentMs",
     ] as const;
-    const stages = Object.fromEntries(fields.map(key => [key, (after[key] - before[key]) / frames]));
+    const stages = Object.fromEntries(
+      fields.map((key) => [key, (after[key] - before[key]) / frames]),
+    );
     const intervals = presentedAt.slice(1).map((value, index) => value - presentedAt[index]);
     const measured = {
       rows: config.instanceRows,
@@ -86,10 +115,18 @@ async function run() {
       gpu: gpuIdentity(),
       runtimeFlavor: lastResult.runtimeFlavor,
       surfaceBackend: lastResult.executionProfile.surfaceBackend,
-      wallMs: { p50: percentile(elapsed, 0.5), p95: percentile(elapsed, 0.95), max: Math.max(...elapsed) },
-      presentationMs: { p50: percentile(intervals, 0.5), p95: percentile(intervals, 0.95), max: Math.max(...intervals) },
-      presentedFps: (frames - 1) * 1000 / (presentedAt.at(-1)! - presentedAt[0]),
-      over33ms: elapsed.filter(value => value > 33.333).length,
+      wallMs: {
+        p50: percentile(elapsed, 0.5),
+        p95: percentile(elapsed, 0.95),
+        max: Math.max(...elapsed),
+      },
+      presentationMs: {
+        p50: percentile(intervals, 0.5),
+        p95: percentile(intervals, 0.95),
+        max: Math.max(...intervals),
+      },
+      presentedFps: ((frames - 1) * 1000) / (presentedAt.at(-1)! - presentedAt[0]),
+      over33ms: elapsed.filter((value) => value > 33.333).length,
       stages,
       lastFrame: { ...lastResult.frame, renderId: "<omitted>" },
       lastStats: lastResult.stats,
@@ -100,7 +137,7 @@ async function run() {
     const playbackStarted = performance.now();
     await player.play();
     while (player.playing && performance.now() - playbackStarted < 10000) {
-      await new Promise(resolve => setTimeout(resolve, 25));
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
     const playbackEnded = performance.now();
     player.pause();
@@ -109,23 +146,31 @@ async function run() {
       presented: played.length,
       totalFrames: config.durationFrames,
       elapsedMs: playbackEnded - playbackStarted,
-      uniqueFrames: new Set(played.map(item => item.frame)).size,
+      uniqueFrames: new Set(played.map((item) => item.frame)).size,
       firstFrame: played[0]?.frame ?? null,
       lastFrame: played.at(-1)?.frame ?? null,
       intervalP50Ms: playbackIntervals.length ? percentile(playbackIntervals, 0.5) : null,
       intervalP95Ms: playbackIntervals.length ? percentile(playbackIntervals, 0.95) : null,
-      frames: played.map(item => item.frame),
+      frames: played.map((item) => item.frame),
     };
     const result = { ...measured, playback };
     status.textContent = "Measurement complete";
     report.textContent = JSON.stringify(result, null, 2);
-    await fetch("/bench/result", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(result) });
+    await fetch("/bench/result", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(result),
+    });
   } finally {
     player.close();
   }
 }
 
-run().catch(async error => {
+run().catch(async (error) => {
   status.textContent = `Benchmark failed: ${error.stack || error}`;
-  await fetch("/bench/result", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ error: String(error.stack || error) }) });
+  await fetch("/bench/result", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ error: String(error.stack || error) }),
+  });
 });

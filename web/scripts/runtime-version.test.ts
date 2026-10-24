@@ -16,9 +16,14 @@ describe("Valle Web runtime build version", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "valle-canvaskit-version-"));
     try {
       await writeFile(path.join(root, "package.json"), JSON.stringify({ version: "999.0.0" }));
-      await expect(assertCanvasKitBuildVersion(root)).rejects.toThrow("does not match workspace catalog");
+      await expect(assertCanvasKitBuildVersion(root)).rejects.toThrow(
+        "does not match workspace catalog",
+      );
       const declared = await Bun.file(path.resolve(import.meta.dir, "../package.json")).json();
-      await writeFile(path.join(root, "package.json"), JSON.stringify({ version: declared.workspaces.catalog["canvaskit-wasm"] }));
+      await writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ version: declared.workspaces.catalog["canvaskit-wasm"] }),
+      );
       await expect(assertCanvasKitBuildVersion(root)).resolves.toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -34,13 +39,16 @@ describe("Valle Web runtime build version", () => {
   test("reads the Cargo workspace package version used by the root runtime manifest", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "valle-runtime-version-"));
     try {
-      await writeFile(path.join(root, "Cargo.toml"), `
+      await writeFile(
+        path.join(root, "Cargo.toml"),
+        `
 [workspace]
 members = []
 
 [workspace.package]
 version = "3.4.5"
-`);
+`,
+      );
       await expect(readValleWorkspaceVersion(root)).resolves.toBe("3.4.5");
     } finally {
       await rm(root, { recursive: true, force: true });

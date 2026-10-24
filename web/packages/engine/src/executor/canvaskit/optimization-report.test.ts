@@ -9,12 +9,14 @@ function optimizedPlan() {
     optimization: {
       inputPhysicalHash: hash("a"),
       outputPhysicalHash: hash("b"),
-      rewrites: [{
-        kind: "noOpGroupElimination",
-        pass: 2,
-        output: 3,
-        source: 1,
-      }],
+      rewrites: [
+        {
+          kind: "noOpGroupElimination",
+          pass: 2,
+          output: 3,
+          source: 1,
+        },
+      ],
     },
     resources: [
       { id: 1, kind: { kind: "surface", slot: 1 } },

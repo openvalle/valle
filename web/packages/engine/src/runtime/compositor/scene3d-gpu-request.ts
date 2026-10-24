@@ -14,11 +14,8 @@ export function supportsScene3dGpu(r: Scene3dGpuRequest): boolean {
         !Object.keys(m.material.textures ?? {}).length &&
         (!m.material.alphaMode || m.material.alphaMode === "opaque"),
     ) &&
-    r.frame.lights.filter((l) => l.type === "directional")
-      .length <= 2 &&
-    r.frame.lights.every((l) =>
-      ["directional", "ambient", "hemisphere"].includes(l.type),
-    ) &&
+    r.frame.lights.filter((l) => l.type === "directional").length <= 2 &&
+    r.frame.lights.every((l) => ["directional", "ambient", "hemisphere"].includes(l.type)) &&
     r.frame.meshes.every(
       (m) =>
         !m.nodes?.length &&

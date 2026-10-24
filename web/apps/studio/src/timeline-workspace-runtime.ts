@@ -15,10 +15,7 @@ type PreviewPlayer = {
 
 export type TimelineWorkspaceRuntimeConfig = Omit<
   VallePlayerElementOptions,
-  | "fixedPackageManifestJson"
-  | "timelineJson"
-  | "resourceManifestJson"
-  | "verifiedBindingBundleJson"
+  "fixedPackageManifestJson" | "timelineJson" | "resourceManifestJson" | "verifiedBindingBundleJson"
 > & {
   timeline: Timeline;
   timelineJson: string;
@@ -79,7 +76,8 @@ export async function initializeTimelineWorkspaceRuntime(
     runtimeBaseUrl: config.runtimeBaseUrl,
   });
   let motionSourceMetadata = config.motionSourceMetadata ?? {};
-  const compileTimeline = (timeline: Timeline) => compiler.compileTimeline(timeline, motionSourceMetadata);
+  const compileTimeline = (timeline: Timeline) =>
+    compiler.compileTimeline(timeline, motionSourceMetadata);
   const compiled = compileTimeline(config.timeline);
   const hostedRender = compiler.canonicalizeTimelineDocument(config.render.timeline);
   if (hostedRender.timelineJson !== compiled.timelineJson) {
@@ -95,21 +93,23 @@ export async function initializeTimelineWorkspaceRuntime(
     resourceManifest,
     verifiedBindingBundleJson,
   ];
-  if (!fixedFields.every((field) => (field === undefined) === (fixedPackageManifestJson === undefined))) {
+  if (
+    !fixedFields.every(
+      (field) => (field === undefined) === (fixedPackageManifestJson === undefined),
+    )
+  ) {
     throw new Error(
       "Timeline preview requires the complete fixed package manifest and members together",
     );
   }
-  if (
-    fixedFields.some((field) => typeof field === "string" && field.length === 0)
-  ) {
+  if (fixedFields.some((field) => typeof field === "string" && field.length === 0)) {
     throw new Error("Timeline preview fixed package strings must not be empty");
   }
   if (
-    fixedPackageManifestJson !== undefined
-    && resourceManifestJson !== undefined
-    && resourceManifest !== undefined
-    && verifiedBindingBundleJson !== undefined
+    fixedPackageManifestJson !== undefined &&
+    resourceManifestJson !== undefined &&
+    resourceManifest !== undefined &&
+    verifiedBindingBundleJson !== undefined
   ) {
     const loadStarted = performance.now();
     await player.load({
@@ -128,20 +128,23 @@ export async function initializeTimelineWorkspaceRuntime(
       cpuThreads: config.cpuThreads,
       audioContext: config.audioContext,
     });
-    performance.mark("valle-studio-player-load", { detail: {
-      durationMs: performance.now() - loadStarted,
-    } });
+    performance.mark("valle-studio-player-load", {
+      detail: {
+        durationMs: performance.now() - loadStarted,
+      },
+    });
     return {
       previewAvailable: true,
       rendererMessage: null,
       compiledTimeline: compiled,
       normalizeTimeline: (timeline) => compiler.normalizeTimeline(timeline),
       timelineTimeFromFrames: (frames, fps) => compiler.timelineTimeFromFrames(frames, fps),
-      timelineSourceTimeDeltaFromFrames: (frames, fps, rate) => (
-        compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate)
-      ),
+      timelineSourceTimeDeltaFromFrames: (frames, fps, rate) =>
+        compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate),
       compileTimeline,
-      setMotionSourceMetadata: (durations) => { motionSourceMetadata = { ...motionSourceMetadata, ...durations }; },
+      setMotionSourceMetadata: (durations) => {
+        motionSourceMetadata = { ...motionSourceMetadata, ...durations };
+      },
     };
   }
   return {
@@ -150,11 +153,12 @@ export async function initializeTimelineWorkspaceRuntime(
     compiledTimeline: compiled,
     normalizeTimeline: (timeline) => compiler.normalizeTimeline(timeline),
     timelineTimeFromFrames: (frames, fps) => compiler.timelineTimeFromFrames(frames, fps),
-    timelineSourceTimeDeltaFromFrames: (frames, fps, rate) => (
-      compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate)
-    ),
+    timelineSourceTimeDeltaFromFrames: (frames, fps, rate) =>
+      compiler.timelineSourceTimeDeltaFromFrames(frames, fps, rate),
     compileTimeline,
-    setMotionSourceMetadata: (durations) => { motionSourceMetadata = { ...motionSourceMetadata, ...durations }; },
+    setMotionSourceMetadata: (durations) => {
+      motionSourceMetadata = { ...motionSourceMetadata, ...durations };
+    },
   };
 }
 

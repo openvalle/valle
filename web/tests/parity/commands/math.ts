@@ -7,8 +7,18 @@ export const mathCommand: CommandDefinition = {
   name: "math",
   summary: "Compare the deterministic-math WASM corpus hash with its checked-in golden.",
   options: [
-    { name: "wasm", value: "module.wasm", description: "deterministic_math_wasm module", required: true },
-    { name: "golden", value: "golden.sha256", description: "expected SHA-256 text file", required: true },
+    {
+      name: "wasm",
+      value: "module.wasm",
+      description: "deterministic_math_wasm module",
+      required: true,
+    },
+    {
+      name: "golden",
+      value: "golden.sha256",
+      description: "expected SHA-256 text file",
+      required: true,
+    },
   ],
   async run(options) {
     const instance = await instantiateWasm(requiredOption(options, "wasm"));

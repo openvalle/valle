@@ -9,10 +9,7 @@ export async function instantiateWasm(path: string): Promise<WebAssembly.Instanc
   return result.instance;
 }
 
-export function requireWasmFunction(
-  instance: WebAssembly.Instance,
-  name: string,
-): WasmFunction {
+export function requireWasmFunction(instance: WebAssembly.Instance, name: string): WasmFunction {
   const value = instance.exports[name];
   if (typeof value !== "function") throw new CliError(`WASM export ${name} is missing`);
   return value as WasmFunction;

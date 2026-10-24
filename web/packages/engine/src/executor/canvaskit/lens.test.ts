@@ -1,28 +1,18 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import type { CanvasKit } from "canvaskit-wasm";
-import {
-  initSync,
-  ProductEngine,
-} from "../../../generated/web/valle_engine.js";
+import { initSync, ProductEngine } from "../../../generated/web/valle_engine.js";
 import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
 import { drawLensDistortion } from "./lens.ts";
 
 initSync({
-  module: await readFile(
-    new URL("../../../generated/web/valle_engine_bg.wasm", import.meta.url),
-  ),
+  module: await readFile(new URL("../../../generated/web/valle_engine_bg.wasm", import.meta.url)),
 });
-const { default: CanvasKitInit } = (await import(
-  "canvaskit-wasm"
-)) as unknown as {
-  default: (options: {
-    locateFile(file: string): string;
-  }) => Promise<CanvasKit>;
+const { default: CanvasKitInit } = (await import("canvaskit-wasm")) as unknown as {
+  default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
 const ck = await CanvasKitInit({
-  locateFile: () =>
-    Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir),
+  locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir),
 });
 
 test("GPU lens keeps CPU subpixel sampling, logical decal bounds and crop coordinates", () => {
@@ -43,9 +33,7 @@ test("GPU lens keeps CPU subpixel sampling, logical decal bounds and crop coordi
           : x % 11 < 4
             ? [0x4000, 0x3c00, 0x3800, 0x3c00]
             : [0, 0, 0, 0];
-      values.forEach((v, c) =>
-        view.setUint16((y * iw + x) * 8 + c * 2, v, true),
-      );
+      values.forEach((v, c) => view.setUint16((y * iw + x) * 8 + c * 2, v, true));
     }
   const info = {
     width: iw,
@@ -56,11 +44,7 @@ test("GPU lens keeps CPU subpixel sampling, logical decal bounds and crop coordi
   };
   const input = ck.MakeImage(info, bytes, iw * 8)!;
   const memory = ck.Malloc(Uint8Array, w * h * 8);
-  const surface = ck.MakeRasterDirectSurface(
-    { ...info, width: w, height: h },
-    memory,
-    w * 8,
-  )!;
+  const surface = ck.MakeRasterDirectSurface({ ...info, width: w, height: h }, memory, w * 8)!;
   try {
     const cases = [
       { origin: [0, 0], offset: [-8, 7], frame: [0, 0, 140, 100] },
@@ -94,17 +78,7 @@ test("GPU lens keeps CPU subpixel sampling, logical decal bounds and crop coordi
         canvas.save();
         canvas.translate(-output.x, -output.y);
         try {
-          drawLensDistortion(
-            ck,
-            runtime,
-            canvas,
-            input,
-            roi,
-            output,
-            frame,
-            k1!,
-            k2!,
-          );
+          drawLensDistortion(ck, runtime, canvas, input, roi, output, frame, k1!, k2!);
         } finally {
           canvas.restore();
         }
@@ -131,11 +105,7 @@ test("GPU lens keeps CPU subpixel sampling, logical decal bounds and crop coordi
           frame[2]!,
           frame[3]!,
         );
-        const image = ck.MakeImage(
-          { ...info, width: w, height: h },
-          expected,
-          w * 8,
-        )!;
+        const image = ck.MakeImage({ ...info, width: w, height: h }, expected, w * 8)!;
         try {
           const pixels = image.readPixels(0, 0, {
             ...info,
@@ -146,10 +116,7 @@ test("GPU lens keeps CPU subpixel sampling, logical decal bounds and crop coordi
           let max = 0;
           for (let i = 0; i < w * h * 4; i++)
             max = Math.max(max, Math.abs(actual[i]! - pixels[i]!));
-          expect(
-            max,
-            `origin=${origin} offset=${offset} k=${k1},${k2}`,
-          ).toBeLessThanOrEqual(0.001);
+          expect(max, `origin=${origin} offset=${offset} k=${k1},${k2}`).toBeLessThanOrEqual(0.001);
         } finally {
           image.delete();
         }

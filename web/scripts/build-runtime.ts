@@ -64,18 +64,17 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
   await assertGeneratedEngineBuildVersion(generatedEngine, valleBuildVersion);
   const engineRuntime = path.join(dist, "runtime", "engine");
   await mkdir(engineRuntime, { recursive: true });
-  for (const asset of [
-    "valle_engine.js",
-    "valle_engine_bg.wasm",
-    "valle_engine.d.ts",
-  ] as const) {
+  for (const asset of ["valle_engine.js", "valle_engine_bg.wasm", "valle_engine.d.ts"] as const) {
     await Bun.write(path.join(engineRuntime, asset), Bun.file(path.join(generatedEngine, asset)));
   }
 
   const engineRoot = path.join(root, "packages", "engine");
   const canvasKitRoot = path.dirname(path.dirname(Bun.resolveSync("canvaskit-wasm", engineRoot)));
   await assertCanvasKitBuildVersion(canvasKitRoot);
-  const mediabunnyRoot = path.resolve(path.dirname(Bun.resolveSync("mediabunny", engineRoot)), "../../..");
+  const mediabunnyRoot = path.resolve(
+    path.dirname(Bun.resolveSync("mediabunny", engineRoot)),
+    "../../..",
+  );
   for (const [source, target] of [
     [path.join(canvasKitRoot, "bin", "canvaskit.js"), "runtime/canvaskit/canvaskit.js"],
     [path.join(canvasKitRoot, "bin", "canvaskit.wasm"), "runtime/canvaskit/canvaskit.wasm"],
@@ -87,8 +86,10 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
     await Bun.write(destination, Bun.file(source));
   }
 
-  await Bun.write(path.join(dist, "runtime", "licenses", "valle-and-third-party.txt"),
-    await thirdPartyNotices(path.resolve(root, "..")));
+  await Bun.write(
+    path.join(dist, "runtime", "licenses", "valle-and-third-party.txt"),
+    await thirdPartyNotices(path.resolve(root, "..")),
+  );
 
   await emitRuntimeManifests(dist, valleBuildVersion, runtimeProtocolVersion, {
     canvasKit: (await Bun.file(path.join(canvasKitRoot, "package.json")).json()).version,
@@ -110,7 +111,7 @@ async function listFiles(dir: string): Promise<string[]> {
   const files: string[] = [];
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const absolute = path.join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...await listFiles(absolute));
+    if (entry.isDirectory()) files.push(...(await listFiles(absolute)));
     else files.push(absolute);
   }
   return files;

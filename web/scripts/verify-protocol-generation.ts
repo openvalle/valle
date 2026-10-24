@@ -5,7 +5,9 @@ const repo = new URL("../../", import.meta.url).pathname;
 const web = new URL("../", import.meta.url).pathname;
 await $`bun test scripts/generate-packed-abi.test.ts`.cwd(web);
 await $`bun run scripts/generate-packed-abi.ts --check`.cwd(web);
-await $`cargo run --quiet -p valle-timeline --features schema --bin valle-schema-gen -- --check`.cwd(repo);
+await $`cargo run --quiet -p valle-timeline --features schema --bin valle-schema-gen -- --check`.cwd(
+  repo,
+);
 await $`cargo test --quiet --manifest-path ${cwd}Cargo.toml`;
 const first = await $`cargo run --quiet --manifest-path ${cwd}Cargo.toml -- --stdout`.text();
 const second = await $`cargo run --quiet --manifest-path ${cwd}Cargo.toml -- --stdout`.text();

@@ -9,7 +9,9 @@ import type { BrowserValleWebPlayer } from "./runtime/product-controller.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -58,7 +60,9 @@ function fakePlayer() {
       runtime.playing = true;
       runtime.onTimeUpdate?.(currentTime);
     },
-    pause: () => { runtime.playing = false; },
+    pause: () => {
+      runtime.playing = false;
+    },
     seek: async (timeS: number) => {
       currentTime = timeS;
       runtime.onTimeUpdate?.(currentTime);
@@ -73,7 +77,9 @@ function fakePlayer() {
       replacements.push(next.timelineJson);
       return renderResult(next.timelineJson);
     },
-    close: async () => { closed += 1; },
+    close: async () => {
+      closed += 1;
+    },
   };
   return {
     runtime: runtime as unknown as BrowserValleWebPlayer,

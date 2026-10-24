@@ -62,7 +62,9 @@ export async function exportBrowserVideo(
   try {
     checkCancelled();
     if (typeof VideoEncoder === "undefined") {
-      throw new Error("This browser cannot export MP4. Open Studio in a browser with WebCodecs video encoding support.");
+      throw new Error(
+        "This browser cannot export MP4. Open Studio in a browser with WebCodecs video encoding support.",
+      );
     }
     options.onProgress?.({ phase: "loading", framesCompleted: 0, frameCount: 0 });
     const canvas = document.createElement("canvas");
@@ -82,15 +84,31 @@ export async function exportBrowserVideo(
     const plan = resolveExportPlan(info, options);
     const { width, height } = plan;
     const hasAudio = options.includeAudio !== false && player.hasAudio();
-    const quality = options.videoBitrate === undefined ? new Quality("high") : new Quality({ bitrate: options.videoBitrate });
+    const quality =
+      options.videoBitrate === undefined
+        ? new Quality("high")
+        : new Quality({ bitrate: options.videoBitrate });
     const [videoSupported, audioSupported] = await Promise.all([
       canEncodeVideo("avc", { width, height, quality, frameRate: plan.fps }),
-      hasAudio ? canEncodeAudio("aac", { sampleRate: info.sampleRate, numberOfChannels: 2, quality: new Quality({ bitrate: plan.audioBitrate }) }) : true,
+      hasAudio
+        ? canEncodeAudio("aac", {
+            sampleRate: info.sampleRate,
+            numberOfChannels: 2,
+            quality: new Quality({ bitrate: plan.audioBitrate }),
+          })
+        : true,
     ]);
     checkCancelled();
-    if (!videoSupported) throw new Error(`This browser cannot encode H.264 at ${width} × ${height}.`);
-    if (!audioSupported) throw new Error("This browser cannot encode AAC audio. Use a browser with AAC encoding support to export this work.");
-    if (hasAudio && typeof AudioDecoder === "undefined") throw new Error("This browser cannot verify AAC audio timing. Use a browser with WebCodecs audio decoding support.");
+    if (!videoSupported)
+      throw new Error(`This browser cannot encode H.264 at ${width} × ${height}.`);
+    if (!audioSupported)
+      throw new Error(
+        "This browser cannot encode AAC audio. Use a browser with AAC encoding support to export this work.",
+      );
+    if (hasAudio && typeof AudioDecoder === "undefined")
+      throw new Error(
+        "This browser cannot verify AAC audio timing. Use a browser with WebCodecs audio decoding support.",
+      );
 
     // Write media incrementally and append the index at the end. A regular MP4 edit list is needed
     // to remove AAC priming while preserving packets required by the decoder.
@@ -99,12 +117,18 @@ export async function exportBrowserVideo(
       ? new StreamTarget(fileSink.stream, { chunked: true, chunkSize: 1_048_576 })
       : new BufferTarget();
     output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target });
-    const video = new CanvasSource(canvas, { codec: "avc", quality, latencyMode: "quality",
-      ...(plan.resize ? { transform: { width, height, fit: "contain" as const } } : {}) });
+    const video = new CanvasSource(canvas, {
+      codec: "avc",
+      quality,
+      latencyMode: "quality",
+      ...(plan.resize ? { transform: { width, height, fit: "contain" as const } } : {}),
+    });
     // A frame-rate hint snaps every packet duration to a whole frame. Omit it when the final
     // frame is partial so MP4 retains the authored end instead of losing the remaining samples.
     output.addVideoTrack(video, plan.partialFinalFrame ? {} : { frameRate: plan.fps });
-    audio = hasAudio ? await createBrowserAacEncoder(info.sampleRate, info.sampleCount, plan.audioBitrate) : null;
+    audio = hasAudio
+      ? await createBrowserAacEncoder(info.sampleRate, info.sampleCount, plan.audioBitrate)
+      : null;
     checkCancelled();
     if (audio) output.addAudioTrack(audio.source);
     await output.start();
@@ -114,7 +138,10 @@ export async function exportBrowserVideo(
         checkCancelled();
         const endSample = Math.min(info.sampleCount, audioSample + info.sampleRate);
         // Bound offline PCM to one second and interleave tracks to bound the muxer's queue too.
-        const buffer = await player!.renderAudioOffline(audioSample / info.sampleRate, endSample / info.sampleRate);
+        const buffer = await player!.renderAudioOffline(
+          audioSample / info.sampleRate,
+          endSample / info.sampleRate,
+        );
         checkCancelled();
         if (!buffer || buffer.length !== endSample - audioSample) {
           throw new Error("Offline audio does not match the admitted sample schedule.");
@@ -128,14 +155,18 @@ export async function exportBrowserVideo(
     for (let frame = 0; frame < plan.frameCount; frame++) {
       checkCancelled();
       const sourceFrame = plan.sourceFrame(frame);
-      const result = await player.renderFrame(sourceFrame, { rasterScale: plan.rasterScale }).catch((error: unknown) => {
-        checkCancelled();
-        if (error instanceof DOMException && error.name === "AbortError") throw error;
-        // Name the failed frame and its time, as Native exports do.
-        const seconds = (sourceFrame * rateDenominator!) / rateNumerator!;
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`frame ${sourceFrame} (${seconds.toFixed(3)} s): ${message}`, { cause: error });
-      });
+      const result = await player
+        .renderFrame(sourceFrame, { rasterScale: plan.rasterScale })
+        .catch((error: unknown) => {
+          checkCancelled();
+          if (error instanceof DOMException && error.name === "AbortError") throw error;
+          // Name the failed frame and its time, as Native exports do.
+          const seconds = (sourceFrame * rateDenominator!) / rateNumerator!;
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`frame ${sourceFrame} (${seconds.toFixed(3)} s): ${message}`, {
+            cause: error,
+          });
+        });
       executionBackends.add(result.executionProfile.surfaceBackend);
       if (result.frame.renderId !== info.renderId || result.frame.index !== sourceFrame) {
         throw new Error("Export frame does not match the frozen render package.");
@@ -148,7 +179,11 @@ export async function exportBrowserVideo(
       await video.add(timestamp, nextTimestamp - timestamp);
       endEncode?.();
       await addAudioUntil(nextTimestamp);
-      options.onProgress?.({ phase: "rendering", framesCompleted: frame + 1, frameCount: plan.frameCount });
+      options.onProgress?.({
+        phase: "rendering",
+        framesCompleted: frame + 1,
+        frameCount: plan.frameCount,
+      });
       // Let progress, cancellation, and the rest of Studio run even with fully cached fast frames.
       if (frame % 8 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
@@ -156,14 +191,19 @@ export async function exportBrowserVideo(
     video.close();
     await audio?.finish();
     checkCancelled();
-    options.onProgress?.({ phase: "finalizing", framesCompleted: plan.frameCount, frameCount: plan.frameCount });
+    options.onProgress?.({
+      phase: "finalizing",
+      framesCompleted: plan.frameCount,
+      frameCount: plan.frameCount,
+    });
     const endFinalize = input.trace?.span("encode.drain_mux");
     await output.finalize();
     endFinalize?.();
     checkCancelled();
     await fileSink?.commit();
     return {
-      blob: target instanceof BufferTarget ? new Blob([target.buffer!], { type: "video/mp4" }) : null,
+      blob:
+        target instanceof BufferTarget ? new Blob([target.buffer!], { type: "video/mp4" }) : null,
       renderId: info.renderId,
       width,
       height,

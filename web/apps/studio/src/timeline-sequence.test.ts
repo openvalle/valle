@@ -18,33 +18,116 @@ function fixture(): TimelineDocument {
       },
       background: { color: "#000000" },
       visual: {
-        tracks: [{ id: "visual:main", items: [
-          { type: "clip", id: "clip:a", duration: "3/2", source: { type: "solid", color: "#111111" }, layer: layer() },
-          { type: "transition", id: "transition:ab", duration: "1/2", kernel: { type: "fade" } },
-          { type: "clip", id: "clip:b", duration: "5/2", source: { type: "solid", color: "#222222" }, layer: layer() },
-          { type: "gap", id: "gap:tail", duration: "1/1" },
-        ] }],
+        tracks: [
+          {
+            id: "visual:main",
+            items: [
+              {
+                type: "clip",
+                id: "clip:a",
+                duration: "3/2",
+                source: { type: "solid", color: "#111111" },
+                layer: layer(),
+              },
+              {
+                type: "transition",
+                id: "transition:ab",
+                duration: "1/2",
+                kernel: { type: "fade" },
+              },
+              {
+                type: "clip",
+                id: "clip:b",
+                duration: "5/2",
+                source: { type: "solid", color: "#222222" },
+                layer: layer(),
+              },
+              { type: "gap", id: "gap:tail", duration: "1/1" },
+            ],
+          },
+        ],
       },
-      audio: { tracks: [{ id: "audio:main", items: [
-        { type: "clip", id: "audio:a", duration: "2/1", source: { type: "media", resource: "asset:audio-a", sourceStart: "0/1", rate: "1/1", endBehavior: "hold" }, gain: { type: "constant", value: 1 }, pan: { type: "constant", value: 0 }, effects: [] },
-        { type: "crossfade", id: "crossfade:ab", duration: "1/4" },
-        { type: "clip", id: "audio:b", duration: "2/1", source: { type: "media", resource: "asset:audio-b", sourceStart: "0/1", rate: "1/1", endBehavior: "hold" }, gain: { type: "constant", value: 1 }, pan: { type: "constant", value: 0 }, effects: [] },
-      ] }] },
-      captions: { tracks: [{ id: "caption:main", items: [
-        { type: "gap", id: "gap:caption-head", duration: "1/1" },
-        { type: "clip", id: "caption:a", duration: "2/1", runs: [{ id: "run:a", text: "Hello", style: null, timing: null }], style: { font: "font:main", fontSize: 48, color: "#ffffff", shadow: null }, layout: { align: "bottom-center", region: [0, 0, 1, 1] }, behavior: null, presentation: { opacity: { type: "constant", value: 1 }, translation: { type: "constant", value: [0, 0] }, scale: { type: "constant", value: 1 }, rotation: { type: "constant", value: 0 }, blurSigma: { type: "constant", value: 0 }, clipInset: { type: "constant", value: [0, 0, 0, 0] } } },
-      ] }] },
-      adjustments: [{
-        id: "adjustment:grade",
-        start: "1/2",
-        duration: "2/1",
-        effect: { type: "color-grade", temperature: 0.2 },
-      }, {
-        id: "adjustment:synthetic",
-        start: "3/1",
-        duration: "1/1",
-        effect: { type: "color-grade", temperature: -0.1 },
-      }],
+      audio: {
+        tracks: [
+          {
+            id: "audio:main",
+            items: [
+              {
+                type: "clip",
+                id: "audio:a",
+                duration: "2/1",
+                source: {
+                  type: "media",
+                  resource: "asset:audio-a",
+                  sourceStart: "0/1",
+                  rate: "1/1",
+                  endBehavior: "hold",
+                },
+                gain: { type: "constant", value: 1 },
+                pan: { type: "constant", value: 0 },
+                effects: [],
+              },
+              { type: "crossfade", id: "crossfade:ab", duration: "1/4" },
+              {
+                type: "clip",
+                id: "audio:b",
+                duration: "2/1",
+                source: {
+                  type: "media",
+                  resource: "asset:audio-b",
+                  sourceStart: "0/1",
+                  rate: "1/1",
+                  endBehavior: "hold",
+                },
+                gain: { type: "constant", value: 1 },
+                pan: { type: "constant", value: 0 },
+                effects: [],
+              },
+            ],
+          },
+        ],
+      },
+      captions: {
+        tracks: [
+          {
+            id: "caption:main",
+            items: [
+              { type: "gap", id: "gap:caption-head", duration: "1/1" },
+              {
+                type: "clip",
+                id: "caption:a",
+                duration: "2/1",
+                runs: [{ id: "run:a", text: "Hello", style: null, timing: null }],
+                style: { font: "font:main", fontSize: 48, color: "#ffffff", shadow: null },
+                layout: { align: "bottom-center", region: [0, 0, 1, 1] },
+                behavior: null,
+                presentation: {
+                  opacity: { type: "constant", value: 1 },
+                  translation: { type: "constant", value: [0, 0] },
+                  scale: { type: "constant", value: 1 },
+                  rotation: { type: "constant", value: 0 },
+                  blurSigma: { type: "constant", value: 0 },
+                  clipInset: { type: "constant", value: [0, 0, 0, 0] },
+                },
+              },
+            ],
+          },
+        ],
+      },
+      adjustments: [
+        {
+          id: "adjustment:grade",
+          start: "1/2",
+          duration: "2/1",
+          effect: { type: "color-grade", temperature: 0.2 },
+        },
+        {
+          id: "adjustment:synthetic",
+          start: "3/1",
+          duration: "1/1",
+          effect: { type: "color-grade", temperature: -0.1 },
+        },
+      ],
       camera: null,
       metadata: {},
     },
@@ -140,29 +223,26 @@ function view(): TimelineDocumentView {
         trackId: "timeline:adjustment-track:0",
         trackIndex: 0,
         durationSeconds: 2.5,
-        items: [{
-          ...item(
-            "adjustment:grade",
-            "/tracks/adjustment/0/clips/0",
-            0,
-            0.5,
-            2,
-            false,
-          ),
-          endSeconds: 2.5,
-          endFrame: 75,
-        }],
+        items: [
+          {
+            ...item("adjustment:grade", "/tracks/adjustment/0/clips/0", 0, 0.5, 2, false),
+            endSeconds: 2.5,
+            endFrame: 75,
+          },
+        ],
       },
       {
         band: "adjustment",
         trackId: "canonical:adjustments",
         trackIndex: 1,
         durationSeconds: 4,
-        items: [{
-          ...item("adjustment:synthetic", null, 1, 3, 1, false),
-          endSeconds: 4,
-          endFrame: 120,
-        }],
+        items: [
+          {
+            ...item("adjustment:synthetic", null, 1, 3, 1, false),
+            endSeconds: 4,
+            endFrame: 120,
+          },
+        ],
       },
     ],
   };
@@ -171,7 +251,9 @@ function view(): TimelineDocumentView {
 test("Sequence projection shows visual overlap and preserves audio cut clocks", () => {
   const tracks = projectTimelineSequences(fixture(), view());
   const visual = tracks.find((track) => track.band === "visual")!;
-  expect(visual.items.map((entry) => [entry.item.id, entry.startSeconds, entry.advancesCursor])).toEqual([
+  expect(
+    visual.items.map((entry) => [entry.item.id, entry.startSeconds, entry.advancesCursor]),
+  ).toEqual([
     ["clip:a", 0, true],
     ["transition:ab", 1, false],
     ["clip:b", 1, true],

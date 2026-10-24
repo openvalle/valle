@@ -19,9 +19,11 @@ describe("app boundaries", () => {
   });
 
   test("keeps Preview in the test fixture and removes Console", async () => {
-    expect(await Bun.file(path.join(root,"tests/preview/index.html")).text()).toContain('src="./src/main.ts"');
-    expect(await Bun.file(path.join(root,"apps/console/index.html")).exists()).toBeFalse();
-    expect(APP_BUILDS).toEqual([["studio","apps/studio/index.html"]]);
+    expect(await Bun.file(path.join(root, "tests/preview/index.html")).text()).toContain(
+      'src="./src/main.ts"',
+    );
+    expect(await Bun.file(path.join(root, "apps/console/index.html")).exists()).toBeFalse();
+    expect(APP_BUILDS).toEqual([["studio", "apps/studio/index.html"]]);
   });
 
   test("publishes one Studio app for all entry types", () => {

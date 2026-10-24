@@ -6,7 +6,9 @@ import {
 
 export type VallePlayerState = "new" | "loading" | "ready" | "disposed";
 export type VallePlayerOptions = Parameters<typeof createBrowserValleWebPlayer>[0];
-export type ValleRenderPackageReplacement = Parameters<BrowserValleWebPlayer["replaceRenderPackage"]>[0];
+export type ValleRenderPackageReplacement = Parameters<
+  BrowserValleWebPlayer["replaceRenderPackage"]
+>[0];
 export type ValleRenderResult = Awaited<ReturnType<BrowserValleWebPlayer["seek"]>>;
 
 export interface VallePlayerStateDetail {
@@ -158,14 +160,19 @@ export class VallePlayerController extends EventTarget {
     return result;
   }
 
-  replaceRenderPackage(next: ValleRenderPackageReplacement): Promise<ValleRenderResult | undefined> {
+  replaceRenderPackage(
+    next: ValleRenderPackageReplacement,
+  ): Promise<ValleRenderResult | undefined> {
     const generation = ++this.#contentGeneration;
     const previous = this.#replaceTail.catch(() => undefined);
     const replacement = previous.then(async () => {
       const player = this.#requireReady("replaceRenderPackage");
       if (generation !== this.#contentGeneration) return undefined;
-      const result = await this.#run("replaceRenderPackage", () => player.replaceRenderPackage(next));
-      if (!result || generation !== this.#contentGeneration || this.#state !== "ready") return undefined;
+      const result = await this.#run("replaceRenderPackage", () =>
+        player.replaceRenderPackage(next),
+      );
+      if (!result || generation !== this.#contentGeneration || this.#state !== "ready")
+        return undefined;
       this.#publishRender(player, result);
       return result;
     });
@@ -176,7 +183,9 @@ export class VallePlayerController extends EventTarget {
   canonicalizeTimelineDocument(
     timeline: Parameters<BrowserValleWebPlayer["canonicalizeTimelineDocument"]>[0],
   ): CanonicalTimelineDocument {
-    return this.#requireReady("canonicalizeTimelineDocument").canonicalizeTimelineDocument(timeline);
+    return this.#requireReady("canonicalizeTimelineDocument").canonicalizeTimelineDocument(
+      timeline,
+    );
   }
 
   dispose(): Promise<void> {

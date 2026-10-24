@@ -1,10 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
-import {
-  assertRuntimeManifest,
-  type RootRuntimeManifest,
-} from "./runtime-manifest.ts";
+import { assertRuntimeManifest, type RootRuntimeManifest } from "./runtime-manifest.ts";
 import { readRuntimeProtocolVersion, readValleWorkspaceVersion } from "./runtime-version.ts";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -41,13 +38,17 @@ describe("root runtime manifest closure", () => {
   test("rejects a glue path outside its declared closure", async () => {
     const splitGroup = structuredClone(manifest);
     splitGroup.assetGroups[0].glue = manifest.runtimeAssets.workers.productFrame;
-    await expect(assertRuntimeManifest(dist, splitGroup)).rejects.toThrow(/outside its glue\+wasm group/);
+    await expect(assertRuntimeManifest(dist, splitGroup)).rejects.toThrow(
+      /outside its glue\+wasm group/,
+    );
   });
 
   test("rejects missing license metadata and byte drift", async () => {
     const missingLicense = structuredClone(manifest);
     missingLicense.assets[0].license = "";
-    await expect(assertRuntimeManifest(dist, missingLicense)).rejects.toThrow(/license is required/);
+    await expect(assertRuntimeManifest(dist, missingLicense)).rejects.toThrow(
+      /license is required/,
+    );
 
     const hashDrift = structuredClone(manifest);
     hashDrift.assets[0].sha256 = "0".repeat(64);
@@ -57,6 +58,8 @@ describe("root runtime manifest closure", () => {
   test("rejects an invalid runtime protocol", async () => {
     const invalidProtocol = structuredClone(manifest);
     invalidProtocol.protocolVersion = 0;
-    await expect(assertRuntimeManifest(dist, invalidProtocol)).rejects.toThrow(/protocolVersion is invalid/);
+    await expect(assertRuntimeManifest(dist, invalidProtocol)).rejects.toThrow(
+      /protocolVersion is invalid/,
+    );
   });
 });

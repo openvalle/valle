@@ -11,13 +11,36 @@ export const PRODUCT_FRAME_TEMPLATE_CACHE_SIZE = 64;
 
 export interface ProductEngineWire {
   motion_kernel_available?(): boolean;
-  capture_motion_jobs_preview?(renderId: string, frame: bigint, width: number, height: number, transparent: boolean): string;
+  capture_motion_jobs_preview?(
+    renderId: string,
+    frame: bigint,
+    width: number,
+    height: number,
+    transparent: boolean,
+  ): string;
   motion_kernel_definition?(id: string): string;
-  run_motion_kernel?(definitionId: string, definitionJson: string, inputJson: string, compact: boolean): Uint8Array;
-  evaluate_prepare_motion_preview?(renderId: string, frame: bigint, width: number, height: number, transparent: boolean, results: Uint8Array): number;
+  run_motion_kernel?(
+    definitionId: string,
+    definitionJson: string,
+    inputJson: string,
+    compact: boolean,
+  ): Uint8Array;
+  evaluate_prepare_motion_preview?(
+    renderId: string,
+    frame: bigint,
+    width: number,
+    height: number,
+    transparent: boolean,
+    results: Uint8Array,
+  ): number;
 
   clear_scene3d_frames(): void;
-  quantize_frame_seconds(seconds: number, numerator: number, denominator: number, count: bigint): bigint;
+  quantize_frame_seconds(
+    seconds: number,
+    numerator: number,
+    denominator: number,
+    count: bigint,
+  ): bigint;
   quantize_sample_seconds(seconds: number, sampleRate: number, count: bigint): bigint;
   set_realtime_geometry?(enabled: boolean): void;
   scene3d_gpu_lighting_input?(content: string, topology: string, request: string): Float32Array;
@@ -32,26 +55,24 @@ export interface ProductEngineWire {
   frame_at_seconds(renderId: string, seconds: number): bigint;
   sample_at_seconds(renderId: string, seconds: number): bigint;
   audio_program_json(renderId: string): string;
-  audio_sources_json(
-    renderId: string,
-    startSample: bigint,
-    endSample: bigint,
-  ): string;
+  audio_sources_json(renderId: string, startSample: bigint, endSample: bigint): string;
   has_audio_pcm(renderId: string, digest: string): boolean;
   audio_windows_json(renderId: string, startSample: bigint, endSample: bigint): string;
   clear_audio_pcm(renderId: string): void;
-  register_audio_pcm_window(renderId: string, digest: string, start: bigint, left: Float32Array, right: Float32Array): void;
+  register_audio_pcm_window(
+    renderId: string,
+    digest: string,
+    start: bigint,
+    left: Float32Array,
+    right: Float32Array,
+  ): void;
   register_audio_pcm(
     renderId: string,
     digest: string,
     left: Float32Array,
     right: Float32Array,
   ): void;
-  mix_audio_pcm(
-    renderId: string,
-    startSample: bigint,
-    endSample: bigint,
-  ): Float32Array;
+  mix_audio_pcm(renderId: string, startSample: bigint, endSample: bigint): Float32Array;
   compiled_execution_resources_json(renderId: string): string;
   compiled_resource_bytes(
     renderId: string,
@@ -68,11 +89,7 @@ export interface ProductEngineWire {
   ): number;
   resource_requests(ticket: number): Uint8Array;
   frame_inspection_json(ticket: number): string;
-  lower_canvas_kit(
-    ticket: number,
-    maxSurfaceBytes: bigint,
-    maxFrameBytes: bigint,
-  ): void;
+  lower_canvas_kit(ticket: number, maxSurfaceBytes: bigint, maxFrameBytes: bigint): void;
   template_cache_hit(ticket: number): boolean;
   bind(ticket: number, generation: bigint): void;
   plan_template_hash(ticket: number): string;
@@ -132,24 +149,52 @@ interface WorkerMessageBase {
 
 /** The worker exposes explicit resource/kernel operations, never arbitrary property access. */
 export const PRODUCT_RUNTIME_METHODS = [
-  "decode_shader_data_texture", "scene3d_resource_needs_json", "register_scene3d_model",
-  "register_scene3d_environment", "register_scene3d_texture", "scene3d_gpu_lighting_input",
-  "render_scene3d_request", "render_scene3d_request_deferred",
-  "has_scene3d_frame", "scene3d_pick_json", "audio_sources_json", "has_audio_pcm",
-  "register_audio_pcm", "mix_audio_pcm", "apply_bloom_f16", "apply_glow_f16",
-  "apply_lens_distortion_f16", "apply_radial_blur_f16", "apply_film_grain_f16",
-  "transform_srgb_preview_pixels", "transform_srgb_preview_f16", "audio_windows_json", "mix_audio_windows", "pick_scene3d_request",
+  "decode_shader_data_texture",
+  "scene3d_resource_needs_json",
+  "register_scene3d_model",
+  "register_scene3d_environment",
+  "register_scene3d_texture",
+  "scene3d_gpu_lighting_input",
+  "render_scene3d_request",
+  "render_scene3d_request_deferred",
+  "has_scene3d_frame",
+  "scene3d_pick_json",
+  "audio_sources_json",
+  "has_audio_pcm",
+  "register_audio_pcm",
+  "mix_audio_pcm",
+  "apply_bloom_f16",
+  "apply_glow_f16",
+  "apply_lens_distortion_f16",
+  "apply_radial_blur_f16",
+  "apply_film_grain_f16",
+  "transform_srgb_preview_pixels",
+  "transform_srgb_preview_f16",
+  "audio_windows_json",
+  "mix_audio_windows",
+  "pick_scene3d_request",
 ] as const;
-export type ProductRuntimeMethod = typeof PRODUCT_RUNTIME_METHODS[number];
+export type ProductRuntimeMethod = (typeof PRODUCT_RUNTIME_METHODS)[number];
 
 export interface ProductRuntimeSnapshot {
   receipt: ProductRenderReceipt;
   audioProgramJson: string;
-  resources: Array<{ resourceId: string; kind: string; contentDigest: string; abiDigest?: string | null; bytes: Uint8Array }>;
+  resources: Array<{
+    resourceId: string;
+    kind: string;
+    contentDigest: string;
+    abiDigest?: string | null;
+    bytes: Uint8Array;
+  }>;
 }
 
 export type ProductFrameWorkerRequest =
-  | (WorkerMessageBase & { type: "call"; renderId: string; method: ProductRuntimeMethod; args: unknown[] })
+  | (WorkerMessageBase & {
+      type: "call";
+      renderId: string;
+      method: ProductRuntimeMethod;
+      args: unknown[];
+    })
   | (WorkerMessageBase & {
       type: "configure";
       bootstrap: ProductEngineBootstrap;
@@ -198,8 +243,10 @@ export interface ProductFrameReadyStage {
   totalWorkerMs: number;
 }
 
-export interface ProductFrameWorkerReadyStage
-  extends Omit<ProductFrameReadyStage, "planPacket" | "planPacketTransferred"> {
+export interface ProductFrameWorkerReadyStage extends Omit<
+  ProductFrameReadyStage,
+  "planPacket" | "planPacketTransferred"
+> {
   planPacket: Uint8Array | null;
 }
 
@@ -211,9 +258,18 @@ export type ProductFrameWorkerFatalResponse = WorkerMessageBase & {
   error: string;
 };
 
-export interface MotionKernelJob { key: string; definitionId: string; inputJson: string; }
+export interface MotionKernelJob {
+  key: string;
+  definitionId: string;
+  inputJson: string;
+}
 export type ProductFrameWorkerResponse =
-  | (WorkerMessageBase & { type: "motionWork"; request: ProductFrameRequest; jobs: MotionKernelJob[]; definitions: Record<string, string> })
+  | (WorkerMessageBase & {
+      type: "motionWork";
+      request: ProductFrameRequest;
+      jobs: MotionKernelJob[];
+      definitions: Record<string, string>;
+    })
   | (WorkerMessageBase & { type: "callResult"; renderId: string; result?: unknown; error?: string })
   | (WorkerMessageBase & {
       type: "configured";
@@ -254,8 +310,7 @@ export function productFrameWorkerFatalResponse(
     type: "fatal",
     id: typeof raw.id === "string" && raw.id.length > 0 ? raw.id : "protocol",
     phase,
-    error:
-      error instanceof Error ? (error.stack ?? error.message) : String(error),
+    error: error instanceof Error ? (error.stack ?? error.message) : String(error),
   };
 }
 
@@ -290,10 +345,7 @@ export function applyProductEngineBootstrap(
       bootstrap.verifiedBindingBundleJson,
     ),
   );
-  if (
-    bootstrap.expectedRenderId &&
-    receipt.renderId !== bootstrap.expectedRenderId
-  ) {
+  if (bootstrap.expectedRenderId && receipt.renderId !== bootstrap.expectedRenderId) {
     throw new Error(
       `ProductEngine worker RenderId drift: expected ${bootstrap.expectedRenderId}, got ${receipt.renderId}`,
     );
@@ -302,10 +354,7 @@ export function applyProductEngineBootstrap(
 }
 
 export function parseProductRenderReceipt(json: string): ProductRenderReceipt {
-  const value = requireRecord(
-    JSON.parse(json) as unknown,
-    "Product render receipt",
-  );
+  const value = requireRecord(JSON.parse(json) as unknown, "Product render receipt");
   const fields = [
     "renderId",
     "canvasWidth",
@@ -330,9 +379,7 @@ export function parseProductRenderReceipt(json: string): ProductRenderReceipt {
     "sampleCount",
   ] as const) {
     if (!Number.isSafeInteger(value[field]) || Number(value[field]) <= 0) {
-      throw new TypeError(
-        `Product render receipt ${field} must be a positive safe integer`,
-      );
+      throw new TypeError(`Product render receipt ${field} must be a positive safe integer`);
     }
   }
   return value as unknown as ProductRenderReceipt;
@@ -352,21 +399,19 @@ export function assertProductFrameWorkerRequest(
   }
   if (message.type === "call") {
     requireRenderId(message.renderId, "Product runtime call renderId");
-    if (!PRODUCT_RUNTIME_METHODS.includes(message.method as ProductRuntimeMethod) || !Array.isArray(message.args)) {
+    if (
+      !PRODUCT_RUNTIME_METHODS.includes(message.method as ProductRuntimeMethod) ||
+      !Array.isArray(message.args)
+    ) {
       throw new TypeError("invalid Product runtime operation");
     }
     return;
   }
   if (message.type !== "configure" && message.type !== "prepareBatch") {
-    throw new TypeError(
-      `unknown Product frame worker request '${String(message.type)}'`,
-    );
+    throw new TypeError(`unknown Product frame worker request '${String(message.type)}'`);
   }
   if (message.type === "configure") {
-    const bootstrap = requireRecord(
-      message.bootstrap,
-      "Product frame worker bootstrap",
-    );
+    const bootstrap = requireRecord(message.bootstrap, "Product frame worker bootstrap");
     const fields = [
       "wasmModuleUrl",
       "wasmUrl",
@@ -378,44 +423,37 @@ export function assertProductFrameWorkerRequest(
     ] as const;
     requireExactFields(
       bootstrap,
-      [
-        ...fields,
-        ...(Object.hasOwn(bootstrap, "gpuScene3d") ? ["gpuScene3d"] : []),
-      ],
+      [...fields, ...(Object.hasOwn(bootstrap, "gpuScene3d") ? ["gpuScene3d"] : [])],
       "Product frame worker bootstrap",
     );
-    if (
-      Object.hasOwn(bootstrap, "gpuScene3d") &&
-      typeof bootstrap.gpuScene3d !== "boolean"
-    ) {
+    if (Object.hasOwn(bootstrap, "gpuScene3d") && typeof bootstrap.gpuScene3d !== "boolean") {
       throw new TypeError("Product frame worker gpuScene3d must be a boolean");
     }
     for (const field of fields.slice(0, -1)) {
-      if (
-        typeof bootstrap[field] !== "string" ||
-        bootstrap[field].length === 0
-      ) {
-        throw new TypeError(
-          `Product frame worker bootstrap ${field} is required`,
-        );
+      if (typeof bootstrap[field] !== "string" || bootstrap[field].length === 0) {
+        throw new TypeError(`Product frame worker bootstrap ${field} is required`);
       }
     }
-    if (bootstrap.expectedRenderId !== "") requireRenderId(
-      bootstrap.expectedRenderId,
-      "Product frame worker bootstrap expectedRenderId",
-    );
+    if (bootstrap.expectedRenderId !== "")
+      requireRenderId(
+        bootstrap.expectedRenderId,
+        "Product frame worker bootstrap expectedRenderId",
+      );
   } else {
     if (!Array.isArray(message.jobs) || message.jobs.length === 0) {
-      throw new TypeError(
-        "Product frame worker batch must contain at least one job",
-      );
+      throw new TypeError("Product frame worker batch must contain at least one job");
     }
     for (const value of message.jobs) {
       const job = requireRecord(value, "Product frame worker job");
       if (typeof job.id !== "string" || job.id.length === 0) {
         throw new TypeError("Product frame worker job id is required");
       }
-      if (job.motionResults !== undefined && (!(job.motionResults instanceof Uint8Array) || job.motionResults.byteLength > 128 * 1024 ** 2)) throw new TypeError("invalid Motion results packet");
+      if (
+        job.motionResults !== undefined &&
+        (!(job.motionResults instanceof Uint8Array) ||
+          job.motionResults.byteLength > 128 * 1024 ** 2)
+      )
+        throw new TypeError("invalid Motion results packet");
       const request = requireRecord(job.request, "Product frame request");
       requireRenderId(request.renderId, "Product frame request renderId");
     }
@@ -447,21 +485,28 @@ export function assertProductFrameWorkerResponse(
       "fatal",
     ].includes(String(message.type))
   ) {
-    throw new TypeError(
-      `unknown Product frame worker response '${String(message.type)}'`,
-    );
+    throw new TypeError(`unknown Product frame worker response '${String(message.type)}'`);
   }
   if (message.type === "motionWork") {
     const request = requireRecord(message.request, "Motion frame request");
     requireRenderId(request.renderId, "Motion frame renderId");
-    if (typeof request.key !== "string" || !request.key.length || request.key.length > 4096 || !Number.isSafeInteger(request.epoch)
-      || !Array.isArray(message.jobs) || !message.jobs.length || message.jobs.length > 128) throw new TypeError("invalid Motion work");
+    if (
+      typeof request.key !== "string" ||
+      !request.key.length ||
+      request.key.length > 4096 ||
+      !Number.isSafeInteger(request.epoch) ||
+      !Array.isArray(message.jobs) ||
+      !message.jobs.length ||
+      message.jobs.length > 128
+    )
+      throw new TypeError("invalid Motion work");
     const definitions = requireRecord(message.definitions, "Motion definitions");
     if (Object.keys(definitions).length > 4) throw new TypeError("Motion definition count budget");
     let definitionBytes = 0;
     for (const [id, json] of Object.entries(definitions)) {
       requireRenderId(id, "Motion definition id");
-      if (typeof json !== "string" || json.length > 64 * 1024 ** 2) throw new TypeError("invalid Motion definition");
+      if (typeof json !== "string" || json.length > 64 * 1024 ** 2)
+        throw new TypeError("invalid Motion definition");
       definitionBytes += json.length;
     }
     if (definitionBytes > 64 * 1024 ** 2) throw new TypeError("Motion definition byte budget");
@@ -469,27 +514,36 @@ export function assertProductFrameWorkerResponse(
     for (const value of message.jobs) {
       const job = requireRecord(value, "Motion job");
       requireRenderId(job.definitionId, "Motion job definition");
-      if (typeof job.key !== "string" || !job.key.length || job.key.length > 4096 || keys.has(job.key)
-        || typeof job.inputJson !== "string" || job.inputJson.length > 8 * 1024 ** 2) throw new TypeError("invalid Motion job");
+      if (
+        typeof job.key !== "string" ||
+        !job.key.length ||
+        job.key.length > 4096 ||
+        keys.has(job.key) ||
+        typeof job.inputJson !== "string" ||
+        job.inputJson.length > 8 * 1024 ** 2
+      )
+        throw new TypeError("invalid Motion job");
       keys.add(job.key);
     }
     return;
   }
   if (message.type === "callResult") {
     requireRenderId(message.renderId, "Product runtime result renderId");
-    if (message.error != null && typeof message.error !== "string") throw new TypeError("invalid Product runtime error");
+    if (message.error != null && typeof message.error !== "string")
+      throw new TypeError("invalid Product runtime error");
     return;
   }
   if (message.type === "configured") {
     if (typeof message.error !== "string") {
-      requireRenderId(
-        message.renderId,
-        "configured Product frame worker renderId",
-      );
+      requireRenderId(message.renderId, "configured Product frame worker renderId");
       if (message.snapshot != null) {
         const snapshot = requireRecord(message.snapshot, "Product runtime snapshot");
         const receipt = parseProductRenderReceipt(JSON.stringify(snapshot.receipt));
-        if (receipt.renderId !== message.renderId || typeof snapshot.audioProgramJson !== "string" || !Array.isArray(snapshot.resources)) {
+        if (
+          receipt.renderId !== message.renderId ||
+          typeof snapshot.audioProgramJson !== "string" ||
+          !Array.isArray(snapshot.resources)
+        ) {
           throw new TypeError("Product runtime snapshot does not match configuration");
         }
       }
@@ -498,9 +552,7 @@ export function assertProductFrameWorkerResponse(
   }
   if (message.type === "fatal") {
     if (message.phase !== "protocol" && message.phase !== "prepareBatch") {
-      throw new TypeError(
-        `unknown Product frame worker fatal phase '${String(message.phase)}'`,
-      );
+      throw new TypeError(`unknown Product frame worker fatal phase '${String(message.phase)}'`);
     }
     if (typeof message.error !== "string" || message.error.length === 0) {
       throw new TypeError("Product frame worker fatal error is required");
@@ -508,10 +560,7 @@ export function assertProductFrameWorkerResponse(
     return;
   }
   if (message.type === "requests" || message.type === "ready") {
-    const stage = requireRecord(
-      message.stage,
-      `Product frame ${message.type} stage`,
-    );
+    const stage = requireRecord(message.stage, `Product frame ${message.type} stage`);
     requireRenderId(stage.renderId, `Product frame ${message.type} renderId`);
     assertGpuPreparation(stage);
     return;
@@ -522,10 +571,7 @@ export function assertProductFrameWorkerResponse(
     }
     for (const value of message.entries) {
       const entry = requireRecord(value, `Product frame ${message.type} entry`);
-      const stage = requireRecord(
-        entry.stage,
-        `Product frame ${message.type} stage`,
-      );
+      const stage = requireRecord(entry.stage, `Product frame ${message.type} stage`);
       requireRenderId(stage.renderId, `Product frame ${message.type} renderId`);
       assertGpuPreparation(stage);
     }
@@ -572,9 +618,18 @@ function assertGpuPreparation(stage: Record<string, unknown>): void {
     if (Object.keys(jobs).length > 64) throw new TypeError("too many Scene3D kernel jobs");
     for (const [digest, value] of Object.entries(jobs)) {
       const job = requireRecord(value, "Scene3D kernel job");
-      requireRenderId(digest, "Scene3D kernel content"); requireRenderId(job.topology, "Scene3D kernel topology");
-      if (job.content !== digest || typeof job.canonical !== "string" || job.canonical.length > 8 * 1024 ** 2
-        || !Number.isSafeInteger(job.width) || Number(job.width) <= 0 || !Number.isSafeInteger(job.height) || Number(job.height) <= 0) throw new TypeError("invalid Scene3D kernel job");
+      requireRenderId(digest, "Scene3D kernel content");
+      requireRenderId(job.topology, "Scene3D kernel topology");
+      if (
+        job.content !== digest ||
+        typeof job.canonical !== "string" ||
+        job.canonical.length > 8 * 1024 ** 2 ||
+        !Number.isSafeInteger(job.width) ||
+        Number(job.width) <= 0 ||
+        !Number.isSafeInteger(job.height) ||
+        Number(job.height) <= 0
+      )
+        throw new TypeError("invalid Scene3D kernel job");
     }
   }
   if (stage.gpuScene3d === undefined) return;
@@ -583,13 +638,9 @@ function assertGpuPreparation(stage: Record<string, unknown>): void {
   for (const [digest, packet] of Object.entries(packets)) {
     requireRenderId(digest, "Scene3D GPU preparation content");
     if (!(packet instanceof Float32Array) || packet.byteLength === 0)
-      throw new TypeError(
-        "Scene3D GPU preparation must contain Float32Array packets",
-      );
+      throw new TypeError("Scene3D GPU preparation must contain Float32Array packets");
     bytes += packet.byteLength;
   }
   if (bytes > 512 * 1024 * 1024)
-    throw new TypeError(
-      "Scene3D GPU preparation exceeds the frame transfer budget",
-    );
+    throw new TypeError("Scene3D GPU preparation exceeds the frame transfer budget");
 }

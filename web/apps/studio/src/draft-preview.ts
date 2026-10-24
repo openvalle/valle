@@ -5,19 +5,24 @@ export class DraftPreview<T, R> {
   #timer: ReturnType<typeof setTimeout> | null = null;
   #running: Promise<void> | null = null;
 
-  constructor(private readonly options: {
-    prepare(draft: T): Promise<R>;
-    apply(result: R, draft: T, isCurrent: () => boolean): Promise<void>;
-    updating(): void;
-    failed(error: unknown): void;
-    ready(): void;
-  }) {}
+  constructor(
+    private readonly options: {
+      prepare(draft: T): Promise<R>;
+      apply(result: R, draft: T, isCurrent: () => boolean): Promise<void>;
+      updating(): void;
+      failed(error: unknown): void;
+      ready(): void;
+    },
+  ) {}
 
   schedule(draft: T, delay = 150): void {
     this.#pending = { version: ++this.#version, draft: structuredClone(draft) };
     this.options.updating();
     if (this.#timer) clearTimeout(this.#timer);
-    this.#timer = setTimeout(() => { this.#timer = null; void this.flush(); }, delay);
+    this.#timer = setTimeout(() => {
+      this.#timer = null;
+      void this.flush();
+    }, delay);
   }
 
   invalidate(): void {
@@ -31,7 +36,9 @@ export class DraftPreview<T, R> {
     if (this.#timer) clearTimeout(this.#timer);
     this.#timer = null;
     if (this.#running) return this.#running;
-    this.#running = this.#drain().finally(() => { this.#running = null; });
+    this.#running = this.#drain().finally(() => {
+      this.#running = null;
+    });
     return this.#running;
   }
 

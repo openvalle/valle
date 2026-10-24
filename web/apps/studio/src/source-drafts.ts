@@ -139,9 +139,12 @@ export class SourceDrafts {
           if (current?.status === "ok" && current.text === input.text) {
             result = { status: "unchanged", digest: current.baseDigest };
           } else {
-            const message = current?.status === "ok" && current.baseDigest !== input.baseDigest
-              ? "Source changed outside Studio"
-              : error instanceof Error ? error.message : String(error);
+            const message =
+              current?.status === "ok" && current.baseDigest !== input.baseDigest
+                ? "Source changed outside Studio"
+                : error instanceof Error
+                  ? error.message
+                  : String(error);
             const file = this.files.get(input.path)!;
             file.conflict = message;
             return { saved, failed: { path: input.path, message } };
@@ -159,9 +162,10 @@ export class SourceDrafts {
         file.conflict = null;
         saved[input.path] = result.digest;
       } else {
-        const message = result.status === "conflict"
-          ? "Source changed outside Studio"
-          : "Source changed again after this save";
+        const message =
+          result.status === "conflict"
+            ? "Source changed outside Studio"
+            : "Source changed again after this save";
         file.conflict = message;
         return { saved, failed: { path: input.path, message } };
       }

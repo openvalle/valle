@@ -4,7 +4,8 @@ import type { TimelineDocument } from "valle-engine/internal";
 export type TimelineBand = "visual" | "audio" | "caption" | "adjustment";
 export type VisualItem = TimelineDocument["document"]["visual"]["tracks"][number]["items"][number];
 export type AudioItem = TimelineDocument["document"]["audio"]["tracks"][number]["items"][number];
-export type CaptionItem = TimelineDocument["document"]["captions"]["tracks"][number]["items"][number];
+export type CaptionItem =
+  TimelineDocument["document"]["captions"]["tracks"][number]["items"][number];
 export type AdjustmentItem = TimelineDocument["document"]["adjustments"][number];
 export type TimelineSequenceItem = VisualItem | AudioItem | CaptionItem | AdjustmentItem;
 
@@ -44,17 +45,21 @@ export function projectTimelineSequences(
   view: TimelineDocumentView,
 ): ProjectedSequenceTrack[] {
   return view.sequences.map((trackView) => {
-    const track = trackView.band === "adjustment"
-      ? null
-      : trackAt(timeline, trackView.band, trackView.trackIndex);
-    if (trackView.band !== "adjustment"
-      && (!track || track.id !== trackView.trackId || track.items.length !== trackView.items.length)) {
+    const track =
+      trackView.band === "adjustment"
+        ? null
+        : trackAt(timeline, trackView.band, trackView.trackIndex);
+    if (
+      trackView.band !== "adjustment" &&
+      (!track || track.id !== trackView.trackId || track.items.length !== trackView.items.length)
+    ) {
       throw new Error(`Timeline ${trackView.band} projection does not match generated document`);
     }
     const items = trackView.items.map((itemView): ProjectedSequenceItem => {
-      const item = trackView.band === "adjustment"
-        ? timeline.document.adjustments.find((candidate) => candidate.id === itemView.itemId)
-        : track?.items[itemView.itemIndex];
+      const item =
+        trackView.band === "adjustment"
+          ? timeline.document.adjustments.find((candidate) => candidate.id === itemView.itemId)
+          : track?.items[itemView.itemIndex];
       if (!item || item.id !== itemView.itemId) {
         throw new Error(`Timeline item projection '${itemView.itemId}' is stale`);
       }

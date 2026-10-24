@@ -102,14 +102,23 @@ function writeWav(path: string) {
   const frames = 96_000;
   const buffer = new Uint8Array(44 + frames * 2);
   const view = new DataView(buffer.buffer);
-  buffer.set(new TextEncoder().encode("RIFF"), 0); view.setUint32(4, buffer.length - 8, true);
-  buffer.set(new TextEncoder().encode("WAVEfmt "), 8); view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-  view.setUint32(24, 48_000, true); view.setUint32(28, 96_000, true);
-  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-  buffer.set(new TextEncoder().encode("data"), 36); view.setUint32(40, frames * 2, true);
+  buffer.set(new TextEncoder().encode("RIFF"), 0);
+  view.setUint32(4, buffer.length - 8, true);
+  buffer.set(new TextEncoder().encode("WAVEfmt "), 8);
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 48_000, true);
+  view.setUint32(28, 96_000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  buffer.set(new TextEncoder().encode("data"), 36);
+  view.setUint32(40, frames * 2, true);
   for (let index = 0; index < frames; index++) {
-    const amplitude = index < 48_000 ? 0 : Math.trunc(Math.sin(2 * Math.PI * 440 * (index % 48_000) / 48_000) * 24_000);
+    const amplitude =
+      index < 48_000
+        ? 0
+        : Math.trunc(Math.sin((2 * Math.PI * 440 * (index % 48_000)) / 48_000) * 24_000);
     view.setInt16(44 + index * 2, amplitude, true);
   }
   writeFileSync(path, buffer);
@@ -119,7 +128,8 @@ function sourceFor(id: string, stem: string | null): string {
   if (id === "B01") {
     const source = join(SOURCES, "grid-4096-instances.motion.tsx");
     const original = readFileSync(join(FIXTURES, "grid-instances.motion.tsx"), "utf8");
-    if (!original.includes("const COLS = 8;")) throw new Error("B01 fixture changed its column declaration");
+    if (!original.includes("const COLS = 8;"))
+      throw new Error("B01 fixture changed its column declaration");
     writeFileSync(source, original.replace("const COLS = 8;", "const COLS = 64;"));
     return source;
   }
@@ -129,7 +139,8 @@ function sourceFor(id: string, stem: string | null): string {
     writeWav(join(SOURCES, "G01-beat.wav"));
     return source;
   }
-  if (id === "circle-open-transition") return join(FIXTURES, "circle-open-transition.timeline.json");
+  if (id === "circle-open-transition")
+    return join(FIXTURES, "circle-open-transition.timeline.json");
   if (id === "H05") {
     const directory = join(SOURCES, "module-import");
     mkdirSync(directory, { recursive: true });
@@ -142,9 +153,15 @@ function sourceFor(id: string, stem: string | null): string {
     const source = join(SOURCES, "lit-sphere-scene3d.motion.tsx");
     writeFileSync(source, I01_SOURCE);
     const sphere = join(SOURCES, "I01-uv-sphere.glb");
-    writeFileSync(sphere, sphereGlb({
-      segments: 64, rings: 32, withUvs: true, generator: "Valle I01 lit showcase",
-    }));
+    writeFileSync(
+      sphere,
+      sphereGlb({
+        segments: 64,
+        rings: 32,
+        withUvs: true,
+        generator: "Valle I01 lit showcase",
+      }),
+    );
     const texture = join(SOURCES, "I01-surface.png");
     writeShowcaseTexture(texture);
     return source;
@@ -159,7 +176,9 @@ function saveReport(id: string, name: string, report: unknown) {
 
 type Delivery = { backend: string; timing: { renderMs: number } };
 type RenderReport = { status: string; delivery: Delivery; compilations?: number };
-type Probe = { streams: Array<{ codec_name: string; width?: number; height?: number; nb_frames?: string }> };
+type Probe = {
+  streams: Array<{ codec_name: string; width?: number; height?: number; nb_frames?: string }>;
+};
 
 function render(id: string, source: string, output: string, extra: string[] = []): RenderReport {
   const extension = output.split(".").at(-1)!;
@@ -168,11 +187,15 @@ function render(id: string, source: string, output: string, extra: string[] = []
   // Regenerate acceptance evidence instead of silently accepting a stale run.
   rmSync(output, { force: true });
   rmSync(reportPath, { force: true });
-  const argv = id === "circle-open-transition"
-    ? [CLI, "timeline", "render", source, "-o", output, "--json"]
-    : [CLI, "motion", "render", source, "-o", output, "--backend", "metal", "--json"];
+  const argv =
+    id === "circle-open-transition"
+      ? [CLI, "timeline", "render", source, "-o", output, "--json"]
+      : [CLI, "motion", "render", source, "-o", output, "--backend", "metal", "--json"];
   const report = runJson<RenderReport>([...argv, ...extra]);
-  if (report.status !== "ok" || (id !== "circle-open-transition" && report.delivery.backend !== "metal")) {
+  if (
+    report.status !== "ok" ||
+    (id !== "circle-open-transition" && report.delivery.backend !== "metal")
+  ) {
     throw new Error(`${id}: render did not use the expected backend`);
   }
   saveReport(id, `${extension}-render`, report);
@@ -180,35 +203,75 @@ function render(id: string, source: string, output: string, extra: string[] = []
 }
 
 function probe(path: string): Probe {
-  return runJson<Probe>(["ffprobe", "-v", "error", "-show_entries",
-    "stream=codec_name,pix_fmt,width,height,nb_frames:format=duration", "-of", "json", path]);
+  return runJson<Probe>([
+    "ffprobe",
+    "-v",
+    "error",
+    "-show_entries",
+    "stream=codec_name,pix_fmt,width,height,nb_frames:format=duration",
+    "-of",
+    "json",
+    path,
+  ]);
 }
 
 function thumbnail(id: string, video: string) {
   const output = join(THUMBS, `${id}.jpg`);
   rmSync(output, { force: true });
-  const second = id === "circle-open-transition" ? "2" : ["H01", "H05", "I01"].includes(id) ? "0.5" : "1";
-  run(["ffmpeg", "-v", "error", "-ss", second, "-i", video,
-    "-frames:v", "1", "-vf", "scale=320:-2", "-q:v", "3", output]);
+  const second =
+    id === "circle-open-transition" ? "2" : ["H01", "H05", "I01"].includes(id) ? "0.5" : "1";
+  run([
+    "ffmpeg",
+    "-v",
+    "error",
+    "-ss",
+    second,
+    "-i",
+    video,
+    "-frames:v",
+    "1",
+    "-vf",
+    "scale=320:-2",
+    "-q:v",
+    "3",
+    output,
+  ]);
 }
 
-type Row = { id: string; title: string; source: string; video: string;
-  backend: string; codec: string; width: number; height: number; frames: number };
+type Row = {
+  id: string;
+  title: string;
+  source: string;
+  video: string;
+  backend: string;
+  codec: string;
+  width: number;
+  height: number;
+  frames: number;
+};
 function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;",
-    '"': "&quot;", "'": "&#39;" })[char]!);
+  return value.replace(
+    /[&<>"']/g,
+    (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!,
+  );
 }
 
 function gallery(rows: Row[]) {
-  const cards = rows.map(row => {
+  const cards = rows.map((row) => {
     const { id } = row;
     const revision = id === "I01" ? "?v=lit-sphere" : id === "F01" ? "?v=f01-metal-edge" : "";
-    const extras = id === "H01" ? '<a href="videos/H01.mov">下载 ProRes 4444 透明 MOV</a>'
-      : id === "H02" ? '<a href="evidence/H02-sheet.png">查看 0/30/59 帧联系表</a>'
-      : id === "H03" ? '<a href="evidence/H03-review.json">查看审片报告</a>'
-      : id === "H05" ? '<a href="evidence/H05-check.json">查看裸文件名检查结果</a>'
-      : id === "I01" && existsSync(join(VIDEOS, "I01-contract.mp4"))
-        ? '<a href="videos/I01-contract.mp4">查看无光照的原始验收视频</a>' : "";
+    const extras =
+      id === "H01"
+        ? '<a href="videos/H01.mov">下载 ProRes 4444 透明 MOV</a>'
+        : id === "H02"
+          ? '<a href="evidence/H02-sheet.png">查看 0/30/59 帧联系表</a>'
+          : id === "H03"
+            ? '<a href="evidence/H03-review.json">查看审片报告</a>'
+            : id === "H05"
+              ? '<a href="evidence/H05-check.json">查看裸文件名检查结果</a>'
+              : id === "I01" && existsSync(join(VIDEOS, "I01-contract.mp4"))
+                ? '<a href="videos/I01-contract.mp4">查看无光照的原始验收视频</a>'
+                : "";
     return `<article id="${id}"><h2>${id} <span>${escapeHtml(row.title)}</span></h2>
 <video controls loop preload="metadata" poster="thumbnails/${id}.jpg${revision}" src="videos/${id}.mp4${revision}"></video>
 <p><a href="videos/${id}.mp4">下载视频</a> ${extras}</p></article>`;
@@ -228,17 +291,24 @@ article p{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;margin:10px 0 0}</
 <header><h1>Motion 第 8 章 · 36 个验收例子</h1>
 <p>35 个 Motion 视频在真实 macOS Metal 上导出；Timeline 圆形转场由 Timeline CLI 的 Raster 后端导出。H01 另附透明 ProRes 4444 MOV。视频用于看画面，详细判定仍以各用例的测试和报告为准。</p>
 <p><a href="overview.jpg">查看 36 格总览</a> · <a href="all-videos.zip">下载全部视频及验收产物</a></p>
-<nav>${rows.map(row => `<a href="#${row.id}">${row.id}</a>`).join("")}</nav></header>
+<nav>${rows.map((row) => `<a href="#${row.id}">${row.id}</a>`).join("")}</nav></header>
 <main>${cards.join("\n")}</main></html>\n`;
   writeFileSync(join(OUT, "index.html"), page);
 }
 
 function archive(rows: Row[]) {
-  const files = rows.map(row => row.video).concat([
-    "videos/H01.mov", "evidence/H02-sheet.png", "evidence/H02-sheet.json",
-    "evidence/H03-review.json", "evidence/H05-check.json", "overview.jpg",
-    "index.html", "manifest.json",
-  ]);
+  const files = rows
+    .map((row) => row.video)
+    .concat([
+      "videos/H01.mov",
+      "evidence/H02-sheet.png",
+      "evidence/H02-sheet.json",
+      "evidence/H03-review.json",
+      "evidence/H05-check.json",
+      "overview.jpg",
+      "index.html",
+      "manifest.json",
+    ]);
   if (existsSync(join(VIDEOS, "I01-contract.mp4"))) files.push("videos/I01-contract.mp4");
   const output = join(OUT, "all-videos.zip");
   rmSync(output, { force: true });
@@ -248,30 +318,58 @@ function archive(rows: Row[]) {
 function main() {
   for (const path of [VIDEOS, EVIDENCE, SOURCES, THUMBS]) mkdirSync(path, { recursive: true });
   if (!existsSync(CLI)) throw new Error(`build release CLI first: ${CLI}`);
-  for (const name of ["index.html", "overview.jpg", "all-videos.zip"]) rmSync(join(OUT, name), { force: true });
+  for (const name of ["index.html", "overview.jpg", "all-videos.zip"])
+    rmSync(join(OUT, name), { force: true });
   const rows: Row[] = [];
   const errors: Record<string, string> = {};
   for (const [id, title, stem] of CASES) {
     console.log(`${id} ${title}`);
     try {
       const source = sourceFor(id, stem);
-      const extra = id === "G01" ? ["--asset", `beat=${join(SOURCES, "G01-beat.wav")}`]
-        : id === "I01" ? ["--asset", `model=${join(SOURCES, "I01-uv-sphere.glb")}`,
-          "--asset", `surface=${join(SOURCES, "I01-surface.png")}`] : [];
+      const extra =
+        id === "G01"
+          ? ["--asset", `beat=${join(SOURCES, "G01-beat.wav")}`]
+          : id === "I01"
+            ? [
+                "--asset",
+                `model=${join(SOURCES, "I01-uv-sphere.glb")}`,
+                "--asset",
+                `surface=${join(SOURCES, "I01-surface.png")}`,
+              ]
+            : [];
       if (id === "H05") {
-        saveReport(id, "check", runJson<unknown>([CLI, "motion", "check", "module-entry.motion.tsx", "--json"],
-          { cwd: join(SOURCES, "module-import") }));
+        saveReport(
+          id,
+          "check",
+          runJson<unknown>([CLI, "motion", "check", "module-entry.motion.tsx", "--json"], {
+            cwd: join(SOURCES, "module-import"),
+          }),
+        );
       }
       if (id === "H02") {
         rmSync(join(EVIDENCE, "H02-sheet.png"), { force: true });
-        const checked = runJson<{ compilations: number }>([CLI, "motion", "render", source,
-          "--backend", "metal", "--frames", "0,30,59", "--storyboard",
-          join(EVIDENCE, "H02-sheet.png"), "--json"]);
+        const checked = runJson<{ compilations: number }>([
+          CLI,
+          "motion",
+          "render",
+          source,
+          "--backend",
+          "metal",
+          "--frames",
+          "0,30,59",
+          "--storyboard",
+          join(EVIDENCE, "H02-sheet.png"),
+          "--json",
+        ]);
         if (checked.compilations !== 1) throw new Error("H02 rendered with multiple compilations");
         saveReport(id, "sheet", checked);
       }
       if (id === "H03") {
-        saveReport(id, "review", runJson<unknown>([CLI, "motion", "review", source, "--json", "--trajectories"]));
+        saveReport(
+          id,
+          "review",
+          runJson<unknown>([CLI, "motion", "review", source, "--json", "--trajectories"]),
+        );
       }
       if (id === "H01") render(id, source, join(VIDEOS, "H01.mov"), ["--codec", "prores4444"]);
       let video: string, report: RenderReport;
@@ -280,17 +378,33 @@ function main() {
         report = render(id, source, visual, extra);
         video = join(VIDEOS, "G01.mp4");
         rmSync(video, { force: true });
-        run(["ffmpeg", "-v", "error", "-i", visual,
-          "-i", join(SOURCES, "G01-beat.wav"), "-c:v", "copy", "-c:a", "aac",
-          "-b:a", "160k", "-shortest", video]);
+        run([
+          "ffmpeg",
+          "-v",
+          "error",
+          "-i",
+          visual,
+          "-i",
+          join(SOURCES, "G01-beat.wav"),
+          "-c:v",
+          "copy",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "160k",
+          "-shortest",
+          video,
+        ]);
       } else {
         video = join(VIDEOS, `${id}.mp4`);
         report = render(id, source, video, extra);
       }
       const info = probe(video);
-      const stream = info.streams.find(entry => entry.width);
-      if (!stream?.width || !stream.height || !stream.nb_frames) throw new Error(`${id}: missing video stream`);
-      if (id !== "circle-open-transition" && report.delivery.backend !== "metal") throw new Error(`${id}: expected Metal output`);
+      const stream = info.streams.find((entry) => entry.width);
+      if (!stream?.width || !stream.height || !stream.nb_frames)
+        throw new Error(`${id}: missing video stream`);
+      if (id !== "circle-open-transition" && report.delivery.backend !== "metal")
+        throw new Error(`${id}: expected Metal output`);
       if (id === "H01") {
         const mov = probe(join(VIDEOS, "H01.mov"));
         if (mov.streams[0]?.codec_name !== "prores") throw new Error("H01 is not ProRes");
@@ -298,19 +412,33 @@ function main() {
       }
       saveReport(id, "mp4-probe", info);
       thumbnail(id, video);
-      rows.push({ id, title, source: relative(ROOT, source), video: relative(OUT, video),
+      rows.push({
+        id,
+        title,
+        source: relative(ROOT, source),
+        video: relative(OUT, video),
         backend: id === "circle-open-transition" ? "timeline auto" : report.delivery.backend,
-        codec: stream.codec_name, width: stream.width, height: stream.height,
-        frames: Number(stream.nb_frames) });
+        codec: stream.codec_name,
+        width: stream.width,
+        height: stream.height,
+        frames: Number(stream.nb_frames),
+      });
     } catch (error) {
       errors[id] = String(error);
       console.error(`  FAILED: ${errors[id]}`);
     }
   }
-  writeFileSync(join(OUT, "manifest.json"), JSON.stringify({ cases: rows, errors }, null, 2) + "\n");
+  writeFileSync(
+    join(OUT, "manifest.json"),
+    JSON.stringify({ cases: rows, errors }, null, 2) + "\n",
+  );
   if (rows.length === CASES.length) {
     gallery(rows);
-    writeOverview(rows.map(row => row.id), THUMBS, join(OUT, "overview.jpg"));
+    writeOverview(
+      rows.map((row) => row.id),
+      THUMBS,
+      join(OUT, "overview.jpg"),
+    );
     archive(rows);
   }
   console.log(`Exported ${rows.length}/${CASES.length}, errors: ${Object.keys(errors)}; ${OUT}`);

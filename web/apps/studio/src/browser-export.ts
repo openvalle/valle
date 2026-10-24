@@ -24,16 +24,31 @@ type ExportState = "setup" | "running" | "complete" | "cancelled" | "error";
 
 function clock(seconds: number): string {
   const total = Math.max(0, Math.floor(seconds));
-  const minutes = Math.floor(total / 60), rest = String(total % 60).padStart(2, "0");
-  return minutes >= 60 ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
+  const minutes = Math.floor(total / 60),
+    rest = String(total % 60).padStart(2, "0");
+  return minutes >= 60
+    ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${rest}`
+    : `${minutes}:${rest}`;
 }
 
 function fileStem(value: string): string {
-  return value.trim().replace(/\.mp4$/i, "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "-")
-    .replace(/\.+$/, "").slice(0, 180).trim() || "video";
+  // oxlint-disable-next-line no-control-regex -- Filenames must exclude ASCII control characters.
+  const invalidFilenameCharacters = /[\\/:*?"<>|\u0000-\u001f]/g;
+  return (
+    value
+      .trim()
+      .replace(/\.mp4$/i, "")
+      .replace(invalidFilenameCharacters, "-")
+      .replace(/\.+$/, "")
+      .slice(0, 180)
+      .trim() || "video"
+  );
 }
 
-function resolution(source: StudioExportSnapshot, preset: string): { width: number; height: number } {
+function resolution(
+  source: StudioExportSnapshot,
+  preset: string,
+): { width: number; height: number } {
   if (preset === "source") return { width: source.width, height: source.height };
   const scale = Number(preset) / Math.min(source.width, source.height);
   const even = (value: number) => Math.max(2, Math.round(value / 2) * 2);
@@ -41,7 +56,10 @@ function resolution(source: StudioExportSnapshot, preset: string): { width: numb
 }
 
 /** Review and export an admitted preview snapshot without a host preparation request. */
-export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => StudioExportSnapshot): void {
+export function bindStudioVideoExport(
+  shell: ValleStudioApp,
+  snapshot: () => StudioExportSnapshot,
+): void {
   const element = <T extends HTMLElement>(id: string): T => {
     const found = document.getElementById(id);
     if (!found) throw new Error(`missing #${id}`);
@@ -82,13 +100,18 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
 
   const sync = () => {
     button.disabled = active !== null || shell.shellState.previewStatus !== "ready";
-    button.title = active ? "Export in progress" : shell.shellState.previewStatus === "ready"
-      ? "Export video" : "Export is available when the preview is up to date";
+    button.title = active
+      ? "Export in progress"
+      : shell.shellState.previewStatus === "ready"
+        ? "Export video"
+        : "Export is available when the preview is up to date";
   };
   const elapsed = () => clock(startedAt === null ? 0 : (performance.now() - startedAt) / 1000);
   const finishedIn = () => {
     const seconds = startedAt === null ? 0 : (performance.now() - startedAt) / 1000;
-    return seconds < 60 ? `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s` : clock(seconds);
+    return seconds < 60
+      ? `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`
+      : clock(seconds);
   };
   const sourceFps = () => {
     const [numerator, denominator] = prepared!.frameRate.split("/").map(Number);
@@ -106,15 +129,23 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
     const size = resolution(prepared, resolutionPreset.value);
     const rate = fps.value === "source" ? sourceFps() : Number(fps.value);
     // A practical starting point for H.264; the user can always choose another target.
-    const suggested = Math.min(200, Math.max(1, Math.round(size.width * size.height * rate * 0.12 / 100_000) / 10));
+    const suggested = Math.min(
+      200,
+      Math.max(1, Math.round((size.width * size.height * rate * 0.12) / 100_000) / 10),
+    );
     if (!manualBitrate) bitrate.value = String(suggested);
     element("exportVideoBitrateHint").textContent = `Suggested: ${suggested} Mbps`;
     audioBitrate.disabled = !prepared.hasAudio || !includeAudio.checked;
     element("exportVideoAudioSettings").dataset.disabled = String(audioBitrate.disabled);
     const settings = selectedSettings();
-    const estimatedBytes = ((settings.videoBitrate ?? 0) + (settings.includeAudio ? settings.audioBitrate! : 0)) * prepared.durationS / 8;
-    note.textContent = Number.isFinite(estimatedBytes) && estimatedBytes > 0
-      ? `Estimated ${estimatedBytes < 1_000_000 ? `${Math.round(estimatedBytes / 1000)} KB` : `${(estimatedBytes / 1_000_000).toFixed(1)} MB`}` : "Estimated size —";
+    const estimatedBytes =
+      (((settings.videoBitrate ?? 0) + (settings.includeAudio ? settings.audioBitrate! : 0)) *
+        prepared.durationS) /
+      8;
+    note.textContent =
+      Number.isFinite(estimatedBytes) && estimatedBytes > 0
+        ? `Estimated ${estimatedBytes < 1_000_000 ? `${Math.round(estimatedBytes / 1000)} KB` : `${(estimatedBytes / 1_000_000).toFixed(1)} MB`}`
+        : "Estimated size —";
   };
   const setState = (next: ExportState, message?: string) => {
     state = next;
@@ -136,29 +167,56 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
     close.hidden = next === "setup" || next === "running";
     close.textContent = next === "complete" ? "Done" : "Close";
     start.hidden = next === "running" || next === "complete";
-    element("exportVideoStartLabel").textContent = next === "error" ? "Try again" : next === "cancelled" ? "Back to export" : "Export video";
+    element("exportVideoStartLabel").textContent =
+      next === "error" ? "Try again" : next === "cancelled" ? "Back to export" : "Export video";
     element("exportVideoNameLabel").textContent = next === "setup" ? "File name" : "MP4 video";
-    stateIcon.innerHTML = iconSvg(next === "complete" ? "check" : next === "error" ? "alert" : next === "cancelled" ? "close" : "download");
+    stateIcon.innerHTML = iconSvg(
+      next === "complete"
+        ? "check"
+        : next === "error"
+          ? "alert"
+          : next === "cancelled"
+            ? "close"
+            : "download",
+    );
     const copy: Record<ExportState, [string, string]> = {
       setup: ["Export video", "Choose your settings and save an MP4."],
       running: ["Exporting video", "Keep this tab open until the export finishes."],
-      complete: [picker ? "Video exported" : "Download started", picker
-        ? "Your video is saved and ready to share." : "Find your MP4 in your browser’s downloads."],
-      cancelled: ["Export cancelled", "Your export was stopped. You can start again whenever you’re ready."],
-      error: ["Couldn’t export video", "The export didn’t finish. Try again, or check the details below."],
+      complete: [
+        picker ? "Video exported" : "Download started",
+        picker
+          ? "Your video is saved and ready to share."
+          : "Find your MP4 in your browser’s downloads.",
+      ],
+      cancelled: [
+        "Export cancelled",
+        "Your export was stopped. You can start again whenever you’re ready.",
+      ],
+      error: [
+        "Couldn’t export video",
+        "The export didn’t finish. Try again, or check the details below.",
+      ],
     };
     title.textContent = copy[next][0];
     status.textContent = message ?? copy[next][1];
     if (next === "setup") syncSettings();
-    else note.textContent = next === "complete" ? `Finished in ${finishedIn()}`
-      : next === "cancelled" || next === "error" ? "Not saved" : "Waiting to start…";
+    else
+      note.textContent =
+        next === "complete"
+          ? `Finished in ${finishedIn()}`
+          : next === "cancelled" || next === "error"
+            ? "Not saved"
+            : "Waiting to start…";
   };
   const showError = (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
-    element("exportVideoError").textContent = error instanceof Error ? error.stack ?? message : message;
+    element("exportVideoError").textContent =
+      error instanceof Error ? (error.stack ?? message) : message;
     let explanation: string | undefined;
-    if (message.includes("even canvas")) explanation = "MP4 needs an even width and height. Choose a resolution preset and try again.";
-    else if (/cannot encode|cannot export MP4|cannot verify AAC|AAC encoding support/.test(message)) explanation = message;
+    if (message.includes("even canvas"))
+      explanation = "MP4 needs an even width and height. Choose a resolution preset and try again.";
+    else if (/cannot encode|cannot export MP4|cannot verify AAC|AAC encoding support/.test(message))
+      explanation = message;
     setState("error", explanation);
   };
   const prepare = (reset: boolean) => {
@@ -167,7 +225,12 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
     try {
       prepared = snapshot();
       if (reset) {
-        name.value = fileStem(shell.shellState.projectName.replace(/\.(?:(?:motion|timeline)\.)?(?:tsx|jsx|json)$/i, ""));
+        name.value = fileStem(
+          shell.shellState.projectName.replace(
+            /\.(?:(?:motion|timeline)\.)?(?:tsx|jsx|json)$/i,
+            "",
+          ),
+        );
         resolutionPreset.value = "source";
         fps.value = "source";
         includeAudio.checked = prepared.hasAudio;
@@ -177,15 +240,25 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
       name.setCustomValidity("");
       for (const option of resolutionPreset.options) {
         const size = resolution(prepared, option.value);
-        const label = option.value === "source" ? "Original" : option.value === "2160" ? "4K" : `${option.value}p`;
+        const label =
+          option.value === "source"
+            ? "Original"
+            : option.value === "2160"
+              ? "4K"
+              : `${option.value}p`;
         option.textContent = `${label} · ${size.width} × ${size.height}`;
         option.disabled = size.width > 8192 || size.height > 8192;
       }
       fps.options[0]!.textContent = `Original · ${Number(sourceFps().toFixed(3))} fps`;
       includeAudio.disabled = !prepared.hasAudio;
-      element("exportVideoAudioFormat").textContent = prepared.hasAudio ? `Stereo · ${prepared.sampleRate / 1000} kHz` : "No audio in this timeline";
-      element("exportVideoSourceSummary").textContent = `${clock(prepared.durationS)} · Full timeline`;
-      hint.textContent = picker ? "Choose where to save in the next step." : "Your MP4 will be saved to your browser’s downloads.";
+      element("exportVideoAudioFormat").textContent = prepared.hasAudio
+        ? `Stereo · ${prepared.sampleRate / 1000} kHz`
+        : "No audio in this timeline";
+      element("exportVideoSourceSummary").textContent =
+        `${clock(prepared.durationS)} · Full timeline`;
+      hint.textContent = picker
+        ? "Choose where to save in the next step."
+        : "Your MP4 will be saved to your browser’s downloads.";
       setState("setup");
     } catch (error) {
       prepared = null;
@@ -204,11 +277,16 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
     } else {
       // Final file commit, rather than the last rendered frame, completes the export.
       progress.max = 100;
-      progress.value = value.phase === "finalizing" ? 99 : value.framesCompleted / Math.max(1, value.frameCount) * 99;
+      progress.value =
+        value.phase === "finalizing"
+          ? 99
+          : (value.framesCompleted / Math.max(1, value.frameCount)) * 99;
       percent.textContent = `${Math.floor(progress.value)}%`;
       phase.textContent = value.phase === "finalizing" ? "Finishing file" : "Rendering video";
-      frames.textContent = value.phase === "finalizing" ? "Saving the finished MP4…"
-        : `${value.framesCompleted.toLocaleString("en")} of ${value.frameCount.toLocaleString("en")} frames`;
+      frames.textContent =
+        value.phase === "finalizing"
+          ? "Saving the finished MP4…"
+          : `${value.framesCompleted.toLocaleString("en")} of ${value.frameCount.toLocaleString("en")} frames`;
     }
   };
   const abort = () => {
@@ -222,10 +300,16 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
 
   shell.addEventListener("studio-statechange", sync);
   sync();
-  name.addEventListener("input", () => name.setCustomValidity(name.value.trim() ? "" : "Enter a file name."));
-  bitrate.addEventListener("input", () => { manualBitrate = true; syncSettings(); });
-  for (const control of [resolutionPreset, fps, includeAudio, audioBitrate]) control.addEventListener("change", syncSettings);
-  cancel.addEventListener("click", () => active ? abort() : dialog.close());
+  name.addEventListener("input", () =>
+    name.setCustomValidity(name.value.trim() ? "" : "Enter a file name."),
+  );
+  bitrate.addEventListener("input", () => {
+    manualBitrate = true;
+    syncSettings();
+  });
+  for (const control of [resolutionPreset, fps, includeAudio, audioBitrate])
+    control.addEventListener("change", syncSettings);
+  cancel.addEventListener("click", () => (active ? abort() : dialog.close()));
   close.addEventListener("click", () => dialog.close());
   dismiss.addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => {
@@ -233,15 +317,22 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
     button.focus({ preventScroll: true });
   });
   dialog.addEventListener("cancel", (event) => {
-    if (active) { event.preventDefault(); abort(); }
+    if (active) {
+      event.preventDefault();
+      abort();
+    }
   });
   // Modal keyboard input must not seek, play, save or undo the timeline behind it.
   dialog.addEventListener("keydown", (event) => {
     event.stopPropagation();
-    if ((event.metaKey || event.ctrlKey) && ["s", "z"].includes(event.key.toLowerCase())) event.preventDefault();
+    if ((event.metaKey || event.ctrlKey) && ["s", "z"].includes(event.key.toLowerCase()))
+      event.preventDefault();
   });
   window.addEventListener("pagehide", (event) => {
-    if (!event.persisted) { active?.abort(); clearInterval(timer); }
+    if (!event.persisted) {
+      active?.abort();
+      clearInterval(timer);
+    }
   });
   button.addEventListener("click", () => {
     if (active || button.disabled) return;
@@ -252,7 +343,10 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     if (active) return;
-    if (state !== "setup") { prepare(false); return; }
+    if (state !== "setup") {
+      prepare(false);
+      return;
+    }
     if (!prepared) return;
     name.setCustomValidity(name.value.trim() ? "" : "Enter a file name.");
     if (!form.reportValidity()) return;
@@ -262,11 +356,14 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
     const suggestedName = `${name.value}.mp4`;
     fileName.textContent = suggestedName;
     element("exportVideoResolution").textContent = `${settings.width} × ${settings.height}`;
-    element("exportVideoFrameRate").textContent = `${Number((settings.frameRate ?? sourceFps()).toFixed(3))} fps`;
+    element("exportVideoFrameRate").textContent =
+      `${Number((settings.frameRate ?? sourceFps()).toFixed(3))} fps`;
     element("exportVideoDuration").textContent = clock(prepared.durationS);
     element("exportVideoAudio").textContent = settings.includeAudio ? "Stereo" : "No audio";
     element("exportVideoVideoBitrate").textContent = `${settings.videoBitrate! / 1_000_000} Mbps`;
-    element("exportVideoAudioBitrateValue").textContent = settings.includeAudio ? `${settings.audioBitrate! / 1000} kbps` : "—";
+    element("exportVideoAudioBitrateValue").textContent = settings.includeAudio
+      ? `${settings.audioBitrate! / 1000} kbps`
+      : "—";
     const controller = new AbortController();
     active = controller;
     sync();
@@ -274,7 +371,9 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
     progress.removeAttribute("value");
     phase.textContent = picker ? "Choose a save location" : "Preparing video";
     percent.textContent = "Starting…";
-    frames.textContent = picker ? "Choose a folder for your MP4." : "Loading your timeline and media…";
+    frames.textContent = picker
+      ? "Choose a folder for your MP4."
+      : "Loading your timeline and media…";
     cancel.focus({ preventScroll: true });
     void (async () => {
       let writable: FileSystemWritableFileStream | undefined;
@@ -294,12 +393,19 @@ export function bindStudioVideoExport(shell: ValleStudioApp, snapshot: () => Stu
         }
         controller.signal.throwIfAborted();
         startedAt = performance.now();
-        const tick = () => { note.textContent = `${elapsed()} elapsed`; };
+        const tick = () => {
+          note.textContent = `${elapsed()} elapsed`;
+        };
         tick();
         timer = setInterval(tick, 1000);
         const { exportBrowserVideo } = await import("valle-engine/export");
         exporterOwnsWritable = true;
-        const result = await exportBrowserVideo(input, { ...settings, writable, signal: controller.signal, onProgress: update });
+        const result = await exportBrowserVideo(input, {
+          ...settings,
+          writable,
+          signal: controller.signal,
+          onProgress: update,
+        });
         if (result.blob) {
           const url = URL.createObjectURL(result.blob);
           const link = document.createElement("a");

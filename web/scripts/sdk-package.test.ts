@@ -56,7 +56,7 @@ async function listFiles(dir: string, base = dir): Promise<string[]> {
   const files: string[] = [];
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...await listFiles(file, base));
+    if (entry.isDirectory()) files.push(...(await listFiles(file, base)));
     else files.push(path.relative(base, file).replaceAll(path.sep, "/"));
   }
   return files.sort();

@@ -30,7 +30,9 @@ export function comparePngs(
     );
   }
   if (native.data.length !== web.data.length) {
-    throw new Error(`RGBA byte lengths differ: native ${native.data.length}, web ${web.data.length}`);
+    throw new Error(
+      `RGBA byte lengths differ: native ${native.data.length}, web ${web.data.length}`,
+    );
   }
   const premul = (data: Uint8Array | Uint8ClampedArray, index: number, channel: number): number =>
     Math.round((data[index + channel]! * data[index + 3]!) / 255);
@@ -92,11 +94,7 @@ function labF(value: number): number {
   return value > 216 / 24389 ? Math.cbrt(value) : ((24389 / 27) * value + 16) / 116;
 }
 
-function srgbToLab(
-  data: Uint8Array | Uint8ClampedArray,
-  index: number,
-  out: Float64Array,
-): void {
+function srgbToLab(data: Uint8Array | Uint8ClampedArray, index: number, out: Float64Array): void {
   const red = SRGB_TO_LINEAR[data[index]!]!;
   const green = SRGB_TO_LINEAR[data[index + 1]!]!;
   const blue = SRGB_TO_LINEAR[data[index + 2]!]!;

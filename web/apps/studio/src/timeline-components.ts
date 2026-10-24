@@ -1,4 +1,8 @@
-export { StudioTransport, formatTimecode, type StudioTransportIntent } from "../../shared/transport.ts";
+export {
+  StudioTransport,
+  formatTimecode,
+  type StudioTransportIntent,
+} from "../../shared/transport.ts";
 import { LitElement, html, type TemplateResult } from "lit";
 import { hydrateIcons } from "../../shared/icons.ts";
 
@@ -20,7 +24,12 @@ export interface TimelineClipView {
   fixedEnd?: boolean;
   readOnly?: boolean;
   error?: boolean;
-  media?: { kind: "video" | "audio"; assetId: string; sourceStartS: number; sourceDurationS: number };
+  media?: {
+    kind: "video" | "audio";
+    assetId: string;
+    sourceStartS: number;
+    sourceDurationS: number;
+  };
   /** Short secondary text shown at the right end of wide clips, e.g. the duration. */
   meta?: string;
 }
@@ -114,9 +123,7 @@ export interface StudioProjectControlsState {
   conflictMessage: string | null;
 }
 
-export type StudioProjectIntent =
-  | { type: "save" }
-  | { type: "reload" };
+export type StudioProjectIntent = { type: "save" } | { type: "reload" };
 
 export class StudioTimeline extends LitElement {
   static properties = {
@@ -124,8 +131,6 @@ export class StudioTimeline extends LitElement {
   };
 
   declare viewModel: TimelineViewModel | null;
-
-  #seekPointerId: number | null = null;
 
   constructor() {
     super();
@@ -151,20 +156,38 @@ export class StudioTimeline extends LitElement {
       <div class="timeline-content" style="width:${labelWidth + model.laneWidthPx}px">
         <div class="ruler">
           <div class="ruler-label"><span id="rulerUnit">sec</span></div>
-          <div class="ruler-lane" id="rulerLane" style="width:${model.laneWidthPx}px"
-            aria-label="Drag to seek">
-            ${model.ticks.map((tick) => html`
-              <span class="tick ${tick.label == null ? "minor" : ""}" style="left:${tick.leftPx}px">${tick.label ?? ""}</span>
-            `)}
+          <div
+            class="ruler-lane"
+            id="rulerLane"
+            style="width:${model.laneWidthPx}px"
+            aria-label="Drag to seek"
+          >
+            ${model.ticks.map(
+              (tick) => html`
+                <span
+                  class="tick ${tick.label == null ? "minor" : ""}"
+                  style="left:${tick.leftPx}px"
+                  >${tick.label ?? ""}</span
+                >
+              `,
+            )}
             <span class="playhead-grip" id="rulerGrip" aria-hidden="true"></span>
           </div>
         </div>
-        ${model.emptyMessage
-          ? html`<div class="empty-tracks"><strong>${model.emptyMessage}</strong></div>`
-          : model.tracks.map((track) => this.#renderTrack(track, model))}
-        ${model.showPlayhead === false
-          ? html``
-          : html`<div class="playhead" id="tlPlayhead" style="left:${model.playheadLeftPx}px"></div>`}
+        ${
+          model.emptyMessage
+            ? html`<div class="empty-tracks"><strong>${model.emptyMessage}</strong></div>`
+            : model.tracks.map((track) => this.#renderTrack(track, model))
+        }
+        ${
+          model.showPlayhead === false
+            ? html``
+            : html`<div
+                class="playhead"
+                id="tlPlayhead"
+                style="left:${model.playheadLeftPx}px"
+              ></div>`
+        }
         <div class="drop-line" id="dropLine" hidden></div>
       </div>
     `;
@@ -209,16 +232,24 @@ export class StudioTimeline extends LitElement {
           ${clip.readOnly ? html`<span class="icon" data-icon="lock" aria-label="Read only"></span>` : ""}
         </span>
         <span class="clip-body">
-          ${clip.media
-            ? html`<canvas class="tl-media" data-kind=${clip.media.kind} data-asset-id=${clip.media.assetId}></canvas>`
-            : ""}
+          ${
+            clip.media
+              ? html`<canvas
+                  class="tl-media"
+                  data-kind=${clip.media.kind}
+                  data-asset-id=${clip.media.assetId}
+                ></canvas>`
+              : ""
+          }
         </span>
-        ${clip.timingEditable && !clip.readOnly && width >= 32
-          ? html`
-              ${clip.fixedStart ? "" : html`<span class="trim left" data-edge="left"></span>`}
-              ${clip.fixedEnd ? "" : html`<span class="trim right" data-edge="right"></span>`}
-            `
-          : ""}
+        ${
+          clip.timingEditable && !clip.readOnly && width >= 32
+            ? html`
+                ${clip.fixedStart ? "" : html`<span class="trim left" data-edge="left"></span>`}
+                ${clip.fixedEnd ? "" : html`<span class="trim right" data-edge="right"></span>`}
+              `
+            : ""
+        }
       </button>
     `;
   }
@@ -255,16 +286,27 @@ export class StudioInspector extends LitElement {
           <h2>${model?.title ?? "Nothing selected"}</h2>
           <p>${model?.emptyHint ?? "Select a clip on the stage or timeline to inspect it."}</p>
         </div>
-        ${model?.summary?.length
-          ? html`<section class="ins-section">
-              ${model.summary.map((row) => html`
-                <div class="inspector-metric"><span>${row.label}</span><span>${row.value}</span></div>
-              `)}
-            </section>`
-          : ""}
-        ${model?.rawJson
-          ? html`<details class="details"><summary>Technical details</summary><code>${model.rawJson}</code></details>`
-          : ""}
+        ${
+          model?.summary?.length
+            ? html`<section class="ins-section">
+                ${model.summary.map(
+                  (row) => html`
+                    <div class="inspector-metric">
+                      <span>${row.label}</span><span>${row.value}</span>
+                    </div>
+                  `,
+                )}
+              </section>`
+            : ""
+        }
+        ${
+          model?.rawJson
+            ? html`<details class="details">
+                <summary>Technical details</summary>
+                <code>${model.rawJson}</code>
+              </details>`
+            : ""
+        }
       `;
     }
 
@@ -277,13 +319,19 @@ export class StudioInspector extends LitElement {
           ${model.subtitle ? html`<small>${model.subtitle}</small>` : ""}
         </div>
       </div>
-      ${model.summary?.length
-        ? html`<section class="ins-section">
-            ${model.summary.map((row) => html`
-              <div class="inspector-metric"><span>${row.label}</span><span>${row.value}</span></div>
-            `)}
-          </section>`
-        : ""}
+      ${
+        model.summary?.length
+          ? html`<section class="ins-section">
+              ${model.summary.map(
+                (row) => html`
+                  <div class="inspector-metric">
+                    <span>${row.label}</span><span>${row.value}</span>
+                  </div>
+                `,
+              )}
+            </section>`
+          : ""
+      }
       ${model.sections.map((section) => {
         const rows = section.rows.filter((row) => !(row.kind === "value" && row.technical));
         if (!rows.length) return "";
@@ -294,23 +342,33 @@ export class StudioInspector extends LitElement {
             </details>`
           : html`<section class="ins-section">${this.#renderRows(rows, model.clipId!)}</section>`;
       })}
-      ${model.motionSource
-        ? html`
-            <button class="button full-width" type="button" id="insOpenMotion" @click=${this.#openMotion}>
-              <span class="icon" data-icon="motion"></span>
-              Edit component · ${model.motionSource}
-            </button>
-          `
-        : ""}
-      ${model.canDelete
-        ? html`<button class="ins-del" type="button" @click=${this.#delete}>Delete clip</button>`
-        : ""}
+      ${
+        model.motionSource
+          ? html`
+              <button
+                class="button full-width"
+                type="button"
+                id="insOpenMotion"
+                @click=${this.#openMotion}
+              >
+                <span class="icon" data-icon="motion"></span>
+                Edit component · ${model.motionSource}
+              </button>
+            `
+          : ""
+      }
+      ${
+        model.canDelete
+          ? html`<button class="ins-del" type="button" @click=${this.#delete}>Delete clip</button>`
+          : ""
+      }
       ${this.#renderTechnical(model)}
     `;
   }
 
   #renderTechnical(model: InspectorViewModel): TemplateResult | string {
-    const rows = model.sections.flatMap((section) => section.rows)
+    const rows = model.sections
+      .flatMap((section) => section.rows)
       .filter((row): row is InspectorValueRow => row.kind === "value" && row.technical === true);
     if (!rows.length && !model.rawJson) return "";
     return html`<details class="details">
@@ -328,7 +386,13 @@ export class StudioInspector extends LitElement {
         const group: InspectorFieldRow[] = [row];
         while (index + 1 < rows.length) {
           const next = rows[index + 1]!;
-          if (next.kind === "value" || next.kind === "action" || next.pair !== row.pair || next.readOnly) break;
+          if (
+            next.kind === "value" ||
+            next.kind === "action" ||
+            next.pair !== row.pair ||
+            next.readOnly
+          )
+            break;
           group.push(next);
           index += 1;
         }
@@ -336,8 +400,12 @@ export class StudioInspector extends LitElement {
           const text = group[0]!.kind === "text";
           rendered.push(html`
             <div class="field pair ${text ? "has-text" : ""}">
-              <span class="field-label" title=${group.map((field) => field.label).join(" · ")}>${row.pair}</span>
-              <div class="pair-inputs" style="--pair-count:${group.length}">${group.map((field) => this.#renderField(field, clipId))}</div>
+              <span class="field-label" title=${group.map((field) => field.label).join(" · ")}
+                >${row.pair}</span
+              >
+              <div class="pair-inputs" style="--pair-count:${group.length}">
+                ${group.map((field) => this.#renderField(field, clipId))}
+              </div>
             </div>
           `);
           continue;
@@ -358,8 +426,13 @@ export class StudioInspector extends LitElement {
       `;
     }
     if (row.kind === "action") {
-      return html`<button class="button full-width" type="button"
-        @click=${() => this.#emit({ type: "edit", clipId, key: row.key, value: "" })}>${row.label}</button>`;
+      return html`<button
+        class="button full-width"
+        type="button"
+        @click=${() => this.#emit({ type: "edit", clipId, key: row.key, value: "" })}
+      >
+        ${row.label}
+      </button>`;
     }
     if (row.readOnly) {
       return html`
@@ -371,8 +444,11 @@ export class StudioInspector extends LitElement {
     }
     return html`
       <label class="field">
-        <span class="field-label ${row.kind === "number" ? "scrub" : ""}"
-          @pointerdown=${row.kind === "number" ? (event: PointerEvent) => this.#scrub(event, row, clipId) : null}>${row.label}</span>
+        <span
+          class="field-label ${row.kind === "number" ? "scrub" : ""}"
+          @pointerdown=${row.kind === "number" ? (event: PointerEvent) => this.#scrub(event, row, clipId) : null}
+          >${row.label}</span
+        >
         ${this.#renderField(row, clipId)}
       </label>
     `;
@@ -381,50 +457,94 @@ export class StudioInspector extends LitElement {
   #renderField(field: InspectorFieldRow, clipId: string): TemplateResult {
     if (field.kind === "textarea") {
       return html`
-        <textarea data-edit-key=${field.key} data-clip-id=${clipId}
-          .value=${String(field.value)} @change=${this.#edit} @blur=${this.#edit}
-          @keydown=${this.#fieldKeydown}></textarea>
+        <textarea
+          data-edit-key=${field.key}
+          data-clip-id=${clipId}
+          .value=${String(field.value)}
+          @change=${this.#edit}
+          @blur=${this.#edit}
+          @keydown=${this.#fieldKeydown}
+        ></textarea>
       `;
     }
     if (field.kind === "text") {
       return html`
-        <input type="text" aria-label=${field.label} data-edit-key=${field.key} data-clip-id=${clipId}
-          .value=${String(field.value)} @change=${this.#edit} @blur=${this.#edit}
-          @keydown=${this.#fieldKeydown} />
+        <input
+          type="text"
+          aria-label=${field.label}
+          data-edit-key=${field.key}
+          data-clip-id=${clipId}
+          .value=${String(field.value)}
+          @change=${this.#edit}
+          @blur=${this.#edit}
+          @keydown=${this.#fieldKeydown}
+        />
       `;
     }
     if (field.kind === "color") {
       return html`
         <div class="color-row">
-          <input type="color" data-edit-key=${field.key} data-clip-id=${clipId}
-            .value=${String(field.value).slice(0, 7)} @change=${this.#edit} @blur=${this.#edit} />
+          <input
+            type="color"
+            data-edit-key=${field.key}
+            data-clip-id=${clipId}
+            .value=${String(field.value).slice(0, 7)}
+            @change=${this.#edit}
+            @blur=${this.#edit}
+          />
           <span class="color-value">${String(field.value).toUpperCase()}</span>
         </div>
       `;
     }
     if (field.kind === "select") {
       return html`
-        <select data-edit-key=${field.key} data-clip-id=${clipId}
-          @change=${this.#edit} @blur=${this.#edit}>
+        <select
+          data-edit-key=${field.key}
+          data-clip-id=${clipId}
+          @change=${this.#edit}
+          @blur=${this.#edit}
+        >
           ${(field.values ?? []).map((value) => html`<option value=${value} .selected=${value === String(field.value)}>${field.valueLabels?.[value] ?? value}</option>`)}
         </select>
       `;
     }
     if (field.kind === "checkbox") {
       return html`
-        <input type="checkbox" data-edit-key=${field.key} data-clip-id=${clipId}
-          .checked=${Boolean(field.value)} @change=${this.#edit} @blur=${this.#edit} />
+        <input
+          type="checkbox"
+          data-edit-key=${field.key}
+          data-clip-id=${clipId}
+          .checked=${Boolean(field.value)}
+          @change=${this.#edit}
+          @blur=${this.#edit}
+        />
       `;
     }
     return html`
       <span class="number-field">
-        ${field.prefix ? html`<span class="field-prefix scrub" title="Drag to adjust ${field.label}"
-          @pointerdown=${(event: PointerEvent) => this.#scrub(event, field, clipId)}>${field.prefix}</span>` : ""}
-        <input type="number" aria-label=${[field.label, field.unit].filter(Boolean).join(" ")} data-edit-key=${field.key} data-clip-id=${clipId}
+        ${
+          field.prefix
+            ? html`<span
+                class="field-prefix scrub"
+                title="Drag to adjust ${field.label}"
+                @pointerdown=${(event: PointerEvent) => this.#scrub(event, field, clipId)}
+                >${field.prefix}</span
+              >`
+            : ""
+        }
+        <input
+          type="number"
+          aria-label=${[field.label, field.unit].filter(Boolean).join(" ")}
+          data-edit-key=${field.key}
+          data-clip-id=${clipId}
           .value=${String(field.value)}
-          min=${field.min ?? ""} max=${field.max ?? ""} step=${field.step ?? ""}
-          @change=${this.#edit} @blur=${this.#edit}
-          @keydown=${this.#fieldKeydown} />
+          min=${field.min ?? ""}
+          max=${field.max ?? ""}
+          step=${field.step ?? ""}
+          @change=${this.#edit}
+          @blur=${this.#edit}
+          @keydown=${this.#fieldKeydown}
+        />
         ${field.unit ? html`<span class="field-unit">${field.unit}</span>` : ""}
       </span>
     `;
@@ -435,7 +555,9 @@ export class StudioInspector extends LitElement {
   #scrub(event: PointerEvent, field: InspectorFieldRow, clipId: string): void {
     if (field.kind !== "number" || field.readOnly || event.button !== 0) return;
     const handle = event.currentTarget as HTMLElement;
-    const input = handle.closest(".field")?.querySelector<HTMLInputElement>(`input[data-edit-key="${CSS.escape(field.key)}"]`);
+    const input = handle
+      .closest(".field")
+      ?.querySelector<HTMLInputElement>(`input[data-edit-key="${CSS.escape(field.key)}"]`);
     if (!input) return;
     event.preventDefault();
     const startX = event.clientX;
@@ -465,11 +587,13 @@ export class StudioInspector extends LitElement {
   }
 
   #emit(intent: StudioInspectorIntent): void {
-    this.dispatchEvent(new CustomEvent("studio-inspector-intent", {
-      detail: intent,
-      bubbles: true,
-      composed: true,
-    }));
+    this.dispatchEvent(
+      new CustomEvent("studio-inspector-intent", {
+        detail: intent,
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   #edit = (event: Event): void => {
@@ -477,13 +601,26 @@ export class StudioInspector extends LitElement {
     const key = input.dataset.editKey;
     const clipId = input.dataset.clipId;
     if (!key || !clipId) return;
-    const previous = this.viewModel?.sections.flatMap((section) => section.rows).find((row) => row.kind !== "value" && row.kind !== "action" && row.key === key);
-    if (previous && previous.kind !== "action" && String(previous.value) === input.value && input.type !== "checkbox") return;
+    const previous = this.viewModel?.sections
+      .flatMap((section) => section.rows)
+      .find((row) => row.kind !== "value" && row.kind !== "action" && row.key === key);
+    if (
+      previous &&
+      previous.kind !== "action" &&
+      String(previous.value) === input.value &&
+      input.type !== "checkbox"
+    )
+      return;
     if (input instanceof HTMLInputElement && input.type === "number") {
-      if (input.value === "" || !input.validity.valid) { input.setAttribute("aria-invalid", "true"); input.title = input.validationMessage || "Enter a valid number"; return; }
+      if (input.value === "" || !input.validity.valid) {
+        input.setAttribute("aria-invalid", "true");
+        input.title = input.validationMessage || "Enter a valid number";
+        return;
+      }
       const parsed = Number(input.value);
       if (!Number.isFinite(parsed)) return;
-      input.removeAttribute("aria-invalid"); input.title = "";
+      input.removeAttribute("aria-invalid");
+      input.title = "";
       this.#emit({ type: "edit", clipId, key, value: parsed });
       return;
     }
@@ -491,26 +628,28 @@ export class StudioInspector extends LitElement {
       this.#emit({ type: "edit", clipId, key, value: input.checked });
       return;
     }
-    const value = input.type === "color" && previous && previous.kind !== "action" && String(previous.value).length === 9
-      ? input.value + String(previous.value).slice(7) : input.value;
+    const value =
+      input.type === "color" &&
+      previous &&
+      previous.kind !== "action" &&
+      String(previous.value).length === 9
+        ? input.value + String(previous.value).slice(7)
+        : input.value;
     this.#emit({ type: "edit", clipId, key, value });
-  };
-
-  #editEnd = (event: Event): void => {
-    const input = event.currentTarget as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-    const key = input.dataset.editKey;
-    const clipId = input.dataset.clipId;
-    if (!key || !clipId) return;
-    this.#emit({ type: "edit-end", clipId, key });
   };
 
   #fieldKeydown = (event: KeyboardEvent): void => {
     if (event.key === "Escape") {
       const input = event.currentTarget as HTMLInputElement | HTMLTextAreaElement;
-      const field = this.viewModel?.sections.flatMap((section) => section.rows)
-        .find((row) => row.kind !== "value" && row.kind !== "action" && row.key === input.dataset.editKey);
+      const field = this.viewModel?.sections
+        .flatMap((section) => section.rows)
+        .find(
+          (row) =>
+            row.kind !== "value" && row.kind !== "action" && row.key === input.dataset.editKey,
+        );
       if (field && field.kind !== "action") input.value = String(field.value);
-      input.removeAttribute("aria-invalid"); input.title = "";
+      input.removeAttribute("aria-invalid");
+      input.title = "";
       input.blur();
       event.stopPropagation();
       return;
@@ -561,20 +700,26 @@ export class StudioProjectControls extends LitElement {
     if (!state.visible) return html``;
     return html`
       ${state.conflictMessage ? html`<button class="button" type="button" @click=${() => this.#emit("reload")}>Discard draft and reload</button>` : ""}
-      <button class="button primary ${state.saving ? "saving" : ""}" id="saveBtn" type="button"
+      <button
+        class="button primary ${state.saving ? "saving" : ""}"
+        id="saveBtn"
+        type="button"
         ?disabled=${!state.dirty || state.saving === true}
-        @click=${() => this.#emit("save")}>
+        @click=${() => this.#emit("save")}
+      >
         ${state.saving ? "Saving…" : "Save"}
       </button>
     `;
   }
 
   #emit(type: StudioProjectIntent["type"]): void {
-    this.dispatchEvent(new CustomEvent("studio-project-intent", {
-      detail: { type } satisfies StudioProjectIntent,
-      bubbles: true,
-      composed: true,
-    }));
+    this.dispatchEvent(
+      new CustomEvent("studio-project-intent", {
+        detail: { type } satisfies StudioProjectIntent,
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 }
 
@@ -596,7 +741,9 @@ export function kindIconOf(kind: string): string {
   return "film";
 }
 
-function hydrateIconsIn(root: ParentNode): void { hydrateIcons(root); }
+function hydrateIconsIn(root: ParentNode): void {
+  hydrateIcons(root);
+}
 
 if (!customElements.get("studio-timeline")) {
   customElements.define("studio-timeline", StudioTimeline);

@@ -4,9 +4,16 @@ import { createExportFileSink } from "./export-file-sink.ts";
 function file() {
   const result = { committed: false, aborted: false, reason: undefined as unknown, writes: 0 };
   const stream = new WritableStream({
-    write() { result.writes++; },
-    close() { result.committed = true; },
-    abort(reason) { result.aborted = true; result.reason = reason; },
+    write() {
+      result.writes++;
+    },
+    close() {
+      result.committed = true;
+    },
+    abort(reason) {
+      result.aborted = true;
+      result.reason = reason;
+    },
   }) as FileSystemWritableFileStream;
   return { stream, result };
 }

@@ -18,7 +18,10 @@ function main() {
   const args = Bun.argv.slice(2);
   const cli = resolve(option(args, "--cli", join(ROOT, "target/debug/valle")));
   const repeats = nonnegativeInteger(option(args, "--repeats", "3"), "--repeats", 1);
-  const fixture = join(ROOT, "crates/valle-compiler/tests/fixtures/motion/composition/lazy-evaluation.motion.tsx");
+  const fixture = join(
+    ROOT,
+    "crates/valle-compiler/tests/fixtures/motion/composition/lazy-evaluation.motion.tsx",
+  );
   const source = readFileSync(fixture, "utf8");
   if (!source.includes("length: 2000")) throw new Error("B03 fixture no longer contains 2000 rows");
   const temporary = mkdtempSync(join(tmpdir(), "valle-b03-motion-"));
@@ -27,17 +30,33 @@ function main() {
       const path = join(temporary, `lazy-evaluation-${rows}.motion.tsx`);
       writeFileSync(path, source.replace("length: 2000", `length: ${rows}`));
       for (let index = 0; index < repeats; index++) {
-        const checked = runJson<CheckReport>([cli, "motion", "check", path, "--frame", "1", "--json"]);
-        console.log(JSON.stringify({
-          rows, run: index + 1, nodes: checked.nodes, templates: checked.templates,
-          instanceRows: checked.instanceRows, expressions: checked.expressions,
-          evaluatedExpressions: checked.evaluatedExpressions,
-          fullEvaluationExpressions: checked.fullEvaluationExpressions,
-          framePrepareMs: checked.timings.framePrepare,
-        }));
+        const checked = runJson<CheckReport>([
+          cli,
+          "motion",
+          "check",
+          path,
+          "--frame",
+          "1",
+          "--json",
+        ]);
+        console.log(
+          JSON.stringify({
+            rows,
+            run: index + 1,
+            nodes: checked.nodes,
+            templates: checked.templates,
+            instanceRows: checked.instanceRows,
+            expressions: checked.expressions,
+            evaluatedExpressions: checked.evaluatedExpressions,
+            fullEvaluationExpressions: checked.fullEvaluationExpressions,
+            framePrepareMs: checked.timings.framePrepare,
+          }),
+        );
       }
     }
-  } finally { rmSync(temporary, { recursive: true, force: true }); }
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 if (import.meta.main) main();

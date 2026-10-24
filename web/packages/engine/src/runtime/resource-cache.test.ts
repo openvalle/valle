@@ -13,14 +13,18 @@ function request(handle: bigint, content: string, sample: bigint = 0n) {
 
 describe("browser resource cache", () => {
   test("identity excludes only the frame-local handle", () => {
-    expect(resourceRequestCacheIdentity(request(1n, "a")))
-      .toBe(resourceRequestCacheIdentity(request(9n, "a")));
-    expect(resourceRequestCacheIdentity(request(1n, "a", 0n)))
-      .not.toBe(resourceRequestCacheIdentity(request(1n, "a", 1n)));
-    expect(resourceRequestCacheIdentity(request(1n, "a")))
-      .not.toBe(resourceRequestCacheIdentity(request(1n, "b")));
-    expect(resourceRequestCacheIdentity({ handle: 1n, z: "last", "𐀀": "astral", a: "first" }))
-      .toBe(resourceRequestCacheIdentity({ a: "first", "𐀀": "astral", z: "last", handle: 9n }));
+    expect(resourceRequestCacheIdentity(request(1n, "a"))).toBe(
+      resourceRequestCacheIdentity(request(9n, "a")),
+    );
+    expect(resourceRequestCacheIdentity(request(1n, "a", 0n))).not.toBe(
+      resourceRequestCacheIdentity(request(1n, "a", 1n)),
+    );
+    expect(resourceRequestCacheIdentity(request(1n, "a"))).not.toBe(
+      resourceRequestCacheIdentity(request(1n, "b")),
+    );
+    expect(resourceRequestCacheIdentity({ handle: 1n, z: "last", "𐀀": "astral", a: "first" })).toBe(
+      resourceRequestCacheIdentity({ a: "first", "𐀀": "astral", z: "last", handle: 9n }),
+    );
   });
 
   test("LRU, frame pinning, byte capacity and generation disposal are deterministic", () => {
@@ -91,12 +95,19 @@ describe("browser resource cache", () => {
     const frame = (lookups: string[], inserts: Array<[string, boolean]> = []) => {
       cache.beginFrame();
       for (const identity of lookups) cache.lookup(identity);
-      for (const [identity, perFrame] of inserts) cache.insert(identity, identity, 4, () => disposed.push(identity), perFrame);
+      for (const [identity, perFrame] of inserts)
+        cache.insert(identity, identity, 4, () => disposed.push(identity), perFrame);
       const report = cache.finishFrame(lookups.length);
       cache.releaseFrame();
       return report;
     };
-    frame(["scene-1", "image"], [["scene-1", true], ["image", false]]);
+    frame(
+      ["scene-1", "image"],
+      [
+        ["scene-1", true],
+        ["image", false],
+      ],
+    );
     // A still scene reuses its frame.
     expect(frame(["scene-1", "image"]).hits).toBe(2);
     // Once the scene moves, its old frame leaves at the end of the first frame that does not use it.

@@ -20,8 +20,13 @@ interface Scene3dMaterialFrame {
 type Scene3dLight =
   | { type: "ambient"; color: Color4; intensity: number }
   | { type: "directional"; color: Color4; intensity: number; direction: Vec3 }
-  | { type: "hemisphere"; skyColor: Color4; groundColor: Color4;
-      intensity: number; direction: Vec3 };
+  | {
+      type: "hemisphere";
+      skyColor: Color4;
+      groundColor: Color4;
+      intensity: number;
+      direction: Vec3;
+    };
 
 interface Scene3dMeshSpec {
   geometry?: unknown;
@@ -223,8 +228,7 @@ export class GpuScene3D {
     this.CK = host.CanvasKit;
     this.gl = host.gl;
     const gl = this.gl;
-    if (!gl?.getExtension("EXT_color_buffer_float"))
-      throw new Error("F16 WebGL2 unavailable");
+    if (!gl?.getExtension("EXT_color_buffer_float")) throw new Error("F16 WebGL2 unavailable");
     gl.getExtension("OES_texture_float_linear");
     const restore = preserveState(gl);
     this.stats = {
@@ -285,14 +289,12 @@ export class GpuScene3D {
       const s = gl.createShader(type)!;
       gl.shaderSource(s, src);
       gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-        throw new Error(gl.getShaderInfoLog(s)!);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)!);
       gl.attachShader(p, s);
       gl.deleteShader(s);
     }
     gl.linkProgram(p);
-    if (!gl.getProgramParameter(p, gl.LINK_STATUS))
-      throw new Error(gl.getProgramInfoLog(p)!);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)!);
     return { p, locations: new Map() };
   }
   private use(program: Scene3dProgram): void {
@@ -301,8 +303,7 @@ export class GpuScene3D {
   }
   private loc(name: string): WebGLUniformLocation | null {
     const p = this.active;
-    if (!p.locations.has(name))
-      p.locations.set(name, this.gl.getUniformLocation(p.p, name));
+    if (!p.locations.has(name)) p.locations.set(name, this.gl.getUniformLocation(p.p, name));
     return p.locations.get(name)!;
   }
   private f(name: string, v: number): void {
@@ -346,28 +347,15 @@ export class GpuScene3D {
       t = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, t);
     gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, data);
-    gl.texParameteri(
-      gl.TEXTURE_2D,
-      gl.TEXTURE_MIN_FILTER,
-      filter ? gl.LINEAR : gl.NEAREST,
-    );
-    gl.texParameteri(
-      gl.TEXTURE_2D,
-      gl.TEXTURE_MAG_FILTER,
-      filter ? gl.LINEAR : gl.NEAREST,
-    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter ? gl.LINEAR : gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter ? gl.LINEAR : gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return t;
   }
   private targets(width: number, height: number): void {
     const gl = this.gl;
-    if (
-      this.target &&
-      this.target.width === width &&
-      this.target.height === height
-    )
-      return;
+    if (this.target && this.target.width === width && this.target.height === height) return;
     const restore = preserveState(gl);
     if (this.target) {
       for (const t of this.target.textures) gl.deleteTexture(t);
@@ -375,21 +363,9 @@ export class GpuScene3D {
       this.output!.delete();
       this.stats.allocatedBytes -= this.target.bytes;
     }
-    const color = this.texture(
-        width,
-        height,
-        gl.RGBA16F,
-        gl.RGBA,
-        gl.HALF_FLOAT,
-      ),
+    const color = this.texture(width, height, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT),
       depth = this.texture(width, height, gl.R32F, gl.RED, gl.FLOAT),
-      zbuffer = this.texture(
-        width,
-        height,
-        gl.DEPTH_COMPONENT32F,
-        gl.DEPTH_COMPONENT,
-        gl.FLOAT,
-      ),
+      zbuffer = this.texture(width, height, gl.DEPTH_COMPONENT32F, gl.DEPTH_COMPONENT, gl.FLOAT),
       decoded = this.texture(width, height, gl.RGBA32F, gl.RGBA, gl.FLOAT);
     const fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
@@ -404,13 +380,7 @@ export class GpuScene3D {
       throw new Error("F16 scene MRT incomplete");
     const decodeFbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, decodeFbo);
-    gl.framebufferTexture2D(
-      gl.FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT0,
-      gl.TEXTURE_2D,
-      decoded,
-      0,
-    );
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, decoded, 0);
     restore();
     this.host.resetContext();
     this.output = this.CK.MakeRenderTarget(this.host.context, {
@@ -464,16 +434,11 @@ export class GpuScene3D {
         objects.length,
       );
       const { columns, rows } = input;
-      if (
-        !this.rays ||
-        this.rays.width !== width ||
-        this.rays.height !== height
-      ) {
+      if (!this.rays || this.rays.width !== width || this.rays.height !== height) {
         if (this.rays) {
           gl.deleteTexture(this.rays.columns);
           gl.deleteTexture(this.rays.rows);
-          this.stats.allocatedBytes -=
-            (this.rays.width + this.rays.height) * 12;
+          this.stats.allocatedBytes -= (this.rays.width + this.rays.height) * 12;
         }
         this.rays = {
           width,
@@ -484,29 +449,9 @@ export class GpuScene3D {
         this.stats.allocatedBytes += (width + height) * 12;
       }
       gl.bindTexture(gl.TEXTURE_2D, this.rays.columns);
-      gl.texSubImage2D(
-        gl.TEXTURE_2D,
-        0,
-        0,
-        0,
-        width,
-        1,
-        gl.RGB,
-        gl.FLOAT,
-        columns,
-      );
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, width, 1, gl.RGB, gl.FLOAT, columns);
       gl.bindTexture(gl.TEXTURE_2D, this.rays.rows);
-      gl.texSubImage2D(
-        gl.TEXTURE_2D,
-        0,
-        0,
-        0,
-        height,
-        1,
-        gl.RGB,
-        gl.FLOAT,
-        rows,
-      );
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, height, 1, gl.RGB, gl.FLOAT, rows);
       const { x, y, width: w, height: h, count } = input;
       // Metadata uses integer texelFetch coordinates, so a larger backing preserves the
       // logical ROI. Clear the whole attachment before scatter to retire every prior object ID.
@@ -527,13 +472,23 @@ export class GpuScene3D {
         const fbo = gl.createFramebuffer();
         gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
         for (const [texture, attachment] of [
-          [normal, gl.COLOR_ATTACHMENT0], [ids, gl.COLOR_ATTACHMENT1], [shadow, gl.COLOR_ATTACHMENT2],
-        ] as const) gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, gl.TEXTURE_2D, texture, 0);
+          [normal, gl.COLOR_ATTACHMENT0],
+          [ids, gl.COLOR_ATTACHMENT1],
+          [shadow, gl.COLOR_ATTACHMENT2],
+        ] as const)
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, gl.TEXTURE_2D, texture, 0);
         gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
         if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
           throw new Error("Visibility framebuffer incomplete");
-        visibility = { normal, ids, shadow, fbo, capacityWidth, capacityHeight,
-          bytes: capacityWidth * capacityHeight * 28 };
+        visibility = {
+          normal,
+          ids,
+          shadow,
+          fbo,
+          capacityWidth,
+          capacityHeight,
+          bytes: capacityWidth * capacityHeight * 28,
+        };
         this.stats.allocatedBytes += visibility.bytes;
         this.stats.visibilityAllocations++;
         this.visibility = visibility;
@@ -591,16 +546,14 @@ export class GpuScene3D {
         hemi = new Float32Array(9);
       for (const l of frame.lights) {
         if (l.type === "ambient")
-          for (let i = 0; i < 3; i++)
-            ambient[i] += linear(l.color[i]) * l.intensity;
+          for (let i = 0; i < 3; i++) ambient[i] += linear(l.color[i]) * l.intensity;
         if (l.type === "hemisphere") {
           const direction = norm(l.direction);
           for (let i = 0; i < 3; i++) {
             const sky = linear(l.skyColor[i]) * l.intensity,
               ground = linear(l.groundColor[i]) * l.intensity;
             hemiBase[i] += (sky + ground) * 0.5;
-            for (let j = 0; j < 3; j++)
-              hemi[j * 3 + i] += direction[j] * (sky - ground) * 0.5;
+            for (let j = 0; j < 3; j++) hemi[j * 3 + i] += direction[j] * (sky - ground) * 0.5;
           }
         }
       }
@@ -614,9 +567,7 @@ export class GpuScene3D {
         this.v3(`lightDir[${i}]`, norm(directional[i].direction));
         this.v3(
           `lightColor[${i}]`,
-          directional[i].color
-            .slice(0, 3)
-            .map((v) => linear(v) * directional[i].intensity),
+          directional[i].color.slice(0, 3).map((v) => linear(v) * directional[i].intensity),
         );
       }
       gl.enable(gl.SCISSOR_TEST);
@@ -628,17 +579,11 @@ export class GpuScene3D {
         this.f("roughness", Math.max(0.0525, f.roughness ?? 1));
         this.v3(
           "emissive",
-          (f.emissive ?? [0, 0, 0])
-            .slice(0, 3)
-            .map((v) => linear(v) * (f.emissiveIntensity ?? 1)),
+          (f.emissive ?? [0, 0, 0]).slice(0, 3).map((v) => linear(v) * (f.emissiveIntensity ?? 1)),
         );
         this.i(
           "kind",
-          o.spec.material.kind === "unlit"
-            ? 0
-            : o.spec.material.kind === "lambert"
-              ? 1
-              : 2,
+          o.spec.material.kind === "unlit" ? 0 : o.spec.material.kind === "lambert" ? 1 : 2,
         );
         this.i("objectId", o.id);
         gl.bindVertexArray(this.vao);
@@ -682,18 +627,8 @@ export class GpuScene3D {
       this.tex("rawSource", this.target!.color, 2);
       this.tex("depths", this.target!.depth, 1);
       this.v2("size", [width, height]);
-      this.v4("visibleBounds", [
-        visible[0],
-        height - visible[3],
-        visible[2],
-        height - visible[1],
-      ]);
-      this.v4("nearBounds", [
-        near[0],
-        height - near[3],
-        near[2],
-        height - near[1],
-      ]);
+      this.v4("visibleBounds", [visible[0], height - visible[3], visible[2], height - visible[1]]);
+      this.v4("nearBounds", [near[0], height - near[3], near[2], height - near[1]]);
       this.i("hasDof", dof && dof.maxBlurRadius > 0 ? 1 : 0);
       this.f("focus", dof?.focusDistance ?? 1);
       this.f("maxRadius", dof?.maxBlurRadius ?? 0);

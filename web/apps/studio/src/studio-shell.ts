@@ -80,31 +80,47 @@ export class ValleStudioApp extends LitElement {
     this.#unsubscribe = host.subscribe((event) => this.#onHostEvent(event));
     try {
       const preferences = JSON.parse(localStorage.getItem("valle.studio.panels") ?? "{}");
-      if (typeof preferences.inspectorVisible === "boolean") this.shellState = { ...this.shellState, inspectorVisible: preferences.inspectorVisible };
-      if (typeof preferences.timelineCollapsed === "boolean") this.shellState = { ...this.shellState, timelineCollapsed: preferences.timelineCollapsed };
-      if (typeof preferences.width === "number") this.style.setProperty("--inspector-width", `${Math.max(280, Math.min(440, preferences.width))}px`);
-      if (typeof preferences.height === "number") this.style.setProperty("--timeline-height", `${Math.max(120, Math.min(innerHeight - 320, preferences.height))}px`);
-    } catch { /* Storage is optional. */ }
+      if (typeof preferences.inspectorVisible === "boolean")
+        this.shellState = { ...this.shellState, inspectorVisible: preferences.inspectorVisible };
+      if (typeof preferences.timelineCollapsed === "boolean")
+        this.shellState = { ...this.shellState, timelineCollapsed: preferences.timelineCollapsed };
+      if (typeof preferences.width === "number")
+        this.style.setProperty(
+          "--inspector-width",
+          `${Math.max(280, Math.min(440, preferences.width))}px`,
+        );
+      if (typeof preferences.height === "number")
+        this.style.setProperty(
+          "--timeline-height",
+          `${Math.max(120, Math.min(innerHeight - 320, preferences.height))}px`,
+        );
+    } catch {
+      /* Storage is optional. */
+    }
     if (innerHeight <= 560) this.shellState = { ...this.shellState, timelineCollapsed: true };
     hydrateIcons(this);
     this.#bindChrome();
     this.#applyShellChrome();
-    this.dispatchEvent(new CustomEvent("studio-ready", {
-      detail: { boot: this.boot },
-      bubbles: true,
-      composed: true,
-    }));
+    this.dispatchEvent(
+      new CustomEvent("studio-ready", {
+        detail: { boot: this.boot },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   dispatchIntent(intent: StudioIntent): void {
     this.shellState = reduceStudioIntent(this.shellState, intent);
     this.#applyShellChrome();
     if (intent.type === "panel") this.#savePreferences();
-    this.dispatchEvent(new CustomEvent("studio-statechange", {
-      detail: { state: this.shellState, intent },
-      bubbles: true,
-      composed: true,
-    }));
+    this.dispatchEvent(
+      new CustomEvent("studio-statechange", {
+        detail: { state: this.shellState, intent },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   connectedCallback(): void {
@@ -142,19 +158,29 @@ export class ValleStudioApp extends LitElement {
   };
 
   #onHostEvent(event: StudioEvent): void {
-    this.dispatchEvent(new CustomEvent("studio-host-event", {
-      detail: event,
-      bubbles: true,
-      composed: true,
-    }));
+    this.dispatchEvent(
+      new CustomEvent("studio-host-event", {
+        detail: event,
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   #savePreferences(): void {
-    try { localStorage.setItem("valle.studio.panels", JSON.stringify({
-      inspectorVisible: this.shellState.inspectorVisible, timelineCollapsed: this.shellState.timelineCollapsed,
-      width: parseFloat(this.style.getPropertyValue("--inspector-width")) || undefined,
-      height: parseFloat(this.style.getPropertyValue("--timeline-height")) || undefined,
-    })); } catch { /* Storage is optional. */ }
+    try {
+      localStorage.setItem(
+        "valle.studio.panels",
+        JSON.stringify({
+          inspectorVisible: this.shellState.inspectorVisible,
+          timelineCollapsed: this.shellState.timelineCollapsed,
+          width: parseFloat(this.style.getPropertyValue("--inspector-width")) || undefined,
+          height: parseFloat(this.style.getPropertyValue("--timeline-height")) || undefined,
+        }),
+      );
+    } catch {
+      /* Storage is optional. */
+    }
   }
 
   #bindChrome(): void {
@@ -181,7 +207,11 @@ export class ValleStudioApp extends LitElement {
     document.addEventListener("pointerdown", (event) => {
       if (!this.#problemsOpen) return;
       const target = event.target as Node | null;
-      if (target && (this.#req("problemsPanel").contains(target) || problemsButton.contains(target))) return;
+      if (
+        target &&
+        (this.#req("problemsPanel").contains(target) || problemsButton.contains(target))
+      )
+        return;
       this.#setProblemsOpen(false);
     });
     window.addEventListener("keydown", (event) => {
@@ -209,29 +239,39 @@ export class ValleStudioApp extends LitElement {
       propertiesTab.setAttribute("aria-selected", String(!code));
       codeTab.setAttribute("aria-selected", String(code));
     };
-    new MutationObserver(syncTabs).observe(inspectorPanel, { attributes: true, attributeFilter: ["class"] });
+    new MutationObserver(syncTabs).observe(inspectorPanel, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
     syncTabs();
 
     undoBtn.addEventListener("click", () => {
-      this.dispatchEvent(new CustomEvent("studio-history-intent", {
-        detail: { type: "undo" },
-        bubbles: true,
-        composed: true,
-      }));
+      this.dispatchEvent(
+        new CustomEvent("studio-history-intent", {
+          detail: { type: "undo" },
+          bubbles: true,
+          composed: true,
+        }),
+      );
     });
 
     redoBtn.addEventListener("click", () => {
-      this.dispatchEvent(new CustomEvent("studio-history-intent", {
-        detail: { type: "redo" },
-        bubbles: true,
-        composed: true,
-      }));
+      this.dispatchEvent(
+        new CustomEvent("studio-history-intent", {
+          detail: { type: "redo" },
+          bubbles: true,
+          composed: true,
+        }),
+      );
     });
 
     inspectorToggle.addEventListener("click", () => {
       if (innerWidth <= 780) {
         this.classList.toggle("mobile-inspector");
-        inspectorToggle.setAttribute("aria-pressed", String(this.classList.contains("mobile-inspector")));
+        inspectorToggle.setAttribute(
+          "aria-pressed",
+          String(this.classList.contains("mobile-inspector")),
+        );
         return;
       }
       this.dispatchIntent({ type: "panel", inspectorVisible: !this.shellState.inspectorVisible });
@@ -252,10 +292,7 @@ export class ValleStudioApp extends LitElement {
       this.dispatchIntent({ type: "panel", timelineCollapsed: !this.shellState.timelineCollapsed });
     });
 
-    for (const [element, axis] of [
-      [splitV, "x"] as const,
-      [splitH, "y"] as const,
-    ]) {
+    for (const [element, axis] of [[splitV, "x"] as const, [splitH, "y"] as const]) {
       element.addEventListener("pointerdown", (event) => {
         if (event.button !== 0) return;
         this.#splitGesture = { axis, pointerId: event.pointerId };
@@ -264,7 +301,8 @@ export class ValleStudioApp extends LitElement {
         event.preventDefault();
       });
       element.addEventListener("pointermove", (event) => {
-        if (this.#splitGesture?.axis !== axis || this.#splitGesture.pointerId !== event.pointerId) return;
+        if (this.#splitGesture?.axis !== axis || this.#splitGesture.pointerId !== event.pointerId)
+          return;
         if (axis === "x") {
           const width = Math.min(440, Math.max(280, innerWidth - event.clientX));
           this.style.setProperty("--inspector-width", `${width}px`);
@@ -291,14 +329,16 @@ export class ValleStudioApp extends LitElement {
     }
 
     this.#resizeObserver = new ResizeObserver(() => {
-      this.dispatchEvent(new CustomEvent("studio-layout", {
-        detail: {
-          width: this.clientWidth,
-          height: this.clientHeight,
-        },
-        bubbles: true,
-        composed: true,
-      }));
+      this.dispatchEvent(
+        new CustomEvent("studio-layout", {
+          detail: {
+            width: this.clientWidth,
+            height: this.clientHeight,
+          },
+          bubbles: true,
+          composed: true,
+        }),
+      );
     });
     this.#resizeObserver.observe(this);
   }
@@ -311,15 +351,22 @@ export class ValleStudioApp extends LitElement {
 
     this.#text("projectName", state.projectName);
     const badge = this.#req<HTMLElement>("sessionBadge");
-    badge.textContent = state.session?.kind === "timeline-file"
+    badge.textContent =
+      state.session?.kind === "timeline-file"
         ? "Timeline"
         : state.session?.kind === "motion-file"
           ? "Motion"
           : "";
     badge.hidden = !state.session;
 
-    this.#text("inspectorKind", state.session?.kind === "timeline-file" ? "Timeline file"
-      : state.session?.kind === "motion-file" ? "Motion clip" : "Project");
+    this.#text(
+      "inspectorKind",
+      state.session?.kind === "timeline-file"
+        ? "Timeline file"
+        : state.session?.kind === "motion-file"
+          ? "Motion clip"
+          : "Project",
+    );
 
     const undo = this.#req<HTMLButtonElement>("undoBtn");
     const redo = this.#req<HTMLButtonElement>("redoBtn");
@@ -331,14 +378,23 @@ export class ValleStudioApp extends LitElement {
     saveStatus.classList.toggle("error", state.conflict);
     saveStatus.textContent = state.conflict
       ? (state.conflictMessage ?? "External change conflict")
-      : state.sourceDirty ? "Unsaved source"
-        : state.dirty ? "Unsaved changes" : "Saved";
+      : state.sourceDirty
+        ? "Unsaved source"
+        : state.dirty
+          ? "Unsaved changes"
+          : "Saved";
 
     const previewStatus = this.#req<HTMLElement>("previewStatus");
     const previewText = this.#req<HTMLElement>("previewStatusText");
-    previewStatus.className = `preview-status ${state.previewStatus === "error" ? "error"
-      : state.previewStatus === "ready" ? "ready"
-        : state.previewStatus === "updating" ? "warning" : "info"}`;
+    previewStatus.className = `preview-status ${
+      state.previewStatus === "error"
+        ? "error"
+        : state.previewStatus === "ready"
+          ? "ready"
+          : state.previewStatus === "updating"
+            ? "warning"
+            : "info"
+    }`;
     previewText.textContent = PREVIEW_LABELS[state.previewStatus];
     previewStatus.title = state.previewMessage ?? "";
 
@@ -346,7 +402,10 @@ export class ValleStudioApp extends LitElement {
     const problems = this.#problems();
     const problemsButton = this.#req<HTMLButtonElement>("problemsButton");
     problemsButton.hidden = problems.length === 0;
-    problemsButton.classList.toggle("error", problems.some((problem) => problem.severity === "error"));
+    problemsButton.classList.toggle(
+      "error",
+      problems.some((problem) => problem.severity === "error"),
+    );
     const problemsLabel = problems.length === 1 ? "1 problem" : `${problems.length} problems`;
     problemsButton.title = problemsLabel;
     problemsButton.setAttribute("aria-label", problemsLabel);
@@ -371,23 +430,39 @@ export class ValleStudioApp extends LitElement {
   }
 
   #syncInspectorToggle(): void {
-    this.#req<HTMLButtonElement>("inspectorToggle").setAttribute("aria-pressed", String(
-      innerWidth <= 780 ? this.classList.contains("mobile-inspector") : this.shellState.inspectorVisible,
-    ));
+    this.#req<HTMLButtonElement>("inspectorToggle").setAttribute(
+      "aria-pressed",
+      String(
+        innerWidth <= 780
+          ? this.classList.contains("mobile-inspector")
+          : this.shellState.inspectorVisible,
+      ),
+    );
   }
 
   #problems(): StudioProblem[] {
     const state = this.shellState;
     const problems: StudioProblem[] = [];
     if (state.conflict && !this.#conflictDismissed) {
-      problems.push({ severity: "error", action: "conflict",
-        message: state.conflictMessage ?? "Source changed outside Studio. Your draft is kept until you choose." });
+      problems.push({
+        severity: "error",
+        action: "conflict",
+        message:
+          state.conflictMessage ??
+          "Source changed outside Studio. Your draft is kept until you choose.",
+      });
     }
     if (state.previewStatus === "error") {
-      problems.push({ severity: "error", action: "retry",
-        message: state.previewMessage ?? "Preview failed. Showing the last successful result." });
+      problems.push({
+        severity: "error",
+        action: "retry",
+        message: state.previewMessage ?? "Preview failed. Showing the last successful result.",
+      });
     } else if (state.previewStatus === "unavailable") {
-      problems.push({ severity: "warning", message: state.previewMessage ?? "Preview is unavailable for this session." });
+      problems.push({
+        severity: "warning",
+        message: state.previewMessage ?? "Preview is unavailable for this session.",
+      });
     }
     for (const message of state.diagnostics) problems.push({ severity: "warning", message });
     return problems;
@@ -440,7 +515,9 @@ export class ValleStudioApp extends LitElement {
         if (problem.action === "retry") {
           button("Retry", true, () => {
             this.#setProblemsOpen(false);
-            this.dispatchEvent(new CustomEvent("studio-preview-retry", { bubbles: true, composed: true }));
+            this.dispatchEvent(
+              new CustomEvent("studio-preview-retry", { bubbles: true, composed: true }),
+            );
           });
         } else {
           if (this.shellState.session?.kind === "motion-file") {

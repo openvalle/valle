@@ -22,15 +22,21 @@
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "verify:boundaries": "bun run scripts/verify-boundaries.ts && bun run verify:protocol",
     "verify:protocol": "bun run scripts/verify-protocol-generation.ts",
-    "gate": "bun run typecheck && bun run build && bun test && bun run verify:boundaries",
+    "gate": "bun run fmt:check && bun run lint && bun run typecheck && bun run build && bun test && bun run verify:boundaries",
     "test": "bun test",
     "test:parity": "bun test tests/parity",
     "parity": "bun tests/parity/cli.ts",
-    "build:sdk": "bun run scripts/build-sdk.ts"
+    "build:sdk": "bun run scripts/build-sdk.ts",
+    "fmt": "prettier --config .prettierrc.json --write \"{apps,packages,scripts,tests}/**/*.ts\" \"../.github/scripts/**/*.ts\"",
+    "fmt:check": "prettier --config .prettierrc.json --check \"{apps,packages,scripts,tests}/**/*.ts\" \"../.github/scripts/**/*.ts\"",
+    "lint": "cd .. && oxlint -c web/.oxlintrc.json --deny-warnings --report-unused-disable-directives web/apps web/packages web/scripts web/tests .github/scripts",
+    "lint:fix": "cd .. && oxlint --fix -c web/.oxlintrc.json --deny-warnings --report-unused-disable-directives web/apps web/packages web/scripts web/tests .github/scripts"
   },
   "devDependencies": {
     "@types/bun": "1.4.1",
-    "typescript": "7.0.2",
-    "lit": "3.3.3"
+    "lit": "3.3.3",
+    "oxlint": "1.89.0",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2"
   }
 }

@@ -66,16 +66,20 @@ export async function emitRuntimeManifests(
         claimedAppScripts.add(script);
       }
     }
-    apps.push(await manifestOf(
-      dist,
-      `app-${app}`,
-      files.map((file, index) => spec(
-        `${app}-${index}`,
-        file.endsWith(".html") ? "html" : file.endsWith(".css") ? "style" : "app",
-        file,
-        "Apache-2.0",
-      )),
-    ));
+    apps.push(
+      await manifestOf(
+        dist,
+        `app-${app}`,
+        files.map((file, index) =>
+          spec(
+            `${app}-${index}`,
+            file.endsWith(".html") ? "html" : file.endsWith(".css") ? "style" : "app",
+            file,
+            "Apache-2.0",
+          ),
+        ),
+      ),
+    );
   }
 
   const sharedChunks = (await listFiles(path.join(dist, "chunks")))
@@ -94,14 +98,55 @@ export async function emitRuntimeManifests(
     spec("product-frame-worker", "worker", "runtime/workers/product-frame.js", "Apache-2.0"),
     spec("motion-curves-worker", "worker", "runtime/workers/motion-curves.js", "Apache-2.0"),
     spec("studio-compile-worker", "worker", "runtime/workers/studio-compile.js", "Apache-2.0"),
-    spec("canvaskit-glue", "glue", "runtime/canvaskit/canvaskit.js", "BSD-3-Clause", "canvaskit", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
-    spec("canvaskit-wasm", "wasm", "runtime/canvaskit/canvaskit.wasm", "BSD-3-Clause", "canvaskit", `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
-    spec("canvaskit-license", "license", "runtime/licenses/canvaskit.txt", "BSD-3-Clause", undefined, `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`),
-    spec("mediabunny-license", "license", "runtime/licenses/mediabunny.txt", "MPL-2.0", undefined, `npm:mediabunny@${dependencyVersions.mediabunny}`),
-    spec("valle-third-party-notices", "license", "runtime/licenses/valle-and-third-party.txt", "Apache-2.0 AND MIT AND ISC AND OFL-1.1 AND CC-BY-4.0 AND MPL-2.0"),
+    spec(
+      "canvaskit-glue",
+      "glue",
+      "runtime/canvaskit/canvaskit.js",
+      "BSD-3-Clause",
+      "canvaskit",
+      `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`,
+    ),
+    spec(
+      "canvaskit-wasm",
+      "wasm",
+      "runtime/canvaskit/canvaskit.wasm",
+      "BSD-3-Clause",
+      "canvaskit",
+      `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`,
+    ),
+    spec(
+      "canvaskit-license",
+      "license",
+      "runtime/licenses/canvaskit.txt",
+      "BSD-3-Clause",
+      undefined,
+      `npm:canvaskit-wasm@${dependencyVersions.canvasKit}`,
+    ),
+    spec(
+      "mediabunny-license",
+      "license",
+      "runtime/licenses/mediabunny.txt",
+      "MPL-2.0",
+      undefined,
+      `npm:mediabunny@${dependencyVersions.mediabunny}`,
+    ),
+    spec(
+      "valle-third-party-notices",
+      "license",
+      "runtime/licenses/valle-and-third-party.txt",
+      "Apache-2.0 AND MIT AND ISC AND OFL-1.1 AND CC-BY-4.0 AND MPL-2.0",
+    ),
     ...sharedChunks.map((file, index) => spec(`shared-app-${index}`, "shared", file, "Apache-2.0")),
-    ...scene3dLookups.map((file, index) => spec(`scene3d-lookup-${index}`, "lookup", file,
-      "MIT", undefined, "https://github.com/mrdoob/three.js")),
+    ...scene3dLookups.map((file, index) =>
+      spec(
+        `scene3d-lookup-${index}`,
+        "lookup",
+        file,
+        "MIT",
+        undefined,
+        "https://github.com/mrdoob/three.js",
+      ),
+    ),
   ]);
 
   const packages = [engine, ...apps];
@@ -111,7 +156,9 @@ export async function emitRuntimeManifests(
     await writeJson(path.join(dist, manifestPath), manifest);
     packageRefs.push({ id: manifest.package, manifest: manifestPath });
   }
-  const assets = packages.flatMap((manifest) => manifest.assets).sort((a, b) => a.path.localeCompare(b.path));
+  const assets = packages
+    .flatMap((manifest) => manifest.assets)
+    .sort((a, b) => a.path.localeCompare(b.path));
   const routes = releaseRoutes(apps);
   const root: RootRuntimeManifest = {
     schemaVersion: RUNTIME_MANIFEST_SCHEMA_VERSION,
@@ -120,18 +167,37 @@ export async function emitRuntimeManifests(
     packages: packageRefs,
     assets,
     assetGroups: [
-      { id: "engine-core", glue: "runtime/engine/valle_engine.js", wasm: ["runtime/engine/valle_engine_bg.wasm"] },
-      { id: "canvaskit", glue: "runtime/canvaskit/canvaskit.js", wasm: ["runtime/canvaskit/canvaskit.wasm"] },
+      {
+        id: "engine-core",
+        glue: "runtime/engine/valle_engine.js",
+        wasm: ["runtime/engine/valle_engine_bg.wasm"],
+      },
+      {
+        id: "canvaskit",
+        glue: "runtime/canvaskit/canvaskit.js",
+        wasm: ["runtime/canvaskit/canvaskit.wasm"],
+      },
     ],
-    workers: [{ id: "product-frame", path: "runtime/workers/product-frame.js" }, { id: "motion-curves", path: "runtime/workers/motion-curves.js" }, { id: "studio-compile", path: "runtime/workers/studio-compile.js" }],
-    apps: [
-      { id: "studio", html: "apps/studio/index.html" },
+    workers: [
+      { id: "product-frame", path: "runtime/workers/product-frame.js" },
+      { id: "motion-curves", path: "runtime/workers/motion-curves.js" },
+      { id: "studio-compile", path: "runtime/workers/studio-compile.js" },
     ],
+    apps: [{ id: "studio", html: "apps/studio/index.html" }],
     routes,
     runtimeAssets: {
-      engine: { glue: "runtime/engine/valle_engine.js", wasm: "runtime/engine/valle_engine_bg.wasm" },
-      canvasKit: { glue: "runtime/canvaskit/canvaskit.js", wasm: "runtime/canvaskit/canvaskit.wasm" },
-      workers: { productFrame: "runtime/workers/product-frame.js", studioCompile: "runtime/workers/studio-compile.js" },
+      engine: {
+        glue: "runtime/engine/valle_engine.js",
+        wasm: "runtime/engine/valle_engine_bg.wasm",
+      },
+      canvasKit: {
+        glue: "runtime/canvaskit/canvaskit.js",
+        wasm: "runtime/canvaskit/canvaskit.wasm",
+      },
+      workers: {
+        productFrame: "runtime/workers/product-frame.js",
+        studioCompile: "runtime/workers/studio-compile.js",
+      },
     },
   };
   await writeJson(path.join(dist, "runtime", "manifest.json"), root);
@@ -139,15 +205,20 @@ export async function emitRuntimeManifests(
   return root;
 }
 
-export async function assertRuntimeManifest(dist: string, manifest: RootRuntimeManifest): Promise<void> {
-  if (manifest.schemaVersion !== RUNTIME_MANIFEST_SCHEMA_VERSION) throw new Error("runtime manifest schema drift");
+export async function assertRuntimeManifest(
+  dist: string,
+  manifest: RootRuntimeManifest,
+): Promise<void> {
+  if (manifest.schemaVersion !== RUNTIME_MANIFEST_SCHEMA_VERSION)
+    throw new Error("runtime manifest schema drift");
   if (!Number.isSafeInteger(manifest.protocolVersion) || manifest.protocolVersion <= 0) {
     throw new Error("runtime manifest protocolVersion is invalid");
   }
   const ids = new Set<string>();
   const paths = new Map<string, RuntimeAsset>();
   for (const asset of manifest.assets) {
-    if (ids.has(asset.id) || paths.has(asset.path)) throw new Error(`duplicate runtime asset '${asset.id}' / '${asset.path}'`);
+    if (ids.has(asset.id) || paths.has(asset.path))
+      throw new Error(`duplicate runtime asset '${asset.id}' / '${asset.path}'`);
     ids.add(asset.id);
     paths.set(asset.path, asset);
     if (!asset.license) throw new Error(`${asset.path}: license is required`);
@@ -161,25 +232,32 @@ export async function assertRuntimeManifest(dist: string, manifest: RootRuntimeM
     const members = [group.glue, ...group.wasm];
     if (group.wasm.length === 0) throw new Error(`${group.id}: wasm group is empty`);
     for (const member of members) {
-      if (paths.get(member)?.group !== group.id) throw new Error(`${group.id}: '${member}' is outside its glue+wasm group`);
+      if (paths.get(member)?.group !== group.id)
+        throw new Error(`${group.id}: '${member}' is outside its glue+wasm group`);
     }
   }
   for (const worker of manifest.workers) {
-    if (paths.get(worker.path)?.role !== "worker") throw new Error(`${worker.id}: worker output is outside the runtime closure`);
+    if (paths.get(worker.path)?.role !== "worker")
+      throw new Error(`${worker.id}: worker output is outside the runtime closure`);
   }
   for (const app of manifest.apps) {
-    if (paths.get(app.html)?.role !== "html") throw new Error(`${app.id}: app HTML is outside the runtime closure`);
+    if (paths.get(app.html)?.role !== "html")
+      throw new Error(`${app.id}: app HTML is outside the runtime closure`);
   }
   for (const [route, target] of Object.entries(manifest.routes)) {
     assertSafePath(route);
-    if (!paths.has(target)) throw new Error(`${route}: route target '${target}' is outside the runtime closure`);
+    if (!paths.has(target))
+      throw new Error(`${route}: route target '${target}' is outside the runtime closure`);
   }
   for (const runtimePath of flattenRuntimeAssets(manifest.runtimeAssets)) {
-    if (!paths.has(runtimePath)) throw new Error(`${runtimePath}: injected runtime URL is outside the closure`);
+    if (!paths.has(runtimePath))
+      throw new Error(`${runtimePath}: injected runtime URL is outside the closure`);
   }
   const packaged = new Set<string>();
   for (const reference of manifest.packages) {
-    const parsed = JSON.parse(await Bun.file(path.join(dist, reference.manifest)).text()) as PackageRuntimeManifest;
+    const parsed = JSON.parse(
+      await Bun.file(path.join(dist, reference.manifest)).text(),
+    ) as PackageRuntimeManifest;
     if (parsed.schemaVersion !== manifest.schemaVersion || parsed.package !== reference.id) {
       throw new Error(`${reference.manifest}: package manifest identity drift`);
     }
@@ -199,11 +277,22 @@ interface AssetSpec {
   source?: string;
 }
 
-function spec(id: string, role: string, assetPath: string, license: string, group?: string, source?: string): AssetSpec {
+function spec(
+  id: string,
+  role: string,
+  assetPath: string,
+  license: string,
+  group?: string,
+  source?: string,
+): AssetSpec {
   return { id, role, path: assetPath, license, group, source };
 }
 
-async function manifestOf(dist: string, owner: string, specs: AssetSpec[]): Promise<PackageRuntimeManifest> {
+async function manifestOf(
+  dist: string,
+  owner: string,
+  specs: AssetSpec[],
+): Promise<PackageRuntimeManifest> {
   const assets: RuntimeAsset[] = [];
   for (const value of specs) {
     const bytes = await Bun.file(path.join(dist, value.path)).bytes();
@@ -239,14 +328,15 @@ function flattenRuntimeAssets(value: RootRuntimeManifest["runtimeAssets"]): stri
 }
 
 function assertSafePath(value: string): void {
-  if (!value || value.startsWith("/") || value.split("/").includes("..")) throw new Error(`unsafe runtime path '${value}'`);
+  if (!value || value.startsWith("/") || value.split("/").includes(".."))
+    throw new Error(`unsafe runtime path '${value}'`);
 }
 
 async function listFiles(dir: string): Promise<string[]> {
   const files: string[] = [];
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const absolute = path.join(dir, entry.name);
-    if (entry.isDirectory()) files.push(...await listFiles(absolute));
+    if (entry.isDirectory()) files.push(...(await listFiles(absolute)));
     else files.push(absolute);
   }
   return files;

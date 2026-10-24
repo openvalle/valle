@@ -10,10 +10,12 @@ test("failed builds preserve the last runtime and successful builds replace obso
   try {
     await mkdir(output);
     await writeFile(path.join(output, "old.js"), "working runtime");
-    await expect(withBuildDirectory(output, async (next) => {
-      await writeFile(path.join(next, "partial.js"), "incomplete");
-      throw new Error("compiler failed");
-    })).rejects.toThrow("compiler failed");
+    await expect(
+      withBuildDirectory(output, async (next) => {
+        await writeFile(path.join(next, "partial.js"), "incomplete");
+        throw new Error("compiler failed");
+      }),
+    ).rejects.toThrow("compiler failed");
     expect(await readFile(path.join(output, "old.js"), "utf8")).toBe("working runtime");
     expect(await readdir(root)).toEqual(["dist"]);
     await withBuildDirectory(output, async (next) => {

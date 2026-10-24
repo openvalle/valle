@@ -1,8 +1,14 @@
 import type { Canvas, CanvasKit, Image } from "canvaskit-wasm";
 
 export interface SrgbPreviewCpuKernel {
-  transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void | Float32Array | Promise<Float32Array>;
-  transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void | Uint8Array | Promise<Uint8Array>;
+  transform_srgb_preview_pixels(
+    pixels: Float32Array,
+    opaque: boolean,
+  ): void | Float32Array | Promise<Float32Array>;
+  transform_srgb_preview_f16?(
+    pixels: Uint8Array,
+    opaque: boolean,
+  ): void | Uint8Array | Promise<Uint8Array>;
 }
 
 const SCRATCH_ROWS = 64;
@@ -24,7 +30,8 @@ export async function drawSrgbPreviewCpu(
   opaque: boolean,
   requireFullCoverage = false,
 ): Promise<boolean> {
-  const width = input.width(), height = input.height();
+  const width = input.width(),
+    height = input.height();
   // An explicit destination also avoids CanvasKit 0.42's default RGBA_F32 reader treating
   // its byte length as a float count. The byte view can be written back without another copy.
   const rows = Math.min(height, SCRATCH_ROWS);
@@ -34,12 +41,19 @@ export async function drawSrgbPreviewCpu(
   const memory = CanvasKit.Malloc(Uint8Array, width * rows * pixelBytes);
   try {
     const readRows = (y: number, count: number) => {
-      const bytes = input.readPixels(0, y, {
-        width, height: count,
-        colorType,
-        alphaType: CanvasKit.AlphaType.Premul,
-        colorSpace: CanvasKit.ColorSpace.SRGB,
-      }, memory, width * pixelBytes);
+      const bytes = input.readPixels(
+        0,
+        y,
+        {
+          width,
+          height: count,
+          colorType,
+          alphaType: CanvasKit.AlphaType.Premul,
+          colorSpace: CanvasKit.ColorSpace.SRGB,
+        },
+        memory,
+        width * pixelBytes,
+      );
       if (!bytes) throw new Error("cannot read CPU output float pixels");
       return new Uint8Array(bytes.buffer, bytes.byteOffset, width * count * pixelBytes);
     };
@@ -64,16 +78,35 @@ export async function drawSrgbPreviewCpu(
       const count = Math.min(rows, height - y);
       const pixels = readRows(y, count);
       const byteLength = pixels.byteLength;
-      const transformed = f16 ? await kernel.transform_srgb_preview_f16!(pixels, opaque)
-        : await kernel.transform_srgb_preview_pixels(new Float32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength / 4), opaque);
+      const transformed = f16
+        ? await kernel.transform_srgb_preview_f16!(pixels, opaque)
+        : await kernel.transform_srgb_preview_pixels(
+            new Float32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength / 4),
+            opaque,
+          );
       // MallocObj.subarray keeps CanvasKit's direct-memory marker, including short stripes.
       const bytes = memory.subarray(0, byteLength) as Uint8Array;
-      if (transformed) bytes.set(new Uint8Array(transformed.buffer, transformed.byteOffset, transformed.byteLength));
-      if (!canvas.writePixels(bytes, width, count, 0, y,
-        CanvasKit.AlphaType.Premul, colorType, CanvasKit.ColorSpace.SRGB)) {
+      if (transformed)
+        bytes.set(
+          new Uint8Array(transformed.buffer, transformed.byteOffset, transformed.byteLength),
+        );
+      if (
+        !canvas.writePixels(
+          bytes,
+          width,
+          count,
+          0,
+          y,
+          CanvasKit.AlphaType.Premul,
+          colorType,
+          CanvasKit.ColorSpace.SRGB,
+        )
+      ) {
         throw new Error("cannot write CPU output float pixels");
       }
     }
     return true;
-  } finally { CanvasKit.Free(memory); }
+  } finally {
+    CanvasKit.Free(memory);
+  }
 }

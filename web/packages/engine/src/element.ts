@@ -67,7 +67,9 @@ export class VallePlayerElement extends LitElement {
       place-items: center;
       padding: 1.5rem;
       background: color-mix(in srgb, #08111f 88%, transparent);
-      font: 500 0.875rem/1.5 system-ui, sans-serif;
+      font:
+        500 0.875rem/1.5 system-ui,
+        sans-serif;
       text-align: center;
     }
 
@@ -182,12 +184,12 @@ export class VallePlayerElement extends LitElement {
 
   protected updated(changed: PropertyValues<this>): void {
     if (
-      changed.has("fixedPackageManifestJson")
-      || changed.has("timelineJson")
-      || changed.has("resourceManifestJson")
-      || changed.has("verifiedBindingBundleJson")
-      || changed.has("runtimeAssets")
-      || changed.has("runtimeBaseUrl")
+      changed.has("fixedPackageManifestJson") ||
+      changed.has("timelineJson") ||
+      changed.has("resourceManifestJson") ||
+      changed.has("verifiedBindingBundleJson") ||
+      changed.has("runtimeAssets") ||
+      changed.has("runtimeBaseUrl")
     ) {
       this.#loadWhenConfigured();
     }
@@ -253,9 +255,9 @@ export class VallePlayerElement extends LitElement {
     try {
       await controller.load();
       if (
-        generation !== this.#connectionGeneration
-        || !this.isConnected
-        || this.#controller !== controller
+        generation !== this.#connectionGeneration ||
+        !this.isConnected ||
+        this.#controller !== controller
       ) {
         await controller.dispose();
         return;
@@ -289,14 +291,18 @@ export class VallePlayerElement extends LitElement {
     return this.captureFrame(timeS);
   }
 
-  replaceRenderPackage(next: ValleRenderPackageReplacement): Promise<ValleRenderResult | undefined> {
+  replaceRenderPackage(
+    next: ValleRenderPackageReplacement,
+  ): Promise<ValleRenderResult | undefined> {
     return this.#requiredController("replaceRenderPackage").replaceRenderPackage(next);
   }
 
   canonicalizeTimelineDocument(
     timeline: Parameters<VallePlayerRuntime["canonicalizeTimelineDocument"]>[0],
   ) {
-    return this.#requiredController("canonicalizeTimelineDocument").canonicalizeTimelineDocument(timeline);
+    return this.#requiredController("canonicalizeTimelineDocument").canonicalizeTimelineDocument(
+      timeline,
+    );
   }
 
   currentTime(): number {
@@ -323,11 +329,7 @@ export class VallePlayerElement extends LitElement {
     return this.#runtime("set muted").setMuted(value);
   }
 
-  renderAudioOffline(
-    startS: number,
-    endS: number,
-    options?: OfflineAudioOptions,
-  ) {
+  renderAudioOffline(startS: number, endS: number, options?: OfflineAudioOptions) {
     return this.#runtime("render audio offline").renderAudioOffline(startS, endS, options);
   }
 
@@ -338,16 +340,11 @@ export class VallePlayerElement extends LitElement {
     return this.#runtime("extract video thumbnails").videoKeyframeThumbnails(assetId, options);
   }
 
-  audioPeaks(
-    assetId: string,
-    options?: Parameters<VallePlayerRuntime["audioPeaks"]>[1],
-  ) {
+  audioPeaks(assetId: string, options?: Parameters<VallePlayerRuntime["audioPeaks"]>[1]) {
     return this.#runtime("extract audio peaks").audioPeaks(assetId, options);
   }
 
-  motionInspection(
-    ...args: Parameters<VallePlayerRuntime["motionInspection"]>
-  ) {
+  motionInspection(...args: Parameters<VallePlayerRuntime["motionInspection"]>) {
     return this.#runtime("inspect Motion frame").motionInspection(...args);
   }
 
@@ -391,25 +388,33 @@ export class VallePlayerElement extends LitElement {
       if (this.#controller !== controller && event.detail.state !== "disposed") return;
       this.state = event.detail.state;
       if (event.detail.state === "ready") this.errorMessage = "";
-      this.dispatchEvent(new CustomEvent("statechange", {
-        detail: event.detail,
-        bubbles: true,
-        composed: true,
-      }));
+      this.dispatchEvent(
+        new CustomEvent("statechange", {
+          detail: event.detail,
+          bubbles: true,
+          composed: true,
+        }),
+      );
     });
     for (const type of RELAYED_EVENTS) {
       controller.addEventListener(type, (event: VallePlayerEventMap[typeof type]) => {
         if (this.#controller !== controller) return;
         if (type === "render") this.errorMessage = "";
-        if (type === "error" && ((event as VallePlayerEventMap["error"]).detail.operation !== "replaceRenderPackage" || controller.state !== "ready")) {
+        if (
+          type === "error" &&
+          ((event as VallePlayerEventMap["error"]).detail.operation !== "replaceRenderPackage" ||
+            controller.state !== "ready")
+        ) {
           const error = (event as VallePlayerEventMap["error"]).detail.error;
           this.errorMessage = error instanceof Error ? error.message : String(error);
         }
-        this.dispatchEvent(new CustomEvent(type, {
-          detail: event.detail,
-          bubbles: true,
-          composed: true,
-        }));
+        this.dispatchEvent(
+          new CustomEvent(type, {
+            detail: event.detail,
+            bubbles: true,
+            composed: true,
+          }),
+        );
       });
     }
   }

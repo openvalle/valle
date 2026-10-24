@@ -46,13 +46,19 @@ export type BuiltinKernel = keyof typeof BUILTIN_SOURCES;
 // Alpha8, where neither color management nor premultiplication can alter the numeric ABI.
 const depthRead = "float4 b = floor(float4(packedDepth.eval(p + 0.5)) * 255.0 + 0.5);";
 if (!scene3dDofSource.includes(depthRead)) throw new Error("Scene3D depth shader ABI drifted");
-const scene3dDof = scene3dDofSource.replace(depthRead, `float4 b = floor(float4(
+const scene3dDof = scene3dDofSource
+  .replace(
+    depthRead,
+    `float4 b = floor(float4(
     packedDepth.eval(p + float2(0.125, 0.5)).a,
     packedDepth.eval(p + float2(0.375, 0.5)).a,
     packedDepth.eval(p + float2(0.625, 0.5)).a,
-    packedDepth.eval(p + float2(0.875, 0.5)).a) * 255.0 + 0.5);`)
-  .replace("if (exponent == 254.0 && mantissa == 8388607.0)",
-    "if ((exponent == 254.0 && mantissa == 8388607.0) || (exponent == 0.0 && mantissa == 0.0))");
+    packedDepth.eval(p + float2(0.875, 0.5)).a) * 255.0 + 0.5);`,
+  )
+  .replace(
+    "if (exponent == 254.0 && mantissa == 8388607.0)",
+    "if ((exponent == 254.0 && mantissa == 8388607.0) || (exponent == 0.0 && mantissa == 0.0))",
+  );
 
 const BUILTIN_SOURCES = Object.freeze({
   chromaKey: chromaKeySource,
@@ -97,9 +103,7 @@ const BUILTIN_SOURCES = Object.freeze({
 });
 
 /** Closed built-in set, exported so admission tests cannot silently omit a newly added kernel. */
-export const BUILTIN_KERNELS = Object.freeze(
-  Object.keys(BUILTIN_SOURCES) as BuiltinKernel[],
-);
+export const BUILTIN_KERNELS = Object.freeze(Object.keys(BUILTIN_SOURCES) as BuiltinKernel[]);
 
 /**
  * One backend-owned cache for the compositor's closed built-in kernel set. The SkSL source is
@@ -114,22 +118,36 @@ export class CanvasKitBuiltinRuntime {
   admit(kernels: Iterable<BuiltinKernel>): void {
     for (const kernel of new Set(kernels)) {
       this.effect(kernel);
-      if (TRANSITION_KERNELS.has(kernel) || kernel.startsWith("pyramid") || kernel === "lensDistortion" || kernel === "scene3dDof") this.effect("workingF16");
+      if (
+        TRANSITION_KERNELS.has(kernel) ||
+        kernel.startsWith("pyramid") ||
+        kernel === "lensDistortion" ||
+        kernel === "scene3dDof"
+      )
+        this.effect("workingF16");
     }
   }
 
-  shader(kernel: BuiltinKernel, uniforms: ArrayLike<number>, children: readonly Shader[],
-    roundWorkingF16 = TRANSITION_KERNELS.has(kernel)): Shader {
+  shader(
+    kernel: BuiltinKernel,
+    uniforms: ArrayLike<number>,
+    children: readonly Shader[],
+    roundWorkingF16 = TRANSITION_KERNELS.has(kernel),
+  ): Shader {
     const effect = this.effect(kernel);
     const packed = uniforms instanceof Float32Array ? uniforms : Float32Array.from(uniforms);
     const shader = effect.makeShaderWithChildren(packed, [...children]);
     if (!shader) throw new Error(`built-in CanvasKit kernel '${kernel}' rejected its typed ABI`);
     if (!roundWorkingF16) return shader;
     try {
-      const rounded = this.effect("workingF16").makeShaderWithChildren(new Float32Array(), [shader]);
+      const rounded = this.effect("workingF16").makeShaderWithChildren(new Float32Array(), [
+        shader,
+      ]);
       if (!rounded) throw new Error("working F16 quantization rejected its ABI");
       return rounded;
-    } finally { shader.delete(); }
+    } finally {
+      shader.delete();
+    }
   }
 
   dispose(): void {
@@ -144,7 +162,8 @@ export class CanvasKitBuiltinRuntime {
     const effect = this.CanvasKit.RuntimeEffect.Make(BUILTIN_SOURCES[kernel], (message) => {
       detail = message;
     });
-    if (!effect) throw new Error(`built-in CanvasKit kernel '${kernel}' failed admission: ${detail}`);
+    if (!effect)
+      throw new Error(`built-in CanvasKit kernel '${kernel}' failed admission: ${detail}`);
     this.effects.set(kernel, effect);
     return effect;
   }

@@ -35,7 +35,11 @@ export function preparedMotionProps(
       continue;
     }
     const resolved = prepared[name] ?? schema.default;
-    if (isRecord(resolved) && typeof resolved.kind === "string" && Object.hasOwn(resolved, "value")) {
+    if (
+      isRecord(resolved) &&
+      typeof resolved.kind === "string" &&
+      Object.hasOwn(resolved, "value")
+    ) {
       result[name] = structuredClone(resolved) as { kind: string; value: unknown };
     }
   }
@@ -46,14 +50,18 @@ export function findMotionStructure(
   motion: unknown,
   clipId: string,
 ): Record<string, unknown> | null {
-  return arrayOfRecords(record(motion).structures).find((candidate) => candidate.clipId === clipId) ?? null;
+  return (
+    arrayOfRecords(record(motion).structures).find((candidate) => candidate.clipId === clipId) ??
+    null
+  );
 }
 
 function findTimelineClip(timeline: TimelineDocument, clipId: string): VisualClip | null {
   for (const track of timeline.document.visual.tracks) {
-    const clip = track.items.find((candidate: VisualItem): candidate is VisualClip => (
-      candidate.type === "clip" && candidate.id === clipId
-    ));
+    const clip = track.items.find(
+      (candidate: VisualItem): candidate is VisualClip =>
+        candidate.type === "clip" && candidate.id === clipId,
+    );
     if (clip) return clip;
   }
   return null;

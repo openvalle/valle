@@ -11,258 +11,866 @@ import { transitionLabels } from "../../../apps/studio/src/timeline-edit.ts";
 
 const root = resolve(import.meta.dir, "../../../../");
 const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
-const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
+const { default: CanvasKitInit } = (await import("canvaskit-wasm")) as unknown as {
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
-type Fixture = { name:string; command:"motion"|"timeline"; content:string; width:number; height:number; frames:number[]; reference?:string; referenceOffset?:number; different?:string; parity?:number; native?:false; probe?:(pixels:Uint8Array,frame:number)=>void };
-const motion = (body:string) => `export const composition={width:96,height:64,fps:4,duration:1.25};
+type Fixture = {
+  name: string;
+  command: "motion" | "timeline";
+  content: string;
+  width: number;
+  height: number;
+  frames: number[];
+  reference?: string;
+  referenceOffset?: number;
+  different?: string;
+  parity?: number;
+  native?: false;
+  probe?: (pixels: Uint8Array, frame: number) => void;
+};
+const motion = (body: string) => `export const composition={width:96,height:64,fps:4,duration:1.25};
 export default function T(){const time = useCurrentTime();return <Scene style={{width:96,height:64,backgroundColor:"#ffffff"}}>${body}</Scene>;}`;
-const view = (color:string,extra="") => `<View style={{width:96,height:64,backgroundColor:"${color}"${extra}}}/>`;
+const view = (color: string, extra = "") =>
+  `<View style={{width:96,height:64,backgroundColor:"${color}"${extra}}}/>`;
 // clipProgress runs from 0 on the first frame to 1 on the last, as a Timeline transition does.
-const transition = (kind:string,from:string,to:string,extra="",progress="time.clipProgress") => `<Transition kind="${kind}" progress={${progress}} style={{width:96,height:64${extra}}}>${from}${to}</Transition>`;
-const diff = (a:Uint8Array,b:Uint8Array) => { let max=0; expect(a.length).toBe(b.length); for(let i=0;i<a.length;i++) max=Math.max(max,Math.abs(a[i]!-b[i]!));return max; };
-const pixel = (pixels:Uint8Array,width:number,x:number,y:number,rgba:number[]) => {
-  for(const [c,value] of rgba.entries()) expect(Math.abs(pixels[(y*width+x)*4+c]!-value)).toBeLessThanOrEqual(2);
+const transition = (
+  kind: string,
+  from: string,
+  to: string,
+  extra = "",
+  progress = "time.clipProgress",
+) =>
+  `<Transition kind="${kind}" progress={${progress}} style={{width:96,height:64${extra}}}>${from}${to}</Transition>`;
+const diff = (a: Uint8Array, b: Uint8Array) => {
+  let max = 0;
+  expect(a.length).toBe(b.length);
+  for (let i = 0; i < a.length; i++) max = Math.max(max, Math.abs(a[i]! - b[i]!));
+  return max;
+};
+const pixel = (pixels: Uint8Array, width: number, x: number, y: number, rgba: number[]) => {
+  for (const [c, value] of rgba.entries())
+    expect(Math.abs(pixels[(y * width + x) * 4 + c]! - value)).toBeLessThanOrEqual(2);
 };
 
 test("Motion Transition shares all Timeline kernels and preserves nested subtree semantics across backends", async () => {
-  const ck = await CanvasKitInit({ locateFile:()=>Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm",import.meta.dir) });
-  initSync({module:await readFile(join(root,"web/packages/engine/generated/web/valle_engine_bg.wasm"))});
-  const dir = await mkdtemp(join(tmpdir(),"valle-motion-transitions-"));
-  const spawn = (args:string[]) => Bun.spawn([cli,"--json",...args],{cwd:dir,env:{...process.env,VALLE_HOME:join(dir,"home")},stdout:"pipe",stderr:"pipe"});
+  const ck = await CanvasKitInit({
+    locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir),
+  });
+  initSync({
+    module: await readFile(join(root, "web/packages/engine/generated/web/valle_engine_bg.wasm")),
+  });
+  const dir = await mkdtemp(join(tmpdir(), "valle-motion-transitions-"));
+  const spawn = (args: string[]) =>
+    Bun.spawn([cli, "--json", ...args], {
+      cwd: dir,
+      env: { ...process.env, VALLE_HOME: join(dir, "home") },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
   const cases: Fixture[] = [];
   const parameters: Record<string, Record<string, number>> = {
-    wipeLeft:{softness:0.25}, wipeRight:{softness:0.25}, circleOpen:{centerX:0.2,centerY:0.3,softness:4},
-    simpleZoom:{quickness:0.4,centerX:0.2,centerY:0.7}, crossWarp:{centerX:0.2,centerY:0.7},
-    linearBlur:{intensity:0.8}, directionalWarp:{directionX:0.6,directionY:-0.5,softness:0.2},
-    dreamyZoom:{strength:1.5,centerX:0.2,centerY:0.7}, ripple:{frequency:20,speed:12,amplitude:0.2},
-    flyEye:{size:0.2,frequency:8,colorSeparation:0.8}, multiplyBlend:{midpoint:0.2}, perlin:{scale:12,smoothness:0.03},
+    wipeLeft: { softness: 0.25 },
+    wipeRight: { softness: 0.25 },
+    circleOpen: { centerX: 0.2, centerY: 0.3, softness: 4 },
+    simpleZoom: { quickness: 0.4, centerX: 0.2, centerY: 0.7 },
+    crossWarp: { centerX: 0.2, centerY: 0.7 },
+    linearBlur: { intensity: 0.8 },
+    directionalWarp: { directionX: 0.6, directionY: -0.5, softness: 0.2 },
+    dreamyZoom: { strength: 1.5, centerX: 0.2, centerY: 0.7 },
+    ripple: { frequency: 20, speed: 12, amplitude: 0.2 },
+    flyEye: { size: 0.2, frequency: 8, colorSeparation: 0.8 },
+    multiplyBlend: { midpoint: 0.2 },
+    perlin: { scale: 12, smoothness: 0.03 },
   };
   const patternedFrom = `<View style={{position:'absolute',width:64,height:48,left:12,top:8,backgroundImage:"linear-gradient(90deg in srgb, red, blue)",opacity:0.6,borderRadius:12}}/>`;
   const patternedTo = `<Mask rect={rect(0,0,96,64)} style={{width:96,height:64}}><MaskSource><Circle cx={48} cy={32} r={22} fill="#fff"/></MaskSource>${view("#00ff00")}</Mask>`;
-  const sourceClip = (body:string) => `export const composition={width:96,height:64,fps:4,duration:3}; export default function T(){return <Scene style={{width:96,height:64}}>${body}</Scene>;}`;
-  await writeFile(join(dir,"param-from.motion.tsx"),sourceClip(patternedFrom));
-  await writeFile(join(dir,"param-to.motion.tsx"),sourceClip(patternedTo));
-  for(const kind of Object.keys(transitionLabels)) {
+  const sourceClip = (body: string) =>
+    `export const composition={width:96,height:64,fps:4,duration:3}; export default function T(){return <Scene style={{width:96,height:64}}>${body}</Scene>;}`;
+  await writeFile(join(dir, "param-from.motion.tsx"), sourceClip(patternedFrom));
+  await writeFile(join(dir, "param-to.motion.tsx"), sourceClip(patternedTo));
+  for (const kind of Object.keys(transitionLabels)) {
     const name = `motion-${kind}`;
-    cases.push({name,command:"motion",content:motion(transition(kind,view("#404040"),view("#c0c0c0"))),width:96,height:64,frames:[2,0,4,2]});
-    cases.push({name:`timeline-${kind}`,command:"timeline",content:JSON.stringify({
-      canvas:{width:96,height:64,fps:4,background:"#ffffff"},tracks:{visual:[{clips:[
-        {kind:"solid",color:"#404040",start:0,duration:1.5},
-        {kind:"solid",color:"#c0c0c0",start:0.25,duration:2},
-      ],transitions:[{from:0,to:1,kind}]}]},
-    }),width:96,height:64,frames:[3,1,5,3],reference:name,referenceOffset:-1});
-    cases.push({name:`empty-${kind}`,command:"motion",content:motion(transition(kind,"<View/>","<View/>")),width:96,height:64,frames:[2,0,4],probe:(p)=>pixel(p,96,48,32,[255,255,255,255])});
-    const from = patternedFrom, to = patternedTo;
-    cases.push({name:`pattern-${kind}`,command:"motion",content:motion(transition(kind,from,to)),width:96,height:64,frames:[2,0,4,2],reference:kind==="fade" ? undefined:"pattern-fade"});
+    cases.push({
+      name,
+      command: "motion",
+      content: motion(transition(kind, view("#404040"), view("#c0c0c0"))),
+      width: 96,
+      height: 64,
+      frames: [2, 0, 4, 2],
+    });
+    cases.push({
+      name: `timeline-${kind}`,
+      command: "timeline",
+      content: JSON.stringify({
+        canvas: { width: 96, height: 64, fps: 4, background: "#ffffff" },
+        tracks: {
+          visual: [
+            {
+              clips: [
+                { kind: "solid", color: "#404040", start: 0, duration: 1.5 },
+                { kind: "solid", color: "#c0c0c0", start: 0.25, duration: 2 },
+              ],
+              transitions: [{ from: 0, to: 1, kind }],
+            },
+          ],
+        },
+      }),
+      width: 96,
+      height: 64,
+      frames: [3, 1, 5, 3],
+      reference: name,
+      referenceOffset: -1,
+    });
+    cases.push({
+      name: `empty-${kind}`,
+      command: "motion",
+      content: motion(transition(kind, "<View/>", "<View/>")),
+      width: 96,
+      height: 64,
+      frames: [2, 0, 4],
+      probe: (p) => pixel(p, 96, 48, 32, [255, 255, 255, 255]),
+    });
+    const from = patternedFrom,
+      to = patternedTo;
+    cases.push({
+      name: `pattern-${kind}`,
+      command: "motion",
+      content: motion(transition(kind, from, to)),
+      width: 96,
+      height: 64,
+      frames: [2, 0, 4, 2],
+      reference: kind === "fade" ? undefined : "pattern-fade",
+    });
     const params = parameters[kind];
     if (params) {
-      const parameterized = transition(kind,from,to).replace(" progress=", ` params={${JSON.stringify(params)}} progress=`);
-      cases.push({name:`param-motion-${kind}`,command:"motion",content:motion(parameterized),width:96,height:64,frames:[2,0,4,2],different:`pattern-${kind}`});
-      cases.push({name:`param-timeline-${kind}`,command:"timeline",content:JSON.stringify({
-        canvas:{width:96,height:64,fps:4,background:"#ffffff"}, resources:{from:"param-from.motion.tsx",to:"param-to.motion.tsx"},
-        tracks:{visual:[{clips:[
-          {kind:"motion",component:"from",start:0,duration:1.5},
-          {kind:"motion",component:"to",start:0.25,duration:2},
-        ],transitions:[{from:0,to:1,kind,params}]}]},
-      }),width:96,height:64,frames:[3,1,5,3],reference:`param-motion-${kind}`,referenceOffset:-1});
+      const parameterized = transition(kind, from, to).replace(
+        " progress=",
+        ` params={${JSON.stringify(params)}} progress=`,
+      );
+      cases.push({
+        name: `param-motion-${kind}`,
+        command: "motion",
+        content: motion(parameterized),
+        width: 96,
+        height: 64,
+        frames: [2, 0, 4, 2],
+        different: `pattern-${kind}`,
+      });
+      cases.push({
+        name: `param-timeline-${kind}`,
+        command: "timeline",
+        content: JSON.stringify({
+          canvas: { width: 96, height: 64, fps: 4, background: "#ffffff" },
+          resources: { from: "param-from.motion.tsx", to: "param-to.motion.tsx" },
+          tracks: {
+            visual: [
+              {
+                clips: [
+                  { kind: "motion", component: "from", start: 0, duration: 1.5 },
+                  { kind: "motion", component: "to", start: 0.25, duration: 2 },
+                ],
+                transitions: [{ from: 0, to: 1, kind, params }],
+              },
+            ],
+          },
+        }),
+        width: 96,
+        height: 64,
+        frames: [3, 1, 5, 3],
+        reference: `param-motion-${kind}`,
+        referenceOffset: -1,
+      });
       // Animate the first parameter at fixed transition progress to catch stale geometry/schedules.
       const [animated, value] = Object.entries(params)[0]!;
-      const expression = JSON.stringify(params).replace(`"${animated}":${value}`, `"${animated}":${value}*(0.5+time.clipProgress)`);
-      cases.push({name:`param-dynamic-${kind}`,command:"motion",content:motion(transition(kind,from,to,"","0.5").replace(" progress=",` params={${expression}} progress=`)),width:96,height:64,frames:[2,0,4,2],probe:(pixels,frame)=>{
-        if(frame===2)expect(diff(pixels,images.get(`param-motion-${kind}/2`)!)).toBeLessThanOrEqual(2);
-        if(frame===4)expect(diff(pixels,images.get(`param-dynamic-${kind}/0`)!),`${kind} animated parameter changes pixels`).toBeGreaterThan(2);
-      }});
+      const expression = JSON.stringify(params).replace(
+        `"${animated}":${value}`,
+        `"${animated}":${value}*(0.5+time.clipProgress)`,
+      );
+      cases.push({
+        name: `param-dynamic-${kind}`,
+        command: "motion",
+        content: motion(
+          transition(kind, from, to, "", "0.5").replace(
+            " progress=",
+            ` params={${expression}} progress=`,
+          ),
+        ),
+        width: 96,
+        height: 64,
+        frames: [2, 0, 4, 2],
+        probe: (pixels, frame) => {
+          if (frame === 2)
+            expect(diff(pixels, images.get(`param-motion-${kind}/2`)!)).toBeLessThanOrEqual(2);
+          if (frame === 4)
+            expect(
+              diff(pixels, images.get(`param-dynamic-${kind}/0`)!),
+              `${kind} animated parameter changes pixels`,
+            ).toBeGreaterThan(2);
+        },
+      });
     }
-    for (const customized of params ? [false,true] : [false]) {
-      let body = transition(kind,from,to,"","time.seconds < 0.5 ? 0.000001 : 0.999999");
-      if (customized) body = body.replace(" progress=", ` params={${JSON.stringify(params)}} progress=`);
-      cases.push({name:`edge-${customized?"param-":""}${kind}`,command:"motion",content:motion(body),
-        width:96,height:64,frames:[0,4],reference:customized?`param-motion-${kind}`:`pattern-${kind}`});
+    for (const customized of params ? [false, true] : [false]) {
+      let body = transition(kind, from, to, "", "time.seconds < 0.5 ? 0.000001 : 0.999999");
+      if (customized)
+        body = body.replace(" progress=", ` params={${JSON.stringify(params)}} progress=`);
+      cases.push({
+        name: `edge-${customized ? "param-" : ""}${kind}`,
+        command: "motion",
+        content: motion(body),
+        width: 96,
+        height: 64,
+        frames: [0, 4],
+        reference: customized ? `param-motion-${kind}` : `pattern-${kind}`,
+      });
     }
   }
   // Endpoint identity must hold for any kernel; intermediate patterns deliberately differ.
-  const motionTransition = await readFile(join(root,"crates/valle-compiler/tests/fixtures/motion/composition/motion-transition.motion.tsx"),"utf8");
+  const motionTransition = await readFile(
+    join(
+      root,
+      "crates/valle-compiler/tests/fixtures/motion/composition/motion-transition.motion.tsx",
+    ),
+    "utf8",
+  );
   // The scene's last frame shows its end, the open circle, a frame before the Timeline's does.
-  cases.push({name:"motion-transition",command:"motion",content:motionTransition,width:640,height:360,frames:[30,0,58,59,30],probe:(p,f)=>{
-    pixel(p,640,320,180,f===0?[33,64,255,255]:[255,74,36,255]);
-    pixel(p,640,0,0,f===59?[255,74,36,255]:[33,64,255,255]);
-  }});
-  cases.push({name:"motion-transition-timeline",command:"timeline",content:JSON.stringify({canvas:{width:640,height:360,fps:30,background:"#101010"},tracks:{visual:[{clips:[
-    {kind:"solid",color:"#2140ff",start:0,duration:91/30},{kind:"solid",color:"#ff4a24",start:1,duration:3},
-  ],transitions:[{from:0,to:1,kind:"circleOpen"}]}]}}),width:640,height:360,frames:[60,30,88,60],reference:"motion-transition",referenceOffset:-30});
-  const extra: Array<[string,string,(p:Uint8Array,f:number)=>void]> = [
-    ["simpleZoom-settles",transition("simpleZoom",patternedFrom,patternedTo,"","0.9999"),(p)=>{
-      pixel(p,96,48,32,[0,255,0,255]);pixel(p,96,0,0,[255,255,255,255]);pixel(p,96,95,63,[255,255,255,255]);
-    }],
-    ["z-order",transition("fade",view("#404040",",zIndex:5"),view("#c0c0c0",",zIndex:-5")),(p,f)=>pixel(p,96,48,32,[...Array(3).fill(f===0?64:f===4?192:146),255])],
-    ["hidden",transition("fade",'<View style={{display:"none"}}/>',view("#000000")),(p,f)=>pixel(p,96,48,32,[...Array(3).fill(f===0?255:f===4?0:188),255])],
-    ["inactive",transition("fade",'<View visible={false}/>',view("#000000")),(p,f)=>pixel(p,96,48,32,[...Array(3).fill(f===0?255:f===4?0:188),255])],
-    ["nested",transition("fade",transition("fade",view("#000000"),view("#ffffff"),"","0.5"),view("#000000")),(p,f)=>pixel(p,96,48,32,[...Array(3).fill(f===0?188:f===4?0:137),255])],
-    ["owner-offset",transition("fade",view("#000000"),view("#000000"),",position:'absolute',left:24,top:16,width:48,height:32,opacity:0.5"),(p)=>{pixel(p,96,30,30,[188,188,188,255]);pixel(p,96,1,1,[255,255,255,255]);}],
-    ["semantic-isolation",transition("fade",view("#000000",",isolation:'auto'"),view("#ffffff",",isolation:'auto'"),",isolation:'auto'"),(p,f)=>pixel(p,96,48,32,[...Array(3).fill(f===0?0:f===4?255:188),255])],
-    ["input-destination",transition("fade",view("#ff0000"),view("#404040",",mixBlendMode:'screen'")),(p,f)=>{if(f===4)pixel(p,96,48,32,[64,64,64,255]);}],
-    ["owner-transform",transition("ripple",view("#404040"),view("#c0c0c0"),",transform:'rotate(17deg) scale(0.6,0.75)'"),()=>{}],
-    ["owner-filter",transition("fade",view("#404040"),view("#c0c0c0"),",filter:'blur(3px)'"),()=>{}],
-    ["owner-clip",transition("fade",view("#000000"),view("#000000"),",borderRadius:32,overflow:'hidden'"),(p)=>{pixel(p,96,48,32,[0,0,0,255]);pixel(p,96,0,0,[255,255,255,255]);}],
+  cases.push({
+    name: "motion-transition",
+    command: "motion",
+    content: motionTransition,
+    width: 640,
+    height: 360,
+    frames: [30, 0, 58, 59, 30],
+    probe: (p, f) => {
+      pixel(p, 640, 320, 180, f === 0 ? [33, 64, 255, 255] : [255, 74, 36, 255]);
+      pixel(p, 640, 0, 0, f === 59 ? [255, 74, 36, 255] : [33, 64, 255, 255]);
+    },
+  });
+  cases.push({
+    name: "motion-transition-timeline",
+    command: "timeline",
+    content: JSON.stringify({
+      canvas: { width: 640, height: 360, fps: 30, background: "#101010" },
+      tracks: {
+        visual: [
+          {
+            clips: [
+              { kind: "solid", color: "#2140ff", start: 0, duration: 91 / 30 },
+              { kind: "solid", color: "#ff4a24", start: 1, duration: 3 },
+            ],
+            transitions: [{ from: 0, to: 1, kind: "circleOpen" }],
+          },
+        ],
+      },
+    }),
+    width: 640,
+    height: 360,
+    frames: [60, 30, 88, 60],
+    reference: "motion-transition",
+    referenceOffset: -30,
+  });
+  const extra: Array<[string, string, (p: Uint8Array, f: number) => void]> = [
+    [
+      "simpleZoom-settles",
+      transition("simpleZoom", patternedFrom, patternedTo, "", "0.9999"),
+      (p) => {
+        pixel(p, 96, 48, 32, [0, 255, 0, 255]);
+        pixel(p, 96, 0, 0, [255, 255, 255, 255]);
+        pixel(p, 96, 95, 63, [255, 255, 255, 255]);
+      },
+    ],
+    [
+      "z-order",
+      transition("fade", view("#404040", ",zIndex:5"), view("#c0c0c0", ",zIndex:-5")),
+      (p, f) => pixel(p, 96, 48, 32, [...Array(3).fill(f === 0 ? 64 : f === 4 ? 192 : 146), 255]),
+    ],
+    [
+      "hidden",
+      transition("fade", '<View style={{display:"none"}}/>', view("#000000")),
+      (p, f) => pixel(p, 96, 48, 32, [...Array(3).fill(f === 0 ? 255 : f === 4 ? 0 : 188), 255]),
+    ],
+    [
+      "inactive",
+      transition("fade", "<View visible={false}/>", view("#000000")),
+      (p, f) => pixel(p, 96, 48, 32, [...Array(3).fill(f === 0 ? 255 : f === 4 ? 0 : 188), 255]),
+    ],
+    [
+      "nested",
+      transition(
+        "fade",
+        transition("fade", view("#000000"), view("#ffffff"), "", "0.5"),
+        view("#000000"),
+      ),
+      (p, f) => pixel(p, 96, 48, 32, [...Array(3).fill(f === 0 ? 188 : f === 4 ? 0 : 137), 255]),
+    ],
+    [
+      "owner-offset",
+      transition(
+        "fade",
+        view("#000000"),
+        view("#000000"),
+        ",position:'absolute',left:24,top:16,width:48,height:32,opacity:0.5",
+      ),
+      (p) => {
+        pixel(p, 96, 30, 30, [188, 188, 188, 255]);
+        pixel(p, 96, 1, 1, [255, 255, 255, 255]);
+      },
+    ],
+    [
+      "semantic-isolation",
+      transition(
+        "fade",
+        view("#000000", ",isolation:'auto'"),
+        view("#ffffff", ",isolation:'auto'"),
+        ",isolation:'auto'",
+      ),
+      (p, f) => pixel(p, 96, 48, 32, [...Array(3).fill(f === 0 ? 0 : f === 4 ? 255 : 188), 255]),
+    ],
+    [
+      "input-destination",
+      transition("fade", view("#ff0000"), view("#404040", ",mixBlendMode:'screen'")),
+      (p, f) => {
+        if (f === 4) pixel(p, 96, 48, 32, [64, 64, 64, 255]);
+      },
+    ],
+    [
+      "owner-transform",
+      transition(
+        "ripple",
+        view("#404040"),
+        view("#c0c0c0"),
+        ",transform:'rotate(17deg) scale(0.6,0.75)'",
+      ),
+      () => {},
+    ],
+    [
+      "owner-filter",
+      transition("fade", view("#404040"), view("#c0c0c0"), ",filter:'blur(3px)'"),
+      () => {},
+    ],
+    [
+      "owner-clip",
+      transition("fade", view("#000000"), view("#000000"), ",borderRadius:32,overflow:'hidden'"),
+      (p) => {
+        pixel(p, 96, 48, 32, [0, 0, 0, 255]);
+        pixel(p, 96, 0, 0, [255, 255, 255, 255]);
+      },
+    ],
   ];
-  for(const [name,body,probe] of extra) cases.push({name,command:"motion",content:motion(body),width:96,height:64,frames:[2,0,4,2],probe});
+  for (const [name, body, probe] of extra)
+    cases.push({
+      name,
+      command: "motion",
+      content: motion(body),
+      width: 96,
+      height: 64,
+      frames: [2, 0, 4, 2],
+      probe,
+    });
   // Transition code: a fade written out renders as the built-in one, and a wipe with a uniform over
   // patterned scenes keeps backend parity and ends on the destination.
-  const code = (source:string,attributes:string,from:string,to:string) =>
-    source+motion(transition("fade",from,to).replace('kind="fade"',attributes));
-  const fadeCode = "const fade=`float4 valle_main(float2 uv){return mix(sample_from(uv),sample_to(uv),progress);}`;\n";
-  const wipeCode = "const wipe=`uniform float softness;\nfloat4 valle_main(float2 uv){float edge=smoothstep(progress-softness,progress+softness,uv.x);return mix(sample_to(uv),sample_from(uv),edge);}`;\n";
-  cases.push({name:"code-fade",command:"motion",content:code(fadeCode,"code={fade}",view("#404040"),view("#c0c0c0")),width:96,height:64,frames:[2,0,4,2],reference:"motion-fade"});
+  const code = (source: string, attributes: string, from: string, to: string) =>
+    source + motion(transition("fade", from, to).replace('kind="fade"', attributes));
+  const fadeCode =
+    "const fade=`float4 valle_main(float2 uv){return mix(sample_from(uv),sample_to(uv),progress);}`;\n";
+  const wipeCode =
+    "const wipe=`uniform float softness;\nfloat4 valle_main(float2 uv){float edge=smoothstep(progress-softness,progress+softness,uv.x);return mix(sample_to(uv),sample_from(uv),edge);}`;\n";
+  cases.push({
+    name: "code-fade",
+    command: "motion",
+    content: code(fadeCode, "code={fade}", view("#404040"), view("#c0c0c0")),
+    width: 96,
+    height: 64,
+    frames: [2, 0, 4, 2],
+    reference: "motion-fade",
+  });
   // The wipe's smallest edge weights leave its result a hair under opaque over the white scene.
   // Skia stores F16 by truncation in WASM and to nearest on NEON, one step (2^-11) apart in alpha,
   // which next to black is 1.6 sRGB levels.
-  cases.push({name:"code-wipe",command:"motion",content:code(wipeCode,"code={wipe} uniforms={{softness:0.1+time.seconds/10}}",patternedFrom,patternedTo),width:96,height:64,frames:[2,0,4,2],parity:3,probe:(p,f)=>{
-    if(f===4)pixel(p,96,48,32,[0,255,0,255]);
-  }});
+  cases.push({
+    name: "code-wipe",
+    command: "motion",
+    content: code(
+      wipeCode,
+      "code={wipe} uniforms={{softness:0.1+time.seconds/10}}",
+      patternedFrom,
+      patternedTo,
+    ),
+    width: 96,
+    height: 64,
+    frames: [2, 0, 4, 2],
+    parity: 3,
+    probe: (p, f) => {
+      if (f === 4) pixel(p, 96, 48, 32, [0, 255, 0, 255]);
+    },
+  });
   // Motion templates draw a Timeline transition from the clips' frames: the documented dissolve
   // and a shader mixing premultiplied colors render as the built-in fade, also for placed and
   // translucent clips, and in previews that scale or letterbox the canvas.
-  await writeFile(join(dir,"dissolve.motion.tsx"),`export const composition={width:48,height:48,duration:1,fps:4};
+  await writeFile(
+    join(dir, "dissolve.motion.tsx"),
+    `export const composition={width:48,height:48,duration:1,fps:4};
 export const role=transition();
-export default function D(){const time = useCurrentTime();return <Scene className="relative h-full w-full"><Image src="input://from" className="absolute inset-0 h-full w-full"/><Image src="input://to" className="absolute inset-0 h-full w-full" style={{opacity:time.clipProgress}}/></Scene>;}`);
-  await writeFile(join(dir,"mix.motion.tsx"),"const mix=`uniform float progress;\nuniform shader outgoing;\nuniform shader incoming;\nfloat4 valle_main(float2 uv){float4 p=sample_outgoing(uv);float4 q=sample_incoming(uv);float4 m=mix(float4(p.rgb*p.a,p.a),float4(q.rgb*q.a,q.a),progress);return float4(m.rgb/m.a,m.a);}`;\n"
-    +`export const composition={width:96,height:64,duration:1,fps:4};
+export default function D(){const time = useCurrentTime();return <Scene className="relative h-full w-full"><Image src="input://from" className="absolute inset-0 h-full w-full"/><Image src="input://to" className="absolute inset-0 h-full w-full" style={{opacity:time.clipProgress}}/></Scene>;}`,
+  );
+  await writeFile(
+    join(dir, "mix.motion.tsx"),
+    "const mix=`uniform float progress;\nuniform shader outgoing;\nuniform shader incoming;\nfloat4 valle_main(float2 uv){float4 p=sample_outgoing(uv);float4 q=sample_incoming(uv);float4 m=mix(float4(p.rgb*p.a,p.a),float4(q.rgb*q.a,q.a),progress);return float4(m.rgb/m.a,m.a);}`;\n" +
+      `export const composition={width:96,height:64,duration:1,fps:4};
 export const role=transition();
-export default function M(){const time = useCurrentTime(); const comp = useComposition();return <Scene><ShaderLayer code={mix} inputs={{outgoing:"input://from",incoming:"input://to"}} uniforms={{progress:time.clipProgress}} style={{width:comp.width,height:comp.height}}/></Scene>;}`);
-  const templated = (clips:unknown[],effect:Record<string,unknown>) => JSON.stringify({canvas:{width:96,height:64,fps:4,background:"#ffffff"},
-    resources:{dissolve:"dissolve.motion.tsx",mix:"mix.motion.tsx",from:"param-from.motion.tsx",to:"param-to.motion.tsx"},
-    tracks:{visual:[{clips,transitions:[{from:0,to:1,...effect}]}]}});
-  const solids = [{kind:"solid",color:"#404040",start:0,duration:1.5},{kind:"solid",color:"#c0c0c0",start:0.25,duration:2}];
-  const placed = [{kind:"motion",component:"from",start:0,duration:1.5,position:[0.4,0.5],scale:[0.8,0.8],opacity:0.7},
-    {kind:"motion",component:"to",start:0.25,duration:2,rotation:15,opacity:0.8}];
-  for (const component of ["dissolve","mix"]) {
-    cases.push({name:`template-${component}`,command:"timeline",content:templated(solids,{kind:"motion",component}),width:96,height:64,frames:[3,1,5,3],reference:"timeline-fade"});
+export default function M(){const time = useCurrentTime(); const comp = useComposition();return <Scene><ShaderLayer code={mix} inputs={{outgoing:"input://from",incoming:"input://to"}} uniforms={{progress:time.clipProgress}} style={{width:comp.width,height:comp.height}}/></Scene>;}`,
+  );
+  const templated = (clips: unknown[], effect: Record<string, unknown>) =>
+    JSON.stringify({
+      canvas: { width: 96, height: 64, fps: 4, background: "#ffffff" },
+      resources: {
+        dissolve: "dissolve.motion.tsx",
+        mix: "mix.motion.tsx",
+        from: "param-from.motion.tsx",
+        to: "param-to.motion.tsx",
+      },
+      tracks: { visual: [{ clips, transitions: [{ from: 0, to: 1, ...effect }] }] },
+    });
+  const solids = [
+    { kind: "solid", color: "#404040", start: 0, duration: 1.5 },
+    { kind: "solid", color: "#c0c0c0", start: 0.25, duration: 2 },
+  ];
+  const placed = [
+    {
+      kind: "motion",
+      component: "from",
+      start: 0,
+      duration: 1.5,
+      position: [0.4, 0.5],
+      scale: [0.8, 0.8],
+      opacity: 0.7,
+    },
+    { kind: "motion", component: "to", start: 0.25, duration: 2, rotation: 15, opacity: 0.8 },
+  ];
+  for (const component of ["dissolve", "mix"]) {
+    cases.push({
+      name: `template-${component}`,
+      command: "timeline",
+      content: templated(solids, { kind: "motion", component }),
+      width: 96,
+      height: 64,
+      frames: [3, 1, 5, 3],
+      reference: "timeline-fade",
+    });
   }
-  cases.push({name:"placed-fade",command:"timeline",content:templated(placed,{kind:"fade"}),width:96,height:64,frames:[3,1,5,3]});
-  cases.push({name:"placed-mix",command:"timeline",content:templated(placed,{kind:"motion",component:"mix"}),width:96,height:64,frames:[3,1,5,3],reference:"placed-fade"});
+  cases.push({
+    name: "placed-fade",
+    command: "timeline",
+    content: templated(placed, { kind: "fade" }),
+    width: 96,
+    height: 64,
+    frames: [3, 1, 5, 3],
+  });
+  cases.push({
+    name: "placed-mix",
+    command: "timeline",
+    content: templated(placed, { kind: "motion", component: "mix" }),
+    width: 96,
+    height: 64,
+    frames: [3, 1, 5, 3],
+    reference: "placed-fade",
+  });
   // Previews other than the canvas: twice its size, letterboxed on whole pixels, and letterboxed
   // between pixels, where the frame rounds to whole pixels and only the viewport's edge rows move.
-  for (const [size,width,height] of [["scaled",192,128],["letterbox",192,192],["fraction",100,100]] as const) {
-    cases.push({name:`${size}-fade`,command:"timeline",content:templated(solids,{kind:"fade"}),width,height,frames:[3,1,5,3],native:false});
-    cases.push({name:`${size}-dissolve`,command:"timeline",content:templated(solids,{kind:"motion",component:"dissolve"}),width,height,frames:[3,1,5,3],native:false,
-      ...(size==="fraction" ? {probe:(p:Uint8Array,f:number)=>{
-        const fade=images.get(`fraction-fade/${f}`)!;
-        let worst=0;
-        for(let i=20*width*4;i<80*width*4;i++) worst=Math.max(worst,Math.abs(p[i]!-fade[i]!));
-        expect(worst,`fraction-dissolve/${f} inside the viewport`).toBeLessThanOrEqual(2);
-      }} : {reference:`${size}-fade`})});
+  for (const [size, width, height] of [
+    ["scaled", 192, 128],
+    ["letterbox", 192, 192],
+    ["fraction", 100, 100],
+  ] as const) {
+    cases.push({
+      name: `${size}-fade`,
+      command: "timeline",
+      content: templated(solids, { kind: "fade" }),
+      width,
+      height,
+      frames: [3, 1, 5, 3],
+      native: false,
+    });
+    cases.push({
+      name: `${size}-dissolve`,
+      command: "timeline",
+      content: templated(solids, { kind: "motion", component: "dissolve" }),
+      width,
+      height,
+      frames: [3, 1, 5, 3],
+      native: false,
+      ...(size === "fraction"
+        ? {
+            probe: (p: Uint8Array, f: number) => {
+              const fade = images.get(`fraction-fade/${f}`)!;
+              let worst = 0;
+              for (let i = 20 * width * 4; i < 80 * width * 4; i++)
+                worst = Math.max(worst, Math.abs(p[i]! - fade[i]!));
+              expect(worst, `fraction-dissolve/${f} inside the viewport`).toBeLessThanOrEqual(2);
+            },
+          }
+        : { reference: `${size}-fade` }),
+    });
   }
   // Effect templates read their clip, or what lies under an adjustment, as input://source. Drawn
   // unchanged, a source renders as no effect, also for placed, translucent and blended clips and
   // in a preview that scales the canvas, and an adjustment's invert matches its clip's.
-  await writeFile(join(dir,"same.motion.tsx"),`export const composition={width:48,height:48,duration:1,fps:4};
+  await writeFile(
+    join(dir, "same.motion.tsx"),
+    `export const composition={width:48,height:48,duration:1,fps:4};
 export const role=effect();
-export default function S(){return <Scene className="relative h-full w-full"><Image src="input://source" className="absolute inset-0 h-full w-full"/></Scene>;}`);
-  await writeFile(join(dir,"mark.motion.tsx"),`export const composition={width:96,height:64,duration:1,fps:4};
+export default function S(){return <Scene className="relative h-full w-full"><Image src="input://source" className="absolute inset-0 h-full w-full"/></Scene>;}`,
+  );
+  await writeFile(
+    join(dir, "mark.motion.tsx"),
+    `export const composition={width:96,height:64,duration:1,fps:4};
 export const role=effect();
-export default function K(){return <Scene className="relative h-full w-full"><Image src="input://source" className="absolute inset-0 h-full w-full"/><View style={{position:"absolute",left:0,top:0,width:8,height:8,backgroundColor:"#2040ff"}}/></Scene>;}`);
-  await writeFile(join(dir,"invert.motion.tsx"),"const invert=`uniform shader source;\nfloat4 valle_main(float2 uv){float4 c=sample_source(uv);return float4(1.0-c.rgb,c.a);}`;\n"
-    +`export const composition={width:96,height:64,duration:1,fps:4};
+export default function K(){return <Scene className="relative h-full w-full"><Image src="input://source" className="absolute inset-0 h-full w-full"/><View style={{position:"absolute",left:0,top:0,width:8,height:8,backgroundColor:"#2040ff"}}/></Scene>;}`,
+  );
+  await writeFile(
+    join(dir, "invert.motion.tsx"),
+    "const invert=`uniform shader source;\nfloat4 valle_main(float2 uv){float4 c=sample_source(uv);return float4(1.0-c.rgb,c.a);}`;\n" +
+      `export const composition={width:96,height:64,duration:1,fps:4};
 export const role=effect();
-export default function I(){const comp = useComposition();return <Scene><ShaderLayer code={invert} inputs={{source:"input://source"}} style={{width:comp.width,height:comp.height}}/></Scene>;}`);
-  const effected = (tracks:unknown[][],adjustment?:unknown[]) => JSON.stringify({canvas:{width:96,height:64,fps:4,background:"#ffffff"},
-    resources:{same:"same.motion.tsx",mark:"mark.motion.tsx",invert:"invert.motion.tsx",from:"param-from.motion.tsx",to:"param-to.motion.tsx"},
-    tracks:{visual:tracks.map(clips=>({clips})),...(adjustment ? {adjustment:[{clips:adjustment}]} : {})}});
-  const layered = (...components:string[]) => {
-    const effects = components.length ? {effects:components.map(component=>({kind:"motion",component}))} : {};
-    return [[{kind:"motion",component:"from",start:0,duration:2,position:[0.4,0.5],scale:[0.8,0.8],opacity:0.7,...effects}],
-      [{kind:"motion",component:"to",start:0,duration:2,rotation:15,opacity:0.8,blend:"multiply",...effects}]];
+export default function I(){const comp = useComposition();return <Scene><ShaderLayer code={invert} inputs={{source:"input://source"}} style={{width:comp.width,height:comp.height}}/></Scene>;}`,
+  );
+  const effected = (tracks: unknown[][], adjustment?: unknown[]) =>
+    JSON.stringify({
+      canvas: { width: 96, height: 64, fps: 4, background: "#ffffff" },
+      resources: {
+        same: "same.motion.tsx",
+        mark: "mark.motion.tsx",
+        invert: "invert.motion.tsx",
+        from: "param-from.motion.tsx",
+        to: "param-to.motion.tsx",
+      },
+      tracks: {
+        visual: tracks.map((clips) => ({ clips })),
+        ...(adjustment ? { adjustment: [{ clips: adjustment }] } : {}),
+      },
+    });
+  const layered = (...components: string[]) => {
+    const effects = components.length
+      ? { effects: components.map((component) => ({ kind: "motion", component })) }
+      : {};
+    return [
+      [
+        {
+          kind: "motion",
+          component: "from",
+          start: 0,
+          duration: 2,
+          position: [0.4, 0.5],
+          scale: [0.8, 0.8],
+          opacity: 0.7,
+          ...effects,
+        },
+      ],
+      [
+        {
+          kind: "motion",
+          component: "to",
+          start: 0,
+          duration: 2,
+          rotation: 15,
+          opacity: 0.8,
+          blend: "multiply",
+          ...effects,
+        },
+      ],
+    ];
   };
-  const solid = (...components:string[]) => [[{kind:"solid",color:"#ff2050",start:0,duration:2,
-    ...(components.length ? {effects:components.map(component=>({kind:"motion",component}))} : {})}]];
-  const adjust = (component:string) => [{kind:"motion",component,start:0.5,duration:1}];
-  cases.push({name:"effect-none",command:"timeline",content:effected(layered()),width:96,height:64,frames:[1,3,5,3]});
-  cases.push({name:"effect-same",command:"timeline",content:effected(layered("same")),width:96,height:64,frames:[1,3,5,3],reference:"effect-none"});
-  cases.push({name:"effect-twice",command:"timeline",content:effected(layered("same","same")),width:96,height:64,frames:[1,3,5,3],reference:"effect-none"});
-  cases.push({name:"effect-chain",command:"timeline",content:effected(layered("mark","invert")),width:96,height:64,frames:[1,3,5,3]});
-  cases.push({name:"adjust-same",command:"timeline",content:effected(layered(),adjust("same")),width:96,height:64,frames:[1,3,5,3],reference:"effect-none"});
+  const solid = (...components: string[]) => [
+    [
+      {
+        kind: "solid",
+        color: "#ff2050",
+        start: 0,
+        duration: 2,
+        ...(components.length
+          ? { effects: components.map((component) => ({ kind: "motion", component })) }
+          : {}),
+      },
+    ],
+  ];
+  const adjust = (component: string) => [{ kind: "motion", component, start: 0.5, duration: 1 }];
+  cases.push({
+    name: "effect-none",
+    command: "timeline",
+    content: effected(layered()),
+    width: 96,
+    height: 64,
+    frames: [1, 3, 5, 3],
+  });
+  cases.push({
+    name: "effect-same",
+    command: "timeline",
+    content: effected(layered("same")),
+    width: 96,
+    height: 64,
+    frames: [1, 3, 5, 3],
+    reference: "effect-none",
+  });
+  cases.push({
+    name: "effect-twice",
+    command: "timeline",
+    content: effected(layered("same", "same")),
+    width: 96,
+    height: 64,
+    frames: [1, 3, 5, 3],
+    reference: "effect-none",
+  });
+  cases.push({
+    name: "effect-chain",
+    command: "timeline",
+    content: effected(layered("mark", "invert")),
+    width: 96,
+    height: 64,
+    frames: [1, 3, 5, 3],
+  });
+  cases.push({
+    name: "adjust-same",
+    command: "timeline",
+    content: effected(layered(), adjust("same")),
+    width: 96,
+    height: 64,
+    frames: [1, 3, 5, 3],
+    reference: "effect-none",
+  });
   // Inverted, #ff2050 has a red channel that is zero only by cancellation in the Rec2020 F16
   // working space. Skia stores F16 by truncation in WASM and to nearest on NEON, which next to
   // black leaves that channel up to 3 sRGB levels apart.
-  cases.push({name:"effect-invert",command:"timeline",content:effected(solid("invert")),width:96,height:64,frames:[3,5],parity:3});
-  cases.push({name:"adjust-invert",command:"timeline",content:effected(solid(),adjust("invert")),width:96,height:64,frames:[3,5],parity:3,reference:"effect-invert"});
-  cases.push({name:"invert-mark",command:"timeline",content:effected(solid("invert","mark")),width:96,height:64,frames:[3],parity:3,probe:(p)=>pixel(p,96,2,2,[0x20,0x40,0xff,255])});
-  cases.push({name:"scaled-effect-none",command:"timeline",content:effected(layered()),width:192,height:128,frames:[3,1],native:false});
-  cases.push({name:"scaled-effect-same",command:"timeline",content:effected(layered("same")),width:192,height:128,frames:[3,1],native:false,reference:"scaled-effect-none"});
+  cases.push({
+    name: "effect-invert",
+    command: "timeline",
+    content: effected(solid("invert")),
+    width: 96,
+    height: 64,
+    frames: [3, 5],
+    parity: 3,
+  });
+  cases.push({
+    name: "adjust-invert",
+    command: "timeline",
+    content: effected(solid(), adjust("invert")),
+    width: 96,
+    height: 64,
+    frames: [3, 5],
+    parity: 3,
+    reference: "effect-invert",
+  });
+  cases.push({
+    name: "invert-mark",
+    command: "timeline",
+    content: effected(solid("invert", "mark")),
+    width: 96,
+    height: 64,
+    frames: [3],
+    parity: 3,
+    probe: (p) => pixel(p, 96, 2, 2, [0x20, 0x40, 0xff, 255]),
+  });
+  cases.push({
+    name: "scaled-effect-none",
+    command: "timeline",
+    content: effected(layered()),
+    width: 192,
+    height: 128,
+    frames: [3, 1],
+    native: false,
+  });
+  cases.push({
+    name: "scaled-effect-same",
+    command: "timeline",
+    content: effected(layered("same")),
+    width: 192,
+    height: 128,
+    frames: [3, 1],
+    native: false,
+    reference: "scaled-effect-none",
+  });
   const filter = process.env.VALLE_TEST_TRANSITION_CASE;
-  const selected = new Set(cases.filter(c=>!filter || new RegExp(filter).test(c.name)).map(c=>c.name));
-  for (const fixture of [...cases].reverse()) if (selected.has(fixture.name)) {
-    if (fixture.reference) selected.add(fixture.reference);
-    if (fixture.different) selected.add(fixture.different);
-    if (fixture.name === "fraction-dissolve") selected.add("fraction-fade");
-    if (fixture.name.startsWith("param-dynamic-")) selected.add(fixture.name.replace("param-dynamic-", "param-motion-"));
-  }
-  const images = new Map<string,Uint8Array>();
-  const parityFailures: Array<{fixture:string; frame:number; delta:number}> = [];
+  const selected = new Set(
+    cases.filter((c) => !filter || new RegExp(filter).test(c.name)).map((c) => c.name),
+  );
+  for (const fixture of [...cases].reverse())
+    if (selected.has(fixture.name)) {
+      if (fixture.reference) selected.add(fixture.reference);
+      if (fixture.different) selected.add(fixture.different);
+      if (fixture.name === "fraction-dissolve") selected.add("fraction-fade");
+      if (fixture.name.startsWith("param-dynamic-"))
+        selected.add(fixture.name.replace("param-dynamic-", "param-motion-"));
+    }
+  const images = new Map<string, Uint8Array>();
+  const parityFailures: Array<{ fixture: string; frame: number; delta: number }> = [];
   try {
-    for(const fixture of cases.filter(c=>selected.has(c.name))) {
-      const {width,height}=fixture;
-      const info={width,height,colorType:ck.ColorType.RGBA_8888,alphaType:ck.AlphaType.Unpremul,colorSpace:ck.ColorSpace.SRGB};
-      const entry=fixture.command==="motion"?"scene.motion.tsx":"timeline.json";
-      await writeFile(join(dir,entry),fixture.content);
-      const server=spawn([fixture.command,"studio",entry,"--port","0","--web-assets-dir",join(root,"web/dist")]);
-      const surface=ck.MakeSurface(width,height)!;
-      let engine:ProductEngine|undefined,executor:CanvasKitExecutor|undefined;
+    for (const fixture of cases.filter((c) => selected.has(c.name))) {
+      const { width, height } = fixture;
+      const info = {
+        width,
+        height,
+        colorType: ck.ColorType.RGBA_8888,
+        alphaType: ck.AlphaType.Unpremul,
+        colorSpace: ck.ColorSpace.SRGB,
+      };
+      const entry = fixture.command === "motion" ? "scene.motion.tsx" : "timeline.json";
+      await writeFile(join(dir, entry), fixture.content);
+      const server = spawn([
+        fixture.command,
+        "studio",
+        entry,
+        "--port",
+        "0",
+        "--web-assets-dir",
+        join(root, "web/dist"),
+      ]);
+      const surface = ck.MakeSurface(width, height)!;
+      let engine: ProductEngine | undefined, executor: CanvasKitExecutor | undefined;
       try {
-        const reader=server.stdout.getReader();let line="";
-        try {while(!line.includes("\n")){const part=await reader.read();if(part.done)throw new Error(await new Response(server.stderr).text());line+=new TextDecoder().decode(part.value);}}
-        finally {reader.releaseLock();}
-        const ready=JSON.parse(line.split("\n")[0]!);
-        const config=await(await fetch(new URL("/config.json",ready.url))).json() as Record<string,string>;
-        if(!config.fixedPackageManifestJson)throw new Error(JSON.stringify(config.diagnostics ?? config));
-        engine=new ProductEngine();
-        const receipt=JSON.parse(engine.open_fixed_package(config.fixedPackageManifestJson!,config.timelineJson!,config.resourceManifestJson!,config.verifiedBindingBundleJson!));
-        executor=new CanvasKitExecutor(ck,{transform_srgb_preview_pixels:engine.transform_srgb_preview_pixels.bind(engine)});
-        const nativeBatch = fixture.native === false ? undefined : await renderNativeFrames(ck, { cwd:dir,
-          args:[fixture.command,"render",entry,...(fixture.command==="motion"?["--backend","raster"]:[])],
-          frames:fixture.frames,output:join(dir,`${fixture.name}-native.png`),width,height });
-        for(const [request,frame] of fixture.frames.entries()) {
-          const ticket=engine.evaluate_prepare_preview(receipt.renderId,BigInt(frame),width,height,false);
-          let web:Uint8Array;
+        const reader = server.stdout.getReader();
+        let line = "";
+        try {
+          while (!line.includes("\n")) {
+            const part = await reader.read();
+            if (part.done) throw new Error(await new Response(server.stderr).text());
+            line += new TextDecoder().decode(part.value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        const ready = JSON.parse(line.split("\n")[0]!);
+        const config = (await (await fetch(new URL("/config.json", ready.url))).json()) as Record<
+          string,
+          string
+        >;
+        if (!config.fixedPackageManifestJson)
+          throw new Error(JSON.stringify(config.diagnostics ?? config));
+        engine = new ProductEngine();
+        const receipt = JSON.parse(
+          engine.open_fixed_package(
+            config.fixedPackageManifestJson!,
+            config.timelineJson!,
+            config.resourceManifestJson!,
+            config.verifiedBindingBundleJson!,
+          ),
+        );
+        executor = new CanvasKitExecutor(ck, {
+          transform_srgb_preview_pixels: engine.transform_srgb_preview_pixels.bind(engine),
+        });
+        const nativeBatch =
+          fixture.native === false
+            ? undefined
+            : await renderNativeFrames(ck, {
+                cwd: dir,
+                args: [
+                  fixture.command,
+                  "render",
+                  entry,
+                  ...(fixture.command === "motion" ? ["--backend", "raster"] : []),
+                ],
+                frames: fixture.frames,
+                output: join(dir, `${fixture.name}-native.png`),
+                width,
+                height,
+              });
+        for (const [request, frame] of fixture.frames.entries()) {
+          const ticket = engine.evaluate_prepare_preview(
+            receipt.renderId,
+            BigInt(frame),
+            width,
+            height,
+            false,
+          );
+          let web: Uint8Array;
           try {
             // Transition code is the only dependency: its runtime shader, from the package.
-            const objects=new Map<number,CanvasKitExternalObject>();
-            for(const request of await decodePackedAbi(engine.resource_requests(ticket),RESOURCE_REQUESTS_ABI) as any[]) {
-              if(request.expected.kind!=="runtimeShader")throw new Error(`unexpected dependency ${request.expected.kind}`);
-              objects.set(request.handle,{key:request.key,kind:"runtimeShader",bytes:engine.compiled_resource_bytes(receipt.renderId,"runtime-shader",request.key.content,request.key.interpretation.abi_digest)});
+            const objects = new Map<number, CanvasKitExternalObject>();
+            for (const request of (await decodePackedAbi(
+              engine.resource_requests(ticket),
+              RESOURCE_REQUESTS_ABI,
+            )) as any[]) {
+              if (request.expected.kind !== "runtimeShader")
+                throw new Error(`unexpected dependency ${request.expected.kind}`);
+              objects.set(request.handle, {
+                key: request.key,
+                kind: "runtimeShader",
+                bytes: engine.compiled_resource_bytes(
+                  receipt.renderId,
+                  "runtime-shader",
+                  request.key.content,
+                  request.key.interpretation.abi_digest,
+                ),
+              });
             }
-            engine.lower_canvas_kit(ticket,64n*1024n*1024n,128n*1024n*1024n);engine.bind(ticket,1n);
-            await executor.execute(engine.plan_template_bytes(ticket),engine.binding_bytes(ticket),engine.bound_schedule_bytes(ticket),{generation:1n,objects},{surface});
-            web=Uint8Array.from(surface.getCanvas().readPixels(0,0,info)!);
-          } finally {engine.release_ticket(ticket);}
+            engine.lower_canvas_kit(ticket, 64n * 1024n * 1024n, 128n * 1024n * 1024n);
+            engine.bind(ticket, 1n);
+            await executor.execute(
+              engine.plan_template_bytes(ticket),
+              engine.binding_bytes(ticket),
+              engine.bound_schedule_bytes(ticket),
+              { generation: 1n, objects },
+              { surface },
+            );
+            web = Uint8Array.from(surface.getCanvas().readPixels(0, 0, info)!);
+          } finally {
+            engine.release_ticket(ticket);
+          }
           if (fixture.native !== false) {
-            const native=nativeBatch!.frames[request]!;
-            const parity=diff(web,native);
-            if(parity>(fixture.parity??2)) {
-              const points=[];
-              for(let i=0;i<web.length;i++) if(Math.abs(web[i]!-native[i]!)>2) points.push({x:Math.floor(i/4)%width,y:Math.floor(i/4/width),c:i%4,web:web[i],native:native[i]});
-              console.info(fixture.name,JSON.stringify(points.slice(0,12)),"count",points.length);
-              parityFailures.push({fixture:fixture.name,frame,delta:parity});
+            const native = nativeBatch!.frames[request]!;
+            const parity = diff(web, native);
+            if (parity > (fixture.parity ?? 2)) {
+              const points = [];
+              for (let i = 0; i < web.length; i++)
+                if (Math.abs(web[i]! - native[i]!) > 2)
+                  points.push({
+                    x: Math.floor(i / 4) % width,
+                    y: Math.floor(i / 4 / width),
+                    c: i % 4,
+                    web: web[i],
+                    native: native[i],
+                  });
+              console.info(
+                fixture.name,
+                JSON.stringify(points.slice(0, 12)),
+                "count",
+                points.length,
+              );
+              parityFailures.push({ fixture: fixture.name, frame, delta: parity });
             }
-            fixture.probe?.(native,frame);
+            fixture.probe?.(native, frame);
           }
-          fixture.probe?.(web,frame);
-          const key=`${fixture.name}/${frame}`;
-          if(images.has(key))expect(web,`${key} random access`).toEqual(images.get(key)!);
-          images.set(key,web);
-          if(fixture.different) {
-            const delta = diff(web,images.get(`${fixture.different}/${frame}`)!);
-            if(frame===2) expect(delta,`${key} parameter changes pixels`).toBeGreaterThan(2);
-            else expect(delta,`${key} exact endpoint`).toBeLessThanOrEqual(2);
+          fixture.probe?.(web, frame);
+          const key = `${fixture.name}/${frame}`;
+          if (images.has(key)) expect(web, `${key} random access`).toEqual(images.get(key)!);
+          images.set(key, web);
+          if (fixture.different) {
+            const delta = diff(web, images.get(`${fixture.different}/${frame}`)!);
+            if (frame === 2) expect(delta, `${key} parameter changes pixels`).toBeGreaterThan(2);
+            else expect(delta, `${key} exact endpoint`).toBeLessThanOrEqual(2);
           }
-          if(fixture.reference && (!fixture.name.startsWith("pattern-")||frame!==2)) {
-            expect(diff(web,images.get(`${fixture.reference}/${frame+(fixture.referenceOffset??0)}`)!),`${key} reference`).toBeLessThanOrEqual(2);
+          if (fixture.reference && (!fixture.name.startsWith("pattern-") || frame !== 2)) {
+            expect(
+              diff(
+                web,
+                images.get(`${fixture.reference}/${frame + (fixture.referenceOffset ?? 0)}`)!,
+              ),
+              `${key} reference`,
+            ).toBeLessThanOrEqual(2);
           }
         }
-      } catch(error) {throw new Error(`${fixture.name}: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
-      finally {server.kill();await server.exited;executor?.dispose();engine?.free();surface.delete();}
+      } catch (error) {
+        throw new Error(
+          `${fixture.name}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      } finally {
+        server.kill();
+        await server.exited;
+        executor?.dispose();
+        engine?.free();
+        surface.delete();
+      }
     }
     expect(parityFailures, "Native / CanvasKit channel differences must not exceed 2").toEqual([]);
-  } finally {await rm(dir,{recursive:true,force:true});}
-},360_000);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}, 360_000);

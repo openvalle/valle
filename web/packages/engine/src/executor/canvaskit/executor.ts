@@ -26,7 +26,6 @@ import {
   type PackedValue,
 } from "../../abi/packed.ts";
 import {
-  BATCH_INSTANCE_BYTES,
   applyDrawProgramPatch,
   decodeDrawProgram,
   type DrawProgramWire,
@@ -136,41 +135,103 @@ export interface CanvasKitPassTiming {
 
 /** Canonical Rust/Wasm kernels owned by ProductEngine. */
 export interface CanvasKitEngineKernels {
-  transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void | Float32Array | Promise<Float32Array>;
-  transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void | Uint8Array | Promise<Uint8Array>;
+  transform_srgb_preview_pixels(
+    pixels: Float32Array,
+    opaque: boolean,
+  ): void | Float32Array | Promise<Float32Array>;
+  transform_srgb_preview_f16?(
+    pixels: Uint8Array,
+    opaque: boolean,
+  ): void | Uint8Array | Promise<Uint8Array>;
   plan_pyramid_filter?(
-    inputWidth: number, inputHeight: number, outputWidth: number, outputHeight: number,
-    offsetX: number, offsetY: number, filterJson: string,
+    inputWidth: number,
+    inputHeight: number,
+    outputWidth: number,
+    outputHeight: number,
+    offsetX: number,
+    offsetY: number,
+    filterJson: string,
   ): Float64Array;
   apply_bloom_f16?(
-    input: Uint8Array, inputWidth: number, inputHeight: number,
-    outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
-    threshold: number, knee: number, intensity: number, radius: number,
+    input: Uint8Array,
+    inputWidth: number,
+    inputHeight: number,
+    outputWidth: number,
+    outputHeight: number,
+    offsetX: number,
+    offsetY: number,
+    threshold: number,
+    knee: number,
+    intensity: number,
+    radius: number,
   ): Uint8Array | Promise<Uint8Array>;
   apply_glow_f16?(
-    input: Uint8Array, inputWidth: number, inputHeight: number,
-    outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
-    colorJson: string, intensity: number, radius: number,
+    input: Uint8Array,
+    inputWidth: number,
+    inputHeight: number,
+    outputWidth: number,
+    outputHeight: number,
+    offsetX: number,
+    offsetY: number,
+    colorJson: string,
+    intensity: number,
+    radius: number,
   ): Uint8Array | Promise<Uint8Array>;
   plan_radial_blur?(
-    amount: number, inputX: number, inputY: number, inputWidth: number, inputHeight: number,
-    outputX: number, outputY: number, outputWidth: number, outputHeight: number,
+    amount: number,
+    inputX: number,
+    inputY: number,
+    inputWidth: number,
+    inputHeight: number,
+    outputX: number,
+    outputY: number,
+    outputWidth: number,
+    outputHeight: number,
   ): Float64Array;
   apply_radial_blur_f16?(
-    input: Uint8Array, inputWidth: number, inputHeight: number,
-    outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
-    originX: number, originY: number, centerX: number, centerY: number, amount: number,
+    input: Uint8Array,
+    inputWidth: number,
+    inputHeight: number,
+    outputWidth: number,
+    outputHeight: number,
+    offsetX: number,
+    offsetY: number,
+    originX: number,
+    originY: number,
+    centerX: number,
+    centerY: number,
+    amount: number,
   ): Uint8Array | Promise<Uint8Array>;
   apply_film_grain_f16?(
-    input: Uint8Array, inputWidth: number, inputHeight: number,
-    outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
-    originX: number, originY: number, seed: number, amount: number, size: number,
+    input: Uint8Array,
+    inputWidth: number,
+    inputHeight: number,
+    outputWidth: number,
+    outputHeight: number,
+    offsetX: number,
+    offsetY: number,
+    originX: number,
+    originY: number,
+    seed: number,
+    amount: number,
+    size: number,
   ): Uint8Array | Promise<Uint8Array>;
   apply_lens_distortion_f16?(
-    input: Uint8Array, inputWidth: number, inputHeight: number,
-    outputWidth: number, outputHeight: number, offsetX: number, offsetY: number,
-    originX: number, originY: number, k1: number, k2: number,
-    frameX: number, frameY: number, frameWidth: number, frameHeight: number,
+    input: Uint8Array,
+    inputWidth: number,
+    inputHeight: number,
+    outputWidth: number,
+    outputHeight: number,
+    offsetX: number,
+    offsetY: number,
+    originX: number,
+    originY: number,
+    k1: number,
+    k2: number,
+    frameX: number,
+    frameY: number,
+    frameWidth: number,
+    frameHeight: number,
   ): Uint8Array | Promise<Uint8Array>;
   perlin_noise_tables?(seed: number): Uint8Array;
 }
@@ -257,7 +318,10 @@ export interface CanvasKitExecutionReport {
 }
 
 export class CanvasKitCompositorError extends Error {
-  constructor(readonly code: string, message: string) {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
     super(`[${code}] ${message}`);
     this.name = "CanvasKitCompositorError";
   }
@@ -358,12 +422,19 @@ function emptyExecutorCacheCounters(): ExecutorCacheCounters {
 function cacheCounterReport(
   before: ExecutorCacheCounters,
   after: ExecutorCacheCounters,
-): Pick<CanvasKitExecutionReport,
-  "programCacheHits" | "programCacheMisses" |
-  "fontCacheHits" | "fontCacheMisses" |
-  "shaderCacheHits" | "shaderCacheMisses" |
-  "rasterLayerCacheHits" | "rasterLayerCacheMisses" |
-  "rasterLayerCacheEntries" | "rasterLayerCacheBytes"> {
+): Pick<
+  CanvasKitExecutionReport,
+  | "programCacheHits"
+  | "programCacheMisses"
+  | "fontCacheHits"
+  | "fontCacheMisses"
+  | "shaderCacheHits"
+  | "shaderCacheMisses"
+  | "rasterLayerCacheHits"
+  | "rasterLayerCacheMisses"
+  | "rasterLayerCacheEntries"
+  | "rasterLayerCacheBytes"
+> {
   return {
     programCacheHits: after.programHits - before.programHits,
     programCacheMisses: after.programMisses - before.programMisses,
@@ -391,7 +462,10 @@ function trimPlainCache<K, V>(values: Map<K, V>, maximum: number): void {
   }
 }
 
-function trimDeleteableCache<K, V extends { delete(): void }>(values: Map<K, V>, maximum: number): void {
+function trimDeleteableCache<K, V extends { delete(): void }>(
+  values: Map<K, V>,
+  maximum: number,
+): void {
   while (values.size > maximum) {
     const oldest = values.entries().next();
     if (oldest.done) return;
@@ -416,7 +490,10 @@ export class CanvasKitExecutor {
   >();
   private readonly typefaces = new Map<string, Typeface>();
   private readonly runtimeShaders = new Map<string, RuntimeEffect>();
-  private readonly rasterLayers = new Map<string, { image: Image; roi: DeviceRoi; bytes: number }>();
+  private readonly rasterLayers = new Map<
+    string,
+    { image: Image; roi: DeviceRoi; bytes: number }
+  >();
   private cacheCounters = emptyExecutorCacheCounters();
 
   constructor(
@@ -526,8 +603,12 @@ export class CanvasKitExecutor {
     this.cacheCounters.programMisses += 1;
     const pending = decodeDrawProgram(packed, this.pathArenas);
     this.drawPrograms.set(key, pending);
-    try { return await pending; }
-    catch (error) { this.drawPrograms.delete(key); throw error; }
+    try {
+      return await pending;
+    } catch (error) {
+      this.drawPrograms.delete(key);
+      throw error;
+    }
   }
 
   async baselineProgram(key: string, packed: Uint8Array): Promise<Uint8Array> {
@@ -540,29 +621,37 @@ export class CanvasKitExecutor {
     // baseline is itself the requested frame.
     const pending = this.drawProgram(key, packed).then(() => packed);
     this.baselinePrograms.set(key, pending);
-    try { return await pending; }
-    catch (error) { this.baselinePrograms.delete(key); throw error; }
+    try {
+      return await pending;
+    } catch (error) {
+      this.baselinePrograms.delete(key);
+      throw error;
+    }
   }
 
-  async planTemplate(
-    key: string,
-    packetInput: ArrayBuffer | ArrayBufferView,
-  ): Promise<Wire> {
+  async planTemplate(key: string, packetInput: ArrayBuffer | ArrayBufferView): Promise<Wire> {
     const packet = exactPacketBytes(packetInput);
     const cached = this.planTemplates.get(key);
-    if (cached
-      && cached.packet.buffer === packet.buffer
-      && cached.packet.byteOffset === packet.byteOffset
-      && cached.packet.byteLength === packet.byteLength) {
+    if (
+      cached &&
+      cached.packet.buffer === packet.buffer &&
+      cached.packet.byteOffset === packet.byteOffset &&
+      cached.packet.byteLength === packet.byteLength
+    ) {
       touch(this.planTemplates, key, cached);
       return cached.admitted;
     }
-    const admitted = decodePackedAbi(packet, RENDER_PLAN_ABI)
-      .then((value) => ownBaselines(record(value, "RenderPlanTemplate")));
+    const admitted = decodePackedAbi(packet, RENDER_PLAN_ABI).then((value) =>
+      ownBaselines(record(value, "RenderPlanTemplate")),
+    );
     const entry = { packet, admitted };
     this.planTemplates.set(key, entry);
-    try { return await admitted; }
-    catch (error) { this.planTemplates.delete(key); throw error; }
+    try {
+      return await admitted;
+    } catch (error) {
+      this.planTemplates.delete(key);
+      throw error;
+    }
   }
 
   typeface(key: string, faceIndex: number, bytes: Uint8Array): Typeface {
@@ -596,7 +685,9 @@ export class CanvasKitExecutor {
     let detail = "";
     const effect = this.CanvasKit.RuntimeEffect.Make(
       new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-      (message) => { detail = message; },
+      (message) => {
+        detail = message;
+      },
     );
     if (!effect) fail("shader_admission", `shader '${key}' failed: ${detail}`);
     this.runtimeShaders.set(key, effect);
@@ -627,7 +718,10 @@ export class CanvasKitExecutor {
     if (!value.owned || !value.image) return false;
     const bytes = value.roi.width * value.roi.height * 8;
     if (bytes > RASTER_LAYER_CACHE_BYTES) return false;
-    while (this.rasterLayers.size >= 64 || this.cacheCounters.rasterBytes + bytes > RASTER_LAYER_CACHE_BYTES) {
+    while (
+      this.rasterLayers.size >= 64 ||
+      this.cacheCounters.rasterBytes + bytes > RASTER_LAYER_CACHE_BYTES
+    ) {
       const oldest = this.rasterLayers.entries().next().value;
       if (!oldest) break;
       oldest[1].image.delete();
@@ -725,7 +819,10 @@ async function planCanvasKitFrame(
   const templateHash = digestString(bindings.templateHash, "bindings.templateHash");
   const plan = await executor.planTemplate(templateHash, planPacket);
   validatePacketTriple(plan, schedule, templateHash);
-  const externalSlots = array(record(plan.bindingLayout, "plan.bindingLayout").externalSlots, "externalSlots");
+  const externalSlots = array(
+    record(plan.bindingLayout, "plan.bindingLayout").externalSlots,
+    "externalSlots",
+  );
 
   const structures = new Map<number, ProgramStructure>();
   const packetAdmissionMs = performance.now() - packetAdmissionStarted;
@@ -740,7 +837,11 @@ async function planCanvasKitFrame(
     const layout = record(programLayouts[index], `plan.programs[${index}]`);
     const frameProgram = record(framePrograms[index], `bindings.programs[${index}]`);
     const contract = admitFrameProgramLayout(layout, frameProgram, index);
-    const structure = await admitProgramStructure(executor, contract, options.onProgramAdmissionStageTiming);
+    const structure = await admitProgramStructure(
+      executor,
+      contract,
+      options.onProgramAdmissionStageTiming,
+    );
     programContracts.push(structure.plan);
     const id = positiveId(structure.plan.id, `bindings.programs[${index}].id`);
     if (structures.has(id)) fail("duplicate_program", `program ${id} is duplicated`);
@@ -761,30 +862,75 @@ async function planCanvasKitFrame(
   const boundSchedule = admitBoundOuterSchedule(plan, programContracts, schedule, dynamic, extent);
   const rootBytes = BigInt(extent.width) * BigInt(extent.height) * 8n;
   const maxSurfaceBytes = options.maxSurfaceBytes ?? maxBigInt(rootBytes, 64n * 1024n * 1024n);
-  const maxFrameBytes = options.maxFrameBytes ?? maxBigInt(maxSurfaceBytes * 16n, 512n * 1024n * 1024n);
+  const maxFrameBytes =
+    options.maxFrameBytes ?? maxBigInt(maxSurfaceBytes * 16n, 512n * 1024n * 1024n);
   let dataTextureBytes = 0n;
   for (const raw of externalSlots) {
     const expected = record(record(raw, "external slot").expected, "external descriptor");
     if (expected.kind !== "dataTexture") continue;
     const size = record(expected.extent, "data texture extent");
-    const bytes = BigInt(positiveId(size.width, "data texture width")) * BigInt(positiveId(size.height, "data texture height")) * 8n;
-    if (bytes > maxSurfaceBytes) fail("resource_budget", "data texture exceeds the surface byte budget");
+    const bytes =
+      BigInt(positiveId(size.width, "data texture width")) *
+      BigInt(positiveId(size.height, "data texture height")) *
+      8n;
+    if (bytes > maxSurfaceBytes)
+      fail("resource_budget", "data texture exceeds the surface byte budget");
     dataTextureBytes += bytes;
   }
-  const plannedSurfacePeakBytes = BigInt(positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "frame surface bytes"));
+  const plannedSurfacePeakBytes = BigInt(
+    positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "frame surface bytes"),
+  );
   if (dataTextureBytes + plannedSurfacePeakBytes > maxFrameBytes) {
     fail("resource_budget", "data textures and working surfaces exceed the frame byte budget");
   }
-  const runs = planProgramRuns(executor, plan, structures, boundSchedule, dynamic, options.geometryRenderer ?? null);
-  const working = frameWorkingSet(executor, plan, structures, runs, boundSchedule, dynamic, extent, options.gpu);
+  const runs = planProgramRuns(
+    executor,
+    plan,
+    structures,
+    boundSchedule,
+    dynamic,
+    options.geometryRenderer ?? null,
+  );
+  const working = frameWorkingSet(
+    executor,
+    plan,
+    structures,
+    runs,
+    boundSchedule,
+    dynamic,
+    extent,
+    options.gpu,
+  );
   if (working.surfaceBytes > maxFrameBytes - dataTextureBytes) {
-    fail("resource_budget", `the frame's working surfaces need ${working.surfaceBytes} bytes beside ${dataTextureBytes} bytes of data textures, budget ${maxFrameBytes}`);
+    fail(
+      "resource_budget",
+      `the frame's working surfaces need ${working.surfaceBytes} bytes beside ${dataTextureBytes} bytes of data textures, budget ${maxFrameBytes}`,
+    );
   }
-  const framePlan: CanvasKitFramePlan = Object.freeze({ surfaceBytes: working.surfaceBytes, imageBytes: working.imageBytes });
+  const framePlan: CanvasKitFramePlan = Object.freeze({
+    surfaceBytes: working.surfaceBytes,
+    imageBytes: working.imageBytes,
+  });
   plannedFrames.set(framePlan, {
-    executor, options, plan, bindings, externalSlots, structures, runs, dynamic, extent, boundSchedule,
-    liveness: working.liveness, maxSurfaceBytes, maxFrameBytes, dataTextureBytes, plannedSurfacePeakBytes,
-    cacheBefore, packetAdmissionMs, programAdmissionMs, scheduleAdmissionMs: performance.now() - scheduleAdmissionStarted,
+    executor,
+    options,
+    plan,
+    bindings,
+    externalSlots,
+    structures,
+    runs,
+    dynamic,
+    extent,
+    boundSchedule,
+    liveness: working.liveness,
+    maxSurfaceBytes,
+    maxFrameBytes,
+    dataTextureBytes,
+    plannedSurfacePeakBytes,
+    cacheBefore,
+    packetAdmissionMs,
+    programAdmissionMs,
+    scheduleAdmissionMs: performance.now() - scheduleAdmissionStarted,
     programDiagnostics,
   });
   return framePlan;
@@ -797,26 +943,48 @@ async function runCanvasKitFrame(
   target: CanvasKitExecutionTarget,
 ): Promise<CanvasKitExecutionReport> {
   const frame = plannedFrames.get(framePlan);
-  if (!frame || frame.executor !== executor) fail("frame_plan", "frame plan already ran or belongs to another executor");
+  if (!frame || frame.executor !== executor)
+    fail("frame_plan", "frame plan already ran or belongs to another executor");
   plannedFrames.delete(framePlan);
-  const { options, plan, bindings, extent, dynamic, boundSchedule, runs, maxSurfaceBytes, maxFrameBytes, dataTextureBytes } = frame;
-  if ((target.directContext != null) !== options.gpu
-    || (target.geometryRenderer ?? null) !== (options.geometryRenderer ?? null)
-    || target.maxSurfaceBytes !== options.maxSurfaceBytes
-    || target.maxFrameBytes !== options.maxFrameBytes) {
+  const {
+    options,
+    plan,
+    bindings,
+    extent,
+    dynamic,
+    boundSchedule,
+    runs,
+    maxSurfaceBytes,
+    maxFrameBytes,
+    dataTextureBytes,
+  } = frame;
+  if (
+    (target.directContext != null) !== options.gpu ||
+    (target.geometryRenderer ?? null) !== (options.geometryRenderer ?? null) ||
+    target.maxSurfaceBytes !== options.maxSurfaceBytes ||
+    target.maxFrameBytes !== options.maxFrameBytes
+  ) {
     fail("frame_plan", "execution target differs from the one the frame was planned for");
   }
   const { CanvasKit, builtins } = executor;
   const bindingStarted = performance.now();
-  const generation = exactPositiveInteger(bindings.externalGeneration, "bindings.externalGeneration");
+  const generation = exactPositiveInteger(
+    bindings.externalGeneration,
+    "bindings.externalGeneration",
+  );
   if (generation !== BigInt(objectTable.generation)) {
-    fail("stale_generation", `binding generation ${generation} does not match object table ${objectTable.generation}`);
+    fail(
+      "stale_generation",
+      `binding generation ${generation} does not match object table ${objectTable.generation}`,
+    );
   }
 
   const externalIds = array(bindings.externalIds, "bindings.externalIds").map((value, index) =>
-    positiveId(value, `bindings.externalIds[${index}]`));
+    positiveId(value, `bindings.externalIds[${index}]`),
+  );
   const externalSlots = frame.externalSlots;
-  if (externalIds.length !== externalSlots.length) fail("binding_layout", "external slot count mismatch");
+  if (externalIds.length !== externalSlots.length)
+    fail("binding_layout", "external slot count mismatch");
   const externalBySlot = new Map<number, CanvasKitExternalObject>();
   for (let index = 0; index < externalIds.length; index += 1) {
     const slot = record(externalSlots[index], `externalSlots[${index}]`);
@@ -824,23 +992,40 @@ async function runCanvasKitFrame(
     if (slotId !== index + 1) fail("binding_layout", "external slots are not canonical");
     const object = objectTable.objects.get(externalIds[index]!);
     if (!object) fail("missing_external", `external handle ${externalIds[index]} is absent`);
-    if (!deepEqual(object.key, slot.key)) fail("external_contract", `external slot ${slotId} key mismatch`);
+    if (!deepEqual(object.key, slot.key))
+      fail("external_contract", `external slot ${slotId} key mismatch`);
     const expected = record(slot.expected, "external descriptor");
     if (expected.kind === "dataTexture") {
       const size = record(expected.extent, "data texture extent");
-      const width = positiveId(size.width, "data texture width"), height = positiveId(size.height, "data texture height");
-      if (width > 4096 || height > 4096 || width * height * 8 > 64 * 1024 * 1024
-        || object.kind !== "dataTexture" || !object.image
-        || object.image.width() !== width * 2 || object.image.height() !== height * 4
-        || object.image.getImageInfo().colorType !== CanvasKit.ColorType.Alpha_8) {
+      const width = positiveId(size.width, "data texture width"),
+        height = positiveId(size.height, "data texture height");
+      if (
+        width > 4096 ||
+        height > 4096 ||
+        width * height * 8 > 64 * 1024 * 1024 ||
+        object.kind !== "dataTexture" ||
+        !object.image ||
+        object.image.width() !== width * 2 ||
+        object.image.height() !== height * 4 ||
+        object.image.getImageInfo().colorType !== CanvasKit.ColorType.Alpha_8
+      ) {
         fail("external_contract", "data texture storage does not match its admitted descriptor");
       }
-    } else if (object.kind === "dataTexture") fail("external_contract", "data texture has a non-data descriptor");
+    } else if (object.kind === "dataTexture")
+      fail("external_contract", "data texture has a non-data descriptor");
     externalBySlot.set(slotId, object);
   }
   const programs = new Map<number, AdmittedProgram>();
   for (const [id, structure] of frame.structures) {
-    programs.set(id, bindProgramResources(executor, structure, externalBySlot, options.onProgramAdmissionStageTiming));
+    programs.set(
+      id,
+      bindProgramResources(
+        executor,
+        structure,
+        externalBySlot,
+        options.onProgramAdmissionStageTiming,
+      ),
+    );
   }
   const programAdmissionMs = frame.programAdmissionMs + performance.now() - bindingStarted;
 
@@ -851,7 +1036,11 @@ async function runCanvasKitFrame(
     extent.height,
     maxSurfaceBytes,
     maxFrameBytes - dataTextureBytes,
-    { envelopeBytes: framePlan.surfaceBytes, borrow: target.borrowSurfaceBytes ?? null, liveness: frame.liveness },
+    {
+      envelopeBytes: framePlan.surfaceBytes,
+      borrow: target.borrowSurfaceBytes ?? null,
+      liveness: frame.liveness,
+    },
   );
   arena.geometryRenderer = target.geometryRenderer ?? null;
   arena.onLocalPassTiming = target.onLocalPassTiming ?? null;
@@ -868,15 +1057,32 @@ async function runCanvasKitFrame(
     const resource = record(raw, "plan resource");
     const kind = record(resource.kind, "plan resource kind");
     if (kind.kind === "external") {
-      externalResourceById.set(positiveId(resource.id, "resource.id"), required(externalBySlot, positiveId(kind.slot, "resource.slot"), "external slot"));
+      externalResourceById.set(
+        positiveId(resource.id, "resource.id"),
+        required(externalBySlot, positiveId(kind.slot, "resource.slot"), "external slot"),
+      );
     }
   }
-  const runProgram = async (id: number, destinations: ImageValue[], device: number[]): Promise<ImageValue> => {
+  const runProgram = async (
+    id: number,
+    destinations: ImageValue[],
+    device: number[],
+  ): Promise<ImageValue> => {
     arena.activeProgram = id;
     try {
-      return await executeProgram(CanvasKit, builtins, arena, executor.engineKernels,
-        required(programs, id, "program"), required(runs, id, "program run"), destinations, device);
-    } finally { arena.activeProgram = 0; }
+      return await executeProgram(
+        CanvasKit,
+        builtins,
+        arena,
+        executor.engineKernels,
+        required(programs, id, "program"),
+        required(runs, id, "program run"),
+        destinations,
+        device,
+      );
+    } finally {
+      arena.activeProgram = 0;
+    }
   };
 
   let maximumLiveImages = 0;
@@ -885,7 +1091,8 @@ async function runCanvasKitFrame(
   try {
     for (const [index, rawPass] of array(plan.passes, "plan.passes").entries()) {
       const pass = record(rawPass, `passes[${index}]`);
-      if (positiveId(pass.id, `passes[${index}].id`) !== index + 1) fail("pass_order", "pass ids are not canonical");
+      if (positiveId(pass.id, `passes[${index}].id`) !== index + 1)
+        fail("pass_order", "pass ids are not canonical");
       const kind = record(pass.kind, `passes[${index}].kind`);
       const step = boundSchedule.passes[index]!;
       const outputId = step.output;
@@ -904,147 +1111,226 @@ async function runCanvasKitFrame(
       }
       const passStarted = target.onPassTiming ? performance.now() : 0;
       const slot = step.surfaceSlot;
-      const slotExtent = slot === null
-        ? extent
-        : required(boundSchedule.slotExtents, slot, "bound surface slot extent");
-      if (slotExtent === null) fail("bound_schedule", `visible output ${outputId} has no physical slot extent`);
-      const surface = slot === null
-        ? arena.output()
-        : arena.slot(slot, slotExtent.width, slotExtent.height);
+      const slotExtent =
+        slot === null
+          ? extent
+          : required(boundSchedule.slotExtents, slot, "bound surface slot extent");
+      if (slotExtent === null)
+        fail("bound_schedule", `visible output ${outputId} has no physical slot extent`);
+      const surface =
+        slot === null ? arena.output() : arena.slot(slot, slotExtent.width, slotExtent.height);
       const canvas = surface.getCanvas();
       canvas.clear(CanvasKit.TRANSPARENT);
       canvas.save();
       canvas.translate(-outputRoi.x, -outputRoi.y);
 
-      try { switch (kind.kind) {
-        case "clearRegion":
-          canvas.clear(color4(kind.workingLinearRec2020Premul));
-          break;
-        case "frameRegion":
-          if (kind.layer != null) {
-            const layer = record(kind.layer, "frame layer");
-            drawImageValue(CanvasKit, canvas, resourceValue(resources, layer.layer),
-              dynamicScalar(dynamic, layer.opacity), "srcOver");
-          }
-          break;
-        case "importRegion":
-          renderImport(CanvasKit, builtins, canvas, externalObject(externalResourceById, kind.external), kind, dynamic, externalResourceById);
-          break;
-        case "rasterProgram": {
-          const id = positiveId(kind.program, "RasterProgram.program");
-          const program = required(programs, id, "program");
-          const destinations = array(kind.destinationInputs, "destinationInputs").map((input) =>
-            borrowedValue(resourceValue(resources, input)));
-          const device = dynamicTransform(dynamic, kind.transform);
-          const cacheKey = rasterLayerKey(program, kind, device, outputRoi, plan);
-          const cached = cacheKey === null ? null : executor.rasterLayer(cacheKey);
-          let result: ImageValue;
-          if (cached) result = cached;
-          else {
-            const releaseFrames = bindFrames(CanvasKit, arena, program, kind, resources, device, extent);
-            try { result = await runProgram(id, destinations, device); } finally { releaseFrames(); }
-          }
-          let retained = false;
-          try {
-            drawImageValue(CanvasKit, canvas, result, 1, "src");
-            if (!cached && cacheKey !== null) retained = executor.retainRasterLayer(cacheKey, result);
-          } finally {
-            if (result.owned && !retained) result.image?.delete();
-          }
-          break;
-        }
-        case "rasterCaption": {
-          const result = await runProgram(positiveId(kind.program, "RasterCaption.program"), [],
-            dynamicTransform(dynamic, kind.transform));
-          drawImageValue(CanvasKit, canvas, resourceValue(resources, kind.destination), 1, "src");
-          drawImageValue(CanvasKit, canvas, result, dynamicScalar(dynamic, kind.opacity), "srcOver");
-          if (result.owned) result.image?.delete();
-          break;
-        }
-        case "resolveRegion": {
-          const bounds = dynamicBounds(dynamic, kind.sampleBounds);
-          canvas.save();
-          canvas.clipRect(deviceRect(CanvasKit, bounds), CanvasKit.ClipOp.Intersect, false);
-          drawImageValue(CanvasKit, canvas, resourceValue(resources, kind.input), 1, "src");
-          canvas.restore();
-          break;
-        }
-        case "dispatchKernel": {
-          const invocation = record(kind.invocation, "kernel invocation");
-          const inputs = new Map<number, MaterializedValue>();
-          try {
-            for (const id of kernelInputs(invocation)) {
-              if (!inputs.has(id)) inputs.set(id, materializeRootValue(CanvasKit, arena, resourceValue(resources, id), extent));
+      try {
+        switch (kind.kind) {
+          case "clearRegion":
+            canvas.clear(color4(kind.workingLinearRec2020Premul));
+            break;
+          case "frameRegion":
+            if (kind.layer != null) {
+              const layer = record(kind.layer, "frame layer");
+              drawImageValue(
+                CanvasKit,
+                canvas,
+                resourceValue(resources, layer.layer),
+                dynamicScalar(dynamic, layer.opacity),
+                "srcOver",
+              );
             }
-            executeKernel(CanvasKit, builtins, arena, canvas, invocation,
-              new Map([...inputs].map(([id, input]) => [id, input.value])), dynamic, extent);
-          } finally {
-            for (const input of inputs.values()) input.release();
-          }
-          break;
-        }
-        case "compositeRegion": {
-          const mode = record(kind.mode, "composite mode");
-          const source = resourceValue(resources, kind.layer);
-          const backdrop = resourceValue(resources, kind.backdrop);
-          if (mode.kind === "blend" && String(mode.mode) !== "normal") {
-            const rootSource = materializeRootValue(CanvasKit, arena, source, extent);
-            try {
-              const rootBackdrop = materializeRootValue(CanvasKit, arena, backdrop, extent);
-              try {
-                drawCreativeBlend(
-                  CanvasKit,
-                  builtins,
-                  canvas,
-                  rootSource.value.image,
-                  rootBackdrop.value.image,
-                  String(mode.mode),
-                  "srgb",
-                  dynamicScalar(dynamic, kind.opacity),
-                  true,
-                );
-              } finally { rootBackdrop.release(); }
-            } finally { rootSource.release(); }
-          } else {
-            drawImageValue(CanvasKit, canvas, backdrop, 1, "src");
-            drawImageValue(CanvasKit, canvas, source, dynamicScalar(dynamic, kind.opacity), "srcOver");
-          }
-          break;
-        }
-        case "copyConvert": {
-          const input = materializeRootValue(CanvasKit, arena, resourceValue(resources, kind.input), extent);
-          const scratchBytes = srgbPreviewScratchBytes(extent.width, extent.height,
-            typeof executor.engineKernels?.transform_srgb_preview_f16 === "function");
-          try {
-            await drawOutputTransform(
+            break;
+          case "importRegion":
+            renderImport(
               CanvasKit,
               builtins,
               canvas,
-              input.value.image,
-              record(kind.operation, "copy operation"),
-              !target.directContext
-                && outputRoi.x === 0 && outputRoi.y === 0
-                && outputRoi.width === extent.width && outputRoi.height === extent.height
-                && scratchBytes <= maxSurfaceBytes
-                // CanvasKit storage and the canonical Engine WASM input copy coexist.
-                && arena.residentBytes + scratchBytes * 2n + dataTextureBytes <= maxFrameBytes
-                ? executor.engineKernels : null,
+              externalObject(externalResourceById, kind.external),
+              kind,
+              dynamic,
             );
-          } finally {
-            input.release();
+            break;
+          case "rasterProgram": {
+            const id = positiveId(kind.program, "RasterProgram.program");
+            const program = required(programs, id, "program");
+            const destinations = array(kind.destinationInputs, "destinationInputs").map((input) =>
+              borrowedValue(resourceValue(resources, input)),
+            );
+            const device = dynamicTransform(dynamic, kind.transform);
+            const cacheKey = rasterLayerKey(program, kind, device, outputRoi, plan);
+            const cached = cacheKey === null ? null : executor.rasterLayer(cacheKey);
+            let result: ImageValue;
+            if (cached) result = cached;
+            else {
+              const releaseFrames = bindFrames(
+                CanvasKit,
+                arena,
+                program,
+                kind,
+                resources,
+                device,
+                extent,
+              );
+              try {
+                result = await runProgram(id, destinations, device);
+              } finally {
+                releaseFrames();
+              }
+            }
+            let retained = false;
+            try {
+              drawImageValue(CanvasKit, canvas, result, 1, "src");
+              if (!cached && cacheKey !== null)
+                retained = executor.retainRasterLayer(cacheKey, result);
+            } finally {
+              if (result.owned && !retained) result.image?.delete();
+            }
+            break;
           }
-          break;
+          case "rasterCaption": {
+            const result = await runProgram(
+              positiveId(kind.program, "RasterCaption.program"),
+              [],
+              dynamicTransform(dynamic, kind.transform),
+            );
+            drawImageValue(CanvasKit, canvas, resourceValue(resources, kind.destination), 1, "src");
+            drawImageValue(
+              CanvasKit,
+              canvas,
+              result,
+              dynamicScalar(dynamic, kind.opacity),
+              "srcOver",
+            );
+            if (result.owned) result.image?.delete();
+            break;
+          }
+          case "resolveRegion": {
+            const bounds = dynamicBounds(dynamic, kind.sampleBounds);
+            canvas.save();
+            canvas.clipRect(deviceRect(CanvasKit, bounds), CanvasKit.ClipOp.Intersect, false);
+            drawImageValue(CanvasKit, canvas, resourceValue(resources, kind.input), 1, "src");
+            canvas.restore();
+            break;
+          }
+          case "dispatchKernel": {
+            const invocation = record(kind.invocation, "kernel invocation");
+            const inputs = new Map<number, MaterializedValue>();
+            try {
+              for (const id of kernelInputs(invocation)) {
+                if (!inputs.has(id))
+                  inputs.set(
+                    id,
+                    materializeRootValue(CanvasKit, arena, resourceValue(resources, id), extent),
+                  );
+              }
+              executeKernel(
+                CanvasKit,
+                builtins,
+                arena,
+                canvas,
+                invocation,
+                new Map([...inputs].map(([id, input]) => [id, input.value])),
+                dynamic,
+                extent,
+              );
+            } finally {
+              for (const input of inputs.values()) input.release();
+            }
+            break;
+          }
+          case "compositeRegion": {
+            const mode = record(kind.mode, "composite mode");
+            const source = resourceValue(resources, kind.layer);
+            const backdrop = resourceValue(resources, kind.backdrop);
+            if (mode.kind === "blend" && String(mode.mode) !== "normal") {
+              const rootSource = materializeRootValue(CanvasKit, arena, source, extent);
+              try {
+                const rootBackdrop = materializeRootValue(CanvasKit, arena, backdrop, extent);
+                try {
+                  drawCreativeBlend(
+                    CanvasKit,
+                    builtins,
+                    canvas,
+                    rootSource.value.image,
+                    rootBackdrop.value.image,
+                    String(mode.mode),
+                    "srgb",
+                    dynamicScalar(dynamic, kind.opacity),
+                    true,
+                  );
+                } finally {
+                  rootBackdrop.release();
+                }
+              } finally {
+                rootSource.release();
+              }
+            } else {
+              drawImageValue(CanvasKit, canvas, backdrop, 1, "src");
+              drawImageValue(
+                CanvasKit,
+                canvas,
+                source,
+                dynamicScalar(dynamic, kind.opacity),
+                "srcOver",
+              );
+            }
+            break;
+          }
+          case "copyConvert": {
+            const input = materializeRootValue(
+              CanvasKit,
+              arena,
+              resourceValue(resources, kind.input),
+              extent,
+            );
+            const scratchBytes = srgbPreviewScratchBytes(
+              extent.width,
+              extent.height,
+              typeof executor.engineKernels?.transform_srgb_preview_f16 === "function",
+            );
+            try {
+              await drawOutputTransform(
+                CanvasKit,
+                builtins,
+                canvas,
+                input.value.image,
+                record(kind.operation, "copy operation"),
+                !target.directContext &&
+                  outputRoi.x === 0 &&
+                  outputRoi.y === 0 &&
+                  outputRoi.width === extent.width &&
+                  outputRoi.height === extent.height &&
+                  scratchBytes <= maxSurfaceBytes &&
+                  // CanvasKit storage and the canonical Engine WASM input copy coexist.
+                  arena.residentBytes + scratchBytes * 2n + dataTextureBytes <= maxFrameBytes
+                  ? executor.engineKernels
+                  : null,
+              );
+            } finally {
+              input.release();
+            }
+            break;
+          }
+          default:
+            fail(
+              "unsupported_pass",
+              `execution pass '${String(kind.kind)}' is not closed in the CanvasKit executor`,
+            );
         }
-        default:
-          fail("unsupported_pass", `execution pass '${String(kind.kind)}' is not closed in the CanvasKit executor`);
-      }} finally { canvas.restore(); }
+      } finally {
+        canvas.restore();
+      }
 
       if (!arena.geometryRenderer) surface.flush();
       const snapshotStarted = target.onPassTiming ? performance.now() : 0;
       const snapshot = surface.makeImageSnapshot();
       target.onPassTiming?.({
-        kind: String(kind.kind), width: outputRoi.width, height: outputRoi.height,
-        drawMs: snapshotStarted - passStarted, snapshotMs: performance.now() - snapshotStarted,
+        kind: String(kind.kind),
+        width: outputRoi.width,
+        height: outputRoi.height,
+        drawMs: snapshotStarted - passStarted,
+        snapshotMs: performance.now() - snapshotStarted,
       });
       resources.set(outputId, { image: snapshot, owned: true, roi: outputRoi });
       retireOuterResources(step.retireAfter, resources);
@@ -1058,8 +1344,11 @@ async function runCanvasKitFrame(
     drawImage(CanvasKit, targetCanvas, output, 1, "src");
     target.surface.flush();
     target.onPassTiming?.({
-      kind: "presentOutput", width: extent.width, height: extent.height,
-      drawMs: performance.now() - presentStarted, snapshotMs: 0,
+      kind: "presentOutput",
+      width: extent.width,
+      height: extent.height,
+      drawMs: performance.now() - presentStarted,
+      snapshotMs: 0,
     });
     arena.prepareReport();
     arena.releaseUnused();
@@ -1112,22 +1401,30 @@ function rasterLayerKey(
   plan: Wire,
 ): string | null {
   const resources = record(program.plan.resources, "program.resources");
-  if (array(pass.externalInputs, "RasterProgram.externalInputs").length !== 0
-    || array(pass.destinationInputs, "RasterProgram.destinationInputs").length !== 0
-    || frameInputs(pass).length !== 0
-    || array(resources.textures, "program textures").length !== 0
-    || array(resources.fonts, "program fonts").length !== 0
-    || array(resources.runtimeShaders, "program shaders").length !== 0
-    || array(resources.scenes, "program scenes").length !== 0
-    || array(program.plan.destinationUses, "program destination uses").length !== 0
-    || array(record(program.draw.requirements, "DrawProgram requirements").destinationUses, "DrawProgram destination uses").length !== 0
-    || array(record(program.plan.localPlan, "program.localPlan").passes, "program passes").some(raw => {
-      const kind = record(record(raw, "program pass").kind, "program pass kind");
-      return kind.kind === "readDestination" || kind.kind === "backdrop";
-    })) return null;
+  if (
+    array(pass.externalInputs, "RasterProgram.externalInputs").length !== 0 ||
+    array(pass.destinationInputs, "RasterProgram.destinationInputs").length !== 0 ||
+    frameInputs(pass).length !== 0 ||
+    array(resources.textures, "program textures").length !== 0 ||
+    array(resources.fonts, "program fonts").length !== 0 ||
+    array(resources.runtimeShaders, "program shaders").length !== 0 ||
+    array(resources.scenes, "program scenes").length !== 0 ||
+    array(program.plan.destinationUses, "program destination uses").length !== 0 ||
+    array(
+      record(program.draw.requirements, "DrawProgram requirements").destinationUses,
+      "DrawProgram destination uses",
+    ).length !== 0 ||
+    array(record(program.plan.localPlan, "program.localPlan").passes, "program passes").some(
+      (raw) => {
+        const kind = record(record(raw, "program pass").kind, "program pass kind");
+        return kind.kind === "readDestination" || kind.kind === "backdrop";
+      },
+    )
+  )
+    return null;
   // Native keys use the exact f64 device-matrix bits. Preserve -0 and subpixel phase here too.
   const bits = new DataView(new ArrayBuffer(8));
-  const matrix = device.map(value => {
+  const matrix = device.map((value) => {
     bits.setFloat64(0, value, false);
     return bits.getBigUint64(0, false).toString(16).padStart(16, "0");
   });
@@ -1135,14 +1432,21 @@ function rasterLayerKey(
     digestString(program.plan.contentHash, "program.contentHash"),
     digestString(program.plan.frameHash, "program.frameHash"),
     JSON.stringify(record(plan.renderSpec, "plan.renderSpec"), bigintJson),
-    matrix.join(""), roi.x, roi.y, roi.width, roi.height,
+    matrix.join(""),
+    roi.x,
+    roi.y,
+    roi.width,
+    roi.height,
   ].join("|");
 }
 
 /** The host frames a raster program pass hands its program. */
 function frameInputs(pass: Wire): Wire[] {
-  return pass.frameInputs === undefined ? [] : array(pass.frameInputs, "RasterProgram.frameInputs")
-    .map((input) => record(input, "frame input"));
+  return pass.frameInputs === undefined
+    ? []
+    : array(pass.frameInputs, "RasterProgram.frameInputs").map((input) =>
+        record(input, "frame input"),
+      );
 }
 
 /**
@@ -1150,15 +1454,32 @@ function frameInputs(pass: Wire): Wire[] {
  * `DeviceTransform::frame_region` rounds it: the whole pixels under its layer box, each edge of
  * the box's bounds rounded to the nearest pixel, half up, inside the frame and never empty.
  */
-export function frameRegion(device: readonly number[], extent: { width: number; height: number }): DeviceRoi {
+export function frameRegion(
+  device: readonly number[],
+  extent: { width: number; height: number },
+): DeviceRoi {
   const m = device;
-  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
-  for (const [x, y] of [[0, 0], [1, 0], [0, 1], [1, 1]] as const) {
+  let left = Infinity,
+    top = Infinity,
+    right = -Infinity,
+    bottom = -Infinity;
+  for (const [x, y] of [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+    [1, 1],
+  ] as const) {
     const w = m[6]! * x + m[7]! * y + m[8]!;
-    if (!Number.isFinite(w) || w === 0) fail("frame_region", "program transform crosses the perspective horizon");
-    const px = (m[0]! * x + m[1]! * y + m[2]!) / w, py = (m[3]! * x + m[4]! * y + m[5]!) / w;
-    if (!Number.isFinite(px) || !Number.isFinite(py)) fail("frame_region", "program transform is not finite");
-    left = Math.min(left, px); top = Math.min(top, py); right = Math.max(right, px); bottom = Math.max(bottom, py);
+    if (!Number.isFinite(w) || w === 0)
+      fail("frame_region", "program transform crosses the perspective horizon");
+    const px = (m[0]! * x + m[1]! * y + m[2]!) / w,
+      py = (m[3]! * x + m[4]! * y + m[5]!) / w;
+    if (!Number.isFinite(px) || !Number.isFinite(py))
+      fail("frame_region", "program transform is not finite");
+    left = Math.min(left, px);
+    top = Math.min(top, py);
+    right = Math.max(right, px);
+    bottom = Math.max(bottom, py);
   }
   const span = (low: number, high: number, size: number): [number, number] => {
     const limit = Math.max(size, 1);
@@ -1197,18 +1518,23 @@ function bindFrames(
   const identities: string[] = [];
   const release = (): void => {
     for (const identity of identities.splice(0)) program.textures.delete(identity);
-    for (const { surface, image } of held.splice(0)) { image.delete(); arena.releaseTransient(surface); }
+    for (const { surface, image } of held.splice(0)) {
+      image.delete();
+      arena.releaseTransient(surface);
+    }
   };
   try {
     for (const input of inputs) {
       const frame = String(input.frame);
-      if (frame !== "from" && frame !== "to" && frame !== "source") fail("frame_contract", `unknown host frame '${frame}'`);
+      if (frame !== "from" && frame !== "to" && frame !== "source")
+        fail("frame_contract", `unknown host frame '${frame}'`);
       const key = `input://${frame}`;
       const picture = resourceValue(resources, input.input);
       let image: Image;
       // Under a viewport that covers the frame, as when the canvas fills the output, the program
       // reads the picture as it is.
-      if (sameRoi(region, root) && sameRoi(picture.roi, root) && picture.image) image = picture.image;
+      if (sameRoi(region, root) && sameRoi(picture.roi, root) && picture.image)
+        image = picture.image;
       else {
         const surface = arena.transient(region.width, region.height);
         const canvas = surface.getCanvas();
@@ -1221,7 +1547,12 @@ function bindFrames(
         image = surface.makeImageSnapshot();
         held.push({ surface, image });
       }
-      const identity = textureIdentity({ key, kind: "frame", colorDomain: "linearRec2020", sampleTimeMicros: null });
+      const identity = textureIdentity({
+        key,
+        kind: "frame",
+        colorDomain: "linearRec2020",
+        sampleTimeMicros: null,
+      });
       program.textures.set(identity, { key, kind: "frame", image });
       identities.push(identity);
     }
@@ -1247,7 +1578,10 @@ function inspectProgramDiagnostics(programs: ReadonlyMap<number, ProgramStructur
     programBlendGroups: 0,
   };
   for (const program of programs.values()) {
-    report.programLocalPasses += array(record(program.plan.localPlan, "program.localPlan").passes, "program passes").length;
+    report.programLocalPasses += array(
+      record(program.plan.localPlan, "program.localPlan").passes,
+      "program passes",
+    ).length;
     report.directRasterPrograms += Number(program.directRaster !== null);
     for (const rawNode of program.draw.nodes) {
       const node = record(rawNode, "DrawProgram node");
@@ -1273,13 +1607,17 @@ function ownBaselines(plan: Wire): Wire {
   for (const [index, value] of array(plan.programs, "plan.programs").entries()) {
     const layout = record(value, `plan.programs[${index}]`);
     layout.baselinePacked = decodeBase64Bytes(layout.baselinePacked, "program.baselinePacked");
-    layout.baselineFramePacked = decodeBase64Bytes(layout.baselineFramePacked, "program.baselineFramePacked");
+    layout.baselineFramePacked = decodeBase64Bytes(
+      layout.baselineFramePacked,
+      "program.baselineFramePacked",
+    );
   }
   return plan;
 }
 
 function templateBytes(value: unknown, label: string): Uint8Array {
-  if (!(value instanceof Uint8Array)) fail("program_contract", `${label} must be admitted template bytes`);
+  if (!(value instanceof Uint8Array))
+    fail("program_contract", `${label} must be admitted template bytes`);
   return value;
 }
 
@@ -1292,11 +1630,16 @@ async function admitProgramStructure(
   let at = onTiming ? performance.now() : 0;
   const measured = (kind: string) => {
     if (!onTiming) return;
-    const next = performance.now(); onTiming(kind, next - at); at = next;
+    const next = performance.now();
+    onTiming(kind, next - at);
+    at = next;
   };
   const baselineHash = digestString(plan.baselineContentHash, "program.baselineContentHash");
   const baselineFrame = templateBytes(plan.baselineFramePacked, "program.baselineFramePacked");
-  const baseline = await executor.baselineProgram(baselineHash, templateBytes(plan.baselinePacked, "program.baselinePacked"));
+  const baseline = await executor.baselineProgram(
+    baselineHash,
+    templateBytes(plan.baselinePacked, "program.baselinePacked"),
+  );
   measured("baseline");
   const framePatch = decodeBase64Bytes(plan.framePatch, "program.framePatch");
   const framePacked = applyDrawProgramPatch(baselineFrame, framePatch);
@@ -1311,11 +1654,17 @@ async function admitProgramStructure(
   try {
     frameValue = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(framePacked));
   } catch (error) {
-    fail("program_contract", `program ${String(plan.id)} frame metadata is invalid: ${String(error)}`);
+    fail(
+      "program_contract",
+      `program ${String(plan.id)} frame metadata is invalid: ${String(error)}`,
+    );
   }
   const exactPlan = { ...plan, ...record(frameValue, "program frame metadata") };
   measured("frameJson");
-  if (!deepEqual(draw.viewport, exactPlan.viewport) || !deepEqual(draw.requirements, exactPlan.requirements)) {
+  if (
+    !deepEqual(draw.viewport, exactPlan.viewport) ||
+    !deepEqual(draw.requirements, exactPlan.requirements)
+  ) {
     fail("program_contract", `program ${String(exactPlan.id)} packed contract mismatch`);
   }
   measured("contract");
@@ -1334,11 +1683,7 @@ function bindProgramResources(
   const started = onTiming ? performance.now() : 0;
   const resources = record(program.plan.resources, "program.resources");
   const requirements = record(program.plan.requirements, "program.requirements");
-  const textures = admitProgramTextures(
-    requirements.externalTextures,
-    resources.textures,
-    objects,
-  );
+  const textures = admitProgramTextures(requirements.externalTextures, resources.textures, objects);
   const fonts = new Map<string, Typeface>();
   for (const raw of array(resources.fonts, "program fonts")) {
     const binding = record(raw, "font binding");
@@ -1347,7 +1692,9 @@ function bindProgramResources(
     const faceIndex = positiveIdOrZero(binding.faceIndex, "faceIndex");
     // PreparedFrame uses the public ContentDigest spelling while DrawProgram's sealed internal
     // font ABI stores the same digest as bare lowercase hex. Normalize only at this typed bridge.
-    const faceHash = digestString(binding.faceHash, "font binding faceHash").slice("sha256:".length);
+    const faceHash = digestString(binding.faceHash, "font binding faceHash").slice(
+      "sha256:".length,
+    );
     const key = fontKey(faceHash, faceIndex);
     fonts.set(key, executor.typeface(key, faceIndex, object.bytes));
   }
@@ -1355,7 +1702,8 @@ function bindProgramResources(
   for (const raw of array(resources.runtimeShaders, "program shaders")) {
     const binding = record(raw, "shader binding");
     const object = required(objects, positiveId(binding.slot, "shader slot"), "shader slot");
-    if (object.kind !== "runtimeShader" || !object.bytes) fail("shader_contract", "shader slot has no source bytes");
+    if (object.kind !== "runtimeShader" || !object.bytes)
+      fail("shader_contract", "shader slot has no source bytes");
     const key = `${String(binding.key)}:${JSON.stringify(object.key, bigintJson)}`;
     shaders.set(String(binding.key), executor.runtimeShader(key, object.bytes));
   }
@@ -1363,18 +1711,28 @@ function bindProgramResources(
   for (const raw of array(resources.scenes, "program scenes")) {
     const binding = record(raw, "scene binding");
     const object = required(objects, positiveId(binding.slot, "scene slot"), "scene slot");
-    if (object.kind !== "scene3d" || !object.image) fail("scene_contract", "Scene3D slot has no raster image");
+    if (object.kind !== "scene3d" || !object.image)
+      fail("scene_contract", "Scene3D slot has no raster image");
     scenes.set(String(binding.key), object);
   }
   onTiming?.("resources", performance.now() - started);
-  return { ...program, pathCache: executor.paths, paintCache: executor.paints, textures, fonts, shaders, scenes };
+  return {
+    ...program,
+    pathCache: executor.paths,
+    paintCache: executor.paints,
+    textures,
+    fonts,
+    shaders,
+    scenes,
+  };
 }
 
 function admitFrameProgramLayout(layout: Wire, program: Wire, index: number): Wire {
   const label = `program ${index + 1}`;
   const layoutId = positiveId(layout.id, `plan.programs[${index}].id`);
-  if (layoutId !== index + 1
-    || positiveId(program.id, `bindings.programs[${index}].id`) !== layoutId
+  if (
+    layoutId !== index + 1 ||
+    positiveId(program.id, `bindings.programs[${index}].id`) !== layoutId
   ) {
     fail("program_layout", `${label} does not match its reusable template slot`);
   }
@@ -1444,13 +1802,23 @@ async function executeProgram(
       }
       if (storage.kind === "destination") {
         const destination = destinations[positiveId(storage.destination, "destination") - 1];
-        if (!destination) fail("program_schedule", `destination ${String(storage.destination)} is absent`);
+        if (!destination)
+          fail("program_schedule", `destination ${String(storage.destination)} is absent`);
         values.set(output, borrowedValue(destination));
         retire(step.retireAfter);
         continue;
       }
       if (storage.kind === "alias") {
-        values.set(output, borrowedValue(required(values, positiveId(storage.source, "program alias source"), "program alias source")));
+        values.set(
+          output,
+          borrowedValue(
+            required(
+              values,
+              positiveId(storage.source, "program alias source"),
+              "program alias source",
+            ),
+          ),
+        );
         retire(step.retireAfter);
         continue;
       }
@@ -1466,9 +1834,8 @@ async function executeProgram(
         retire(step.retireAfter);
         continue;
       }
-      const slot = storage.kind === "surface"
-        ? positiveId(storage.slot, "bound program surface slot")
-        : 0;
+      const slot =
+        storage.kind === "surface" ? positiveId(storage.slot, "bound program surface slot") : 0;
       const localStarted = arena.onLocalPassTiming ? performance.now() : 0;
       let surface: Surface;
       if (slot === 0) {
@@ -1496,20 +1863,20 @@ async function executeProgram(
           canvas.save();
           canvas.translate(-outputRoi.x, -outputRoi.y);
           try {
-          await executeProgramPass(
-            CanvasKit,
-            builtins,
-            engineKernels,
-            arena,
-            canvas,
-            admitted,
-            kind,
-            values,
-            destinations,
-            device,
-            localPlan,
-            outputRoi,
-          );
+            await executeProgramPass(
+              CanvasKit,
+              builtins,
+              engineKernels,
+              arena,
+              canvas,
+              admitted,
+              kind,
+              values,
+              destinations,
+              device,
+              localPlan,
+              outputRoi,
+            );
           } finally {
             canvas.restore();
           }
@@ -1522,15 +1889,21 @@ async function executeProgram(
           if (slot === 0) arena.releaseTransient(surface);
         }
       })();
-      arena.onLocalPassTiming?.({kind: String(kind.kind), width: outputRoi.width, height: outputRoi.height,
-        drawMs: performance.now() - localStarted - localSnapshotMs, snapshotMs: localSnapshotMs});
+      arena.onLocalPassTiming?.({
+        kind: String(kind.kind),
+        width: outputRoi.width,
+        height: outputRoi.height,
+        drawMs: performance.now() - localStarted - localSnapshotMs,
+        snapshotMs: localSnapshotMs,
+      });
       if (slot !== 0) localSlotImages.set(slot, snapshot);
       const value = { image: snapshot, owned: true, roi: outputRoi };
       values.set(output, value);
       if (storage.kind === "output") result = value;
       retire(step.retireAfter);
     }
-    if (result.image === null) result = values.get(positiveId(localPlan.output, "localPlan.output")) ?? result;
+    if (result.image === null)
+      result = values.get(positiveId(localPlan.output, "localPlan.output")) ?? result;
     // `result` is deliberately excluded from the cleanup below and ownership crosses this
     // function boundary. The outer pass must delete it after copying it into its own surface;
     // reporting it as borrowed leaks one snapshot per DrawProgram execution.
@@ -1538,11 +1911,13 @@ async function executeProgram(
   } finally {
     const liveSlotImages = new Set(localSlotImages.values());
     for (const value of [...values.values(), ...retiredValues]) {
-      if (value.owned
-        && value.image
-        && value.image !== result.image
-        && !retiredImages.has(value.image)
-        && !liveSlotImages.has(value.image)) {
+      if (
+        value.owned &&
+        value.image &&
+        value.image !== result.image &&
+        !retiredImages.has(value.image) &&
+        !liveSlotImages.has(value.image)
+      ) {
         value.image.delete();
       }
     }
@@ -1555,12 +1930,16 @@ async function executeProgram(
 
 function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterPlan | null {
   const passes = array(localPlan.passes, "direct raster passes");
-  if (passes.length === 1 && record(record(passes[0], "pass").kind, "pass kind").kind === "rasterTree") {
+  if (
+    passes.length === 1 &&
+    record(record(passes[0], "pass").kind, "pass kind").kind === "rasterTree"
+  ) {
     return null;
   }
   const destinationUses = array(draw.requirements.destinationUses, "DrawProgram destination uses");
   const resources = array(localPlan.resources, "direct raster resources").map((raw) =>
-    record(raw, "direct raster resource"));
+    record(raw, "direct raster resource"),
+  );
   const layerBounds = new Map<number, RectWire>();
   const backdrops = new Map<number, DirectRasterBackdrop>();
   for (const rawPass of array(localPlan.passes, "direct raster passes")) {
@@ -1571,9 +1950,10 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
       if (backdrops.has(node)) return null;
       const localInputs = array(kind.localInputs, "direct raster destination local inputs");
       backdrops.set(node, {
-        destination: kind.external == null
-          ? null
-          : positiveId(kind.external, "direct raster backdrop destination") - 1,
+        destination:
+          kind.external == null
+            ? null
+            : positiveId(kind.external, "direct raster backdrop destination") - 1,
         hasLocalInputs: localInputs.length !== 0,
       });
       continue;
@@ -1584,7 +1964,10 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
       kind.kind === "applyOpacity" ? kind.input : kind.output,
       "direct raster layer resource",
     );
-    const resource = record(requiredIndex(resources, resourceId - 1, "direct raster layer resource"), "direct raster layer resource");
+    const resource = record(
+      requiredIndex(resources, resourceId - 1, "direct raster layer resource"),
+      "direct raster layer resource",
+    );
     const bounds = record(resource.bounds, "direct raster layer bounds");
     if (bounds.kind !== "finite") return null;
     layerBounds.set(node, rect(bounds.rect, "direct raster layer rect"));
@@ -1607,30 +1990,61 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
     const filters = array(group.filters, "direct raster group filters");
     const opensLayer = opacity !== 1 || filters.length !== 0;
     const backdrop = group.backdrop == null ? null : backdrops.get(id);
-    const kinds = filters.map(filter => String(record(filter, "direct raster group filter").kind));
-    const backdropKinds = group.backdrop == null ? [] : array(record(group.backdrop, "direct raster backdrop").filters,
-      "direct raster backdrop filters").map(filter => String(record(filter, "direct raster backdrop filter").kind));
-    const spatial = kinds.some(kind => kind === "blur" || kind === "dropShadow");
-    const transformed = rotated || !isScaleTranslateMatrix(numberArray(group.transform, 9, "direct raster group transform"));
-    const supported = group.mask == null
+    const kinds = filters.map((filter) =>
+      String(record(filter, "direct raster group filter").kind),
+    );
+    const backdropKinds =
+      group.backdrop == null
+        ? []
+        : array(
+            record(group.backdrop, "direct raster backdrop").filters,
+            "direct raster backdrop filters",
+          ).map((filter) => String(record(filter, "direct raster backdrop filter").kind));
+    const spatial = kinds.some((kind) => kind === "blur" || kind === "dropShadow");
+    const transformed =
+      rotated ||
+      !isScaleTranslateMatrix(numberArray(group.transform, 9, "direct raster group transform"));
+    const supported =
+      group.mask == null &&
       // saveLayer's image-filter crop truncates the wide glow tail; use scheduled ROI passes.
       // Noise displacement runs the kernel Native shares, which only a scheduled pass draws.
-      && !kinds.some(kind => ["glow", "bloom", "radialBlur", "filmGrain", "lensDistortion", "chromaticAberration", "noiseDisplacement"].includes(kind))
+      !kinds.some((kind) =>
+        [
+          "glow",
+          "bloom",
+          "radialBlur",
+          "filmGrain",
+          "lensDistortion",
+          "chromaticAberration",
+          "noiseDisplacement",
+        ].includes(kind),
+      ) &&
       // A backdrop list that names an advanced filter runs a scheduled pass per function.
-      && !backdropKinds.some(kind => ["glow", "bloom", "radialBlur", "filmGrain", "lensDistortion", "chromaticAberration", "velocityBlur", "noiseDisplacement"].includes(kind))
+      !backdropKinds.some((kind) =>
+        [
+          "glow",
+          "bloom",
+          "radialBlur",
+          "filmGrain",
+          "lensDistortion",
+          "chromaticAberration",
+          "velocityBlur",
+          "noiseDisplacement",
+        ].includes(kind),
+      ) &&
       // Skia filters a blur or drop-shadow layer under a rotated or skewed CTM in scale/translate
       // space and resamples the result, softening its content; scheduled passes filter in device space.
-      && !(spatial && transformed)
+      !(spatial && transformed) &&
       // Path clips use the scheduled filled-path coverage contract, not clipPath's AA mask.
-      && (group.clip == null || record(group.clip, "direct raster clip").kind !== "path")
-      && group.shader == null
-      && group.transition == null
-      && String(group.internalBlend) === "normal"
-      && opacity >= 0
-      && opacity <= 1
-      && (group.backdrop == null || backdrop !== undefined)
-      && !(backdrop?.hasLocalInputs && (insideLayer || opensLayer))
-      && (opacity === 0 || (opacity === 1 && filters.length === 0) || layerBounds.has(id));
+      (group.clip == null || record(group.clip, "direct raster clip").kind !== "path") &&
+      group.shader == null &&
+      group.transition == null &&
+      String(group.internalBlend) === "normal" &&
+      opacity >= 0 &&
+      opacity <= 1 &&
+      (group.backdrop == null || backdrop !== undefined) &&
+      !(backdrop?.hasLocalInputs && (insideLayer || opensLayer)) &&
+      (opacity === 0 || (opacity === 1 && filters.length === 0) || layerBounds.has(id));
     if (!supported) {
       memo.set(memoKey, false);
       return false;
@@ -1638,20 +2052,24 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
     spatialFilters ||= spatial;
     visiting.add(id);
     const children = array(group.children, "direct raster group children");
-    const result = children.every((child) => eligible(
-      positiveIdOrZero(child, "direct raster child"),
-      depth + 1,
-      insideLayer || opensLayer,
-      transformed,
-    ));
+    const result = children.every((child) =>
+      eligible(
+        positiveIdOrZero(child, "direct raster child"),
+        depth + 1,
+        insideLayer || opensLayer,
+        transformed,
+      ),
+    );
     visiting.delete(id);
     memo.set(memoKey, result);
     return result;
   };
   const roots = draw.roots.map((root) => positiveIdOrZero(root, "direct raster root"));
-  const externalBackdropCount = [...backdrops.values()].filter((backdrop) => backdrop.destination !== null).length;
-  return roots.every((root) => eligible(root, 0, false, false))
-    && externalBackdropCount === destinationUses.length
+  const externalBackdropCount = [...backdrops.values()].filter(
+    (backdrop) => backdrop.destination !== null,
+  ).length;
+  return roots.every((root) => eligible(root, 0, false, false)) &&
+    externalBackdropCount === destinationUses.length
     ? { roots, layerBounds, backdrops, spatialFilters }
     : null;
 }
@@ -1691,7 +2109,15 @@ function executeDirectRasterProgram(
           0,
         );
       };
-      if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,admitted.directRaster!.roots,IDENTITY_MATRIX,fallback);
+      if (arena.geometryRenderer)
+        arena.geometryRenderer.drawChildren(
+          CanvasKit,
+          canvas,
+          admitted.draw,
+          admitted.directRaster!.roots,
+          IDENTITY_MATRIX,
+          fallback,
+        );
       else admitted.directRaster!.roots.forEach(fallback);
     } finally {
       canvas.restore();
@@ -1716,9 +2142,22 @@ function drawProgramTree(
   depth: number,
 ): void {
   if (depth > 128) fail("program_schedule", "direct raster tree exceeds the group depth budget");
-  const node = record(requiredIndex(admitted.draw.nodes, nodeId, "direct raster node"), "direct raster node");
+  const node = record(
+    requiredIndex(admitted.draw.nodes, nodeId, "direct raster node"),
+    "direct raster node",
+  );
   if (node.kind !== "group") {
-    drawProgramNode(CanvasKit, builtins, canvas, admitted, nodeId, IDENTITY_MATRIX, 0, undefined, arena);
+    drawProgramNode(
+      CanvasKit,
+      builtins,
+      canvas,
+      admitted,
+      nodeId,
+      IDENTITY_MATRIX,
+      0,
+      undefined,
+      arena,
+    );
     return;
   }
   const group = record(node.value, "direct raster group");
@@ -1756,7 +2195,13 @@ function drawProgramTree(
     // blur/drop-shadow expansion when the layer is restored. Ancestor clips remain outside and
     // therefore continue to constrain the complete descendant result.
     if (group.clip != null) {
-      applyClip(CanvasKit, canvas, admitted.draw, record(group.clip, "direct raster group clip"), IDENTITY_MATRIX);
+      applyClip(
+        CanvasKit,
+        canvas,
+        admitted.draw,
+        record(group.clip, "direct raster group clip"),
+        IDENTITY_MATRIX,
+      );
     }
     if (group.backdrop != null) {
       const contract = required(
@@ -1766,7 +2211,10 @@ function drawProgramTree(
       );
       const destination = contract.destination === null ? null : destinations[contract.destination];
       if (contract.destination !== null && !destination) {
-        fail("program_schedule", `direct raster backdrop destination ${contract.destination + 1} is absent`);
+        fail(
+          "program_schedule",
+          `direct raster backdrop destination ${contract.destination + 1} is absent`,
+        );
       }
       drawDirectRasterBackdrop(
         CanvasKit,
@@ -1794,7 +2242,15 @@ function drawProgramTree(
         depth + 1,
       );
     };
-    if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,children as number[],IDENTITY_MATRIX,fallback);
+    if (arena.geometryRenderer)
+      arena.geometryRenderer.drawChildren(
+        CanvasKit,
+        canvas,
+        admitted.draw,
+        children as number[],
+        IDENTITY_MATRIX,
+        fallback,
+      );
     else children.forEach(fallback);
   } finally {
     if (layer) canvas.restore();
@@ -1859,7 +2315,13 @@ function drawDirectRasterBackdrop(
     if (filters.length === 0) {
       drawImageValue(CanvasKit, canvas, input, 1, "src");
     } else {
-      applyFiltersAsLayerValue(CanvasKit, canvas, input, backdropFiltersInDeviceSpace(filters, matrix, bounds), null);
+      applyFiltersAsLayerValue(
+        CanvasKit,
+        canvas,
+        input,
+        backdropFiltersInDeviceSpace(filters, matrix, bounds),
+        null,
+      );
     }
   } finally {
     canvas.restore();
@@ -1884,9 +2346,20 @@ async function executeProgramPass(
   outputRoi: DeviceRoi,
 ): Promise<void> {
   switch (kind.kind) {
-    case "clear": return;
+    case "clear":
+      return;
     case "rasterNode":
-      drawProgramNode(CanvasKit, builtins, canvas, admitted, positiveIdOrZero(kind.node, "RasterNode.node"), programMatrix(admitted, localPlan, kind.output, device), 0, undefined, arena);
+      drawProgramNode(
+        CanvasKit,
+        builtins,
+        canvas,
+        admitted,
+        positiveIdOrZero(kind.node, "RasterNode.node"),
+        programMatrix(admitted, localPlan, kind.output, device),
+        0,
+        undefined,
+        arena,
+      );
       return;
     case "rasterTree": {
       const matrix = programMatrix(admitted, localPlan, kind.output, device);
@@ -1894,19 +2367,42 @@ async function executeProgramPass(
       const bounds = new Map<number, ReturnType<typeof programNodeBounds>>();
       try {
         const fallback = (root: unknown) => {
-          drawProgramNode(CanvasKit, builtins, canvas, admitted,
-            positiveIdOrZero(root, "RasterTree.root"), matrix, 0, bounds, arena, objects, outputRoi);
+          drawProgramNode(
+            CanvasKit,
+            builtins,
+            canvas,
+            admitted,
+            positiveIdOrZero(root, "RasterTree.root"),
+            matrix,
+            0,
+            bounds,
+            arena,
+            objects,
+            outputRoi,
+          );
         };
         const roots = array(kind.roots, "RasterTree.roots");
-        if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,roots as number[],matrix,fallback);
+        if (arena.geometryRenderer)
+          arena.geometryRenderer.drawChildren(
+            CanvasKit,
+            canvas,
+            admitted.draw,
+            roots as number[],
+            matrix,
+            fallback,
+          );
         else roots.forEach(fallback);
-      } finally { objects.delete(); }
+      } finally {
+        objects.delete();
+      }
       return;
     }
     case "readDestination": {
-      const external = kind.external == null
-        ? transparentValue()
-        : destinations[positiveId(kind.external, "program destination") - 1] ?? transparentValue();
+      const external =
+        kind.external == null
+          ? transparentValue()
+          : (destinations[positiveId(kind.external, "program destination") - 1] ??
+            transparentValue());
       drawImageValue(CanvasKit, canvas, external, 1, "src");
       for (const input of array(kind.localInputs, "local destination inputs")) {
         drawImageValue(CanvasKit, canvas, programValue(values, input), 1, "srcOver");
@@ -1921,17 +2417,34 @@ async function executeProgramPass(
       const clip = { kind: "rect", value: rect(kind.bounds, "program backdrop bounds") };
       const matrix = programMatrix(admitted, localPlan, kind.output, device);
       const input = programValue(values, kind.input);
-      const filters = backdropFiltersInDeviceSpace(array(kind.filters, "backdrop filters"), matrix, clip.value);
-      const last = filters.length === 0 ? null : record(filters[filters.length - 1], "backdrop filter");
+      const filters = backdropFiltersInDeviceSpace(
+        array(kind.filters, "backdrop filters"),
+        matrix,
+        clip.value,
+      );
+      const last =
+        filters.length === 0 ? null : record(filters[filters.length - 1], "backdrop filter");
       canvas.save();
       try {
         applyClip(CanvasKit, canvas, admitted.draw, clip, matrix);
         if (last?.kind === "noiseDisplacement") {
-          drawDisplacedBackdrop(CanvasKit, builtins, engineKernels, arena, canvas, input, filters.slice(0, -1), last, outputRoi);
+          drawDisplacedBackdrop(
+            CanvasKit,
+            builtins,
+            engineKernels,
+            arena,
+            canvas,
+            input,
+            filters.slice(0, -1),
+            last,
+            outputRoi,
+          );
         } else {
           applyFiltersAsLayerValue(CanvasKit, canvas, input, filters, null);
         }
-      } finally { canvas.restore(); }
+      } finally {
+        canvas.restore();
+      }
       return;
     }
     case "sourceOver":
@@ -1949,7 +2462,13 @@ async function executeProgramPass(
         return;
       }
       canvas.save();
-      applyClip(CanvasKit, canvas, admitted.draw, record(kind.clip, "program clip"), programMatrix(admitted, localPlan, kind.output, device));
+      applyClip(
+        CanvasKit,
+        canvas,
+        admitted.draw,
+        record(kind.clip, "program clip"),
+        programMatrix(admitted, localPlan, kind.output, device),
+      );
       drawImageValue(CanvasKit, canvas, programValue(values, kind.input), 1, "src");
       canvas.restore();
       return;
@@ -1961,22 +2480,38 @@ async function executeProgramPass(
       if (filter.kind === "noiseDisplacement") {
         const tables = engineKernels?.perlin_noise_tables;
         if (!tables) fail("noise_displacement_tables", "noise displacement tables are unavailable");
-        drawNoiseDisplacement(CanvasKit, builtins, canvas, programValue(values, kind.input), filter, matrix,
-          tables.call(engineKernels, positiveIdOrZero(filter.seed, "noise seed")));
+        drawNoiseDisplacement(
+          CanvasKit,
+          builtins,
+          canvas,
+          programValue(values, kind.input),
+          filter,
+          matrix,
+          tables.call(engineKernels, positiveIdOrZero(filter.seed, "noise seed")),
+        );
         return;
       }
       if (filter.kind === "chromaticAberration") {
         const input = programValue(values, kind.input);
         if (!input.image) return;
-        const source = input.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
-          CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None,
-          [1, 0, input.roi.x, 0, 1, input.roi.y, 0, 0, 1]);
+        const source = input.image.makeShaderOptions(
+          CanvasKit.TileMode.Decal,
+          CanvasKit.TileMode.Decal,
+          CanvasKit.FilterMode.Linear,
+          CanvasKit.MipmapMode.None,
+          [1, 0, input.roi.x, 0, 1, input.roi.y, 0, 0, 1],
+        );
         if (!source) fail("chromatic_shader", "chromatic input shader allocation failed");
         let shader: Shader | null = null;
         try {
-          shader = builtins.shader("chromaticAberration", pair(filter.offset, "chromatic offset"), [source]);
+          shader = builtins.shader("chromaticAberration", pair(filter.offset, "chromatic offset"), [
+            source,
+          ]);
           drawShader(CanvasKit, canvas, shader, "src");
-        } finally { shader?.delete(); source.delete(); }
+        } finally {
+          shader?.delete();
+          source.delete();
+        }
         return;
       }
       if (filter.kind === "radialBlur") {
@@ -1985,16 +2520,42 @@ async function executeProgramPass(
         const input = programValue(values, kind.input);
         if (!input.image) return;
         const amount = finiteNumber(filter.amount, "radial blur amount");
-        const plan = planner.call(engineKernels, amount, input.roi.x, input.roi.y, input.roi.width, input.roi.height,
-          outputRoi.x, outputRoi.y, outputRoi.width, outputRoi.height);
-        await drawRadialBlur(CanvasKit, builtins, arena, canvas, input, outputRoi,
-          pair(filter.center, "radial blur center"), amount, plan);
+        const plan = planner.call(
+          engineKernels,
+          amount,
+          input.roi.x,
+          input.roi.y,
+          input.roi.width,
+          input.roi.height,
+          outputRoi.x,
+          outputRoi.y,
+          outputRoi.width,
+          outputRoi.height,
+        );
+        await drawRadialBlur(
+          CanvasKit,
+          builtins,
+          arena,
+          canvas,
+          input,
+          outputRoi,
+          pair(filter.center, "radial blur center"),
+          amount,
+          plan,
+        );
         return;
       }
       if (filter.kind === "filmGrain") {
-        drawFilmGrain(CanvasKit, builtins, canvas, programValue(values, kind.input), outputRoi,
-          finiteNumber(filter.seed, "film grain seed"), finiteNumber(filter.amount, "film grain amount"),
-          finiteNumber(filter.size, "film grain size"));
+        drawFilmGrain(
+          CanvasKit,
+          builtins,
+          canvas,
+          programValue(values, kind.input),
+          outputRoi,
+          finiteNumber(filter.seed, "film grain seed"),
+          finiteNumber(filter.amount, "film grain amount"),
+          finiteNumber(filter.size, "film grain size"),
+        );
         return;
       }
       if (filter.kind === "bloom" || filter.kind === "glow" || filter.kind === "lensDistortion") {
@@ -2002,36 +2563,91 @@ async function executeProgramPass(
         if (!source.image) return;
         const inputRoi = source.roi;
         if (arena.gpu && filter.kind === "lensDistortion") {
-          drawLensDistortion(CanvasKit, builtins, canvas, source.image, inputRoi, outputRoi,
+          drawLensDistortion(
+            CanvasKit,
+            builtins,
+            canvas,
+            source.image,
+            inputRoi,
+            outputRoi,
             programLensFrame(localPlan, kind, matrix, exact),
-            finiteNumber(filter.k1, "lens distortion k1"), finiteNumber(filter.k2, "lens distortion k2"));
+            finiteNumber(filter.k1, "lens distortion k1"),
+            finiteNumber(filter.k2, "lens distortion k2"),
+          );
           return;
         }
         const planner = engineKernels?.plan_pyramid_filter;
         if (arena.gpu && planner && (filter.kind === "bloom" || filter.kind === "glow")) {
-          const recipe = planner.call(engineKernels, inputRoi.width, inputRoi.height,
-            outputRoi.width, outputRoi.height, inputRoi.x - outputRoi.x, inputRoi.y - outputRoi.y,
-            JSON.stringify(filter));
+          const recipe = planner.call(
+            engineKernels,
+            inputRoi.width,
+            inputRoi.height,
+            outputRoi.width,
+            outputRoi.height,
+            inputRoi.x - outputRoi.x,
+            inputRoi.y - outputRoi.y,
+            JSON.stringify(filter),
+          );
           if (arena.yieldToPresentation)
-            await drawPyramidFilterCooperative(arena.yieldToPresentation, CanvasKit, builtins, arena,
-              canvas, source.image, inputRoi, outputRoi, filter.kind, recipe);
-          else drawPyramidFilter(CanvasKit, builtins, arena, canvas, source.image, inputRoi,
-            outputRoi, filter.kind, recipe);
+            await drawPyramidFilterCooperative(
+              arena.yieldToPresentation,
+              CanvasKit,
+              builtins,
+              arena,
+              canvas,
+              source.image,
+              inputRoi,
+              outputRoi,
+              filter.kind,
+              recipe,
+            );
+          else
+            drawPyramidFilter(
+              CanvasKit,
+              builtins,
+              arena,
+              canvas,
+              source.image,
+              inputRoi,
+              outputRoi,
+              filter.kind,
+              recipe,
+            );
           return;
         }
         let readRoi = inputRoi;
         if (planner && (filter.kind === "bloom" || filter.kind === "glow")) {
-          const recipe = planner.call(engineKernels, inputRoi.width, inputRoi.height,
-            outputRoi.width, outputRoi.height, inputRoi.x - outputRoi.x, inputRoi.y - outputRoi.y,
-            JSON.stringify(filter));
+          const recipe = planner.call(
+            engineKernels,
+            inputRoi.width,
+            inputRoi.height,
+            outputRoi.width,
+            outputRoi.height,
+            inputRoi.x - outputRoi.x,
+            inputRoi.y - outputRoi.y,
+            JSON.stringify(filter),
+          );
           // Keep raster coverage intact. Only copy the region used by the F16 kernel across
           // the CanvasKit/WASM boundary, using the planner's original sampling grid.
-          const region = recipe.length >= 15
-            ? { x: outputRoi.x + recipe[0]!, y: outputRoi.y + recipe[1]!, width: recipe[2]!, height: recipe[3]! }
-            : outputRoi;
-          const x = Math.max(inputRoi.x, region.x), y = Math.max(inputRoi.y, region.y);
-          const width = Math.max(0, Math.min(inputRoi.x + inputRoi.width, region.x + region.width) - x);
-          const height = Math.max(0, Math.min(inputRoi.y + inputRoi.height, region.y + region.height) - y);
+          const region =
+            recipe.length >= 15
+              ? {
+                  x: outputRoi.x + recipe[0]!,
+                  y: outputRoi.y + recipe[1]!,
+                  width: recipe[2]!,
+                  height: recipe[3]!,
+                }
+              : outputRoi;
+          const x = Math.max(inputRoi.x, region.x),
+            y = Math.max(inputRoi.y, region.y);
+          const width = Math.max(
+            0,
+            Math.min(inputRoi.x + inputRoi.width, region.x + region.width) - x,
+          );
+          const height = Math.max(
+            0,
+            Math.min(inputRoi.y + inputRoi.height, region.y + region.height) - y,
+          );
           if (!width || !height) return;
           readRoi = { x, y, width, height };
         }
@@ -2042,51 +2658,83 @@ async function executeProgramPass(
           alphaType: CanvasKit.AlphaType.Premul,
           colorSpace: CanvasKit.ColorSpace.SRGB,
         };
-        const input = source.image.readPixels(readRoi.x - inputRoi.x, readRoi.y - inputRoi.y,
-          info, undefined, readRoi.width * 8);
-        if (!input || !(input instanceof Uint8Array)) fail("pyramid_read", "working F16 input read failed");
-        const dimensions = [readRoi.width, readRoi.height, outputRoi.width, outputRoi.height,
-          readRoi.x - outputRoi.x, readRoi.y - outputRoi.y] as const;
-        const output = await (filter.kind === "lensDistortion" ? (() => {
-          const kernel = engineKernels?.apply_lens_distortion_f16;
-          if (!kernel) fail("lens_distortion_kernel", "working-linear F16 lens distortion kernel is unavailable");
-          const frame = programLensFrame(localPlan, kind, matrix, exact);
-          return kernel.call(engineKernels, input, ...dimensions, outputRoi.x, outputRoi.y,
-            finiteNumber(filter.k1, "lens distortion k1"),
-            finiteNumber(filter.k2, "lens distortion k2"),
-            ...frame);
-        })() : filter.kind === "bloom" ? (() => {
-          const kernel = engineKernels?.apply_bloom_f16;
-          if (!kernel) fail("bloom_kernel", "working-linear F16 bloom kernel is unavailable");
-          return kernel.call(engineKernels, input, ...dimensions,
-            finiteNumber(filter.threshold, "bloom threshold"),
-            finiteNumber(filter.knee, "bloom knee"),
-            finiteNumber(filter.intensity, "bloom intensity"),
-            finiteNumber(filter.radius, "bloom radius"));
-        })() : (() => {
-          const kernel = engineKernels?.apply_glow_f16;
-          if (!kernel) fail("glow_kernel", "working-linear F16 glow kernel is unavailable");
-          return kernel.call(engineKernels, input, ...dimensions,
-            JSON.stringify(record(filter.color, "glow color")),
-            finiteNumber(filter.intensity, "glow intensity"),
-            finiteNumber(filter.radius, "glow radius"));
-        })());
-        const image = CanvasKit.MakeImage({ ...info, width: outputRoi.width, height: outputRoi.height },
-          output, outputRoi.width * 8);
+        const input = source.image.readPixels(
+          readRoi.x - inputRoi.x,
+          readRoi.y - inputRoi.y,
+          info,
+          undefined,
+          readRoi.width * 8,
+        );
+        if (!input || !(input instanceof Uint8Array))
+          fail("pyramid_read", "working F16 input read failed");
+        const dimensions = [
+          readRoi.width,
+          readRoi.height,
+          outputRoi.width,
+          outputRoi.height,
+          readRoi.x - outputRoi.x,
+          readRoi.y - outputRoi.y,
+        ] as const;
+        const output = await (filter.kind === "lensDistortion"
+          ? (() => {
+              const kernel = engineKernels?.apply_lens_distortion_f16;
+              if (!kernel)
+                fail(
+                  "lens_distortion_kernel",
+                  "working-linear F16 lens distortion kernel is unavailable",
+                );
+              const frame = programLensFrame(localPlan, kind, matrix, exact);
+              return kernel.call(
+                engineKernels,
+                input,
+                ...dimensions,
+                outputRoi.x,
+                outputRoi.y,
+                finiteNumber(filter.k1, "lens distortion k1"),
+                finiteNumber(filter.k2, "lens distortion k2"),
+                ...frame,
+              );
+            })()
+          : filter.kind === "bloom"
+            ? (() => {
+                const kernel = engineKernels?.apply_bloom_f16;
+                if (!kernel) fail("bloom_kernel", "working-linear F16 bloom kernel is unavailable");
+                return kernel.call(
+                  engineKernels,
+                  input,
+                  ...dimensions,
+                  finiteNumber(filter.threshold, "bloom threshold"),
+                  finiteNumber(filter.knee, "bloom knee"),
+                  finiteNumber(filter.intensity, "bloom intensity"),
+                  finiteNumber(filter.radius, "bloom radius"),
+                );
+              })()
+            : (() => {
+                const kernel = engineKernels?.apply_glow_f16;
+                if (!kernel) fail("glow_kernel", "working-linear F16 glow kernel is unavailable");
+                return kernel.call(
+                  engineKernels,
+                  input,
+                  ...dimensions,
+                  JSON.stringify(record(filter.color, "glow color")),
+                  finiteNumber(filter.intensity, "glow intensity"),
+                  finiteNumber(filter.radius, "glow radius"),
+                );
+              })());
+        const image = CanvasKit.MakeImage(
+          { ...info, width: outputRoi.width, height: outputRoi.height },
+          output,
+          outputRoi.width * 8,
+        );
         if (!image) fail("pyramid_image", "working F16 pyramid output allocation failed");
         try {
-          drawImageValue(CanvasKit, canvas,
-            { image, owned: false, roi: outputRoi }, 1, "src");
-        } finally { image.delete(); }
+          drawImageValue(CanvasKit, canvas, { image, owned: false, roi: outputRoi }, 1, "src");
+        } finally {
+          image.delete();
+        }
         return;
       }
-      applyFiltersAsLayerValue(
-        CanvasKit,
-        canvas,
-        programValue(values, kind.input),
-        [filter],
-        null,
-      );
+      applyFiltersAsLayerValue(CanvasKit, canvas, programValue(values, kind.input), [filter], null);
       return;
     }
     case "applyMask": {
@@ -2097,20 +2745,33 @@ async function executeProgramPass(
         if (!inverted) canvas.clear(CanvasKit.TRANSPARENT);
         return;
       }
-      const source = mask.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
-        CanvasKit.FilterMode.Nearest, CanvasKit.MipmapMode.None,
-        [1, 0, mask.roi.x, 0, 1, mask.roi.y, 0, 0, 1]);
+      const source = mask.image.makeShaderOptions(
+        CanvasKit.TileMode.Decal,
+        CanvasKit.TileMode.Decal,
+        CanvasKit.FilterMode.Nearest,
+        CanvasKit.MipmapMode.None,
+        [1, 0, mask.roi.x, 0, 1, mask.roi.y, 0, 0, 1],
+      );
       if (!source) fail("mask_shader", "mask input cannot become a shader");
       let coverage: Shader | null = null;
       try {
         const luminance = kind.mode === "luminance" || kind.mode === "luminanceInverted";
         coverage = luminance ? builtins.shader("maskCoverage", [], [source]) : source;
         drawShader(CanvasKit, canvas, coverage, inverted ? "dstOut" : "dstIn");
-      } finally { if (coverage !== source) coverage?.delete(); source.delete(); }
+      } finally {
+        if (coverage !== source) coverage?.delete();
+        source.delete();
+      }
       return;
     }
     case "applyOpacity":
-      drawImageValue(CanvasKit, canvas, programValue(values, kind.input), finiteNumber(kind.opacity, "program opacity"), "src");
+      drawImageValue(
+        CanvasKit,
+        canvas,
+        programValue(values, kind.input),
+        finiteNumber(kind.opacity, "program opacity"),
+        "src",
+      );
       return;
     case "applyTransition": {
       const transition = record(kind.transition, "local transition");
@@ -2125,39 +2786,81 @@ async function executeProgramPass(
       try {
         for (const id of [kind.from, kind.to]) {
           const input = programValue(values, id);
-          const content = input.image ? input.image.makeShaderOptions(
-            CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal, CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None,
-            mul3(inverse, [1, 0, input.roi.x, 0, 1, input.roi.y, 0, 0, 1]),
-          ) : CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB);
+          const content = input.image
+            ? input.image.makeShaderOptions(
+                CanvasKit.TileMode.Decal,
+                CanvasKit.TileMode.Decal,
+                CanvasKit.FilterMode.Linear,
+                CanvasKit.MipmapMode.None,
+                mul3(inverse, [1, 0, input.roi.x, 0, 1, input.roi.y, 0, 0, 1]),
+              )
+            : CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB);
           if (!content) fail("shader_transform", "transition input shader allocation failed");
-          try { children.push(builtins.shader("transitionInput", [bounds.width, bounds.height], [content])); }
-          finally { content.delete(); }
+          try {
+            children.push(
+              builtins.shader("transitionInput", [bounds.width, bounds.height], [content]),
+            );
+          } finally {
+            content.delete();
+          }
         }
         const progress = finiteNumber(transition.progress, "transition progress");
         const kernel = record(transition.kernel, "transition kernel");
         if (kernel.type === "shader") {
-          const effect = required(admitted.shaders, String(record(kernel.shader, "transition shader key").uri), "transition shader");
+          const effect = required(
+            admitted.shaders,
+            String(record(kernel.shader, "transition shader key").uri),
+            "transition shader",
+          );
           // The canvas is origin-anchored, so owner pixels are the shader's own.
-          shader = makeRuntimeShader(CanvasKit, builtins, effect, bounds, array(kernel.uniforms, "transition uniforms"),
-            array(kernel.textures, "transition textures"), admitted, children.splice(0), [["progress", [progress]]]);
+          shader = makeRuntimeShader(
+            CanvasKit,
+            builtins,
+            effect,
+            bounds,
+            array(kernel.uniforms, "transition uniforms"),
+            array(kernel.textures, "transition textures"),
+            admitted,
+            children.splice(0),
+            [["progress", [progress]]],
+          );
         } else {
-          shader = builtins.shader(transitionKernel(String(kernel.kind)),
-            [bounds.width, bounds.height, progress, ...transitionValues(kernel.params, String(kernel.kind))], children);
+          shader = builtins.shader(
+            transitionKernel(String(kernel.kind)),
+            [
+              bounds.width,
+              bounds.height,
+              progress,
+              ...transitionValues(kernel.params, String(kernel.kind)),
+            ],
+            children,
+          );
         }
         paint.setAntiAlias(true);
         paint.setShader(shader);
         canvas.concat(matrix);
         canvas.drawRect(skRect(CanvasKit, bounds), paint);
       } finally {
-        canvas.restore(); paint.delete(); shader?.delete();
+        canvas.restore();
+        paint.delete();
+        shader?.delete();
         for (const child of children) child.delete();
       }
       return;
     }
     case "applyShader":
-      applyProgramShader(CanvasKit, builtins, canvas, admitted, programValue(values, kind.input),
-        (kind.backdrops === undefined ? [] : array(kind.backdrops, "shader backdrops")).map((id) => programValue(values, id)),
-        record(kind.shader, "program shader"), programMatrix(admitted, localPlan, kind.output, device));
+      applyProgramShader(
+        CanvasKit,
+        builtins,
+        canvas,
+        admitted,
+        programValue(values, kind.input),
+        (kind.backdrops === undefined ? [] : array(kind.backdrops, "shader backdrops")).map((id) =>
+          programValue(values, id),
+        ),
+        record(kind.shader, "program shader"),
+        programMatrix(admitted, localPlan, kind.output, device),
+      );
       return;
     case "applyTransform":
       drawImageValue(CanvasKit, canvas, programValue(values, kind.input), 1, "src");
@@ -2185,8 +2888,11 @@ class RasterDrawObjects {
   private readonly fills = new Map<number, Paint>();
   private readonly leases: FillPaintLease[] = [];
   private layerPaint: Paint | null = null;
-  constructor(private readonly CK: CanvasKit, private readonly draw: DrawProgramWire,
-    private readonly cache?: RasterPaintCache) {}
+  constructor(
+    private readonly CK: CanvasKit,
+    private readonly draw: DrawProgramWire,
+    private readonly cache?: RasterPaintCache,
+  ) {}
   fill(id: number): Paint {
     let paint = this.fills.get(id);
     if (!paint) {
@@ -2199,12 +2905,12 @@ class RasterDrawObjects {
     return paint;
   }
   opacity(alpha: number): Paint {
-    const paint = this.layerPaint ??= new this.CK.Paint();
+    const paint = (this.layerPaint ??= new this.CK.Paint());
     paint.setAlphaf(alpha);
     return paint;
   }
   delete(): void {
-    if (this.cache) this.leases.forEach(lease => lease.release());
+    if (this.cache) this.leases.forEach((lease) => lease.release());
     else for (const paint of this.fills.values()) paint.delete();
     this.leases.length = 0;
     this.fills.clear();
@@ -2218,7 +2924,9 @@ function isIdentityMatrix(matrix: readonly number[]): boolean {
 }
 
 function isScaleTranslateMatrix(matrix: readonly number[]): boolean {
-  return matrix[1] === 0 && matrix[3] === 0 && matrix[6] === 0 && matrix[7] === 0 && matrix[8] === 1;
+  return (
+    matrix[1] === 0 && matrix[3] === 0 && matrix[6] === 0 && matrix[7] === 0 && matrix[8] === 1
+  );
 }
 
 export function drawProgramNode(
@@ -2236,8 +2944,23 @@ export function drawProgramNode(
 ): void {
   if (!objects) {
     const owned = new RasterDrawObjects(CanvasKit, admitted.draw, admitted.paintCache);
-    try { drawProgramNode(CanvasKit, builtins, canvas, admitted, nodeId, matrix, depth, boundsCache, arena, owned, targetRoi); }
-    finally { owned.delete(); }
+    try {
+      drawProgramNode(
+        CanvasKit,
+        builtins,
+        canvas,
+        admitted,
+        nodeId,
+        matrix,
+        depth,
+        boundsCache,
+        arena,
+        owned,
+        targetRoi,
+      );
+    } finally {
+      owned.delete();
+    }
     return;
   }
   if (depth > 128) fail("program_schedule", "RasterTree exceeds the group depth limit");
@@ -2245,24 +2968,63 @@ export function drawProgramNode(
   const leafStarted = arena?.onRasterLeafTiming && node.kind !== "group" ? performance.now() : null;
   const transformed = !isIdentityMatrix(matrix);
   // These leaves manage internal canvas state. Keep an outer recovery save for exceptional exits.
-  const saved = transformed || node.kind === "image" || node.kind === "instanceBatch" || node.kind === "shadow";
+  const saved =
+    transformed || node.kind === "image" || node.kind === "instanceBatch" || node.kind === "shadow";
   if (saved) canvas.save();
   if (transformed) canvas.concat(matrix);
   try {
     switch (node.kind) {
-      case "path": drawPathNode(CanvasKit, canvas, admitted.draw, record(node.value, "path node"), objects, admitted.pathCache); break;
-      case "instanceBatch": drawBatchNode(CanvasKit, builtins, canvas, admitted, record(node.value, "batch node"), arena); break;
-      case "image": drawImageNode(CanvasKit, builtins, canvas, admitted, record(node.value, "image node")); break;
-      case "glyphRun": drawGlyphNode(CanvasKit, canvas, admitted, record(node.value, "glyph node"), objects); break;
-      case "shadow": drawShadowNode(CanvasKit, canvas, record(node.value, "shadow node")); break;
-      case "runtimeShader": drawRuntimeShaderNode(CanvasKit, builtins, canvas, admitted, record(node.value, "runtime shader node")); break;
-      case "scene3d": drawSceneNode(CanvasKit, builtins, canvas, admitted, record(node.value, "Scene3D node")); break;
+      case "path":
+        drawPathNode(
+          CanvasKit,
+          canvas,
+          admitted.draw,
+          record(node.value, "path node"),
+          objects,
+          admitted.pathCache,
+        );
+        break;
+      case "instanceBatch":
+        drawBatchNode(
+          CanvasKit,
+          builtins,
+          canvas,
+          admitted,
+          record(node.value, "batch node"),
+          arena,
+        );
+        break;
+      case "image":
+        drawImageNode(CanvasKit, builtins, canvas, admitted, record(node.value, "image node"));
+        break;
+      case "glyphRun":
+        drawGlyphNode(CanvasKit, canvas, admitted, record(node.value, "glyph node"), objects);
+        break;
+      case "shadow":
+        drawShadowNode(CanvasKit, canvas, record(node.value, "shadow node"));
+        break;
+      case "runtimeShader":
+        drawRuntimeShaderNode(
+          CanvasKit,
+          builtins,
+          canvas,
+          admitted,
+          record(node.value, "runtime shader node"),
+        );
+        break;
+      case "scene3d":
+        drawSceneNode(CanvasKit, builtins, canvas, admitted, record(node.value, "Scene3D node"));
+        break;
       case "group": {
         const group = record(node.value, "RasterTree group");
-        if (group.mask != null || group.backdrop != null
-          || group.shader != null || group.transition != null
-          || array(group.filters, "RasterTree group filters").length !== 0
-          || group.internalBlend !== "normal") {
+        if (
+          group.mask != null ||
+          group.backdrop != null ||
+          group.shader != null ||
+          group.transition != null ||
+          array(group.filters, "RasterTree group filters").length !== 0 ||
+          group.internalBlend !== "normal"
+        ) {
           fail("program_schedule", `group node ${nodeId} requires a separate pixel operation`);
         }
         const transform = numberArray(group.transform, 9, "RasterTree group transform");
@@ -2277,11 +3039,15 @@ export function drawProgramNode(
         } else if (groupSaved) canvas.save();
         if (groupTransformed) canvas.concat(transform);
         let clipped = false;
-        const pathClip = group.clip != null && record(group.clip, "RasterTree clip").kind === "path";
-        const clipValue = pathClip ? record(record(group.clip, "RasterTree clip").value, "path clip") : null;
-        const clipBounds = pathClip && arena?.boundedPathClipLayers
-          ? programClipBounds(admitted.draw, record(group.clip, "RasterTree clip"))
-          : undefined;
+        const pathClip =
+          group.clip != null && record(group.clip, "RasterTree clip").kind === "path";
+        const clipValue = pathClip
+          ? record(record(group.clip, "RasterTree clip").value, "path clip")
+          : null;
+        const clipBounds =
+          pathClip && arena?.boundedPathClipLayers
+            ? programClipBounds(admitted.draw, record(group.clip, "RasterTree clip"))
+            : undefined;
         const clipLayer = clipBounds == null ? undefined : skRect(CanvasKit, clipBounds);
         try {
           if (pathClip && arena?.fuseClipPaints && (group.children as number[]).length === 1) {
@@ -2289,20 +3055,40 @@ export function drawProgramNode(
             if (child.kind === "path") {
               const fill = record(child.value, "clip paint fill");
               if (fill.fill != null && fill.stroke == null) {
-                const rectangle = requiredIndex(admitted.draw.paths, fill.path, "clip paint rectangle");
+                const rectangle = requiredIndex(
+                  admitted.draw.paths,
+                  fill.path,
+                  "clip paint rectangle",
+                );
                 const bounds = paintRectangleBounds(rectangle);
                 if (bounds) {
-                  const covered = !arena.recordingClipPaints && clipPaintRectangleCoversOutline(rectangle,
-                    requiredIndex(admitted.draw.paths, clipValue!.path, "clip paint outline"),
-                    canvas.getTotalMatrix());
+                  const covered =
+                    !arena.recordingClipPaints &&
+                    clipPaintRectangleCoversOutline(
+                      rectangle,
+                      requiredIndex(admitted.draw.paths, clipValue!.path, "clip paint outline"),
+                      canvas.getTotalMatrix(),
+                    );
                   canvas.save();
                   try {
-                    if (!covered) canvas.clipRect(skRect(CanvasKit, bounds), CanvasKit.ClipOp.Intersect, true);
-                    drawPathNode(CanvasKit, canvas, admitted.draw, {
-                      path: clipValue!.path, fillRule: clipValue!.fillRule,
-                      fill: fill.fill, stroke: null,
-                    }, objects, admitted.pathCache);
-                  } finally { canvas.restore(); }
+                    if (!covered)
+                      canvas.clipRect(skRect(CanvasKit, bounds), CanvasKit.ClipOp.Intersect, true);
+                    drawPathNode(
+                      CanvasKit,
+                      canvas,
+                      admitted.draw,
+                      {
+                        path: clipValue!.path,
+                        fillRule: clipValue!.fillRule,
+                        fill: fill.fill,
+                        stroke: null,
+                      },
+                      objects,
+                      admitted.pathCache,
+                    );
+                  } finally {
+                    canvas.restore();
+                  }
                   arena.pathClipElisions++;
                   return;
                 }
@@ -2310,16 +3096,55 @@ export function drawProgramNode(
             }
           }
           if (group.clip != null) {
-            if (!pathClip) applyClip(CanvasKit, canvas, admitted.draw, record(group.clip, "RasterTree group clip"), IDENTITY_MATRIX);
+            if (!pathClip)
+              applyClip(
+                CanvasKit,
+                canvas,
+                admitted.draw,
+                record(group.clip, "RasterTree group clip"),
+                IDENTITY_MATRIX,
+              );
             canvas.saveLayer(undefined, clipLayer);
             clipped = true;
           }
           const children = array(group.children, "RasterTree group children");
-          const fallback = (child: unknown) => drawProgramNode(CanvasKit, builtins, canvas, admitted,
-            positiveIdOrZero(child, "RasterTree child"), IDENTITY_MATRIX, depth + 1, boundsCache, arena, objects, targetRoi);
-          if (arena?.trees) drawCachedChildren(CanvasKit, builtins, canvas, admitted, children,
-            depth, boundsCache, arena, objects!, targetRoi, fallback);
-          else if (arena?.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit,canvas,admitted.draw,children as number[],IDENTITY_MATRIX,fallback);
+          const fallback = (child: unknown) =>
+            drawProgramNode(
+              CanvasKit,
+              builtins,
+              canvas,
+              admitted,
+              positiveIdOrZero(child, "RasterTree child"),
+              IDENTITY_MATRIX,
+              depth + 1,
+              boundsCache,
+              arena,
+              objects,
+              targetRoi,
+            );
+          if (arena?.trees)
+            drawCachedChildren(
+              CanvasKit,
+              builtins,
+              canvas,
+              admitted,
+              children,
+              depth,
+              boundsCache,
+              arena,
+              objects!,
+              targetRoi,
+              fallback,
+            );
+          else if (arena?.geometryRenderer)
+            arena.geometryRenderer.drawChildren(
+              CanvasKit,
+              canvas,
+              admitted.draw,
+              children as number[],
+              IDENTITY_MATRIX,
+              fallback,
+            );
           else children.forEach(fallback);
         } finally {
           if (clipped && pathClip) {
@@ -2327,87 +3152,178 @@ export function drawProgramNode(
             try {
               restore.setBlendMode(CanvasKit.BlendMode.DstIn);
               canvas.saveLayer(restore, clipLayer);
-              try { drawPathClipCoverage(CanvasKit, canvas, admitted.draw, record(group.clip, "RasterTree path clip"), admitted.pathCache); }
-              finally { canvas.restore(); }
-            } finally { restore.delete(); }
+              try {
+                drawPathClipCoverage(
+                  CanvasKit,
+                  canvas,
+                  admitted.draw,
+                  record(group.clip, "RasterTree path clip"),
+                  admitted.pathCache,
+                );
+              } finally {
+                canvas.restore();
+              }
+            } finally {
+              restore.delete();
+            }
           }
           if (clipped) canvas.restore();
           if (paint || groupSaved) canvas.restore();
         }
         break;
       }
-      default: fail("unsupported_node", `DrawProgram node '${String(node.kind)}' is not closed`);
+      default:
+        fail("unsupported_node", `DrawProgram node '${String(node.kind)}' is not closed`);
     }
   } finally {
     if (saved) canvas.restore();
-    if (leafStarted !== null) arena!.onRasterLeafTiming?.(String(node.kind), performance.now() - leafStarted);
+    if (leafStarted !== null)
+      arena!.onRasterLeafTiming?.(String(node.kind), performance.now() - leafStarted);
   }
 }
 
-function drawCachedChildren(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, canvas: Canvas,
-  admitted: AdmittedProgram, children: unknown[], depth: number,
-  boundsCache: Map<number, ReturnType<typeof programNodeBounds>>, arena: SurfaceArena,
-  objects: RasterDrawObjects, targetRoi: DeviceRoi | undefined, fallback: (child: unknown) => void): void {
+function drawCachedChildren(
+  CanvasKit: CanvasKit,
+  builtins: CanvasKitBuiltinRuntime,
+  canvas: Canvas,
+  admitted: AdmittedProgram,
+  children: unknown[],
+  depth: number,
+  boundsCache: Map<number, ReturnType<typeof programNodeBounds>>,
+  arena: SurfaceArena,
+  objects: RasterDrawObjects,
+  targetRoi: DeviceRoi | undefined,
+  fallback: (child: unknown) => void,
+): void {
   const cache = arena.trees!;
   const original = (part: unknown[]) => {
-    if (arena.geometryRenderer) arena.geometryRenderer.drawChildren(CanvasKit, canvas, admitted.draw, part as number[], IDENTITY_MATRIX, fallback);
+    if (arena.geometryRenderer)
+      arena.geometryRenderer.drawChildren(
+        CanvasKit,
+        canvas,
+        admitted.draw,
+        part as number[],
+        IDENTITY_MATRIX,
+        fallback,
+      );
     else part.forEach(fallback);
   };
-  if (children.length < 3) { original(children); return; }
+  if (children.length < 3) {
+    original(children);
+    return;
+  }
   let at = 0;
   while (at < children.length) {
-    const start = at, signatures: RasterTreeSignature[] = [];
+    const start = at,
+      signatures: RasterTreeSignature[] = [];
     while (at < children.length) {
-      const signature = cache.signature(admitted.draw, children[at] as number, arena.treeSignatures);
+      const signature = cache.signature(
+        admitted.draw,
+        children[at] as number,
+        arena.treeSignatures,
+      );
       if (!signature) break;
-      signatures.push(signature); at++;
+      signatures.push(signature);
+      at++;
     }
-    if (!signatures.length) { original([children[at++]]); continue; }
+    if (!signatures.length) {
+      original([children[at++]]);
+      continue;
+    }
     const part = children.slice(start, at);
-    const signature = { key: signatures.map(s => `${s.key.length}:${s.key}`).join(""),
-      leaves: signatures.reduce((n, s) => n + s.leaves, 0), bytes: signatures.reduce((n, s) => n + s.bytes, 0) };
-    const bounds = part.map(id => programNodeBounds(admitted.draw, id as number, boundsCache));
-    if (bounds.some(b => b === undefined)) { original(part); continue; }
+    const signature = {
+      key: signatures.map((s) => `${s.key.length}:${s.key}`).join(""),
+      leaves: signatures.reduce((n, s) => n + s.leaves, 0),
+      bytes: signatures.reduce((n, s) => n + s.bytes, 0),
+    };
+    const bounds = part.map((id) => programNodeBounds(admitted.draw, id as number, boundsCache));
+    if (bounds.some((b) => b === undefined)) {
+      original(part);
+      continue;
+    }
     const nonempty = bounds.filter((b): b is RectWire => b != null);
-    if (!nonempty.length) { original(part); continue; }
-    const x = Math.min(...nonempty.map(b => b.x)), y = Math.min(...nonempty.map(b => b.y));
-    const right = Math.max(...nonempty.map(b => b.x + b.width)), bottom = Math.max(...nonempty.map(b => b.y + b.height));
+    if (!nonempty.length) {
+      original(part);
+      continue;
+    }
+    const x = Math.min(...nonempty.map((b) => b.x)),
+      y = Math.min(...nonempty.map((b) => b.y));
+    const right = Math.max(...nonempty.map((b) => b.x + b.width)),
+      bottom = Math.max(...nonempty.map((b) => b.y + b.height));
     const picture = cache.acquire(signature, () => {
       const recorder = new CanvasKit.PictureRecorder();
       try {
-        const recording = recorder.beginRecording(CanvasKit.XYWHRect(x - 8, y - 8, right - x + 16, bottom - y + 16));
+        const recording = recorder.beginRecording(
+          CanvasKit.XYWHRect(x - 8, y - 8, right - x + 16, bottom - y + 16),
+        );
         const isolated = Object.create(arena) as SurfaceArena;
-        isolated.trees = null; isolated.geometryRenderer = null;
+        isolated.trees = null;
+        isolated.geometryRenderer = null;
         isolated.recordingClipPaints = true;
         isolated.onRasterLeafTiming = null;
-        for (const id of part) drawProgramNode(CanvasKit, builtins, recording, admitted,
-          id as number, IDENTITY_MATRIX, depth + 1, boundsCache, isolated, objects);
+        for (const id of part)
+          drawProgramNode(
+            CanvasKit,
+            builtins,
+            recording,
+            admitted,
+            id as number,
+            IDENTITY_MATRIX,
+            depth + 1,
+            boundsCache,
+            isolated,
+            objects,
+          );
         return recorder.finishRecordingAsPicture();
-      } finally { recorder.delete(); }
+      } finally {
+        recorder.delete();
+      }
     });
-    if (picture) canvas.drawPicture(picture); else original(part);
+    if (picture) canvas.drawPicture(picture);
+    else original(part);
   }
 }
 
-function drawPathNode(CanvasKit: CanvasKit, canvas: Canvas, draw: DrawProgramWire, node: Wire, objects?: RasterDrawObjects, cache?: RasterPathCache): void {
-  const wire = requiredIndex(draw.paths, node.path, "path"), fillRule = String(node.fillRule);
+function drawPathNode(
+  CanvasKit: CanvasKit,
+  canvas: Canvas,
+  draw: DrawProgramWire,
+  node: Wire,
+  objects?: RasterDrawObjects,
+  cache?: RasterPathCache,
+): void {
+  const wire = requiredIndex(draw.paths, node.path, "path"),
+    fillRule = String(node.fillRule);
   const lease = cache?.acquire(wire, fillRule, () => buildPath(CanvasKit, wire, fillRule));
   const path = lease?.path ?? buildPath(CanvasKit, wire, fillRule);
   try {
     if (node.fill != null) {
-      const paint = objects?.fill(node.fill as number) ?? makePaint(CanvasKit, requiredIndex(draw.paints, node.fill, "paint"));
-      try { canvas.drawPath(path, paint); } finally { if (!objects) paint.delete(); }
+      const paint =
+        objects?.fill(node.fill as number) ??
+        makePaint(CanvasKit, requiredIndex(draw.paints, node.fill, "paint"));
+      try {
+        canvas.drawPath(path, paint);
+      } finally {
+        if (!objects) paint.delete();
+      }
     }
     if (node.stroke != null) {
       const stroke = record(node.stroke, "path stroke");
       const paint = makePaint(CanvasKit, requiredIndex(draw.paints, stroke.paint, "stroke paint"));
       try {
         const effect = configureStrokePaint(CanvasKit, paint, stroke);
-        try { canvas.drawPath(path, paint); }
-        finally { effect?.delete(); }
-      } finally { paint.delete(); }
+        try {
+          canvas.drawPath(path, paint);
+        } finally {
+          effect?.delete();
+        }
+      } finally {
+        paint.delete();
+      }
     }
-  } finally { if (!lease || lease.owned) path.delete(); }
+  } finally {
+    if (!lease || lease.owned) path.delete();
+  }
 }
 
 function drawBatchNode(
@@ -2422,33 +3338,58 @@ function drawBatchNode(
   if (arena?.geometryRenderer?.batch(CanvasKit, canvas, program, node as CircleBatch)) return;
   const shape = record(node.shape, "instance shape");
   const imageRegion = shape.kind === "image" ? record(shape.value, "instance image region") : null;
-  const imageNode = imageRegion === null ? null : {
-    texture: imageRegion.texture, src: imageRegion.src,
-    dst: { x: 0, y: 0, width: 1, height: 1 },
-    sampling: imageRegion.sampling, opacity: 1,
-  };
-  const atlas = imageRegion === null ? null : normalizeAtlasImage(
-    CanvasKit, builtins, admitted, imageRegion, arena,
-  );
+  const imageNode =
+    imageRegion === null
+      ? null
+      : {
+          texture: imageRegion.texture,
+          src: imageRegion.src,
+          dst: { x: 0, y: 0, width: 1, height: 1 },
+          sampling: imageRegion.sampling,
+          opacity: 1,
+        };
+  const atlas =
+    imageRegion === null
+      ? null
+      : normalizeAtlasImage(CanvasKit, builtins, admitted, imageRegion, arena);
   const fillPaint = new CanvasKit.Paint();
   const strokePaint = new CanvasKit.Paint();
   const layerPaint = new CanvasKit.Paint();
-  const batchPath = shape.kind === "path"
-    ? buildPath(CanvasKit, requiredIndex(program.paths, shape.value, "batch path"), "nonZero")
-    : null;
-  const batchRoundRect = shape.kind === "roundRect"
-    ? roundRect(CanvasKit, record(shape.value, "instance round rect"))
-    : null;
+  const batchPath =
+    shape.kind === "path"
+      ? buildPath(CanvasKit, requiredIndex(program.paths, shape.value, "batch path"), "nonZero")
+      : null;
+  const batchRoundRect =
+    shape.kind === "roundRect"
+      ? roundRect(CanvasKit, record(shape.value, "instance round rect"))
+      : null;
   let fixedDash: ReturnType<typeof CanvasKit.PathEffect.MakeDash> | null = null;
   try {
     fillPaint.setAntiAlias(true);
     strokePaint.setAntiAlias(true);
     strokePaint.setStyle(CanvasKit.PaintStyle.Stroke);
     const pathStyle = node.pathStyle === null ? null : record(node.pathStyle, "batch Path style");
-    const dash = pathStyle === null ? [] : array(pathStyle.dash, "batch dash intervals").map((value) => finiteNumber(value, "batch dash interval"));
+    const dash =
+      pathStyle === null
+        ? []
+        : array(pathStyle.dash, "batch dash intervals").map((value) =>
+            finiteNumber(value, "batch dash interval"),
+          );
     if (pathStyle !== null) {
-      strokePaint.setStrokeCap(pathStyle.cap === "round" ? CanvasKit.StrokeCap.Round : pathStyle.cap === "square" ? CanvasKit.StrokeCap.Square : CanvasKit.StrokeCap.Butt);
-      strokePaint.setStrokeJoin(pathStyle.join === "round" ? CanvasKit.StrokeJoin.Round : pathStyle.join === "bevel" ? CanvasKit.StrokeJoin.Bevel : CanvasKit.StrokeJoin.Miter);
+      strokePaint.setStrokeCap(
+        pathStyle.cap === "round"
+          ? CanvasKit.StrokeCap.Round
+          : pathStyle.cap === "square"
+            ? CanvasKit.StrokeCap.Square
+            : CanvasKit.StrokeCap.Butt,
+      );
+      strokePaint.setStrokeJoin(
+        pathStyle.join === "round"
+          ? CanvasKit.StrokeJoin.Round
+          : pathStyle.join === "bevel"
+            ? CanvasKit.StrokeJoin.Bevel
+            : CanvasKit.StrokeJoin.Miter,
+      );
       strokePaint.setStrokeMiter(finiteNumber(pathStyle.miterLimit, "batch stroke miter"));
     }
     const range = record(node.instances, "batch instance range");
@@ -2460,18 +3401,38 @@ function drawBatchNode(
     }
     const view = program.batchInstances.view;
     const tableCount = program.batchInstances.count;
-    const strokeRange = node.strokeColors === null ? null : record(node.strokeColors, "batch stroke color range");
-    const strokeStart = strokeRange === null ? 0 : positiveIdOrZero(strokeRange.start, "batch stroke color start");
+    const strokeRange =
+      node.strokeColors === null ? null : record(node.strokeColors, "batch stroke color range");
+    const strokeStart =
+      strokeRange === null ? 0 : positiveIdOrZero(strokeRange.start, "batch stroke color start");
     const strokeView = program.strokeColors.view;
-    const dashRange = node.dashOffsets === null ? null : record(node.dashOffsets, "batch dash offset range");
-    const dashStart = dashRange === null ? 0 : positiveIdOrZero(dashRange.start, "batch dash offset start");
+    const dashRange =
+      node.dashOffsets === null ? null : record(node.dashOffsets, "batch dash offset range");
+    const dashStart =
+      dashRange === null ? 0 : positiveIdOrZero(dashRange.start, "batch dash offset start");
     const dashView = program.dashOffsets.view;
-    if (imageRegion !== null && atlas !== null && drawOpaqueImageAtlas(
-      CanvasKit, canvas, atlas.image, imageRegion,
-      atlas.source, view, tableCount, start, end, fillPaint,
-    )) return;
+    if (
+      imageRegion !== null &&
+      atlas !== null &&
+      drawOpaqueImageAtlas(
+        CanvasKit,
+        canvas,
+        atlas.image,
+        imageRegion,
+        atlas.source,
+        view,
+        tableCount,
+        start,
+        end,
+        fillPaint,
+      )
+    )
+      return;
     if (dash.length && dashRange === null) {
-      fixedDash = CanvasKit.PathEffect.MakeDash(dash, finiteNumber(pathStyle?.dashOffset, "batch dash offset"));
+      fixedDash = CanvasKit.PathEffect.MakeDash(
+        dash,
+        finiteNumber(pathStyle?.dashOffset, "batch dash offset"),
+      );
       if (fixedDash) strokePaint.setPathEffect(fixedDash);
     }
     const drawShape = (paint: Paint) => {
@@ -2482,10 +3443,30 @@ function drawBatchNode(
       else fail("wire_shape", "image instances use texture sampling");
     };
     // Neighbouring instances often share a color; keep each paint's shader until it changes.
-    const fillColor = [NaN, NaN, NaN, NaN, NaN], strokeColor = [NaN, NaN, NaN, NaN, NaN];
-    const setColor = (paint: Paint, last: number[], red: number, green: number, blue: number, alpha: number, opacity: number) => {
-      if (last[0] === red && last[1] === green && last[2] === blue && last[3] === alpha && last[4] === opacity) return;
-      last[0] = red; last[1] = green; last[2] = blue; last[3] = alpha; last[4] = opacity;
+    const fillColor = [NaN, NaN, NaN, NaN, NaN],
+      strokeColor = [NaN, NaN, NaN, NaN, NaN];
+    const setColor = (
+      paint: Paint,
+      last: number[],
+      red: number,
+      green: number,
+      blue: number,
+      alpha: number,
+      opacity: number,
+    ) => {
+      if (
+        last[0] === red &&
+        last[1] === green &&
+        last[2] === blue &&
+        last[3] === alpha &&
+        last[4] === opacity
+      )
+        return;
+      last[0] = red;
+      last[1] = green;
+      last[2] = blue;
+      last[3] = alpha;
+      last[4] = opacity;
       setWorkingColor(CanvasKit, paint, red, green, blue, alpha, opacity);
     };
     for (let index = start; index < end; index += 1) {
@@ -2500,65 +3481,114 @@ function drawBatchNode(
       const alpha = view.getFloat32(colorOffset + 12, true);
       const opacity = view.getFloat32(tableCount * 64 + index * 4, true);
       const strokeWidth = view.getFloat32(tableCount * 68 + index * 4, true);
-      if (imageNode !== null && strokeWidth !== 0) fail("wire_shape", "image instances cannot have a stroke");
+      if (imageNode !== null && strokeWidth !== 0)
+        fail("wire_shape", "image instances cannot have a stroke");
       const strokeOffset = (strokeStart + index - start) * 16;
-      const strokeAlpha = strokeRange === null ? alpha : strokeView.getFloat32(strokeOffset + 12, true);
+      const strokeAlpha =
+        strokeRange === null ? alpha : strokeView.getFloat32(strokeOffset + 12, true);
       if (opacity <= 0 || (alpha <= 0 && (strokeWidth <= 0 || strokeAlpha <= 0))) continue;
       // A fill-only rectangle produces one draw. Folding group opacity into its paint
       // avoids allocating and compositing a separate GPU layer for every instance.
-      const directOpacity = imageNode === null && shape.kind === "rect"
-        && strokeWidth === 0 && alpha > 0 && (pathStyle === null || pathStyle.fill === true);
+      const directOpacity =
+        imageNode === null &&
+        shape.kind === "rect" &&
+        strokeWidth === 0 &&
+        alpha > 0 &&
+        (pathStyle === null || pathStyle.fill === true);
       if (opacity < 1 && !directOpacity) {
         layerPaint.setAlphaf(opacity);
-        const bounds = instanceOpacityBounds(program, shape, pathStyle, strokeWidth, [a, b, c, d, e, f]);
+        const bounds = instanceOpacityBounds(program, shape, pathStyle, strokeWidth, [
+          a,
+          b,
+          c,
+          d,
+          e,
+          f,
+        ]);
         canvas.saveLayer(layerPaint, bounds === null ? undefined : skRect(CanvasKit, bounds));
       }
       canvas.save();
       try {
         canvas.concat([a, c, e, b, d, f, 0, 0, 1]);
         if (alpha > 0 && imageNode !== null) {
-          drawImageNode(CanvasKit, builtins, canvas, admitted, { ...imageNode, src: atlas!.source }, {
-            red: view.getFloat32(colorOffset, true),
-            green: view.getFloat32(colorOffset + 4, true),
-            blue: view.getFloat32(colorOffset + 8, true), alpha,
-          }, atlas!.image);
+          drawImageNode(
+            CanvasKit,
+            builtins,
+            canvas,
+            admitted,
+            { ...imageNode, src: atlas!.source },
+            {
+              red: view.getFloat32(colorOffset, true),
+              green: view.getFloat32(colorOffset + 4, true),
+              blue: view.getFloat32(colorOffset + 8, true),
+              alpha,
+            },
+            atlas!.image,
+          );
         } else if (alpha > 0 && (pathStyle === null || pathStyle.fill === true)) {
-          setColor(fillPaint, fillColor,
+          setColor(
+            fillPaint,
+            fillColor,
             view.getFloat32(colorOffset, true),
             view.getFloat32(colorOffset + 4, true),
             view.getFloat32(colorOffset + 8, true),
-            alpha, directOpacity ? opacity : 1);
+            alpha,
+            directOpacity ? opacity : 1,
+          );
           drawShape(fillPaint);
         }
         if (strokeWidth > 0 && strokeAlpha > 0) {
           if (strokeRange !== null) {
-            setColor(strokePaint, strokeColor,
+            setColor(
+              strokePaint,
+              strokeColor,
               strokeView.getFloat32(strokeOffset, true),
               strokeView.getFloat32(strokeOffset + 4, true),
               strokeView.getFloat32(strokeOffset + 8, true),
-              strokeAlpha, 1);
+              strokeAlpha,
+              1,
+            );
           } else if (alpha > 0) {
-            setColor(strokePaint, strokeColor,
+            setColor(
+              strokePaint,
+              strokeColor,
               view.getFloat32(colorOffset, true),
               view.getFloat32(colorOffset + 4, true),
               view.getFloat32(colorOffset + 8, true),
-              alpha, 1);
+              alpha,
+              1,
+            );
           } else {
             fail("wire_shape", "visible stroke requires a visible color");
           }
           strokePaint.setStrokeWidth(strokeWidth);
           let rowDash: ReturnType<typeof CanvasKit.PathEffect.MakeDash> | null = null;
           if (dash.length && dashRange !== null) {
-            rowDash = CanvasKit.PathEffect.MakeDash(dash, dashView.getFloat32((dashStart + index - start) * 4, true));
+            rowDash = CanvasKit.PathEffect.MakeDash(
+              dash,
+              dashView.getFloat32((dashStart + index - start) * 4, true),
+            );
             strokePaint.setPathEffect(rowDash);
           }
-          try { drawShape(strokePaint); }
-          finally { rowDash?.delete(); }
+          try {
+            drawShape(strokePaint);
+          } finally {
+            rowDash?.delete();
+          }
         }
-      } finally { canvas.restore(); }
+      } finally {
+        canvas.restore();
+      }
       if (opacity < 1 && !directOpacity) canvas.restore();
     }
-  } finally { atlas?.image.delete(); fixedDash?.delete(); batchPath?.delete(); layerPaint.delete(); strokePaint.delete(); fillPaint.delete(); }
+  } finally {
+    atlas?.image.delete();
+    fixedDash?.delete();
+    batchPath?.delete();
+    layerPaint.delete();
+    strokePaint.delete();
+    fillPaint.delete();
+  }
 }
 
 function drawOpaqueImageAtlas(
@@ -2575,27 +3605,41 @@ function drawOpaqueImageAtlas(
 ): boolean {
   if (start === end) return false;
   const src = source;
-  const x = src.x * image.width(), y = src.y * image.height();
-  const width = src.width * image.width(), height = src.height * image.height();
+  const x = src.x * image.width(),
+    y = src.y * image.height();
+  const width = src.width * image.width(),
+    height = src.height * image.height();
   const sourceRects: number[] = [];
   const xforms: number[] = [];
   for (let index = start; index < end; index += 1) {
     const matrix = index * 48;
-    const a = rows.getFloat64(matrix, true), b = rows.getFloat64(matrix + 8, true);
-    const c = rows.getFloat64(matrix + 16, true), d = rows.getFloat64(matrix + 24, true);
-    const e = rows.getFloat64(matrix + 32, true), f = rows.getFloat64(matrix + 40, true);
+    const a = rows.getFloat64(matrix, true),
+      b = rows.getFloat64(matrix + 8, true);
+    const c = rows.getFloat64(matrix + 16, true),
+      d = rows.getFloat64(matrix + 24, true);
+    const e = rows.getFloat64(matrix + 32, true),
+      f = rows.getFloat64(matrix + 40, true);
     const color = count * 48 + index * 16;
-    if (rows.getFloat32(color, true) !== 1 || rows.getFloat32(color + 4, true) !== 1
-      || rows.getFloat32(color + 8, true) !== 1 || rows.getFloat32(color + 12, true) !== 1
-      || rows.getFloat32(count * 64 + index * 4, true) !== 1
-      || rows.getFloat32(count * 68 + index * 4, true) !== 0) return false;
-    const scos = a / width, ssin = b / width;
+    if (
+      rows.getFloat32(color, true) !== 1 ||
+      rows.getFloat32(color + 4, true) !== 1 ||
+      rows.getFloat32(color + 8, true) !== 1 ||
+      rows.getFloat32(color + 12, true) !== 1 ||
+      rows.getFloat32(count * 64 + index * 4, true) !== 1 ||
+      rows.getFloat32(count * 68 + index * 4, true) !== 0
+    )
+      return false;
+    const scos = a / width,
+      ssin = b / width;
     if (Math.abs(c / height + ssin) > 1e-6 || Math.abs(d / height - scos) > 1e-6) return false;
     sourceRects.push(x, y, x + width, y + height);
     xforms.push(scos, ssin, e, f);
   }
   canvas.drawAtlas(image, sourceRects, xforms, paint, null, null, {
-    filter: String(region.sampling) === "nearestClamp" ? CanvasKit.FilterMode.Nearest : CanvasKit.FilterMode.Linear,
+    filter:
+      String(region.sampling) === "nearestClamp"
+        ? CanvasKit.FilterMode.Nearest
+        : CanvasKit.FilterMode.Linear,
   });
   return true;
 }
@@ -2610,9 +3654,17 @@ function normalizeAtlasImage(
   if (!arena) fail("surface_lifetime", "atlas image needs a working surface arena");
   // Convert source texels before filtering, as the native ProgramTexture does. The cropped
   // snapshot also keeps bilinear sampling from reading a neighboring atlas tile.
-  const object = resolveProgramTexture(admitted.textures, record(region.texture, "atlas texture"), "atlas texture");
+  const object = resolveProgramTexture(
+    admitted.textures,
+    record(region.texture, "atlas texture"),
+    "atlas texture",
+  );
   const image = object.image!;
-  const { left, top, width, height, source } = atlasCrop(rect(region.src, "atlas source"), image.width(), image.height());
+  const { left, top, width, height, source } = atlasCrop(
+    rect(region.src, "atlas source"),
+    image.width(),
+    image.height(),
+  );
   const surface = arena.transient(width, height);
   try {
     const canvas = surface.getCanvas();
@@ -2626,11 +3678,18 @@ function normalizeAtlasImage(
       try {
         canvas.translate(-left, -top);
         canvas.drawRect(CanvasKit.XYWHRect(left, top, width, height), paint);
-      } finally { canvas.restore(); }
-    } finally { paint.delete(); shader.delete(); }
+      } finally {
+        canvas.restore();
+      }
+    } finally {
+      paint.delete();
+      shader.delete();
+    }
     surface.flush();
     return { image: surface.makeImageSnapshot([0, 0, width, height]), source };
-  } finally { arena.releaseTransient(surface); }
+  } finally {
+    arena.releaseTransient(surface);
+  }
 }
 
 function drawImageNode(
@@ -2654,9 +3713,15 @@ function drawImageNode(
     height: src.height * image.height(),
   };
   const localFromPixel = [
-    dst.width / source.width, 0, dst.x - source.x * dst.width / source.width,
-    0, dst.height / source.height, dst.y - source.y * dst.height / source.height,
-    0, 0, 1,
+    dst.width / source.width,
+    0,
+    dst.x - (source.x * dst.width) / source.width,
+    0,
+    dst.height / source.height,
+    dst.y - (source.y * dst.height) / source.height,
+    0,
+    0,
+    1,
   ];
   const shader = normalizedImage
     ? imageShader(CanvasKit, normalizedImage, String(node.sampling))
@@ -2668,10 +3733,26 @@ function drawImageNode(
     if (tint && (tint.red !== 1 || tint.green !== 1 || tint.blue !== 1 || tint.alpha !== 1)) {
       const inverseAlpha = 1 / tint.alpha;
       const filter = CanvasKit.ColorFilter.MakeMatrix([
-        tint.red * inverseAlpha, 0, 0, 0, 0,
-        0, tint.green * inverseAlpha, 0, 0, 0,
-        0, 0, tint.blue * inverseAlpha, 0, 0,
-        0, 0, 0, 1, 0,
+        tint.red * inverseAlpha,
+        0,
+        0,
+        0,
+        0,
+        0,
+        tint.green * inverseAlpha,
+        0,
+        0,
+        0,
+        0,
+        0,
+        tint.blue * inverseAlpha,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
       ]);
       paint.setColorFilter(filter);
       filter.delete();
@@ -2682,42 +3763,84 @@ function drawImageNode(
     canvas.concat(localFromPixel);
     canvas.drawRect(skRect(CanvasKit, source), paint);
     canvas.restore();
-  } finally { paint.delete(); shader.delete(); }
+  } finally {
+    paint.delete();
+    shader.delete();
+  }
 }
 
-function drawGlyphNode(CanvasKit: CanvasKit, canvas: Canvas, admitted: AdmittedProgram, node: Wire, objects?: RasterDrawObjects): void {
+function drawGlyphNode(
+  CanvasKit: CanvasKit,
+  canvas: Canvas,
+  admitted: AdmittedProgram,
+  node: Wire,
+  objects?: RasterDrawObjects,
+): void {
   if (node.outline != null) {
-    drawPathNode(CanvasKit, canvas, admitted.draw, {
-      path: node.outline, fillRule: "nonZero", fill: node.paint, stroke: node.stroke,
-    }, objects, admitted.pathCache);
+    drawPathNode(
+      CanvasKit,
+      canvas,
+      admitted.draw,
+      {
+        path: node.outline,
+        fillRule: "nonZero",
+        fill: node.paint,
+        stroke: node.stroke,
+      },
+      objects,
+      admitted.pathCache,
+    );
     return;
   }
   const fontKeyWire = record(node.font, "glyph font");
-  const face = required(admitted.fonts, fontKey(String(fontKeyWire.faceHash), positiveIdOrZero(fontKeyWire.faceIndex, "faceIndex")), "font face");
+  const face = required(
+    admitted.fonts,
+    fontKey(String(fontKeyWire.faceHash), positiveIdOrZero(fontKeyWire.faceIndex, "faceIndex")),
+    "font face",
+  );
   const font = new CanvasKit.Font(face, finiteNumber(node.fontSize, "font size"));
   try {
     // Match the Native Skia executor exactly. CanvasKit otherwise keeps its platform defaults,
     // which changes stem coverage (and therefore parity) even with identical glyph positions.
     configureGlyphCoverage(CanvasKit, font);
     const glyphs = array(node.glyphs, "glyphs");
-    const ids = Uint16Array.from(glyphs.map((raw) => positiveIdOrZero(record(raw, "glyph").id, "glyph id")));
-    const positions = Float32Array.from(glyphs.flatMap((raw) => {
-      const glyph = record(raw, "glyph");
-      return [finiteNumber(glyph.x, "glyph x"), finiteNumber(glyph.y, "glyph y")];
-    }));
-    const fill = objects?.fill(node.paint as number) ?? makePaint(CanvasKit, requiredIndex(admitted.draw.paints, node.paint, "glyph paint"));
-    try { canvas.drawGlyphs(ids, positions, 0, 0, font, fill); }
-    finally { if (!objects) fill.delete(); }
+    const ids = Uint16Array.from(
+      glyphs.map((raw) => positiveIdOrZero(record(raw, "glyph").id, "glyph id")),
+    );
+    const positions = Float32Array.from(
+      glyphs.flatMap((raw) => {
+        const glyph = record(raw, "glyph");
+        return [finiteNumber(glyph.x, "glyph x"), finiteNumber(glyph.y, "glyph y")];
+      }),
+    );
+    const fill =
+      objects?.fill(node.paint as number) ??
+      makePaint(CanvasKit, requiredIndex(admitted.draw.paints, node.paint, "glyph paint"));
+    try {
+      canvas.drawGlyphs(ids, positions, 0, 0, font, fill);
+    } finally {
+      if (!objects) fill.delete();
+    }
     if (node.stroke != null) {
       const stroke = record(node.stroke, "glyph stroke");
-      const outline = makePaint(CanvasKit, requiredIndex(admitted.draw.paints, stroke.paint, "glyph stroke paint"));
+      const outline = makePaint(
+        CanvasKit,
+        requiredIndex(admitted.draw.paints, stroke.paint, "glyph stroke paint"),
+      );
       try {
         const effect = configureStrokePaint(CanvasKit, outline, stroke);
-        try { canvas.drawGlyphs(ids, positions, 0, 0, font, outline); }
-        finally { effect?.delete(); }
-      } finally { outline.delete(); }
+        try {
+          canvas.drawGlyphs(ids, positions, 0, 0, font, outline);
+        } finally {
+          effect?.delete();
+        }
+      } finally {
+        outline.delete();
+      }
     }
-  } finally { font.delete(); }
+  } finally {
+    font.delete();
+  }
 }
 
 function configureGlyphCoverage(CanvasKit: CanvasKit, font: Font): void {
@@ -2750,12 +3873,15 @@ function drawShadowNode(CanvasKit: CanvasKit, canvas: Canvas, node: Wire): void 
     finiteNumber(node.sigmaX, "shadow sigmaX"),
     finiteNumber(node.sigmaY, "shadow sigmaY"),
   );
-  const filter = sigma > 0
-    ? CanvasKit.MaskFilter.MakeBlur(CanvasKit.BlurStyle.Normal, sigma, true)
-    : null;
+  const filter =
+    sigma > 0 ? CanvasKit.MaskFilter.MakeBlur(CanvasKit.BlurStyle.Normal, sigma, true) : null;
   try {
     paint.setAntiAlias(true);
-    setLinearColor(CanvasKit, paint, record(node.color, "shadow color") as unknown as LinearColorWire);
+    setLinearColor(
+      CanvasKit,
+      paint,
+      record(node.color, "shadow color") as unknown as LinearColorWire,
+    );
     if (filter) paint.setMaskFilter(filter);
     if (node.inset === true) {
       canvas.save();
@@ -2765,20 +3891,50 @@ function drawShadowNode(CanvasKit: CanvasKit, canvas: Canvas, node: Wire): void 
     } else {
       canvas.drawRRect(roundRect(CanvasKit, shape), paint);
     }
-  } finally { filter?.delete(); paint.delete(); }
+  } finally {
+    filter?.delete();
+    paint.delete();
+  }
 }
 
-function drawRuntimeShaderNode(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, canvas: Canvas, admitted: AdmittedProgram, node: Wire): void {
+function drawRuntimeShaderNode(
+  CanvasKit: CanvasKit,
+  builtins: CanvasKitBuiltinRuntime,
+  canvas: Canvas,
+  admitted: AdmittedProgram,
+  node: Wire,
+): void {
   const shader = record(node.shader, "runtime shader key");
   const effect = required(admitted.shaders, String(shader.uri), "runtime shader");
   const bounds = rect(node.bounds, "runtime shader bounds");
-  const runtime = instantiateRuntimeShader(CanvasKit, builtins, effect, bounds, array(node.uniforms, "shader uniforms"), array(node.textures, "shader textures"), admitted, null);
+  const runtime = instantiateRuntimeShader(
+    CanvasKit,
+    builtins,
+    effect,
+    bounds,
+    array(node.uniforms, "shader uniforms"),
+    array(node.textures, "shader textures"),
+    admitted,
+    null,
+  );
   const paint = new CanvasKit.Paint();
-  try { paint.setAntiAlias(true); paint.setShader(runtime); canvas.drawRect(skRect(CanvasKit, bounds), paint); }
-  finally { paint.delete(); runtime.delete(); }
+  try {
+    paint.setAntiAlias(true);
+    paint.setShader(runtime);
+    canvas.drawRect(skRect(CanvasKit, bounds), paint);
+  } finally {
+    paint.delete();
+    runtime.delete();
+  }
 }
 
-function drawSceneNode(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, canvas: Canvas, admitted: AdmittedProgram, node: Wire): void {
+function drawSceneNode(
+  CanvasKit: CanvasKit,
+  builtins: CanvasKitBuiltinRuntime,
+  canvas: Canvas,
+  admitted: AdmittedProgram,
+  node: Wire,
+): void {
   const scene = record(node.scene, "Scene3D key");
   const object = required(admitted.scenes, String(scene.contentHash), "Scene3D image");
   const image = object.image!;
@@ -2786,9 +3942,15 @@ function drawSceneNode(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, 
   const shader = normalizedExternalShader(CanvasKit, builtins, object);
   const paint = new CanvasKit.Paint();
   const localFromPixel = [
-    bounds.width / image.width(), 0, bounds.x,
-    0, bounds.height / image.height(), bounds.y,
-    0, 0, 1,
+    bounds.width / image.width(),
+    0,
+    bounds.x,
+    0,
+    bounds.height / image.height(),
+    bounds.y,
+    0,
+    0,
+    1,
   ];
   try {
     paint.setShader(shader);
@@ -2797,19 +3959,47 @@ function drawSceneNode(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, 
     canvas.concat(localFromPixel);
     canvas.drawRect(CanvasKit.XYWHRect(0, 0, image.width(), image.height()), paint);
     canvas.restore();
-  } finally { paint.delete(); shader.delete(); }
+  } finally {
+    paint.delete();
+    shader.delete();
+  }
 }
 
-function applyProgramShader(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, canvas: Canvas, admitted: AdmittedProgram, input: ImageValue, backdrops: ImageValue[], shaderWire: Wire, ownerToDevice: number[]): void {
+function applyProgramShader(
+  CanvasKit: CanvasKit,
+  builtins: CanvasKitBuiltinRuntime,
+  canvas: Canvas,
+  admitted: AdmittedProgram,
+  input: ImageValue,
+  backdrops: ImageValue[],
+  shaderWire: Wire,
+  ownerToDevice: number[],
+): void {
   const key = record(shaderWire.shader, "group shader key");
   const effect = required(admitted.shaders, String(key.uri), "group shader");
-  const runtime = instantiateRuntimeShader(CanvasKit, builtins, effect, rect(shaderWire.bounds, "group shader bounds"), array(shaderWire.uniforms, "group uniforms"), array(shaderWire.textures, "group textures"), admitted, input, ownerToDevice, backdrops);
+  const runtime = instantiateRuntimeShader(
+    CanvasKit,
+    builtins,
+    effect,
+    rect(shaderWire.bounds, "group shader bounds"),
+    array(shaderWire.uniforms, "group uniforms"),
+    array(shaderWire.textures, "group textures"),
+    admitted,
+    input,
+    ownerToDevice,
+    backdrops,
+  );
   const paint = new CanvasKit.Paint();
   const bounds = rect(shaderWire.bounds, "group shader bounds");
   const padding = numberArray(shaderWire.padding, 4, "shader padding");
-  if (padding.some(v => !Number.isSafeInteger(v) || v < 0)) fail("shader_bounds", "shader padding must contain non-negative integers");
-  const output = { x: bounds.x - padding[0]!, y: bounds.y - padding[1]!,
-    width: bounds.width + padding[0]! + padding[2]!, height: bounds.height + padding[1]! + padding[3]! };
+  if (padding.some((v) => !Number.isSafeInteger(v) || v < 0))
+    fail("shader_bounds", "shader padding must contain non-negative integers");
+  const output = {
+    x: bounds.x - padding[0]!,
+    y: bounds.y - padding[1]!,
+    width: bounds.width + padding[0]! + padding[2]!,
+    height: bounds.height + padding[1]! + padding[3]!,
+  };
   canvas.save();
   try {
     canvas.concat(ownerToDevice);
@@ -2818,7 +4008,11 @@ function applyProgramShader(CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRunt
     paint.setAntiAlias(true);
     paint.setShader(runtime);
     canvas.drawRect(skRect(CanvasKit, output), paint);
-  } finally { canvas.restore(); paint.delete(); runtime.delete(); }
+  } finally {
+    canvas.restore();
+    paint.delete();
+    runtime.delete();
+  }
 }
 
 function instantiateRuntimeShader(
@@ -2836,15 +4030,21 @@ function instantiateRuntimeShader(
   // The content and the backdrops are snapshots in device pixels. The runtime entry and its child
   // evaluations use pixels relative to the shader's local border box, so each is sampled where it lies.
   const inPlace = (value: ImageValue | null): Shader => {
-    if (!value?.image) return CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB);
+    if (!value?.image)
+      return CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB);
     const deviceToOwner = inverse3(ownerToDevice);
     if (!deviceToOwner) fail("shader_transform", "shader owner transform is not invertible");
     const imageToShader = mul3(
       [1, 0, -bounds.x, 0, 1, -bounds.y, 0, 0, 1],
       mul3(deviceToOwner, [1, 0, value.roi.x, 0, 1, value.roi.y, 0, 0, 1]),
     );
-    const image = value.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
-      CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None, imageToShader);
+    const image = value.image.makeShaderOptions(
+      CanvasKit.TileMode.Decal,
+      CanvasKit.TileMode.Decal,
+      CanvasKit.FilterMode.Linear,
+      CanvasKit.MipmapMode.None,
+      imageToShader,
+    );
     if (!image) fail("shader_transform", "an image cannot become a shader child");
     return image;
   };
@@ -2857,8 +4057,19 @@ function instantiateRuntimeShader(
     for (const shader of supplied) shader.delete();
     throw error;
   }
-  return makeRuntimeShader(CanvasKit, builtins, effect, bounds, uniforms, textures, admitted, [child], [],
-    [1, 0, bounds.x, 0, 1, bounds.y, 0, 0, 1], supplied);
+  return makeRuntimeShader(
+    CanvasKit,
+    builtins,
+    effect,
+    bounds,
+    uniforms,
+    textures,
+    admitted,
+    [child],
+    [],
+    [1, 0, bounds.x, 0, 1, bounds.y, 0, 0, 1],
+    supplied,
+  );
 }
 
 /**
@@ -2882,48 +4093,75 @@ function makeRuntimeShader(
   const children = [...inputs];
   const pending = [...backdrops];
   try {
-    const values = new Map<string, number[]>([["resolution", [bounds.width, bounds.height]], ...system]);
+    const values = new Map<string, number[]>([
+      ["resolution", [bounds.width, bounds.height]],
+      ...system,
+    ]);
     for (const raw of uniforms) {
       const binding = record(raw, "shader uniform");
       const value = record(binding.value, "shader uniform value");
       const scalars: number[] = [];
       if (value.kind === "float") scalars.push(finiteNumber(value.value, "shader float"));
       else if (value.kind === "float2") scalars.push(...pair(value.value, "shader float2"));
-      else if (["float3", "float4", "float2x2", "float3x3", "float4x4"].includes(String(value.kind))) {
-        const widths: Record<string, number> = { float3: 3, float4: 4, float2x2: 4, float3x3: 9, float4x4: 16 };
+      else if (
+        ["float3", "float4", "float2x2", "float3x3", "float4x4"].includes(String(value.kind))
+      ) {
+        const widths: Record<string, number> = {
+          float3: 3,
+          float4: 4,
+          float2x2: 4,
+          float3x3: 9,
+          float4x4: 16,
+        };
         const components = array(value.value, "shader components");
-        if (components.length !== widths[String(value.kind)]) fail("shader_abi", "shader component count mismatch");
+        if (components.length !== widths[String(value.kind)])
+          fail("shader_abi", "shader component count mismatch");
         scalars.push(...components.map((v) => finiteNumber(v, "shader component")));
-      }
-      else if (value.kind === "color") {
+      } else if (value.kind === "color") {
         const components = array(value.value, "shader linear sRGB color");
         if (components.length !== 4) fail("shader_abi", "shader color requires four components");
         scalars.push(...components.map((v) => finiteNumber(v, "shader color component")));
       } else if (value.kind === "bool") scalars.push(value.value === true ? 1 : 0);
       else fail("shader_abi", `unknown shader uniform kind '${String(value.kind)}'`);
-      const name = value.kind === "bool" ? `valle_uniform_${String(binding.name)}` : String(binding.name);
+      const name =
+        value.kind === "bool" ? `valle_uniform_${String(binding.name)}` : String(binding.name);
       if (values.has(name)) fail("shader_abi", `duplicate shader uniform '${name}'`);
       values.set(name, scalars);
     }
     for (const raw of textures) {
       const binding = record(raw, "shader texture binding");
       const name = `valle_size_${String(binding.name)}`;
-      if (values.has(name)) fail("shader_abi", `duplicate shader texture '${String(binding.name)}'`);
+      if (values.has(name))
+        fail("shader_abi", `duplicate shader texture '${String(binding.name)}'`);
       const source = shaderTextureSource(binding);
-      if (source === null) { values.set(name, [1, 1]); continue; }
+      if (source === null) {
+        values.set(name, [1, 1]);
+        continue;
+      }
       // The backdrop lies under the layer, at its size.
-      if (source.type === "backdrop") { values.set(name, [bounds.width, bounds.height]); continue; }
-      const object = resolveProgramTexture(admitted.textures, record(source.texture, "shader texture key"), "shader texture");
+      if (source.type === "backdrop") {
+        values.set(name, [bounds.width, bounds.height]);
+        continue;
+      }
+      const object = resolveProgramTexture(
+        admitted.textures,
+        record(source.texture, "shader texture key"),
+        "shader texture",
+      );
       if (!object.image) fail("shader_abi", "shader texture needs an image");
       const data = object.kind === "dataTexture";
-      values.set(name, [object.image.width() / (data ? 2 : 1), object.image.height() / (data ? 4 : 1)]);
+      values.set(name, [
+        object.image.width() / (data ? 2 : 1),
+        object.image.height() / (data ? 4 : 1),
+      ]);
     }
     const scalars = new Float32Array(effect.getUniformFloatCount());
     for (let i = 0; i < effect.getUniformCount(); i++) {
       const name = effect.getUniformName(i);
       const uniform = effect.getUniform(i);
       const value = values.get(name);
-      if (!value || value.length !== uniform.columns * uniform.rows) fail("shader_abi", `missing or mismatched shader uniform '${name}'`);
+      if (!value || value.length !== uniform.columns * uniform.rows)
+        fail("shader_abi", `missing or mismatched shader uniform '${name}'`);
       scalars.set(value, uniform.slot);
       values.delete(name);
     }
@@ -2932,20 +4170,25 @@ function makeRuntimeShader(
       const binding = record(raw, "shader texture binding");
       const source = shaderTextureSource(binding);
       const backdrop = source?.type === "backdrop" ? pending.shift() : undefined;
-      if (backdrop) { children.push(backdrop); continue; }
+      if (backdrop) {
+        children.push(backdrop);
+        continue;
+      }
       if (source === null || source.type === "backdrop") {
         children.push(CanvasKit.Shader.MakeColor(CanvasKit.TRANSPARENT, CanvasKit.ColorSpace.SRGB));
         continue;
       }
       const texture = record(source.texture, "shader texture key");
-      children.push(normalizedExternalShader(
-        CanvasKit,
-        builtins,
-        resolveProgramTexture(admitted.textures, texture, "shader texture"),
-        // Decode each texel before the shared shader performs linear interpolation.
-        "nearestClamp",
-        String(binding.wrap),
-      ));
+      children.push(
+        normalizedExternalShader(
+          CanvasKit,
+          builtins,
+          resolveProgramTexture(admitted.textures, texture, "shader texture"),
+          // Decode each texel before the shared shader performs linear interpolation.
+          "nearestClamp",
+          String(binding.wrap),
+        ),
+      );
     }
     const shader = effect.makeShaderWithChildren(scalars, children, local);
     if (!shader) fail("shader_abi", "RuntimeEffect child/uniform ABI mismatch");
@@ -2977,14 +4220,24 @@ function executeKernel(
   extent: { width: number; height: number },
 ): void {
   switch (invocation.kind) {
-    case "group": drawImage(CanvasKit, canvas, image(resources, invocation.input), 1, "src"); return;
+    case "group":
+      drawImage(CanvasKit, canvas, image(resources, invocation.input), 1, "src");
+      return;
     case "mask":
       drawImage(CanvasKit, canvas, image(resources, invocation.input), 1, "src");
       applyPreparedMask(CanvasKit, arena, canvas, record(invocation.mask, "prepared mask"));
       return;
     case "filter":
     case "adjustmentEffect":
-      applyPreparedEffect(CanvasKit, builtins, canvas, image(resources, invocation.input), record(invocation.effect, "effect"), dynamic, extent);
+      applyPreparedEffect(
+        CanvasKit,
+        builtins,
+        canvas,
+        image(resources, invocation.input),
+        record(invocation.effect, "effect"),
+        dynamic,
+        extent,
+      );
       return;
     case "transition": {
       drawImage(CanvasKit, canvas, image(resources, invocation.backdrop), 1, "src");
@@ -3009,15 +4262,19 @@ function executeKernel(
           [extent.width, extent.height, progress, ...prepared.params],
           [from, to],
         );
-        try { drawShader(CanvasKit, canvas, transition, "srcOver"); }
-        finally { transition.delete(); }
+        try {
+          drawShader(CanvasKit, canvas, transition, "srcOver");
+        } finally {
+          transition.delete();
+        }
       } finally {
         from.delete();
         to.delete();
       }
       return;
     }
-    default: fail("unsupported_kernel", `kernel '${String(invocation.kind)}' is not closed`);
+    default:
+      fail("unsupported_kernel", `kernel '${String(invocation.kind)}' is not closed`);
   }
 }
 
@@ -3061,8 +4318,13 @@ function drawPreparedEffect(
     const sigma = dynamicScalar(dynamic, kernel.sigmaDevicePx);
     const filter = CanvasKit.ImageFilter.MakeBlur(sigma, sigma, CanvasKit.TileMode.Decal, null);
     const paint = new CanvasKit.Paint();
-    try { paint.setImageFilter(filter); drawImageWithPaint(CanvasKit, canvas, input, paint, "src"); }
-    finally { filter?.delete(); paint.delete(); }
+    try {
+      paint.setImageFilter(filter);
+      drawImageWithPaint(CanvasKit, canvas, input, paint, "src");
+    } finally {
+      filter?.delete();
+      paint.delete();
+    }
     return;
   }
   if (kernel.kind === "directionalBlur") {
@@ -3105,7 +4367,13 @@ function drawPreparedEffect(
       builtins,
       canvas,
       "mosaic",
-      [extent.width, extent.height, dynamicScalar(dynamic, kernel.blockSizeDevicePx), anchor[0], anchor[1]],
+      [
+        extent.width,
+        extent.height,
+        dynamicScalar(dynamic, kernel.blockSizeDevicePx),
+        anchor[0],
+        anchor[1],
+      ],
       [input],
       "src",
     );
@@ -3160,16 +4428,29 @@ function applyEffectClip(
     }
     return;
   }
-  if (space.kind !== "layer") fail("effect_space", `effect space '${String(space.kind)}' is outside the closed set`);
-  canvas.clipRect(deviceRect(CanvasKit, dynamicBounds(dynamic, space.bounds)), CanvasKit.ClipOp.Intersect, false);
+  if (space.kind !== "layer")
+    fail("effect_space", `effect space '${String(space.kind)}' is outside the closed set`);
+  canvas.clipRect(
+    deviceRect(CanvasKit, dynamicBounds(dynamic, space.bounds)),
+    CanvasKit.ClipOp.Intersect,
+    false,
+  );
   if (!region) return;
 
   const transform = dynamicTransform(dynamic, space.transform);
   const inverse = inverse3(transform);
-  if (!inverse) fail("effect_space", `effect '${String(effect.semanticPath)}' has a non-invertible layer transform`);
+  if (!inverse)
+    fail(
+      "effect_space",
+      `effect '${String(effect.semanticPath)}' has a non-invertible layer transform`,
+    );
   const value = unitRegion(region);
   canvas.concat(transform);
-  canvas.clipRect(CanvasKit.XYWHRect(value.x, value.y, value.width, value.height), CanvasKit.ClipOp.Intersect, false);
+  canvas.clipRect(
+    CanvasKit.XYWHRect(value.x, value.y, value.width, value.height),
+    CanvasKit.ClipOp.Intersect,
+    false,
+  );
   canvas.concat(inverse);
 }
 
@@ -3180,7 +4461,14 @@ function effectRegion(kernel: Wire): Wire | null {
 
 function unitRegion(region: Wire): RectWire {
   const value = rect(region, "effect region");
-  if (value.x < 0 || value.y < 0 || value.width <= 0 || value.height <= 0 || value.x + value.width > 1 || value.y + value.height > 1) {
+  if (
+    value.x < 0 ||
+    value.y < 0 ||
+    value.width <= 0 ||
+    value.height <= 0 ||
+    value.x + value.width > 1 ||
+    value.y + value.height > 1
+  ) {
     fail("effect_region", "effect region must be a non-empty normalized unit rectangle");
   }
   return value;
@@ -3189,13 +4477,20 @@ function unitRegion(region: Wire): RectWire {
 function effectAnchor(effect: Wire, dynamic: Map<number, Wire>): [number, number] {
   const space = record(effect.space, "effect space");
   if (space.kind === "root") return [0, 0];
-  if (space.kind !== "layer") fail("effect_space", `effect space '${String(space.kind)}' is outside the closed set`);
+  if (space.kind !== "layer")
+    fail("effect_space", `effect space '${String(space.kind)}' is outside the closed set`);
   const anchor = project3(dynamicTransform(dynamic, space.transform), [0, 0]);
-  if (!anchor) fail("effect_space", `effect '${String(effect.semanticPath)}' has an invalid layer origin`);
+  if (!anchor)
+    fail("effect_space", `effect '${String(effect.semanticPath)}' has an invalid layer origin`);
   return anchor;
 }
 
-function applyPreparedMask(CanvasKit: CanvasKit, arena: SurfaceArena, canvas: Canvas, mask: Wire): void {
+function applyPreparedMask(
+  CanvasKit: CanvasKit,
+  arena: SurfaceArena,
+  canvas: Canvas,
+  mask: Wire,
+): void {
   const transform = record(mask.deviceFromMask, "mask transform");
   const surface = arena.transient();
   const maskCanvas = surface.getCanvas();
@@ -3219,9 +4514,8 @@ function applyPreparedMask(CanvasKit: CanvasKit, arena: SurfaceArena, canvas: Ca
   }
   const coverage = new CanvasKit.Paint();
   const sigma = finiteNumber(mask.featherSigmaDevicePx, "mask feather sigma");
-  const blur = sigma > 0
-    ? CanvasKit.ImageFilter.MakeBlur(sigma, sigma, CanvasKit.TileMode.Decal, null)
-    : null;
+  const blur =
+    sigma > 0 ? CanvasKit.ImageFilter.MakeBlur(sigma, sigma, CanvasKit.TileMode.Decal, null) : null;
   try {
     coverage.setBlendMode(CanvasKit.BlendMode.DstIn);
     if (blur) coverage.setImageFilter(blur);
@@ -3240,7 +4534,6 @@ function renderImport(
   sourceObject: CanvasKitExternalObject,
   pass: Wire,
   dynamic: Map<number, Wire>,
-  externals: Map<number, CanvasKitExternalObject>,
 ): void {
   const source = sourceObject.image!;
   const placement = record(pass.placement, "external placement");
@@ -3248,17 +4541,25 @@ function renderImport(
   const bounds = dynamicBounds(dynamic, pass.bounds);
   canvas.save();
   canvas.clipRect(deviceRect(CanvasKit, bounds), CanvasKit.ClipOp.Intersect, false);
-  const backdrop = placement.backdrop == null ? null : record(placement.backdrop, "external backdrop");
+  const backdrop =
+    placement.backdrop == null ? null : record(placement.backdrop, "external backdrop");
   if (backdrop?.kind === "color") {
-    canvas.save(); canvas.concat(transform);
+    canvas.save();
+    canvas.concat(transform);
     const paint = new CanvasKit.Paint();
     try {
-      const [red, green, blue, alpha] = numberArray(backdrop.workingLinearRec2020Premul, 4, "color") as [number, number, number, number];
+      const [red, green, blue, alpha] = numberArray(
+        backdrop.workingLinearRec2020Premul,
+        4,
+        "color",
+      ) as [number, number, number, number];
       if (alpha > 0) setWorkingColor(CanvasKit, paint, red, green, blue, alpha);
       else setWorkingColor(CanvasKit, paint, 0, 0, 0, 0);
       canvas.drawRect(CanvasKit.XYWHRect(0, 0, 1, 1), paint);
+    } finally {
+      paint.delete();
+      canvas.restore();
     }
-    finally { paint.delete(); canvas.restore(); }
   } else if (backdrop?.kind === "blur") {
     const sigma = dynamicScalar(dynamic, backdrop.sigmaDevicePx);
     const blur = CanvasKit.ImageFilter.MakeBlur(sigma, sigma, CanvasKit.TileMode.Decal, null);
@@ -3288,7 +4589,8 @@ function renderImport(
   if (sourcePipeline.chromaKey != null) {
     const effect = record(sourcePipeline.chromaKey, "chroma key effect");
     const kernel = record(effect.kernel, "chroma key kernel");
-    if (kernel.kind !== "chromaKey") fail("source_pipeline", "chroma key slot carries the wrong kernel");
+    if (kernel.kind !== "chromaKey")
+      fail("source_pipeline", "chroma key slot carries the wrong kernel");
     const key = numberArray(kernel.keyWorkingLinearRec2020, 3, "chroma key color");
     const child = sourceShader;
     try {
@@ -3305,7 +4607,9 @@ function renderImport(
         ],
         [child],
       );
-    } finally { child.delete(); }
+    } finally {
+      child.delete();
+    }
   }
   try {
     drawExternalSample(
@@ -3319,7 +4623,9 @@ function renderImport(
       undefined,
       sourceShader,
     );
-  } finally { sourceShader.delete(); }
+  } finally {
+    sourceShader.delete();
+  }
   canvas.restore();
 }
 
@@ -3335,15 +4641,31 @@ function drawExternalSample(
   shaderOverride?: Shader,
 ): void {
   if (sample.kind === "empty") return;
-  if (sample.kind !== "texture") fail("external_sample", `unknown sample kind '${String(sample.kind)}'`);
+  if (sample.kind !== "texture")
+    fail("external_sample", `unknown sample kind '${String(sample.kind)}'`);
   const textureFromContent = numberArray(sample.textureFromContent, 9, "textureFromContent");
   const inverse = inverse3(textureFromContent);
   if (!inverse) fail("external_sample", "non-invertible texture mapping");
   const normalizedFromPixel = [1 / image.width(), 0, 0, 0, 1 / image.height(), 0, 0, 0, 1];
-  const localFromContent = [destination.width, 0, destination.x, 0, destination.height, destination.y, 0, 0, 1];
+  const localFromContent = [
+    destination.width,
+    0,
+    destination.x,
+    0,
+    destination.height,
+    destination.y,
+    0,
+    0,
+    1,
+  ];
   const localFromPixel = mul3(localFromContent, mul3(inverse, normalizedFromPixel));
   const sourceBounds = rect(sample.inputSampleBounds, "input sample bounds");
-  const src = CanvasKit.XYWHRect(sourceBounds.x * image.width(), sourceBounds.y * image.height(), sourceBounds.width * image.width(), sourceBounds.height * image.height());
+  const src = CanvasKit.XYWHRect(
+    sourceBounds.x * image.width(),
+    sourceBounds.y * image.height(),
+    sourceBounds.width * image.width(),
+    sourceBounds.height * image.height(),
+  );
   const paint = paintOverride ?? new CanvasKit.Paint();
   try {
     canvas.save();
@@ -3356,25 +4678,19 @@ function drawExternalSample(
       canvas.drawRect(src, paint);
       paint.setShader(null);
     } else {
-      canvas.drawImageRectOptions(image, src, src, CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None, paint);
+      canvas.drawImageRectOptions(
+        image,
+        src,
+        src,
+        CanvasKit.FilterMode.Linear,
+        CanvasKit.MipmapMode.None,
+        paint,
+      );
     }
     canvas.restore();
-  } finally { if (!paintOverride) paint.delete(); }
-}
-
-function applyFiltersAsLayer(CanvasKit: CanvasKit, canvas: Canvas, input: Image | null, filters: unknown[], bounds: RectWire | null): void {
-  let current: ImageFilter | null = null;
-  try {
-    for (const raw of filters) {
-      const filter = record(raw, "DrawProgram filter");
-      const next = drawProgramImageFilter(CanvasKit, filter, current);
-      if (next !== current) current?.delete();
-      current = next;
-    }
-    const paint = new CanvasKit.Paint();
-    try { if (current) paint.setImageFilter(current); if (bounds) canvas.clipRect(skRect(CanvasKit, bounds), CanvasKit.ClipOp.Intersect, true); drawImageWithPaint(CanvasKit, canvas, input, paint, "src"); }
-    finally { paint.delete(); }
-  } finally { current?.delete(); }
+  } finally {
+    if (!paintOverride) paint.delete();
+  }
 }
 
 function applyFiltersAsLayerValue(
@@ -3405,7 +4721,11 @@ function applyFiltersAsLayerValue(
   }
 }
 
-function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: ImageFilter | null): ImageFilter | null {
+function drawProgramImageFilter(
+  CanvasKit: CanvasKit,
+  filter: Wire,
+  input: ImageFilter | null,
+): ImageFilter | null {
   if (filter.kind === "blur") {
     const sigmaX = finiteNumber(filter.sigmaX, "sigmaX");
     const sigmaY = finiteNumber(filter.sigmaY, "sigmaY");
@@ -3416,8 +4736,11 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
   const matrix = drawProgramColorMatrix(filter);
   if (matrix) {
     const color = CanvasKit.ColorFilter.MakeMatrix(matrix);
-    try { return CanvasKit.ImageFilter.MakeColorFilter(color, input); }
-    finally { color.delete(); }
+    try {
+      return CanvasKit.ImageFilter.MakeColorFilter(color, input);
+    } finally {
+      color.delete();
+    }
   }
   if (filter.kind === "dropShadow") {
     const offset = pair(filter.offset, "drop shadow offset");
@@ -3426,7 +4749,10 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
       offset[1],
       finiteNumber(filter.sigmaX, "sigmaX"),
       finiteNumber(filter.sigmaY, "sigmaY"),
-      linearColor(CanvasKit, record(filter.color, "drop shadow color") as unknown as LinearColorWire),
+      linearColor(
+        CanvasKit,
+        record(filter.color, "drop shadow color") as unknown as LinearColorWire,
+      ),
       input,
     );
   }
@@ -3463,30 +4789,62 @@ function drawProgramImageFilter(CanvasKit: CanvasKit, filter: Wire, input: Image
     const samples = Math.min(32, Math.max(9, Math.ceil(reach) + 1));
     const weight = 1 / samples;
     const alpha = CanvasKit.ColorFilter.MakeMatrix([
-      1,0,0,0,0, 0,1,0,0,0, 0,0,1,0,0, 0,0,0,weight,0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      weight,
+      0,
     ]);
     let sum: ImageFilter | null = null;
     try {
       for (let index = 0; index < samples; index++) {
-        const phase = 2 * index / (samples - 1) - 1;
+        const phase = (2 * index) / (samples - 1) - 1;
         const end = phase < 0 ? from : to;
         const share = Math.abs(phase);
         const shifted = CanvasKit.ImageFilter.MakeMatrixTransform(
-          CanvasKit.Matrix.translated(end[0] * share, end[1] * share), sampling, input,
+          CanvasKit.Matrix.translated(end[0] * share, end[1] * share),
+          sampling,
+          input,
         );
         let tap: ImageFilter;
-        try { tap = CanvasKit.ImageFilter.MakeColorFilter(alpha, shifted); }
-        finally { shifted.delete(); }
+        try {
+          tap = CanvasKit.ImageFilter.MakeColorFilter(alpha, shifted);
+        } finally {
+          shifted.delete();
+        }
         if (sum) {
           const previous = sum;
           sum = null;
-          try { sum = CanvasKit.ImageFilter.MakeBlend(CanvasKit.BlendMode.Plus, previous, tap); }
-          finally { previous.delete(); tap.delete(); }
+          try {
+            sum = CanvasKit.ImageFilter.MakeBlend(CanvasKit.BlendMode.Plus, previous, tap);
+          } finally {
+            previous.delete();
+            tap.delete();
+          }
         } else sum = tap;
       }
       return sum;
-    } catch (error) { sum?.delete(); throw error; }
-    finally { alpha.delete(); }
+    } catch (error) {
+      sum?.delete();
+      throw error;
+    } finally {
+      alpha.delete();
+    }
   }
   fail("unsupported_filter", `DrawProgram filter '${String(filter.kind)}' has no CanvasKit kernel`);
 }
@@ -3515,9 +4873,14 @@ function drawDisplacedBackdrop(
   try {
     if (filters.length > 0 && input.image) {
       // A pixel reads its nearest sample at most half the scale away on each axis.
-      const reach = Math.ceil(Math.abs(finiteNumber(displacement.scale, "noise displacement scale")) * 0.5) + 1;
-      const roi = { x: outputRoi.x - reach, y: outputRoi.y - reach,
-        width: outputRoi.width + 2 * reach, height: outputRoi.height + 2 * reach };
+      const reach =
+        Math.ceil(Math.abs(finiteNumber(displacement.scale, "noise displacement scale")) * 0.5) + 1;
+      const roi = {
+        x: outputRoi.x - reach,
+        y: outputRoi.y - reach,
+        width: outputRoi.width + 2 * reach,
+        height: outputRoi.height + 2 * reach,
+      };
       surface = arena.transient(roi.width, roi.height);
       const layer = surface.getCanvas();
       layer.clear(CanvasKit.TRANSPARENT);
@@ -3525,11 +4888,25 @@ function drawDisplacedBackdrop(
       try {
         layer.translate(-roi.x, -roi.y);
         applyFiltersAsLayerValue(CanvasKit, layer, input, filters, null);
-      } finally { layer.restore(); }
+      } finally {
+        layer.restore();
+      }
       if (!arena.gpu || !arena.deferGpuFlush) surface.flush();
-      source = { image: surface.makeImageSnapshot([0, 0, roi.width, roi.height]), roi, owned: true };
+      source = {
+        image: surface.makeImageSnapshot([0, 0, roi.width, roi.height]),
+        roi,
+        owned: true,
+      };
     }
-    drawNoiseDisplacement(CanvasKit, builtins, canvas, source, displacement, IDENTITY_MATRIX, noise);
+    drawNoiseDisplacement(
+      CanvasKit,
+      builtins,
+      canvas,
+      source,
+      displacement,
+      IDENTITY_MATRIX,
+      noise,
+    );
   } finally {
     if (source !== input) source.image?.delete();
     if (surface) arena.releaseTransient(surface);
@@ -3554,37 +4931,85 @@ export function drawNoiseDisplacement(
   tables: Uint8Array,
 ): void {
   if (!input.image || input.roi.width === 0 || input.roi.height === 0) return;
-  const [a, b, c, d, e, f] = affineDeviceTransform(localToDevice, "noise displacement")
-    .map(checkedDeviceFilterValue) as [number, number, number, number, number, number];
+  const [a, b, c, d, e, f] = affineDeviceTransform(localToDevice, "noise displacement").map(
+    checkedDeviceFilterValue,
+  ) as [number, number, number, number, number, number];
   const determinant = a * e - b * d;
   const [ia, ib, id, ie] = [e / determinant, -b / determinant, -d / determinant, a / determinant];
   const { x, y, width, height } = input.roi;
-  const uniforms = [ia, ib, id, ie, -(ia * c + ib * f), -(id * c + ie * f), a, b, d, e,
-    finiteNumber(filter.scale, "noise displacement scale"), x, y, x + width, y + height];
-  if (determinant === 0 || uniforms.some(value => !Number.isFinite(value) || Math.abs(value) > 3.4028234663852886e38)) {
+  const uniforms = [
+    ia,
+    ib,
+    id,
+    ie,
+    -(ia * c + ib * f),
+    -(id * c + ie * f),
+    a,
+    b,
+    d,
+    e,
+    finiteNumber(filter.scale, "noise displacement scale"),
+    x,
+    y,
+    x + width,
+    y + height,
+  ];
+  if (
+    determinant === 0 ||
+    uniforms.some((value) => !Number.isFinite(value) || Math.abs(value) > 3.4028234663852886e38)
+  ) {
     drawImageValue(CanvasKit, canvas, input, 1, "src");
     return;
   }
   const frequency = pair(filter.frequency, "noise frequency");
   const octaves = positiveIdOrZero(filter.octaves, "noise octaves");
-  const source = input.image.makeShaderOptions(CanvasKit.TileMode.Decal, CanvasKit.TileMode.Decal,
-    CanvasKit.FilterMode.Nearest, CanvasKit.MipmapMode.None, [1, 0, x, 0, 1, y, 0, 0, 1]);
-  if (!source) fail("noise_displacement_shader", "noise displacement input shader allocation failed");
+  const source = input.image.makeShaderOptions(
+    CanvasKit.TileMode.Decal,
+    CanvasKit.TileMode.Decal,
+    CanvasKit.FilterMode.Nearest,
+    CanvasKit.MipmapMode.None,
+    [1, 0, x, 0, 1, y, 0, 0, 1],
+  );
+  if (!source)
+    fail("noise_displacement_shader", "noise displacement input shader allocation failed");
   let lattice: Image | null = null;
   let noise: Shader | null = null;
   let shader: Shader | null = null;
   try {
     // The tables' bytes as they are: the image and CanvasKit's surfaces are both sRGB.
-    lattice = CanvasKit.MakeImage({ width: 256, height: 5, colorType: CanvasKit.ColorType.RGBA_8888,
-      alphaType: CanvasKit.AlphaType.Opaque, colorSpace: CanvasKit.ColorSpace.SRGB }, tables, 256 * 4);
-    if (!lattice) fail("noise_displacement_tables", "noise displacement tables image allocation failed");
-    noise = lattice.makeShaderOptions(CanvasKit.TileMode.Clamp, CanvasKit.TileMode.Clamp,
-      CanvasKit.FilterMode.Nearest, CanvasKit.MipmapMode.None);
-    if (!noise) fail("noise_displacement_tables", "noise displacement tables shader allocation failed");
-    shader = builtins.shader("noiseDisplacement",
-      [...uniforms, frequency[0], frequency[1], octaves, filter.turbulence === true ? 1 : 0], [source, noise]);
+    lattice = CanvasKit.MakeImage(
+      {
+        width: 256,
+        height: 5,
+        colorType: CanvasKit.ColorType.RGBA_8888,
+        alphaType: CanvasKit.AlphaType.Opaque,
+        colorSpace: CanvasKit.ColorSpace.SRGB,
+      },
+      tables,
+      256 * 4,
+    );
+    if (!lattice)
+      fail("noise_displacement_tables", "noise displacement tables image allocation failed");
+    noise = lattice.makeShaderOptions(
+      CanvasKit.TileMode.Clamp,
+      CanvasKit.TileMode.Clamp,
+      CanvasKit.FilterMode.Nearest,
+      CanvasKit.MipmapMode.None,
+    );
+    if (!noise)
+      fail("noise_displacement_tables", "noise displacement tables shader allocation failed");
+    shader = builtins.shader(
+      "noiseDisplacement",
+      [...uniforms, frequency[0], frequency[1], octaves, filter.turbulence === true ? 1 : 0],
+      [source, noise],
+    );
     drawShader(CanvasKit, canvas, shader, "src");
-  } finally { shader?.delete(); noise?.delete(); lattice?.delete(); source.delete(); }
+  } finally {
+    shader?.delete();
+    noise?.delete();
+    lattice?.delete();
+    source.delete();
+  }
 }
 
 /**
@@ -3599,7 +5024,17 @@ export function programFilterInDeviceSpace(
   rawLocalToDevice: readonly number[],
 ): Record<string, unknown> {
   const filter = record(rawFilter, "program filter");
-  if (filter.kind !== "blur" && filter.kind !== "dropShadow" && filter.kind !== "glow" && filter.kind !== "bloom" && filter.kind !== "radialBlur" && filter.kind !== "filmGrain" && filter.kind !== "chromaticAberration" && filter.kind !== "velocityBlur") return filter;
+  if (
+    filter.kind !== "blur" &&
+    filter.kind !== "dropShadow" &&
+    filter.kind !== "glow" &&
+    filter.kind !== "bloom" &&
+    filter.kind !== "radialBlur" &&
+    filter.kind !== "filmGrain" &&
+    filter.kind !== "chromaticAberration" &&
+    filter.kind !== "velocityBlur"
+  )
+    return filter;
   const matrix = numberArray(rawLocalToDevice, 9, "program filter local-to-device matrix");
   if (filter.kind === "filmGrain") {
     const size = finiteNumber(filter.size, "film grain size");
@@ -3614,7 +5049,8 @@ export function programFilterInDeviceSpace(
     if (Math.abs(sx - sy) > Math.max(sx, sy, 1) * 1e-9)
       fail("unsupported_filter", "radial blur amount needs a similarity device transform");
     const [cx, cy] = pair(filter.center, "radial blur center");
-    return { ...filter,
+    return {
+      ...filter,
       center: [
         checkedDeviceFilterValue(matrix[0]! * cx + matrix[1]! * cy + matrix[2]!),
         checkedDeviceFilterValue(matrix[3]! * cx + matrix[4]! * cy + matrix[5]!),
@@ -3623,14 +5059,28 @@ export function programFilterInDeviceSpace(
     };
   }
   if (filter.kind === "chromaticAberration") {
-    return { ...filter, offset: programVectorInDeviceSpace(
-      pair(filter.offset, "chromatic aberration offset"), matrix, "chromatic aberration") };
+    return {
+      ...filter,
+      offset: programVectorInDeviceSpace(
+        pair(filter.offset, "chromatic aberration offset"),
+        matrix,
+        "chromatic aberration",
+      ),
+    };
   }
   if (filter.kind === "velocityBlur") {
     return {
       ...filter,
-      from: programVectorInDeviceSpace(pair(filter.from, "velocity blur trail start"), matrix, "velocity blur"),
-      to: programVectorInDeviceSpace(pair(filter.to, "velocity blur trail end"), matrix, "velocity blur"),
+      from: programVectorInDeviceSpace(
+        pair(filter.from, "velocity blur trail start"),
+        matrix,
+        "velocity blur",
+      ),
+      to: programVectorInDeviceSpace(
+        pair(filter.to, "velocity blur trail end"),
+        matrix,
+        "velocity blur",
+      ),
     };
   }
   if (filter.kind === "glow" || filter.kind === "bloom") {
@@ -3680,7 +5130,11 @@ export function backdropFiltersInDeviceSpace(
  * one gives way to `backdropSimilarity` at the centre of `bounds`, so the filter keeps its shape
  * instead of failing. Native chooses the same way.
  */
-export function backdropFilterMatrix(filter: Wire, matrix: readonly number[], bounds: RectWire): readonly number[] {
+export function backdropFilterMatrix(
+  filter: Wire,
+  matrix: readonly number[],
+  bounds: RectWire,
+): readonly number[] {
   let exact = true;
   try {
     if (filter.kind === "lensDistortion") {
@@ -3691,19 +5145,29 @@ export function backdropFilterMatrix(filter: Wire, matrix: readonly number[], bo
       programFilterInDeviceSpace(filter, matrix);
     }
   } catch (error) {
-    if (!(error instanceof CanvasKitCompositorError) || error.code !== "unsupported_filter") throw error;
+    if (!(error instanceof CanvasKitCompositorError) || error.code !== "unsupported_filter")
+      throw error;
     exact = false;
   }
   return exact
     ? matrix
-    : backdropSimilarity(matrix, [bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5]) ?? matrix;
+    : (backdropSimilarity(matrix, [
+        bounds.x + bounds.width * 0.5,
+        bounds.y + bounds.height * 0.5,
+      ]) ?? matrix);
 }
 
 /** The transform an ApplyFilter pass maps its filter with: a backdrop stage's, or the node's own. */
 function programFilterMatrix(kind: Wire, exact: number[]): number[] {
   return kind.backdrop == null
     ? exact
-    : [...backdropFilterMatrix(record(kind.filter, "program filter"), exact, rect(kind.backdrop, "backdrop stage bounds"))];
+    : [
+        ...backdropFilterMatrix(
+          record(kind.filter, "program filter"),
+          exact,
+          rect(kind.backdrop, "backdrop stage bounds"),
+        ),
+      ];
 }
 
 /**
@@ -3712,9 +5176,20 @@ function programFilterMatrix(kind: Wire, exact: number[]): number[] {
  * the transform does. A similarity returns itself. `null` when `at` is not in front of the camera.
  * Native computes it with the same operations, so both agree to the bit.
  */
-export function backdropSimilarity(matrix: readonly number[], at: readonly [number, number]): number[] | null {
+export function backdropSimilarity(
+  matrix: readonly number[],
+  at: readonly [number, number],
+): number[] | null {
   const [a, b, c, d, e, f, g, h, i] = matrix as [
-    number, number, number, number, number, number, number, number, number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
   ];
   const [x, y] = at;
   const deviceX = a * x + b * y + c;
@@ -3730,9 +5205,8 @@ export function backdropSimilarity(matrix: readonly number[], at: readonly [numb
   const scale = Math.sqrt(Math.abs(det));
   const [p, q]: [number, number] = det >= 0 ? [j11 + j22, j21 - j12] : [j11 - j22, j21 + j12];
   const k = scale === 0 ? 0 : scale / Math.sqrt(p * p + q * q);
-  const [l11, l12, l21, l22]: [number, number, number, number] = det >= 0
-    ? [k * p, -(k * q), k * q, k * p]
-    : [k * p, k * q, k * q, -(k * p)];
+  const [l11, l12, l21, l22]: [number, number, number, number] =
+    det >= 0 ? [k * p, -(k * q), k * q, k * p] : [k * p, k * q, k * q, -(k * p)];
   const tx = deviceX / w - (l11 * x + l12 * y);
   const ty = deviceY / w - (l21 * x + l22 * y);
   const similarity = [l11, l12, tx, l21, l22, ty, 0, 0, 1];
@@ -3740,15 +5214,27 @@ export function backdropSimilarity(matrix: readonly number[], at: readonly [numb
 }
 
 /** The 2 x 3 part of a local-to-device transform that has no projective row. */
-function affineDeviceTransform(matrix: readonly number[], what: string): [number, number, number, number, number, number] {
-  if (matrix.length !== 9 || matrix.some(value => !Number.isFinite(value)) || Math.abs(matrix[6]!) > 1e-12
-    || Math.abs(matrix[7]!) > 1e-12 || Math.abs(matrix[8]! - 1) > 1e-12) {
+function affineDeviceTransform(
+  matrix: readonly number[],
+  what: string,
+): [number, number, number, number, number, number] {
+  if (
+    matrix.length !== 9 ||
+    matrix.some((value) => !Number.isFinite(value)) ||
+    Math.abs(matrix[6]!) > 1e-12 ||
+    Math.abs(matrix[7]!) > 1e-12 ||
+    Math.abs(matrix[8]! - 1) > 1e-12
+  ) {
     fail("unsupported_filter", `${what} needs an affine device transform`);
   }
   return [matrix[0]!, matrix[1]!, matrix[2]!, matrix[3]!, matrix[4]!, matrix[5]!];
 }
 
-function programVectorInDeviceSpace(vector: [number, number], matrix: readonly number[], what: string): [number, number] {
+function programVectorInDeviceSpace(
+  vector: [number, number],
+  matrix: readonly number[],
+  what: string,
+): [number, number] {
   const [a, b, , d, e] = affineDeviceTransform(matrix, what);
   return [
     checkedDeviceFilterValue(a * vector[0] + b * vector[1]),
@@ -3756,14 +5242,27 @@ function programVectorInDeviceSpace(vector: [number, number], matrix: readonly n
   ];
 }
 
-function programGaussianInDeviceSpace(sigma: [number, number], matrix: readonly number[]): [number, number] {
+function programGaussianInDeviceSpace(
+  sigma: [number, number],
+  matrix: readonly number[],
+): [number, number] {
   const [a, b, , d, e, , g, h, i] = matrix as [
-    number, number, number, number, number, number, number, number, number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
   ];
-  if (matrix.some((value) => !Number.isFinite(value))
-    || Math.abs(g) > 1e-12
-    || Math.abs(h) > 1e-12
-    || Math.abs(i - 1) > 1e-12) {
+  if (
+    matrix.some((value) => !Number.isFinite(value)) ||
+    Math.abs(g) > 1e-12 ||
+    Math.abs(h) > 1e-12 ||
+    Math.abs(i - 1) > 1e-12
+  ) {
     fail("unsupported_filter", "program-local spatial filter requires an affine device transform");
   }
   const varianceX = (a * sigma[0]) ** 2 + (b * sigma[1]) ** 2;
@@ -3771,7 +5270,10 @@ function programGaussianInDeviceSpace(sigma: [number, number], matrix: readonly 
   const covariance = a * d * sigma[0] ** 2 + b * e * sigma[1] ** 2;
   const varianceScale = Math.max(varianceX, varianceY, 1);
   if (Math.abs(covariance) > varianceScale * 1e-9) {
-    fail("unsupported_filter", "rotated program-local anisotropic blur has no axis-aligned CanvasKit equivalent");
+    fail(
+      "unsupported_filter",
+      "rotated program-local anisotropic blur has no axis-aligned CanvasKit equivalent",
+    );
   }
   return [
     checkedDeviceFilterValue(Math.sqrt(varianceX)),
@@ -3788,17 +5290,20 @@ function checkedDeviceFilterValue(value: number): number {
 
 function drawProgramColorMatrix(filter: Wire): number[] | null {
   switch (filter.kind) {
-    case "colorMatrix": return numberArray(filter.matrix, 20, "color matrix");
+    case "colorMatrix":
+      return numberArray(filter.matrix, 20, "color matrix");
     case "brightness": {
       const amount = finiteNumber(filter.amount, "brightness amount");
       return diagonalColorMatrix(amount, amount, amount, 0);
     }
     case "contrast": {
       const amount = finiteNumber(filter.amount, "contrast amount");
-      return diagonalColorMatrix(amount, amount, amount, .5 - .5 * amount);
+      return diagonalColorMatrix(amount, amount, amount, 0.5 - 0.5 * amount);
     }
-    case "grayscale": return grayscaleColorMatrix(finiteNumber(filter.amount, "grayscale amount"));
-    case "hueRotate": return hueRotateColorMatrix(finiteNumber(filter.degrees, "hue rotation"));
+    case "grayscale":
+      return grayscaleColorMatrix(finiteNumber(filter.amount, "grayscale amount"));
+    case "hueRotate":
+      return hueRotateColorMatrix(finiteNumber(filter.degrees, "hue rotation"));
     case "invert": {
       const amount = finiteNumber(filter.amount, "invert amount");
       return diagonalColorMatrix(1 - 2 * amount, 1 - 2 * amount, 1 - 2 * amount, amount);
@@ -3808,9 +5313,12 @@ function drawProgramColorMatrix(filter: Wire): number[] | null {
       matrix[18] = finiteNumber(filter.amount, "opacity amount");
       return matrix;
     }
-    case "saturate": return saturateColorMatrix(finiteNumber(filter.amount, "saturation amount"));
-    case "sepia": return sepiaColorMatrix(finiteNumber(filter.amount, "sepia amount"));
-    default: return null;
+    case "saturate":
+      return saturateColorMatrix(finiteNumber(filter.amount, "saturation amount"));
+    case "sepia":
+      return sepiaColorMatrix(finiteNumber(filter.amount, "sepia amount"));
+    default:
+      return null;
   }
 }
 
@@ -3821,48 +5329,118 @@ function diagonalColorMatrix(red: number, green: number, blue: number, offset: n
 function grayscaleColorMatrix(amount: number): number[] {
   const a = amount;
   return [
-    .2126 + .7874 * (1 - a), .7152 - .7152 * (1 - a), .0722 - .0722 * (1 - a), 0, 0,
-    .2126 - .2126 * (1 - a), .7152 + .2848 * (1 - a), .0722 - .0722 * (1 - a), 0, 0,
-    .2126 - .2126 * (1 - a), .7152 - .7152 * (1 - a), .0722 + .9278 * (1 - a), 0, 0,
-    0, 0, 0, 1, 0,
+    0.2126 + 0.7874 * (1 - a),
+    0.7152 - 0.7152 * (1 - a),
+    0.0722 - 0.0722 * (1 - a),
+    0,
+    0,
+    0.2126 - 0.2126 * (1 - a),
+    0.7152 + 0.2848 * (1 - a),
+    0.0722 - 0.0722 * (1 - a),
+    0,
+    0,
+    0.2126 - 0.2126 * (1 - a),
+    0.7152 - 0.7152 * (1 - a),
+    0.0722 + 0.9278 * (1 - a),
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
   ];
 }
 
 function saturateColorMatrix(amount: number): number[] {
   return [
-    .213 + .787 * amount, .715 - .715 * amount, .072 - .072 * amount, 0, 0,
-    .213 - .213 * amount, .715 + .285 * amount, .072 - .072 * amount, 0, 0,
-    .213 - .213 * amount, .715 - .715 * amount, .072 + .928 * amount, 0, 0,
-    0, 0, 0, 1, 0,
+    0.213 + 0.787 * amount,
+    0.715 - 0.715 * amount,
+    0.072 - 0.072 * amount,
+    0,
+    0,
+    0.213 - 0.213 * amount,
+    0.715 + 0.285 * amount,
+    0.072 - 0.072 * amount,
+    0,
+    0,
+    0.213 - 0.213 * amount,
+    0.715 - 0.715 * amount,
+    0.072 + 0.928 * amount,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
   ];
 }
 
 function hueRotateColorMatrix(degrees: number): number[] {
-  const radians = degrees * Math.PI / 180;
+  const radians = (degrees * Math.PI) / 180;
   const cosine = Math.cos(radians);
   const sine = Math.sin(radians);
   return [
-    .213 + cosine * .787 - sine * .213, .715 - cosine * .715 - sine * .715, .072 - cosine * .072 + sine * .928, 0, 0,
-    .213 - cosine * .213 + sine * .143, .715 + cosine * .285 + sine * .140, .072 - cosine * .072 - sine * .283, 0, 0,
-    .213 - cosine * .213 - sine * .787, .715 - cosine * .715 + sine * .715, .072 + cosine * .928 + sine * .072, 0, 0,
-    0, 0, 0, 1, 0,
+    0.213 + cosine * 0.787 - sine * 0.213,
+    0.715 - cosine * 0.715 - sine * 0.715,
+    0.072 - cosine * 0.072 + sine * 0.928,
+    0,
+    0,
+    0.213 - cosine * 0.213 + sine * 0.143,
+    0.715 + cosine * 0.285 + sine * 0.14,
+    0.072 - cosine * 0.072 - sine * 0.283,
+    0,
+    0,
+    0.213 - cosine * 0.213 - sine * 0.787,
+    0.715 - cosine * 0.715 + sine * 0.715,
+    0.072 + cosine * 0.928 + sine * 0.072,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
   ];
 }
 
 function sepiaColorMatrix(amount: number): number[] {
   const inverse = 1 - amount;
   return [
-    .393 * amount + inverse, .769 * amount, .189 * amount, 0, 0,
-    .349 * amount, .686 * amount + inverse, .168 * amount, 0, 0,
-    .272 * amount, .534 * amount, .131 * amount + inverse, 0, 0,
-    0, 0, 0, 1, 0,
+    0.393 * amount + inverse,
+    0.769 * amount,
+    0.189 * amount,
+    0,
+    0,
+    0.349 * amount,
+    0.686 * amount + inverse,
+    0.168 * amount,
+    0,
+    0,
+    0.272 * amount,
+    0.534 * amount,
+    0.131 * amount + inverse,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
   ];
 }
 
-function drawPathClipCoverage(CanvasKit: CanvasKit, canvas: Canvas, draw: DrawProgramWire, clip: Wire,
-  cache?: RasterPathCache): void {
+function drawPathClipCoverage(
+  CanvasKit: CanvasKit,
+  canvas: Canvas,
+  draw: DrawProgramWire,
+  clip: Wire,
+  cache?: RasterPathCache,
+): void {
   const value = record(clip.value, "path clip");
-  const wire = requiredIndex(draw.paths, value.path, "clip path"), fillRule = String(value.fillRule);
+  const wire = requiredIndex(draw.paths, value.path, "clip path"),
+    fillRule = String(value.fillRule);
   const lease = cache?.acquire(wire, fillRule, () => buildPath(CanvasKit, wire, fillRule));
   const path = lease?.path ?? buildPath(CanvasKit, wire, fillRule);
   const paint = new CanvasKit.Paint();
@@ -3870,49 +5448,92 @@ function drawPathClipCoverage(CanvasKit: CanvasKit, canvas: Canvas, draw: DrawPr
     paint.setAntiAlias(true);
     paint.setColor(CanvasKit.WHITE);
     canvas.drawPath(path, paint);
-  } finally { paint.delete(); if (!lease || lease.owned) path.delete(); }
+  } finally {
+    paint.delete();
+    if (!lease || lease.owned) path.delete();
+  }
 }
 
-export function applyClip(CanvasKit: CanvasKit, canvas: Canvas, draw: DrawProgramWire, clip: Wire, matrix: number[]): void {
+export function applyClip(
+  CanvasKit: CanvasKit,
+  canvas: Canvas,
+  draw: DrawProgramWire,
+  clip: Wire,
+  matrix: number[],
+): void {
   // Clip geometry is local, while scheduled images are already in device space.
   // Transform the path without changing the canvas matrix used to draw those images.
   let builder: InstanceType<CanvasKit["PathBuilder"]>;
   if (clip.kind === "path") {
     const value = record(clip.value, "path clip");
-    const path = buildPath(CanvasKit, requiredIndex(draw.paths, value.path, "clip path"), String(value.fillRule));
-    try { builder = new CanvasKit.PathBuilder(path); } finally { path.delete(); }
+    const path = buildPath(
+      CanvasKit,
+      requiredIndex(draw.paths, value.path, "clip path"),
+      String(value.fillRule),
+    );
+    try {
+      builder = new CanvasKit.PathBuilder(path);
+    } finally {
+      path.delete();
+    }
   } else {
     builder = new CanvasKit.PathBuilder();
     if (clip.kind === "rect") builder.addRect(skRect(CanvasKit, rect(clip.value, "clip rect")));
-    else if (clip.kind === "roundRect") builder.addRRect(roundRect(CanvasKit, record(clip.value, "round clip")));
-    else { builder.delete(); fail("unsupported_clip", `clip '${String(clip.kind)}' is not closed`); }
+    else if (clip.kind === "roundRect")
+      builder.addRRect(roundRect(CanvasKit, record(clip.value, "round clip")));
+    else {
+      builder.delete();
+      fail("unsupported_clip", `clip '${String(clip.kind)}' is not closed`);
+    }
   }
   builder.transform(matrix);
   const path = builder.detachAndDelete();
-  try { canvas.clipPath(path, CanvasKit.ClipOp.Intersect, true); } finally { path.delete(); }
+  try {
+    canvas.clipPath(path, CanvasKit.ClipOp.Intersect, true);
+  } finally {
+    path.delete();
+  }
 }
 
-function buildPath(CanvasKit: CanvasKit, wire: { verbs: string[]; points: Array<[number, number]> }, fillRule: string): Path {
+function buildPath(
+  CanvasKit: CanvasKit,
+  wire: { verbs: string[]; points: Array<[number, number]> },
+  fillRule: string,
+): Path {
   // Submit the same f32 path commands in one Wasm call instead of crossing Embind for every
   // verb. MakeFromCmds runs Skia's builder, retaining contour normalization and curve coverage.
   const commands = new Float32Array(wire.verbs.length + wire.points.length * 2);
-  let point = 0, offset = 0;
+  let point = 0,
+    offset = 0;
   for (const verb of wire.verbs) {
     let count: number;
-    if (verb === "moveTo") { commands[offset++] = CanvasKit.MOVE_VERB; count = 1; }
-    else if (verb === "lineTo") { commands[offset++] = CanvasKit.LINE_VERB; count = 1; }
-    else if (verb === "quadTo") { commands[offset++] = CanvasKit.QUAD_VERB; count = 2; }
-    else if (verb === "cubicTo") { commands[offset++] = CanvasKit.CUBIC_VERB; count = 3; }
-    else if (verb === "close") { commands[offset++] = CanvasKit.CLOSE_VERB; count = 0; }
-    else fail("path_verb", `unknown path verb '${verb}'`);
+    if (verb === "moveTo") {
+      commands[offset++] = CanvasKit.MOVE_VERB;
+      count = 1;
+    } else if (verb === "lineTo") {
+      commands[offset++] = CanvasKit.LINE_VERB;
+      count = 1;
+    } else if (verb === "quadTo") {
+      commands[offset++] = CanvasKit.QUAD_VERB;
+      count = 2;
+    } else if (verb === "cubicTo") {
+      commands[offset++] = CanvasKit.CUBIC_VERB;
+      count = 3;
+    } else if (verb === "close") {
+      commands[offset++] = CanvasKit.CLOSE_VERB;
+      count = 0;
+    } else fail("path_verb", `unknown path verb '${verb}'`);
     for (let i = 0; i < count; i++) {
       const p = wire.points[point++]!;
-      commands[offset++] = p[0]; commands[offset++] = p[1];
+      commands[offset++] = p[0];
+      commands[offset++] = p[1];
     }
   }
   const path = CanvasKit.Path.MakeFromCmds(commands.subarray(0, offset));
   if (!path) fail("path_allocation", "cannot construct admitted DrawProgram path");
-  path.setFillType(fillRule === "evenOdd" ? CanvasKit.FillType.EvenOdd : CanvasKit.FillType.Winding);
+  path.setFillType(
+    fillRule === "evenOdd" ? CanvasKit.FillType.EvenOdd : CanvasKit.FillType.Winding,
+  );
   return path;
 }
 
@@ -3922,12 +5543,23 @@ export function makePaint(CanvasKit: CanvasKit, raw: unknown): Paint {
   paint.setAntiAlias(true);
   try {
     if (wire.kind === "solid") {
-      setLinearColor(CanvasKit, paint, record(wire.value, "solid color") as unknown as LinearColorWire);
+      setLinearColor(
+        CanvasKit,
+        paint,
+        record(wire.value, "solid color") as unknown as LinearColorWire,
+      );
       return paint;
     }
     const value = record(wire.value, `${String(wire.kind)} paint`);
-    const stops = array(value.stops, "gradient stops").map((rawStop) => record(rawStop, "gradient stop"));
-    const colors = stops.map((stop) => linearColor(CanvasKit, record(stop.color, "gradient stop color") as unknown as LinearColorWire));
+    const stops = array(value.stops, "gradient stops").map((rawStop) =>
+      record(rawStop, "gradient stop"),
+    );
+    const colors = stops.map((stop) =>
+      linearColor(
+        CanvasKit,
+        record(stop.color, "gradient stop color") as unknown as LinearColorWire,
+      ),
+    );
     const positions = stops.map((stop) => finiteNumber(stop.offset, "gradient stop offset"));
     const mode = tileMode(CanvasKit, String(value.spread));
     let shader: Shader | null = null;
@@ -3959,9 +5591,16 @@ export function makePaint(CanvasKit: CanvasKit, raw: unknown): Paint {
       );
     } else if (wire.kind === "twoCircleGradient") {
       shader = CanvasKit.Shader.MakeTwoPointConicalGradient(
-        pair(value.start, "gradient start"), finiteNumber(value.startRadius, "gradient start radius"),
-        pair(value.end, "gradient end"), finiteNumber(value.endRadius, "gradient end radius"),
-        colors, positions, mode, undefined, 1, CanvasKit.ColorSpace.SRGB,
+        pair(value.start, "gradient start"),
+        finiteNumber(value.startRadius, "gradient start radius"),
+        pair(value.end, "gradient end"),
+        finiteNumber(value.endRadius, "gradient end radius"),
+        colors,
+        positions,
+        mode,
+        undefined,
+        1,
+        CanvasKit.ColorSpace.SRGB,
       );
     } else if (wire.kind === "conicGradient") {
       const center = pair(value.center, "conic gradient center");
@@ -4002,21 +5641,39 @@ function roundRect(CanvasKit: CanvasKit, wire: Wire): Float32Array {
     bounds.y,
     bounds.x + bounds.width,
     bounds.y + bounds.height,
-    radii[0]![0], radii[0]![1],
-    radii[1]![0], radii[1]![1],
-    radii[2]![0], radii[2]![1],
-    radii[3]![0], radii[3]![1],
+    radii[0]![0],
+    radii[0]![1],
+    radii[1]![0],
+    radii[1]![1],
+    radii[2]![0],
+    radii[2]![1],
+    radii[3]![0],
+    radii[3]![1],
   ]);
 }
 
 function configureStrokePaint(CanvasKit: CanvasKit, paint: Paint, stroke: Wire) {
   paint.setStyle(CanvasKit.PaintStyle.Stroke);
   paint.setStrokeWidth(finiteNumber(stroke.width, "stroke width"));
-  paint.setStrokeCap(stroke.cap === "round" ? CanvasKit.StrokeCap.Round : stroke.cap === "square" ? CanvasKit.StrokeCap.Square : CanvasKit.StrokeCap.Butt);
-  paint.setStrokeJoin(stroke.join === "round" ? CanvasKit.StrokeJoin.Round : stroke.join === "bevel" ? CanvasKit.StrokeJoin.Bevel : CanvasKit.StrokeJoin.Miter);
+  paint.setStrokeCap(
+    stroke.cap === "round"
+      ? CanvasKit.StrokeCap.Round
+      : stroke.cap === "square"
+        ? CanvasKit.StrokeCap.Square
+        : CanvasKit.StrokeCap.Butt,
+  );
+  paint.setStrokeJoin(
+    stroke.join === "round"
+      ? CanvasKit.StrokeJoin.Round
+      : stroke.join === "bevel"
+        ? CanvasKit.StrokeJoin.Bevel
+        : CanvasKit.StrokeJoin.Miter,
+  );
   paint.setStrokeMiter(finiteNumber(stroke.miterLimit, "stroke miter"));
   const dash = array(stroke.dash, "stroke dash").map((value) => finiteNumber(value, "dash value"));
-  const effect = dash.length ? CanvasKit.PathEffect.MakeDash(dash, finiteNumber(stroke.dashOffset, "dash offset")) : null;
+  const effect = dash.length
+    ? CanvasKit.PathEffect.MakeDash(dash, finiteNumber(stroke.dashOffset, "dash offset"))
+    : null;
   if (effect) paint.setPathEffect(effect);
   return effect;
 }
@@ -4028,9 +5685,16 @@ function tileMode(CanvasKit: CanvasKit, spread: string) {
   fail("gradient", `gradient spread '${spread}' is outside the closed set`);
 }
 
-function programMatrix(admitted: ProgramStructure, localPlan: Wire, output: unknown, device: number[]): number[] {
+function programMatrix(
+  admitted: ProgramStructure,
+  localPlan: Wire,
+  output: unknown,
+  device: number[],
+): number[] {
   const id = positiveId(output, "program output resource");
-  const resource = array(localPlan.resources, "localPlan.resources").map((value) => record(value, "local resource")).find((value) => value.id === id);
+  const resource = array(localPlan.resources, "localPlan.resources")
+    .map((value) => record(value, "local resource"))
+    .find((value) => value.id === id);
   if (!resource) fail("program_resource", `local resource ${id} is absent`);
   return programTransformMatrix(
     admitted,
@@ -4044,7 +5708,12 @@ function programMatrix(admitted: ProgramStructure, localPlan: Wire, output: unkn
  * backdrop stage's border box or else of the uncropped input. `matrix`, the transform the pass
  * filters with, must be a similarity. Native maps the frame the same way.
  */
-function programLensFrame(localPlan: Wire, kind: Wire, matrix: number[], exact: number[]): [number, number, number, number] {
+function programLensFrame(
+  localPlan: Wire,
+  kind: Wire,
+  matrix: number[],
+  exact: number[],
+): [number, number, number, number] {
   const [sx, sy] = programGaussianInDeviceSpace([1, 1], matrix);
   if (Math.abs(sx - sy) > Math.max(sx, sy, 1) * 1e-9)
     fail("unsupported_filter", "lens distortion needs a similarity device transform");
@@ -4052,10 +5721,14 @@ function programLensFrame(localPlan: Wire, kind: Wire, matrix: number[], exact: 
   if (kind.backdrop == null) {
     const id = positiveId(kind.input, "lens input resource");
     const resources = array(localPlan.resources, "localPlan.resources");
-    const resource = record(requiredIndex(resources, id - 1, "lens input resource"), "lens input resource");
+    const resource = record(
+      requiredIndex(resources, id - 1, "lens input resource"),
+      "lens input resource",
+    );
     if (resource.id !== id) fail("program_resource", "lens input resource identity is invalid");
     const bounds = record(resource.bounds, "lens input bounds");
-    if (bounds.kind !== "finite") fail("unsupported_filter", "lens distortion has no finite source frame");
+    if (bounds.kind !== "finite")
+      fail("unsupported_filter", "lens distortion has no finite source frame");
     source = rect(bounds.rect, "lens source frame");
   } else {
     source = rect(kind.backdrop, "lens backdrop frame");
@@ -4067,23 +5740,50 @@ function programLensFrame(localPlan: Wire, kind: Wire, matrix: number[], exact: 
     [source.x, source.y + source.height],
   ];
   const w = corners.map(([x, y]) => exact[6]! * x! + exact[7]! * y! + exact[8]!);
-  if (w.some(value => !Number.isFinite(value) || Math.abs(value) <= Number.EPSILON || Math.sign(value) !== Math.sign(w[0]!)))
+  if (
+    w.some(
+      (value) =>
+        !Number.isFinite(value) ||
+        Math.abs(value) <= Number.EPSILON ||
+        Math.sign(value) !== Math.sign(w[0]!),
+    )
+  )
     fail("unsupported_filter", "lens distortion has no finite source frame");
   const points = corners.map(([x, y], i) => [
     (exact[0]! * x! + exact[1]! * y! + exact[2]!) / w[i]!,
     (exact[3]! * x! + exact[4]! * y! + exact[5]!) / w[i]!,
   ]);
-  const left = Math.min(...points.map(point => point[0]!));
-  const top = Math.min(...points.map(point => point[1]!));
-  const right = Math.max(...points.map(point => point[0]!));
-  const bottom = Math.max(...points.map(point => point[1]!));
-  return [left, top, right - left, bottom - top].map(checkedDeviceFilterValue) as [number, number, number, number];
+  const left = Math.min(...points.map((point) => point[0]!));
+  const top = Math.min(...points.map((point) => point[1]!));
+  const right = Math.max(...points.map((point) => point[0]!));
+  const bottom = Math.max(...points.map((point) => point[1]!));
+  return [left, top, right - left, bottom - top].map(checkedDeviceFilterValue) as [
+    number,
+    number,
+    number,
+    number,
+  ];
 }
 
-function programTransformMatrix(admitted: ProgramStructure, localToProgram: number[], device: number[]): number[] {
+function programTransformMatrix(
+  admitted: ProgramStructure,
+  localToProgram: number[],
+  device: number[],
+): number[] {
   const viewport = admitted.draw.viewport;
-  if (!(viewport.width > 0) || !(viewport.height > 0)) fail("program_viewport", "DrawProgram viewport is empty during execution");
-  const normalize = [1 / viewport.width, 0, -viewport.x / viewport.width, 0, 1 / viewport.height, -viewport.y / viewport.height, 0, 0, 1];
+  if (!(viewport.width > 0) || !(viewport.height > 0))
+    fail("program_viewport", "DrawProgram viewport is empty during execution");
+  const normalize = [
+    1 / viewport.width,
+    0,
+    -viewport.x / viewport.width,
+    0,
+    1 / viewport.height,
+    -viewport.y / viewport.height,
+    0,
+    0,
+    1,
+  ];
   return mul3(device, mul3(normalize, localToProgram));
 }
 
@@ -4130,7 +5830,12 @@ class SurfaceArena {
   private outputUsed = false;
   private gpuCacheLimit = -1;
   private readonly surfaceKinds = new Map<Surface, CanvasKitSurfaceKind>();
-  private readonly residentByKind: Record<CanvasKitSurfaceKind, bigint> = { output: 0n, outer: 0n, program: 0n, transient: 0n };
+  private readonly residentByKind: Record<CanvasKitSurfaceKind, bigint> = {
+    output: 0n,
+    outer: 0n,
+    program: 0n,
+    transient: 0n,
+  };
   residentBytes = 0n;
   frameAllocations = 0;
   frameReuses = 0;
@@ -4150,13 +5855,18 @@ class SurfaceArena {
   private envelope = 0n;
   private borrowed = 0n;
   private borrow: ((bytes: bigint) => boolean) | null = null;
-  get gpu(): boolean { return this.context !== null; }
+  get gpu(): boolean {
+    return this.context !== null;
+  }
   /** CanvasKit 0.42's public cache getters drop their return values, so read usage through the
    * bound method; the limit is the one this arena configured. */
   gpuCacheReport(): { gpuCacheUsageBytes: number; gpuCacheLimitBytes: number } {
     if (!this.context) return { gpuCacheUsageBytes: 0, gpuCacheLimitBytes: 0 };
     const bound = this.context as unknown as { _getResourceCacheUsageBytes(): number };
-    return { gpuCacheUsageBytes: Number(bound._getResourceCacheUsageBytes()), gpuCacheLimitBytes: this.gpuCacheLimit };
+    return {
+      gpuCacheUsageBytes: Number(bound._getResourceCacheUsageBytes()),
+      gpuCacheLimitBytes: this.gpuCacheLimit,
+    };
   }
   constructor(
     private readonly CanvasKit: CanvasKit,
@@ -4165,7 +5875,9 @@ class SurfaceArena {
     private readonly height: number,
     private readonly maxSurfaceBytes: bigint,
     private readonly maxFrameBytes: bigint,
-  ) { this.configureGpuCache(0n); }
+  ) {
+    this.configureGpuCache(0n);
+  }
   private configureGpuCache(residentBytes: bigint): void {
     if (!this.context) return;
     // Circle batch targets are pinned outside this pool.
@@ -4182,15 +5894,18 @@ class SurfaceArena {
     maxSurfaceBytes: bigint,
     maxFrameBytes: bigint,
   ): boolean {
-    return this.context === context
-      && this.width === width
-      && this.height === height
-      && this.maxSurfaceBytes === maxSurfaceBytes
-      && this.maxFrameBytes === maxFrameBytes;
+    return (
+      this.context === context &&
+      this.width === width &&
+      this.height === height &&
+      this.maxSurfaceBytes === maxSurfaceBytes &&
+      this.maxFrameBytes === maxFrameBytes
+    );
   }
   beginFrame(frame: SurfaceFrame): void {
     this.pathClipElisions = 0;
-    if (this.checkedOutTransients.size !== 0) fail("surface_lifetime", "transient surface escaped the prior frame");
+    if (this.checkedOutTransients.size !== 0)
+      fail("surface_lifetime", "transient surface escaped the prior frame");
     this.usedSlotKeys.clear();
     this.frameTransients.clear();
     this.outputUsed = false;
@@ -4221,7 +5936,8 @@ class SurfaceArena {
       }
       this.checkedOutTransients.clear();
     }
-    if (leaked !== 0) fail("surface_lifetime", `${leaked} transient surface(s) escaped frame execution`);
+    if (leaked !== 0)
+      fail("surface_lifetime", `${leaked} transient surface(s) escaped frame execution`);
   }
   /**
    * Keep only the working set of the frame that just executed. Ganesh retains a deleted backing as
@@ -4230,7 +5946,8 @@ class SurfaceArena {
    */
   releaseUnused(): void {
     this.releaseCarriedOver();
-    for (const [key, entry] of [...this.slots]) {
+    const slots = [...this.slots];
+    for (const [key, entry] of slots) {
       if (this.usedSlotKeys.has(key)) continue;
       this.slots.delete(key);
       this.evictSurface(entry.surface);
@@ -4247,10 +5964,12 @@ class SurfaceArena {
     }
   }
   get count(): number {
-    return this.slots.size
-      + this.freeTransients.size
-      + this.checkedOutTransients.size
-      + Number(this.outputSurface !== null);
+    return (
+      this.slots.size +
+      this.freeTransients.size +
+      this.checkedOutTransients.size +
+      Number(this.outputSurface !== null)
+    );
   }
   slot(id: number, width: number, height: number): Surface {
     return this.keyedSlot(`outer:${id}`, width, height, 0, id);
@@ -4258,7 +5977,13 @@ class SurfaceArena {
   programSlot(program: number, id: number, width: number, height: number): Surface {
     return this.keyedSlot(`program:${program}:${id}`, width, height, program, id);
   }
-  private keyedSlot(key: string, width: number, height: number, program: number, slot: number): Surface {
+  private keyedSlot(
+    key: string,
+    width: number,
+    height: number,
+    program: number,
+    slot: number,
+  ): Surface {
     this.usedSlotKeys.add(key);
     const existing = this.slots.get(key);
     // Physical extents follow the plan exactly, as on Native GPU. Snapshots cover the whole backing,
@@ -4277,8 +6002,11 @@ class SurfaceArena {
   }
   output(): Surface {
     this.outputUsed = true;
-    if (this.outputSurface) { this.frameReuses += 1; return this.outputSurface; }
-    return this.outputSurface = this.create(this.width, this.height, "output");
+    if (this.outputSurface) {
+      this.frameReuses += 1;
+      return this.outputSurface;
+    }
+    return (this.outputSurface = this.create(this.width, this.height, "output"));
   }
   /**
    * A transient for consumers that read only [0, width) x [0, height): a free backing of the
@@ -4291,14 +6019,18 @@ class SurfaceArena {
     let surface: Surface | null = null;
     for (const candidate of this.boundedBackings) {
       const free = this.freeTransients.get(candidate);
-      if (free && free.width === dimensions.width && free.height === dimensions.height) { surface = candidate; break; }
+      if (free && free.width === dimensions.width && free.height === dimensions.height) {
+        surface = candidate;
+        break;
+      }
     }
     if (surface) {
       this.freeTransients.delete(surface);
       this.frameReuses += 1;
     } else {
       const bytes = BigInt(dimensions.width) * BigInt(dimensions.height) * 8n;
-      if (bytes > this.maxSurfaceBytes || this.residentBytes + bytes > this.maxFrameBytes) return this.transient(width, height);
+      if (bytes > this.maxSurfaceBytes || this.residentBytes + bytes > this.maxFrameBytes)
+        return this.transient(width, height);
       surface = this.create(dimensions.width, dimensions.height);
       this.boundedBackings.add(surface);
     }
@@ -4309,7 +6041,10 @@ class SurfaceArena {
   transient(width = this.width, height = this.height): Surface {
     let surface: Surface | null = null;
     for (const [candidate, dimensions] of this.freeTransients) {
-      if (dimensions.width === width && dimensions.height === height) { surface = candidate; break; }
+      if (dimensions.width === width && dimensions.height === height) {
+        surface = candidate;
+        break;
+      }
     }
     if (surface) {
       this.freeTransients.delete(surface);
@@ -4328,9 +6063,14 @@ class SurfaceArena {
   }
   private releaseCarriedOver(midFrame = false): void {
     const planned = midFrame ? this.liveness?.transientExtents : undefined;
-    for (const [surface, { width, height }] of [...this.freeTransients]) {
-      if (this.frameTransients.has(surface) || midFrame && this.boundedBackings.has(surface)
-        || planned?.has(`${width}x${height}`)) continue;
+    const transients = [...this.freeTransients];
+    for (const [surface, { width, height }] of transients) {
+      if (
+        this.frameTransients.has(surface) ||
+        (midFrame && this.boundedBackings.has(surface)) ||
+        planned?.has(`${width}x${height}`)
+      )
+        continue;
       this.freeTransients.delete(surface);
       this.evictSurface(surface);
     }
@@ -4359,7 +6099,10 @@ class SurfaceArena {
   private create(width: number, height: number, kind: CanvasKitSurfaceKind = "transient"): Surface {
     const bytes = BigInt(width) * BigInt(height) * 8n;
     if (width <= 0 || height <= 0 || bytes <= 0n || bytes > this.maxSurfaceBytes) {
-      fail("surface_budget", `${width}x${height} working surface needs ${bytes} bytes, budget ${this.maxSurfaceBytes}`);
+      fail(
+        "surface_budget",
+        `${width}x${height} working surface needs ${bytes} bytes, budget ${this.maxSurfaceBytes}`,
+      );
     }
     this.ensureCapacity(bytes);
     this.configureGpuCache(this.residentBytes + bytes);
@@ -4416,7 +6159,10 @@ class SurfaceArena {
         continue;
       }
       if (lends && this.residentBytes + requiredBytes <= this.maxFrameBytes) {
-        if (this.borrow!(missing)) { this.borrowed += missing; continue; }
+        if (this.borrow!(missing)) {
+          this.borrowed += missing;
+          continue;
+        }
         lends = false;
       }
       const needed = this.evictionVictim(true);
@@ -4425,10 +6171,16 @@ class SurfaceArena {
         continue;
       }
       if (this.residentBytes + requiredBytes > this.maxFrameBytes) {
-        fail("frame_budget", `working surface pool needs ${this.residentBytes + requiredBytes} bytes, budget ${this.maxFrameBytes}`);
+        fail(
+          "frame_budget",
+          `working surface pool needs ${this.residentBytes + requiredBytes} bytes, budget ${this.maxFrameBytes}`,
+        );
       }
       if (this.borrow && !this.borrow(missing)) {
-        fail("frame_budget", `live working surfaces need ${missing} bytes beyond the frame's ${this.allowance}-byte envelope`);
+        fail(
+          "frame_budget",
+          `live working surfaces need ${missing} bytes beyond the frame's ${this.allowance}-byte envelope`,
+        );
       }
       this.borrowed += missing;
     }
@@ -4438,26 +6190,40 @@ class SurfaceArena {
   /** Checked-out transients, live slots and the written output. */
   private liveBytes(): bigint {
     let bytes = 0n;
-    for (const surface of this.checkedOutTransients.keys()) bytes += this.surfaceBytes.get(surface) ?? 0n;
-    for (const [key, entry] of this.slots) if (this.nextUse(key, entry) === null) bytes += this.surfaceBytes.get(entry.surface) ?? 0n;
-    if (this.outputSurface && this.outputUsed) bytes += this.surfaceBytes.get(this.outputSurface) ?? 0n;
+    for (const surface of this.checkedOutTransients.keys())
+      bytes += this.surfaceBytes.get(surface) ?? 0n;
+    for (const [key, entry] of this.slots)
+      if (this.nextUse(key, entry) === null) bytes += this.surfaceBytes.get(entry.surface) ?? 0n;
+    if (this.outputSurface && this.outputUsed)
+      bytes += this.surfaceBytes.get(this.outputSurface) ?? 0n;
     return bytes;
   }
   /** Remove and return a surface to evict: one the frame never uses again, or with `needed` any. */
   private evictionVictim(needed: boolean): Surface | null {
     const planned = this.liveness?.transientExtents;
-    let free: Surface | null = null, unused = false;
+    let free: Surface | null = null,
+      unused = false;
     for (const [surface, { width, height }] of this.freeTransients) {
-      if (planned && !planned.has(`${width}x${height}`)) { free = surface; unused = true; break; }
-      if (!free || this.frameTransients.has(free) && !this.frameTransients.has(surface)) free = surface;
+      if (planned && !planned.has(`${width}x${height}`)) {
+        free = surface;
+        unused = true;
+        break;
+      }
+      if (!free || (this.frameTransients.has(free) && !this.frameTransients.has(surface)))
+        free = surface;
     }
-    let victim: string | null = null, farthest = -1;
+    let victim: string | null = null,
+      farthest = -1;
     for (const [key, entry] of this.slots) {
       const next = this.nextUse(key, entry);
-      if (next !== null && next > farthest) { victim = key; farthest = next; }
+      if (next !== null && next > farthest) {
+        victim = key;
+        farthest = next;
+      }
     }
-    const output = this.outputSurface && !this.outputUsed ? this.liveness?.outputPass ?? Infinity : -1;
-    if (free && (unused || needed && Math.max(farthest, output) !== Infinity)) {
+    const output =
+      this.outputSurface && !this.outputUsed ? (this.liveness?.outputPass ?? Infinity) : -1;
+    if (free && (unused || (needed && Math.max(farthest, output) !== Infinity))) {
       this.freeTransients.delete(free);
       return free;
     }
@@ -4539,21 +6305,25 @@ function admitBoundOuterSchedule(
   const resourceRois = new Map<number, DeviceRoi>();
   const planResources = array(plan.resources, "plan.resources");
   const boundResources = array(schedule.resources, "schedule.resources");
-  if (planResources.length !== boundResources.length) fail("bound_schedule", "resource count mismatch");
+  if (planResources.length !== boundResources.length)
+    fail("bound_schedule", "resource count mismatch");
   for (let index = 0; index < planResources.length; index += 1) {
     const resource = record(planResources[index], `plan.resources[${index}]`);
     const id = positiveId(resource.id, `plan.resources[${index}].id`);
     const roiWire = record(resource.roi, `plan.resources[${index}].roi`);
-    const expected = roiWire.kind === "fullFrame"
-      ? root
-      : roiWire.kind === "static"
-        ? deviceRoi(record(roiWire.rect, "static ROI"), extent)
-        : roiWire.kind === "dynamic"
-          ? deviceRoi(dynamicBounds(dynamic, roiWire.binding), extent)
-          : fail("bound_schedule", `unknown ROI kind '${String(roiWire.kind)}'`);
+    const expected =
+      roiWire.kind === "fullFrame"
+        ? root
+        : roiWire.kind === "static"
+          ? deviceRoi(record(roiWire.rect, "static ROI"), extent)
+          : roiWire.kind === "dynamic"
+            ? deviceRoi(dynamicBounds(dynamic, roiWire.binding), extent)
+            : fail("bound_schedule", `unknown ROI kind '${String(roiWire.kind)}'`);
     const actual = record(boundResources[index], `schedule.resources[${index}]`);
-    if (positiveId(actual.resource, "bound resource id") !== id
-      || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound device ROI"), extent), expected)) {
+    if (
+      positiveId(actual.resource, "bound resource id") !== id ||
+      !sameRoi(deviceRoi(record(actual.deviceRoi, "bound device ROI"), extent), expected)
+    ) {
       fail("bound_schedule", `resource ${id} ROI is not the exact plan/binding projection`);
     }
     resourceRois.set(id, expected);
@@ -4572,10 +6342,12 @@ function admitBoundOuterSchedule(
     const slot = record(planSlots[index], `plan.surfaceSlots[${index}]`);
     const bound = record(boundSlots[index], `schedule.surfaceSlots[${index}]`);
     const id = positiveId(slot.id, "surface slot id");
-    if (positiveId(bound.id, "bound surface slot id") !== id) fail("bound_schedule", "surface slot IDs diverge");
+    if (positiveId(bound.id, "bound surface slot id") !== id)
+      fail("bound_schedule", "surface slot IDs diverge");
     const allocations = array(slot.allocations, "surface allocations");
     const boundAllocations = array(bound.allocations, "bound surface allocations");
-    if (allocations.length !== boundAllocations.length) fail("bound_schedule", `slot ${id} allocation count mismatch`);
+    if (allocations.length !== boundAllocations.length)
+      fail("bound_schedule", `slot ${id} allocation count mismatch`);
     let width = 0;
     let height = 0;
     for (let allocationIndex = 0; allocationIndex < allocations.length; allocationIndex += 1) {
@@ -4583,27 +6355,35 @@ function admitBoundOuterSchedule(
       const actual = record(boundAllocations[allocationIndex], "bound surface allocation");
       const resource = positiveId(allocation.resource, "surface allocation resource");
       const roi = required(resourceRois, resource, "bound resource ROI");
-      if (positiveId(actual.resource, "bound allocation resource") !== resource
-        || String(actual.reason) !== String(allocation.reason)
-        || !deepEqual(actual.interval, allocation.interval)
-        || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound allocation ROI"), extent), roi)) {
+      if (
+        positiveId(actual.resource, "bound allocation resource") !== resource ||
+        String(actual.reason) !== String(allocation.reason) ||
+        !deepEqual(actual.interval, allocation.interval) ||
+        !sameRoi(deviceRoi(record(actual.deviceRoi, "bound allocation ROI"), extent), roi)
+      ) {
         fail("bound_schedule", `slot ${id} allocation ${allocationIndex} diverges from the plan`);
       }
-      const regional = allocation.reason === "layerIntermediate"
-        || allocation.reason === "backdropResolve"
-        || allocation.reason === "programIntermediate";
+      const regional =
+        allocation.reason === "layerIntermediate" ||
+        allocation.reason === "backdropResolve" ||
+        allocation.reason === "programIntermediate";
       width = Math.max(width, regional ? roi.width : extent.width);
       height = Math.max(height, regional ? roi.height : extent.height);
       slotByResource.set(resource, id);
     }
     const expectedExtent = width === 0 || height === 0 ? null : { width, height };
-    const actualExtent = bound.extent == null
-      ? null
-      : {
-          width: positiveId(record(bound.extent, "bound slot extent").width, "bound slot width"),
-          height: positiveId(record(bound.extent, "bound slot extent").height, "bound slot height"),
-        };
-    if (!deepEqual(actualExtent, expectedExtent)) fail("bound_schedule", `slot ${id} extent is not derived from its allocations`);
+    const actualExtent =
+      bound.extent == null
+        ? null
+        : {
+            width: positiveId(record(bound.extent, "bound slot extent").width, "bound slot width"),
+            height: positiveId(
+              record(bound.extent, "bound slot extent").height,
+              "bound slot height",
+            ),
+          };
+    if (!deepEqual(actualExtent, expectedExtent))
+      fail("bound_schedule", `slot ${id} extent is not derived from its allocations`);
     const bytes = BigInt(width) * BigInt(height) * 8n;
     if (BigInt(positiveIdOrZero(bound.estimatedBytes, "bound slot bytes")) !== bytes) {
       fail("bound_schedule", `slot ${id} byte estimate mismatch`);
@@ -4617,8 +6397,9 @@ function admitBoundOuterSchedule(
       if (first > last || last > activeBytes.length) {
         fail("bound_schedule", `slot ${id} allocation interval escapes the pass list`);
       }
-      for (let pass = first; pass <= last; pass += 1) activeBytes[pass - 1] = (activeBytes[pass - 1] ?? 0n) + bytes;
-      if (bytes !== 0n) slotIntervals.set(id, [...slotIntervals.get(id) ?? [], [first, last]]);
+      for (let pass = first; pass <= last; pass += 1)
+        activeBytes[pass - 1] = (activeBytes[pass - 1] ?? 0n) + bytes;
+      if (bytes !== 0n) slotIntervals.set(id, [...(slotIntervals.get(id) ?? []), [first, last]]);
       if (resource !== finalOutput) {
         const retired = retireAfter[last - 1];
         if (!retired) fail("bound_schedule", `slot ${id} allocation ends outside the pass list`);
@@ -4627,19 +6408,30 @@ function admitBoundOuterSchedule(
     }
     slotExtents.set(id, expectedExtent);
   }
-  const outerPeak = activeBytes.reduce((peak, value) => value > peak ? value : peak, 0n);
+  const outerPeak = activeBytes.reduce((peak, value) => (value > peak ? value : peak), 0n);
   if (BigInt(positiveIdOrZero(schedule.outerPeakSurfaceBytes, "outer peak bytes")) !== outerPeak) {
     fail("bound_schedule", "outer peak byte estimate mismatch");
   }
   const outerActiveBytes = [...activeBytes];
-  const boundPrograms = admitBoundProgramSchedules(plan, programs, schedule, dynamic, extent, activeBytes);
-  const combinedPeak = activeBytes.reduce((peak, value) => value > peak ? value : peak, 0n);
-  if (BigInt(positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "combined peak bytes")) !== combinedPeak) {
+  const boundPrograms = admitBoundProgramSchedules(
+    plan,
+    programs,
+    schedule,
+    dynamic,
+    extent,
+    activeBytes,
+  );
+  const combinedPeak = activeBytes.reduce((peak, value) => (value > peak ? value : peak), 0n);
+  if (
+    BigInt(positiveIdOrZero(schedule.estimatedPeakSurfaceBytes, "combined peak bytes")) !==
+    combinedPeak
+  ) {
     fail("bound_schedule", "combined plan/program peak byte estimate mismatch");
   }
   const planPasses = array(plan.passes, "plan.passes");
   const boundPasses = array(schedule.passes, "schedule.passes");
-  if (planPasses.length !== boundPasses.length) fail("bound_schedule", "execution pass count mismatch");
+  if (planPasses.length !== boundPasses.length)
+    fail("bound_schedule", "execution pass count mismatch");
   const passes = planPasses.map((raw, index): BoundExecutionPass => {
     const pass = record(raw, `plan.passes[${index}]`);
     const bound = record(boundPasses[index], `schedule.passes[${index}]`);
@@ -4647,16 +6439,24 @@ function admitBoundOuterSchedule(
     const output = passOutput(record(pass.kind, "execution pass kind"));
     const outputRoi = required(resourceRois, output, "bound pass output ROI");
     const surfaceSlot = slotByResource.get(output) ?? null;
-    const actualSlot = bound.surfaceSlot == null ? null : positiveId(bound.surfaceSlot, "bound pass surface slot");
+    const actualSlot =
+      bound.surfaceSlot == null ? null : positiveId(bound.surfaceSlot, "bound pass surface slot");
     const actualRoi = deviceRoi(record(bound.deviceRoi, "bound pass device ROI"), extent);
     const expectedRetire = [...retireAfter[index]!].sort((a, b) => a - b);
-    const uniqueRetire = expectedRetire.filter((value, position) => position === 0 || value !== expectedRetire[position - 1]);
-    const actualRetire = array(bound.retireAfter, "bound pass retireAfter").map((value) => positiveId(value, "retired resource"));
-    if (id !== index + 1 || positiveId(bound.pass, "bound pass id") !== id
-      || positiveId(bound.output, "bound pass output") !== output
-      || !sameRoi(actualRoi, outputRoi)
-      || actualSlot !== surfaceSlot
-      || !deepEqual(actualRetire, uniqueRetire)) {
+    const uniqueRetire = expectedRetire.filter(
+      (value, position) => position === 0 || value !== expectedRetire[position - 1],
+    );
+    const actualRetire = array(bound.retireAfter, "bound pass retireAfter").map((value) =>
+      positiveId(value, "retired resource"),
+    );
+    if (
+      id !== index + 1 ||
+      positiveId(bound.pass, "bound pass id") !== id ||
+      positiveId(bound.output, "bound pass output") !== output ||
+      !sameRoi(actualRoi, outputRoi) ||
+      actualSlot !== surfaceSlot ||
+      !deepEqual(actualRetire, uniqueRetire)
+    ) {
       fail("bound_schedule", `execution pass ${id} diverges from its plan and allocations`);
     }
     return { output, deviceRoi: outputRoi, surfaceSlot, retireAfter: actualRetire };
@@ -4673,10 +6473,14 @@ function admitBoundProgramSchedules(
   activeBytes: bigint[],
 ): Map<number, BoundProgramRuntimeSchedule> {
   const result = new Map<number, BoundProgramRuntimeSchedule>();
-  let frameOperations = 0n, frameSamples = 0n;
+  let frameOperations = 0n,
+    frameSamples = 0n;
   const programLayouts = array(plan.programs, "plan.programs");
   const boundPrograms = array(schedule.programs, "schedule.programs");
-  if (programLayouts.length !== framePrograms.length || framePrograms.length !== boundPrograms.length) {
+  if (
+    programLayouts.length !== framePrograms.length ||
+    framePrograms.length !== boundPrograms.length
+  ) {
     fail("program_schedule", "bound program count does not match the plan");
   }
 
@@ -4686,7 +6490,8 @@ function admitBoundProgramSchedules(
     const kind = record(pass.kind, "plan pass kind");
     if (kind.kind !== "rasterProgram" && kind.kind !== "rasterCaption") continue;
     const program = positiveId(kind.program, "program execution id");
-    if (executionByProgram.has(program)) fail("program_schedule", `program ${program} has more than one execution pass`);
+    if (executionByProgram.has(program))
+      fail("program_schedule", `program ${program} has more than one execution pass`);
     executionByProgram.set(program, { pass: positiveId(pass.id, "program execution pass"), kind });
   }
 
@@ -4695,14 +6500,18 @@ function admitBoundProgramSchedules(
     const program = record(framePrograms[index], `bindings.programs[${index}]`);
     const bound = record(boundPrograms[index], `schedule.programs[${index}]`);
     const id = positiveId(program.id, `bindings.programs[${index}].id`);
-    if (id !== index + 1
-      || positiveId(layout.id, `plan.programs[${index}].id`) !== id
-      || positiveId(bound.program, "bound program id") !== id) {
+    if (
+      id !== index + 1 ||
+      positiveId(layout.id, `plan.programs[${index}].id`) !== id ||
+      positiveId(bound.program, "bound program id") !== id
+    ) {
       fail("program_schedule", "program IDs are not canonical and aligned");
     }
     const execution = required(executionByProgram, id, "program execution pass");
-    if (positiveId(bound.executionPass, "bound program execution pass") !== execution.pass
-      || String(bound.boundsReason) !== String(execution.kind.boundsReason)) {
+    if (
+      positiveId(bound.executionPass, "bound program execution pass") !== execution.pass ||
+      String(bound.boundsReason) !== String(execution.kind.boundsReason)
+    ) {
       fail("program_schedule", `program ${id} execution identity diverges from the plan`);
     }
 
@@ -4712,28 +6521,48 @@ function admitBoundProgramSchedules(
     for (const rawStorage of array(localSchedule.resources, "program schedule resources")) {
       const storage = record(rawStorage, "program resource storage");
       const resource = positiveId(storage.resource, "program storage resource");
-      if (storageByResource.has(resource)) fail("program_schedule", `program ${id} repeats resource ${resource}`);
+      if (storageByResource.has(resource))
+        fail("program_schedule", `program ${id} repeats resource ${resource}`);
       storageByResource.set(resource, record(storage.storage, "program storage kind"));
     }
 
     const destinationRois = new Map<number, DeviceRoi>();
     for (const rawPass of array(localPlan.passes, "program local passes")) {
-      const localKind = record(record(rawPass, "program local pass").kind, "program local pass kind");
+      const localKind = record(
+        record(rawPass, "program local pass").kind,
+        "program local pass kind",
+      );
       if (localKind.kind !== "readDestination" || localKind.external == null) continue;
       const destination = positiveId(localKind.external, "program destination id");
-      const use = record(requiredIndex(array(program.destinationUses, "program destination uses"), destination - 1, "program destination use"), "program destination use");
+      const use = record(
+        requiredIndex(
+          array(program.destinationUses, "program destination uses"),
+          destination - 1,
+          "program destination use",
+        ),
+        "program destination use",
+      );
       const roi = deviceRoi(dynamicBounds(dynamic, use.sampleBounds), extent);
       const output = positiveId(localKind.output, "program destination output");
       const prior = destinationRois.get(output);
-      if (prior && !sameRoi(prior, roi)) fail("program_schedule", `program ${id} destination ROI has conflicting derivations`);
+      if (prior && !sameRoi(prior, roi))
+        fail("program_schedule", `program ${id} destination ROI has conflicting derivations`);
       destinationRois.set(output, roi);
     }
 
     const device = dynamicTransform(dynamic, execution.kind.transform);
     const localResources = array(localPlan.resources, "program local resources");
-    const unclipped = (resourceId: number) => projectProgramResource(program,
-      record(requiredIndex(localResources, resourceId - 1, "program local resource"), "program local resource"),
-      device, extent, true);
+    const unclipped = (resourceId: number) =>
+      projectProgramResource(
+        program,
+        record(
+          requiredIndex(localResources, resourceId - 1, "program local resource"),
+          "program local resource",
+        ),
+        device,
+        extent,
+        true,
+      );
     // Mirror Engine's bind_program: these kernels can sample predecessors outside the final
     // viewport, so their inputs keep their complete projection. Blurs, drop shadows,
     // displacements and velocity blurs read their input up to their footprint away from the
@@ -4748,17 +6577,29 @@ function admitBoundProgramSchedules(
     };
     for (const raw of [...array(localPlan.passes, "program local passes")].reverse()) {
       const kind = record(record(raw, "program local pass").kind, "program local pass kind");
-      const output = passOutput(kind), needed = beyondRoot.get(output);
-      const filter = kind.kind === "applyFilter" ? String(record(kind.filter, "program filter").kind) : undefined;
+      const output = passOutput(kind),
+        needed = beyondRoot.get(output);
+      const filter =
+        kind.kind === "applyFilter"
+          ? String(record(kind.filter, "program filter").kind)
+          : undefined;
       if (kind.kind === "applyShader") {
         for (const input of programPassReads(kind)) need(input, unclipped(input));
-      } else if (["lensDistortion", "glow", "bloom", "radialBlur", "chromaticAberration"].includes(filter ?? "")) {
+      } else if (
+        ["lensDistortion", "glow", "bloom", "radialBlur", "chromaticAberration"].includes(
+          filter ?? "",
+        )
+      ) {
         const input = positiveId(kind.input, "kernel input");
         need(input, unclipped(input));
-      } else if (["blur", "dropShadow", "noiseDisplacement", "velocityBlur"].includes(filter ?? "")) {
-        const region = needed ?? (String(execution.kind.boundsReason) === "exact"
-          ? intersectRoi(unclipped(output), root)
-          : emptyRoi());
+      } else if (
+        ["blur", "dropShadow", "noiseDisplacement", "velocityBlur"].includes(filter ?? "")
+      ) {
+        const region =
+          needed ??
+          (String(execution.kind.boundsReason) === "exact"
+            ? intersectRoi(unclipped(output), root)
+            : emptyRoi());
         if (region.width > 0 && region.height > 0) {
           const input = positiveId(kind.input, "sampler input");
           need(input, samplerFootprint(region, unclipped(input), unclipped(output)));
@@ -4766,7 +6607,8 @@ function admitBoundProgramSchedules(
       } else if (kind.kind === "applyTransition") {
         for (const input of programPassReads(kind)) need(input, unclipped(input));
       } else if (kind.kind === "applyClip") {
-        if (needed) need(positiveId(kind.input, "clip input"), intersectRoi(needed, unclipped(output)));
+        if (needed)
+          need(positiveId(kind.input, "clip input"), intersectRoi(needed, unclipped(output)));
       } else if (COMPOSITE_PASSES.has(String(kind.kind))) {
         if (needed) for (const input of programPassReads(kind)) need(input, needed);
       } else if (needed) {
@@ -4775,32 +6617,60 @@ function admitBoundProgramSchedules(
     }
     const resourceRois = new Map<number, DeviceRoi>();
     const boundResources = array(bound.resources, "bound program resources");
-    if (localResources.length !== boundResources.length || storageByResource.size !== localResources.length) {
+    if (
+      localResources.length !== boundResources.length ||
+      storageByResource.size !== localResources.length
+    ) {
       fail("program_schedule", `program ${id} resource count mismatch`);
     }
     for (let resourceIndex = 0; resourceIndex < localResources.length; resourceIndex += 1) {
-      const resource = record(localResources[resourceIndex], `program ${id} resource ${resourceIndex}`);
+      const resource = record(
+        localResources[resourceIndex],
+        `program ${id} resource ${resourceIndex}`,
+      );
       const resourceId = positiveId(resource.id, "program resource id");
-      if (resourceId !== resourceIndex + 1) fail("program_schedule", `program ${id} resource IDs are not canonical`);
+      if (resourceId !== resourceIndex + 1)
+        fail("program_schedule", `program ${id} resource IDs are not canonical`);
       const storage = required(storageByResource, resourceId, "program storage");
       const region = beyondRoot.get(resourceId);
-      resourceRois.set(resourceId, storage.kind === "transparent"
-        ? emptyRoi()
-        : region !== undefined && !destinationRois.has(resourceId)
-          ? intersectRoi(projectProgramResource(program, resource, device, extent, true), unionRoi(region, root))
-          : String(execution.kind.boundsReason) === "conservativeCameraTarget"
-          ? { x: 0, y: 0, ...extent }
-          : destinationRois.get(resourceId)
-            ?? projectProgramResource(program, resource, device, extent));
+      resourceRois.set(
+        resourceId,
+        storage.kind === "transparent"
+          ? emptyRoi()
+          : region !== undefined && !destinationRois.has(resourceId)
+            ? intersectRoi(
+                projectProgramResource(program, resource, device, extent, true),
+                unionRoi(region, root),
+              )
+            : String(execution.kind.boundsReason) === "conservativeCameraTarget"
+              ? { x: 0, y: 0, ...extent }
+              : (destinationRois.get(resourceId) ??
+                projectProgramResource(program, resource, device, extent)),
+      );
     }
-    restrictCompositesToDemand(array(localPlan.passes, "program local passes"), destinationRois, resourceRois);
+    restrictCompositesToDemand(
+      array(localPlan.passes, "program local passes"),
+      destinationRois,
+      resourceRois,
+    );
     for (let resourceIndex = 0; resourceIndex < localResources.length; resourceIndex += 1) {
       const resourceId = resourceIndex + 1;
       const actual = record(boundResources[resourceIndex], "bound program resource");
-      if (positiveId(actual.resource, "bound program resource id") !== resourceId
-        || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program device ROI"), extent, beyondRoot.has(resourceId)),
-          required(resourceRois, resourceId, "program resource ROI"))) {
-        fail("program_schedule", `program ${id} resource ${resourceId} ROI is not the exact plan/binding projection`);
+      if (
+        positiveId(actual.resource, "bound program resource id") !== resourceId ||
+        !sameRoi(
+          deviceRoi(
+            record(actual.deviceRoi, "bound program device ROI"),
+            extent,
+            beyondRoot.has(resourceId),
+          ),
+          required(resourceRois, resourceId, "program resource ROI"),
+        )
+      ) {
+        fail(
+          "program_schedule",
+          `program ${id} resource ${resourceId} ROI is not the exact plan/binding projection`,
+        );
       }
     }
 
@@ -4808,65 +6678,103 @@ function admitBoundProgramSchedules(
     const slotByResource = new Map<number, number>();
     const localSlots = array(localSchedule.surfaceSlots, "program surface slots");
     const boundSlots = array(bound.surfaceSlots, "bound program surface slots");
-    if (localSlots.length !== boundSlots.length) fail("program_schedule", `program ${id} surface slot count mismatch`);
+    if (localSlots.length !== boundSlots.length)
+      fail("program_schedule", `program ${id} surface slot count mismatch`);
     let estimatedSurfaceBytes = 0n;
     for (let slotIndex = 0; slotIndex < localSlots.length; slotIndex += 1) {
       const slot = record(localSlots[slotIndex], "program surface slot");
       const boundSlot = record(boundSlots[slotIndex], "bound program surface slot");
       const slotId = positiveId(slot.id, "program surface slot id");
-      if (slotId !== slotIndex + 1 || positiveId(boundSlot.id, "bound program slot id") !== slotId) {
+      if (
+        slotId !== slotIndex + 1 ||
+        positiveId(boundSlot.id, "bound program slot id") !== slotId
+      ) {
         fail("program_schedule", `program ${id} surface slot IDs diverge`);
       }
       const allocations = array(slot.allocations, "program slot allocations");
       const boundAllocations = array(boundSlot.allocations, "bound program slot allocations");
-      if (allocations.length !== boundAllocations.length) fail("program_schedule", `program ${id} slot ${slotId} allocation count mismatch`);
+      if (allocations.length !== boundAllocations.length)
+        fail("program_schedule", `program ${id} slot ${slotId} allocation count mismatch`);
       let width = 0;
       let height = 0;
       for (let allocationIndex = 0; allocationIndex < allocations.length; allocationIndex += 1) {
         const allocation = record(allocations[allocationIndex], "program surface allocation");
-        const actual = record(boundAllocations[allocationIndex], "bound program surface allocation");
+        const actual = record(
+          boundAllocations[allocationIndex],
+          "bound program surface allocation",
+        );
         const resource = positiveId(allocation.resource, "program allocation resource");
         const roi = required(resourceRois, resource, "program allocation ROI");
-        if (positiveId(actual.resource, "bound program allocation resource") !== resource
-          || String(actual.reason) !== String(allocation.reason)
-          || !deepEqual(actual.interval, allocation.interval)
-          || !sameRoi(deviceRoi(record(actual.deviceRoi, "bound program allocation ROI"), extent, beyondRoot.has(resource)), roi)) {
-          fail("program_schedule", `program ${id} slot ${slotId} allocation ${allocationIndex} diverges`);
+        if (
+          positiveId(actual.resource, "bound program allocation resource") !== resource ||
+          String(actual.reason) !== String(allocation.reason) ||
+          !deepEqual(actual.interval, allocation.interval) ||
+          !sameRoi(
+            deviceRoi(
+              record(actual.deviceRoi, "bound program allocation ROI"),
+              extent,
+              beyondRoot.has(resource),
+            ),
+            roi,
+          )
+        ) {
+          fail(
+            "program_schedule",
+            `program ${id} slot ${slotId} allocation ${allocationIndex} diverges`,
+          );
         }
         if (slotByResource.has(resource)) {
-          fail("program_schedule", `program ${id} resource ${resource} has more than one physical slot`);
+          fail(
+            "program_schedule",
+            `program ${id} resource ${resource} has more than one physical slot`,
+          );
         }
         slotByResource.set(resource, slotId);
         width = Math.max(width, roi.width);
         height = Math.max(height, roi.height);
       }
       const expectedExtent = width === 0 || height === 0 ? null : { width, height };
-      const actualExtent = boundSlot.extent == null
-        ? null
-        : {
-            width: positiveId(record(boundSlot.extent, "bound program extent").width, "bound program width"),
-            height: positiveId(record(boundSlot.extent, "bound program extent").height, "bound program height"),
-          };
-      if (!deepEqual(actualExtent, expectedExtent)) fail("program_schedule", `program ${id} slot ${slotId} extent mismatch`);
+      const actualExtent =
+        boundSlot.extent == null
+          ? null
+          : {
+              width: positiveId(
+                record(boundSlot.extent, "bound program extent").width,
+                "bound program width",
+              ),
+              height: positiveId(
+                record(boundSlot.extent, "bound program extent").height,
+                "bound program height",
+              ),
+            };
+      if (!deepEqual(actualExtent, expectedExtent))
+        fail("program_schedule", `program ${id} slot ${slotId} extent mismatch`);
       const bytes = BigInt(width) * BigInt(height) * 8n;
-      if (BigInt(positiveIdOrZero(boundSlot.estimatedBytes, "bound program slot bytes")) !== bytes) {
+      if (
+        BigInt(positiveIdOrZero(boundSlot.estimatedBytes, "bound program slot bytes")) !== bytes
+      ) {
         fail("program_schedule", `program ${id} slot ${slotId} byte estimate mismatch`);
       }
       estimatedSurfaceBytes += bytes;
       slotExtents.set(slotId, expectedExtent);
     }
-    if (BigInt(positiveIdOrZero(bound.estimatedSurfaceBytes, "bound program bytes")) !== estimatedSurfaceBytes) {
+    if (
+      BigInt(positiveIdOrZero(bound.estimatedSurfaceBytes, "bound program bytes")) !==
+      estimatedSurfaceBytes
+    ) {
       fail("program_schedule", `program ${id} total surface byte estimate mismatch`);
     }
     const localPasses = array(localPlan.passes, "program local passes");
     const boundPasses = array(bound.passes, "bound program passes");
-    if (localPasses.length !== boundPasses.length) fail("program_schedule", `program ${id} pass count mismatch`);
+    if (localPasses.length !== boundPasses.length)
+      fail("program_schedule", `program ${id} pass count mismatch`);
     const lastUses = new Map<number, number>();
     for (const [index, rawPass] of localPasses.entries()) {
       const pass = record(rawPass, "program local pass");
       const kind = record(pass.kind, "program local pass kind");
       const passId = positiveId(pass.id, "program local pass id");
-      if (passId !== index + 1) fail("program_schedule", `program ${id} pass IDs are not canonical`);
+      if (passId !== index + 1)
+        fail("program_schedule", `program ${id} pass IDs are not canonical`);
       const output = passOutput(kind);
       lastUses.set(output, passId);
       for (const input of programPassReads(kind)) lastUses.set(input, passId);
@@ -4875,8 +6783,14 @@ function admitBoundProgramSchedules(
         const source = positiveId(storage.source, "program alias source");
         lastUses.set(source, Math.max(lastUses.get(source) ?? 0, passId));
       }
-      if (storage.kind === "surface" && slotByResource.get(output) !== positiveId(storage.slot, "program surface slot")) {
-        fail("program_schedule", `program ${id} pass ${passId} surface slot diverges from its allocation`);
+      if (
+        storage.kind === "surface" &&
+        slotByResource.get(output) !== positiveId(storage.slot, "program surface slot")
+      ) {
+        fail(
+          "program_schedule",
+          `program ${id} pass ${passId} surface slot diverges from its allocation`,
+        );
       }
     }
     const retireByPass = localPasses.map(() => [] as number[]);
@@ -4892,36 +6806,55 @@ function admitBoundProgramSchedules(
       const output = passOutput(kind);
       const roi = required(resourceRois, output, "bound program pass ROI");
       const storage = required(storageByResource, output, "bound program pass storage");
-      const actualRoi = deviceRoi(record(actual.deviceRoi, "bound program pass device ROI"), extent, beyondRoot.has(output));
-      const actualRetire = array(actual.retireAfter, "bound program pass retireAfter")
-        .map((resource) => positiveId(resource, "retired program resource"));
-      if (positiveId(actual.pass, "bound program pass id") !== index + 1
-        || positiveId(actual.output, "bound program pass output") !== output
-        || !sameRoi(actualRoi, roi)
-        || !deepEqual(actual.storage, storage)
-        || !deepEqual(actualRetire, retireByPass[index])) {
-        fail("program_schedule", `program ${id} pass ${index + 1} diverges from its plan and bindings`);
+      const actualRoi = deviceRoi(
+        record(actual.deviceRoi, "bound program pass device ROI"),
+        extent,
+        beyondRoot.has(output),
+      );
+      const actualRetire = array(actual.retireAfter, "bound program pass retireAfter").map(
+        (resource) => positiveId(resource, "retired program resource"),
+      );
+      if (
+        positiveId(actual.pass, "bound program pass id") !== index + 1 ||
+        positiveId(actual.output, "bound program pass output") !== output ||
+        !sameRoi(actualRoi, roi) ||
+        !deepEqual(actual.storage, storage) ||
+        !deepEqual(actualRetire, retireByPass[index])
+      ) {
+        fail(
+          "program_schedule",
+          `program ${id} pass ${index + 1} diverges from its plan and bindings`,
+        );
       }
       return { output, deviceRoi: actualRoi, storage, retireAfter: actualRetire };
     });
-    let operations = 0n, samples = 0n;
+    let operations = 0n,
+      samples = 0n;
     for (const rawPass of localPasses) {
       const pass = record(rawPass, "program pass");
       const kind = record(pass.kind, "program pass kind");
       const cost = record(pass.shaderWorkPerPixel, "shader work per pixel");
-      const roi = required(resourceRois, positiveId(kind.output, "program output"), "program output ROI");
+      const roi = required(
+        resourceRois,
+        positiveId(kind.output, "program output"),
+        "program output ROI",
+      );
       const pixels = BigInt(roi.width) * BigInt(roi.height);
       operations += BigInt(positiveIdOrZero(cost.operations, "shader operations")) * pixels;
       samples += BigInt(positiveIdOrZero(cost.samples, "shader samples")) * pixels;
     }
     const actualWork = record(bound.shaderWork, "bound program shader work");
-    if (BigInt(positiveIdOrZero(actualWork.operations, "bound shader operations")) !== operations
-      || BigInt(positiveIdOrZero(actualWork.samples, "bound shader samples")) !== samples) {
+    if (
+      BigInt(positiveIdOrZero(actualWork.operations, "bound shader operations")) !== operations ||
+      BigInt(positiveIdOrZero(actualWork.samples, "bound shader samples")) !== samples
+    ) {
       fail("shader_budget", "program Shader work differs from its exact pass/ROI projection");
     }
-    frameOperations += operations; frameSamples += samples;
+    frameOperations += operations;
+    frameSamples += samples;
     const active = activeBytes[execution.pass - 1];
-    if (active === undefined) fail("program_schedule", `program ${id} execution pass is out of range`);
+    if (active === undefined)
+      fail("program_schedule", `program ${id} execution pass is out of range`);
     activeBytes[execution.pass - 1] = active + estimatedSurfaceBytes;
     result.set(id, { resourceRois, slotExtents, passes, estimatedSurfaceBytes });
   }
@@ -4930,8 +6863,11 @@ function admitBoundProgramSchedules(
     fail("program_schedule", "every program must have exactly one bound execution schedule");
   }
   const actualWork = record(schedule.shaderWork, "bound frame shader work");
-  if (BigInt(positiveIdOrZero(actualWork.operations, "frame shader operations")) !== frameOperations
-    || BigInt(positiveIdOrZero(actualWork.samples, "frame shader samples")) !== frameSamples) {
+  if (
+    BigInt(positiveIdOrZero(actualWork.operations, "frame shader operations")) !==
+      frameOperations ||
+    BigInt(positiveIdOrZero(actualWork.samples, "frame shader samples")) !== frameSamples
+  ) {
     fail("shader_budget", "frame Shader work is not the sum of its programs");
   }
   return result;
@@ -4942,7 +6878,10 @@ interface SurfaceLiveness {
   /** Outer slot allocation intervals, as inclusive 1-based outer pass indices. */
   readonly slotIntervals: ReadonlyMap<number, readonly (readonly [number, number])[]>;
   /** The extent of each slot the frame allocates, by program, with 0 for the outer slots. */
-  readonly slotExtents: ReadonlyMap<number, ReadonlyMap<number, { width: number; height: number } | null>>;
+  readonly slotExtents: ReadonlyMap<
+    number,
+    ReadonlyMap<number, { width: number; height: number } | null>
+  >;
   /** The extents of the transients the frame checks out, as `${width}x${height}`. */
   readonly transientExtents: ReadonlySet<string>;
   /** The outer pass that runs each program. */
@@ -4952,7 +6891,11 @@ interface SurfaceLiveness {
 }
 
 /** A value's device ROI and the extent of the image that holds it. */
-interface HeldValue { readonly roi: DeviceRoi; readonly width: number; readonly height: number }
+interface HeldValue {
+  readonly roi: DeviceRoi;
+  readonly width: number;
+  readonly height: number;
+}
 
 /** Crop each program's inputs and choose its direct or scheduled execution for this frame. */
 function planProgramRuns(
@@ -4972,18 +6915,33 @@ function planProgramRuns(
     const program = required(structures, id, "program");
     const localPlan = record(program.plan.localPlan, "program.localPlan");
     const device = dynamicTransform(dynamic, kind.transform);
-    const bound = cropProgramInputs(localPlan, required(schedule.programs, id, "bound program schedule"), planner,
-      local => programFilterInDeviceSpace(record(local.filter, "program filter"),
-        programFilterMatrix(local, programMatrix(program, localPlan, local.output, device))),
-      local => programPassReads(local),
-      local => {
+    const bound = cropProgramInputs(
+      localPlan,
+      required(schedule.programs, id, "bound program schedule"),
+      planner,
+      (local) =>
+        programFilterInDeviceSpace(
+          record(local.filter, "program filter"),
+          programFilterMatrix(local, programMatrix(program, localPlan, local.output, device)),
+        ),
+      (local) => programPassReads(local),
+      (local) => {
         const exact = programMatrix(program, localPlan, local.output, device);
         return programLensFrame(localPlan, local, programFilterMatrix(local, exact), exact);
       },
-      local => geometryRenderer?.canCrop(program.draw, local.roots as number[],
-        programMatrix(program, localPlan, local.output, device)) ?? false);
-    const direct = program.directRaster !== null && !(program.directRaster.spatialFilters
-      && !isScaleTranslateMatrix(programMatrix(program, localPlan, localPlan.output, device)));
+      (local) =>
+        geometryRenderer?.canCrop(
+          program.draw,
+          local.roots as number[],
+          programMatrix(program, localPlan, local.output, device),
+        ) ?? false,
+    );
+    const direct =
+      program.directRaster !== null &&
+      !(
+        program.directRaster.spatialFilters &&
+        !isScaleTranslateMatrix(programMatrix(program, localPlan, localPlan.output, device))
+      );
     runs.set(id, { bound, direct, device });
   }
   return runs;
@@ -5007,20 +6965,30 @@ function frameWorkingSet(
 ): { surfaceBytes: bigint; imageBytes: bigint; liveness: SurfaceLiveness } {
   const root: DeviceRoi = { x: 0, y: 0, ...extent };
   const rootBytes = roiBytes(root);
-  const externalSlots = array(record(plan.bindingLayout, "plan.bindingLayout").externalSlots, "externalSlots");
+  const externalSlots = array(
+    record(plan.bindingLayout, "plan.bindingLayout").externalSlots,
+    "externalSlots",
+  );
   const live = new Map<number, HeldValue>();
   const programPasses = new Map<number, number>();
   const transients = new Set<string>();
-  let outputPass = Infinity, surfaceBytes = 0n, imageBytes = 0n, layerBytes = 0n;
+  let outputPass = Infinity,
+    surfaceBytes = 0n,
+    imageBytes = 0n,
+    layerBytes = 0n;
   // Kernels and creative blends read values at the root extent; other ROIs are copied there.
-  const copies = (ids: readonly number[]) => BigInt(ids.filter(id => {
-    const value = live.get(id);
-    return value !== undefined && !sameRoi(value.roi, root);
-  }).length) * rootBytes;
+  const copies = (ids: readonly number[]) =>
+    BigInt(
+      ids.filter((id) => {
+        const value = live.get(id);
+        return value !== undefined && !sameRoi(value.roi, root);
+      }).length,
+    ) * rootBytes;
   for (const [index, raw] of array(plan.passes, "plan.passes").entries()) {
     const kind = record(record(raw, "plan pass").kind, "plan pass kind");
     const step = schedule.passes[index]!;
-    let surfaces = 0n, images = 0n;
+    let surfaces = 0n,
+      images = 0n;
     if (kind.kind === "bindBackdropView" || kind.kind === "aliasResource") {
       const source = live.get(positiveId(kind.input, "plan resource id"));
       if (source) live.set(step.output, source);
@@ -5029,11 +6997,23 @@ function frameWorkingSet(
       if (kind.kind === "rasterProgram" || kind.kind === "rasterCaption") {
         const id = positiveId(kind.program, "program execution id");
         programPasses.set(id, index + 1);
-        const program = required(structures, id, "program"), run = required(runs, id, "program run");
-        const destinations = kind.kind === "rasterProgram"
-          ? array(kind.destinationInputs, "destinationInputs").map(input => live.get(positiveId(input, "plan resource id")) ?? null)
-          : [];
-        const need = programWorkingSet(executor, program, run, destinations, externalSlots, gpu, transients);
+        const program = required(structures, id, "program"),
+          run = required(runs, id, "program run");
+        const destinations =
+          kind.kind === "rasterProgram"
+            ? array(kind.destinationInputs, "destinationInputs").map(
+                (input) => live.get(positiveId(input, "plan resource id")) ?? null,
+              )
+            : [];
+        const need = programWorkingSet(
+          executor,
+          program,
+          run,
+          destinations,
+          externalSlots,
+          gpu,
+          transients,
+        );
         surfaces = need.surfaces;
         images = need.images;
         // A host frame under a viewport short of the frame is cut into a transient of its own.
@@ -5043,33 +7023,52 @@ function frameWorkingSet(
           transients.add(`${region.width}x${region.height}`);
           surfaces += BigInt(frames) * roiBytes(region);
         }
-        if (kind.kind === "rasterProgram" && rasterLayerKey(program, kind, run.device, step.deviceRoi, plan) !== null) {
-          const output = required(run.bound.resourceRois, positiveId(record(program.plan.localPlan, "program.localPlan").output,
-            "program output"), "program output ROI");
+        if (
+          kind.kind === "rasterProgram" &&
+          rasterLayerKey(program, kind, run.device, step.deviceRoi, plan) !== null
+        ) {
+          const output = required(
+            run.bound.resourceRois,
+            positiveId(
+              record(program.plan.localPlan, "program.localPlan").output,
+              "program output",
+            ),
+            "program output ROI",
+          );
           const bytes = roiBytes(output);
           if (bytes <= BigInt(RASTER_LAYER_CACHE_BYTES)) layerBytes += bytes;
         }
       } else if (kind.kind === "dispatchKernel") {
         const invocation = record(kind.invocation, "kernel invocation");
-        surfaces = copies([...new Set(kernelInputs(invocation))]) + (invocation.kind === "mask" ? rootBytes : 0n);
+        surfaces =
+          copies([...new Set(kernelInputs(invocation))]) +
+          (invocation.kind === "mask" ? rootBytes : 0n);
       } else if (kind.kind === "compositeRegion") {
         const mode = record(kind.mode, "composite mode");
         if (mode.kind === "blend" && String(mode.mode) !== "normal") {
-          surfaces = copies([positiveId(kind.layer, "plan resource id"), positiveId(kind.backdrop, "plan resource id")]);
+          surfaces = copies([
+            positiveId(kind.layer, "plan resource id"),
+            positiveId(kind.backdrop, "plan resource id"),
+          ]);
         }
       } else if (kind.kind === "copyConvert") {
         surfaces = copies([positiveId(kind.input, "plan resource id")]);
         // The CPU sRGB transform holds CanvasKit storage and the Engine's WASM copy of the input.
         if (!gpu && sameRoi(step.deviceRoi, root)) {
-          images = srgbPreviewScratchBytes(extent.width, extent.height,
-            typeof executor.engineKernels?.transform_srgb_preview_f16 === "function") * 2n;
+          images =
+            srgbPreviewScratchBytes(
+              extent.width,
+              extent.height,
+              typeof executor.engineKernels?.transform_srgb_preview_f16 === "function",
+            ) * 2n;
         }
       }
       // Root copies are the only transients outside programs.
       if (surfaces !== 0n && kind.kind !== "rasterProgram" && kind.kind !== "rasterCaption") {
         transients.add(`${extent.width}x${extent.height}`);
       }
-      const slot = step.surfaceSlot === null ? extent : schedule.slotExtents.get(step.surfaceSlot) ?? extent;
+      const slot =
+        step.surfaceSlot === null ? extent : (schedule.slotExtents.get(step.surfaceSlot) ?? extent);
       live.set(step.output, { roi: step.deviceRoi, width: slot.width, height: slot.height });
     }
     const held = schedule.outerActiveBytes[index]! + (outputPass <= index + 1 ? rootBytes : 0n);
@@ -5084,8 +7083,17 @@ function frameWorkingSet(
   if (!gpu) imageBytes += surfaceBytes;
   const slotExtents = new Map([[0, schedule.slotExtents]]);
   for (const [id, run] of runs) slotExtents.set(id, run.direct ? new Map() : run.bound.slotExtents);
-  return { surfaceBytes, imageBytes,
-    liveness: { slotIntervals: schedule.slotIntervals, slotExtents, transientExtents: transients, programPasses, outputPass } };
+  return {
+    surfaceBytes,
+    imageBytes,
+    liveness: {
+      slotIntervals: schedule.slotIntervals,
+      slotExtents,
+      transientExtents: transients,
+      programPasses,
+      outputPass,
+    },
+  };
 }
 
 /**
@@ -5106,20 +7114,31 @@ function programWorkingSet(
   const { bound } = run;
   const atlas = atlasWorkingBytes(program, externalSlots, transients);
   if (run.direct) {
-    const output = required(bound.resourceRois, positiveId(localPlan.output, "direct raster output"), "direct raster output ROI");
+    const output = required(
+      bound.resourceRois,
+      positiveId(localPlan.output, "direct raster output"),
+      "direct raster output ROI",
+    );
     if (output.width === 0 || output.height === 0) return { surfaces: 0n, images: 0n };
     transients.add(`${output.width}x${output.height}`);
     const bytes = roiBytes(output);
-    const backdrops = [...program.directRaster!.backdrops.values()].filter(backdrop => backdrop.hasLocalInputs);
-    const combined = backdrops.some(backdrop => backdrop.destination !== null) ? bytes : 0n;
+    const backdrops = [...program.directRaster!.backdrops.values()].filter(
+      (backdrop) => backdrop.hasLocalInputs,
+    );
+    const combined = backdrops.some((backdrop) => backdrop.destination !== null) ? bytes : 0n;
     // Drawing the backdrop over the local snapshot copies the GPU surface on write.
-    return { surfaces: bytes + maxBigInt(combined, atlas), images: gpu && backdrops.length !== 0 ? bytes : 0n };
+    return {
+      surfaces: bytes + maxBigInt(combined, atlas),
+      images: gpu && backdrops.length !== 0 ? bytes : 0n,
+    };
   }
   let slots = 0n;
-  for (const slot of bound.slotExtents.values()) if (slot) slots += BigInt(slot.width) * BigInt(slot.height) * 8n;
+  for (const slot of bound.slotExtents.values())
+    if (slot) slots += BigInt(slot.width) * BigInt(slot.height) * 8n;
   const kernels = executor.engineKernels;
   const values = new Map<number, HeldValue | null>();
-  let peak = 0n, images = 0n;
+  let peak = 0n,
+    images = 0n;
   for (const [index, rawPass] of array(localPlan.passes, "localPlan.passes").entries()) {
     const kind = record(record(rawPass, "program pass").kind, "program pass kind");
     const step = bound.passes[index];
@@ -5138,30 +7157,80 @@ function programWorkingSet(
       continue;
     }
     let need = 0n;
-    if (storage.kind === "output") { need = roiBytes(roi); transients.add(`${roi.width}x${roi.height}`); }
+    if (storage.kind === "output") {
+      need = roiBytes(roi);
+      transients.add(`${roi.width}x${roi.height}`);
+    }
     if (kind.kind === "rasterNode" || kind.kind === "rasterTree") need += atlas;
     if (kind.kind === "applyFilter") {
-      const filter = programFilterInDeviceSpace(record(kind.filter, "program filter"),
-        programFilterMatrix(kind, programMatrix(program, localPlan, kind.output, run.device)));
+      const filter = programFilterInDeviceSpace(
+        record(kind.filter, "program filter"),
+        programFilterMatrix(kind, programMatrix(program, localPlan, kind.output, run.device)),
+      );
       const input = values.get(positiveId(kind.input, "program input")) ?? null;
       const pyramid = filter.kind === "glow" || filter.kind === "bloom";
       if (filter.kind === "radialBlur" && input) {
         const planner = kernels?.plan_radial_blur;
         if (!planner) fail("radial_blur_plan", "radial blur pass planner is unavailable");
-        need += radialBlurWorkingBytes(planner.call(kernels, finiteNumber(filter.amount, "radial blur amount"),
-          input.roi.x, input.roi.y, input.roi.width, input.roi.height, roi.x, roi.y, roi.width, roi.height), transients);
-      } else if ((pyramid || filter.kind === "lensDistortion") && input && !(gpu && filter.kind === "lensDistortion")) {
+        need += radialBlurWorkingBytes(
+          planner.call(
+            kernels,
+            finiteNumber(filter.amount, "radial blur amount"),
+            input.roi.x,
+            input.roi.y,
+            input.roi.width,
+            input.roi.height,
+            roi.x,
+            roi.y,
+            roi.width,
+            roi.height,
+          ),
+          transients,
+        );
+      } else if (
+        (pyramid || filter.kind === "lensDistortion") &&
+        input &&
+        !(gpu && filter.kind === "lensDistortion")
+      ) {
         const planner = kernels?.plan_pyramid_filter;
-        const recipe = pyramid && planner ? planner.call(kernels, input.roi.width, input.roi.height, roi.width, roi.height,
-          input.roi.x - roi.x, input.roi.y - roi.y, JSON.stringify(filter)) : null;
+        const recipe =
+          pyramid && planner
+            ? planner.call(
+                kernels,
+                input.roi.width,
+                input.roi.height,
+                roi.width,
+                roi.height,
+                input.roi.x - roi.x,
+                input.roi.y - roi.y,
+                JSON.stringify(filter),
+              )
+            : null;
         if (gpu && recipe) {
-          need += BigInt(pyramidWorkingBytes(recipe, roi, filter.kind as "glow" | "bloom",
-            input.width !== input.roi.width || input.height !== input.roi.height, transients));
+          need += BigInt(
+            pyramidWorkingBytes(
+              recipe,
+              roi,
+              filter.kind as "glow" | "bloom",
+              input.width !== input.roi.width || input.height !== input.roi.height,
+              transients,
+            ),
+          );
         } else {
           // The read and the result each exist in JavaScript and in WASM memory.
-          const read = !recipe ? input.roi : intersectRoi(input.roi, recipe.length >= 15
-            ? { x: roi.x + recipe[0]!, y: roi.y + recipe[1]!, width: recipe[2]!, height: recipe[3]! }
-            : roi);
+          const read = !recipe
+            ? input.roi
+            : intersectRoi(
+                input.roi,
+                recipe.length >= 15
+                  ? {
+                      x: roi.x + recipe[0]!,
+                      y: roi.y + recipe[1]!,
+                      width: recipe[2]!,
+                      height: recipe[3]!,
+                    }
+                  : roi,
+              );
           images = maxBigInt(images, (roiBytes(read) + roiBytes(roi)) * 2n);
         }
       } else if (filter.kind === "filmGrain") {
@@ -5172,8 +7241,15 @@ function programWorkingSet(
         images = maxBigInt(images, BigInt(width) * BigInt(height) * 8n);
       }
     }
-    const slot = storage.kind === "surface" ? bound.slotExtents.get(positiveId(storage.slot, "program surface slot")) : null;
-    values.set(output, { roi, width: slot?.width ?? roi.width, height: slot?.height ?? roi.height });
+    const slot =
+      storage.kind === "surface"
+        ? bound.slotExtents.get(positiveId(storage.slot, "program surface slot"))
+        : null;
+    values.set(output, {
+      roi,
+      width: slot?.width ?? roi.width,
+      height: slot?.height ?? roi.height,
+    });
     peak = maxBigInt(peak, need);
   }
   return { surfaces: slots + peak, images };
@@ -5181,7 +7257,8 @@ function programWorkingSet(
 
 /** Peak bytes of the ping-pong transients `drawRadialBlur` holds for a pass plan, and their extents. */
 function radialBlurWorkingBytes(plan: Float64Array, transients: Set<string>): bigint {
-  let peak = 0n, prior = 0n;
+  let peak = 0n,
+    prior = 0n;
   // Every pass but the last writes a transient while the previous one is still read.
   for (let at = 0; at + 5 < plan.length; at += 5) {
     transients.add(`${plan[at + 2]}x${plan[at + 3]}`);
@@ -5195,7 +7272,11 @@ function radialBlurWorkingBytes(plan: Float64Array, transients: Set<string>): bi
 const atlasRegions = new WeakMap<DrawProgramWire, readonly { texture: Wire; src: RectWire }[]>();
 
 /** The largest crop an image batch of the program checks out, from its textures' admitted extents. */
-function atlasWorkingBytes(program: ProgramStructure, externalSlots: unknown[], transients: Set<string>): bigint {
+function atlasWorkingBytes(
+  program: ProgramStructure,
+  externalSlots: unknown[],
+  transients: Set<string>,
+): bigint {
   let regions = atlasRegions.get(program.draw);
   if (!regions) {
     const found: { texture: Wire; src: RectWire }[] = [];
@@ -5205,24 +7286,38 @@ function atlasWorkingBytes(program: ProgramStructure, externalSlots: unknown[], 
       const shape = record(record(node.value, "batch node").shape, "instance shape");
       if (shape.kind !== "image") continue;
       const region = record(shape.value, "instance image region");
-      found.push({ texture: record(region.texture, "atlas texture"), src: rect(region.src, "atlas source") });
+      found.push({
+        texture: record(region.texture, "atlas texture"),
+        src: rect(region.src, "atlas source"),
+      });
     }
-    atlasRegions.set(program.draw, regions = found);
+    atlasRegions.set(program.draw, (regions = found));
   }
   if (regions.length === 0) return 0n;
   const resources = record(program.plan.resources, "program.resources");
-  const requirements = array(record(program.plan.requirements, "program.requirements").externalTextures, "program texture requirements");
+  const requirements = array(
+    record(program.plan.requirements, "program.requirements").externalTextures,
+    "program texture requirements",
+  );
   const bindings = array(resources.textures, "program textures");
   const extents = new Map<string, { width: number; height: number }>();
   for (const [index, raw] of bindings.entries()) {
     const slot = positiveId(record(raw, "texture binding").slot, "texture slot");
-    const expected = record(record(requiredIndex(externalSlots, slot - 1, "texture slot"), "external slot").expected, "external descriptor");
+    const expected = record(
+      record(requiredIndex(externalSlots, slot - 1, "texture slot"), "external slot").expected,
+      "external descriptor",
+    );
     if (expected.extent == null) continue;
     const size = record(expected.extent, "texture extent");
-    const width = positiveId(size.width, "texture width"), height = positiveId(size.height, "texture height");
+    const width = positiveId(size.width, "texture width"),
+      height = positiveId(size.height, "texture height");
     // Data textures are stored as an Alpha_8 image of 2 x 4 bytes per texel.
-    extents.set(textureIdentity(record(requirements[index], "texture requirement")),
-      expected.kind === "dataTexture" ? { width: width * 2, height: height * 4 } : { width, height });
+    extents.set(
+      textureIdentity(record(requirements[index], "texture requirement")),
+      expected.kind === "dataTexture"
+        ? { width: width * 2, height: height * 4 }
+        : { width, height },
+    );
   }
   let peak = 0n;
   for (const region of regions) {
@@ -5237,15 +7332,34 @@ function atlasWorkingBytes(program: ProgramStructure, externalSlots: unknown[], 
 }
 
 /** The texels an atlas region crops, and the region's normalized rectangle inside the crop. */
-function atlasCrop(region: RectWire, width: number, height: number): {
-  left: number; top: number; width: number; height: number; source: RectWire;
+function atlasCrop(
+  region: RectWire,
+  width: number,
+  height: number,
+): {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  source: RectWire;
 } {
-  const edges = [region.x * width, region.y * height, (region.x + region.width) * width, (region.y + region.height) * height];
-  const left = Math.max(0, Math.floor(edges[0]!)), top = Math.max(0, Math.floor(edges[1]!));
-  const right = Math.min(width, Math.ceil(edges[2]!)), bottom = Math.min(height, Math.ceil(edges[3]!));
-  const cropWidth = right - left, cropHeight = bottom - top;
+  const edges = [
+    region.x * width,
+    region.y * height,
+    (region.x + region.width) * width,
+    (region.y + region.height) * height,
+  ];
+  const left = Math.max(0, Math.floor(edges[0]!)),
+    top = Math.max(0, Math.floor(edges[1]!));
+  const right = Math.min(width, Math.ceil(edges[2]!)),
+    bottom = Math.min(height, Math.ceil(edges[3]!));
+  const cropWidth = right - left,
+    cropHeight = bottom - top;
   return {
-    left, top, width: cropWidth, height: cropHeight,
+    left,
+    top,
+    width: cropWidth,
+    height: cropHeight,
     source: {
       x: (edges[0]! - left) / cropWidth,
       y: (edges[1]! - top) / cropHeight,
@@ -5264,7 +7378,9 @@ function kernelInputs(invocation: Wire): number[] {
     case "adjustmentEffect":
       return [positiveId(invocation.input, "kernel input")];
     case "transition":
-      return [invocation.backdrop, invocation.from, invocation.to].map(id => positiveId(id, "transition input"));
+      return [invocation.backdrop, invocation.from, invocation.to].map((id) =>
+        positiveId(id, "transition input"),
+      );
     default:
       return fail("unsupported_kernel", `kernel '${String(invocation.kind)}' is not closed`);
   }
@@ -5283,7 +7399,8 @@ function projectProgramResource(
 ): DeviceRoi {
   const bounds = record(resource.bounds, "program resource bounds");
   if (bounds.kind === "empty") return emptyRoi();
-  if (bounds.kind !== "finite") fail("program_schedule", `unknown local bounds kind '${String(bounds.kind)}'`);
+  if (bounds.kind !== "finite")
+    fail("program_schedule", `unknown local bounds kind '${String(bounds.kind)}'`);
   return projectProgramResourceRoi(
     rect(program.viewport, "program viewport"),
     rect(bounds.rect, "program finite bounds"),
@@ -5310,7 +7427,8 @@ export function projectProgramResourceRoi(
   extent: { width: number; height: number },
   unclipped = false,
 ): DeviceRoi {
-  if (viewport.width <= 0 || viewport.height <= 0) fail("program_schedule", "program viewport is empty");
+  if (viewport.width <= 0 || viewport.height <= 0)
+    fail("program_schedule", "program viewport is empty");
   if (value.width <= 0 || value.height <= 0) return emptyRoi();
   const localCorners: Array<[number, number]> = [
     [value.x, value.y],
@@ -5334,10 +7452,10 @@ export function projectProgramResourceRoi(
   ];
   validateProjectionDomain(device, corners, 1e-12, "program device resource");
   const points = corners.map((corner) => projectValidated(device, corner));
-  if (points.some(point => point.some(v => Math.abs(v) > 1_073_741_824))) {
+  if (points.some((point) => point.some((v) => Math.abs(v) > 1_073_741_824))) {
     fail("program_schedule", "program projection exceeds the device coordinate budget");
   }
-  const clip = (v: number, limit: number) => unclipped ? v : Math.max(0, Math.min(limit, v));
+  const clip = (v: number, limit: number) => (unclipped ? v : Math.max(0, Math.min(limit, v)));
   const left = clip(Math.floor(Math.min(...points.map((point) => point[0]))), extent.width);
   const top = clip(Math.floor(Math.min(...points.map((point) => point[1]))), extent.height);
   const right = clip(Math.ceil(Math.max(...points.map((point) => point[0]))), extent.width);
@@ -5357,12 +7475,14 @@ function validateProjectionDomain(
   const maximum = denominators.reduce((current, value) => Math.max(current, Math.abs(value)), 0);
   // Transform2d::map_bounds uses an absolute f64::EPSILON threshold. DeviceTransform uses a
   // scale-relative 1e-12 horizon threshold. The caller selects the matching policy.
-  const tolerance = relativeTolerance === Number.EPSILON
-    ? Number.EPSILON
-    : maximum * relativeTolerance;
-  if (!Number.isFinite(maximum) || maximum === 0
-    || denominators.some((value) => !Number.isFinite(value) || Math.abs(value) <= tolerance)
-    || denominators.some((value) => Math.sign(value) !== Math.sign(denominators[0]!))) {
+  const tolerance =
+    relativeTolerance === Number.EPSILON ? Number.EPSILON : maximum * relativeTolerance;
+  if (
+    !Number.isFinite(maximum) ||
+    maximum === 0 ||
+    denominators.some((value) => !Number.isFinite(value) || Math.abs(value) <= tolerance) ||
+    denominators.some((value) => Math.sign(value) !== Math.sign(denominators[0]!))
+  ) {
     fail("program_schedule", `${label} crosses the perspective horizon`);
   }
 }
@@ -5373,7 +7493,8 @@ function projectValidated(matrix: number[], point: [number, number]): [number, n
     (matrix[0]! * point[0] + matrix[1]! * point[1] + matrix[2]!) / w,
     (matrix[3]! * point[0] + matrix[4]! * point[1] + matrix[5]!) / w,
   ];
-  if (!projected.every(Number.isFinite)) fail("program_schedule", "program resource projection is invalid");
+  if (!projected.every(Number.isFinite))
+    fail("program_schedule", "program resource projection is invalid");
   return projected;
 }
 
@@ -5381,17 +7502,31 @@ function emptyRoi(): DeviceRoi {
   return { x: 0, y: 0, width: 0, height: 0 };
 }
 
-function deviceRoi(value: Wire, extent: { width: number; height: number }, unclipped = false): DeviceRoi {
+function deviceRoi(
+  value: Wire,
+  extent: { width: number; height: number },
+  unclipped = false,
+): DeviceRoi {
   const roi = {
     x: finiteNumber(value.x, "ROI x"),
     y: finiteNumber(value.y, "ROI y"),
     width: positiveIdOrZero(value.width, "ROI width"),
     height: positiveIdOrZero(value.height, "ROI height"),
   };
-  if (![roi.x, roi.y, roi.x + roi.width, roi.y + roi.height].every(v => Number.isSafeInteger(v) && Math.abs(v) <= 1_073_741_824)) {
+  if (
+    ![roi.x, roi.y, roi.x + roi.width, roi.y + roi.height].every(
+      (v) => Number.isSafeInteger(v) && Math.abs(v) <= 1_073_741_824,
+    )
+  ) {
     fail("bound_schedule", "ROI exceeds the device coordinate budget");
   }
-  if (!unclipped && (roi.x < 0 || roi.y < 0 || roi.x + roi.width > extent.width || roi.y + roi.height > extent.height)) {
+  if (
+    !unclipped &&
+    (roi.x < 0 ||
+      roi.y < 0 ||
+      roi.x + roi.width > extent.width ||
+      roi.y + roi.height > extent.height)
+  ) {
     fail("bound_schedule", "ROI escapes the render root");
   }
   if ((roi.width === 0 || roi.height === 0) && !sameRoi(roi, { x: 0, y: 0, width: 0, height: 0 })) {
@@ -5400,7 +7535,14 @@ function deviceRoi(value: Wire, extent: { width: number; height: number }, uncli
   return roi;
 }
 
-const COMPOSITE_PASSES = new Set(["readDestination", "sourceOver", "applyMask", "applyOpacity", "applyTransform", "blend"]);
+const COMPOSITE_PASSES = new Set([
+  "readDestination",
+  "sourceOver",
+  "applyMask",
+  "applyOpacity",
+  "applyTransform",
+  "blend",
+]);
 
 /**
  * Mirror Engine's restrict_composites_to_demand. Composites write each output pixel from their
@@ -5408,22 +7550,30 @@ const COMPOSITE_PASSES = new Set(["readDestination", "sourceOver", "applyMask", 
  * its readers need; a clip reads its input only inside the clip output. Raster, clip and kernel
  * outputs keep their ROI.
  */
-function restrictCompositesToDemand(passes: unknown[], destinationRois: ReadonlyMap<number, DeviceRoi>,
-  rois: Map<number, DeviceRoi>): void {
+function restrictCompositesToDemand(
+  passes: unknown[],
+  destinationRois: ReadonlyMap<number, DeviceRoi>,
+  rois: Map<number, DeviceRoi>,
+): void {
   // undefined: no reader yet. null: a reader may sample anywhere in the resource.
   const demand = new Map<number, DeviceRoi | null>();
   for (const raw of [...passes].reverse()) {
     const kind = record(record(raw, "program local pass").kind, "program local pass kind");
-    const output = passOutput(kind), composite = COMPOSITE_PASSES.has(String(kind.kind));
+    const output = passOutput(kind),
+      composite = COMPOSITE_PASSES.has(String(kind.kind));
     const needed = demand.get(output);
     if (composite && !destinationRois.has(output) && needed) {
       const restricted = intersectRoi(required(rois, output, "program composite ROI"), needed);
       rois.set(output, restricted.width === 0 || restricted.height === 0 ? emptyRoi() : restricted);
     }
-    const need = composite || kind.kind === "applyClip" ? required(rois, output, "program reader ROI") : null;
+    const need =
+      composite || kind.kind === "applyClip" ? required(rois, output, "program reader ROI") : null;
     for (const input of programPassReads(kind)) {
       const prior = demand.get(input);
-      demand.set(input, prior === undefined ? need : prior === null || need === null ? null : unionRoi(prior, need));
+      demand.set(
+        input,
+        prior === undefined ? need : prior === null || need === null ? null : unionRoi(prior, need),
+      );
     }
   }
 }
@@ -5438,7 +7588,8 @@ function samplerFootprint(region: DeviceRoi, input: DeviceRoi, output: DeviceRoi
 }
 
 function intersectRoi(left: DeviceRoi, right: DeviceRoi): DeviceRoi {
-  const x = Math.max(left.x, right.x), y = Math.max(left.y, right.y);
+  const x = Math.max(left.x, right.x),
+    y = Math.max(left.y, right.y);
   const width = Math.min(left.x + left.width, right.x + right.width) - x;
   const height = Math.min(left.y + left.height, right.y + right.height) - y;
   return width <= 0 || height <= 0 ? emptyRoi() : { x, y, width, height };
@@ -5447,17 +7598,23 @@ function intersectRoi(left: DeviceRoi, right: DeviceRoi): DeviceRoi {
 function unionRoi(left: DeviceRoi, right: DeviceRoi): DeviceRoi {
   if (left.width === 0 || left.height === 0) return right;
   if (right.width === 0 || right.height === 0) return left;
-  const x = Math.min(left.x, right.x), y = Math.min(left.y, right.y);
+  const x = Math.min(left.x, right.x),
+    y = Math.min(left.y, right.y);
   return {
-    x, y,
+    x,
+    y,
     width: Math.max(left.x + left.width, right.x + right.width) - x,
     height: Math.max(left.y + left.height, right.y + right.height) - y,
   };
 }
 
 function sameRoi(left: DeviceRoi, right: DeviceRoi): boolean {
-  return left.x === right.x && left.y === right.y
-    && left.width === right.width && left.height === right.height;
+  return (
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
+  );
 }
 
 function retireOuterResources(retired: readonly number[], values: Map<number, ImageValue>): void {
@@ -5469,13 +7626,24 @@ function retireOuterResources(retired: readonly number[], values: Map<number, Im
 }
 
 async function drawRadialBlur(
-  CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, arena: SurfaceArena,
-  canvas: Canvas, input: ImageValue, output: DeviceRoi, center: number[], amount: number, plan: Float64Array,
+  CanvasKit: CanvasKit,
+  builtins: CanvasKitBuiltinRuntime,
+  arena: SurfaceArena,
+  canvas: Canvas,
+  input: ImageValue,
+  output: DeviceRoi,
+  center: number[],
+  amount: number,
+  plan: Float64Array,
 ): Promise<void> {
   if (!input.image) return;
   const makeSource = (image: Image): Shader => {
-    const shader = image.makeShaderOptions(CanvasKit.TileMode.Clamp, CanvasKit.TileMode.Clamp,
-      CanvasKit.FilterMode.Nearest, CanvasKit.MipmapMode.None);
+    const shader = image.makeShaderOptions(
+      CanvasKit.TileMode.Clamp,
+      CanvasKit.TileMode.Clamp,
+      CanvasKit.FilterMode.Nearest,
+      CanvasKit.MipmapMode.None,
+    );
     if (!shader) fail("radial_blur_shader", "radial blur input shader allocation failed");
     return shader;
   };
@@ -5487,89 +7655,180 @@ async function drawRadialBlur(
   try {
     for (let at = 0; at < plan.length; at += 5) {
       if (arena.yieldToPresentation && performance.now() - yieldAt >= 6) {
-        await arena.yieldToPresentation(); yieldAt = performance.now();
+        await arena.yieldToPresentation();
+        yieldAt = performance.now();
       }
-      const roi: DeviceRoi = {x: plan[at]!, y: plan[at+1]!, width: plan[at+2]!, height: plan[at+3]!};
+      const roi: DeviceRoi = {
+        x: plan[at]!,
+        y: plan[at + 1]!,
+        width: plan[at + 2]!,
+        height: plan[at + 3]!,
+      };
       const finalPass = at + 5 === plan.length;
       const source = makeSource(current.image!);
       let shader: Shader | null = null;
       try {
-        shader = builtins.shader("radialBlur", [input.roi.width, input.roi.height,
-          input.roi.x - roi.x, input.roi.y - roi.y, finalPass ? 1 : 0,
-          current.roi.width, current.roi.height, current.roi.x - roi.x, current.roi.y - roi.y,
-          roi.x, roi.y, center[0]!, center[1]!, amount, plan[at+4]!], [source, original]);
+        shader = builtins.shader(
+          "radialBlur",
+          [
+            input.roi.width,
+            input.roi.height,
+            input.roi.x - roi.x,
+            input.roi.y - roi.y,
+            finalPass ? 1 : 0,
+            current.roi.width,
+            current.roi.height,
+            current.roi.x - roi.x,
+            current.roi.y - roi.y,
+            roi.x,
+            roi.y,
+            center[0]!,
+            center[1]!,
+            amount,
+            plan[at + 4]!,
+          ],
+          [source, original],
+        );
         if (finalPass) {
           canvas.save();
-          try { canvas.translate(output.x, output.y); drawShader(CanvasKit, canvas, shader, "src"); }
-          finally { canvas.restore(); }
+          try {
+            canvas.translate(output.x, output.y);
+            drawShader(CanvasKit, canvas, shader, "src");
+          } finally {
+            canvas.restore();
+          }
         } else {
           nextSurface = arena.transient(roi.width, roi.height);
           drawShader(CanvasKit, nextSurface.getCanvas(), shader, "src");
           if (!arena.gpu || !arena.deferGpuFlush) nextSurface.flush();
         }
-      } finally { shader?.delete(); source.delete(); }
+      } finally {
+        shader?.delete();
+        source.delete();
+      }
       if (currentSurface) {
-        current.image?.delete(); arena.releaseTransient(currentSurface); currentSurface = null;
+        current.image?.delete();
+        arena.releaseTransient(currentSurface);
+        currentSurface = null;
         current = input;
       }
       if (nextSurface) {
-        current = {image: nextSurface.makeImageSnapshot([0,0,roi.width,roi.height]), roi, owned: true};
-        currentSurface = nextSurface; nextSurface = null;
+        current = {
+          image: nextSurface.makeImageSnapshot([0, 0, roi.width, roi.height]),
+          roi,
+          owned: true,
+        };
+        currentSurface = nextSurface;
+        nextSurface = null;
       }
     }
   } finally {
     original.delete();
-    if (currentSurface) { current.image?.delete(); arena.releaseTransient(currentSurface); }
+    if (currentSurface) {
+      current.image?.delete();
+      arena.releaseTransient(currentSurface);
+    }
     if (nextSurface) arena.releaseTransient(nextSurface);
   }
 }
 
 /** Upload only deterministic noise, never read the rendered source back to the CPU. */
 function drawFilmGrain(
-  CanvasKit: CanvasKit, builtins: CanvasKitBuiltinRuntime, canvas: Canvas,
-  input: ImageValue, output: RectWire, seed: number, amount: number, size: number,
+  CanvasKit: CanvasKit,
+  builtins: CanvasKitBuiltinRuntime,
+  canvas: Canvas,
+  input: ImageValue,
+  output: RectWire,
+  seed: number,
+  amount: number,
+  size: number,
 ): void {
   if (!input.image) return;
-  const originX = Math.floor(output.x / size), originY = Math.floor(output.y / size);
+  const originX = Math.floor(output.x / size),
+    originY = Math.floor(output.y / size);
   const width = Math.floor((output.x + output.width - 1) / size) + 2 - originX;
   const height = Math.floor((output.y + output.height - 1) / size) + 2 - originY;
-  if (width * height > 33_600_000) fail("film_grain_lattice", "film grain noise lattice is too large");
+  if (width * height > 33_600_000)
+    fail("film_grain_lattice", "film grain noise lattice is too large");
   const pixels = new Uint8Array(width * height * 4);
-  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    let hash = seed ^ Math.imul(originX + x, 0x9e3779b9) ^ Math.imul(originY + y, 0x85ebca6b);
-    hash ^= hash >>> 16;
-    hash = Math.imul(hash, 0x7feb352d);
-    hash ^= hash >>> 15;
-    hash = Math.imul(hash, 0x846ca68b);
-    hash ^= hash >>> 16;
-    const at = (y * width + x) * 4;
-    pixels[at] = hash >>> 8; pixels[at + 1] = hash >>> 16;
-    pixels[at + 2] = hash >>> 24; pixels[at + 3] = 255;
-  }
-  const lattice = CanvasKit.MakeImage({width, height, colorType: CanvasKit.ColorType.RGBA_8888,
-    alphaType: CanvasKit.AlphaType.Opaque, colorSpace: CanvasKit.ColorSpace.SRGB}, pixels, width * 4);
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      let hash = seed ^ Math.imul(originX + x, 0x9e3779b9) ^ Math.imul(originY + y, 0x85ebca6b);
+      hash ^= hash >>> 16;
+      hash = Math.imul(hash, 0x7feb352d);
+      hash ^= hash >>> 15;
+      hash = Math.imul(hash, 0x846ca68b);
+      hash ^= hash >>> 16;
+      const at = (y * width + x) * 4;
+      pixels[at] = hash >>> 8;
+      pixels[at + 1] = hash >>> 16;
+      pixels[at + 2] = hash >>> 24;
+      pixels[at + 3] = 255;
+    }
+  const lattice = CanvasKit.MakeImage(
+    {
+      width,
+      height,
+      colorType: CanvasKit.ColorType.RGBA_8888,
+      alphaType: CanvasKit.AlphaType.Opaque,
+      colorSpace: CanvasKit.ColorSpace.SRGB,
+    },
+    pixels,
+    width * 4,
+  );
   if (!lattice) fail("film_grain_lattice", "film grain noise image allocation failed");
-  let source: Shader | null = null, noise: Shader | null = null, shader: Shader | null = null;
+  let source: Shader | null = null,
+    noise: Shader | null = null,
+    shader: Shader | null = null;
   canvas.save();
   try {
-    source = input.image.makeShaderOptions(CanvasKit.TileMode.Clamp, CanvasKit.TileMode.Clamp,
-      CanvasKit.FilterMode.Nearest, CanvasKit.MipmapMode.None);
-    noise = lattice.makeShaderOptions(CanvasKit.TileMode.Clamp, CanvasKit.TileMode.Clamp,
-      CanvasKit.FilterMode.Nearest, CanvasKit.MipmapMode.None);
+    source = input.image.makeShaderOptions(
+      CanvasKit.TileMode.Clamp,
+      CanvasKit.TileMode.Clamp,
+      CanvasKit.FilterMode.Nearest,
+      CanvasKit.MipmapMode.None,
+    );
+    noise = lattice.makeShaderOptions(
+      CanvasKit.TileMode.Clamp,
+      CanvasKit.TileMode.Clamp,
+      CanvasKit.FilterMode.Nearest,
+      CanvasKit.MipmapMode.None,
+    );
     if (!source || !noise) fail("film_grain_shader", "film grain child shader allocation failed");
-    shader = builtins.shader("filmGrain", [input.roi.width, input.roi.height,
-      input.roi.x - output.x, input.roi.y - output.y, output.x, output.y,
-      originX, originY, amount, size], [source, noise]);
+    shader = builtins.shader(
+      "filmGrain",
+      [
+        input.roi.width,
+        input.roi.height,
+        input.roi.x - output.x,
+        input.roi.y - output.y,
+        output.x,
+        output.y,
+        originX,
+        originY,
+        amount,
+        size,
+      ],
+      [source, noise],
+    );
     canvas.translate(output.x, output.y);
     drawShader(CanvasKit, canvas, shader, "src");
   } finally {
-    canvas.restore(); shader?.delete(); source?.delete(); noise?.delete(); lattice.delete();
+    canvas.restore();
+    shader?.delete();
+    source?.delete();
+    noise?.delete();
+    lattice.delete();
   }
 }
 
 function disposeValues(values: Map<number, ImageValue>, retained: Image | null): void {
   const deleted = new Set<Image>();
-  for (const value of values.values()) if (value.owned && value.image && value.image !== retained && !deleted.has(value.image)) { value.image.delete(); deleted.add(value.image); }
+  for (const value of values.values())
+    if (value.owned && value.image && value.image !== retained && !deleted.has(value.image)) {
+      value.image.delete();
+      deleted.add(value.image);
+    }
   if (retained && !deleted.has(retained)) retained.delete();
   values.clear();
 }
@@ -5609,21 +7868,37 @@ function requiredBuiltinKernels(plan: Wire, programs: Wire[]): Set<BuiltinKernel
       const kind = record(record(rawPass, "local pass").kind, "local pass kind");
       if (kind.kind === "blend" && String(kind.mode) !== "normal") kernels.add("creativeBlend");
       if (kind.kind === "applyTransition") {
-        const kernel = record(record(kind.transition, "local transition").kernel, "transition kernel");
+        const kernel = record(
+          record(kind.transition, "local transition").kernel,
+          "transition kernel",
+        );
         if (kernel.type !== "shader") kernels.add(transitionKernel(String(kernel.kind)));
         kernels.add("transitionInput");
       }
       if (kind.kind === "applyFilter") {
         const filter = record(kind.filter, "program filter").kind;
-        if (filter === "chromaticAberration" || filter === "filmGrain" || filter === "radialBlur" || filter === "lensDistortion") kernels.add(filter);
+        if (
+          filter === "chromaticAberration" ||
+          filter === "filmGrain" ||
+          filter === "radialBlur" ||
+          filter === "lensDistortion"
+        )
+          kernels.add(filter);
         if (filter === "noiseDisplacement") kernels.add("noiseDisplacement");
         if (filter === "glow" || filter === "bloom") {
-          for (const kernel of ["pyramidDownsample", "pyramidBlur", "pyramidUpsample", "pyramidUpsampleRows",
+          for (const kernel of [
+            "pyramidDownsample",
+            "pyramidBlur",
+            "pyramidUpsample",
+            "pyramidUpsampleRows",
             filter === "glow" ? "pyramidCoverageDownsample" : "pyramidThreshold",
-            filter === "glow" ? "pyramidGlowUpsampleComposite" : "pyramidUpsampleComposite"] as BuiltinKernel[]) kernels.add(kernel);
+            filter === "glow" ? "pyramidGlowUpsampleComposite" : "pyramidUpsampleComposite",
+          ] as BuiltinKernel[])
+            kernels.add(kernel);
         }
       }
-      if (kind.kind === "applyMask" && String(kind.mode).startsWith("luminance")) kernels.add("maskCoverage");
+      if (kind.kind === "applyMask" && String(kind.mode).startsWith("luminance"))
+        kernels.add("maskCoverage");
     }
   }
   return kernels;
@@ -5632,11 +7907,17 @@ function requiredBuiltinKernels(plan: Wire, programs: Wire[]): Set<BuiltinKernel
 function admitCanvasKitOutput(plan: Wire): void {
   const output = record(record(plan.renderSpec, "render spec").output, "output spec");
   if (output.bitDepth !== "eight") {
-    fail("output_storage", `CanvasKit product targets accept eight-bit delivery, not '${String(output.bitDepth)}'`);
+    fail(
+      "output_storage",
+      `CanvasKit product targets accept eight-bit delivery, not '${String(output.bitDepth)}'`,
+    );
   }
   const dither = record(output.dither, "output dither");
   if (dither.kind !== "none") {
-    fail("output_dither", "CanvasKit cannot reproduce the compositor's exact 64-bit triangular dither ABI");
+    fail(
+      "output_dither",
+      "CanvasKit cannot reproduce the compositor's exact 64-bit triangular dither ABI",
+    );
   }
 }
 
@@ -5659,16 +7940,37 @@ async function drawOutputTransform(
     transferCode(String(target.transfer)),
     enumCode(String(spec.toneMap), ["none", "reinhardLuminance"], "tone map"),
     enumCode(String(spec.gamutMap), ["clip", "chromaCompress"], "gamut map"),
-    enumCode(String(spec.alpha), ["opaque", "straightCoverage", "premultipliedCoverage"], "output alpha"),
+    enumCode(
+      String(spec.alpha),
+      ["opaque", "straightCoverage", "premultipliedCoverage"],
+      "output alpha",
+    ),
     positiveId(luminance.referenceWhite, "output reference white"),
     positiveId(luminance.peak, "output peak luminance"),
   ];
-  if (cpuKernel && input && target.primaries === "rec709" && target.transfer === "srgb"
-    && spec.toneMap === "none" && spec.gamutMap === "chromaCompress"
-    && luminance.referenceWhite === 100 && luminance.peak === 100) {
+  if (
+    cpuKernel &&
+    input &&
+    target.primaries === "rec709" &&
+    target.transfer === "srgb" &&
+    spec.toneMap === "none" &&
+    spec.gamutMap === "chromaCompress" &&
+    luminance.referenceWhite === 100 &&
+    luminance.peak === 100
+  ) {
     // An author-transparent canvas can still produce an opaque frame (background View/video).
     // Prove actual coverage each time; partial coverage keeps the established shader path.
-    if (await drawSrgbPreviewCpu(CanvasKit, canvas, input, cpuKernel, spec.alpha === "opaque", spec.alpha !== "opaque")) return;
+    if (
+      await drawSrgbPreviewCpu(
+        CanvasKit,
+        canvas,
+        input,
+        cpuKernel,
+        spec.alpha === "opaque",
+        spec.alpha !== "opaque",
+      )
+    )
+      return;
   }
   drawBuiltinImage(CanvasKit, builtins, canvas, "outputTransform", uniforms, [input], "src");
 }
@@ -5681,7 +7983,8 @@ function enumCode(value: string, values: readonly string[], label: string): numb
 
 function transitionValues(value: unknown, kind: string): number[] {
   const values = array(value, "transition parameters");
-  if (values.length !== 4) fail("transition_params", "transition requires four resolved scalar slots");
+  if (values.length !== 4)
+    fail("transition_params", "transition requires four resolved scalar slots");
   const specs = transitionParameterSpecs[kind as keyof typeof transitionParameterSpecs];
   if (!specs) fail("transition_kernel", `unknown transition kind '${kind}'`);
   const resolved = values.map((value, index) => {
@@ -5693,14 +7996,18 @@ function transitionValues(value: unknown, kind: string): number[] {
     }
     return scalar;
   });
-  if (kind === "directionalWarp" && Math.abs(resolved[0]!) + Math.abs(resolved[1]!) < 0.000001) fail("transition_params", "transition direction must be nonzero");
+  if (kind === "directionalWarp" && Math.abs(resolved[0]!) + Math.abs(resolved[1]!) < 0.000001)
+    fail("transition_params", "transition direction must be nonzero");
   return resolved;
 }
 
 function preparedTransition(value: Wire): { kind: BuiltinKernel; params: number[] } {
   if (value.type === "extensionCrossFade") return { kind: "fade", params: [0, 0, 0, 0] };
   if (value.type !== "builtin") fail("transition_kernel", "unknown prepared transition type");
-  return { kind: transitionKernel(String(value.kind)), params: transitionValues(value.params, String(value.kind)) };
+  return {
+    kind: transitionKernel(String(value.kind)),
+    params: transitionValues(value.params, String(value.kind)),
+  };
 }
 
 function transitionKernel(value: string): BuiltinKernel {
@@ -5712,13 +8019,20 @@ function transitionKernel(value: string): BuiltinKernel {
 
 function effectBuiltin(kind: string): BuiltinKernel | null {
   switch (kind) {
-    case "chromaKey": return "chromaKey";
-    case "colorGrade": return "colorGrade";
-    case "mosaic": return "mosaic";
-    case "directionalBlur": return "directionalBlur";
-    case "spotlight": return "spotlight";
-    case "gaussianBlur": return null;
-    default: fail("effect_kernel", `effect kernel '${kind}' is outside the closed set`);
+    case "chromaKey":
+      return "chromaKey";
+    case "colorGrade":
+      return "colorGrade";
+    case "mosaic":
+      return "mosaic";
+    case "directionalBlur":
+      return "directionalBlur";
+    case "spotlight":
+      return "spotlight";
+    case "gaussianBlur":
+      return null;
+    default:
+      fail("effect_kernel", `effect kernel '${kind}' is outside the closed set`);
   }
 }
 
@@ -5734,8 +8048,11 @@ function drawBuiltinImage(
   const children = images.map((value) => imageOrTransparentShader(CanvasKit, value));
   try {
     const shader = builtins.shader(kernel, uniforms, children);
-    try { drawShader(CanvasKit, canvas, shader, mode); }
-    finally { shader.delete(); }
+    try {
+      drawShader(CanvasKit, canvas, shader, mode);
+    } finally {
+      shader.delete();
+    }
   } finally {
     for (const child of children) child.delete();
   }
@@ -5748,8 +8065,11 @@ function opacityShader(
   opacity: number,
 ): Shader {
   const child = imageOrTransparentShader(CanvasKit, image);
-  try { return builtins.shader("opacity", [opacity], [child]); }
-  finally { child.delete(); }
+  try {
+    return builtins.shader("opacity", [opacity], [child]);
+  } finally {
+    child.delete();
+  }
 }
 
 function imageOrTransparentShader(CanvasKit: CanvasKit, image: Image | null): Shader {
@@ -5770,7 +8090,9 @@ function drawShader(CanvasKit: CanvasKit, canvas: Canvas, shader: Shader, mode: 
     paint.setShader(shader);
     paint.setBlendMode(blendMode(CanvasKit, mode));
     canvas.drawPaint(paint);
-  } finally { paint.delete(); }
+  } finally {
+    paint.delete();
+  }
 }
 
 function drawCreativeBlend(
@@ -5798,8 +8120,11 @@ function drawCreativeBlend(
       [blendCode(mode), opacity, compositeResult ? 1 : 0, blendSpaceCode(space)],
       children,
     );
-    try { drawShader(CanvasKit, canvas, shader, "src"); }
-    finally { shader.delete(); }
+    try {
+      drawShader(CanvasKit, canvas, shader, "src");
+    } finally {
+      shader.delete();
+    }
   } finally {
     for (const child of children) child.delete();
   }
@@ -5900,9 +8225,11 @@ export function admitOptimizationReport(plan: Wire): void {
   const inputHash = digestString(report.inputPhysicalHash, "optimization.inputPhysicalHash");
   const outputHash = digestString(report.outputPhysicalHash, "optimization.outputPhysicalHash");
   const resources = array(plan.resources, "plan.resources").map((value, index) =>
-    record(value, `plan.resources[${index}]`));
+    record(value, `plan.resources[${index}]`),
+  );
   const passes = array(plan.passes, "plan.passes").map((value, index) =>
-    record(value, `plan.passes[${index}]`));
+    record(value, `plan.passes[${index}]`),
+  );
   const rewrites = array(report.rewrites, "optimization.rewrites");
   if (rewrites.length === 0) {
     if (inputHash !== outputHash) {
@@ -5932,43 +8259,57 @@ export function admitOptimizationReport(plan: Wire): void {
 
     const resource = record(resources[outputId - 1], `plan.resources[${outputId - 1}]`);
     const pass = record(passes[passId - 1], `plan.passes[${passId - 1}]`);
-    if (positiveId(resource.id, "optimization resource id") !== outputId
-      || positiveId(pass.id, "optimization pass id") !== passId) {
+    if (
+      positiveId(resource.id, "optimization resource id") !== outputId ||
+      positiveId(pass.id, "optimization pass id") !== passId
+    ) {
       fail("optimization_proof", "rewrite resource/pass ids are not canonical");
     }
     const resourceKind = record(resource.kind, "optimization resource kind");
     const passKind = record(pass.kind, "optimization pass kind");
-    const expected = rewrite.kind === "backdropResolveReuse"
-      ? { resourceReason: "reusedBackdropResolve", passKind: "bindBackdropView" }
-      : rewrite.kind === "noOpGroupElimination"
-        ? { resourceReason: "noOpGroup", passKind: "aliasResource" }
-        : null;
-    if (!expected
-      || resourceKind.kind !== "alias"
-      || resourceKind.reason !== expected.resourceReason
-      || positiveId(resourceKind.source, "optimization alias source") !== sourceId
-      || passKind.kind !== expected.passKind
-      || passKind.reason !== expected.resourceReason
-      || positiveId(passKind.input, "optimization pass input") !== sourceId
-      || positiveId(passKind.output, "optimization pass output") !== outputId) {
+    const expected =
+      rewrite.kind === "backdropResolveReuse"
+        ? { resourceReason: "reusedBackdropResolve", passKind: "bindBackdropView" }
+        : rewrite.kind === "noOpGroupElimination"
+          ? { resourceReason: "noOpGroup", passKind: "aliasResource" }
+          : null;
+    if (
+      !expected ||
+      resourceKind.kind !== "alias" ||
+      resourceKind.reason !== expected.resourceReason ||
+      positiveId(resourceKind.source, "optimization alias source") !== sourceId ||
+      passKind.kind !== expected.passKind ||
+      passKind.reason !== expected.resourceReason ||
+      positiveId(passKind.input, "optimization pass input") !== sourceId ||
+      positiveId(passKind.output, "optimization pass output") !== outputId
+    ) {
       fail("optimization_proof", `rewrite ${index} does not match the final plan`);
     }
   }
 
   for (const resource of resources) {
     const kind = record(resource.kind, "plan resource kind");
-    if (kind.kind === "alias"
-      && (kind.reason === "reusedBackdropResolve" || kind.reason === "noOpGroup")
-      && !outputs.has(positiveId(resource.id, "optimizer alias resource id"))) {
-      fail("optimization_proof", "an optimizer-owned resource alias is missing from the rewrite proof");
+    if (
+      kind.kind === "alias" &&
+      (kind.reason === "reusedBackdropResolve" || kind.reason === "noOpGroup") &&
+      !outputs.has(positiveId(resource.id, "optimizer alias resource id"))
+    ) {
+      fail(
+        "optimization_proof",
+        "an optimizer-owned resource alias is missing from the rewrite proof",
+      );
     }
   }
   for (const pass of passes) {
     const kind = record(pass.kind, "plan pass kind");
-    const optimizerOwned = (kind.kind === "bindBackdropView" && kind.reason === "reusedBackdropResolve")
-      || (kind.kind === "aliasResource" && kind.reason === "noOpGroup");
+    const optimizerOwned =
+      (kind.kind === "bindBackdropView" && kind.reason === "reusedBackdropResolve") ||
+      (kind.kind === "aliasResource" && kind.reason === "noOpGroup");
     if (optimizerOwned && !rewritePasses.has(positiveId(pass.id, "optimizer alias pass id"))) {
-      fail("optimization_proof", "an optimizer-owned execution alias is missing from the rewrite proof");
+      fail(
+        "optimization_proof",
+        "an optimizer-owned execution alias is missing from the rewrite proof",
+      );
     }
   }
 }
@@ -6007,14 +8348,18 @@ function preflightEffectDomains(
     if (region) unitRegion(region);
     const space = record(effect.space, "effect space");
     if (space.kind === "root") continue;
-    if (space.kind !== "layer") fail("effect_space", `effect space '${String(space.kind)}' is outside the closed set`);
+    if (space.kind !== "layer")
+      fail("effect_space", `effect space '${String(space.kind)}' is outside the closed set`);
     const transform = dynamicTransform(dynamic, space.transform);
     const bounds = dynamicBounds(dynamic, space.bounds);
     if (kernel.kind === "mosaic" && !project3(transform, [0, 0])) {
       fail("effect_space", `effect '${String(effect.semanticPath)}' has an invalid layer origin`);
     }
     if (region && deviceRectIntersectsRoot(bounds, extent) && !inverse3(transform)) {
-      fail("effect_space", `effect '${String(effect.semanticPath)}' has a non-invertible layer transform`);
+      fail(
+        "effect_space",
+        `effect '${String(effect.semanticPath)}' has a non-invertible layer transform`,
+      );
     }
   }
 }
@@ -6027,55 +8372,90 @@ function deviceRectIntersectsRoot(
   const y = finiteNumber(bounds.y, "effect bounds.y");
   const width = positiveIdOrZero(bounds.width, "effect bounds.width");
   const height = positiveIdOrZero(bounds.height, "effect bounds.height");
-  return width > 0 && height > 0 && x < extent.width && y < extent.height && x + width > 0 && y + height > 0;
+  return (
+    width > 0 &&
+    height > 0 &&
+    x < extent.width &&
+    y < extent.height &&
+    x + width > 0 &&
+    y + height > 0
+  );
 }
 
 function dynamicScalar(dynamic: Map<number, Wire>, id: unknown): number {
-  const value = record(required(dynamic, positiveId(id, "dynamic scalar id"), "dynamic scalar").value, "dynamic scalar value");
+  const value = record(
+    required(dynamic, positiveId(id, "dynamic scalar id"), "dynamic scalar").value,
+    "dynamic scalar value",
+  );
   if (value.kind !== "scalar") fail("dynamic_type", "dynamic binding is not scalar");
   return finiteNumber(value.value, "dynamic scalar");
 }
 
 function dynamicTransform(dynamic: Map<number, Wire>, id: unknown): number[] {
-  const value = record(required(dynamic, positiveId(id, "dynamic transform id"), "dynamic transform").value, "dynamic transform value");
-  if (value.kind !== "deviceTransform") fail("dynamic_type", "dynamic binding is not DeviceTransform");
+  const value = record(
+    required(dynamic, positiveId(id, "dynamic transform id"), "dynamic transform").value,
+    "dynamic transform value",
+  );
+  if (value.kind !== "deviceTransform")
+    fail("dynamic_type", "dynamic binding is not DeviceTransform");
   return numberArray(record(value.value, "DeviceTransform").matrix, 9, "DeviceTransform.matrix");
 }
 
 function dynamicBounds(dynamic: Map<number, Wire>, id: unknown): Wire {
-  const value = record(required(dynamic, positiveId(id, "dynamic bounds id"), "dynamic bounds").value, "dynamic bounds value");
+  const value = record(
+    required(dynamic, positiveId(id, "dynamic bounds id"), "dynamic bounds").value,
+    "dynamic bounds value",
+  );
   if (value.kind !== "bounds") fail("dynamic_type", "dynamic binding is not Bounds");
   return record(value.value, "DeviceRect");
 }
 
 function renderExtent(plan: Wire): { width: number; height: number } {
   const spec = record(plan.renderSpec, "plan.renderSpec");
-  return { width: positiveId(spec.width, "render width"), height: positiveId(spec.height, "render height") };
+  return {
+    width: positiveId(spec.width, "render width"),
+    height: positiveId(spec.height, "render height"),
+  };
 }
 
 function preflightTarget(surface: Surface, extent: { width: number; height: number }): void {
   const canvas = surface.getCanvas();
   const bounds = canvas.getDeviceClipBounds();
-  if (bounds[2] - bounds[0] !== extent.width || bounds[3] - bounds[1] !== extent.height) fail("target_extent", "target extent does not match RenderSpec");
+  if (bounds[2] - bounds[0] !== extent.width || bounds[3] - bounds[1] !== extent.height)
+    fail("target_extent", "target extent does not match RenderSpec");
 }
 
-function externalObject(resources: Map<number, CanvasKitExternalObject>, id: unknown): CanvasKitExternalObject {
+function externalObject(
+  resources: Map<number, CanvasKitExternalObject>,
+  id: unknown,
+): CanvasKitExternalObject {
   const object = required(resources, positiveId(id, "external resource id"), "external resource");
-  if (!object.image || (object.kind !== "visual" && object.kind !== "scene3d")) fail("external_type", "external resource is not an image");
+  if (!object.image || (object.kind !== "visual" && object.kind !== "scene3d"))
+    fail("external_type", "external resource is not an image");
   return object;
 }
 
 function resourceValue(values: Map<number, ImageValue>, id: unknown): ImageValue {
   return required(values, positiveId(id, "plan resource id"), "plan resource");
 }
-function image(values: Map<number, ImageValue>, id: unknown): Image | null { return resourceValue(values, id).image; }
+function image(values: Map<number, ImageValue>, id: unknown): Image | null {
+  return resourceValue(values, id).image;
+}
 function programValue(values: Map<number, ImageValue>, id: unknown): ImageValue {
   return required(values, positiveId(id, "program resource id"), "program resource");
 }
-function borrowed(image: Image | null, roi: DeviceRoi): ImageValue { return { image, owned: false, roi }; }
-function borrowedValue(value: ImageValue): ImageValue { return { image: value.image, owned: false, roi: value.roi }; }
-function transparentValue(): ImageValue { return { image: null, owned: false, roi: { x: 0, y: 0, width: 0, height: 0 } }; }
-function liveImages(values: Map<number, ImageValue>): number { return new Set([...values.values()].map((value) => value.image).filter(Boolean)).size; }
+function borrowed(image: Image | null, roi: DeviceRoi): ImageValue {
+  return { image, owned: false, roi };
+}
+function borrowedValue(value: ImageValue): ImageValue {
+  return { image: value.image, owned: false, roi: value.roi };
+}
+function transparentValue(): ImageValue {
+  return { image: null, owned: false, roi: { x: 0, y: 0, width: 0, height: 0 } };
+}
+function liveImages(values: Map<number, ImageValue>): number {
+  return new Set([...values.values()].map((value) => value.image).filter(Boolean)).size;
+}
 
 function drawImageValue(
   CanvasKit: CanvasKit,
@@ -6089,7 +8469,9 @@ function drawImageValue(
   try {
     paint.setAlphaf(alpha);
     drawImageValueWithPaint(CanvasKit, canvas, value, paint, mode);
-  } finally { paint.delete(); }
+  } finally {
+    paint.delete();
+  }
 }
 
 function drawImageValueWithPaint(
@@ -6102,7 +8484,12 @@ function drawImageValueWithPaint(
   if (!value.image || value.roi.width === 0 || value.roi.height === 0) return;
   paint.setBlendMode(blendMode(CanvasKit, mode));
   const source = CanvasKit.XYWHRect(0, 0, value.roi.width, value.roi.height);
-  const destination = CanvasKit.XYWHRect(value.roi.x, value.roi.y, value.roi.width, value.roi.height);
+  const destination = CanvasKit.XYWHRect(
+    value.roi.x,
+    value.roi.y,
+    value.roi.width,
+    value.roi.height,
+  );
   canvas.drawImageRectOptions(
     value.image,
     source,
@@ -6146,21 +8533,38 @@ function materializeRootValue(
   }
   return {
     value: { image: snapshot, owned: true, roi: root },
-    release: () => { snapshot.delete(); arena.releaseTransient(surface); },
+    release: () => {
+      snapshot.delete();
+      arena.releaseTransient(surface);
+    },
   };
 }
 
-function drawImage(CanvasKit: CanvasKit, canvas: Canvas, image: Image | null, alpha: number, mode: string): void {
+function drawImage(
+  CanvasKit: CanvasKit,
+  canvas: Canvas,
+  image: Image | null,
+  alpha: number,
+  mode: string,
+): void {
   if (!image) return;
   const paint = new CanvasKit.Paint();
   try {
     paint.setAlphaf(alpha);
     paint.setBlendMode(blendMode(CanvasKit, mode));
     canvas.drawImage(image, 0, 0, paint);
-  } finally { paint.delete(); }
+  } finally {
+    paint.delete();
+  }
 }
 
-function drawImageWithPaint(CanvasKit: CanvasKit, canvas: Canvas, image: Image | null, paint: Paint, mode: string): void {
+function drawImageWithPaint(
+  CanvasKit: CanvasKit,
+  canvas: Canvas,
+  image: Image | null,
+  paint: Paint,
+  mode: string,
+): void {
   if (!image) return;
   paint.setBlendMode(blendMode(CanvasKit, mode));
   canvas.drawImage(image, 0, 0, paint);
@@ -6168,12 +8572,30 @@ function drawImageWithPaint(CanvasKit: CanvasKit, canvas: Canvas, image: Image |
 
 function blendMode(CanvasKit: CanvasKit, mode: string): BlendMode {
   const names: Record<string, string> = {
-    src: "Src", srcOver: "SrcOver", srcIn: "SrcIn", dstIn: "DstIn", dstOut: "DstOut", plus: "Plus",
-    normal: "SrcOver", multiply: "Multiply", screen: "Screen", overlay: "Overlay",
-    darken: "Darken", lighten: "Lighten", colorDodge: "ColorDodge", colorBurn: "ColorBurn",
-    hardLight: "HardLight", softLight: "SoftLight", difference: "Difference", exclusion: "Exclusion",
-    hue: "Hue", saturation: "Saturation", color: "Color", luminosity: "Luminosity",
-    linearBurn: "SrcOver", dstInLuminance: "DstIn",
+    src: "Src",
+    srcOver: "SrcOver",
+    srcIn: "SrcIn",
+    dstIn: "DstIn",
+    dstOut: "DstOut",
+    plus: "Plus",
+    normal: "SrcOver",
+    multiply: "Multiply",
+    screen: "Screen",
+    overlay: "Overlay",
+    darken: "Darken",
+    lighten: "Lighten",
+    colorDodge: "ColorDodge",
+    colorBurn: "ColorBurn",
+    hardLight: "HardLight",
+    softLight: "SoftLight",
+    difference: "Difference",
+    exclusion: "Exclusion",
+    hue: "Hue",
+    saturation: "Saturation",
+    color: "Color",
+    luminosity: "Luminosity",
+    linearBurn: "SrcOver",
+    dstInLuminance: "DstIn",
   };
   const name = names[mode];
   if (!name) fail("blend_mode", `blend mode '${mode}' is not closed`);
@@ -6181,7 +8603,12 @@ function blendMode(CanvasKit: CanvasKit, mode: string): BlendMode {
 }
 
 function imageShader(CanvasKit: CanvasKit, image: Image, sampling: string, wrap = "pad"): Shader {
-  const shader = image.makeShaderOptions(tileMode(CanvasKit, wrap), tileMode(CanvasKit, wrap), sampling === "nearestClamp" ? CanvasKit.FilterMode.Nearest : CanvasKit.FilterMode.Linear, CanvasKit.MipmapMode.None);
+  const shader = image.makeShaderOptions(
+    tileMode(CanvasKit, wrap),
+    tileMode(CanvasKit, wrap),
+    sampling === "nearestClamp" ? CanvasKit.FilterMode.Nearest : CanvasKit.FilterMode.Linear,
+    CanvasKit.MipmapMode.None,
+  );
   if (!shader) fail("image_shader", "image cannot become a shader child");
   return shader;
 }
@@ -6203,7 +8630,8 @@ function decodeBase64Bytes(value: unknown, label: string): Uint8Array {
   if (typeof value !== "string") fail("program_contract", `${label} must be a base64 string`);
   let decoded: string;
   try {
-    const direct = (Uint8Array as unknown as { fromBase64?: (text: string) => Uint8Array }).fromBase64;
+    const direct = (Uint8Array as unknown as { fromBase64?: (text: string) => Uint8Array })
+      .fromBase64;
     if (direct) return direct(value);
     decoded = atob(value);
   } catch {
@@ -6235,7 +8663,8 @@ function normalizedExternalShader(
   if (object.kind === "visual") {
     const key = record(object.key, "visual resource key");
     const resourceInterpretation = record(key.interpretation, "visual resource interpretation");
-    if (resourceInterpretation.kind !== "visual") fail("external_type", "visual object key has a non-visual interpretation");
+    if (resourceInterpretation.kind !== "visual")
+      fail("external_type", "visual object key has a non-visual interpretation");
     const interpretation = record(resourceInterpretation.interpretation, "visual interpretation");
     const color = record(interpretation.color, "visual color description");
     const luminance = record(interpretation.luminance, "visual signal luminance");
@@ -6253,7 +8682,9 @@ function normalizedExternalShader(
       [transferCode(transfer), primariesCode(primaries), referenceWhite, peak],
       [child],
     );
-  } finally { child.delete(); }
+  } finally {
+    child.delete();
+  }
 }
 
 function transferCode(value: string): number {
@@ -6289,7 +8720,12 @@ function workingF16(value: number): number {
 function linearColor(CanvasKit: CanvasKit, color: LinearColorWire): Float32Array {
   const alpha = finiteNumber(color.alpha, "color alpha");
   if (alpha <= 0) return CanvasKit.Color4f(0, 0, 0, 0);
-  return CanvasKit.Color4f(workingF16(color.red) / alpha, workingF16(color.green) / alpha, workingF16(color.blue) / alpha, alpha);
+  return CanvasKit.Color4f(
+    workingF16(color.red) / alpha,
+    workingF16(color.green) / alpha,
+    workingF16(color.blue) / alpha,
+    alpha,
+  );
 }
 
 // Native's `set_working_color` uses the same shader.
@@ -6299,10 +8735,20 @@ const workingColorEffects = new WeakMap<CanvasKit, RuntimeEffect>();
 /** Paints a premultiplied working color through a float uniform. Ganesh keeps an in-range paint
  * color as an 8-bit vertex color, and the output transform's Rec.2020 to sRGB matrix amplifies
  * that rounding to several levels in saturated or dark channels. `opacity` scales the result. */
-function setWorkingColor(CanvasKit: CanvasKit, paint: Paint, red: number, green: number, blue: number, alpha: number, opacity = 1): void {
+function setWorkingColor(
+  CanvasKit: CanvasKit,
+  paint: Paint,
+  red: number,
+  green: number,
+  blue: number,
+  alpha: number,
+  opacity = 1,
+): void {
   let effect = workingColorEffects.get(CanvasKit);
   if (!effect) {
-    effect = CanvasKit.RuntimeEffect.Make(WORKING_COLOR_SKSL) ?? fail("shader_compile", "working color shader failed admission");
+    effect =
+      CanvasKit.RuntimeEffect.Make(WORKING_COLOR_SKSL) ??
+      fail("shader_compile", "working color shader failed admission");
     workingColorEffects.set(CanvasKit, effect);
   }
   const shader = effect.makeShader([red, green, blue, alpha]);
@@ -6315,29 +8761,93 @@ function setWorkingColor(CanvasKit: CanvasKit, paint: Paint, red: number, green:
 function setLinearColor(CanvasKit: CanvasKit, paint: Paint, color: LinearColorWire): void {
   const alpha = finiteNumber(color.alpha, "color alpha");
   if (alpha <= 0) setWorkingColor(CanvasKit, paint, 0, 0, 0, 0);
-  else setWorkingColor(CanvasKit, paint, workingF16(color.red), workingF16(color.green), workingF16(color.blue), alpha);
+  else
+    setWorkingColor(
+      CanvasKit,
+      paint,
+      workingF16(color.red),
+      workingF16(color.green),
+      workingF16(color.blue),
+      alpha,
+    );
 }
 
 function color4(value: unknown): Float32Array {
   const channels = numberArray(value, 4, "color");
   const alpha = channels[3]!;
   if (alpha <= 0) return Float32Array.from([0, 0, 0, 0]);
-  return Float32Array.from([channels[0]! / alpha, channels[1]! / alpha, channels[2]! / alpha, alpha]);
+  return Float32Array.from([
+    channels[0]! / alpha,
+    channels[1]! / alpha,
+    channels[2]! / alpha,
+    alpha,
+  ]);
 }
 
-function skRect(CanvasKit: CanvasKit, value: RectWire) { return CanvasKit.XYWHRect(value.x, value.y, value.width, value.height); }
-function deviceRect(CanvasKit: CanvasKit, value: Wire) { return CanvasKit.XYWHRect(finiteNumber(value.x, "rect.x"), finiteNumber(value.y, "rect.y"), positiveIdOrZero(value.width, "rect.width"), positiveIdOrZero(value.height, "rect.height")); }
-function rect(value: unknown, label: string): RectWire { const wire = record(value, label); return { x: finiteNumber(wire.x, `${label}.x`), y: finiteNumber(wire.y, `${label}.y`), width: finiteNumber(wire.width, `${label}.width`), height: finiteNumber(wire.height, `${label}.height`) }; }
-function pair(value: unknown, label: string): [number, number] { const values = numberArray(value, 2, label); return [values[0]!, values[1]!]; }
-function numberArray(value: unknown, length: number, label: string): number[] { const values = array(value, label).map((item) => finiteNumber(item, label)); if (values.length !== length) fail("wire_shape", `${label} must contain ${length} numbers`); return values; }
-function finiteNumber(value: unknown, label: string): number { if (typeof value !== "number" || !Number.isFinite(value)) fail("wire_number", `${label} must be finite`); return value; }
-function positiveId(value: unknown, label: string): number { const result = positiveIdOrZero(value, label); if (result === 0) fail("wire_id", `${label} must be positive`); return result; }
-function positiveIdOrZero(value: unknown, label: string): number { const number = typeof value === "bigint" ? Number(value) : value; if (!Number.isSafeInteger(number) || Number(number) < 0) fail("wire_id", `${label} must be an exact non-negative integer`); return Number(number); }
-function exactPositiveInteger(value: unknown, label: string): bigint { const number = typeof value === "bigint" ? value : BigInt(positiveId(value, label)); if (number <= 0n) fail("wire_id", `${label} must be positive`); return number; }
-function byte(value: unknown, label: string): number { const result = positiveIdOrZero(value, label); if (result > 255) fail("wire_byte", `${label} exceeds 255`); return result; }
-function array(value: unknown, label: string): unknown[] { if (!Array.isArray(value)) fail("wire_shape", `${label} must be an array`); return value; }
-function record(value: unknown, label: string): Wire { if (typeof value !== "object" || value === null || Array.isArray(value)) fail("wire_shape", `${label} must be an object`); return value as Wire; }
-function passOutput(kind: Wire): number { if (kind.kind === "dispatchKernel") return positiveId(record(kind.invocation, "kernel invocation").output, "kernel output"); return positiveId(kind.output, "pass output"); }
+function skRect(CanvasKit: CanvasKit, value: RectWire) {
+  return CanvasKit.XYWHRect(value.x, value.y, value.width, value.height);
+}
+function deviceRect(CanvasKit: CanvasKit, value: Wire) {
+  return CanvasKit.XYWHRect(
+    finiteNumber(value.x, "rect.x"),
+    finiteNumber(value.y, "rect.y"),
+    positiveIdOrZero(value.width, "rect.width"),
+    positiveIdOrZero(value.height, "rect.height"),
+  );
+}
+function rect(value: unknown, label: string): RectWire {
+  const wire = record(value, label);
+  return {
+    x: finiteNumber(wire.x, `${label}.x`),
+    y: finiteNumber(wire.y, `${label}.y`),
+    width: finiteNumber(wire.width, `${label}.width`),
+    height: finiteNumber(wire.height, `${label}.height`),
+  };
+}
+function pair(value: unknown, label: string): [number, number] {
+  const values = numberArray(value, 2, label);
+  return [values[0]!, values[1]!];
+}
+function numberArray(value: unknown, length: number, label: string): number[] {
+  const values = array(value, label).map((item) => finiteNumber(item, label));
+  if (values.length !== length) fail("wire_shape", `${label} must contain ${length} numbers`);
+  return values;
+}
+function finiteNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value))
+    fail("wire_number", `${label} must be finite`);
+  return value;
+}
+function positiveId(value: unknown, label: string): number {
+  const result = positiveIdOrZero(value, label);
+  if (result === 0) fail("wire_id", `${label} must be positive`);
+  return result;
+}
+function positiveIdOrZero(value: unknown, label: string): number {
+  const number = typeof value === "bigint" ? Number(value) : value;
+  if (!Number.isSafeInteger(number) || Number(number) < 0)
+    fail("wire_id", `${label} must be an exact non-negative integer`);
+  return Number(number);
+}
+function exactPositiveInteger(value: unknown, label: string): bigint {
+  const number = typeof value === "bigint" ? value : BigInt(positiveId(value, label));
+  if (number <= 0n) fail("wire_id", `${label} must be positive`);
+  return number;
+}
+function array(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) fail("wire_shape", `${label} must be an array`);
+  return value;
+}
+function record(value: unknown, label: string): Wire {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    fail("wire_shape", `${label} must be an object`);
+  return value as Wire;
+}
+function passOutput(kind: Wire): number {
+  if (kind.kind === "dispatchKernel")
+    return positiveId(record(kind.invocation, "kernel invocation").output, "kernel output");
+  return positiveId(kind.output, "pass output");
+}
 function programPassReads(kind: Wire): number[] {
   switch (kind.kind) {
     case "clear":
@@ -6345,15 +8855,22 @@ function programPassReads(kind: Wire): number[] {
     case "rasterTree":
       return [];
     case "readDestination":
-      return array(kind.localInputs, "program destination local inputs")
-        .map((input) => positiveId(input, "program destination local input"));
+      return array(kind.localInputs, "program destination local inputs").map((input) =>
+        positiveId(input, "program destination local input"),
+      );
     case "sourceOver":
     case "blend":
-      return [positiveId(kind.source, "program source"), positiveId(kind.destination, "program destination")];
+      return [
+        positiveId(kind.source, "program source"),
+        positiveId(kind.destination, "program destination"),
+      ];
     case "applyMask":
       return [positiveId(kind.input, "program input"), positiveId(kind.mask, "program mask")];
     case "applyTransition":
-      return [positiveId(kind.from, "program transition from"), positiveId(kind.to, "program transition to")];
+      return [
+        positiveId(kind.from, "program transition from"),
+        positiveId(kind.to, "program transition to"),
+      ];
     case "backdrop":
     case "applyClip":
     case "applyFilter":
@@ -6361,15 +8878,30 @@ function programPassReads(kind: Wire): number[] {
     case "applyTransform":
       return [positiveId(kind.input, "program input")];
     case "applyShader":
-      return [positiveId(kind.input, "program input"), ...(kind.backdrops === undefined ? [] : array(kind.backdrops, "shader backdrops"))
-        .map((backdrop) => positiveId(backdrop, "program shader backdrop"))];
+      return [
+        positiveId(kind.input, "program input"),
+        ...(kind.backdrops === undefined ? [] : array(kind.backdrops, "shader backdrops")).map(
+          (backdrop) => positiveId(backdrop, "program shader backdrop"),
+        ),
+      ];
     default:
       return fail("program_schedule", `unknown program pass kind '${String(kind.kind)}'`);
   }
 }
-function required<K, V>(map: ReadonlyMap<K, V>, key: K, label: string): V { const value = map.get(key); if (value === undefined) fail("missing_value", `${label} '${String(key)}' is absent`); return value; }
-function requiredIndex<T>(values: T[], id: unknown, label: string): T { const index = positiveIdOrZero(id, `${label} id`); const value = values[index]; if (value === undefined) fail("missing_value", `${label} ${index} is absent`); return value; }
-function fontKey(hash: string, index: number): string { return `${hash}:${index}`; }
+function required<K, V>(map: ReadonlyMap<K, V>, key: K, label: string): V {
+  const value = map.get(key);
+  if (value === undefined) fail("missing_value", `${label} '${String(key)}' is absent`);
+  return value;
+}
+function requiredIndex<T>(values: T[], id: unknown, label: string): T {
+  const index = positiveIdOrZero(id, `${label} id`);
+  const value = values[index];
+  if (value === undefined) fail("missing_value", `${label} ${index} is absent`);
+  return value;
+}
+function fontKey(hash: string, index: number): string {
+  return `${hash}:${index}`;
+}
 /** @internal Shared by executor admission and its source-level contract tests. */
 export function admitProgramTextures(
   requirementsValue: unknown,
@@ -6414,8 +8946,15 @@ export function resolveProgramTexture(
 function textureIdentity(texture: Wire): string {
   const kind = String(texture.kind);
   const sample = texture.sampleTimeMicros;
-  if (sample !== null && sample !== undefined && (typeof sample !== "number" || !Number.isSafeInteger(sample) || sample < 0)) {
-    fail("texture_contract", "texture sampleTimeMicros must be a non-negative safe integer or null");
+  if (
+    sample !== null &&
+    sample !== undefined &&
+    (typeof sample !== "number" || !Number.isSafeInteger(sample) || sample < 0)
+  ) {
+    fail(
+      "texture_contract",
+      "texture sampleTimeMicros must be a non-negative safe integer or null",
+    );
   }
   if (kind === "video") {
     if (sample === null || sample === undefined) {
@@ -6434,33 +8973,65 @@ function deepEqual(left: unknown, right: unknown): boolean {
   if (left === right) return true;
   if (typeof left !== typeof right) return false;
   if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left)
-      && Array.isArray(right)
-      && left.length === right.length
-      && left.every((value, index) => deepEqual(value, right[index]));
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => deepEqual(value, right[index]))
+    );
   }
   if (typeof left !== "object" || left === null || right === null) return false;
   const leftRecord = left as Record<string, unknown>;
   const rightRecord = right as Record<string, unknown>;
   const leftKeys = Object.keys(leftRecord);
   const rightKeys = Object.keys(rightRecord);
-  return leftKeys.length === rightKeys.length
-    && leftKeys.every((key) => Object.hasOwn(rightRecord, key)
-      && deepEqual(leftRecord[key], rightRecord[key]));
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) => Object.hasOwn(rightRecord, key) && deepEqual(leftRecord[key], rightRecord[key]),
+    )
+  );
 }
-function bigintJson(_key: string, value: unknown): unknown { return typeof value === "bigint" ? value.toString() : value; }
+function bigintJson(_key: string, value: unknown): unknown {
+  return typeof value === "bigint" ? value.toString() : value;
+}
 
 function mul3(left: number[], right: number[]): number[] {
   const output = Array<number>(9).fill(0);
-  for (let row = 0; row < 3; row += 1) for (let column = 0; column < 3; column += 1) for (let index = 0; index < 3; index += 1) output[row * 3 + column]! += left[row * 3 + index]! * right[index * 3 + column]!;
+  for (let row = 0; row < 3; row += 1)
+    for (let column = 0; column < 3; column += 1)
+      for (let index = 0; index < 3; index += 1)
+        output[row * 3 + column]! += left[row * 3 + index]! * right[index * 3 + column]!;
   return output;
 }
 
 function inverse3(value: number[]): number[] | null {
-  const [a, b, c, d, e, f, g, h, i] = value as [number, number, number, number, number, number, number, number, number];
-  const cofactors = [e * i - f * h, c * h - b * i, b * f - c * e, f * g - d * i, a * i - c * g, c * d - a * f, d * h - e * g, b * g - a * h, a * e - b * d];
+  const [a, b, c, d, e, f, g, h, i] = value as [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+  ];
+  const cofactors = [
+    e * i - f * h,
+    c * h - b * i,
+    b * f - c * e,
+    f * g - d * i,
+    a * i - c * g,
+    c * d - a * f,
+    d * h - e * g,
+    b * g - a * h,
+    a * e - b * d,
+  ];
   const determinant = a * cofactors[0]! + b * cofactors[3]! + c * cofactors[6]!;
-  return Number.isFinite(determinant) && Math.abs(determinant) > 1e-15 ? cofactors.map((item) => item / determinant) : null;
+  return Number.isFinite(determinant) && Math.abs(determinant) > 1e-15
+    ? cofactors.map((item) => item / determinant)
+    : null;
 }
 
 function project3(matrix: number[], point: [number, number]): [number, number] | null {
@@ -6477,4 +9048,6 @@ function maxBigInt(left: bigint, right: bigint): bigint {
   return left > right ? left : right;
 }
 
-function fail(code: string, message: string): never { throw new CanvasKitCompositorError(code, message); }
+function fail(code: string, message: string): never {
+  throw new CanvasKitCompositorError(code, message);
+}

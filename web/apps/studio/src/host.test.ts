@@ -66,24 +66,31 @@ function canonicalTimeline(motion = false): TimelineDocument {
       },
       background: { color: "#000000" },
       visual: {
-        tracks: [{ id: "visual:main", items: [{
-          type: "clip",
-          id: "hero",
-          duration: "2/1",
-          source,
-          layer: {
-            transform: {
-              position: { type: "constant", value: [0, 0] },
-              scale: { type: "constant", value: [1, 1] },
-              rotation: { type: "constant", value: 0 },
-              anchor: [0.5, 0.5],
-            },
-            opacity: { type: "constant", value: 1 },
-            blend: "normal",
-            mask: null,
-            filters: [],
+        tracks: [
+          {
+            id: "visual:main",
+            items: [
+              {
+                type: "clip",
+                id: "hero",
+                duration: "2/1",
+                source,
+                layer: {
+                  transform: {
+                    position: { type: "constant", value: [0, 0] },
+                    scale: { type: "constant", value: [1, 1] },
+                    rotation: { type: "constant", value: 0 },
+                    anchor: [0.5, 0.5],
+                  },
+                  opacity: { type: "constant", value: 1 },
+                  blend: "normal",
+                  mask: null,
+                  filters: [],
+                },
+              },
+            ],
           },
-        }] }],
+        ],
       },
       audio: { tracks: [] },
       captions: { tracks: [] },
@@ -98,9 +105,11 @@ function sparseTimeline(): Timeline {
   return {
     canvas: { width: 640, height: 360, fps: 30, background: "#000000ff" },
     tracks: {
-      visual: [{
-        clips: [{ start: 0, duration: 2, kind: "solid", color: "#000000ff" }],
-      }],
+      visual: [
+        {
+          clips: [{ start: 0, duration: 2, kind: "solid", color: "#000000ff" }],
+        },
+      ],
     },
   } as unknown as Timeline;
 }
@@ -125,7 +134,7 @@ function fixedPackage() {
     render: {
       timeline: renderTimeline,
       timelineJson: JSON.stringify(renderTimeline),
-      fixedPackageManifestJson: "{\"format\":\"valle.fixed-render-package@1\"}",
+      fixedPackageManifestJson: '{"format":"valle.fixed-render-package@1"}',
       resourceManifestJson: JSON.stringify(resourceManifest),
       resourceManifest,
       verifiedBindingBundleJson: JSON.stringify({ bindings: {}, capabilities: {} }),
@@ -138,38 +147,74 @@ describe("Studio host adapters", () => {
     const boot = assertStudioBoot({
       protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
       session: { kind: "timeline-file", input: "/project/timeline.json", token: "secret" },
-      capabilities, runtime,
+      capabilities,
+      runtime,
     });
     const calls: Array<{ url: string; init?: RequestInit }> = [];
-    const host = new TimelineFileHost(boot as ConstructorParameters<typeof TimelineFileHost>[0], async (url, init) => {
-      calls.push({ url: String(url), init });
-      return json(String(url) === "/source/files"
-        ? { files: [{ path: "/card.motion.tsx", status: "ok", text: "hello", baseDigest: "sha256:a" }] }
-        : { status: "saved", digest: "sha256:b" });
+    const host = new TimelineFileHost(
+      boot as ConstructorParameters<typeof TimelineFileHost>[0],
+      async (url, init) => {
+        calls.push({ url: String(url), init });
+        return json(
+          String(url) === "/source/files"
+            ? {
+                files: [
+                  { path: "/card.motion.tsx", status: "ok", text: "hello", baseDigest: "sha256:a" },
+                ],
+              }
+            : { status: "saved", digest: "sha256:b" },
+        );
+      },
+    );
+    expect((await host.loadSourceFiles())[0]).toMatchObject({
+      path: "/card.motion.tsx",
+      text: "hello",
     });
-    expect((await host.loadSourceFiles())[0]).toMatchObject({ path: "/card.motion.tsx", text: "hello" });
-    expect(await host.writeSourceFile({ path: "/card.motion.tsx", baseDigest: "sha256:a", text: "updated" }))
-      .toEqual({ status: "saved", digest: "sha256:b" });
+    expect(
+      await host.writeSourceFile({
+        path: "/card.motion.tsx",
+        baseDigest: "sha256:a",
+        text: "updated",
+      }),
+    ).toEqual({ status: "saved", digest: "sha256:b" });
     expect(calls.map((call) => call.url)).toEqual(["/source/files", "/source/write"]);
-    expect(calls.every((call) => new Headers(call.init?.headers).get("x-valle-token") === "secret")).toBe(true);
+    expect(
+      calls.every((call) => new Headers(call.init?.headers).get("x-valle-token") === "secret"),
+    ).toBe(true);
   });
 
   test("file sessions load their snapshot and authenticate media facts and explicit saves", async () => {
     const boot = assertStudioBoot({
-      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION, session: { kind: "timeline-file", input: "/cuts/edit.json", token: "file-token" },
-      capabilities: { ...capabilities, saveTimeline: true }, runtime,
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
+      session: { kind: "timeline-file", input: "/cuts/edit.json", token: "file-token" },
+      capabilities: { ...capabilities, saveTimeline: true },
+      runtime,
     });
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const host = new TimelineFileHost(boot, async (url, init) => {
       calls.push({ url: String(url), init });
-      return json(String(url) === "/timeline/edit" ? { outcome: "committed", revision: 2 }
-        : String(url) === "/timeline/media-facts" ? { status: "ok", resources: [], assets: [], inputDependencies: {} } : fixedPackage());
+      return json(
+        String(url) === "/timeline/edit"
+          ? { outcome: "committed", revision: 2 }
+          : String(url) === "/timeline/media-facts"
+            ? { status: "ok", resources: [], assets: [], inputDependencies: {} }
+            : fixedPackage(),
+      );
     });
     expect((await host.loadTimeline()).timeline).toEqual(sparseTimeline());
-    expect(await host.loadMediaFacts({ timeline: sparseTimeline() })).toEqual({ status: "ok", resources: [], assets: [], inputDependencies: {} });
+    expect(await host.loadMediaFacts({ timeline: sparseTimeline() })).toEqual({
+      status: "ok",
+      resources: [],
+      assets: [],
+      inputDependencies: {},
+    });
     const edit = { baseRevision: 1, timeline: sparseTimeline(), intent: "Save file" };
     expect(await host.saveTimeline(edit)).toEqual({ outcome: "committed", revision: 2 });
-    expect(calls.map((call) => call.url)).toEqual(["/timeline/get", "/timeline/media-facts", "/timeline/edit"]);
+    expect(calls.map((call) => call.url)).toEqual([
+      "/timeline/get",
+      "/timeline/media-facts",
+      "/timeline/edit",
+    ]);
     for (const call of calls.slice(1)) {
       expect(call.init?.method).toBe("POST");
       expect(new Headers(call.init?.headers).get("x-valle-token")).toBe("file-token");
@@ -180,10 +225,14 @@ describe("Studio host adapters", () => {
   test("selects the two file hosts only from the explicit session discriminator", async () => {
     const fixtures = [
       [{ kind: "timeline-file", input: "cut.valle.json", token: "file-token" }, TimelineFileHost],
-      [{ kind: "motion-file", input: "card.motion.tsx", generation: 2, token: "motion-token" }, MotionFileHost],
+      [
+        { kind: "motion-file", input: "card.motion.tsx", generation: 2, token: "motion-token" },
+        MotionFileHost,
+      ],
     ] as const;
     for (const [session, Host] of fixtures) {
-      const fetcher = async () => json({ protocolVersion: STUDIO_HOST_PROTOCOL_VERSION, session, capabilities, runtime });
+      const fetcher = async () =>
+        json({ protocolVersion: STUDIO_HOST_PROTOCOL_VERSION, session, capabilities, runtime });
       const host = await loadStudioHost("", fetcher);
       expect(host).toBeInstanceOf(Host);
       expect(host.boot.session.kind).toBe(session.kind);
@@ -230,7 +279,7 @@ describe("Studio host adapters", () => {
       capabilities: { ...capabilities, saveTimeline: true },
       runtime,
     });
-    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+    const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, init });
       return url.startsWith("/timeline/get")
@@ -239,7 +288,7 @@ describe("Studio host adapters", () => {
             outcome: "committed",
             revision: 8,
           });
-    });
+    };
     const host = new TimelineFileHost(
       boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
       fetcher,
@@ -268,11 +317,11 @@ describe("Studio host adapters", () => {
       capabilities: { ...capabilities, saveTimeline: true },
       runtime,
     });
-    const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+    const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       calls.push({ url, init });
       return json({ status: "ok", resources: [], assets: [], inputDependencies: {} });
-    });
+    };
     const host = new TimelineFileHost(
       boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
       fetcher,
@@ -301,13 +350,15 @@ describe("Studio host adapters", () => {
       canvas: { width: 640, height: 360, fps: 30 },
       tracks: [{ type: "visual", clips: [] }],
     };
-    const host = new TimelineFileHost(boot, async () => json({
-      ...current,
-      timeline: unsupportedTimeline,
-      timelineJson: JSON.stringify(unsupportedTimeline),
-      runtimeAssets: {},
-      assetBaseUrl: "/assets/",
-    }));
+    const host = new TimelineFileHost(boot, async () =>
+      json({
+        ...current,
+        timeline: unsupportedTimeline,
+        timelineJson: JSON.stringify(unsupportedTimeline),
+        runtimeAssets: {},
+        assetBaseUrl: "/assets/",
+      }),
+    );
 
     await expect(host.loadTimeline()).rejects.toThrow("complete authoring and render projections");
   });
@@ -345,10 +396,12 @@ describe("Studio host adapters", () => {
         "every fixed-package member and manifest together",
       );
     }
-    const extraProjection = new TimelineFileHost(boot, async () => json({
-      ...base,
-      render: { ...current.render, extraIdentity: "producer-private" },
-    }));
+    const extraProjection = new TimelineFileHost(boot, async () =>
+      json({
+        ...base,
+        render: { ...current.render, extraIdentity: "producer-private" },
+      }),
+    );
     await expect(extraProjection.loadTimeline()).rejects.toThrow(
       "complete authoring and render projections",
     );
@@ -418,14 +471,21 @@ describe("Studio host adapters", () => {
         return {
           normalizeTimeline: (timeline) => timeline,
           timelineTimeFromFrames: (frames, fps) => frames / Number(fps),
-          timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) => (
-            frames / Number(fps) * (rate ?? 1)
-          ),
+          timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) =>
+            (frames / Number(fps)) * (rate ?? 1),
           compileTimeline: () => ({
             timeline: loaded.render.timeline,
             timelineJson: loaded.render.timelineJson,
             view: {
-              canvas: { width: 640, height: 360, durationSeconds: 2, framesPerSecond: 30, frameCount: 60, sampleRate: 48_000, sampleCount: 96_000 },
+              canvas: {
+                width: 640,
+                height: 360,
+                durationSeconds: 2,
+                framesPerSecond: 30,
+                frameCount: 60,
+                sampleRate: 48_000,
+                sampleCount: 96_000,
+              },
               sequences: [],
             },
           }),
@@ -433,7 +493,15 @@ describe("Studio host adapters", () => {
             timeline: loaded.render.timeline,
             timelineJson: loaded.render.timelineJson,
             view: {
-              canvas: { width: 640, height: 360, durationSeconds: 2, framesPerSecond: 30, frameCount: 60, sampleRate: 48_000, sampleCount: 96_000 },
+              canvas: {
+                width: 640,
+                height: 360,
+                durationSeconds: 2,
+                framesPerSecond: 30,
+                frameCount: 60,
+                sampleRate: 48_000,
+                sampleCount: 96_000,
+              },
               sequences: [],
             },
           }),
@@ -448,10 +516,7 @@ describe("Studio host adapters", () => {
       intent: "authoring without preview",
     });
     expect(saved).toMatchObject({ outcome: "unchanged", revision: 1 });
-    expect(calls).toEqual([
-      "/timeline/get",
-      "/timeline/edit",
-    ]);
+    expect(calls).toEqual(["/timeline/get", "/timeline/edit"]);
   });
 
   test("Timeline file host derives a selected clip MotionContext from admitted structure and Timeline", async () => {
@@ -532,16 +597,27 @@ describe("Studio host adapters", () => {
       ],
       runtimeAssets: { engine: {} },
       motion: {
-        structures: [{
-          clipId: "hero",
-          // The structure is an authoring projection, not an artifact trust source.
-          artifact: {},
-          authoring: {
-            props: {},
-            sourceMap: { version: 1, component: "Card", entry: "components/Card.tsx", closureDigest: `sha256:${"c".repeat(64)}`, modules: [], nodes: [], exprs: [], objects: [] },
-            totalFrames: 60,
+        structures: [
+          {
+            clipId: "hero",
+            // The structure is an authoring projection, not an artifact trust source.
+            artifact: {},
+            authoring: {
+              props: {},
+              sourceMap: {
+                version: 1,
+                component: "Card",
+                entry: "components/Card.tsx",
+                closureDigest: `sha256:${"c".repeat(64)}`,
+                modules: [],
+                nodes: [],
+                exprs: [],
+                objects: [],
+              },
+              totalFrames: 60,
+            },
           },
-        }],
+        ],
         shaders: [],
         problems: [],
       },
@@ -551,11 +627,9 @@ describe("Studio host adapters", () => {
       async () => json(config),
     );
 
-    const context = projectMotionContextFromAdmittedPreview(
-      await host.loadTimeline(),
-      host.boot,
-      { clipId: "hero" },
-    );
+    const context = projectMotionContextFromAdmittedPreview(await host.loadTimeline(), host.boot, {
+      clipId: "hero",
+    });
 
     expect(context.status).toBe("ok");
     if (context.status !== "ok") throw new Error("expected project MotionContext");
@@ -569,7 +643,10 @@ describe("Studio host adapters", () => {
     expect(context.artifact).toEqual(verifiedArtifact);
 
     const withoutVerifiedArtifact = structuredClone(config);
-    const artifactEntries = withoutVerifiedArtifact.render.resourceManifest.entries as Record<string, unknown>;
+    const artifactEntries = withoutVerifiedArtifact.render.resourceManifest.entries as Record<
+      string,
+      unknown
+    >;
     delete artifactEntries["component:Card"];
     const artifactRejectedHost = new TimelineFileHost(
       boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
@@ -582,7 +659,12 @@ describe("Studio host adapters", () => {
     );
     expect(artifactRejected).toMatchObject({
       status: "error",
-      diagnostics: [{ message: "Selected project clip is missing verified Motion artifact digest for 'component:Card'" }],
+      diagnostics: [
+        {
+          message:
+            "Selected project clip is missing verified Motion artifact digest for 'component:Card'",
+        },
+      ],
     });
 
     const mismatchedBinding = structuredClone(config);
@@ -602,7 +684,12 @@ describe("Studio host adapters", () => {
     );
     expect(bindingRejected).toMatchObject({
       status: "error",
-      diagnostics: [{ message: "Selected project clip is missing Motion artifact for 'component:Card' bound by the verified package" }],
+      diagnostics: [
+        {
+          message:
+            "Selected project clip is missing Motion artifact for 'component:Card' bound by the verified package",
+        },
+      ],
     });
   });
 
@@ -615,51 +702,57 @@ describe("Studio host adapters", () => {
     });
     const host = new TimelineFileHost(
       boot as typeof boot & { session: Extract<typeof boot.session, { kind: "timeline-file" }> },
-      async () => json({
-        ...fixedPackage(),
-        render: {
-          ...fixedPackage().render,
-          timelineJson: JSON.stringify(canonicalTimeline(true)),
-          timeline: canonicalTimeline(true),
-        },
-        motion: { structures: [{ clipId: "hero", artifact: {}, authoring: {} }] },
-      }),
+      async () =>
+        json({
+          ...fixedPackage(),
+          render: {
+            ...fixedPackage().render,
+            timelineJson: JSON.stringify(canonicalTimeline(true)),
+            timeline: canonicalTimeline(true),
+          },
+          motion: { structures: [{ clipId: "hero", artifact: {}, authoring: {} }] },
+        }),
     );
 
-    const context = projectMotionContextFromAdmittedPreview(
-      await host.loadTimeline(),
-      host.boot,
-      { clipId: "hero" },
-    );
+    const context = projectMotionContextFromAdmittedPreview(await host.loadTimeline(), host.boot, {
+      clipId: "hero",
+    });
     expect(context).toMatchObject({ status: "error", input: "hero" });
   });
 
   test("fails closed on a missing or unknown session kind", () => {
-    expect(() => assertStudioBoot({ protocolVersion: STUDIO_HOST_PROTOCOL_VERSION })).toThrow("contain session");
-    expect(() => assertStudioBoot({
-      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      session: { kind: "guessed-from-fields" },
-      capabilities,
-      runtime,
-    })).toThrow("unknown Studio session kind");
+    expect(() => assertStudioBoot({ protocolVersion: STUDIO_HOST_PROTOCOL_VERSION })).toThrow(
+      "contain session",
+    );
+    expect(() =>
+      assertStudioBoot({
+        protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
+        session: { kind: "guessed-from-fields" },
+        capabilities,
+        runtime,
+      }),
+    ).toThrow("unknown Studio session kind");
   });
 
-
   test("MotionContext accepts explicit success/error states and rejects implicit unsupported state", () => {
-    expect(assertMotionContext({
-      status: "error",
-      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      generation: 3,
-      input: "card.motion.tsx",
-      diagnostics: [],
-    }).status).toBe("error");
-    expect(() => assertMotionContext({
-      status: "error",
-      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
-      generation: 3,
-      input: "card.motion.tsx",
-      diagnostics: [{ class: "resource", code: "failed", message: "failed", span: null }],
-    })).toThrow("protocolVersion " + STUDIO_HOST_PROTOCOL_VERSION);
+    expect(
+      assertMotionContext({
+        status: "error",
+        protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
+        generation: 3,
+        input: "card.motion.tsx",
+        diagnostics: [],
+      }).status,
+    ).toBe("error");
+    expect(() =>
+      assertMotionContext({
+        status: "error",
+        protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
+        generation: 3,
+        input: "card.motion.tsx",
+        diagnostics: [{ class: "resource", code: "failed", message: "failed", span: null }],
+      }),
+    ).toThrow("protocolVersion " + STUDIO_HOST_PROTOCOL_VERSION);
     const fixed = fixedPackage().render;
     const success = {
       status: "ok",
@@ -683,11 +776,13 @@ describe("Studio host adapters", () => {
         component: "Card",
         entry: "component.tsx",
         closureDigest: `sha256:${"c".repeat(64)}`,
-        modules: [{
-          path: "component.tsx",
-          sourceDigest: `sha256:${"d".repeat(64)}`,
-          normalizedAstDigest: `sha256:${"e".repeat(64)}`,
-        }],
+        modules: [
+          {
+            path: "component.tsx",
+            sourceDigest: `sha256:${"d".repeat(64)}`,
+            normalizedAstDigest: `sha256:${"e".repeat(64)}`,
+          },
+        ],
         nodes: [],
         exprs: [],
         objects: [],
@@ -712,16 +807,24 @@ describe("Studio host adapters", () => {
     expect(() => assertMotionContext({ ...success, extraIdentity: "producer-private" })).toThrow(
       "successful MotionContext",
     );
-    expect(() => assertMotionContext({ ...success, artifactDigest: "abc" })).toThrow("successful MotionContext");
-    expect(() => assertMotionContext({ ...success, fonts: [] })).toThrow("successful MotionContext");
+    expect(() => assertMotionContext({ ...success, artifactDigest: "abc" })).toThrow(
+      "successful MotionContext",
+    );
+    expect(() => assertMotionContext({ ...success, fonts: [] })).toThrow(
+      "successful MotionContext",
+    );
     const unsupportedControlsMirror = { ...success, controls: {} };
-    expect(() => assertMotionContext(unsupportedControlsMirror)).toThrow("successful MotionContext");
+    expect(() => assertMotionContext(unsupportedControlsMirror)).toThrow(
+      "successful MotionContext",
+    );
     const missingArtifactControls = structuredClone(success);
     delete (missingArtifactControls.artifact as { controls?: unknown }).controls;
     expect(() => assertMotionContext(missingArtifactControls)).toThrow("successful MotionContext");
     const malformedArtifactControls = structuredClone(success);
     malformedArtifactControls.artifact.controls.data = [] as never;
-    expect(() => assertMotionContext(malformedArtifactControls)).toThrow("successful MotionContext");
+    expect(() => assertMotionContext(malformedArtifactControls)).toThrow(
+      "successful MotionContext",
+    );
     const mismatchedSourceMap = structuredClone(success);
     mismatchedSourceMap.sourceMap.component = "OtherCard";
     expect(() => assertMotionContext(mismatchedSourceMap)).toThrow("successful MotionContext");
@@ -746,7 +849,11 @@ describe("Studio host adapters", () => {
     const malformedModuleDigest = structuredClone(success);
     malformedModuleDigest.sourceMap.modules[0].sourceDigest = "sha256:source";
     expect(() => assertMotionContext(malformedModuleDigest)).toThrow("successful MotionContext");
-    expect(() => assertMotionContext({ ...success, timing: {} })).toThrow("successful MotionContext");
-    expect(() => assertMotionContext({ status: "ok", generation: 3 })).toThrow("protocolVersion " + STUDIO_HOST_PROTOCOL_VERSION);
+    expect(() => assertMotionContext({ ...success, timing: {} })).toThrow(
+      "successful MotionContext",
+    );
+    expect(() => assertMotionContext({ status: "ok", generation: 3 })).toThrow(
+      "protocolVersion " + STUDIO_HOST_PROTOCOL_VERSION,
+    );
   });
 });

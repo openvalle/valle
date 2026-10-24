@@ -11,18 +11,21 @@ type SphereOptions = {
 };
 
 function pad(bytes: Uint8Array, fill: number): Uint8Array {
-  const needed = (4 - bytes.length % 4) % 4;
+  const needed = (4 - (bytes.length % 4)) % 4;
   if (!needed) return bytes;
   const output = new Uint8Array(bytes.length + needed);
-  output.set(bytes); output.fill(fill, bytes.length);
+  output.set(bytes);
+  output.fill(fill, bytes.length);
   return output;
 }
 
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   if (value && typeof value === "object") {
-    return `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
-      .map(([key, part]) => `${JSON.stringify(key)}:${stableJson(part)}`).join(",")}}`;
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, part]) => `${JSON.stringify(key)}:${stableJson(part)}`)
+      .join(",")}}`;
   }
   return JSON.stringify(value);
 }
@@ -37,9 +40,9 @@ export function sphereGlb({
   const uvs: number[] = [];
   const indices: number[] = [];
   for (let ring = 0; ring <= rings; ring++) {
-    const latitude = Math.PI * ring / rings;
+    const latitude = (Math.PI * ring) / rings;
     for (let segment = 0; segment <= segments; segment++) {
-      const longitude = 2 * Math.PI * segment / segments;
+      const longitude = (2 * Math.PI * segment) / segments;
       positions.push(
         Math.sin(latitude) * Math.cos(longitude),
         Math.cos(latitude),
@@ -86,15 +89,32 @@ export function sphereGlb({
       target: index === indexView ? 34963 : 34962,
     })),
     accessors: [
-      { bufferView: 0, componentType: 5126, count: positions.length / 3,
-        type: "VEC3", min: [-1, -1, -1], max: [1, 1, 1] },
+      {
+        bufferView: 0,
+        componentType: 5126,
+        count: positions.length / 3,
+        type: "VEC3",
+        min: [-1, -1, -1],
+        max: [1, 1, 1],
+      },
       { bufferView: 1, componentType: 5126, count: positions.length / 3, type: "VEC3" },
-      ...(withUvs ? [{ bufferView: 2, componentType: 5126, count: uvs.length / 2, type: "VEC2" }] : []),
+      ...(withUvs
+        ? [{ bufferView: 2, componentType: 5126, count: uvs.length / 2, type: "VEC2" }]
+        : []),
       { bufferView: indexView, componentType: 5123, count: indices.length, type: "SCALAR" },
     ],
-    meshes: [{ primitives: [{ attributes: withUvs
-      ? { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 }
-      : { POSITION: 0, NORMAL: 1 }, indices: withUvs ? 3 : 2 }] }],
+    meshes: [
+      {
+        primitives: [
+          {
+            attributes: withUvs
+              ? { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 }
+              : { POSITION: 0, NORMAL: 1 },
+            indices: withUvs ? 3 : 2,
+          },
+        ],
+      },
+    ],
     nodes: [{ mesh: 0 }],
     scenes: [{ nodes: [0] }],
     scene: 0,
@@ -103,7 +123,8 @@ export function sphereGlb({
   // floating-point bounds, so the regression test keeps the same model input.
   let documentJson = stableJson(document);
   if (!withUvs) {
-    documentJson = documentJson.replace('"max":[1,1,1]', '"max":[1.0,1.0,1.0]')
+    documentJson = documentJson
+      .replace('"max":[1,1,1]', '"max":[1.0,1.0,1.0]')
       .replace('"min":[-1,-1,-1]', '"min":[-1.0,-1.0,-1.0]');
   }
   const json = pad(new TextEncoder().encode(documentJson), 0x20);

@@ -63,9 +63,7 @@ test("external source changes refresh clean files and preserve dirty drafts", ()
 test("matching disk text confirms a write with a missing response", () => {
   const drafts = new SourceDrafts(loaded);
   drafts.edit("/a.motion.tsx", "A2");
-  drafts.reconcile([
-    { path: "/a.motion.tsx", status: "ok", text: "A2", baseDigest: "sha256:a2" },
-  ]);
+  drafts.reconcile([{ path: "/a.motion.tsx", status: "ok", text: "A2", baseDigest: "sha256:a2" }]);
   expect(drafts.dirty).toBe(false);
   expect(drafts.files.get("/a.motion.tsx")?.baseDigest).toBe("sha256:a2");
 });
@@ -74,10 +72,16 @@ test("unchanged import scans do not schedule another preview", () => {
   const drafts = new SourceDrafts(loaded);
   drafts.edit("/a.motion.tsx", "A local");
   expect(drafts.reconcile(loaded)).toBe(false);
-  expect(drafts.reconcile([...loaded,
-    { path: "/new.ts", status: "ok", text: "new", baseDigest: "sha256:new" },
-  ])).toBe(true);
-  expect(drafts.reconcile([...loaded,
-    { path: "/new.ts", status: "ok", text: "new", baseDigest: "sha256:new" },
-  ])).toBe(false);
+  expect(
+    drafts.reconcile([
+      ...loaded,
+      { path: "/new.ts", status: "ok", text: "new", baseDigest: "sha256:new" },
+    ]),
+  ).toBe(true);
+  expect(
+    drafts.reconcile([
+      ...loaded,
+      { path: "/new.ts", status: "ok", text: "new", baseDigest: "sha256:new" },
+    ]),
+  ).toBe(false);
 });
