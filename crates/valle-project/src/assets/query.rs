@@ -59,7 +59,11 @@ impl Library {
                 continue;
             }
             if directory.as_ref().is_some_and(|d| {
-                !d.is_empty() && entry.path != *d && !entry.path.starts_with(&format!("{d}/"))
+                let directory = crate::files::folded(d);
+                let path = crate::files::folded(&entry.path);
+                !directory.is_empty()
+                    && path != directory
+                    && !path.starts_with(&format!("{directory}/"))
             }) {
                 continue;
             }
