@@ -766,12 +766,7 @@ fn preview_base(state: &StudioHost) -> PathBuf {
         .timeline_file
         .as_ref()
         .and_then(|file| file.input.parent().map(Path::to_path_buf))
-        .or_else(|| std::env::var_os("VALLE_HOME").map(PathBuf::from))
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(|home| PathBuf::from(home).join(".valle"))
-        })
+        .or_else(|| valle_project::folder::app_home().ok())
         .unwrap_or_else(|| PathBuf::from("."))
 }
 

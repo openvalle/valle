@@ -60,18 +60,7 @@ struct UrlCacheLocator {
 
 /// Shared cache root. Models keep their separate model store.
 pub fn cache_dir() -> PathBuf {
-    if let Some(root) = std::env::var_os("VALLE_CACHE_DIR") {
-        return PathBuf::from(root);
-    }
-    let home = std::env::var_os("VALLE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(|home| PathBuf::from(home).join(".valle"))
-        })
-        .unwrap_or_else(|| PathBuf::from(".valle"));
-    home.join("cache")
+    valle_media::paths::cache_dir()
 }
 
 /// URL downloads live apart from reusable user assets.

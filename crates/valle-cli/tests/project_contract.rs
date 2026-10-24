@@ -53,13 +53,20 @@ fn folder_cli_add_save_restore_and_render_survive_a_project_move() {
         fs::read_to_string(root.join("promo").join(imported)).unwrap(),
         "independent input"
     );
-    fs::write(root.join("promo/timeline.json"), timeline().to_string()).unwrap();
+    image::RgbaImage::from_pixel(32, 32, image::Rgba([255, 0, 0, 255]))
+        .save(root.join("promo/media/card.png"))
+        .unwrap();
+    let mut original = timeline();
+    original["resources"] = json!({"card":"media/card.png"});
+    original["tracks"]["visual"][0]["clips"][0] =
+        json!({"kind":"image","src":"card","start":0,"duration":1});
+    fs::write(root.join("promo/timeline.json"), original.to_string()).unwrap();
     assert_eq!(ok(root, &["project", "save", "-C", "promo"])["snapshot"], 1);
     assert_eq!(
         ok(root, &["project", "save", "-C", "promo"])["unchanged"],
         true
     );
-    let mut edited = timeline();
+    let mut edited = original;
     edited["canvas"]["background"] = json!("#123456");
     fs::write(root.join("promo/timeline.json"), edited.to_string()).unwrap();
     let restored = ok(root, &["project", "restore", "1", "-C", "promo"]);
@@ -97,6 +104,23 @@ fn folder_cli_add_save_restore_and_render_survive_a_project_move() {
     ));
     let record: Value = serde_json::from_slice(&fs::read(record).unwrap()).unwrap();
     assert_eq!(record["outputs"], exported["outputs"]);
+    assert_eq!(record["receipt"]["frameCount"], 4);
+    assert!(record["receipt"]["renderId"].is_string());
+    let inputs = record["inputs"].as_array().unwrap();
+    assert!(inputs.iter().all(|input| input["fileIdentity"].is_object()));
+    let media = inputs
+        .iter()
+        .find(|input| input["path"] == "media/card.png")
+        .unwrap();
+    let path = root.join("moved/media/card.png");
+    assert_eq!(
+        media["digest"],
+        json!(valle_project::folder::digest_file(&path).unwrap())
+    );
+    assert_eq!(
+        media["fileIdentity"],
+        json!(valle_project::files::FileStamp::read(&path).unwrap())
+    );
     assert!(
         record["inputs"]
             .as_array()

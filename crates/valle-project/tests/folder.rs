@@ -2,6 +2,52 @@ use std::{fs, path::Path};
 
 use valle_project::folder::{CapturedInput, Project};
 
+#[test]
+fn cached_media_detects_atomic_replacement_even_when_length_and_mtime_are_preserved() {
+    use std::io::Write;
+    let temporary = tempfile::tempdir().unwrap();
+    let project = Project::create(&temporary.path().join("promo"), 32, 32, "4").unwrap();
+    let _lock = project.lock().unwrap();
+    let media = project.root.join("media/take.bin");
+    fs::write(&media, b"original").unwrap();
+    let mtime = fs::metadata(&media).unwrap().modified().unwrap();
+    let mut cache = valle_project::folder::DigestCache::open(&project);
+    let first = cache.capture(&media).unwrap();
+    cache.persist().unwrap();
+    let mut replacement = tempfile::NamedTempFile::new_in(media.parent().unwrap()).unwrap();
+    replacement.write_all(b"replaced").unwrap();
+    replacement.as_file().set_modified(mtime).unwrap();
+    replacement.persist(&media).unwrap();
+    let mut cache = valle_project::folder::DigestCache::open(&project);
+    let next = cache.capture(&media).unwrap();
+    assert_ne!(first.digest, next.digest);
+    assert_eq!(
+        next.digest,
+        valle_project::ContentDigest::of_bytes(b"replaced")
+    );
+    assert_ne!(first.stamp, next.stamp);
+}
+
+#[test]
+fn changing_the_project_entry_during_capture_cannot_publish_a_mismatched_snapshot() {
+    let temporary = tempfile::tempdir().unwrap();
+    let project = Project::create(&temporary.path().join("promo"), 32, 32, "4").unwrap();
+    let _lock = project.lock().unwrap();
+    let captured = capture(&project);
+    fs::copy(project.timeline_path(), project.root.join("other.json")).unwrap();
+    fs::write(
+        project.root.join("project.json"),
+        r#"{"name":"promo","timeline":"other.json"}"#,
+    )
+    .unwrap();
+    assert!(project.save_captured(captured, None, "save").is_err());
+    assert!(project.history().unwrap().is_empty());
+    let latest = Project::open(&project.root).unwrap();
+    latest
+        .save_captured(capture(&latest), None, "save")
+        .unwrap();
+}
+
 fn capture(project: &Project) -> Vec<CapturedInput> {
     vec![CapturedInput::source(
         project.timeline_path(),

@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod codec;
 pub mod frame;
 pub mod models;
+pub mod paths;
 pub mod tools;
 pub mod transport;
 

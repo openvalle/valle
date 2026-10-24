@@ -1575,12 +1575,17 @@ pub(super) fn capture_asset(
     path: &Path,
 ) -> Result<(BoundAsset, Vec<valle_project::folder::CapturedInput>)> {
     use valle_project::{files::Kind, folder::CapturedInput};
+    let stamp = valle_project::files::FileStamp::read(path)?;
     let bytes = std::fs::read(path).with_context(|| format!("reading asset {}", path.display()))?;
+    if valle_project::files::FileStamp::read(path)? != stamp {
+        bail!("asset changed while capturing: {}", path.display());
+    }
     let mut inputs = vec![if Kind::detect(path).snapshot_source() {
         CapturedInput::source(path.to_owned(), bytes.clone())
     } else {
         CapturedInput::media(path.to_owned(), ContentDigest::of_bytes(&bytes))
     }];
+    inputs[0].stamp = Some(stamp);
     let frozen = if path.to_string_lossy().ends_with(".shader.json") {
         valle_motion::shader::ShaderPackage::admit_with_resolver(&bytes, |entry| {
             let source_path = path.parent().unwrap_or_else(|| Path::new(".")).join(entry);

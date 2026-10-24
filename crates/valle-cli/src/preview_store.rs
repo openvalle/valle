@@ -31,6 +31,17 @@ pub(crate) struct FrozenMediaCache {
 }
 
 impl FrozenMediaCache {
+    pub fn captured_stamp(
+        &self,
+        path: &Path,
+        digest: ContentDigest,
+    ) -> Option<valle_project::files::FileStamp> {
+        self.entries
+            .get(&path.canonicalize().ok()?)
+            .filter(|entry| entry.digest == digest)
+            .map(|entry| entry.stamp.clone())
+    }
+
     pub fn get(&mut self, source: &Path) -> Result<(ContentDigest, PreviewFile)> {
         use sha2::{Digest, Sha256};
         use std::io::{Read, Write};
@@ -233,6 +244,11 @@ mod tests {
         let mut cache = FrozenMediaCache::default();
         let (digest, first) = cache.get(&source).unwrap();
         assert_eq!(digest, ContentDigest::of_bytes(&bytes));
+        let captured_stamp = cache.captured_stamp(&source, digest).unwrap();
+        assert_eq!(
+            captured_stamp,
+            valle_project::files::FileStamp::read(&source).unwrap()
+        );
         let (_, second) = cache.get(&source).unwrap();
         let path = |file: &PreviewFile| match file {
             PreviewFile::File { path, .. } => path.clone(),
@@ -250,8 +266,11 @@ mod tests {
             std::fs::metadata(&source).unwrap().modified().unwrap(),
             modified
         );
+        // An export keeps the identity of its captured bytes, even after the original is replaced.
+        assert_eq!(cache.captured_stamp(&source, digest), Some(captured_stamp));
         let (updated, third) = cache.get(&source).unwrap();
         assert_ne!(digest, updated);
+        assert!(cache.captured_stamp(&source, digest).is_none());
         assert_eq!(std::fs::read(path(&first)).unwrap(), bytes);
         assert_eq!(std::fs::read(path(&third)).unwrap(), replacement);
         let old_path = path(&first);
