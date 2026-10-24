@@ -535,7 +535,7 @@ source trim used to create the foreground.
 - **Foregrounds and upscaled images:** add the PNG/MOV as a Timeline resource or
   bind an image to Motion through `--asset NAME=PATH`. Transparent PNG and RGBA
   MOV contain compositable color; a binary mask is an analysis artifact.
-- **Asset library:** explicitly run `valle assets add FILE --mode copy --json`
+- **Asset library:** explicitly run `valle assets add FILE --json`
   when the processed file should become a managed asset. Media processing alone
   does not import it or attach its analysis to an existing asset.
 

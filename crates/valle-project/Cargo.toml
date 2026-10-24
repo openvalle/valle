@@ -10,6 +10,8 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+libc = { workspace = true, optional = true }
+trash = { version = "5.2.9", optional = true }
 valle-timeline.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
@@ -20,13 +22,15 @@ tempfile = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 reflink-copy = { workspace = true, optional = true }
-rusqlite = { workspace = true, features = ["bundled", "hooks"], optional = true }
+rusqlite = { workspace = true, features = ["bundled", "hooks", "backup"], optional = true }
 unicode-normalization = { workspace = true, optional = true }
 valle-media = { workspace = true, optional = true }
 
 [features]
 default = ["host"]
 host = [
+    "dep:libc",
+    "dep:trash",
     "dep:serde_json",
     "dep:serde_jcs",
     "dep:fs2",
@@ -38,3 +42,6 @@ host = [
     "dep:unicode-normalization",
 ]
 native = ["host", "dep:valle-media", "valle-media/libav"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

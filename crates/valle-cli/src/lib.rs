@@ -18,30 +18,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 
-/// One complete immutable Timeline fixed render package.
-#[derive(clap::Args, Debug, Clone)]
-pub struct FixedRenderPackageArgs {
-    /// Canonical `valle.fixed-render-package@1` outer manifest.
-    #[arg(long, value_name = "PATH")]
-    pub package_manifest: PathBuf,
-    /// Canonical Timeline document JSON.
-    #[arg(long, value_name = "PATH")]
-    pub canonical_timeline: PathBuf,
-    /// Complete resource manifest JSON.
-    #[arg(long, value_name = "PATH")]
-    pub resource_manifest: PathBuf,
-    /// Closed verified resource binding bundle JSON.
-    #[arg(long, value_name = "PATH")]
-    pub verified_binding_bundle: PathBuf,
-    /// Canonical execution profile member bound by the outer manifest.
-    #[arg(long, value_name = "PATH")]
-    pub execution_profile: PathBuf,
-    /// Explicit fulfillment, `RESOURCE_ID=PATH_OR_URL`; copied to local CAS. Pin needs every
-    /// declared resource either supplied here or already stored locally.
-    #[arg(long = "resource", value_name = "RESOURCE_ID=PATH_OR_URL")]
-    pub resources: Vec<String>,
-}
-
 /// Set process allocator defaults before other initialization, while respecting environment
 /// overrides. Rust uses mimalloc and native libraries use the system allocator. Shorten mimalloc's
 /// purge delay, use a custom macOS memory tag, and pin glibc's mmap threshold so large native
@@ -843,216 +819,90 @@ impl From<MotionRenderBackend> for valle_render::executor::skia::SkiaBackendKind
     }
 }
 
-/// Fixed-package Native delivery operations.
-#[derive(Subcommand)]
-pub enum FixedRenderAction {
-    /// Validate and compile the complete fixed render package without rendering pixels.
-    Open,
-    /// Retain this verified package's complete resource set in the local asset store.
-    Pin,
-    /// Release this package's persistent resource retention; active renders remain protected.
-    Unpin,
-    /// Render one exact admitted frame to PNG.
-    Preview {
-        /// Exact zero-based FrameKey in the admitted fixed package.
-        #[arg(long, default_value_t = 0)]
-        frame: i64,
-        #[arg(short, long)]
-        output: PathBuf,
-        #[command(flatten)]
-        budget: RenderBudgetArgs,
-    },
-    /// Export the complete admitted fixed package to MP4 (or audio-only media when applicable).
-    Export {
-        #[arg(short, long)]
-        output: PathBuf,
-        #[command(flatten)]
-        budget: RenderBudgetArgs,
-    },
-}
-
-/// Asset library commands.
+/// Reusable files, tags, notes, and local search.
 #[derive(Subcommand)]
 pub enum AssetsAction {
-    /// Import files. Repeated imports reuse the same ID and restore removed assets.
+    /// Copy files or directory trees into the library; repeated imports merge tags and notes.
     Add {
-        /// File paths after shell wildcard expansion.
-        paths: Vec<String>,
-        /// Import mode: reflink (default), copy, or reference (register without copying).
-        #[arg(long, default_value = "reflink")]
-        mode: String,
-        /// Set the asset kind when probing cannot identify it.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
         #[arg(long)]
-        kind: Option<String>,
+        to: Option<String>,
         #[arg(long)]
-        title: Option<String>,
-        /// May be repeated.
+        name: Option<String>,
         #[arg(long = "tag")]
         tags: Vec<String>,
-    },
-    /// Remove asset bytes while keeping metadata; --purge also removes metadata and requires
-    /// --force for annotated assets.
-    #[command(name = "remove")]
-    Rm {
-        hash: String,
         #[arg(long)]
-        purge: bool,
-        #[arg(long)]
-        force: bool,
+        note: Option<String>,
     },
-    /// List assets, excluding removed entries by default.
+    /// List current files, or retained missing entries.
     List {
+        directory: Option<String>,
         #[arg(long)]
         kind: Option<String>,
         #[arg(long)]
         tag: Option<String>,
-        /// List references marked invalid by verify.
         #[arg(long)]
-        stale: bool,
-        /// List removed assets that can be restored.
-        #[arg(long)]
-        removed: bool,
+        missing: bool,
     },
-    /// Edit title or subkind; use tag to change tags.
-    Edit {
-        hash: String,
-        #[arg(long)]
-        title: Option<String>,
-        /// Audio subkind: music or sfx.
-        #[arg(long)]
-        subkind: Option<String>,
-    },
-    /// Add or remove tags; both options may be repeated.
-    Tag {
-        hash: String,
-        #[arg(long = "add")]
-        add: Vec<String>,
-        #[arg(long = "rm")]
-        rm: Vec<String>,
-    },
-    /// Annotate an asset, a time point, or a time range; use --rm to remove an annotation.
-    Annotate {
-        hash: String,
-        /// Time marker in seconds.
-        #[arg(long)]
-        at: Option<f64>,
-        /// Time range in seconds, supplied as START END.
-        #[arg(long, num_args = 2, value_names = ["START", "END"])]
-        range: Option<Vec<f64>>,
-        #[arg(long)]
-        text: Option<String>,
-        #[arg(long = "tag")]
-        tags: Vec<String>,
-        /// Attach an entity ID; may be repeated.
-        #[arg(long = "entity")]
-        entities: Vec<String>,
-        /// Replace an existing annotation; omit to create one.
-        #[arg(long)]
-        id: Option<String>,
-        /// Remove an annotation by its ID, such as n2.
-        #[arg(long)]
-        rm: Option<String>,
-    },
-    /// Manage entities with stable IDs and aliases.
-    Entity {
-        #[command(subcommand)]
-        action: EntityCmd,
-    },
-    /// Show an asset's metadata and analysis.
-    Show { hash: String },
-    /// Show asset counts, kind distribution, analysis coverage, costs, and stale entries.
-    #[command(name = "stats")]
-    Describe,
-    /// Resolve a hash or unique prefix to an absolute path.
-    Resolve { hash: String },
-    /// Read word or sentence transcripts from stored ASR results without rerunning a model.
-    Transcript {
-        /// Asset hash or unique prefix.
-        hash: String,
-        /// Transcript level: word for precise timing, or sentence for readable text (default).
-        #[arg(long, default_value = "sentence")]
-        level: String,
-    },
-    /// Run analyzers on an explicit selection, resuming completed work. Semantic analysis never
-    /// runs automatically.
-    Analyze {
-        /// Asset hashes; alternatively select assets with --all, --kind, or --tag.
-        hashes: Vec<String>,
-        #[arg(long)]
-        all: bool,
-        #[arg(long)]
-        kind: Option<String>,
-        #[arg(long)]
-        tag: Option<String>,
-        /// Comma-separated analyzers: shots, beats, vlm. Use `valle media transcribe` for ASR.
-        #[arg(long, value_delimiter = ',')]
-        with: Vec<String>,
-        /// Per-run cost limit in CNY. Stop when exceeded and keep completed results.
-        #[arg(long)]
-        budget: Option<f64>,
-        /// Recompute results, ignoring cached analysis slots.
-        #[arg(long)]
-        force: bool,
-    },
-    /// Search assets and timed evidence using local full-text search.
+    /// Search filenames, directories, tags, notes, and font names.
     Search {
         query: String,
         #[arg(long)]
         kind: Option<String>,
+        #[arg(long = "in")]
+        directory: Option<String>,
         #[arg(long)]
         tag: Option<String>,
-        /// Entity ID, such as e1.
-        #[arg(long)]
-        entity: Option<String>,
-        /// Structured filters, such as orientation=portrait,min-dur=5.
+        /// min-dur=5,max-dur=60,orientation=portrait
         #[arg(long)]
         filter: Option<String>,
         #[arg(long)]
         limit: Option<usize>,
     },
-    /// Low-level asset library maintenance.
-    Maintenance {
-        #[command(subcommand)]
-        action: AssetsMaintenanceAction,
-    },
-}
-
-/// `valle assets entity <op>`。
-#[derive(Subcommand)]
-pub enum AssetsMaintenanceAction {
-    /// Check reference validity, orphaned files, and drift; use --deep to recompute hashes.
-    Verify {
-        #[arg(long)]
-        deep: bool,
-    },
-    /// Remove orphaned blobs and temporary writes while preserving metadata and analysis.
-    Gc,
-    /// Rebuild index.db from the authoritative metadata, analysis, and annotation trees.
-    Reindex,
-    /// Run read-only SQL; the authorizer enforces SELECT-only access.
-    Sql { query: String },
-}
-
-#[derive(Subcommand)]
-pub enum EntityCmd {
-    /// Create an entity with a free-form kind, such as person, place, or product.
-    Add {
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        kind: Option<String>,
-        #[arg(long = "alias")]
-        aliases: Vec<String>,
-    },
-    List,
-    /// Rename an entity or replace its complete alias list.
+    /// Show one library-relative path.
+    Show { path: String },
+    /// Rename or move a file; inspect the current path before retrying.
     Edit {
-        id: String,
+        path: String,
         #[arg(long)]
         name: Option<String>,
-        #[arg(long = "alias")]
-        aliases: Option<Vec<String>>,
+        #[arg(long)]
+        to: Option<String>,
     },
+    Tag {
+        path: String,
+        #[arg(long = "add")]
+        add: Vec<String>,
+        #[arg(long = "rm")]
+        rm: Vec<String>,
+    },
+    /// Write, replace, or delete a note; times are seconds.
+    Annotate {
+        path: String,
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long, conflicts_with = "range")]
+        at: Option<f64>,
+        /// START,END in seconds.
+        #[arg(long, value_delimiter = ',', num_args = 1)]
+        range: Option<Vec<f64>>,
+        #[arg(long)]
+        id: Option<i64>,
+        #[arg(long)]
+        rm: Option<i64>,
+    },
+    /// Delete metadata and move the file to system Trash, or clean all missing entries.
+    Remove {
+        #[arg(required_unless_present = "missing", conflicts_with = "missing")]
+        path: Option<String>,
+        #[arg(long)]
+        missing: bool,
+    },
+    /// List backups or restore one; close Studio and other library commands before restoring.
+    Recover { backup: Option<String> },
+    /// Read-only SELECT queries against catalog.db.
+    Sql { query: String },
 }
 
 /// File-backed project operations.

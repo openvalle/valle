@@ -12,6 +12,6 @@ pub mod executor;
 pub mod host;
 
 #[cfg(feature = "native")]
-pub use assets::{AssetCache, default_cache_dir};
+pub use assets::{AssetCache, cache_dir, default_cache_dir};
 #[cfg(feature = "native")]
 pub use valle_media::codec::hw_h264_available;

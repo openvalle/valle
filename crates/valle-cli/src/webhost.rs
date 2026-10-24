@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 
@@ -125,41 +125,10 @@ fn studio_runtime_font_urls() -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// Library session token and per-request kernel context; tests may supply adapters.
+/// Each request opens a short SQLite transaction, shared with the CLI business operations.
 pub struct LibraryCtx {
     pub token: String,
-    pub make_ctx: Box<dyn Fn() -> valle_project::assets::Ctx + Send + Sync>,
-    /// Optional video thumbnail extractor. Receives the library home, full hash, media path, and
-    /// duration, then returns a cached PNG path.
-    pub thumbnail: Option<ThumbnailFn>,
-    /// Allow one analysis run at a time; concurrent requests return `locked`.
-    pub analyzing: AtomicBool,
-    /// Optional analysis adapter for sidecar lifetime management; otherwise execute directly.
-    pub run_analyze: Option<AnalyzeFn>,
-}
-
-pub type AnalyzeFn = Box<
-    dyn Fn(
-            &valle_project::assets::Ctx,
-            valle_project::assets::Verb,
-        ) -> valle_project::assets::Report
-        + Send
-        + Sync,
->;
-
-pub type ThumbnailFn = Box<
-    dyn Fn(&valle_project::assets::Home, &str, &Path, Option<i64>) -> anyhow::Result<PathBuf>
-        + Send
-        + Sync,
->;
-
-/// Keep SQL and permanent deletion exclusive to the CLI.
-fn library_verb_allowed(verb: &valle_project::assets::Verb) -> bool {
-    !matches!(
-        verb,
-        valle_project::assets::Verb::Sql { .. }
-            | valle_project::assets::Verb::Rm { purge: true, .. }
-    )
+    pub root: PathBuf,
 }
 
 fn local_request_authorized(token: &str, expected: &str, origin: Option<&str>) -> bool {
@@ -839,152 +808,82 @@ fn serve_library_execute(
     body: &str,
     state: &Arc<StudioHost>,
 ) -> Result<()> {
-    let Some(lib) = &state.library else {
-        return write_simple(out, 404, "Not Found", &[], b"library mode off");
+    let Some(library) = &state.library else {
+        return write_simple(out, 404, "Not Found", &[], b"library unavailable");
     };
     let token = header_value(headers, "x-valle-token").unwrap_or("");
     let origin = header_value(headers, "origin").or_else(|| header_value(headers, "host"));
-    if !local_request_authorized(token, &lib.token, origin) {
-        return write_simple(
-            out,
-            403,
-            "Forbidden",
-            &[("Content-Type", "application/json")],
-            br#"{"ok":false,"error":{"code":"refused","message":"token/origin check failed"}}"#,
-        );
+    if !local_request_authorized(token, &library.token, origin) {
+        return write_simple(out, 403, "Forbidden", &[], b"token/origin check failed");
     }
-
-    let report = match serde_json::from_str::<valle_project::assets::Verb>(body) {
-        Ok(verb) if !library_verb_allowed(&verb) => valle_project::assets::Report::from_error(
-            valle_project::assets::AssetsError::refused(
-                "this command is unavailable in the web interface",
-            )
-            .with_hint("use the CLI for SQL and purging assets"),
-        ),
-        // Start analysis in the background and report progress and completion over SSE. An atomic
-        // guard rejects concurrent runs.
-        Ok(verb @ valle_project::assets::Verb::Analyze { .. }) => {
-            if lib
-                .analyzing
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
-                valle_project::assets::Report::from_error(
-                    valle_project::assets::AssetsError::locked("analysis is already running")
-                        .with_hint("retry after the library completion event"),
-                )
-            } else {
-                let st = Arc::clone(state);
-                std::thread::spawn(move || {
-                    let lib = st.library.as_ref().expect("library ctx present");
-                    let mut ctx = (lib.make_ctx)();
-                    let sse_st = Arc::clone(&st);
-                    ctx.progress = Some(Box::new(move |line: &str| {
-                        sse_st.sse.broadcast(
-                            "library",
-                            &serde_json::json!({ "kind": "progress", "line": line }).to_string(),
-                        );
-                    }));
-                    let report = match &lib.run_analyze {
-                        Some(f) => f(&ctx, verb),
-                        None => valle_project::assets::execute(&ctx, verb),
-                    };
-                    st.sse.broadcast(
-                        "library",
-                        &serde_json::json!({ "kind": "done", "ok": report.ok, "report": report })
-                            .to_string(),
-                    );
-                    lib.analyzing.store(false, Ordering::SeqCst);
-                });
-                valle_project::assets::Report::data(serde_json::json!({ "started": true }))
-            }
+    use valle_project::assets::Command;
+    let report = match serde_json::from_str::<Command>(body) {
+        Ok(Command::Sql { .. } | Command::Recover { .. }) => {
+            serde_json::json!({"status":"error","error":{"code":"refused","message":"Use the CLI for SQL and database recovery."}})
         }
-        Ok(verb) => {
-            let ctx = (lib.make_ctx)();
-            valle_project::assets::execute(&ctx, verb)
+        Ok(command) => crate::cmd::assets::studio_context(library.root.clone()).execute(command),
+        Err(error) => {
+            serde_json::json!({"status":"error","error":{"code":"invalid_arguments","message":error.to_string()}})
         }
-        Err(e) => valle_project::assets::Report::from_error(
-            valle_project::assets::AssetsError::bad_query(format!("invalid request body: {e}")),
-        ),
     };
-    let json = serde_json::to_vec(&report).unwrap_or_default();
-    write_simple(
-        out,
-        200,
-        "OK",
-        &[
-            ("Content-Type", "application/json"),
-            ("Cache-Control", "no-store"),
-        ],
-        &json,
-    )
+    serve_file_json(out, Ok(report))
 }
 
-/// Resolve a blob by hash prefix, rejecting removed or stale assets. Support byte ranges for media
-/// seeking. Reads use the loopback-only host without a token.
 fn serve_library_blob(
     out: &mut TcpStream,
     headers: &[(String, String)],
-    prefix: &str,
+    path: &str,
     state: &StudioHost,
 ) -> Result<()> {
-    let Some(lib) = &state.library else {
+    let Some(library) = &state.library else {
         return write_simple(out, 404, "Not Found", &[], b"");
     };
-    let ctx = (lib.make_ctx)();
-    match valle_project::assets::resolve::resolve(&ctx, prefix) {
-        Ok(o) => {
-            let path = PathBuf::from(&o.path);
-            serve_file(out, headers, &path, content_type_for(&o.path))
-        }
+    match crate::cmd::assets::studio_context(library.root.clone()).file(path) {
+        Ok((file, _, _)) => serve_file(out, headers, &file, content_type_for(path)),
         Err(_) => write_simple(out, 404, "Not Found", &[], b""),
     }
 }
 
-/// Serve cached thumbnails, redirect image requests to the full blob, or generate video thumbnails
-/// when supported. Return 404 when no thumbnail is available.
 fn serve_library_thumb(
     out: &mut TcpStream,
     headers: &[(String, String)],
-    prefix: &str,
+    path: &str,
     state: &StudioHost,
 ) -> Result<()> {
-    let Some(lib) = &state.library else {
+    let Some(library) = &state.library else {
         return write_simple(out, 404, "Not Found", &[], b"");
     };
-    let ctx = (lib.make_ctx)();
-    let Ok(o) = valle_project::assets::resolve::resolve(&ctx, prefix) else {
+    let Ok((file, digest, kind)) =
+        crate::cmd::assets::studio_context(library.root.clone()).file(path)
+    else {
         return write_simple(out, 404, "Not Found", &[], b"");
     };
-    let hash = o.content_digest.as_hex();
-    let cached =
-        valle_project::assets::cachefs::cache_path(&ctx.home, "thumbs", &hash, "w320", "png");
-    if cached.exists() {
-        return serve_file(out, headers, &cached, "image/png");
+    if kind == valle_project::files::Kind::Image {
+        return serve_file(out, headers, &file, content_type_for(path));
     }
-    let Ok(meta) = valle_project::assets::meta::AssetMeta::load(&ctx.home.meta_path(&hash)) else {
+    if kind != valle_project::files::Kind::Video {
         return write_simple(out, 404, "Not Found", &[], b"");
-    };
-    match meta.kind {
-        valle_project::assets::AssetKind::Image => {
-            let loc = format!("/library/blob/{hash}");
-            write_simple(out, 302, "Found", &[("Location", loc.as_str())], b"")
-        }
-        valle_project::assets::AssetKind::Video => {
-            let Some(thumb) = &lib.thumbnail else {
-                return write_simple(out, 404, "Not Found", &[], b"");
-            };
-            let dur_ms = meta.probe.as_ref().and_then(|p| p.duration_ms);
-            match thumb(&ctx.home, &hash, Path::new(&o.path), dur_ms) {
-                Ok(png) => serve_file(out, headers, &png, "image/png"),
-                Err(e) => {
-                    eprintln!("library thumbnail generation failed {}: {e}", &hash[..12]);
-                    write_simple(out, 404, "Not Found", &[], b"")
-                }
-            }
-        }
-        _ => write_simple(out, 404, "Not Found", &[], b""),
     }
+    let directory = valle_render::cache_dir().join("thumbs");
+    std::fs::create_dir_all(&directory)?;
+    let target = directory.join(format!(
+        "{}.png",
+        digest.strip_prefix("sha256:").unwrap_or(&digest)
+    ));
+    if !target.is_file() {
+        let frame = valle_media::codec::decode_rgba_frames(&file, Some(1))?
+            .into_iter()
+            .next()
+            .context("video has no thumbnail frame")?;
+        let temp = tempfile::NamedTempFile::new_in(&directory)?;
+        valle_media::codec::write_rgba_png(temp.path(), &frame)?;
+        match temp.persist_noclobber(&target) {
+            Ok(_) => (),
+            Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => (),
+            Err(e) => return Err(e.error.into()),
+        }
+    }
+    serve_file(out, headers, &target, "image/png")
 }
 
 /// Flush every SSE event immediately. A failed write ends the connection; the next broadcast
@@ -1482,381 +1381,65 @@ mod tests {
         );
     }
 
-    /// Verify library authentication and the command allowlist.
     #[test]
-    fn library_execute_enforces_token_and_allowlist() {
+    fn library_commands_require_auth_and_files_cannot_escape() {
         let tmp = tempfile::tempdir().unwrap();
-        let assets_home = valle_project::assets::Home::at(tmp.path());
-        let token = "tok-lib".to_owned();
-        let factory_home = assets_home.clone();
+        std::fs::write(tmp.path().join("sample.txt"), b"0123456789").unwrap();
         let state = Arc::new(StudioHost {
             runtime_files: BTreeMap::new(),
             assets_dir: None,
-            config_json: Arc::new(RwLock::new("{}".to_owned())),
-            sse: SseBroadcaster::default(),
-            capture_dir: None,
-            library: Some(LibraryCtx {
-                token: token.clone(),
-                make_ctx: Box::new(move || {
-                    valle_project::assets::Ctx::new(
-                        factory_home.clone(),
-                        Box::new(valle_project::assets::NoProber),
-                    )
-                }),
-                thumbnail: None,
-                analyzing: AtomicBool::new(false),
-                run_analyze: None,
-            }),
-            timeline_file: None,
-            source_paths: std::sync::Mutex::new(Default::default()),
-            last_report: RwLock::new(None),
             preview_files: Arc::new(Default::default()),
             motion_source: None,
-        });
-        let (listener, addr) = bind(0).unwrap();
-        std::thread::spawn(move || {
-            let _ = serve_forever(listener, state);
-        });
-        let post = |headers: &str, body: &str| -> (u16, String) {
-            let mut s = TcpStream::connect(addr).unwrap();
-            let req = format!(
-                "POST /library/execute HTTP/1.1\r\nHost: localhost\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            s.write_all(req.as_bytes()).unwrap();
-            let mut resp = String::new();
-            s.read_to_string(&mut resp).unwrap();
-            let status: u16 = resp
-                .lines()
-                .next()
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|c| c.parse().ok())
-                .unwrap_or(0);
-            (
-                status,
-                resp.split("\r\n\r\n").nth(1).unwrap_or("").to_owned(),
-            )
-        };
-        let auth = format!("Origin: http://localhost\r\nX-Valle-Token: {token}\r\n");
-
-        // Missing token returns 403.
-        let (st, _) = post("Origin: http://localhost\r\n", r#"{"verb":"describe"}"#);
-        assert_eq!(st, 403);
-
-        // SQL and permanent deletion return a refusal envelope.
-        let (st, body) = post(&auth, r#"{"verb":"sql","query":"select 1"}"#);
-        assert_eq!(st, 200);
-        assert!(
-            body.contains("refused"),
-            "SQL must be rejected by the allowlist: {body}"
-        );
-        let (st, body) = post(&auth, r#"{"verb":"rm","hash":"abc123","purge":true}"#);
-        assert_eq!(st, 200);
-        assert!(
-            body.contains("refused"),
-            "purge must be rejected by the allowlist: {body}"
-        );
-
-        // Allowed commands return successful reports.
-        let (st, body) = post(&auth, r#"{"verb":"describe"}"#);
-        assert_eq!(st, 200, "body={body}");
-        assert!(
-            body.contains("\"ok\":true"),
-            "describe must succeed: {body}"
-        );
-
-        // Non-purge removal reaches the kernel and reports a missing hash.
-        let (st, body) = post(&auth, r#"{"verb":"rm","hash":"deadbeef00"}"#);
-        assert_eq!(st, 200);
-        assert!(
-            body.contains("\"ok\":false") && body.contains("not_found"),
-            "removal without purge must reach the core: {body}"
-        );
-    }
-
-    /// Verify blob ranges and thumbnail cache, redirect, and unavailable paths.
-    #[test]
-    fn library_blob_and_thumb_routes() {
-        let tmp = tempfile::tempdir().unwrap();
-        let assets_home = valle_project::assets::Home::at(tmp.path());
-        // Register synthetic image and video files with a stub prober.
-        let src_dir = tmp.path().join("src");
-        std::fs::create_dir_all(&src_dir).unwrap();
-        let png_path = src_dir.join("pic.png");
-        std::fs::write(&png_path, b"fake-png-bytes-0123456789").unwrap();
-        let mp4_path = src_dir.join("clip.mp4");
-        std::fs::write(&mp4_path, b"fake-mp4").unwrap();
-        let ctx = valle_project::assets::Ctx::new(
-            assets_home.clone(),
-            Box::new(valle_project::assets::NoProber),
-        );
-        let seed = |p: &Path| -> String {
-            let r = valle_project::assets::execute(
-                &ctx,
-                valle_project::assets::Verb::Add {
-                    path: p.to_string_lossy().into_owned(),
-                    mode: valle_project::assets::AddMode::Copy,
-                    kind: None,
-                    title: None,
-                    tags: vec![],
-                },
-            );
-            assert!(r.ok, "seed add: {:?}", r.error);
-            valle_project::ContentDigest::parse(r.data.unwrap()["content_digest"].as_str().unwrap())
-                .unwrap()
-                .as_hex()
-        };
-        let png_hash = seed(&png_path);
-        let mp4_hash = seed(&mp4_path);
-
-        let factory_home = assets_home.clone();
-        let state = Arc::new(StudioHost {
-            runtime_files: BTreeMap::new(),
-            assets_dir: None,
-            config_json: Arc::new(RwLock::new("{}".to_owned())),
-            sse: SseBroadcaster::default(),
+            source_paths: Mutex::new(Default::default()),
+            config_json: Arc::new(RwLock::new("{}".into())),
+            sse: Default::default(),
             capture_dir: None,
             library: Some(LibraryCtx {
-                token: "t".to_owned(),
-                make_ctx: Box::new(move || {
-                    valle_project::assets::Ctx::new(
-                        factory_home.clone(),
-                        Box::new(valle_project::assets::NoProber),
-                    )
-                }),
-                thumbnail: None,
-                analyzing: AtomicBool::new(false),
-                run_analyze: None,
+                token: "secret".into(),
+                root: tmp.path().to_path_buf(),
             }),
             timeline_file: None,
-            source_paths: std::sync::Mutex::new(Default::default()),
             last_report: RwLock::new(None),
-            preview_files: Arc::new(Default::default()),
-            motion_source: None,
         });
-        let (listener, addr) = bind(0).unwrap();
-        std::thread::spawn(move || {
-            let _ = serve_forever(listener, state);
-        });
-        let get = |path: &str, extra: &str| -> (u16, String, String) {
-            let mut s = TcpStream::connect(addr).unwrap();
-            let req = format!(
-                "GET {path} HTTP/1.1\r\nHost: localhost\r\n{extra}Connection: close\r\n\r\n"
-            );
-            s.write_all(req.as_bytes()).unwrap();
-            let mut resp = Vec::new();
-            s.read_to_end(&mut resp).unwrap();
-            let resp = String::from_utf8_lossy(&resp).into_owned();
-            let (head, body) = resp.split_once("\r\n\r\n").unwrap_or((resp.as_str(), ""));
-            let status: u16 = head
-                .lines()
-                .next()
-                .and_then(|l| l.split_whitespace().nth(1))
-                .and_then(|c| c.parse().ok())
-                .unwrap_or(0);
-            (status, head.to_owned(), body.to_owned())
-        };
-
-        // Resolve a hash prefix for full and partial reads.
-        let (st, _, body) = get(&format!("/library/blob/{}", &png_hash[..8]), "");
-        assert_eq!(st, 200);
-        assert_eq!(body.as_bytes(), b"fake-png-bytes-0123456789");
-        let (st, head, body) = get(
-            &format!("/library/blob/{}", &png_hash[..8]),
-            "Range: bytes=0-3\r\n",
+        let unauthorized = request_round_trip(
+            &state,
+            "POST",
+            "/library/execute",
+            br#"{"op":"list"}"#,
+            "Origin: http://localhost\r\n",
         );
-        assert_eq!(st, 206, "head={head}");
-        assert_eq!(body.as_bytes(), b"fake");
-
-        // Unknown hash returns 404.
-        let (st, _, _) = get("/library/blob/ffffffffff", "");
-        assert_eq!(st, 404);
-
-        // Image thumbnails redirect to the blob's full hash.
-        let (st, head, _) = get(&format!("/library/thumb/{}", &png_hash[..8]), "");
-        assert_eq!(st, 302, "head={head}");
-        assert!(
-            head.contains(&format!("/library/blob/{png_hash}")),
-            "Location must point to the full-hash blob: {head}"
-        );
-
-        // Video thumbnails require an extractor or a cached result.
-        let (st, _, _) = get(&format!("/library/thumb/{}", &mp4_hash[..8]), "");
-        assert_eq!(st, 404);
-        let cache = valle_project::assets::cachefs::ensure_cache_path(
-            &assets_home,
-            "thumbs",
-            &mp4_hash,
-            "w320",
-            "png",
-        )
-        .unwrap();
-        std::fs::write(&cache, b"png-bytes").unwrap();
-        let (st, _, body) = get(&format!("/library/thumb/{}", &mp4_hash[..8]), "");
-        assert_eq!(st, 200);
-        assert_eq!(body.as_bytes(), b"png-bytes");
-    }
-
-    /// Verify immediate analysis acknowledgement, SSE completion, and concurrent-run rejection.
-    #[test]
-    fn library_analyze_runs_background_with_sse_and_single_flight() {
-        /// Delay the mock analyzer to expose the concurrent-run guard.
-        struct SlowMock;
-        impl valle_project::assets::analysis::Analyzer for SlowMock {
-            fn name(&self) -> &'static str {
-                "mock"
-            }
-            fn version(&self) -> u32 {
-                1
-            }
-            fn accepts(&self, _kind: valle_project::assets::AssetKind) -> bool {
-                true
-            }
-            fn analyze(
-                &self,
-                _input: &valle_project::assets::analysis::AnalyzerInput<'_>,
-            ) -> valle_project::assets::Result<valle_project::assets::analysis::AnalyzerOutput>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(400));
-                Ok(valle_project::assets::analysis::AnalyzerOutput {
-                    items: vec![serde_json::json!({"start_ms": 0, "end_ms": 1000, "note": "m"})],
-                    ..Default::default()
-                })
-            }
+        assert!(String::from_utf8_lossy(&unauthorized).contains("403 Forbidden"));
+        let auth = "Origin: http://localhost\r\nX-Valle-Token: secret\r\n";
+        for body in [
+            br#"{"op":"sql","query":"SELECT 1"}"#.as_slice(),
+            br#"{"op":"recover"}"#,
+        ] {
+            let response = request_round_trip(&state, "POST", "/library/execute", body, auth);
+            assert!(String::from_utf8_lossy(&response).contains("refused"));
         }
-
-        let tmp = tempfile::tempdir().unwrap();
-        let assets_home = valle_project::assets::Home::at(tmp.path());
-        let seed_ctx = valle_project::assets::Ctx::new(
-            assets_home.clone(),
-            Box::new(valle_project::assets::NoProber),
+        let list = request_round_trip(
+            &state,
+            "POST",
+            "/library/execute",
+            br#"{"op":"list"}"#,
+            auth,
         );
-        let f = tmp.path().join("a.mp4");
-        std::fs::write(&f, b"bytes").unwrap();
-        let r = valle_project::assets::execute(
-            &seed_ctx,
-            valle_project::assets::Verb::Add {
-                path: f.to_string_lossy().into_owned(),
-                mode: valle_project::assets::AddMode::Copy,
-                kind: None,
-                title: None,
-                tags: vec![],
-            },
+        assert!(String::from_utf8_lossy(&list).contains("sample.txt"));
+        let bytes = request_round_trip(
+            &state,
+            "GET",
+            "/library/blob/sample.txt",
+            b"",
+            "Range: bytes=2-5\r\n",
         );
-        let hash = valle_project::ContentDigest::parse(
-            r.data.unwrap()["content_digest"].as_str().unwrap(),
-        )
-        .unwrap()
-        .as_hex();
-
-        let factory_home = assets_home.clone();
-        let state = Arc::new(StudioHost {
-            runtime_files: BTreeMap::new(),
-            assets_dir: None,
-            config_json: Arc::new(RwLock::new("{}".to_owned())),
-            sse: SseBroadcaster::default(),
-            capture_dir: None,
-            library: Some(LibraryCtx {
-                token: "t".to_owned(),
-                make_ctx: Box::new(move || {
-                    let mut ctx = valle_project::assets::Ctx::new(
-                        factory_home.clone(),
-                        Box::new(valle_project::assets::NoProber),
-                    );
-                    ctx.analyzers = vec![Box::new(SlowMock)];
-                    ctx
-                }),
-                thumbnail: None,
-                analyzing: AtomicBool::new(false),
-                run_analyze: None,
-            }),
-            timeline_file: None,
-            source_paths: std::sync::Mutex::new(Default::default()),
-            last_report: RwLock::new(None),
-            preview_files: Arc::new(Default::default()),
-            motion_source: None,
-        });
-        let (listener, addr) = bind(0).unwrap();
-        std::thread::spawn(move || {
-            let _ = serve_forever(listener, state);
-        });
-
-        // Subscribe before triggering analysis.
-        let mut sse = TcpStream::connect(addr).unwrap();
-        sse.write_all(b"GET /events HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-            .unwrap();
-        sse.set_read_timeout(Some(std::time::Duration::from_secs(10)))
-            .unwrap();
-
-        let post = |body: &str| -> String {
-            let mut s = TcpStream::connect(addr).unwrap();
-            let req = format!(
-                "POST /library/execute HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost\r\nX-Valle-Token: t\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            s.write_all(req.as_bytes()).unwrap();
-            let mut resp = String::new();
-            s.read_to_string(&mut resp).unwrap();
-            resp.split("\r\n\r\n").nth(1).unwrap_or("").to_owned()
-        };
-
-        // Starting analysis returns immediately.
-        let verb = format!(r#"{{"verb":"analyze","hashes":["{hash}"],"with":["mock"]}}"#);
-        let body = post(&verb);
-        assert!(
-            body.contains("\"started\":true"),
-            "must immediately return started: {body}"
-        );
-
-        // A second run is rejected while the first is active.
-        let body = post(&verb);
-        assert!(
-            body.contains("locked"),
-            "a concurrent second request must be locked: {body}"
-        );
-
-        // Expect progress and successful completion events.
-        let mut sse_text = String::new();
-        let mut buf = [0u8; 4096];
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            match sse.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    sse_text.push_str(&String::from_utf8_lossy(&buf[..n]));
-                    if sse_text.contains("\"kind\":\"done\"") {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-            if std::time::Instant::now() > deadline {
-                break;
-            }
+        assert!(bytes.ends_with(b"2345"));
+        for path in [
+            "/library/blob/../sample.txt",
+            "/library/blob/.valle/catalog.db",
+        ] {
+            let response = request_round_trip(&state, "GET", path, b"", "");
+            assert!(String::from_utf8_lossy(&response).contains("404 Not Found"));
         }
-        assert!(
-            sse_text.contains("event: library") && sse_text.contains("\"kind\":\"progress\""),
-            "must receive a progress event: {sse_text}"
-        );
-        assert!(
-            sse_text.contains("\"kind\":\"done\"") && sse_text.contains("\"ok\":true"),
-            "must receive successful completion: {sse_text}"
-        );
-
-        // The guard is released after analysis completes.
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        let body = post(&verb);
-        assert!(
-            body.contains("\"started\":true"),
-            "must accept another request after completion: {body}"
-        );
-
-        // Verify the completed analysis is persisted and reusable.
-        let show = post(&format!(r#"{{"verb":"show","hash":"{hash}"}}"#));
-        assert!(
-            show.contains("\"analyzer\":\"mock\""),
-            "show must include the analysis slot: {show}"
-        );
     }
 
     #[test]

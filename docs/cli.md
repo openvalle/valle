@@ -28,6 +28,8 @@ export VALLE_HOME="$demo_dir/library"
 Project files and history live in each project directory.
 It does not relocate model weights. `VALLE_MODEL_CACHE` selects the model directory;
 otherwise models use the platform cache directory, or `$VALLE_CACHE_DIR/models`.
+URL downloads, thumbnails, and waveforms use `$VALLE_HOME/cache/{url,thumbs,waveforms}`
+(normally `~/.valle/cache`); `VALLE_CACHE_DIR` overrides this cache root.
 Each demo uses new output paths. Keep `demo_dir` for the following sections.
 
 ## Read bundled documentation
@@ -266,38 +268,27 @@ snapshot and an export record. Preview frames and storyboards do not save snapsh
 Binary media is recorded by digest and is not restored. Media changes during export produce
 warnings; the output still uses the captured inputs. Old project stores are not migrated.
 
-## Assets: import, annotate and find media
+## Assets: reusable files, tags, and notes
 
-See the [Asset library reference](assets.md), also available through
-`valle docs assets`, for import modes, annotations, entities, analysis and maintenance.
-
-Use the PNG rendered in the Motion example:
+See the [Asset library reference](assets.md), also available through `valle docs assets`.
 
 ```sh
-valle assets add "$demo_dir/cover.png" --mode copy --title "Demo cover" --tag demo \
-  --json > "$demo_dir/asset.json"
-asset_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["items"][0]["content_digest"])' "$demo_dir/asset.json")
-valle assets show "$asset_id" --json
-valle assets tag "$asset_id" --add approved
-valle assets annotate "$asset_id" --text "Opening title" --tag intro
-valle assets search "Opening" --json
+valle assets add "$demo_dir/cover.png" --to images --tag demo --note "Opening cover" --json
+valle assets show images/cover.png --json
+valle assets tag images/cover.png --add approved
+valle assets annotate images/cover.png --text "Opening title"
+valle assets search Opening --json
 valle assets list --tag demo --json
-valle assets resolve "$asset_id" --json
-valle assets stats --json
+valle assets edit images/cover.png --name poster.png
+valle assets remove images/poster.png
+valle assets recover --json
 ```
 
-IDs are content hashes; a full `sha256:...` value or an unambiguous prefix is
-accepted. Reimporting identical bytes reuses the ID. `reference` registers a file
-in place, `copy` stores a copy, and the default `reflink` attempts a copy-on-write
-import. `remove` deletes stored bytes but keeps metadata; reimport restores them.
-
-For timed annotations on audio/video, use `--at 1.5` or `--range 1 2`.
-`assets analyze ID --with shots,beats --events` explicitly invokes supported
-analyzers; they have their own media/model prerequisites. `vlm` additionally needs
-a configured service. Search and tags work without semantic analysis or models.
-`assets transcript` reads stored ASR; use `media transcribe` to produce a new
-standalone transcript. `media` commands do not automatically import outputs or
-attach their analyses to the asset library.
+Assets are ordinary files under `$VALLE_HOME/assets`. Use library-relative paths in commands;
+results include absolute paths for `project add`. Repeated adds merge tags and notes without
+copying duplicate content. Finder moves are recognized by scanning before use; missing entries
+retain notes until explicitly removed. `catalog.db` is primary data with seven retained backups.
+Recovery also works when the current database cannot open. Analyze files with `media` commands.
 
 ## Models and Media: local file processing
 
@@ -424,7 +415,7 @@ An NDJSON line has `ts_ms` (UTC epoch milliseconds), increasing `seq`, `level`,
 - `motion.compilation`: `{ "entry": "title.motion.tsx", "elapsedMs": 12.5 }`, emitted
   for each actual Motion compiler invocation, including a failed invocation.
 - `media.progress`: `phase`, optional `completed`, `total`, and `message`.
-- `models.progress` and `analyze.progress`: a human-readable `message`.
+- `models.progress`: a human-readable `message`.
 - `report`: the command's unchanged result payload in `data`.
 - `ready`: Studio URL, actual port, `runtime_version`, `runtime_source`.
 - `reload` and `browser_report`: service events during Studio sessions.

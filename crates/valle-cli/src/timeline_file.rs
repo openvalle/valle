@@ -508,18 +508,10 @@ pub(crate) fn serve(
     let config = json!({"input":file.input,"timelineFile":{"token":file.token},"project":project,"runtimeAssets":crate::webruntime::runtime_assets_json()});
     let mut runtime_files = runtime.serving_map();
     crate::cmd::motion::mount_motion_runtime_fonts(&mut runtime_files)?;
-    let library = if file.project.is_some() {
-        let home = valle_project::assets::Home::resolve()?;
-        Some(crate::webhost::LibraryCtx {
-            token: file.token.clone(),
-            make_ctx: Box::new(move || crate::cmd::assets::studio_context(home.clone())),
-            thumbnail: None,
-            analyzing: std::sync::atomic::AtomicBool::new(false),
-            run_analyze: None,
-        })
-    } else {
-        None
-    };
+    let library = Some(crate::webhost::LibraryCtx {
+        token: file.token.clone(),
+        root: valle_project::folder::app_home()?.join("assets"),
+    });
     let state = Arc::new(crate::webhost::StudioHost {
         runtime_files,
         assets_dir: None,
