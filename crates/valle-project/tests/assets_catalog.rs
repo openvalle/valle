@@ -18,6 +18,63 @@ fn list(ctx: &Context) -> Value {
 }
 
 #[test]
+fn case_only_renames_and_directory_spelling_preserve_one_asset_namespace() {
+    let temp = tempfile::tempdir().unwrap();
+    let ctx = context(&temp.path().join("library"));
+    let a = temp.path().join("one.bin");
+    let b = temp.path().join("two.bin");
+    fs::write(&a, b"one").unwrap();
+    fs::write(&b, b"two").unwrap();
+    run(
+        &ctx,
+        json!({"op":"add","paths":[a],"to":"Brand/Acme","tags":["keep"]}),
+    );
+    let second = run(&ctx, json!({"op":"add","paths":[b],"to":"brand/acme"}));
+    assert_eq!(second["items"][0]["path"], "Brand/Acme/two.bin");
+    run(
+        &ctx,
+        json!({"op":"edit","path":"brand/acme/ONE.BIN","name":"ONE.bin"}),
+    );
+    let shown = run(&ctx, json!({"op":"show","path":"Brand/Acme/ONE.bin"}));
+    assert_eq!(shown["tags"], json!(["keep"]));
+    assert_eq!(
+        run(&ctx, json!({"op":"list","directory":"brand/acme"}))["total"],
+        2
+    );
+    run(
+        &ctx,
+        json!({"op":"edit","path":"Brand/Acme/ONE.bin","name":"one.csv"}),
+    );
+    assert_eq!(
+        run(&ctx, json!({"op":"show","path":"Brand/Acme/one.csv"}))["kind"],
+        "data"
+    );
+}
+
+#[test]
+fn primary_constraints_cannot_be_rebuilt_as_if_they_were_derived_data() {
+    let temp = tempfile::tempdir().unwrap();
+    let ctx = context(&temp.path().join("library"));
+    fs::create_dir_all(&ctx.root).unwrap();
+    fs::write(ctx.root.join("take.txt"), b"take").unwrap();
+    run(
+        &ctx,
+        json!({"op":"tag","path":"take.txt","add":["preserve"]}),
+    );
+    let conn = rusqlite::Connection::open(ctx.root.join(".valle/catalog.db")).unwrap();
+    conn.execute_batch("ALTER TABLE tags RENAME TO old_tags; CREATE TABLE tags(asset_id INTEGER NOT NULL,tag TEXT NOT NULL,PRIMARY KEY(asset_id,tag)); INSERT INTO tags SELECT * FROM old_tags; DROP TABLE old_tags;").unwrap();
+    drop(conn);
+    let report = ctx.execute(serde_json::from_value(json!({"op":"list"})).unwrap());
+    assert_eq!(report["status"], "error");
+    let conn = rusqlite::Connection::open(ctx.root.join(".valle/catalog.db")).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT tag FROM tags", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "preserve"
+    );
+}
+
+#[test]
 fn imports_are_independent_deduplicated_and_notes_merge_without_exposing_identity() {
     let temp = tempfile::tempdir().unwrap();
     let ctx = context(&temp.path().join("library"));

@@ -181,7 +181,14 @@ impl Library {
             })
             .map(|e| e.path())
             .collect::<Vec<_>>();
-        files.sort();
+        files.sort_by_key(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            (
+                name.get(..10).unwrap_or("").to_owned(),
+                name.contains("-before-remove-"),
+                name.into_owned(),
+            )
+        });
         let excess = files.len().saturating_sub(7);
         for old in files.into_iter().take(excess) {
             fs::remove_file(old)?;
@@ -210,21 +217,25 @@ pub(crate) fn validate(conn: &Connection, full: bool) -> Result<()> {
     if check != "ok" {
         bail!("database integrity check failed: {check}");
     }
-    for (table, expected) in [
-        (
-            "assets",
-            vec![
-                "asset_id", "path", "path_key", "kind", "digest", "stamp", "missing",
-            ],
-        ),
-        ("tags", vec!["asset_id", "tag"]),
-        (
-            "notes",
-            vec!["note_id", "asset_id", "text", "at", "start", "end"],
-        ),
-    ] {
-        if columns(conn, table)? != expected {
-            bail!("unsupported primary table {table}; user data was preserved");
+    let normalize = |sql: &str| {
+        sql.chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    for statement in PRIMARY_SCHEMA
+        .split(';')
+        .map(str::trim)
+        .filter(|sql| !sql.is_empty())
+    {
+        let table = statement.split_whitespace().nth(2).unwrap();
+        let stored: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            [table],
+            |row| row.get(0),
+        )?;
+        if normalize(&stored) != normalize(statement) {
+            bail!("unsupported primary schema for {table}; user data was preserved");
         }
     }
     Ok(())
@@ -289,7 +300,7 @@ pub(crate) fn reindex(conn: &Connection, id: i64) -> Result<()> {
     for sql in [
         "SELECT tag FROM tags WHERE asset_id=?",
         "SELECT text FROM notes WHERE asset_id=?",
-        "SELECT info FROM facts WHERE asset_id=?",
+        "SELECT COALESCE(json_extract(info,'$.family'),'') FROM facts WHERE asset_id=?",
     ] {
         texts.extend(
             conn.prepare(sql)?

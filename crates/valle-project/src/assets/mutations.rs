@@ -96,7 +96,7 @@ impl Library {
         }
         let directory = PathBuf::from(to.unwrap_or(kind.directory())).join(subdirectory);
         let directory = directory.to_string_lossy().replace('\\', "/");
-        let dir = safe_path(&self.root, &directory)?;
+
         let proposed = name.unwrap_or(
             source
                 .file_name()
@@ -108,6 +108,11 @@ impl Library {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let dir = super::directory_path(&self.root, &directory)?;
+        let directory = dir
+            .strip_prefix(&self.root)?
+            .to_string_lossy()
+            .replace('\\', "/");
         let existing = tx
             .query_row(
                 "SELECT path FROM assets WHERE digest=? AND missing=0 ORDER BY path LIMIT 1",
@@ -191,7 +196,13 @@ impl Library {
         Ok(item)
     }
 
-    pub fn edit(&mut self, path: &str, name: Option<&str>, to: Option<&str>) -> Result<Value> {
+    pub fn edit(
+        &mut self,
+        path: &str,
+        name: Option<&str>,
+        to: Option<&str>,
+        inspector: &dyn Inspector,
+    ) -> Result<Value> {
         if name.is_none() && to.is_none() {
             bail!("provide --name or --to");
         }
@@ -210,18 +221,28 @@ impl Library {
         }
         let source = safe_path(&self.root, &entry.path)?;
         let old = Path::new(&entry.path);
-        let destination = PathBuf::from(to.unwrap_or(old.parent().unwrap().to_str().unwrap()))
-            .join(name.unwrap_or(old.file_name().unwrap().to_str().unwrap()));
+        let directory = super::directory_path(
+            &self.root,
+            to.unwrap_or(old.parent().unwrap().to_str().unwrap()),
+        )?;
+        let destination =
+            directory.join(name.unwrap_or(old.file_name().unwrap().to_str().unwrap()));
+        let destination = destination.strip_prefix(&self.root)?;
         let destination = destination.to_string_lossy().replace('\\', "/");
         if destination == entry.path {
             return Ok(json!({"status":"ok","path":entry.path,"unchanged":true}));
         }
         let target = safe_path(&self.root, &destination)?;
         let same_file = target.exists() && target.canonicalize()? == source.canonicalize()?;
+        let case_only = source.parent() == target.parent()
+            && folded(&source.file_name().unwrap().to_string_lossy())
+                == folded(&target.file_name().unwrap().to_string_lossy())
+            && !target.exists();
         if occupied(
             target.parent().unwrap(),
             target.file_name().unwrap().to_str().unwrap(),
         )? && !same_file
+            && !case_only
         {
             bail!("filename already exists: {destination}; choose another name or directory");
         }
@@ -235,10 +256,21 @@ impl Library {
             rename_new(&source, &target)?;
         }
         let stamp = serde_json::to_string(&FileStamp::read(&target)?)?;
+        let kind = Kind::detect(&target);
         tx.execute(
-            "UPDATE assets SET path=?,path_key=?,stamp=? WHERE asset_id=?",
-            params![destination, folded(&destination), stamp, entry.id],
+            "UPDATE assets SET path=?,path_key=?,stamp=?,kind=? WHERE asset_id=?",
+            params![
+                destination,
+                folded(&destination),
+                stamp,
+                kind.as_str(),
+                entry.id
+            ],
         )?;
+        if kind.as_str() != entry.kind {
+            let info = inspector.inspect(&target, kind);
+            tx.execute("INSERT INTO facts(asset_id,info) VALUES(?,?) ON CONFLICT(asset_id) DO UPDATE SET info=excluded.info",params![entry.id,info.to_string()])?;
+        }
         reindex(&tx, entry.id)?;
         tx.commit()?;
         self.show(&destination)

@@ -113,7 +113,12 @@ impl Context {
                 limit.unwrap_or(50).min(1000),
             ),
             Command::Show { path } => library.show(&path),
-            Command::Edit { path, name, to } => library.edit(&path, name.as_deref(), to.as_deref()),
+            Command::Edit { path, name, to } => library.edit(
+                &path,
+                name.as_deref(),
+                to.as_deref(),
+                self.inspector.as_ref(),
+            ),
             Command::Tag { path, add, rm } => library.tag(&path, &add, &rm),
             Command::Annotate {
                 path,
@@ -248,6 +253,44 @@ pub(crate) fn safe_path(root: &Path, path: &str) -> Result<PathBuf> {
             Ok(_) => (),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
             Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(current)
+}
+
+/// Reuse the existing spelling of directory components on every filesystem.
+/// Called under the SQLite write transaction so concurrent imports see one directory spelling.
+pub(crate) fn directory_path(root: &Path, path: &str) -> Result<PathBuf> {
+    let relative = relative(path)?;
+    let mut current = root.to_path_buf();
+    for part in relative.components() {
+        let wanted = part.as_os_str();
+        let matches = if current.is_dir() {
+            std::fs::read_dir(&current)?
+                .collect::<std::io::Result<Vec<_>>>()?
+                .into_iter()
+                .filter(|entry| {
+                    crate::files::folded(&entry.file_name().to_string_lossy())
+                        == crate::files::folded(&wanted.to_string_lossy())
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if matches.len() > 1 {
+            bail!(
+                "directory names differ only in case: {}; rename one before importing",
+                current.display()
+            );
+        }
+        current.push(
+            matches
+                .first()
+                .map(|entry| entry.file_name())
+                .unwrap_or_else(|| wanted.to_owned()),
+        );
+        if std::fs::symlink_metadata(&current).is_ok_and(|m| m.file_type().is_symlink()) {
+            bail!("library directories must not follow symlinks");
         }
     }
     Ok(current)
