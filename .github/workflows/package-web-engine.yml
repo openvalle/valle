@@ -83,6 +83,15 @@ jobs:
       - name: Install Web dependencies
         working-directory: web
         run: bun install --frozen-lockfile
+      - name: Check Web formatting and lint
+        working-directory: web
+        run: |
+          bun run fmt:check
+          bun run lint
+      - name: Check Rust lints
+        run: |
+          cargo clippy --locked -p valle-engine --lib --target wasm32-unknown-unknown --features web -- -D warnings
+          cargo clippy --locked --manifest-path web/tools/schema-gen/Cargo.toml -- -D warnings
       - name: Build Web engine and SDK
         working-directory: web
         run: |

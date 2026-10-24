@@ -10,7 +10,7 @@ pub(super) fn encode(raster: &RasterFrame, camera: &CameraFrameState) -> Vec<u8>
         .map_or((1.0, 0.0), |dof| (dof.focus_distance, dof.max_blur_radius));
     let mut visible = None;
     let mut near = None;
-    for (i, pixel) in raster.premul_rgba16f.chunks_exact(4).enumerate() {
+    for (i, pixel) in raster.premul_rgba16f.as_chunks::<4>().0.iter().enumerate() {
         if pixel[3] == 0 {
             continue;
         }

@@ -147,6 +147,21 @@ jobs:
       - name: Install Web dependencies
         working-directory: web
         run: bun install --frozen-lockfile
+      - name: Check Web formatting and lint
+        if: inputs.ci
+        working-directory: web
+        run: |
+          bun run fmt:check 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/web-format.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun run lint 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/web-lint.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check Rust lints
+        if: inputs.ci
+        run: |
+          cargo clippy --locked --workspace --target '${{ inputs.target }}' -- -D warnings 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/rust-clippy.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --manifest-path web/tools/schema-gen/Cargo.toml -- -D warnings 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/schema-clippy.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check packaging tool
         run: cargo test --locked -p xtask 2>&1 | Tee-Object -FilePath "$env:PACKAGE_LOGS/xtask-tests.log"
       - name: Build and verify single executable

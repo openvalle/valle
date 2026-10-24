@@ -194,6 +194,17 @@ jobs:
       - name: Install Web dependencies
         working-directory: web
         run: bun install --frozen-lockfile
+      - name: Check Web formatting and lint
+        if: inputs.ci
+        working-directory: web
+        run: |
+          bun run fmt:check 2>&1 | tee "$PACKAGE_LOGS/web-format.log"
+          bun run lint 2>&1 | tee "$PACKAGE_LOGS/web-lint.log"
+      - name: Check Rust lints
+        if: inputs.ci
+        run: |
+          cargo clippy --locked --workspace --target '${{ inputs.target }}' -- -D warnings 2>&1 | tee "$PACKAGE_LOGS/rust-clippy.log"
+          cargo clippy --locked --manifest-path web/tools/schema-gen/Cargo.toml -- -D warnings 2>&1 | tee "$PACKAGE_LOGS/schema-clippy.log"
       - name: Check packaging tool
         run: cargo test --locked -p xtask 2>&1 | tee "$PACKAGE_LOGS/xtask-tests.log"
       # Local packaging uses ad-hoc signing. Sign the final artifact after the build tests.
