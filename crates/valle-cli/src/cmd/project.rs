@@ -13,7 +13,7 @@ use std::{
 };
 use valle_project::{
     files::Kind,
-    folder::{CapturedInput, Project, absolute, app_home, digest_file, now_millis, write_json},
+    folder::{CapturedInput, Project, absolute, app_home, now_millis, write_json},
 };
 use valle_timeline::decode_timeline;
 
@@ -222,49 +222,68 @@ pub(crate) fn probe(path: &Path, kind: Kind) -> Value {
 pub(crate) fn capture_inputs(project: &Project) -> Result<Vec<CapturedInput>> {
     let bytes = fs::read(project.timeline_path())?;
     let timeline = decode_timeline(std::str::from_utf8(&bytes)?)?;
-    let mut doc: Value = serde_json::from_slice(&bytes)?;
-    super::timeline::prepare_motion_instances(&mut doc)?;
+    let document: Value = serde_json::from_slice(&bytes)?;
     let base = project.timeline_path().parent().unwrap().to_path_buf();
-    let motion = super::timeline::capture_motion_sources(&doc, &base)?;
-    let mut inputs = motion.snapshot_inputs();
-    let mut used = BTreeSet::new();
-    super::timeline::collect_used_resources(&doc["tracks"], &mut used);
-    let components = valle_compiler::motion_preparation_inputs(&timeline)?
-        .into_iter()
-        .map(|input| input.component)
+    let motion = valle_compiler::motion_preparation_inputs(&timeline)?;
+    let components = motion
+        .iter()
+        .map(|input| input.component.as_str())
         .collect::<BTreeSet<_>>();
+    let mut inputs = Vec::new();
+    for input in &motion {
+        let entry = base.join(&input.locator);
+        let graph = valle_compiler::motion::MotionModuleGraph::from_entry_path(&entry).map_err(
+            |diagnostics| anyhow::anyhow!("cannot capture component imports: {diagnostics:?}"),
+        )?;
+        let root = entry.parent().context("component has no parent")?;
+        for (module, source) in graph.modules {
+            let path = root.join(module);
+            let captured = fs::read(&path)?;
+            if captured != source.as_bytes() {
+                bail!("source changed while capturing: {}; retry", path.display());
+            }
+            inputs.push(CapturedInput::source(path, captured));
+        }
+    }
+    let mut cache = valle_project::folder::DigestCache::open(project);
+    let mut used = BTreeSet::new();
+    super::timeline::collect_used_resources(&document["tracks"], &mut used);
     for alias in used {
-        if components.contains(&alias) {
+        if components.contains(alias.as_str()) {
             continue;
         }
-        let Some(locator) = doc["resources"][&alias].as_str() else {
-            continue;
-        };
+        let locator = document["resources"][&alias]
+            .as_str()
+            .with_context(|| format!("missing resource {alias}"))?;
         let path = if locator.starts_with("http://") || locator.starts_with("https://") {
             valle_render::AssetCache::new(valle_render::default_cache_dir())?
                 .fetch(locator, "bin")?
         } else {
             base.join(locator)
         };
-        if inputs
-            .iter()
-            .any(|input| absolute(&input.path).ok() == absolute(&path).ok())
-        {
-            continue;
-        }
         if Kind::detect(&path).snapshot_source() {
             let (_, captured) = super::motion::capture_asset(&path)?;
             inputs.extend(captured);
         } else {
-            inputs.push(CapturedInput::media(
-                path.clone(),
-                digest_file(&path)
+            inputs.push(
+                cache
+                    .capture(&path)
                     .with_context(|| format!("reading {alias}: {}", path.display()))?,
-            ));
+            );
         }
     }
-    motion.verify_dependencies()?;
     inputs.push(CapturedInput::source(project.timeline_path(), bytes));
+    for input in &inputs {
+        if let Some(bytes) = &input.bytes
+            && fs::read(&input.path)? != *bytes
+        {
+            bail!(
+                "source changed while capturing: {}; retry",
+                input.path.display()
+            );
+        }
+    }
+    cache.persist()?;
     Ok(inputs)
 }
 

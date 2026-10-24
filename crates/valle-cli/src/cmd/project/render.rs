@@ -123,13 +123,17 @@ pub(super) fn render(
     }
     let mut warnings = Vec::new();
     for input in &prepared.snapshot_inputs {
-        if input.bytes.is_none() && digest_file(&input.path).ok() != Some(input.digest) {
+        if input.bytes.is_none()
+            && (input.stamp.is_none()
+                || valle_project::files::FileStamp::read(&input.path).ok() != input.stamp)
+            && digest_file(&input.path).ok() != Some(input.digest)
+        {
             warnings.push(json!({"code":"media_changed","path":project.path_key(&input.path)?,"message":"Media changed during export; this output uses the captured original and may no longer be reproducible from the project."}));
         }
     }
     let record = json!({"id":id,"createdAt":now_millis(),"snapshot":saved.as_ref().map(|s|s.snapshot),"outputs":outputs,
-        "inputs":prepared.snapshot_inputs.iter().map(|input|Ok(json!({"path":project.path_key(&input.path)?,"digest":input.digest}))).collect::<Result<Vec<_>>>()?,
-        "parameters":{"frame":delivery.frame,"frames":delivery.frames,"storyboard":delivery.storyboard,"codec":details["codec"],"canvas":canvas},"valleVersion":env!("CARGO_PKG_VERSION"),"warnings":warnings});
+        "inputs":prepared.snapshot_inputs.iter().map(|input|Ok(json!({"path":project.path_key(&input.path)?,"digest":input.digest,"fileIdentity":input.stamp}))).collect::<Result<Vec<_>>>()?,
+        "receipt":serde_json::from_str::<Value>(prepared.opened.receipt_json())?,"parameters":{"frame":delivery.frame,"frames":delivery.frames,"storyboard":delivery.storyboard,"codec":details["codec"],"canvas":canvas},"valleVersion":env!("CARGO_PKG_VERSION"),"warnings":warnings});
     let record_path = saved.as_ref().map(|s| {
         project
             .snapshot_dir(s.snapshot)

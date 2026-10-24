@@ -144,7 +144,8 @@ valle project studio --port 0 --events
 Render accepts the Timeline delivery options: video codecs, individual frames, frame
 sequences and storyboards. Full exports automatically save or reuse a source snapshot;
 each export has its own record under that snapshot's `exports/` directory. The record
-names output and input digests, parameters, warnings and the Valle executable version.
+names output and input digests, input file identities, the compiled render receipt,
+parameters, warnings and the Valle executable version.
 Preview frames and storyboards do not create snapshots.
 
 Rendering and history use the same captured inputs. If original media changes during

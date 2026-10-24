@@ -1,6 +1,6 @@
 [package]
 name = "valle-project"
-description = "Project timelines, asset registration, content addressing, and persistence."
+description = "Folder projects, source snapshots, and the reusable asset catalog."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -30,6 +30,7 @@ valle-media = { workspace = true, optional = true }
 default = ["host"]
 host = [
     "dep:libc",
+    "dep:valle-media",
     "dep:trash",
     "dep:serde_json",
     "dep:serde_jcs",
@@ -41,7 +42,7 @@ host = [
     "dep:rusqlite",
     "dep:unicode-normalization",
 ]
-native = ["host", "dep:valle-media", "valle-media/libav"]
+native = ["host", "valle-media/libav"]
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true

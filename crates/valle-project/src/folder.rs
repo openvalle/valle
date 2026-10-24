@@ -14,8 +14,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::ContentDigest;
+mod digests;
+pub use digests::DigestCache;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
     pub name: String,
@@ -34,11 +36,13 @@ pub struct CapturedInput {
     pub path: PathBuf,
     pub digest: ContentDigest,
     pub bytes: Option<Vec<u8>>,
+    pub stamp: Option<crate::files::FileStamp>,
 }
 
 impl CapturedInput {
     pub fn source(path: PathBuf, bytes: Vec<u8>) -> Self {
         Self {
+            stamp: crate::files::FileStamp::read(&path).ok(),
             path,
             digest: ContentDigest::of_bytes(&bytes),
             bytes: Some(bytes),
@@ -50,6 +54,7 @@ impl CapturedInput {
             path,
             digest,
             bytes: None,
+            stamp: None,
         }
     }
 }
@@ -246,9 +251,13 @@ impl Project {
         message: Option<&str>,
         source: &str,
     ) -> Result<SavedSnapshot> {
+        let project_bytes = fs::read(self.root.join("project.json"))?;
+        if serde_json::from_slice::<ProjectConfig>(&project_bytes)? != self.config {
+            bail!("project.json changed while capturing inputs; retry the command");
+        }
         inputs.push(CapturedInput::source(
             self.root.join("project.json"),
-            fs::read(self.root.join("project.json"))?,
+            project_bytes,
         ));
         self.save_inputs(inputs, BTreeMap::new(), message, source)
     }
@@ -403,15 +412,7 @@ impl Project {
     }
 }
 
-pub fn app_home() -> Result<PathBuf> {
-    if let Some(root) = std::env::var_os("VALLE_HOME") {
-        return Ok(root.into());
-    }
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .context("set VALLE_HOME because no user home directory is available")?;
-    Ok(PathBuf::from(home).join(".valle"))
-}
+pub use valle_media::paths::app_home;
 
 pub fn now_millis() -> u64 {
     SystemTime::now()

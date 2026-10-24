@@ -738,10 +738,10 @@ fn prepare_timeline_package_impl(
             let (bytes, hash, file) =
                 if matches!(declared_kind, Some(AssetKind::Video | AssetKind::Audio)) {
                     let (hash, file) = media.get(&path)?;
-                    snapshot_inputs.push(valle_project::folder::CapturedInput::media(
-                        path.clone(),
-                        hash,
-                    ));
+                    let mut captured =
+                        valle_project::folder::CapturedInput::media(path.clone(), hash);
+                    captured.stamp = media.captured_stamp(&path, hash);
+                    snapshot_inputs.push(captured);
                     (Vec::new(), hash, file)
                 } else {
                     let asset = if let Some(asset) = motion_environments.remove(name) {
