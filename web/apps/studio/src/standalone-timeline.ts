@@ -55,8 +55,6 @@ export class StandaloneTimelineSession {
   #generation = 0;
   #revision = 1;
   #target: string | null = null;
-  #targetDigest: string | null = null;
-  #ownedTimeline: Timeline | null = null;
 
   constructor(boot: StudioBoot, sources: StudioSourceEditor, host: StudioHost) {
     if (boot.session.kind !== "motion-file") throw new Error("Motion file session required");
@@ -72,7 +70,7 @@ export class StandaloneTimelineSession {
 
   get conversionBlockedReason(): string | null {
     return this.#boot.session.authorInputs?.extraFonts.length
-      ? "Extra --font stacks must be replaced by a declared font asset before saving as Timeline"
+      ? "Extra --font stacks must be replaced by a declared font asset before saving as a project"
       : null;
   }
 
@@ -80,12 +78,11 @@ export class StandaloneTimelineSession {
 
   async chooseTarget(): Promise<boolean> {
     if (this.conversionBlockedReason) throw new Error(this.conversionBlockedReason);
-    if (this.#target) return true;
-    const suggested = this.#boot.session.input.replace(/(?:\.motion)?\.[jt]sx?$/, "") + ".timeline.json";
-    const dialog = document.getElementById("saveAsTimelineDialog") as HTMLDialogElement;
-    const form = document.getElementById("saveAsTimelineForm") as HTMLFormElement;
-    const input = document.getElementById("saveAsTimelinePath") as HTMLInputElement;
-    const cancel = document.getElementById("saveAsTimelineCancel") as HTMLButtonElement;
+    const suggested = this.#target ?? this.#boot.session.input.replace(/(?:\.motion)?\.[jt]sx?$/, "") + "-project";
+    const dialog = document.getElementById("saveAsProjectDialog") as HTMLDialogElement;
+    const form = document.getElementById("saveAsProjectForm") as HTMLFormElement;
+    const input = document.getElementById("saveAsProjectPath") as HTMLInputElement;
+    const cancel = document.getElementById("saveAsProjectCancel") as HTMLButtonElement;
     input.value = suggested;
     input.setCustomValidity("");
     return await new Promise<boolean>((resolve) => {
@@ -93,11 +90,7 @@ export class StandaloneTimelineSession {
       const onSubmit = (event: SubmitEvent) => {
         event.preventDefault();
         const target = input.value.trim();
-        if (!target.endsWith(".json")) {
-          input.setCustomValidity("Timeline target must end in .json");
-          input.reportValidity();
-          return;
-        }
+        if (!target) return;
         this.#target = target;
         dialog.close("save");
       };
@@ -118,34 +111,17 @@ export class StandaloneTimelineSession {
   }
 
   async saveTimeline(edit: TimelineEdit): Promise<SaveReport> {
-    if (!this.#target || !this.#host.saveStandaloneTimeline) {
-      throw new Error("Timeline save target is unavailable");
-    }
-    if (edit.baseRevision !== this.#revision) {
-      return { outcome: "staleBase", revision: this.#revision };
-    }
-    const result = await this.#host.saveStandaloneTimeline({
-      target: this.#target,
-      baseDigest: this.#targetDigest,
+    if (!this.#target || !this.#host.saveProject) throw new Error("Project directory is unavailable");
+    if (edit.baseRevision !== this.#revision) return { outcome: "staleBase", revision: this.#revision };
+    const result = await this.#host.saveProject({
+      directory: this.#target,
       timeline: edit.timeline,
       expectedDependencies: { ...this.#boot.session.authorInputs?.inputDigests,
         ...(edit.expectedDependencies ?? this.#sources.confirmedDigests()) },
     });
-    if (result.status === "conflict") return { outcome: "staleBase", revision: this.#revision + 1 };
-    this.#target = result.target;
-    this.#targetDigest = result.digest;
-    this.#ownedTimeline = result.timeline;
-    this.#revision++;
-    return { outcome: "committed", revision: this.#revision };
-  }
-
-  async reloadSavedTimeline(): Promise<void> {
-    if (!this.#target || !this.#host.loadSavedStandaloneTimeline) return;
-    const saved = await this.#host.loadSavedStandaloneTimeline(this.#target);
-    this.#target = saved.target;
-    this.#targetDigest = saved.digest;
-    this.#ownedTimeline = saved.timeline;
-    this.#revision++;
+    location.assign(result.url);
+    // The new project opens as a Timeline file session, with its own source and save baselines.
+    return await new Promise<SaveReport>(() => {});
   }
 
   async assets(): Promise<StandaloneAssets | undefined> {
@@ -164,7 +140,7 @@ export class StandaloneTimelineSession {
   }
 
   async loadTimeline(): Promise<TimelineContext> {
-    const result = await this.#compile(this.#ownedTimeline ?? undefined);
+    const result = await this.#compile(undefined);
     const assets = await this.assets();
     const render = compiledPackage(result);
     const now = new Date().toISOString();
@@ -199,8 +175,7 @@ export class StandaloneTimelineSession {
         assets: assets?.locators ?? [], motion: { structures: [] },
         render: compiledPackage(result),
         motionSourceMetadata: result.package.motionSourceMetadata,
-        generatedWrapper: this.#ownedTimeline === null
-          && JSON.stringify(timeline) !== JSON.stringify(result.authorTimeline),
+        generatedWrapper:  JSON.stringify(timeline) !== JSON.stringify(result.authorTimeline),
         inputDependencies: this.#sources.confirmedDigests(),
         motionInstances: result.instances,
         warnings: result.warnings,
@@ -214,7 +189,7 @@ export class StandaloneTimelineSession {
   async #compile(draft?: Timeline): Promise<Extract<StudioCompileResult, { status: "ok" }>> {
     const payload: CompilePayload = standaloneCompilePayload(this.#boot, this.#sources.snapshot(),
       undefined, undefined, await this.assets());
-    if (draft && !this.#ownedTimeline && this.#lastWrapper && wrapperShape(draft) === wrapperShape(this.#lastWrapper)) {
+    if (draft && this.#lastWrapper && wrapperShape(draft) === wrapperShape(this.#lastWrapper)) {
       const clip = firstMotion(draft);
       if (clip && payload.standalone) {
         payload.standalone.props = clip.props ?? this.#boot.session.authorInputs?.props;
@@ -237,7 +212,7 @@ export class StandaloneTimelineSession {
     const result = await this.#compiler.compile(payload);
     if (result.status === "error") throw new Error(result.message);
     this.#lastInstances = result.instances;
-    if (!draft || (!this.#ownedTimeline && this.#lastWrapper && wrapperShape(draft) === wrapperShape(this.#lastWrapper))) {
+    if (!draft || (this.#lastWrapper && wrapperShape(draft) === wrapperShape(this.#lastWrapper))) {
       this.#lastWrapper = result.authorTimeline;
     }
     return result;

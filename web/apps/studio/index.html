@@ -17,6 +17,9 @@
       <span class="session-badge" id="sessionBadge"></span>
     </div>
     <div class="top-actions">
+      <button class="button quiet" id="homeButton" type="button">Home</button>
+      <button class="button quiet" id="assetsPanelButton" type="button">Assets</button>
+      <button class="button quiet" id="historyPanelButton" type="button" hidden>History</button>
       <span id="saveStatus" class="save-status"></span>
       <button class="problems-button" id="problemsButton" type="button" hidden
         aria-haspopup="dialog" aria-expanded="false" aria-controls="problemsPanel">
@@ -25,7 +28,7 @@
       <span class="top-sep" aria-hidden="true"></span>
       <button class="icon-button" id="undoBtn" type="button" title="Undo (⌘Z)" aria-label="Undo" disabled data-icon="undo"></button>
       <button class="icon-button" id="redoBtn" type="button" title="Redo (⇧⌘Z)" aria-label="Redo" disabled data-icon="redo"></button>
-      <button class="button quiet" id="saveAsTimeline" type="button" hidden>Save as Timeline</button>
+      <button class="button quiet" id="saveAsProject" type="button" hidden>Save as project</button>
       <studio-project-controls id="projectControls"></studio-project-controls>
       <button class="icon-button" id="inspectorToggle" type="button" title="Show / hide inspector (⌥⌘I)" aria-label="Show / hide inspector" aria-pressed="true" data-icon="panel"></button>
       <span class="top-sep export-sep" aria-hidden="true"></span>
@@ -123,6 +126,7 @@
         <button class="icon-button" id="collapseTimeline" type="button" title="Collapse timeline (⌥⌘T)" aria-label="Collapse timeline" data-icon="chevron-down"></button>
       </div>
     </div>
+    <p id="timelineImportStatus" class="timeline-import-message" role="status" hidden></p>
     <div class="timeline-scroll" id="timelineScroll">
       <studio-timeline id="tracks"></studio-timeline>
     </div>
@@ -132,14 +136,14 @@
     </footer>
   </section>
 
-  <dialog id="saveAsTimelineDialog" class="studio-dialog" aria-labelledby="saveAsTimelineTitle">
-    <form id="saveAsTimelineForm">
-      <h2 id="saveAsTimelineTitle">Save as Timeline</h2>
-      <label for="saveAsTimelinePath">Timeline JSON path</label>
-      <input id="saveAsTimelinePath" type="text" required />
-      <p>The JSX files and bound assets remain external references.</p>
+  <dialog id="saveAsProjectDialog" class="studio-dialog" aria-labelledby="saveAsProjectTitle">
+    <form id="saveAsProjectForm">
+      <h2 id="saveAsProjectTitle">Save as project</h2>
+      <label for="saveAsProjectPath">Project directory</label>
+      <input id="saveAsProjectPath" type="text" required />
+      <p>The component and its media are copied into a new project.</p>
       <div class="dialog-actions">
-        <button class="button quiet" id="saveAsTimelineCancel" type="button">Cancel</button>
+        <button class="button quiet" id="saveAsProjectCancel" type="button">Cancel</button>
         <button class="button primary" type="submit">Save Timeline</button>
       </div>
     </form>

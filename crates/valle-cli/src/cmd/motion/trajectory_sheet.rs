@@ -42,7 +42,7 @@ pub(super) fn render(
     {
         return Err(anyhow!("--trajectory-sheet requires a .png output path"));
     }
-    super::super::fixed_render::require_new_output(output)?;
+    super::super::delivery_report::require_new_output(output)?;
     let fonts = fixed_package_font_blobs(
         artifact,
         explicit_fonts,

@@ -286,7 +286,7 @@ async function run(
     await cdp("Runtime.enable");
     await cdp("Log.enable");
     await cdp("Network.enable");
-    await cdp("Page.navigate", { url: `http://127.0.0.1:${port}/studio` });
+    await cdp("Page.navigate", { url: `http://127.0.0.1:${port}/` });
     const state = () =>
       evaluate(
         `(()=>{const app=document.querySelector('valle-studio-app');return {state:app?.shellState,source:document.querySelector('#sourceText')?.value,status:document.querySelector('#sourceStatus')?.textContent,previewStatusClass:document.querySelector('#previewStatus')?.className,compiles:performance.getEntriesByName('valle-studio-compile').length,text:document.body?.innerText??"",error:document.querySelector('#errtext')?.textContent??""};})()`,

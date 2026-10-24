@@ -118,6 +118,12 @@ export class StudioSourceEditor extends EventTarget {
     }
   }
 
+  async includeTimeline(timeline: import("valle-engine").Timeline): Promise<void> {
+    const files = await this.#host.loadSourceFiles(this.snapshot(), timeline);
+    this.drafts.reconcile(files);
+    this.#renderFiles();
+  }
+
   async refreshFromDisk(): Promise<void> {
     if (this.#saving) {
       this.#refreshAfterSave = true;

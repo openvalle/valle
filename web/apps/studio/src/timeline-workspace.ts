@@ -1,3 +1,4 @@
+import { StudioServices, appendImportedAssets, requireImported, type ImportIntent } from "./project-client.ts";
 import { DraftPreview } from "./draft-preview.ts";
 import { bindStudioVideoExport } from "./browser-export.ts";
 import type { StudioSourceEditor } from "./source-editor.ts";
@@ -673,7 +674,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       : "";
     document.getElementById("statusbarRight")!.textContent = canSaveTimeline
       ? storageKind === "file" ? "Save writes the opened JSON file"
-        : storageKind === "motion" ? "Source file · Save as Timeline for arrangement edits"
+        : storageKind === "motion" ? "Source file · Save as project for arrangement edits"
           : `Revision ${baseRevision}`
       : "Read-only preview session";
     projectControls.sync({ visible: canSaveTimeline, dirty, saving, conflictMessage });
@@ -1936,7 +1937,8 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   const saveQueue = new TimelineSaveQueue(saveOneSnapshot, consumeExternalUpdate);
 
   async function requestSave(force = false): Promise<boolean> {
-    if (!canSaveTimeline || (!dirty && !force) || saving) return false;
+    if (saving) return saveQueue.request();
+    if (!canSaveTimeline || (!dirty && !force)) return false;
     forceConversion = force;
     saving = true;
     renderMeta();
@@ -1950,12 +1952,19 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   async function reloadProject(): Promise<void> {
     try { await reloadSavedSnapshot(); }
     catch (error) {
-      setConflict(`Cannot reload ${storageKind}: ${error instanceof Error ? error.message : String(error)}`);
+      const message = `Cannot reload ${storageKind}: ${error instanceof Error ? error.message : String(error)}`;
+      setConflict(message);
+      shell.dispatchIntent({ type: "preview-status", status: "error", message });
     }
   }
 
   async function reloadSavedSnapshot(): Promise<void> {
-    if (sourceEditor && !await sourceEditor.reload()) return;
+    const previousStatus=shell.shellState.previewStatus;
+    const previousMessage=shell.shellState.previewMessage;
+    shell.dispatchIntent({type:"preview-status",status:"updating",message:"Reloading saved files…"});
+    if (sourceEditor && !await sourceEditor.reload()) {
+      shell.dispatchIntent({type:"preview-status",status:previousStatus,message:previousMessage});return;
+    }
     await options.beforeReload?.();
     const next = await loadTimeline() as StudioConfig;
     draftPreview.invalidate();
@@ -1985,12 +1994,64 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     scheduleDraftPreview();
   }
 
+  shell.addEventListener("studio-prepare-project-operation", (event) => {
+    const complete = (event as CustomEvent<{complete:(saved:boolean)=>void}>).detail.complete;
+    void (async () => {
+      try {
+        if (conflictMessage) { complete(false); return; }
+        const saved = saving ? await saveQueue.request() : !dirty || await requestSave();
+        complete(saved && !dirty && !conflictMessage);
+      } catch { complete(false); }
+    })();
+  });
+
+  const importServices = new StudioServices(boot.session.token);
+  async function importToTimeline(intent: ImportIntent): Promise<void> {
+    try {
+      if (boot.session.kind !== "timeline-file" || !boot.project) throw new Error("Open a project Timeline to import clips.");
+      const imported = intent.files ? await importServices.importFiles(intent.files) : await importServices.importAssets(intent.assets ?? []);
+      requireImported(imported);
+      const before = JSON.stringify(workingCopy);
+      const candidate = appendImportedAssets(workingCopy, imported, boot, currentTime());
+      await sourceEditor?.includeTimeline(candidate);
+      const preview = await options.preparePreview?.(candidate);
+      if (!preview || preview.status === "error") throw new Error(preview?.status === "error" ? preview.diagnostics.map((d) => d.message).join("; ") : "Draft preview is unavailable");
+      if (before !== JSON.stringify(workingCopy) || saving || conflictMessage) throw new Error("The Timeline changed while importing. Copied files remain; retry after resolving the draft.");
+      workspaceRuntime.setMotionSourceMetadata(preview.motionSourceMetadata ?? {});
+      confirmedDependencies = { ...preview.inputDependencies };
+      await editQueue.enqueue(() => commitWorkingCopy(candidate));
+      await flushDraftPreview();
+      if (!await requestSave()) throw new Error("Files were imported; the Timeline draft was not saved. Resolve the save conflict before retrying.");
+      const status = document.getElementById("timelineImportStatus")!; status.hidden = true;
+      intent.complete();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = document.getElementById("timelineImportStatus")!; status.textContent = message; status.hidden = false;
+      intent.complete(message);
+    }
+    shell.dispatchEvent(new CustomEvent("studio-assets-changed"));
+  }
+  shell.addEventListener("studio-import-assets", (event) => { void importToTimeline((event as CustomEvent<ImportIntent>).detail); });
+  timelinePane.addEventListener("dragover", (event) => {
+    if (boot.project && (event.dataTransfer?.types.includes("Files") || event.dataTransfer?.types.includes("application/x-valle-asset"))) event.preventDefault();
+  });
+  timelinePane.addEventListener("drop", (event) => {
+    if (!boot.project) return;
+    const raw = event.dataTransfer?.getData("application/x-valle-asset");
+    const files = [...event.dataTransfer?.files ?? []];
+    if (!raw && !files.length) return;
+    event.preventDefault();
+    const complete = (message?: string) => { if (message) { const status = document.getElementById("timelineImportStatus")!; status.textContent = message; status.hidden = false; } };
+    try { void importToTimeline(raw ? { assets: [JSON.parse(raw)], complete } : { files, complete }); }
+    catch (error) { complete(String(error)); }
+  });
+
   projectControls.addEventListener("studio-project-intent", (event) => {
     const intent = (event as CustomEvent<StudioProjectIntent>).detail;
     if (intent.type === "save") void requestSave();
     else if (!dirty || confirm(`Discard unsaved changes and reload the saved ${storageKind}?`)) void reloadProject();
   });
-  shell.addEventListener("studio-save-as-timeline", () => { void requestSave(true); });
+  shell.addEventListener("studio-save-as-project", () => { void requestSave(true); });
 
   shell.addEventListener("studio-host-event", (event) => {
     const detail = (event as CustomEvent<{ type: string; data: unknown }>).detail;

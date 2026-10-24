@@ -1,7 +1,7 @@
-import { createTimelineCompilerRuntime } from "valle-engine";
-import { StudioTransport, isEditableTarget, type StudioTransportIntent } from "../../shared/transport.ts";
-import { type CanonicalTimelineDocument } from "valle-engine";
-import { VallePlayerElement, type VallePlayerElementOptions } from "valle-engine/element";
+import { createTimelineCompilerRuntime } from "../../../packages/engine/src/index.ts";
+import { StudioTransport, isEditableTarget, type StudioTransportIntent } from "../../../apps/shared/transport.ts";
+import { type CanonicalTimelineDocument } from "../../../packages/engine/src/index.ts";
+import { VallePlayerElement, type VallePlayerElementOptions } from "../../../packages/engine/src/element.ts";
 
   type PlayerOptions = VallePlayerElementOptions;
   type DemoTimeline = CanonicalTimelineDocument["timeline"];

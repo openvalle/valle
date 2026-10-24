@@ -930,3 +930,17 @@ External-file examples require the explicitly named files; parameter/resource
 fragments are not standalone timelines. These results do not claim coverage of
 every font, remote locator, color pipeline or Web renderer combination. Verification
 scripts and generated media stay outside the public examples directory.
+
+## Studio project tools
+
+Studio serves one editor at `/`. When a Timeline belongs to a folder project, Assets can
+browse its `media/` and `components/` and the reusable library. A Timeline drop imports
+all files first, validates the combined draft, then uses the normal file save protocol.
+Any failed import leaves the Timeline unchanged; successful file copies remain for retry.
+Undo edits the Timeline without deleting imported files. Library timed notes are selection
+hints and are not stored in clips.
+
+History and native project Exports are available only for `project.json`'s entry Timeline.
+A different Timeline in that folder keeps normal browser export. Referenced component,
+shader, data and media changes reload a clean workspace; unsaved drafts cause a conflict
+instead of being replaced. See the [Project guide](project.md).

@@ -18,20 +18,10 @@ describe("app boundaries", () => {
     expect(main).toContain("StandaloneTimelineSession");
   });
 
-  test("routes demo and console through their app-local entries", async () => {
-    const [demoHtml, demo, consoleHtml, consoleApp] = await Promise.all([
-      Bun.file(path.join(root, "apps/preview/index.html")).text(),
-      Bun.file(path.join(root, "apps/preview/src/host.ts")).text(),
-      Bun.file(path.join(root, "apps/console/index.html")).text(),
-      Bun.file(path.join(root, "apps/console/src/console-app.ts")).text(),
-    ]);
-    expect(demoHtml).toContain('src="./src/main.ts"');
-    expect(demo).toContain('from "valle-engine/element"');
-    expect(demo).toContain("runtimeAssets: config.runtimeAssets");
-    expect(consoleHtml).toContain('src="./src/main.ts"');
-    expect(consoleHtml).toContain("<valle-console-app>");
-    expect(consoleApp).toContain('from "lit"');
-    expect(`${demoHtml}\n${demo}\n${consoleHtml}\n${consoleApp}`).not.toMatch(/["'`]\/(?:wasm|vendor|src)\//);
+  test("keeps Preview in the test fixture and removes Console", async () => {
+    expect(await Bun.file(path.join(root,"tests/preview/index.html")).text()).toContain('src="./src/main.ts"');
+    expect(await Bun.file(path.join(root,"apps/console/index.html")).exists()).toBeFalse();
+    expect(APP_BUILDS).toEqual([["studio","apps/studio/index.html"]]);
   });
 
   test("publishes one Studio app for all entry types", () => {

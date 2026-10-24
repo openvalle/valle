@@ -53,7 +53,7 @@ export async function emitRuntimeManifests(
 
   const apps: PackageRuntimeManifest[] = [];
   const claimedAppScripts = new Set<string>();
-  for (const app of ["preview", "studio", "console"] as const) {
+  for (const app of ["studio"] as const) {
     const appDir = path.join(dist, "apps", app);
     const files = (await listFiles(appDir))
       .filter((file) => !file.endsWith(".map"))
@@ -125,9 +125,7 @@ export async function emitRuntimeManifests(
     ],
     workers: [{ id: "product-frame", path: "runtime/workers/product-frame.js" }, { id: "motion-curves", path: "runtime/workers/motion-curves.js" }, { id: "studio-compile", path: "runtime/workers/studio-compile.js" }],
     apps: [
-      { id: "preview", html: "apps/preview/index.html" },
       { id: "studio", html: "apps/studio/index.html" },
-      { id: "console", html: "apps/console/index.html" },
     ],
     routes,
     runtimeAssets: {
@@ -225,7 +223,7 @@ function releaseRoutes(apps: PackageRuntimeManifest[]): Record<string, string> {
       routes[route] = asset.path;
     }
   }
-  routes["index.html"] = routes["preview.html"];
+  routes["index.html"] = routes["studio.html"];
   return Object.fromEntries(Object.entries(routes).sort(([a], [b]) => a.localeCompare(b)));
 }
 

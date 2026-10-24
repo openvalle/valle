@@ -4,7 +4,7 @@ pub mod assets;
 pub(crate) mod docs;
 pub mod enhance;
 
-pub mod fixed_render;
+mod delivery_report;
 pub mod inpaint;
 pub mod interpolate;
 pub mod matte;

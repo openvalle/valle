@@ -4,7 +4,7 @@ const root = path.resolve(import.meta.dir, "..");
 const build = Bun.spawn(["bun", "run", "build:runtime"], { cwd: root, stdout: "inherit", stderr: "inherit" });
 if (await build.exited !== 0) throw new Error("initial web build failed");
 
-const appRoot = path.join(root, "dist", "apps", "preview");
+const appRoot = path.join(root, "dist", "apps", "studio");
 const server = Bun.serve({
   port: Number(Bun.env.PORT ?? 9527),
   async fetch(request) {
@@ -22,4 +22,4 @@ const server = Bun.serve({
   },
 });
 
-console.log(`Valle Web preview: ${server.url}`);
+console.log(`Valle Studio: ${server.url}`);

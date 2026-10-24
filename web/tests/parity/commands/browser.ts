@@ -9,10 +9,11 @@ import { comparePngs, countNonBlackPixels } from "../lib/metrics.ts";
 import { browserLaunchCommand, pollBrowserReport, resolveBrowser, terminateBrowser, waitForUnexpectedBrowserExit } from "../lib/browser.ts";
 const WEB_DIST_DIR = repositoryPath("web/dist");
 const RUNTIME_MANIFEST = JSON.parse(await readText(joinPath(WEB_DIST_DIR, "runtime/manifest.json")));
-const APP_HTML = new Map(RUNTIME_MANIFEST.apps.map(({ id, html }: any) => [`${id}.html`, joinPath(WEB_DIST_DIR, html)]));
+const APP_HTML = new Map<string, string>(RUNTIME_MANIFEST.apps.map(({ id, html }: any) => [`${id}.html`, joinPath(WEB_DIST_DIR, html)]));
+APP_HTML.set("preview.html", repositoryPath("web/test-dist/preview/index.html"));
 export const browserCommand: CommandDefinition = {
     name: "browser",
-    summary: "Run Demo, Studio or Console parity in a real Chromium browser.",
+    summary: "Run Preview or Studio parity in a real Chromium browser.",
     options: [
         { name: "request", value: "request.json", description: "browser smoke request", required: true },
     ],
@@ -34,8 +35,8 @@ async function runBrowser(requestPath: any) {
         return;
     }
     const page = request.page ?? "preview.html";
-    if (!["preview.html", "studio.html", "console.html"].includes(page)) {
-        throw new Error(`unsupported page '${page}' (preview.html | studio.html | console.html)`);
+    if (!["preview.html", "studio.html"].includes(page)) {
+        throw new Error(`unsupported page '${page}' (preview.html | studio.html)`);
     }
     // With serverUrl, use the running Valle host and poll its smoke-report endpoint.
     const serverUrl = request.serverUrl ? String(request.serverUrl).replace(/\/$/, "") : null;
@@ -156,10 +157,14 @@ async function handleRequest(request: any, state: any) {
     }
     try {
         if (url.pathname === "/preview.html" || url.pathname === "/") {
-            return serveFile(APP_HTML.get("preview.html"), "text/html");
+            return new Response((await readText(APP_HTML.get("preview.html")!)).replace(/(src|href)="(?!https?:|data:|\/)([^"]+)"/g, '$1="/test-preview/$2"'), {headers:{"content-type":"text/html"}});
         }
-        else if (url.pathname === "/studio.html" || url.pathname === "/console.html") {
+        else if (url.pathname === "/studio.html") {
             return serveFile(APP_HTML.get(url.pathname.slice(1)), "text/html");
+        }
+        else if (url.pathname.startsWith("/test-preview/")) {
+            const file=resolveUnder(repositoryPath("web/test-dist/preview"),url.pathname.slice("/test-preview/".length));
+            return serveFile(file,contentTypeFor(file));
         }
         else if (url.pathname === "/studio/boot.json") {
             return Response.json({

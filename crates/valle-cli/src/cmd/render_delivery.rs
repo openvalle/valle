@@ -27,7 +27,7 @@ impl DeliveryObservation {
             )
         });
         if let Some((_, path)) = &performance {
-            super::fixed_render::require_new_output(path)?;
+            super::delivery_report::require_new_output(path)?;
         }
         let render_trace = performance.as_ref().map(|(trace, _)| trace.clone());
         Ok(Self {
@@ -66,7 +66,7 @@ impl DeliveryPlan {
         let mut codec = None;
         if let Some(sheet) = &args.storyboard {
             require_extension(sheet, "png")?;
-            super::fixed_render::require_new_output(sheet)?;
+            super::delivery_report::require_new_output(sheet)?;
         }
         if let Some(output) = &args.output {
             if args.frame.is_some() {
@@ -79,7 +79,7 @@ impl DeliveryPlan {
                         "--frame requires one PNG file; use --frames with a PNG sequence pattern"
                     );
                 }
-                super::fixed_render::require_new_output(output)?;
+                super::delivery_report::require_new_output(output)?;
             } else if output
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
@@ -119,7 +119,7 @@ impl DeliveryPlan {
                         "--codec must match the output extension: h264 and hevc use .mp4; qtrle and prores4444 use .mov"
                     );
                 }
-                super::fixed_render::require_new_output(output)?;
+                super::delivery_report::require_new_output(output)?;
             }
         } else if args.storyboard.is_none() {
             bail!("provide -o or --storyboard");
@@ -255,7 +255,7 @@ impl DeliveryPlan {
             );
         }
         let (summary, details) = self.execute(renderer)?;
-        let mut report = super::fixed_render::delivery_report(
+        let mut report = super::delivery_report::delivery_report(
             opened,
             self.operation(),
             self.output(),

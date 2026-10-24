@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-fn studio(mode: &str) {
+fn browser_acceptance(script: &str, mode: Option<&str>) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let runtime = std::env::var_os("VALLE_WEB_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -20,9 +20,12 @@ fn studio(mode: &str) {
         eprintln!("skip Studio browser acceptance: web runtime is not built");
         return;
     }
-    let output = Command::new("bun")
-        .arg(root.join("web/tests/studio-browser.ts"))
-        .arg(mode)
+    let mut command = Command::new("bun");
+    command.arg(root.join("web/tests").join(script));
+    if let Some(mode) = mode {
+        command.arg(mode);
+    }
+    let output = command
         .env("VALLE_TEST_CLI", env!("CARGO_BIN_EXE_valle"))
         .output()
         .expect("run real Chrome Studio acceptance (requires Bun and Chrome)");
@@ -33,6 +36,15 @@ fn studio(mode: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
     eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+}
+
+fn studio(mode: &str) {
+    browser_acceptance("studio-browser.ts", Some(mode));
+}
+
+#[test]
+fn project_studio_uses_folder_library_history_and_exports() {
+    browser_acceptance("project-studio-browser.ts", None);
 }
 
 #[test]
