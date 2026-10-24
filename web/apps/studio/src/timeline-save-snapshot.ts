@@ -1,13 +1,7 @@
-import type {
-  EditTimelineResponse,
-  Timeline,
-} from "valle-engine";
+import type { EditTimelineResponse, Timeline } from "valle-engine";
 import type { StudioTimelineRevision } from "./host.ts";
 
-type AcceptedTimelineSave = Extract<
-  EditTimelineResponse,
-  { outcome: "committed" | "unchanged" }
->;
+type AcceptedTimelineSave = Extract<EditTimelineResponse, { outcome: "committed" | "unchanged" }>;
 
 export interface ReloadedTimelineSnapshot {
   timelineRevision: StudioTimelineRevision;
@@ -63,17 +57,20 @@ function assertJsonSame(label: string, expected: unknown, actual: unknown): void
 export function jsonEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left)
-      && Array.isArray(right)
-      && left.length === right.length
-      && left.every((value, index) => jsonEqual(value, right[index]));
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonEqual(value, right[index]))
+    );
   }
   if (isRecord(left) || isRecord(right)) {
     if (!isRecord(left) || !isRecord(right)) return false;
     const leftKeys = Object.keys(left).sort();
     const rightKeys = Object.keys(right).sort();
-    return jsonEqual(leftKeys, rightKeys)
-      && leftKeys.every((key) => jsonEqual(left[key], right[key]));
+    return (
+      jsonEqual(leftKeys, rightKeys) && leftKeys.every((key) => jsonEqual(left[key], right[key]))
+    );
   }
   return false;
 }

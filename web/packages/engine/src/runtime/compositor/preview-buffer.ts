@@ -24,11 +24,11 @@ export class PreviewBuffer<T> {
     try {
       let cursor = first;
       while (cursor <= last && !this.stopped) {
-        while (this.entries.length >= this.capacity && !this.stopped)
-          await tick();
+        while (this.entries.length >= this.capacity && !this.stopped) await tick();
         if (this.stopped) break;
         const frame = Math.max(cursor, this.minimumFrame, this.clockFrame?.() ?? cursor);
-        if (!Number.isSafeInteger(frame)) throw new RangeError("Preview clock frame must be an integer");
+        if (!Number.isSafeInteger(frame))
+          throw new RangeError("Preview clock frame must be an integer");
         if (frame > last) break;
         const value = await this.create(frame);
         if (this.stopped) {
@@ -45,11 +45,7 @@ export class PreviewBuffer<T> {
     }
   }
   async prebuffer(count: number): Promise<void> {
-    while (
-      !this.stopped &&
-      !this.done &&
-      this.entries.length < Math.min(count, this.capacity)
-    )
+    while (!this.stopped && !this.done && this.entries.length < Math.min(count, this.capacity))
       await tick();
     if (this.failure) throw this.failure.cause;
   }

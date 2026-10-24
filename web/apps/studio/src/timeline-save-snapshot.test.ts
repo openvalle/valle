@@ -58,24 +58,30 @@ test("save accepts the exact sparse Timeline reloaded from the accepted revision
 
 test("save rejects revision and complete Timeline drift", () => {
   const submitted = captureTimelineSaveSnapshot(document("#14532dff"));
-  expect(() => assertReloadedTimelineSave(
-    response,
-    reloaded({ timelineRevision: revision({ revision: 9 }) }),
-    submitted,
-  )).toThrow("Timeline revision drift");
+  expect(() =>
+    assertReloadedTimelineSave(
+      response,
+      reloaded({ timelineRevision: revision({ revision: 9 }) }),
+      submitted,
+    ),
+  ).toThrow("Timeline revision drift");
   const other = document("#000000ff");
-  expect(() => assertReloadedTimelineSave(
-    response,
-    reloaded({ timeline: other, timelineJson: JSON.stringify(other) }),
-    submitted,
-  )).toThrow("reloaded complete Timeline drift");
+  expect(() =>
+    assertReloadedTimelineSave(
+      response,
+      reloaded({ timeline: other, timelineJson: JSON.stringify(other) }),
+      submitted,
+    ),
+  ).toThrow("reloaded complete Timeline drift");
 });
 
 test("save rejects timelineJson that disagrees with the reloaded Timeline", () => {
   const submitted = captureTimelineSaveSnapshot(document("#14532dff"));
-  expect(() => assertReloadedTimelineSave(
-    response,
-    reloaded({ timelineJson: JSON.stringify(document("#000000ff")) }),
-    submitted,
-  )).toThrow("reloaded timelineJson drift");
+  expect(() =>
+    assertReloadedTimelineSave(
+      response,
+      reloaded({ timelineJson: JSON.stringify(document("#000000ff")) }),
+      submitted,
+    ),
+  ).toThrow("reloaded timelineJson drift");
 });

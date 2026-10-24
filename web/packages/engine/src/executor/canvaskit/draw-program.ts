@@ -1,7 +1,4 @@
-import {
-  DRAW_PROGRAM_ABI,
-  PROGRAM_PATCH_ABI,
-} from "../../generated/packed-abi.ts";
+import { DRAW_PROGRAM_ABI, PROGRAM_PATCH_ABI } from "../../generated/packed-abi.ts";
 import { PathArenaCache } from "./path-arena-cache.ts";
 
 export { DRAW_PROGRAM_ABI };
@@ -17,10 +14,27 @@ const PATCH_HEADER_BYTES = PROGRAM_PATCH_ABI.headerBytes;
 const PATCH_COPY = 0;
 const PATCH_INSERT = 1;
 
-export interface RectWire { x: number; y: number; width: number; height: number }
-export interface LinearColorWire { red: number; green: number; blue: number; alpha: number }
-export interface PathWire { verbs: string[]; points: Array<[number, number]> }
-export interface TaggedWire { kind: string; value?: unknown; [key: string]: unknown }
+export interface RectWire {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+export interface LinearColorWire {
+  red: number;
+  green: number;
+  blue: number;
+  alpha: number;
+}
+export interface PathWire {
+  verbs: string[];
+  points: Array<[number, number]>;
+}
+export interface TaggedWire {
+  kind: string;
+  value?: unknown;
+  [key: string]: unknown;
+}
 export interface BatchInstanceTableWire {
   readonly bytes: Uint8Array;
   readonly view: DataView;
@@ -66,8 +80,8 @@ export function applyDrawProgramPatch(
   const baseline = exactBytes(baselineInput);
   const patch = exactBytes(patchInput);
   if (
-    baseline.byteLength > PROGRAM_PATCH_ABI.maximumBytes
-    || patch.byteLength > PROGRAM_PATCH_ABI.maximumBytes
+    baseline.byteLength > PROGRAM_PATCH_ABI.maximumBytes ||
+    patch.byteLength > PROGRAM_PATCH_ABI.maximumBytes
   ) {
     fail("program patch byte budget exceeded");
   }
@@ -127,12 +141,16 @@ export function applyDrawProgramPatch(
 }
 
 /** Decode the DrawProgram arena before any CanvasKit object or surface is allocated. */
-export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView, cache?: PathArenaCache): Promise<DrawProgramWire> {
+export async function decodeDrawProgram(
+  input: ArrayBuffer | ArrayBufferView,
+  cache?: PathArenaCache,
+): Promise<DrawProgramWire> {
   const bytes = exactBytes(input);
   if (bytes.byteLength > DRAW_PROGRAM_ABI.maximumBytes) {
     fail(`byte budget exceeded (${bytes.byteLength} > ${DRAW_PROGRAM_ABI.maximumBytes})`);
   }
-  if (bytes.byteLength < TABLE_BYTES) fail(`truncated section table (${bytes.byteLength} < ${TABLE_BYTES})`);
+  if (bytes.byteLength < TABLE_BYTES)
+    fail(`truncated section table (${bytes.byteLength} < ${TABLE_BYTES})`);
   const magic = new TextEncoder().encode(DRAW_PROGRAM_ABI.magic);
   if (!equal(bytes.subarray(0, 8), magic)) fail("wrong magic");
   const view = dataView(bytes);
@@ -146,8 +164,8 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView, ca
     fail("wrong endianness marker");
   }
   if (
-    view.getUint16(16, DRAW_LITTLE_ENDIAN) !== SECTION_COUNT
-    || view.getUint16(18, DRAW_LITTLE_ENDIAN) !== 0
+    view.getUint16(16, DRAW_LITTLE_ENDIAN) !== SECTION_COUNT ||
+    view.getUint16(18, DRAW_LITTLE_ENDIAN) !== 0
   ) {
     fail("invalid section-count or reserved header bits");
   }
@@ -175,7 +193,8 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView, ca
       fail(`non-canonical section entry ${index}`);
     }
     const end = offset + length;
-    if (!Number.isSafeInteger(end) || end > bytes.byteLength) fail(`section ${kind} is out of range`);
+    if (!Number.isSafeInteger(end) || end > bytes.byteLength)
+      fail(`section ${kind} is out of range`);
     let value: unknown;
     if (kind === 7 || kind === 8 || kind === 9) {
       const rowBytes = kind === 7 ? BATCH_INSTANCE_BYTES : kind === 8 ? 16 : 4;
@@ -185,10 +204,17 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView, ca
       // Own the rows. A view, even an empty one, would keep the whole packed program alive in the
       // program cache after its JSON and path sections are decoded.
       const batchBytes = bytes.slice(offset, end);
-      value = { bytes: batchBytes, view: dataView(batchBytes), count } satisfies BatchInstanceTableWire;
+      value = {
+        bytes: batchBytes,
+        view: dataView(batchBytes),
+        count,
+      } satisfies BatchInstanceTableWire;
     } else if (kind === 3) {
-      try { value = (cache ?? new PathArenaCache(0)).decode(bytes.subarray(offset, end), count); }
-      catch (cause) { fail(`path arena is invalid: ${errorText(cause)}`); }
+      try {
+        value = (cache ?? new PathArenaCache(0)).decode(bytes.subarray(offset, end), count);
+      } catch (cause) {
+        fail(`path arena is invalid: ${errorText(cause)}`);
+      }
     } else {
       try {
         const json = decoder.decode(bytes.subarray(offset, end));
@@ -206,14 +232,30 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView, ca
   }
   if (expectedOffset !== bytes.byteLength) fail("trailing bytes are not owned by a section");
 
-  const [roots, nodes, batchInstances, strokeColors, dashOffsets, paths, paints, viewport, requirements] = sections;
+  const [
+    roots,
+    nodes,
+    batchInstances,
+    strokeColors,
+    dashOffsets,
+    paths,
+    paints,
+    viewport,
+    requirements,
+  ] = sections;
   if (!Array.isArray(roots) || !roots.every(positiveIntegerOrZero)) fail("roots are invalid");
   if (!Array.isArray(nodes) || !nodes.every(isRecord)) fail("nodes are invalid");
   if (!isBatchInstanceTable(batchInstances)) fail("InstanceBatch instance table is invalid");
   if (!isStrokeColorTable(strokeColors)) fail("InstanceBatch stroke color table is invalid");
   if (!isDashOffsetTable(dashOffsets)) fail("InstanceBatch dash offset table is invalid");
   if (!Array.isArray(paths) || (!cache && !paths.every(isPath))) fail("paths are invalid");
-  validateInstanceBatches(nodes as TaggedWire[], batchInstances, strokeColors, dashOffsets, paths.length);
+  validateInstanceBatches(
+    nodes as TaggedWire[],
+    batchInstances,
+    strokeColors,
+    dashOffsets,
+    paths.length,
+  );
   if (!Array.isArray(paints) || !paints.every(isRecord)) fail("paints are invalid");
   if (!isRect(viewport) || viewport.width <= 0 || viewport.height <= 0) fail("viewport is invalid");
   if (!isRecord(requirements)) fail("requirements are invalid");
@@ -231,36 +273,52 @@ export async function decodeDrawProgram(input: ArrayBuffer | ArrayBufferView, ca
 }
 
 function isBatchInstanceTable(value: unknown): value is BatchInstanceTableWire {
-  return isRecord(value)
-    && value.bytes instanceof Uint8Array
-    && value.view instanceof DataView
-    && positiveIntegerOrZero(value.count)
-    && value.bytes.byteLength === value.count * BATCH_INSTANCE_BYTES;
+  return (
+    isRecord(value) &&
+    value.bytes instanceof Uint8Array &&
+    value.view instanceof DataView &&
+    positiveIntegerOrZero(value.count) &&
+    value.bytes.byteLength === value.count * BATCH_INSTANCE_BYTES
+  );
 }
 
 function isStrokeColorTable(value: unknown): value is StrokeColorTableWire {
-  return isRecord(value)
-    && value.bytes instanceof Uint8Array
-    && value.view instanceof DataView
-    && positiveIntegerOrZero(value.count)
-    && value.bytes.byteLength === value.count * 16;
+  return (
+    isRecord(value) &&
+    value.bytes instanceof Uint8Array &&
+    value.view instanceof DataView &&
+    positiveIntegerOrZero(value.count) &&
+    value.bytes.byteLength === value.count * 16
+  );
 }
 
 function isDashOffsetTable(value: unknown): value is DashOffsetTableWire {
-  return isRecord(value)
-    && value.bytes instanceof Uint8Array
-    && value.view instanceof DataView
-    && positiveIntegerOrZero(value.count)
-    && value.bytes.byteLength === value.count * 4;
+  return (
+    isRecord(value) &&
+    value.bytes instanceof Uint8Array &&
+    value.view instanceof DataView &&
+    positiveIntegerOrZero(value.count) &&
+    value.bytes.byteLength === value.count * 4
+  );
 }
 
-function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableWire, strokeColors: StrokeColorTableWire, dashOffsets: DashOffsetTableWire, pathCount: number): void {
+function validateInstanceBatches(
+  nodes: TaggedWire[],
+  table: BatchInstanceTableWire,
+  strokeColors: StrokeColorTableWire,
+  dashOffsets: DashOffsetTableWire,
+  pathCount: number,
+): void {
   let consumed = 0;
   let colorsConsumed = 0;
   let offsetsConsumed = 0;
   for (const [nodeIndex, node] of nodes.entries()) {
     if (node.kind !== "instanceBatch") continue;
-    const value = exactRecord(node.value, ["shape", "instances", "strokeColors", "dashOffsets", "pathStyle"], `nodes[${nodeIndex}].value`);
+    const value = exactRecord(
+      node.value,
+      ["shape", "instances", "strokeColors", "dashOffsets", "pathStyle"],
+      `nodes[${nodeIndex}].value`,
+    );
     const shape = value.shape;
     if (!isRecord(shape)) fail(`nodes[${nodeIndex}].shape must be an object`);
     if (shape.kind === "path") {
@@ -269,37 +327,78 @@ function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableW
       if (path >= pathCount) fail(`nodes[${nodeIndex}].shape.value is out of range`);
     } else if (shape.kind === "image") {
       exactRecord(shape, ["kind", "value"], `nodes[${nodeIndex}].shape`);
-      const region = exactRecord(shape.value, ["texture", "src", "sampling"], `nodes[${nodeIndex}].shape.value`);
-      const texture = exactRecord(region.texture, ["key", "kind", "colorDomain", "alpha", "sampleTimeMicros"], `nodes[${nodeIndex}].shape.value.texture`);
-      if (typeof texture.key !== "string" || texture.key.length === 0
-        || new TextEncoder().encode(texture.key).length > 4096
-        || !["image", "video", "generated", "frame"].includes(String(texture.kind))
-        || texture.colorDomain !== "linearRec2020"
-        || !["opaque", "straight", "premultiplied"].includes(String(texture.alpha))
-        || (texture.kind === "video"
+      const region = exactRecord(
+        shape.value,
+        ["texture", "src", "sampling"],
+        `nodes[${nodeIndex}].shape.value`,
+      );
+      const texture = exactRecord(
+        region.texture,
+        ["key", "kind", "colorDomain", "alpha", "sampleTimeMicros"],
+        `nodes[${nodeIndex}].shape.value.texture`,
+      );
+      if (
+        typeof texture.key !== "string" ||
+        texture.key.length === 0 ||
+        new TextEncoder().encode(texture.key).length > 4096 ||
+        !["image", "video", "generated", "frame"].includes(String(texture.kind)) ||
+        texture.colorDomain !== "linearRec2020" ||
+        !["opaque", "straight", "premultiplied"].includes(String(texture.alpha)) ||
+        (texture.kind === "video"
           ? !positiveIntegerOrZero(texture.sampleTimeMicros)
-          : texture.sampleTimeMicros !== null)
-        || !["nearestClamp", "linearClamp", "linearDecal", "cubicClamp"].includes(String(region.sampling))
-        || !isRect(region.src) || region.src.x < 0 || region.src.y < 0
-        || region.src.width <= 0 || region.src.height <= 0
-        || region.src.x + region.src.width > 1 || region.src.y + region.src.height > 1) {
+          : texture.sampleTimeMicros !== null) ||
+        !["nearestClamp", "linearClamp", "linearDecal", "cubicClamp"].includes(
+          String(region.sampling),
+        ) ||
+        !isRect(region.src) ||
+        region.src.x < 0 ||
+        region.src.y < 0 ||
+        region.src.width <= 0 ||
+        region.src.height <= 0 ||
+        region.src.x + region.src.width > 1 ||
+        region.src.y + region.src.height > 1
+      ) {
         fail(`nodes[${nodeIndex}].shape.value is invalid`);
       }
     } else if (shape.kind === "roundRect") {
       exactRecord(shape, ["kind", "value"], `nodes[${nodeIndex}].shape`);
-      const roundRect = exactRecord(shape.value, ["rect", "radii"], `nodes[${nodeIndex}].shape.value`);
+      const roundRect = exactRecord(
+        shape.value,
+        ["rect", "radii"],
+        `nodes[${nodeIndex}].shape.value`,
+      );
       if (!isRect(roundRect.rect) || roundRect.rect.width < 0 || roundRect.rect.height < 0) {
         fail(`nodes[${nodeIndex}].shape.value.rect is invalid`);
       }
       const bounds = roundRect.rect;
-      if ([bounds.x, bounds.y, bounds.width, bounds.height, bounds.x + bounds.width, bounds.y + bounds.height]
-        .some((coordinate) => Math.abs(coordinate) > 16_777_216)) {
+      if (
+        [
+          bounds.x,
+          bounds.y,
+          bounds.width,
+          bounds.height,
+          bounds.x + bounds.width,
+          bounds.y + bounds.height,
+        ].some((coordinate) => Math.abs(coordinate) > 16_777_216)
+      ) {
         fail(`nodes[${nodeIndex}].shape.value.rect exceeds the coordinate limit`);
       }
-      if (!Array.isArray(roundRect.radii) || roundRect.radii.length !== 4
-        || !roundRect.radii.every((pair) => Array.isArray(pair) && pair.length === 2
-          && pair.every((radius) => typeof radius === "number" && Number.isFinite(radius)
-            && radius >= 0 && radius <= 16_777_216))) {
+      if (
+        !Array.isArray(roundRect.radii) ||
+        roundRect.radii.length !== 4 ||
+        !roundRect.radii.every(
+          (pair) =>
+            Array.isArray(pair) &&
+            pair.length === 2 &&
+            pair.every(
+              (radius) =>
+                typeof radius === "number" &&
+                Number.isFinite(radius) &&
+                radius >= 0 &&
+                radius <= 16_777_216,
+            ),
+        )
+      ) {
         fail(`nodes[${nodeIndex}].shape.value.radii is invalid`);
       }
     } else if (shape.kind === "circle" || shape.kind === "rect") {
@@ -309,14 +408,28 @@ function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableW
     }
     if (value.pathStyle !== null) {
       if (shape.kind !== "path") fail(`nodes[${nodeIndex}].pathStyle requires a Path shape`);
-      const style = exactRecord(value.pathStyle, ["fill", "dash", "dashOffset", "cap", "join", "miterLimit"], `nodes[${nodeIndex}].value.pathStyle`);
-      if (typeof style.fill !== "boolean" || !["butt", "round", "square"].includes(String(style.cap))
-        || !["miter", "round", "bevel"].includes(String(style.join))
-        || typeof style.miterLimit !== "number" || !Number.isFinite(style.miterLimit) || style.miterLimit < 1
-        || typeof style.dashOffset !== "number" || !Number.isFinite(style.dashOffset)
-        || !Array.isArray(style.dash) || style.dash.length % 2 !== 0
-        || !style.dash.every((part: unknown) => typeof part === "number" && Number.isFinite(part) && part >= 0)
-        || style.dash.length > 0 && style.dash.reduce((sum: number, part: number) => sum + part, 0) <= 0) {
+      const style = exactRecord(
+        value.pathStyle,
+        ["fill", "dash", "dashOffset", "cap", "join", "miterLimit"],
+        `nodes[${nodeIndex}].value.pathStyle`,
+      );
+      if (
+        typeof style.fill !== "boolean" ||
+        !["butt", "round", "square"].includes(String(style.cap)) ||
+        !["miter", "round", "bevel"].includes(String(style.join)) ||
+        typeof style.miterLimit !== "number" ||
+        !Number.isFinite(style.miterLimit) ||
+        style.miterLimit < 1 ||
+        typeof style.dashOffset !== "number" ||
+        !Number.isFinite(style.dashOffset) ||
+        !Array.isArray(style.dash) ||
+        style.dash.length % 2 !== 0 ||
+        !style.dash.every(
+          (part: unknown) => typeof part === "number" && Number.isFinite(part) && part >= 0,
+        ) ||
+        (style.dash.length > 0 &&
+          style.dash.reduce((sum: number, part: number) => sum + part, 0) <= 0)
+      ) {
         fail(`nodes[${nodeIndex}].pathStyle is invalid`);
       }
     }
@@ -339,36 +452,69 @@ function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableW
     }
     consumed += count;
     if (value.strokeColors !== null) {
-      const colors = exactRecord(value.strokeColors, ["start", "count"], `nodes[${nodeIndex}].value.strokeColors`);
-      const colorStart = exactNonNegativeInteger(colors.start, `nodes[${nodeIndex}].strokeColors.start`);
-      const colorCount = exactNonNegativeInteger(colors.count, `nodes[${nodeIndex}].strokeColors.count`);
-      if (colorStart !== colorsConsumed || colorCount !== count || colorCount > strokeColors.count - colorsConsumed) {
+      const colors = exactRecord(
+        value.strokeColors,
+        ["start", "count"],
+        `nodes[${nodeIndex}].value.strokeColors`,
+      );
+      const colorStart = exactNonNegativeInteger(
+        colors.start,
+        `nodes[${nodeIndex}].strokeColors.start`,
+      );
+      const colorCount = exactNonNegativeInteger(
+        colors.count,
+        `nodes[${nodeIndex}].strokeColors.count`,
+      );
+      if (
+        colorStart !== colorsConsumed ||
+        colorCount !== count ||
+        colorCount > strokeColors.count - colorsConsumed
+      ) {
         fail("InstanceBatch stroke color ranges do not canonically partition the color table");
       }
       colorsConsumed += colorCount;
     }
     if (value.dashOffsets !== null) {
       if (value.pathStyle === null) fail(`nodes[${nodeIndex}].dashOffsets requires a Path style`);
-      const offsets = exactRecord(value.dashOffsets, ["start", "count"], `nodes[${nodeIndex}].value.dashOffsets`);
-      const offsetStart = exactNonNegativeInteger(offsets.start, `nodes[${nodeIndex}].dashOffsets.start`);
-      const offsetCount = exactNonNegativeInteger(offsets.count, `nodes[${nodeIndex}].dashOffsets.count`);
-      if (offsetStart !== offsetsConsumed || offsetCount !== count || offsetCount > dashOffsets.count - offsetsConsumed) {
+      const offsets = exactRecord(
+        value.dashOffsets,
+        ["start", "count"],
+        `nodes[${nodeIndex}].value.dashOffsets`,
+      );
+      const offsetStart = exactNonNegativeInteger(
+        offsets.start,
+        `nodes[${nodeIndex}].dashOffsets.start`,
+      );
+      const offsetCount = exactNonNegativeInteger(
+        offsets.count,
+        `nodes[${nodeIndex}].dashOffsets.count`,
+      );
+      if (
+        offsetStart !== offsetsConsumed ||
+        offsetCount !== count ||
+        offsetCount > dashOffsets.count - offsetsConsumed
+      ) {
         fail("InstanceBatch dash ranges do not canonically partition the offset table");
       }
       offsetsConsumed += offsetCount;
     }
   }
   if (consumed !== table.count) fail("InstanceBatch instance table has unreferenced values");
-  if (colorsConsumed !== strokeColors.count) fail("InstanceBatch stroke color table has unreferenced values");
-  if (offsetsConsumed !== dashOffsets.count) fail("InstanceBatch dash offset table has unreferenced values");
+  if (colorsConsumed !== strokeColors.count)
+    fail("InstanceBatch stroke color table has unreferenced values");
+  if (offsetsConsumed !== dashOffsets.count)
+    fail("InstanceBatch dash offset table has unreferenced values");
 
   // Rows are checked in place: a frame can carry thousands of instances.
   const view = table.view;
   for (let index = 0; index < table.count; index += 1) {
     const matrix = index * 48;
-    const a = view.getFloat64(matrix, DRAW_LITTLE_ENDIAN), b = view.getFloat64(matrix + 8, DRAW_LITTLE_ENDIAN);
-    const c = view.getFloat64(matrix + 16, DRAW_LITTLE_ENDIAN), d = view.getFloat64(matrix + 24, DRAW_LITTLE_ENDIAN);
-    const e = view.getFloat64(matrix + 32, DRAW_LITTLE_ENDIAN), f = view.getFloat64(matrix + 40, DRAW_LITTLE_ENDIAN);
+    const a = view.getFloat64(matrix, DRAW_LITTLE_ENDIAN),
+      b = view.getFloat64(matrix + 8, DRAW_LITTLE_ENDIAN);
+    const c = view.getFloat64(matrix + 16, DRAW_LITTLE_ENDIAN),
+      d = view.getFloat64(matrix + 24, DRAW_LITTLE_ENDIAN);
+    const e = view.getFloat64(matrix + 32, DRAW_LITTLE_ENDIAN),
+      f = view.getFloat64(matrix + 40, DRAW_LITTLE_ENDIAN);
     const colorOffset = table.count * 48 + index * 16;
     const red = view.getFloat32(colorOffset, DRAW_LITTLE_ENDIAN);
     const green = view.getFloat32(colorOffset + 4, DRAW_LITTLE_ENDIAN);
@@ -376,12 +522,26 @@ function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableW
     const alpha = view.getFloat32(colorOffset + 12, DRAW_LITTLE_ENDIAN);
     const opacity = view.getFloat32(table.count * 64 + index * 4, DRAW_LITTLE_ENDIAN);
     const stroke = view.getFloat32(table.count * 68 + index * 4, DRAW_LITTLE_ENDIAN);
-    if (!(Number.isFinite(a) && Number.isFinite(b) && Number.isFinite(c) && Number.isFinite(d)
-      && Number.isFinite(e) && Number.isFinite(f) && Number.isFinite(red) && Number.isFinite(green)
-      && Number.isFinite(blue) && Number.isFinite(alpha) && Number.isFinite(opacity) && Number.isFinite(stroke))) {
+    if (!(
+      Number.isFinite(a) &&
+      Number.isFinite(b) &&
+      Number.isFinite(c) &&
+      Number.isFinite(d) &&
+      Number.isFinite(e) &&
+      Number.isFinite(f) &&
+      Number.isFinite(red) &&
+      Number.isFinite(green) &&
+      Number.isFinite(blue) &&
+      Number.isFinite(alpha) &&
+      Number.isFinite(opacity) &&
+      Number.isFinite(stroke)
+    )) {
       fail(`InstanceBatch instance ${index} contains a non-finite value`);
     }
-    if (Math.max(Math.abs(a), Math.abs(b), Math.abs(c), Math.abs(d), Math.abs(e), Math.abs(f)) > 16_777_216) {
+    if (
+      Math.max(Math.abs(a), Math.abs(b), Math.abs(c), Math.abs(d), Math.abs(e), Math.abs(f)) >
+      16_777_216
+    ) {
       fail(`InstanceBatch instance ${index} exceeds the coordinate limit`);
     }
     const determinant = a * d - b * c;
@@ -389,7 +549,8 @@ function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableW
       fail(`InstanceBatch instance ${index} has a singular transform`);
     }
     if (alpha < 0 || alpha > 1) fail(`InstanceBatch instance ${index} alpha is outside [0,1]`);
-    if (opacity < 0 || opacity > 1) fail(`InstanceBatch instance ${index} opacity is outside [0,1]`);
+    if (opacity < 0 || opacity > 1)
+      fail(`InstanceBatch instance ${index} opacity is outside [0,1]`);
     if (stroke < 0) fail(`InstanceBatch instance ${index} stroke width is negative`);
     if (alpha === 0 && (red !== 0 || green !== 0 || blue !== 0)) {
       fail(`InstanceBatch instance ${index} has RGB under transparent premultiplied alpha`);
@@ -401,8 +562,16 @@ function validateInstanceBatches(nodes: TaggedWire[], table: BatchInstanceTableW
     const green = strokeColors.view.getFloat32(offset + 4, DRAW_LITTLE_ENDIAN);
     const blue = strokeColors.view.getFloat32(offset + 8, DRAW_LITTLE_ENDIAN);
     const alpha = strokeColors.view.getFloat32(offset + 12, DRAW_LITTLE_ENDIAN);
-    if (!(Number.isFinite(red) && Number.isFinite(green) && Number.isFinite(blue) && Number.isFinite(alpha))
-      || alpha < 0 || alpha > 1) {
+    if (
+      !(
+        Number.isFinite(red) &&
+        Number.isFinite(green) &&
+        Number.isFinite(blue) &&
+        Number.isFinite(alpha)
+      ) ||
+      alpha < 0 ||
+      alpha > 1
+    ) {
       fail(`InstanceBatch stroke color ${index} is invalid`);
     }
     if (alpha === 0 && (red !== 0 || green !== 0 || blue !== 0)) {
@@ -458,18 +627,27 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isRect(value: unknown): value is RectWire {
-  return isRecord(value)
-    && [value.x, value.y, value.width, value.height].every((part) => typeof part === "number" && Number.isFinite(part));
+  return (
+    isRecord(value) &&
+    [value.x, value.y, value.width, value.height].every(
+      (part) => typeof part === "number" && Number.isFinite(part),
+    )
+  );
 }
 
 function isPath(value: unknown): value is PathWire {
-  return isRecord(value)
-    && Array.isArray(value.verbs)
-    && value.verbs.every((verb) => typeof verb === "string")
-    && Array.isArray(value.points)
-    && value.points.every((point) => Array.isArray(point)
-      && point.length === 2
-      && point.every((part) => typeof part === "number" && Number.isFinite(part)));
+  return (
+    isRecord(value) &&
+    Array.isArray(value.verbs) &&
+    value.verbs.every((verb) => typeof verb === "string") &&
+    Array.isArray(value.points) &&
+    value.points.every(
+      (point) =>
+        Array.isArray(point) &&
+        point.length === 2 &&
+        point.every((part) => typeof part === "number" && Number.isFinite(part)),
+    )
+  );
 }
 
 function errorText(error: unknown): string {

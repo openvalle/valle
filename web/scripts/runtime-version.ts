@@ -6,7 +6,9 @@ export async function assertCanvasKitBuildVersion(installedRoot: string): Promis
   const installed = await Bun.file(path.join(installedRoot, "package.json")).json();
   const expected = workspacePackage.workspaces.catalog["canvaskit-wasm"];
   if (installed.version !== expected) {
-    throw new Error(`installed CanvasKit '${String(installed.version)}' does not match workspace catalog '${expected}'; run bun install`);
+    throw new Error(
+      `installed CanvasKit '${String(installed.version)}' does not match workspace catalog '${expected}'; run bun install`,
+    );
   }
 }
 
@@ -34,7 +36,9 @@ export async function readRuntimeProtocolVersion(workspaceRoot: string): Promise
   }
   const version = Number(text);
   if (!Number.isSafeInteger(version)) {
-    throw new Error(`Valle Web runtime protocol version is outside the safe integer range in ${source}`);
+    throw new Error(
+      `Valle Web runtime protocol version is outside the safe integer range in ${source}`,
+    );
   }
   return version;
 }

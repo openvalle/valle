@@ -7,12 +7,7 @@ import {
   type PackedAbiDescriptor,
 } from "../generated/packed-abi.ts";
 
-export {
-  BOUND_PROGRAM_SCHEDULES_ABI,
-  RENDER_BINDINGS_ABI,
-  RENDER_PLAN_ABI,
-  RESOURCE_REQUESTS_ABI,
-};
+export { BOUND_PROGRAM_SCHEDULES_ABI, RENDER_BINDINGS_ABI, RENDER_PLAN_ABI, RESOURCE_REQUESTS_ABI };
 
 const {
   maximumDepth: MAX_DEPTH,
@@ -60,7 +55,10 @@ export async function decodePackedAbi(
 }
 
 export class PackedAbiError extends Error {
-  constructor(readonly kind: string, message: string) {
+  constructor(
+    readonly kind: string,
+    message: string,
+  ) {
     super(`packed ${kind}: ${message}`);
     this.name = "PackedAbiError";
   }
@@ -68,7 +66,10 @@ export class PackedAbiError extends Error {
 
 function validateEnvelopeShape(bytes: Uint8Array, contract: PackedAbiContract): void {
   if (bytes.byteLength > contract.maximumBytes) {
-    throw new PackedAbiError(contract.kind, `byte budget exceeded (${bytes.byteLength} > ${contract.maximumBytes})`);
+    throw new PackedAbiError(
+      contract.kind,
+      `byte budget exceeded (${bytes.byteLength} > ${contract.maximumBytes})`,
+    );
   }
   if (bytes.byteLength < contract.headerBytes) {
     throw new PackedAbiError(
@@ -107,7 +108,9 @@ class Cursor {
   constructor(
     private readonly bytes: Uint8Array,
     private readonly contract: PackedAbiContract,
-  ) { this.view = dataView(bytes); }
+  ) {
+    this.view = dataView(bytes);
+  }
 
   get done(): boolean {
     return this.offset === this.bytes.byteLength;
@@ -136,7 +139,8 @@ class Cursor {
       }
       case TAG_F64: {
         const value = this.view.getFloat64(this.reserve(8), true);
-        if (!Number.isFinite(value) || Object.is(value, -0)) this.fail("non-finite float or negative zero");
+        if (!Number.isFinite(value) || Object.is(value, -0))
+          this.fail("non-finite float or negative zero");
         return value;
       }
       case TAG_STRING: {
@@ -180,7 +184,8 @@ class Cursor {
 
   private reserve(length: number): number {
     const end = this.offset + length;
-    if (!Number.isSafeInteger(end) || end > this.bytes.byteLength) this.fail("value extends beyond payload");
+    if (!Number.isSafeInteger(end) || end > this.bytes.byteLength)
+      this.fail("value extends beyond payload");
     const start = this.offset;
     this.offset = end;
     return start;
@@ -225,7 +230,8 @@ class Cursor {
 
 function safeNumber(value: bigint): number | bigint {
   return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)
-    ? Number(value) : value;
+    ? Number(value)
+    : value;
 }
 
 function exactBytes(input: ArrayBuffer | ArrayBufferView): Uint8Array {
@@ -241,7 +247,8 @@ function dataView(bytes: Uint8Array): DataView {
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
   if (left.byteLength !== right.byteLength) return false;
   let different = 0;
-  for (let index = 0; index < left.byteLength; index += 1) different |= left[index]! ^ right[index]!;
+  for (let index = 0; index < left.byteLength; index += 1)
+    different |= left[index]! ^ right[index]!;
   return different === 0;
 }
 

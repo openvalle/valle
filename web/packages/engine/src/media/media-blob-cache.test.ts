@@ -17,13 +17,18 @@ test("duplicate media loads coalesce and failed fetches can be retried", async (
     expect(await (await loaded).text()).toBe("media");
     expect(cache.get("/asset", "identity")).toBe(loaded);
     expect(calls).toBe(2);
-  } finally { globalThis.fetch = original; }
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 test("media cache evicts old files and invalidates changed identities", async () => {
   const original = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = (async () => { calls++; return new Response("media"); }) as unknown as typeof fetch;
+  globalThis.fetch = (async () => {
+    calls++;
+    return new Response("media");
+  }) as unknown as typeof fetch;
   try {
     const cache = new MediaBlobCache(2, 10);
     await cache.get("/a", "v1");
@@ -37,5 +42,7 @@ test("media cache evicts old files and invalidates changed identities", async ()
     cache.clear();
     await cache.get("/b", "v2");
     expect(calls).toBe(6);
-  } finally { globalThis.fetch = original; }
+  } finally {
+    globalThis.fetch = original;
+  }
 });

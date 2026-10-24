@@ -10,8 +10,7 @@ const decoded = new Map<string, Promise<Pcm>>();
 
 async function decode(input: AudioAnalysisInput): Promise<Pcm> {
   const response = await fetch(`${input.url}/analysis-pcm`);
-  if (!response.ok)
-    throw new Error(`Audio asset ${input.control}: HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`Audio asset ${input.control}: HTTP ${response.status}`);
   if (response.headers.get("X-Valle-Audio-Source") !== input.contentHash)
     throw new Error(`Audio asset ${input.control} changed after preparation`);
   const sampleRate = Number(response.headers.get("X-Valle-Sample-Rate"));
@@ -27,7 +26,9 @@ async function decode(input: AudioAnalysisInput): Promise<Pcm> {
   let samples = new Float32Array(bytes);
   if (new Uint8Array(new Uint16Array([1]).buffer)[0] !== 1) {
     const view = new DataView(bytes);
-    samples = Float32Array.from({ length: bytes.byteLength / 4 }, (_, i) => view.getFloat32(i * 4, true));
+    samples = Float32Array.from({ length: bytes.byteLength / 4 }, (_, i) =>
+      view.getFloat32(i * 4, true),
+    );
   }
   return { sampleRate, samples };
 }
@@ -69,8 +70,24 @@ export async function motionCompileOptionIdentity(
     placement: options.placement ? { track: options.placement.track } : undefined,
     data: options.data ? { value: options.data.value } : undefined,
     fonts: options.fonts ? await Promise.all(options.fonts.map(digest)) : undefined,
-    fontAliases: options.fontAliases ? Object.fromEntries(await Promise.all(Object.entries(options.fontAliases).map(async ([uri, bytes]) => [uri, await digest(bytes)]))) : undefined,
-    shaders: options.shaders ? await Promise.all(options.shaders.map(async ({ frozenBytes, ...metadata }) => ({ ...metadata, contentHash: await digest(frozenBytes) }))) : undefined,
+    fontAliases: options.fontAliases
+      ? Object.fromEntries(
+          await Promise.all(
+            Object.entries(options.fontAliases).map(async ([uri, bytes]) => [
+              uri,
+              await digest(bytes),
+            ]),
+          ),
+        )
+      : undefined,
+    shaders: options.shaders
+      ? await Promise.all(
+          options.shaders.map(async ({ frozenBytes, ...metadata }) => ({
+            ...metadata,
+            contentHash: await digest(frozenBytes),
+          })),
+        )
+      : undefined,
     audioSources: options.audioSources?.map(({ samples: _samples, ...metadata }) => metadata),
   };
 }
@@ -79,5 +96,6 @@ export async function digestBytes(bytes: Uint8Array): Promise<string> {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return [...new Uint8Array(await crypto.subtle.digest("SHA-256", copy.buffer))]
-    .map(byte => byte.toString(16).padStart(2, "0")).join("");
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }

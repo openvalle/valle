@@ -59,17 +59,25 @@ test("producer failures reach prebuffer and playback without leaking ready frame
 
 test("a clock jump skips obsolete work while preserving the bounded completed frames", async () => {
   let frame = 0;
-  const made: number[] = [], disposed: number[] = [];
-  const q = new PreviewBuffer(0, 20, 2, async (f) => {
-    made.push(f);
-    return f;
-  }, f => disposed.push(f), () => frame);
+  const made: number[] = [],
+    disposed: number[] = [];
+  const q = new PreviewBuffer(
+    0,
+    20,
+    2,
+    async (f) => {
+      made.push(f);
+      return f;
+    },
+    (f) => disposed.push(f),
+    () => frame,
+  );
   await q.prebuffer(2);
   expect(made).toEqual([0, 1]);
   frame = 18;
   expect((await q.take(18))?.frame).toBe(18);
   expect(made.slice(0, 3)).toEqual([0, 1, 18]);
-  expect(made.some(f => f > 1 && f < 18)).toBe(false);
+  expect(made.some((f) => f > 1 && f < 18)).toBe(false);
   expect(disposed).toEqual([0, 1]);
   expect((await q.take(19))?.frame).toBe(19);
   expect((await q.take(20))?.frame).toBe(20);
@@ -80,7 +88,16 @@ test("a clock jump skips obsolete work while preserving the bounded completed fr
 
 test("an exact consumer can advance the producer without an external clock", async () => {
   const made: number[] = [];
-  const q = new PreviewBuffer(0, 10, 1, async f => { made.push(f); return f; }, () => {});
+  const q = new PreviewBuffer(
+    0,
+    10,
+    1,
+    async (f) => {
+      made.push(f);
+      return f;
+    },
+    () => {},
+  );
   await q.prebuffer(1);
   expect((await q.take(10))?.frame).toBe(10);
   expect(made).toEqual([0, 10]);

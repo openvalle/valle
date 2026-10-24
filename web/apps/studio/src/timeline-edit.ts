@@ -27,10 +27,7 @@ export type TimelineClipTarget =
   | { band: "caption"; track: TimelineCaptionTrack; clip: TimelineCaptionClip }
   | { band: "adjustment"; track: TimelineAdjustmentTrack; clip: TimelineAdjustmentClip };
 
-export type TimelineTimeFromFrames = (
-  frames: number,
-  fps: Timeline["canvas"]["fps"],
-) => number;
+export type TimelineTimeFromFrames = (frames: number, fps: Timeline["canvas"]["fps"]) => number;
 
 export type TimelineSourceTimeDeltaFromFrames = (
   frames: number,
@@ -40,7 +37,10 @@ export type TimelineSourceTimeDeltaFromFrames = (
 
 /** Decode the compiler-provided source JSON Pointer for one public Timeline clip. */
 export function timelineClipAddress(timelinePath: string): TimelineClipAddress | null {
-  const match = /^\/tracks\/(visual|audio|caption|adjustment)\/(0|[1-9]\d*)\/clips\/(0|[1-9]\d*)$/.exec(timelinePath);
+  const match =
+    /^\/tracks\/(visual|audio|caption|adjustment)\/(0|[1-9]\d*)\/clips\/(0|[1-9]\d*)$/.exec(
+      timelinePath,
+    );
   if (!match) return null;
   return {
     band: match[1] as TimelineTrackBand,
@@ -92,9 +92,7 @@ export function setTimelineSourceStartFrames(
       target.clip.trimStart = seconds;
       return;
     }
-    if (target.band !== "visual"
-      || target.clip.kind === "image"
-      || target.clip.kind === "solid") {
+    if (target.band !== "visual" || target.clip.kind === "image" || target.clip.kind === "solid") {
       throw new Error(`Timeline clip '${timelinePath}' has no source trim`);
     }
     target.clip.trimStart = seconds;
@@ -131,10 +129,17 @@ export function trimTimelineClipFrames(
         );
         target.clip.trimStart = finiteOptionalNumber(target.clip.trimStart, 0) + sourceDelta;
         trimStart = target.clip.trimStart;
-      } else if (target.band === "visual"
-        && target.clip.kind !== "image"
-        && target.clip.kind !== "solid"
-        && !(target.clip.kind === "motion" && (motionRole?.type === "overlay" || motionRole?.type === "transition" || motionRole?.type === "effect"))) {
+      } else if (
+        target.band === "visual" &&
+        target.clip.kind !== "image" &&
+        target.clip.kind !== "solid" &&
+        !(
+          target.clip.kind === "motion" &&
+          (motionRole?.type === "overlay" ||
+            motionRole?.type === "transition" ||
+            motionRole?.type === "effect")
+        )
+      ) {
         const sourceDelta = finiteNumber(
           sourceTimeDeltaFromFrames(deltaFrames, timeline.canvas.fps, target.clip.rate),
           "source trim delta",
@@ -143,9 +148,11 @@ export function trimTimelineClipFrames(
         trimStart = target.clip.trimStart;
       }
     }
-    if (finiteNumber(clip.start, "clip start") < 0
-      || finiteNumber(clip.duration, "clip duration") <= 0
-      || (trimStart !== undefined && trimStart < 0)) {
+    if (
+      finiteNumber(clip.start, "clip start") < 0 ||
+      finiteNumber(clip.duration, "clip duration") <= 0 ||
+      (trimStart !== undefined && trimStart < 0)
+    ) {
       throw new Error("Timeline trim would create a negative start or non-positive duration");
     }
   });
@@ -158,13 +165,24 @@ export function deleteTimelineClip(timeline: Timeline, timelinePath: string): Ti
   switch (target.band) {
     case "visual": {
       target.track.clips.splice(address.clipIndex, 1);
-      target.track.transitions = target.track.transitions?.filter(t => t.from !== address.clipIndex && t.to !== address.clipIndex)
-        .map(t => ({ ...t, from: t.from > address.clipIndex ? t.from - 1 : t.from, to: t.to > address.clipIndex ? t.to - 1 : t.to }));
+      target.track.transitions = target.track.transitions
+        ?.filter((t) => t.from !== address.clipIndex && t.to !== address.clipIndex)
+        .map((t) => ({
+          ...t,
+          from: t.from > address.clipIndex ? t.from - 1 : t.from,
+          to: t.to > address.clipIndex ? t.to - 1 : t.to,
+        }));
       break;
     }
-    case "audio": target.track.clips.splice(address.clipIndex, 1); break;
-    case "caption": target.track.clips.splice(address.clipIndex, 1); break;
-    case "adjustment": target.track.clips.splice(address.clipIndex, 1); break;
+    case "audio":
+      target.track.clips.splice(address.clipIndex, 1);
+      break;
+    case "caption":
+      target.track.clips.splice(address.clipIndex, 1);
+      break;
+    case "adjustment":
+      target.track.clips.splice(address.clipIndex, 1);
+      break;
   }
   return next;
 }
@@ -176,8 +194,11 @@ export function moveTimelineVisualClipBefore(
 ): Timeline {
   const source = requireAddress(timelinePath);
   const target = requireAddress(beforeTimelinePath);
-  if (source.band !== "visual" || target.band !== "visual"
-    || source.trackIndex !== target.trackIndex) {
+  if (
+    source.band !== "visual" ||
+    target.band !== "visual" ||
+    source.trackIndex !== target.trackIndex
+  ) {
     throw new Error("Studio can only reorder clips within one visual track");
   }
   const next = structuredClone(timeline);
@@ -186,35 +207,45 @@ export function moveTimelineVisualClipBefore(
     throw new Error("Timeline visual reorder target does not exist");
   }
   const originalClips = [...track.clips];
-  const transitions = (track.transitions ?? []).map(t => ({
-    transition: t, fromClip: originalClips[t.from]!, toClip: originalClips[t.to]!,
-    duration: originalClips[t.from]!.start + originalClips[t.from]!.duration - originalClips[t.to]!.start,
+  const transitions = (track.transitions ?? []).map((t) => ({
+    transition: t,
+    fromClip: originalClips[t.from]!,
+    toClip: originalClips[t.to]!,
+    duration:
+      originalClips[t.from]!.start + originalClips[t.from]!.duration - originalClips[t.to]!.start,
   }));
   const slots = track.clips.map((clip, index) => ({
     start: finiteNumber(clip.start, `clip ${index} start`),
-    gapAfter: index + 1 < track.clips.length
-      ? Math.max(0,
-        finiteNumber(track.clips[index + 1]!.start, `clip ${index + 1} start`)
-          - finiteNumber(clip.start, `clip ${index + 1} start`)
-          - finiteNumber(clip.duration, `clip ${index} duration`))
-      : 0,
+    gapAfter:
+      index + 1 < track.clips.length
+        ? Math.max(
+            0,
+            finiteNumber(track.clips[index + 1]!.start, `clip ${index + 1} start`) -
+              finiteNumber(clip.start, `clip ${index + 1} start`) -
+              finiteNumber(clip.duration, `clip ${index} duration`),
+          )
+        : 0,
   }));
   const [clip] = track.clips.splice(source.clipIndex, 1);
   if (!clip) throw new Error(`Timeline clip '${timelinePath}' does not exist`);
   const insertion = source.clipIndex < target.clipIndex ? target.clipIndex - 1 : target.clipIndex;
   track.clips.splice(insertion, 0, clip);
-  const retained = transitions.flatMap(t => {
-    const from = track.clips.indexOf(t.fromClip), to = track.clips.indexOf(t.toClip);
-    return to === from + 1 ? [{ transition: { ...t.transition, from, to }, duration: t.duration }] : [];
+  const retained = transitions.flatMap((t) => {
+    const from = track.clips.indexOf(t.fromClip),
+      to = track.clips.indexOf(t.toClip);
+    return to === from + 1
+      ? [{ transition: { ...t.transition, from, to }, duration: t.duration }]
+      : [];
   });
-  track.transitions = retained.map(t => t.transition);
+  track.transitions = retained.map((t) => t.transition);
   let cursor = slots[0]?.start ?? 0;
   for (let index = 0; index < track.clips.length; index += 1) {
     const current = track.clips[index]!;
     current.start = cursor;
-    const transition = retained.find(t => t.transition.from === index);
-    cursor += finiteNumber(current.duration, `clip ${index} duration`)
-      + (transition ? -transition.duration : (slots[index]?.gapAfter ?? 0));
+    const transition = retained.find((t) => t.transition.from === index);
+    cursor +=
+      finiteNumber(current.duration, `clip ${index} duration`) +
+      (transition ? -transition.duration : (slots[index]?.gapAfter ?? 0));
   }
   return next;
 }
@@ -230,8 +261,8 @@ export function setTimelineMotionProp(
     throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
   }
   const next = structuredClone(timeline);
-  const clip: TimelineVisualClip | undefined = next.tracks.visual?.[address.trackIndex]
-    ?.clips[address.clipIndex];
+  const clip: TimelineVisualClip | undefined =
+    next.tracks.visual?.[address.trackIndex]?.clips[address.clipIndex];
   if (!clip || clip.kind !== "motion") {
     throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
   }
@@ -281,7 +312,7 @@ export function setTimelineMotionResource(
     if (target.band !== "visual" || target.clip.kind !== "motion") {
       throw new Error(`Timeline clip '${timelinePath}' is not Motion`);
     }
-    target.clip.resources = { ...(target.clip.resources ?? {}), [slot]: alias };
+    target.clip.resources = { ...target.clip.resources, [slot]: alias };
   });
 }
 
@@ -303,9 +334,11 @@ export function setTimelineClipEffect(
     if (target.band !== "visual") throw new Error("Effects apply to visual clips");
     const effects: TimelineClipEffect[] = target.clip.effects ?? [];
     const end = component === null ? effects.length - 1 : effects.length;
-    if (!Number.isSafeInteger(index) || index < 0 || index > end) throw new Error("Effect does not exist");
+    if (!Number.isSafeInteger(index) || index < 0 || index > end)
+      throw new Error("Effect does not exist");
     if (component === null) effects.splice(index, 1);
-    else if (effects[index]?.component !== component) effects[index] = { kind: "motion", component };
+    else if (effects[index]?.component !== component)
+      effects[index] = { kind: "motion", component };
     if (effects.length) target.clip.effects = effects;
     else delete target.clip.effects;
   });
@@ -357,17 +390,25 @@ function finiteOptionalNumber(value: unknown, fallback: number): number {
   return value === undefined ? fallback : finiteNumber(value, "Timeline number");
 }
 
-
 export type TimelineTransitionKind = TimelineSchema.TransitionKind;
 type TimelineTransition = TimelineSchema.TimelineTransitionWire;
 /** A built-in kernel, or the resource alias of a Motion template that declares `transition()`. */
 export type TimelineTransitionEffect = TimelineTransitionKind | { component: string };
 export const transitionParameterSpecs = transitionParameters;
 export const transitionLabels = {
-  fade: "Fade", wipeLeft: "Wipe left", wipeRight: "Wipe right", circleOpen: "Circle open",
-  simpleZoom: "Simple zoom", crossWarp: "Cross warp", linearBlur: "Linear blur",
-  directionalWarp: "Directional warp", dreamyZoom: "Dreamy zoom", ripple: "Ripple",
-  flyEye: "Fly eye", multiplyBlend: "Multiply blend", perlin: "Perlin noise",
+  fade: "Fade",
+  wipeLeft: "Wipe left",
+  wipeRight: "Wipe right",
+  circleOpen: "Circle open",
+  simpleZoom: "Simple zoom",
+  crossWarp: "Cross warp",
+  linearBlur: "Linear blur",
+  directionalWarp: "Directional warp",
+  dreamyZoom: "Dreamy zoom",
+  ripple: "Ripple",
+  flyEye: "Fly eye",
+  multiplyBlend: "Multiply blend",
+  perlin: "Perlin noise",
 } satisfies Record<TimelineTransitionKind, string>;
 
 /** Ripple the following clips so overlap changes preserve all endpoint local clocks. */
@@ -382,49 +423,81 @@ export function setTimelineTransition(
   const target = requireClip(next, timelinePath);
   if (target.band !== "visual") throw new Error("Transitions require two visual clips");
   const track = target.track;
-  const from = address.clipIndex, to = from + 1;
-  const a = track.clips[from]!, b = track.clips[to];
+  const from = address.clipIndex,
+    to = from + 1;
+  const a = track.clips[from]!,
+    b = track.clips[to];
   if (!b) throw new Error("Select a visual clip with a following clip");
-  if (typeof effect === "string" && !Object.hasOwn(transitionLabels, effect)) throw new Error("Unknown transition kind");
-  if (typeof effect === "object" && effect !== null && !effect.component) throw new Error("A Motion transition needs a component");
-  const existing = track.transitions?.find(t => t.from === from && t.to === to);
+  if (typeof effect === "string" && !Object.hasOwn(transitionLabels, effect))
+    throw new Error("Unknown transition kind");
+  if (typeof effect === "object" && effect !== null && !effect.component)
+    throw new Error("A Motion transition needs a component");
+  const existing = track.transitions?.find((t) => t.from === from && t.to === to);
   if (!effect && !existing) return next;
   const overlap = existing ? a.start + a.duration - b.start : 0;
-  const duration = effect ? durationSeconds ?? (existing ? overlap : Math.min(0.5, a.duration / 2, b.duration / 2)) : 0;
-  if (!Number.isFinite(duration) || (effect && (duration <= 0 || duration >= a.duration || duration >= b.duration))) {
+  const duration = effect
+    ? (durationSeconds ?? (existing ? overlap : Math.min(0.5, a.duration / 2, b.duration / 2)))
+    : 0;
+  if (
+    !Number.isFinite(duration) ||
+    (effect && (duration <= 0 || duration >= a.duration || duration >= b.duration))
+  ) {
     throw new Error("Transition duration must be positive and shorter than both clips");
   }
   const delta = a.start + a.duration - duration - b.start;
   for (let index = to; index < track.clips.length; index++) track.clips[index]!.start += delta;
-  track.transitions = (track.transitions ?? []).filter(t => t.from !== from);
+  track.transitions = (track.transitions ?? []).filter((t) => t.from !== from);
   if (effect) track.transitions.push(transitionWith(effect, existing, from, to));
   return next;
 }
 
 /** The same effect keeps its parameters, or its template props and resources. */
-function transitionWith(effect: TimelineTransitionEffect, existing: TimelineTransition | undefined, from: number, to: number): TimelineTransition {
+function transitionWith(
+  effect: TimelineTransitionEffect,
+  existing: TimelineTransition | undefined,
+  from: number,
+  to: number,
+): TimelineTransition {
   if (typeof effect === "string") {
-    const params = existing && existing.kind !== "motion" && existing.kind === effect ? existing.params : undefined;
+    const params =
+      existing && existing.kind !== "motion" && existing.kind === effect
+        ? existing.params
+        : undefined;
     return { from, to, kind: effect, ...(params ? { params } : {}) };
   }
-  const same = existing?.kind === "motion" && existing.component === effect.component ? existing : undefined;
+  const same =
+    existing?.kind === "motion" && existing.component === effect.component ? existing : undefined;
   return { ...same, from, to, kind: "motion", component: effect.component };
 }
 
 /** Parameters use generated Rust metadata; compilation remains the final semantic admission. */
-export function setTimelineTransitionParameter(timeline: Timeline, timelinePath: string, name: string, value: number): Timeline {
+export function setTimelineTransitionParameter(
+  timeline: Timeline,
+  timelinePath: string,
+  name: string,
+  value: number,
+): Timeline {
   const next = structuredClone(timeline);
   const address = requireAddress(timelinePath);
   const target = requireClip(next, timelinePath);
   if (target.band !== "visual") throw new Error("Transitions require visual clips");
-  const transition = target.track.transitions?.find(t => t.from === address.clipIndex);
+  const transition = target.track.transitions?.find((t) => t.from === address.clipIndex);
   if (!transition) throw new Error("Transition does not exist");
-  if (transition.kind === "motion") throw new Error("A Motion transition takes props, not parameters");
-  const spec = transitionParameterSpecs[transition.kind].find(spec => spec.name === name);
+  if (transition.kind === "motion")
+    throw new Error("A Motion transition takes props, not parameters");
+  const spec = transitionParameterSpecs[transition.kind].find((spec) => spec.name === name);
   if (!spec) throw new Error(`Unknown transition parameter '${name}'`);
-  if (!Number.isFinite(value) || Math.fround(value) < Math.fround(spec.min) || Math.fround(value) > Math.fround(spec.max)) throw new Error(`${spec.label} must be in [${spec.min}, ${spec.max}]`);
+  if (
+    !Number.isFinite(value) ||
+    Math.fround(value) < Math.fround(spec.min) ||
+    Math.fround(value) > Math.fround(spec.max)
+  )
+    throw new Error(`${spec.label} must be in [${spec.min}, ${spec.max}]`);
   const params = { ...transition.params, [name]: value };
-  if (transition.kind === "directionalWarp" && Math.abs(params.directionX ?? -1) + Math.abs(params.directionY ?? 1) < 0.000001) {
+  if (
+    transition.kind === "directionalWarp" &&
+    Math.abs(params.directionX ?? -1) + Math.abs(params.directionY ?? 1) < 0.000001
+  ) {
     throw new Error("Transition direction must have nonzero length");
   }
   if (Math.fround(value) === Math.fround(spec.default)) delete params[name];

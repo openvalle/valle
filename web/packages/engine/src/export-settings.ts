@@ -34,36 +34,54 @@ export function resolveExportPlan(info: ExportRenderInfo, settings: BrowserVideo
   }
   const width = integer(settings.width ?? info.canvasWidth, "Export width", 2, 8192);
   const height = integer(settings.height ?? info.canvasHeight, "Export height", 2, 8192);
-  if (width % 2 || height % 2) throw new RangeError("MP4 export requires even canvas width and height.");
-  if (settings.videoBitrate !== undefined) integer(settings.videoBitrate, "Video bitrate", 100_000, 200_000_000);
+  if (width % 2 || height % 2)
+    throw new RangeError("MP4 export requires even canvas width and height.");
+  if (settings.videoBitrate !== undefined)
+    integer(settings.videoBitrate, "Video bitrate", 100_000, 200_000_000);
   const audioBitrate = integer(settings.audioBitrate ?? 192_000, "Audio bitrate", 32_000, 512_000);
   if (settings.includeAudio !== undefined && typeof settings.includeAudio !== "boolean") {
     throw new TypeError("Include audio must be a boolean.");
   }
   const [sourceNumerator, sourceDenominator] = info.frameRate.split("/").map(BigInt);
-  const numerator = settings.frameRate === undefined ? sourceNumerator!
-    : BigInt(integer(settings.frameRate, "Frame rate", 1, 120));
+  const numerator =
+    settings.frameRate === undefined
+      ? sourceNumerator!
+      : BigInt(integer(settings.frameRate, "Frame rate", 1, 120));
   const denominator = settings.frameRate === undefined ? sourceDenominator! : 1n;
   const durationS = info.sampleCount / info.sampleRate;
   const countDivisor = BigInt(info.sampleRate) * denominator;
-  const frameCount = settings.frameRate === undefined ? info.frameCount
-    : Number((BigInt(info.sampleCount) * numerator + countDivisor - 1n) / countDivisor);
+  const frameCount =
+    settings.frameRate === undefined
+      ? info.frameCount
+      : Number((BigInt(info.sampleCount) * numerator + countDivisor - 1n) / countDivisor);
   integer(frameCount, "Export frame count", 1, Number.MAX_SAFE_INTEGER);
-  const timestamp = (frame: number) => Number((BigInt(frame) * denominator * 1_000_000n + numerator / 2n) / numerator) / 1_000_000;
+  const timestamp = (frame: number) =>
+    Number((BigInt(frame) * denominator * 1_000_000n + numerator / 2n) / numerator) / 1_000_000;
   return {
-    width, height, frameCount, audioBitrate, durationS,
+    width,
+    height,
+    frameCount,
+    audioBitrate,
+    durationS,
     frameRate: `${numerator}/${denominator}`,
     fps: Number(numerator) / Number(denominator),
-    partialFinalFrame: settings.frameRate !== undefined && BigInt(info.sampleCount) * numerator % countDivisor !== 0n,
+    partialFinalFrame:
+      settings.frameRate !== undefined &&
+      (BigInt(info.sampleCount) * numerator) % countDivisor !== 0n,
     rasterScale: Math.min(width / info.canvasWidth, height / info.canvasHeight),
     resize: width !== info.canvasWidth || height !== info.canvasHeight,
     sourceFrame(frame: number) {
-      return Math.min(info.frameCount - 1, Number(BigInt(frame) * denominator * sourceNumerator! / (numerator * sourceDenominator!)));
+      return Math.min(
+        info.frameCount - 1,
+        Number((BigInt(frame) * denominator * sourceNumerator!) / (numerator * sourceDenominator!)),
+      );
     },
     timestamp,
     endTimestamp(frame: number) {
       const next = timestamp(frame + 1);
-      return settings.frameRate === undefined ? next : Math.min(next, Math.round(durationS * 1_000_000) / 1_000_000);
+      return settings.frameRate === undefined
+        ? next
+        : Math.min(next, Math.round(durationS * 1_000_000) / 1_000_000);
     },
   };
 }

@@ -16,14 +16,9 @@ const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
 const runtime = process.env.VALLE_WEB_RUNTIME_DIR ?? join(root, "web/dist");
 const browser = resolveBrowser();
 if (!browser) {
-  if (
-    process.env.VALLE_WEB_PLAYER_REQUIRE_BROWSER ||
-    process.env.VALLE_WEB_PARITY_REQUIRE_BROWSER
-  )
+  if (process.env.VALLE_WEB_PLAYER_REQUIRE_BROWSER || process.env.VALLE_WEB_PARITY_REQUIRE_BROWSER)
     throw new Error("Chrome/Chromium is required");
-  console.log(
-    JSON.stringify({ status: "skipped", reason: "browser unavailable" }),
-  );
+  console.log(JSON.stringify({ status: "skipped", reason: "browser unavailable" }));
   process.exit(0);
 }
 const dir = await mkdtemp(join(tmpdir(), "valle-studio-machine-"));
@@ -35,11 +30,7 @@ export default function Main(props){ const time = useCurrentTime();return <Scene
 function assert(ok: unknown, message: string): asserts ok {
   if (!ok) throw new Error(message);
 }
-async function deadline<T>(
-  work: Promise<T>,
-  label: string,
-  ms = 120_000,
-): Promise<T> {
+async function deadline<T>(work: Promise<T>, label: string, ms = 120_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -96,8 +87,7 @@ function wav(): Uint8Array {
     n = rate * 3,
     bytes = new Uint8Array(44 + n * 2),
     view = new DataView(bytes.buffer);
-  const text = (at: number, s: string) =>
-    bytes.set(new TextEncoder().encode(s), at);
+  const text = (at: number, s: string) => bytes.set(new TextEncoder().encode(s), at);
   text(0, "RIFF");
   view.setUint32(4, 36 + n * 2, true);
   text(8, "WAVEfmt ");
@@ -111,11 +101,7 @@ function wav(): Uint8Array {
   text(36, "data");
   view.setUint32(40, n * 2, true);
   for (let i = 0; i < n; i++)
-    view.setInt16(
-      44 + i * 2,
-      i % rate < rate / 2 ? (i % 100) * 200 - 10000 : 0,
-      true,
-    );
+    view.setInt16(44 + i * 2, i % rate < rate / 2 ? (i % 100) * 200 - 10000 : 0, true);
   return bytes;
 }
 async function run(
@@ -146,8 +132,7 @@ async function run(
     },
   );
   const browserEvents: unknown[] = [];
-  let chrome: ReturnType<typeof Bun.spawn> | undefined,
-    socket: WebSocket | undefined;
+  let chrome: ReturnType<typeof Bun.spawn> | undefined, socket: WebSocket | undefined;
   try {
     const reader = server.stdout.getReader();
     let lines = "",
@@ -206,9 +191,7 @@ async function run(
               });
             try {
               return Number(
-                (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split(
-                  "\n",
-                )[0],
+                (await readFile(join(profile, "DevToolsActivePort"), "utf8")).split("\n")[0],
               );
             } catch {
               return 0;
@@ -239,28 +222,25 @@ async function run(
       "CDP connection",
     );
     let next = 1;
-    const pending = new Map<
-      number,
-      { ok: (v: any) => void; bad: (e: Error) => void }
-    >();
+    const pending = new Map<number, { ok: (v: any) => void; bad: (e: Error) => void }>();
     socket.onmessage = (event) => {
       const reply = JSON.parse(String(event.data));
       const waiter = pending.get(reply.id);
       if (!waiter) {
         if (
           browserEvents.length < 200 &&
-          ["Runtime.exceptionThrown", "Log.entryAdded", "Network.loadingFailed"].includes(reply.method)
-        ) browserEvents.push(reply);
+          ["Runtime.exceptionThrown", "Log.entryAdded", "Network.loadingFailed"].includes(
+            reply.method,
+          )
+        )
+          browserEvents.push(reply);
         return;
       }
       pending.delete(reply.id);
       if (reply.error) waiter.bad(new Error(JSON.stringify(reply.error)));
       else waiter.ok(reply.result);
     };
-    const cdp = async (
-      method: string,
-      params: Record<string, unknown> = {},
-    ) => {
+    const cdp = async (method: string, params: Record<string, unknown> = {}) => {
       const id = next++;
       const response = new Promise<any>((ok, bad) => {
         pending.set(id, { ok, bad });
@@ -278,8 +258,7 @@ async function run(
         returnByValue: true,
         awaitPromise: true,
       });
-      if (result.exceptionDetails)
-        throw new Error(JSON.stringify(result.exceptionDetails));
+      if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
       return result.result.value;
     };
     await cdp("Page.enable");
@@ -304,16 +283,14 @@ async function run(
         "first compile error",
       );
       assert(
-        !/compile Worker is absent|assetUrls\.\w+ is required/.test(`${failed.text}\n${failed.error}`),
+        !/compile Worker is absent|assetUrls\.\w+ is required/.test(
+          `${failed.text}\n${failed.error}`,
+        ),
         `Studio must boot its compiler: ${failed.error}`,
       );
       await editSource(repair);
     }
-    await poll(
-      state,
-      (s) => s.state?.previewStatus === "ready" && !!s.source,
-      "initial preview",
-    );
+    await poll(state, (s) => s.state?.previewStatus === "ready" && !!s.source, "initial preview");
     const userAgent = await evaluate("navigator.userAgent");
     assert(/Chrome\//.test(userAgent), "real Chrome required");
     await evaluate("document.querySelector('#sourceToggle').click()");
@@ -345,24 +322,13 @@ async function run(
       (s) => s.state?.previewStatus === "ready" && s.compiles > before.compiles,
       "browser-compiled draft preview",
     );
-    assert(
-      edited.status === "Unsaved source",
-      `draft status: ${edited.status}`,
-    );
+    assert(edited.status === "Unsaved source", `draft status: ${edited.status}`);
     const second = await screenshot("edited");
-    if (edit)
-      assert(
-        first !== second,
-        "edited source must change visible preview pixels",
-      );
+    if (edit) assert(first !== second, "edited source must change visible preview pixels");
     if (hot) {
       const count = edited.compiles;
       await editSource("export default function Broken( {");
-      await poll(
-        state,
-        (s) => s.state?.previewStatus === "error",
-        "invalid source diagnostics",
-      );
+      await poll(state, (s) => s.state?.previewStatus === "error", "invalid source diagnostics");
       assert(
         second === (await screenshot("invalid-last-good")),
         "invalid source must retain the last good preview pixels",
@@ -392,8 +358,10 @@ async function run(
     }
     const final = await state();
     // A settled preview hides its status pill; only updating or failed previews show one.
-    assert(final.state?.previewStatus === "ready" && /\bready\b/.test(String(final.previewStatusClass)),
-      "preview status settles and hides its pill");
+    assert(
+      final.state?.previewStatus === "ready" && /\bready\b/.test(String(final.previewStatusClass)),
+      "preview status settles and hides its pill",
+    );
     const report = {
       mode,
       input,
@@ -405,22 +373,20 @@ async function run(
       evidence,
     };
     const page = await cdp("Page.captureScreenshot", { format: "png" });
-    await writeFile(
-      join(evidence, "studio.png"),
-      Buffer.from(page.data, "base64"),
-    );
-    await writeFile(
-      join(evidence, "result.json"),
-      JSON.stringify(report, null, 2),
-    );
+    await writeFile(join(evidence, "studio.png"), Buffer.from(page.data, "base64"));
+    await writeFile(join(evidence, "result.json"), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report));
   } catch (error) {
     await writeFile(
       join(evidence, "failure.json"),
-      JSON.stringify({
-        message: error instanceof Error ? error.stack : String(error),
-        browserEvents,
-      }, null, 2),
+      JSON.stringify(
+        {
+          message: error instanceof Error ? error.stack : String(error),
+          browserEvents,
+        },
+        null,
+        2,
+      ),
     );
     throw error;
   } finally {
@@ -434,20 +400,11 @@ async function run(
 }
 try {
   if (mode === "modules") {
-    const modules = join(
-      root,
-      "crates/valle-compiler/tests/fixtures/motion/modules",
-    );
+    const modules = join(root, "crates/valle-compiler/tests/fixtures/motion/modules");
     for (const [name, args] of [
-      [
-        "components/dashboard.tsx",
-        ["--data", join(modules, "data-dashboard/dashboard.data.json")],
-      ],
+      ["components/dashboard.tsx", ["--data", join(modules, "data-dashboard/dashboard.data.json")]],
       ["components/route-network.tsx", []],
-      [
-        "components/code-build.tsx",
-        ["--asset", `dot=${join(modules, "assets/dot.png")}`],
-      ],
+      ["components/code-build.tsx", ["--asset", `dot=${join(modules, "assets/dot.png")}`]],
       ["components/brand-poster.tsx", []],
     ] as const)
       await run(join(modules, name), [...args]);
@@ -455,7 +412,11 @@ try {
     // One source fails to compile and one fails to parse; both open with their error.
     for (const [name, from, to] of [
       ["compile", '<View key="box"', '<Missing key="box"'],
-      ["syntax", "export default function Main(props){ const time = useCurrentTime();", "export default function Main(props){("],
+      [
+        "syntax",
+        "export default function Main(props){ const time = useCurrentTime();",
+        "export default function Main(props){(",
+      ],
     ] as const) {
       const valid = source.replace(/AUDIO_CONTROL|AUDIO_ANALYSIS|AUDIO_HEIGHT/g, "");
       const input = join(dir, `${name}.motion.tsx`);
@@ -469,19 +430,24 @@ try {
     await writeFile(
       input,
       source
-        .replace(
-          "AUDIO_CONTROL",
-          audio ? ',assets:{beat:asset({kind:"audio",required:true})}' : "",
-        )
+        .replace("AUDIO_CONTROL", audio ? ',assets:{beat:asset({kind:"audio",required:true})}' : "")
         .replace(
           "AUDIO_ANALYSIS",
-          audio
-            ? 'const BEAT=audioAnalysis("asset://beat",{bands:8,rate:30});'
-            : "",
+          audio ? 'const BEAT=audioAnalysis("asset://beat",{bands:8,rate:30});' : "",
         )
         .replace("AUDIO_HEIGHT", audio ? "+BEAT.level(time.seconds)*10" : "")
-        .replace("backgroundColor:\"#101010\"", mode === "effects" ? 'backgroundColor:"#101010",filter:"film-grain(4294967295 0.5 2px)"' : 'backgroundColor:"#101010"')
-        .replace('opacity:0.5+time.progress*0.5', mode === "effects" ? 'opacity:0.5+time.progress*0.5,filter:"radial-blur(120px 70px 128px)"' : 'opacity:0.5+time.progress*0.5'),
+        .replace(
+          'backgroundColor:"#101010"',
+          mode === "effects"
+            ? 'backgroundColor:"#101010",filter:"film-grain(4294967295 0.5 2px)"'
+            : 'backgroundColor:"#101010"',
+        )
+        .replace(
+          "opacity:0.5+time.progress*0.5",
+          mode === "effects"
+            ? 'opacity:0.5+time.progress*0.5,filter:"radial-blur(120px 70px 128px)"'
+            : "opacity:0.5+time.progress*0.5",
+        ),
     );
     const args: string[] = [];
     if (audio) {
@@ -489,12 +455,7 @@ try {
       await writeFile(file, wav());
       args.push("--asset", `beat=${file}`);
     }
-    await run(
-      input,
-      args,
-      { from: "default:40", to: "default:80" },
-      mode === "hot",
-    );
+    await run(input, args, { from: "default:40", to: "default:80" }, mode === "hot");
   }
 } catch (error) {
   console.error(`Studio evidence: ${dir}`);

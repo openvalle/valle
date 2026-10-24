@@ -48,20 +48,12 @@ const names = [
   "CULL_FACE_MODE",
   "FRONT_FACE",
 ] as const;
-const switches = [
-  "SCISSOR_TEST",
-  "DEPTH_TEST",
-  "STENCIL_TEST",
-  "CULL_FACE",
-  "BLEND",
-] as const;
+const switches = ["SCISSOR_TEST", "DEPTH_TEST", "STENCIL_TEST", "CULL_FACE", "BLEND"] as const;
 
 /** Mirror only this owned context. CanvasKit and host calls both pass through its methods. */
 export function trackGpuState(gl: WebGL2RenderingContext): void {
   if (mirrors.has(gl)) return;
-  const values = Object.fromEntries(
-      names.map((n) => [n, gl.getParameter(gl[n])]),
-    ),
+  const values = Object.fromEntries(names.map((n) => [n, gl.getParameter(gl[n])])),
     textures: (WebGLTexture | null)[] = [],
     samplers: (WebGLSampler | null)[] = [];
   const units = gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) as number;
@@ -76,9 +68,7 @@ export function trackGpuState(gl: WebGL2RenderingContext): void {
     textures,
     samplers,
     deleted: new WeakSet(),
-    enabled: new Set(
-      switches.filter((n) => gl.isEnabled(gl[n])).map((n) => gl[n]),
-    ),
+    enabled: new Set(switches.filter((n) => gl.isEnabled(gl[n])).map((n) => gl[n])),
     restore: [],
   };
   mirrors.set(gl, mirror);
@@ -111,8 +101,7 @@ export function trackGpuState(gl: WebGL2RenderingContext): void {
     cullFace: "CULL_FACE_MODE",
     frontFace: "FRONT_FACE",
   };
-  for (const [method, key] of Object.entries(scalar))
-    wrap(method, (v) => (values[key] = v));
+  for (const [method, key] of Object.entries(scalar)) wrap(method, (v) => (values[key] = v));
   for (const [method, key] of [
     ["viewport", "VIEWPORT"],
     ["scissor", "SCISSOR_BOX"],
@@ -130,14 +119,12 @@ export function trackGpuState(gl: WebGL2RenderingContext): void {
       values.READ_FRAMEBUFFER_BINDING = buffer;
   });
   wrap("bindTexture", (target, texture) => {
-    if (target === gl.TEXTURE_2D)
-      textures[values.ACTIVE_TEXTURE - gl.TEXTURE0] = texture;
+    if (target === gl.TEXTURE_2D) textures[values.ACTIVE_TEXTURE - gl.TEXTURE0] = texture;
   });
   wrap("bindSampler", (unit, sampler) => (samplers[unit] = sampler));
   wrap("deleteSampler", (sampler) => {
     if (sampler) mirror.deleted.add(sampler);
-    for (let i = 0; i < samplers.length; i++)
-      if (samplers[i] === sampler) samplers[i] = null;
+    for (let i = 0; i < samplers.length; i++) if (samplers[i] === sampler) samplers[i] = null;
   });
   wrap("deleteProgram", (program) => {
     if (program) mirror.deleted.add(program);
@@ -145,13 +132,11 @@ export function trackGpuState(gl: WebGL2RenderingContext): void {
   });
   wrap("deleteTexture", (texture) => {
     if (texture) mirror.deleted.add(texture);
-    for (let i = 0; i < textures.length; i++)
-      if (textures[i] === texture) textures[i] = null;
+    for (let i = 0; i < textures.length; i++) if (textures[i] === texture) textures[i] = null;
   });
   wrap("deleteBuffer", (buffer) => {
     if (buffer) mirror.deleted.add(buffer);
-    if (values.ARRAY_BUFFER_BINDING === buffer)
-      values.ARRAY_BUFFER_BINDING = null;
+    if (values.ARRAY_BUFFER_BINDING === buffer) values.ARRAY_BUFFER_BINDING = null;
   });
   wrap("deleteVertexArray", (vao) => {
     if (vao) mirror.deleted.add(vao);
@@ -159,10 +144,8 @@ export function trackGpuState(gl: WebGL2RenderingContext): void {
   });
   wrap("deleteFramebuffer", (fbo) => {
     if (fbo) mirror.deleted.add(fbo);
-    if (values.DRAW_FRAMEBUFFER_BINDING === fbo)
-      values.DRAW_FRAMEBUFFER_BINDING = null;
-    if (values.READ_FRAMEBUFFER_BINDING === fbo)
-      values.READ_FRAMEBUFFER_BINDING = null;
+    if (values.DRAW_FRAMEBUFFER_BINDING === fbo) values.DRAW_FRAMEBUFFER_BINDING = null;
+    if (values.READ_FRAMEBUFFER_BINDING === fbo) values.READ_FRAMEBUFFER_BINDING = null;
   });
   wrap("enable", (v) => mirror.enabled.add(v));
   wrap("disable", (v) => mirror.enabled.delete(v));
@@ -203,8 +186,7 @@ export function preserveState(gl: WebGL2RenderingContext): () => void {
     enabled = new Set(mirror.enabled),
     textures = mirror.textures.slice(),
     samplers = mirror.samplers.slice();
-  const alive = (value: any) =>
-    value && mirror.deleted.has(value) ? null : value;
+  const alive = (value: any) => (value && mirror.deleted.has(value) ? null : value);
   return () => {
     gl.useProgram(alive(v.CURRENT_PROGRAM));
     gl.bindVertexArray(alive(v.VERTEX_ARRAY_BINDING));
@@ -213,9 +195,7 @@ export function preserveState(gl: WebGL2RenderingContext): () => void {
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, alive(v.READ_FRAMEBUFFER_BINDING));
     gl.viewport(...(v.VIEWPORT as [number, number, number, number]));
     gl.scissor(...(v.SCISSOR_BOX as [number, number, number, number]));
-    gl.colorMask(
-      ...(v.COLOR_WRITEMASK as [boolean, boolean, boolean, boolean]),
-    );
+    gl.colorMask(...(v.COLOR_WRITEMASK as [boolean, boolean, boolean, boolean]));
     gl.clearColor(...(v.COLOR_CLEAR_VALUE as [number, number, number, number]));
     gl.depthFunc(v.DEPTH_FUNC);
     gl.depthMask(v.DEPTH_WRITEMASK);
@@ -223,22 +203,21 @@ export function preserveState(gl: WebGL2RenderingContext): () => void {
     gl.cullFace(v.CULL_FACE_MODE);
     gl.frontFace(v.FRONT_FACE);
     gl.blendEquationSeparate(v.BLEND_EQUATION_RGB, v.BLEND_EQUATION_ALPHA);
-    gl.blendFuncSeparate(
-      v.BLEND_SRC_RGB,
-      v.BLEND_DST_RGB,
-      v.BLEND_SRC_ALPHA,
-      v.BLEND_DST_ALPHA,
-    );
-    for (const n of switches)
-      enabled.has(gl[n]) ? gl.enable(gl[n]) : gl.disable(gl[n]);
+    gl.blendFuncSeparate(v.BLEND_SRC_RGB, v.BLEND_DST_RGB, v.BLEND_SRC_ALPHA, v.BLEND_DST_ALPHA);
+    for (const n of switches) {
+      if (enabled.has(gl[n])) {
+        gl.enable(gl[n]);
+      } else {
+        gl.disable(gl[n]);
+      }
+    }
     for (let i = 0; i < textures.length; i++)
       if (mirror.textures[i] !== textures[i]) {
         gl.activeTexture(gl.TEXTURE0 + i);
         gl.bindTexture(gl.TEXTURE_2D, alive(textures[i]!));
       }
     for (let i = 0; i < samplers.length; i++)
-      if (mirror.samplers[i] !== samplers[i])
-        gl.bindSampler(i, alive(samplers[i]!));
+      if (mirror.samplers[i] !== samplers[i]) gl.bindSampler(i, alive(samplers[i]!));
     gl.activeTexture(v.ACTIVE_TEXTURE);
   };
 }

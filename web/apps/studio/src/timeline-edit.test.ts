@@ -16,13 +16,15 @@ function timeline(): Timeline {
   return {
     canvas: { width: 640, height: 360, fps: "30000/1001" },
     tracks: {
-      visual: [{
-        clips: [
-          { start: 0, duration: 1, kind: "solid", color: "#111111ff" },
-          { start: 1.5, duration: 2, kind: "solid", color: "#222222ff" },
-          { start: 4, duration: 1, kind: "solid", color: "#333333ff" },
-        ],
-      }],
+      visual: [
+        {
+          clips: [
+            { start: 0, duration: 1, kind: "solid", color: "#111111ff" },
+            { start: 1.5, duration: 2, kind: "solid", color: "#222222ff" },
+            { start: 4, duration: 1, kind: "solid", color: "#333333ff" },
+          ],
+        },
+      ],
     },
   } as unknown as Timeline;
 }
@@ -30,29 +32,47 @@ function timeline(): Timeline {
 test("Motion data edit copies the prepared object into one author clip", () => {
   const original = timeline();
   original.tracks.visual![0]!.clips[1] = {
-    kind: "motion", component: "chart", start: 1.5, duration: 2,
+    kind: "motion",
+    component: "chart",
+    start: 1.5,
+    duration: 2,
     data: { rows: [{ id: "old", value: 3 }] },
   } as never;
   const rows = [{ id: "new", value: 8 }];
   const updated = setTimelineMotionData(original, "/tracks/visual/0/clips/1", { rows });
   rows[0]!.value = 99;
-  expect(updated.tracks.visual![0]!.clips[1]).toMatchObject({ data: { rows: [{ id: "new", value: 8 }] } });
-  expect(original.tracks.visual![0]!.clips[1]).toMatchObject({ data: { rows: [{ id: "old", value: 3 }] } });
-  expect(() => setTimelineMotionData(original, "/tracks/visual/0/clips/0", { rows })).toThrow("not Motion");
+  expect(updated.tracks.visual![0]!.clips[1]).toMatchObject({
+    data: { rows: [{ id: "new", value: 8 }] },
+  });
+  expect(original.tracks.visual![0]!.clips[1]).toMatchObject({
+    data: { rows: [{ id: "old", value: 3 }] },
+  });
+  expect(() => setTimelineMotionData(original, "/tracks/visual/0/clips/0", { rows })).toThrow(
+    "not Motion",
+  );
 });
 
 test("Motion resource binding edits one clip and requires a declared alias", () => {
   const original = timeline();
   original.resources = { first: "one.png", second: "two.png" };
   original.tracks.visual![0]!.clips[1] = {
-    kind: "motion", component: "chart", start: 1.5, duration: 2,
+    kind: "motion",
+    component: "chart",
+    start: 1.5,
+    duration: 2,
     resources: { poster: "first" },
   } as never;
-  const updated = setTimelineMotionResource(original, "/tracks/visual/0/clips/1", "poster", "second");
+  const updated = setTimelineMotionResource(
+    original,
+    "/tracks/visual/0/clips/1",
+    "poster",
+    "second",
+  );
   expect(updated.tracks.visual![0]!.clips[1]).toMatchObject({ resources: { poster: "second" } });
   expect(original.tracks.visual![0]!.clips[1]).toMatchObject({ resources: { poster: "first" } });
-  expect(() => setTimelineMotionResource(original, "/tracks/visual/0/clips/1", "poster", "missing"))
-    .toThrow("does not exist");
+  expect(() =>
+    setTimelineMotionResource(original, "/tracks/visual/0/clips/1", "poster", "missing"),
+  ).toThrow("does not exist");
 });
 
 test("compiler source pointers address Timeline clips without parsing internal ids", () => {
@@ -102,46 +122,51 @@ test("frame edits delegate exact Timeline seconds to the Rust runtime", () => {
 });
 
 test("left trim applies exact source-rate deltas for audio, video, and Motion", () => {
-  const sourceDeltaCalls: Array<{ frames: number; fps: number | string; rate: number | null | undefined }> = [];
-  const sourceDelta = (
-    frames: number,
-    fps: number | string,
-    rate?: number | null,
-  ): number => {
+  const sourceDeltaCalls: Array<{
+    frames: number;
+    fps: number | string;
+    rate: number | null | undefined;
+  }> = [];
+  const sourceDelta = (frames: number, fps: number | string, rate?: number | null): number => {
     sourceDeltaCalls.push({ frames, fps, rate });
     return frames * (rate ?? 1);
   };
 
   for (const rate of [2, 0.5]) {
     for (const kind of ["audio", "video", "motion"] as const) {
-      const authored = kind === "audio"
-        ? ({
-            canvas: { width: 640, height: 360, fps: 1 },
-            tracks: {
-              audio: [{
-                clips: [{ start: 1, duration: 4, src: "media", trimStart: 3, rate }],
-              }],
-            },
-          } as Timeline)
-        : ({
-            canvas: { width: 640, height: 360, fps: 1 },
-            tracks: {
-              visual: [{
-                clips: [{
-                  start: 1,
-                  duration: 4,
-                  trimStart: 3,
-                  rate,
-                  ...(kind === "motion"
-                    ? { kind, component: "component" }
-                    : { kind, src: "media" }),
-                }],
-              }],
-            },
-          } as Timeline);
-      const path = kind === "audio"
-        ? "/tracks/audio/0/clips/0"
-        : "/tracks/visual/0/clips/0";
+      const authored =
+        kind === "audio"
+          ? ({
+              canvas: { width: 640, height: 360, fps: 1 },
+              tracks: {
+                audio: [
+                  {
+                    clips: [{ start: 1, duration: 4, src: "media", trimStart: 3, rate }],
+                  },
+                ],
+              },
+            } as Timeline)
+          : ({
+              canvas: { width: 640, height: 360, fps: 1 },
+              tracks: {
+                visual: [
+                  {
+                    clips: [
+                      {
+                        start: 1,
+                        duration: 4,
+                        trimStart: 3,
+                        rate,
+                        ...(kind === "motion"
+                          ? { kind, component: "component" }
+                          : { kind, src: "media" }),
+                      },
+                    ],
+                  },
+                ],
+              },
+            } as Timeline);
+      const path = kind === "audio" ? "/tracks/audio/0/clips/0" : "/tracks/visual/0/clips/0";
       const trimmed = trimTimelineClipFrames(
         authored,
         path,
@@ -150,9 +175,10 @@ test("left trim applies exact source-rate deltas for audio, video, and Motion", 
         (frames) => frames,
         sourceDelta,
       );
-      const clip = kind === "audio"
-        ? trimmed.tracks.audio?.[0]?.clips[0]
-        : trimmed.tracks.visual?.[0]?.clips[0];
+      const clip =
+        kind === "audio"
+          ? trimmed.tracks.audio?.[0]?.clips[0]
+          : trimmed.tracks.visual?.[0]?.clips[0];
       expect(clip).toMatchObject({
         start: 2,
         duration: 3,
@@ -178,12 +204,12 @@ test("delete and reorder operate on hard-typed arrays and preserve legal absolut
     "/tracks/visual/0/clips/2",
     "/tracks/visual/0/clips/0",
   );
-  expect(moved.tracks.visual?.[0]?.clips.map((clip) => clip.kind === "solid" ? clip.color : null)).toEqual([
-    "#333333ff",
-    "#111111ff",
-    "#222222ff",
+  expect(
+    moved.tracks.visual?.[0]?.clips.map((clip) => (clip.kind === "solid" ? clip.color : null)),
+  ).toEqual(["#333333ff", "#111111ff", "#222222ff"]);
+  expect(moved.tracks.visual?.[0]?.clips.map((clip: { start: number }) => clip.start)).toEqual([
+    0, 1.5, 3,
   ]);
-  expect(moved.tracks.visual?.[0]?.clips.map((clip: { start: number }) => clip.start)).toEqual([0, 1.5, 3]);
 
   const deleted = deleteTimelineClip(moved, "/tracks/visual/0/clips/1");
   expect(deleted.tracks.visual?.[0]?.clips).toHaveLength(2);
@@ -196,31 +222,51 @@ test("transition edits ripple following starts while preserving source clocks an
     const next = setTimelineTransition(source, "/tracks/visual/0/clips/0", kind, 0.25);
     const track = next.tracks.visual![0]!;
     expect(track.transitions).toEqual([{ from: 0, to: 1, kind }]);
-    expect(track.clips.map(c => [c.start, c.duration])).toEqual([[0,1],[0.75,2],[3.25,1]]);
+    expect(track.clips.map((c) => [c.start, c.duration])).toEqual([
+      [0, 1],
+      [0.75, 2],
+      [3.25, 1],
+    ]);
     const removed = setTimelineTransition(next, "/tracks/visual/0/clips/0", null);
-    expect(removed.tracks.visual![0]!.clips.map(c => c.start)).toEqual([0,1,3.5]);
+    expect(removed.tracks.visual![0]!.clips.map((c) => c.start)).toEqual([0, 1, 3.5]);
     expect(removed.tracks.visual![0]!.transitions).toEqual([]);
   }
   expect(source.tracks.visual![0]!.clips[1]!.start).toBe(1.5);
-  for (const duration of [0,1,NaN,-1]) {
-    expect(() => setTimelineTransition(source, "/tracks/visual/0/clips/0", "fade", duration)).toThrow("duration");
+  for (const duration of [0, 1, NaN, -1]) {
+    expect(() =>
+      setTimelineTransition(source, "/tracks/visual/0/clips/0", "fade", duration),
+    ).toThrow("duration");
   }
-  expect(() => setTimelineTransition(source, "/tracks/visual/0/clips/2", "fade")).toThrow("following clip");
+  expect(() => setTimelineTransition(source, "/tracks/visual/0/clips/2", "fade")).toThrow(
+    "following clip",
+  );
 });
 
 test("deleting and reordering visual clips keep only adjacent transition endpoints", async () => {
   const { setTimelineTransition } = await import("./timeline-edit.ts");
   const source = setTimelineTransition(timeline(), "/tracks/visual/0/clips/1", "circleOpen", 0.25);
   const deletedHead = deleteTimelineClip(source, "/tracks/visual/0/clips/0");
-  expect(deletedHead.tracks.visual![0]!.transitions).toEqual([{from:0,to:1,kind:"circleOpen"}]);
+  expect(deletedHead.tracks.visual![0]!.transitions).toEqual([
+    { from: 0, to: 1, kind: "circleOpen" },
+  ]);
   const deletedEndpoint = deleteTimelineClip(source, "/tracks/visual/0/clips/1");
   expect(deletedEndpoint.tracks.visual![0]!.transitions).toEqual([]);
-  const reordered = moveTimelineVisualClipBefore(source, "/tracks/visual/0/clips/2", "/tracks/visual/0/clips/1");
+  const reordered = moveTimelineVisualClipBefore(
+    source,
+    "/tracks/visual/0/clips/2",
+    "/tracks/visual/0/clips/1",
+  );
   expect(reordered.tracks.visual![0]!.transitions).toEqual([]);
-  const preserved = moveTimelineVisualClipBefore(source, "/tracks/visual/0/clips/0", "/tracks/visual/0/clips/1");
-  expect(preserved.tracks.visual![0]!.transitions).toEqual([{from:1,to:2,kind:"circleOpen"}]);
+  const preserved = moveTimelineVisualClipBefore(
+    source,
+    "/tracks/visual/0/clips/0",
+    "/tracks/visual/0/clips/1",
+  );
+  expect(preserved.tracks.visual![0]!.transitions).toEqual([
+    { from: 1, to: 2, kind: "circleOpen" },
+  ]);
   const clips = preserved.tracks.visual![0]!.clips;
-  expect(clips[1]!.start+clips[1]!.duration-clips[2]!.start).toBe(0.25);
+  expect(clips[1]!.start + clips[1]!.duration - clips[2]!.start).toBe(0.25);
 });
 
 /** The first transition's parameters; Motion transitions take props instead. */
@@ -230,95 +276,216 @@ function paramsOf(timeline: Timeline) {
 }
 
 test("transition parameters survive duration changes, reorder and deletion; kind changes reset them", async () => {
-  const { setTimelineTransition, setTimelineTransitionParameter, transitionParameterSpecs } = await import("./timeline-edit.ts");
+  const { setTimelineTransition, setTimelineTransitionParameter, transitionParameterSpecs } =
+    await import("./timeline-edit.ts");
   const four = timeline();
-  four.tracks.visual![0]!.clips.push({kind:"solid",color:"#444444",start:6,duration:1});
+  four.tracks.visual![0]!.clips.push({ kind: "solid", color: "#444444", start: 6, duration: 1 });
   const source = setTimelineTransition(four, "/tracks/visual/0/clips/1", "circleOpen", 0.25);
   const edited = setTimelineTransitionParameter(source, "/tracks/visual/0/clips/1", "centerX", 0.2);
   expect(paramsOf(source)).toBeUndefined();
   const resized = setTimelineTransition(edited, "/tracks/visual/0/clips/1", "circleOpen", 0.4);
-  expect(paramsOf(resized)).toEqual({centerX:0.2});
+  expect(paramsOf(resized)).toEqual({ centerX: 0.2 });
   const deletedHead = deleteTimelineClip(resized, "/tracks/visual/0/clips/0");
-  expect(deletedHead.tracks.visual![0]!.transitions![0]).toEqual({from:0,to:1,kind:"circleOpen",params:{centerX:0.2}});
-  const preserved = moveTimelineVisualClipBefore(resized, "/tracks/visual/0/clips/3", "/tracks/visual/0/clips/0");
-  expect(paramsOf(preserved)).toEqual({centerX:0.2});
-  expect(paramsOf(setTimelineTransition(resized, "/tracks/visual/0/clips/1", "ripple"))).toBeUndefined();
-  expect(() => setTimelineTransitionParameter(edited, "/tracks/visual/0/clips/1", "centerX", 2)).toThrow();
-  expect(() => setTimelineTransitionParameter(edited, "/tracks/visual/0/clips/1", "frequency", 4)).toThrow();
+  expect(deletedHead.tracks.visual![0]!.transitions![0]).toEqual({
+    from: 0,
+    to: 1,
+    kind: "circleOpen",
+    params: { centerX: 0.2 },
+  });
+  const preserved = moveTimelineVisualClipBefore(
+    resized,
+    "/tracks/visual/0/clips/3",
+    "/tracks/visual/0/clips/0",
+  );
+  expect(paramsOf(preserved)).toEqual({ centerX: 0.2 });
+  expect(
+    paramsOf(setTimelineTransition(resized, "/tracks/visual/0/clips/1", "ripple")),
+  ).toBeUndefined();
+  expect(() =>
+    setTimelineTransitionParameter(edited, "/tracks/visual/0/clips/1", "centerX", 2),
+  ).toThrow();
+  expect(() =>
+    setTimelineTransitionParameter(edited, "/tracks/visual/0/clips/1", "frequency", 4),
+  ).toThrow();
   const zoom = setTimelineTransition(timeline(), "/tracks/visual/0/clips/0", "simpleZoom", 0.25);
-  expect(paramsOf(setTimelineTransitionParameter(zoom, "/tracks/visual/0/clips/0", "quickness", 0.2))).toEqual({quickness:0.2});
+  expect(
+    paramsOf(setTimelineTransitionParameter(zoom, "/tracks/visual/0/clips/0", "quickness", 0.2)),
+  ).toEqual({ quickness: 0.2 });
   const ripple = setTimelineTransition(timeline(), "/tracks/visual/0/clips/0", "ripple", 0.25);
-  expect(paramsOf(setTimelineTransitionParameter(ripple, "/tracks/visual/0/clips/0", "amplitude", 1/30))).toEqual({});
+  expect(
+    paramsOf(
+      setTimelineTransitionParameter(ripple, "/tracks/visual/0/clips/0", "amplitude", 1 / 30),
+    ),
+  ).toEqual({});
   for (const [kind, specs] of Object.entries(transitionParameterSpecs)) {
-    const base = setTimelineTransition(timeline(), "/tracks/visual/0/clips/0", kind as keyof typeof transitionParameterSpecs, 0.25);
+    const base = setTimelineTransition(
+      timeline(),
+      "/tracks/visual/0/clips/0",
+      kind as keyof typeof transitionParameterSpecs,
+      0.25,
+    );
     for (const spec of specs) {
-      const changed = setTimelineTransitionParameter(base, "/tracks/visual/0/clips/0", spec.name, spec.max);
+      const changed = setTimelineTransitionParameter(
+        base,
+        "/tracks/visual/0/clips/0",
+        spec.name,
+        spec.max,
+      );
       expect(paramsOf(changed)?.[spec.name] ?? spec.default).toBe(spec.max);
-      expect(() => setTimelineTransitionParameter(base, "/tracks/visual/0/clips/0", spec.name, NaN)).toThrow();
+      expect(() =>
+        setTimelineTransitionParameter(base, "/tracks/visual/0/clips/0", spec.name, NaN),
+      ).toThrow();
     }
   }
 });
 
 test("Motion transitions keep their template through duration changes and reorder", async () => {
-  const { setTimelineTransition, setTimelineTransitionParameter } = await import("./timeline-edit.ts");
+  const { setTimelineTransition, setTimelineTransitionParameter } =
+    await import("./timeline-edit.ts");
   const four = timeline();
-  four.tracks.visual![0]!.clips.push({kind:"solid",color:"#444444",start:6,duration:1});
-  const source = setTimelineTransition(four, "/tracks/visual/0/clips/1", { component: "wipe" }, 0.25);
-  expect(source.tracks.visual![0]!.transitions).toEqual([{from:1,to:2,kind:"motion",component:"wipe"}]);
-  Object.assign(source.tracks.visual![0]!.transitions![0]!, { props: { softness: 0.2 }, resources: { noise: "grain" } });
-  const authored = {from:1,to:2,kind:"motion" as const,component:"wipe",props:{softness:0.2},resources:{noise:"grain"}};
-  const resized = setTimelineTransition(source, "/tracks/visual/0/clips/1", { component: "wipe" }, 0.4);
+  four.tracks.visual![0]!.clips.push({ kind: "solid", color: "#444444", start: 6, duration: 1 });
+  const source = setTimelineTransition(
+    four,
+    "/tracks/visual/0/clips/1",
+    { component: "wipe" },
+    0.25,
+  );
+  expect(source.tracks.visual![0]!.transitions).toEqual([
+    { from: 1, to: 2, kind: "motion", component: "wipe" },
+  ]);
+  Object.assign(source.tracks.visual![0]!.transitions![0]!, {
+    props: { softness: 0.2 },
+    resources: { noise: "grain" },
+  });
+  const authored = {
+    from: 1,
+    to: 2,
+    kind: "motion" as const,
+    component: "wipe",
+    props: { softness: 0.2 },
+    resources: { noise: "grain" },
+  };
+  const resized = setTimelineTransition(
+    source,
+    "/tracks/visual/0/clips/1",
+    { component: "wipe" },
+    0.4,
+  );
   expect(resized.tracks.visual![0]!.transitions).toEqual([authored]);
   const clips = resized.tracks.visual![0]!.clips;
   expect(clips[1]!.start + clips[1]!.duration - clips[2]!.start).toBeCloseTo(0.4);
-  const moved = moveTimelineVisualClipBefore(resized, "/tracks/visual/0/clips/3", "/tracks/visual/0/clips/0");
-  expect(moved.tracks.visual![0]!.transitions).toEqual([{...authored,from:2,to:3}]);
+  const moved = moveTimelineVisualClipBefore(
+    resized,
+    "/tracks/visual/0/clips/3",
+    "/tracks/visual/0/clips/0",
+  );
+  expect(moved.tracks.visual![0]!.transitions).toEqual([{ ...authored, from: 2, to: 3 }]);
   // Another template or a built-in kernel starts from its own defaults.
-  expect(setTimelineTransition(resized, "/tracks/visual/0/clips/1", { component: "glitch" }).tracks.visual![0]!.transitions)
-    .toEqual([{from:1,to:2,kind:"motion",component:"glitch"}]);
-  expect(setTimelineTransition(resized, "/tracks/visual/0/clips/1", "fade").tracks.visual![0]!.transitions).toEqual([{from:1,to:2,kind:"fade"}]);
-  expect(() => setTimelineTransitionParameter(resized, "/tracks/visual/0/clips/1", "softness", 0.5)).toThrow("props");
-  expect(() => setTimelineTransition(four, "/tracks/visual/0/clips/1", { component: "" })).toThrow("component");
+  expect(
+    setTimelineTransition(resized, "/tracks/visual/0/clips/1", { component: "glitch" }).tracks
+      .visual![0]!.transitions,
+  ).toEqual([{ from: 1, to: 2, kind: "motion", component: "glitch" }]);
+  expect(
+    setTimelineTransition(resized, "/tracks/visual/0/clips/1", "fade").tracks.visual![0]!
+      .transitions,
+  ).toEqual([{ from: 1, to: 2, kind: "fade" }]);
+  expect(() =>
+    setTimelineTransitionParameter(resized, "/tracks/visual/0/clips/1", "softness", 0.5),
+  ).toThrow("props");
+  expect(() => setTimelineTransition(four, "/tracks/visual/0/clips/1", { component: "" })).toThrow(
+    "component",
+  );
 });
 
 test("a transition template placed as a clip trims its host window without a source trim", () => {
-  const authored = { canvas: { width:64, height:32, fps:4 }, tracks:{visual:[{clips:[
-    {kind:"motion",component:"wipe",start:1,duration:3},
-  ]}]} } as Timeline;
-  const trimmed = trimTimelineClipFrames(authored,"/tracks/visual/0/clips/0","start",2,
-    (frames) => frames/4, () => {throw new Error("a template has no media source delta");}, {type:"transition"});
-  expect(trimmed.tracks.visual![0]!.clips[0]).toEqual({kind:"motion",component:"wipe",start:1.5,duration:2.5});
+  const authored = {
+    canvas: { width: 64, height: 32, fps: 4 },
+    tracks: { visual: [{ clips: [{ kind: "motion", component: "wipe", start: 1, duration: 3 }] }] },
+  } as Timeline;
+  const trimmed = trimTimelineClipFrames(
+    authored,
+    "/tracks/visual/0/clips/0",
+    "start",
+    2,
+    (frames) => frames / 4,
+    () => {
+      throw new Error("a template has no media source delta");
+    },
+    { type: "transition" },
+  );
+  expect(trimmed.tracks.visual![0]!.clips[0]).toEqual({
+    kind: "motion",
+    component: "wipe",
+    start: 1.5,
+    duration: 2.5,
+  });
 });
 
 test("overlay leading trim edits the host window without creating a source trim", () => {
-  const authored = { canvas: { width:64, height:32, fps:4 }, tracks:{visual:[{clips:[
-    {kind:"motion",component:"card",start:1,duration:3},
-  ]}]} } as Timeline;
-  const trimmed = trimTimelineClipFrames(authored,"/tracks/visual/0/clips/0","start",2,
-    (frames) => frames/4, () => {throw new Error("overlay has no media source delta");},
-    {type:"overlay",intro:"1/2",outro:"1/2",hold:"once"});
-  expect(trimmed.tracks.visual![0]!.clips[0]).toEqual({kind:"motion",component:"card",start:1.5,duration:2.5});
+  const authored = {
+    canvas: { width: 64, height: 32, fps: 4 },
+    tracks: { visual: [{ clips: [{ kind: "motion", component: "card", start: 1, duration: 3 }] }] },
+  } as Timeline;
+  const trimmed = trimTimelineClipFrames(
+    authored,
+    "/tracks/visual/0/clips/0",
+    "start",
+    2,
+    (frames) => frames / 4,
+    () => {
+      throw new Error("overlay has no media source delta");
+    },
+    { type: "overlay", intro: "1/2", outro: "1/2", hold: "once" },
+  );
+  expect(trimmed.tracks.visual![0]!.clips[0]).toEqual({
+    kind: "motion",
+    component: "card",
+    start: 1.5,
+    duration: 2.5,
+  });
   expect(authored.tracks.visual![0]!.clips[0]!.start).toBe(1);
 });
 
 test("clip effects append, replace and remove templates, and the same component keeps its props", async () => {
   const { setTimelineClipEffect } = await import("./timeline-edit.ts");
-  const source = { ...timeline(), resources: { glow: "glow.motion.tsx", invert: "invert.motion.tsx" } } as Timeline;
+  const source = {
+    ...timeline(),
+    resources: { glow: "glow.motion.tsx", invert: "invert.motion.tsx" },
+  } as Timeline;
   const clip = (edited: Timeline) => edited.tracks.visual![0]!.clips[1]!;
   const one = setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 0, "glow");
-  expect(clip(one).effects).toEqual([{kind:"motion",component:"glow"}]);
+  expect(clip(one).effects).toEqual([{ kind: "motion", component: "glow" }]);
   expect(clip(source)).not.toHaveProperty("effects");
   Object.assign(clip(one).effects![0]!, { props: { radius: 4 }, resources: { noise: "grain" } });
-  const glow = {kind:"motion" as const,component:"glow",props:{radius:4},resources:{noise:"grain"}};
+  const glow = {
+    kind: "motion" as const,
+    component: "glow",
+    props: { radius: 4 },
+    resources: { noise: "grain" },
+  };
   const two = setTimelineClipEffect(one, "/tracks/visual/0/clips/1", 1, "invert");
-  expect(clip(two).effects).toEqual([glow,{kind:"motion",component:"invert"}]);
-  expect(clip(setTimelineClipEffect(two, "/tracks/visual/0/clips/1", 0, "glow")).effects).toEqual(clip(two).effects!);
-  expect(clip(setTimelineClipEffect(two, "/tracks/visual/0/clips/1", 0, "invert")).effects)
-    .toEqual([{kind:"motion",component:"invert"},{kind:"motion",component:"invert"}]);
+  expect(clip(two).effects).toEqual([glow, { kind: "motion", component: "invert" }]);
+  expect(clip(setTimelineClipEffect(two, "/tracks/visual/0/clips/1", 0, "glow")).effects).toEqual(
+    clip(two).effects!,
+  );
+  expect(clip(setTimelineClipEffect(two, "/tracks/visual/0/clips/1", 0, "invert")).effects).toEqual(
+    [
+      { kind: "motion", component: "invert" },
+      { kind: "motion", component: "invert" },
+    ],
+  );
   const first = setTimelineClipEffect(two, "/tracks/visual/0/clips/1", 1, null);
   expect(clip(first).effects).toEqual([glow]);
-  expect(clip(setTimelineClipEffect(first, "/tracks/visual/0/clips/1", 0, null))).not.toHaveProperty("effects");
-  expect(() => setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 1, "glow")).toThrow("Effect does not exist");
-  expect(() => setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 0, null)).toThrow("Effect does not exist");
-  expect(() => setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 0, "missing")).toThrow("does not exist");
+  expect(
+    clip(setTimelineClipEffect(first, "/tracks/visual/0/clips/1", 0, null)),
+  ).not.toHaveProperty("effects");
+  expect(() => setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 1, "glow")).toThrow(
+    "Effect does not exist",
+  );
+  expect(() => setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 0, null)).toThrow(
+    "Effect does not exist",
+  );
+  expect(() => setTimelineClipEffect(source, "/tracks/visual/0/clips/1", 0, "missing")).toThrow(
+    "does not exist",
+  );
 });

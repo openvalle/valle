@@ -6,15 +6,9 @@ import type {
   PreviewResourceInput,
   Timeline,
 } from "valle-engine";
-import type {
-  MotionContextWire,
-  StudioBootWire,
-} from "valle-engine/protocol";
+import type { MotionContextWire, StudioBootWire } from "valle-engine/protocol";
 import { MOTION_SOURCE_MAP_VERSION, STUDIO_HOST_PROTOCOL_VERSION } from "valle-engine/protocol";
-import type {
-  ResourceManifest,
-  TimelineDocument,
-} from "valle-engine/internal";
+import type { ResourceManifest, TimelineDocument } from "valle-engine/internal";
 import type { PlayerRuntimeAssets } from "valle-engine";
 import { findMotionStructure } from "./project-motion-edit.ts";
 
@@ -44,7 +38,11 @@ export interface TimelineContext {
   assetBaseUrl: string;
   proxyBase?: string | null;
   generation?: number;
-  motionInstances?: Array<{ clipPath: string; artifact: Record<string, unknown>; sourceMap: Record<string, unknown> }>;
+  motionInstances?: Array<{
+    clipPath: string;
+    artifact: Record<string, unknown>;
+    sourceMap: Record<string, unknown>;
+  }>;
   warnings?: ReadonlyArray<MotionCompilerDiagnostic>;
 }
 
@@ -54,9 +52,7 @@ export interface StudioTimelineRevision {
   createdAt: string;
   actor: string;
   cause:
-    | { type: "genesis" }
-    | { type: "timelineEdit" }
-    | { type: "restore"; sourceRevision: number };
+    { type: "genesis" } | { type: "timelineEdit" } | { type: "restore"; sourceRevision: number };
   intent: string | null;
 }
 
@@ -65,20 +61,21 @@ type TimelineRenderProjection = {
   timeline: TimelineDocument;
 };
 
-export type TimelineRenderContext = TimelineRenderProjection & (
-  | {
-      fixedPackageManifestJson: string;
-      resourceManifestJson: string;
-      resourceManifest: ResourceManifest;
-      verifiedBindingBundleJson: string;
-    }
-  | {
-      fixedPackageManifestJson?: never;
-      resourceManifestJson?: never;
-      resourceManifest?: never;
-      verifiedBindingBundleJson?: never;
-    }
-);
+export type TimelineRenderContext = TimelineRenderProjection &
+  (
+    | {
+        fixedPackageManifestJson: string;
+        resourceManifestJson: string;
+        resourceManifest: ResourceManifest;
+        verifiedBindingBundleJson: string;
+      }
+    | {
+        fixedPackageManifestJson?: never;
+        resourceManifestJson?: never;
+        resourceManifest?: never;
+        verifiedBindingBundleJson?: never;
+      }
+  );
 
 export interface MotionRequest {
   clipId?: string;
@@ -87,8 +84,6 @@ export interface MotionRequest {
 export type MotionContext = MotionContextWire;
 
 type TimelineVisualItem = TimelineDocument["document"]["visual"]["tracks"][number]["items"][number];
-type TimelineVisualClip = Extract<TimelineVisualItem, { type: "clip" }>;
-type TimelineMotionSource = Extract<TimelineVisualClip["source"], { type: "motion" }>;
 
 export type TimelineEdit = EditTimelineRequest & {
   expectedDependencies?: Record<string, string>;
@@ -115,35 +110,46 @@ export interface TimelinePreviewRequest {
 }
 
 export type MediaFactsResult =
-  | { status: "ok"; resources: PreviewResourceInput[]; assets: Array<{ id: string; url: string }>;
-      inputDependencies: Record<string, string> }
-  | { status: "error"; diagnostics: ReadonlyArray<{ class: string; code: string; message: string }> };
+  | {
+      status: "ok";
+      resources: PreviewResourceInput[];
+      assets: Array<{ id: string; url: string }>;
+      inputDependencies: Record<string, string>;
+    }
+  | {
+      status: "error";
+      diagnostics: ReadonlyArray<{ class: string; code: string; message: string }>;
+    };
 
 export type TimelinePreviewResult =
   | {
-    status: "ok";
-    timelineJson: string;
-    timeline: Timeline;
-    assets: unknown[];
-    motion: unknown;
-    render: {
+      status: "ok";
       timelineJson: string;
-      timeline: TimelineDocument;
-      fixedPackageManifestJson: string;
-      resourceManifestJson: string;
-      resourceManifest: ResourceManifest;
-      verifiedBindingBundleJson: string;
-    };
-    inputDependencies?: Record<string, string>;
-    motionSourceMetadata?: Record<string, MotionSourceMetadata>;
-    generatedWrapper?: boolean;
-    motionInstances?: Array<{ clipPath: string; artifact: Record<string, unknown>; sourceMap: Record<string, unknown> }>;
-    warnings?: ReadonlyArray<MotionCompilerDiagnostic>;
-  }
+      timeline: Timeline;
+      assets: unknown[];
+      motion: unknown;
+      render: {
+        timelineJson: string;
+        timeline: TimelineDocument;
+        fixedPackageManifestJson: string;
+        resourceManifestJson: string;
+        resourceManifest: ResourceManifest;
+        verifiedBindingBundleJson: string;
+      };
+      inputDependencies?: Record<string, string>;
+      motionSourceMetadata?: Record<string, MotionSourceMetadata>;
+      generatedWrapper?: boolean;
+      motionInstances?: Array<{
+        clipPath: string;
+        artifact: Record<string, unknown>;
+        sourceMap: Record<string, unknown>;
+      }>;
+      warnings?: ReadonlyArray<MotionCompilerDiagnostic>;
+    }
   | {
-    status: "error";
-    diagnostics: ReadonlyArray<{ class: string; code: string; message: string }>;
-  };
+      status: "error";
+      diagnostics: ReadonlyArray<{ class: string; code: string; message: string }>;
+    };
 
 export interface StudioHost {
   readonly boot: StudioBoot;
@@ -159,8 +165,14 @@ export interface StudioHost {
     directory: string;
     timeline: Timeline;
     expectedDependencies: Record<string, string>;
-  }): Promise<{ status: "saved"; target: string; root: string; digest: string; timeline: Timeline; url: string }>;
-
+  }): Promise<{
+    status: "saved";
+    target: string;
+    root: string;
+    digest: string;
+    timeline: Timeline;
+    url: string;
+  }>;
 }
 
 interface EventSourceLike {
@@ -192,15 +204,25 @@ abstract class BaseStudioHost implements StudioHost {
     return this.boot;
   }
 
-  async loadSourceFiles(drafts?: Record<string, string>, timeline?: Timeline): Promise<SourceFile[]> {
-    const result = await this.fetchJson("/source/files", {
-      ...(timeline || (drafts && Object.keys(drafts).length) ? {
-        method: "POST", body: JSON.stringify({ drafts, timeline }),
-        headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
-      } : {
-      headers: { "x-valle-token": this.boot.session.token },
-      }),
-    });
+  async loadSourceFiles(
+    drafts?: Record<string, string>,
+    timeline?: Timeline,
+  ): Promise<SourceFile[]> {
+    const result = await this.fetchJson(
+      "/source/files",
+      timeline || (drafts && Object.keys(drafts).length)
+        ? {
+            method: "POST",
+            body: JSON.stringify({ drafts, timeline }),
+            headers: {
+              "content-type": "application/json",
+              "x-valle-token": this.boot.session.token,
+            },
+          }
+        : {
+            headers: { "x-valle-token": this.boot.session.token },
+          },
+    );
     if (!Array.isArray(result.files)) throw new Error("Studio source manifest is invalid");
     return result.files as SourceFile[];
   }
@@ -223,7 +245,7 @@ abstract class BaseStudioHost implements StudioHost {
       source.addEventListener(type, (event) => {
         let data: unknown;
         try {
-          data = event.data ? JSON.parse(event.data) as unknown : null;
+          data = event.data ? (JSON.parse(event.data) as unknown) : null;
         } catch {
           source.close();
           throw new TypeError(`Studio ${type} event payload must be valid JSON`);
@@ -238,8 +260,10 @@ abstract class BaseStudioHost implements StudioHost {
     const response = await this.fetcher(url, init);
     if (!response.ok) {
       const failure: unknown = await response.json().catch(() => null);
-      const message = isRecord(failure) && isRecord(failure.error) && typeof failure.error.message === "string"
-        ? `: ${failure.error.message}` : "";
+      const message =
+        isRecord(failure) && isRecord(failure.error) && typeof failure.error.message === "string"
+          ? `: ${failure.error.message}`
+          : "";
       throw new Error(`${url} returned ${response.status}${message}`);
     }
     const value: unknown = await response.json();
@@ -273,7 +297,7 @@ export function playerRuntimeAssetsFromStudioBoot(boot: StudioBoot): PlayerRunti
 export class TimelineFileHost extends BaseStudioHost {
   async loadTimeline(): Promise<TimelineContext> {
     return assertTimelineContext({
-      ...await this.fetchJson("/timeline/get"),
+      ...(await this.fetchJson("/timeline/get")),
       runtimeAssets: playerRuntimeAssetsFromStudioBoot(this.boot),
       assetBaseUrl: this.boot.runtime.assetBaseUrl,
       proxyBase: this.boot.runtime.proxyBase ?? null,
@@ -281,7 +305,8 @@ export class TimelineFileHost extends BaseStudioHost {
   }
 
   private async post(url: string, body: unknown): Promise<Record<string, unknown>> {
-    if (this.boot.session.kind !== "timeline-file") throw new Error("Timeline file session required");
+    if (this.boot.session.kind !== "timeline-file")
+      throw new Error("Timeline file session required");
     return this.fetchJson(url, {
       method: "POST",
       headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
@@ -290,22 +315,22 @@ export class TimelineFileHost extends BaseStudioHost {
   }
 
   async saveTimeline(edit: TimelineEdit): Promise<SaveReport> {
-    return await this.post("/timeline/edit", edit) as unknown as SaveReport;
+    return (await this.post("/timeline/edit", edit)) as unknown as SaveReport;
   }
 
   async loadMediaFacts(request: TimelinePreviewRequest): Promise<MediaFactsResult> {
-    return await this.post("/timeline/media-facts", request) as unknown as MediaFactsResult;
+    return (await this.post("/timeline/media-facts", request)) as unknown as MediaFactsResult;
   }
 }
 
 export class MotionFileHost extends BaseStudioHost {
   async saveProject(request: Parameters<NonNullable<StudioHost["saveProject"]>>[0]) {
     if (this.boot.session.kind !== "motion-file") throw new Error("Motion file session required");
-    return await this.fetchJson("/motion/save-project", {
+    return (await this.fetchJson("/motion/save-project", {
       method: "POST",
       headers: { "content-type": "application/json", "x-valle-token": this.boot.session.token },
       body: JSON.stringify(request),
-    }) as Awaited<ReturnType<NonNullable<StudioHost["saveProject"]>>>;
+    })) as Awaited<ReturnType<NonNullable<StudioHost["saveProject"]>>>;
   }
 
   async loadMotion(_request: MotionRequest = {}): Promise<MotionContext> {
@@ -334,17 +359,28 @@ export async function loadStudioHost(
 }
 
 export function assertStudioBoot(value: unknown): StudioBoot {
-  if (!isRecord(value) || value.protocolVersion !== STUDIO_HOST_PROTOCOL_VERSION || !isRecord(value.session)) {
-    throw new Error(`Studio boot must use protocolVersion ${STUDIO_HOST_PROTOCOL_VERSION} and contain session`);
+  if (
+    !isRecord(value) ||
+    value.protocolVersion !== STUDIO_HOST_PROTOCOL_VERSION ||
+    !isRecord(value.session)
+  ) {
+    throw new Error(
+      `Studio boot must use protocolVersion ${STUDIO_HOST_PROTOCOL_VERSION} and contain session`,
+    );
   }
   const kind = value.session.kind;
   if (!isRecord(value.capabilities) || !isRecord(value.runtime)) {
     throw new Error("Studio boot must contain capabilities and runtime");
   }
   if (kind === "timeline-file") {
-    if (typeof value.session.input !== "string" || typeof value.session.token !== "string") throw new Error("timeline-file input and token are required");
+    if (typeof value.session.input !== "string" || typeof value.session.token !== "string")
+      throw new Error("timeline-file input and token are required");
   } else if (kind === "motion-file") {
-    if (typeof value.session.input !== "string" || typeof value.session.generation !== "number" || typeof value.session.token !== "string") {
+    if (
+      typeof value.session.input !== "string" ||
+      typeof value.session.generation !== "number" ||
+      typeof value.session.token !== "string"
+    ) {
       throw new Error("motion-file session is incomplete");
     }
   } else {
@@ -355,15 +391,17 @@ export function assertStudioBoot(value: unknown): StudioBoot {
 
 export function assertMotionContext(value: unknown): MotionContext {
   if (
-    !isRecord(value)
-    || value.protocolVersion !== STUDIO_HOST_PROTOCOL_VERSION
-    || (value.status !== "ok" && value.status !== "error")
-    || typeof value.generation !== "number"
-    || typeof value.input !== "string"
-    || !Array.isArray(value.diagnostics)
-    || !value.diagnostics.every(isMotionDiagnostic)
+    !isRecord(value) ||
+    value.protocolVersion !== STUDIO_HOST_PROTOCOL_VERSION ||
+    (value.status !== "ok" && value.status !== "error") ||
+    typeof value.generation !== "number" ||
+    typeof value.input !== "string" ||
+    !Array.isArray(value.diagnostics) ||
+    !value.diagnostics.every(isMotionDiagnostic)
   ) {
-    throw new Error(`MotionContext must use protocolVersion ${STUDIO_HOST_PROTOCOL_VERSION} and contain status, generation, input and diagnostics`);
+    throw new Error(
+      `MotionContext must use protocolVersion ${STUDIO_HOST_PROTOCOL_VERSION} and contain status, generation, input and diagnostics`,
+    );
   }
   if (value.status === "error") {
     if (!hasOnlyKeys(value, ["status", "protocolVersion", "generation", "input", "diagnostics"])) {
@@ -397,31 +435,33 @@ export function assertMotionContext(value: unknown): MotionContext {
       "resourceManifestJson",
       "resourceManifest",
       "verifiedBindingBundleJson",
-    ])
-    || !isSha256Wire(value.artifactDigest)
-    || !isMotionArtifact(value.artifact)
-    || "controls" in value
-    || !isObjectRecord(value.preparedData)
-    || (value.dataSource !== null && typeof value.dataSource !== "string")
-    || !isMotionSourceMap(value.sourceMap)
-    || value.sourceMap.component !== value.artifact.component
-    || !Array.isArray(value.assets)
-    || !Array.isArray(value.resourceLocators)
-    || !Array.isArray(value.shaders)
-    || typeof value.durationFrames !== "number"
-    || !isRecord(value.fps)
-    || !isRecord(value.viewport)
-    || !isRecord(value.runtimeAssets)
-    || typeof value.fixedPackageManifestJson !== "string"
-    || typeof value.timelineJson !== "string"
-    || !isRecord(value.timeline)
-    || !isRecord(value.timeline.document)
-    || typeof value.resourceManifestJson !== "string"
-    || !isRecord(value.resourceManifest)
-    || !isRecord(value.resourceManifest.entries)
-    || typeof value.verifiedBindingBundleJson !== "string"
+    ]) ||
+    !isSha256Wire(value.artifactDigest) ||
+    !isMotionArtifact(value.artifact) ||
+    "controls" in value ||
+    !isObjectRecord(value.preparedData) ||
+    (value.dataSource !== null && typeof value.dataSource !== "string") ||
+    !isMotionSourceMap(value.sourceMap) ||
+    value.sourceMap.component !== value.artifact.component ||
+    !Array.isArray(value.assets) ||
+    !Array.isArray(value.resourceLocators) ||
+    !Array.isArray(value.shaders) ||
+    typeof value.durationFrames !== "number" ||
+    !isRecord(value.fps) ||
+    !isRecord(value.viewport) ||
+    !isRecord(value.runtimeAssets) ||
+    typeof value.fixedPackageManifestJson !== "string" ||
+    typeof value.timelineJson !== "string" ||
+    !isRecord(value.timeline) ||
+    !isRecord(value.timeline.document) ||
+    typeof value.resourceManifestJson !== "string" ||
+    !isRecord(value.resourceManifest) ||
+    !isRecord(value.resourceManifest.entries) ||
+    typeof value.verifiedBindingBundleJson !== "string"
   ) {
-    throw new Error("successful MotionContext must include source-map format 1 and a fixed package");
+    throw new Error(
+      "successful MotionContext must include source-map format 1 and a fixed package",
+    );
   }
   return value as unknown as MotionContext;
 }
@@ -438,30 +478,30 @@ export function motionControls(
 
 function assertTimelineContext(value: unknown): TimelineContext {
   if (
-    !isRecord(value)
-    || "fixedPackageManifestJson" in value
-    || "resourceManifestJson" in value
-    || "verifiedBindingBundleJson" in value
-    || typeof value.timelineJson !== "string"
-    || !isTimeline(value.timeline)
-    || !isRecord(value.timelineRevision)
-    || !isRevision(value.timelineRevision.revision)
-    || (value.timelineRevision.parentRevision !== null
-      && !isRevision(value.timelineRevision.parentRevision))
-    || !isRecord(value.render)
-    || !hasOnlyKeys(value.render, [
+    !isRecord(value) ||
+    "fixedPackageManifestJson" in value ||
+    "resourceManifestJson" in value ||
+    "verifiedBindingBundleJson" in value ||
+    typeof value.timelineJson !== "string" ||
+    !isTimeline(value.timeline) ||
+    !isRecord(value.timelineRevision) ||
+    !isRevision(value.timelineRevision.revision) ||
+    (value.timelineRevision.parentRevision !== null &&
+      !isRevision(value.timelineRevision.parentRevision)) ||
+    !isRecord(value.render) ||
+    !hasOnlyKeys(value.render, [
       "timelineJson",
       "timeline",
       "resourceManifest",
       "fixedPackageManifestJson",
       "resourceManifestJson",
       "verifiedBindingBundleJson",
-    ])
-    || typeof value.render.timelineJson !== "string"
-    || !isRecord(value.render.timeline)
-    || !isRecord(value.render.timeline.document)
-    || !isRecord(value.runtimeAssets)
-    || typeof value.assetBaseUrl !== "string"
+    ]) ||
+    typeof value.render.timelineJson !== "string" ||
+    !isRecord(value.render.timeline) ||
+    !isRecord(value.render.timeline.document) ||
+    !isRecord(value.runtimeAssets) ||
+    typeof value.assetBaseUrl !== "string"
   ) {
     throw new Error("Timeline context must contain complete authoring and render projections");
   }
@@ -470,8 +510,9 @@ function assertTimelineContext(value: unknown): TimelineContext {
   const hasResourceManifest = value.render.resourceManifest !== undefined;
   const hasBindingBundle = value.render.verifiedBindingBundleJson !== undefined;
   if (
-    ![hasFixedManifest, hasResourceManifestJson, hasResourceManifest, hasBindingBundle]
-      .every((present) => present === hasFixedManifest)
+    ![hasFixedManifest, hasResourceManifestJson, hasResourceManifest, hasBindingBundle].every(
+      (present) => present === hasFixedManifest,
+    )
   ) {
     throw new Error(
       "Timeline render context must provide every fixed-package member and manifest together",
@@ -479,23 +520,27 @@ function assertTimelineContext(value: unknown): TimelineContext {
   }
   if (hasFixedManifest) {
     if (
-      typeof value.render.fixedPackageManifestJson !== "string"
-      || value.render.fixedPackageManifestJson.length === 0
-      || typeof value.render.resourceManifestJson !== "string"
-      || value.render.resourceManifestJson.length === 0
-      || !isRecord(value.render.resourceManifest)
-      || !isRecord(value.render.resourceManifest.entries)
-      || typeof value.render.verifiedBindingBundleJson !== "string"
-      || value.render.verifiedBindingBundleJson.length === 0
+      typeof value.render.fixedPackageManifestJson !== "string" ||
+      value.render.fixedPackageManifestJson.length === 0 ||
+      typeof value.render.resourceManifestJson !== "string" ||
+      value.render.resourceManifestJson.length === 0 ||
+      !isRecord(value.render.resourceManifest) ||
+      !isRecord(value.render.resourceManifest.entries) ||
+      typeof value.render.verifiedBindingBundleJson !== "string" ||
+      value.render.verifiedBindingBundleJson.length === 0
     ) {
       throw new Error("Timeline render context contains an invalid fixed package");
     }
   }
   if (
-    !hasBindingBundle
-    && (!isRecord(value.preview) || value.preview.status !== "unavailable" || typeof value.preview.code !== "string")
+    !hasBindingBundle &&
+    (!isRecord(value.preview) ||
+      value.preview.status !== "unavailable" ||
+      typeof value.preview.code !== "string")
   ) {
-    throw new Error("Timeline context without fixed fulfillment must explicitly mark preview unavailable");
+    throw new Error(
+      "Timeline context without fixed fulfillment must explicitly mark preview unavailable",
+    );
   }
   return value as unknown as TimelineContext;
 }
@@ -505,20 +550,27 @@ function isRevision(value: unknown): value is number {
 }
 
 function isTimeline(value: unknown): value is Timeline {
-  if (!isRecord(value) || "version" in value || !isRecord(value.canvas) || !isRecord(value.tracks)) {
+  if (
+    !isRecord(value) ||
+    "version" in value ||
+    !isRecord(value.canvas) ||
+    !isRecord(value.tracks)
+  ) {
     return false;
   }
   const bands = new Set(["visual", "audio", "caption", "adjustment"]);
   if (Object.keys(value.tracks).some((key) => !bands.has(key))) return false;
-  return Object.values(value.tracks).every((tracks) => (
-    Array.isArray(tracks)
-    && tracks.every((track) => (
-      isRecord(track)
-      && !("type" in track)
-      && !("trackType" in track)
-      && Array.isArray(track.clips)
-    ))
-  ));
+  return Object.values(value.tracks).every(
+    (tracks) =>
+      Array.isArray(tracks) &&
+      tracks.every(
+        (track) =>
+          isRecord(track) &&
+          !("type" in track) &&
+          !("trackType" in track) &&
+          Array.isArray(track.clips),
+      ),
+  );
 }
 
 /** Project a Motion editor context only after the caller's Product admission has succeeded. */
@@ -536,18 +588,24 @@ export function projectMotionContextFromAdmittedPreview(
   const structure = clipId ? findMotionStructure(motion, clipId) : null;
   const authoring = record(structure?.authoring);
   const sourceMap = record(authoring.sourceMap);
-  const motionContent = timelineClip?.type === "clip" && timelineClip.source.type === "motion"
-    ? timelineClip.source
-    : null;
-  const admittedClip = config.render.timeline.document.visual.tracks.flatMap((track) => track.items)
+  const motionContent =
+    timelineClip?.type === "clip" && timelineClip.source.type === "motion"
+      ? timelineClip.source
+      : null;
+  const admittedClip = config.render.timeline.document.visual.tracks
+    .flatMap((track) => track.items)
     .find((item) => item.type === "clip" && item.id === clipId);
-  const component = admittedClip?.type === "clip" && admittedClip.source.type === "motion" ? admittedClip.source.component : null;
-  const missingContext = (missing: string) => motionContextError(
-    clipId ?? boot.session.input,
-    Number(config.generation ?? config.timelineRevision.revision),
-    "motion-context-missing",
-    `Selected project clip is missing ${missing}`,
-  );
+  const component =
+    admittedClip?.type === "clip" && admittedClip.source.type === "motion"
+      ? admittedClip.source.component
+      : null;
+  const missingContext = (missing: string) =>
+    motionContextError(
+      clipId ?? boot.session.input,
+      Number(config.generation ?? config.timelineRevision.revision),
+      "motion-context-missing",
+      `Selected project clip is missing ${missing}`,
+    );
   if (!clipId) return missingContext("clip id");
   if (!timelineClip) return missingContext("Timeline clip");
   if (!motionContent) return missingContext("Motion source");
@@ -556,54 +614,58 @@ export function projectMotionContextFromAdmittedPreview(
   const resourceManifest = config.render.resourceManifest;
   const verifiedBindingBundleJson = config.render.verifiedBindingBundleJson;
   if (
-    fixedPackageManifestJson === undefined
-    || resourceManifestJson === undefined
-    || resourceManifest === undefined
-    || verifiedBindingBundleJson === undefined
+    fixedPackageManifestJson === undefined ||
+    resourceManifestJson === undefined ||
+    resourceManifest === undefined ||
+    verifiedBindingBundleJson === undefined
   ) {
     return missingContext("verified fixed-package fulfillment");
   }
   if (!structure) {
-    const problems = Array.isArray(motion.problems) ? motion.problems.map(String).join("; ") : "none reported";
+    const problems = Array.isArray(motion.problems)
+      ? motion.problems.map(String).join("; ")
+      : "none reported";
     return missingContext(`admitted Motion structure (prepare problems: ${problems})`);
   }
   if (!component) return missingContext("component identity");
   if (sourceMap.version !== MOTION_SOURCE_MAP_VERSION) {
-    return missingContext(`source-map format ${MOTION_SOURCE_MAP_VERSION} (received ${String(sourceMap.version)})`);
+    return missingContext(
+      `source-map format ${MOTION_SOURCE_MAP_VERSION} (received ${String(sourceMap.version)})`,
+    );
   }
 
   const canvas = authoringTimeline.document.canvas;
   const fps = motionFrameRateWire(canvas.fps);
-  const assetsById = new Map(arrayOfRecords(config.assets).map((asset) => [String(asset.id), asset]));
+  const assetsById = new Map(
+    arrayOfRecords(config.assets).map((asset) => [String(asset.id), asset]),
+  );
   const manifestEntries = record(resourceManifest.entries);
   const artifactDigest = verifiedResourceDigest(manifestEntries, component, "motion-artifact");
   if (!artifactDigest) return missingContext(`verified Motion artifact digest for '${component}'`);
-  const artifact = verifiedMotionArtifact(
-    verifiedBindingBundleJson,
-    component,
-    artifactDigest,
-  );
+  const artifact = verifiedMotionArtifact(verifiedBindingBundleJson, component, artifactDigest);
   if (!artifact) {
     return missingContext(`Motion artifact for '${component}' bound by the verified package`);
   }
-  const resourceLocators = [...assetsById].flatMap(([id, asset]) => (
-    typeof asset.url === "string" ? [{ id, url: asset.url }] : []
-  ));
+  const resourceLocators = [...assetsById].flatMap(([id, asset]) =>
+    typeof asset.url === "string" ? [{ id, url: asset.url }] : [],
+  );
   const assets = boundMotionAssets(
     motionContent.resources,
     record(record(artifact.controls).assets),
     assetsById,
     boot.runtime.assetBaseUrl,
   );
-  const shaders = arrayOfRecords(motion.shaders).flatMap((shader) => (
+  const shaders = arrayOfRecords(motion.shaders).flatMap((shader) =>
     Array.isArray(shader.manifestBytes) && Array.isArray(shader.sourceBytes)
-      ? [{
-          uri: typeof shader.uri === "string" ? shader.uri : "shader://project",
-          manifestBytes: shader.manifestBytes.map(Number),
-          sourceBytes: shader.sourceBytes.map(Number),
-        }]
-      : []
-  ));
+      ? [
+          {
+            uri: typeof shader.uri === "string" ? shader.uri : "shader://project",
+            manifestBytes: shader.manifestBytes.map(Number),
+            sourceBytes: shader.sourceBytes.map(Number),
+          },
+        ]
+      : [],
+  );
   const preparedData = record(motionContent.data);
   const totalFrames = motionTotalFrames(authoring);
   return assertMotionContext({
@@ -638,7 +700,12 @@ export function projectMotionContextFromAdmittedPreview(
   });
 }
 
-function motionContextError(input: string, generation: number, code: string, message: string): MotionContext {
+function motionContextError(
+  input: string,
+  generation: number,
+  code: string,
+  message: string,
+): MotionContext {
   return {
     status: "error",
     protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
@@ -713,8 +780,8 @@ function isSha256Wire(value: unknown): value is string {
 
 function isMotionSourceMap(value: unknown): value is MotionContextOk["sourceMap"] {
   if (
-    !isObjectRecord(value)
-    || !hasOnlyKeys(value, [
+    !isObjectRecord(value) ||
+    !hasOnlyKeys(value, [
       "version",
       "component",
       "entry",
@@ -729,43 +796,51 @@ function isMotionSourceMap(value: unknown): value is MotionContextOk["sourceMap"
   ) {
     return false;
   }
-  return value.version === 1
-    && typeof value.component === "string"
-    && typeof value.entry === "string"
-    && isSha256Wire(value.closureDigest)
-    && Array.isArray(value.modules)
-    && value.modules.every(isMotionSourceModule)
-    && (value.controlsSourcePath === undefined || typeof value.controlsSourcePath === "string")
-    && (value.controls === undefined || isObjectRecord(value.controls))
-    && Array.isArray(value.nodes)
-    && value.nodes.every(isObjectRecord)
-    && Array.isArray(value.exprs)
-    && value.exprs.every(isObjectRecord)
-    && Array.isArray(value.objects)
-    && value.objects.every(isObjectRecord);
+  return (
+    value.version === 1 &&
+    typeof value.component === "string" &&
+    typeof value.entry === "string" &&
+    isSha256Wire(value.closureDigest) &&
+    Array.isArray(value.modules) &&
+    value.modules.every(isMotionSourceModule) &&
+    (value.controlsSourcePath === undefined || typeof value.controlsSourcePath === "string") &&
+    (value.controls === undefined || isObjectRecord(value.controls)) &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every(isObjectRecord) &&
+    Array.isArray(value.exprs) &&
+    value.exprs.every(isObjectRecord) &&
+    Array.isArray(value.objects) &&
+    value.objects.every(isObjectRecord)
+  );
 }
 
 function isMotionSourceModule(value: unknown): boolean {
-  return isObjectRecord(value)
-    && hasOnlyKeys(value, ["path", "sourceDigest", "normalizedAstDigest"])
-    && typeof value.path === "string"
-    && isSha256Wire(value.sourceDigest)
-    && isSha256Wire(value.normalizedAstDigest);
+  return (
+    isObjectRecord(value) &&
+    hasOnlyKeys(value, ["path", "sourceDigest", "normalizedAstDigest"]) &&
+    typeof value.path === "string" &&
+    isSha256Wire(value.sourceDigest) &&
+    isSha256Wire(value.normalizedAstDigest)
+  );
 }
 
 function isMotionDiagnostic(value: unknown): boolean {
-  if (!isRecord(value)
-    || typeof value.class !== "string"
-    || typeof value.code !== "string"
-    || typeof value.message !== "string"
-    || (value.sourcePath !== undefined && typeof value.sourcePath !== "string")) {
+  if (
+    !isRecord(value) ||
+    typeof value.class !== "string" ||
+    typeof value.code !== "string" ||
+    typeof value.message !== "string" ||
+    (value.sourcePath !== undefined && typeof value.sourcePath !== "string")
+  ) {
     return false;
   }
   const span = value.span;
   if (span === undefined) return true;
   if (!isRecord(span)) return false;
-  return ["start", "end", "line", "column"].every((field) => isNonNegativeSafeInteger(span[field]))
-    && Object.keys(span).every((key) => ["start", "end", "line", "column"].includes(key));
+  return (
+    ["start", "end", "line", "column"].every((field) => isNonNegativeSafeInteger(span[field])) &&
+    Object.keys(span).every((key) => ["start", "end", "line", "column"].includes(key))
+  );
 }
 
 function motionFrameRateWire(value: unknown): { num: number; den: number } {
@@ -797,16 +872,16 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isMotionArtifact(value: unknown): value is Record<string, unknown> {
-  return isObjectRecord(value)
-    && value.formatVersion === 1
-    && typeof value.component === "string"
-    && value.component.length > 0
-    && isMotionControlsSchema(value.controls);
+  return (
+    isObjectRecord(value) &&
+    value.formatVersion === 1 &&
+    typeof value.component === "string" &&
+    value.component.length > 0 &&
+    isMotionControlsSchema(value.controls)
+  );
 }
 
 function isMotionControlsSchema(value: unknown): value is Record<string, unknown> {
   if (!isObjectRecord(value)) return false;
-  return isObjectRecord(value.props)
-    && isObjectRecord(value.data)
-    && isObjectRecord(value.assets);
+  return isObjectRecord(value.props) && isObjectRecord(value.data) && isObjectRecord(value.assets);
 }

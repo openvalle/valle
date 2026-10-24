@@ -7,10 +7,18 @@ export function createExportFileSink(writable: FileSystemWritableFileStream) {
     // A muxer cancellation closes its target stream. That must not commit an incomplete file.
     stream: new WritableStream<StreamTargetChunk>({ write: (chunk) => writer.write(chunk) }),
     async commit() {
-      try { await writer.close(); } finally { writer.releaseLock(); }
+      try {
+        await writer.close();
+      } finally {
+        writer.releaseLock();
+      }
     },
     async abort(reason: unknown) {
-      try { await writer.abort(reason); } finally { writer.releaseLock(); }
+      try {
+        await writer.abort(reason);
+      } finally {
+        writer.releaseLock();
+      }
     },
   };
 }

@@ -13,9 +13,12 @@ export function run(argv: string[], options: { cwd?: string; input?: Uint8Array 
     maxBuffer: 64 * 1024 * 1024,
   });
   if (result.error || result.status !== 0) {
-    throw new Error(`${argv.join(" ")} failed (${result.status}):\n${result.stderr?.slice(-3000) ?? ""}\n${result.stdout?.slice(-2000) ?? ""}`, {
-      cause: result.error,
-    });
+    throw new Error(
+      `${argv.join(" ")} failed (${result.status}):\n${result.stderr?.slice(-3000) ?? ""}\n${result.stdout?.slice(-2000) ?? ""}`,
+      {
+        cause: result.error,
+      },
+    );
   }
   return result.stdout;
 }
@@ -37,7 +40,8 @@ export function option(args: string[], name: string, fallback?: string): string 
 
 export function nonnegativeInteger(value: string, name: string, minimum = 0): number {
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < minimum) throw new Error(`${name} must be an integer >= ${minimum}`);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum)
+    throw new Error(`${name} must be an integer >= ${minimum}`);
   return parsed;
 }
 

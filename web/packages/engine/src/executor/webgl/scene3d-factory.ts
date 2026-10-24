@@ -18,11 +18,9 @@ export async function createScene3dGpu(
   )
     return null;
   const response = await fetch(new URL(dfgUrl, import.meta.url));
-  if (!response.ok)
-    throw new Error(`Scene3D BRDF resource failed: ${response.status}`);
+  if (!response.ok) throw new Error(`Scene3D BRDF resource failed: ${response.status}`);
   const bytes = await response.arrayBuffer();
-  if (bytes.byteLength !== 1024)
-    throw new Error("Scene3D BRDF resource has an invalid length");
+  if (bytes.byteLength !== 1024) throw new Error("Scene3D BRDF resource has an invalid length");
   if (!isCurrent()) return null;
   return new GpuScene3D(
     {

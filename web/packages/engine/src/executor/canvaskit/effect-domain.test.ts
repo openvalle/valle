@@ -4,17 +4,12 @@ import type { CanvasKit } from "canvaskit-wasm";
 import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
 import { applyPreparedEffect } from "./executor.ts";
 
-type CanvasKitInitializer = (options: {
-  locateFile(file: string): string;
-}) => Promise<CanvasKit>;
+type CanvasKitInitializer = (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 
-const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
+const { default: CanvasKitInit } = (await import("canvaskit-wasm")) as unknown as {
   default: CanvasKitInitializer;
 };
-const wasmPath = Bun.resolveSync(
-  "canvaskit-wasm/bin/canvaskit.wasm",
-  import.meta.dir,
-);
+const wasmPath = Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir);
 
 describe("CanvasKit prepared effect write domains", () => {
   test("a transformed layer region samples the immutable full input and only replaces its clip", async () => {
@@ -28,11 +23,7 @@ describe("CanvasKit prepared effect write domains", () => {
         alphaType: CanvasKit.AlphaType.Unpremul,
         colorSpace: CanvasKit.ColorSpace.SRGB,
       },
-      Uint8Array.from([
-        255, 0, 0, 255,
-        0, 0, 0, 0,
-        0, 0, 0, 0,
-      ]),
+      Uint8Array.from([255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0]),
       12,
     );
     const surface = CanvasKit.MakeSurface(3, 1);
@@ -56,7 +47,10 @@ describe("CanvasKit prepared effect write domains", () => {
     try {
       const canvas = surface.getCanvas();
       canvas.clear(CanvasKit.TRANSPARENT);
-      applyPreparedEffect(CanvasKit, builtins, canvas, input, effect, dynamic, { width: 3, height: 1 });
+      applyPreparedEffect(CanvasKit, builtins, canvas, input, effect, dynamic, {
+        width: 3,
+        height: 1,
+      });
       surface.flush();
       const pixels = canvas.readPixels(0, 0, {
         width: 3,

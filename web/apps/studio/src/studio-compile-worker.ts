@@ -11,7 +11,12 @@ import {
   type WebCompilerRuntime,
 } from "valle-engine";
 
-import { digestBytes, motionCompileOptionIdentity, prepareAudioAnalysisInputs, type AudioAnalysisInput } from "./audio-analysis-input.ts";
+import {
+  digestBytes,
+  motionCompileOptionIdentity,
+  prepareAudioAnalysisInputs,
+  type AudioAnalysisInput,
+} from "./audio-analysis-input.ts";
 
 export interface StudioCompileInstance {
   clipPath: string;
@@ -40,12 +45,33 @@ export interface StudioCompileRequest {
 }
 
 export type StudioCompileResult =
-  | { id: number; status: "ok"; authorTimeline: Timeline; package: PreparedPreviewPackage;
-      timings: { runtimeMs: number; fontsMs: number; compileMs: number; prepareMs: number; compilations: number; cacheHit: boolean };
+  | {
+      id: number;
+      status: "ok";
+      authorTimeline: Timeline;
+      package: PreparedPreviewPackage;
+      timings: {
+        runtimeMs: number;
+        fontsMs: number;
+        compileMs: number;
+        prepareMs: number;
+        compilations: number;
+        cacheHit: boolean;
+      };
       warnings: MotionCompilerDiagnostic[];
-      instances: Array<{ clipPath: string; artifact: Record<string, unknown>; artifactDigest: string;
-        sourceMap: Record<string, unknown> }> }
-  | { id: number; status: "error"; message: string; diagnostics?: MotionCompileError["diagnostics"] };
+      instances: Array<{
+        clipPath: string;
+        artifact: Record<string, unknown>;
+        artifactDigest: string;
+        sourceMap: Record<string, unknown>;
+      }>;
+    }
+  | {
+      id: number;
+      status: "error";
+      message: string;
+      diagnostics?: MotionCompileError["diagnostics"];
+    };
 
 let runtime: Promise<WebCompilerRuntime> | null = null;
 let runtimeIdentity = "";
@@ -63,7 +89,9 @@ async function fontAt(url: string): Promise<Uint8Array> {
       return new Uint8Array(await response.arrayBuffer());
     });
     if (immutable) immutableFonts.set(url, pending);
-    void pending.catch(() => { if (immutable && immutableFonts.get(url) === pending) immutableFonts.delete(url); });
+    void pending.catch(() => {
+      if (immutable && immutableFonts.get(url) === pending) immutableFonts.delete(url);
+    });
   }
   return pending;
 }
@@ -72,9 +100,14 @@ async function instanceFonts(instance: StudioCompileInstance): Promise<{
   fonts: Array<{ bytes: Uint8Array; role: "font" | "formula-font" }>;
   digests: string[];
 }> {
-  const supplied = instance.fonts ?? await Promise.all((instance.fontUrls ?? []).map(async ({ url, role }) => ({
-    bytes: await fontAt(url), role,
-  })));
+  const supplied =
+    instance.fonts ??
+    (await Promise.all(
+      (instance.fontUrls ?? []).map(async ({ url, role }) => ({
+        bytes: await fontAt(url),
+        role,
+      })),
+    ));
   const fingerprints = await Promise.all(supplied.map(async (font) => digestBytes(font.bytes)));
   const seen = new Set<string>();
   const fonts: Array<{ bytes: Uint8Array; role: "font" | "formula-font" }> = [];
@@ -101,11 +134,21 @@ function standaloneTimeline(
   input: NonNullable<StudioCompileRequest["standalone"]>,
   artifact: Record<string, unknown>,
 ): Timeline {
-  const composition = artifact.composition as {
-    width?: unknown; height?: unknown; fps?: unknown; duration?: unknown; loop?: unknown;
-  } | undefined;
-  if (!composition || !Number.isInteger(composition.width) || !Number.isInteger(composition.height)
-    || typeof composition.duration !== "string") {
+  const composition = artifact.composition as
+    | {
+        width?: unknown;
+        height?: unknown;
+        fps?: unknown;
+        duration?: unknown;
+        loop?: unknown;
+      }
+    | undefined;
+  if (
+    !composition ||
+    !Number.isInteger(composition.width) ||
+    !Number.isInteger(composition.height) ||
+    typeof composition.duration !== "string"
+  ) {
     throw new Error("Motion composition needs a valid canvas and duration");
   }
   const fps = input.fpsOverride ?? composition.fps;
@@ -113,8 +156,12 @@ function standaloneTimeline(
     throw new Error("Motion composition needs fps when --fps was not supplied");
   }
   const durationParts = composition.duration.split("/").map(Number);
-  const duration = durationParts.length === 1 ? durationParts[0]
-    : durationParts.length === 2 ? durationParts[0]! / durationParts[1]! : NaN;
+  const duration =
+    durationParts.length === 1
+      ? durationParts[0]
+      : durationParts.length === 2
+        ? durationParts[0]! / durationParts[1]!
+        : NaN;
   if (!Number.isFinite(duration) || duration <= 0) {
     throw new Error("Motion composition has an invalid duration");
   }
@@ -127,42 +174,77 @@ function standaloneTimeline(
   }
   if ((artifact.role as { type?: string } | undefined)?.type === "captionPresenter") {
     type Track = NonNullable<Timeline["tracks"]["caption"]>[number];
-    type CaptionData = { runs: NonNullable<Track["clips"][number]["runs"]>;
-      style: Track["style"]; region: [number, number, number, number];
-      align: NonNullable<Track["layout"]>["align"] };
+    type CaptionData = {
+      runs: NonNullable<Track["clips"][number]["runs"]>;
+      style: Track["style"];
+      region: [number, number, number, number];
+      align: NonNullable<Track["layout"]>["align"];
+    };
     // Motion compilation has already validated the closed caption input shape.
     const data = input.data as CaptionData | undefined;
     const font = assetBindings.caption;
-    if (!data || !font) throw new Error("Caption Studio needs caption data and the reserved font binding");
+    if (!data || !font)
+      throw new Error("Caption Studio needs caption data and the reserved font binding");
     delete assetBindings.caption;
-    const width = composition.width as number, height = composition.height as number;
+    const width = composition.width as number,
+      height = composition.height as number;
     return {
-      canvas: { width, height, fps }, resources,
-      tracks: { caption: [{
-        presenter: { component: "motion", ...(input.props ? { props: input.props as NonNullable<Track["presenter"]>["props"] } : {}),
-          ...(Object.keys(assetBindings).length ? { resources: assetBindings } : {}) },
-        style: { ...data.style, font },
-        layout: { region: [data.region[0] / width, data.region[1] / height,
-          data.region[2] / width, data.region[3] / height], align: data.align },
-        clips: [{ start: 0, duration, runs: data.runs }],
-      }] },
+      canvas: { width, height, fps },
+      resources,
+      tracks: {
+        caption: [
+          {
+            presenter: {
+              component: "motion",
+              ...(input.props
+                ? { props: input.props as NonNullable<Track["presenter"]>["props"] }
+                : {}),
+              ...(Object.keys(assetBindings).length ? { resources: assetBindings } : {}),
+            },
+            style: { ...data.style, font },
+            layout: {
+              region: [
+                data.region[0] / width,
+                data.region[1] / height,
+                data.region[2] / width,
+                data.region[3] / height,
+              ],
+              align: data.align,
+            },
+            clips: [{ start: 0, duration, runs: data.runs }],
+          },
+        ],
+      },
     };
   }
   return {
     canvas: { width: composition.width as number, height: composition.height as number, fps },
     resources,
-    tracks: { visual: [{ clips: [{
-      kind: "motion", component: "motion", start: 0, duration,
-      // The clip loops a looping scene, as the CLI's standalone render does.
-      ...(composition.loop === true ? { end: "loop" } : {}),
-      ...(input.props && Object.keys(input.props).length ? { props: input.props } : {}),
-      ...(input.data && Object.keys(input.data).length ? { data: input.data } : {}),
-      ...(Object.keys(assetBindings).length ? { resources: assetBindings } : {}),
-    }] }] },
+    tracks: {
+      visual: [
+        {
+          clips: [
+            {
+              kind: "motion",
+              component: "motion",
+              start: 0,
+              duration,
+              // The clip loops a looping scene, as the CLI's standalone render does.
+              ...(composition.loop === true ? { end: "loop" } : {}),
+              ...(input.props && Object.keys(input.props).length ? { props: input.props } : {}),
+              ...(input.data && Object.keys(input.data).length ? { data: input.data } : {}),
+              ...(Object.keys(assetBindings).length ? { resources: assetBindings } : {}),
+            },
+          ],
+        },
+      ],
+    },
   } as Timeline;
 }
 
-export async function compileStudioPreview(request: StudioCompileRequest): Promise<StudioCompileResult> {
+export async function compileStudioPreview(
+  request: StudioCompileRequest,
+): Promise<StudioCompileResult> {
   try {
     const started = performance.now();
     const identity = JSON.stringify([request.runtimeAssets, request.runtimeBaseUrl]);
@@ -177,70 +259,146 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
     }
     const compiler = await runtime!;
     if (request.authorTimeline) {
-      const prepared = new Map(compiler.motionPreparationInputs(request.authorTimeline).map(input => [input.clipPath, input]));
-      request = { ...request, instances: request.instances.map(instance => {
-        const input = prepared.get(instance.clipPath);
-        if (!input) throw new Error(`Motion preparation input is missing for ${instance.clipPath}`);
-        return { ...instance, options: { ...instance.options,
-          placement: { component: input.component, path: input.clipPath,
-            track: input.clipPath.startsWith("/tracks/caption/") ? "caption"
-              : input.clipPath.includes("/transitions/") ? "transition"
-              : input.clipPath.startsWith("/tracks/adjustment/") || input.clipPath.includes("/effects/") ? "effect" : "visual" },
-          data: input.data === null ? undefined : { source: `timeline:${instance.clipPath}`, value: input.data } } };
-      }) };
+      const prepared = new Map(
+        compiler
+          .motionPreparationInputs(request.authorTimeline)
+          .map((input) => [input.clipPath, input]),
+      );
+      request = {
+        ...request,
+        instances: request.instances.map((instance) => {
+          const input = prepared.get(instance.clipPath);
+          if (!input)
+            throw new Error(`Motion preparation input is missing for ${instance.clipPath}`);
+          return {
+            ...instance,
+            options: {
+              ...instance.options,
+              placement: {
+                component: input.component,
+                path: input.clipPath,
+                track: input.clipPath.startsWith("/tracks/caption/")
+                  ? "caption"
+                  : input.clipPath.includes("/transitions/")
+                    ? "transition"
+                    : input.clipPath.startsWith("/tracks/adjustment/") ||
+                        input.clipPath.includes("/effects/")
+                      ? "effect"
+                      : "visual",
+              },
+              data:
+                input.data === null
+                  ? undefined
+                  : { source: `timeline:${instance.clipPath}`, value: input.data },
+            },
+          };
+        }),
+      };
     }
     // Fetch canonical PCM in this long-lived Worker. Source edits only send URLs
     // and digests from the UI; they do not clone the song through postMessage.
-    request = { ...request, instances: await Promise.all(request.instances.map(async instance => {
-      if (!instance.audioUrls?.length || !Object.values(instance.modules).some(source => source.includes("audioAnalysis"))) return instance;
-      const audioSources = await prepareAudioAnalysisInputs(instance.audioUrls);
-      return { ...instance, options: { ...instance.options, audioSources } };
-    })) };
+    request = {
+      ...request,
+      instances: await Promise.all(
+        request.instances.map(async (instance) => {
+          if (
+            !instance.audioUrls?.length ||
+            !Object.values(instance.modules).some((source) => source.includes("audioAnalysis"))
+          )
+            return instance;
+          const audioSources = await prepareAudioAnalysisInputs(instance.audioUrls);
+          return { ...instance, options: { ...instance.options, audioSources } };
+        }),
+      ),
+    };
     const runtimeMs = performance.now() - started;
     const byteDigests = new WeakMap<Uint8Array, Promise<string>>();
     const digest = (bytes: Uint8Array): Promise<string> => {
       let pending = byteDigests.get(bytes);
-      if (!pending) { pending = digestBytes(bytes); byteDigests.set(bytes, pending); }
+      if (!pending) {
+        pending = digestBytes(bytes);
+        byteDigests.set(bytes, pending);
+      }
       return pending;
     };
-    const optionIdentities = await Promise.all(request.instances.map(instance => motionCompileOptionIdentity(instance.options, digest)));
+    const optionIdentities = await Promise.all(
+      request.instances.map((instance) => motionCompileOptionIdentity(instance.options, digest)),
+    );
     let compilations = 0;
-    const currentCompilations = new Map<string, ReturnType<WebCompilerRuntime["compileMotionModules"]>>();
+    const currentCompilations = new Map<
+      string,
+      ReturnType<WebCompilerRuntime["compileMotionModules"]>
+    >();
     const preliminary = new Map<number, ReturnType<WebCompilerRuntime["compileMotionModules"]>>();
-    const hydrated = await Promise.all(request.instances.map(async (instance, index) => {
-      if (instance.fonts || !instance.fontUrls?.length) return instanceFonts(instance);
-      // Compile-time measurement needs the whole font pack before compiling. This is a superset of
-      // the compiler's `mentions_measure` identifier check, so no fontless compile can need fonts.
-      if (Object.values(instance.modules).some((source) => /measureText|textOutline/u.test(source))) {
-        return instanceFonts(instance);
-      }
-      // Rendering-only text compiles without fonts first, then loads just the faces its artifact uses.
-      const key = JSON.stringify([instance.entry, instance.modules, optionIdentities[index], "without-measurement-fonts"]);
-      let compiled = currentCompilations.get(key) ?? compiledInstances.get(key);
-      if (!compiled) {
-        compilations += 1;
-        compiled = compiler.compileMotionModules(instance.entry, instance.modules, { ...instance.options, fonts: [] });
-        currentCompilations.set(key, compiled);
-        compiledInstances.set(key, compiled);
-        if (compiledInstances.size > 32) compiledInstances.delete(compiledInstances.keys().next().value!);
-      }
-      preliminary.set(index, compiled);
-      return instanceFonts({ ...instance, fontUrls: artifactFontUrls(compiled.artifact, instance.fontUrls) });
-    }));
+    const hydrated = await Promise.all(
+      request.instances.map(async (instance, index) => {
+        if (instance.fonts || !instance.fontUrls?.length) return instanceFonts(instance);
+        // Compile-time measurement needs the whole font pack before compiling. This is a superset of
+        // the compiler's `mentions_measure` identifier check, so no fontless compile can need fonts.
+        if (
+          Object.values(instance.modules).some((source) => /measureText|textOutline/u.test(source))
+        ) {
+          return instanceFonts(instance);
+        }
+        // Rendering-only text compiles without fonts first, then loads just the faces its artifact uses.
+        const key = JSON.stringify([
+          instance.entry,
+          instance.modules,
+          optionIdentities[index],
+          "without-measurement-fonts",
+        ]);
+        let compiled = currentCompilations.get(key) ?? compiledInstances.get(key);
+        if (!compiled) {
+          compilations += 1;
+          compiled = compiler.compileMotionModules(instance.entry, instance.modules, {
+            ...instance.options,
+            fonts: [],
+          });
+          currentCompilations.set(key, compiled);
+          compiledInstances.set(key, compiled);
+          if (compiledInstances.size > 32)
+            compiledInstances.delete(compiledInstances.keys().next().value!);
+        }
+        preliminary.set(index, compiled);
+        return instanceFonts({
+          ...instance,
+          fontUrls: artifactFontUrls(compiled.artifact, instance.fontUrls),
+        });
+      }),
+    );
     const fontsMs = performance.now() - started - runtimeMs;
-    const cacheKey = JSON.stringify([request.authorTimeline, request.standalone,
-      request.instances.map((instance, index) => [instance.clipPath, instance.entry, instance.modules,
-        optionIdentities[index], hydrated[index]!.digests]), request.resourceInputs]);
+    const cacheKey = JSON.stringify([
+      request.authorTimeline,
+      request.standalone,
+      request.instances.map((instance, index) => [
+        instance.clipPath,
+        instance.entry,
+        instance.modules,
+        optionIdentities[index],
+        hydrated[index]!.digests,
+      ]),
+      request.resourceInputs,
+    ]);
     if (cachedInputs === cacheKey && cachedResult?.status === "ok") {
-      return { ...cachedResult, id: request.id,
-        timings: { runtimeMs, fontsMs, compileMs: 0, prepareMs: 0, compilations, cacheHit: true } };
+      return {
+        ...cachedResult,
+        id: request.id,
+        timings: { runtimeMs, fontsMs, compileMs: 0, prepareMs: 0, compilations, cacheHit: true },
+      };
     }
     const compileStarted = performance.now();
     let instances = request.instances.map((instance, index) => {
       const fonts = hydrated[index]!.fonts;
-      const instanceKey = JSON.stringify([instance.entry, instance.modules, optionIdentities[index],
-        hydrated[index]!.digests]);
-      let compiled = preliminary.get(index) ?? currentCompilations.get(instanceKey) ?? compiledInstances.get(instanceKey);
+      const instanceKey = JSON.stringify([
+        instance.entry,
+        instance.modules,
+        optionIdentities[index],
+        hydrated[index]!.digests,
+      ]);
+      let compiled =
+        preliminary.get(index) ??
+        currentCompilations.get(instanceKey) ??
+        compiledInstances.get(instanceKey);
       if (!compiled) {
         compilations += 1;
         compiled = compiler.compileMotionModules(instance.entry, instance.modules, {
@@ -249,24 +407,33 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
         });
         currentCompilations.set(instanceKey, compiled);
         compiledInstances.set(instanceKey, compiled);
-        if (compiledInstances.size > 32) compiledInstances.delete(compiledInstances.keys().next().value!);
+        if (compiledInstances.size > 32)
+          compiledInstances.delete(compiledInstances.keys().next().value!);
       }
       const needed = artifactFontUrls(compiled.artifact, [
-        { url: "provided", role: "font" as const }, { url: "provided", role: "formula-font" as const },
+        { url: "provided", role: "font" as const },
+        { url: "provided", role: "formula-font" as const },
       ]);
-      const roles = new Set(needed.map(font => font.role));
-      return { clipPath: instance.clipPath, ...compiled,
-        fonts: fonts.filter((font) => roles.has(font.role))
-          .map((font) => ({ bytesBase64: base64(font.bytes), role: font.role })) };
+      const roles = new Set(needed.map((font) => font.role));
+      return {
+        clipPath: instance.clipPath,
+        ...compiled,
+        fonts: fonts
+          .filter((font) => roles.has(font.role))
+          .map((font) => ({ bytesBase64: base64(font.bytes), role: font.role })),
+      };
     });
-    let authorTimeline = request.authorTimeline ?? (
-      request.standalone && instances.length === 1
+    let authorTimeline =
+      request.authorTimeline ??
+      (request.standalone && instances.length === 1
         ? standaloneTimeline(request.standalone, instances[0]!.artifact)
-        : null
-    );
+        : null);
     if (!authorTimeline) throw new Error("Studio compile needs an author Timeline");
     const conversionWarnings: MotionCompilerDiagnostic[] = [];
-    if (request.standalone && (instances[0]?.artifact.role as { type?: string } | undefined)?.type === "captionPresenter") {
+    if (
+      request.standalone &&
+      (instances[0]?.artifact.role as { type?: string } | undefined)?.type === "captionPresenter"
+    ) {
       // The editable wrapper uses Timeline's existing normalized layout and q6 rules.
       // Freeze that exact Rust projection for both preview and the saved document.
       authorTimeline = compiler.normalizeTimeline(authorTimeline);
@@ -277,24 +444,36 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
       const { style, region, align } = request.standalone.data ?? {};
       if (!jsonEqual(input.data, { style, region, align })) {
         const original = request.instances[0]!;
-        const options: MotionCompileOptions = { ...original.options,
+        const options: MotionCompileOptions = {
+          ...original.options,
           data: { source: "studio:caption", value: input.data },
         };
-        const instanceKey = JSON.stringify([original.entry, original.modules,
-          await motionCompileOptionIdentity(options, digest), hydrated[0]!.digests]);
+        const instanceKey = JSON.stringify([
+          original.entry,
+          original.modules,
+          await motionCompileOptionIdentity(options, digest),
+          hydrated[0]!.digests,
+        ]);
         let compiled = compiledInstances.get(instanceKey);
         if (!compiled) {
           compiled = compiler.compileMotionModules(original.entry, original.modules, {
-            ...options, fonts: hydrated[0]!.fonts.map(font => font.bytes),
+            ...options,
+            fonts: hydrated[0]!.fonts.map((font) => font.bytes),
           });
           compilations++;
           compiledInstances.set(instanceKey, compiled);
-          if (compiledInstances.size > 32) compiledInstances.delete(compiledInstances.keys().next().value!);
+          if (compiledInstances.size > 32)
+            compiledInstances.delete(compiledInstances.keys().next().value!);
         }
         instances[0] = { ...instances[0]!, ...compiled };
-        conversionWarnings.push({ class: "warning", code: "caption-input-normalized",
-          span: { start: 0, end: 0, line: 1, column: 1 }, sourcePath: original.entry,
-          message: "Caption input was normalized to Timeline precision; preview and Save as Timeline use the normalized values." });
+        conversionWarnings.push({
+          class: "warning",
+          code: "caption-input-normalized",
+          span: { start: 0, end: 0, line: 1, column: 1 },
+          sourcePath: original.entry,
+          message:
+            "Caption input was normalized to Timeline precision; preview and Save as Timeline use the normalized values.",
+        });
       }
     }
     const compileMs = performance.now() - compileStarted;
@@ -311,20 +490,35 @@ export async function compileStudioPreview(request: StudioCompileRequest): Promi
     });
     const prepareMs = performance.now() - prepareStarted;
     const result: StudioCompileResult = {
-      id: request.id, status: "ok", authorTimeline, package: prepared,
+      id: request.id,
+      status: "ok",
+      authorTimeline,
+      package: prepared,
       timings: { runtimeMs, fontsMs, compileMs, prepareMs, compilations, cacheHit: false },
-      warnings: [...new Map([...instances.flatMap((instance) => instance.warnings), ...conversionWarnings]
-        .map((warning) => [JSON.stringify([warning.sourcePath, warning.span, warning.code, warning.message]), warning])).values()],
+      warnings: [
+        ...new Map(
+          [...instances.flatMap((instance) => instance.warnings), ...conversionWarnings].map(
+            (warning) => [
+              JSON.stringify([warning.sourcePath, warning.span, warning.code, warning.message]),
+              warning,
+            ],
+          ),
+        ).values(),
+      ],
       instances: instances.map((instance) => ({
-        clipPath: instance.clipPath, artifact: instance.artifact,
-        artifactDigest: instance.artifactDigest, sourceMap: instance.sourceMap,
+        clipPath: instance.clipPath,
+        artifact: instance.artifact,
+        artifactDigest: instance.artifactDigest,
+        sourceMap: instance.sourceMap,
       })),
     };
     cachedInputs = cacheKey;
     cachedResult = result;
     return result;
   } catch (error) {
-    return { id: request.id, status: "error",
+    return {
+      id: request.id,
+      status: "error",
       message: error instanceof Error ? error.message : String(error),
       ...(error instanceof MotionCompileError ? { diagnostics: error.diagnostics } : {}),
     };

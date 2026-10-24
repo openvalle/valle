@@ -31,14 +31,11 @@ export const GENERATED_PACKED_ABI_PATH = resolve(
   "packages/engine/src/generated/packed-abi.ts",
 );
 
-export async function loadPackedAbiSources(
-  repoRoot = REPO_ROOT,
-): Promise<PackedAbiSources> {
+export async function loadPackedAbiSources(repoRoot = REPO_ROOT): Promise<PackedAbiSources> {
   const entries = await Promise.all(
-    Object.entries(SOURCE_PATHS).map(async ([key, path]) => [
-      key,
-      await Bun.file(resolve(repoRoot, path)).text(),
-    ] as const),
+    Object.entries(SOURCE_PATHS).map(
+      async ([key, path]) => [key, await Bun.file(resolve(repoRoot, path)).text()] as const,
+    ),
   );
   return Object.fromEntries(entries) as unknown as PackedAbiSources;
 }
@@ -185,7 +182,9 @@ function envelopeModel(
 function rustInteger(source: string, name: string): number {
   const match = requireMatch(
     source,
-    new RegExp(`(?:pub(?:\\(crate\\))?\\s+)?const\\s+${name}\\s*:\\s*(?:u32|u64|usize)\\s*=\\s*([^;]+);`),
+    new RegExp(
+      `(?:pub(?:\\(crate\\))?\\s+)?const\\s+${name}\\s*:\\s*(?:u32|u64|usize)\\s*=\\s*([^;]+);`,
+    ),
     name,
   );
   return evaluateInteger(match[1]!.trim(), name);
@@ -203,7 +202,8 @@ function evaluateInteger(expression: string, label: string): number {
       : Number.parseInt(normalized, 10);
     return product * parsed;
   }, 1);
-  if (!Number.isSafeInteger(value)) throw new Error(`${label} is outside JavaScript's exact integer range`);
+  if (!Number.isSafeInteger(value))
+    throw new Error(`${label} is outside JavaScript's exact integer range`);
   return value;
 }
 
@@ -254,7 +254,9 @@ async function main(): Promise<void> {
     console.log("generated packages/engine/src/generated/packed-abi.ts");
     return;
   }
-  const current = await Bun.file(GENERATED_PACKED_ABI_PATH).text().catch(() => "");
+  const current = await Bun.file(GENERATED_PACKED_ABI_PATH)
+    .text()
+    .catch(() => "");
   if (current !== output) {
     throw new Error(
       "packages/engine/src/generated/packed-abi.ts drifted; run bun run generate:packed-abi",

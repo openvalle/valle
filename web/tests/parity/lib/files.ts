@@ -19,7 +19,11 @@ export function repositoryPath(input: string): string {
 
 export function joinPath(root: string, ...parts: readonly string[]): string {
   let url = directoryUrl(root);
-  for (const part of parts) url = new URL(part.replaceAll("\\", "/"), url.href.endsWith("/") ? url : directoryUrl(Bun.fileURLToPath(url)));
+  for (const part of parts)
+    url = new URL(
+      part.replaceAll("\\", "/"),
+      url.href.endsWith("/") ? url : directoryUrl(Bun.fileURLToPath(url)),
+    );
   return Bun.fileURLToPath(url);
 }
 
@@ -47,7 +51,12 @@ export function resolveRequestPath(requestDir: string, value: string): string {
 }
 
 export function resolveUnder(root: string, relative: string): string {
-  if (!relative || relative.includes("\0") || relative.startsWith("/") || relative.split(/[\\/]+/).includes("..")) {
+  if (
+    !relative ||
+    relative.includes("\0") ||
+    relative.startsWith("/") ||
+    relative.split(/[\\/]+/).includes("..")
+  ) {
     throw new CliError(`unsafe relative path ${JSON.stringify(relative)}`, 2);
   }
   const absoluteRoot = absolutePath(root).replace(/\/$/, "");
@@ -86,13 +95,20 @@ export async function readText(path: string): Promise<string> {
   return file.text();
 }
 
-export async function writeBytes(path: string, bytes: string | Uint8Array | ArrayBuffer | Blob): Promise<void> {
+export async function writeBytes(
+  path: string,
+  bytes: string | Uint8Array | ArrayBuffer | Blob,
+): Promise<void> {
   await Bun.write(absolutePath(path), bytes);
 }
 
 export function ensureDirectory(path: string): string {
   const absolute = absolutePath(path);
-  const result = Bun.spawnSync({ cmd: ["mkdir", "-p", absolute], stdout: "ignore", stderr: "pipe" });
+  const result = Bun.spawnSync({
+    cmd: ["mkdir", "-p", absolute],
+    stdout: "ignore",
+    stderr: "pipe",
+  });
   if (!result.success) {
     throw new CliError(
       `could not create directory ${absolute}: ${new TextDecoder().decode(result.stderr).trim()}`,
@@ -109,7 +125,9 @@ export function createTempDirectory(prefix: string): string {
     stderr: "pipe",
   });
   if (!result.success) {
-    throw new CliError(`could not create temporary directory: ${new TextDecoder().decode(result.stderr).trim()}`);
+    throw new CliError(
+      `could not create temporary directory: ${new TextDecoder().decode(result.stderr).trim()}`,
+    );
   }
   return new TextDecoder().decode(result.stdout).trim();
 }

@@ -5,11 +5,37 @@ import { PackedAbiError, RENDER_PLAN_ABI, decodePackedAbi } from "./packed.ts";
 describe("packed compositor ABI", () => {
   test("validates and decodes one canonical envelope", async () => {
     const payload = Uint8Array.from([
-      8, 2, 0, 0, 0, // object(2)
-      1, 0, 0, 0, 0x61, // "a"
-      6, 2, 0, 0, 0, 0x6f, 0x6b, // string("ok")
-      1, 0, 0, 0, 0x6e, // "n"
-      3, 7, 0, 0, 0, 0, 0, 0, 0, // i64(7)
+      8,
+      2,
+      0,
+      0,
+      0, // object(2)
+      1,
+      0,
+      0,
+      0,
+      0x61, // "a"
+      6,
+      2,
+      0,
+      0,
+      0,
+      0x6f,
+      0x6b, // string("ok")
+      1,
+      0,
+      0,
+      0,
+      0x6e, // "n"
+      3,
+      7,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0, // i64(7)
     ]);
     const decoded = await decodePackedAbi(await envelope(payload), RENDER_PLAN_ABI);
     expect(decoded).toEqual({ a: "ok", n: 7 });
@@ -26,7 +52,9 @@ describe("packed compositor ABI", () => {
 
   test("rejects an oversized declared container before growing it", async () => {
     const payload = Uint8Array.from([7, 0xff, 0xff, 0xff, 0xff]);
-    await expect(decodePackedAbi(await envelope(payload), RENDER_PLAN_ABI)).rejects.toBeInstanceOf(PackedAbiError);
+    await expect(decodePackedAbi(await envelope(payload), RENDER_PLAN_ABI)).rejects.toBeInstanceOf(
+      PackedAbiError,
+    );
   });
 
   test("rejects a U64 spelling when the canonical Rust encoder uses I64", async () => {

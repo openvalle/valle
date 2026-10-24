@@ -4,7 +4,9 @@ import { TimelineSaveQueue } from "./timeline-save-queue.ts";
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 
@@ -41,11 +43,16 @@ test("a stale or rejected response stops without attempting a merge", async () =
   let attempts = 0;
   let idle = 0;
   const response = deferred();
-  const queue = new TimelineSaveQueue(async () => {
-    attempts += 1;
-    await response.promise;
-    return false;
-  }, () => { idle += 1; });
+  const queue = new TimelineSaveQueue(
+    async () => {
+      attempts += 1;
+      await response.promise;
+      return false;
+    },
+    () => {
+      idle += 1;
+    },
+  );
 
   const saving = queue.request();
   await Promise.resolve();

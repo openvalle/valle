@@ -63,9 +63,8 @@ function unfilterRow(
   for (let x = 0; x < row.length; x += 1) {
     const left = x >= bytesPerPixel ? out[outStart + x - bytesPerPixel]! : 0;
     const up = previousStart >= 0 ? out[previousStart + x]! : 0;
-    const upLeft = previousStart >= 0 && x >= bytesPerPixel
-      ? out[previousStart + x - bytesPerPixel]!
-      : 0;
+    const upLeft =
+      previousStart >= 0 && x >= bytesPerPixel ? out[previousStart + x - bytesPerPixel]! : 0;
     let value = row[x]!;
     if (filter === 1) value += left;
     else if (filter === 2) value += up;

@@ -11,6 +11,6 @@ const WASM_SIZE_MAX = 0xffffffffn;
  */
 export function canvasKitGpuCacheBudget(frameBytes: bigint, pinnedBytes: bigint): number {
   const cap = frameBytes < WASM_SIZE_MAX ? frameBytes : WASM_SIZE_MAX;
-  const needed = (pinnedBytes + SCRATCH_HEADROOM + QUANTUM - 1n) / QUANTUM * QUANTUM;
+  const needed = ((pinnedBytes + SCRATCH_HEADROOM + QUANTUM - 1n) / QUANTUM) * QUANTUM;
   return Number(needed < cap ? needed : cap);
 }

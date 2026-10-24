@@ -8,7 +8,7 @@ import { CanvasKitExecutor, type CanvasKitExecutionReport } from "./executor.ts"
 
 const root = resolve(import.meta.dir, "../../../../../..");
 const cli = process.env.VALLE_TEST_CLI ?? join(root, "target/debug/valle");
-const { default: CanvasKitInit } = await import("canvaskit-wasm") as unknown as {
+const { default: CanvasKitInit } = (await import("canvaskit-wasm")) as unknown as {
   default: (options: { locateFile(file: string): string }) => Promise<CanvasKit>;
 };
 
@@ -16,12 +16,16 @@ test("CanvasKit RasterProgram cache reuses exact pixels and invalidates on frame
   const CanvasKit = await CanvasKitInit({
     locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir),
   });
-  initSync({ module: await readFile(join(root, "web/packages/engine/generated/web/valle_engine_bg.wasm")) });
+  initSync({
+    module: await readFile(join(root, "web/packages/engine/generated/web/valle_engine_bg.wasm")),
+  });
   const directory = await mkdtemp(join(tmpdir(), "valle-raster-layer-cache-"));
   const surface = CanvasKit.MakeSurface(48, 48)!;
   let engine: ProductEngine | null = null;
   let executor: CanvasKitExecutor | null = null;
-  await writeFile(join(directory, "scene.motion.tsx"), `
+  await writeFile(
+    join(directory, "scene.motion.tsx"),
+    `
       export const composition = { width: 48, height: 48, fps: 30, duration: 3 };
       export default function CacheScene() { const time = useCurrentTime();
         return <Scene style={{ width: 48, height: 48, backgroundColor: "#000" }}>
@@ -30,12 +34,27 @@ test("CanvasKit RasterProgram cache reuses exact pixels and invalidates on frame
             backgroundColor: interpolate(time.progress, [0, 1], ["#00ff00", "#ff0000"]) }} />
         </Scene>;
       }
-    `);
-  const server = Bun.spawn([cli, "--json", "motion", "studio", "scene.motion.tsx", "--port", "0",
-    "--web-assets-dir", join(root, "web/dist")], {
-    cwd: directory, env: { ...process.env, VALLE_HOME: join(directory, "home") },
-    stdout: "pipe", stderr: "pipe",
-  });
+    `,
+  );
+  const server = Bun.spawn(
+    [
+      cli,
+      "--json",
+      "motion",
+      "studio",
+      "scene.motion.tsx",
+      "--port",
+      "0",
+      "--web-assets-dir",
+      join(root, "web/dist"),
+    ],
+    {
+      cwd: directory,
+      env: { ...process.env, VALLE_HOME: join(directory, "home") },
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   try {
     const reader = server.stdout.getReader();
     let line = "";
@@ -45,42 +64,73 @@ test("CanvasKit RasterProgram cache reuses exact pixels and invalidates on frame
         if (part.done) throw new Error(await new Response(server.stderr).text());
         line += new TextDecoder().decode(part.value);
       }
-    } finally { reader.releaseLock(); }
+    } finally {
+      reader.releaseLock();
+    }
     const ready = JSON.parse(line.split("\n")[0]!);
-    const config = await (await fetch(new URL("/config.json", ready.url))).json() as Record<string, string>;
-    if (!config.fixedPackageManifestJson) throw new Error(JSON.stringify(config.diagnostics ?? config));
+    const config = (await (await fetch(new URL("/config.json", ready.url))).json()) as Record<
+      string,
+      string
+    >;
+    if (!config.fixedPackageManifestJson)
+      throw new Error(JSON.stringify(config.diagnostics ?? config));
     engine = new ProductEngine();
-    const receipt = JSON.parse(engine.open_fixed_package(
-      config.fixedPackageManifestJson!, config.timelineJson!, config.resourceManifestJson!,
-      config.verifiedBindingBundleJson!,
-    ));
+    const receipt = JSON.parse(
+      engine.open_fixed_package(
+        config.fixedPackageManifestJson!,
+        config.timelineJson!,
+        config.resourceManifestJson!,
+        config.verifiedBindingBundleJson!,
+      ),
+    );
     executor = new CanvasKitExecutor(CanvasKit, engine);
     const render = async (
-      frame: number, current: CanvasKitExecutor,
-      maxFrameBytes = 128n * 1024n * 1024n, transparent = false,
+      frame: number,
+      current: CanvasKitExecutor,
+      maxFrameBytes = 128n * 1024n * 1024n,
+      transparent = false,
     ): Promise<{
-      pixels: Uint8Array; report: CanvasKitExecutionReport;
+      pixels: Uint8Array;
+      report: CanvasKitExecutionReport;
     }> => {
-      const ticket = engine!.evaluate_prepare_preview(receipt.renderId, BigInt(frame), 48, 48, transparent);
+      const ticket = engine!.evaluate_prepare_preview(
+        receipt.renderId,
+        BigInt(frame),
+        48,
+        48,
+        transparent,
+      );
       try {
         engine!.lower_canvas_kit(ticket, 64n * 1024n * 1024n, 128n * 1024n * 1024n);
         engine!.bind(ticket, 1n);
         const report = await current.execute(
-          engine!.plan_template_bytes(ticket), engine!.binding_bytes(ticket),
-          engine!.bound_schedule_bytes(ticket), { generation: 1n, objects: new Map() },
+          engine!.plan_template_bytes(ticket),
+          engine!.binding_bytes(ticket),
+          engine!.bound_schedule_bytes(ticket),
+          { generation: 1n, objects: new Map() },
           { surface, maxSurfaceBytes: 64n * 1024n * 1024n, maxFrameBytes },
         );
-        const pixels = Uint8Array.from(surface.getCanvas().readPixels(0, 0, {
-          width: 48, height: 48, colorType: CanvasKit.ColorType.RGBA_8888,
-          alphaType: CanvasKit.AlphaType.Unpremul, colorSpace: CanvasKit.ColorSpace.SRGB,
-        })!);
+        const pixels = Uint8Array.from(
+          surface.getCanvas().readPixels(0, 0, {
+            width: 48,
+            height: 48,
+            colorType: CanvasKit.ColorType.RGBA_8888,
+            alphaType: CanvasKit.AlphaType.Unpremul,
+            colorSpace: CanvasKit.ColorSpace.SRGB,
+          })!,
+        );
         return { pixels, report };
-      } finally { engine!.release_ticket(ticket); }
+      } finally {
+        engine!.release_ticket(ticket);
+      }
     };
     const cold = async (frame: number, transparent = false) => {
       const fresh = new CanvasKitExecutor(CanvasKit, engine);
-      try { return await render(frame, fresh, 128n * 1024n * 1024n, transparent); }
-      finally { fresh.dispose(); }
+      try {
+        return await render(frame, fresh, 128n * 1024n * 1024n, transparent);
+      } finally {
+        fresh.dispose();
+      }
     };
     const first = await render(0, executor);
     const repeat = await render(0, executor);
@@ -102,7 +152,8 @@ test("CanvasKit RasterProgram cache reuses exact pixels and invalidates on frame
     expect(reset.report.rasterLayerCacheEntries).toBeLessThanOrEqual(64);
     expect(reset.report.rasterLayerCacheBytes).toBeLessThanOrEqual(64 * 1024 * 1024);
     let afterEviction: CanvasKitExecutionReport | null = null;
-    for (let frame = 1; frame <= 70; frame += 1) afterEviction = (await render(frame, executor)).report;
+    for (let frame = 1; frame <= 70; frame += 1)
+      afterEviction = (await render(frame, executor)).report;
     expect(afterEviction!.rasterLayerCacheEntries).toBe(64);
     const evicted = await render(0, executor);
     expect(evicted.report.rasterLayerCacheMisses).toBeGreaterThan(0);

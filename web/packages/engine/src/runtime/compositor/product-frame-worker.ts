@@ -21,10 +21,7 @@ import { installKernelWorker, type Scene3dKernelInput } from "./kernel-worker.ts
 
 interface ProductWorkerScope {
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
-  postMessage(
-    message: ProductFrameWorkerResponse,
-    transfer?: Transferable[],
-  ): void;
+  postMessage(message: ProductFrameWorkerResponse, transfer?: Transferable[]): void;
 }
 
 const scope = globalThis as unknown as ProductWorkerScope;
@@ -47,30 +44,28 @@ interface StartedFrame {
   requestStage: ProductFrameRequestStage;
 }
 
-if (new URL(globalThis.location.href).searchParams.get("valle-kernel") === "1") installKernelWorker();
-else scope.onmessage = (event) => {
-  messageChain = messageChain
-    .then(() => handleIncomingMessage(event.data))
-    .catch((error) => {
-      // A response-delivery failure cannot be assigned to one task. Try once to fail the worker
-      // explicitly; if the message channel itself is broken, the browser's worker error owns it.
-      try {
-        scope.postMessage(
-          productFrameWorkerFatalResponse(event.data, "protocol", error),
-        );
-      } catch {
-        // Nothing else can be delivered through this worker channel.
-      }
-    });
-};
+if (new URL(globalThis.location.href).searchParams.get("valle-kernel") === "1")
+  installKernelWorker();
+else
+  scope.onmessage = (event) => {
+    messageChain = messageChain
+      .then(() => handleIncomingMessage(event.data))
+      .catch((error) => {
+        // A response-delivery failure cannot be assigned to one task. Try once to fail the worker
+        // explicitly; if the message channel itself is broken, the browser's worker error owns it.
+        try {
+          scope.postMessage(productFrameWorkerFatalResponse(event.data, "protocol", error));
+        } catch {
+          // Nothing else can be delivered through this worker channel.
+        }
+      });
+  };
 
 async function handleIncomingMessage(value: unknown): Promise<void> {
   try {
     assertProductFrameWorkerRequest(value);
   } catch (error) {
-    scope.postMessage(
-      productFrameWorkerFatalResponse(value, "protocol", error),
-    );
+    scope.postMessage(productFrameWorkerFatalResponse(value, "protocol", error));
     return;
   }
 
@@ -86,15 +81,11 @@ async function handleIncomingMessage(value: unknown): Promise<void> {
       });
       return;
     }
-    scope.postMessage(
-      productFrameWorkerFatalResponse(value, "prepareBatch", error),
-    );
+    scope.postMessage(productFrameWorkerFatalResponse(value, "prepareBatch", error));
   }
 }
 
-async function handleMessage(
-  message: ProductFrameWorkerRequest,
-): Promise<void> {
+async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> {
   if (message.type === "configure") {
     gpuScene3d = message.bootstrap.gpuScene3d === true;
     engine?.free();
@@ -104,9 +95,7 @@ async function handleMessage(
     motionDefinitionsSent.clear();
     lastReadyAt = null;
     lastReleaseMs = 0;
-    const wasm = (await import(
-      message.bootstrap.wasmModuleUrl
-    )) as ProductWasmModule;
+    const wasm = (await import(message.bootstrap.wasmModuleUrl)) as ProductWasmModule;
     await wasm.default(message.bootstrap.wasmUrl);
     const canonicalTimelineJson = wasm.canonicalize_timeline_document(
       message.bootstrap.timelineJson,
@@ -117,14 +106,33 @@ async function handleMessage(
     };
     const next = new wasm.ProductEngine();
     try {
-      const receipt = parseProductRenderReceipt(next.open_fixed_package(bootstrap.fixedPackageManifestJson,
-        bootstrap.timelineJson, bootstrap.resourceManifestJson, bootstrap.verifiedBindingBundleJson));
+      const receipt = parseProductRenderReceipt(
+        next.open_fixed_package(
+          bootstrap.fixedPackageManifestJson,
+          bootstrap.timelineJson,
+          bootstrap.resourceManifestJson,
+          bootstrap.verifiedBindingBundleJson,
+        ),
+      );
       const openedRenderId = receipt.renderId;
-      if (bootstrap.expectedRenderId && bootstrap.expectedRenderId !== openedRenderId) throw new Error("Product worker RenderId drift");
-      const resources = JSON.parse(next.compiled_execution_resources_json(openedRenderId)).map((resource: any) => ({
-        ...resource, bytes: next.compiled_resource_bytes(openedRenderId, resource.kind, resource.contentDigest, resource.abiDigest),
-      }));
-      const snapshot = { receipt, resources, audioProgramJson: next.audio_program_json(openedRenderId) };
+      if (bootstrap.expectedRenderId && bootstrap.expectedRenderId !== openedRenderId)
+        throw new Error("Product worker RenderId drift");
+      const resources = JSON.parse(next.compiled_execution_resources_json(openedRenderId)).map(
+        (resource: any) => ({
+          ...resource,
+          bytes: next.compiled_resource_bytes(
+            openedRenderId,
+            resource.kind,
+            resource.contentDigest,
+            resource.abiDigest,
+          ),
+        }),
+      );
+      const snapshot = {
+        receipt,
+        resources,
+        audioProgramJson: next.audio_program_json(openedRenderId),
+      };
       next.set_realtime_geometry?.(gpuScene3d);
       engine = next;
       renderId = openedRenderId;
@@ -144,22 +152,32 @@ async function handleMessage(
 
   if (message.type === "call") {
     try {
-      if (!engine || renderId !== message.renderId) throw new Error("Product runtime call RenderId drift");
+      if (!engine || renderId !== message.renderId)
+        throw new Error("Product runtime call RenderId drift");
       const result = executeRuntimeCall(engine, message.method, message.args);
-      scope.postMessage({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "callResult",
-        id: message.id, renderId, result }, ArrayBuffer.isView(result) ? [result.buffer as ArrayBuffer] : []);
+      scope.postMessage(
+        {
+          protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+          type: "callResult",
+          id: message.id,
+          renderId,
+          result,
+        },
+        ArrayBuffer.isView(result) ? [result.buffer as ArrayBuffer] : [],
+      );
     } catch (error) {
-      scope.postMessage({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "callResult",
-        id: message.id, renderId: message.renderId, error: errorMessage(error) });
+      scope.postMessage({
+        protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+        type: "callResult",
+        id: message.id,
+        renderId: message.renderId,
+        error: errorMessage(error),
+      });
     }
     return;
   }
 
-  for (
-    let offset = 0;
-    offset < message.jobs.length;
-    offset += RESULT_BATCH_FRAMES
-  ) {
+  for (let offset = 0; offset < message.jobs.length; offset += RESULT_BATCH_FRAMES) {
     const jobs = message.jobs.slice(offset, offset + RESULT_BATCH_FRAMES);
     gpuScene3d = jobs[0]?.request.realtime ?? gpuScene3d;
     engine?.set_realtime_geometry?.(gpuScene3d);
@@ -169,19 +187,43 @@ async function handleMessage(
         if (engine?.motion_kernel_available?.() && job.motionResults === undefined) {
           if (job.request.renderId !== renderId) throw new Error("Motion capture RenderId drift");
           const r = job.request;
-          const work = JSON.parse(engine.capture_motion_jobs_preview!(r.renderId, BigInt(r.frame), r.width, r.height, r.transparent)) as MotionKernelJob[];
+          const work = JSON.parse(
+            engine.capture_motion_jobs_preview!(
+              r.renderId,
+              BigInt(r.frame),
+              r.width,
+              r.height,
+              r.transparent,
+            ),
+          ) as MotionKernelJob[];
           const definitions: Record<string, string> = {};
           for (const input of work) {
-            if (!motionDefinitionsSent.has(input.definitionId)) definitions[input.definitionId] = engine.motion_kernel_definition!(input.definitionId);
-            const length = definitions[input.definitionId]?.length ?? motionDefinitionsSent.get(input.definitionId)!;
+            if (!motionDefinitionsSent.has(input.definitionId))
+              definitions[input.definitionId] = engine.motion_kernel_definition!(
+                input.definitionId,
+              );
+            const length =
+              definitions[input.definitionId]?.length ??
+              motionDefinitionsSent.get(input.definitionId)!;
             motionDefinitionsSent.delete(input.definitionId);
             motionDefinitionsSent.set(input.definitionId, length);
           }
-          while (motionDefinitionsSent.size > 4 || [...motionDefinitionsSent.values()].reduce((sum, bytes) => sum + bytes, 0) > 64 * 1024 ** 2) {
+          while (
+            motionDefinitionsSent.size > 4 ||
+            [...motionDefinitionsSent.values()].reduce((sum, bytes) => sum + bytes, 0) >
+              64 * 1024 ** 2
+          ) {
             motionDefinitionsSent.delete(motionDefinitionsSent.keys().next().value!);
           }
           if (work.length) {
-            scope.postMessage({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "motionWork", id: job.id, request: r, jobs: work, definitions });
+            scope.postMessage({
+              protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+              type: "motionWork",
+              id: job.id,
+              request: r,
+              jobs: work,
+              definitions,
+            });
             continue;
           }
         }
@@ -210,15 +252,12 @@ async function handleMessage(
       [
         bundledRequests.buffer.buffer,
         ...started.flatMap((f) =>
-          Object.values(f.requestStage.gpuScene3d ?? {}).map(
-            (v) => v.buffer as ArrayBuffer,
-          ),
+          Object.values(f.requestStage.gpuScene3d ?? {}).map((v) => v.buffer as ArrayBuffer),
         ),
       ],
     );
 
-    const ready: Array<{ id: string; stage: ProductFrameWorkerReadyStage }> =
-      [];
+    const ready: Array<{ id: string; stage: ProductFrameWorkerReadyStage }> = [];
     for (const frame of started) {
       try {
         ready.push({ id: frame.id, stage: finishFrame(frame) });
@@ -259,9 +298,7 @@ async function handleMessage(
       [
         bundledReady.buffer.buffer,
         ...ready.flatMap((entry) =>
-          entry.stage.planPacket === null
-            ? []
-            : [entry.stage.planPacket.buffer as ArrayBuffer],
+          entry.stage.planPacket === null ? [] : [entry.stage.planPacket.buffer as ArrayBuffer],
         ),
       ],
     );
@@ -276,27 +313,32 @@ async function startFrame(
 ): Promise<StartedFrame> {
   const active = engine;
   const activeRenderId = renderId;
-  if (!active || !activeRenderId)
-    throw new Error("Product frame worker is not configured");
+  if (!active || !activeRenderId) throw new Error("Product frame worker is not configured");
   if (request.renderId !== activeRenderId) {
     throw new Error(
       `Product frame request RenderId drift: expected ${activeRenderId}, got ${request.renderId}`,
     );
   }
   const workerTurnGapMs =
-    !measureTurnGap || lastReadyAt === null
-      ? 0
-      : performance.now() - lastReadyAt;
+    !measureTurnGap || lastReadyAt === null ? 0 : performance.now() - lastReadyAt;
   const evaluateStarted = performance.now();
-  const ticket = motionResults !== undefined
-    ? active.evaluate_prepare_motion_preview!(activeRenderId, BigInt(request.frame), request.width, request.height, request.transparent, motionResults)
-    : active.evaluate_prepare_preview(
-    activeRenderId,
-    BigInt(request.frame),
-    request.width,
-    request.height,
-    request.transparent,
-  );
+  const ticket =
+    motionResults !== undefined
+      ? active.evaluate_prepare_motion_preview!(
+          activeRenderId,
+          BigInt(request.frame),
+          request.width,
+          request.height,
+          request.transparent,
+          motionResults,
+        )
+      : active.evaluate_prepare_preview(
+          activeRenderId,
+          BigInt(request.frame),
+          request.width,
+          request.height,
+          request.transparent,
+        );
   const evaluatePrepareMs = performance.now() - evaluateStarted;
   try {
     const inspectStarted = performance.now();
@@ -304,10 +346,10 @@ async function startFrame(
     const inspectionJson = active.frame_inspection_json(ticket);
     const gpuJobs: Record<string, Scene3dKernelInput> = {};
     if (gpuScene3d && active.scene3d_gpu_lighting_input) {
-      const requests = (await decodePackedAbi(
-        requestPacket,
-        RESOURCE_REQUESTS_ABI,
-      )) as Record<string, any>[];
+      const requests = (await decodePackedAbi(requestPacket, RESOURCE_REQUESTS_ABI)) as Record<
+        string,
+        any
+      >[];
       for (const request of requests) {
         if (request.expected.kind !== "scene3d") continue;
         const content = request.key.content;
@@ -315,7 +357,13 @@ async function startFrame(
         const canonical = request.payload.canonical_request as string;
         const value = JSON.parse(canonical) as Scene3dGpuRequest;
         if (!supportsScene3dGpu(value)) continue;
-        gpuJobs[content] = { content, topology: request.key.interpretation.topology_digest, canonical, width: value.width, height: value.height };
+        gpuJobs[content] = {
+          content,
+          topology: request.key.interpretation.topology_digest,
+          canonical,
+          width: value.width,
+          height: value.height,
+        };
       }
     }
     const requestInspectMs = performance.now() - inspectStarted;
@@ -355,8 +403,7 @@ function finishFrame(frame: StartedFrame): ProductFrameWorkerReadyStage {
   const { request, ticket } = frame;
   const active = engine;
   const activeRenderId = renderId;
-  if (!active || !activeRenderId)
-    throw new Error("Product frame worker is not configured");
+  if (!active || !activeRenderId) throw new Error("Product frame worker is not configured");
   if (request.renderId !== activeRenderId) {
     throw new Error(
       `Product frame finish RenderId drift: expected ${activeRenderId}, got ${request.renderId}`,
@@ -364,11 +411,7 @@ function finishFrame(frame: StartedFrame): ProductFrameWorkerReadyStage {
   }
   try {
     const lowerStarted = performance.now();
-    active.lower_canvas_kit(
-      ticket,
-      request.maxSurfaceBytes,
-      request.maxFrameBytes,
-    );
+    active.lower_canvas_kit(ticket, request.maxSurfaceBytes, request.maxFrameBytes);
     const lowerMs = performance.now() - lowerStarted;
     const templateCacheHit = active.template_cache_hit(ticket);
     const templateHash = active.plan_template_hash(ticket);
@@ -418,11 +461,7 @@ function finishFrame(frame: StartedFrame): ProductFrameWorkerReadyStage {
   }
 }
 
-function postTaskError(
-  id: string,
-  request: ProductFrameRequest,
-  error: unknown,
-): void {
+function postTaskError(id: string, request: ProductFrameRequest, error: unknown): void {
   scope.postMessage({
     protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
     type: "taskError",
@@ -435,9 +474,7 @@ function postTaskError(
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error
-    ? (error.stack ?? error.message)
-    : String(error);
+  return error instanceof Error ? (error.stack ?? error.message) : String(error);
 }
 
 function bundleByteArrays(chunks: Uint8Array[]): {

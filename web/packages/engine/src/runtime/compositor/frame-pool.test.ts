@@ -32,7 +32,13 @@ class WrongRenderIdWorker {
       return;
     }
     if (message.type === "call") {
-      this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "callResult", id: message.id, renderId: message.renderId, result: message.args[0] });
+      this.emit({
+        protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+        type: "callResult",
+        id: message.id,
+        renderId: message.renderId,
+        result: message.args[0],
+      });
       return;
     }
     const job = message.jobs[0]!;
@@ -78,11 +84,7 @@ class FatalBatchWorker {
       });
       return;
     }
-    this.emit(productFrameWorkerFatalResponse(
-      message,
-      "prepareBatch",
-      new Error("bundle failed"),
-    ));
+    this.emit(productFrameWorkerFatalResponse(message, "prepareBatch", new Error("bundle failed")));
   }
 
   terminate(): void {
@@ -121,34 +123,51 @@ test("render receipt is narrow and requires positive safe result facts", () => {
     canvasWidth: 320,
     canvasHeight: 180,
   });
-  expect(() => parseProductRenderReceipt(JSON.stringify({ ...receipt, canvasWidth: 0 })))
-    .toThrow("canvasWidth must be a positive safe integer");
-  expect(() => parseProductRenderReceipt(JSON.stringify({
-    ...receipt,
-    canvasHeight: Number.MAX_SAFE_INTEGER + 1,
-  }))).toThrow("canvasHeight must be a positive safe integer");
-  expect(() => parseProductRenderReceipt(JSON.stringify({
-    ...receipt,
-    unsupportedIdentity: "sha256:unsupported",
-  }))).toThrow("unknown field unsupportedIdentity");
+  expect(() => parseProductRenderReceipt(JSON.stringify({ ...receipt, canvasWidth: 0 }))).toThrow(
+    "canvasWidth must be a positive safe integer",
+  );
+  expect(() =>
+    parseProductRenderReceipt(
+      JSON.stringify({
+        ...receipt,
+        canvasHeight: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ),
+  ).toThrow("canvasHeight must be a positive safe integer");
+  expect(() =>
+    parseProductRenderReceipt(
+      JSON.stringify({
+        ...receipt,
+        unsupportedIdentity: "sha256:unsupported",
+      }),
+    ),
+  ).toThrow("unknown field unsupportedIdentity");
 });
 
 test("worker protocol requires a strong RenderId at every boundary", () => {
-  expect(() => assertProductFrameWorkerResponse({
-    protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
-    type: "configured",
-    id: "configure-1",
-  })).toThrow("must be a sha256 RenderId");
-  expect(() => assertProductFrameWorkerRequest({
-    protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
-    type: "prepareBatch",
-    id: "batch-1",
-    jobs: [{ id: "frame-1", request: { renderId: "unsupported-bare-hex" } }],
-  })).toThrow("must be a sha256 RenderId");
+  expect(() =>
+    assertProductFrameWorkerResponse({
+      protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+      type: "configured",
+      id: "configure-1",
+    }),
+  ).toThrow("must be a sha256 RenderId");
+  expect(() =>
+    assertProductFrameWorkerRequest({
+      protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+      type: "prepareBatch",
+      id: "batch-1",
+      jobs: [{ id: "frame-1", request: { renderId: "unsupported-bare-hex" } }],
+    }),
+  ).toThrow("must be a sha256 RenderId");
 });
 
 test("malformed and wrong-version requests map to an explicit protocol fatal response", () => {
-  const malformed = productFrameWorkerFatalResponse(null, "protocol", new Error("request must be an object"));
+  const malformed = productFrameWorkerFatalResponse(
+    null,
+    "protocol",
+    new Error("request must be an object"),
+  );
   expect(malformed).toMatchObject({
     protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
     type: "fatal",
@@ -164,7 +183,9 @@ test("malformed and wrong-version requests map to an explicit protocol fatal res
     id: "batch-wrong-version",
     jobs: [],
   };
-  expect(() => assertProductFrameWorkerRequest(wrongVersion)).toThrow("unsupported Product frame worker protocol");
+  expect(() => assertProductFrameWorkerRequest(wrongVersion)).toThrow(
+    "unsupported Product frame worker protocol",
+  );
   const fatal = productFrameWorkerFatalResponse(wrongVersion, "protocol", "unsupported protocol");
   expect(fatal).toMatchObject({
     type: "fatal",
@@ -223,18 +244,15 @@ test("bootstrap opens exactly the four fixed-package members", () => {
   bootstrap.expectedRenderId = RENDER_ID;
 
   expect(applyProductEngineBootstrap(engine, bootstrap)).toBe(RENDER_ID);
-  expect(calls).toEqual([[
-    "fixed-package",
-    "timeline",
-    "resource-manifest",
-    "binding-bundle",
-  ]]);
-  expect(() => assertProductFrameWorkerRequest({
-    protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
-    type: "configure",
-    id: "configure-extra",
-    bootstrap: { ...bootstrap, unexpected: "member" },
-  })).toThrow("bootstrap contains unknown field unexpected");
+  expect(calls).toEqual([["fixed-package", "timeline", "resource-manifest", "binding-bundle"]]);
+  expect(() =>
+    assertProductFrameWorkerRequest({
+      protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+      type: "configure",
+      id: "configure-extra",
+      bootstrap: { ...bootstrap, unexpected: "member" },
+    }),
+  ).toThrow("bootstrap contains unknown field unexpected");
 });
 
 test("planner rejects a worker stage from another RenderId", async () => {
@@ -248,14 +266,7 @@ test("planner rejects a worker stage from another RenderId", async () => {
       return generation;
     },
   });
-  const bootstrap = emptyProductEngineBootstrap(
-    "engine.js",
-    "engine.wasm",
-    "{}",
-    "{}",
-    "{}",
-    "{}",
-  );
+  const bootstrap = emptyProductEngineBootstrap("engine.js", "engine.wasm", "{}", "{}", "{}", "{}");
   bootstrap.expectedRenderId = RENDER_ID;
   await pool.init(bootstrap);
 
@@ -283,14 +294,7 @@ test("planner rejects every pending promise after a batch-level worker failure",
       return generation;
     },
   });
-  const bootstrap = emptyProductEngineBootstrap(
-    "engine.js",
-    "engine.wasm",
-    "{}",
-    "{}",
-    "{}",
-    "{}",
-  );
+  const bootstrap = emptyProductEngineBootstrap("engine.js", "engine.wasm", "{}", "{}", "{}", "{}");
   bootstrap.expectedRenderId = RENDER_ID;
   await pool.init(bootstrap);
 
@@ -308,17 +312,18 @@ test("planner rejects every pending promise after a batch-level worker failure",
   expect(failure).toBeInstanceOf(Error);
   expect((failure as Error).message).toContain("bundle failed");
   expect(worker.terminated).toBeTrue();
-  expect(() => pool.prepare({
-    frame: 1,
-    width: 320,
-    height: 180,
-    transparent: false,
-    maxSurfaceBytes: 1024n,
-    maxFrameBytes: 2048n,
-  })).toThrow("Product frame planner failed");
+  expect(() =>
+    pool.prepare({
+      frame: 1,
+      width: 320,
+      height: 180,
+      transparent: false,
+      maxSurfaceBytes: 1024n,
+      maxFrameBytes: 2048n,
+    }),
+  ).toThrow("Product frame planner failed");
   pool.close();
 });
-
 
 function manualTemplateWorker() {
   type Batch = Extract<ProductFrameWorkerRequest, { type: "prepareBatch" }>;
@@ -328,24 +333,65 @@ function manualTemplateWorker() {
     onerror: null as ((event: ErrorEvent) => void) | null,
     postMessage(message: ProductFrameWorkerRequest) {
       if (message.type === "configure") {
-        queueMicrotask(() => this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
-          type: "configured", id: message.id, renderId: message.bootstrap.expectedRenderId }));
+        queueMicrotask(() =>
+          this.emit({
+            protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+            type: "configured",
+            id: message.id,
+            renderId: message.bootstrap.expectedRenderId,
+          }),
+        );
       } else if (message.type === "prepareBatch") batches.push(message);
     },
     emit(message: ProductFrameWorkerResponse) {
       this.onmessage?.({ data: message } as MessageEvent<unknown>);
     },
-    complete(job: Batch["jobs"][number], planPacket: Uint8Array | null, templateHash = RENDER_ID, gpuBytes = 0) {
-      const {key, renderId, epoch, frame, generation} = job.request;
-      this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "requests", id: job.id,
-        stage: { key, renderId, epoch, frame, generation, requestPacket: new Uint8Array(),
-          inspectionJson: "{}", evaluatePrepareMs: 0, requestInspectMs: 0,
+    complete(
+      job: Batch["jobs"][number],
+      planPacket: Uint8Array | null,
+      templateHash = RENDER_ID,
+      gpuBytes = 0,
+    ) {
+      const { key, renderId, epoch, frame, generation } = job.request;
+      this.emit({
+        protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+        type: "requests",
+        id: job.id,
+        stage: {
+          key,
+          renderId,
+          epoch,
+          frame,
+          generation,
+          requestPacket: new Uint8Array(),
+          inspectionJson: "{}",
+          evaluatePrepareMs: 0,
+          requestInspectMs: 0,
           ...(gpuBytes ? { gpuScene3d: { [SCENE_CONTENT]: new Float32Array(gpuBytes / 4) } } : {}),
-          workerTurnGapMs: 0, previousReleaseMs: 0 } });
-      this.emit({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION, type: "ready", id: job.id,
-        stage: { key, renderId, epoch, frame, generation, templateHash, planPacket,
-          bindingPacket: new Uint8Array(), schedulePacket: new Uint8Array(),
-          templateCacheHit: planPacket === null, lowerMs: 0, bindPacketsMs: 0, totalWorkerMs: 0 } });
+          workerTurnGapMs: 0,
+          previousReleaseMs: 0,
+        },
+      });
+      this.emit({
+        protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+        type: "ready",
+        id: job.id,
+        stage: {
+          key,
+          renderId,
+          epoch,
+          frame,
+          generation,
+          templateHash,
+          planPacket,
+          bindingPacket: new Uint8Array(),
+          schedulePacket: new Uint8Array(),
+          templateCacheHit: planPacket === null,
+          lowerMs: 0,
+          bindPacketsMs: 0,
+          totalWorkerMs: 0,
+        },
+      });
     },
     terminate() {},
   };
@@ -355,68 +401,107 @@ function manualTemplateWorker() {
 const SCENE_CONTENT = `sha256:${"a".repeat(64)}`;
 
 test("ready byte pressure keeps imminent frames, accounts GPU preparation and still serves demand", async () => {
-  const {worker,batches}=manualTemplateWorker();let generation=0n;
-  const pool=new ProductFramePlannerPool({workerUrl:"frame-worker.js",maxReadyBytes:32,
-    workerFactory:()=>worker,allocateGeneration:()=>++generation});
-  const bootstrap=emptyProductEngineBootstrap("engine.js","engine.wasm","{}","{}","{}","{}");
-  bootstrap.expectedRenderId=RENDER_ID;await pool.init(bootstrap);
-  const input={frame:1,width:1920,height:1080,transparent:false,maxSurfaceBytes:1024n,maxFrameBytes:2048n};
+  const { worker, batches } = manualTemplateWorker();
+  let generation = 0n;
+  const pool = new ProductFramePlannerPool({
+    workerUrl: "frame-worker.js",
+    maxReadyBytes: 32,
+    workerFactory: () => worker,
+    allocateGeneration: () => ++generation,
+  });
+  const bootstrap = emptyProductEngineBootstrap("engine.js", "engine.wasm", "{}", "{}", "{}", "{}");
+  bootstrap.expectedRenderId = RENDER_ID;
+  await pool.init(bootstrap);
+  const input = {
+    frame: 1,
+    width: 1920,
+    height: 1080,
+    transparent: false,
+    maxSurfaceBytes: 1024n,
+    maxFrameBytes: 2048n,
+  };
   try {
-    const near=pool.prefetch(input,1),far=pool.prefetch({...input,frame:100},100);
+    const near = pool.prefetch(input, 1),
+      far = pool.prefetch({ ...input, frame: 100 }, 100);
     await Promise.resolve();
-    expect(batches[0]!.jobs.map(j=>j.request.frame)).toEqual([1,100]);
-    worker.complete(batches[0]!.jobs[0]!,new Uint8Array(16),RENDER_ID,16);
-    worker.complete(batches[0]!.jobs[1]!,new Uint8Array(16),RENDER_ID,16);
-    await near.ready;await far.ready;
-    expect(pool.snapshot()).toMatchObject({readyBytes:32,readyFrames:1,cancelled:1});
+    expect(batches[0]!.jobs.map((j) => j.request.frame)).toEqual([1, 100]);
+    worker.complete(batches[0]!.jobs[0]!, new Uint8Array(16), RENDER_ID, 16);
+    worker.complete(batches[0]!.jobs[1]!, new Uint8Array(16), RENDER_ID, 16);
+    await near.ready;
+    await far.ready;
+    expect(pool.snapshot()).toMatchObject({ readyBytes: 32, readyFrames: 1, cancelled: 1 });
     expect(pool.prepare(input).key).toBe(near.key);
     pool.release(near.key);
-    const next=pool.prefetch({...input,frame:2},2);await Promise.resolve();
+    const next = pool.prefetch({ ...input, frame: 2 }, 2);
+    await Promise.resolve();
     expect(batches.length).toBe(1);
-    pool.prepare({...input,frame:2});await Promise.resolve();
+    pool.prepare({ ...input, frame: 2 });
+    await Promise.resolve();
     expect(batches.length).toBe(2);
-    worker.complete(batches[1]!.jobs[0]!,null);
+    worker.complete(batches[1]!.jobs[0]!, null);
     await next.ready;
     expect(pool.snapshot().errors).toBe(0);
-  } finally {pool.close();}
+  } finally {
+    pool.close();
+  }
 });
 
 test("a cancelled prefetch still supplies the template needed by the next seek", async () => {
   const { worker, batches } = manualTemplateWorker();
-  let generation=0n;
-  const pool=new ProductFramePlannerPool({workerUrl:"frame-worker.js",
-    workerFactory:()=>worker, allocateGeneration:()=>++generation});
-  const bootstrap=emptyProductEngineBootstrap("engine.js","engine.wasm","{}","{}","{}","{}");
-  bootstrap.expectedRenderId=RENDER_ID;
+  let generation = 0n;
+  const pool = new ProductFramePlannerPool({
+    workerUrl: "frame-worker.js",
+    workerFactory: () => worker,
+    allocateGeneration: () => ++generation,
+  });
+  const bootstrap = emptyProductEngineBootstrap("engine.js", "engine.wasm", "{}", "{}", "{}", "{}");
+  bootstrap.expectedRenderId = RENDER_ID;
   await pool.init(bootstrap);
   try {
-    const input={frame:0,width:320,height:180,transparent:false,maxSurfaceBytes:1024n,maxFrameBytes:2048n};
-    const cancelled=pool.prefetch(input);
+    const input = {
+      frame: 0,
+      width: 320,
+      height: 180,
+      transparent: false,
+      maxSurfaceBytes: 1024n,
+      maxFrameBytes: 2048n,
+    };
+    const cancelled = pool.prefetch(input);
     await Promise.resolve();
     pool.advanceEpoch();
     await expect(cancelled.ready).rejects.toThrow("epoch changed");
-    const template=Uint8Array.of(1,2,3);
-    worker.complete(batches[0]!.jobs[0]!,template);
-    const next=pool.prepare({...input,frame:15});
+    const template = Uint8Array.of(1, 2, 3);
+    worker.complete(batches[0]!.jobs[0]!, template);
+    const next = pool.prepare({ ...input, frame: 15 });
     await Promise.resolve();
-    worker.complete(batches[1]!.jobs[0]!,null);
+    worker.complete(batches[1]!.jobs[0]!, null);
     // The transferred packet is kept as is, not copied.
     expect((await next.ready).planPacket).toBe(template);
-    expect(pool.snapshot()).toMatchObject({completed:1,cancelled:1,errors:0});
-  } finally {pool.close();}
+    expect(pool.snapshot()).toMatchObject({ completed: 1, cancelled: 1, errors: 0 });
+  } finally {
+    pool.close();
+  }
 });
-
 
 test("template cache hits stay available while older unused templates are evicted", async () => {
   const { worker, batches } = manualTemplateWorker();
   let generation = 0n;
-  const pool = new ProductFramePlannerPool({ workerUrl: "frame-worker.js",
-    workerFactory: () => worker, allocateGeneration: () => ++generation });
+  const pool = new ProductFramePlannerPool({
+    workerUrl: "frame-worker.js",
+    workerFactory: () => worker,
+    allocateGeneration: () => ++generation,
+  });
   const bootstrap = emptyProductEngineBootstrap("engine.js", "engine.wasm", "{}", "{}", "{}", "{}");
   bootstrap.expectedRenderId = RENDER_ID;
   await pool.init(bootstrap);
-  const input = { frame: 0, width: 320, height: 180, transparent: false,
-    maxSurfaceBytes: 1024n, maxFrameBytes: 2048n };
+  const input = {
+    frame: 0,
+    width: 320,
+    height: 180,
+    transparent: false,
+    maxSurfaceBytes: 1024n,
+    maxFrameBytes: 2048n,
+  };
   async function complete(hash: string, packet: Uint8Array | null) {
     const next = pool.prepare({ ...input, frame: input.frame++ });
     await Promise.resolve();
@@ -435,5 +520,7 @@ test("template cache hits stay available while older unused templates are evicte
     }
     expect(pool.snapshot().errors).toBe(0);
     expect((pool as any).templatePackets.size).toBe(64);
-  } finally { pool.close(); }
+  } finally {
+    pool.close();
+  }
 });

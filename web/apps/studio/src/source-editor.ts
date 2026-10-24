@@ -49,19 +49,31 @@ export class StudioSourceEditor extends EventTarget {
     return new StudioSourceEditor(host, new SourceDrafts(files));
   }
 
-  get dirty(): boolean { return this.drafts.dirty; }
-  get conflicted(): boolean { return [...this.drafts.files.values()].some((file) => file.conflict !== null); }
+  get dirty(): boolean {
+    return this.drafts.dirty;
+  }
+  get conflicted(): boolean {
+    return [...this.drafts.files.values()].some((file) => file.conflict !== null);
+  }
 
-  confirmedDigests(): Record<string, string> { return this.drafts.confirmedDigests(); }
+  confirmedDigests(): Record<string, string> {
+    return this.drafts.confirmedDigests();
+  }
 
-  snapshot(): Record<string, string> { return this.drafts.snapshot(); }
+  snapshot(): Record<string, string> {
+    return this.drafts.snapshot();
+  }
 
   resolvePath(path: string): string {
     if (this.drafts.files.has(path)) return path;
-    const matches = [...this.drafts.files.keys()].filter((candidate) => candidate.endsWith(`/${path}`));
+    const matches = [...this.drafts.files.keys()].filter((candidate) =>
+      candidate.endsWith(`/${path}`),
+    );
     if (matches.length === 1) return matches[0]!;
     const basename = path.split(/[\\/]/).pop();
-    const byName = [...this.drafts.files.keys()].filter((candidate) => candidate.endsWith(`/${basename}`));
+    const byName = [...this.drafts.files.keys()].filter((candidate) =>
+      candidate.endsWith(`/${basename}`),
+    );
     if (byName.length !== 1) throw new Error(`Source path is unavailable or ambiguous: ${path}`);
     return byName[0]!;
   }
@@ -100,7 +112,11 @@ export class StudioSourceEditor extends EventTarget {
   }
 
   async saveDirty(): Promise<SourceSaveReport> {
-    if (this.#saving) return { saved: {}, failed: { path: this.#selected ?? "", message: "Source save already in progress" } };
+    if (this.#saving)
+      return {
+        saved: {},
+        failed: { path: this.#selected ?? "", message: "Source save already in progress" },
+      };
     this.#saving = true;
     this.#renderStatus();
     try {
@@ -131,9 +147,11 @@ export class StudioSourceEditor extends EventTarget {
     }
     const version = ++this.#refreshVersion;
     try {
-      const draftImports = Object.fromEntries([...this.drafts.files.values()]
-        .filter((file) => file.text !== file.savedText)
-        .map((file) => [file.path, file.text]));
+      const draftImports = Object.fromEntries(
+        [...this.drafts.files.values()]
+          .filter((file) => file.text !== file.savedText)
+          .map((file) => [file.path, file.text]),
+      );
       const files = await this.#host.loadSourceFiles(draftImports);
       if (version !== this.#refreshVersion) return;
       const changed = this.drafts.reconcile(files);
@@ -146,7 +164,8 @@ export class StudioSourceEditor extends EventTarget {
   }
 
   async reload(): Promise<boolean> {
-    if (this.dirty && !confirm("Discard unsaved source edits and reload files from disk?")) return false;
+    if (this.dirty && !confirm("Discard unsaved source edits and reload files from disk?"))
+      return false;
     try {
       ++this.#refreshVersion;
       const files = await this.#host.loadSourceFiles();
@@ -183,9 +202,10 @@ export class StudioSourceEditor extends EventTarget {
       this.#previewPane.classList.remove("source-open");
       return;
     }
-    this.#selected = this.#selected && this.drafts.files.has(this.#selected)
-      ? this.#selected
-      : this.drafts.files.keys().next().value ?? null;
+    this.#selected =
+      this.#selected && this.drafts.files.has(this.#selected)
+        ? this.#selected
+        : (this.drafts.files.keys().next().value ?? null);
     this.#renderSelected();
   }
 
@@ -198,8 +218,13 @@ export class StudioSourceEditor extends EventTarget {
 
   #renderStatus(): void {
     const file = this.#selected ? this.drafts.files.get(this.#selected) : null;
-    this.#status.textContent = file?.conflict
-      ?? (this.#saving ? "Saving…" : file && file.text !== file.savedText ? "Unsaved source" : "Saved");
+    this.#status.textContent =
+      file?.conflict ??
+      (this.#saving
+        ? "Saving…"
+        : file && file.text !== file.savedText
+          ? "Unsaved source"
+          : "Saved");
     this.#saveButton.disabled = this.#saving || !this.dirty;
   }
 }

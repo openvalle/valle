@@ -1,5 +1,9 @@
 import { sharedProductWorker, type ProductWorkerPort } from "./shared-worker.ts";
-import { BrowserRuntimeBudget, sharedBrowserRuntimeBudget, type RuntimePriority } from "../runtime-budget.ts";
+import {
+  BrowserRuntimeBudget,
+  sharedBrowserRuntimeBudget,
+  type RuntimePriority,
+} from "../runtime-budget.ts";
 import {
   PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
   PRODUCT_FRAME_TEMPLATE_CACHE_SIZE,
@@ -25,10 +29,7 @@ const READY_REFILL_THRESHOLD = 48;
 interface WorkerLike extends ProductWorkerPort {
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
-  postMessage(
-    message: ProductFrameWorkerRequest,
-    transfer?: Transferable[],
-  ): void;
+  postMessage(message: ProductFrameWorkerRequest, transfer?: Transferable[]): void;
   terminate(): void;
 }
 
@@ -115,7 +116,10 @@ export class ProductFramePlannerPool {
   private readonly slots: WorkerSlot[] = [];
   private readonly tasks = new Map<string, FrameTask>();
   private readonly controls = new Map<string, ControlRequest>();
-  private readonly calls = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+  private readonly calls = new Map<
+    string,
+    { resolve: (value: any) => void; reject: (error: Error) => void }
+  >();
   initialization: ProductRuntimeSnapshot | null = null;
   private readonly templatePackets = new Map<string, Uint8Array>();
   private queue: FrameTask[] = [];
@@ -164,7 +168,10 @@ export class ProductFramePlannerPool {
     if (this.slots.length > 0) return;
     for (let index = 0; index < 1; index += 1) {
       const worker = this.workerFactory
-        ? this.workerFactory(this.workerUrl, { type: "module", name: `valle-product-frame-${index}` })
+        ? this.workerFactory(this.workerUrl, {
+            type: "module",
+            name: `valle-product-frame-${index}`,
+          })
         : sharedProductWorker(this.workerUrl, bootstrap, this.runtimeBudget, this.priority);
       const slot: WorkerSlot = {
         index,
@@ -177,9 +184,7 @@ export class ProductFramePlannerPool {
         this.fail(
           event.error instanceof Error
             ? event.error
-            : new Error(
-                event.message || `Product frame worker ${index} failed`,
-              ),
+            : new Error(event.message || `Product frame worker ${index} failed`),
         );
       this.slots.push(slot);
     }
@@ -203,8 +208,10 @@ export class ProductFramePlannerPool {
 
   call<T>(method: ProductRuntimeMethod, args: unknown[]): Promise<T> {
     this.assertUsable();
-    if (this.calls.size >= 32) return Promise.reject(new Error("Product runtime call queue is full"));
-    const slot = this.slots[0], renderId = this.renderId;
+    if (this.calls.size >= 32)
+      return Promise.reject(new Error("Product runtime call queue is full"));
+    const slot = this.slots[0],
+      renderId = this.renderId;
     if (!slot || !renderId) throw new Error("Product runtime is not configured");
     const id = `call-${++this.messageId}`;
     return new Promise<T>((resolve, reject) => {
@@ -212,27 +219,32 @@ export class ProductFramePlannerPool {
       try {
         const transfer: Transferable[] = [];
         const packed = copyRuntimeArguments(args, transfer) as unknown[];
-        slot.worker.postMessage({ protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
-          type: "call", id, renderId, method, args: packed }, transfer);
+        slot.worker.postMessage(
+          {
+            protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+            type: "call",
+            id,
+            renderId,
+            method,
+            args: packed,
+          },
+          transfer,
+        );
+      } catch (error) {
+        this.calls.delete(id);
+        reject(asError(error));
       }
-      catch (error) { this.calls.delete(id); reject(asError(error)); }
     });
   }
 
-  prefetch(
-    input: ProductFramePlanningInput,
-    priority = 1,
-  ): ProductFramePlanningJob {
+  prefetch(input: ProductFramePlanningInput, priority = 1): ProductFramePlanningJob {
     const task = this.ensureTask(input, priority);
     task.requests.catch(() => undefined);
     task.ready.catch(() => undefined);
     return task;
   }
 
-  prepare(
-    input: ProductFramePlanningInput,
-    priority = 0,
-  ): ProductFramePlanningJob {
+  prepare(input: ProductFramePlanningInput, priority = 0): ProductFramePlanningJob {
     const task = this.ensureTask(input, priority);
     if (!task.demanded) {
       task.demanded = true;
@@ -244,26 +256,25 @@ export class ProductFramePlannerPool {
     return task;
   }
 
-  retainPlaybackWindow(
-    currentFrame: number,
-    lastFrame: number,
-    lookahead: number,
-  ): void {
-    const maximum = Math.min(
-      lastFrame,
-      currentFrame + Math.max(1, Math.trunc(lookahead)),
-    );
-    for (const task of [...this.tasks.values()]) {
+  retainPlaybackWindow(currentFrame: number, lastFrame: number, lookahead: number): void {
+    const maximum = Math.min(lastFrame, currentFrame + Math.max(1, Math.trunc(lookahead)));
+    const tasks = [...this.tasks.values()];
+    for (const task of tasks) {
       if (task.demanded) continue;
-      if (task.request.frame >= currentFrame && task.request.frame <= maximum)
-        continue;
+      if (task.request.frame >= currentFrame && task.request.frame <= maximum) continue;
       this.cancelTask(task, "Product frame prefetch left the playback window");
     }
   }
 
-  trimPreparedFrames(): void { for (const task of [...this.tasks.values()]) if (!task.demanded) this.cancelTask(task, "Prepared frame evicted under memory pressure"); }
+  trimPreparedFrames(): void {
+    const tasks = [...this.tasks.values()];
+    for (const task of tasks)
+      if (!task.demanded) this.cancelTask(task, "Prepared frame evicted under memory pressure");
+  }
 
-  adoptPreparationMemory(key: string): void { for (const slot of this.slots) slot.worker.releasePreparation?.(key); }
+  adoptPreparationMemory(key: string): void {
+    for (const slot of this.slots) slot.worker.releasePreparation?.(key);
+  }
 
   release(key: string): void {
     const task = this.tasks.get(key);
@@ -274,15 +285,15 @@ export class ProductFramePlannerPool {
 
   advanceEpoch(): void {
     this.epoch += 1;
-    for (const task of [...this.tasks.values()]) {
+    const tasks = [...this.tasks.values()];
+    for (const task of tasks) {
       this.cancelTask(task, "Product frame planning epoch changed");
     }
   }
 
   snapshot(): ProductFramePlannerStats {
     let readyFrames = 0;
-    for (const task of this.tasks.values())
-      readyFrames += Number(task.readyCompleted);
+    for (const task of this.tasks.values()) readyFrames += Number(task.readyCompleted);
     return {
       ...this.counters,
       workerCount: this.slots.length,
@@ -296,8 +307,8 @@ export class ProductFramePlannerPool {
     if (this.closed) return;
     this.closed = true;
     this.runtimeBudget.unregisterPreparation(this);
-    for (const task of [...this.tasks.values()])
-      this.cancelTask(task, "Product frame planner closed");
+    const tasks = [...this.tasks.values()];
+    for (const task of tasks) this.cancelTask(task, "Product frame planner closed");
     for (const control of this.controls.values()) {
       clearTimeout(control.timer);
       control.reject(new Error("Product frame planner closed"));
@@ -313,10 +324,7 @@ export class ProductFramePlannerPool {
     this.templatePackets.clear();
   }
 
-  private ensureTask(
-    input: ProductFramePlanningInput,
-    priority: number,
-  ): FrameTask {
+  private ensureTask(input: ProductFramePlanningInput, priority: number): FrameTask {
     this.assertUsable();
     assertPlanningInput(input);
     const renderId = this.renderId;
@@ -328,18 +336,15 @@ export class ProductFramePlannerPool {
       return existing;
     }
     const generation = this.allocateGeneration();
-    if (generation <= 0n)
-      throw new Error("Product external generation id must be positive");
+    if (generation <= 0n) throw new Error("Product external generation id must be positive");
     let resolveRequests!: (stage: ProductFrameRequestStage) => void;
     let rejectRequests!: (error: Error) => void;
     let resolveReady!: (stage: ProductFrameReadyStage) => void;
     let rejectReady!: (error: Error) => void;
-    const requests = new Promise<ProductFrameRequestStage>(
-      (resolve, reject) => {
-        resolveRequests = resolve;
-        rejectRequests = reject;
-      },
-    );
+    const requests = new Promise<ProductFrameRequestStage>((resolve, reject) => {
+      resolveRequests = resolve;
+      rejectRequests = reject;
+    });
     const ready = new Promise<ProductFrameReadyStage>((resolve, reject) => {
       resolveReady = resolve;
       rejectReady = reject;
@@ -393,15 +398,11 @@ export class ProductFramePlannerPool {
         const candidate = this.queue.find(
           (task) => !task.cancelled && this.tasks.get(task.key) === task,
         );
-        const inFlight = this.slots.reduce(
-          (n, worker) => n + worker.tasks.size,
-          0,
-        );
+        const inFlight = this.slots.reduce((n, worker) => n + worker.tasks.size, 0);
         const full =
           this.readyFrameCount() + inFlight >=
             Math.min(READY_REFILL_THRESHOLD, this.maxReadyFrames) ||
-          this.readyBytes + (inFlight + 1) * this.estimatedFrameBytes >
-            this.maxReadyBytes * 0.9;
+          this.readyBytes + (inFlight + 1) * this.estimatedFrameBytes > this.maxReadyBytes * 0.9;
         // A demanded frame must make progress even when speculative preparation is full.
         if (candidate && !candidate.demanded && full) break;
         let task: FrameTask | undefined;
@@ -424,19 +425,12 @@ export class ProductFramePlannerPool {
     }
   }
 
-  private configure(
-    slot: WorkerSlot,
-    bootstrap: ProductEngineBootstrap,
-  ): Promise<string> {
+  private configure(slot: WorkerSlot, bootstrap: ProductEngineBootstrap): Promise<string> {
     const id = `configure-${++this.messageId}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (!this.controls.delete(id)) return;
-        reject(
-          new Error(
-            `Product frame worker ${slot.index} configuration timed out`,
-          ),
-        );
+        reject(new Error(`Product frame worker ${slot.index} configuration timed out`));
       }, 30_000);
       this.controls.set(id, { slot, resolve, reject, timer });
       slot.worker.postMessage({
@@ -464,7 +458,8 @@ export class ProductFramePlannerPool {
       const call = this.calls.get(message.id);
       if (!call) return;
       this.calls.delete(message.id);
-      if (message.renderId !== this.renderId) call.reject(new Error("Product runtime result RenderId drift"));
+      if (message.renderId !== this.renderId)
+        call.reject(new Error("Product runtime result RenderId drift"));
       else if (message.error) call.reject(new Error(message.error));
       else call.resolve(message.result);
       return;
@@ -584,20 +579,13 @@ export class ProductFramePlannerPool {
     }
     if (!task.cancelled) {
       if (!task.requestsCompleted) {
-        this.fail(
-          new Error(
-            "Product frame became ready before its resource request stage",
-          ),
-        );
+        this.fail(new Error("Product frame became ready before its resource request stage"));
         return;
       }
-      const planPacket = this.templatePackets.get(templateKey) ?? slot.worker.templatePacket?.(templateKey);
+      const planPacket =
+        this.templatePackets.get(templateKey) ?? slot.worker.templatePacket?.(templateKey);
       if (!planPacket) {
-        this.fail(
-          new Error(
-            `Product frame template '${message.stage.templateHash}' is absent`,
-          ),
-        );
+        this.fail(new Error(`Product frame template '${message.stage.templateHash}' is absent`));
         return;
       }
       const readyStage: ProductFrameReadyStage = {
@@ -612,10 +600,7 @@ export class ProductFramePlannerPool {
         readyStage.bindingPacket.byteLength +
         readyStage.schedulePacket.byteLength;
       this.readyBytes += task.readyBytes;
-      this.estimatedFrameBytes = Math.max(
-        task.readyBytes,
-        this.estimatedFrameBytes * 0.9,
-      );
+      this.estimatedFrameBytes = Math.max(task.readyBytes, this.estimatedFrameBytes * 0.9);
       this.counters.completed += 1;
       this.counters.workerMs += readyStage.totalWorkerMs;
       task.resolveReady(readyStage);
@@ -625,10 +610,7 @@ export class ProductFramePlannerPool {
   }
 
   private evictReadyFrames(): void {
-    while (
-      this.readyFrameCount() > this.maxReadyFrames ||
-      this.readyBytes > this.maxReadyBytes
-    ) {
+    while (this.readyFrameCount() > this.maxReadyFrames || this.readyBytes > this.maxReadyBytes) {
       const farthest = [...this.tasks.values()]
         .filter((task) => task.readyCompleted && !task.demanded)
         .sort((a, b) => b.priority - a.priority || b.sequence - a.sequence)[0];
@@ -639,8 +621,7 @@ export class ProductFramePlannerPool {
 
   private readyFrameCount(): number {
     let count = 0;
-    for (const task of this.tasks.values())
-      count += Number(task.readyCompleted);
+    for (const task of this.tasks.values()) count += Number(task.readyCompleted);
     return count;
   }
 
@@ -651,9 +632,7 @@ export class ProductFramePlannerPool {
   }
 
   private sortQueue(): void {
-    this.queue.sort(
-      (a, b) => a.priority - b.priority || a.sequence - b.sequence,
-    );
+    this.queue.sort((a, b) => a.priority - b.priority || a.sequence - b.sequence);
   }
 
   private cancelTask(task: FrameTask, reason: string): void {
@@ -687,7 +666,8 @@ export class ProductFramePlannerPool {
       control.reject(error);
     }
     this.controls.clear();
-    for (const task of [...this.tasks.values()]) {
+    const tasks = [...this.tasks.values()];
+    for (const task of tasks) {
       if (!task.requestsCompleted) task.rejectRequests(error);
       if (!task.readyCompleted) task.rejectReady(error);
       this.removeTask(task);
@@ -701,8 +681,7 @@ export class ProductFramePlannerPool {
 
   private assertUsable(): void {
     if (this.closed) throw new Error("Product frame planner is closed");
-    if (this.failure)
-      throw new Error(`Product frame planner failed: ${this.failure.message}`);
+    if (this.failure) throw new Error(`Product frame planner failed: ${this.failure.message}`);
   }
 }
 
@@ -712,11 +691,18 @@ export function copyRuntimeArguments(value: unknown, transfer: Transferable[]): 
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice();
     transfer.push(bytes.buffer);
-    return new (value.constructor as { new(buffer: ArrayBuffer): ArrayBufferView })(bytes.buffer);
+    return new (value.constructor as { new (buffer: ArrayBuffer): ArrayBufferView })(bytes.buffer);
   }
-  if (value instanceof ArrayBuffer) { const copy = value.slice(0); transfer.push(copy); return copy; }
-  if (Array.isArray(value)) return value.map(entry => copyRuntimeArguments(entry, transfer));
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, copyRuntimeArguments(entry, transfer)]));
+  if (value instanceof ArrayBuffer) {
+    const copy = value.slice(0);
+    transfer.push(copy);
+    return copy;
+  }
+  if (Array.isArray(value)) return value.map((entry) => copyRuntimeArguments(entry, transfer));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, copyRuntimeArguments(entry, transfer)]),
+    );
   return value;
 }
 
@@ -742,10 +728,7 @@ function assertPlanningInput(input: ProductFramePlanningInput): void {
     throw new Error("frame must be a non-negative safe integer");
   positiveInteger(input.width, "width");
   positiveInteger(input.height, "height");
-  if (
-    input.maxSurfaceBytes <= 0n ||
-    input.maxFrameBytes < input.maxSurfaceBytes
-  ) {
+  if (input.maxSurfaceBytes <= 0n || input.maxFrameBytes < input.maxSurfaceBytes) {
     throw new Error("Product frame planning budgets are invalid");
   }
 }

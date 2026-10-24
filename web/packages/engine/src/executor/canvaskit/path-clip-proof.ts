@@ -7,8 +7,12 @@ const immutableRectangles = new WeakMap<PathWire, RectWire | null>();
 export function paintRectangleBounds(path: PathWire): RectWire | null {
   if (immutableRectangles.has(path)) return immutableRectangles.get(path)!;
   const result = rectangleBounds(path);
-  if (Object.isFrozen(path) && Object.isFrozen(path.verbs) && Object.isFrozen(path.points)
-    && path.points.every(Object.isFrozen)) {
+  if (
+    Object.isFrozen(path) &&
+    Object.isFrozen(path.verbs) &&
+    Object.isFrozen(path.points) &&
+    path.points.every(Object.isFrozen)
+  ) {
     if (result) Object.freeze(result);
     immutableRectangles.set(path, result);
   }
@@ -16,15 +20,19 @@ export function paintRectangleBounds(path: PathWire): RectWire | null {
 }
 
 function rectangleBounds(path: PathWire): RectWire | null {
-  if (path.verbs.join(",") !== "moveTo,lineTo,lineTo,lineTo,close" || path.points.length !== 4) return null;
-  const xs = new Set(path.points.map(p => p[0])), ys = new Set(path.points.map(p => p[1]));
+  if (path.verbs.join(",") !== "moveTo,lineTo,lineTo,lineTo,close" || path.points.length !== 4)
+    return null;
+  const xs = new Set(path.points.map((p) => p[0])),
+    ys = new Set(path.points.map((p) => p[1]));
   if (xs.size !== 2 || ys.size !== 2) return null;
   for (let at = 0; at < 4; at++) {
-    const a = path.points[at]!, b = path.points[(at + 1) % 4]!;
+    const a = path.points[at]!,
+      b = path.points[(at + 1) % 4]!;
     if ((a[0] === b[0]) === (a[1] === b[1])) return null;
   }
-  const x = Math.min(...xs), y = Math.min(...ys);
-  return {x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y};
+  const x = Math.min(...xs),
+    y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
 function project(point: Point, matrix: readonly number[]): Point | null {
@@ -36,14 +44,21 @@ function project(point: Point, matrix: readonly number[]): Point | null {
 }
 
 /** A finite paint rectangle can fill an outline directly when its edges cannot affect coverage. */
-export function clipPaintRectangleCoversOutline(rectangle: PathWire, outline: PathWire,
-  matrix: readonly number[]): boolean {
-  if (rectangle.verbs.length !== 5 || rectangle.points.length !== 4 ||
-      rectangle.verbs.join(",") !== "moveTo,lineTo,lineTo,lineTo,close") return false;
+export function clipPaintRectangleCoversOutline(
+  rectangle: PathWire,
+  outline: PathWire,
+  matrix: readonly number[],
+): boolean {
+  if (
+    rectangle.verbs.length !== 5 ||
+    rectangle.points.length !== 4 ||
+    rectangle.verbs.join(",") !== "moveTo,lineTo,lineTo,lineTo,close"
+  )
+    return false;
   if (!paintRectangleBounds(rectangle)) return false;
   const polygon = rectangle.points;
-  const vertices = polygon.map(point => project(point, matrix));
-  if (vertices.some(point => point === null)) return false;
+  const vertices = polygon.map((point) => project(point, matrix));
+  if (vertices.some((point) => point === null)) return false;
   const points = vertices as Point[];
   const area = points.reduce((sum, point, at) => {
     const next = points[(at + 1) % points.length]!;
@@ -52,13 +67,15 @@ export function clipPaintRectangleCoversOutline(rectangle: PathWire, outline: Pa
   if (!Number.isFinite(area) || Math.abs(area) < 1e-8) return false;
   const direction = Math.sign(area);
   const edges = points.map((a, at) => {
-    const b = points[(at + 1) % points.length]!, dx = b[0] - a[0], dy = b[1] - a[1];
+    const b = points[(at + 1) % points.length]!,
+      dx = b[0] - a[0],
+      dy = b[1] - a[1];
     return { a, dx, dy, margin: 2 * Math.hypot(dx, dy) };
   });
   for (const point of outline.points) {
     const device = project(point, matrix);
     if (!device) return false;
-    for (const {a, dx, dy, margin} of edges) {
+    for (const { a, dx, dy, margin } of edges) {
       if (direction * (dx * (device[1] - a[1]) - dy * (device[0] - a[0])) <= margin) return false;
     }
   }

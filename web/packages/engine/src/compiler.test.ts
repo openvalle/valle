@@ -20,43 +20,75 @@ test("Motion compiler forwards explicit bytes and preserves structured diagnosti
     placement: { component: "card", path: "/tracks/visual/0/clips/0", track: "visual" as const },
     resources: [{ control: "logo", contentHash: `sha256:${"a".repeat(64)}` }],
     data: { source: "fixture", value: { count: 2 } },
-    audioSources: [{ control: "beat", contentHash: `sha256:${"b".repeat(64)}`,
-      sampleRate: 48_000, samples: new Float32Array([0, 0.5]) }],
+    audioSources: [
+      {
+        control: "beat",
+        contentHash: `sha256:${"b".repeat(64)}`,
+        sampleRate: 48_000,
+        samples: new Float32Array([0, 0.5]),
+      },
+    ],
     fonts: [font],
     fontAliases: { "asset://brand": font },
     shaders: [shader],
   };
-  const compiled = compileMotionJsxWithWasm({
-    compile_motion_jsx: (source, optionsJson, fonts, aliases, shaders, audioSamples) => {
-      expect(source).toBe("source");
-      expect(JSON.parse(optionsJson)).toEqual({ resources: options.resources, data: options.data,
-        placement: options.placement,
-        audioSources: [{ control: "beat", contentHash: options.audioSources[0]!.contentHash,
-          sampleRate: 48_000 }] });
-      expect(audioSamples[0]).toBe(options.audioSources[0]!.samples);
-      expect(fonts).toEqual([font]);
-      expect(aliases).toEqual([["asset://brand", font]]);
-      expect(shaders).toEqual([shader]);
-      return JSON.stringify({
-        status: "ok", artifact: { component: "Card" }, artifactDigest: "sha256:artifact", sourceMap: { entry: "Card.tsx" },
-        normalizedSource: "source", normalizedAstDigest: "sha256:one", preparedDataDigest: "sha256:two",
-      });
+  const compiled = compileMotionJsxWithWasm(
+    {
+      compile_motion_jsx: (source, optionsJson, fonts, aliases, shaders, audioSamples) => {
+        expect(source).toBe("source");
+        expect(JSON.parse(optionsJson)).toEqual({
+          resources: options.resources,
+          data: options.data,
+          placement: options.placement,
+          audioSources: [
+            {
+              control: "beat",
+              contentHash: options.audioSources[0]!.contentHash,
+              sampleRate: 48_000,
+            },
+          ],
+        });
+        expect(audioSamples[0]).toBe(options.audioSources[0]!.samples);
+        expect(fonts).toEqual([font]);
+        expect(aliases).toEqual([["asset://brand", font]]);
+        expect(shaders).toEqual([shader]);
+        return JSON.stringify({
+          status: "ok",
+          artifact: { component: "Card" },
+          artifactDigest: "sha256:artifact",
+          sourceMap: { entry: "Card.tsx" },
+          normalizedSource: "source",
+          normalizedAstDigest: "sha256:one",
+          preparedDataDigest: "sha256:two",
+        });
+      },
     },
-  }, "source", options);
+    "source",
+    options,
+  );
   expect(compiled.artifact.component).toBe("Card");
   expect(compiled.artifactDigest).toBe("sha256:artifact");
 
   const diagnostic = {
-    class: "error", code: "syntaxError", span: { start: 0, end: 1, line: 1, column: 1 },
-    sourcePath: "card.motion.tsx", message: "invalid Motion source",
+    class: "error",
+    code: "syntaxError",
+    span: { start: 0, end: 1, line: 1, column: 1 },
+    sourcePath: "card.motion.tsx",
+    message: "invalid Motion source",
   };
-  expect(() => compileMotionModulesWithWasm({
-    compile_motion_modules: (entry, modulesJson) => {
-      expect(entry).toBe("card.motion.tsx");
-      expect(JSON.parse(modulesJson)).toEqual({ "card.motion.tsx": "bad" });
-      return JSON.stringify({ status: "error", diagnostics: [diagnostic] });
-    },
-  }, "card.motion.tsx", { "card.motion.tsx": "bad" })).toThrow(MotionCompileError);
+  expect(() =>
+    compileMotionModulesWithWasm(
+      {
+        compile_motion_modules: (entry, modulesJson) => {
+          expect(entry).toBe("card.motion.tsx");
+          expect(JSON.parse(modulesJson)).toEqual({ "card.motion.tsx": "bad" });
+          return JSON.stringify({ status: "error", diagnostics: [diagnostic] });
+        },
+      },
+      "card.motion.tsx",
+      { "card.motion.tsx": "bad" },
+    ),
+  ).toThrow(MotionCompileError);
 });
 
 const timeline = {
@@ -83,13 +115,16 @@ const view = {
 
 test("sparse Timeline compiles through the read-only Rust projection", () => {
   let received = "";
-  const canonical = compileTimelineWithWasm({
-    compile_timeline: (timelineJson) => {
-      received = timelineJson;
-      return JSON.stringify(timeline);
+  const canonical = compileTimelineWithWasm(
+    {
+      compile_timeline: (timelineJson) => {
+        received = timelineJson;
+        return JSON.stringify(timeline);
+      },
+      timeline_document_view: () => JSON.stringify(view),
     },
-    timeline_document_view: () => JSON.stringify(view),
-  }, authored);
+    authored,
+  );
 
   expect(JSON.parse(received)).toEqual(authored);
   expect(canonical).toEqual({
@@ -101,13 +136,16 @@ test("sparse Timeline compiles through the read-only Rust projection", () => {
 
 test("renderer canonicalization remains read-only", () => {
   let received = "";
-  const canonical = canonicalizeTimelineDocumentWithWasm({
-    canonicalize_timeline_document: (timelineJson) => {
-      received = timelineJson;
-      return timelineJson;
+  const canonical = canonicalizeTimelineDocumentWithWasm(
+    {
+      canonicalize_timeline_document: (timelineJson) => {
+        received = timelineJson;
+        return timelineJson;
+      },
+      timeline_document_view: () => JSON.stringify(view),
     },
-    timeline_document_view: () => JSON.stringify(view),
-  }, timeline);
+    timeline,
+  );
 
   expect(JSON.parse(received)).toEqual(timeline);
   expect(canonical).toEqual({ timeline, timelineJson: JSON.stringify(timeline), view });
@@ -115,37 +153,52 @@ test("renderer canonicalization remains read-only", () => {
 
 test("sparse normalization and frame conversion delegate to Rust/WASM", () => {
   let normalizedInput = "";
-  const normalized = normalizeTimelineWithWasm({
-    normalize_timeline: (timelineJson) => {
-      normalizedInput = timelineJson;
-      return JSON.stringify({ ...authored, resources: { main: "https://example.test/main.mp4" } });
+  const normalized = normalizeTimelineWithWasm(
+    {
+      normalize_timeline: (timelineJson) => {
+        normalizedInput = timelineJson;
+        return JSON.stringify({
+          ...authored,
+          resources: { main: "https://example.test/main.mp4" },
+        });
+      },
     },
-  }, authored);
+    authored,
+  );
   expect(JSON.parse(normalizedInput)).toEqual(authored);
   expect(normalized.resources?.main).toBe("https://example.test/main.mp4");
 
   let receivedFrames = -1;
   let receivedFpsJson = "";
-  const seconds = timelineTimeFromFramesWithWasm({
-    timeline_time_from_frames: (frames, fpsJson) => {
-      receivedFrames = frames;
-      receivedFpsJson = fpsJson;
-      return 0.033367;
+  const seconds = timelineTimeFromFramesWithWasm(
+    {
+      timeline_time_from_frames: (frames, fpsJson) => {
+        receivedFrames = frames;
+        receivedFpsJson = fpsJson;
+        return 0.033367;
+      },
     },
-  }, 1, "30000/1001");
+    1,
+    "30000/1001",
+  );
   expect(receivedFrames).toBe(1);
   expect(receivedFpsJson).toBe('"30000/1001"');
   expect(seconds).toBe(0.033367);
 
   let receivedRateJson = "";
-  const sourceSeconds = timelineSourceTimeDeltaFromFramesWithWasm({
-    timeline_source_time_delta_from_frames: (frames, fpsJson, rateJson) => {
-      receivedFrames = frames;
-      receivedFpsJson = fpsJson;
-      receivedRateJson = rateJson;
-      return 0.066733;
+  const sourceSeconds = timelineSourceTimeDeltaFromFramesWithWasm(
+    {
+      timeline_source_time_delta_from_frames: (frames, fpsJson, rateJson) => {
+        receivedFrames = frames;
+        receivedFpsJson = fpsJson;
+        receivedRateJson = rateJson;
+        return 0.066733;
+      },
     },
-  }, 1, "30000/1001", 2);
+    1,
+    "30000/1001",
+    2,
+  );
   expect(receivedFrames).toBe(1);
   expect(receivedFpsJson).toBe('"30000/1001"');
   expect(receivedRateJson).toBe("2");
@@ -154,10 +207,24 @@ test("sparse normalization and frame conversion delegate to Rust/WASM", () => {
 
 test("long PCM reaches Wasm as a typed buffer without JSON conversion", () => {
   const samples = new Float32Array(48_000 * 60 * 5);
-  Object.defineProperty(samples, "toJSON", { value() { throw new Error("PCM JSON conversion"); } });
-  compileMotionJsxWithWasm({ compile_motion_jsx: (_source,json,_fonts,_aliases,_shaders,pcm) => {
-    expect(pcm[0]).toBe(samples);
-    expect(json.length).toBeLessThan(250);
-    return JSON.stringify({status:"ok",artifact:{},warnings:[]});
-  } }, "source", {audioSources:[{control:"beat",contentHash:`sha256:${"a".repeat(64)}`,sampleRate:48000,samples}]});
+  Object.defineProperty(samples, "toJSON", {
+    value() {
+      throw new Error("PCM JSON conversion");
+    },
+  });
+  compileMotionJsxWithWasm(
+    {
+      compile_motion_jsx: (_source, json, _fonts, _aliases, _shaders, pcm) => {
+        expect(pcm[0]).toBe(samples);
+        expect(json.length).toBeLessThan(250);
+        return JSON.stringify({ status: "ok", artifact: {}, warnings: [] });
+      },
+    },
+    "source",
+    {
+      audioSources: [
+        { control: "beat", contentHash: `sha256:${"a".repeat(64)}`, sampleRate: 48000, samples },
+      ],
+    },
+  );
 });

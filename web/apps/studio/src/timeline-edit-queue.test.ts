@@ -6,19 +6,24 @@ test("Timeline edit queue serializes edits and survives one rejected edit", asyn
   const queue = new TimelineEditQueue();
   const order: string[] = [];
   let releaseFirst!: () => void;
-  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const firstGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
 
   queue.enqueue(async () => {
     order.push("first:start");
     await firstGate;
     order.push("first:end");
   });
-  queue.enqueue(async () => {
-    order.push("rejected");
-    throw new Error("bad edit");
-  }, (error) => {
-    order.push((error as Error).message);
-  });
+  queue.enqueue(
+    async () => {
+      order.push("rejected");
+      throw new Error("bad edit");
+    },
+    (error) => {
+      order.push((error as Error).message);
+    },
+  );
   queue.enqueue(async () => {
     order.push("third");
   });

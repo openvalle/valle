@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  assertRuntimeEntrypoints,
-  PACKAGE_BUILDS,
-} from "./runtime-entrypoints.ts";
+import { assertRuntimeEntrypoints, PACKAGE_BUILDS } from "./runtime-entrypoints.ts";
 
 describe("runtime build entries", () => {
   test("contains one unique entry for every browser package surface", () => {

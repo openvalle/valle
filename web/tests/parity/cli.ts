@@ -2,17 +2,9 @@
 
 import { mathCommand } from "./commands/math.ts";
 import { browserCommand } from "./commands/browser.ts";
-import {
-  CliError,
-  type CommandDefinition,
-  formatCommandHelp,
-  parseOptions,
-} from "./lib/args.ts";
+import { CliError, type CommandDefinition, formatCommandHelp, parseOptions } from "./lib/args.ts";
 
-const commands: readonly CommandDefinition[] = [
-  mathCommand,
-  browserCommand,
-];
+const commands: readonly CommandDefinition[] = [mathCommand, browserCommand];
 
 function topLevelHelp(): string {
   return [
@@ -35,7 +27,8 @@ async function main(argv: readonly string[]): Promise<void> {
   }
   if (!name) throw new CliError(`${topLevelHelp()}\n\nmissing command`, 2);
   const command = commands.find((candidate) => candidate.name === name);
-  if (!command) throw new CliError(`unknown parity command ${JSON.stringify(name)}\n\n${topLevelHelp()}`, 2);
+  if (!command)
+    throw new CliError(`unknown parity command ${JSON.stringify(name)}\n\n${topLevelHelp()}`, 2);
   try {
     await command.run(parseOptions(command, rest));
   } catch (error) {

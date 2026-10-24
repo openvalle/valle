@@ -12,20 +12,24 @@ const url = Bun.argv[2];
 const resultPath = Bun.argv[3] && resolve(Bun.argv[3]);
 if (!url || !resultPath) throw new Error("expected benchmark URL and new result path");
 if (await Bun.file(resultPath).exists()) throw new Error(`result already exists: ${resultPath}`);
-const chrome = Bun.env.VALLE_BENCH_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const chrome =
+  Bun.env.VALLE_BENCH_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const profile = await mkdtemp(join(tmpdir(), "valle-b01-chrome-"));
-const process = Bun.spawn([
-  chrome,
-  "--headless=new",
-  "--enable-gpu",
-  "--use-angle=metal",
-  "--disable-software-rasterizer",
-  "--enable-logging=stderr",
-  "--no-first-run",
-  "--no-default-browser-check",
-  `--user-data-dir=${profile}`,
-  url,
-], { stdout: "ignore", stderr: "inherit" });
+const process = Bun.spawn(
+  [
+    chrome,
+    "--headless=new",
+    "--enable-gpu",
+    "--use-angle=metal",
+    "--disable-software-rasterizer",
+    "--enable-logging=stderr",
+    "--no-first-run",
+    "--no-default-browser-check",
+    `--user-data-dir=${profile}`,
+    url,
+  ],
+  { stdout: "ignore", stderr: "inherit" },
+);
 
 try {
   const deadline = Date.now() + 180_000;
@@ -45,17 +49,32 @@ try {
   if (!result) throw new Error("Chrome benchmark did not produce a result within 180 seconds");
   if (result.error) throw new Error(String(result.error));
   const renderer = (result.gpu as { renderer?: string } | undefined)?.renderer ?? "";
-  if (result.runtimeFlavor !== "product-gpu" || result.surfaceBackend !== "canvaskit-gpu"
-      || !renderer.includes("Apple") || !renderer.includes("Metal")) {
-    throw new Error(`benchmark did not use the Apple GPU: ${JSON.stringify({
-      runtimeFlavor: result.runtimeFlavor, surfaceBackend: result.surfaceBackend, renderer,
-    })}`);
+  if (
+    result.runtimeFlavor !== "product-gpu" ||
+    result.surfaceBackend !== "canvaskit-gpu" ||
+    !renderer.includes("Apple") ||
+    !renderer.includes("Metal")
+  ) {
+    throw new Error(
+      `benchmark did not use the Apple GPU: ${JSON.stringify({
+        runtimeFlavor: result.runtimeFlavor,
+        surfaceBackend: result.surfaceBackend,
+        renderer,
+      })}`,
+    );
   }
-  console.log(JSON.stringify({
-    resultPath, rows: result.rows, frames: result.frames, browser: result.browser,
-    renderer, wallMs: result.wallMs, stages: result.stages,
-    playback: result.playback,
-  }));
+  console.log(
+    JSON.stringify({
+      resultPath,
+      rows: result.rows,
+      frames: result.frames,
+      browser: result.browser,
+      renderer,
+      wallMs: result.wallMs,
+      stages: result.stages,
+      playback: result.playback,
+    }),
+  );
 } finally {
   process.kill();
   await process.exited;

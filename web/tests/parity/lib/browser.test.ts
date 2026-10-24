@@ -1,18 +1,28 @@
 import { describe, expect, test } from "bun:test";
 
-import { browserExitError, browserLaunchCommand, pollBrowserReport, terminateBrowser, waitForUnexpectedBrowserExit } from "./browser.ts";
+import {
+  browserExitError,
+  browserLaunchCommand,
+  pollBrowserReport,
+  terminateBrowser,
+  waitForUnexpectedBrowserExit,
+} from "./browser.ts";
 import { createTempDirectory, joinPath, removeDirectory } from "./files.ts";
 
 const appleSilicon = process.platform === "darwin" && process.arch === "arm64";
-const rosettaAvailable = appleSilicon && Bun.spawnSync([
-  "/usr/bin/arch", "-x86_64", "/usr/bin/uname", "-m",
-], { stderr: "ignore" }).exitCode === 0;
+const rosettaAvailable =
+  appleSilicon &&
+  Bun.spawnSync(["/usr/bin/arch", "-x86_64", "/usr/bin/uname", "-m"], { stderr: "ignore" })
+    .exitCode === 0;
 
-test.skipIf(!appleSilicon)("launches universal executables with the native host architecture", () => {
-  const child = Bun.spawnSync([...browserLaunchCommand("/usr/bin/uname"), "-m"]);
-  expect(child.exitCode).toBe(0);
-  expect(new TextDecoder().decode(child.stdout).trim()).toBe("arm64");
-});
+test.skipIf(!appleSilicon)(
+  "launches universal executables with the native host architecture",
+  () => {
+    const child = Bun.spawnSync([...browserLaunchCommand("/usr/bin/uname"), "-m"]);
+    expect(child.exitCode).toBe(0);
+    expect(new TextDecoder().decode(child.stdout).trim()).toBe("arm64");
+  },
+);
 
 test.skipIf(!rosettaAvailable)(
   "launches universal executables natively from a Rosetta parent",
@@ -25,7 +35,12 @@ test.skipIf(!rosettaAvailable)(
       process.exit(child.exitCode);
     `;
     const child = Bun.spawnSync([
-      "/usr/bin/arch", "-x86_64", "/usr/bin/env", process.execPath, "-e", probe,
+      "/usr/bin/arch",
+      "-x86_64",
+      "/usr/bin/env",
+      process.execPath,
+      "-e",
+      probe,
     ]);
     expect(child.exitCode).toBe(0);
     expect(new TextDecoder().decode(child.stdout).trim()).toBe("arm64");
@@ -42,7 +57,9 @@ describe("browser subprocess diagnostics", () => {
       signalCode: "SIGABRT",
       stderr: "fatal startup failure\n",
     });
-    expect(error.message).toContain("browser process exited before reporting (signal SIGABRT, exit code 134)");
+    expect(error.message).toContain(
+      "browser process exited before reporting (signal SIGABRT, exit code 134)",
+    );
     expect(error.message).toContain("fatal startup failure");
     expect(error.message).not.toContain("timed out");
   });
@@ -66,7 +83,9 @@ describe("browser subprocess diagnostics", () => {
         stderrPath,
         isCompleted: () => false,
       });
-      await expect(failure).rejects.toThrow("browser process exited before reporting (exit code 42)");
+      await expect(failure).rejects.toThrow(
+        "browser process exited before reporting (exit code 42)",
+      );
       await expect(failure).rejects.toThrow("synthetic browser crash");
     } finally {
       removeDirectory(directory);
@@ -76,16 +95,20 @@ describe("browser subprocess diagnostics", () => {
   test("waits through progress reports until the hosted result is final", async () => {
     let requests = 0;
     const server = Bun.serve({
-      hostname: "127.0.0.1", port: 0,
+      hostname: "127.0.0.1",
+      port: 0,
       fetch() {
         requests += 1;
-        return Response.json(requests < 3 ? { status: "running", stage: "load" } : { status: "ok", frames: 30 });
+        return Response.json(
+          requests < 3 ? { status: "running", stage: "load" } : { status: "ok", frames: 30 },
+        );
       },
     });
     const abort = new AbortController();
     try {
-      expect(await pollBrowserReport(`http://127.0.0.1:${server.port}/smoke-report`, abort.signal, 1))
-        .toEqual({ status: "ok", frames: 30 });
+      expect(
+        await pollBrowserReport(`http://127.0.0.1:${server.port}/smoke-report`, abort.signal, 1),
+      ).toEqual({ status: "ok", frames: 30 });
       expect(requests).toBe(3);
     } finally {
       abort.abort();
@@ -125,7 +148,9 @@ describe("browser subprocess diagnostics", () => {
   test("terminates Chrome gracefully and only escalates a hung child", async () => {
     const gracefulSignals: Array<number | undefined> = [];
     let resolveGraceful!: (code: number) => void;
-    const gracefulExit = new Promise<number>((resolve) => { resolveGraceful = resolve; });
+    const gracefulExit = new Promise<number>((resolve) => {
+      resolveGraceful = resolve;
+    });
     const gracefulChild = {
       exitCode: null,
       exited: gracefulExit,
@@ -139,7 +164,9 @@ describe("browser subprocess diagnostics", () => {
 
     const hungSignals: Array<number | undefined> = [];
     let resolveHung!: (code: number) => void;
-    const hungExit = new Promise<number>((resolve) => { resolveHung = resolve; });
+    const hungExit = new Promise<number>((resolve) => {
+      resolveHung = resolve;
+    });
     const hungChild = {
       exitCode: null,
       exited: hungExit,

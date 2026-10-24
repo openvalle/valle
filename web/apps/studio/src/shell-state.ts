@@ -1,12 +1,7 @@
 import type { StudioSession } from "./host.ts";
 
 export type PreviewStatusKind =
-  | "loading"
-  | "ready"
-  | "updating"
-  | "error"
-  | "unavailable"
-  | "empty";
+  "loading" | "ready" | "updating" | "error" | "unavailable" | "empty";
 
 export interface StudioShellState {
   session: StudioSession | null;
@@ -34,7 +29,12 @@ export type StudioIntent =
   | { type: "diagnostics"; messages: ReadonlyArray<string> }
   | { type: "preview-status"; status: PreviewStatusKind; message?: string | null }
   | { type: "history"; canUndo: boolean; canRedo: boolean }
-  | { type: "panel"; inspectorVisible?: boolean; timelineCollapsed?: boolean; previewFocus?: boolean }
+  | {
+      type: "panel";
+      inspectorVisible?: boolean;
+      timelineCollapsed?: boolean;
+      previewFocus?: boolean;
+    }
   | { type: "project-name"; name: string };
 
 export const initialStudioShellState: StudioShellState = {

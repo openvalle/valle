@@ -9,20 +9,33 @@ import {
   type TimelinePreviewResult,
 } from "./host.ts";
 import type { StudioSourceEditor } from "./source-editor.ts";
-import { StudioCompileClient, standaloneCompilePayload, timelineCompilePayload, type CompilePayload } from "./studio-compile.ts";
+import {
+  StudioCompileClient,
+  standaloneCompilePayload,
+  timelineCompilePayload,
+  type CompilePayload,
+} from "./studio-compile.ts";
 import type { StudioCompileResult } from "./studio-compile-worker.ts";
 import { standaloneAssetsFromMotionContext, type StandaloneAssets } from "./standalone-assets.ts";
 
 function wrapperShape(timeline: Timeline): string {
-  const visual = timeline.tracks.visual?.map((track) => track.clips.map((clip) => {
-    if (clip.kind === "motion") {
-      const { props: _props, data: _data, ...shape } = clip;
-      return shape;
-    }
-    return clip;
-  }));
-  return JSON.stringify({ canvas: timeline.canvas, resources: timeline.resources, visual,
-    audio: timeline.tracks.audio, caption: timeline.tracks.caption, adjustment: timeline.tracks.adjustment });
+  const visual = timeline.tracks.visual?.map((track) =>
+    track.clips.map((clip) => {
+      if (clip.kind === "motion") {
+        const { props: _props, data: _data, ...shape } = clip;
+        return shape;
+      }
+      return clip;
+    }),
+  );
+  return JSON.stringify({
+    canvas: timeline.canvas,
+    resources: timeline.resources,
+    visual,
+    audio: timeline.tracks.audio,
+    caption: timeline.tracks.caption,
+    adjustment: timeline.tracks.adjustment,
+  });
 }
 
 function firstMotion(timeline: Timeline) {
@@ -58,15 +71,21 @@ export class StandaloneTimelineSession {
 
   constructor(boot: StudioBoot, sources: StudioSourceEditor, host: StudioHost) {
     if (boot.session.kind !== "motion-file") throw new Error("Motion file session required");
-    this.#boot = boot as StudioBoot & { session: Extract<StudioBoot["session"], { kind: "motion-file" }> };
+    this.#boot = boot as StudioBoot & {
+      session: Extract<StudioBoot["session"], { kind: "motion-file" }>;
+    };
     this.#sources = sources;
     this.#host = host;
     this.#compiler = new StudioCompileClient(boot);
   }
 
-  close(): void { this.#compiler.close(); }
+  close(): void {
+    this.#compiler.close();
+  }
 
-  invalidateAssetInputs(): void { this.#assetInputs = null; }
+  invalidateAssetInputs(): void {
+    this.#assetInputs = null;
+  }
 
   get conversionBlockedReason(): string | null {
     return this.#boot.session.authorInputs?.extraFonts.length
@@ -74,11 +93,14 @@ export class StandaloneTimelineSession {
       : null;
   }
 
-  get target(): string | null { return this.#target; }
+  get target(): string | null {
+    return this.#target;
+  }
 
   async chooseTarget(): Promise<boolean> {
     if (this.conversionBlockedReason) throw new Error(this.conversionBlockedReason);
-    const suggested = this.#target ?? this.#boot.session.input.replace(/(?:\.motion)?\.[jt]sx?$/, "") + "-project";
+    const suggested =
+      this.#target ?? this.#boot.session.input.replace(/(?:\.motion)?\.[jt]sx?$/, "") + "-project";
     const dialog = document.getElementById("saveAsProjectDialog") as HTMLDialogElement;
     const form = document.getElementById("saveAsProjectForm") as HTMLFormElement;
     const input = document.getElementById("saveAsProjectPath") as HTMLInputElement;
@@ -111,13 +133,17 @@ export class StandaloneTimelineSession {
   }
 
   async saveTimeline(edit: TimelineEdit): Promise<SaveReport> {
-    if (!this.#target || !this.#host.saveProject) throw new Error("Project directory is unavailable");
-    if (edit.baseRevision !== this.#revision) return { outcome: "staleBase", revision: this.#revision };
+    if (!this.#target || !this.#host.saveProject)
+      throw new Error("Project directory is unavailable");
+    if (edit.baseRevision !== this.#revision)
+      return { outcome: "staleBase", revision: this.#revision };
     const result = await this.#host.saveProject({
       directory: this.#target,
       timeline: edit.timeline,
-      expectedDependencies: { ...this.#boot.session.authorInputs?.inputDigests,
-        ...(edit.expectedDependencies ?? this.#sources.confirmedDigests()) },
+      expectedDependencies: {
+        ...this.#boot.session.authorInputs?.inputDigests,
+        ...(edit.expectedDependencies ?? this.#sources.confirmedDigests()),
+      },
     });
     location.assign(result.url);
     // The new project opens as a Timeline file session, with its own source and save baselines.
@@ -131,8 +157,12 @@ export class StandaloneTimelineSession {
       if (!this.#host.loadMotion) throw new Error("Motion asset facts are unavailable from Host");
       return standaloneAssetsFromMotionContext(specs, await this.#host.loadMotion({}));
     })();
-    try { return await this.#assetInputs; }
-    catch (error) { this.#assetInputs = null; throw error; }
+    try {
+      return await this.#assetInputs;
+    } catch (error) {
+      this.#assetInputs = null;
+      throw error;
+    }
   }
 
   motionInstance(clipPath: string) {
@@ -146,8 +176,12 @@ export class StandaloneTimelineSession {
     const now = new Date().toISOString();
     return {
       timelineRevision: {
-        revision: this.#revision, parentRevision: null, createdAt: now, actor: "studio",
-        cause: { type: "genesis" }, intent: null,
+        revision: this.#revision,
+        parentRevision: null,
+        createdAt: now,
+        actor: "studio",
+        cause: { type: "genesis" },
+        intent: null,
       },
       timelineJson: JSON.stringify(result.authorTimeline),
       timeline: result.authorTimeline,
@@ -172,23 +206,37 @@ export class StandaloneTimelineSession {
         status: "ok",
         timelineJson: JSON.stringify(result.authorTimeline),
         timeline: result.authorTimeline,
-        assets: assets?.locators ?? [], motion: { structures: [] },
+        assets: assets?.locators ?? [],
+        motion: { structures: [] },
         render: compiledPackage(result),
         motionSourceMetadata: result.package.motionSourceMetadata,
-        generatedWrapper:  JSON.stringify(timeline) !== JSON.stringify(result.authorTimeline),
+        generatedWrapper: JSON.stringify(timeline) !== JSON.stringify(result.authorTimeline),
         inputDependencies: this.#sources.confirmedDigests(),
         motionInstances: result.instances,
         warnings: result.warnings,
       };
     } catch (error) {
-      return { status: "error", diagnostics: [{ class: "compile", code: "studio-preview",
-        message: error instanceof Error ? error.message : String(error) }] };
+      return {
+        status: "error",
+        diagnostics: [
+          {
+            class: "compile",
+            code: "studio-preview",
+            message: error instanceof Error ? error.message : String(error),
+          },
+        ],
+      };
     }
   }
 
   async #compile(draft?: Timeline): Promise<Extract<StudioCompileResult, { status: "ok" }>> {
-    const payload: CompilePayload = standaloneCompilePayload(this.#boot, this.#sources.snapshot(),
-      undefined, undefined, await this.assets());
+    const payload: CompilePayload = standaloneCompilePayload(
+      this.#boot,
+      this.#sources.snapshot(),
+      undefined,
+      undefined,
+      await this.assets(),
+    );
     if (draft && this.#lastWrapper && wrapperShape(draft) === wrapperShape(this.#lastWrapper)) {
       const clip = firstMotion(draft);
       if (clip && payload.standalone) {
@@ -205,9 +253,17 @@ export class StandaloneTimelineSession {
       const original = payload.instances[0];
       if (!original) throw new Error("Motion source closure is missing");
       const assets = await this.assets();
-      const timelinePayload = timelineCompilePayload(this.#boot, draft, this.#sources.snapshot(),
-        assets?.resourceInputs ?? [], assets?.locators ?? []);
-      payload.instances = timelinePayload.instances.map(instance => ({ ...instance, fontUrls: original.fontUrls }));
+      const timelinePayload = timelineCompilePayload(
+        this.#boot,
+        draft,
+        this.#sources.snapshot(),
+        assets?.resourceInputs ?? [],
+        assets?.locators ?? [],
+      );
+      payload.instances = timelinePayload.instances.map((instance) => ({
+        ...instance,
+        fontUrls: original.fontUrls,
+      }));
     }
     const result = await this.#compiler.compile(payload);
     if (result.status === "error") throw new Error(result.message);

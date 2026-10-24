@@ -8,89 +8,129 @@ const outDir = path.resolve(root, "packages", "engine", "generated", "web");
 
 async function wasmCompilerEnv(): Promise<typeof process.env> {
   if (process.platform === "win32") {
-    const quickjs = metadata.packages.find(pkg => pkg.name === "rquickjs-sys");
+    const quickjs = metadata.packages.find((pkg) => pkg.name === "rquickjs-sys");
     if (!quickjs) throw new Error("rquickjs-sys is missing from Cargo metadata");
     // Use a distinct directory: Clang deduplicates aliases of the vendored UNC include path.
-    const include = path.join(metadata.target_directory, "tools", `rquickjs-sys-${quickjs.version}-wasm-include`)
-      .replace(/^\\\\\?\\/, "").replaceAll("\\", "/");
-    if (!await Bun.file(path.join(include, "bits/alltypes.h")).exists()) {
+    const include = path
+      .join(metadata.target_directory, "tools", `rquickjs-sys-${quickjs.version}-wasm-include`)
+      .replace(/^\\\\\?\\/, "")
+      .replaceAll("\\", "/");
+    if (!(await Bun.file(path.join(include, "bits/alltypes.h")).exists())) {
       const source = path.join(path.dirname(quickjs.manifest_path), "vendor/wasi-libc/include");
-      await withBuildDirectory(include, next => cp(source, next, { recursive: true }));
-      if (!await Bun.file(path.join(include, "bits/alltypes.h")).exists()) {
+      await withBuildDirectory(include, (next) => cp(source, next, { recursive: true }));
+      if (!(await Bun.file(path.join(include, "bits/alltypes.h")).exists())) {
         throw new Error(`QuickJS WASM libc headers are missing: ${include}`);
       }
     }
     return {
       ...process.env,
       CC_SHELL_ESCAPED_FLAGS: "1",
-      CFLAGS_wasm32_unknown_unknown: [process.env.CFLAGS_wasm32_unknown_unknown, `-I"${include}"`].filter(Boolean).join(" "),
+      CFLAGS_wasm32_unknown_unknown: [process.env.CFLAGS_wasm32_unknown_unknown, `-I"${include}"`]
+        .filter(Boolean)
+        .join(" "),
     };
   }
-  if (process.platform !== "darwin" || process.env.CC_wasm32_unknown_unknown
-    || process.env.TARGET_CC || process.env.CC) return process.env;
+  if (
+    process.platform !== "darwin" ||
+    process.env.CC_wasm32_unknown_unknown ||
+    process.env.TARGET_CC ||
+    process.env.CC
+  )
+    return process.env;
   const brew = Bun.which("brew");
   if (!brew) return process.env;
   const child = Bun.spawn([brew, "--prefix", "llvm"], { stdout: "pipe", stderr: "pipe" });
   const prefix = (await new Response(child.stdout).text()).trim();
-  if (await child.exited !== 0) return process.env;
+  if ((await child.exited) !== 0) return process.env;
   const clang = path.join(prefix, "bin", "clang");
-  if (!await Bun.file(clang).exists()) return process.env;
+  if (!(await Bun.file(clang).exists())) return process.env;
   return { ...process.env, CC_wasm32_unknown_unknown: clang };
 }
 
 async function run(args: string[], env = process.env): Promise<void> {
   const child = Bun.spawn(args, { cwd: workspace, env, stdout: "inherit", stderr: "inherit" });
-  if (await child.exited !== 0) throw new Error(`engine build failed: ${args.join(" ")}`);
+  if ((await child.exited) !== 0) throw new Error(`engine build failed: ${args.join(" ")}`);
 }
 
-const metadataProcess = Bun.spawn(["cargo", "metadata", ...(process.platform === "win32" ? [] : ["--no-deps"]), "--locked", "--format-version", "1"], {
-  cwd: workspace, stdout: "pipe", stderr: "inherit",
-});
+const metadataProcess = Bun.spawn(
+  [
+    "cargo",
+    "metadata",
+    ...(process.platform === "win32" ? [] : ["--no-deps"]),
+    "--locked",
+    "--format-version",
+    "1",
+  ],
+  {
+    cwd: workspace,
+    stdout: "pipe",
+    stderr: "inherit",
+  },
+);
 const metadataText = await new Response(metadataProcess.stdout).text();
-if (await metadataProcess.exited !== 0) throw new Error("cannot read Cargo workspace metadata");
+if ((await metadataProcess.exited) !== 0) throw new Error("cannot read Cargo workspace metadata");
 const metadata = JSON.parse(metadataText) as {
   target_directory: string;
-  packages: Array<{ name: string; version: string; description: string; license: string; repository: string; manifest_path: string }>;
+  packages: Array<{
+    name: string;
+    version: string;
+    description: string;
+    license: string;
+    repository: string;
+    manifest_path: string;
+  }>;
 };
-const engine = metadata.packages.find(pkg => pkg.name === "valle-engine");
+const engine = metadata.packages.find((pkg) => pkg.name === "valle-engine");
 if (!engine) throw new Error("valle-engine is missing from the Cargo workspace");
 
 const lock = Bun.TOML.parse(await Bun.file(path.join(workspace, "Cargo.lock")).text()) as {
   package: Array<{ name: string; version: string }>;
 };
-const versions = new Set(lock.package.filter(pkg => pkg.name === "wasm-bindgen").map(pkg => pkg.version));
+const versions = new Set(
+  lock.package.filter((pkg) => pkg.name === "wasm-bindgen").map((pkg) => pkg.version),
+);
 if (versions.size !== 1) throw new Error("expected exactly one wasm-bindgen version in Cargo.lock");
 const version = [...versions][0]!;
 
 async function matchesVersion(binary: string): Promise<boolean> {
-  if (!await Bun.file(binary).exists()) return false;
+  if (!(await Bun.file(binary).exists())) return false;
   const child = Bun.spawn([binary, "--version"], { stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
-  return await child.exited === 0 && output.trim() === `wasm-bindgen ${version}`;
+  return (await child.exited) === 0 && output.trim() === `wasm-bindgen ${version}`;
 }
 
 // Cache the exact CLI version beside build artifacts; never replace a user's global tool.
 const installRoot = path.join(metadata.target_directory, "tools", `wasm-bindgen-${version}`);
-const cached = path.join(installRoot, "bin", process.platform === "win32" ? "wasm-bindgen.exe" : "wasm-bindgen");
+const cached = path.join(
+  installRoot,
+  "bin",
+  process.platform === "win32" ? "wasm-bindgen.exe" : "wasm-bindgen",
+);
 const fromPath = Bun.which("wasm-bindgen");
 let bindgen: string;
 if (await matchesVersion(cached)) bindgen = cached;
-else if (fromPath && await matchesVersion(fromPath)) bindgen = fromPath;
+else if (fromPath && (await matchesVersion(fromPath))) bindgen = fromPath;
 else {
   const targets: Record<string, string> = {
-    "darwin-arm64": "aarch64-apple-darwin", "darwin-x64": "x86_64-apple-darwin",
-    "linux-arm64": "aarch64-unknown-linux-musl", "linux-x64": "x86_64-unknown-linux-musl",
+    "darwin-arm64": "aarch64-apple-darwin",
+    "darwin-x64": "x86_64-apple-darwin",
+    "linux-arm64": "aarch64-unknown-linux-musl",
+    "linux-x64": "x86_64-unknown-linux-musl",
     "win32-x64": "x86_64-pc-windows-msvc",
     // Upstream ships only an x64 Windows CLI; Windows 11 Arm runs this build tool via emulation.
     "win32-arm64": "x86_64-pc-windows-msvc",
   };
   const target = targets[`${process.platform}-${process.arch}`];
-  if (!target) throw new Error(`Install wasm-bindgen-cli ${version} on PATH for ${process.platform}-${process.arch}`);
+  if (!target)
+    throw new Error(
+      `Install wasm-bindgen-cli ${version} on PATH for ${process.platform}-${process.arch}`,
+    );
   // Git's GNU tar treats a Windows drive letter as a remote archive host.
   const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
-  const tar = process.platform === "win32"
-    ? systemRoot && path.join(systemRoot, "System32", "tar.exe")
-    : Bun.which("tar");
+  const tar =
+    process.platform === "win32"
+      ? systemRoot && path.join(systemRoot, "System32", "tar.exe")
+      : Bun.which("tar");
   if (!tar) throw new Error("tar is required to extract the wasm-bindgen release");
   console.log(`Downloading wasm-bindgen-cli ${version} for ${target}`);
   const release = `wasm-bindgen-${version}-${target}`;
@@ -112,22 +152,66 @@ else {
     const binary = path.basename(cached);
     await Bun.write(archivePath, archive);
     await mkdir(bin);
-    await run([tar, "-xzf", archivePath, "-C", bin, "--strip-components=1", `${release}/${binary}`]);
-    if (!await matchesVersion(path.join(bin, binary))) throw new Error(`downloaded wasm-bindgen does not match ${version}`);
+    await run([
+      tar,
+      "-xzf",
+      archivePath,
+      "-C",
+      bin,
+      "--strip-components=1",
+      `${release}/${binary}`,
+    ]);
+    if (!(await matchesVersion(path.join(bin, binary))))
+      throw new Error(`downloaded wasm-bindgen does not match ${version}`);
     await rm(archivePath);
   });
   bindgen = cached;
 }
 
 await withBuildDirectory(outDir, async (next) => {
-  await run(["cargo", "build", "--release", "--locked", "-p", "valle-engine", "--target", "wasm32-unknown-unknown", "--features", "web"], await wasmCompilerEnv());
-  await run([bindgen, path.join(metadata.target_directory, "wasm32-unknown-unknown", "release", "valle_engine.wasm"),
-    "--target", "web", "--out-dir", next, "--out-name", "valle_engine"]);
+  await run(
+    [
+      "cargo",
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "valle-engine",
+      "--target",
+      "wasm32-unknown-unknown",
+      "--features",
+      "web",
+    ],
+    await wasmCompilerEnv(),
+  );
+  await run([
+    bindgen,
+    path.join(metadata.target_directory, "wasm32-unknown-unknown", "release", "valle_engine.wasm"),
+    "--target",
+    "web",
+    "--out-dir",
+    next,
+    "--out-name",
+    "valle_engine",
+  ]);
   await Bun.write(path.join(next, "LICENSE"), Bun.file(path.join(workspace, "LICENSE")));
-  await Bun.write(path.join(next, "package.json"), JSON.stringify({
-    name: engine.name, version: engine.version, private: true, description: engine.description,
-    license: engine.license, repository: { type: "git", url: engine.repository },
-    files: ["*.wasm", "*.js", "*.d.ts", "snippets", "LICENSE"],
-    module: "valle_engine.js", types: "valle_engine.d.ts", sideEffects: ["./snippets/*"],
-  }, null, 2) + "\n");
+  await Bun.write(
+    path.join(next, "package.json"),
+    JSON.stringify(
+      {
+        name: engine.name,
+        version: engine.version,
+        private: true,
+        description: engine.description,
+        license: engine.license,
+        repository: { type: "git", url: engine.repository },
+        files: ["*.wasm", "*.js", "*.d.ts", "snippets", "LICENSE"],
+        module: "valle_engine.js",
+        types: "valle_engine.d.ts",
+        sideEffects: ["./snippets/*"],
+      },
+      null,
+      2,
+    ) + "\n",
+  );
 });

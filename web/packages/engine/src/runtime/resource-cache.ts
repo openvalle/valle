@@ -111,7 +111,13 @@ export class BrowserResourceCache<T> {
     }
   }
 
-  insert(identity: string, value: T, bytes: number, dispose: () => void, perFrame = false): boolean {
+  insert(
+    identity: string,
+    value: T,
+    bytes: number,
+    dispose: () => void,
+    perFrame = false,
+  ): boolean {
     this.requireOpenFrame();
     const admittedBytes = nonNegativeSafeInteger(bytes, "resource cache object bytes");
     if (this.entries.has(identity)) {
@@ -122,14 +128,17 @@ export class BrowserResourceCache<T> {
       return false;
     }
     while (
-      this.entries.size >= this.limits.maxEntries
-      || this.residentBytes + admittedBytes > this.limits.maxBytes
+      this.entries.size >= this.limits.maxEntries ||
+      this.residentBytes + admittedBytes > this.limits.maxBytes
     ) {
       if (!this.evictLru()) {
         this.frame.bypasses = checkedIncrement(this.frame.bypasses, "resource cache bypass count");
         return false;
       }
-      this.frame.evictions = checkedIncrement(this.frame.evictions, "resource cache eviction count");
+      this.frame.evictions = checkedIncrement(
+        this.frame.evictions,
+        "resource cache eviction count",
+      );
     }
     this.clock += 1n;
     this.entries.set(identity, {
@@ -142,8 +151,15 @@ export class BrowserResourceCache<T> {
       pinned: true,
     });
     this.framePins.add(identity);
-    this.residentBytes = checkedAdd(this.residentBytes, admittedBytes, "resource cache resident bytes");
-    this.frame.insertions = checkedIncrement(this.frame.insertions, "resource cache insertion count");
+    this.residentBytes = checkedAdd(
+      this.residentBytes,
+      admittedBytes,
+      "resource cache resident bytes",
+    );
+    this.frame.insertions = checkedIncrement(
+      this.frame.insertions,
+      "resource cache insertion count",
+    );
     return true;
   }
 
@@ -157,7 +173,10 @@ export class BrowserResourceCache<T> {
       if (!entry.perFrame || entry.lastFrame === this.frameIndex || entry.pinned) continue;
       this.entries.delete(identity);
       this.residentBytes -= entry.bytes;
-      this.frame.evictions = checkedIncrement(this.frame.evictions, "resource cache eviction count");
+      this.frame.evictions = checkedIncrement(
+        this.frame.evictions,
+        "resource cache eviction count",
+      );
       entry.dispose();
     }
     const generationInvalidations = this.invalidations - this.reportedInvalidations;
@@ -190,7 +209,8 @@ export class BrowserResourceCache<T> {
   }
 
   invalidateGeneration(): void {
-    if (this.frameActive) throw new Error("resource cache generation cannot change during a frame lease");
+    if (this.frameActive)
+      throw new Error("resource cache generation cannot change during a frame lease");
     this.disposeEntries();
     if (this.generation >= Number.MAX_SAFE_INTEGER) {
       throw new Error("resource cache generation id space exhausted");
@@ -209,8 +229,11 @@ export class BrowserResourceCache<T> {
     let lastUsed: bigint | null = null;
     for (const [identity, entry] of this.entries) {
       if (entry.pinned) continue;
-      if (lastUsed === null || entry.lastUsed < lastUsed
-        || (entry.lastUsed === lastUsed && identity < (candidate ?? identity))) {
+      if (
+        lastUsed === null ||
+        entry.lastUsed < lastUsed ||
+        (entry.lastUsed === lastUsed && identity < (candidate ?? identity))
+      ) {
         candidate = identity;
         lastUsed = entry.lastUsed;
       }
@@ -259,7 +282,8 @@ function encodePacked(value: PackedValue): string {
   if (typeof value === "boolean") return value ? "b1" : "b0";
   if (typeof value === "bigint") return `i${value.toString(10)};`;
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("resource cache identity contains non-finite number");
+    if (!Number.isFinite(value))
+      throw new Error("resource cache identity contains non-finite number");
     return `f${Object.is(value, -0) ? "-0" : value.toString()};`;
   }
   if (typeof value === "string") return `s${utf8Length(value)}:${value}`;

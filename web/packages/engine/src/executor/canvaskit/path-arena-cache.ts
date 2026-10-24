@@ -1,8 +1,14 @@
 import { DRAW_PROGRAM_ABI } from "../../generated/packed-abi.ts";
 import type { PathWire } from "./draw-program.ts";
 
-interface Cached<T> { value: T; snapshot: Uint8Array; bytes: number }
-interface CachedArena extends Cached<PathWire[]> { key: number }
+interface Cached<T> {
+  value: T;
+  snapshot: Uint8Array;
+  bytes: number;
+}
+interface CachedArena extends Cached<PathWire[]> {
+  key: number;
+}
 const verbs = ["moveTo", "lineTo", "quadTo", "cubicTo", "close"];
 const pointsPerVerb = [1, 1, 2, 3, 0];
 
@@ -20,7 +26,12 @@ export class PathArenaCache {
   constructor(private readonly maximumBytes = 64 * 1024 * 1024) {}
 
   decode(bytes: Uint8Array, count: number): PathWire[] {
-    if (!Number.isSafeInteger(count) || count < 0 || count > DRAW_PROGRAM_ABI.maximumPaths || count > bytes.length / DRAW_PROGRAM_ABI.pathHeaderBytes)
+    if (
+      !Number.isSafeInteger(count) ||
+      count < 0 ||
+      count > DRAW_PROGRAM_ABI.maximumPaths ||
+      count > bytes.length / DRAW_PROGRAM_ABI.pathHeaderBytes
+    )
       throw new Error("path count exceeds the arena");
     const key = arenaKey(bytes);
     // The arena cache has at most eight entries. A sampled index avoids scanning megabytes just
@@ -29,56 +40,91 @@ export class PathArenaCache {
     // solely because the index samples missed a changed contour.
     for (const [id, cached] of Array.from(this.arenas).reverse()) {
       if (cached.key === key && cached.value.length === count && equal(bytes, cached.snapshot)) {
-        this.hits++; this.arenas.delete(id); this.arenas.set(id, cached); return cached.value;
+        this.hits++;
+        this.arenas.delete(id);
+        this.arenas.set(id, cached);
+        return cached.value;
       }
     }
     this.misses++;
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), paths: PathWire[] = [];
-    let at = 0, totalVerbs = 0, totalPoints = 0;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      paths: PathWire[] = [];
+    let at = 0,
+      totalVerbs = 0,
+      totalPoints = 0;
     for (let index = 0; index < count; index++) {
       const start = at;
-      if (bytes.length - at < DRAW_PROGRAM_ABI.pathHeaderBytes) throw new Error("truncated path header");
-      const verbCount = view.getUint32(at, true), pointCount = view.getUint32(at + 4, true);
-      totalVerbs += verbCount; totalPoints += pointCount;
-      if (totalVerbs > DRAW_PROGRAM_ABI.maximumPathVerbs || totalPoints > DRAW_PROGRAM_ABI.maximumPathPoints)
+      if (bytes.length - at < DRAW_PROGRAM_ABI.pathHeaderBytes)
+        throw new Error("truncated path header");
+      const verbCount = view.getUint32(at, true),
+        pointCount = view.getUint32(at + 4, true);
+      totalVerbs += verbCount;
+      totalPoints += pointCount;
+      if (
+        totalVerbs > DRAW_PROGRAM_ABI.maximumPathVerbs ||
+        totalPoints > DRAW_PROGRAM_ABI.maximumPathPoints
+      )
         throw new Error("path verb or point budget exceeded");
       at += DRAW_PROGRAM_ABI.pathHeaderBytes;
       const end = at + verbCount + pointCount * DRAW_PROGRAM_ABI.pathPointBytes;
       if (end > bytes.length) throw new Error("path row exceeds its section");
-      const row = bytes.subarray(start, end), rowKey = hash(row), prior = this.contours.get(rowKey);
+      const row = bytes.subarray(start, end),
+        rowKey = hash(row),
+        prior = this.contours.get(rowKey);
       let path: PathWire;
       if (prior && equal(row, prior.snapshot)) {
-        this.contourHits++; this.contours.delete(rowKey); this.contours.set(rowKey, prior); path = prior.value;
+        this.contourHits++;
+        this.contours.delete(rowKey);
+        this.contours.set(rowKey, prior);
+        path = prior.value;
       } else {
         this.contourMisses++;
         const codes = bytes.subarray(at, at + verbCount);
-        const names: string[] = []; let expectedPoints = 0;
+        const names: string[] = [];
+        let expectedPoints = 0;
         for (const code of codes) {
           if (code >= verbs.length) throw new Error("unknown path verb");
-          names.push(verbs[code]!); expectedPoints += pointsPerVerb[code]!;
+          names.push(verbs[code]!);
+          expectedPoints += pointsPerVerb[code]!;
         }
-        if (expectedPoints !== pointCount) throw new Error("path point count does not match its verbs");
+        if (expectedPoints !== pointCount)
+          throw new Error("path point count does not match its verbs");
         const points: Array<[number, number]> = [];
         let cursor = at + verbCount;
-        for (let point = 0; point < pointCount; point++, cursor += DRAW_PROGRAM_ABI.pathPointBytes) {
-          const x = view.getFloat64(cursor, true), y = view.getFloat64(cursor + 8, true);
-          if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("path coordinates must be finite");
+        for (
+          let point = 0;
+          point < pointCount;
+          point++, cursor += DRAW_PROGRAM_ABI.pathPointBytes
+        ) {
+          const x = view.getFloat64(cursor, true),
+            y = view.getFloat64(cursor + 8, true);
+          if (!Number.isFinite(x) || !Number.isFinite(y))
+            throw new Error("path coordinates must be finite");
           points.push(Object.freeze([x, y]) as [number, number]);
         }
-        path = { verbs: names, points }; Object.freeze(names); Object.freeze(points); Object.freeze(path);
+        path = { verbs: names, points };
+        Object.freeze(names);
+        Object.freeze(points);
+        Object.freeze(path);
         const cost = 128 + row.length + points.length * 64 + names.length * 32;
         if (cost <= this.maximumBytes / 2) {
           const replaced = this.contours.get(rowKey);
-          if (replaced) { this.contourBytes -= replaced.bytes; this.contours.delete(rowKey); }
+          if (replaced) {
+            this.contourBytes -= replaced.bytes;
+            this.contours.delete(rowKey);
+          }
           while (this.contours.size >= 4096 || this.contourBytes + cost > this.maximumBytes / 2) {
             const oldest = this.contours.entries().next().value;
             if (!oldest) break;
-            this.contourBytes -= oldest[1].bytes; this.contours.delete(oldest[0]);
+            this.contourBytes -= oldest[1].bytes;
+            this.contours.delete(oldest[0]);
           }
-          this.contours.set(rowKey, { value: path, snapshot: row.slice(), bytes: cost }); this.contourBytes += cost;
+          this.contours.set(rowKey, { value: path, snapshot: row.slice(), bytes: cost });
+          this.contourBytes += cost;
         }
       }
-      paths.push(path); at = end;
+      paths.push(path);
+      at = end;
     }
     if (at !== bytes.length) throw new Error("trailing path arena bytes");
     Object.freeze(paths);
@@ -88,14 +134,27 @@ export class PathArenaCache {
       while (this.arenas.size >= 8 || this.arenaBytes + cost > this.maximumBytes / 2) {
         const oldest = this.arenas.entries().next().value;
         if (!oldest) break;
-        this.arenaBytes -= oldest[1].bytes; this.arenas.delete(oldest[0]);
+        this.arenaBytes -= oldest[1].bytes;
+        this.arenas.delete(oldest[0]);
       }
-      this.arenas.set(this.nextArenaId++, { key, value: paths, snapshot: bytes.slice(), bytes: cost }); this.arenaBytes += cost;
+      this.arenas.set(this.nextArenaId++, {
+        key,
+        value: paths,
+        snapshot: bytes.slice(),
+        bytes: cost,
+      });
+      this.arenaBytes += cost;
     }
     return paths;
   }
 
-  clear(): void { this.arenas.clear(); this.contours.clear(); this.arenaBytes = 0; this.contourBytes = 0; this.nextArenaId = 0; }
+  clear(): void {
+    this.arenas.clear();
+    this.contours.clear();
+    this.arenaBytes = 0;
+    this.contourBytes = 0;
+    this.nextArenaId = 0;
+  }
 }
 
 function arenaKey(bytes: Uint8Array): number {
@@ -111,29 +170,36 @@ function arenaKey(bytes: Uint8Array): number {
 
 function hash(bytes: Uint8Array): number {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let value = 2166136261, at = 0;
+  let value = 2166136261,
+    at = 0;
   for (; at + 16 <= bytes.length; at += 16) {
     value = Math.imul(value ^ view.getUint32(at, true), 16777619);
     value = Math.imul(value ^ view.getUint32(at + 4, true), 16777619);
     value = Math.imul(value ^ view.getUint32(at + 8, true), 16777619);
     value = Math.imul(value ^ view.getUint32(at + 12, true), 16777619);
   }
-  for (; at + 4 <= bytes.length; at += 4) value = Math.imul(value ^ view.getUint32(at, true), 16777619);
+  for (; at + 4 <= bytes.length; at += 4)
+    value = Math.imul(value ^ view.getUint32(at, true), 16777619);
   for (; at < bytes.length; at++) value = Math.imul(value ^ bytes[at]!, 16777619);
   return value >>> 0;
 }
 
 function equal(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
-  const av = new DataView(a.buffer, a.byteOffset, a.byteLength), bv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const av = new DataView(a.buffer, a.byteOffset, a.byteLength),
+    bv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   let at = 0;
   for (; at + 16 <= a.length; at += 16) {
-    if (av.getUint32(at, true) !== bv.getUint32(at, true)
-      || av.getUint32(at + 4, true) !== bv.getUint32(at + 4, true)
-      || av.getUint32(at + 8, true) !== bv.getUint32(at + 8, true)
-      || av.getUint32(at + 12, true) !== bv.getUint32(at + 12, true)) return false;
+    if (
+      av.getUint32(at, true) !== bv.getUint32(at, true) ||
+      av.getUint32(at + 4, true) !== bv.getUint32(at + 4, true) ||
+      av.getUint32(at + 8, true) !== bv.getUint32(at + 8, true) ||
+      av.getUint32(at + 12, true) !== bv.getUint32(at + 12, true)
+    )
+      return false;
   }
-  for (; at + 4 <= a.length; at += 4) if (av.getUint32(at, true) !== bv.getUint32(at, true)) return false;
+  for (; at + 4 <= a.length; at += 4)
+    if (av.getUint32(at, true) !== bv.getUint32(at, true)) return false;
   for (; at < a.length; at++) if (a[at] !== b[at]) return false;
   return true;
 }

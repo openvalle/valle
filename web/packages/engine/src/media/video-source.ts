@@ -18,8 +18,12 @@ export interface KeyframeThumbnail {
  * Thin adapter for the existing frame source API. Mediabunny owns demuxing, decoder queues,
  * keyframe seeks and frame lifetimes. Only source-time rebasing and EOF hold belong here.
  */
-export function createDecoderRing({ lookahead = 8, ...source }: BrowserMediaInput & { lookahead?: number }): DecoderRing {
-  if (!Number.isInteger(lookahead) || lookahead < 1) throw new Error(`lookahead must be a positive integer, got ${lookahead}`);
+export function createDecoderRing({
+  lookahead = 8,
+  ...source
+}: BrowserMediaInput & { lookahead?: number }): DecoderRing {
+  if (!Number.isInteger(lookahead) || lookahead < 1)
+    throw new Error(`lookahead must be a positive integer, got ${lookahead}`);
   const input = createMediaInput(source);
   let closed = false;
   let baseTime: number | undefined;
@@ -28,7 +32,9 @@ export function createDecoderRing({ lookahead = 8, ...source }: BrowserMediaInpu
   let current: VideoSample | undefined, next: VideoSample | undefined;
   let initialized: Promise<void> | undefined;
   let queue: Promise<unknown> = Promise.resolve();
-  const checkOpen = () => { if (closed) throw new Error("video source is closed"); };
+  const checkOpen = () => {
+    if (closed) throw new Error("video source is closed");
+  };
   const initialize = async () => {
     const track = await input.getPrimaryVideoTrack();
     if (!track) throw new Error("no video track");
@@ -39,11 +45,17 @@ export function createDecoderRing({ lookahead = 8, ...source }: BrowserMediaInpu
   const stopIteration = () => {
     void iterator?.return(undefined).catch(() => undefined);
     iterator = undefined;
-    current?.close(); next?.close(); current = undefined; next = undefined;
+    current?.close();
+    next?.close();
+    current = undefined;
+    next = undefined;
   };
   const take = async (active: AsyncGenerator<VideoSample>) => {
     const sample = (await active.next()).value || undefined;
-    if (closed) { sample?.close(); checkOpen(); }
+    if (closed) {
+      sample?.close();
+      checkOpen();
+    }
     return sample;
   };
   async function frameAt(timeS: number): Promise<VideoFrame> {
@@ -54,8 +66,13 @@ export function createDecoderRing({ lookahead = 8, ...source }: BrowserMediaInpu
     const target = baseTime! + Math.max(0, timeS) + FRAME_TIME_EPS_S;
     // Keep one continuous iterator for playback/export. Restart it for backward seeks or large
     // jumps; the library seeks to the right keyframe without walking every intermediate frame.
-    if (!iterator || (current && target < current.timestamp)
-      || (current && next && target > next.timestamp + (next.timestamp - current.timestamp) * lookahead)) {
+    if (
+      !iterator ||
+      (current && target < current.timestamp) ||
+      (current &&
+        next &&
+        target > next.timestamp + (next.timestamp - current.timestamp) * lookahead)
+    ) {
       stopIteration();
       const active = sink.samples(target);
       iterator = active;
@@ -63,7 +80,8 @@ export function createDecoderRing({ lookahead = 8, ...source }: BrowserMediaInpu
       next = await take(active);
     }
     while (next && next.timestamp <= target) {
-      current?.close(); current = next;
+      current?.close();
+      current = next;
       next = await take(iterator!);
     }
     checkOpen();
@@ -83,14 +101,19 @@ export function createDecoderRing({ lookahead = 8, ...source }: BrowserMediaInpu
     },
     close() {
       if (closed) return;
-      closed = true; stopIteration(); input.dispose();
+      closed = true;
+      stopIteration();
+      input.dispose();
     },
   };
 }
 
 /** Read keyframe metadata and let the same library decode the selected thumbnail frames. */
-export async function keyframeThumbnails({ height = 26, maxCount = 60, ...source }:
-  BrowserMediaInput & { height?: number; maxCount?: number }): Promise<KeyframeThumbnail[]> {
+export async function keyframeThumbnails({
+  height = 26,
+  maxCount = 60,
+  ...source
+}: BrowserMediaInput & { height?: number; maxCount?: number }): Promise<KeyframeThumbnail[]> {
   if (!Number.isInteger(height) || height < 1 || !Number.isInteger(maxCount) || maxCount < 1) {
     throw new Error("thumbnail height and maxCount must be positive integers");
   }
@@ -102,23 +125,38 @@ export async function keyframeThumbnails({ height = 26, maxCount = 60, ...source
     const origin = await track.getFirstTimestamp();
     const packets = new EncodedPacketSink(track);
     const times: number[] = [];
-    for (let packet = await packets.getFirstKeyPacket({ metadataOnly: true }); packet;
-      packet = await packets.getNextKeyPacket(packet, { metadataOnly: true })) times.push(packet.timestamp);
+    for (
+      let packet = await packets.getFirstKeyPacket({ metadataOnly: true });
+      packet;
+      packet = await packets.getNextKeyPacket(packet, { metadataOnly: true })
+    )
+      times.push(packet.timestamp);
     if (!times.length) throw new Error("video track has no keyframes");
     const count = Math.min(maxCount, times.length);
-    const selected = Array.from({ length: count }, (_, i) => times[count === 1 ? 0 : Math.round(i * (times.length - 1) / (count - 1))]!);
+    const selected = Array.from(
+      { length: count },
+      (_, i) => times[count === 1 ? 0 : Math.round((i * (times.length - 1)) / (count - 1))]!,
+    );
     for await (const sample of new VideoSampleSink(track).samplesAtTimestamps(selected)) {
       if (!sample) throw new Error("thumbnail frame could not be decoded");
       const frame = sample.toVideoFrame();
       try {
-        const width = Math.max(1, Math.round(frame.displayWidth * height / Math.max(1, frame.displayHeight)));
+        const width = Math.max(
+          1,
+          Math.round((frame.displayWidth * height) / Math.max(1, frame.displayHeight)),
+        );
         const bitmap = await createImageBitmap(frame, { resizeWidth: width, resizeHeight: height });
         thumbnails.push({ tS: sample.timestamp - origin, bitmap });
-      } finally { frame.close(); sample.close(); }
+      } finally {
+        frame.close();
+        sample.close();
+      }
     }
     return thumbnails;
   } catch (error) {
     for (const thumbnail of thumbnails) thumbnail.bitmap.close();
     throw error;
-  } finally { input.dispose(); }
+  } finally {
+    input.dispose();
+  }
 }

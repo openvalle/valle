@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { BrowserValleWebPlayer } from "valle-engine";
-import { resolveEngineRuntimeAssets, resolvePlayerRuntimeAssets } from "valle-engine/runtime-assets";
+import {
+  resolveEngineRuntimeAssets,
+  resolvePlayerRuntimeAssets,
+} from "valle-engine/runtime-assets";
 
 const runtimeAssets = {
   engine: { glue: "engine/engine.js", wasm: "engine/engine.wasm" },
@@ -11,11 +14,15 @@ const runtimeAssets = {
 
 describe("player runtime asset map", () => {
   test("compiler accepts only the Engine URLs", () => {
-    expect(resolveEngineRuntimeAssets({ engine: runtimeAssets.engine }, "https://example.test/runtime/")).toEqual({
+    expect(
+      resolveEngineRuntimeAssets({ engine: runtimeAssets.engine }, "https://example.test/runtime/"),
+    ).toEqual({
       glue: "https://example.test/runtime/engine/engine.js",
       wasm: "https://example.test/runtime/engine/engine.wasm",
     });
-    expect(() => resolveEngineRuntimeAssets({ engine: { glue: "engine.js" } })).toThrow(/engine\.wasm/);
+    expect(() => resolveEngineRuntimeAssets({ engine: { glue: "engine.js" } })).toThrow(
+      /engine\.wasm/,
+    );
   });
   test("resolves every executable runtime URL against one explicit base", () => {
     expect(resolvePlayerRuntimeAssets(runtimeAssets, "https://example.test/runtime/")).toEqual({
@@ -39,20 +46,23 @@ describe("player runtime asset map", () => {
     const resolved = resolvePlayerRuntimeAssets(runtimeAssets, "/runtime/");
     expect(resolved.engine.glue).toBe(new URL("engine/engine.js", expectedBase).href);
     expect(resolved.canvasKit.wasm).toBe(new URL("canvaskit/canvaskit.wasm", expectedBase).href);
-    expect(resolved.workers.productFrame).toBe(new URL("workers/product-frame.js", expectedBase).href);
+    expect(resolved.workers.productFrame).toBe(
+      new URL("workers/product-frame.js", expectedBase).href,
+    );
   });
 
   test("controller rejects incomplete maps instead of falling back to hard-coded paths", () => {
     // Exercise runtime rejection with incomplete options; the type suppression must become an error if the required field is relaxed.
-    // @ts-expect-error runtimeAssets is required; verify runtime rejection when omitted.
-    expect(() => new BrowserValleWebPlayer({
-      fixedPackageManifestJson: "{}",
-      timelineJson: "{}",
-      resourceManifestJson: "{}",
-      verifiedBindingBundleJson: "{}",
-    })).toThrow(/runtimeAssets is required/);
+    expect(() => {
+      // @ts-expect-error runtimeAssets is required; verify runtime rejection when omitted.
+      return new BrowserValleWebPlayer({
+        fixedPackageManifestJson: "{}",
+        timelineJson: "{}",
+        resourceManifestJson: "{}",
+        verifiedBindingBundleJson: "{}",
+      });
+    }).toThrow(/runtimeAssets is required/);
     // This function accepts a partial map, so runtime validation is required without a type suppression.
     expect(() => resolvePlayerRuntimeAssets({ engine: {} })).toThrow(/runtimeAssets\.engine\.glue/);
   });
-
 });

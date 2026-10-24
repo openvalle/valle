@@ -53,7 +53,10 @@ export function parseOptions(
     .filter(({ name, required }) => required && !parsed.has(name))
     .map(({ name }) => `--${name}`);
   if (missing.length) {
-    throw new CliError(`missing required option${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`, 2);
+    throw new CliError(
+      `missing required option${missing.length === 1 ? "" : "s"}: ${missing.join(", ")}`,
+      2,
+    );
   }
   return parsed;
 }
@@ -66,12 +69,19 @@ export function requiredOption(options: ReadonlyMap<string, string>, name: strin
 
 export function formatCommandHelp(command: CommandDefinition): string {
   const usage = command.options
-    .map(({ name, value, required }) => `${required ? "" : "["}--${name} <${value}>${required ? "" : "]"}`)
+    .map(
+      ({ name, value, required }) =>
+        `${required ? "" : "["}--${name} <${value}>${required ? "" : "]"}`,
+    )
     .join(" ");
   const rows = command.options.map(
     ({ name, value, description }) => `  --${name} <${value}>\n      ${description}`,
   );
-  return [`usage: bun web/tests/parity/cli.ts ${command.name} ${usage}`, "", command.summary, "", ...rows].join(
-    "\n",
-  );
+  return [
+    `usage: bun web/tests/parity/cli.ts ${command.name} ${usage}`,
+    "",
+    command.summary,
+    "",
+    ...rows,
+  ].join("\n");
 }

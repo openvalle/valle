@@ -28,7 +28,8 @@ export function hitAtDisplayPoint<T extends TimelineHitRect>(
   canvasWidth: number,
   canvasHeight: number,
 ): T | null {
-  if (display.width <= 0 || display.height <= 0 || canvasWidth <= 0 || canvasHeight <= 0) return null;
+  if (display.width <= 0 || display.height <= 0 || canvasWidth <= 0 || canvasHeight <= 0)
+    return null;
   const x = ((clientX - display.left) / display.width) * canvasWidth;
   const y = ((clientY - display.top) / display.height) * canvasHeight;
   for (let index = hits.length - 1; index >= 0; index -= 1) {

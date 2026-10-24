@@ -1,7 +1,11 @@
 import { cp, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { withBuildDirectory } from "./build-directory.ts";
-import { assertCanvasKitBuildVersion, assertGeneratedEngineBuildVersion, readValleWorkspaceVersion } from "./runtime-version.ts";
+import {
+  assertCanvasKitBuildVersion,
+  assertGeneratedEngineBuildVersion,
+  readValleWorkspaceVersion,
+} from "./runtime-version.ts";
 import { thirdPartyNotices } from "./third-party-notices.ts";
 import workspace from "../package.json";
 import sdk from "../packages/engine/package.json";
@@ -12,7 +16,9 @@ const root = path.join(web, "packages/engine");
 const generated = path.join(root, "generated/web");
 const version = await readValleWorkspaceVersion(repo);
 await assertGeneratedEngineBuildVersion(generated, version);
-await assertCanvasKitBuildVersion(path.dirname(path.dirname(Bun.resolveSync("canvaskit-wasm", root))));
+await assertCanvasKitBuildVersion(
+  path.dirname(path.dirname(Bun.resolveSync("canvaskit-wasm", root))),
+);
 
 await withBuildDirectory(path.join(root, "dist"), async (dist) => {
   const entries = Object.values(sdk.exports);
@@ -27,25 +33,39 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
     naming: { entry: "[dir]/[name].mjs", chunk: "chunks/[name]-[hash].mjs" },
   });
   assertBuild(output, "SDK");
-  assertBuild(await Bun.build({
-    entrypoints: [path.join(root, "src/runtime/compositor/product-frame-worker.ts")],
-    outdir: path.join(dist, "workers"),
-    target: "browser",
-    format: "esm",
-    naming: "product-frame.js",
-  }), "SDK worker");
+  assertBuild(
+    await Bun.build({
+      entrypoints: [path.join(root, "src/runtime/compositor/product-frame-worker.ts")],
+      outdir: path.join(dist, "workers"),
+      target: "browser",
+      format: "esm",
+      naming: "product-frame.js",
+    }),
+    "SDK worker",
+  );
 
   const types = path.join(dist, "types");
   const declarations = path.join(dist, ".declarations");
-  const tsc = Bun.spawn([
-    process.execPath, "run", "tsc", "--project", path.join(root, "tsconfig.build.json"), "--outDir", declarations,
-  ], { cwd: web, stdout: "inherit", stderr: "inherit" });
-  if (await tsc.exited !== 0) throw new Error("SDK declaration generation failed");
+  const tsc = Bun.spawn(
+    [
+      process.execPath,
+      "run",
+      "tsc",
+      "--project",
+      path.join(root, "tsconfig.build.json"),
+      "--outDir",
+      declarations,
+    ],
+    { cwd: web, stdout: "inherit", stderr: "inherit" },
+  );
+  if ((await tsc.exited) !== 0) throw new Error("SDK declaration generation failed");
   await cp(path.join(declarations, "web/packages/engine/src"), types, { recursive: true });
   // TypeScript does not re-emit authored declarations such as asset module declarations.
   // Ship these alongside the generated types so consumers can resolve them.
   await copyAuthoredDeclarations(path.join(root, "src"), types);
-  await cp(path.join(declarations, "crates/valle-timeline/schema"), path.join(types, "schema"), { recursive: true });
+  await cp(path.join(declarations, "crates/valle-timeline/schema"), path.join(types, "schema"), {
+    recursive: true,
+  });
   await rm(declarations, { recursive: true });
   await rewriteDeclarationImports(types);
 
@@ -58,38 +78,80 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
   await Bun.write(path.join(dist, "NOTICE.txt"), await thirdPartyNotices(repo));
   await Bun.write(path.join(dist, "README.md"), Bun.file(path.join(root, "README.md")));
 
-  const exports = Object.fromEntries(Object.entries(sdk.exports).map(([name, entry]) => {
-    const relative = entry.replace(/^\.\/src\//, "").replace(/\.ts$/, "");
-    return [name, { types: `./types/${relative}.d.ts`, import: `./${relative}.mjs`, default: `./${relative}.mjs` }];
-  }));
-  await Bun.write(path.join(dist, "package.json"), JSON.stringify({
-    name: sdk.name,
-    version,
-    description: "Programmable video engine for the browser, with Motion playback and Timeline compilation.",
-    license: "Apache-2.0",
-    repository: { type: "git", url: "https://github.com/openvalle/valle", directory: "web/packages/engine" },
-    type: "module",
-    main: "./index.mjs",
-    module: "./index.mjs",
-    types: "./types/index.d.ts",
-    exports: { ...exports, "./wasm/*": "./wasm/*", "./workers/*": "./workers/*", "./package.json": "./package.json" },
-    files: ["**/*.mjs", "**/*.rg16f", "types", "wasm", "workers", "LICENSE", "NOTICE.txt", "README.md"],
-    sideEffects: ["./element.mjs", "./wasm/snippets/**"],
-    dependencies: { ...sdk.dependencies, "canvaskit-wasm": workspace.workspaces.catalog["canvaskit-wasm"] },
-    peerDependencies: sdk.peerDependencies,
-    peerDependenciesMeta: sdk.peerDependenciesMeta,
-  }, null, 2) + "\n");
+  const exports = Object.fromEntries(
+    Object.entries(sdk.exports).map(([name, entry]) => {
+      const relative = entry.replace(/^\.\/src\//, "").replace(/\.ts$/, "");
+      return [
+        name,
+        {
+          types: `./types/${relative}.d.ts`,
+          import: `./${relative}.mjs`,
+          default: `./${relative}.mjs`,
+        },
+      ];
+    }),
+  );
+  await Bun.write(
+    path.join(dist, "package.json"),
+    JSON.stringify(
+      {
+        name: sdk.name,
+        version,
+        description:
+          "Programmable video engine for the browser, with Motion playback and Timeline compilation.",
+        license: "Apache-2.0",
+        repository: {
+          type: "git",
+          url: "https://github.com/openvalle/valle",
+          directory: "web/packages/engine",
+        },
+        type: "module",
+        main: "./index.mjs",
+        module: "./index.mjs",
+        types: "./types/index.d.ts",
+        exports: {
+          ...exports,
+          "./wasm/*": "./wasm/*",
+          "./workers/*": "./workers/*",
+          "./package.json": "./package.json",
+        },
+        files: [
+          "**/*.mjs",
+          "**/*.rg16f",
+          "types",
+          "wasm",
+          "workers",
+          "LICENSE",
+          "NOTICE.txt",
+          "README.md",
+        ],
+        sideEffects: ["./element.mjs", "./wasm/snippets/**"],
+        dependencies: {
+          ...sdk.dependencies,
+          "canvaskit-wasm": workspace.workspaces.catalog["canvaskit-wasm"],
+        },
+        peerDependencies: sdk.peerDependencies,
+        peerDependenciesMeta: sdk.peerDependenciesMeta,
+      },
+      null,
+      2,
+    ) + "\n",
+  );
 });
 console.log("built npm SDK under packages/engine/dist (CanvasKit remains an official dependency)");
 
 function assertBuild(result: Awaited<ReturnType<typeof Bun.build>>, label: string): void {
-  if (!result.success) throw new Error(`${label}: ${result.logs.map((log) => log.message).join("\n")}`);
+  if (!result.success)
+    throw new Error(`${label}: ${result.logs.map((log) => log.message).join("\n")}`);
 }
 
 async function copyAuthoredDeclarations(source: string, destination: string): Promise<void> {
   for (const entry of await readdir(source, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      await copyAuthoredDeclarations(path.join(source, entry.name), path.join(destination, entry.name));
+      await copyAuthoredDeclarations(
+        path.join(source, entry.name),
+        path.join(destination, entry.name),
+      );
     } else if (entry.name.endsWith(".d.ts")) {
       await cp(path.join(source, entry.name), path.join(destination, entry.name));
     }
@@ -102,9 +164,12 @@ async function rewriteDeclarationImports(dir: string): Promise<void> {
     if (entry.isDirectory()) await rewriteDeclarationImports(file);
     else if (file.endsWith(".d.ts")) {
       const source = await Bun.file(file).text();
-      await Bun.write(file, source
-        .replaceAll("../../../../crates/valle-timeline/schema/", "./schema/")
-        .replace(/(["']\.[^"']+)\.ts(["'])/g, "$1.js$2"));
+      await Bun.write(
+        file,
+        source
+          .replaceAll("../../../../crates/valle-timeline/schema/", "./schema/")
+          .replace(/(["']\.[^"']+)\.ts(["'])/g, "$1.js$2"),
+      );
     }
   }
 }

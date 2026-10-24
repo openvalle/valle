@@ -21,39 +21,92 @@ function fixture(
   geometry: "rect" | "path" | "roundRect" | "image" = "rect",
   path: number | null = null,
   strokeColor: [number, number, number, number] | null = null,
-  pathStyle: { fill: boolean; dash: number[]; dashOffset: number; cap: string; join: string; miterLimit: number } | null = null,
+  pathStyle: {
+    fill: boolean;
+    dash: number[];
+    dashOffset: number;
+    cap: string;
+    join: string;
+    miterLimit: number;
+  } | null = null,
   dashOffset: number | null = null,
   atlasSrc = { x: 0, y: 0, width: 0.5, height: 1 },
-  atlasTexture: Record<string, unknown> = { key: "asset://sprites", kind: "image", colorDomain: "linearRec2020", alpha: "premultiplied", sampleTimeMicros: null },
+  atlasTexture: Record<string, unknown> = {
+    key: "asset://sprites",
+    kind: "image",
+    colorDomain: "linearRec2020",
+    alpha: "premultiplied",
+    sampleTimeMicros: null,
+  },
 ): Uint8Array {
   const batch = new Uint8Array(BATCH_INSTANCE_BYTES);
   const batchView = new DataView(batch.buffer);
-  for (const [index, value] of [6, 0, 0, 7, 4, 5].entries()) batchView.setFloat64(index * 8, value, true);
+  for (const [index, value] of [6, 0, 0, 7, 4, 5].entries())
+    batchView.setFloat64(index * 8, value, true);
   batchView.setFloat32(48, 0.25, true);
   batchView.setFloat32(52, 0.5, true);
   batchView.setFloat32(56, 0.75, true);
   batchView.setFloat32(60, 1, true);
   batchView.setFloat32(64, 1, true);
   batchView.setFloat32(68, 0, true);
-  const shape = geometry === "image"
-    ? { kind: geometry, value: { texture: atlasTexture, src: atlasSrc, sampling: "linearClamp" } }
-    : geometry === "roundRect"
-    ? { kind: geometry, value: { rect: { x: 0, y: 0, width: 1, height: 1 }, radii: [[0.2, 0.2], [0.2, 0.2], [0.2, 0.2], [0.2, 0.2]] } }
-    : geometry === "path" || path !== null ? { kind: geometry, value: path } : { kind: geometry };
+  const shape =
+    geometry === "image"
+      ? { kind: geometry, value: { texture: atlasTexture, src: atlasSrc, sampling: "linearClamp" } }
+      : geometry === "roundRect"
+        ? {
+            kind: geometry,
+            value: {
+              rect: { x: 0, y: 0, width: 1, height: 1 },
+              radii: [
+                [0.2, 0.2],
+                [0.2, 0.2],
+                [0.2, 0.2],
+                [0.2, 0.2],
+              ],
+            },
+          }
+        : geometry === "path" || path !== null
+          ? { kind: geometry, value: path }
+          : { kind: geometry };
   const strokeBytes = new Uint8Array(strokeColor === null ? 0 : 16);
   if (strokeColor !== null) {
     const strokeView = new DataView(strokeBytes.buffer);
-    for (const [index, value] of strokeColor.entries()) strokeView.setFloat32(index * 4, value, true);
+    for (const [index, value] of strokeColor.entries())
+      strokeView.setFloat32(index * 4, value, true);
   }
   const dashBytes = new Uint8Array(dashOffset === null ? 0 : 4);
   if (dashOffset !== null) new DataView(dashBytes.buffer).setFloat32(0, dashOffset, true);
   const sections = [
     json([0]),
-    json([{ kind: "instanceBatch", value: { shape, instances: { start: 0, count: 1 }, strokeColors: strokeColor === null ? null : { start: 0, count: 1 }, dashOffsets: dashOffset === null ? null : { start: 0, count: 1 }, pathStyle } }]),
+    json([
+      {
+        kind: "instanceBatch",
+        value: {
+          shape,
+          instances: { start: 0, count: 1 },
+          strokeColors: strokeColor === null ? null : { start: 0, count: 1 },
+          dashOffsets: dashOffset === null ? null : { start: 0, count: 1 },
+          pathStyle,
+        },
+      },
+    ]),
     batch,
     strokeBytes,
     dashBytes,
-    encodeTestPaths(geometry === "path" ? [{ verbs: ["moveTo", "lineTo", "lineTo", "close"], points: [[0, 0], [5, 0], [0, 5]] }] : []),
+    encodeTestPaths(
+      geometry === "path"
+        ? [
+            {
+              verbs: ["moveTo", "lineTo", "lineTo", "close"],
+              points: [
+                [0, 0],
+                [5, 0],
+                [0, 5],
+              ],
+            },
+          ]
+        : [],
+    ),
     json([]),
     json({ x: 0, y: 0, width: 16, height: 9 }),
     json({}),
@@ -71,7 +124,23 @@ function fixture(
   for (const [index, section] of sections.entries()) {
     const entry = HEADER_BYTES + index * ENTRY_BYTES;
     view.setUint16(entry, KINDS[index]!, true);
-    view.setUint32(entry + 4, index === 2 ? 1 : index === 3 ? strokeBytes.byteLength / 16 : index === 4 ? dashBytes.byteLength / 4 : index === 5 ? (geometry === "path" ? 1 : 0) : index === 7 || index === 8 ? 1 : JSON.parse(new TextDecoder().decode(section)).length, true);
+    view.setUint32(
+      entry + 4,
+      index === 2
+        ? 1
+        : index === 3
+          ? strokeBytes.byteLength / 16
+          : index === 4
+            ? dashBytes.byteLength / 4
+            : index === 5
+              ? geometry === "path"
+                ? 1
+                : 0
+              : index === 7 || index === 8
+                ? 1
+                : JSON.parse(new TextDecoder().decode(section)).length,
+      true,
+    );
     view.setBigUint64(entry + 8, BigInt(offset), true);
     view.setBigUint64(entry + 16, BigInt(section.byteLength), true);
     bytes.set(section, offset);
@@ -106,10 +175,22 @@ describe("DrawProgram packed InstanceBatch", () => {
   test("admits atlas regions and rejects invalid crops and strokes", async () => {
     const draw = await decodeDrawProgram(fixture("image"));
     expect(draw.nodes[0]?.kind).toBe("instanceBatch");
-    await expect(decodeDrawProgram(fixture("image", null, null, null, null,
-      { x: 0.8, y: 0, width: 0.5, height: 1 }))).rejects.toThrow("shape.value is invalid");
-    await expect(decodeDrawProgram(fixture("image", null, null, null, null, undefined,
-      { key: "asset://sprites", kind: "image", colorDomain: "data", alpha: "premultiplied", sampleTimeMicros: null }))).rejects.toThrow("shape.value is invalid");
+    await expect(
+      decodeDrawProgram(
+        fixture("image", null, null, null, null, { x: 0.8, y: 0, width: 0.5, height: 1 }),
+      ),
+    ).rejects.toThrow("shape.value is invalid");
+    await expect(
+      decodeDrawProgram(
+        fixture("image", null, null, null, null, undefined, {
+          key: "asset://sprites",
+          kind: "image",
+          colorDomain: "data",
+          alpha: "premultiplied",
+          sampleTimeMicros: null,
+        }),
+      ),
+    ).rejects.toThrow("shape.value is invalid");
     const stroke = fixture("image");
     const view = new DataView(stroke.buffer);
     const offset = Number(view.getBigUint64(HEADER_BYTES + 2 * ENTRY_BYTES + 8, true));
@@ -151,12 +232,23 @@ describe("DrawProgram packed InstanceBatch", () => {
   });
 
   test("admits a shared Path style and row dash phase, rejecting invalid phases", async () => {
-    const style = { fill: false, dash: [3, 2], dashOffset: 0, cap: "round", join: "bevel", miterLimit: 6 };
+    const style = {
+      fill: false,
+      dash: [3, 2],
+      dashOffset: 0,
+      cap: "round",
+      join: "bevel",
+      miterLimit: 6,
+    };
     const draw = await decodeDrawProgram(fixture("path", 0, null, style, 1.25));
     expect(draw.dashOffsets.count).toBe(1);
     expect(draw.dashOffsets.view.getFloat32(0, true)).toBe(1.25);
-    await expect(decodeDrawProgram(fixture("path", 0, null, style, Number.NaN))).rejects.toThrow("dash offset 0 is non-finite");
-    await expect(decodeDrawProgram(fixture("path", 0, null, { ...style, dash: [0, 0] }, 1.25))).rejects.toThrow("pathStyle is invalid");
+    await expect(decodeDrawProgram(fixture("path", 0, null, style, Number.NaN))).rejects.toThrow(
+      "dash offset 0 is non-finite",
+    );
+    await expect(
+      decodeDrawProgram(fixture("path", 0, null, { ...style, dash: [0, 0] }, 1.25)),
+    ).rejects.toThrow("pathStyle is invalid");
   });
 
   test("rejects malformed instance values and non-canonical ranges", async () => {
@@ -168,13 +260,17 @@ describe("DrawProgram packed InstanceBatch", () => {
 
     const invalidRotation = fixture();
     const rotationView = new DataView(invalidRotation.buffer);
-    const rotationOffset = Number(rotationView.getBigUint64(HEADER_BYTES + 2 * ENTRY_BYTES + 8, true));
+    const rotationOffset = Number(
+      rotationView.getBigUint64(HEADER_BYTES + 2 * ENTRY_BYTES + 8, true),
+    );
     rotationView.setFloat64(rotationOffset + 8, Number.NaN, true);
     await expect(decodeDrawProgram(invalidRotation)).rejects.toThrow("non-finite");
 
     const invalidOpacity = fixture();
     const opacityView = new DataView(invalidOpacity.buffer);
-    const opacityOffset = Number(opacityView.getBigUint64(HEADER_BYTES + 2 * ENTRY_BYTES + 8, true));
+    const opacityOffset = Number(
+      opacityView.getBigUint64(HEADER_BYTES + 2 * ENTRY_BYTES + 8, true),
+    );
     opacityView.setFloat32(opacityOffset + 64, 1.1, true);
     await expect(decodeDrawProgram(invalidOpacity)).rejects.toThrow("outside [0,1]");
 
@@ -198,7 +294,9 @@ describe("DrawProgram packed InstanceBatch", () => {
     const invalidSection = fixture();
     const view = new DataView(invalidSection.buffer);
     view.setBigUint64(HEADER_BYTES + 2 * ENTRY_BYTES + 16, BigInt(BATCH_INSTANCE_BYTES - 1), true);
-    await expect(decodeDrawProgram(invalidSection)).rejects.toThrow(`${BATCH_INSTANCE_BYTES - 1} bytes`);
+    await expect(decodeDrawProgram(invalidSection)).rejects.toThrow(
+      `${BATCH_INSTANCE_BYTES - 1} bytes`,
+    );
 
     const bytes = fixture();
     const patch = identityPatch(bytes);

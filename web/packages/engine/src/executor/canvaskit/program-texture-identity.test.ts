@@ -48,19 +48,25 @@ describe("program texture execution identity", () => {
     expect(admitted.size).toBe(2);
     expect(resolveProgramTexture(admitted, lateRequirement)).toBe(lateObject);
     expect(resolveProgramTexture(admitted, earlyRequirement)).toBe(earlyObject);
-    expect(() => resolveProgramTexture(admitted, {
-      ...earlyRequirement,
-      sampleTimeMicros: 500_000,
-    })).toThrow("program texture");
-    expect(() => admitProgramTextures(
-      [{ ...earlyRequirement, sampleTimeMicros: null }],
-      [{ key: logicalKey, slot: 1 }],
-      new Map([[1, earlyObject]]),
-    )).toThrow("video textures must carry sampleTimeMicros");
-    expect(() => admitProgramTextures(
-      [{ ...earlyRequirement, kind: "image", sampleTimeMicros: 250_000 }],
-      [{ key: logicalKey, slot: 1 }],
-      new Map([[1, earlyObject]]),
-    )).toThrow("only video textures may carry sampleTimeMicros");
+    expect(() =>
+      resolveProgramTexture(admitted, {
+        ...earlyRequirement,
+        sampleTimeMicros: 500_000,
+      }),
+    ).toThrow("program texture");
+    expect(() =>
+      admitProgramTextures(
+        [{ ...earlyRequirement, sampleTimeMicros: null }],
+        [{ key: logicalKey, slot: 1 }],
+        new Map([[1, earlyObject]]),
+      ),
+    ).toThrow("video textures must carry sampleTimeMicros");
+    expect(() =>
+      admitProgramTextures(
+        [{ ...earlyRequirement, kind: "image", sampleTimeMicros: 250_000 }],
+        [{ key: logicalKey, slot: 1 }],
+        new Map([[1, earlyObject]]),
+      ),
+    ).toThrow("only video textures may carry sampleTimeMicros");
   });
 });

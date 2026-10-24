@@ -72,9 +72,8 @@ test("Timeline compiler boots without fixed fulfillment and does not open previe
       return {
         normalizeTimeline: (value) => value,
         timelineTimeFromFrames: (frames, fps) => frames / Number(fps),
-        timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) => (
-          frames / Number(fps) * (rate ?? 1)
-        ),
+        timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) =>
+          (frames / Number(fps)) * (rate ?? 1),
         compileTimeline: () => canonical,
         canonicalizeTimelineDocument: () => canonical,
       };
@@ -91,48 +90,69 @@ test("Timeline compiler boots without fixed fulfillment and does not open previe
 });
 
 test("file Studio passes resolved Motion metadata separately from author clips", async () => {
-  const scene = { ...authored, tracks: { visual: [{ clips: [
-    { kind: "motion", component: "card", start: 0, duration: 1 },
-  ] }] } } as Timeline;
-  const compiledInputs: Array<{ timeline: Timeline; durations: Record<string, import("valle-engine").MotionSourceMetadata> | undefined }> = [];
+  const scene = {
+    ...authored,
+    tracks: { visual: [{ clips: [{ kind: "motion", component: "card", start: 0, duration: 1 }] }] },
+  } as Timeline;
+  const compiledInputs: Array<{
+    timeline: Timeline;
+    durations: Record<string, import("valle-engine").MotionSourceMetadata> | undefined;
+  }> = [];
   const runtime = await initializeTimelineWorkspaceRuntime(
-    { ...config, timeline: scene, motionSourceMetadata: { card: { duration: "3/1", role: { type: "clip" } } } },
+    {
+      ...config,
+      timeline: scene,
+      motionSourceMetadata: { card: { duration: "3/1", role: { type: "clip" } } },
+    },
     { load: async () => undefined },
     async () => ({
       normalizeTimeline: (value) => value,
       timelineTimeFromFrames: (frames, fps) => frames / Number(fps),
-      timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) => frames / Number(fps) * (rate ?? 1),
-      compileTimeline: (timeline, durations) => { compiledInputs.push({ timeline, durations }); return canonical; },
+      timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) =>
+        (frames / Number(fps)) * (rate ?? 1),
+      compileTimeline: (timeline, durations) => {
+        compiledInputs.push({ timeline, durations });
+        return canonical;
+      },
       canonicalizeTimelineDocument: () => canonical,
     }),
   );
   expect(compiledInputs[0]!.timeline).toEqual(scene);
-  expect(compiledInputs[0]!.durations).toEqual({ card: { duration: "3/1", role: { type: "clip" } } });
+  expect(compiledInputs[0]!.durations).toEqual({
+    card: { duration: "3/1", role: { type: "clip" } },
+  });
   runtime.setMotionSourceMetadata({ otherData: { duration: "2/1", role: { type: "clip" } } });
   runtime.compileTimeline(scene);
-  expect(compiledInputs[1]!.durations).toEqual({ card: { duration: "3/1", role: { type: "clip" } }, otherData: { duration: "2/1", role: { type: "clip" } } });
+  expect(compiledInputs[1]!.durations).toEqual({
+    card: { duration: "3/1", role: { type: "clip" } },
+    otherData: { duration: "2/1", role: { type: "clip" } },
+  });
   runtime.setMotionSourceMetadata({ card: { duration: "4/1", role: { type: "clip" } } });
   runtime.compileTimeline(scene);
-  expect(compiledInputs[2]!.durations).toEqual({ card: { duration: "4/1", role: { type: "clip" } }, otherData: { duration: "2/1", role: { type: "clip" } } });
+  expect(compiledInputs[2]!.durations).toEqual({
+    card: { duration: "4/1", role: { type: "clip" } },
+    otherData: { duration: "2/1", role: { type: "clip" } },
+  });
   expect(scene.tracks.visual![0]!.clips[0]).not.toHaveProperty("sourceDuration");
 });
 
 test("Timeline compiler rejects a hosted render projection from another working copy", async () => {
-  await expect(initializeTimelineWorkspaceRuntime(
-    config,
-    {
-      load: async () => undefined,
-    },
-    async () => ({
-      normalizeTimeline: (value) => value,
-      timelineTimeFromFrames: (frames, fps) => frames / Number(fps),
-      timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) => (
-        frames / Number(fps) * (rate ?? 1)
-      ),
-      compileTimeline: () => canonical,
-      canonicalizeTimelineDocument: () => ({ ...canonical, timelineJson: "different" }),
-    }),
-  )).rejects.toThrow("render projection does not match");
+  await expect(
+    initializeTimelineWorkspaceRuntime(
+      config,
+      {
+        load: async () => undefined,
+      },
+      async () => ({
+        normalizeTimeline: (value) => value,
+        timelineTimeFromFrames: (frames, fps) => frames / Number(fps),
+        timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) =>
+          (frames / Number(fps)) * (rate ?? 1),
+        compileTimeline: () => canonical,
+        canonicalizeTimelineDocument: () => ({ ...canonical, timelineJson: "different" }),
+      }),
+    ),
+  ).rejects.toThrow("render projection does not match");
 });
 
 test("Timeline preview receives the exact fixed-package bytes", async () => {
@@ -141,22 +161,25 @@ test("Timeline preview receives the exact fixed-package bytes", async () => {
     cpuThreads: 3,
     render: {
       ...config.render,
-      fixedPackageManifestJson: "{\"format\":\"valle.fixed-render-package@1\"}",
+      fixedPackageManifestJson: '{"format":"valle.fixed-render-package@1"}',
       resourceManifestJson: JSON.stringify(resourceManifest),
       resourceManifest,
-      verifiedBindingBundleJson: "{\"bindings\":{}}",
+      verifiedBindingBundleJson: '{"bindings":{}}',
     },
   } as unknown as TimelineWorkspaceRuntimeConfig;
   const loads: Record<string, unknown>[] = [];
   const runtime = await initializeTimelineWorkspaceRuntime(
     previewConfig,
-    { load: async (options) => { loads.push(options as unknown as Record<string, unknown>); } },
+    {
+      load: async (options) => {
+        loads.push(options as unknown as Record<string, unknown>);
+      },
+    },
     async () => ({
       normalizeTimeline: (value) => value,
       timelineTimeFromFrames: (frames, fps) => frames / Number(fps),
-      timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) => (
-        frames / Number(fps) * (rate ?? 1)
-      ),
+      timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) =>
+        (frames / Number(fps)) * (rate ?? 1),
       compileTimeline: () => canonical,
       canonicalizeTimelineDocument: () => canonical,
     }),
@@ -165,9 +188,7 @@ test("Timeline preview receives the exact fixed-package bytes", async () => {
   expect(runtime.previewAvailable).toBe(true);
   expect(loads[0]?.renderMode).toBe("realtime");
   expect(loads[0]?.cpuThreads).toBe(3);
-  expect(loads[0]?.fixedPackageManifestJson).toBe(
-    "{\"format\":\"valle.fixed-render-package@1\"}",
-  );
+  expect(loads[0]?.fixedPackageManifestJson).toBe('{"format":"valle.fixed-render-package@1"}');
   expect(loads[0]).not.toHaveProperty("resourceManifest");
   expect(loads[0]).not.toHaveProperty("timelineRevision");
 });
@@ -180,19 +201,16 @@ test("Timeline preview rejects partial fixed render fulfillment", async () => {
       resourceManifestJson: "{}",
     },
   } as unknown as TimelineWorkspaceRuntimeConfig;
-  await expect(initializeTimelineWorkspaceRuntime(
-    partial,
-    { load: async () => undefined },
-    async () => ({
+  await expect(
+    initializeTimelineWorkspaceRuntime(partial, { load: async () => undefined }, async () => ({
       normalizeTimeline: (value) => value,
       timelineTimeFromFrames: (frames, fps) => frames / Number(fps),
-      timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) => (
-        frames / Number(fps) * (rate ?? 1)
-      ),
+      timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) =>
+        (frames / Number(fps)) * (rate ?? 1),
       compileTimeline: () => canonical,
       canonicalizeTimelineDocument: () => canonical,
-    }),
-  )).rejects.toThrow("complete fixed package manifest and members together");
+    })),
+  ).rejects.toThrow("complete fixed package manifest and members together");
 });
 
 test("Timeline preview rejects an empty fixed render fulfillment", async () => {
@@ -206,17 +224,14 @@ test("Timeline preview rejects an empty fixed render fulfillment", async () => {
       verifiedBindingBundleJson: "",
     },
   } as unknown as TimelineWorkspaceRuntimeConfig;
-  await expect(initializeTimelineWorkspaceRuntime(
-    emptyBundle,
-    { load: async () => undefined },
-    async () => ({
+  await expect(
+    initializeTimelineWorkspaceRuntime(emptyBundle, { load: async () => undefined }, async () => ({
       normalizeTimeline: (value) => value,
       timelineTimeFromFrames: (frames, fps) => frames / Number(fps),
-      timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) => (
-        frames / Number(fps) * (rate ?? 1)
-      ),
+      timelineSourceTimeDeltaFromFrames: (frames, fps, rate = 1) =>
+        (frames / Number(fps)) * (rate ?? 1),
       compileTimeline: () => canonical,
       canonicalizeTimelineDocument: () => canonical,
-    }),
-  )).rejects.toThrow("fixed package strings must not be empty");
+    })),
+  ).rejects.toThrow("fixed package strings must not be empty");
 });

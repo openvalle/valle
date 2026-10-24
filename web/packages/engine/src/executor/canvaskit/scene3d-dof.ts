@@ -1,10 +1,4 @@
-import type {
-  CanvasKit,
-  GrDirectContext,
-  Image,
-  Shader,
-  Surface,
-} from "canvaskit-wasm";
+import type { CanvasKit, GrDirectContext, Image, Shader, Surface } from "canvaskit-wasm";
 import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
 
 export interface DeferredScene3dDof {
@@ -19,20 +13,12 @@ export interface DeferredScene3dDof {
   depth: Uint8Array;
 }
 
-export function decodeDeferredScene3dDof(
-  packet: Uint8Array,
-): DeferredScene3dDof {
+export function decodeDeferredScene3dDof(packet: Uint8Array): DeferredScene3dDof {
   if (packet.byteLength < 80) throw new Error("Truncated Scene3D DOF packet");
-  const view = new DataView(
-    packet.buffer,
-    packet.byteOffset,
-    packet.byteLength,
-  );
-  if (view.getUint32(0, true) !== 0x464f4456)
-    throw new Error("Unsupported Scene3D DOF packet");
-  const [width, height, x, y, inputWidth, inputHeight] = Array.from(
-    { length: 6 },
-    (_, i) => view.getUint32(4 + i * 4, true),
+  const view = new DataView(packet.buffer, packet.byteOffset, packet.byteLength);
+  if (view.getUint32(0, true) !== 0x464f4456) throw new Error("Unsupported Scene3D DOF packet");
+  const [width, height, x, y, inputWidth, inputHeight] = Array.from({ length: 6 }, (_, i) =>
+    view.getUint32(4 + i * 4, true),
   );
   if (
     !width ||
@@ -45,11 +31,8 @@ export function decodeDeferredScene3dDof(
   )
     throw new Error("Invalid Scene3D DOF extent");
   const pixels = inputWidth! * inputHeight!;
-  if (packet.byteLength !== 80 + pixels * 12)
-    throw new Error("Invalid Scene3D DOF planes");
-  const uniforms = Float32Array.from({ length: 13 }, (_, i) =>
-    view.getFloat32(28 + i * 4, true),
-  );
+  if (packet.byteLength !== 80 + pixels * 12) throw new Error("Invalid Scene3D DOF planes");
+  const uniforms = Float32Array.from({ length: 13 }, (_, i) => view.getFloat32(28 + i * 4, true));
   if (
     !uniforms.every(Number.isFinite) ||
     uniforms[0] !== width ||
@@ -130,8 +113,7 @@ export class CanvasKitScene3dDof {
           width: input.width,
           height: input.height,
         });
-        if (!this.surface)
-          throw new Error("Scene3D DOF output allocation failed");
+        if (!this.surface) throw new Error("Scene3D DOF output allocation failed");
         this.extent = extent;
       }
       source = color.makeShaderOptions(
@@ -148,12 +130,7 @@ export class CanvasKitScene3dDof {
         ck.MipmapMode.None,
         [0.25, 0, input.x, 0, 1, input.y, 0, 0, 1],
       );
-      shader = this.builtins.shader(
-        "scene3dDof",
-        input.uniforms,
-        [source, packed],
-        true,
-      );
+      shader = this.builtins.shader("scene3dDof", input.uniforms, [source, packed], true);
       paint.setBlendMode(ck.BlendMode.Src);
       paint.setShader(shader);
       this.surface!.getCanvas().drawPaint(paint);
