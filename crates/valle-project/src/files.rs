@@ -327,6 +327,10 @@ pub fn copy_new(
         permissions.set_mode(permissions.mode() | 0o200);
     }
     #[cfg(windows)]
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "Windows only clears FILE_ATTRIBUTE_READONLY; Unix sets the owner-write bit above."
+    )]
     permissions.set_readonly(false);
     fs::set_permissions(&path, permissions)?;
     let file = fs::OpenOptions::new().read(true).write(true).open(&path)?;

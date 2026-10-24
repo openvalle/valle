@@ -294,6 +294,7 @@ pub(super) fn render(
                         pixels: &pixels,
                         evidence: &evidence,
                     }),
+                    #[cfg(target_os = "macos")]
                     CompletedPixels::Shared(frame) => sink.push_shared(DeliveredSharedFrame {
                         sequence,
                         key,

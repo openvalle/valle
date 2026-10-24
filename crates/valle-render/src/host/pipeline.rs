@@ -19,8 +19,11 @@ use valle_engine::{
     render::{FrameKey, RenderId},
     resource::ContentDigest,
 };
-use valle_media::{SharedVideoFrame, SharedVideoFramePool};
+#[cfg(target_os = "macos")]
+use valle_media::SharedVideoFrame;
+use valle_media::SharedVideoFramePool;
 
+#[cfg(target_os = "macos")]
 use super::DeliveredSharedFrame;
 #[cfg(target_os = "macos")]
 use super::gpu_schedule::{AdaptiveQueues, QueueSample, metal_memory};
@@ -731,6 +734,7 @@ struct CompletedFrame {
 enum CompletedPixels {
     Rgba(valle_media::frame::RgbaFrame),
     /// An encoder-owned surface that Raster wrote in place.
+    #[cfg(target_os = "macos")]
     Shared(SharedVideoFrame),
 }
 
