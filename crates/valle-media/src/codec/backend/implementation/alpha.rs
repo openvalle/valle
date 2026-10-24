@@ -63,8 +63,7 @@ impl TransparentVideoMuxer {
         }
         Self::open_with_clock(
             path,
-            width,
-            height,
+            (width, height),
             Rational(fps_den as i32, fps_num as i32),
             Some(Rational(fps_num as i32, fps_den as i32)),
             false,
@@ -94,8 +93,7 @@ impl TransparentVideoMuxer {
         }
         Self::open_with_clock(
             path,
-            width,
-            height,
+            (width, height),
             Rational(fps_den as i32, fps_num as i32),
             Some(Rational(fps_num as i32, fps_den as i32)),
             false,
@@ -118,8 +116,7 @@ impl TransparentVideoMuxer {
     ) -> Result<Self> {
         Self::open_with_clock(
             path,
-            width,
-            height,
+            (width, height),
             time_base,
             nominal_frame_rate,
             true,
@@ -130,14 +127,14 @@ impl TransparentVideoMuxer {
 
     fn open_with_clock(
         path: &Path,
-        width: u32,
-        height: u32,
+        dimensions: (u32, u32),
         enc_tb: Rational,
         nominal_frame_rate: Option<Rational>,
         preserve_start_timestamp: bool,
         codec_kind: TransparentVideoCodec,
         threads: Option<usize>,
     ) -> Result<Self> {
+        let (width, height) = dimensions;
         ffmpeg_init()?;
         if width == 0 || height == 0 {
             return Err(anyhow!(
@@ -302,7 +299,9 @@ impl TransparentVideoMuxer {
             converted
         } else {
             let mut argb = vec![0u8; expected];
-            for (src, dst) in rgba.data.chunks_exact(4).zip(argb.chunks_exact_mut(4)) {
+            let rgba_pixels = rgba.data.as_chunks::<4>().0;
+            let argb_pixels = argb.as_chunks_mut::<4>().0;
+            for (src, dst) in rgba_pixels.iter().zip(argb_pixels) {
                 dst[0] = src[3];
                 dst[1] = src[0];
                 dst[2] = src[1];

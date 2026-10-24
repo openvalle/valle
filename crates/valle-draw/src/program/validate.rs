@@ -624,7 +624,7 @@ fn validate_stroke(stroke: &super::PathStroke, location: &str) -> Result<(), Dra
 
 fn validate_dash(dash: &[f32], offset: f32, location: &str) -> Result<(), DrawProgramError> {
     finite_f32(offset, &format!("{location}.dashOffset"))?;
-    if dash.len() % 2 != 0 {
+    if !dash.len().is_multiple_of(2) {
         return invalid(
             format!("{location}.dash"),
             "dash intervals must have even length",

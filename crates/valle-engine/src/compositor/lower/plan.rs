@@ -234,10 +234,10 @@ impl PlanProgram {
             id: frame.id,
             kind: frame.kind,
             semantic_path: frame.semantic_path.clone(),
-            structure_hash: structure_hash.clone(),
-            baseline_content_hash: baseline_content_hash.clone(),
+            structure_hash,
+            baseline_content_hash,
             baseline_packed: packed.clone(),
-            baseline_frame_hash: baseline_frame_hash.clone(),
+            baseline_frame_hash,
             baseline_frame_packed,
             resources: frame.resources.clone(),
             destination_uses: frame.destination_uses.clone(),
@@ -246,7 +246,7 @@ impl PlanProgram {
         let program = Self {
             id,
             content_hash,
-            frame_hash: baseline_frame_hash.clone(),
+            frame_hash: baseline_frame_hash,
             patch,
             frame_patch,
             frame: OnceLock::from(frame),
@@ -305,10 +305,10 @@ impl PlanProgram {
             id: frame.id,
             kind: frame.kind,
             semantic_path: frame.semantic_path.clone(),
-            structure_hash: structure_hash.clone(),
-            baseline_content_hash: baseline_content_hash.clone(),
+            structure_hash,
+            baseline_content_hash,
             baseline_packed: packed.clone(),
-            baseline_frame_hash: baseline_frame_hash.clone(),
+            baseline_frame_hash,
             baseline_frame_packed,
             resources: frame.resources.clone(),
             destination_uses: frame.destination_uses.clone(),
@@ -317,7 +317,7 @@ impl PlanProgram {
         let program = Self {
             id,
             content_hash,
-            frame_hash: baseline_content_hash.clone(),
+            frame_hash: baseline_content_hash,
             patch: Vec::new(),
             frame_patch: Vec::new(),
             frame: OnceLock::from(frame),
@@ -398,8 +398,8 @@ impl PlanProgram {
             runtime_program,
             structure_hash: OnceLock::from(structure_hash),
             admitted_baseline: OnceLock::from(PlanProgramAdmissionKey {
-                content: layout.baseline_content_hash.clone(),
-                frame: layout.baseline_frame_hash.clone(),
+                content: layout.baseline_content_hash,
+                frame: layout.baseline_frame_hash,
             }),
             initial_layout: None,
             constructed: false,
@@ -478,10 +478,10 @@ impl PlanProgram {
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
             runtime_program: Some(runtime_program),
-            structure_hash: OnceLock::from(layout.structure_hash.clone()),
+            structure_hash: OnceLock::from(layout.structure_hash),
             admitted_baseline: OnceLock::from(PlanProgramAdmissionKey {
-                content: layout.baseline_content_hash.clone(),
-                frame: layout.baseline_frame_hash.clone(),
+                content: layout.baseline_content_hash,
+                frame: layout.baseline_frame_hash,
             }),
             initial_layout: None,
             constructed: true,
@@ -532,8 +532,8 @@ impl PlanProgram {
             ));
         }
         let admission = PlanProgramAdmissionKey {
-            content: layout.baseline_content_hash.clone(),
-            frame: layout.baseline_frame_hash.clone(),
+            content: layout.baseline_content_hash,
+            frame: layout.baseline_frame_hash,
         };
         if let Some(attached) = self.admitted_baseline.get() {
             if attached != &admission
@@ -597,7 +597,7 @@ impl PlanProgram {
             &expected_local_schedule,
         )?;
         self.structure_hash
-            .set(layout.structure_hash.clone())
+            .set(layout.structure_hash)
             .map_err(|_| invalid("program.layout", "program structure admission raced"))?;
         self.admitted_baseline
             .set(admission)
@@ -645,16 +645,16 @@ impl PlanProgram {
             .map_err(|error| invalid("program.framePatch", error))?;
         Ok(Self {
             id: self.id,
-            content_hash: self.content_hash.clone(),
+            content_hash: self.content_hash,
             frame_hash,
             patch,
             frame_patch,
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
-            structure_hash: OnceLock::from(layout.structure_hash.clone()),
+            structure_hash: OnceLock::from(layout.structure_hash),
             admitted_baseline: OnceLock::from(PlanProgramAdmissionKey {
-                content: layout.baseline_content_hash.clone(),
-                frame: layout.baseline_frame_hash.clone(),
+                content: layout.baseline_content_hash,
+                frame: layout.baseline_frame_hash,
             }),
             initial_layout: None,
             constructed: false,
@@ -1483,7 +1483,7 @@ impl OptimizationReport {
         let hash = super::optimizer::state_hash(resources, passes)
             .map_err(|error| PlanValidationError::Canonical(error.to_string()))?;
         Ok(Self {
-            input_physical_hash: hash.clone(),
+            input_physical_hash: hash,
             output_physical_hash: hash,
             rewrites: Vec::new(),
         })
@@ -1711,6 +1711,10 @@ pub struct PlanFrameLayer {
     rename_all = "camelCase",
     rename_all_fields = "camelCase",
     deny_unknown_fields
+)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The frame execution tables keep pass data inline, without a separate allocation per pass."
 )]
 pub enum ExecutionPassKind {
     ClearRegion {
@@ -2146,7 +2150,7 @@ impl RenderPlanTemplate {
             .map(PlanProgram::take_initial_layout)
             .collect::<Result<Vec<_>, _>>()?;
         let placeholder = ContentDigest::from_bytes([0; 32]);
-        let cached_template_hash = placeholder.clone();
+        let cached_template_hash = placeholder;
         let template = Self {
             render_id,
             structure_hash: placeholder,
@@ -2262,7 +2266,7 @@ impl RenderPlanTemplate {
     }
 
     pub fn template_hash(&self) -> Result<ContentDigest, PlanValidationError> {
-        Ok(self.cached_template_hash.clone())
+        Ok(self.cached_template_hash)
     }
 
     pub fn validate_bindings(&self, bindings: &RenderBindings) -> Result<(), PlanValidationError> {
@@ -2421,8 +2425,8 @@ impl TryFrom<RenderPlanTemplateWire> for RenderPlanTemplate {
     type Error = PlanValidationError;
 
     fn try_from(value: RenderPlanTemplateWire) -> Result<Self, Self::Error> {
-        let declared_structure_hash = value.structure_hash.clone();
-        let cached_template_hash = declared_structure_hash.clone();
+        let declared_structure_hash = value.structure_hash;
+        let cached_template_hash = declared_structure_hash;
         let template = Self {
             render_id: value.render_id,
             structure_hash: value.structure_hash,

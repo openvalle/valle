@@ -475,6 +475,10 @@ fn template_frames(
         .frames())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the rendering inputs, source and output geometry, and validation context explicit."
+)]
 fn prepare_endpoint(
     render: &CompiledRender,
     evaluated: &EvaluatedRenderFrame,
@@ -1197,7 +1201,7 @@ fn adapt_endpoint(
         source: VisualSource::Asset {
             id: asset.id.clone(),
             asset_kind: asset.kind,
-            digest: asset.digest.clone(),
+            digest: asset.digest,
             descriptor: asset.descriptor.clone(),
         },
         transform,
@@ -1416,15 +1420,15 @@ fn adapt_transform_with_fit(
         .unwrap_or([f64::from(source_width), f64::from(source_height)]);
     let rotation = layer.rotation();
     let (sin, cos) = rotation.sin_cos();
-    let local_x = (0.5 - anchor_x) * f64::from(source_width) * scale_x;
-    let local_y = (0.5 - anchor_y) * f64::from(source_height) * scale_y;
+    let local_x = (0.5 - anchor_x) * source_width * scale_x;
+    let local_y = (0.5 - anchor_y) * source_height * scale_y;
     let adjusted_x = position_x + (cos * local_x - sin * local_y) / f64::from(canvas.width());
     let adjusted_y = position_y + (sin * local_x + cos * local_y) / f64::from(canvas.height());
     Ok(ResolvedTransform {
         x: adjusted_x,
         y: adjusted_y,
-        width: f64::from(source_width) * scale_x.abs() / f64::from(canvas.width()),
-        height: f64::from(source_height) * scale_y.abs() / f64::from(canvas.height()),
+        width: source_width * scale_x.abs() / f64::from(canvas.width()),
+        height: source_height * scale_y.abs() / f64::from(canvas.height()),
         anchor: Anchor::Center,
         scale: 1.0,
         rotation: rotation * 180.0 / PI,

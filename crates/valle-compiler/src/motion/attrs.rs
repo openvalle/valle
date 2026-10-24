@@ -534,7 +534,9 @@ impl<'s> Compiler<'s> {
                 };
                 Some(
                     numbers
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .map(|pair| {
                             let x = self.push(
                                 Expr::Const {
@@ -1126,7 +1128,7 @@ impl<'s> Compiler<'s> {
             let number = |name: &str| object.get(name)?.as_f64().filter(|v| v.is_finite());
             let integer = |name: &str| {
                 let value = number(name)?;
-                (value.fract() == 0.0 && value >= 0.0 && value <= 9_007_199_254_740_991.0)
+                (value.fract() == 0.0 && (0.0..=9_007_199_254_740_991.0).contains(&value))
                     .then_some(value as u64)
             };
             let typed = |name: &str| object.get(name).and_then(motion_value_from_json);

@@ -1420,7 +1420,7 @@ impl ClockHints {
         single.extend(
             self.runs
                 .iter()
-                .filter(|(key, start)| **start == last_frame && !wraps(*key, 0, &self.first))
+                .filter(|(key, start)| **start == last_frame && !wraps(key, 0, &self.first))
                 .map(|(key, start)| (key.clone(), single_frame(*start), None)),
         );
         push_grouped(
@@ -1531,6 +1531,8 @@ impl ClockHints {
     }
 }
 
+type NodeFinding = (String, FrameRun, Option<(f64, f64)>);
+
 /// Hints of one code about nodes, one per element that draws them: the rows of an instance group
 /// merge under their host, and copies of a source element, such as the rows of an expanded
 /// `.map`, under the element.
@@ -1538,7 +1540,7 @@ fn push_grouped(
     issues: &mut Vec<MotionReviewIssue>,
     kind: (&'static str, &'static str),
     message: &'static str,
-    found: Vec<(String, FrameRun, Option<(f64, f64)>)>,
+    found: Vec<NodeFinding>,
     hosts: &BTreeMap<String, String>,
     elements: &BTreeMap<String, String>,
 ) {

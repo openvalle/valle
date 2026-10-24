@@ -272,7 +272,7 @@ impl RequestAllocator {
             SemanticAssetKind::Audio => unreachable!("rejected above"),
         };
         self.allocate(
-            ResourceKey::new(asset.digest.clone(), interpretation),
+            ResourceKey::new(asset.digest, interpretation),
             sample,
             expected,
             path,
@@ -292,7 +292,7 @@ impl RequestAllocator {
             .extent()
             .ok_or(RequestError::InvalidVisualDescriptor)?;
         self.allocate(
-            ResourceKey::new(asset.digest.clone(), ResourceInterpretation::DataTexture {}),
+            ResourceKey::new(asset.digest, ResourceInterpretation::DataTexture {}),
             ResourceSample::Static,
             ExternalResourceDesc::DataTexture { extent },
             path,

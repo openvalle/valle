@@ -272,10 +272,11 @@ impl Project {
         let mut entries = BTreeMap::new();
         for input in inputs {
             let key = self.path_key(&input.path)?;
-            if let Some(previous) = entries.insert(key.clone(), input.clone()) {
-                if previous.digest != input.digest {
-                    bail!("input changed while capturing: {key}");
-                }
+            let changed = entries
+                .insert(key.clone(), input.clone())
+                .is_some_and(|previous| previous.digest != input.digest);
+            if changed {
+                bail!("input changed while capturing: {key}");
             }
         }
         let files = entries
@@ -295,13 +296,13 @@ impl Project {
             }))
             .collect::<Vec<_>>();
         let history = self.history()?;
-        if let Some(last) = history.last() {
-            if last.files == files {
-                return Ok(SavedSnapshot {
-                    snapshot: last.number,
-                    unchanged: true,
-                });
-            }
+        if let Some(last) = history.last()
+            && last.files == files
+        {
+            return Ok(SavedSnapshot {
+                snapshot: last.number,
+                unchanged: true,
+            });
         }
         let number = history.last().map_or(1, |s| s.number + 1);
         let directory = self.root.join(".valle/history");

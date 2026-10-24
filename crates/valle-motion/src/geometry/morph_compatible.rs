@@ -430,14 +430,16 @@ fn solve_two_rhs(
         matrix.swap(column, pivot);
         rhs_x.swap(column, pivot);
         rhs_y.swap(column, pivot);
-        for row in column + 1..count {
-            let factor = matrix[row][column] / matrix[column][column];
-            matrix[row][column] = 0.0;
-            for at in column + 1..count {
-                matrix[row][at] -= factor * matrix[column][at];
+        let (previous, following) = matrix.split_at_mut(column + 1);
+        let pivot_row = &previous[column];
+        for (offset, row) in following.iter_mut().enumerate() {
+            let factor = row[column] / pivot_row[column];
+            row[column] = 0.0;
+            for (value, pivot_value) in row.iter_mut().zip(pivot_row).skip(column + 1) {
+                *value -= factor * pivot_value;
             }
-            rhs_x[row] -= factor * rhs_x[column];
-            rhs_y[row] -= factor * rhs_y[column];
+            rhs_x[column + 1 + offset] -= factor * rhs_x[column];
+            rhs_y[column + 1 + offset] -= factor * rhs_y[column];
         }
     }
     let mut solved_x = vec![0.0; count];
@@ -682,10 +684,9 @@ fn single_closed(path: &PathData) -> Result<Option<FlattenedContour>, GeometryEr
     Ok(contours.pop())
 }
 
-fn normalized_pair(
-    from: &PathData,
-    to: &PathData,
-) -> Result<Option<(Vec<Point>, Vec<Point>)>, GeometryError> {
+type ContourPair = (Vec<Point>, Vec<Point>);
+
+fn normalized_pair(from: &PathData, to: &PathData) -> Result<Option<ContourPair>, GeometryError> {
     let (Some(mut from), Some(mut to)) = (single_closed(from)?, single_closed(to)?) else {
         return Ok(None);
     };
@@ -905,7 +906,7 @@ fn triangulate_cut_annulus(
         return None;
     }
     let mut triangles = Vec::with_capacity(cut.len() - 2);
-    for indices in raw.triangle_indices.chunks_exact(3) {
+    for indices in raw.triangle_indices.as_chunks::<3>().0 {
         let [a, mut b, mut c] = [indices[0], indices[1], indices[2]];
         if [a, b, c].iter().any(|&index| index >= cut.len()) {
             return None;

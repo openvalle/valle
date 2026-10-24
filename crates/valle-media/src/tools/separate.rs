@@ -279,7 +279,7 @@ impl StereoSource for WorkspaceStereoSource<'_> {
             .workspace
             .read_frames(self.position, end)
             .map_err(anyhow::Error::new)?;
-        for (index, frame) in buffer.samples.chunks_exact(2).enumerate() {
+        for (index, frame) in buffer.samples.as_chunks::<2>().0.iter().enumerate() {
             left[index] = frame[0];
             right[index] = frame[1];
         }

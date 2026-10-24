@@ -483,7 +483,7 @@ impl<'a> PrepareState<'a> {
             digest,
             descriptor,
         } = &clip.source;
-        let asset = SemanticAsset::new(id.clone(), *asset_kind, digest.clone(), descriptor.clone());
+        let asset = SemanticAsset::new(id.clone(), *asset_kind, *digest, descriptor.clone());
         let sample = match asset_kind {
             SemanticAssetKind::Image => ResourceSample::Static,
             SemanticAssetKind::Video => ResourceSample::SourceTime(source_time),

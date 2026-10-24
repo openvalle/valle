@@ -53,10 +53,9 @@ impl Length {
             (p, LengthUnit::Em)
         } else if let Some(p) = s.strip_suffix("vw") {
             (p, LengthUnit::Vw)
-        } else if let Some(p) = s.strip_suffix("vh") {
-            (p, LengthUnit::Vh)
         } else {
-            return None;
+            let p = s.strip_suffix("vh")?;
+            (p, LengthUnit::Vh)
         };
         let value: f64 = num.trim().parse().ok()?;
         value.is_finite().then_some(Length { value, unit })
@@ -123,10 +122,9 @@ impl Angle {
             (p, AngleUnit::Deg)
         } else if let Some(p) = s.strip_suffix("rad") {
             (p, AngleUnit::Rad)
-        } else if let Some(p) = s.strip_suffix("turn") {
-            (p, AngleUnit::Turn)
         } else {
-            return None;
+            let p = s.strip_suffix("turn")?;
+            (p, AngleUnit::Turn)
         };
         let value: f64 = num.trim().parse().ok()?;
         value.is_finite().then_some(Angle { value, unit })

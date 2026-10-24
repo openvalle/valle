@@ -307,7 +307,7 @@ impl RenderBindings {
         external_ids: Vec<ExternalHandleId>,
         programs: Vec<PlanProgram>,
     ) -> Result<Self, BindingContractError> {
-        let cached_hash = template_hash.clone();
+        let cached_hash = template_hash;
         let bindings = Self {
             render_id,
             template_hash,
@@ -335,7 +335,7 @@ impl RenderBindings {
                 "constructed bindings require attached frame programs".into(),
             ));
         }
-        let cached_hash = template_hash.clone();
+        let cached_hash = template_hash;
         let mut bindings = Self {
             render_id,
             template_hash,
@@ -461,7 +461,7 @@ impl TryFrom<RenderBindingsWire> for RenderBindings {
     type Error = BindingContractError;
 
     fn try_from(value: RenderBindingsWire) -> Result<Self, Self::Error> {
-        let cached_hash = value.template_hash.clone();
+        let cached_hash = value.template_hash;
         let bindings = Self {
             render_id: value.render_id,
             template_hash: value.template_hash,

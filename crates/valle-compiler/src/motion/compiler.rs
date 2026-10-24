@@ -512,7 +512,7 @@ impl<'s> Compiler<'s> {
                         .and_then(|index| index.parse::<usize>().ok())
                         .and_then(|index| artifact.nodes.get(index))
                         .map(|node| node.key.clone());
-                    diagnostic.style = error.style;
+                    diagnostic.style = error.style.map(|issue| *issue);
                     self.push_diagnostic(diagnostic);
                     continue;
                 }
@@ -543,7 +543,7 @@ impl<'s> Compiler<'s> {
                     let mut diagnostic = diagnostic_at(self.source, code, span, error.message);
                     diagnostic.node_path = Some(node.key.clone());
                     diagnostic.utility = Some(class.clone());
-                    diagnostic.style = error.style;
+                    diagnostic.style = error.style.map(|issue| *issue);
                     if node.class_conditions.contains_key(class) {
                         diagnostic.message.push_str(
                             "; candidate from a conditional className (all branches are validated)",
@@ -570,7 +570,7 @@ impl<'s> Compiler<'s> {
                     {
                         span = *origin;
                     }
-                    self.style_diagnostic(span, node.map(|node| node.key.as_str()), issue);
+                    self.style_diagnostic(span, node.map(|node| node.key.as_str()), *issue);
                 } else {
                     self.illegal(DiagCode::ArtifactInvalid, span, error.to_string());
                 }

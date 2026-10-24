@@ -231,10 +231,10 @@ pub fn serve_forever(listener: TcpListener, state: Arc<StudioHost>) -> Result<()
         let stream = stream.context("accepting connection")?;
         let state = Arc::clone(&state);
         std::thread::spawn(move || {
-            if let Err(e) = handle_connection(stream, &state) {
-                if std::env::var_os("VALLE_WEBHOST_DEBUG").is_some() {
-                    eprintln!("webhost conn error: {e:#}");
-                }
+            if let Err(e) = handle_connection(stream, &state)
+                && std::env::var_os("VALLE_WEBHOST_DEBUG").is_some()
+            {
+                eprintln!("webhost conn error: {e:#}");
             }
         });
     }
@@ -1020,20 +1020,19 @@ fn handle_browser_report(body: &str, state: &StudioHost) {
     };
     let status = report["status"].as_str().unwrap_or("unknown").to_owned();
     let mut capture_path: Option<String> = None;
-    if let Some(png_b64) = report["pngBase64"].as_str() {
-        if let Some(dir) = &state.capture_dir {
-            use base64::Engine as _;
-            match base64::engine::general_purpose::STANDARD.decode(png_b64) {
-                Ok(bytes) => {
-                    let n = CAPTURE_SEQ.fetch_add(1, Ordering::Relaxed);
-                    let path = dir.join(format!("capture-{n:04}-{status}.png"));
-                    if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&path, bytes).is_ok()
-                    {
-                        capture_path = Some(path.display().to_string());
-                    }
+    if let Some(png_b64) = report["pngBase64"].as_str()
+        && let Some(dir) = &state.capture_dir
+    {
+        use base64::Engine as _;
+        match base64::engine::general_purpose::STANDARD.decode(png_b64) {
+            Ok(bytes) => {
+                let n = CAPTURE_SEQ.fetch_add(1, Ordering::Relaxed);
+                let path = dir.join(format!("capture-{n:04}-{status}.png"));
+                if std::fs::create_dir_all(dir).is_ok() && std::fs::write(&path, bytes).is_ok() {
+                    capture_path = Some(path.display().to_string());
                 }
-                Err(err) => eprintln!("Motion Studio capture decode failed: {err}"),
             }
+            Err(err) => eprintln!("Motion Studio capture decode failed: {err}"),
         }
     }
     if let Some(obj) = report.as_object_mut() {
@@ -1283,12 +1282,13 @@ fn percent_decode(path: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
-                out.push(hi * 16 + lo);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+        {
+            out.push(hi * 16 + lo);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;

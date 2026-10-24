@@ -277,8 +277,10 @@ fn blend_pixels(
     let mut source_memo = ConversionMemo::default();
     let mut backdrop_memo = ConversionMemo::default();
     for (index, (out, backdrop)) in out
-        .chunks_exact_mut(16)
-        .zip(backdrop.chunks_exact(16))
+        .as_chunks_mut::<16>()
+        .0
+        .iter_mut()
+        .zip(backdrop.as_chunks::<16>().0)
         .enumerate()
     {
         let raw = read_rgba(out);
@@ -311,9 +313,9 @@ fn blend_pixels(
             ]
         } else {
             let backdrop_alpha = backdrop[3];
-            let source_rgb = source_memo.to_blend(tables, source, space);
+            let source_rgb = source_memo.blend_rgb(tables, source, space);
             let backdrop_rgb = if backdrop_alpha > 0.0 {
-                backdrop_memo.to_blend(tables, backdrop, space)
+                backdrop_memo.blend_rgb(tables, backdrop, space)
             } else {
                 [0.0; 3]
             };
@@ -388,7 +390,7 @@ struct ConversionMemo {
 
 impl ConversionMemo {
     #[inline(always)]
-    fn to_blend(
+    fn blend_rgb(
         &mut self,
         tables: &TransferTables,
         pixel: [f32; 4],
@@ -437,7 +439,7 @@ fn read_rgba(bytes: &[u8]) -> [f32; 4] {
 }
 
 fn write_rgba(bytes: &mut [u8], pixel: [f32; 4]) {
-    for (bytes, channel) in bytes.chunks_exact_mut(4).zip(pixel) {
+    for (bytes, channel) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(pixel) {
         bytes.copy_from_slice(&channel.to_ne_bytes());
     }
 }
@@ -1096,7 +1098,7 @@ mod fused {
     }
 
     impl Memo {
-        /// `ConversionMemo::to_blend` of each lane of `pixel`, whose lanes hold the one pixel
+        /// `ConversionMemo::blend_rgb` of each lane of `pixel`, whose lanes hold the one pixel
         /// `key` where it is known, or `None` where a lane in `needed` has a magnitude beyond the
         /// transfer tables.
         #[inline(always)]

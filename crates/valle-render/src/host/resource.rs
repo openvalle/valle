@@ -331,13 +331,12 @@ impl NativeResourceProvider {
                     .insert(*resource.content_digest(), Arc::from(resource.bytes()));
             }
             if resource.kind() == valle_engine::render::CompiledExecutionResourceKind::RuntimeShader
+                && let Some(abi) = resource.abi_digest()
             {
-                if let Some(abi) = resource.abi_digest() {
-                    self.runtime_shaders.insert(
-                        (*resource.content_digest(), *abi),
-                        Arc::from(resource.bytes()),
-                    );
-                }
+                self.runtime_shaders.insert(
+                    (*resource.content_digest(), *abi),
+                    Arc::from(resource.bytes()),
+                );
             }
         }
         self
@@ -438,7 +437,7 @@ impl NativeResourceProvider {
         extent: Extent2d,
         layout: ExternalPixelLayout,
     ) -> Result<SkiaExternalObject, NativeResourceError> {
-        let source = self.source(request.key().content.clone())?;
+        let source = self.source(request.key().content)?;
         match request.sample() {
             ResourceSample::Static => {
                 let bytes = self.source_bytes(&request.key().content, &source)?;
@@ -459,7 +458,7 @@ impl NativeResourceProvider {
                     )?;
                     self.video_memory.insert(request.key().content, memory);
                     self.video.insert(
-                        request.key().content.clone(),
+                        request.key().content,
                         if valle_engine::motion::cpu::is_budgeted() {
                             LibavVideoSource::open_with_transport_and_threads(
                                 &path,
@@ -628,7 +627,7 @@ impl NativeResourceProvider {
                 reason: error.to_string(),
             })?,
         );
-        self.models.insert(digest.clone(), Arc::clone(&model));
+        self.models.insert(*digest, Arc::clone(&model));
         Ok(model)
     }
 
@@ -721,13 +720,13 @@ impl NativeResourceProvider {
                         expected: "fontFace",
                     });
                 };
-                let digest = request.key().content.clone();
-                let source =
-                    self.source(digest.clone())
-                        .map_err(|_| NativeResourceError::MissingFont {
-                            digest: digest.to_string(),
-                            face_index,
-                        })?;
+                let digest = request.key().content;
+                let source = self
+                    .source(digest)
+                    .map_err(|_| NativeResourceError::MissingFont {
+                        digest: digest.to_string(),
+                        face_index,
+                    })?;
                 let bytes = self.source_bytes(&digest, &source)?;
                 Ok(SkiaExternalObject::font_bytes(
                     request.key().clone(),
@@ -742,7 +741,7 @@ impl NativeResourceProvider {
                         expected: "runtimeShader",
                     });
                 };
-                let digest = request.key().content.clone();
+                let digest = request.key().content;
                 let bytes = self
                     .runtime_shaders
                     .get(&(digest, *abi_digest))

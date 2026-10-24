@@ -202,8 +202,7 @@ fn draw_track(
                 sheet,
                 origin,
                 cell,
-                at.0.round() as i32,
-                at.1.round() as i32,
+                (at.0.round() as i32, at.1.round() as i32),
                 [0, 0, 0],
                 255,
                 5,
@@ -212,8 +211,7 @@ fn draw_track(
                 sheet,
                 origin,
                 cell,
-                at.0.round() as i32,
-                at.1.round() as i32,
+                (at.0.round() as i32, at.1.round() as i32),
                 color,
                 255,
                 3,
@@ -240,8 +238,8 @@ fn draw_line(
         };
         let x = (start.0 + (end.0 - start.0) * t).round() as i32;
         let y = (start.1 + (end.1 - start.1) * t).round() as i32;
-        stamp(sheet, origin, cell, x, y, [0, 0, 0], alpha / 2, 2);
-        stamp(sheet, origin, cell, x, y, color, alpha, 1);
+        stamp(sheet, origin, cell, (x, y), [0, 0, 0], alpha / 2, 2);
+        stamp(sheet, origin, cell, (x, y), color, alpha, 1);
     }
 }
 
@@ -249,12 +247,12 @@ fn stamp(
     sheet: &mut RgbaImage,
     origin: (u32, u32),
     cell: (u32, u32),
-    x: i32,
-    y: i32,
+    position: (i32, i32),
     color: [u8; 3],
     alpha: u8,
     radius: i32,
 ) {
+    let (x, y) = position;
     for dy in -radius..=radius {
         for dx in -radius..=radius {
             if dx * dx + dy * dy > radius * radius {

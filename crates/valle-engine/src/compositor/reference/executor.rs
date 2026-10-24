@@ -667,6 +667,10 @@ fn plan_program(
         .ok_or(ReferenceExecuteError::InvalidProgram { program: id })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the rendering inputs, source and output geometry, and validation context explicit."
+)]
 fn preflight_program(
     program: &ReferenceProgramRuntime,
     prepared: &PlanProgram,
@@ -1477,7 +1481,7 @@ fn prepare_reference_clip(
 ) -> Result<ReferenceClip, ReferenceExecuteError> {
     match clip {
         Clip::Rect(rect) => Ok(ReferenceClip::Rect(*rect)),
-        Clip::RoundRect(_) => return Err(ReferenceExecuteError::UnsupportedPass { pass }),
+        Clip::RoundRect(_) => Err(ReferenceExecuteError::UnsupportedPass { pass }),
         Clip::Path { path, .. } => {
             let Some(path) = program.paths().get(path.raw() as usize) else {
                 return Err(ReferenceExecuteError::InvalidProgram { program: id });
@@ -2596,7 +2600,7 @@ fn execute_shared_f16_filter(
         let mut channels = [0.0; 4];
         for (channel, pair) in channels
             .iter_mut()
-            .zip(output_bytes[index..index + 8].chunks_exact(2))
+            .zip(output_bytes[index..index + 8].as_chunks::<2>().0)
         {
             *channel =
                 crate::compositor::bloom::half_to_f32(u16::from_le_bytes([pair[0], pair[1]]));

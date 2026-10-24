@@ -42,7 +42,7 @@ pub fn project_paths(
     }
     let unwrapped = polygons
         .iter()
-        .map(|polygon| unwrap_polygon(polygon))
+        .map(unwrap_polygon)
         .collect::<Result<Vec<_>, _>>()?;
     let all = unwrapped
         .iter()

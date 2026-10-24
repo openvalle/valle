@@ -766,7 +766,7 @@ impl SemanticResourceSnapshot {
         digest: &ContentDigest,
         face_index: u32,
     ) -> Option<&SemanticFontPayload> {
-        self.font_payloads.get(&(digest.clone(), face_index))
+        self.font_payloads.get(&(*digest, face_index))
     }
 
     pub fn motion_payload(&self, key: &str) -> Option<&SemanticMotionPayload> {
@@ -835,7 +835,7 @@ impl SnapshotBuilder {
 
     /// Add one font descriptor and the exact bytes that make it usable for semantic shaping.
     pub fn font_face(mut self, font: SemanticFont, bytes: impl Into<Arc<[u8]>>) -> Self {
-        let identity = (font.digest.clone(), font.face_index, bytes.into());
+        let identity = (font.digest, font.face_index, bytes.into());
         self.fonts.push(font);
         self.font_payloads.push(identity);
         self
@@ -973,7 +973,7 @@ impl SnapshotBuilder {
             }
             ttf_parser::Face::parse(&bytes, face_index).map_err(|error| {
                 SnapshotError::InvalidFontPayload {
-                    digest: actual.clone(),
+                    digest: actual,
                     face_index,
                     reason: error.to_string(),
                 }
@@ -1023,7 +1023,7 @@ impl SnapshotBuilder {
             if actual != structure.digest {
                 return Err(SnapshotError::PayloadDigestMismatch {
                     owner: key,
-                    expected: structure.digest.clone(),
+                    expected: structure.digest,
                     actual,
                 });
             }
@@ -1054,7 +1054,7 @@ impl SnapshotBuilder {
 
         let mut motion_fonts = valle_motion::Fonts::default();
         for font in fonts.values().flatten() {
-            let Some(payload) = font_payloads.get(&(font.digest.clone(), font.face_index)) else {
+            let Some(payload) = font_payloads.get(&(font.digest, font.face_index)) else {
                 continue;
             };
             let mut resource = valle_motion::FontResource::new(
@@ -1070,7 +1070,7 @@ impl SnapshotBuilder {
             motion_fonts
                 .register(resource)
                 .map_err(|error| SnapshotError::InvalidFontPayload {
-                    digest: font.digest.clone(),
+                    digest: font.digest,
                     face_index: font.face_index,
                     reason: error.to_string(),
                 })?;

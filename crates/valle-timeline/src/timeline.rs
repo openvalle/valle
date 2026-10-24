@@ -447,15 +447,13 @@ impl TimelineValidator {
             Some(TimelineCaptionBehaviorWire::Karaoke { .. })
         );
         if !karaoke && !presenter {
-            if let Some(runs) = &clip.runs {
-                for (index, run) in runs.iter().enumerate() {
-                    if run.start.is_some() || run.end.is_some() {
-                        self.error(
-                            "run_timing_requires_karaoke",
-                            &format!("{path}/runs/{index}"),
-                            json!({ "requiredBehavior": "karaoke" }),
-                        );
-                    }
+            for (index, run) in clip.runs.iter().flatten().enumerate() {
+                if run.start.is_some() || run.end.is_some() {
+                    self.error(
+                        "run_timing_requires_karaoke",
+                        &format!("{path}/runs/{index}"),
+                        json!({ "requiredBehavior": "karaoke" }),
+                    );
                 }
             }
         }

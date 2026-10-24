@@ -193,17 +193,19 @@ pub(crate) fn prepare_timeline_preview(
     prepare_timeline_package_impl(timeline, base, Some(media))
 }
 
+type TimelineMediaFacts = (
+    Vec<serde_json::Value>,
+    std::collections::BTreeMap<String, PreviewFile>,
+    std::collections::BTreeMap<String, ContentDigest>,
+);
+
 /// Capture only the media inputs consumed by browser preparation. Motion source
 /// evaluation stays in the Studio Worker, including when a clip binds assets.
 pub(crate) fn prepare_timeline_media_facts(
     timeline: Timeline,
     base: &Path,
     media: &mut FrozenMediaCache,
-) -> Result<(
-    Vec<serde_json::Value>,
-    std::collections::BTreeMap<String, PreviewFile>,
-    std::collections::BTreeMap<String, ContentDigest>,
-)> {
+) -> Result<TimelineMediaFacts> {
     use std::collections::{BTreeMap, BTreeSet};
 
     let original_doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
@@ -1160,14 +1162,14 @@ pub(super) fn collect_used_resources(
                     used.insert(name.to_owned());
                 }
             }
-            if map.contains_key("component") {
-                if let Some(bindings) = map.get("resources").and_then(|v| v.as_object()) {
-                    used.extend(
-                        bindings
-                            .values()
-                            .filter_map(|v| v.as_str().map(str::to_owned)),
-                    );
-                }
+            if map.contains_key("component")
+                && let Some(bindings) = map.get("resources").and_then(|v| v.as_object())
+            {
+                used.extend(
+                    bindings
+                        .values()
+                        .filter_map(|v| v.as_str().map(str::to_owned)),
+                );
             }
             for (_, child) in resource_fields(map) {
                 collect_used_resources(child, used);

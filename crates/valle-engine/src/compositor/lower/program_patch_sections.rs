@@ -163,15 +163,15 @@ impl TokenPatch {
         if length == 0 {
             return;
         }
-        if let Some((start, n, small)) = self.pending_copy.as_mut() {
-            if *start + *n == offset {
-                if *n < 16 {
-                    let end = (*n + source.len()).min(16);
-                    small[*n..end].copy_from_slice(&source[..end - *n]);
-                }
-                *n += length;
-                return;
+        if let Some((start, n, small)) = self.pending_copy.as_mut()
+            && *start + *n == offset
+        {
+            if *n < 16 {
+                let end = (*n + source.len()).min(16);
+                small[*n..end].copy_from_slice(&source[..end - *n]);
             }
+            *n += length;
+            return;
         }
         self.flush_copy();
         let mut small = [0; 16];

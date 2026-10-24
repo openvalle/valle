@@ -444,6 +444,10 @@ fn one_css_component(value: &str) -> bool {
 }
 
 fn finite_css_numbers(source: &str) -> bool {
+    #[expect(
+        clippy::collapsible_match,
+        reason = "A match guard would retain the borrowed token while nested parsing mutably borrows the parser."
+    )]
     fn scan(input: &mut Parser<'_, '_>) -> bool {
         while let Ok(token) = input.next() {
             match token {

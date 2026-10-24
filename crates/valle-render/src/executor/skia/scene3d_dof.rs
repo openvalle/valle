@@ -62,7 +62,8 @@ impl Scene3dDofInput {
         {
             let (mut first, mut last) = (u32::MAX, 0);
             let (mut near_first, mut near_last) = (u32::MAX, 0);
-            for (x, (&z, color)) in depth_row.iter().zip(color_row.chunks_exact(4)).enumerate() {
+            let pixels = depth_row.iter().zip(color_row.as_chunks::<4>().0);
+            for (x, (&z, color)) in pixels.enumerate() {
                 if !z.is_finite() || z <= 0.0 {
                     return Err(SkiaObjectError::InvalidPixelPayload);
                 }

@@ -169,6 +169,10 @@ fn pin(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The recursive match keeps source and target hierarchies, descriptors, and pins explicit."
+)]
 fn match_level(
     from_parent: Option<usize>,
     to_parent: Option<usize>,

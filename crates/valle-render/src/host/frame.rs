@@ -589,18 +589,19 @@ impl FrameExecutionStage {
         let output = spec.output();
         let mut shared = drained(|| self.executor.acquire_shared_frame(pool, output))?;
         drop(acquire_span);
-        let surface = shared.surface_mut().map_err(SkiaExecuteError::from)?;
-        let mut target = SkiaTarget::direct_gpu(surface, output)?;
-        let budget = self.cpu_budget.clone();
-        let mut evidence = budgeted(budget.as_ref(), || {
-            execute_prepared_with(
-                &mut self.executor,
-                prepared,
-                &mut target,
-                FrameDelivery::SharedGpu,
-            )
-        })?;
-        drop(target);
+        let mut evidence = {
+            let surface = shared.surface_mut().map_err(SkiaExecuteError::from)?;
+            let mut target = SkiaTarget::direct_gpu(surface, output)?;
+            let budget = self.cpu_budget.clone();
+            budgeted(budget.as_ref(), || {
+                execute_prepared_with(
+                    &mut self.executor,
+                    prepared,
+                    &mut target,
+                    FrameDelivery::SharedGpu,
+                )
+            })?
+        };
         let submit_span = trace.as_ref().map(|t| t.span("execute.submit"));
         let submitted = drained(|| self.executor.submit_shared_frame(shared))?;
         drop(submit_span);

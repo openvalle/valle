@@ -256,9 +256,9 @@ mod fused {
                 let mut color = vdupq_n_f32(0.0);
                 let mut alpha = vdupq_n_f32(0.0);
                 for row in 0..2 {
-                    for column in 0..2 {
+                    for (column, &are_adjacent) in adjacent.iter().enumerate() {
                         let index = vaddq_u32(rows.index[row], columns.index[column]);
-                        let texels = if adjacent[column] {
+                        let texels = if are_adjacent {
                             self.load(vgetq_lane_u32::<0>(index))
                         } else {
                             self.gather(index)

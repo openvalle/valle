@@ -322,6 +322,10 @@ pub fn unsupported_css_markdown() -> String {
 
 impl ValueLimit {
     fn matches(&self, value: &str) -> bool {
+        #[expect(
+            clippy::collapsible_match,
+            reason = "A match guard would retain the borrowed token while nested parsing mutably borrows the parser."
+        )]
         fn scan(limit: &ValueLimit, input: &mut cssparser::Parser<'_, '_>) -> bool {
             use cssparser::Token;
             while let Ok(token) = input.next() {
@@ -714,24 +718,24 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
             return spec.typed(&[T::Number], false);
         }
     }
-    if let Some(suffix) = name.strip_prefix("motion-perspective-origin-") {
-        if matches!(
+    if let Some(suffix) = name.strip_prefix("motion-perspective-origin-")
+        && matches!(
             suffix,
             "x" | "y" | "x-px" | "y-px" | "x-percent" | "y-percent"
-        ) {
-            spec.lowering = Lowering::Motion;
-            spec.impact = Impact::COMPOSITE;
-            spec.geometry_reuse = Reuse::AcrossFrames;
-            spec.post_layout = true;
-            return spec.typed(
-                if matches!(suffix, "x" | "y") {
-                    &[T::Length]
-                } else {
-                    &[T::Number]
-                },
-                false,
-            );
-        }
+        )
+    {
+        spec.lowering = Lowering::Motion;
+        spec.impact = Impact::COMPOSITE;
+        spec.geometry_reuse = Reuse::AcrossFrames;
+        spec.post_layout = true;
+        return spec.typed(
+            if matches!(suffix, "x" | "y") {
+                &[T::Length]
+            } else {
+                &[T::Number]
+            },
+            false,
+        );
     }
     for prefix in ["motion-displacement-", "motion-backdrop-displacement-"] {
         if let Some(suffix) = name.strip_prefix(prefix)

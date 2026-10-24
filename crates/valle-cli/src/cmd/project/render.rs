@@ -73,7 +73,7 @@ pub(super) fn render(
     let renderer = NativeRenderer::new(
         NativeProject::from_render(
             prepared.opened.engine_render(),
-            Arc::new(std::mem::replace(&mut prepared.catalog, Default::default())),
+            Arc::new(std::mem::take(&mut prepared.catalog)),
         ),
         NativeRenderOptions {
             backend: valle_render::executor::skia::SkiaBackendKind::Raster,

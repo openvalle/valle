@@ -634,7 +634,7 @@ fn resize_to_model_rgb(
             return Ok(source.to_vec());
         }
         let mut output = Vec::with_capacity(MODEL_FRAME_BYTES);
-        for pixel in source.chunks_exact(4) {
+        for pixel in source.as_chunks::<4>().0.iter() {
             output.extend_from_slice(&pixel[..3]);
         }
         return Ok(output);

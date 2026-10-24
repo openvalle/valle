@@ -462,24 +462,23 @@ fn validate_layer_inputs(
     {
         return Err(BoundsError::InvalidGeometryInput);
     }
-    if let Some(camera) = camera {
-        if ![
+    let invalid_camera = camera.is_some_and(|camera| {
+        let values = [
             camera.center_x,
             camera.center_y,
             camera.zoom,
             camera.rotation,
-        ]
-        .iter()
-        .all(|value| value.is_finite())
+        ];
+        !values.iter().all(|value| value.is_finite())
             || camera.zoom <= 0.0
             || camera
                 .target
                 .as_ref()
                 .and_then(|target| target.margin)
                 .is_some_and(|margin| !margin.is_finite() || !(0.0..0.5).contains(&margin))
-        {
-            return Err(BoundsError::InvalidGeometryInput);
-        }
+    });
+    if invalid_camera {
+        return Err(BoundsError::InvalidGeometryInput);
     }
     if let Some(mask) = mask {
         mask.validate_wire()?;

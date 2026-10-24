@@ -235,16 +235,15 @@ impl LightFrameState {
                 color(*ground_color, "groundColor");
             }
         }
-        if let Self::Directional { direction, .. } | Self::Hemisphere { direction, .. } = self {
-            if !direction.finite()
+        if let Self::Directional { direction, .. } | Self::Hemisphere { direction, .. } = self
+            && (!direction.finite()
                 || direction.length_squared() <= 1.0e-12
-                || direction.0.iter().any(|v| v.abs() > MAX_ABS_POSITION)
-            {
-                errors.push(
-                    format!("{path}/direction"),
-                    "light direction must be a finite, bounded, non-zero vector",
-                );
-            }
+                || direction.0.iter().any(|v| v.abs() > MAX_ABS_POSITION))
+        {
+            errors.push(
+                format!("{path}/direction"),
+                "light direction must be a finite, bounded, non-zero vector",
+            );
         }
     }
 }

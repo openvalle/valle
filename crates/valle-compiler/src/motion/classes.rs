@@ -101,6 +101,10 @@ impl Compiler<'_> {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Recursive class expansion carries its guard, source location, outputs, and budgets explicitly."
+    )]
     fn class_expression(
         &mut self,
         expr: ExprId,

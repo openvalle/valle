@@ -218,6 +218,10 @@ pub struct VisualTrack {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Clips are the common track item; keep their payload inline without a per-clip allocation."
+)]
 pub enum VisualItem {
     Clip(VisualClip),
     Gap(Gap),
@@ -480,6 +484,10 @@ pub struct CaptionTrack {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Clips are the common track item; keep their payload inline without a per-clip allocation."
+)]
 pub enum CaptionItem {
     Clip(Caption),
     Motion(CaptionMotion),

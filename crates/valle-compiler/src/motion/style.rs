@@ -203,7 +203,7 @@ impl<'s> Compiler<'s> {
             self.restore_style_scope(&entry.scope);
             let property = entry.property;
             let name = &entry.name;
-            let property_name = camel_to_kebab(&name);
+            let property_name = camel_to_kebab(name);
             if property_name == "layout-transition" {
                 if saw_layout_transition {
                     self.illegal(

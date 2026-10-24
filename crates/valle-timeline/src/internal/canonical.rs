@@ -196,15 +196,18 @@ fn quantize_document_scalars(document: &mut TimelineDocumentWire) {
             if let Some(size) = &mut clip.layer.transform.size {
                 quantize_param(size, quantize_components);
             }
-            if let VisualSourceWire::Video(source) = &mut clip.source {
-                if let Some(gain) = &mut source.gain {
-                    quantize_param(gain, quantize_scalar);
+            match &mut clip.source {
+                VisualSourceWire::Video(source) => {
+                    if let Some(gain) = &mut source.gain {
+                        quantize_param(gain, quantize_scalar);
+                    }
                 }
-            }
-            if let VisualSourceWire::Motion(motion) = &mut clip.source {
-                for param in motion.props.values_mut() {
-                    quantize_param(param, quantize_json_numbers);
+                VisualSourceWire::Motion(motion) => {
+                    for param in motion.props.values_mut() {
+                        quantize_param(param, quantize_json_numbers);
+                    }
                 }
+                _ => {}
             }
         }
     }
@@ -503,7 +506,7 @@ impl<'a> Validator<'a> {
                 if items > MAX_ITEMS_PER_TRACK {
                     self.error(
                         "sequence_item_budget_exceeded",
-                        &format!("{path}/{index}/items"),
+                        format!("{path}/{index}/items"),
                         None,
                         details([
                             ("limit", json!(MAX_ITEMS_PER_TRACK)),
@@ -727,7 +730,7 @@ impl<'a> Validator<'a> {
                 if matches!(source.role, crate::MotionRole::CaptionPresenter { .. }) {
                     self.error(
                         "motion_role_invalid",
-                        &format!("{path}/source/role"),
+                        format!("{path}/source/role"),
                         Some(&clip.id),
                         details([(
                             "reason",
@@ -746,7 +749,7 @@ impl<'a> Validator<'a> {
                 if !crate::internal::Color(source.color.clone()).is_valid() {
                     self.error(
                         "invalid_color",
-                        &format!("{path}/source/color"),
+                        format!("{path}/source/color"),
                         Some(&clip.id),
                         JsonObject::new(),
                     );
@@ -767,7 +770,7 @@ impl<'a> Validator<'a> {
         if motion.role != role {
             self.error(
                 "motion_role_invalid",
-                &format!("{path}/role"),
+                format!("{path}/role"),
                 Some(id),
                 details([(
                     "reason",
@@ -804,7 +807,7 @@ impl<'a> Validator<'a> {
                 if !valid {
                     self.error(
                         "motion_role_invalid",
-                        &format!("{path}/{field}"),
+                        format!("{path}/{field}"),
                         Some(id),
                         details([(
                             "reason",
@@ -820,7 +823,7 @@ impl<'a> Validator<'a> {
         ) {
             self.error(
                 "motion_role_invalid",
-                &format!("{path}/role"),
+                format!("{path}/role"),
                 Some(id),
                 details([("reason", json!(reason))]),
             );
@@ -828,7 +831,7 @@ impl<'a> Validator<'a> {
         if source.props.len() > MAX_MOTION_PROPS {
             self.error(
                 "motion_prop_budget_exceeded",
-                &format!("{path}/props"),
+                format!("{path}/props"),
                 Some(id),
                 details([
                     ("limit", json!(MAX_MOTION_PROPS)),
@@ -1071,7 +1074,7 @@ impl<'a> Validator<'a> {
                 if !(-1.0..=1.0).contains(&grade.temperature) {
                     self.error(
                         "temperature_out_of_range",
-                        &format!("{path}/effect/temperature"),
+                        format!("{path}/effect/temperature"),
                         Some(&effect.id),
                         JsonObject::new(),
                     );
@@ -1099,7 +1102,7 @@ impl<'a> Validator<'a> {
                         if caption.runs.is_empty() {
                             self.error(
                                 "caption_runs_empty",
-                                &format!("{path}/runs"),
+                                format!("{path}/runs"),
                                 Some(&caption.id),
                                 JsonObject::new(),
                             );
@@ -1117,7 +1120,7 @@ impl<'a> Validator<'a> {
                                     if !karaoke {
                                         self.error(
                                             "run_timing_requires_karaoke",
-                                            &format!("{run_path}/timing"),
+                                            format!("{run_path}/timing"),
                                             Some(&run.id),
                                             JsonObject::new(),
                                         );
@@ -1130,7 +1133,7 @@ impl<'a> Validator<'a> {
                                     if timing.end <= timing.start || timing.end > caption.duration {
                                         self.error(
                                             "caption_run_timing_invalid",
-                                            &format!("{run_path}/timing"),
+                                            format!("{run_path}/timing"),
                                             Some(&run.id),
                                             JsonObject::new(),
                                         );
@@ -1141,7 +1144,7 @@ impl<'a> Validator<'a> {
                                     {
                                         self.error(
                                             "caption_run_timing_overlap",
-                                            &format!("{run_path}/timing/start"),
+                                            format!("{run_path}/timing/start"),
                                             Some(&run.id),
                                             JsonObject::new(),
                                         );
@@ -1150,7 +1153,7 @@ impl<'a> Validator<'a> {
                                 }
                                 None if karaoke => self.error(
                                     "karaoke_run_timing_required",
-                                    &format!("{run_path}/timing"),
+                                    format!("{run_path}/timing"),
                                     Some(&run.id),
                                     JsonObject::new(),
                                 ),
@@ -1160,7 +1163,7 @@ impl<'a> Validator<'a> {
                                 if style.font_size.is_none() && style.color.is_none() {
                                     self.error(
                                         "caption_run_style_empty",
-                                        &format!("{run_path}/style"),
+                                        format!("{run_path}/style"),
                                         Some(&run.id),
                                         JsonObject::new(),
                                     );
@@ -1170,7 +1173,7 @@ impl<'a> Validator<'a> {
                                 {
                                     self.error(
                                         "font_size_non_positive",
-                                        &format!("{run_path}/style/fontSize"),
+                                        format!("{run_path}/style/fontSize"),
                                         Some(&run.id),
                                         JsonObject::new(),
                                     );
@@ -1181,7 +1184,7 @@ impl<'a> Validator<'a> {
                                 {
                                     self.error(
                                         "font_size_out_of_range",
-                                        &format!("{run_path}/style/fontSize"),
+                                        format!("{run_path}/style/fontSize"),
                                         Some(&run.id),
                                         details([("maximum", json!(MAX_CAPTION_FONT_SIZE))]),
                                     );
@@ -1191,7 +1194,7 @@ impl<'a> Validator<'a> {
                                 {
                                     self.error(
                                         "invalid_color",
-                                        &format!("{run_path}/style/color"),
+                                        format!("{run_path}/style/color"),
                                         Some(&run.id),
                                         JsonObject::new(),
                                     );
@@ -1210,7 +1213,7 @@ impl<'a> Validator<'a> {
                         if !(caption.style.font_size.is_finite() && caption.style.font_size > 0.0) {
                             self.error(
                                 "font_size_non_positive",
-                                &format!("{path}/style/fontSize"),
+                                format!("{path}/style/fontSize"),
                                 Some(&caption.id),
                                 JsonObject::new(),
                             );
@@ -1218,7 +1221,7 @@ impl<'a> Validator<'a> {
                         if caption.style.font_size > MAX_CAPTION_FONT_SIZE {
                             self.error(
                                 "font_size_out_of_range",
-                                &format!("{path}/style/fontSize"),
+                                format!("{path}/style/fontSize"),
                                 Some(&caption.id),
                                 details([("maximum", json!(MAX_CAPTION_FONT_SIZE))]),
                             );
@@ -1226,7 +1229,7 @@ impl<'a> Validator<'a> {
                         if !crate::internal::Color(caption.style.color.clone()).is_valid() {
                             self.error(
                                 "invalid_color",
-                                &format!("{path}/style/color"),
+                                format!("{path}/style/color"),
                                 Some(&caption.id),
                                 JsonObject::new(),
                             );
@@ -1235,7 +1238,7 @@ impl<'a> Validator<'a> {
                             if !crate::internal::Color(shadow.color.clone()).is_valid() {
                                 self.error(
                                     "invalid_color",
-                                    &format!("{path}/style/shadow/color"),
+                                    format!("{path}/style/shadow/color"),
                                     Some(&caption.id),
                                     JsonObject::new(),
                                 );
@@ -1249,7 +1252,7 @@ impl<'a> Validator<'a> {
                             {
                                 self.error(
                                     "caption_shadow_blur_sigma_out_of_range",
-                                    &format!("{path}/style/shadow/blurSigma"),
+                                    format!("{path}/style/shadow/blurSigma"),
                                     Some(&caption.id),
                                     details([
                                         ("value", json!(shadow.blur_sigma)),
@@ -1324,7 +1327,7 @@ impl<'a> Validator<'a> {
                             if speed == 0.0 {
                                 self.error(
                                     "scroll_speed_zero",
-                                    &format!("{path}/behavior/speed"),
+                                    format!("{path}/behavior/speed"),
                                     Some(&caption.id),
                                     JsonObject::new(),
                                 );
@@ -1346,7 +1349,7 @@ impl<'a> Validator<'a> {
                         ) {
                             self.error(
                                 "motion_role_invalid",
-                                &format!("{path}/source/role"),
+                                format!("{path}/source/role"),
                                 Some(&caption.id),
                                 details([(
                                     "reason",
@@ -1390,7 +1393,7 @@ impl<'a> Validator<'a> {
         if caption.runs.is_empty() {
             self.error(
                 "caption_runs_empty",
-                &format!("{path}/runs"),
+                format!("{path}/runs"),
                 Some(&caption.id),
                 JsonObject::new(),
             );
@@ -1408,7 +1411,7 @@ impl<'a> Validator<'a> {
                     if timing.end <= timing.start || timing.end > caption.duration {
                         self.error(
                             "caption_run_timing_invalid",
-                            &format!("{run_path}/timing"),
+                            format!("{run_path}/timing"),
                             Some(&run.id),
                             JsonObject::new(),
                         );
@@ -1416,7 +1419,7 @@ impl<'a> Validator<'a> {
                 }
                 None => self.error(
                     "presenter_run_timing_required",
-                    &format!("{run_path}/timing"),
+                    format!("{run_path}/timing"),
                     Some(&run.id),
                     JsonObject::new(),
                 ),
@@ -1428,7 +1431,7 @@ impl<'a> Validator<'a> {
             else {
                 self.error(
                     "presenter_run_style_required",
-                    &format!("{run_path}/style"),
+                    format!("{run_path}/style"),
                     Some(&run.id),
                     JsonObject::new(),
                 );
@@ -1437,7 +1440,7 @@ impl<'a> Validator<'a> {
             if !(font_size.is_finite() && *font_size > 0.0) {
                 self.error(
                     "font_size_non_positive",
-                    &format!("{run_path}/style/fontSize"),
+                    format!("{run_path}/style/fontSize"),
                     Some(&run.id),
                     JsonObject::new(),
                 );
@@ -1445,7 +1448,7 @@ impl<'a> Validator<'a> {
             if *font_size > MAX_CAPTION_FONT_SIZE {
                 self.error(
                     "font_size_out_of_range",
-                    &format!("{run_path}/style/fontSize"),
+                    format!("{run_path}/style/fontSize"),
                     Some(&run.id),
                     details([("maximum", json!(MAX_CAPTION_FONT_SIZE))]),
                 );
@@ -1453,7 +1456,7 @@ impl<'a> Validator<'a> {
             if !crate::internal::Color(color.clone()).is_valid() {
                 self.error(
                     "invalid_color",
-                    &format!("{run_path}/style/color"),
+                    format!("{run_path}/style/color"),
                     Some(&run.id),
                     JsonObject::new(),
                 );
@@ -1612,7 +1615,7 @@ impl<'a> Validator<'a> {
                 if curve.keyframes.len() > MAX_KEYFRAMES_PER_CURVE {
                     self.error(
                         "keyframe_budget_exceeded",
-                        &format!("{path}/keyframes"),
+                        format!("{path}/keyframes"),
                         Some(&curve.id),
                         details([
                             ("limit", json!(MAX_KEYFRAMES_PER_CURVE)),
@@ -1623,7 +1626,7 @@ impl<'a> Validator<'a> {
                 if curve.keyframes.is_empty() {
                     self.error(
                         "curve_keyframes_empty",
-                        &format!("{path}/keyframes"),
+                        format!("{path}/keyframes"),
                         Some(&curve.id),
                         JsonObject::new(),
                     );
@@ -1637,7 +1640,7 @@ impl<'a> Validator<'a> {
                     if keyframe.time.is_negative() || keyframe.time > owner {
                         self.error(
                             "keyframe_time_out_of_owner_range",
-                            &format!("{keyframe_path}/time"),
+                            format!("{keyframe_path}/time"),
                             Some(&keyframe.id),
                             JsonObject::new(),
                         );
@@ -1645,7 +1648,7 @@ impl<'a> Validator<'a> {
                     if previous.is_some_and(|time| keyframe.time <= time) {
                         self.error(
                             "keyframe_time_not_strictly_increasing",
-                            &format!("{keyframe_path}/time"),
+                            format!("{keyframe_path}/time"),
                             Some(&keyframe.id),
                             JsonObject::new(),
                         );
@@ -1653,7 +1656,7 @@ impl<'a> Validator<'a> {
                     if index == last && keyframe.out_easing.is_some() {
                         self.error(
                             "last_keyframe_out_easing_not_null",
-                            &format!("{keyframe_path}/outEasing"),
+                            format!("{keyframe_path}/outEasing"),
                             Some(&keyframe.id),
                             JsonObject::new(),
                         );
@@ -1661,7 +1664,7 @@ impl<'a> Validator<'a> {
                     if keyframe.out_easing.is_some_and(|easing| !easing.is_valid()) {
                         self.error(
                             "invalid_easing",
-                            &format!("{keyframe_path}/outEasing"),
+                            format!("{keyframe_path}/outEasing"),
                             Some(&keyframe.id),
                             JsonObject::new(),
                         );

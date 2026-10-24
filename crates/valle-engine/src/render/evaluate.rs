@@ -415,7 +415,7 @@ fn evaluate_resource_ref(
         resource_id: resource.resource_id.clone(),
         role: role.to_owned(),
         kind: resource.kind,
-        digest: resource.digest.clone(),
+        digest: resource.digest,
         handle: resource.handle,
         facts: resource.facts.clone(),
     }

@@ -13,6 +13,10 @@ pub struct RadialBlurParams {
     pub amount: f32,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the rendering inputs, source and output geometry, and validation context explicit."
+)]
 pub fn apply_radial_blur_f16(
     input: &[u8],
     input_width: u32,
@@ -252,6 +256,9 @@ pub fn radial_blur_plan(
     Ok(passes)
 }
 
+/// A pixel region's origin and size.
+pub type PixelRegion = ([i32; 2], [u32; 2]);
+
 /// The input pixels a radial blur of `amount` reads to write `output`: those within the passes'
 /// combined reach of it, as an origin and a size. `None` when no input pixel is that close.
 pub fn radial_blur_input(
@@ -260,7 +267,7 @@ pub fn radial_blur_input(
     input_size: [u32; 2],
     output_origin: [i32; 2],
     output_size: [u32; 2],
-) -> Result<Option<([i32; 2], [u32; 2])>, BloomError> {
+) -> Result<Option<PixelRegion>, BloomError> {
     if !amount.is_finite() || amount < 0.0 {
         return Err(BloomError::InvalidParameters);
     }
@@ -319,6 +326,10 @@ fn radial_blur_steps(amount: f32) -> (Vec<f32>, Vec<i64>) {
 // the number of taps here is bounded independently of output scale and amount.
 //
 // `sx` and `sy` count from the whole input's origin; `source` holds its pixels from `shift` on.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the rendering inputs, source and output geometry, and validation context explicit."
+)]
 fn exact_pixel(
     source: &[[f32; 4]],
     width: usize,

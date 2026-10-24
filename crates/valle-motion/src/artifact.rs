@@ -706,7 +706,7 @@ pub enum NodeKind {
         arrow_end: Option<ArrowSpec>,
     },
     GeometryBatch {
-        batch: GeometryBatchSpec,
+        batch: Box<GeometryBatchSpec>,
     },
     /// One prepared homogeneous template evaluated over a columnar instance table.
     InstanceBatch {
@@ -2763,10 +2763,10 @@ impl SceneArtifact {
     pub(crate) fn validate_impl(&self) -> Result<(), Vec<ValidationError>> {
         let mut errors = Vec::new();
         if let Some(composition) = &self.composition {
-            if let Ok(duration) = composition.duration() {
-                if let Err(reason) = self.role.validate(duration, None) {
-                    errors.push(ValidationError::new("/role", reason));
-                }
+            if let Ok(duration) = composition.duration()
+                && let Err(reason) = self.role.validate(duration, None)
+            {
+                errors.push(ValidationError::new("/role", reason));
             }
         } else if !matches!(self.role, valle_timeline::MotionRole::Clip) {
             errors.push(ValidationError::new(
@@ -3106,14 +3106,14 @@ impl SceneArtifact {
                 ));
             }
             for row in 0..rows {
-                if let Some(key) = group.keys.key_at(row) {
-                    if !identities.insert(key) {
-                        errors.push(ValidationError::new(
-                            format!("{path}/keys"),
-                            "instance row key conflicts with another scene or instance key",
-                        ));
-                        break;
-                    }
+                if let Some(key) = group.keys.key_at(row)
+                    && !identities.insert(key)
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/keys"),
+                        "instance row key conflicts with another scene or instance key",
+                    ));
+                    break;
                 }
             }
             if group.circle_template_parameters().is_some() && rows > 10_000 {
@@ -3156,16 +3156,17 @@ impl SceneArtifact {
                     "instance template must be a Box/Group/Text layout tree, leaf Box, full solid Circle, or translated solid static Path",
                 ));
             }
-            if let Some(static_path) = group.static_path_template() {
-                if static_path.validate().is_err() {
-                    errors.push(ValidationError::new(
-                        format!("{path}/template/kind/d"),
-                        "instance Path geometry must be valid",
-                    ));
-                }
+            if group
+                .static_path_template()
+                .is_some_and(|path| path.validate().is_err())
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}/template/kind/d"),
+                    "instance Path geometry must be valid",
+                ));
             }
-            if layout_group {
-                if group.template.space.is_some()
+            let invalid_layout_template = layout_group
+                && (group.template.space.is_some()
                     || group.template.semantic.is_some()
                     || !layout_text
                         && group.template.styles.iter().any(|style| {
@@ -3189,13 +3190,12 @@ impl SceneArtifact {
                                     | "background-color"
                                     | "opacity"
                             )
-                        })
-                {
-                    errors.push(ValidationError::new(
+                        }));
+            if invalid_layout_template {
+                errors.push(ValidationError::new(
                         format!("{path}/template"),
                         "layout instance template needs a Box, Group, or plain Text with supported inline styles and no semantic scope",
                     ));
-                }
             }
             let mut names = BTreeSet::new();
             for (column_index, column) in group.columns.iter().enumerate() {
@@ -3734,13 +3734,15 @@ impl SceneArtifact {
             .map(|node| node.key.clone())
             .collect::<BTreeSet<_>>();
         for node in &self.nodes {
-            if let NodeKind::InstanceLayout { group } = node.kind {
-                if let Some(group) = self.instance_groups.get(group as usize) {
-                    for row in 0..group.rows() {
-                        if let Some(key) = group.keys.key_at(row) {
-                            keys.insert(key);
-                        }
-                    }
+            let NodeKind::InstanceLayout { group } = node.kind else {
+                continue;
+            };
+            let Some(group) = self.instance_groups.get(group as usize) else {
+                continue;
+            };
+            for row in 0..group.rows() {
+                if let Some(key) = group.keys.key_at(row) {
+                    keys.insert(key);
                 }
             }
         }
@@ -3963,13 +3965,8 @@ impl SceneArtifact {
         });
         let uses_particles = self.nodes.iter().any(|node| {
             matches!(
-                node.kind,
-                NodeKind::GeometryBatch {
-                    batch: GeometryBatchSpec {
-                        positions: BatchPositions::Particles { .. },
-                        ..
-                    }
-                }
+                &node.kind,
+                NodeKind::GeometryBatch { batch } if matches!(batch.positions, BatchPositions::Particles { .. })
             )
         });
         let uses_fields = self.nodes.iter().any(|node| {
@@ -4616,13 +4613,14 @@ impl SceneArtifact {
                     "shader uniform names must be non-empty and unique",
                 ));
             }
-            if let Some([min, max]) = uniform.range {
-                if !min.is_finite() || !max.is_finite() || min > max {
-                    errors.push(ValidationError::new(
-                        format!("{base}/uniforms/{uniform_at}/range"),
-                        "uniform range must be finite and ordered",
-                    ));
-                }
+            let invalid_range = uniform
+                .range
+                .is_some_and(|[min, max]| !min.is_finite() || !max.is_finite() || min > max);
+            if invalid_range {
+                errors.push(ValidationError::new(
+                    format!("{base}/uniforms/{uniform_at}/range"),
+                    "uniform range must be finite and ordered",
+                ));
             }
             let valid = match &uniform.value {
                 ShaderUniformValue::Float { value } => {
@@ -5298,13 +5296,13 @@ impl SceneArtifact {
                     ));
                 }
             }
-            if let NodeKind::MathFormula { latex, .. } = &node.kind {
-                if latex.is_empty() {
-                    errors.push(ValidationError::new(
-                        format!("{path}/kind/latex"),
-                        "MathFormula latex must be non-empty",
-                    ));
-                }
+            if let NodeKind::MathFormula { latex, .. } = &node.kind
+                && latex.is_empty()
+            {
+                errors.push(ValidationError::new(
+                    format!("{path}/kind/latex"),
+                    "MathFormula latex must be non-empty",
+                ));
             }
             if let NodeKind::Image { source } = &node.kind {
                 if let Some(frame) = HostFrame::from_source(source) {
@@ -5372,16 +5370,16 @@ impl SceneArtifact {
             }
             if let NodeKind::Scene3D { scene, frame } = &node.kind {
                 if let Some(environment) = &scene.pbr.environment {
-                    if !self
+                    let has_asset = self
                         .controls
                         .assets
                         .get(&environment.control)
-                        .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Environment)
-                        || !self
-                            .resource_refs
-                            .iter()
-                            .any(|resource| resource.control == environment.control)
-                    {
+                        .is_some_and(|asset| asset.kind == crate::controls::AssetKind::Environment);
+                    let has_resource = self
+                        .resource_refs
+                        .iter()
+                        .any(|resource| resource.control == environment.control);
+                    if !has_asset || !has_resource {
                         errors.push(ValidationError::new(
                             format!("{path}/kind/scene/pbr/environment"),
                             "Scene3D environment requires a bound environment asset control",
@@ -5434,13 +5432,13 @@ impl SceneArtifact {
                     ));
                 }
                 for light in &frame.lights {
-                    if let Some(value) = light.constant() {
-                        if let Err(error) = value.validate() {
-                            errors.push(ValidationError::new(
-                                format!("{path}/kind/frame/lights"),
-                                error.to_string(),
-                            ));
-                        }
+                    if let Some(value) = light.constant()
+                        && let Err(error) = value.validate()
+                    {
+                        errors.push(ValidationError::new(
+                            format!("{path}/kind/frame/lights"),
+                            error.to_string(),
+                        ));
                     }
                 }
                 let lights_valid = frame.lights.iter().all(|light| {
@@ -5498,13 +5496,13 @@ impl SceneArtifact {
                         .chain(mesh.nodes.iter().map(|n| &n.transform))
                     {
                         meshes_valid &= transform.numbers().into_iter().all(|(_, n)| scalar(n));
-                        if let Some(value) = transform.constant() {
-                            if let Err(error) = value.validate() {
-                                errors.push(ValidationError::new(
-                                    format!("{path}/kind/frame/meshes/{at}"),
-                                    error.to_string(),
-                                ));
-                            }
+                        if let Some(value) = transform.constant()
+                            && let Err(error) = value.validate()
+                        {
+                            errors.push(ValidationError::new(
+                                format!("{path}/kind/frame/meshes/{at}"),
+                                error.to_string(),
+                            ));
                         }
                     }
                 }
@@ -6130,7 +6128,7 @@ pub struct ValidationError {
     pub path: String,
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style: Option<crate::style::StyleIssue>,
+    pub style: Option<Box<crate::style::StyleIssue>>,
 }
 
 impl ValidationError {
@@ -6143,7 +6141,7 @@ impl ValidationError {
     }
 
     pub(crate) fn with_style(mut self, style: Option<crate::style::StyleIssue>) -> Self {
-        self.style = style;
+        self.style = style.map(Box::new);
         self
     }
 }

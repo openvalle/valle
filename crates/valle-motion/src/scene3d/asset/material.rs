@@ -617,7 +617,7 @@ impl MaterialImage {
             .into_rgba32f()
             .into_raw();
         if role == TextureRole::Color {
-            for pixel in rgba.chunks_exact_mut(4) {
+            for pixel in rgba.as_chunks_mut::<4>().0 {
                 for c in &mut pixel[..3] {
                     *c = srgb_to_linear(*c);
                 }
@@ -682,10 +682,10 @@ impl ModelMaterial {
         if let Some(v) = value.occlusion_strength {
             self.occlusion_strength = v;
         }
-        if let Some(v) = value.alpha_cutoff {
-            if self.alpha_cutoff.is_some() {
-                self.alpha_cutoff = Some(v);
-            }
+        if let Some(v) = value.alpha_cutoff
+            && self.alpha_cutoff.is_some()
+        {
+            self.alpha_cutoff = Some(v);
         }
     }
 }

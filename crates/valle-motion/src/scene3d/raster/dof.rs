@@ -99,7 +99,7 @@ pub(super) fn apply(frame: &mut RasterFrame, camera: &CameraFrameState, workers:
     let height = frame.height as usize;
     let mut near_bounds: Option<(usize, usize, usize, usize)> = None;
     let mut visible_bounds: Option<(usize, usize, usize, usize)> = None;
-    for (index, pixel) in frame.premul_rgba16f.chunks_exact(4).enumerate() {
+    for (index, pixel) in frame.premul_rgba16f.as_chunks::<4>().0.iter().enumerate() {
         // RasterFrame guarantees zero RGB at zero coverage. Only covered pixels can
         // contribute to either gather; expand their union by the complete kernel support.
         if pixel[3] != 0 {
@@ -155,7 +155,9 @@ pub(super) fn apply(frame: &mut RasterFrame, camera: &CameraFrameState, workers:
     };
     for y in source_y0..source_y1 {
         let row = &frame.premul_rgba16f[(y * width + source_x0) * 4..(y * width + source_x1) * 4];
-        source.pixels.extend(row.chunks_exact(4).map(decode));
+        source
+            .pixels
+            .extend(row.as_chunks::<4>().0.iter().map(|pixel| decode(pixel)));
     }
     if std::env::var_os("VALLE_PERF_SCENE3D").is_some() {
         eprintln!(

@@ -119,8 +119,10 @@ fn quantize(value: f64) -> f64 {
 // Host-owned immutable PCM is shared across editor recompiles. Cache by its Arc
 // identity, not an encoded hash supplied alongside potentially different PCM.
 // Weak ownership avoids retaining decoded songs after the host evicts them.
+type CachedAudioTable = (std::sync::Weak<AudioPcm>, u8, u32, Arc<AudioTable>);
+
 thread_local! {
-    static TABLE_CACHE: std::cell::RefCell<std::collections::VecDeque<(std::sync::Weak<AudioPcm>, u8, u32, Arc<AudioTable>)>> = const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
+    static TABLE_CACHE: std::cell::RefCell<std::collections::VecDeque<CachedAudioTable>> = const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
 }
 
 fn analyze_cached(pcm: &Arc<AudioPcm>, bands: u8, rate: u32) -> Result<Arc<AudioTable>, String> {

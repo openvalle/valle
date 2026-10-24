@@ -801,10 +801,10 @@ impl PathData {
             verbs.push(PathVerb::Close);
             let prepared = Self::new(verbs, samples)?;
             if !allow_self_intersection && let Some(previous) = aligned.last() {
-                if let Some(issue) =
+                let contact =
                     morph_check::scan_linear_morph(previous, &prepared, &[], &[], contact_is_error)
-                        .map_err(|issue| GeometryError::UnsafeMorph(issue.to_string()))?
-                {
+                        .map_err(|issue| GeometryError::UnsafeMorph(issue.to_string()))?;
+                if let Some(issue) = contact {
                     contacts.push(MorphContact {
                         segment: index - 1,
                         detail: issue.to_string(),
@@ -832,14 +832,14 @@ impl PathData {
                 Ok(pair) => Ok(pair),
                 Err(polar_reason) => self
                     .arc_length_morph_pair_with_options(other, &[], allow_self_intersection)
-                    .or_else(|arc_reason| {
-                        Err(if matches!(arc_reason, GeometryError::UnsafeMorph(_)) {
+                    .map_err(|arc_reason| {
+                        if matches!(arc_reason, GeometryError::UnsafeMorph(_)) {
                             arc_reason
                         } else if convex_reason == GeometryError::NonConvexContour {
                             polar_reason
                         } else {
                             convex_reason
-                        })
+                        }
                     }),
             },
         }
@@ -862,14 +862,14 @@ impl PathData {
                         allow_self_intersection,
                         contact_is_error,
                     )
-                    .or_else(|arc_reason| {
-                        Err(if matches!(arc_reason, GeometryError::UnsafeMorph(_)) {
+                    .map_err(|arc_reason| {
+                        if matches!(arc_reason, GeometryError::UnsafeMorph(_)) {
                             arc_reason
                         } else if convex_reason == GeometryError::NonConvexContour {
                             polar_reason
                         } else {
                             convex_reason
-                        })
+                        }
                     }),
             },
         }
@@ -892,14 +892,14 @@ impl PathData {
                     &[],
                     allow_self_intersection,
                 )
-                .or_else(|arc_reason| {
-                    Err(if matches!(arc_reason, GeometryError::UnsafeMorph(_)) {
+                .map_err(|arc_reason| {
+                    if matches!(arc_reason, GeometryError::UnsafeMorph(_)) {
                         arc_reason
                     } else if convex_reason == GeometryError::NonConvexContour {
                         polar_reason
                     } else {
                         convex_reason
-                    })
+                    }
                 }),
             },
         }
@@ -920,14 +920,14 @@ impl PathData {
                     allow_self_intersection,
                     contact_is_error,
                 )
-                .or_else(|arc_reason| {
-                    Err(if matches!(arc_reason, GeometryError::UnsafeMorph(_)) {
+                .map_err(|arc_reason| {
+                    if matches!(arc_reason, GeometryError::UnsafeMorph(_)) {
                         arc_reason
                     } else if convex_reason == GeometryError::NonConvexContour {
                         polar_reason
                     } else {
                         convex_reason
-                    })
+                    }
                 }),
             },
         }
@@ -2976,7 +2976,7 @@ fn append_corner_cubic(
 fn open_contour(path: &PathData) -> Result<(Point, Point, Vec<PathVerb>), GeometryError> {
     path.validate()?;
     if path.verbs.first() != Some(&PathVerb::Move)
-        || path.verbs.iter().any(|verb| *verb == PathVerb::Close)
+        || path.verbs.contains(&PathVerb::Close)
         || path
             .verbs
             .iter()

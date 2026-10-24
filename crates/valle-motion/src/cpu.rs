@@ -54,7 +54,7 @@ impl CpuBudget {
             // and deadlines must remain observable while waiting, outside the quota lock.
             check()?;
             let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
-            if state.used <= self.limit() - slots - 1 {
+            if state.used < self.limit() - slots {
                 state.used += slots;
                 state.peak = state.peak.max(state.used);
                 return Ok(CodecReservation {

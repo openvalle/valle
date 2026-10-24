@@ -66,13 +66,11 @@ fn run_inner(start: &Path, action: ProjectAction) -> Result<(ExitCode, Option<Va
         web_assets_dir,
         port,
     } = &action
-    {
-        if !start
+        && !start
             .ancestors()
             .any(|root| root.join("project.json").is_file())
-        {
-            return Ok((web::serve_home(web_assets_dir.as_deref(), *port)?, None));
-        }
+    {
+        return Ok((web::serve_home(web_assets_dir.as_deref(), *port)?, None));
     }
     let project = Project::discover(start)?;
     remember(&project)?;

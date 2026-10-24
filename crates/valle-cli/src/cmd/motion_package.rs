@@ -114,7 +114,7 @@ pub(super) fn build_standalone_motion_package(
     resources.add(
         COMPONENT_RESOURCE_ID,
         ResourceEntryWire::MotionArtifact {
-            digest: artifact_digest.clone(),
+            digest: artifact_digest,
             abi: MotionArtifactAbiWire::Canonical,
             descriptor: motion_descriptor.clone(),
         },
@@ -245,7 +245,7 @@ fn caption_runs(
     duration: RationalTime,
 ) -> Result<Value> {
     let time = |seconds: f64| -> Result<RationalTime> {
-        let wire = valle_timeline::wire::timeline::TimelineTimeWire::new(&seconds.to_string())?;
+        let wire = valle_timeline::wire::timeline::TimelineTimeWire::new(seconds.to_string())?;
         Ok(RationalTime::from_exact(wire.to_exact()))
     };
     let runs = caption
@@ -453,7 +453,7 @@ impl FixedResources {
                     },
                     VerifiedResourceFacts::Model3d {
                         descriptor,
-                        bytes: asset.bytes.clone().into(),
+                        bytes: asset.bytes.clone(),
                     },
                     Vec::new(),
                 )
@@ -563,10 +563,10 @@ impl FixedResources {
         {
             bail!("duplicate standalone resource `{resource_id}`");
         }
-        let digest = entry_digest(&entry).clone();
+        let digest = *entry_digest(&entry);
         let handle = VerifiedHandleId::new(self.next_handle)?;
         self.next_handle += 1;
-        let mut binding = ResourceBinding::new(digest.clone(), handle, facts);
+        let mut binding = ResourceBinding::new(digest, handle, facts);
         for dependency in &dependencies {
             binding = binding.with_dependency(ResourceDependency::new(
                 dependency.role.clone(),

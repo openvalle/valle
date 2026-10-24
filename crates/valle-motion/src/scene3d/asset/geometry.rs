@@ -280,7 +280,7 @@ pub(super) fn admit_geometry(
                         .collect();
                     *skinning = expanded;
                 }
-                for triangle in local_indices.chunks_exact(3) {
+                for triangle in local_indices.as_chunks::<3>().0 {
                     let p = [
                         positions[triangle[0] as usize],
                         positions[triangle[1] as usize],
@@ -506,8 +506,8 @@ pub(super) fn accessor_bytes<'a>(
     let view_end = view.byte_offset.checked_add(view.byte_length);
     if stride < size
         || stride % component_size != 0
-        || accessor.byte_offset % component_size != 0
-        || (vertex && (accessor.byte_offset % 4 != 0 || stride % 4 != 0))
+        || !accessor.byte_offset.is_multiple_of(component_size)
+        || (vertex && (!accessor.byte_offset.is_multiple_of(4) || stride % 4 != 0))
         || start.is_none_or(|s| s % component_size != 0)
         || end.is_none_or(|e| e > view_end.unwrap_or(0) || e > bin.len())
     {

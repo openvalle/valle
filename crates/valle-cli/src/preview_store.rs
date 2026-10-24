@@ -50,18 +50,17 @@ impl FrozenMediaCache {
         let source = source.canonicalize()?;
         let mut input = std::fs::File::open(&source)?;
         let stamp = valle_project::files::FileStamp::from_file(&input)?;
-        if let Some(entry) = self.entries.get(&source) {
-            if entry.stamp == stamp {
-                if let Some(directory) = entry.directory.upgrade() {
-                    return Ok((
-                        entry.digest,
-                        PreviewFile::File {
-                            path: entry.path.clone(),
-                            _directory: directory,
-                        },
-                    ));
-                }
-            }
+        if let Some(entry) = self.entries.get(&source)
+            && entry.stamp == stamp
+            && let Some(directory) = entry.directory.upgrade()
+        {
+            return Ok((
+                entry.digest,
+                PreviewFile::File {
+                    path: entry.path.clone(),
+                    _directory: directory,
+                },
+            ));
         }
         let directory = Arc::new(tempfile::tempdir().context("freezing preview media")?);
         let mut output = tempfile::NamedTempFile::new_in(directory.path())?;

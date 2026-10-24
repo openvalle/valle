@@ -15,6 +15,10 @@ use super::{
     surface::ScratchSurfaces,
 };
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the execution stage bindings, surfaces, geometry, and control inputs explicit."
+)]
 pub(crate) fn render_import(
     surfaces: &mut ScratchSurfaces<'_, '_>,
     output_slot: SurfaceSlotId,

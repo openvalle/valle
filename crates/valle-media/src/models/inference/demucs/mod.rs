@@ -111,7 +111,7 @@ impl TrackStatsBuilder {
             stereo.len().is_multiple_of(CHANNELS as usize),
             "interleaved stereo buffer has an incomplete frame"
         );
-        for frame in stereo.chunks_exact(CHANNELS as usize) {
+        for frame in stereo.as_chunks::<{ CHANNELS as usize }>().0.iter() {
             let left = frame[0];
             let right = frame[1];
             ensure!(

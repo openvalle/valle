@@ -993,7 +993,8 @@ pub fn prepare_gpu_lighting_input(
                     vec![None; primitive.vertex_count as usize];
                 let start = primitive.first_index as usize;
                 for triangle in mesh.model.indices[start..start + primitive.index_count as usize]
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
                 {
                     let corners: [(u32, ProjectedVertex); 3] = std::array::from_fn(|corner| {
                         let index = triangle[corner];
@@ -1313,7 +1314,8 @@ fn render_scene_impl(
                     && instance.weights.is_empty())
                 .then(|| vec![None; primitive.vertex_count as usize]);
                 for triangle in mesh.model.indices[start..start + primitive.index_count as usize]
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
                 {
                     // Cached vertices also share one shadow caster; deformed triangles own theirs.
                     let mut caster_corners = None;
@@ -1478,7 +1480,7 @@ fn render_scene_impl(
     let worker_count = if cfg!(target_arch = "wasm32") {
         1
     } else {
-        workers.max(1).min(MAX_RASTER_WORKERS)
+        workers.clamp(1, MAX_RASTER_WORKERS)
     }
     .min(tiles.len());
     let pixel_rays = PixelRays::new(&camera);
@@ -2182,13 +2184,13 @@ fn morphed_vertex(
             continue;
         }
         if let Some(positions) = &target.positions {
-            for axis in 0..3 {
-                vertex.position[axis] += positions[offset][axis] * weight;
+            for (position, delta) in vertex.position.iter_mut().zip(positions[offset]) {
+                *position += delta * weight;
             }
         }
         if let Some(normals) = &target.normals {
-            for axis in 0..3 {
-                vertex.normal[axis] += normals[offset][axis] * weight;
+            for (normal, delta) in vertex.normal.iter_mut().zip(normals[offset]) {
+                *normal += delta * weight;
             }
         }
     }

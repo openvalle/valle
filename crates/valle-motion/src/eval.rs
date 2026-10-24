@@ -511,10 +511,11 @@ impl EvalPlan {
         let mut live = BTreeSet::new();
         let mut todo: Vec<_> = roots.into_iter().collect();
         while let Some(id) = todo.pop() {
-            if live.insert(id) {
-                if let Some(children) = self.children.get(id.0 as usize) {
-                    todo.extend(children);
-                }
+            if !live.insert(id) {
+                continue;
+            }
+            if let Some(children) = self.children.get(id.0 as usize) {
+                todo.extend(children);
             }
         }
         live.into_iter().collect()
@@ -1189,7 +1190,7 @@ fn eval_one_with<'a>(
             .ok_or(EvalError::InstanceOutsideGroup { at }),
         Expr::Caption { .. } => Err(EvalError::UnboundCaption { at }),
         Expr::Context { input } => context_value(*input, inputs.ctx, inputs.unit, inputs.viewport)
-            .ok_or_else(|| match input {
+            .ok_or(match input {
                 ContextInput::ViewportWidth | ContextInput::ViewportHeight => {
                     EvalError::ViewportUnavailable { at }
                 }

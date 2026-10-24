@@ -278,8 +278,8 @@ fn solve8(mut a: [[f64; 8]; 8], mut b: [f64; 8]) -> Option<[f64; 8]> {
     for col in 0..8 {
         let mut pivot = col;
         let mut best = a[col][col].abs();
-        for row in (col + 1)..8 {
-            let value = a[row][col].abs();
+        for (row, coefficients) in a.iter().enumerate().skip(col + 1) {
+            let value = coefficients[col].abs();
             if value > best {
                 best = value;
                 pivot = row;
@@ -293,13 +293,14 @@ fn solve8(mut a: [[f64; 8]; 8], mut b: [f64; 8]) -> Option<[f64; 8]> {
             b.swap(col, pivot);
         }
         let diag = a[col][col];
+        let pivot_row = a[col];
         for row in (col + 1)..8 {
             let f = a[row][col] / diag;
             if !f.is_finite() {
                 return None;
             }
-            for k in col..8 {
-                a[row][k] -= f * a[col][k];
+            for (value, pivot_value) in a[row][col..].iter_mut().zip(&pivot_row[col..]) {
+                *value -= f * pivot_value;
             }
             b[row] -= f * b[col];
         }
@@ -1270,7 +1271,7 @@ impl RecordCmd {
 // Recording storage.
 
 /// Recording commands and side tables for one component subtree in one frame.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProgramRecording {
@@ -1302,30 +1303,6 @@ pub struct ProgramRecording {
     pub shader_uniforms: Vec<ShaderUniformBinding>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shader_inputs: Vec<ShaderTextureInput>,
-}
-
-impl Default for ProgramRecording {
-    fn default() -> Self {
-        ProgramRecording {
-            cmds: Vec::new(),
-            verbs: Vec::new(),
-            points: Vec::new(),
-            gradient_stops: Vec::new(),
-            filters: Vec::new(),
-            glyphs: Vec::new(),
-            batch_instances: Vec::new(),
-            batch_stroke_colors: Vec::new(),
-            batch_dash_offsets: Vec::new(),
-            glyph_source_ranges: Vec::new(),
-            text_sources: Vec::new(),
-            fonts: Vec::new(),
-            images: Vec::new(),
-            generated_textures: Vec::new(),
-            shader_programs: Vec::new(),
-            shader_uniforms: Vec::new(),
-            shader_inputs: Vec::new(),
-        }
-    }
 }
 
 impl PathSink for ProgramRecording {
@@ -1484,7 +1461,7 @@ mod finite {
     }
 
     pub fn rrect(r: &RoundRect) -> bool {
-        rect(&r.rect) && r.radii.iter().all(|v| point(v))
+        rect(&r.rect) && r.radii.iter().all(point)
     }
 
     pub fn paint(p: &Paint) -> bool {

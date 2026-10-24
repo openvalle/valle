@@ -89,7 +89,7 @@ impl<'a> FrameView<'a> {
         match self.format {
             PixelFormat::Rgb8 => output.extend_from_slice(self.data),
             PixelFormat::Rgba8 => {
-                for pixel in self.data.chunks_exact(4) {
+                for pixel in self.data.as_chunks::<4>().0.iter() {
                     output.extend_from_slice(&pixel[..3]);
                 }
             }

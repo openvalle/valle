@@ -225,7 +225,7 @@ impl EnvironmentAsset {
         if storage > MAX_STORAGE_BYTES || bytes.len() - 12 - length != storage {
             return Err(error("environment mip dimensions do not match its bytes"));
         }
-        let mut pixels = bytes[12 + length..].chunks_exact(12);
+        let mut pixels = bytes[12 + length..].as_chunks::<12>().0.iter();
         let mut cube = |size: u32| -> Result<Cube, ContractErrors> {
             let values = pixels
                 .by_ref()

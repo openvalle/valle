@@ -19,6 +19,10 @@ pub struct CodeWire(pub String);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 #[ts(tag = "kind", rename_all = "kebab-case")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "This enum describes generated TypeScript; Rust values are never constructed."
+)]
 pub enum StudioSessionWire {
     TimelineFile {
         input: String,
@@ -209,6 +213,10 @@ pub struct MotionShaderWire {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "status", rename_all = "lowercase", deny_unknown_fields)]
 #[ts(tag = "status", rename_all = "lowercase")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "This enum describes generated TypeScript; Rust values are never constructed."
+)]
 pub enum MotionContextWire {
     Ok {
         #[serde(rename = "protocolVersion")]

@@ -87,7 +87,7 @@ pub fn read_rgba_png(path: &Path) -> Result<RgbaFrame> {
         }
         png::ColorType::Rgb => {
             ensure!(decoded.len() == rgb_len, "RGB PNG has invalid storage");
-            for rgb in decoded.chunks_exact(3) {
+            for rgb in decoded.as_chunks::<3>().0 {
                 rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
         }
@@ -96,7 +96,7 @@ pub fn read_rgba_png(path: &Path) -> Result<RgbaFrame> {
                 decoded.len() == gray_alpha_len,
                 "GrayAlpha PNG has invalid storage"
             );
-            for gray_alpha in decoded.chunks_exact(2) {
+            for gray_alpha in decoded.as_chunks::<2>().0 {
                 rgba.extend_from_slice(&[
                     gray_alpha[0],
                     gray_alpha[0],

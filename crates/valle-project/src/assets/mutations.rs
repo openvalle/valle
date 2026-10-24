@@ -424,15 +424,14 @@ fn add_note(
     id: Option<i64>,
 ) -> Result<i64> {
     if let Some(id) = id {
-        if conn
+        let existing = conn
             .query_row(
                 "SELECT note_id FROM notes WHERE asset_id=? AND note_id=?",
                 params![asset, id],
                 |r| r.get::<_, i64>(0),
             )
-            .optional()?
-            .is_none()
-        {
+            .optional()?;
+        if existing.is_none() {
             bail!("note {id} not found on this asset");
         }
     }

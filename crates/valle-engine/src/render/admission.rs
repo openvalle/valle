@@ -140,7 +140,7 @@ pub(super) fn open_engine_render(
             kind: kernel.kind.clone(),
             domain: kernel.domain,
             abi: capability.abi.clone(),
-            implementation_digest: capability.implementation_digest.clone(),
+            implementation_digest: capability.implementation_digest,
             visual_footprint: capability.visual_footprint,
             audio_footprint: capability.audio_footprint,
         });
@@ -707,6 +707,10 @@ enum AdmittedSourceKind {
 }
 
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Render evaluation keeps source payloads inline to avoid allocations while cloning or evaluating frames."
+)]
 enum AdmittedSourcePayload {
     Video {
         fit: AdmittedRasterFit,
@@ -869,6 +873,10 @@ struct AdmittedVisualTransition {
 }
 
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Clips are the common timeline item; keep their payload inline without a per-clip allocation."
+)]
 enum AdmittedVisualItem {
     Clip {
         clip: AdmittedVisualClip,
@@ -996,6 +1004,10 @@ struct AdmittedCaptionMotion {
 }
 
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Clips are the common timeline item; keep their payload inline without a per-clip allocation."
+)]
 enum AdmittedCaptionItem {
     Motion { clip: AdmittedCaptionMotion },
     Clip { clip: AdmittedCaptionClip },
@@ -1278,6 +1290,10 @@ fn admit_kernel_call(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the rendering inputs, source and output geometry, and validation context explicit."
+)]
 fn admit_visual_program(
     visual: &VisualComposition,
     canvas: CompiledCanvas,
@@ -1755,6 +1771,10 @@ fn admit_visual_source(
     index
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Keep the rendering inputs, source and output geometry, and validation context explicit."
+)]
 fn admit_motion_instance(
     source: &MotionInstance,
     component_target: u32,
@@ -2035,9 +2055,9 @@ fn motion_param_matches_artifact_control(param: &Param<JsonValue>, control: &Con
 fn motion_json_matches_artifact_control(value: &JsonValue, control: &ControlType) -> bool {
     let finite_number = |value: &JsonValue| value.as_f64().is_some_and(f64::is_finite);
     let finite_array = |value: &JsonValue, len: usize| {
-        value.as_array().is_some_and(|values| {
-            values.len() == len && values.iter().all(|value| finite_number(value))
-        })
+        value
+            .as_array()
+            .is_some_and(|values| values.len() == len && values.iter().all(&finite_number))
     };
     match control {
         ControlType::Number { min, max, .. } => value.as_f64().is_some_and(|value| {
@@ -2070,9 +2090,10 @@ fn admit_motion_param(
                 .or_else(|| motion_param_type_error(path, diagnostics))
         }
         ControlType::Point => admit_motion_typed_param(param, |value| {
-            let values = value.as_array()?;
-            Some([values.first()?.as_f64()?, values.get(1)?.as_f64()?])
-                .filter(|_| values.len() == 2)
+            let [x, y] = value.as_array()?.as_slice() else {
+                return None;
+            };
+            Some([x.as_f64()?, y.as_f64()?])
         })
         .map(|param| AdmittedMotionParam::Vec2 { param })
         .or_else(|| motion_param_type_error(path, diagnostics)),
@@ -2080,14 +2101,10 @@ fn admit_motion_param(
             .map(|param| AdmittedMotionParam::Vec4 { param })
             .or_else(|| motion_param_type_error(path, diagnostics)),
         ControlType::Rect => admit_motion_typed_param(param, |value| {
-            let values = value.as_array()?;
-            Some([
-                values.first()?.as_f64()?,
-                values.get(1)?.as_f64()?,
-                values.get(2)?.as_f64()?,
-                values.get(3)?.as_f64()?,
-            ])
-            .filter(|_| values.len() == 4)
+            let [x, y, width, height] = value.as_array()?.as_slice() else {
+                return None;
+            };
+            Some([x.as_f64()?, y.as_f64()?, width.as_f64()?, height.as_f64()?])
         })
         .map(|param| AdmittedMotionParam::Vec4 { param })
         .or_else(|| motion_param_type_error(path, diagnostics)),

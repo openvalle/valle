@@ -124,10 +124,10 @@ fn bind_motion_instances(
                 path: "/resources".into(),
             });
         }
-        if !motion_sources.contains_key(&key) {
-            if let Some(metadata) = motion_sources.get(&input.component).copied() {
-                motion_sources.insert(key.clone(), metadata);
-            }
+        if !motion_sources.contains_key(&key)
+            && let Some(metadata) = motion_sources.get(&input.component).copied()
+        {
+            motion_sources.insert(key.clone(), metadata);
         }
         timeline.resources.insert(key.clone(), input.locator);
         by_path.insert(input.clip_path, key);
@@ -755,7 +755,7 @@ impl TimelineNormalizer {
                     component: presenter.component.clone(),
                     role: metadata.role.name().into(),
                     path: clip_path.clone(),
-                    reason: reason.into(),
+                    reason,
                 };
                 if !matches!(
                     metadata.role,
@@ -832,13 +832,13 @@ impl TimelineNormalizer {
             let presentation = if uses_preset {
                 let request =
                     self.preset_request(&id, duration, clip.enter, clip.display, clip.exit);
-                let expanded = expand_caption_presets(&request).map_err(|source| {
+
+                expand_caption_presets(&request).map_err(|source| {
                     CompileTimelineError::CaptionPreset {
                         path: clip_path.clone(),
                         source,
                     }
-                })?;
-                expanded
+                })?
             } else {
                 clip.presentation
                     .map(|value| timeline_presentation_to_canonical(value, &id))

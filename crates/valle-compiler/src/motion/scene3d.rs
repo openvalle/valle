@@ -3,6 +3,10 @@
 use super::*;
 
 impl<'s> Compiler<'s> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The JSX lowerer passes the shared node attributes and both Scene3D author objects explicitly."
+    )]
     pub(super) fn lower_scene3d_node(
         &mut self,
         element: &'s JSXElement<'s>,
@@ -848,12 +852,13 @@ impl<'s> Compiler<'s> {
             );
             return None;
         };
-        if let Some(value) = self.eval_static(value).and_then(|v| v.as_array().cloned()) {
-            if value.len() == 3 && value.iter().all(|v| v.as_f64().is_some_and(f64::is_finite)) {
-                return Some(std::array::from_fn(|i| NumberValue::Static {
-                    value: value[i].as_f64().unwrap(),
-                }));
-            }
+        if let Some(value) = self.eval_static(value).and_then(|v| v.as_array().cloned())
+            && value.len() == 3
+            && value.iter().all(|v| v.as_f64().is_some_and(f64::is_finite))
+        {
+            return Some(std::array::from_fn(|i| NumberValue::Static {
+                value: value[i].as_f64().unwrap(),
+            }));
         }
         let Some(items) = array_items(value).filter(|a| a.len() == 3) else {
             // A binding of a frame-dependent array, such as `const position = [0, 0, 5 - t]`,
@@ -1061,11 +1066,11 @@ impl<'s> Compiler<'s> {
                 ground_color: self.scene3d_light_color(&attrs, "groundColor", None)?,
             },
         };
-        if let Some(value) = binding.constant() {
-            if let Err(error) = value.validate() {
-                self.illegal(DiagCode::GrammarForbidden, child.span(), error.to_string());
-                return None;
-            }
+        if let Some(value) = binding.constant()
+            && let Err(error) = value.validate()
+        {
+            self.illegal(DiagCode::GrammarForbidden, child.span(), error.to_string());
+            return None;
         }
         Some(binding)
     }

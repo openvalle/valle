@@ -367,7 +367,7 @@ impl RenderPlanTemplate {
         let root = DeviceRect::full(self.render_spec().width(), self.render_spec().height());
         validate_root_extent(root, capabilities)?;
         let template_hash = self.template_hash()?;
-        let binding_hash = bindings.binding_hash().clone();
+        let binding_hash = *bindings.binding_hash();
         let capability_fingerprint = capabilities.fingerprint()?;
         let resources = bind_plan_resources(self, bindings, root)?;
         let surface_slots = bind_surface_slots(self, &resources, root, capabilities)?;
@@ -1043,74 +1043,70 @@ fn resolve_destination_rois(
 ) -> Result<BTreeMap<ProgramResourceId, DeviceRect>, ProgramBindingError> {
     let mut result = BTreeMap::new();
     for pass in program.local_plan().passes() {
-        match &pass.kind {
-            ProgramPassKind::ReadDestination {
-                external: Some(destination),
-                output,
-                ..
-            } => {
-                let prepared = program
-                    .destination_uses
-                    .get(destination.index())
-                    .ok_or_else(|| ProgramBindingError::InvalidContract {
-                        path: pass.semantic_path.clone(),
-                        reason: format!(
-                            "destination {} has no prepared binding",
-                            destination.get()
-                        ),
-                    })?;
-                let required = program
-                    .requirements
-                    .destination_uses
-                    .get(destination.index())
-                    .ok_or_else(|| ProgramBindingError::InvalidContract {
-                        path: pass.semantic_path.clone(),
-                        reason: format!(
-                            "destination {} has no DrawRequirements entry",
-                            destination.get()
-                        ),
-                    })?;
-                let sample = dynamic_bounds(
-                    bindings,
-                    prepared.sample_bounds,
-                    DynamicBindingKind::BackdropSampleBounds,
-                    &pass.semantic_path,
-                )?;
-                let output_bounds = dynamic_bounds(
-                    bindings,
-                    prepared.output_bounds,
-                    DynamicBindingKind::BackdropOutputBounds,
-                    &pass.semantic_path,
-                )?;
-                validate_rect_in_root(sample, root, &pass.semantic_path)?;
-                validate_rect_in_root(output_bounds, root, &pass.semantic_path)?;
-                let expected = if bounds_reason == BoundsReason::ConservativeCameraTarget {
-                    (root, root)
-                } else {
-                    let sample = crate::prepare::bounds::program_bounds_to_device(
-                        valle_draw::requirements::LocalBounds::from_rect(required.sample_bounds),
-                        program.viewport,
-                        transform,
-                        root,
-                    )?;
-                    let output = crate::prepare::bounds::program_bounds_to_device(
-                        valle_draw::requirements::LocalBounds::from_rect(required.output_bounds),
-                        program.viewport,
-                        transform,
-                        root,
-                    )?;
-                    (sample, output)
-                };
-                if (sample, output_bounds) != expected {
-                    return invalid(
-                        &pass.semantic_path,
-                        "destination binding does not equal its device-space projection",
-                    );
-                }
-                insert_destination_roi(&mut result, *output, sample, &pass.semantic_path)?;
-            }
-            _ => {}
+        let ProgramPassKind::ReadDestination {
+            external: Some(destination),
+            output,
+            ..
+        } = &pass.kind
+        else {
+            continue;
+        };
+        let prepared = program
+            .destination_uses
+            .get(destination.index())
+            .ok_or_else(|| ProgramBindingError::InvalidContract {
+                path: pass.semantic_path.clone(),
+                reason: format!("destination {} has no prepared binding", destination.get()),
+            })?;
+        let required = program
+            .requirements
+            .destination_uses
+            .get(destination.index())
+            .ok_or_else(|| ProgramBindingError::InvalidContract {
+                path: pass.semantic_path.clone(),
+                reason: format!(
+                    "destination {} has no DrawRequirements entry",
+                    destination.get()
+                ),
+            })?;
+        let sample = dynamic_bounds(
+            bindings,
+            prepared.sample_bounds,
+            DynamicBindingKind::BackdropSampleBounds,
+            &pass.semantic_path,
+        )?;
+        let output_bounds = dynamic_bounds(
+            bindings,
+            prepared.output_bounds,
+            DynamicBindingKind::BackdropOutputBounds,
+            &pass.semantic_path,
+        )?;
+        validate_rect_in_root(sample, root, &pass.semantic_path)?;
+        validate_rect_in_root(output_bounds, root, &pass.semantic_path)?;
+        let expected = if bounds_reason == BoundsReason::ConservativeCameraTarget {
+            (root, root)
+        } else {
+            let sample = crate::prepare::bounds::program_bounds_to_device(
+                valle_draw::requirements::LocalBounds::from_rect(required.sample_bounds),
+                program.viewport,
+                transform,
+                root,
+            )?;
+            let output = crate::prepare::bounds::program_bounds_to_device(
+                valle_draw::requirements::LocalBounds::from_rect(required.output_bounds),
+                program.viewport,
+                transform,
+                root,
+            )?;
+            (sample, output)
+        };
+        if (sample, output_bounds) != expected {
+            return invalid(
+                &pass.semantic_path,
+                "destination binding does not equal its device-space projection",
+            );
         }
+        insert_destination_roi(&mut result, *output, sample, &pass.semantic_path)?;
     }
     Ok(result)
 }

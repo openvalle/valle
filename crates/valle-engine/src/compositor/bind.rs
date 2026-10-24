@@ -166,7 +166,7 @@ pub fn bind_external_objects<'a, T: ExternalObject>(
     }
 
     Ok(BoundExternalObjects {
-        template_hash: bindings.template_hash().clone(),
+        template_hash: *bindings.template_hash(),
         generation: table.generation,
         objects,
     })

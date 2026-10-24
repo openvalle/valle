@@ -153,16 +153,16 @@ impl TimelineFile {
                         .flatten()
                     {
                         for clip in track["clips"].as_array().into_iter().flatten() {
-                            if clip["kind"] == "motion" {
-                                if let Some(component) = clip["component"].as_str() {
-                                    durations.insert(
-                                        component.to_owned(),
-                                        valle_timeline::MotionSourceMetadata {
-                                            duration: valle_timeline::RationalTime::new(86_400, 1)?,
-                                            role: valle_timeline::MotionRole::Clip,
-                                        },
-                                    );
-                                }
+                            if clip["kind"] == "motion"
+                                && let Some(component) = clip["component"].as_str()
+                            {
+                                durations.insert(
+                                    component.to_owned(),
+                                    valle_timeline::MotionSourceMetadata {
+                                        duration: valle_timeline::RationalTime::new(86_400, 1)?,
+                                        role: valle_timeline::MotionRole::Clip,
+                                    },
+                                );
                             }
                             for effect in clip["effects"].as_array().into_iter().flatten() {
                                 if let Some(component) = effect["component"].as_str() {
@@ -177,16 +177,16 @@ impl TimelineFile {
                             }
                         }
                         for transition in track["transitions"].as_array().into_iter().flatten() {
-                            if transition["kind"] == "motion" {
-                                if let Some(component) = transition["component"].as_str() {
-                                    durations.insert(
-                                        component.to_owned(),
-                                        valle_timeline::MotionSourceMetadata {
-                                            duration: valle_timeline::RationalTime::new(86_400, 1)?,
-                                            role: valle_timeline::MotionRole::Transition,
-                                        },
-                                    );
-                                }
+                            if transition["kind"] == "motion"
+                                && let Some(component) = transition["component"].as_str()
+                            {
+                                durations.insert(
+                                    component.to_owned(),
+                                    valle_timeline::MotionSourceMetadata {
+                                        duration: valle_timeline::RationalTime::new(86_400, 1)?,
+                                        role: valle_timeline::MotionRole::Transition,
+                                    },
+                                );
                             }
                         }
                     }

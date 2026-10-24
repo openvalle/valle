@@ -151,7 +151,9 @@ fn load_npy_f32(path: &Path) -> Result<(Vec<usize>, Vec<f32>)> {
         bytes.len() - data_start
     );
     let values = bytes[data_start..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect();
     Ok((shape, values))
