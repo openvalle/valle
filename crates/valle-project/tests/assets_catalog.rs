@@ -49,6 +49,11 @@ fn case_only_renames_and_directory_spelling_preserve_one_asset_namespace() {
         run(&ctx, json!({"op":"show","path":"Brand/Acme/one.csv"}))["kind"],
         "data"
     );
+    let shader = temp.path().join("effect.shader.json");
+    fs::write(&shader, b"{}").unwrap();
+    let imported = run(&ctx, json!({"op":"add","paths":[shader]}));
+    assert_eq!(imported["items"][0]["kind"], "shader");
+    assert_eq!(imported["items"][0]["path"], "shaders/effect.shader.json");
 }
 
 #[test]
