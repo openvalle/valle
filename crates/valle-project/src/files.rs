@@ -167,6 +167,9 @@ impl Kind {
         if name.ends_with(".motion.tsx") {
             return Self::Component;
         }
+        if name.ends_with(".shader.json") {
+            return Self::Shader;
+        }
         match path
             .extension()
             .and_then(|s| s.to_str())
