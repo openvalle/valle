@@ -604,9 +604,9 @@ pub struct CaptionTrackWire {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
-#[expect(
+#[allow(
     clippy::large_enum_variant,
-    reason = "Keep wire items aligned with the inline document model without per-clip allocations."
+    reason = "Match the inline document model without per-clip allocations; variant sizes depend on the target."
 )]
 pub enum CaptionItemWire {
     Clip(CaptionWire),

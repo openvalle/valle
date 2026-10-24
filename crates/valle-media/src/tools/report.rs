@@ -380,40 +380,42 @@ impl PreparedRunReport {
     where
         T: Serialize,
     {
-        let mut file = OpenOptions::new()
-            .truncate(true)
-            .write(true)
-            .open(self.transaction.staging_path())
-            .map_err(|error| {
+        // Close the staging file before publishing the report.
+        {
+            let mut file = OpenOptions::new()
+                .truncate(true)
+                .write(true)
+                .open(self.transaction.staging_path())
+                .map_err(|error| {
+                    ToolError::new(
+                        ToolErrorCode::OutputValidationFailed,
+                        format!(
+                            "open report staging {}: {error}",
+                            self.transaction.staging_path().display()
+                        ),
+                    )
+                })?;
+            serde_json::to_writer_pretty(&mut file, &MediaRunEnvelope::success(run)).map_err(
+                |error| {
+                    ToolError::new(
+                        ToolErrorCode::OutputValidationFailed,
+                        format!("serialize run report: {error}"),
+                    )
+                },
+            )?;
+            file.write_all(b"\n").map_err(|error| {
                 ToolError::new(
                     ToolErrorCode::OutputValidationFailed,
-                    format!(
-                        "open report staging {}: {error}",
-                        self.transaction.staging_path().display()
-                    ),
+                    format!("write run report: {error}"),
                 )
             })?;
-        serde_json::to_writer_pretty(&mut file, &MediaRunEnvelope::success(run)).map_err(
-            |error| {
+            file.sync_all().map_err(|error| {
                 ToolError::new(
                     ToolErrorCode::OutputValidationFailed,
-                    format!("serialize run report: {error}"),
+                    format!("flush run report: {error}"),
                 )
-            },
-        )?;
-        file.write_all(b"\n").map_err(|error| {
-            ToolError::new(
-                ToolErrorCode::OutputValidationFailed,
-                format!("write run report: {error}"),
-            )
-        })?;
-        file.sync_all().map_err(|error| {
-            ToolError::new(
-                ToolErrorCode::OutputValidationFailed,
-                format!("flush run report: {error}"),
-            )
-        })?;
-        drop(file);
+            })?;
+        }
         self.transaction.commit()?;
         Ok(())
     }

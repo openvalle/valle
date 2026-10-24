@@ -484,9 +484,9 @@ pub struct CaptionTrack {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[expect(
+#[allow(
     clippy::large_enum_variant,
-    reason = "Clips are the common track item; keep their payload inline without a per-clip allocation."
+    reason = "Keep common clips inline without per-clip allocation; variant sizes depend on the target."
 )]
 pub enum CaptionItem {
     Clip(Caption),

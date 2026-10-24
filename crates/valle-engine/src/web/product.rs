@@ -5,7 +5,10 @@
 //! objects never enter the semantic render; JavaScript keeps them in its generation-scoped
 //! object table.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    sync::Arc,
+};
 
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -226,6 +229,10 @@ impl ProductEngine {
 
     /// GPU host recipe for the same padded F16 pyramid as Native. Only pass dimensions,
     /// uniforms and resource lifetimes cross WASM; source pixels stay on the GPU.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Expose dimensions and uniforms as scalar arguments at the Wasm boundary."
+    )]
     pub fn plan_pyramid_filter(
         &self,
         input_width: u32,
@@ -341,6 +348,10 @@ impl ProductEngine {
     }
 
     /// Apply the same working-linear F16 bloom pyramid used by the Native executor.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Expose dimensions and uniforms as scalar arguments at the Wasm boundary."
+    )]
     pub fn apply_bloom_f16(
         &self,
         input: &[u8],
@@ -373,6 +384,10 @@ impl ProductEngine {
     }
 
     /// Render node-local colored glow using the shared F16 pyramid.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Expose dimensions and uniforms as scalar arguments at the Wasm boundary."
+    )]
     pub fn apply_glow_f16(
         &self,
         input: &[u8],
@@ -406,6 +421,10 @@ impl ProductEngine {
 
     /// Shared ROI support and geometric pass spacings for Native and CanvasKit.
     /// This sends a few numbers per pass; rendered pixels remain GPU-resident.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Expose dimensions and uniforms as scalar arguments at the Wasm boundary."
+    )]
     pub fn plan_radial_blur(
         &self,
         amount: f32,
@@ -441,6 +460,10 @@ impl ProductEngine {
     }
 
     /// Blur along rays from a local-center filter mapped into device space.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Expose dimensions and uniforms as scalar arguments at the Wasm boundary."
+    )]
     pub fn apply_radial_blur_f16(
         &self,
         input: &[u8],
@@ -473,6 +496,10 @@ impl ProductEngine {
     }
 
     /// Stable film grain over a working-linear F16 image ROI.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Expose dimensions and uniforms as scalar arguments at the Wasm boundary."
+    )]
     pub fn apply_film_grain_f16(
         &self,
         input: &[u8],
@@ -508,6 +535,10 @@ impl ProductEngine {
     }
 
     /// Distort a fixed device-space source frame without changing its output bounds.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Expose dimensions and uniforms as scalar arguments at the Wasm boundary."
+    )]
     pub fn apply_lens_distortion_f16(
         &self,
         input: &[u8],
@@ -880,7 +911,7 @@ impl ProductEngine {
         let render = self.active_render(render_id)?;
         if end
             .checked_sub(start)
-            .is_none_or(|len| len < 0 || len > MAX_WEB_AUDIO_BLOCK_SAMPLES)
+            .is_none_or(|len| !(0..=MAX_WEB_AUDIO_BLOCK_SAMPLES).contains(&len))
             || start < 0
             || end > render.compiled().canvas().sample_count()
         {
@@ -946,11 +977,10 @@ impl ProductEngine {
         bytes: &[u8],
     ) -> Result<(), JsError> {
         let digest = verified_content_digest(digest, bytes, "scene3d_environment_digest")?;
-        if !self.scene3d_environments.contains_key(&digest) {
+        if let Entry::Vacant(entry) = self.scene3d_environments.entry(digest) {
             let environment = valle_motion::scene3d::EnvironmentAsset::from_frozen(bytes)
                 .map_err(|e| js_error("scene3d_environment", e))?;
-            self.scene3d_environments
-                .insert(digest, Arc::new(environment));
+            entry.insert(Arc::new(environment));
         }
         Ok(())
     }
@@ -980,11 +1010,10 @@ impl ProductEngine {
             "data" => TextureRole::Data,
             _ => return Err(JsError::new("[scene3d_texture] role must be color or data")),
         };
-        if !self.scene3d_textures.contains_key(&(digest, role)) {
+        if let Entry::Vacant(entry) = self.scene3d_textures.entry((digest, role)) {
             let texture = MaterialImage::from_encoded(encoded_bytes, role)
                 .map_err(|e| js_error("scene3d_texture", e))?;
-            self.scene3d_textures
-                .insert((digest, role), Arc::new(texture));
+            entry.insert(Arc::new(texture));
         }
         Ok(())
     }

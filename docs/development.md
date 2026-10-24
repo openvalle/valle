@@ -80,7 +80,10 @@ export VALLE_EMBED_WEB_DIR="$PWD/web/dist"
 export VALLE_EMBED_NOTICES="$PWD/target/distribution-notices.txt"
 cargo test --workspace --features valle-cli/embedded-runtime --tests
 cargo fmt --all --check
-(cd web && bun run gate) # typecheck, build, test and check generated code
+cargo fmt --manifest-path web/tools/schema-gen/Cargo.toml --check
+cargo clippy --locked --workspace -- -D warnings
+cargo clippy --locked --manifest-path web/tools/schema-gen/Cargo.toml -- -D warnings
+(cd web && bun run gate) # format, lint, typecheck, build, test and check generated code
 ```
 
 - Codec, media and video delivery tests need the FFmpeg shared libraries; `VALLE_FFMPEG_DIR`
@@ -103,8 +106,10 @@ Some files are generated, and the checks fail when they are stale. Regenerate th
 The six `CI <OS> <architecture>` workflows run on demand, for example
 `gh workflow run ci-macos-arm64.yml --ref main`. Each builds and verifies a package, then runs
 the Rust tests and the codec tests: against FFmpeg 7, 8 and 9 on macOS, and FFmpeg 9 on Linux
-and Windows. macOS arm64 also runs every Web test. Formatting and the Web SDK package are
-checked on every pull request and push to `main`.
+and Windows. They also check Rust formatting and Clippy for the native workspace and schema
+generator, plus Web formatting and lint. macOS arm64 also runs every Web test. Every pull
+request and push to `main` checks Rust and Web formatting, Web lint, Clippy for the Wasm engine
+and schema generator, and the Web SDK package. Clippy and Web lint fail on warnings.
 
 ## Package
 
