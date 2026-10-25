@@ -2169,6 +2169,287 @@ mod capacity_tests {
     }
 
     #[test]
+    fn wide_gaussian_preserves_edges_energy_hdr_and_sigma_continuity() {
+        use skia_safe::{Color4f, Paint, Rect};
+        use valle_draw::program::Filter;
+        let mut arena = match std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() {
+            #[cfg(all(target_os = "macos", feature = "native"))]
+            Ok("metal") => SurfaceArena::metal().unwrap(),
+            _ => SurfaceArena::new(),
+        };
+        const LENGTH: usize = 2048;
+        let started = std::time::Instant::now();
+        let mut worst = 0.0_f32;
+        for horizontal in [true, false] {
+            let (width, height) = if horizontal { (LENGTH, 4) } else { (4, LENGTH) };
+            let info = working_info(Extent2d::new(width as u32, height as u32).unwrap()).unwrap();
+            let read_info = info.with_color_type(ColorType::RGBAF32);
+            for stripes in [false, true] {
+                let mut source = arena.create_surface(&info).unwrap();
+                source.canvas().clear(skia_safe::Color::TRANSPARENT);
+                let mut paint = Paint::default();
+                paint.set_color4f(
+                    Color4f::new(2.0, 0.0, 0.0, 1.0),
+                    info.color_space().as_ref(),
+                );
+                let mut rect = |start: usize, length: usize| {
+                    let rect = if horizontal {
+                        Rect::from_xywh(start as f32, 0.0, length as f32, 4.0)
+                    } else {
+                        Rect::from_xywh(0.0, start as f32, 4.0, length as f32)
+                    };
+                    source.canvas().draw_rect(rect, &paint);
+                };
+                if stripes {
+                    for position in (0..LENGTH).step_by(2) {
+                        rect(position, 1);
+                    }
+                } else {
+                    rect(0, LENGTH / 2);
+                }
+                let input = source.image_snapshot();
+                let mut previous = 0.0_f32;
+                let mut previous_sigma = 0.0_f32;
+                let mut observed = BTreeMap::new();
+                for sigma in [
+                    16.0, 31.8, 31.9, 32.0, 32.1, 32.2, 40.0, 48.0, 63.8, 63.9, 64.0, 64.1, 64.2,
+                    96.0, 127.8, 127.9, 128.0, 128.1, 128.2, 192.0, 255.9, 256.0, 256.1, 512.0,
+                    1024.0, 32.1, 64.1, 16.0, 128.1, 32.1,
+                ] {
+                    let filter = Filter::Blur {
+                        sigma_x: if horizontal { sigma } else { 0.0 },
+                        sigma_y: if horizontal { 0.0 } else { sigma },
+                    };
+                    assert!(super::super::gaussian_gpu::supports(&filter));
+                    let mut output = arena.create_surface(&info).unwrap();
+                    output.canvas().clear(skia_safe::Color::TRANSPARENT);
+                    let mut filtered = Paint::default();
+                    filtered.set_image_filter(super::super::gaussian_gpu::filter(&filter).unwrap());
+                    output.canvas().draw_image(&input, (0, 0), Some(&filtered));
+                    let mut bytes = vec![0; width * height * 16];
+                    assert!(output.read_pixels(&read_info, &mut bytes, width * 16, (0, 0)));
+                    if let Some(prior) = observed.insert(sigma.to_bits(), bytes.clone()) {
+                        assert_eq!(
+                            bytes, prior,
+                            "wide Gaussian changed after a seek at sigma={sigma}"
+                        );
+                    }
+                    let pixels = bytes
+                        .chunks_exact(4)
+                        .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+                        .collect::<Vec<_>>();
+                    let weights =
+                        super::super::blur::kernel_with_radius_limit(sigma, 4096).unwrap();
+                    let radius = (weights.len() / 2) as isize;
+                    let mut prefix = vec![[0.0_f64; 2]; weights.len() + 1];
+                    for (i, &weight) in weights.iter().enumerate() {
+                        prefix[i + 1] = prefix[i];
+                        prefix[i + 1][((i as isize - radius).rem_euclid(2)) as usize] +=
+                            f64::from(weight);
+                    }
+                    let source_end = if stripes { LENGTH - 1 } else { LENGTH / 2 - 1 };
+                    for position in 0..LENGTH {
+                        let first = (position as isize - source_end as isize).max(-radius);
+                        let last = (position as isize).min(radius);
+                        let expected = if first > last {
+                            0.0
+                        } else {
+                            let low = prefix[(first + radius) as usize];
+                            let high = prefix[(last + radius + 1) as usize];
+                            if stripes {
+                                high[position % 2] - low[position % 2]
+                            } else {
+                                high[0] + high[1] - low[0] - low[1]
+                            }
+                        } as f32;
+                        let index = if horizontal {
+                            2 * width + position
+                        } else {
+                            position * width + 2
+                        };
+                        let alpha = pixels[index * 4 + 3];
+                        let error = (alpha - expected).abs();
+                        worst = worst.max(error);
+                        assert!(
+                            error < 0.003,
+                            "sigma={sigma} horizontal={horizontal} stripes={stripes} at={position}: alpha={alpha} expected={expected} error={error}"
+                        );
+                        assert!(
+                            (pixels[index * 4] - 2.0 * alpha).abs() < 0.001,
+                            "HDR mismatch sigma={sigma} at={position} rgba=({}, {alpha})",
+                            pixels[index * 4]
+                        );
+                        if !stripes && position == LENGTH / 2 + 24 {
+                            if sigma >= previous_sigma && sigma <= 256.1 {
+                                assert!(
+                                    alpha + 0.0005 >= previous,
+                                    "blur rebound at sigma={sigma}: {previous} -> {alpha}"
+                                );
+                            }
+                            previous = alpha;
+                            previous_sigma = sigma;
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "wide Gaussian: backend={:?} max_alpha_error={worst} elapsed={:?}",
+            arena.backend_kind(),
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[ignore = "requires real Metal; includes 4K wide blur and shadow timing"]
+    fn wide_gaussian_metal_filter_chain_and_4k_probe() {
+        use skia_safe::{Color4f, Paint, Rect};
+        use valle_draw::program::{Filter, LinearColor};
+        let mut arena = SurfaceArena::metal().unwrap();
+        let integral = |sigma, coordinate: i32, first: i32, length: i32| {
+            let weights = super::super::blur::kernel_with_radius_limit(sigma, 4096).unwrap();
+            let radius = weights.len() as i32 / 2;
+            weights
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &weight)| {
+                    let source = coordinate - (i as i32 - radius);
+                    (source >= first && source < first + length).then_some(f64::from(weight))
+                })
+                .sum::<f64>() as f32
+        };
+        for (width, height) in [(384u32, 256u32), (3840, 2160)] {
+            let info = working_info(Extent2d::new(width, height).unwrap()).unwrap();
+            let read_info = info.with_color_type(ColorType::RGBAF32);
+            let (left, top, rw, rh) = (
+                width as i32 * 3 / 8,
+                height as i32 * 3 / 8,
+                width as i32 / 4,
+                height as i32 / 4,
+            );
+            let mut source = arena.create_surface(&info).unwrap();
+            source.canvas().clear(skia_safe::Color::TRANSPARENT);
+            let mut paint = Paint::default();
+            paint.set_color4f(
+                Color4f::new(0.8, 0.3, 0.1, 0.5),
+                info.color_space().as_ref(),
+            );
+            source.canvas().draw_rect(
+                Rect::from_xywh(left as f32, top as f32, rw as f32, rh as f32),
+                &paint,
+            );
+            let input = source.image_snapshot();
+            for (sx, sy) in [(32.0, 32.0), (32.1, 32.1), (64.1, 32.1), (128.1, 48.0)] {
+                for shadow in [false, true] {
+                    let filter = if shadow {
+                        Filter::DropShadow {
+                            sigma_x: sx,
+                            sigma_y: sy,
+                            offset: [9.0, -7.0],
+                            color: LinearColor::new(0.0, 0.0, 0.0, 0.75),
+                        }
+                    } else {
+                        Filter::Blur {
+                            sigma_x: sx,
+                            sigma_y: sy,
+                        }
+                    };
+                    let mut output = arena.create_surface(&info).unwrap();
+                    output.canvas().clear(skia_safe::Color::TRANSPARENT);
+                    let started = std::time::Instant::now();
+                    super::super::effect::draw_filters_into(
+                        &mut output,
+                        &input,
+                        IRect::from_wh(width as i32, height as i32),
+                        [0, 0],
+                        std::slice::from_ref(&filter),
+                    )
+                    .unwrap();
+                    let (read, origin) = if width == 384 {
+                        (read_info.clone(), (0, 0))
+                    } else {
+                        (read_info.with_dimensions((1, 1)), (left + rw, top + rh / 2))
+                    };
+                    let stride = read.width() as usize * 16;
+                    let mut bytes = vec![0; stride * read.height() as usize];
+                    assert!(output.read_pixels(&read, &mut bytes, stride, origin));
+                    let elapsed = started.elapsed();
+                    let pixels = bytes
+                        .chunks_exact(4)
+                        .map(|b| f32::from_ne_bytes(b.try_into().unwrap()))
+                        .collect::<Vec<_>>();
+                    let offset = if shadow { [9, -7] } else { [0, 0] };
+                    let xs = (0..read.width())
+                        .map(|x| integral(sx, x + origin.0 - offset[0], left, rw))
+                        .collect::<Vec<_>>();
+                    let ys = (0..read.height())
+                        .map(|y| integral(sy, y + origin.1 - offset[1], top, rh))
+                        .collect::<Vec<_>>();
+                    for (y, &fy) in ys.iter().enumerate() {
+                        for (x, &fx) in xs.iter().enumerate() {
+                            let mut expected = 0.5 * fx * fy;
+                            if shadow {
+                                let inside = (left..left + rw).contains(&(x as i32 + origin.0))
+                                    && (top..top + rh).contains(&(y as i32 + origin.1));
+                                let original = if inside { 0.5 } else { 0.0 };
+                                expected = original + expected * 0.75 * (1.0 - original);
+                            }
+                            let alpha = pixels[(y * xs.len() + x) * 4 + 3];
+                            assert!(
+                                (alpha - expected).abs() < 0.003,
+                                "sigma=({sx},{sy}) shadow={shadow} at=({x},{y}): {alpha} != {expected}"
+                            );
+                        }
+                    }
+                    if width == 3840 {
+                        let mut warmed = [std::time::Duration::ZERO; 2];
+                        for (path, timing) in warmed.iter_mut().enumerate() {
+                            for pass in 0..3 {
+                                output.canvas().clear(skia_safe::Color::TRANSPARENT);
+                                let started = std::time::Instant::now();
+                                if path == 0 {
+                                    super::super::effect::draw_filters_into(
+                                        &mut output,
+                                        &input,
+                                        IRect::from_wh(width as i32, height as i32),
+                                        [0, 0],
+                                        std::slice::from_ref(&filter),
+                                    )
+                                    .unwrap();
+                                } else {
+                                    let mut old = Paint::default();
+                                    old.set_image_filter(
+                                        super::super::effect::image_filter(&filter).unwrap(),
+                                    );
+                                    output.canvas().draw_image(&input, (0, 0), Some(&old));
+                                }
+                                assert!(output.read_pixels(&read, &mut bytes, stride, origin));
+                                if pass > 0 {
+                                    *timing += started.elapsed();
+                                }
+                            }
+                            *timing /= 2;
+                        }
+                        // Compare the previous Skia path at the same size, including the same
+                        // final one-pixel synchronization read. This is not an encoder benchmark.
+                        eprintln!(
+                            "4K Gaussian sigma=({sx},{sy}) shadow={shadow}: first={elapsed:?}, warmed stable={:?}, warmed Skia={:?}, cached_gpu_bytes={} (includes final pixel read)",
+                            warmed[0],
+                            warmed[1],
+                            match &arena.backend {
+                                SurfaceBackend::Metal { context, .. } =>
+                                    context.resource_cache_usage().resource_bytes,
+                                SurfaceBackend::Raster => 0,
+                            }
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn solid_working_colors_keep_float_precision_and_repeat_exactly() {
         use valle_draw::program::LinearColor;
         let mut arena = match std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() {

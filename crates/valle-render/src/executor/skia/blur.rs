@@ -157,6 +157,10 @@ pub(super) fn supports(filter: &Filter) -> bool {
 }
 
 pub(super) fn kernel(sigma: f32) -> Option<Vec<f32>> {
+    kernel_with_radius_limit(sigma, MAX_DIRECT_RADIUS)
+}
+
+pub(super) fn kernel_with_radius_limit(sigma: f32, max_radius: usize) -> Option<Vec<f32>> {
     if !sigma.is_finite() || sigma < 0.0 {
         return None;
     }
@@ -164,7 +168,7 @@ pub(super) fn kernel(sigma: f32) -> Option<Vec<f32>> {
         return Some(vec![1.0]);
     }
     let radius = (sigma * FILTER_GAUSSIAN_SUPPORT_SIGMAS).ceil() as usize;
-    if radius > MAX_DIRECT_RADIUS {
+    if radius > max_radius {
         return None;
     }
     let denominator = 2.0 * f64::from(sigma).powi(2);
