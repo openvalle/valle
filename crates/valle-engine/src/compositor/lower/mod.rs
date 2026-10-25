@@ -21,8 +21,9 @@ pub use bindings::{
 };
 pub use build::{LowerError, lower_render_graph};
 pub(crate) use build::{
-    lower_constructed_programs_for_template, lower_constructed_render_graph,
-    lower_constructed_wire_render_graph, lower_programs_for_template,
+    external_slots_for_template, lower_constructed_programs_for_template,
+    lower_constructed_render_graph, lower_constructed_wire_render_graph,
+    lower_programs_for_template,
 };
 pub use capability::{BackendCapabilities, CapabilityContractError, FramebufferFetchSemantics};
 pub use ids::{

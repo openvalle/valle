@@ -161,7 +161,7 @@ fn capabilities() -> BackendCapabilities {
             TextureUsage::ColorAttachment,
         ],
         [1],
-        [ExternalPixelLayout::Rgba8],
+        [ExternalPixelLayout::Rgba8, ExternalPixelLayout::Nv12],
         [
             GraphCapability::Blend,
             GraphCapability::Clear,
@@ -184,6 +184,86 @@ fn render_spec(width: u32) -> RenderSpec {
         OutputSpec::srgb_preview(OutputBackground::opaque_srgb([12, 34, 56])).unwrap(),
     )
     .unwrap()
+}
+
+#[test]
+fn simultaneous_samples_of_one_video_bind_distinct_handles_with_cached_templates() {
+    use std::collections::BTreeSet;
+    for same_sample in [false, true] {
+        let mut timeline: Value =
+            serde_json::from_slice(&canonical_bytes(&image_document()).unwrap()).unwrap();
+        let track = &mut timeline["document"]["visual"]["tracks"][0];
+        track["items"][0]["source"] = json!({"type":"video","resource":"asset:hero","sourceStart":"0/1","rate":"1/1","endBehavior":"hold","sampling":{"fit":"contain"}});
+        let mut other = track.clone();
+        other["id"] = json!("track:other");
+        other["items"][0]["id"] = json!("clip:other");
+        other["items"][0]["source"]["sourceStart"] = json!(if same_sample { "0/1" } else { "1/2" });
+        timeline["document"]["visual"]["tracks"]
+            .as_array_mut()
+            .unwrap()
+            .push(other);
+        let timeline = decode_canonical(&timeline.to_string()).unwrap();
+        let manifest = decode_resource_manifest(&serde_json::to_vec(&json!({"entries":{"asset:hero":{
+            "kind":"video","digest":IMAGE_DIGEST,"descriptor":{
+                "duration":"2/1","timeBase":"1/30","presentationIndexDigest":IMAGE_DIGEST,
+                "width":2,"height":1,"orientation":"identity",
+                "color":{"primaries":"bt709","transfer":"bt709","matrix":"bt709","fullRange":false},
+                "videoStream":0,"audioStream":null
+            }
+        }}})).unwrap()).unwrap();
+        let ResourceEntryWire::Video { digest, descriptor } = &manifest.entries()["asset:hero"]
+        else {
+            unreachable!()
+        };
+        let bindings = ResourceBindings::new()
+            .with_binding(
+                "asset:hero",
+                ResourceBinding::new(
+                    digest.clone(),
+                    VerifiedHandleId::new(7).unwrap(),
+                    VerifiedResourceFacts::Video {
+                        descriptor: descriptor.clone(),
+                        temporal_footprint: VisualFootprint::default(),
+                    },
+                ),
+            )
+            .unwrap();
+        let timeline_json = String::from_utf8(canonical_bytes(&timeline).unwrap()).unwrap();
+        let manifest_json = std::str::from_utf8(manifest.canonical_bytes()).unwrap();
+        let bundle = canonical_verified_binding_bundle(&bindings, &Capabilities::new()).unwrap();
+        let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).unwrap();
+        let files = fixed_package_files(&timeline_json, manifest_json, &bundle, &profile);
+        let package = canonical_fixed_package_manifest(&files).unwrap();
+        let render = open_verified_fixed_package(&package, &files)
+            .unwrap()
+            .engine_render();
+        for constructed in [false, true] {
+            let mut compiler = render.frame_compiler();
+            for (index, frame) in [0, 1, 0].into_iter().enumerate() {
+                let prepared = compiler
+                    .evaluate_prepare(render.render_id(), FrameKey::new(frame), render_spec(2))
+                    .unwrap();
+                let lowered = if constructed {
+                    prepared.lower_constructed(&capabilities()).unwrap()
+                } else {
+                    prepared.lower(&capabilities()).unwrap()
+                };
+                if index > 0 {
+                    assert!(lowered.template_cache_hit());
+                }
+                let bound = if constructed {
+                    lowered
+                        .bind_constructed(ExternalGeneration::new(1).unwrap())
+                        .unwrap()
+                } else {
+                    lowered.bind(ExternalGeneration::new(1).unwrap()).unwrap()
+                };
+                let ids = bound.bindings().external_ids();
+                assert_eq!(ids.len(), if same_sample { 1 } else { 2 });
+                assert_eq!(ids.iter().collect::<BTreeSet<_>>().len(), ids.len());
+            }
+        }
+    }
 }
 
 #[test]

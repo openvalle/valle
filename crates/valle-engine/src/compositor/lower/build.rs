@@ -1024,18 +1024,12 @@ fn lower_programs_impl(
         .collect()
 }
 
-/// Rebuild only the exact per-frame program payloads after an outer RenderGraph structure hit.
-/// The cached template remains authoritative for physical passes/storage; every current external
-/// resource is re-admitted by semantic path, key and descriptor before its handle is mapped to a
-/// template slot.
-pub(crate) fn lower_programs_for_template(
+/// Match current graph handles to stable template slots by semantic path, key and descriptor.
+/// Program lowering and object binding share this mapping on both cold and cached plans.
+pub(crate) fn external_slots_for_template(
     graph: &RenderGraph,
-    dynamic: &DynamicBindings,
     template: &RenderPlanTemplate,
-) -> Result<Vec<PlanProgram>, LowerError> {
-    // This path accepts only the closed, already-validated product graph constructed immediately
-    // before lookup. Public lowering and wire decoding retain their independent validation.
-    template.binding_layout().admits_dynamic_layout(dynamic)?;
+) -> Result<BTreeMap<ExternalHandleId, ExternalSlotId>, LowerError> {
     let mut external_by_handle = BTreeMap::new();
     let mut matched_slots = BTreeMap::new();
     for resource in &graph.resources {
@@ -1075,6 +1069,18 @@ pub(crate) fn lower_programs_for_template(
             .unwrap_or(graph.output);
         return Err(LowerError::MissingExternalSlot { resource });
     }
+    Ok(external_by_handle)
+}
+
+pub(crate) fn lower_programs_for_template(
+    graph: &RenderGraph,
+    dynamic: &DynamicBindings,
+    template: &RenderPlanTemplate,
+) -> Result<Vec<PlanProgram>, LowerError> {
+    // This path accepts only the closed, already-validated product graph constructed immediately
+    // before lookup. Public lowering and wire decoding retain their independent validation.
+    template.binding_layout().admits_dynamic_layout(dynamic)?;
+    let external_by_handle = external_slots_for_template(graph, template)?;
     lower_programs_impl(
         graph,
         &external_by_handle,
@@ -1089,45 +1095,7 @@ pub(crate) fn lower_constructed_programs_for_template(
     template: &RenderPlanTemplate,
 ) -> Result<Vec<PlanProgram>, LowerError> {
     template.binding_layout().admits_dynamic_layout(dynamic)?;
-    let mut external_by_handle = BTreeMap::new();
-    let mut matched_slots = BTreeMap::new();
-    for resource in &graph.resources {
-        let GraphResourceKind::ExternalResource {
-            handle,
-            key,
-            expected,
-        } = &resource.kind
-        else {
-            continue;
-        };
-        let slot = template
-            .binding_layout()
-            .external_slots()
-            .iter()
-            .find(|slot| {
-                slot.semantic_path == resource.semantic_path
-                    && &slot.key == key
-                    && &slot.expected == expected
-            })
-            .ok_or(LowerError::MissingExternalSlot {
-                resource: resource.id,
-            })?;
-        if matched_slots.insert(slot.id, resource.id).is_some() {
-            return Err(LowerError::MissingExternalSlot {
-                resource: resource.id,
-            });
-        }
-        external_by_handle.insert(*handle, slot.id);
-    }
-    if matched_slots.len() != template.binding_layout().external_slots().len() {
-        let resource = graph
-            .resources
-            .iter()
-            .find(|resource| matches!(resource.kind, GraphResourceKind::ExternalResource { .. }))
-            .map(|resource| resource.id)
-            .unwrap_or(graph.output);
-        return Err(LowerError::MissingExternalSlot { resource });
-    }
+    let external_by_handle = external_slots_for_template(graph, template)?;
     lower_programs_impl(
         graph,
         &external_by_handle,

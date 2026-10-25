@@ -18,9 +18,9 @@ use crate::{
         graph::{GraphBuildError, RenderGraph, build_constructed_render_graph},
         lower::{
             BackendCapabilities, BindingContractError, LowerError, RenderBindings,
-            RenderPlanTemplate, lower_constructed_programs_for_template,
-            lower_constructed_render_graph, lower_constructed_wire_render_graph,
-            lower_programs_for_template,
+            RenderPlanTemplate, external_slots_for_template,
+            lower_constructed_programs_for_template, lower_constructed_render_graph,
+            lower_constructed_wire_render_graph, lower_programs_for_template,
         },
     },
     frame::RenderSpec,
@@ -411,23 +411,21 @@ impl LoweredTicket {
         generation: ExternalGeneration,
         mode: FrameProgramMode,
     ) -> Result<BoundTicket, ProductEngineError> {
+        let by_slot = external_slots_for_template(&self.graph, &self.template)?
+            .into_iter()
+            .map(|(handle, slot)| (slot, handle))
+            .collect::<BTreeMap<_, _>>();
         let external_ids = self
             .template
             .binding_layout()
             .external_slots()
             .iter()
             .map(|slot| {
-                self.prepared
-                    .resource_requests
-                    .requests()
-                    .iter()
-                    .find(|request| {
-                        request.key() == &slot.key && request.expected() == &slot.expected
-                    })
-                    .map(|request| request.handle())
-                    .ok_or(ProductEngineError::MissingPreparedExternalSlot {
+                by_slot.get(&slot.id).copied().ok_or(
+                    ProductEngineError::MissingPreparedExternalSlot {
                         slot: slot.id.get(),
-                    })
+                    },
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
         let bindings = match mode {
