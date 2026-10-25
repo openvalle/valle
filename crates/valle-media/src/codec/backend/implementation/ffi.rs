@@ -87,13 +87,13 @@ pub fn guessed_sample_aspect_ratio(
 }
 
 /// Write MP4/M4A headers with a 90 kHz movie clock for exact integer and fractional frame
-/// boundaries. Use signed composition offsets for B frames and disable edit lists to preserve
-/// boundary packets.
+/// boundaries. Signed composition offsets preserve B-frame presentation order; edit lists
+/// express AAC encoder priming so decoded audio starts on the source clock.
 pub fn write_mp4_header(octx: &mut format::context::Output) -> Result<()> {
     let mut options = ff::Dictionary::new();
     options.set("movie_timescale", "90000");
     options.set("movflags", "+negative_cts_offsets");
-    options.set("use_editlist", "0");
+    options.set("use_editlist", "1");
     let unused = octx.write_header_with(options)?;
     if let Some((key, _)) = unused.iter().next() {
         bail!("MP4 muxer rejected header option `{key}`");

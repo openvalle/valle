@@ -4,6 +4,73 @@
 use valle_media::frame::RgbaFrame;
 
 #[test]
+fn aac_transients_follow_the_source_clock_at_start_middle_and_end() {
+    use valle_media::{
+        AudioBuffer,
+        codec::{LibavAudioStream, Muxer},
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let output = temp.path().join("sync.mp4");
+    let centers = [4_800usize, 24_000, 43_200];
+    let mut samples = vec![0.0f32; 48_000 * 2];
+    for &center in &centers {
+        for i in 0..480 {
+            let envelope = (std::f64::consts::PI * i as f64 / 480.0).sin().powi(2);
+            let value =
+                (0.6 * envelope * (std::f64::consts::TAU * 1200.0 * i as f64 / 48_000.0).sin())
+                    as f32;
+            samples[(center + i) * 2] = value;
+            samples[(center + i) * 2 + 1] = value;
+        }
+    }
+    let mut muxer = Muxer::open(&output, 32, 32, 30, None).unwrap();
+    muxer.expect_external_audio();
+    for i in 0..30 {
+        let mut frame = RgbaFrame::new(32, 32);
+        frame.fill([i as u8, 0, 0, 255]);
+        muxer.encode_video(&frame).unwrap();
+    }
+    muxer
+        .encode_audio(&AudioBuffer {
+            samples: samples.clone(),
+            sample_rate: 48_000,
+            channels: 2,
+        })
+        .unwrap();
+    muxer.finish().unwrap();
+    drop(muxer);
+    let mut stream = LibavAudioStream::open(&output, 48_000, 2).unwrap();
+    let mut decoded = Vec::new();
+    loop {
+        let block = stream.read(48_000).unwrap();
+        if block.samples.is_empty() {
+            break;
+        }
+        decoded.extend(block.samples);
+    }
+    for center in centers {
+        let best = (-1500isize..=1500)
+            .filter(|&offset| center as isize + offset >= 0)
+            .map(|offset| {
+                let dot: f64 = (0..480)
+                    .map(|i| {
+                        f64::from(samples[(center + i) * 2])
+                            * f64::from(decoded[((center as isize + offset) as usize + i) * 2])
+                    })
+                    .sum();
+                (offset, dot)
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap();
+        assert!(
+            best.0.abs() <= 48,
+            "source sample {center}: decoded transient shifted {} samples",
+            best.0
+        );
+    }
+}
+
+#[test]
 fn muxer_emits_video_and_aac_with_matching_duration() {
     use valle_media::codec::{Muxer, probe_av};
     let temp = tempfile::tempdir().expect("temp dir");
