@@ -156,7 +156,7 @@ pub(super) fn supports(filter: &Filter) -> bool {
     }
 }
 
-fn kernel(sigma: f32) -> Option<Vec<f32>> {
+pub(super) fn kernel(sigma: f32) -> Option<Vec<f32>> {
     if !sigma.is_finite() || sigma < 0.0 {
         return None;
     }

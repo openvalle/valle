@@ -2096,6 +2096,79 @@ mod capacity_tests {
     use super::*;
 
     #[test]
+    fn stable_gaussian_matches_direct_convolution_across_sigma_steps() {
+        use skia_safe::{Paint, Rect};
+        use valle_draw::program::Filter;
+        let mut arena = match std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() {
+            #[cfg(all(target_os = "macos", feature = "native"))]
+            Ok("metal") => SurfaceArena::metal().unwrap(),
+            _ => SurfaceArena::new(),
+        };
+        let info = working_info(Extent2d::new(256, 256).unwrap()).unwrap();
+        let read_info = info.with_color_type(ColorType::RGBAF32);
+        let mut source = arena.create_surface(&info).unwrap();
+        let mut reference_source = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        for surface in [&mut source, &mut reference_source] {
+            surface.canvas().clear(skia_safe::Color::TRANSPARENT);
+            let mut paint = Paint::default();
+            paint
+                .set_anti_alias(true)
+                .set_color4f(skia_safe::Color4f::new(0.8, 0.3, 0.1, 0.75), None);
+            surface
+                .canvas()
+                .draw_rect(Rect::from_xywh(108.0, 116.0, 40.0, 24.0), &paint);
+        }
+        let input = source.image_snapshot();
+        let reference_input = reference_source.image_snapshot();
+        for sigma in [
+            0.0, 0.25, 1.0, 3.9, 4.1, 7.9, 8.1, 15.9, 16.0, 16.1, 31.9, 32.0,
+        ] {
+            for sy in [0.0, sigma] {
+                let filter = Filter::Blur {
+                    sigma_x: sigma,
+                    sigma_y: sy,
+                };
+                let mut output = arena.create_surface(&info).unwrap();
+                let mut reference = skia_safe::surfaces::raster(&info, None, None).unwrap();
+                output.canvas().clear(skia_safe::Color::TRANSPARENT);
+                reference.canvas().clear(skia_safe::Color::TRANSPARENT);
+                let mut paint = Paint::default();
+                paint.set_image_filter(super::super::gaussian_gpu::filter(&filter).unwrap());
+                output.canvas().draw_image(&input, (0, 0), Some(&paint));
+                assert!(
+                    super::super::blur::draw(
+                        reference.canvas(),
+                        &reference_input,
+                        IRect::from_wh(256, 256),
+                        [0, 0],
+                        &filter
+                    )
+                    .unwrap()
+                );
+                let read = |surface: &mut Surface| {
+                    let mut bytes = vec![0u8; 256 * 256 * 16];
+                    assert!(surface.read_pixels(&read_info, &mut bytes, 256 * 16, (0, 0)));
+                    bytes
+                        .chunks_exact(4)
+                        .map(|value| f32::from_ne_bytes(value.try_into().unwrap()))
+                        .collect::<Vec<_>>()
+                };
+                let actual = read(&mut output);
+                let expected = read(&mut reference);
+                let maximum = actual
+                    .iter()
+                    .zip(&expected)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0_f32, f32::max);
+                assert!(
+                    maximum < 0.003,
+                    "sigma=({sigma},{sy}) max float error={maximum}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn solid_working_colors_keep_float_precision_and_repeat_exactly() {
         use valle_draw::program::LinearColor;
         let mut arena = match std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() {

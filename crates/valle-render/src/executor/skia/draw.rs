@@ -4064,24 +4064,53 @@ fn draw_shadow(
             None,
         ));
     }
-    let mut shape = shadow.shape;
-    shape.rect.x += f64::from(shadow.offset[0] - shadow.spread);
-    shape.rect.y += f64::from(shadow.offset[1] - shadow.spread);
-    shape.rect.width += f64::from(shadow.spread * 2.0);
-    shape.rect.height += f64::from(shadow.spread * 2.0);
-    for radii in &mut shape.radii {
-        radii[0] = (radii[0] + f64::from(shadow.spread)).max(0.0);
-        radii[1] = (radii[1] + f64::from(shadow.spread)).max(0.0);
-    }
-    if shadow.inset {
-        canvas.save();
-        canvas.clip_rrect(sk_rrect(shadow.shape), ClipOp::Intersect, true);
-        paint.set_blend_mode(SkBlendMode::SrcOver);
-        canvas.draw_rrect(sk_rrect(shape), &paint);
-        canvas.restore();
+    let spread = if shadow.inset {
+        -shadow.spread
     } else {
+        shadow.spread
+    };
+    let mut shape = shadow.shape;
+    shape.rect.x += f64::from(shadow.offset[0] - spread);
+    shape.rect.y += f64::from(shadow.offset[1] - spread);
+    shape.rect.width += f64::from(spread * 2.0);
+    shape.rect.height += f64::from(spread * 2.0);
+    for radii in &mut shape.radii {
+        radii[0] = (radii[0] + f64::from(spread)).max(0.0);
+        radii[1] = (radii[1] + f64::from(spread)).max(0.0);
+    }
+    canvas.save();
+    canvas.clip_rrect(
+        sk_rrect(shadow.shape),
+        if shadow.inset {
+            ClipOp::Intersect
+        } else {
+            ClipOp::Difference
+        },
+        true,
+    );
+    if shadow.inset {
+        // The shadow is the blurred complement of the displaced inner box. Keep the outer
+        // contour beyond the complete blur support, even when the offset moves the hole outside.
+        let pad = f64::from(shadow.sigma_x.max(shadow.sigma_y)) * 4.0 + 1.0;
+        let outer = Rect::from_edges(
+            shadow.shape.rect.x.min(shape.rect.x) - pad,
+            shadow.shape.rect.y.min(shape.rect.y) - pad,
+            (shadow.shape.rect.x + shadow.shape.rect.width).max(shape.rect.x + shape.rect.width)
+                + pad,
+            (shadow.shape.rect.y + shadow.shape.rect.height).max(shape.rect.y + shape.rect.height)
+                + pad,
+        );
+        let mut path = skia_safe::PathBuilder::new();
+        path.set_fill_type(skia_safe::PathFillType::EvenOdd);
+        path.add_rect(sk_rect(outer), None, None);
+        if shape.rect.width > 0.0 && shape.rect.height > 0.0 {
+            path.add_rrect(sk_rrect(shape), None, None);
+        }
+        canvas.draw_path(&path.detach(), &paint);
+    } else if shape.rect.width > 0.0 && shape.rect.height > 0.0 {
         canvas.draw_rrect(sk_rrect(shape), &paint);
     }
+    canvas.restore();
     Ok(())
 }
 
@@ -4173,6 +4202,36 @@ fn write_f32s(data: &mut [u8], offset: usize, values: &[f32]) -> Result<(), Draw
         chunk.copy_from_slice(&value.to_ne_bytes());
     }
     Ok(())
+}
+
+fn exact_instance_opacity(
+    canvas: &skia_safe::Canvas,
+    shape: &InstanceShape,
+    transform: valle_draw::program::Affine2d,
+    color: LinearColor,
+    opacity: f32,
+) -> bool {
+    if !matches!(shape, InstanceShape::Rect)
+        || !canvas.is_clip_rect()
+        || color.alpha != 1.0
+        || ![color.red, color.green, color.blue]
+            .iter()
+            .all(|value| *value == 0.0 || *value == 1.0)
+        || ![0.5, 0.25, 0.125].contains(&opacity)
+    {
+        return false;
+    }
+    let matrix = canvas.local_to_device_as_3x3();
+    let [a, b, c, d, e, f] = transform.0;
+    let local = Matrix::new_all(
+        a as f32, c as f32, e as f32, b as f32, d as f32, f as f32, 0.0, 0.0, 1.0,
+    );
+    let combined = Matrix::concat(&matrix, &local);
+    let (bounds, rectangular) = combined.map_rect(SkRect::from_xywh(0.0, 0.0, 1.0, 1.0));
+    rectangular
+        && [bounds.left, bounds.top, bounds.right, bounds.bottom]
+            .iter()
+            .all(|value| value.is_finite() && value.fract() == 0.0)
 }
 
 fn draw_instance_batch(
@@ -4285,6 +4344,23 @@ fn draw_instance_batch(
         {
             continue;
         }
+        let fill = color.alpha > 0.0 && batch.path_style.as_ref().is_none_or(|style| style.fill);
+        let stroke = stroke_width > 0.0 && stroke_color.alpha > 0.0;
+        // Only fold the proven exact case. Fractional coverage and arbitrary F16 colors
+        // round differently through an isolated layer, even for one draw.
+        let direct_opacity = fill
+            && !stroke
+            && exact_instance_opacity(canvas, &batch.shape, transform, color, opacity);
+        let color = if direct_opacity {
+            color.scale_opacity(opacity)
+        } else {
+            color
+        };
+        let stroke_color = if direct_opacity {
+            stroke_color.scale_opacity(opacity)
+        } else {
+            stroke_color
+        };
         let local_bounds = match &batch.shape {
             InstanceShape::Path(_) => path_local_bounds.map(|bounds| {
                 // Match an ordinary Path group's stroke footprint before saving its opacity
@@ -4310,7 +4386,7 @@ fn draw_instance_batch(
             InstanceShape::Image(_) => Some(Rect::new(0.0, 0.0, 1.0, 1.0)),
             _ => None,
         };
-        if opacity < 1.0 {
+        if opacity < 1.0 && !direct_opacity {
             let bounds = local_bounds
                 .and_then(|rect| Transform2d::from_affine(transform).map_bounds(rect))
                 .map(sk_rect);
@@ -4414,7 +4490,7 @@ fn draw_instance_batch(
             };
         }
         canvas.restore();
-        if opacity < 1.0 {
+        if opacity < 1.0 && !direct_opacity {
             canvas.restore();
         }
     }
@@ -6477,6 +6553,109 @@ mod tests {
         let stroked = render(10.0, 0.2);
         assert_ne!(axis_aligned, skewed);
         assert_ne!(skewed, stroked);
+    }
+
+    #[test]
+    fn single_draw_instance_opacity_matches_isolated_group_coverage() {
+        use valle_draw::program::{Affine2d, DrawProgramBuilder, InstanceColumns};
+        let read_info = ImageInfo::new(
+            (64, 64),
+            skia_safe::ColorType::RGBAF32,
+            skia_safe::AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        for color_type in [skia_safe::ColorType::RGBAF16, skia_safe::ColorType::RGBAF32] {
+            let info = read_info.with_color_type(color_type);
+            for shape in [
+                InstanceShape::Circle,
+                InstanceShape::Rect,
+                InstanceShape::RoundRect(RoundRect::circular(
+                    Rect::new(0.0, 0.0, 1.0, 1.0),
+                    [0.2; 4],
+                )),
+            ] {
+                for stroke in [0.0, 0.2] {
+                    for (transform, color, opacity) in [
+                        (
+                            Affine2d([24.0, 7.0, -4.0, 22.0, 18.3, 12.7]),
+                            LinearColor::new(0.21, 0.06, 0.03, 0.3),
+                            0.37,
+                        ),
+                        (
+                            Affine2d([24.0, 0.0, 0.0, 24.0, 12.0, 12.0]),
+                            LinearColor::new(1.0, 1.0, 1.0, 1.0),
+                            0.5,
+                        ),
+                    ] {
+                        let batch = InstanceBatchNode {
+                            shape: shape.clone(),
+                            path_style: None,
+                            instances: InstanceColumns {
+                                transforms: vec![transform],
+                                colors: vec![color],
+                                stroke_colors: vec![LinearColor::new(0.05, 0.1, 0.5, 0.5)],
+                                stroke_widths: vec![stroke],
+                                opacities: vec![opacity],
+                                dash_offsets: Vec::new(),
+                            },
+                        };
+                        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 64.0));
+                        let root = builder.push_node(Node::InstanceBatch(batch.clone()));
+                        builder.add_root(root);
+                        let program = builder.finish().unwrap();
+                        let render = |isolated: bool| {
+                            let mut surface =
+                                skia_safe::surfaces::raster(&info, None, None).unwrap();
+                            surface.canvas().clear(Color4f::new(0.1, 0.2, 0.3, 0.7));
+                            let mut batch = batch.clone();
+                            if matches!(shape, InstanceShape::Rect)
+                                && stroke == 0.0
+                                && opacity == 0.5
+                            {
+                                assert!(exact_instance_opacity(
+                                    surface.canvas(),
+                                    &shape,
+                                    transform,
+                                    color,
+                                    opacity
+                                ));
+                            }
+                            if isolated {
+                                let bounds = match batch.shape {
+                                    InstanceShape::Rect | InstanceShape::RoundRect(_)
+                                        if stroke == 0.0 =>
+                                    {
+                                        Transform2d::from_affine(transform)
+                                            .map_bounds(Rect::new(0.0, 0.0, 1.0, 1.0))
+                                            .map(sk_rect)
+                                    }
+                                    _ => None,
+                                };
+                                surface.canvas().save_layer_alpha_f(bounds, opacity);
+                                batch.instances.opacities[0] = 1.0;
+                            }
+                            draw_instance_batch(
+                                &program,
+                                &BTreeMap::new(),
+                                surface.canvas(),
+                                &batch,
+                            )
+                            .unwrap();
+                            if isolated {
+                                surface.canvas().restore();
+                            }
+                            let mut bytes = vec![0u8; 64 * 64 * 16];
+                            assert!(surface.read_pixels(&read_info, &mut bytes, 64 * 16, (0, 0)));
+                            bytes
+                        };
+                        assert!(
+                            render(false) == render(true),
+                            "shape={shape:?} stroke={stroke} opacity={opacity} color_type={color_type:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -8763,5 +8942,58 @@ mod tests {
                 expected[at]
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod shadow_regressions {
+    use super::*;
+
+    fn alpha(inset: bool, spread: f32, offset: [f32; 2], sigma: f32, x: usize, y: usize) -> f32 {
+        let info = skia_safe::ImageInfo::new(
+            (80, 80),
+            skia_safe::ColorType::RGBAF32,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let mut surface = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        surface.canvas().clear(skia_safe::Color::TRANSPARENT);
+        draw_shadow(
+            surface.canvas(),
+            &valle_draw::program::ShadowNode {
+                shape: RoundRect {
+                    rect: Rect::new(16.0, 16.0, 48.0, 48.0),
+                    radii: [[0.0; 2]; 4],
+                },
+                offset,
+                spread,
+                sigma_x: sigma,
+                sigma_y: sigma,
+                color: LinearColor::new(0.0, 0.0, 0.0, 1.0),
+                inset,
+            },
+        )
+        .unwrap();
+        let mut bytes = vec![0u8; 80 * 80 * 16];
+        assert!(surface.read_pixels(&info, &mut bytes, 80 * 16, (0, 0)));
+        let at = (y * 80 + x) * 16 + 12;
+        f32::from_ne_bytes(bytes[at..at + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn outer_shadow_never_fills_a_transparent_box() {
+        assert_eq!(alpha(false, 4.0, [0.0, 0.0], 0.0, 40, 40), 0.0);
+        assert!(alpha(false, 4.0, [0.0, 0.0], 0.0, 14, 40) > 0.99);
+    }
+
+    #[test]
+    fn inset_is_the_inner_ring_even_with_displaced_or_empty_holes() {
+        assert_eq!(alpha(true, 4.0, [0.0, 0.0], 0.0, 40, 40), 0.0);
+        assert!(alpha(true, 4.0, [0.0, 0.0], 0.0, 18, 40) > 0.99);
+        assert_eq!(alpha(true, 4.0, [0.0, 0.0], 0.0, 10, 40), 0.0);
+        assert!(alpha(true, 0.0, [100.0, 0.0], 0.0, 40, 40) > 0.99);
+        assert!(alpha(true, 30.0, [0.0, 0.0], 0.0, 40, 40) > 0.99);
+        assert!(alpha(true, 0.0, [0.0, 0.0], 3.0, 17, 40) > 0.1);
+        assert!(alpha(true, 0.0, [0.0, 0.0], 3.0, 40, 40) < 0.01);
     }
 }

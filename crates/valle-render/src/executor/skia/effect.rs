@@ -949,7 +949,7 @@ pub(super) fn materialize_filters(
     filters: &[Filter],
 ) -> Result<(Image, IRect, [i32; 2]), DrawError> {
     for filter in filters {
-        let Some(effect) = image_filter(filter)? else {
+        let Some(effect) = physical_image_filter(filter, image.is_texture_backed())? else {
             continue;
         };
         // Keep the full intermediate support: clipping to the final panel here loses
@@ -1069,7 +1069,7 @@ pub(super) fn draw_displaced_filters_into(
     }
     let mut chain = None;
     for filter in filters {
-        let Some(filter) = image_filter(filter)? else {
+        let Some(filter) = physical_image_filter(filter, input.is_texture_backed())? else {
             continue;
         };
         chain = Some(match chain {
@@ -1125,7 +1125,7 @@ fn draw_skia_filters(
 ) -> Result<(), DrawError> {
     let mut chain = None;
     for filter in filters {
-        let Some(filter) = image_filter(filter)? else {
+        let Some(filter) = physical_image_filter(filter, input.is_texture_backed())? else {
             continue;
         };
         chain = Some(match chain {
@@ -1172,6 +1172,14 @@ fn chromatic_aberration_effect() -> Result<RuntimeEffect, DrawError> {
         }
         Ok(effect.as_ref().unwrap().clone())
     })
+}
+
+fn physical_image_filter(filter: &Filter, gpu: bool) -> Result<Option<ImageFilter>, DrawError> {
+    if gpu && super::gaussian_gpu::supports(filter) {
+        super::gaussian_gpu::filter(filter)
+    } else {
+        image_filter(filter)
+    }
 }
 
 pub(crate) fn image_filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawError> {

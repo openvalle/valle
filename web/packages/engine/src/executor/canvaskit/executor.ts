@@ -3546,7 +3546,7 @@ function drawBatchNode(
               strokeView.getFloat32(strokeOffset + 4, true),
               strokeView.getFloat32(strokeOffset + 8, true),
               strokeAlpha,
-              1,
+              directOpacity ? opacity : 1,
             );
           } else if (alpha > 0) {
             setColor(
@@ -3556,7 +3556,7 @@ function drawBatchNode(
               view.getFloat32(colorOffset + 4, true),
               view.getFloat32(colorOffset + 8, true),
               alpha,
-              1,
+              directOpacity ? opacity : 1,
             );
           } else {
             fail("wire_shape", "visible stroke requires a visible color");
@@ -3854,7 +3854,7 @@ function drawShadowNode(CanvasKit: CanvasKit, canvas: Canvas, node: Wire): void 
   const original = record(node.shape, "shadow shape");
   const shapeBounds = rect(original.rect, "shadow shape bounds");
   const offset = pair(node.offset, "shadow offset");
-  const spread = finiteNumber(node.spread, "shadow spread");
+  const spread = finiteNumber(node.spread, "shadow spread") * (node.inset === true ? -1 : 1);
   const radii = array(original.radii, "shadow radii").map((raw) => {
     const radius = pair(raw, "shadow radius");
     return [Math.max(0, radius[0] + spread), Math.max(0, radius[1] + spread)];
@@ -3886,10 +3886,34 @@ function drawShadowNode(CanvasKit: CanvasKit, canvas: Canvas, node: Wire): void 
     if (node.inset === true) {
       canvas.save();
       canvas.clipRRect(roundRect(CanvasKit, original), CanvasKit.ClipOp.Intersect, true);
+      const pad = sigma * 4 + 1;
+      const left = Math.min(shapeBounds.x, shape.rect.x) - pad;
+      const top = Math.min(shapeBounds.y, shape.rect.y) - pad;
+      const right =
+        Math.max(shapeBounds.x + shapeBounds.width, shape.rect.x + shape.rect.width) + pad;
+      const bottom =
+        Math.max(shapeBounds.y + shapeBounds.height, shape.rect.y + shape.rect.height) + pad;
+      const ring = new CanvasKit.PathBuilder();
+      try {
+        ring.setFillType(CanvasKit.FillType.EvenOdd);
+        ring.addRect(CanvasKit.LTRBRect(left, top, right, bottom));
+        if (shape.rect.width > 0 && shape.rect.height > 0)
+          ring.addRRect(roundRect(CanvasKit, shape));
+        const path = ring.detach();
+        try {
+          canvas.drawPath(path, paint);
+        } finally {
+          path.delete();
+        }
+      } finally {
+        ring.delete();
+      }
+      canvas.restore();
+    } else if (shape.rect.width > 0 && shape.rect.height > 0) {
+      canvas.save();
+      canvas.clipRRect(roundRect(CanvasKit, original), CanvasKit.ClipOp.Difference, true);
       canvas.drawRRect(roundRect(CanvasKit, shape), paint);
       canvas.restore();
-    } else {
-      canvas.drawRRect(roundRect(CanvasKit, shape), paint);
     }
   } finally {
     filter?.delete();
