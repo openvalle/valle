@@ -1,7 +1,8 @@
 //! ABI-specific sequential readers used by frame-derived media tools.
 use super::ff;
 use super::ffi::{
-    ffmpeg_init, guessed_sample_aspect_ratio, matrix_for, read_plane0, set_sws_colorspace,
+    ffmpeg_init, guessed_sample_aspect_ratio, matrix_for, read_plane0, rgba_scaling_flags,
+    set_sws_colorspace,
 };
 #[cfg(any(
     feature = "tool-inpaint",
@@ -231,7 +232,7 @@ impl SequentialDecoder {
             DecodeFormat::Gray8 => format::Pixel::GRAY8,
         };
         let scaling_flags = match output_format {
-            DecodeFormat::Rgba => software::scaling::Flags::BILINEAR,
+            DecodeFormat::Rgba => rgba_scaling_flags(),
             // A mask is categorical data. SAR normalization must never synthesize soft values.
             #[cfg(any(feature = "tool-inpaint", feature = "tool-segment"))]
             DecodeFormat::Gray8 => software::scaling::Flags::POINT,

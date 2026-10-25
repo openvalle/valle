@@ -127,6 +127,7 @@ mod tests {
     native_test!(audio::forward_stream_does_not_truncate_to_a_short_duration_hint);
     native_test!(alpha::timestamped_writer_keeps_a_single_nonzero_pts_frame);
     native_test!(decode::streaming_source_reports_and_decodes_square_pixel_sar_geometry);
+    native_test!(decode::bt709_limited_decode_rounds_to_nearest_rgb);
     native_test!(flac::streaming_flac_roundtrip_preserves_length_and_pcm24_precision);
     native_test!(flac::strict_validation_rejects_truncated_and_trailing_data);
     native_test!(

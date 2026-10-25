@@ -13,7 +13,7 @@ use ff::{Packet, Rational, codec, color, format, frame, media, software};
 
 use super::ffi::{
     YuvMatrix, ffmpeg_init, guessed_sample_aspect_ratio, matrix_for, read_plane0,
-    set_sws_colorspace,
+    rgba_scaling_flags, set_sws_colorspace,
 };
 use super::shared_frame::{SharedFrameBackend, SharedVideoFrameHandle, VideoFrameTransport};
 use crate::transport::source::{SourceFrame, SourceMeta, VideoSource};
@@ -48,7 +48,7 @@ pub fn decode_rgba_frames(path: &Path, max: Option<usize>) -> Result<Vec<RgbaFra
         format::Pixel::RGBA,
         w,
         h,
-        software::scaling::Flags::BILINEAR,
+        rgba_scaling_flags(),
     )?;
     // Match the streaming decoder's explicit color matrix and range selection.
     let yuv_full = decoder.color_range() == color::Range::JPEG;
@@ -743,7 +743,7 @@ fn convert_video_frame(yuv: frame::Video, p: ConvertParams) -> Result<Arc<RgbaFr
         format::Pixel::RGBA,
         p.square_w,
         p.square_h,
-        software::scaling::Flags::BILINEAR,
+        rgba_scaling_flags(),
     )?;
     set_sws_colorspace(&mut sws, p.matrix, p.yuv_full, true);
     let mut rgba = frame::Video::empty();
@@ -987,6 +987,38 @@ pub(crate) mod tests {
             }
         }
         f
+    }
+
+    pub(crate) fn bt709_limited_decode_rounds_to_nearest_rgb() {
+        ffmpeg_init().unwrap();
+        // Fixed BT.709 limited-range samples isolate conversion rounding from lossy encoding.
+        // The scalar fast path used to truncate these to [13,31,47] and [56,119,197].
+        for (yuv, expected) in [
+            ([42, 137, 120], [16, 33, 49, 255]),
+            ([126, 128, 128], [128, 128, 128, 255]),
+            ([113, 169, 98], [59, 120, 200, 255]),
+        ] {
+            let mut frame = frame::Video::new(format::Pixel::YUV420P, 32, 32);
+            for (plane, value) in yuv.into_iter().enumerate() {
+                frame.data_mut(plane).fill(value);
+            }
+            let converted = convert_video_frame(
+                frame,
+                ConvertParams {
+                    src_fmt: format::Pixel::YUV420P,
+                    coded_w: 32,
+                    coded_h: 32,
+                    square_w: 32,
+                    square_h: 32,
+                    row: 32 * 4,
+                    rotation_deg: 0,
+                    matrix: YuvMatrix::Bt709,
+                    yuv_full: false,
+                },
+            )
+            .unwrap();
+            assert_eq!(converted.pixel(16, 16).unwrap(), expected, "YUV {yuv:?}");
+        }
     }
 
     #[test]

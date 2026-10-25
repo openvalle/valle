@@ -122,6 +122,14 @@ fn sws_cs(matrix: YuvMatrix) -> i32 {
     }
 }
 
+/// Use accurate YUV-to-RGB rounding on both scalar and SIMD paths. The fast scalar converter
+/// truncates dark and saturated colors; full chroma interpolation is also needed for rounding.
+pub fn rgba_scaling_flags() -> software::scaling::Flags {
+    software::scaling::Flags::BILINEAR
+        | software::scaling::Flags::ACCURATE_RND
+        | software::scaling::Flags::FULL_CHR_H_INT
+}
+
 /// Select a matrix from source tags, falling back to height-based SD/HD defaults.
 pub fn matrix_for(space: color::Space, height: u32) -> YuvMatrix {
     match space {
