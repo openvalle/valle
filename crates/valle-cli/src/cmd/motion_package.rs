@@ -4,7 +4,7 @@
 //! Timeline render input whose resource proof is opened by the Rust Product engine before
 //! any JSON is published to Studio.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -434,9 +434,13 @@ impl FixedResources {
                     Vec::new(),
                 )
             }
-            AssetKind::Video => bail!(
-                "Video Motion assets require a verified presentation-index descriptor not yet produced by standalone Studio"
-            ),
+            AssetKind::Video => add_video_resource(self, resource_id, digest, &asset.path, false)
+                .with_context(|| {
+                    format!(
+                        "probing Motion video asset `{resource_id}` ({})",
+                        asset.path.display()
+                    )
+                }),
             AssetKind::Model3d => {
                 let model = valle_motion::scene3d::admit_glb(&asset.bytes)
                     .with_context(|| format!("admitting GLB asset `{resource_id}`"))?;
@@ -702,6 +706,74 @@ fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
         | ResourceEntryWire::MotionArtifact { digest, .. }
         | ResourceEntryWire::Shader { digest, .. } => digest,
     }
+}
+
+pub(super) fn add_video_resource(
+    resources: &mut FixedResources,
+    id: &str,
+    hash: ContentDigest,
+    path: &Path,
+    include_audio: bool,
+) -> Result<()> {
+    use valle_timeline::internal::wire::resource::*;
+    let probe = valle_media::codec::decode::probe_video_presentation(path)?;
+    let audio = valle_media::codec::audio::probe_audio_stream(path)?;
+    let mut dependencies = Vec::new();
+    if audio.is_some() && include_audio {
+        let audio_id = format!("{id}:audio");
+        resources.add_asset(
+            &audio_id,
+            AssetKind::Audio,
+            &super::motion::BoundAsset {
+                path: path.to_path_buf(),
+                bytes: Arc::from([]),
+                hash,
+            },
+        )?;
+        dependencies.push(FixedResourceDependency {
+            role: "audio".into(),
+            resource_id: audio_id,
+        });
+    }
+    let descriptor = VideoResourceDescriptorWire {
+        duration: valle_timeline::RationalTime::new(
+            probe
+                .duration_ticks
+                .checked_mul(i64::from(probe.time_base.0))
+                .ok_or_else(|| anyhow!("video duration overflow"))?,
+            probe.time_base.1 as u32,
+        )?,
+        time_base: valle_timeline::time::ExactRational::new(
+            i64::from(probe.time_base.0),
+            probe.time_base.1 as u32,
+        )?,
+        presentation_index_digest: ContentDigest::of_bytes(&serde_json::to_vec(
+            &probe.presentation,
+        )?),
+        width: probe.display.width,
+        height: probe.display.height,
+        orientation: MediaOrientationWire::Identity,
+        color: MediaColorDescriptorWire {
+            primaries: ColorPrimariesWire::Srgb,
+            transfer: ColorTransferWire::Srgb,
+            matrix: ColorMatrixWire::Identity,
+            full_range: true,
+        },
+        video_stream: probe.stream,
+        audio_stream: audio.map(|audio| audio.stream),
+    };
+    resources.add(
+        id,
+        ResourceEntryWire::Video {
+            digest: hash,
+            descriptor: descriptor.clone(),
+        },
+        valle_engine::render::VerifiedResourceFacts::Video {
+            descriptor,
+            temporal_footprint: Default::default(),
+        },
+        dependencies,
+    )
 }
 
 #[cfg(test)]

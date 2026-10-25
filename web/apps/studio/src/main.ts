@@ -196,6 +196,22 @@ async function startDocument(shell: ValleStudioApp): Promise<void> {
       await fetch("/timeline/get", { headers: { "x-valle-token": host.boot.session.token } })
     ).json();
     if (initial.empty) {
+      let reloadPending = false;
+      shell.addEventListener("studio-host-event", (event) => {
+        const type = (event as CustomEvent<{ type: string }>).detail.type;
+        if ((type !== "timeline" && type !== "project") || reloadPending) return;
+        reloadPending = true;
+        void fetch("/timeline/get", { headers: { "x-valle-token": host.boot.session.token } })
+          .then(async (response) => {
+            if (!response.ok) throw new Error(`Timeline reload failed: ${response.status}`);
+            const next = await response.json();
+            if (!next.empty) location.reload();
+          })
+          .catch((error: unknown) => console.error("Could not reload empty project", error))
+          .finally(() => {
+            reloadPending = false;
+          });
+      });
       shell.dispatchIntent({
         type: "preview-status",
         status: "empty",

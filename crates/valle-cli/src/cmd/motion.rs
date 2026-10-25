@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use super::render_delivery::{DeliveryObservation, DeliveryPlan};
 use crate::{
-    MotionAction, MotionBindingArgs, MotionRenderTuningArgs, RenderOutputArgs, RenderVideoCodec,
+    MotionAction, MotionBindingArgs, RenderOutputArgs, RenderTuningArgs, RenderVideoCodec,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
@@ -54,7 +54,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
                 data.as_deref(),
                 &bindings,
                 valle_render::executor::skia::SkiaBackendKind::Raster,
-                MotionRenderTuningArgs {
+                RenderTuningArgs {
                     fps,
                     output_size,
                     ..Default::default()
@@ -92,7 +92,6 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             host_duration,
             host_size,
             delivery,
-            backend,
             tuning,
             assets,
             bindings,
@@ -108,7 +107,7 @@ pub fn run(action: MotionAction) -> Result<std::process::ExitCode> {
             &font,
             data.as_deref(),
             &bindings,
-            backend.into(),
+            tuning.backend.into(),
             tuning,
             None,
         ),
@@ -257,7 +256,7 @@ fn render(
     data: Option<&Path>,
     bindings: &MotionBindingArgs,
     backend: valle_render::executor::skia::SkiaBackendKind,
-    tuning: MotionRenderTuningArgs,
+    tuning: RenderTuningArgs,
     check: Option<MotionCheck>,
 ) -> Result<std::process::ExitCode> {
     use valle_render::host::{
@@ -267,6 +266,7 @@ fn render(
     if let Some((width, height)) = tuning.output_size {
         validate_pixel_size(MotionViewport::new(width, height), "output")?;
     }
+    super::render_delivery::validate_tuning(&output, &tuning)?;
     let frame = output.frame;
     let plan = DeliveryPlan::new(output)?;
     let mp4 = matches!(
@@ -330,10 +330,12 @@ fn render(
         &explicit_fonts,
         caption_data.map(|caption| caption.text.as_str()),
     )?;
+    let frozen = tempfile::tempdir().context("creating immutable render resources")?;
+    let frozen_assets = freeze_assets(&prepared.assets, frozen.path())?;
     let package = super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
             artifact,
-            assets: &prepared.assets,
+            assets: &frozen_assets,
             font_blobs: &font_blobs,
             prop_bindings: &props,
             caption: caption_data,
@@ -346,14 +348,11 @@ fn render(
     let opened = package.opened;
     // Freeze resources for the job; streaming decoders require stable files.
     let mut catalog = NativeResourceCatalog::new();
-    let frozen = tempfile::tempdir().context("creating immutable render resources")?;
     for bytes in &font_blobs {
         catalog.admit_bytes(bytes.clone());
     }
-    for asset in prepared.assets.values() {
-        let path = frozen.path().join(asset.hash.as_hex());
-        std::fs::write(&path, &asset.bytes)?;
-        catalog.insert_file(asset.hash, path);
+    for asset in frozen_assets.values() {
+        catalog.insert_file(asset.hash, asset.path.clone());
     }
     let project = NativeProject::from_render(opened.engine_render(), Arc::new(catalog));
     let renderer = NativeRenderer::new(
@@ -385,7 +384,7 @@ fn render(
         // cannot be planned, the checked frame included.
         let cost = if check.cost {
             let size = tuning.output_size.unwrap_or(canvas.tuple());
-            let (cost, failures) = frame_costs(&renderer, fps, size)?;
+            let (cost, failures) = super::render_delivery::frame_costs(&renderer, fps, size)?;
             if failures != 0 {
                 crate::output::emit(serde_json::json!({"status":"error",
                     "component":artifact.component, "cost":cost,
@@ -453,75 +452,6 @@ fn render(
 struct MotionCheck {
     /// Plan every output frame and report its cost.
     cost: bool,
-}
-
-/// The planned cost of every output frame at `width` x `height`: a row per frame, the five frames
-/// with the most planned pixels with their pixels by pass kind and largest passes, and the frames
-/// that cannot be planned, with their count.
-fn frame_costs(
-    renderer: &valle_render::host::NativeRenderer,
-    fps: FrameRate,
-    (width, height): (u32, u32),
-) -> Result<(serde_json::Value, usize)> {
-    use std::cmp::Reverse;
-    let seconds = |frame: valle_engine::render::FrameKey| {
-        frame.index() as f64 * f64::from(fps.denominator()) / fps.numerator() as f64
-    };
-    let (mut frames, mut planned, mut failures) = (Vec::new(), Vec::new(), Vec::new());
-    for (frame, cost) in renderer.plan_costs()? {
-        match cost {
-            Ok(cost) => {
-                frames.push(
-                    serde_json::json!({"frame":frame.index(), "pixels":cost.pixels,
-                    "peakBytes":cost.peak_surface_bytes}),
-                );
-                planned.push((frame, cost));
-            }
-            Err(error) => {
-                let mut failure = serde_json::json!({"frame":frame.index(),
-                    "seconds":seconds(frame), "error":error.to_string()});
-                if let Some(path) = error.path() {
-                    failure["path"] = path.into();
-                }
-                failures.push(failure);
-            }
-        }
-    }
-    planned.sort_by_key(|(frame, cost)| (Reverse(cost.pixels), *frame));
-    let hot = planned
-        .iter_mut()
-        .take(5)
-        .map(|(frame, cost)| {
-            let mut kinds = std::collections::BTreeMap::<&str, (usize, u64)>::new();
-            for pass in &cost.passes {
-                let kind = kinds.entry(pass.kind).or_default();
-                kind.0 += 1;
-                kind.1 += pass.device_roi.pixels();
-            }
-            let mut kinds = kinds.into_iter().collect::<Vec<_>>();
-            kinds.sort_by_key(|(_, (_, pixels))| Reverse(*pixels));
-            let kinds = kinds.into_iter().map(|(kind, (passes, pixels))| {
-                serde_json::json!({"kind":kind, "passes":passes, "pixels":pixels})
-            });
-            cost.passes
-                .sort_by_key(|pass| Reverse(pass.device_roi.pixels()));
-            let passes = cost.passes.iter().take(5).map(|pass| {
-                let roi = pass.device_roi;
-                serde_json::json!({"path":pass.path, "kind":pass.kind,
-                    "roi":[roi.x, roi.y, roi.width, roi.height], "pixels":roi.pixels()})
-            });
-            serde_json::json!({"frame":frame.index(), "seconds":seconds(*frame),
-                "pixels":cost.pixels, "peakBytes":cost.peak_surface_bytes,
-                "shaderOperations":cost.shader_work.operations,
-                "kinds":kinds.collect::<Vec<_>>(), "passes":passes.collect::<Vec<_>>()})
-        })
-        .collect::<Vec<_>>();
-    let count = failures.len();
-    Ok((
-        serde_json::json!({"width":width, "height":height, "frames":frames, "hotFrames":hot,
-            "failures":failures}),
-        count,
-    ))
 }
 
 /// Runtime artifacts intentionally contain no source text. Attach the source
@@ -698,6 +628,47 @@ pub(super) struct BoundAsset {
     pub(super) hash: ContentDigest,
 }
 
+impl BoundAsset {
+    fn file_backed(&self) -> bool {
+        // Streamed assets keep an empty payload, including after freezing to a digest filename.
+        self.bytes.is_empty()
+    }
+
+    /// Destination belongs to this job's private content-addressed temporary directory.
+    fn write_frozen(&self, destination: &Path) -> Result<()> {
+        if destination.exists() {
+            return Ok(());
+        }
+        if self.file_backed() {
+            valle_project::files::copy_new(
+                &self.path,
+                destination,
+                &destination
+                    .parent()
+                    .context("asset cache parent")?
+                    .join("tmp"),
+                self.hash,
+            )?;
+        } else {
+            std::fs::write(destination, &self.bytes)?;
+        }
+        Ok(())
+    }
+}
+
+fn freeze_assets(
+    assets: &BTreeMap<String, BoundAsset>,
+    directory: &Path,
+) -> Result<BTreeMap<String, BoundAsset>> {
+    let mut frozen = assets.clone();
+    for asset in frozen.values_mut() {
+        let destination = directory.join(asset.hash.as_hex());
+        asset.write_frozen(&destination)?;
+        asset.path = destination;
+    }
+    Ok(frozen)
+}
+
 pub(crate) struct PreparedInput {
     scene: valle_motion::PreparedScene,
     pub(super) compiled: valle_compiler::motion::CompiledMotion,
@@ -769,9 +740,10 @@ impl CapturedTimelineComponent {
 
     pub(crate) fn verify_dependencies(&self) -> Result<()> {
         for (path, expected) in &self.dependencies {
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("reading Motion dependency {}", path.display()))?;
-            if ContentDigest::of_bytes(&bytes) != *expected {
+            if valle_project::folder::digest_file(path)
+                .with_context(|| format!("reading Motion dependency {}", path.display()))?
+                != *expected
+            {
                 bail!("Motion dependency changed during save: {}", path.display());
             }
         }
@@ -953,7 +925,9 @@ fn compile_with_font_assets(
                     .ok_or_else(|| format!("asset `{control}` is not bound"))?;
                 let frozen = tempfile::tempdir().map_err(|error| error.to_string())?;
                 let path = frozen.path().join(asset.hash.as_hex());
-                std::fs::write(&path, &asset.bytes).map_err(|error| error.to_string())?;
+                asset
+                    .write_frozen(&path)
+                    .map_err(|error| error.to_string())?;
                 let samples =
                     valle_media::codec::decode_audio_mono_f32(&path, 48_000).map_err(|error| {
                         let message = error.to_string();
@@ -1080,6 +1054,27 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
             Err(diagnostics) => return studio_diagnostics_json(request, generation, &diagnostics),
         };
     let mut assets = load_assets(&request.asset_specs)?;
+    let mut media = request
+        .preview_files
+        .prepare
+        .lock()
+        .map_err(|_| anyhow!("preview media cache poisoned"))?;
+    let mut blobs = BTreeMap::new();
+    for asset in assets.values_mut().filter(|asset| asset.file_backed()) {
+        let (digest, file) = media.get(&asset.path)?;
+        if digest != asset.hash {
+            bail!(
+                "video changed while preparing Studio: {}",
+                asset.path.display()
+            );
+        }
+        let crate::preview_store::PreviewFile::File { path, .. } = &file else {
+            unreachable!("media cache returns disk-backed files");
+        };
+        asset.path = path.clone();
+        blobs.insert(digest.to_string(), file);
+    }
+
     let shaders = shader_registry(&assets)?;
     let resources = assets
         .iter()
@@ -1181,36 +1176,33 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
             );
         }
     };
-    // Serve the prepared bytes, including normalized environment maps, rather than mutable files.
+    // Keep normalized bytes and frozen media alive for this preview generation.
+    for asset in prepared.assets.values() {
+        blobs
+            .entry(asset.hash.to_string())
+            .or_insert_with(|| crate::preview_store::PreviewFile::Bytes(Arc::clone(&asset.bytes)));
+    }
     request
         .preview_files
         .files
         .write()
         .map_err(|_| anyhow!("preview files poisoned"))?
-        .replace(
-            prepared
-                .assets
-                .values()
-                .map(|asset| {
-                    (
-                        asset.hash.to_string(),
-                        crate::preview_store::PreviewFile::Bytes(Arc::clone(&asset.bytes)),
-                    )
-                })
-                .collect(),
-        );
+        .replace(blobs);
     let asset_urls = prepared
         .assets
         .iter()
         .filter(|(name, _)| {
             matches!(
                 prepared.compiled.artifact.controls.assets[*name].kind,
-                valle_motion::AssetKind::Image | valle_motion::AssetKind::Model3d
+                valle_motion::AssetKind::Image
+                    | valle_motion::AssetKind::Model3d
+                    | valle_motion::AssetKind::Video
             )
         })
         .map(|(name, _)| {
             let kind = match prepared.compiled.artifact.controls.assets[name].kind {
                 valle_motion::AssetKind::Image => "image",
+                valle_motion::AssetKind::Video => "video",
                 valle_motion::AssetKind::Model3d => "model3d",
                 _ => unreachable!("filter above admits only Studio visual resources"),
             };
@@ -1586,6 +1578,22 @@ pub(super) fn capture_asset(
 ) -> Result<(BoundAsset, Vec<valle_project::folder::CapturedInput>)> {
     use valle_project::{files::Kind, folder::CapturedInput};
     let stamp = valle_project::files::FileStamp::read(path)?;
+    if Kind::detect(path) == Kind::Video {
+        let hash = valle_project::folder::digest_file(path)?;
+        if valle_project::files::FileStamp::read(path)? != stamp {
+            bail!("video changed while capturing: {}", path.display());
+        }
+        let mut input = CapturedInput::media(path.to_owned(), hash);
+        input.stamp = Some(stamp);
+        return Ok((
+            BoundAsset {
+                path: path.to_owned(),
+                bytes: Arc::from([]),
+                hash,
+            },
+            vec![input],
+        ));
+    }
     let bytes = std::fs::read(path).with_context(|| format!("reading asset {}", path.display()))?;
     if valle_project::files::FileStamp::read(path)? != stamp {
         bail!("asset changed while capturing: {}", path.display());
@@ -1841,7 +1849,7 @@ impl Delivery {
             .frame_rate()
             .map_err(|error| anyhow!("composition frame rate is invalid: {error}"))?;
         let fps = output_fps
-            .map(parse_output_fps)
+            .map(super::render_delivery::parse_output_fps)
             .transpose()?
             .or(default_fps)
             .ok_or_else(|| anyhow!("provide --fps or composition.fps"))?;
@@ -1908,16 +1916,6 @@ impl Delivery {
         }
         Ok(self)
     }
-}
-
-fn parse_output_fps(input: &str) -> Result<FrameRate> {
-    use valle_timeline::time::ExactRational;
-    let exact = if input.contains('/') {
-        ExactRational::parse_canonical(input)?
-    } else {
-        TimelineTimeWire::new(input)?.to_exact()
-    };
-    FrameRate::from_exact(exact).map_err(Into::into)
 }
 
 fn validate_pixel_size(size: MotionViewport, label: &str) -> Result<MotionViewport> {
@@ -2242,6 +2240,64 @@ mod capture_tests {
 mod contract_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn studio_video_is_disk_backed_and_survives_original_changes() {
+        use valle_media::{
+            codec::{Muxer, VideoFrameTransport},
+            frame::RgbaFrame,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let video = temp.path().join("source.mp4");
+        let mut muxer = Muxer::open_media_rational_with_transport(
+            &video,
+            32,
+            32,
+            4,
+            1,
+            false,
+            None,
+            false,
+            Some(1),
+            VideoFrameTransport::Cpu,
+        )
+        .unwrap();
+        for _ in 0..8 {
+            let mut frame = RgbaFrame::new(32, 32);
+            frame.fill([255, 0, 0, 255]);
+            muxer.encode_video(&frame).unwrap();
+        }
+        muxer.finish().unwrap();
+        drop(muxer);
+        let original = std::fs::read(&video).unwrap();
+        let source = temp.path().join("video.motion.tsx");
+        std::fs::write(&source,r#"export const composition={width:32,height:32,fps:4,duration:1};
+export const controls={assets:{film:asset({kind:"video",required:true})}};
+export default function Main(){return <Scene><Video src="asset://film" style={{width:32,height:32}}/></Scene>;}
+"#).unwrap();
+        let mut request = request(source);
+        request.asset_specs = vec![format!("film={}", video.display())];
+        let state: serde_json::Value =
+            serde_json::from_str(&studio_state_json(&request, 1).unwrap()).unwrap();
+        assert_eq!(state["status"], "ok");
+        assert_eq!(state["assets"][0]["kind"], "video");
+        let digest = ContentDigest::of_bytes(&original).to_string();
+        let file = request
+            .preview_files
+            .files
+            .read()
+            .unwrap()
+            .get(&digest)
+            .unwrap()
+            .clone();
+        let crate::preview_store::PreviewFile::File { path, .. } = &file else {
+            panic!("video preview must stay on disk");
+        };
+        assert_eq!(std::fs::read(path).unwrap(), original);
+        std::fs::write(&video, b"replacement").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), original);
+        assert!(valle_media::codec::decode::probe_video_presentation(path).is_ok());
+    }
 
     fn request(input: PathBuf) -> StudioRequest {
         StudioRequest {

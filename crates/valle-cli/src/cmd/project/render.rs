@@ -1,7 +1,7 @@
 //! Project delivery reuses Timeline preparation and captures the same inputs in source history.
 
 use super::super::render_delivery::{DeliveryObservation, DeliveryPlan};
-use crate::{RenderBudgetArgs, RenderOutputArgs};
+use crate::{RenderOutputArgs, RenderTuningArgs, RenderVideoCodec};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::{
@@ -18,8 +18,9 @@ use valle_render::host::{NativeProject, NativeRenderOptions, NativeRenderer};
 pub(super) fn render(
     project: &Project,
     mut delivery: RenderOutputArgs,
-    budget: RenderBudgetArgs,
+    tuning: RenderTuningArgs,
 ) -> Result<Value> {
+    super::super::render_delivery::validate_tuning(&delivery, &tuning)?;
     let complete =
         delivery.frame.is_none() && delivery.frames.is_empty() && delivery.storyboard.is_none();
     let mut random = [0; 8];
@@ -28,27 +29,40 @@ pub(super) fn render(
     let observation = DeliveryObservation::new()?;
     let lock = project.lock()?;
     let bytes = fs::read(project.timeline_path())?;
-    let timeline = valle_timeline::decode_timeline(std::str::from_utf8(&bytes)?)?;
+    let timeline = super::super::render_delivery::apply_frame_rate(
+        valle_timeline::decode_timeline(std::str::from_utf8(&bytes)?)?,
+        &tuning,
+    )?;
     let canvas = serde_json::from_slice::<Value>(&bytes)?["canvas"].clone();
     let base = project.timeline_path().parent().unwrap().to_path_buf();
     let mut prepared = super::super::timeline::prepare_timeline_package(timeline, &base)?;
     prepared
         .snapshot_inputs
         .push(CapturedInput::source(project.timeline_path(), bytes));
-    let saved = if complete {
-        Some(project.save_captured(prepared.snapshot_inputs.clone(), None, "render")?)
-    } else {
-        None
-    };
-    drop(lock);
+    let native_project = NativeProject::from_render(
+        prepared.opened.engine_render(),
+        Arc::new(std::mem::take(&mut prepared.catalog)),
+    );
     let automatic = delivery.output.is_none() && delivery.storyboard.is_none();
     if automatic {
-        let filename = if let Some(saved) = &saved {
+        let filename = if complete {
+            let transparent = native_project.has_visual_material()
+                && prepared.opened.engine_render().canvas().background_rgba()[3] < 255;
+            let extension = if matches!(
+                delivery.codec,
+                Some(RenderVideoCodec::Qtrle | RenderVideoCodec::Prores4444)
+            ) || transparent && delivery.codec.is_none()
+            {
+                "mov"
+            } else {
+                "mp4"
+            };
             format!(
-                "{}-{}.mp4",
-                project.root.file_name().unwrap().to_string_lossy(),
-                saved.snapshot
+                "{}-{id}.{extension}",
+                project.root.file_name().unwrap().to_string_lossy()
             )
+        } else if !delivery.frames.is_empty() {
+            format!("preview-{id}/%05d.png")
         } else {
             format!("preview-{id}.png")
         };
@@ -57,6 +71,34 @@ pub(super) fn render(
         delivery.output = delivery.output.map(|path| project.root.join(path));
         delivery.storyboard = delivery.storyboard.map(|path| project.root.join(path));
     }
+    // Reject invalid output selections before capturing a source snapshot.
+    let selection = DeliveryPlan::new(delivery.clone())?;
+    let output_canvas = prepared.opened.engine_render().canvas();
+    super::super::render_delivery::validate_output_size(
+        &tuning,
+        (output_canvas.width(), output_canvas.height()),
+    )?;
+    selection.validate_encoder(
+        &tuning,
+        native_project.has_visual_material()
+            && prepared.opened.engine_render().canvas().background_rgba()[3] < 255,
+    )?;
+    if matches!(
+        selection.codec,
+        Some(RenderVideoCodec::Qtrle | RenderVideoCodec::Prores4444)
+    ) && native_project.has_audio()
+    {
+        anyhow::bail!(
+            "transparent MOV currently delivers video only; export audio separately or use MP4 for an audio/video mix"
+        );
+    }
+    let _ = tuning.budget.native()?;
+    let saved = if complete {
+        Some(project.save_captured(prepared.snapshot_inputs.clone(), None, "render")?)
+    } else {
+        None
+    };
+    drop(lock);
     let prefix = format!(".valle-part-{id}-");
     let stage = |path: &Path| -> Result<PathBuf> {
         let parent = path.parent().context("output has no parent")?;
@@ -71,13 +113,14 @@ pub(super) fn render(
     staging.storyboard = delivery.storyboard.as_deref().map(stage).transpose()?;
     let plan = DeliveryPlan::new(staging.clone())?;
     let renderer = NativeRenderer::new(
-        NativeProject::from_render(
-            prepared.opened.engine_render(),
-            Arc::new(std::mem::take(&mut prepared.catalog)),
-        ),
+        native_project,
         NativeRenderOptions {
-            backend: valle_render::executor::skia::SkiaBackendKind::Raster,
-            budget: budget.native()?,
+            backend: tuning.backend.into(),
+            budget: tuning.budget.native()?,
+            output_size: tuning.output_size,
+            hardware_encode: tuning.hardware_encode,
+            bitrate: tuning.bitrate.map(|value| value as usize),
+            encode_threads: tuning.encode_threads.map(usize::from),
             background: valle_engine::resource::OutputBackground::AuthorSrgbStraight {
                 color: valle_engine::resource::AuthorSrgbStraight(
                     prepared.opened.engine_render().canvas().background_rgba(),
@@ -133,7 +176,7 @@ pub(super) fn render(
     }
     let record = json!({"id":id,"createdAt":now_millis(),"snapshot":saved.as_ref().map(|s|s.snapshot),"outputs":outputs,
         "inputs":prepared.snapshot_inputs.iter().map(|input|Ok(json!({"path":project.path_key(&input.path)?,"digest":input.digest,"fileIdentity":input.stamp}))).collect::<Result<Vec<_>>>()?,
-        "receipt":serde_json::from_str::<Value>(prepared.opened.receipt_json())?,"parameters":{"frame":delivery.frame,"frames":delivery.frames,"storyboard":delivery.storyboard,"codec":details["codec"],"canvas":canvas},"valleVersion":env!("CARGO_PKG_VERSION"),"warnings":warnings});
+        "receipt":serde_json::from_str::<Value>(prepared.opened.receipt_json())?,"parameters":{"frame":delivery.frame,"frames":delivery.frames,"storyboard":delivery.storyboard,"codec":details["codec"],"canvas":canvas,"fpsOverride":tuning.fps,"outputSize":tuning.output_size,"requestedBackend":format!("{:?}",tuning.backend).to_ascii_lowercase(),"backend":summary.pipeline.as_ref().and_then(|pipeline|pipeline.profile).map(|profile|format!("{:?}",profile.surface_backend).to_ascii_lowercase()),"hardwareEncode":tuning.hardware_encode,"bitrate":tuning.bitrate,"encodeThreads":tuning.encode_threads},"valleVersion":env!("CARGO_PKG_VERSION"),"warnings":warnings});
     let record_path = saved.as_ref().map(|s| {
         project
             .snapshot_dir(s.snapshot)

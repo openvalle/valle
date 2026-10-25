@@ -30,6 +30,80 @@ fn timeline() -> Value {
 }
 
 #[test]
+fn automatic_outputs_support_sequences_and_invalid_delivery_creates_no_snapshot() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    ok(
+        root,
+        &[
+            "project", "create", "promo", "--width", "32", "--height", "32", "--fps", "4",
+        ],
+    );
+    fs::write(root.join("promo/timeline.json"), timeline().to_string()).unwrap();
+    let bad = command(
+        root,
+        &[
+            "project",
+            "render",
+            "-C",
+            "promo",
+            "--codec",
+            "prores4444",
+            "-o",
+            "bad.mp4",
+        ],
+    );
+    assert!(!bad.status.success());
+    assert!(
+        ok(root, &["project", "history", "-C", "promo"])["snapshots"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let result = ok(
+        root,
+        &[
+            "project",
+            "render",
+            "-C",
+            "promo",
+            "--frames",
+            "0,7",
+            "--fps",
+            "8",
+            "--output-size",
+            "64x64",
+            "--backend",
+            "raster",
+        ],
+    );
+    let outputs = result["outputs"].as_array().unwrap();
+    assert_eq!(outputs.len(), 2);
+    for output in outputs {
+        let path = root.join("promo").join(output["path"].as_str().unwrap());
+        let frame = valle_media::codec::read_rgba_png(&path).unwrap();
+        assert_eq!((frame.width, frame.height), (64, 64));
+    }
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(root.join("promo/timeline.json")).unwrap())
+            .unwrap()["canvas"]["fps"],
+        4
+    );
+}
+
+#[test]
+fn unwritable_recent_projects_does_not_fail_project_commands() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    fs::create_dir_all(root.join("home/recent-projects.json")).unwrap();
+    ok(root, &["project", "create", "promo"]);
+    assert_eq!(
+        ok(root, &["project", "show", "-C", "promo"])["name"],
+        "promo"
+    );
+}
+
+#[test]
 fn folder_cli_add_save_restore_and_render_survive_a_project_move() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path();

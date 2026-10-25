@@ -1,6 +1,6 @@
 //! Studio adapters. Project operations reuse the CLI functions and file save protocols.
 use crate::{
-    RenderBudgetArgs, RenderOutputArgs, RenderVideoCodec,
+    RenderOutputArgs, RenderTuningArgs, RenderVideoCodec,
     webhost::{LibraryCtx, StudioHost},
     webruntime::HostedFile,
 };
@@ -93,12 +93,12 @@ pub(crate) fn execute(state: &StudioHost, body: &str) -> Result<Value> {
                 height.unwrap_or(1080),
                 fps.as_deref().unwrap_or("30"),
             )?;
-            super::remember(&project)?;
+            super::remember(&project);
             return open(&project, state.runtime_files.clone());
         }
         Command::Open { directory } => {
             let project = Project::discover(&directory)?;
-            super::remember(&project)?;
+            super::remember(&project);
             return open(&project, state.runtime_files.clone());
         }
         _ => (),
@@ -157,7 +157,7 @@ pub(crate) fn execute(state: &StudioHost, body: &str) -> Result<Value> {
                     codec,
                     ..Default::default()
                 },
-                RenderBudgetArgs::default(),
+                RenderTuningArgs::default(),
             )
         }
         Command::Recent | Command::Create { .. } | Command::Open { .. } => unreachable!(),

@@ -645,7 +645,10 @@ impl RenderBudgetArgs {
 
 /// Delivery controls independent of the logical Motion authoring canvas.
 #[derive(clap::Args, Debug, Clone, Default)]
-pub struct MotionRenderTuningArgs {
+pub struct RenderTuningArgs {
+    /// Compositor backend; auto selects an available device, otherwise Raster.
+    #[arg(long, value_enum, default_value = "auto")]
+    pub backend: RenderBackend,
     /// Output frame rate; overrides the optional composition default.
     #[arg(long)]
     pub fps: Option<String>,
@@ -750,11 +753,8 @@ pub enum MotionAction {
         host_size: Option<(u32, u32)>,
         #[command(flatten)]
         delivery: RenderOutputArgs,
-        /// Compositor backend. Auto uses an available Metal device on macOS, otherwise CPU Raster.
-        #[arg(long, value_enum, default_value = "auto")]
-        backend: MotionRenderBackend,
         #[command(flatten)]
-        tuning: MotionRenderTuningArgs,
+        tuning: RenderTuningArgs,
         /// Bind an asset control as name=path; may be repeated.
         #[arg(long = "asset", value_name = "NAME=PATH")]
         assets: Vec<String>,
@@ -801,21 +801,22 @@ pub struct MotionBindingArgs {
     props: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum MotionRenderBackend {
+#[derive(Clone, Copy, Debug, Default, clap::ValueEnum)]
+pub enum RenderBackend {
+    #[default]
     Auto,
     Raster,
     #[cfg(target_os = "macos")]
     Metal,
 }
 
-impl From<MotionRenderBackend> for valle_render::executor::skia::SkiaBackendKind {
-    fn from(value: MotionRenderBackend) -> Self {
+impl From<RenderBackend> for valle_render::executor::skia::SkiaBackendKind {
+    fn from(value: RenderBackend) -> Self {
         match value {
-            MotionRenderBackend::Auto => Self::preferred_available(),
-            MotionRenderBackend::Raster => Self::Raster,
+            RenderBackend::Auto => Self::preferred_available(),
+            RenderBackend::Raster => Self::Raster,
             #[cfg(target_os = "macos")]
-            MotionRenderBackend::Metal => Self::Metal,
+            RenderBackend::Metal => Self::Metal,
         }
     }
 }
@@ -929,8 +930,11 @@ pub enum ProjectAction {
         #[arg(long)]
         link: bool,
     },
-    /// Validate the entry Timeline and report missing and external inputs.
-    Check,
+    /// Validate the entry Timeline; optionally plan every frame without exporting.
+    Check {
+        #[arg(long)]
+        cost: bool,
+    },
     /// Save a snapshot of the entry Timeline's actual source dependencies.
     Save {
         #[arg(short, long)]
@@ -952,7 +956,7 @@ pub enum ProjectAction {
         #[command(flatten)]
         delivery: ProjectRenderArgs,
         #[command(flatten)]
-        budget: RenderBudgetArgs,
+        tuning: RenderTuningArgs,
     },
 }
 
@@ -1069,7 +1073,7 @@ pub enum TimelineAction {
         #[command(flatten)]
         delivery: RenderOutputArgs,
         #[command(flatten)]
-        budget: RenderBudgetArgs,
+        tuning: RenderTuningArgs,
     },
 }
 

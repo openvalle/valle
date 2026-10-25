@@ -256,6 +256,61 @@ try {
     (value) => value.boot?.project?.entry && value.state?.previewStatus === "empty",
     "new empty project",
   );
+  const emptyTimeline = await disk();
+  const externalTimeline = structuredClone(emptyTimeline);
+  externalTimeline.tracks.visual = [
+    { clips: [{ kind: "solid", color: "#2468acff", start: 0, duration: 1 }] },
+  ];
+  await writeFile(join(project, "timeline.json"), JSON.stringify(externalTimeline));
+  await ready("empty project accepts an external Timeline edit");
+  await writeFile(join(project, "timeline.json"), JSON.stringify(emptyTimeline));
+  await cdp("Page.reload");
+  await poll(state, (value) => value.state?.previewStatus === "empty", "empty project restored");
+
+  const studioUrl = (await state()).url;
+  const attackScript =
+    "parent.__valleSandboxEscape = true; document.documentElement.dataset.executed = 'yes'; fetch('/studio/boot').then(r => r.text()).then(text => parent.__valleStolenBoot = text);";
+  await writeFile(
+    join(project, "media/sandbox.html"),
+    `<html><body><script>${attackScript}</script>Sandbox test</body></html>`,
+  );
+  await writeFile(
+    join(project, "media/sandbox.svg"),
+    `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><script>${attackScript}</script><rect width="16" height="16" fill="red"/></svg>`,
+  );
+  for (const extension of ["html", "svg"]) {
+    const url = new URL(`/project/file/media/sandbox.${extension}`, studioUrl).href;
+    const embedded = await evaluate(
+      `new Promise(resolve => { const frame=document.createElement('iframe'); frame.src=${JSON.stringify(url)}; frame.onload=()=>{ const opaque=frame.contentDocument===null; frame.remove(); resolve({opaque, escaped:!!globalThis.__valleSandboxEscape, stolen:!!globalThis.__valleStolenBoot}); }; document.body.append(frame); })`,
+    );
+    assert(
+      embedded.opaque && !embedded.escaped && !embedded.stolen,
+      `sandboxed ${extension} cannot access Studio`,
+    );
+    await cdp("Page.navigate", { url });
+    await poll(
+      () => evaluate("document.readyState"),
+      (value) => value === "complete",
+      `top-level ${extension}`,
+    );
+    assert(
+      !(await evaluate("!!document.documentElement.dataset.executed")),
+      `top-level ${extension} scripts blocked`,
+    );
+    await cdp("Page.navigate", { url: studioUrl });
+    await poll(
+      state,
+      (value) => value.state?.previewStatus === "empty",
+      "Studio after sandbox test",
+    );
+  }
+  assert(
+    await evaluate(
+      `new Promise(resolve => { const image=new Image(); image.onload=()=>resolve(image.naturalWidth===16); image.onerror=()=>resolve(false); image.src='/project/file/media/sandbox.svg'; })`,
+    ),
+    "sandboxed SVG remains usable as an image",
+  );
+  console.error("project browser: empty external edit and HTML/SVG isolation passed");
   const image = (
     await readFile(join(root, "crates/valle-compiler/tests/fixtures/motion/modules/assets/dot.png"))
   ).toString("base64");

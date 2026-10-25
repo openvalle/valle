@@ -56,6 +56,10 @@ fn motion_studio_audio_analysis_survives_browser_recompilation() {
     studio("audio");
 }
 #[test]
+fn motion_studio_video_survives_browser_recompilation() {
+    studio("video");
+}
+#[test]
 fn motion_studio_invalid_source_recovers_the_same_pixels() {
     studio("hot");
 }

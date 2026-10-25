@@ -22,11 +22,12 @@ impl WatchStamp {
         let text_asset = path.extension().is_some_and(|extension| {
             extension.eq_ignore_ascii_case("svg") || extension.eq_ignore_ascii_case("gltf")
         });
-        let content = if text_asset
-            || matches!(
-                Kind::detect(path),
-                Kind::Component | Kind::Shader | Kind::Data | Kind::Other
-            ) {
+        let content = if metadata.len <= 8 * 1024 * 1024
+            && (text_asset
+                || matches!(
+                    Kind::detect(path),
+                    Kind::Component | Kind::Shader | Kind::Data | Kind::Other
+                )) {
             Some(valle_project::folder::digest_file(path)?)
         } else {
             None
@@ -84,6 +85,22 @@ pub(crate) fn extend_shader(paths: &mut BTreeSet<PathBuf>, path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn large_editable_assets_only_use_metadata_above_the_hash_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        for extension in ["other", "svg", "gltf"] {
+            let path = temp.path().join(format!("large.{extension}"));
+            let file = std::fs::File::create(&path).unwrap();
+            file.set_len(8 * 1024 * 1024).unwrap();
+            assert!(WatchStamp::read(&path).unwrap().content.is_some());
+            file.set_len(8 * 1024 * 1024 + 1).unwrap();
+            assert!(WatchStamp::read(&path).unwrap().content.is_none());
+            std::fs::remove_file(&path).unwrap();
+            assert!(WatchStamp::read(&path).is_err());
+            std::fs::write(&path, "changed").unwrap();
+            assert!(WatchStamp::read(&path).unwrap().content.is_some());
+        }
+    }
     #[test]
     fn timeline_watches_component_modules_media_and_shader_source() {
         let temp = tempfile::tempdir().unwrap();

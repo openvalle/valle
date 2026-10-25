@@ -140,6 +140,18 @@ fn local_request_authorized(token: &str, expected: &str, origin: Option<&str>) -
     token_eq(token, expected) && origin.is_some_and(origin_allowed)
 }
 
+fn host_allowed(headers: &[(String, String)], port: u16) -> bool {
+    let mut hosts = headers.iter().filter(|(name, _)| name == "host");
+    let Some((_, host)) = hosts.next() else {
+        return false;
+    };
+    hosts.next().is_none()
+        && ["localhost", "127.0.0.1", "[::1]"].iter().any(|name| {
+            host.eq_ignore_ascii_case(&format!("{name}:{port}"))
+                || port == 80 && host.eq_ignore_ascii_case(name)
+        })
+}
+
 fn token_eq(left: &str, right: &str) -> bool {
     let (left, right) = (left.as_bytes(), right.as_bytes());
     if left.len() != right.len() {
@@ -242,9 +254,13 @@ pub fn serve_forever(listener: TcpListener, state: Arc<StudioHost>) -> Result<()
 }
 
 /// Handle one request per connection with `Connection: close`; SSE ends at EOF.
-fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
+fn handle_connection(mut stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
+    let port = stream.local_addr()?.port();
     let mut reader = BufReader::new(stream.try_clone().context("cloning stream")?);
     let (method, raw_path, headers) = read_request_head(&mut reader)?;
+    if !host_allowed(&headers, port) {
+        return write_simple(&mut stream, 403, "Forbidden", &[], b"");
+    }
     let raw_target = raw_path
         .split_once('?')
         .map_or(raw_path.as_str(), |(path, _)| path);
@@ -349,7 +365,7 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
                         .as_str()
                         .context("missing saved project root")?,
                 ))?;
-                crate::cmd::project::remember(&project)?;
+                crate::cmd::project::remember(&project);
                 saved["url"] =
                     crate::cmd::project::web::open(&project, state.runtime_files.clone())?["url"]
                         .clone();
@@ -579,7 +595,13 @@ fn handle_connection(stream: TcpStream, state: &Arc<StudioHost>) -> Result<()> {
         path.strip_prefix('/').unwrap_or("")
     };
     if let Some(file) = state.runtime_files.get(runtime_rel) {
-        return serve_hosted_file(&mut out, &headers, file, content_type_for(runtime_rel));
+        return serve_hosted_file(
+            &mut out,
+            &headers,
+            file,
+            content_type_for(runtime_rel),
+            runtime_rel.starts_with("motion-assets/") || runtime_rel.starts_with("motion-fonts/"),
+        );
     }
 
     if let Some(rel) = path.strip_prefix("/assets/") {
@@ -600,13 +622,14 @@ fn serve_hosted_file(
     headers: &[(String, String)],
     file: &crate::webruntime::HostedFile,
     content_type: &str,
+    sandbox: bool,
 ) -> Result<()> {
     match file {
         crate::webruntime::HostedFile::VerifiedRuntime(bytes) => {
             serve_bytes(out, headers, bytes, content_type)
         }
         crate::webruntime::HostedFile::LocalPath(path) => {
-            serve_file(out, headers, path, content_type)
+            serve_file_impl(out, headers, path, content_type, sandbox)
         }
     }
 }
@@ -1076,8 +1099,23 @@ fn serve_file(
     path: &Path,
     content_type: &str,
 ) -> Result<()> {
+    serve_file_impl(out, headers, path, content_type, true)
+}
+
+fn serve_file_impl(
+    out: &mut TcpStream,
+    headers: &[(String, String)],
+    path: &Path,
+    content_type: &str,
+    sandbox: bool,
+) -> Result<()> {
+    let policy = if sandbox {
+        vec![("Content-Security-Policy", "sandbox")]
+    } else {
+        Vec::new()
+    };
     let Ok(mut file) = std::fs::File::open(path) else {
-        return write_simple(out, 404, "Not Found", &[], b"");
+        return write_simple(out, 404, "Not Found", &policy, b"");
     };
     let total = file.metadata().map(|m| m.len()).unwrap_or(0);
     match header_value(headers, "range").map(|r| parse_byte_range(r, total)) {
@@ -1086,11 +1124,15 @@ fn serve_file(
                 out,
                 200,
                 "OK",
-                &[
-                    ("Content-Type", content_type),
-                    ("Accept-Ranges", "bytes"),
-                    ("Content-Length", &total.to_string()),
-                ],
+                &policy
+                    .iter()
+                    .copied()
+                    .chain([
+                        ("Content-Type", content_type),
+                        ("Accept-Ranges", "bytes"),
+                        ("Content-Length", &total.to_string()),
+                    ])
+                    .collect::<Vec<_>>(),
             )?;
             std::io::copy(&mut file, out).context("writing file body")?;
             out.flush().context("flushing file body")
@@ -1103,12 +1145,16 @@ fn serve_file(
                 out,
                 206,
                 "Partial Content",
-                &[
-                    ("Content-Type", content_type),
-                    ("Accept-Ranges", "bytes"),
-                    ("Content-Range", &format!("bytes {start}-{end}/{total}")),
-                    ("Content-Length", &len.to_string()),
-                ],
+                &policy
+                    .iter()
+                    .copied()
+                    .chain([
+                        ("Content-Type", content_type),
+                        ("Accept-Ranges", "bytes"),
+                        ("Content-Range", &format!("bytes {start}-{end}/{total}")),
+                        ("Content-Length", &len.to_string()),
+                    ])
+                    .collect::<Vec<_>>(),
             )?;
             std::io::copy(&mut file.take(len), out).context("writing range body")?;
             out.flush().context("flushing range body")
@@ -1117,7 +1163,11 @@ fn serve_file(
             out,
             416,
             "Range Not Satisfiable",
-            &[("Content-Range", &format!("bytes */{total}"))],
+            &policy
+                .iter()
+                .copied()
+                .chain([("Content-Range", format!("bytes */{total}").as_str())])
+                .collect::<Vec<_>>(),
             b"",
         ),
     }
@@ -1181,7 +1231,9 @@ fn write_head(
     reason: &str,
     headers: &[(&str, &str)],
 ) -> Result<()> {
-    let mut head = format!("HTTP/1.1 {status} {reason}\r\nConnection: close\r\n");
+    let mut head = format!(
+        "HTTP/1.1 {status} {reason}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\n"
+    );
     for (name, value) in headers {
         head.push_str(name);
         head.push_str(": ");
@@ -1317,6 +1369,91 @@ mod tests {
         );
     }
 
+    #[test]
+    fn host_validation_rejects_rebinding_missing_duplicate_and_wrong_ports() {
+        let headers = |host: &str| vec![("host".to_owned(), host.to_owned())];
+        for host in [
+            "localhost:9527",
+            "127.0.0.1:9527",
+            "[::1]:9527",
+            "LOCALHOST:9527",
+        ] {
+            assert!(host_allowed(&headers(host), 9527), "{host}");
+        }
+        for host in [
+            "localhost",
+            "localhost:80",
+            "example.com:9527",
+            "localhost.evil:9527",
+            "127.0.0.1:9527@evil",
+        ] {
+            assert!(!host_allowed(&headers(host), 9527), "{host}");
+        }
+        assert!(!host_allowed(&[], 9527));
+        assert!(!host_allowed(
+            &vec![("host".into(), "localhost:9527".into()); 2],
+            9527
+        ));
+        assert!(host_allowed(&headers("localhost"), 80));
+    }
+
+    #[test]
+    fn user_documents_are_sandboxed_including_range_and_missing_responses() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("evil.svg");
+        std::fs::write(&input, b"<svg><script>throw 1</script></svg>").unwrap();
+        let state = Arc::new(StudioHost {
+            runtime_files: BTreeMap::from([
+                (
+                    "studio.html".into(),
+                    crate::webruntime::HostedFile::VerifiedRuntime(Arc::from(&b"studio"[..])),
+                ),
+                (
+                    "motion-assets/evil.svg".into(),
+                    crate::webruntime::HostedFile::LocalPath(input),
+                ),
+            ]),
+            assets_dir: Some(dir.path().to_path_buf()),
+            config_json: Arc::new(RwLock::new("{}".into())),
+            sse: SseBroadcaster::default(),
+            capture_dir: None,
+            library: None,
+            timeline_file: None,
+            source_paths: Mutex::new(Default::default()),
+            last_report: RwLock::new(None),
+            preview_files: Arc::new(Default::default()),
+            motion_source: None,
+        });
+        for (path, headers, status) in [
+            ("/assets/evil.svg", "", "200"),
+            ("/assets/evil.svg", "Range: bytes=0-3\r\n", "206"),
+            ("/assets/evil.svg", "Range: bytes=9999-\r\n", "416"),
+            ("/assets/missing.svg", "", "404"),
+            ("/motion-assets/evil.svg", "", "200"),
+        ] {
+            let response =
+                String::from_utf8(request_round_trip(&state, "GET", path, b"", headers)).unwrap();
+            assert!(
+                response.starts_with(&format!("HTTP/1.1 {status}")),
+                "{response}"
+            );
+            assert!(response.contains("Content-Security-Policy: sandbox\r\n"));
+            assert!(response.contains("X-Content-Type-Options: nosniff\r\n"));
+        }
+        let trusted = String::from_utf8(request_round_trip(&state, "GET", "/", b"", "")).unwrap();
+        assert!(trusted.starts_with("HTTP/1.1 200"));
+        assert!(!trusted.contains("Content-Security-Policy: sandbox"));
+        let denied = String::from_utf8(request_round_trip(
+            &state,
+            "GET",
+            "/studio/boot.json",
+            b"",
+            "Host: attacker.example\r\n",
+        ))
+        .unwrap();
+        assert!(denied.starts_with("HTTP/1.1 403"));
+    }
+
     fn request_round_trip(
         state: &Arc<StudioHost>,
         method: &str,
@@ -1332,6 +1469,12 @@ mod tests {
             handle_connection(stream, &server_state).unwrap();
         });
         let mut stream = TcpStream::connect(address).unwrap();
+        let headers = headers.replace("Host: localhost\r\n", "");
+        let headers = if headers.to_ascii_lowercase().contains("host:") {
+            headers
+        } else {
+            format!("Host: {address}\r\n{headers}")
+        };
         let head = format!(
             "{method} {path} HTTP/1.1\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
@@ -1534,7 +1677,7 @@ mod tests {
         let mut stream = TcpStream::connect(address).unwrap();
         stream
             .write_all(
-                b"GET /preview.html HTTP/1.1\r\nRange: bytes=9-15\r\nConnection: close\r\n\r\n",
+                format!("GET /preview.html HTTP/1.1\r\nHost: {address}\r\nRange: bytes=9-15\r\nConnection: close\r\n\r\n").as_bytes(),
             )
             .unwrap();
         stream.shutdown(std::net::Shutdown::Write).unwrap();

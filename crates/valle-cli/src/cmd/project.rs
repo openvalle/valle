@@ -54,7 +54,7 @@ fn run_inner(start: &Path, action: ProjectAction) -> Result<(ExitCode, Option<Va
     } = &action
     {
         let project = Project::create(&start.join(directory), *width, *height, fps)?;
-        remember(&project)?;
+        remember(&project);
         return Ok((
             ExitCode::SUCCESS,
             Some(
@@ -73,7 +73,7 @@ fn run_inner(start: &Path, action: ProjectAction) -> Result<(ExitCode, Option<Va
         return Ok((web::serve_home(web_assets_dir.as_deref(), *port)?, None));
     }
     let project = Project::discover(start)?;
-    remember(&project)?;
+    remember(&project);
     let report = match action {
         ProjectAction::Create { .. } => unreachable!(),
         ProjectAction::Show => summary(&project)?,
@@ -88,7 +88,7 @@ fn run_inner(start: &Path, action: ProjectAction) -> Result<(ExitCode, Option<Va
                 Some(report),
             ));
         }
-        ProjectAction::Check => check(&project)?,
+        ProjectAction::Check { cost } => check_with_cost(&project, cost)?,
         ProjectAction::Save { message } => save(&project, message.as_deref())?,
         ProjectAction::History => json!({"status":"ok","snapshots":project.history()?}),
         ProjectAction::Restore { snapshot } => restore(&project, snapshot)?,
@@ -105,8 +105,8 @@ fn run_inner(start: &Path, action: ProjectAction) -> Result<(ExitCode, Option<Va
                 None,
             ));
         }
-        ProjectAction::Render { delivery, budget } => {
-            render::render(&project, delivery.into(), budget)?
+        ProjectAction::Render { delivery, tuning } => {
+            render::render(&project, delivery.into(), tuning)?
         }
     };
     Ok((
@@ -134,7 +134,13 @@ pub(crate) fn restore(project: &Project, snapshot: u64) -> Result<Value> {
     Ok(value)
 }
 
-pub(crate) fn remember(project: &Project) -> Result<()> {
+pub(crate) fn remember(project: &Project) {
+    if let Err(error) = remember_project(project) {
+        eprintln!("warning: could not update recent projects: {error:#}");
+    }
+}
+
+fn remember_project(project: &Project) -> Result<()> {
     let path = app_home()?.join("recent-projects.json");
     let mut entries = fs::read(&path)
         .ok()
@@ -348,6 +354,10 @@ pub(crate) fn summary(project: &Project) -> Result<Value> {
 }
 
 pub(crate) fn check(project: &Project) -> Result<Value> {
+    check_with_cost(project, false)
+}
+
+fn check_with_cost(project: &Project, cost: bool) -> Result<Value> {
     let report = summary(project)?;
     let timeline = decode_timeline(&fs::read_to_string(project.timeline_path())?)?;
     let base = project.timeline_path().parent().unwrap().to_path_buf();
@@ -356,6 +366,26 @@ pub(crate) fn check(project: &Project) -> Result<Value> {
         Ok(prepared) => {
             result["warnings"] =
                 serde_json::to_value(super::timeline::clock_warnings(prepared.opened.compiled())?)?;
+            if cost {
+                let canvas = prepared.opened.compiled().canvas();
+                let renderer = valle_render::host::NativeRenderer::new(
+                    valle_render::host::NativeProject::from_render(
+                        prepared.opened.engine_render(),
+                        std::sync::Arc::new(prepared.catalog),
+                    ),
+                    valle_render::host::NativeRenderOptions::default(),
+                );
+                let (costs, failures) = super::render_delivery::frame_costs(
+                    &renderer,
+                    canvas.frame_rate(),
+                    (canvas.width(), canvas.height()),
+                )?;
+                result["cost"] = costs;
+                if failures != 0 {
+                    result["status"] = json!("error");
+                    result["error"] = json!({"code":"frame_plan_failed","message":format!("{failures} frames cannot be planned; see cost.failures")});
+                }
+            }
         }
         Err(error) => {
             result["status"] = json!("error");

@@ -48,9 +48,11 @@ pub(super) fn render(
         explicit_fonts,
         caption.map(|caption| caption.text.as_str()),
     )?;
+    let temp = tempfile::tempdir().context("prepare review sheet resources")?;
+    let frozen_assets = super::freeze_assets(assets, temp.path())?;
     let package = build_standalone_motion_package(StandaloneMotionPackageInput {
         artifact,
-        assets,
+        assets: &frozen_assets,
         font_blobs: &fonts,
         prop_bindings,
         caption,
@@ -59,15 +61,12 @@ pub(super) fn render(
         canvas: delivery.canvas.tuple(),
     })?;
 
-    let temp = tempfile::tempdir().context("prepare review sheet resources")?;
     let mut catalog = NativeResourceCatalog::new();
     for bytes in &fonts {
         catalog.admit_bytes(bytes.clone());
     }
-    for asset in assets.values() {
-        let path = temp.path().join(asset.hash.as_hex());
-        std::fs::write(&path, &asset.bytes)?;
-        catalog.insert_file(asset.hash, path);
+    for asset in frozen_assets.values() {
+        catalog.insert_file(asset.hash, asset.path.clone());
     }
     let project = NativeProject::from_render(package.opened.engine_render(), Arc::new(catalog));
     let (cell_width, cell_height) = cell_size(delivery.canvas.width, delivery.canvas.height);

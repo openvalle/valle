@@ -760,12 +760,7 @@ export default function I(){const comp = useComposition();return <Scene><ShaderL
             ? undefined
             : await renderNativeFrames(ck, {
                 cwd: dir,
-                args: [
-                  fixture.command,
-                  "render",
-                  entry,
-                  ...(fixture.command === "motion" ? ["--backend", "raster"] : []),
-                ],
+                args: [fixture.command, "render", entry, "--backend", "raster"],
                 frames: fixture.frames,
                 output: join(dir, `${fixture.name}-native.png`),
                 width,

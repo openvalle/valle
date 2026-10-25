@@ -11,6 +11,73 @@ use valle_compiler::motion::CompilationTrace;
 use valle_engine::{fixed_package::OpenedFixedPackage, render::FrameKey};
 use valle_media::codec::{Mp4VideoCodec, TransparentVideoCodec};
 use valle_render::host::{NativeRenderer, RenderSummary};
+use valle_timeline::{FrameRate, wire::timeline::TimelineTimeWire};
+
+pub(super) fn apply_frame_rate(
+    timeline: valle_timeline::Timeline,
+    tuning: &crate::RenderTuningArgs,
+) -> Result<valle_timeline::Timeline> {
+    let Some(fps) = &tuning.fps else {
+        return Ok(timeline);
+    };
+    let mut document: Value = serde_json::from_slice(&valle_timeline::timeline_bytes(&timeline)?)?;
+    let fps = parse_output_fps(fps)?;
+    document["canvas"]["fps"] = json!(format!("{}/{}", fps.numerator(), fps.denominator()));
+    valle_timeline::decode_timeline(&document.to_string()).map_err(Into::into)
+}
+
+pub(super) fn parse_output_fps(input: &str) -> Result<FrameRate> {
+    use valle_timeline::time::ExactRational;
+    let exact = if input.contains('/') {
+        ExactRational::parse_canonical(input)?
+    } else {
+        TimelineTimeWire::new(input)?.to_exact()
+    };
+    FrameRate::from_exact(exact).map_err(Into::into)
+}
+
+pub(super) fn validate_tuning(
+    output: &RenderOutputArgs,
+    tuning: &crate::RenderTuningArgs,
+) -> Result<()> {
+    if tuning.hardware_encode
+        && matches!(
+            output.codec,
+            Some(RenderVideoCodec::Qtrle | RenderVideoCodec::Prores4444)
+        )
+    {
+        bail!("--hardware-encode requires .mp4 output");
+    }
+    if tuning.bitrate.is_some()
+        && !tuning.hardware_encode
+        && output.codec != Some(RenderVideoCodec::Hevc)
+    {
+        bail!("--bitrate requires --hardware-encode or --codec hevc");
+    }
+    if tuning.encode_threads.is_some() && output.codec == Some(RenderVideoCodec::Hevc) {
+        bail!("--encode-threads only applies to software H.264");
+    }
+    Ok(())
+}
+
+pub(super) fn validate_output_size(
+    tuning: &crate::RenderTuningArgs,
+    canvas: (u32, u32),
+) -> Result<()> {
+    if let Some((width, height)) = tuning.output_size {
+        if width > i32::MAX as u32 || height > i32::MAX as u32 {
+            bail!("output dimensions exceed Skia's i32 domain");
+        }
+        if u64::from(width) * u64::from(canvas.1) != u64::from(height) * u64::from(canvas.0) {
+            bail!(
+                "--output-size must scale the canvas {}x{} proportionally",
+                canvas.0,
+                canvas.1
+            );
+        }
+    }
+    Ok(())
+}
 
 pub(super) struct DeliveryObservation {
     pub trace: CompilationTrace,
@@ -143,6 +210,30 @@ impl DeliveryPlan {
             .as_deref()
             .or(self.args.output.as_deref())
             .expect("validated delivery")
+    }
+
+    pub fn validate_encoder(
+        &self,
+        tuning: &crate::RenderTuningArgs,
+        transparent: bool,
+    ) -> Result<()> {
+        let mp4 = matches!(
+            self.codec,
+            Some(RenderVideoCodec::H264 | RenderVideoCodec::Hevc)
+        );
+        if !mp4
+            && (tuning.hardware_encode
+                || tuning.bitrate.is_some()
+                || tuning.encode_threads.is_some())
+        {
+            bail!("encoder options require .mp4 output");
+        }
+        if mp4 && transparent {
+            bail!(
+                "H.264/HEVC cannot preserve a transparent canvas; use .mov with qtrle or prores4444, or set an opaque background"
+            );
+        }
+        Ok(())
     }
 
     pub fn operation(&self) -> &'static str {
@@ -343,6 +434,72 @@ impl PngPattern {
             width = self.width
         ))
     }
+}
+
+pub(super) fn frame_costs(
+    renderer: &valle_render::host::NativeRenderer,
+    fps: FrameRate,
+    (width, height): (u32, u32),
+) -> Result<(serde_json::Value, usize)> {
+    use std::cmp::Reverse;
+    let seconds = |frame: valle_engine::render::FrameKey| {
+        frame.index() as f64 * f64::from(fps.denominator()) / fps.numerator() as f64
+    };
+    let (mut frames, mut planned, mut failures) = (Vec::new(), Vec::new(), Vec::new());
+    for (frame, cost) in renderer.plan_costs()? {
+        match cost {
+            Ok(cost) => {
+                frames.push(
+                    serde_json::json!({"frame":frame.index(), "pixels":cost.pixels,
+                    "peakBytes":cost.peak_surface_bytes}),
+                );
+                planned.push((frame, cost));
+            }
+            Err(error) => {
+                let mut failure = serde_json::json!({"frame":frame.index(),
+                    "seconds":seconds(frame), "error":error.to_string()});
+                if let Some(path) = error.path() {
+                    failure["path"] = path.into();
+                }
+                failures.push(failure);
+            }
+        }
+    }
+    planned.sort_by_key(|(frame, cost)| (Reverse(cost.pixels), *frame));
+    let hot = planned
+        .iter_mut()
+        .take(5)
+        .map(|(frame, cost)| {
+            let mut kinds = std::collections::BTreeMap::<&str, (usize, u64)>::new();
+            for pass in &cost.passes {
+                let kind = kinds.entry(pass.kind).or_default();
+                kind.0 += 1;
+                kind.1 += pass.device_roi.pixels();
+            }
+            let mut kinds = kinds.into_iter().collect::<Vec<_>>();
+            kinds.sort_by_key(|(_, (_, pixels))| Reverse(*pixels));
+            let kinds = kinds.into_iter().map(|(kind, (passes, pixels))| {
+                serde_json::json!({"kind":kind, "passes":passes, "pixels":pixels})
+            });
+            cost.passes
+                .sort_by_key(|pass| Reverse(pass.device_roi.pixels()));
+            let passes = cost.passes.iter().take(5).map(|pass| {
+                let roi = pass.device_roi;
+                serde_json::json!({"path":pass.path, "kind":pass.kind,
+                    "roi":[roi.x, roi.y, roi.width, roi.height], "pixels":roi.pixels()})
+            });
+            serde_json::json!({"frame":frame.index(), "seconds":seconds(*frame),
+                "pixels":cost.pixels, "peakBytes":cost.peak_surface_bytes,
+                "shaderOperations":cost.shader_work.operations,
+                "kinds":kinds.collect::<Vec<_>>(), "passes":passes.collect::<Vec<_>>()})
+        })
+        .collect::<Vec<_>>();
+    let count = failures.len();
+    Ok((
+        serde_json::json!({"width":width, "height":height, "frames":frames, "hotFrames":hot,
+            "failures":failures}),
+        count,
+    ))
 }
 
 #[cfg(test)]

@@ -40,6 +40,109 @@ fn pixel(dir: &Path, name: &str, x: usize, y: usize) -> Vec<u8> {
 }
 
 #[test]
+fn shared_video_samples_crossfade_and_standalone_motion_uses_real_video_facts() {
+    use valle_media::{
+        codec::{Muxer, VideoFrameTransport},
+        frame::RgbaFrame,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let mut mux = Muxer::open_media_rational_with_transport(
+        &dir.join("source.mp4"),
+        64,
+        36,
+        10,
+        1,
+        false,
+        None,
+        false,
+        Some(1),
+        VideoFrameTransport::Cpu,
+    )
+    .unwrap();
+    for i in 0..20 {
+        let mut frame = RgbaFrame::new(64, 36);
+        frame.fill(if i < 10 {
+            [240, 0, 0, 255]
+        } else {
+            [0, 0, 240, 255]
+        });
+        mux.encode_video(&frame).unwrap();
+    }
+    mux.finish().unwrap();
+    drop(mux);
+    put(
+        dir,
+        "fade.json",
+        json!({"canvas":{"width":64,"height":36,"fps":10},"resources":{"film":"source.mp4"},"tracks":{"visual":[{
+            "clips":[{"kind":"video","src":"film","start":0,"duration":1,"trimStart":0,"gain":0},{"kind":"video","src":"film","start":0.5,"duration":1,"trimStart":1,"gain":0}],
+            "transitions":[{"from":0,"to":1,"kind":"fade"}]
+        }]}}),
+    );
+    let backends = if cfg!(target_os = "macos")
+        && std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() == Ok("metal")
+    {
+        vec!["raster", "metal"]
+    } else {
+        vec!["raster"]
+    };
+    for backend in backends {
+        let output = format!("{backend}-%02d.png");
+        let report = success(run(
+            dir,
+            &[
+                "timeline",
+                "render",
+                "fade.json",
+                "--frames",
+                "4,5,7,10",
+                "--backend",
+                backend,
+                "-o",
+                &output,
+            ],
+        ));
+        assert_eq!(report["delivery"]["backend"], backend);
+        let mixed = pixel(dir, &format!("{backend}-07.png"), 32, 18);
+        assert!(
+            mixed[0] > 80 && mixed[2] > 80 && mixed[1] < 20,
+            "{backend}: {mixed:?}"
+        );
+    }
+    std::fs::write(dir.join("video.motion.tsx"),r#"export const composition={width:64,height:36,fps:10,duration:1};
+export const controls={assets:{film:asset({kind:"video",required:true})}};
+export default function Main(){return <Scene><Video src="asset://film" sourceStart={1} style={{width:64,height:36}}/></Scene>;}
+"#).unwrap();
+    for command in [
+        vec!["motion", "check", "video.motion.tsx", "--cost"],
+        vec![
+            "motion",
+            "review",
+            "video.motion.tsx",
+            "--trajectory-sheet",
+            "video-review.png",
+        ],
+        vec![
+            "motion",
+            "render",
+            "video.motion.tsx",
+            "--frame",
+            "0",
+            "--backend",
+            "raster",
+            "-o",
+            "video.png",
+        ],
+    ] {
+        let mut args = command;
+        args.extend(["--asset", "film=source.mp4"]);
+        success(run(dir, &args));
+    }
+    let color = pixel(dir, "video.png", 32, 18);
+    assert!(color[2] > 200 && color[0] < 20, "{color:?}");
+}
+
+#[test]
 fn environment_assets_are_frozen_and_render_in_arbitrary_frame_order() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
@@ -215,6 +318,12 @@ export default function Grow() { const time = useCurrentTime(); const frame = Ma
     );
     let path = first["path"].as_str().unwrap().to_owned();
     assert!(path.starts_with("visual[0].draw.node["), "{cost}");
+    success(run(dir, &["project", "check"]));
+    let project_cost = run(dir, &["project", "check", "--cost"]);
+    assert!(!project_cost.status.success());
+    let project_cost: Value = serde_json::from_slice(&project_cost.stdout).unwrap();
+    assert_eq!(project_cost["cost"]["failures"][0]["frame"], 30);
+    assert_eq!(project_cost["error"]["code"], "frame_plan_failed");
 
     let message = format!("frame 30 (1.000 s): {path}: local intermediate pixels budget exceeded");
     let hint = "run valle motion check --cost --output-size 64x36 to find every such frame before exporting";
@@ -1142,6 +1251,8 @@ export default function T() { const time = useCurrentTime(); return <Scene style
                 "timeline",
                 "render",
                 "effect.timeline.json",
+                "--backend",
+                "raster",
                 "--frame",
                 &frame.to_string(),
                 "-o",

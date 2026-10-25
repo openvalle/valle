@@ -1,7 +1,8 @@
 //! File and project Timeline delivery through the fixed-package admission path.
+use super::motion_package::add_video_resource;
 use super::render_delivery::{DeliveryObservation, DeliveryPlan};
 use crate::{
-    RenderBudgetArgs, RenderOutputArgs, TimelineAction,
+    RenderOutputArgs, RenderTuningArgs, TimelineAction,
     preview_store::{FrozenMediaCache, PreviewFile},
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -36,7 +37,7 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
                     ..Default::default()
                 },
                 Some(&mut warnings),
-                RenderBudgetArgs::default(),
+                RenderTuningArgs::default(),
             )?;
             for warning in &warnings {
                 eprintln!(
@@ -54,7 +55,7 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
         TimelineAction::Render {
             input,
             delivery,
-            budget,
+            tuning,
         } => {
             let timeline = decode_timeline(&super::read(&input)?)?;
             render_document_impl(
@@ -62,7 +63,7 @@ pub fn run(action: TimelineAction) -> Result<std::process::ExitCode> {
                 input.parent().unwrap_or(Path::new(".")),
                 delivery,
                 None,
-                budget,
+                tuning,
             )
         }
     }
@@ -75,19 +76,40 @@ fn render_document_impl(
     base: &Path,
     delivery: RenderOutputArgs,
     check: Option<&mut Vec<valle_motion::MotionDiagnostic>>,
-    budget: RenderBudgetArgs,
+    tuning: RenderTuningArgs,
 ) -> Result<std::process::ExitCode> {
+    super::render_delivery::validate_tuning(&delivery, &tuning)?;
+    let timeline = super::render_delivery::apply_frame_rate(timeline, &tuning)?;
     let plan = DeliveryPlan::new(delivery)?;
     let observation = DeliveryObservation::new()?;
     let prepared = prepare_timeline_package(timeline, base)?;
     // Package preparation already admitted and opened the closed package; reuse it.
     let opened = prepared.opened;
-    let catalog = prepared.catalog;
+    super::render_delivery::validate_output_size(
+        &tuning,
+        (
+            opened.engine_render().canvas().width(),
+            opened.engine_render().canvas().height(),
+        ),
+    )?;
+    let project = NativeProject::from_render(opened.engine_render(), Arc::new(prepared.catalog));
+    plan.validate_encoder(
+        &tuning,
+        project.has_visual_material() && opened.engine_render().canvas().background_rgba()[3] < 255,
+    )?;
     let renderer = NativeRenderer::new(
-        NativeProject::from_render(opened.engine_render(), Arc::new(catalog)),
+        project,
         NativeRenderOptions {
-            backend: valle_render::executor::skia::SkiaBackendKind::Raster,
-            budget: budget.native()?,
+            backend: if check.is_some() {
+                valle_render::executor::skia::SkiaBackendKind::Raster
+            } else {
+                tuning.backend.into()
+            },
+            budget: tuning.budget.native()?,
+            output_size: tuning.output_size,
+            hardware_encode: tuning.hardware_encode,
+            bitrate: tuning.bitrate.map(|value| value as usize),
+            encode_threads: tuning.encode_threads.map(usize::from),
             background: valle_engine::resource::OutputBackground::AuthorSrgbStraight {
                 color: valle_engine::resource::AuthorSrgbStraight(
                     opened.engine_render().canvas().background_rgba(),
@@ -101,7 +123,6 @@ fn render_document_impl(
                 })
                 .unwrap_or_default(),
             progress: crate::output::render_progress(),
-            ..NativeRenderOptions::default()
         },
     );
     if let Some(warnings) = check {
@@ -489,74 +510,6 @@ pub(crate) fn prepare_timeline_media_facts(
         }));
     }
     Ok((inputs, blobs, input_dependencies))
-}
-
-fn add_video_resource(
-    resources: &mut super::motion_package::FixedResources,
-    id: &str,
-    hash: ContentDigest,
-    path: &Path,
-    include_audio: bool,
-) -> Result<()> {
-    use valle_timeline::internal::wire::resource::*;
-    let probe = valle_media::codec::decode::probe_video_presentation(path)?;
-    let audio = valle_media::codec::audio::probe_audio_stream(path)?;
-    let mut dependencies = Vec::new();
-    if audio.is_some() && include_audio {
-        let audio_id = format!("{id}:audio");
-        resources.add_asset(
-            &audio_id,
-            AssetKind::Audio,
-            &super::motion::BoundAsset {
-                path: path.to_path_buf(),
-                bytes: Arc::from([]),
-                hash,
-            },
-        )?;
-        dependencies.push(super::motion_package::FixedResourceDependency {
-            role: "audio".into(),
-            resource_id: audio_id,
-        });
-    }
-    let descriptor = VideoResourceDescriptorWire {
-        duration: valle_timeline::RationalTime::new(
-            probe
-                .duration_ticks
-                .checked_mul(i64::from(probe.time_base.0))
-                .ok_or_else(|| anyhow!("video duration overflow"))?,
-            probe.time_base.1 as u32,
-        )?,
-        time_base: valle_timeline::time::ExactRational::new(
-            i64::from(probe.time_base.0),
-            probe.time_base.1 as u32,
-        )?,
-        presentation_index_digest: ContentDigest::of_bytes(&serde_json::to_vec(
-            &probe.presentation,
-        )?),
-        width: probe.display.width,
-        height: probe.display.height,
-        orientation: MediaOrientationWire::Identity,
-        color: MediaColorDescriptorWire {
-            primaries: ColorPrimariesWire::Srgb,
-            transfer: ColorTransferWire::Srgb,
-            matrix: ColorMatrixWire::Identity,
-            full_range: true,
-        },
-        video_stream: probe.stream,
-        audio_stream: audio.map(|audio| audio.stream),
-    };
-    resources.add(
-        id,
-        ResourceEntryWire::Video {
-            digest: hash,
-            descriptor: descriptor.clone(),
-        },
-        valle_engine::render::VerifiedResourceFacts::Video {
-            descriptor,
-            temporal_footprint: Default::default(),
-        },
-        dependencies,
-    )
 }
 
 fn prepare_timeline_package_impl(

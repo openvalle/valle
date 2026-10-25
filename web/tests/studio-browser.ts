@@ -291,6 +291,15 @@ async function run(
       await editSource(repair);
     }
     await poll(state, (s) => s.state?.previewStatus === "ready" && !!s.source, "initial preview");
+    if (mode === "video") {
+      const pixel = await evaluate(
+        `(()=>{const source=document.querySelector('#studioPlayer').canvas; const copy=document.createElement('canvas'); copy.width=source.width; copy.height=source.height; const context=copy.getContext('2d');context.drawImage(source,0,0);return [...context.getImageData(Math.floor(copy.width*.8),Math.floor(copy.height*.7),1,1).data];})()`,
+      );
+      assert(
+        pixel[0] > 180 && pixel[2] > 180 && pixel[1] < 120,
+        `video pixels are present: ${pixel}`,
+      );
+    }
     const userAgent = await evaluate("navigator.userAgent");
     assert(/Chrome\//.test(userAgent), "real Chrome required");
     await evaluate("document.querySelector('#sourceToggle').click()");
@@ -408,6 +417,35 @@ try {
       ["components/brand-poster.tsx", []],
     ] as const)
       await run(join(modules, name), [...args]);
+  } else if (mode === "video") {
+    const clip = join(dir, "clip.motion.tsx");
+    const video = join(dir, "clip.mp4");
+    await writeFile(
+      clip,
+      'export const composition={width:240,height:140,fps:30,duration:3}; export default function Clip(){return <Scene style={{width:240,height:140,backgroundColor:"#d040ff"}}/>;}',
+    );
+    const encode = Bun.spawn(
+      [cli, "--json", "motion", "render", clip, "--backend", "raster", "-o", video],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [output, errors, code] = await Promise.all([
+      new Response(encode.stdout).text(),
+      new Response(encode.stderr).text(),
+      encode.exited,
+    ]);
+    assert(code === 0, `prepare video: ${output}\n${errors}`);
+    const input = join(dir, "video.motion.tsx");
+    await writeFile(
+      input,
+      source
+        .replace("AUDIO_CONTROL", ',assets:{film:asset({kind:"video",required:true})}')
+        .replace(/AUDIO_ANALYSIS|AUDIO_HEIGHT/g, "")
+        .replace(
+          '<View key="box"',
+          '<Video src="asset://film" style={{position:"absolute",left:0,top:0,width:240,height:140}}/><View key="box"',
+        ),
+    );
+    await run(input, ["--asset", `film=${video}`], { from: "default:40", to: "default:80" });
   } else if (mode === "broken") {
     // One source fails to compile and one fails to parse; both open with their error.
     for (const [name, from, to] of [
