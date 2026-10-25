@@ -65,7 +65,7 @@ The compiler and snapshots support their relative imports.
 | `project create DIR` | Create an empty project; optional `--width`, `--height`, `--fps` |
 | `project show` | Show canvas, tracks, resources, external references, history and latest export |
 | `project add FILE… [--link]` | Import files and return resource suggestions |
-| `project check` | Validate the entry Timeline and report missing and external inputs |
+| `project check [--cost]` | Validate inputs; `--cost` also plans every output frame and reports failed frames without exporting |
 | `project save [-m MESSAGE]` | Save a source snapshot; unchanged inputs reuse the last snapshot |
 | `project history` | List snapshots with their numbers, timestamps and messages |
 | `project restore N` | Back up files that will be overwritten, then restore snapshot N |
@@ -159,3 +159,11 @@ Projects using relative paths and copied inputs can be moved or archived as dire
 `.valle/` when preserving history; ignore `.valle/` and `renders/` when using Git for source
 control. `VALLE_HOME` selects the global asset library and recent-project list, not the
 project's location.
+
+Project, Timeline and Motion renders share `--backend auto|raster|metal` (Metal on macOS),
+`--fps`, `--output-size`, `--hardware-encode`, `--bitrate`, `--encode-threads`, and the
+render budget flags. Output size scales the existing canvas proportionally; FPS and size
+are delivery overrides and do not rewrite the Timeline. Auto chooses an available compositor;
+use an explicit backend for comparisons and read `delivery.backend` in the JSON result.
+Default project exports use `.mov` for a transparent canvas or a transparent codec, `.mp4`
+otherwise; frame lists use a PNG pattern. Invalid codec/extension pairs fail before a snapshot.

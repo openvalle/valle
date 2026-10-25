@@ -2452,8 +2452,8 @@ export default function GlassDemo() {
           borderRadius: 40, boxShadow: "0 18px 40px #0f172a55" }}>
         <Text style={{ fontSize: 32, color: "#ffffff" }}>Glass</Text>
       </Glass>
-      <GlassField merge={{ distance: 32 }}>
-        <Glass style={{ position: "absolute", left: x, top: 130, width: 100, height: 100,
+      <GlassField merge={{ distance: 32 }} light={{ intensity: 0.4 }}>
+        <Glass style={{ position: "absolute", left: 0, transform: `translateX(${x}px)`, top: 130, width: 100, height: 100,
           borderRadius: "50%" }} />
         <Glass presence={interpolate(progress, [0, 0.4], [0, 1])}
           style={{ position: "absolute", left: 500, top: 130, width: 100, height: 100,

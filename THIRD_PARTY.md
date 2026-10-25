@@ -50,7 +50,13 @@ We thank the authors and maintainers of the projects below. This document covers
 
 ## Models
 
-Current integrations include **BiRefNet, MODNet, Demucs, DPDFNet, EdgeTAM, LaMa, OmniShotCut, TransNetV2, Real-ESRGAN, RIFE, Qwen3-ASR, and Qwen3 Aligner**. Weights are installed separately.
+Current integrations include **BiRefNet, MODNet, Demucs, DPDFNet, EdgeTAM, LaMa, OmniShotCut, TransNetV2, Real-ESRGAN, RIFE, Qwen3-ASR, Qwen3 Aligner, and Qwen3-TTS**. Weights are installed separately.
+
+Qwen3-TTS GGUF conversion weights are sourced from the pinned
+[Serveurperso/Qwen3-TTS-GGUF](https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF)
+revision in each manifest. Their Apache-2.0 license is preserved in
+[the model license](crates/valle-media/src/models/catalog/qwen-LICENSE);
+`valle-tts` integration code has its own dependency notices.
 
 See the [model release manifests](crates/valle-media/src/models/catalog) for upstream sources, versions, artifact hashes, and licenses, and the [NOTICE](crates/valle-media/licenses/NOTICE.txt) for integration code provenance. Model code, weights, and conversion artifacts are governed by their respective notices.
 

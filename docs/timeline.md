@@ -891,10 +891,9 @@ and exit codes see the [CLI output contract](cli.md#output-contract-for-scripts-
 | MP4 rejects a transparent scene | Set an opaque `canvas.background` or use PNG/transparent MOV when alpha is required |
 | Export is longer than expected | Check the latest ending clip in every band, including audio and adjustments |
 
-Use `project create/show/apply/history/restore` when revisions are needed; those
-commands store the same public Timeline document. `project apply` accepts a
-complete document and a base revision, not a raw patch. See
-[project editing](cli.md#project-versioned-timeline-editing) for that workflow.
+Edit `timeline.json` directly, run `project check`, then use `project save` to capture
+source snapshots and `project history` / `project restore` to return to one.
+See [project folders](project.md) for the complete workflow.
 
 ## Schemas and verification
 
