@@ -127,6 +127,7 @@ impl MotionPreparation {
                     .finish()
                     .map_err(failure)?,
                     scene3d_frames: Vec::new(),
+                    scene3d_sampling: Vec::new(),
                     layout_boxes: BTreeMap::new(),
                 })
             }
@@ -146,6 +147,7 @@ pub(crate) struct MotionKernel {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Metadata {
     scene3d_frames: Vec<valle_motion::SealedScene3DFrame>,
+    scene3d_sampling: Vec<valle_motion::emit::Scene3DSampling>,
     layout_boxes: BTreeMap<String, [f32; 4]>,
 }
 
@@ -188,6 +190,7 @@ impl MotionKernel {
         })?;
         let metadata = serde_json::to_vec(&Metadata {
             scene3d_frames: built.scene3d_frames,
+            scene3d_sampling: built.scene3d_sampling,
             layout_boxes: built.layout_boxes,
         })
         .map_err(failure)?;
@@ -218,6 +221,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<BuiltMotionProgram, ProgramPrepareE
     Ok(BuiltMotionProgram {
         program,
         scene3d_frames: metadata.scene3d_frames,
+        scene3d_sampling: metadata.scene3d_sampling,
         layout_boxes: metadata.layout_boxes,
     })
 }
@@ -301,6 +305,7 @@ export default function Card(props) { const time = useCurrentTime(); const frame
                 FrameRate::new(30, 1).unwrap(),
             )
             .unwrap(),
+            raster_scale: 1.0,
             viewport: Extent2d::new(320, 180).unwrap(),
             source_clip: Some(Rect::new(0.0, 0.0, 320.0, 180.0)),
             assets: BTreeMap::new(),

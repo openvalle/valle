@@ -231,6 +231,7 @@ pub struct MotionFrameInspection {
     pub source_index: u32,
     pub source_frame: u32,
     pub boxes: std::collections::BTreeMap<String, [f32; 4]>,
+    pub scene3d_sampling: Vec<valle_motion::emit::Scene3DSampling>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

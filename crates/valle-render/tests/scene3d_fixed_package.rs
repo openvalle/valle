@@ -126,6 +126,35 @@ fn verify_fixed_model_package(pbr: bool) {
     let admitted = render.admitted_models().collect::<Vec<_>>();
     assert_eq!(admitted.len(), 1);
     assert_eq!(admitted[0].1.images().len(), if pbr { 5 } else { 0 });
+    let mut compiler = render.frame_compiler();
+    let output = OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap();
+    let mut base_boxes = None;
+    for size in [64, 128, 16384, 64] {
+        let prepared = compiler
+            .evaluate_prepare(
+                render.render_id(),
+                FrameKey::new(0),
+                RenderSpec::new(size, size, RenderQuality::Preview, output).unwrap(),
+            )
+            .unwrap();
+        let inspection = &prepared.prepared().inspection.motion[0];
+        let sampling = &inspection.scene3d_sampling[0];
+        if size < 16384 {
+            assert_eq!((sampling.width, sampling.height), (size, size));
+            assert!(!sampling.budget_limited);
+        } else {
+            assert!(sampling.budget_limited);
+            assert!(
+                u64::from(sampling.width) * u64::from(sampling.height)
+                    <= valle_motion::scene3d::MAX_LAYER_PIXELS
+            );
+        }
+        if let Some(boxes) = &base_boxes {
+            assert_eq!(boxes, &inspection.boxes);
+        } else {
+            base_boxes = Some(inspection.boxes.clone());
+        }
+    }
     let project = NativeProject::from_render(render, Arc::new(NativeResourceCatalog::new()));
     let spec = RenderSpec::new(
         64,

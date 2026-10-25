@@ -25,6 +25,7 @@ use super::{
 pub(crate) struct BuiltMotionProgram {
     pub program: DrawProgram,
     pub scene3d_frames: Vec<valle_motion::SealedScene3DFrame>,
+    pub scene3d_sampling: Vec<valle_motion::emit::Scene3DSampling>,
     pub layout_boxes: BTreeMap<String, [f32; 4]>,
 }
 
@@ -122,6 +123,7 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
     pub prepared: &'a valle_motion::PreparedScene,
     pub evaluated: &'a crate::render::EvaluatedSourceRef,
     pub source_duration: RationalTime,
+    pub raster_scale: f64,
     pub viewport: Extent2d,
     pub source_clip: Option<valle_draw::Rect>,
     pub fps: FrameRate,
@@ -140,6 +142,7 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
 pub(super) struct MotionFrameInput {
     pub props: BTreeMap<String, valle_motion::MotionValue>,
     pub motion_context: valle_motion::MotionContext,
+    pub raster_scale: f64,
     pub viewport: Extent2d,
     pub source_clip: Option<Rect>,
     pub assets: BTreeMap<String, SemanticAsset>,
@@ -217,6 +220,7 @@ pub(super) fn resolve_motion_input(
     Ok(MotionFrameInput {
         props: props.as_map().clone(),
         motion_context,
+        raster_scale: context.raster_scale,
         viewport: context.viewport,
         source_clip: context.source_clip,
         assets: context.assets.clone(),
@@ -270,21 +274,14 @@ pub(super) fn build_motion_program(
         model_resources: &input.model_resources,
         viewport: input.viewport,
     };
-    let report = match input.source_clip {
-        Some(clip) => valle_motion::emit::emit_program_with_faces_clipped(
-            &tree,
-            &valle_motion::default_font_naming,
-            Some(faces),
-            &catalog,
-            clip,
-        ),
-        None => valle_motion::emit_program_with_faces(
-            &tree,
-            &valle_motion::default_font_naming,
-            Some(faces),
-            &catalog,
-        ),
-    }
+    let report = valle_motion::emit::emit_program_at_density(
+        &tree,
+        &valle_motion::default_font_naming,
+        Some(faces),
+        &catalog,
+        input.source_clip,
+        input.raster_scale,
+    )
     .map_err(|error| match error {
         valle_motion::EmitError::NodeBudget { node, reason } => {
             ProgramPrepareError::MotionBudget { node, reason }
@@ -305,6 +302,7 @@ pub(super) fn build_motion_program(
     Ok(BuiltMotionProgram {
         program: report.program,
         scene3d_frames: report.scene3d_frames,
+        scene3d_sampling: report.scene3d_sampling,
         layout_boxes,
     })
 }

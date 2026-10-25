@@ -672,6 +672,17 @@ fn prepare_endpoint(
                     .source(source.source_index())
                     .and_then(|compiled| compiled.source_duration())
                     .ok_or_else(|| PrepareError::at(path, "Motion source duration is missing"))?,
+                raster_scale: CanvasMapping::contain(
+                    [render.canvas().width(), render.canvas().height()],
+                    state.frame.render_spec,
+                )
+                .scale
+                    * (clip.transform.width * f64::from(render.canvas().width())
+                        / f64::from(viewport.width()))
+                    .max(
+                        clip.transform.height * f64::from(render.canvas().height())
+                            / f64::from(viewport.height()),
+                    ),
                 viewport,
                 source_clip,
                 fps: render.canvas().frame_rate(),
@@ -766,6 +777,7 @@ fn prepare_endpoint(
                     source_index: frame_address.source_index(),
                     source_frame: frame_address.source_frame(),
                     boxes: built.layout_boxes,
+                    scene3d_sampling: built.scene3d_sampling,
                 });
             state.programs.push(program);
             state.finish_compiled_program_layer(
