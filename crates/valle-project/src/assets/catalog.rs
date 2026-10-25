@@ -17,7 +17,7 @@ pub struct Library {
     pub(crate) conn: Connection,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Entry {
     pub id: i64,
     pub path: String,
@@ -48,14 +48,13 @@ impl Library {
     pub fn open(root: &Path) -> Result<Self> {
         fs::create_dir_all(root)?;
         let root = root.canonicalize()?;
-        if root.join("index.db").exists()
-            || root.join("objects").exists()
-            || root.join("meta").exists()
+        if !root.join(".valle/catalog.db").exists()
+            && root.join("index.db").is_file()
+            && Connection::open_with_flags(root.join("index.db"), OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .and_then(|conn| conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('assets','objects'))", [], |row| row.get::<_, bool>(0)))
+                .unwrap_or(false)
         {
-            bail!(
-                "legacy asset library at {}; move it aside before creating the new library (no migration)",
-                root.display()
-            );
+            bail!("legacy asset library at {}; move it aside before creating a new library", root.display());
         }
         let management = root.join(".valle");
         fs::create_dir_all(&management)?;

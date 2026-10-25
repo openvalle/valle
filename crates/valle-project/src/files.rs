@@ -177,7 +177,8 @@ impl Kind {
             .to_lowercase()
             .as_str()
         {
-            "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" => Self::Video,
+            "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" | "mts" | "m2ts" | "mxf" | "mpg"
+            | "mpeg" | "3gp" | "wmv" | "flv" => Self::Video,
             "mp3" | "wav" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "aif" | "aiff" => Self::Audio,
             "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "svg" | "avif" => {
                 Self::Image
@@ -311,8 +312,20 @@ pub fn copy_new(
     staging: &Path,
     expected: ContentDigest,
 ) -> Result<()> {
-    fs::create_dir_all(staging)?;
     fs::create_dir_all(destination.parent().context("destination has no parent")?)?;
+    stage_copy(source, staging, expected)?
+        .persist_noclobber(destination)
+        .map_err(|e| e.error)?;
+    crate::sync_directory(destination.parent().unwrap())?;
+    Ok(())
+}
+
+pub(crate) fn stage_copy(
+    source: &Path,
+    staging: &Path,
+    expected: ContentDigest,
+) -> Result<tempfile::NamedTempFile> {
+    fs::create_dir_all(staging)?;
     let (file, path) = tempfile::Builder::new()
         .prefix(".import-")
         .tempfile_in(staging)?
@@ -339,9 +352,7 @@ pub fn copy_new(
         bail!("source changed during import: {}", source.display());
     }
     let temp = tempfile::NamedTempFile::from_parts(file, path);
-    temp.persist_noclobber(destination).map_err(|e| e.error)?;
-    crate::sync_directory(destination.parent().unwrap())?;
-    Ok(())
+    Ok(temp)
 }
 
 #[derive(Debug, Serialize)]

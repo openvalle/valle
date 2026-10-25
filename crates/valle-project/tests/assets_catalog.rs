@@ -18,6 +18,73 @@ fn list(ctx: &Context) -> Value {
 }
 
 #[test]
+fn missing_names_are_reserved_and_case_only_replacements_keep_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let ctx = context(&temp.path().join("library"));
+    fs::create_dir_all(ctx.root.join("pack")).unwrap();
+    fs::write(ctx.root.join("pack/A.bin"), b"old").unwrap();
+    run(&ctx, json!({"op":"tag","path":"pack/A.bin","add":["keep"]}));
+    fs::remove_file(ctx.root.join("pack/A.bin")).unwrap();
+    assert_eq!(list(&ctx)["total"], 0);
+    let source = temp.path().join("A.bin");
+    fs::write(&source, b"new").unwrap();
+    let added = run(&ctx, json!({"op":"add","paths":[source],"to":"pack"}));
+    assert_eq!(added["items"][0]["path"], "pack/A-2.bin");
+    let rejected = ctx.execute(
+        serde_json::from_value(json!({"op":"edit","path":"pack/A-2.bin","name":"a.bin"})).unwrap(),
+    );
+    assert_eq!(rejected["status"], "error");
+    assert!(ctx.root.join("pack/A-2.bin").exists());
+    fs::write(
+        ctx.root.join("pack/a.bin"),
+        b"replacement with different bytes",
+    )
+    .unwrap();
+    let shown = run(&ctx, json!({"op":"show","path":"pack/a.bin"}));
+    assert_eq!(shown["tags"], json!(["keep"]));
+    assert_eq!(list(&ctx)["total"], 2);
+}
+
+#[test]
+fn ordinary_legacy_named_directories_and_index_files_are_allowed() {
+    let temp = tempfile::tempdir().unwrap();
+    let ctx = context(&temp.path().join("library"));
+    fs::create_dir_all(ctx.root.join("objects")).unwrap();
+    fs::create_dir_all(ctx.root.join("meta")).unwrap();
+    fs::write(
+        ctx.root.join("index.db"),
+        b"ordinary asset, not an old catalog",
+    )
+    .unwrap();
+    fs::write(ctx.root.join("objects/item.bin"), b"asset").unwrap();
+    assert_eq!(list(&ctx)["total"], 2);
+    assert_eq!(list(&ctx)["total"], 2);
+}
+
+#[test]
+fn media_inspection_does_not_hold_the_catalog_write_lock() {
+    struct LockProbe;
+    impl valle_project::assets::Inspector for LockProbe {
+        fn inspect(&self, path: &Path, _kind: valle_project::files::Kind) -> Value {
+            let conn = rusqlite::Connection::open(path.parent().unwrap().join(".valle/catalog.db"))
+                .unwrap();
+            conn.busy_timeout(std::time::Duration::ZERO).unwrap();
+            conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")
+                .expect("scanning must not hold a write transaction during inspection");
+            Value::Null
+        }
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let ctx = Context {
+        root: temp.path().join("library"),
+        inspector: Box::new(LockProbe),
+    };
+    fs::create_dir_all(&ctx.root).unwrap();
+    fs::write(ctx.root.join("new.bin"), b"new").unwrap();
+    assert_eq!(list(&ctx)["total"], 1);
+}
+
+#[test]
 fn case_only_renames_and_directory_spelling_preserve_one_asset_namespace() {
     let temp = tempfile::tempdir().unwrap();
     let ctx = context(&temp.path().join("library"));

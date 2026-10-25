@@ -4,7 +4,7 @@ use super::{
     filename, relative, safe_path,
 };
 use crate::{
-    files::{FileStamp, Kind, copy_new, files_in, folded, occupied, rename_new, suffixed},
+    files::{FileStamp, Kind, files_in, folded, occupied, rename_new, stage_copy, suffixed},
     folder::digest_file,
 };
 use anyhow::{Context, Result, bail};
@@ -105,6 +105,7 @@ impl Library {
                 .context("filename must be UTF-8")?,
         );
         filename(proposed)?;
+        let mut staged = Some(stage_copy(&source, &self.root.join(".valle/tmp"), digest)?);
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -132,7 +133,9 @@ impl Library {
             let mut number = 1;
             let path = loop {
                 let actual = suffixed(proposed, number);
-                if occupied(&dir, &actual)? {
+                if occupied(&dir, &actual)?
+                    || catalog_occupied(&tx, &format!("{directory}/{actual}"), None)?
+                {
                     if name.is_some() {
                         bail!(
                             "filename already exists: {directory}/{actual}; choose another --name"
@@ -142,17 +145,23 @@ impl Library {
                     continue;
                 }
                 let target = dir.join(&actual);
-                match copy_new(&source, &target, &self.root.join(".valle/tmp"), digest) {
-                    Ok(()) => break target,
+                match staged
+                    .take()
+                    .expect("staged import is retained until publication")
+                    .persist_noclobber(&target)
+                {
+                    Ok(_) => {
+                        crate::sync_directory(&dir)?;
+                        break target;
+                    }
                     Err(error)
-                        if error
-                            .downcast_ref::<std::io::Error>()
-                            .is_some_and(|e| e.kind() == std::io::ErrorKind::AlreadyExists)
+                        if error.error.kind() == std::io::ErrorKind::AlreadyExists
                             && name.is_none() =>
                     {
+                        staged = Some(error.file);
                         number += 1;
                     }
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(error.error.into()),
                 }
             };
             let path = path
@@ -231,6 +240,11 @@ impl Library {
         let destination = destination.to_string_lossy().replace('\\', "/");
         if destination == entry.path {
             return Ok(json!({"status":"ok","path":entry.path,"unchanged":true}));
+        }
+        if catalog_occupied(&tx, &destination, Some(entry.id))? {
+            bail!(
+                "filename is reserved by another asset, including missing records: {destination}; choose another name"
+            );
         }
         let target = safe_path(&self.root, &destination)?;
         let same_file = target.exists() && target.canonicalize()? == source.canonicalize()?;
@@ -457,4 +471,12 @@ fn add_note(
         )?;
         Ok(conn.last_insert_rowid())
     }
+}
+
+fn catalog_occupied(conn: &rusqlite::Connection, path: &str, except: Option<i64>) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM assets WHERE path_key=? AND (? IS NULL OR asset_id<>?))",
+        params![folded(path), except, except],
+        |row| row.get(0),
+    )?)
 }

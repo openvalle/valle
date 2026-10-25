@@ -21,13 +21,10 @@ struct Observed {
 }
 
 pub(crate) fn scan(library: &mut Library, inspector: &dyn Inspector) -> Result<()> {
-    let tx = library
-        .conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let old = entries(&tx)?;
+    let old = entries(&library.conn)?;
     let by_path = old
         .iter()
-        .map(|e| (e.path.as_str(), e))
+        .map(|e| (folded(&e.path), e))
         .collect::<BTreeMap<_, _>>();
     let mut observed = Vec::new();
     let mut keys = BTreeSet::new();
@@ -44,13 +41,15 @@ pub(crate) fn scan(library: &mut Library, inspector: &dyn Inspector) -> Result<(
         let stamp = FileStamp::read(&file)?;
         let serialized = serde_json::to_string(&stamp)?;
         let kind = Kind::detect(&file);
-        let previous = by_path.get(path.as_str());
+        let previous = by_path.get(&folded(&path));
         let facts = previous
             .map(|e| {
-                tx.query_row("SELECT info FROM facts WHERE asset_id=?", [e.id], |r| {
-                    r.get::<_, String>(0)
-                })
-                .optional()
+                library
+                    .conn
+                    .query_row("SELECT info FROM facts WHERE asset_id=?", [e.id], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .optional()
             })
             .transpose()?
             .flatten();
@@ -78,17 +77,28 @@ pub(crate) fn scan(library: &mut Library, inspector: &dyn Inspector) -> Result<(
             info,
         });
     }
+    let tx = library
+        .conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if entries(&tx)? != old {
+        bail!("asset library changed during scan; retry the command");
+    }
+    for file in &observed {
+        if serde_json::to_string(&FileStamp::read(&library.root.join(&file.path))?)? != file.stamp {
+            bail!("file changed during scan: {}; retry the command", file.path);
+        }
+    }
     let present = observed
         .iter()
-        .map(|o| o.path.as_str())
+        .map(|o| folded(&o.path))
         .collect::<BTreeSet<_>>();
     let missing = old
         .iter()
-        .filter(|e| !present.contains(e.path.as_str()))
+        .filter(|e| !present.contains(&folded(&e.path)))
         .collect::<Vec<_>>();
     let mut new_digest_counts = BTreeMap::<&str, usize>::new();
     for file in &observed {
-        if !by_path.contains_key(file.path.as_str()) {
+        if !by_path.contains_key(&folded(&file.path)) {
             *new_digest_counts.entry(&file.digest).or_default() += 1;
         }
     }
@@ -99,7 +109,7 @@ pub(crate) fn scan(library: &mut Library, inspector: &dyn Inspector) -> Result<(
     }
     let mut matched = BTreeSet::new();
     for file in &observed {
-        let previous = by_path.get(file.path.as_str()).copied().or_else(|| {
+        let previous = by_path.get(&folded(&file.path)).copied().or_else(|| {
             let candidates = missing
                 .iter()
                 .copied()
