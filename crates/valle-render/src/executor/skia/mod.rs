@@ -28,6 +28,7 @@ mod surface;
 mod target;
 mod velocity;
 
+#[cfg(feature = "native")]
 pub(crate) use cache::SkiaCacheLimits;
 pub(crate) use output::rgba8_target_info;
 pub(crate) use pass::planned_frame_bytes;

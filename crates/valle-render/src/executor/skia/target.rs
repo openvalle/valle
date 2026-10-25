@@ -540,7 +540,6 @@ impl SkiaExternalObject {
         }
     }
 
-    #[cfg(feature = "native")]
     pub(crate) fn resident_bytes(&self) -> Option<u64> {
         match &self.payload {
             SkiaObjectPayload::Scene3dDof(input) => Some(input.resident_bytes()),
