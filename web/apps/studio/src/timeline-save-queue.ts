@@ -17,6 +17,10 @@ export class TimelineSaveQueue {
     return this.#running !== null;
   }
 
+  waitForIdle(): Promise<boolean> {
+    return this.#running ?? Promise.resolve(true);
+  }
+
   noteEdit(): void {
     if (this.#running) this.#pending = true;
   }

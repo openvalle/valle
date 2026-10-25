@@ -62,3 +62,28 @@ test("a stale or rejected response stops without attempting a merge", async () =
   expect(attempts).toBe(1);
   expect(idle).toBe(1);
 });
+
+test.each([true, false])(
+  "waiting for a save joins its result without another pass (%s)",
+  async (result) => {
+    let attempts = 0;
+    const response = deferred();
+    const queue = new TimelineSaveQueue(async () => {
+      attempts += 1;
+      await response.promise;
+      return result;
+    });
+
+    expect(await queue.waitForIdle()).toBe(true);
+    expect(attempts).toBe(0);
+    const saving = queue.request();
+    const waiting = queue.waitForIdle();
+    expect(waiting).toBe(saving);
+    response.resolve();
+    expect(await waiting).toBe(result);
+    expect(queue.active).toBe(false);
+    expect(attempts).toBe(1);
+    expect(await queue.waitForIdle()).toBe(true);
+    expect(attempts).toBe(1);
+  },
+);

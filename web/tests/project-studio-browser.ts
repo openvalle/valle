@@ -203,7 +203,7 @@ try {
   };
   const state = () =>
     evaluate(
-      `(()=>({url:location.href,boot:globalThis.valleStudioHost?{project:globalThis.valleStudioHost.boot.project,session:{kind:globalThis.valleStudioHost.boot.session.kind}}:null,state:document.querySelector('valle-studio-app')?{...document.querySelector('valle-studio-app').shellState,session:undefined}:null,text:document.body.innerText,source:document.querySelector('#sourceText')?.value,banner:document.querySelector('#stageBanner')?.textContent}))()`,
+      `(()=>({url:location.href,boot:globalThis.valleStudioHost?{project:globalThis.valleStudioHost.boot.project,session:{kind:globalThis.valleStudioHost.boot.session.kind}}:null,state:document.querySelector('valle-studio-app')?{...document.querySelector('valle-studio-app').shellState,saving:document.querySelector('#projectControls')?.controlsState.saving,session:undefined}:null,text:document.body.innerText,source:document.querySelector('#sourceText')?.value,banner:document.querySelector('#stageBanner')?.textContent}))()`,
     );
   const ready = async (label: string) => {
     const value = await poll(
@@ -365,17 +365,56 @@ try {
   );
   await poll(disk, (value) => value.tracks.audio?.length === 1, "library drag and save");
   await ready("library audio preview");
+  await poll(
+    state,
+    (value) => !value.state.dirty && !value.state.saving && !value.state.conflict,
+    "library import save acknowledged",
+  );
   await click('[aria-label="Close project panel"]');
+  // A file notification may arrive after the import edits the draft but before its save.
+  await evaluate(
+    `(()=>{const shell=document.querySelector('valle-studio-app');const notify=event=>{if(event.detail.intent.type==='dirty'&&event.detail.state.dirty){shell.removeEventListener('studio-statechange',notify);shell.dispatchEvent(new CustomEvent('studio-host-event',{detail:{type:'project',data:{}}}));}};shell.addEventListener('studio-statechange',notify);})()`,
+  );
+  const pausedSave = new Promise<string>((resolve) => {
+    const listener = (event: MessageEvent) => {
+      const message = JSON.parse(String(event.data));
+      if (message.method === "Fetch.requestPaused") {
+        socket!.removeEventListener("message", listener);
+        resolve(message.params.requestId);
+      }
+    };
+    socket!.addEventListener("message", listener);
+  });
+  await cdp("Fetch.enable", {
+    patterns: [{ urlPattern: "*/timeline/edit", requestStage: "Response" }],
+  });
   const source = `export const composition={width:32,height:32,fps:4,duration:1};export default function Card(){return <Scene><View style={{width:32,height:32,backgroundColor:'#67e8f9'}}/></Scene>;}`;
   await drop([{ name: "card.motion.tsx", bytes: Buffer.from(source).toString("base64") }]);
   await poll(disk, (value) => value.tracks.visual.length === 2, "component drop and save");
+  const saveRequest = await deadline(pausedSave, "paused component save");
   await ready("component preview");
+  assert(
+    await evaluate(
+      `document.querySelector('#projectControls').controlsState.saving && document.querySelector('valle-studio-app').shellState.conflict`,
+    ),
+    "import save is still pending with its file notification",
+  );
   await click("#historyPanelButton");
   await panelIdle();
   await field('[aria-label="Snapshot message"]', "Before source edit");
   await evaluate(
     `document.querySelector('[aria-label="Snapshot message"]').closest('form').requestSubmit()`,
   );
+  assert(
+    !(await state()).text.includes("Save or resolve the current draft"),
+    "snapshot waits for the pending import save before checking conflicts",
+  );
+  assert(
+    await evaluate(`document.querySelector('.studio-project-panel > nav button').disabled`),
+    "snapshot remains pending until the import save response arrives",
+  );
+  await cdp("Fetch.continueRequest", { requestId: saveRequest });
+  await cdp("Fetch.disable");
   await poll(state, (value) => value.text.includes("Snapshot 1"), "save snapshot");
   await panelIdle();
   await screenshot("history");

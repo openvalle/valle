@@ -2653,11 +2653,11 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     const complete = (event as CustomEvent<{ complete: (saved: boolean) => void }>).detail.complete;
     void (async () => {
       try {
-        if (conflictMessage) {
+        if (!(await saveQueue.waitForIdle()) || conflictMessage) {
           complete(false);
           return;
         }
-        const saved = saving ? await saveQueue.request() : !dirty || (await requestSave());
+        const saved = !dirty || (await requestSave());
         complete(saved && !dirty && !conflictMessage);
       } catch {
         complete(false);
