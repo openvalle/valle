@@ -1,0 +1,58 @@
+name: Draft release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux-arm64:
+    uses: ./.github/workflows/package-linux-arm64.yml
+    secrets: inherit
+  linux-x86_64:
+    uses: ./.github/workflows/package-linux-x86_64.yml
+    secrets: inherit
+  macos-arm64:
+    uses: ./.github/workflows/package-macos-arm64.yml
+    secrets: inherit
+  macos-x86_64:
+    uses: ./.github/workflows/package-macos-x86_64.yml
+    secrets: inherit
+  windows-arm64:
+    uses: ./.github/workflows/package-windows-arm64.yml
+    secrets: inherit
+  windows-x86_64:
+    uses: ./.github/workflows/package-windows-x86_64.yml
+    secrets: inherit
+  draft:
+    needs: [linux-arm64, linux-x86_64, macos-arm64, macos-x86_64, windows-arm64, windows-x86_64]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify tag matches package version
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          test "$GITHUB_REF_NAME" = "v$version"
+      - name: Download and verify all six packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --pattern 'valle-*' --dir artifacts
+          bash .github/scripts/verify-release.sh artifacts "$GITHUB_REF_NAME"
+      - name: Create draft for human publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t files < <(find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) | sort)
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "Valle $GITHUB_REF_NAME" --generate-notes

@@ -141,6 +141,17 @@ jobs:
           VALLE_EMBED_WEB_DIR: ${{ github.workspace }}/web/dist
           VALLE_EMBED_NOTICES: ${{ github.workspace }}/target/distribution-notices.txt
         run: cargo test --locked --release --target '${{ inputs.target }}' -p valle-cli --features embedded-runtime --test web_runtime --test ffmpeg_runtime -- --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-tests.log"
+      - name: Require Studio browser acceptance
+        if: inputs.ci && inputs.arch == 'x86_64'
+        run: |
+          if ! bun -e 'import {resolveBrowser} from "./web/tests/parity/lib/browser.ts"; process.exit(resolveBrowser() ? 0 : 1)'; then
+            curl --fail --location --retry 3 https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o "$RUNNER_TEMP/google-chrome.deb"
+            sudo apt-get install -y "$RUNNER_TEMP/google-chrome.deb"
+          fi
+          browser=$(bun -e 'import {resolveBrowser} from "./web/tests/parity/lib/browser.ts"; const browser=resolveBrowser(); if (!browser) throw new Error("Chrome/Chromium is required for Studio acceptance"); console.log(browser);')
+          "$browser" --version
+          echo "VALLE_WEB_PARITY_BROWSER=$browser" >> "$GITHUB_ENV"
+          echo "VALLE_WEB_PLAYER_REQUIRE_BROWSER=1" >> "$GITHUB_ENV"
       - name: Test Rust workspace
         if: inputs.ci
         env:
