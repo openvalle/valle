@@ -442,6 +442,7 @@ struct PrepareState<'a> {
 
 #[derive(Debug, Clone)]
 pub(super) struct PrepareFrameContext {
+    pub(super) scene3d_layer_limit: usize,
     pub(super) render_spec: RenderSpec,
     pub(super) canvas_mapping: crate::frame::CanvasMapping,
     pub(super) camera: Option<crate::frame::ResolvedCamera>,

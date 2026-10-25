@@ -305,7 +305,7 @@ export default function Card(props) { const time = useCurrentTime(); const frame
                 FrameRate::new(30, 1).unwrap(),
             )
             .unwrap(),
-            raster_scale: 1.0,
+            raster_scale: valle_motion::emit::RasterDensity::default(),
             viewport: Extent2d::new(320, 180).unwrap(),
             source_clip: Some(Rect::new(0.0, 0.0, 320.0, 180.0)),
             assets: BTreeMap::new(),

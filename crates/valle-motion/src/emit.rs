@@ -59,9 +59,29 @@ pub struct Scene3DSampling {
     pub budget_limited: bool,
 }
 
+/// Whole-frame raster allowance supplied by the host. Each eligible layer is still capped by
+/// the existing per-layer pixel budget; multiple producers must share the frame allowance.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RasterDensity {
+    pub scale: f64,
+    pub layer_limit: usize,
+}
+
+impl Default for RasterDensity {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            layer_limit: (crate::scene3d::MAX_TOTAL_FRAME_PIXELS / crate::scene3d::MAX_LAYER_PIXELS)
+                as usize,
+        }
+    }
+}
+
 struct EmissionState {
     review_ink: bool,
-    raster_scale: f64,
+    upscale_scene3d: bool,
+    raster_scale: RasterDensity,
     scene3d_sampling: Vec<Scene3DSampling>,
     recording: ProgramRecording,
     scene3d_frames: Vec<crate::SealedScene3DFrame>,
@@ -218,7 +238,7 @@ pub(crate) fn review_text_ink(
         None,
         None,
         true,
-        1.0,
+        RasterDensity::default(),
     )?
     .program;
     // `rect` within `clip`, the screen bounds that the clips and masks around it let through.
@@ -352,7 +372,15 @@ pub fn emit_with_faces(
     naming: FontNaming<'_>,
     faces: Option<&FaceCache>,
 ) -> Result<EmitReport, EmitError> {
-    emit_with_faces_and_catalog(tree, naming, faces, None, None, false, 1.0)
+    emit_with_faces_and_catalog(
+        tree,
+        naming,
+        faces,
+        None,
+        None,
+        false,
+        RasterDensity::default(),
+    )
 }
 
 /// Product emission with immutable interpreted-content descriptors. This is required for
@@ -364,7 +392,15 @@ pub fn emit_program_with_faces(
     faces: Option<&FaceCache>,
     catalog: &dyn valle_draw::program::ProgramResourceCatalog,
 ) -> Result<EmitReport, EmitError> {
-    emit_with_faces_and_catalog(tree, naming, faces, Some(catalog), None, false, 1.0)
+    emit_with_faces_and_catalog(
+        tree,
+        naming,
+        faces,
+        Some(catalog),
+        None,
+        false,
+        RasterDensity::default(),
+    )
 }
 
 /// Emit a Motion program with a source-space clip, used by Timeline `fit: cover`.
@@ -375,7 +411,15 @@ pub fn emit_program_with_faces_clipped(
     catalog: &dyn valle_draw::program::ProgramResourceCatalog,
     clip: Rect,
 ) -> Result<EmitReport, EmitError> {
-    emit_with_faces_and_catalog(tree, naming, faces, Some(catalog), Some(clip), false, 1.0)
+    emit_with_faces_and_catalog(
+        tree,
+        naming,
+        faces,
+        Some(catalog),
+        Some(clip),
+        false,
+        RasterDensity::default(),
+    )
 }
 
 /// Product emission at an output density; layout coordinates remain unchanged.
@@ -385,9 +429,9 @@ pub fn emit_program_at_density(
     faces: Option<&FaceCache>,
     catalog: &dyn valle_draw::program::ProgramResourceCatalog,
     source_clip: Option<Rect>,
-    raster_scale: f64,
+    raster_scale: RasterDensity,
 ) -> Result<EmitReport, EmitError> {
-    if !raster_scale.is_finite() || raster_scale <= 0.0 {
+    if !raster_scale.scale.is_finite() || raster_scale.scale <= 0.0 {
         return Err(EmitError::Program("invalid output raster density".into()));
     }
     emit_with_faces_and_catalog(
@@ -408,7 +452,7 @@ fn emit_with_faces_and_catalog(
     catalog: Option<&dyn valle_draw::program::ProgramResourceCatalog>,
     source_clip: Option<Rect>,
     review_ink: bool,
-    raster_scale: f64,
+    raster_scale: RasterDensity,
 ) -> Result<EmitReport, EmitError> {
     let root_layout = tree
         .layout
@@ -416,6 +460,11 @@ fn emit_with_faces_and_catalog(
         .map_err(|e| EmitError::RootLayout(e.to_string()))?;
     let mut out = EmissionState {
         review_ink,
+        // Reserve a complete layer allowance per producer. Temporal samples keep layout density
+        // until a shared sample allocator exists, so an enhancement cannot invalidate legal input.
+        upscale_scene3d: tree.scene3d.len() <= raster_scale.layer_limit
+            && tree.shutters.is_empty()
+            && tree.echoes.is_empty(),
         raster_scale,
         scene3d_sampling: Vec::new(),
         recording: ProgramRecording::new(),
@@ -1622,20 +1671,8 @@ impl Emitter<'_> {
                     }
                     // Use the largest affine singular value so shear cannot under-sample.
                     // Perspective sampling remains on the conservative layout-density path.
-                    let a = affine_of(np.transform).0;
-                    let trace = a[0] * a[0] + a[1] * a[1] + a[2] * a[2] + a[3] * a[3];
-                    let det = a[0] * a[3] - a[1] * a[2];
-                    let stretch = valle_draw::math::sqrt(
-                        (trace
-                            + valle_draw::math::sqrt((trace * trace - 4.0 * det * det).max(0.0)))
-                            * 0.5,
-                    );
-                    let requested = (self.out.raster_scale * stretch).max(1.0);
-                    let density = valle_draw::math::pow(
-                        2.0,
-                        (valle_draw::math::ln(requested) * core::f64::consts::LOG2_E * 4.0).ceil()
-                            / 4.0,
-                    );
+                    let density =
+                        scene3d_density(self.out.raster_scale.scale, affine_of(np.transform));
                     let used: u64 = self
                         .out
                         .scene3d_frames
@@ -1646,7 +1683,12 @@ impl Emitter<'_> {
                         })
                         .sum();
                     let remaining = crate::scene3d::MAX_TOTAL_FRAME_PIXELS.saturating_sub(used);
-                    let (width, height, limited) = scene3d_extent(dst, density, remaining);
+                    let selected = if self.out.upscale_scene3d {
+                        density
+                    } else {
+                        1.0
+                    };
+                    let (width, height, limited) = scene3d_extent(dst, selected, remaining);
                     self.out.scene3d_sampling.push(Scene3DSampling {
                         node: formula_key
                             .cloned()
@@ -1654,7 +1696,7 @@ impl Emitter<'_> {
                         requested_density: density,
                         width,
                         height,
-                        budget_limited: limited,
+                        budget_limited: limited || selected < density,
                     });
                     let frame = crate::SealedScene3DFrame::new(crate::Scene3DFrameRequest {
                         provider_key: request.provider_key.clone(),
@@ -4611,6 +4653,26 @@ fn project_cluster_ranges(
         .collect()
 }
 
+fn scene3d_density(output_scale: f64, transform: Affine) -> f64 {
+    let a = transform.0;
+    let trace = a[0] * a[0] + a[1] * a[1] + a[2] * a[2] + a[3] * a[3];
+    let det = a[0] * a[3] - a[1] * a[2];
+    let stretch = valle_draw::math::sqrt(
+        (trace + valle_draw::math::sqrt((trace * trace - 4.0 * det * det).max(0.0))) * 0.5,
+    );
+    let requested = (output_scale * stretch).max(1.0);
+    let steps = valle_draw::math::ln(requested) * core::f64::consts::LOG2_E * 4.0;
+    // An f32 rotation is only approximately orthogonal. Keep its roundoff from repeatedly
+    // switching between neighboring density bins at a constant physical scale.
+    let nearest = steps.round();
+    let quantized = if (steps - nearest).abs() < 1.0e-5 {
+        nearest
+    } else {
+        steps.ceil()
+    };
+    valle_draw::math::pow(2.0, quantized / 4.0)
+}
+
 /// Keep legal author input at its original density when no extra sampling fits. The frame
 /// allocator still enforces the global budget across clips and shutter samples.
 fn scene3d_extent(dst: Rect, density: f64, remaining: u64) -> (u32, u32, bool) {
@@ -4649,6 +4711,31 @@ mod tests {
     };
     use takumi_core::style::{TextTransform, WhiteSpaceCollapse};
     use valle_draw::draw::Span;
+
+    #[test]
+    fn scene3d_rotations_keep_a_stable_density_bin() {
+        for degree in 0..=360 {
+            let (sin, cos) = valle_draw::math::sin_cos_f32((degree as f32).to_radians());
+            let transform = valle_draw::program::recording::Affine([
+                f64::from(cos),
+                f64::from(sin),
+                -f64::from(sin),
+                f64::from(cos),
+                0.0,
+                0.0,
+            ]);
+            for scale in [1.0, 2.0, 4.0] {
+                assert_eq!(
+                    super::scene3d_density(scale, transform),
+                    scale,
+                    "rotation {degree}"
+                );
+            }
+        }
+        assert!(
+            super::scene3d_density(1.001, valle_draw::program::recording::Affine::IDENTITY) > 1.0
+        );
+    }
 
     fn span(start: u32, end: u32) -> Span {
         Span { start, end }

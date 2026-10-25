@@ -84,8 +84,45 @@ pub fn prepare_compiled_render_frame_cached(
     let background = prepare_background(BackgroundBand {
         author_srgb_straight: render_spec.output().background().author_color(),
     })?;
+    // A Motion producer can contain several Scene3D rasters or temporal samples. Without
+    // preparing every producer twice, their original pixel demand is not known here. Keep
+    // layout density whenever producers must share the frame, rather than letting an optional
+    // enhancement consume the budget another producer needs for otherwise legal input.
+    let motion_source =
+        |source: &EvaluatedSourceRef| usize::from(source.kind() == CompiledSourceKind::Motion);
+    let producers = evaluated
+        .visual()
+        .iter()
+        .map(|operation| match operation {
+            EvaluatedVisualOperation::Clip(clip) => motion_source(clip.source()),
+            EvaluatedVisualOperation::Transition(transition) => {
+                motion_source(transition.from())
+                    + motion_source(transition.to())
+                    + transition.template().map(motion_source).unwrap_or(0)
+            }
+        })
+        .sum::<usize>()
+        + evaluated
+            .adjustments()
+            .iter()
+            .filter(|adjustment| {
+                matches!(adjustment.effect(), CompiledAdjustmentEffect::Motion { .. })
+            })
+            .count()
+        + evaluated
+            .captions()
+            .iter()
+            .filter(|caption| matches!(caption, crate::render::EvaluatedCaption::Motion(_)))
+            .count();
+    let scene3d_layer_limit = if producers == 1 {
+        (valle_motion::scene3d::MAX_TOTAL_FRAME_PIXELS / valle_motion::scene3d::MAX_LAYER_PIXELS)
+            as usize
+    } else {
+        0
+    };
     let mut state = PrepareState::new_with_context(
         super::PrepareFrameContext {
+            scene3d_layer_limit,
             render_spec: *render_spec,
             canvas_mapping: mapping,
             camera,
@@ -672,17 +709,20 @@ fn prepare_endpoint(
                     .source(source.source_index())
                     .and_then(|compiled| compiled.source_duration())
                     .ok_or_else(|| PrepareError::at(path, "Motion source duration is missing"))?,
-                raster_scale: CanvasMapping::contain(
-                    [render.canvas().width(), render.canvas().height()],
-                    state.frame.render_spec,
-                )
-                .scale
-                    * (clip.transform.width * f64::from(render.canvas().width())
-                        / f64::from(viewport.width()))
-                    .max(
-                        clip.transform.height * f64::from(render.canvas().height())
-                            / f64::from(viewport.height()),
-                    ),
+                raster_scale: valle_motion::emit::RasterDensity {
+                    scale: CanvasMapping::contain(
+                        [render.canvas().width(), render.canvas().height()],
+                        state.frame.render_spec,
+                    )
+                    .scale
+                        * (clip.transform.width * f64::from(render.canvas().width())
+                            / f64::from(viewport.width()))
+                        .max(
+                            clip.transform.height * f64::from(render.canvas().height())
+                                / f64::from(viewport.height()),
+                        ),
+                    layer_limit: state.frame.scene3d_layer_limit,
+                },
                 viewport,
                 source_clip,
                 fps: render.canvas().frame_rate(),

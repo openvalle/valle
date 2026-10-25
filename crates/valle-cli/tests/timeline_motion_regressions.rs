@@ -40,6 +40,107 @@ fn pixel(dir: &Path, name: &str, x: usize, y: usize) -> Vec<u8> {
 }
 
 #[test]
+fn scene3d_density_falls_back_before_multiple_producers_exceed_the_frame_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let model = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../valle-motion/tests/fixtures/scene3d/triangle.glb");
+    std::fs::copy(model, dir.join("triangle.glb")).unwrap();
+    let scene = |key: usize| {
+        format!(
+            r##"<Scene3D key="scene{key}" camera={{{{position:[0,0,3],target:[0,0,0],fov:45}}}} style={{{{position:"absolute",left:0,top:0,width:1920,height:1080}}}}><Mesh key="tri" src="asset://model" rotateY={{props.turn+{key}}} material={{{{type:"unlit",color:"#efb343"}}}}/></Scene3D>"##
+        )
+    };
+    let source = |count: usize| {
+        format!(
+            r#"export const composition={{width:1920,height:1080,fps:1,duration:1}};
+export const controls={{props:{{turn:number({{default:0}})}},assets:{{model:asset({{kind:"model3d",required:true}})}}}};
+export default function Layers(props){{return <Scene style={{{{width:1920,height:1080}}}}>{}</Scene>;}}"#,
+            (0..count).map(scene).collect::<String>()
+        )
+    };
+    std::fs::write(dir.join("three.motion.tsx"), source(3)).unwrap();
+    let check = success(run(
+        dir,
+        &[
+            "motion",
+            "check",
+            "three.motion.tsx",
+            "--asset",
+            "model=triangle.glb",
+            "--cost",
+            "--output-size",
+            "3840x2160",
+        ],
+    ));
+    assert!(check["cost"]["failures"].as_array().unwrap().is_empty());
+    std::fs::write(dir.join("one.motion.tsx"), source(1)).unwrap();
+    put(
+        dir,
+        "three.json",
+        json!({"canvas":{"width":1920,"height":1080,"fps":1},"resources":{"motion":"one.motion.tsx","model":"triangle.glb"},"tracks":{"visual":(0..3).map(|index|json!({"clips":[{"kind":"motion","component":"motion","start":0,"duration":1,"props":{"turn":index*10},"resources":{"model":"model"}}]})).collect::<Vec<_>>()}}),
+    );
+    success(run(
+        dir,
+        &[
+            "timeline",
+            "render",
+            "three.json",
+            "--frame",
+            "0",
+            "--output-size",
+            "3840x2160",
+            "--backend",
+            "raster",
+            "-o",
+            "three.png",
+        ],
+    ));
+    let output = valle_media::codec::read_rgba_png(&dir.join("three.png")).unwrap();
+    assert_eq!((output.width, output.height), (3840, 2160));
+    assert!(
+        output
+            .data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[0] > 100)
+    );
+    // Unequal producers must not let a small scene take the extra budget needed by a larger
+    // producer's original rasters. Both sources are legal together at layout density.
+    std::fs::write(
+        dir.join("large.motion.tsx"),
+        source(2).replace("width:1920,height:1080", "width:3008,height:1692"),
+    )
+    .unwrap();
+    let mut mixed: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("three.json")).unwrap()).unwrap();
+    mixed["resources"]["large"] = json!("large.motion.tsx");
+    mixed["tracks"]["visual"]
+        .as_array_mut()
+        .unwrap()
+        .truncate(2);
+    mixed["tracks"]["visual"][1]["clips"][0]["component"] = json!("large");
+    put(dir, "mixed.json", mixed);
+    success(run(
+        dir,
+        &[
+            "timeline",
+            "render",
+            "mixed.json",
+            "--frame",
+            "0",
+            "--output-size",
+            "3840x2160",
+            "--backend",
+            "raster",
+            "-o",
+            "mixed.png",
+        ],
+    ));
+}
+
+#[test]
 fn shared_video_samples_crossfade_and_standalone_motion_uses_real_video_facts() {
     use valle_media::{
         codec::{Muxer, VideoFrameTransport},

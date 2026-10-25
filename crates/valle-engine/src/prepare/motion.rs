@@ -123,7 +123,7 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
     pub prepared: &'a valle_motion::PreparedScene,
     pub evaluated: &'a crate::render::EvaluatedSourceRef,
     pub source_duration: RationalTime,
-    pub raster_scale: f64,
+    pub raster_scale: valle_motion::emit::RasterDensity,
     pub viewport: Extent2d,
     pub source_clip: Option<valle_draw::Rect>,
     pub fps: FrameRate,
@@ -142,7 +142,7 @@ pub(crate) struct CompiledMotionProgramContext<'a> {
 pub(super) struct MotionFrameInput {
     pub props: BTreeMap<String, valle_motion::MotionValue>,
     pub motion_context: valle_motion::MotionContext,
-    pub raster_scale: f64,
+    pub raster_scale: valle_motion::emit::RasterDensity,
     pub viewport: Extent2d,
     pub source_clip: Option<Rect>,
     pub assets: BTreeMap<String, SemanticAsset>,
