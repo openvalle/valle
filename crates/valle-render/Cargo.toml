@@ -44,6 +44,10 @@ serde_json.workspace = true
 libc.workspace = true
 valle-compiler = { workspace = true, features = ["motion"] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "metal", "wgsl"] }
+pollster = "0.4.0"
+
 [[test]]
 name = "product_executor"
 required-features = ["motion"]
@@ -54,6 +58,10 @@ required-features = ["native"]
 
 [[test]]
 name = "scene3d_fixed_package"
+required-features = ["native"]
+
+[[test]]
+name = "scene3d_gpu_interop"
 required-features = ["native"]
 
 [[example]]
