@@ -1421,7 +1421,7 @@ pub(crate) fn motion_module_paths(input: &Path) -> Result<Vec<PathBuf>> {
 
 fn path_fingerprints(
     paths: &[PathBuf],
-) -> std::collections::BTreeMap<PathBuf, Option<valle_project::files::FileStamp>> {
+) -> std::collections::BTreeMap<PathBuf, Option<crate::watch::WatchStamp>> {
     crate::watch::stamps(&paths.iter().cloned().collect())
 }
 

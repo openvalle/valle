@@ -1,14 +1,44 @@
-//! Poll metadata only; a changed dependency triggers the existing reload/conflict flow.
+//! Poll dependencies for the existing reload/conflict flow. Fingerprint source contents as well
+//! as metadata so same-size edits are detected even when filesystem timestamps do not change.
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
-use valle_project::files::FileStamp;
+use valle_project::{
+    ContentDigest,
+    files::{FileStamp, Kind},
+};
 
-pub(crate) fn stamps(paths: &BTreeSet<PathBuf>) -> BTreeMap<PathBuf, Option<FileStamp>> {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct WatchStamp {
+    metadata: FileStamp,
+    content: Option<ContentDigest>,
+}
+
+impl WatchStamp {
+    fn read(path: &Path) -> anyhow::Result<Self> {
+        let metadata = FileStamp::read(path)?;
+        // Keep large binary media on the cheap metadata path. SVG and glTF are editable text.
+        let text_asset = path.extension().is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("svg") || extension.eq_ignore_ascii_case("gltf")
+        });
+        let content = if text_asset
+            || matches!(
+                Kind::detect(path),
+                Kind::Component | Kind::Shader | Kind::Data | Kind::Other
+            ) {
+            Some(valle_project::folder::digest_file(path)?)
+        } else {
+            None
+        };
+        Ok(Self { metadata, content })
+    }
+}
+
+pub(crate) fn stamps(paths: &BTreeSet<PathBuf>) -> BTreeMap<PathBuf, Option<WatchStamp>> {
     paths
         .iter()
-        .map(|p| (p.clone(), FileStamp::read(p).ok()))
+        .map(|p| (p.clone(), WatchStamp::read(p).ok()))
         .collect()
 }
 
@@ -70,8 +100,18 @@ mod tests {
         let paths = timeline_paths(&file);
         assert!(paths.contains(&file.input.parent().unwrap().join("shared.ts")));
         assert!(paths.iter().any(|p| p.ends_with("image.png")));
+        let shared = root.join("shared.ts");
+        let modified = std::fs::metadata(&shared).unwrap().modified().unwrap();
         let before = stamps(&paths);
-        std::fs::write(root.join("shared.ts"), "export const size=30;").unwrap();
+        std::fs::write(&shared, "export const size=30;").unwrap();
+        // Windows can report identical metadata for a fast same-size write. Reproduce that
+        // timestamp collision without depending on the speed or resolution of this filesystem.
+        std::fs::File::options()
+            .write(true)
+            .open(&shared)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
         assert_ne!(stamps(&paths), before);
     }
 }
