@@ -1907,6 +1907,13 @@ fn static_path_template_rejects_unsupported_paint() {
 fn expanded_maps_explain_why_instancing_was_skipped() {
     let cases = [
         (
+            grid(8).replace(
+                "left: cell.x",
+                "position: \"absolute\", rotate: \"15deg\", left: cell.x",
+            ),
+            "View style.rotate",
+        ),
+        (
             circle_grid(8).replace("fill={dot.color}", "fill={dot.color} stroke=\"#fff\""),
             "Circle stroke",
         ),

@@ -349,7 +349,9 @@ impl<'s> Compiler<'s> {
                     self.illegal(
                         DiagCode::UnknownIdentifier,
                         expression.span(),
-                        format!("unknown runtime identifier `{}`", identifier.name),
+                        if identifier.name == "children" {
+                            "unsupported text children: pass a text prop or wrap JSX children in <Text>".to_owned()
+                        } else { format!("unknown runtime identifier `{}`", identifier.name) },
                     );
                     return None;
                 }

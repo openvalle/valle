@@ -11,6 +11,48 @@ use valle_motion::{
 use valle_timeline::{FrameRate, RationalTime, internal::SampleTime};
 
 #[test]
+fn inline_absolute_position_matches_class_instance_template() {
+    let source = r##"
+        export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+        const RAYS = Array.from({ length: 72 }, (_, i) => ({ id: `r${i}`, x: i * 8 }));
+        export default function Rays() { const time = useCurrentTime();
+          return <Scene>{RAYS.map((ray) => <View key={ray.id} className="absolute"
+            style={{left: ray.x, top: 100, width: 3, height: 20 + time.seconds * 10,
+              backgroundColor: "#ffffff", opacity: 0.5}} />)}</Scene>;
+        }
+        "##;
+    let inline = source
+        .replace("className=\"absolute\"", "")
+        .replace("style={{left:", "style={{position: \"absolute\", left:");
+    let class = compile_motion(source).unwrap().artifact;
+    let inline = compile_motion(&inline).unwrap().artifact;
+    for artifact in [&class, &inline] {
+        assert_eq!(artifact.instance_groups.len(), 1);
+        assert_eq!(artifact.instance_groups[0].rows(), 72);
+    }
+    let fonts = Fonts::default();
+    let options = LayoutOptions {
+        viewport: Viewport::new((640, 360)),
+        fonts: &fonts,
+        styles: None,
+    };
+    for frame in [0, 15, 59, 0] {
+        let ctx = motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+        let programs = [&class, &inline].map(|artifact| {
+            let prepared = prepare_scene(artifact).unwrap();
+            let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+            let (tree, _) = build_tree_profiled(&prepared, &ctx, &props, &options).unwrap();
+            emit(&tree, &default_font_naming)
+                .unwrap()
+                .program
+                .packed_bytes()
+                .unwrap()
+        });
+        assert_eq!(programs[0], programs[1], "frame {frame}");
+    }
+}
+
+#[test]
 fn expanded_absolute_leaves_match_full_evaluation() {
     let source = r##"
         export const composition = { width: 640, height: 360, fps: 30, duration: 2 };

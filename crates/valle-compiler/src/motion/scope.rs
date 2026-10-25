@@ -1405,6 +1405,7 @@ impl<'s> Compiler<'s> {
             return "template has children and needs per-instance layout".into();
         }
         let mut class_name = None;
+        let mut absolute_style = false;
         let mut style_properties = BTreeSet::new();
         let mut attributes = BTreeSet::new();
         for attribute in &element.opening_element.attributes {
@@ -1441,6 +1442,13 @@ impl<'s> Compiler<'s> {
                         PropertyKey::StringLiteral(id) => id.value.as_str(),
                         _ => return "computed style keys prevent a fixed template".into(),
                     };
+                    if tag == "View"
+                        && name == "position"
+                        && matches!(peel_expr(&property.value), Expression::StringLiteral(value) if value.value == "absolute")
+                    {
+                        absolute_style = true;
+                        continue;
+                    }
                     style_properties.insert(name);
                 }
             }
@@ -1503,7 +1511,7 @@ impl<'s> Compiler<'s> {
             return format!("{tag} style.{name} has no pixel-equivalent instance lowering");
         }
         if tag == "View" {
-            if class_name == Some("absolute") {
+            if class_name == Some("absolute") || absolute_style {
                 let layout_property = style_properties.iter().find(|name| {
                     matches!(
                         **name,
@@ -1626,6 +1634,7 @@ impl<'s> Compiler<'s> {
         }
         let mut key_field = None;
         let mut has_absolute_class = false;
+        let mut has_absolute_style = false;
         let mut has_style = false;
         let mut has_circle_radius = false;
         let mut has_circle_fill = false;
@@ -1704,6 +1713,14 @@ impl<'s> Compiler<'s> {
                             PropertyKey::StringLiteral(id) => id.value.as_str(),
                             _ => return None,
                         };
+                        if is_view && name == "position" {
+                            if !matches!(peel_expr(&property.value), Expression::StringLiteral(value) if value.value == "absolute")
+                            {
+                                return None;
+                            }
+                            has_absolute_style = true;
+                            continue;
+                        }
                         if !(if is_circle {
                             name == "opacity"
                         } else if is_path {
@@ -1819,6 +1836,7 @@ impl<'s> Compiler<'s> {
                 _ => return None,
             }
         }
+        has_absolute_class |= has_absolute_style;
         let key_field = key_field?;
         let layout_view = is_component || is_group || is_text || is_view && !has_absolute_class;
         if !element.children.is_empty() && !layout_view {
@@ -1985,6 +2003,12 @@ impl<'s> Compiler<'s> {
         let template_elapsed = template_started.elapsed();
         self.list_depth -= 1;
         let mut template = template;
+        if has_absolute_style && let Some(template) = &mut template {
+            template.styles.retain(|style| style.property != "position");
+            if !template.class_names.iter().any(|name| name == "absolute") {
+                template.class_names.push("absolute".into());
+            }
+        }
         let group_arena = template
             .as_mut()
             .and_then(|template| instance_capture::extract(&self.expr_arena, template));
