@@ -486,7 +486,7 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<StudioHost>) -> Result<(
                     "OK",
                     &[
                         ("Content-Type", "application/octet-stream"),
-                        ("X-Valle-Audio-Source", digest),
+                        ("X-Valle-Audio-Source", &format!("sha256:{digest}")),
                         (
                             "X-Valle-Pcm-Digest",
                             &valle_motion::ContentDigest::of_bytes(&bytes).to_wire(),
@@ -1360,6 +1360,70 @@ fn hex_val(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_analysis_response_uses_the_canonical_source_digest() {
+        use crate::preview_store::PreviewFile;
+        use valle_media::{codec::FloatWavWriter, frame::AudioBuffer};
+        use valle_motion::ContentDigest;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("source.wav");
+        let mut writer = FloatWavWriter::create(&path, 48_000, 1).unwrap();
+        writer
+            .write(&AudioBuffer {
+                samples: vec![0.0, 0.25, -0.25, 0.5],
+                sample_rate: 48_000,
+                channels: 1,
+            })
+            .unwrap();
+        writer.finish().unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let digest = ContentDigest::of_bytes(&bytes);
+        let preview_files = Arc::new(crate::preview_store::PreviewStore::default());
+        preview_files
+            .files
+            .write()
+            .unwrap()
+            .replace(BTreeMap::from([(
+                digest.as_hex(),
+                PreviewFile::Bytes(bytes.into()),
+            )]));
+        let state = Arc::new(StudioHost {
+            runtime_files: BTreeMap::new(),
+            assets_dir: None,
+            preview_files,
+            motion_source: None,
+            source_paths: Mutex::new(Default::default()),
+            config_json: Arc::new(RwLock::new("{}".into())),
+            sse: SseBroadcaster::default(),
+            capture_dir: None,
+            library: None,
+            timeline_file: None,
+            last_report: RwLock::new(None),
+        });
+        let response = request_round_trip(
+            &state,
+            "GET",
+            &format!("/preview-assets/{}/analysis-pcm", digest.as_hex()),
+            b"",
+            "",
+        );
+        let body = response
+            .windows(4)
+            .position(|bytes| bytes == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        let headers = std::str::from_utf8(&response[..body]).unwrap();
+        assert!(headers.starts_with("HTTP/1.1 200"), "{headers}");
+        assert!(headers.contains(&format!("X-Valle-Audio-Source: {}\r\n", digest.to_wire())));
+        assert!(headers.contains(&format!(
+            "X-Valle-Pcm-Digest: {}\r\n",
+            ContentDigest::of_bytes(&response[body..]).to_wire()
+        )));
+        assert!(headers.contains("X-Valle-Sample-Rate: 48000\r\n"));
+        assert_eq!(response.len() - body, 4 * 4);
+    }
 
     #[test]
     fn stylesheet_response_has_browser_css_mime_type() {
