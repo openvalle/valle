@@ -62,19 +62,36 @@ impl ResourceProvider for SharedResourceProvider {
         state.begin_frame();
         let object;
         let report;
-        if matches!(
+        let video = matches!(
+            request.sample(),
+            valle_engine::resource::ResourceSample::SourceTime(_)
+        ) && matches!(
             request.expected(),
-            valle_engine::resource::ExternalResourceDesc::Scene3d
-        ) {
+            valle_engine::resource::ExternalResourceDesc::VisualFrame { .. }
+        );
+        if video
+            || matches!(
+                request.expected(),
+                valle_engine::resource::ExternalResourceDesc::Scene3d
+            )
+        {
             if let Some(cached) = state.lookup_request(request)? {
                 object = cached;
                 report = state.frame_report();
             } else {
-                let work = state.prepare_scene3d(request)?;
-                let before = state.frame_report();
-                drop(state);
-                self.accumulate(before)?;
-                let image = work.render(&mut self.report.scene3d)?;
+                let image = if video {
+                    let work = state.prepare_video(request)?;
+                    let before = state.frame_report();
+                    drop(state);
+                    self.accumulate(before)?;
+                    work.render(request)?
+                } else {
+                    let work = state.prepare_scene3d(request)?;
+                    let before = state.frame_report();
+                    drop(state);
+                    self.accumulate(before)?;
+                    work.render(&mut self.report.scene3d)?
+                };
                 state = self.lock();
                 state.begin_frame();
                 object = state.cache_fulfilled(request, image)?;

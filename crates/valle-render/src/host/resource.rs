@@ -3,7 +3,12 @@
 //! This module owns paths, bytes, decoder cursors and generated Scene3D rasters. It never sees a
 //! authoring document or RenderGraph: every decision is driven by one immutable [`ResourceRequest`].
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use skia_safe::{Data, images};
 use thiserror::Error;
@@ -263,6 +268,90 @@ struct ResourceCacheCounters {
     bypasses: u64,
 }
 
+struct VideoDecoder {
+    path: PathBuf,
+    transport: VideoFrameTransport,
+    source: Option<LibavVideoSource>,
+    memory: Option<valle_engine::motion::memory::MemoryLease>,
+}
+
+/// Only requests for the same source share a cursor. Opening, decoding and pixel conversion
+/// run without the provider's cache lock, so unrelated videos and resources can progress.
+pub(super) struct VideoWork(Arc<Mutex<VideoDecoder>>);
+
+impl VideoWork {
+    pub(super) fn render(
+        &self,
+        request: &ResourceRequest,
+    ) -> Result<SkiaExternalObject, NativeResourceError> {
+        let ExternalResourceDesc::VisualFrame {
+            extent,
+            pixel_layout,
+        } = request.expected()
+        else {
+            unreachable!("video work requires a visual request")
+        };
+        let ResourceSample::SourceTime(time) = request.sample() else {
+            unreachable!("video work requires a source time")
+        };
+        let video_error = |error: anyhow::Error| NativeResourceError::Video {
+            digest: request.key().content.to_string(),
+            reason: error.to_string(),
+        };
+        let mut decoder = valle_engine::motion::cpu::blocking(|| {
+            self.0.lock().unwrap_or_else(|error| error.into_inner())
+        });
+        if decoder.source.is_none() {
+            let memory = valle_engine::motion::memory::reserve(
+                valle_engine::motion::memory::MemoryKind::Media,
+                u64::from(extent.width()) * u64::from(extent.height()) * 12,
+            )?;
+            let source = if valle_engine::motion::cpu::is_budgeted() {
+                LibavVideoSource::open_with_transport_and_threads(
+                    &decoder.path,
+                    decoder.transport,
+                    1,
+                )
+            } else {
+                LibavVideoSource::open_with_transport(&decoder.path, decoder.transport)
+            }
+            .map_err(video_error)?;
+            decoder.source = Some(source);
+            decoder.memory = memory;
+        }
+        let source_frame = decoder
+            .source
+            .as_mut()
+            .expect("decoder initialized")
+            .frame_at_lazy(time.as_f64())
+            .map_err(video_error)?;
+        drop(decoder);
+        if source_frame.decoded_gpu().is_some() {
+            return Ok(SkiaExternalObject::visual_decoded(
+                request.key().clone(),
+                *pixel_layout,
+                *extent,
+                source_frame,
+            )?);
+        }
+        let frame = source_frame.rgba().map_err(video_error)?;
+        if frame.width != extent.width() || frame.height != extent.height() {
+            return Err(NativeResourceError::VisualExtent {
+                expected_width: extent.width(),
+                expected_height: extent.height(),
+                actual_width: frame.width,
+                actual_height: frame.height,
+            });
+        }
+        Ok(SkiaExternalObject::visual_rgba8_as(
+            request.key().clone(),
+            *pixel_layout,
+            *extent,
+            &frame.data,
+        )?)
+    }
+}
+
 /// Mutable resource ownership. Native schedules share one instance between preparation tasks;
 /// returned immutable images retain their own lifetime independently of this cache.
 pub struct NativeResourceProvider {
@@ -275,8 +364,7 @@ pub struct NativeResourceProvider {
     frame_cache: ResourceCacheCounters,
     frame_scene3d: Scene3dFrameReport,
     bytes: BTreeMap<ContentDigest, Arc<[u8]>>,
-    video: BTreeMap<ContentDigest, LibavVideoSource>,
-    video_memory: BTreeMap<ContentDigest, Option<valle_engine::motion::memory::MemoryLease>>,
+    video: BTreeMap<ContentDigest, Arc<Mutex<VideoDecoder>>>,
     video_transport: VideoFrameTransport,
     defer_scene3d_dof: bool,
     defer_scene3d_geometry: bool,
@@ -306,7 +394,6 @@ impl NativeResourceProvider {
             frame_scene3d: Scene3dFrameReport::default(),
             bytes: BTreeMap::new(),
             video: BTreeMap::new(),
-            video_memory: BTreeMap::new(),
             video_transport: VideoFrameTransport::Cpu,
             defer_scene3d_dof: false,
             defer_scene3d_geometry: false,
@@ -345,17 +432,12 @@ impl NativeResourceProvider {
     }
 
     pub(super) fn retain_media(&mut self, fulfilled_requests: &[ResourceRequest]) {
-        self.video_memory.retain(|digest, _| {
-            fulfilled_requests.iter().any(|request| {
-                &request.key().content == digest
-                    && matches!(request.sample(), ResourceSample::SourceTime(_))
-            })
-        });
-        self.video.retain(|digest, _| {
-            fulfilled_requests.iter().any(|request| {
-                &request.key().content == digest
-                    && matches!(request.sample(), ResourceSample::SourceTime(_))
-            })
+        self.video.retain(|digest, decoder| {
+            Arc::strong_count(decoder) > 1
+                || fulfilled_requests.iter().any(|request| {
+                    &request.key().content == digest
+                        && matches!(request.sample(), ResourceSample::SourceTime(_))
+                })
         });
     }
 
@@ -412,7 +494,7 @@ impl NativeResourceProvider {
             generation: self.cache_generation,
             request: request.cache_identity()?,
         };
-        // Independent preparation tasks can finish the same immutable 3D request together.
+        // Independent preparation tasks can finish the same immutable request together.
         // Keep the first admitted allocation rather than retaining or rejecting its duplicate.
         if let Some(existing) = self.objects.get(&identity)? {
             return Ok(existing);
@@ -451,71 +533,27 @@ impl NativeResourceProvider {
                 )?;
                 Ok(object)
             }
-            ResourceSample::SourceTime(time) => {
-                let path = source_path(&source)?;
-                if !self.video.contains_key(&request.key().content) {
-                    let memory = valle_engine::motion::memory::reserve(
-                        valle_engine::motion::memory::MemoryKind::Media,
-                        u64::from(extent.width()) * u64::from(extent.height()) * 12,
-                    )?;
-                    self.video_memory.insert(request.key().content, memory);
-                    self.video.insert(
-                        request.key().content,
-                        if valle_engine::motion::cpu::is_budgeted() {
-                            LibavVideoSource::open_with_transport_and_threads(
-                                &path,
-                                self.video_transport,
-                                1,
-                            )
-                        } else {
-                            LibavVideoSource::open_with_transport(&path, self.video_transport)
-                        }
-                        .map_err(|error| NativeResourceError::Video {
-                            digest: request.key().content.to_string(),
-                            reason: error.to_string(),
-                        })?,
-                    );
-                }
-                let decoder = self
-                    .video
-                    .get_mut(&request.key().content)
-                    .expect("decoder was inserted");
-                let source_frame = decoder.frame_at_lazy(time.as_f64()).map_err(|error| {
-                    NativeResourceError::Video {
-                        digest: request.key().content.to_string(),
-                        reason: error.to_string(),
-                    }
-                })?;
-                if source_frame.decoded_gpu().is_some() {
-                    return Ok(SkiaExternalObject::visual_decoded(
-                        request.key().clone(),
-                        layout,
-                        extent,
-                        source_frame,
-                    )?);
-                }
-                let frame = source_frame
-                    .rgba()
-                    .map_err(|error| NativeResourceError::Video {
-                        digest: request.key().content.to_string(),
-                        reason: error.to_string(),
-                    })?;
-                if frame.width != extent.width() || frame.height != extent.height() {
-                    return Err(NativeResourceError::VisualExtent {
-                        expected_width: extent.width(),
-                        expected_height: extent.height(),
-                        actual_width: frame.width,
-                        actual_height: frame.height,
-                    });
-                }
-                Ok(SkiaExternalObject::visual_rgba8_as(
-                    request.key().clone(),
-                    layout,
-                    extent,
-                    &frame.data,
-                )?)
-            }
+            ResourceSample::SourceTime(_) => self.prepare_video(request)?.render(request),
         }
+    }
+
+    pub(super) fn prepare_video(
+        &mut self,
+        request: &ResourceRequest,
+    ) -> Result<VideoWork, NativeResourceError> {
+        let digest = request.key().content;
+        if let Some(decoder) = self.video.get(&digest) {
+            return Ok(VideoWork(Arc::clone(decoder)));
+        }
+        let path = source_path(&self.source(digest)?)?;
+        let decoder = Arc::new(Mutex::new(VideoDecoder {
+            path,
+            transport: self.video_transport,
+            source: None,
+            memory: None,
+        }));
+        self.video.insert(digest, Arc::clone(&decoder));
+        Ok(VideoWork(decoder))
     }
 
     pub(super) fn prepare_scene3d(
@@ -868,8 +906,8 @@ impl ResourceProvider for NativeResourceProvider {
         self.objects.clear();
         // Keep bounded immutable topology. Clearing it whenever another frame waits for bytes
         // repeats geometry construction and serializes the shared provider under pressure.
-        self.video.clear();
-        self.video_memory.clear();
+        self.video
+            .retain(|_, decoder| Arc::strong_count(decoder) > 1);
     }
 
     fn begin_frame(&mut self) {
