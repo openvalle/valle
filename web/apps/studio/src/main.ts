@@ -5,7 +5,13 @@ import {
   requireImported,
   type ImportIntent,
 } from "./project-client.ts";
-import { loadStudioHost, timelineContextFromSnapshot, type StudioHost } from "./host.ts";
+import {
+  loadStudioHost,
+  playerRuntimeAssetsFromStudioBoot,
+  timelineContextFromSnapshot,
+  type StudioHost,
+} from "./host.ts";
+import { prepareBrowserPlayerRuntime } from "valle-engine";
 import type { ValleStudioApp } from "./studio-shell.ts";
 import { startTimelineStudio } from "./timeline-workspace.ts";
 import { StudioSourceEditor } from "./source-editor.ts";
@@ -38,6 +44,11 @@ if (bootResponse.home || new URLSearchParams(location.search).has("home")) {
 async function startDocument(shell: ValleStudioApp): Promise<void> {
   const host = await loadStudioHost(location.search);
   globalThis.valleStudioHost = host;
+  // The eventual player load observes initialization failures through the same cached promises.
+  void prepareBrowserPlayerRuntime(
+    playerRuntimeAssetsFromStudioBoot(host.boot),
+    location.href,
+  ).catch(() => undefined);
   await shell.initialize(host);
   const [sourceEditor, initialTimeline] = await Promise.all([
     StudioSourceEditor.mount(host),

@@ -3,6 +3,7 @@ import type { TimelineDocument, TimelineDocumentSchema } from "./internal-timeli
 
 import type { CanonicalTimelineDocument } from "./runtime/product-controller.ts";
 import { resolveEngineRuntimeAssets } from "./runtime-assets.ts";
+import { loadEngineWasm } from "./engine-wasm.ts";
 
 interface TimelineCompilerWasmModule {
   default(wasmUrl: string): Promise<unknown>;
@@ -213,8 +214,6 @@ export interface TimelineCompilerRuntimeOptions {
   runtimeAssets: unknown;
   runtimeBaseUrl?: string | URL;
 }
-
-const moduleLoads = new Map<string, Promise<TimelineCompilerWasmModule>>();
 
 /**
  * Load the Rust/WASM Timeline and Motion compiler surface without initializing the product
@@ -435,17 +434,7 @@ function loadTimelineCompilerWasm(
   moduleUrl: string,
   wasmUrl: string,
 ): Promise<TimelineCompilerWasmModule> {
-  const key = `${moduleUrl}\n${wasmUrl}`;
-  const existing = moduleLoads.get(key);
-  if (existing) return existing;
-  const loading = (async () => {
-    const module = (await import(moduleUrl)) as unknown as TimelineCompilerWasmModule;
-    await module.default(wasmUrl);
-    return module;
-  })();
-  moduleLoads.set(key, loading);
-  void loading.catch(() => moduleLoads.delete(key));
-  return loading;
+  return loadEngineWasm(moduleUrl, wasmUrl) as Promise<TimelineCompilerWasmModule>;
 }
 
 export interface MotionPreparationInput {

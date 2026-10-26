@@ -34,6 +34,7 @@ import { createDecoderRing, keyframeThumbnails, type DecoderRing } from "../medi
 import { BrowserAudioWindowReader } from "../media/audio-source.ts";
 import { resolvePlayerRuntimeAssets, type PlayerRuntimeAssets } from "../runtime-assets.ts";
 import { canonicalizeTimelineDocumentWithWasm } from "../compiler.ts";
+import { loadEngineWasm } from "../engine-wasm.ts";
 import {
   ProductFramePlannerPool,
   type ProductFramePlanningInput,
@@ -3458,9 +3459,19 @@ function emptyPlayerStats(): PlayerStats {
 }
 
 async function loadWasmModule(moduleUrl: string, wasmUrl: string): Promise<ValleWasmModule> {
-  const module = (await import(moduleUrl)) as unknown as ValleWasmModule;
-  await module.default(wasmUrl);
-  return module;
+  return loadEngineWasm(moduleUrl, wasmUrl) as Promise<ValleWasmModule>;
+}
+
+/** Start package-independent initialization while Studio captures and compiles its inputs. */
+export async function prepareBrowserPlayerRuntime(
+  runtimeAssets: unknown,
+  runtimeBaseUrl?: string | URL,
+): Promise<void> {
+  const assets = resolvePlayerRuntimeAssets(runtimeAssets, runtimeBaseUrl);
+  await Promise.all([
+    loadWasmModule(assets.engine.glue, assets.engine.wasm),
+    loadCanvasKit(assets.canvasKit),
+  ]);
 }
 
 async function loadCanvasKit(assets: PlayerRuntimeAssets["canvasKit"]): Promise<CanvasKit> {

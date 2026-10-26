@@ -3,6 +3,7 @@ export {
   CANVASKIT_VERSION,
   BrowserValleWebPlayer,
   createBrowserValleWebPlayer,
+  prepareBrowserPlayerRuntime,
   resolveAssetUrl,
   type BrowserResourceLocator,
   type CanonicalTimelineDocument,
