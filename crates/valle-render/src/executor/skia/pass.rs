@@ -1973,6 +1973,9 @@ fn commit_output(
         return Ok(());
     }
     if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Raster
+        // Use the canonical delivery conversion on x86: its integer bytes must not depend on
+        // the platform Skia runtime shader's float evaluation/rounding path.
+        && cfg!(target_arch = "aarch64")
         && spec.dither() != valle_engine::resource::Dither::None
         && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
     {

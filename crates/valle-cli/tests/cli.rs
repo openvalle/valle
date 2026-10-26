@@ -1104,9 +1104,17 @@ fn timeline_and_project_render_without_internal_package_arguments() {
         "-o",
         project_frame.to_str().unwrap(),
     ]);
-    assert_eq!(
-        std::fs::read(frame).unwrap(),
-        std::fs::read(project_frame).unwrap()
+    let timeline_bytes = std::fs::read(frame).unwrap();
+    let project_bytes = std::fs::read(project_frame).unwrap();
+    assert!(
+        timeline_bytes == project_bytes,
+        "Timeline and Project PNG differ ({} vs {} bytes), first differing byte {:?}",
+        timeline_bytes.len(),
+        project_bytes.len(),
+        timeline_bytes
+            .iter()
+            .zip(&project_bytes)
+            .position(|(a, b)| a != b),
     );
     let mut timeline: Value = serde_json::from_slice(&std::fs::read(&input).unwrap()).unwrap();
     timeline["resources"]["hero"] = serde_json::json!(video);
