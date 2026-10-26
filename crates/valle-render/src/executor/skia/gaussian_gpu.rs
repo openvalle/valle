@@ -98,6 +98,7 @@ fn scaled_axis(
     horizontal: bool,
     scale: f32,
     mut input: Option<ImageFilter>,
+    output_scale: f32,
 ) -> Result<Option<ImageFilter>, DrawError> {
     let matrix = |value| {
         Matrix::scale(if horizontal {
@@ -122,10 +123,10 @@ fn scaled_axis(
     let variance = (scale * scale - 1.0) * (4.0 + 0.25) / 3.0;
     let local_sigma = (sigma * sigma - variance).max(0.0).sqrt() / scale;
     let blurred = direct_axis(local_sigma, horizontal, input)?;
-    if scale == 1.0 {
+    if scale == output_scale {
         return Ok(blurred);
     }
-    image_filters::matrix_transform(&matrix(scale), sampling, blurred)
+    image_filters::matrix_transform(&matrix(scale / output_scale), sampling, blurred)
         .ok_or_else(|| DrawError::Unsupported("Gaussian upsample".into()))
         .map(Some)
 }
@@ -134,9 +135,9 @@ fn axis(
     sigma: f32,
     horizontal: bool,
     input: Option<ImageFilter>,
-) -> Result<Option<ImageFilter>, DrawError> {
+) -> Result<(Option<ImageFilter>, f32), DrawError> {
     if sigma <= DIRECT_SIGMA {
-        return direct_axis(sigma, horizontal, input);
+        return Ok((direct_axis(sigma, horizontal, input)?, 1.0));
     }
     // Grid spacing is always a power of two, anchored in filter coordinates. Sigma only
     // changes the kernel and the continuous blend; it never slides a sampling grid.
@@ -145,11 +146,19 @@ fn axis(
         scale *= 2.0;
     }
     let weight = sigma / (DIRECT_SIGMA * scale) - 1.0;
-    let coarse = scaled_axis(sigma, horizontal, 2.0 * scale, input.clone())?;
+    // Keep the horizontal result on its finest active grid until the vertical pass finishes.
+    // The two separable linear operations commute with horizontal resampling; delaying it
+    // avoids processing full-width intermediate images in every vertical pyramid branch.
+    let output_scale = if horizontal {
+        if weight == 1.0 { 2.0 * scale } else { scale }
+    } else {
+        1.0
+    };
+    let coarse = scaled_axis(sigma, horizontal, 2.0 * scale, input.clone(), output_scale)?;
     if weight == 1.0 {
-        return Ok(coarse);
+        return Ok((coarse, output_scale));
     }
-    let fine = scaled_axis(sigma, horizontal, scale, input)?;
+    let fine = scaled_axis(sigma, horizontal, scale, input, output_scale)?;
     thread_local! {
         static MIX: Result<RuntimeEffect, String> = RuntimeEffect::make_for_blender(
             "uniform float weight; half4 main(half4 src, half4 dst) { return half4(mix(float4(dst), float4(src), weight)); }", None);
@@ -164,9 +173,10 @@ fn axis(
             .make_blender(Data::new_copy(&weight.to_ne_bytes()), None)
             .ok_or_else(|| DrawError::Unsupported("Gaussian level blend".into()))
     })?;
-    image_filters::blend(blender, fine, coarse, None)
+    let mixed = image_filters::blend(blender, fine, coarse, None)
         .ok_or_else(|| DrawError::Unsupported("Gaussian level blend filter".into()))
-        .map(Some)
+        .map(Some)?;
+    Ok((mixed, output_scale))
 }
 
 pub(super) fn filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawError> {
@@ -182,7 +192,18 @@ pub(super) fn filter(filter: &Filter) -> Result<Option<ImageFilter>, DrawError> 
         } => (*sigma_x, *sigma_y),
         _ => return Err(DrawError::Unsupported("stable Gaussian filter kind".into())),
     };
-    let blurred = axis(sy, false, axis(sx, true, None)?)?;
+    let (horizontal, scale) = axis(sx, true, None)?;
+    let (mut blurred, _) = axis(sy, false, horizontal)?;
+    if scale != 1.0 {
+        blurred = Some(
+            image_filters::matrix_transform(
+                &Matrix::scale((scale, 1.0)),
+                SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
+                blurred,
+            )
+            .ok_or_else(|| DrawError::Unsupported("Gaussian final horizontal upsample".into()))?,
+        );
+    }
     if let Filter::DropShadow { offset, color, .. } = filter {
         let tint =
             color_filters::blend_with_color_space(straight_color(*color), None, BlendMode::SrcIn)
