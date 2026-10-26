@@ -419,9 +419,32 @@ try {
     "library import save acknowledged",
   );
   await click('[aria-label="Close project panel"]');
+  // Hold a clean-state reload until the next import has edited the draft. A late
+  // disk read must not replace that newer working copy before its save starts.
+  await evaluate(`(()=>{
+    const host=globalThis.valleStudioHost;
+    const load=host.loadTimelineSnapshot;
+    host.loadTimelineSnapshot=async()=>{
+      host.loadTimelineSnapshot=load;
+      const snapshot=await load.call(host);
+      await new Promise(resolve=>{
+        globalThis.releaseStaleTimelineRead=resolve;
+        globalThis.staleTimelineReadStarted=true;
+      });
+      return snapshot;
+    };
+    document.querySelector('valle-studio-app').dispatchEvent(new CustomEvent(
+      'studio-host-event',{detail:{type:'project',data:{}}}
+    ));
+  })()`);
+  await poll(
+    () => evaluate("globalThis.staleTimelineReadStarted"),
+    Boolean,
+    "clean-state Timeline reload started",
+  );
   // A file notification may arrive after the import edits the draft but before its save.
   await evaluate(
-    `(()=>{const shell=document.querySelector('valle-studio-app');const notify=event=>{if(event.detail.intent.type==='dirty'&&event.detail.state.dirty){shell.removeEventListener('studio-statechange',notify);shell.dispatchEvent(new CustomEvent('studio-host-event',{detail:{type:'project',data:{}}}));}};shell.addEventListener('studio-statechange',notify);})()`,
+    `(()=>{const shell=document.querySelector('valle-studio-app');const notify=event=>{if(event.detail.intent.type==='dirty'&&event.detail.state.dirty){shell.removeEventListener('studio-statechange',notify);globalThis.releaseStaleTimelineRead();shell.dispatchEvent(new CustomEvent('studio-host-event',{detail:{type:'project',data:{}}}));}};shell.addEventListener('studio-statechange',notify);})()`,
   );
   const pausedSave = new Promise<string>((resolve) => {
     const listener = (event: MessageEvent) => {
@@ -438,7 +461,18 @@ try {
   });
   const source = `export const composition={width:32,height:32,fps:4,duration:1};export default function Card(){return <Scene><View style={{width:32,height:32,backgroundColor:'#67e8f9'}}/></Scene>;}`;
   await drop([{ name: "card.motion.tsx", bytes: Buffer.from(source).toString("base64") }]);
-  await poll(disk, (value) => value.tracks.visual.length === 2, "component drop and save");
+  const imported = await poll(
+    async () => ({
+      timeline: await disk(),
+      ui: await state(),
+      error: await evaluate(
+        `(()=>{const status=document.querySelector('#timelineImportStatus');return status&&!status.hidden?status.textContent:null})()`,
+      ),
+    }),
+    (value) => value.timeline.tracks.visual.length === 2 || Boolean(value.error),
+    "component drop and save",
+  );
+  assert(imported.timeline.tracks.visual.length === 2, JSON.stringify(imported));
   const saveRequest = await deadline(pausedSave, "paused component save");
   await ready("component preview");
   assert(

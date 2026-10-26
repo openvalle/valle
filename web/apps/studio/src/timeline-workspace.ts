@@ -2492,7 +2492,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         setConflict(`External ${storageKind} update; keep this draft or reload the saved content`);
       }
     } else {
-      void reloadProject();
+      void reloadProject(true);
     }
   }
 
@@ -2601,9 +2601,9 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     }
   }
 
-  async function reloadProject(): Promise<void> {
+  async function reloadProject(automatic = false): Promise<void> {
     try {
-      await reloadSavedSnapshot();
+      await reloadSavedSnapshot(automatic);
     } catch (error) {
       const message = `Cannot reload ${storageKind}: ${error instanceof Error ? error.message : String(error)}`;
       setConflict(message);
@@ -2611,24 +2611,38 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     }
   }
 
-  async function reloadSavedSnapshot(): Promise<void> {
+  async function reloadSavedSnapshot(automatic: boolean): Promise<void> {
+    const startingCopy = workingCopy;
+    const startingRevision = baseRevision;
     const previousStatus = shell.shellState.previewStatus;
     const previousMessage = shell.shellState.previewMessage;
-    shell.dispatchIntent({
-      type: "preview-status",
-      status: "updating",
-      message: "Reloading saved files…",
-    });
-    if (sourceEditor && !(await sourceEditor.reload())) {
+    if (!automatic) {
       shell.dispatchIntent({
         type: "preview-status",
-        status: previousStatus,
-        message: previousMessage,
+        status: "updating",
+        message: "Reloading saved files…",
       });
-      return;
+    }
+    if (sourceEditor) {
+      if (automatic) await sourceEditor.refreshFromDisk();
+      else if (!(await sourceEditor.reload())) {
+        shell.dispatchIntent({
+          type: "preview-status",
+          status: previousStatus,
+          message: previousMessage,
+        });
+        return;
+      }
     }
     await options.beforeReload?.();
     const next = (await loadTimeline()) as StudioConfig;
+    // Loading includes asynchronous source discovery and preview compilation.
+    // An edit or save made in that time owns the newer working copy.
+    if (
+      automatic &&
+      (workingCopy !== startingCopy || baseRevision !== startingRevision || dirty || saving)
+    )
+      return;
     draftPreview.invalidate();
     config = next;
     showWarnings(next.warnings);
@@ -2778,7 +2792,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     if (dirty) {
       setConflict(`External ${storageKind} update; keep this draft or reload the saved content`);
     } else {
-      void reloadProject();
+      void reloadProject(true);
     }
   });
 
