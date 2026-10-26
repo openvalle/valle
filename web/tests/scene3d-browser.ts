@@ -146,6 +146,8 @@ export default function Main(){const time=useCurrentTime();return <Scene>
     const result = new Promise<Record<string, unknown>>((resolve) => {
       resolveReport = resolve;
     });
+    const stages: unknown[] = [];
+    const started = Date.now();
     const preview = join(root, "web/test-dist/preview");
     host = Bun.serve({
       hostname: "127.0.0.1",
@@ -154,6 +156,13 @@ export default function Main(){const time=useCurrentTime();return <Scene>
         const url = new URL(request.url);
         if (url.pathname === "/result") {
           resolveReport(await request.json());
+          return new Response("ok");
+        }
+        if (url.pathname === "/progress") {
+          const stage = { elapsedMs: Date.now() - started, ...(await request.json()) };
+          stages.push(stage);
+          await Bun.write(join(directory, "progress.json"), JSON.stringify(stages, null, 2));
+          console.error(`Scene3D ${name}: ${JSON.stringify(stage)}`);
           return new Response("ok");
         }
         if (

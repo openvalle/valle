@@ -6,7 +6,17 @@ import {
 } from "../../../packages/engine/src/runtime/product-controller.ts";
 import { exportBrowserVideo } from "../../../packages/engine/src/export.ts";
 
+async function progress(stage: string, detail?: unknown): Promise<void> {
+  const response = await fetch("/progress", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ stage, detail }),
+  });
+  if (!response.ok) throw new Error(`Cannot report Scene3D progress: ${stage}`);
+}
+
 async function run() {
+  await progress("load configuration");
   const config = (await (await fetch("/config.json")).json()) as BrowserValleWebPlayerOptions & {
     resourceBytesUrl: string;
     resourceLocators?: BrowserValleWebPlayerOptions["assets"];
@@ -25,6 +35,7 @@ async function run() {
     JSON.parse(config.timelineJson).document.canvas.width >= 3840 ? 4 * 1024 ** 3 : undefined;
   try {
     for (const [index, gpu] of [false, true].entries()) {
+      await progress("create player", { gpu });
       const started = performance.now();
       players.push(
         await createBrowserValleWebPlayer({
@@ -45,6 +56,7 @@ async function run() {
       const pixels: Uint8ClampedArray[] = [];
       const timings = [];
       for (let i = 0; i < players.length; i++) {
+        await progress("render frame", { frame, gpu: i === 1 });
         const started = performance.now();
         await players[i]!.renderFrame(frame);
         const canvas = canvases[i]!;
@@ -111,10 +123,17 @@ async function run() {
       );
     let encoded: Record<string, unknown> | undefined;
     if (new URLSearchParams(location.search).has("encode")) {
+      await progress("export video");
       for (const player of players) await player.close();
       const exported = await exportBrowserVideo(
         { ...config, gpu: true, renderMode: "reference", runtimeBaseUrl: location.href },
-        { includeAudio: false, videoBitrate: 4_000_000 },
+        {
+          includeAudio: false,
+          videoBitrate: 4_000_000,
+          onProgress: (value) => {
+            if (value.framesCompleted % 10 === 0) void progress("export video", value);
+          },
+        },
       );
       if (
         !exported.blob?.size ||
@@ -125,6 +144,7 @@ async function run() {
       const video = document.createElement("video"),
         url = URL.createObjectURL(exported.blob);
       try {
+        await progress("decode video", { bytes: exported.blob.size });
         const loaded = new Promise<void>((resolve, reject) => {
           video.onloadeddata = () => resolve();
           video.onerror = () => reject(new Error("Scene3D MP4 cannot be decoded"));
@@ -140,6 +160,7 @@ async function run() {
         const seeked = new Promise<void>((resolve) => {
           video.onseeked = () => resolve();
         });
+        await progress("seek decoded video");
         video.currentTime = 0.5;
         await seeked;
         const canvas = canvases[1]!,
@@ -165,6 +186,7 @@ async function run() {
         URL.revokeObjectURL(url);
       }
     }
+    await progress("complete");
     return {
       status: "ok",
       stats: { creationMs, rows, scene3dGpu: diagnostics, encoded },
