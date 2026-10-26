@@ -316,7 +316,12 @@ async function run(
       });
       const bytes = Buffer.from(result.data, "base64");
       await writeFile(join(evidence, `${name}.png`), bytes);
-      return createHash("sha256").update(bytes).digest("hex");
+      // Error badges and panel shadows can overlap the CSS screenshot's canvas edge.
+      // Compare the actual retained canvas pixels, while keeping screenshots as evidence.
+      const pixels = await evaluate(
+        `(()=>{const source=document.querySelector('#studioPlayer').canvas;const copy=document.createElement('canvas');copy.width=source.width;copy.height=source.height;const context=copy.getContext('2d');context.drawImage(source,0,0);return [...context.getImageData(0,0,copy.width,copy.height).data];})()`,
+      );
+      return createHash("sha256").update(Buffer.from(pixels)).digest("hex");
     };
     const before = await state();
     const original = String(before.source);
