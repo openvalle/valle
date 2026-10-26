@@ -11,14 +11,18 @@ const DIRECT_SIGMA: f32 = 16.0;
 
 fn effect(pairs: usize) -> Result<RuntimeEffect, DrawError> {
     fn compile(pairs: usize) -> Result<RuntimeEffect, String> {
-        let mut source =
-            String::from("uniform shader image; uniform float2 axis; uniform float center;");
+        let mut source = String::from("uniform shader image; uniform float2 axis;");
         for i in 1..=pairs {
             source.push_str(&format!("uniform float2 tap{i};"));
         }
-        source.push_str("half4 main(float2 xy) { float4 sum = float4(image.eval(xy)) * center;");
+        // Accumulate deviations from the center instead of summing the DC component at every
+        // tap. Constant HDR colors then remain exact even on truncating F16 CPU backends;
+        // rounding a weight sum just below one must not darken each pyramid level.
+        source.push_str(
+            "half4 main(float2 xy) { float4 middle = float4(image.eval(xy)); float4 sum = middle;",
+        );
         for i in 1..=pairs {
-            source.push_str(&format!("if (tap{i}.y > 0) {{ float2 delta = axis * tap{i}.x; sum += (float4(image.eval(xy + delta)) + float4(image.eval(xy - delta))) * tap{i}.y; }}"));
+            source.push_str(&format!("if (tap{i}.y > 0) {{ float2 delta = axis * tap{i}.x; sum += ((float4(image.eval(xy + delta)) - middle) + (float4(image.eval(xy - delta)) - middle)) * tap{i}.y; }}"));
         }
         source.push_str("return half4(sum); }");
         RuntimeEffect::make_for_shader(source, None)
@@ -67,7 +71,6 @@ fn direct_axis(
         "axis",
         if horizontal { &[1.0, 0.0] } else { &[0.0, 1.0] },
     )?;
-    set(&mut builder, "center", &[weights[radius]])?;
     for pair in 0..pairs {
         let a = pair * 2 + 1;
         let first = weights.get(radius + a).copied().unwrap_or(0.0);
