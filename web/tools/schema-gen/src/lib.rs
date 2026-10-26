@@ -79,6 +79,9 @@ pub struct StudioCapabilitiesWire {
     pub save_timeline: bool,
     pub edit_motion_props: bool,
     pub write_motion_source: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub compile_cache: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -272,6 +275,9 @@ pub enum MotionContextWire {
         #[serde(rename = "verifiedBindingBundleJson")]
         #[ts(rename = "verifiedBindingBundleJson")]
         verified_binding_bundle_json: String,
+        #[serde(rename = "resourceBytesUrl", skip_serializing_if = "Option::is_none")]
+        #[ts(rename = "resourceBytesUrl", optional)]
+        resource_bytes_url: Option<String>,
     },
     Error {
         #[serde(rename = "protocolVersion")]

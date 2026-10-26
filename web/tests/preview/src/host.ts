@@ -72,6 +72,11 @@ async function fetchConfig(): Promise<DemoConfig> {
   ) {
     throw new Error("/config.json must contain one complete fixed package");
   }
+  if (typeof raw.resourceBytesUrl === "string") {
+    const response = await fetch(raw.resourceBytesUrl);
+    if (!response.ok) throw new Error(`resource bytes returned ${response.status}`);
+    raw.resourceBytes = new Uint8Array(await response.arrayBuffer());
+  }
   return raw as DemoConfig;
 }
 
@@ -138,6 +143,7 @@ player.configure({
   timelineJson: config.timelineJson,
   resourceManifestJson: config.resourceManifestJson,
   verifiedBindingBundleJson: config.verifiedBindingBundleJson,
+  resourceBytes: config.resourceBytes,
   assets: config.assets,
   assetBaseUrl: "/assets/",
   proxyBase: config.proxyBase ?? null,

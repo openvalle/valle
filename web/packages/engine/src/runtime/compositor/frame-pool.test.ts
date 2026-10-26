@@ -217,10 +217,10 @@ test("bootstrap is versioned only by the enclosing worker protocol", () => {
   expect(PRODUCT_FRAME_WORKER_PROTOCOL_VERSION).toBe(3);
 });
 
-test("bootstrap opens exactly the four fixed-package members", () => {
-  const calls: string[][] = [];
+test("bootstrap opens fixed-package metadata and binary resources together", () => {
+  const calls: unknown[][] = [];
   const engine = {
-    open_fixed_package: (...members: string[]) => {
+    open_fixed_package: (...members: unknown[]) => {
       calls.push(members);
       return JSON.stringify({
         renderId: RENDER_ID,
@@ -242,9 +242,12 @@ test("bootstrap opens exactly the four fixed-package members", () => {
     "binding-bundle",
   );
   bootstrap.expectedRenderId = RENDER_ID;
+  bootstrap.resourceBytes = new Uint8Array([8, 9]);
 
   expect(applyProductEngineBootstrap(engine, bootstrap)).toBe(RENDER_ID);
-  expect(calls).toEqual([["fixed-package", "timeline", "resource-manifest", "binding-bundle"]]);
+  expect(calls).toEqual([
+    ["fixed-package", "timeline", "resource-manifest", "binding-bundle", bootstrap.resourceBytes],
+  ]);
   expect(() =>
     assertProductFrameWorkerRequest({
       protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,

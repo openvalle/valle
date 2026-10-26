@@ -14,7 +14,9 @@ import { findMotionStructure } from "./project-motion-edit.ts";
 
 export type StudioBoot = StudioBootWire;
 export type StudioSession = StudioBoot["session"];
-type MotionContextOk = Extract<MotionContextWire, { status: "ok" }>;
+type MotionContextOk = Extract<MotionContextWire, { status: "ok" }> & {
+  resourceBytes?: Uint8Array;
+};
 
 export interface StudioEvent {
   type: "timeline" | "project" | "motion" | "runtime";
@@ -75,6 +77,7 @@ export type TimelineRenderContext = TimelineRenderProjection &
         resourceManifestJson: string;
         resourceManifest: ResourceManifest;
         verifiedBindingBundleJson: string;
+        resourceBytes?: Uint8Array;
       }
     | {
         fixedPackageManifestJson?: never;
@@ -88,7 +91,7 @@ export interface MotionRequest {
   clipId?: string;
 }
 
-export type MotionContext = MotionContextWire;
+export type MotionContext = MotionContextWire & { resourceBytes?: Uint8Array };
 
 type TimelineVisualItem = TimelineDocument["document"]["visual"]["tracks"][number]["items"][number];
 
@@ -122,6 +125,8 @@ export type MediaFactsResult =
       resources: PreviewResourceInput[];
       assets: Array<{ id: string; url: string }>;
       inputDependencies: Record<string, string>;
+      resourceBytes?: { digest: string; url: string };
+      timings?: Record<string, number>;
     }
   | {
       status: "error";
@@ -142,6 +147,7 @@ export type TimelinePreviewResult =
         resourceManifestJson: string;
         resourceManifest: ResourceManifest;
         verifiedBindingBundleJson: string;
+        resourceBytes?: Uint8Array;
       };
       inputDependencies?: Record<string, string>;
       motionSourceMetadata?: Record<string, MotionSourceMetadata>;
@@ -319,7 +325,14 @@ export class TimelineFileHost extends BaseStudioHost {
   }
 
   async loadTimeline(): Promise<TimelineContext> {
-    return timelineContextFromSnapshot(this.boot, await this.fetchJson("/timeline/get"));
+    const snapshot = await this.fetchJson("/timeline/get");
+    if (isRecord(snapshot.render) && typeof snapshot.render.resourceBytesUrl === "string") {
+      const response = await this.fetcher(snapshot.render.resourceBytesUrl);
+      if (!response.ok) throw new Error(`resource bytes returned ${response.status}`);
+      snapshot.render.resourceBytes = new Uint8Array(await response.arrayBuffer());
+      delete snapshot.render.resourceBytesUrl;
+    }
+    return timelineContextFromSnapshot(this.boot, snapshot);
   }
 
   private async post(url: string, body: unknown): Promise<Record<string, unknown>> {
@@ -365,7 +378,13 @@ export class MotionFileHost extends BaseStudioHost {
 
   async loadMotion(_request: MotionRequest = {}): Promise<MotionContext> {
     const { authorInputs: _authorInputs, ...context } = await this.fetchJson("/config.json");
-    return assertMotionContext(context);
+    const result = assertMotionContext(context);
+    if (result.status === "ok" && result.resourceBytesUrl) {
+      const response = await this.fetcher(result.resourceBytesUrl);
+      if (!response.ok) throw new Error(`resource bytes returned ${response.status}`);
+      result.resourceBytes = new Uint8Array(await response.arrayBuffer());
+    }
+    return result;
   }
 }
 
@@ -465,6 +484,8 @@ export function assertMotionContext(value: unknown): MotionContext {
       "resourceManifestJson",
       "resourceManifest",
       "verifiedBindingBundleJson",
+      "resourceBytesUrl",
+      "resourceBytes",
     ]) ||
     !isSha256Wire(value.artifactDigest) ||
     !isMotionArtifact(value.artifact) ||
@@ -526,6 +547,7 @@ function assertTimelineContext(value: unknown): TimelineContext {
       "fixedPackageManifestJson",
       "resourceManifestJson",
       "verifiedBindingBundleJson",
+      "resourceBytes",
     ]) ||
     typeof value.render.timelineJson !== "string" ||
     !isRecord(value.render.timeline) ||
@@ -724,6 +746,7 @@ export function projectMotionContextFromAdmittedPreview(
     fixedPackageManifestJson,
     timelineJson: config.render.timelineJson,
     timeline: config.render.timeline,
+    resourceBytes: config.render.resourceBytes,
     resourceManifestJson,
     resourceManifest,
     verifiedBindingBundleJson,

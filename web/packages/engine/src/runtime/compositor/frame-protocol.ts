@@ -19,9 +19,11 @@ export interface ProductEngineWire {
     transparent: boolean,
   ): string;
   motion_kernel_definition?(id: string): string;
+  motion_kernel_definition_bytes?(id: string): Uint8Array;
   run_motion_kernel?(
     definitionId: string,
     definitionJson: string,
+    resourceBytes: Uint8Array,
     inputJson: string,
     compact: boolean,
   ): Uint8Array;
@@ -51,6 +53,7 @@ export interface ProductEngineWire {
     timelineJson: string,
     resourceManifestJson: string,
     verifiedBindingBundleJson: string,
+    resourceBytes: Uint8Array,
   ): string;
   frame_at_seconds(renderId: string, seconds: number): bigint;
   sample_at_seconds(renderId: string, seconds: number): bigint;
@@ -101,7 +104,7 @@ export interface ProductEngineWire {
 }
 
 export interface ProductWasmModule {
-  default(wasmUrl: string): Promise<{ memory: WebAssembly.Memory }>;
+  default(options: { module_or_path: string }): Promise<{ memory: WebAssembly.Memory }>;
   canonicalize_timeline_document(timelineJson: string): string;
   ProductEngine: new () => ProductEngineWire;
 }
@@ -114,6 +117,7 @@ export interface ProductEngineBootstrap {
   timelineJson: string;
   resourceManifestJson: string;
   verifiedBindingBundleJson: string;
+  resourceBytes?: Uint8Array;
   expectedRenderId: string;
 }
 
@@ -263,12 +267,17 @@ export interface MotionKernelJob {
   definitionId: string;
   inputJson: string;
 }
+
+export interface MotionKernelDefinition {
+  json: string;
+  resourceBytes: Uint8Array;
+}
 export type ProductFrameWorkerResponse =
   | (WorkerMessageBase & {
       type: "motionWork";
       request: ProductFrameRequest;
       jobs: MotionKernelJob[];
-      definitions: Record<string, string>;
+      definitions: Record<string, MotionKernelDefinition>;
     })
   | (WorkerMessageBase & { type: "callResult"; renderId: string; result?: unknown; error?: string })
   | (WorkerMessageBase & {
@@ -343,6 +352,7 @@ export function applyProductEngineBootstrap(
       bootstrap.timelineJson,
       bootstrap.resourceManifestJson,
       bootstrap.verifiedBindingBundleJson,
+      bootstrap.resourceBytes ?? new Uint8Array(),
     ),
   );
   if (bootstrap.expectedRenderId && receipt.renderId !== bootstrap.expectedRenderId) {
@@ -423,12 +433,18 @@ export function assertProductFrameWorkerRequest(
     ] as const;
     requireExactFields(
       bootstrap,
-      [...fields, ...(Object.hasOwn(bootstrap, "gpuScene3d") ? ["gpuScene3d"] : [])],
+      [
+        ...fields,
+        ...(Object.hasOwn(bootstrap, "gpuScene3d") ? ["gpuScene3d"] : []),
+        ...(Object.hasOwn(bootstrap, "resourceBytes") ? ["resourceBytes"] : []),
+      ],
       "Product frame worker bootstrap",
     );
     if (Object.hasOwn(bootstrap, "gpuScene3d") && typeof bootstrap.gpuScene3d !== "boolean") {
       throw new TypeError("Product frame worker gpuScene3d must be a boolean");
     }
+    if (bootstrap.resourceBytes !== undefined && !(bootstrap.resourceBytes instanceof Uint8Array))
+      throw new TypeError("Product frame worker resourceBytes must be binary");
     for (const field of fields.slice(0, -1)) {
       if (typeof bootstrap[field] !== "string" || bootstrap[field].length === 0) {
         throw new TypeError(`Product frame worker bootstrap ${field} is required`);
@@ -503,11 +519,12 @@ export function assertProductFrameWorkerResponse(
     const definitions = requireRecord(message.definitions, "Motion definitions");
     if (Object.keys(definitions).length > 4) throw new TypeError("Motion definition count budget");
     let definitionBytes = 0;
-    for (const [id, json] of Object.entries(definitions)) {
+    for (const [id, value] of Object.entries(definitions)) {
       requireRenderId(id, "Motion definition id");
-      if (typeof json !== "string" || json.length > 64 * 1024 ** 2)
+      const definition = requireRecord(value, "Motion definition");
+      if (typeof definition.json !== "string" || !(definition.resourceBytes instanceof Uint8Array))
         throw new TypeError("invalid Motion definition");
-      definitionBytes += json.length;
+      definitionBytes += definition.json.length + definition.resourceBytes.byteLength;
     }
     if (definitionBytes > 64 * 1024 ** 2) throw new TypeError("Motion definition byte budget");
     const keys = new Set<string>();

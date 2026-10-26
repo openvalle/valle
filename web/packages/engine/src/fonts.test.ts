@@ -16,10 +16,8 @@ test("font URLs load lazily once, preserve stack order and share duplicate reque
     expect(requested).toEqual([]);
     const first = load();
     expect(load()).toBe(first);
-    const result = JSON.parse(await first);
-    expect(
-      result.map((font: { bytesBase64: string }) => atob(font.bytesBase64).charCodeAt(0)),
-    ).toEqual([1, 9, 1, 2]);
+    const result = await first;
+    expect(result.map((font) => font[0])).toEqual([1, 9, 1, 2]);
     expect(requested).toEqual([
       "https://fonts.example.test/assets/brand.ttf",
       "https://fonts.example.test/assets/fallback.otf",
@@ -43,7 +41,7 @@ test("failed font requests can be retried and input bytes are snapshotted", asyn
     const load = createMotionFontLoader([bytes, "brand.ttf"], "https://fonts.example.test/");
     bytes[0] = 99;
     await expect(load()).rejects.toThrow("font request failed (404)");
-    expect(JSON.parse(await load())[0].bytesBase64).toBe("AQ==");
+    expect((await load())[0]).toEqual(new Uint8Array([1]));
     expect(attempts).toBe(2);
   } finally {
     globalThis.fetch = original;

@@ -12,6 +12,7 @@ import {
   type ProductFrameWorkerResponse,
   type ProductWasmModule,
   type MotionKernelJob,
+  type MotionKernelDefinition,
 } from "./frame-protocol.ts";
 import { decodePackedAbi, RESOURCE_REQUESTS_ABI } from "../../abi/packed.ts";
 import { supportsScene3dGpu } from "./scene3d-gpu-request.ts";
@@ -96,7 +97,7 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
     lastReadyAt = null;
     lastReleaseMs = 0;
     const wasm = (await import(message.bootstrap.wasmModuleUrl)) as ProductWasmModule;
-    await wasm.default(message.bootstrap.wasmUrl);
+    await wasm.default({ module_or_path: message.bootstrap.wasmUrl });
     const canonicalTimelineJson = wasm.canonicalize_timeline_document(
       message.bootstrap.timelineJson,
     );
@@ -112,6 +113,7 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
           bootstrap.timelineJson,
           bootstrap.resourceManifestJson,
           bootstrap.verifiedBindingBundleJson,
+          bootstrap.resourceBytes ?? new Uint8Array(),
         ),
       );
       const openedRenderId = receipt.renderId;
@@ -196,15 +198,18 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
               r.transparent,
             ),
           ) as MotionKernelJob[];
-          const definitions: Record<string, string> = {};
+          const definitions: Record<string, MotionKernelDefinition> = {};
           for (const input of work) {
             if (!motionDefinitionsSent.has(input.definitionId))
-              definitions[input.definitionId] = engine.motion_kernel_definition!(
-                input.definitionId,
-              );
+              definitions[input.definitionId] = {
+                json: engine.motion_kernel_definition!(input.definitionId),
+                resourceBytes: engine.motion_kernel_definition_bytes!(input.definitionId),
+              };
             const length =
-              definitions[input.definitionId]?.length ??
-              motionDefinitionsSent.get(input.definitionId)!;
+              (definitions[input.definitionId]
+                ? definitions[input.definitionId]!.json.length +
+                  definitions[input.definitionId]!.resourceBytes.byteLength
+                : undefined) ?? motionDefinitionsSent.get(input.definitionId)!;
             motionDefinitionsSent.delete(input.definitionId);
             motionDefinitionsSent.set(input.definitionId, length);
           }
@@ -216,14 +221,19 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
             motionDefinitionsSent.delete(motionDefinitionsSent.keys().next().value!);
           }
           if (work.length) {
-            scope.postMessage({
-              protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
-              type: "motionWork",
-              id: job.id,
-              request: r,
-              jobs: work,
-              definitions,
-            });
+            scope.postMessage(
+              {
+                protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+                type: "motionWork",
+                id: job.id,
+                request: r,
+                jobs: work,
+                definitions,
+              },
+              Object.values(definitions).map(
+                (definition) => definition.resourceBytes.buffer as ArrayBuffer,
+              ),
+            );
             continue;
           }
         }

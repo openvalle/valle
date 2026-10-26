@@ -3,8 +3,8 @@
 use super::motion::{
     self, BuiltMotionProgram, CompiledMotionProgramContext, MotionFrameInput, ProgramPrepareError,
 };
+use crate::fixed_package::{ResourceByteRange, ResourceBytes};
 use crate::resource::ContentDigest;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -24,13 +24,14 @@ pub(crate) const MIN_KERNEL_NODES: usize = 128;
 struct Definition {
     artifact: valle_motion::SceneArtifact,
     fonts: Vec<FontDefinition>,
+    resource_bytes_digest: ContentDigest,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FontDefinition {
     digest: ContentDigest,
-    bytes: String,
+    bytes: ResourceByteRange,
     generic: bool,
 }
 
@@ -47,10 +48,17 @@ pub(crate) enum Stage {
     Complete(BTreeMap<String, BuiltMotionProgram>),
 }
 
+struct CachedDefinition {
+    source: u32,
+    id: String,
+    json: String,
+    bytes: Vec<u8>,
+}
+
 #[derive(Default)]
 pub(crate) struct MotionPreparation {
     pub(crate) stage: Option<Stage>,
-    definitions: VecDeque<(u32, String, String)>,
+    definitions: VecDeque<CachedDefinition>,
     oversized_sources: BTreeSet<u32>,
 }
 
@@ -58,8 +66,15 @@ impl MotionPreparation {
     pub fn definition(&self, id: &str) -> Option<&str> {
         self.definitions
             .iter()
-            .find(|(_, key, _)| key == id)
-            .map(|(_, _, json)| json.as_str())
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.json.as_str())
+    }
+
+    pub fn definition_bytes(&self, id: &str) -> Option<&[u8]> {
+        self.definitions
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.bytes.as_slice())
     }
 
     fn definition_for(
@@ -71,45 +86,53 @@ impl MotionPreparation {
         if self.oversized_sources.contains(&source) {
             return Ok(None);
         }
-        if let Some(index) = self.definitions.iter().position(|entry| entry.0 == source) {
+        if let Some(index) = self
+            .definitions
+            .iter()
+            .position(|entry| entry.source == source)
+        {
             let entry = self.definitions.remove(index).expect("located definition");
-            let id = entry.1.clone();
+            let id = entry.id.clone();
             self.definitions.push_back(entry);
             return Ok(Some(id));
         }
-        // Base64 fonts alone can exceed the wire budget. Do not encode and discard the same
-        // immutable font pack on every frame before falling back to ordinary preparation.
-        let font_bytes: usize = fonts
-            .iter()
-            .map(|(_, bytes, _)| bytes.len().div_ceil(3) * 4)
-            .sum();
+        // Skip oversized immutable packs before copying them into a kernel definition.
+        let font_bytes: usize = fonts.iter().map(|(_, bytes, _)| bytes.len()).sum();
         if font_bytes >= MAX_DEFINITION_BYTES {
             self.oversized_sources.insert(source);
             return Ok(None);
         }
+        let mut binary = ResourceBytes::default();
+        let fonts = fonts
+            .iter()
+            .map(|(digest, bytes, generic)| FontDefinition {
+                digest: *digest,
+                bytes: binary.append(bytes),
+                generic: *generic,
+            })
+            .collect();
         let json = serde_json::to_string(&Definition {
             artifact: prepared.artifact().clone(),
-            fonts: fonts
-                .iter()
-                .map(|(digest, bytes, generic)| FontDefinition {
-                    digest: *digest,
-                    bytes: STANDARD.encode(bytes),
-                    generic: *generic,
-                })
-                .collect(),
+            fonts,
+            resource_bytes_digest: ContentDigest::of_bytes(&binary.bytes),
         })
         .map_err(failure)?;
-        if json.len() > MAX_DEFINITION_BYTES {
+        if json.len() + binary.bytes.len() > MAX_DEFINITION_BYTES {
             self.oversized_sources.insert(source);
             return Ok(None);
         }
         let id = ContentDigest::of_bytes(json.as_bytes()).to_string();
-        self.definitions.push_back((source, id.clone(), json));
+        self.definitions.push_back(CachedDefinition {
+            source,
+            id: id.clone(),
+            json,
+            bytes: binary.bytes,
+        });
         while self.definitions.len() > 4
             || self
                 .definitions
                 .iter()
-                .map(|entry| entry.2.len())
+                .map(|entry| entry.json.len() + entry.bytes.len())
                 .sum::<usize>()
                 > MAX_DEFINITION_BYTES
         {
@@ -193,10 +216,13 @@ impl MotionKernel {
         &mut self,
         definition_id: &str,
         definition_json: &str,
+        resource_bytes: &[u8],
         input_json: &str,
         compact: bool,
     ) -> Result<Vec<u8>, ProgramPrepareError> {
-        if definition_json.len() > MAX_DEFINITION_BYTES || input_json.len() > 8 * 1024 * 1024 {
+        if definition_json.len().saturating_add(resource_bytes.len()) > MAX_DEFINITION_BYTES
+            || input_json.len() > 8 * 1024 * 1024
+        {
             return Err(failure("Motion kernel input byte budget"));
         }
         if self
@@ -208,13 +234,16 @@ impl MotionKernel {
                 return Err(failure("Motion definition digest mismatch"));
             }
             let definition: Definition = serde_json::from_str(definition_json).map_err(failure)?;
+            if ContentDigest::of_bytes(resource_bytes) != definition.resource_bytes_digest {
+                return Err(failure("Motion resource bytes digest mismatch"));
+            }
             let mut fonts = Vec::with_capacity(definition.fonts.len());
             for font in definition.fonts {
-                let bytes = STANDARD.decode(&font.bytes).map_err(failure)?;
+                let bytes = font.bytes.resolve(resource_bytes).map_err(failure)?;
                 if ContentDigest::of_bytes(&bytes) != font.digest {
                     return Err(failure("Motion font digest mismatch"));
                 }
-                fonts.push((font.digest, Arc::from(bytes), font.generic));
+                fonts.push((font.digest, bytes, font.generic));
             }
             let scene = valle_motion::prepare_owned_scene(definition.artifact).map_err(failure)?;
             self.scene = Some((definition_id.into(), scene, fonts));
@@ -311,7 +340,7 @@ mod tests {
     use crate::resource::Extent2d;
     use valle_timeline::FrameRate;
 
-    fn fixture() -> (Definition, MotionFrameInput) {
+    fn fixture() -> (Definition, MotionFrameInput, Vec<u8>) {
         let artifact = valle_compiler::motion::compile_motion(r##"
 export const composition = { width: 320, height: 180, duration: 1 };
 export const controls = { props: { alpha: number({ default: 1, min: 0, max: 1 }) } };
@@ -330,9 +359,13 @@ export default function Card(props) { const time = useCurrentTime(); const frame
             artifact,
             fonts: vec![FontDefinition {
                 digest: ContentDigest::of_bytes(bytes),
-                bytes: STANDARD.encode(bytes),
+                bytes: ResourceByteRange {
+                    offset: 0,
+                    length: bytes.len(),
+                },
                 generic: true,
             }],
+            resource_bytes_digest: ContentDigest::of_bytes(bytes),
         };
         let input = MotionFrameInput {
             props: BTreeMap::from([("alpha".into(), valle_motion::MotionValue::Number(0.75))]),
@@ -348,14 +381,14 @@ export default function Card(props) { const time = useCurrentTime(); const frame
             assets: BTreeMap::new(),
             model_resources: BTreeMap::new(),
         };
-        (definition, input)
+        (definition, input, bytes.to_vec())
     }
 
     #[test]
     fn oversized_font_packs_do_not_create_or_retry_kernel_definitions() {
-        let (definition, _) = fixture();
+        let (definition, _, _) = fixture();
         let scene = valle_motion::prepare_owned_scene(definition.artifact).unwrap();
-        let bytes: Arc<[u8]> = vec![0; 26 * 1024 * 1024].into();
+        let bytes: Arc<[u8]> = vec![0; 33 * 1024 * 1024].into();
         let font = (ContentDigest::of_bytes(&bytes), bytes, true);
         let mut preparation = MotionPreparation::default();
         assert!(
@@ -386,7 +419,7 @@ export default function Card(props) { const time = useCurrentTime(); const frame
 
     #[test]
     fn independent_motion_kernels_preserve_fonts_props_and_random_frame_order() {
-        let (definition, mut input) = fixture();
+        let (definition, mut input, binary) = fixture();
         let json = serde_json::to_string(&definition).unwrap();
         let id = ContentDigest::of_bytes(json.as_bytes()).to_string();
         let scene = valle_motion::prepare_owned_scene(definition.artifact).unwrap();
@@ -396,7 +429,7 @@ export default function Card(props) { const time = useCurrentTime(); const frame
             .map(|font| {
                 (
                     font.digest,
-                    Arc::from(STANDARD.decode(&font.bytes).unwrap()),
+                    font.bytes.resolve(&binary).unwrap(),
                     font.generic,
                 )
             })
@@ -418,7 +451,13 @@ export default function Card(props) { const time = useCurrentTime(); const frame
             )
             .unwrap();
             let packet = kernels[index % 2]
-                .run(&id, &json, &serde_json::to_string(&input).unwrap(), false)
+                .run(
+                    &id,
+                    &json,
+                    &binary,
+                    &serde_json::to_string(&input).unwrap(),
+                    false,
+                )
                 .unwrap();
             let actual = decode(&packet).unwrap();
             assert_eq!(
@@ -433,20 +472,27 @@ export default function Card(props) { const time = useCurrentTime(); const frame
         }
         assert!(
             kernels[0]
-                .run(&id, "", &serde_json::to_string(&input).unwrap(), false)
+                .run(&id, "", &[], &serde_json::to_string(&input).unwrap(), false)
                 .is_ok()
         );
     }
 
     #[test]
     fn kernel_rejects_definition_drift_bad_fonts_and_truncated_or_duplicate_results() {
-        let (mut definition, input) = fixture();
+        let (mut definition, input, binary) = fixture();
         let json = serde_json::to_string(&definition).unwrap();
         let id = ContentDigest::of_bytes(json.as_bytes()).to_string();
         let input = serde_json::to_string(&input).unwrap();
         let mut kernel = MotionKernel::default();
-        assert!(kernel.run(&id, "{}", &input, false).is_err());
-        let packet = kernel.run(&id, &json, &input, false).unwrap();
+        assert!(kernel.run(&id, "{}", &binary, &input, false).is_err());
+        assert!(
+            MotionKernel::default()
+                .run(&id, &json, b"changed bytes", &input, false)
+                .unwrap_err()
+                .to_string()
+                .contains("resource bytes digest mismatch")
+        );
+        let packet = kernel.run(&id, &json, &binary, &input, false).unwrap();
         for bytes in [&packet[..3], &packet[..packet.len() - 1]] {
             assert!(decode(bytes).is_err());
         }
@@ -464,7 +510,7 @@ export default function Card(props) { const time = useCurrentTime(); const frame
         let id = ContentDigest::of_bytes(json.as_bytes()).to_string();
         assert!(
             kernel
-                .run(&id, &json, &input, false)
+                .run(&id, &json, &binary, &input, false)
                 .unwrap_err()
                 .to_string()
                 .contains("font digest mismatch")

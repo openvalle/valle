@@ -131,6 +131,7 @@ test("covered project fonts avoid downloading defaults; missing glyphs keep fall
       input: "/project/bound-font.motion.tsx",
       assets: [{ name: "brand", path: "brand.ttf", alias: "brand" }],
     },
+    resourceBytes: font,
     resourceInputs: [
       {
         id: "resource:brand",
@@ -138,7 +139,7 @@ test("covered project fonts avoid downloading defaults; missing glyphs keep fall
         facts: {
           kind: "font" as const,
           descriptor: { faceIndex: 0, variationAxes: {} },
-          bytesBase64: font.toBase64(),
+          bytes: { offset: 0, length: font.byteLength },
         },
       },
     ],
@@ -265,7 +266,7 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
     {
       id: "resource:asset_0",
       entry: { kind: "font", digest, descriptor },
-      facts: { kind: "font", descriptor, bytesBase64: font.toBase64() },
+      facts: { kind: "font", descriptor, bytes: { offset: 0, length: font.byteLength } },
     },
   ];
   const request = {
@@ -278,6 +279,7 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
       assets: [{ name: "caption", alias: "asset_0", path: "/project/font.ttf" }],
     },
     instances: [instance],
+    resourceBytes: font,
     resourceInputs,
   };
   const result = await compileStudioPreview(request);
@@ -299,6 +301,7 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
     id: 16,
     runtimeAssets,
     runtimeBaseUrl,
+    resourceBytes: font,
     resourceInputs,
     authorTimeline: JSON.parse(JSON.stringify(result.authorTimeline)),
     instances: [{ ...instance, clipPath: result.instances[0]!.clipPath }],
@@ -329,6 +332,7 @@ test("standalone caption Studio uses a caption track and preserves the saved pre
     id: 18,
     runtimeAssets,
     runtimeBaseUrl,
+    resourceBytes: font,
     resourceInputs,
     authorTimeline: normalized.authorTimeline,
     instances: [{ ...instance, clipPath: normalized.instances[0]!.clipPath }],
@@ -495,11 +499,12 @@ test("300 Timeline captions compile their track's template once and retain exact
       },
       fonts: [],
     })),
+    resourceBytes: font,
     resourceInputs: [
       {
         id: "resource:font",
         entry: { kind: "font", digest, descriptor },
-        facts: { kind: "font", descriptor, bytesBase64: font.toBase64() },
+        facts: { kind: "font", descriptor, bytes: { offset: 0, length: font.byteLength } },
       },
     ],
   };
@@ -532,6 +537,7 @@ test("300 Timeline captions compile their track's template once and retain exact
         p.timelineJson,
         p.resourceManifestJson,
         p.verifiedBindingBundleJson,
+        p.resourceBytes,
       ),
     );
     const seen = new Map<number, string>();

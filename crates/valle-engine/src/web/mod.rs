@@ -21,12 +21,24 @@ pub use product::ProductEngine;
 
 /// Build and self-admit a complete preview package from captured author inputs.
 #[wasm_bindgen::prelude::wasm_bindgen]
-pub fn prepare_preview_package(input_json: &str) -> Result<String, wasm_bindgen::JsError> {
-    let input: crate::preview_package::PreviewPackageInput = serde_json::from_str(input_json)
-        .map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))?;
+pub fn prepare_preview_package(
+    input_json: &str,
+    resource_bytes: Vec<u8>,
+) -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsError> {
+    let mut input: crate::preview_package::PreviewPackageInput =
+        serde_json::from_str(input_json)
+            .map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))?;
+    input.resource_bytes = resource_bytes;
     let prepared = crate::preview_package::prepare_preview_package(input)
         .map_err(|error| wasm_bindgen::JsError::new(&error))?;
-    serde_json::to_string(&prepared).map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))
+    let json = serde_json::to_string(&prepared)
+        .map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))?;
+    let result = js_sys::Array::new();
+    result.push(&wasm_bindgen::JsValue::from_str(&json));
+    result.push(&js_sys::Uint8Array::from(
+        prepared.resource_bytes.as_slice(),
+    ));
+    Ok(result.into())
 }
 
 /// Rewrite one directly authored declaration in the current source bytes.
@@ -66,17 +78,28 @@ pub fn with_motion_fonts(
     timeline_json: &str,
     manifest_json: &str,
     bundle_json: &str,
-    fonts_json: &str,
-) -> Result<String, wasm_bindgen::JsError> {
-    let fonts: Vec<crate::fixed_package::MotionFontBytes> = serde_json::from_str(fonts_json)
-        .map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))?;
+    resource_bytes: &[u8],
+    fonts: js_sys::Array,
+) -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsError> {
+    let fonts: Vec<_> = fonts
+        .iter()
+        .map(|bytes| crate::fixed_package::MotionFontBytes {
+            bytes: js_sys::Uint8Array::new(&bytes).to_vec(),
+        })
+        .collect();
     let package = crate::fixed_package::with_motion_fonts(
         package_json,
         timeline_json,
         manifest_json,
         bundle_json,
+        resource_bytes,
         &fonts,
     )
     .map_err(|error| wasm_bindgen::JsError::new(&error))?;
-    serde_json::to_string(&package).map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))
+    let json = serde_json::to_string(&package)
+        .map_err(|error| wasm_bindgen::JsError::new(&error.to_string()))?;
+    let result = js_sys::Array::new();
+    result.push(&wasm_bindgen::JsValue::from_str(&json));
+    result.push(&js_sys::Uint8Array::from(package.resource_bytes.as_slice()));
+    Ok(result.into())
 }

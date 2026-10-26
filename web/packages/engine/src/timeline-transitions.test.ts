@@ -132,6 +132,9 @@ test("all 13 Timeline transitions render exact endpoints and analytic midpoints 
           string,
           string
         >;
+        const resourceBytes = new Uint8Array(
+          await (await fetch(new URL(config.resourceBytesUrl!, ready.url))).arrayBuffer(),
+        );
         if (!config.fixedPackageManifestJson) throw new Error(JSON.stringify(config));
         engine = new ProductEngine();
         const receipt = JSON.parse(
@@ -140,6 +143,7 @@ test("all 13 Timeline transitions render exact endpoints and analytic midpoints 
             config.timelineJson!,
             config.resourceManifestJson!,
             config.verifiedBindingBundleJson!,
+            resourceBytes,
           ),
         );
         executor = new CanvasKitExecutor(ck, {

@@ -127,6 +127,10 @@ impl FrameCompiler {
         self.caches.motion_preparation.definition(id)
     }
 
+    pub(crate) fn motion_definition_bytes(&self, id: &str) -> Option<&[u8]> {
+        self.caches.motion_preparation.definition_bytes(id)
+    }
+
     pub(crate) fn capture_motion_jobs(
         &mut self,
         render_id: RenderId,

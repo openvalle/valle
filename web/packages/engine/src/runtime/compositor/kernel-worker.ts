@@ -15,6 +15,7 @@ export interface MotionKernelInput {
   kind: "motion";
   definitionId: string;
   definitionJson: string;
+  resourceBytes: Uint8Array;
   inputJson: string;
   compact: boolean;
   width: number;
@@ -61,6 +62,7 @@ export function installKernelWorker(): void {
           if (
             !/^sha256:[0-9a-f]{64}$/.test(input.definitionId) ||
             typeof input.definitionJson !== "string" ||
+            !(input.resourceBytes instanceof Uint8Array) ||
             typeof input.inputJson !== "string" ||
             typeof input.compact !== "boolean"
           )
@@ -81,7 +83,7 @@ export function installKernelWorker(): void {
         if (engine && key !== identity) throw new Error("kernel runtime identity changed");
         if (!engine) {
           const wasm = (await import(m.wasmModuleUrl)) as ProductWasmModule;
-          memory = (await wasm.default(m.wasmUrl)).memory;
+          memory = (await wasm.default({ module_or_path: m.wasmUrl })).memory;
           engine = new wasm.ProductEngine();
           identity = key;
         }
@@ -91,6 +93,7 @@ export function installKernelWorker(): void {
           const bytes = engine.run_motion_kernel!(
             input.definitionId,
             input.definitionJson,
+            input.resourceBytes,
             input.inputJson,
             input.compact,
           );

@@ -178,7 +178,7 @@ test("Motion capture releases the single CPU slot before kernels and resumes the
       type: "motionWork",
       id: sent.id,
       request: sent.request,
-      definitions: { [renderId]: "scene" },
+      definitions: { [renderId]: { json: "scene", resourceBytes: new Uint8Array([1, 2, 3]) } },
       jobs: [
         { key: "clip", definitionId: renderId, inputJson: '{"viewport":{"width":2,"height":2}}' },
       ],

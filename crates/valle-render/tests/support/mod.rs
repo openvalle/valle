@@ -135,7 +135,13 @@ fn opened_image_render_with_gain(digest: &str, extension_gain: Option<f64>) -> E
     let manifest_json = std::str::from_utf8(manifest.canonical_bytes()).unwrap();
     let bundle_json = canonical_verified_binding_bundle(&binding, &capabilities).unwrap();
     let profile_json = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).unwrap();
-    let files = fixed_package_files(&timeline_json, manifest_json, &bundle_json, &profile_json);
+    let files = fixed_package_files(
+        &timeline_json,
+        manifest_json,
+        &bundle_json.json,
+        &profile_json,
+        &bundle_json.resource_bytes,
+    );
     let package_manifest = canonical_fixed_package_manifest(&files).unwrap();
     open_verified_fixed_package(&package_manifest, &files)
         .unwrap()

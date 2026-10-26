@@ -72,6 +72,9 @@ test("CanvasKit RasterProgram cache reuses exact pixels and invalidates on frame
       string,
       string
     >;
+    const resourceBytes = new Uint8Array(
+      await (await fetch(new URL(config.resourceBytesUrl!, ready.url))).arrayBuffer(),
+    );
     if (!config.fixedPackageManifestJson)
       throw new Error(JSON.stringify(config.diagnostics ?? config));
     engine = new ProductEngine();
@@ -81,6 +84,7 @@ test("CanvasKit RasterProgram cache reuses exact pixels and invalidates on frame
         config.timelineJson!,
         config.resourceManifestJson!,
         config.verifiedBindingBundleJson!,
+        resourceBytes,
       ),
     );
     executor = new CanvasKitExecutor(CanvasKit, engine);

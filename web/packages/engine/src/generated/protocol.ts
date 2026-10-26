@@ -19,7 +19,7 @@ export type StudioMotionInputsWire = { fpsOverride?: string, props: Record<strin
 
 export type StudioFontUrlWire = { url: string, role: string, };
 
-export type StudioCapabilitiesWire = { saveTimeline: boolean, editMotionProps: boolean, writeMotionSource: boolean, };
+export type StudioCapabilitiesWire = { saveTimeline: boolean, editMotionProps: boolean, writeMotionSource: boolean, compileCache?: boolean, };
 
 export type StudioProjectWire = { root: string, name: string, timeline: string, entry: boolean, };
 
@@ -43,7 +43,7 @@ export type MotionResourceLocatorWire = { id: string, url: string, };
 
 export type MotionShaderWire = { uri: string, manifestBytes: Array<number>, sourceBytes: Array<number>, };
 
-export type MotionContextWire = { "status": "ok", protocolVersion: number, generation: number, input: string, artifactDigest: ContentDigest, artifact: Record<string, unknown>, preparedData: Record<string, unknown>, dataSource: string | null, sourceMap: MotionSourceMapWire, assets: Array<MotionAssetWire>, resourceLocators: Array<MotionResourceLocatorWire>, shaders: Array<MotionShaderWire>, durationFrames: number, fps: MotionFrameRateWire, viewport: MotionViewportWire, diagnostics: Array<MotionDiagnosticWire>, runtimeBaseUrl: string, runtimeAssets: Record<string, unknown>, fixedPackageManifestJson: string, timelineJson: string, timeline: TimelineDocument, resourceManifestJson: string, resourceManifest: ResourceManifest, verifiedBindingBundleJson: string, } | { "status": "error", protocolVersion: number, generation: number, input: string, diagnostics: Array<MotionDiagnosticWire>, };
+export type MotionContextWire = { "status": "ok", protocolVersion: number, generation: number, input: string, artifactDigest: ContentDigest, artifact: Record<string, unknown>, preparedData: Record<string, unknown>, dataSource: string | null, sourceMap: MotionSourceMapWire, assets: Array<MotionAssetWire>, resourceLocators: Array<MotionResourceLocatorWire>, shaders: Array<MotionShaderWire>, durationFrames: number, fps: MotionFrameRateWire, viewport: MotionViewportWire, diagnostics: Array<MotionDiagnosticWire>, runtimeBaseUrl: string, runtimeAssets: Record<string, unknown>, fixedPackageManifestJson: string, timelineJson: string, timeline: TimelineDocument, resourceManifestJson: string, resourceManifest: ResourceManifest, verifiedBindingBundleJson: string, resourceBytesUrl?: string, } | { "status": "error", protocolVersion: number, generation: number, input: string, diagnostics: Array<MotionDiagnosticWire>, };
 
 export type StudioEventWire = { "type": "ready", generation: number, } | { "type": "seek", timeS: number, } | { "type": "selectClip", clipId: string, };
 

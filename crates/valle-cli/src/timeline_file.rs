@@ -700,7 +700,7 @@ mod tests {
         authored["tracks"]["caption"][0]["clips"][0]["runs"][0] =
             json!({"text":"Create","start":0,"end":1.5});
         let mut cache = crate::preview_store::FrozenMediaCache::default();
-        let (_, _, mut expected) = crate::cmd::timeline::prepare_timeline_media_facts(
+        let (_, _, mut expected, _, _) = crate::cmd::timeline::prepare_timeline_media_facts(
             decode_timeline(&authored.to_string()).unwrap(),
             dir.path(),
             &mut cache,
@@ -764,7 +764,7 @@ mod tests {
         assert_eq!(stale["outcome"], "rejected");
 
         let mut cache = crate::preview_store::FrozenMediaCache::default();
-        let (_, _, media_dependencies) = crate::cmd::timeline::prepare_timeline_media_facts(
+        let (_, _, media_dependencies, _, _) = crate::cmd::timeline::prepare_timeline_media_facts(
             decode_timeline(&edited.to_string()).unwrap(),
             dir.path(),
             &mut cache,

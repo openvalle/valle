@@ -15,6 +15,7 @@ export function buildMotionPreview(context: GoodMotionContext) {
     timelineJson: context.timelineJson,
     resourceManifestJson: context.resourceManifestJson,
     verifiedBindingBundleJson: context.verifiedBindingBundleJson,
+    resourceBytes: context.resourceBytes,
     assets: context.resourceLocators,
     runtimeAssets: context.runtimeAssets,
     runtimeBaseUrl: context.runtimeBaseUrl,

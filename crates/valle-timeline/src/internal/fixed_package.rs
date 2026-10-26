@@ -12,6 +12,7 @@ pub const FIXED_PACKAGE_FORMAT: &str = "valle.fixed-render-package@1";
 pub const CANONICAL_TIMELINE_MEMBER_PATH: &str = "canonical-timeline.json";
 pub const RESOURCE_MANIFEST_MEMBER_PATH: &str = "resource-manifest.json";
 pub const VERIFIED_BINDING_BUNDLE_MEMBER_PATH: &str = "verified-binding-bundle.json";
+pub const RESOURCE_BYTES_MEMBER_PATH: &str = "resource-bytes.bin";
 pub const EXECUTION_PROFILE_MEMBER_PATH: &str = "execution-profile.json";
 
 /// The closed outer manifest for one immutable fixed render package.
@@ -50,14 +51,16 @@ pub struct FixedPackageMember {
 pub enum FixedPackageMemberRole {
     CanonicalTimeline,
     ExecutionProfile,
+    ResourceBytes,
     ResourceManifest,
     VerifiedBindingBundle,
 }
 
 impl FixedPackageMemberRole {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::CanonicalTimeline,
         Self::ExecutionProfile,
+        Self::ResourceBytes,
         Self::ResourceManifest,
         Self::VerifiedBindingBundle,
     ];
@@ -68,6 +71,7 @@ impl FixedPackageMemberRole {
             Self::ExecutionProfile => EXECUTION_PROFILE_MEMBER_PATH,
             Self::ResourceManifest => RESOURCE_MANIFEST_MEMBER_PATH,
             Self::VerifiedBindingBundle => VERIFIED_BINDING_BUNDLE_MEMBER_PATH,
+            Self::ResourceBytes => RESOURCE_BYTES_MEMBER_PATH,
         }
     }
 
@@ -77,6 +81,7 @@ impl FixedPackageMemberRole {
             Self::ExecutionProfile => "execution-profile",
             Self::ResourceManifest => "resource-manifest",
             Self::VerifiedBindingBundle => "verified-binding-bundle",
+            Self::ResourceBytes => "resource-bytes",
         }
     }
 

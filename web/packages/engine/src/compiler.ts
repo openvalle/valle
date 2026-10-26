@@ -6,7 +6,7 @@ import { resolveEngineRuntimeAssets } from "./runtime-assets.ts";
 import { loadEngineWasm } from "./engine-wasm.ts";
 
 interface TimelineCompilerWasmModule {
-  default(wasmUrl: string): Promise<unknown>;
+  default(input: { module_or_path: string }): Promise<unknown>;
   canonicalize_timeline_document(timelineJson: string): string;
   compile_timeline(timelineJson: string, motionSourcesJson: string): string;
   motion_preparation_inputs(timelineJson: string): string;
@@ -34,7 +34,7 @@ interface TimelineCompilerWasmModule {
   ): string;
   motion_module_paths(entry: string, modulesJson: string): string;
   font_covers_text(bytes: Uint8Array, text: string): boolean;
-  prepare_preview_package(inputJson: string): string;
+  prepare_preview_package(inputJson: string, resourceBytes: Uint8Array): [string, Uint8Array];
   rewrite_motion_source(inputJson: string): string;
 }
 
@@ -102,7 +102,7 @@ export interface PreviewMotionInstance {
   clipPath: string;
   artifact: Record<string, unknown>;
   artifactDigest: string;
-  fonts: readonly { bytesBase64: string; role: "font" | "formula-font" }[];
+  fonts: readonly { bytes: Uint8Array; role: "font" | "formula-font" }[];
 }
 
 export interface PreviewResourceInput {
@@ -116,6 +116,7 @@ export interface PreviewPackageInput {
   authorTimeline: Timeline;
   motionInstances: readonly PreviewMotionInstance[];
   resourceInputs?: readonly PreviewResourceInput[];
+  resourceBytes?: Uint8Array;
 }
 
 export type MotionRole = TimelineDocumentSchema.MotionRole;
@@ -129,6 +130,7 @@ export interface PreparedPreviewPackage {
   timelineJson: string;
   resourceManifestJson: string;
   verifiedBindingBundleJson: string;
+  resourceBytes: Uint8Array;
   executionProfileJson: string;
   externalResources: readonly { id: string; digest: string }[];
   motionSourceMetadata: Record<string, MotionSourceMetadata>;
@@ -265,7 +267,52 @@ export function preparePreviewPackageWithWasm(
   wasm: Pick<TimelineCompilerWasmModule, "prepare_preview_package">,
   input: PreviewPackageInput,
 ): PreparedPreviewPackage {
-  return JSON.parse(wasm.prepare_preview_package(JSON.stringify(input))) as PreparedPreviewPackage;
+  const original = input.resourceBytes ?? new Uint8Array();
+  const chunks = [original];
+  let length = original.byteLength;
+  const ranges = new Map<Uint8Array, { offset: number; length: number }>();
+  const motionInstances = input.motionInstances.map((instance) => ({
+    ...instance,
+    fonts: instance.fonts.map((font) => {
+      let range = ranges.get(font.bytes);
+      if (!range) {
+        range = { offset: length, length: font.bytes.byteLength };
+        ranges.set(font.bytes, range);
+        chunks.push(font.bytes);
+        length += font.bytes.byteLength;
+      }
+      return { bytes: range, role: font.role };
+    }),
+  }));
+  const bytes = chunks.length === 1 ? original : new Uint8Array(length);
+  if (chunks.length > 1) {
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+  }
+  const [json, resourceBytes] = wasm.prepare_preview_package(
+    JSON.stringify({
+      authorTimeline: input.authorTimeline,
+      resourceInputs: input.resourceInputs,
+      motionInstances,
+    }),
+    bytes,
+  );
+  return { ...JSON.parse(json), resourceBytes } as PreparedPreviewPackage;
+}
+
+/** A checked view into the binary member; JSON contains ranges, never file contents. */
+export function resourceByteRange(value: unknown, bytes: Uint8Array): Uint8Array {
+  const range = value as { offset?: unknown; length?: unknown } | null;
+  if (!range || !Number.isSafeInteger(range.offset) || !Number.isSafeInteger(range.length))
+    throw new Error("invalid resource byte range");
+  const offset = range.offset as number,
+    length = range.length as number;
+  if (offset < 0 || length < 0 || offset > bytes.byteLength - length)
+    throw new Error("resource byte range exceeds binary member");
+  return bytes.subarray(offset, offset + length);
 }
 
 /** Bounded local-property inspection; no layout or rendering. Run in a diagnostic worker. */

@@ -138,6 +138,9 @@ fn packet(
             .run(
                 &job.definition_id,
                 compiler.motion_definition(&job.definition_id).unwrap(),
+                compiler
+                    .motion_definition_bytes(&job.definition_id)
+                    .unwrap(),
                 &job.input_json,
                 false,
             )

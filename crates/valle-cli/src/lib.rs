@@ -2,6 +2,7 @@
 //! consumes complete immutable fixed packages.
 
 pub mod cmd;
+mod compile_cache;
 mod events;
 mod embedded {
     include!(concat!(env!("OUT_DIR"), "/embedded.rs"));

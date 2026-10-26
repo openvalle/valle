@@ -36,6 +36,7 @@ export {
   createTimelineCompilerRuntime,
   MotionCompileError,
   preparePreviewPackageWithWasm,
+  resourceByteRange,
   rewriteMotionSourceWithWasm,
   type CompiledMotion,
   type MotionCompileOptions,

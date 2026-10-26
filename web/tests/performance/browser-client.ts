@@ -11,6 +11,10 @@ const { exportBrowserVideo } = (await import(
   exportUrl
 )) as typeof import("../../packages/engine/src/export.ts");
 const job = await (await fetch("/job.json")).json();
+if (job.input.resourceBytesUrl)
+  job.input.resourceBytes = new Uint8Array(
+    await (await fetch(job.input.resourceBytesUrl)).arrayBuffer(),
+  );
 const trace = job.trace ? new RenderTrace() : undefined;
 const canvas = document.createElement("canvas");
 document.body.append(canvas);

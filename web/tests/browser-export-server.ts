@@ -189,6 +189,7 @@ function fixture(name: string, videoBytes?: Uint8Array) {
     resourceManifestJson: prepared.resourceManifestJson,
     resourceManifest: JSON.parse(prepared.resourceManifestJson),
     verifiedBindingBundleJson: prepared.verifiedBindingBundleJson,
+    resourceBytes: prepared.resourceBytes,
   };
   const assets = [
     ...(hasAudio ? [{ id: "resource:tone", url: "/fixtures/tone.wav" }] : []),
@@ -277,6 +278,7 @@ const server = Bun.serve({
     if (route === "/timeline/get")
       return Response.json({
         timeline: current.author,
+        empty: false,
         timelineJson: JSON.stringify(current.author),
         timelineRevision: {
           revision: 1,
@@ -287,7 +289,11 @@ const server = Bun.serve({
           intent: null,
         },
         motionSourceMetadata: current.prepared.motionSourceMetadata,
-        render: current.render,
+        render: {
+          ...current.render,
+          resourceBytes: undefined,
+          resourceBytesUrl: `/__test/resource-bytes.bin?fixture=${selected}`,
+        },
         assets: current.assets,
         motion: { structures: [] },
         motionInstances: current.compiled
@@ -345,11 +351,25 @@ const server = Bun.serve({
           ),
         );
       const item = fixtures.get(name);
-      return item ? Response.json(item.input) : new Response("Unknown fixture", { status: 404 });
+      return item
+        ? Response.json({
+            ...item.input,
+            resourceBytes: undefined,
+            resourceBytesUrl: `/__test/resource-bytes.bin?fixture=${name}`,
+          })
+        : new Response("Unknown fixture", { status: 404 });
+    }
+    if (route === "/__test/resource-bytes.bin") {
+      const item = fixtures.get(url.searchParams.get("fixture") ?? selected);
+      return item
+        ? new Response(new Uint8Array(item.prepared.resourceBytes).buffer, {
+            headers: { "content-type": "application/octet-stream" },
+          })
+        : new Response("Unknown fixture", { status: 404 });
     }
     if (route === "/__test/checks")
       return new Response(
-        '<!doctype html><meta charset="utf-8"><title>Browser export checks</title><style>body{font:16px system-ui;margin:40px;background:#101113;color:#e8eaed}pre{white-space:pre-wrap}</style><h1>Browser export checks</h1><pre id="status">Running…</pre><script type="module" src="/__test/client.js"></script>',
+        '<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><title>Browser export checks</title><style>body{font:16px system-ui;margin:40px;background:#101113;color:#e8eaed}pre{white-space:pre-wrap}</style><h1>Browser export checks</h1><pre id="status">Running…</pre><script type="module" src="/__test/client.js"></script>',
         { headers: { "content-type": "text/html" } },
       );
     if (route === "/__test/client.js")

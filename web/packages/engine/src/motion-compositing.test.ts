@@ -2895,6 +2895,9 @@ test("Motion composition, easing and color interpolation match analytic pixels o
           string,
           string
         >;
+        const resourceBytes = new Uint8Array(
+          await (await fetch(new URL(config.resourceBytesUrl!, ready.url))).arrayBuffer(),
+        );
         if (!config.fixedPackageManifestJson)
           throw new Error(`Motion preparation failed: ${JSON.stringify(config)}`);
         engine = new ProductEngine();
@@ -2904,6 +2907,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
             config.timelineJson!,
             config.resourceManifestJson!,
             config.verifiedBindingBundleJson!,
+            resourceBytes,
           ),
         );
         executor = new CanvasKitExecutor(ck, {

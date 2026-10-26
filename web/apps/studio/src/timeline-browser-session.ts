@@ -64,6 +64,7 @@ export class TimelineBrowserSession {
   #resourceInputs: PreviewResourceInput[] = [];
   #locators: Array<{ id: string; url: string }> = [];
   #mediaDependencies: Record<string, string> = {};
+  #resourceBytesSource?: { digest: string; url: string };
 
   constructor(host: StudioHost, sources: StudioSourceEditor) {
     if (!host.loadMediaFacts) throw new Error("Studio media facts are unavailable");
@@ -89,7 +90,14 @@ export class TimelineBrowserSession {
       const locators = this.#locators;
       const mediaDependencies = this.#mediaDependencies;
       const result = await this.#compiler.compile(
-        timelineCompilePayload(this.#host.boot, timeline, sources, resourceInputs, locators),
+        timelineCompilePayload(
+          this.#host.boot,
+          timeline,
+          sources,
+          resourceInputs,
+          locators,
+          this.#resourceBytesSource,
+        ),
       );
       if (result.status === "error") throw new Error(result.message);
       const render = {
@@ -99,6 +107,7 @@ export class TimelineBrowserSession {
         resourceManifestJson: result.package.resourceManifestJson,
         resourceManifest: JSON.parse(result.package.resourceManifestJson) as ResourceManifest,
         verifiedBindingBundleJson: result.package.verifiedBindingBundleJson,
+        resourceBytes: result.package.resourceBytes,
       };
       return {
         status: "ok",
@@ -133,16 +142,22 @@ export class TimelineBrowserSession {
       this.#resourceInputs = [];
       this.#locators = [];
       this.#mediaDependencies = {};
+      this.#resourceBytesSource = undefined;
       return;
     }
     if (key === this.#mediaKey) return;
+    const began = performance.now();
     const preview = await this.#host.loadMediaFacts!({ timeline });
     if (preview.status === "error") {
       throw new Error(preview.diagnostics.map((item) => item.message).join("\n"));
     }
     this.#resourceInputs = preview.resources;
+    performance.mark("valle-studio-media-facts", {
+      detail: { roundTripMs: performance.now() - began, ...preview.timings },
+    });
     this.#locators = preview.assets;
     this.#mediaDependencies = preview.inputDependencies;
+    this.#resourceBytesSource = preview.resourceBytes;
     this.#mediaKey = key;
   }
 }

@@ -3,7 +3,8 @@
 
 pub use valle_timeline::internal::fixed_package::{
     CANONICAL_TIMELINE_MEMBER_PATH, EXECUTION_PROFILE_MEMBER_PATH, FIXED_PACKAGE_FORMAT,
-    FixedPackageManifest, RESOURCE_MANIFEST_MEMBER_PATH, VERIFIED_BINDING_BUNDLE_MEMBER_PATH,
+    FixedPackageManifest, RESOURCE_BYTES_MEMBER_PATH, RESOURCE_MANIFEST_MEMBER_PATH,
+    VERIFIED_BINDING_BUNDLE_MEMBER_PATH,
 };
 use valle_timeline::internal::fixed_package::{
     FixedPackageMember, FixedPackageMemberRole, is_normalized_package_relative_path,
@@ -18,7 +19,6 @@ use std::{
     sync::Arc,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde::{
     Deserialize, Serialize,
     de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor},
@@ -156,6 +156,7 @@ impl VerifiedFixedPackage {
             manifest_json,
             bundle_json,
             &self.execution_profile,
+            &self.members[&FixedPackageMemberRole::ResourceBytes],
         )
     }
 
@@ -327,11 +328,11 @@ struct AudioFootprintWire {
 enum VerifiedResourceFactsWire {
     Environment {
         descriptor: EnvironmentResourceDescriptorWire,
-        bytes_base64: String,
+        bytes: ResourceByteRange,
     },
     Model3d {
         descriptor: Model3dResourceDescriptorWire,
-        bytes_base64: String,
+        bytes: ResourceByteRange,
     },
     Video {
         descriptor: VideoResourceDescriptorWire,
@@ -347,7 +348,7 @@ enum VerifiedResourceFactsWire {
     },
     Font {
         descriptor: FontResourceDescriptorWire,
-        bytes_base64: String,
+        bytes: ResourceByteRange,
     },
     MotionArtifact {
         abi: MotionArtifactAbiWire,
@@ -358,31 +359,79 @@ enum VerifiedResourceFactsWire {
     Shader {
         abi: ShaderArtifactAbiWire,
         descriptor: ShaderResourceDescriptorWire,
-        manifest_bytes_base64: String,
-        source_bytes_base64: String,
+        manifest_bytes: ResourceByteRange,
+        source_bytes: ResourceByteRange,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceByteRange {
+    pub offset: usize,
+    pub length: usize,
+}
+
+impl ResourceByteRange {
+    pub(crate) fn resolve(self, bytes: &[u8]) -> Result<Arc<[u8]>, String> {
+        let end = self
+            .offset
+            .checked_add(self.length)
+            .ok_or("[verified_binding_bundle] resource byte range overflow")?;
+        bytes.get(self.offset..end).map(Arc::from).ok_or_else(|| {
+            "[verified_binding_bundle] resource byte range exceeds binary member".into()
+        })
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct ResourceBytes {
+    pub(crate) bytes: Vec<u8>,
+    ranges: BTreeMap<ContentDigest, ResourceByteRange>,
+}
+
+impl ResourceBytes {
+    pub(crate) fn append(&mut self, bytes: &[u8]) -> ResourceByteRange {
+        let digest = ContentDigest::of_bytes(bytes);
+        if let Some(range) = self.ranges.get(&digest) {
+            return *range;
+        }
+        let range = ResourceByteRange {
+            offset: self.bytes.len(),
+            length: bytes.len(),
+        };
+        self.bytes.extend_from_slice(bytes);
+        self.ranges.insert(digest, range);
+        range
+    }
+}
+
+pub struct SerializedBindingBundle {
+    pub json: String,
+    pub resource_bytes: Vec<u8>,
 }
 
 pub(crate) fn prepared_resource_facts(
     entry: &ResourceEntryWire,
     value: Value,
+    resource_bytes: &[u8],
 ) -> Result<VerifiedResourceFacts, String> {
     let wire: VerifiedResourceFactsWire = serde_json::from_value(value)
         .map_err(|error| format!("[preview_package] invalid resource facts: {error}"))?;
     if !wire.matches_manifest_entry(entry) {
         return Err("[preview_package] resource facts disagree with the manifest entry".into());
     }
-    wire.into_domain()
+    wire.into_domain(resource_bytes)
 }
 
-/// Return the four closed files used by the fixed-package inner wire.
+/// Return the metadata and binary members used by the fixed-package inner wire.
 /// The outer manifest binds these exact bytes and paths.
 pub fn fixed_package_files<'a>(
     timeline_json: &'a str,
     manifest_json: &'a str,
     verified_binding_bundle_json: &'a str,
     execution_profile_json: &'a str,
-) -> [FixedPackageFile<'a>; 4] {
+    resource_bytes: &'a [u8],
+) -> [FixedPackageFile<'a>; 5] {
     [
         FixedPackageFile::new(CANONICAL_TIMELINE_MEMBER_PATH, timeline_json.as_bytes()),
         FixedPackageFile::new(RESOURCE_MANIFEST_MEMBER_PATH, manifest_json.as_bytes()),
@@ -394,6 +443,7 @@ pub fn fixed_package_files<'a>(
             EXECUTION_PROFILE_MEMBER_PATH,
             execution_profile_json.as_bytes(),
         ),
+        FixedPackageFile::new(RESOURCE_BYTES_MEMBER_PATH, resource_bytes),
     ]
 }
 
@@ -402,7 +452,7 @@ pub fn fixed_package_files<'a>(
 /// `resourceDigests` is derived from the ResourceManifest member and contains
 /// only actual externally fulfilled content blobs. Descriptor fingerprints,
 /// decoded-media facts, and Engine-owned implementation identities remain
-/// bound by the four member digests but are not falsely advertised as CAS
+/// bound by the member digests but are not falsely advertised as CAS
 /// objects to the package GC.
 pub fn canonical_fixed_package_manifest(files: &[FixedPackageFile<'_>]) -> Result<String, String> {
     build_fixed_package_manifest(files).map(|(manifest, _, _)| manifest)
@@ -430,6 +480,7 @@ pub fn build_fixed_package(
         text(FixedPackageMemberRole::ResourceManifest)?,
         text(FixedPackageMemberRole::VerifiedBindingBundle)?,
         &profile,
+        members[&FixedPackageMemberRole::ResourceBytes],
     )?;
     Ok((manifest, opened))
 }
@@ -628,6 +679,7 @@ fn open_fixed_package_members_with_profile(
     manifest_json: &str,
     verified_binding_bundle_json: &str,
     profile: &ExecutionProfile,
+    resource_bytes: &[u8],
 ) -> Result<OpenedFixedPackage, FixedPackageOpenError> {
     let timeline = valle_timeline::internal::decode_canonical(timeline_json)
         .map_err(|error| format!("[timeline_document] {error}"))?;
@@ -647,7 +699,7 @@ fn open_fixed_package_members_with_profile(
         .map_err(|error| format!("[verified_binding_bundle] invalid closed bundle: {error}"))?;
     let bundle = bundle.decode_closure(&timeline)?;
     bundle.validate_manifest(&manifest)?;
-    let (bindings, capabilities) = bundle.into_domain()?;
+    let (bindings, capabilities) = bundle.into_domain(resource_bytes)?;
     let opened = EngineRender::open(&timeline, &manifest, &bindings, &capabilities, profile)
         .map_err(FixedPackageOpenError::Engine)?;
     let compiled = opened.compiled();
@@ -687,8 +739,9 @@ fn open_fixed_package_members_with_profile(
 pub fn canonical_verified_binding_bundle(
     bindings: &ResourceBindings,
     capabilities: &Capabilities,
-) -> Result<String, String> {
+) -> Result<SerializedBindingBundle, String> {
     let mut wire_bindings = BTreeMap::new();
+    let mut resource_bytes = ResourceBytes::default();
     for (resource_id, binding) in bindings.iter() {
         let dependencies = binding
             .dependencies()
@@ -703,7 +756,10 @@ pub fn canonical_verified_binding_bundle(
             ResourceBindingWire {
                 digest: *binding.digest(),
                 handle: binding.handle().get(),
-                facts: VerifiedResourceFactsWire::from_domain(binding.facts())?,
+                facts: VerifiedResourceFactsWire::from_domain(
+                    binding.facts(),
+                    &mut resource_bytes,
+                )?,
                 dependencies,
             },
         );
@@ -739,20 +795,27 @@ pub fn canonical_verified_binding_bundle(
     let strict = parse_strict_json(&ordinary, "verified_binding_bundle")?;
     let canonical = serde_jcs::to_vec(&strict)
         .map_err(|error| format!("[verified_binding_bundle] cannot encode JCS: {error}"))?;
-    String::from_utf8(canonical)
-        .map_err(|error| format!("[verified_binding_bundle] JCS was not UTF-8: {error}"))
+    let json = String::from_utf8(canonical)
+        .map_err(|error| format!("[verified_binding_bundle] JCS was not UTF-8: {error}"))?;
+    Ok(SerializedBindingBundle {
+        json,
+        resource_bytes: resource_bytes.bytes,
+    })
 }
 
 impl VerifiedResourceFactsWire {
-    fn from_domain(facts: &VerifiedResourceFacts) -> Result<Self, String> {
+    fn from_domain(
+        facts: &VerifiedResourceFacts,
+        resource_bytes: &mut ResourceBytes,
+    ) -> Result<Self, String> {
         Ok(match facts {
             VerifiedResourceFacts::Model3d { descriptor, bytes } => Self::Model3d {
                 descriptor: descriptor.clone(),
-                bytes_base64: BASE64_STANDARD.encode(bytes),
+                bytes: resource_bytes.append(bytes),
             },
             VerifiedResourceFacts::Environment { descriptor, bytes } => Self::Environment {
                 descriptor: descriptor.clone(),
-                bytes_base64: BASE64_STANDARD.encode(bytes),
+                bytes: resource_bytes.append(bytes),
             },
             VerifiedResourceFacts::Video {
                 descriptor,
@@ -777,7 +840,7 @@ impl VerifiedResourceFactsWire {
             },
             VerifiedResourceFacts::Font { descriptor, bytes } => Self::Font {
                 descriptor: descriptor.clone(),
-                bytes_base64: BASE64_STANDARD.encode(bytes),
+                bytes: resource_bytes.append(bytes),
             },
             VerifiedResourceFacts::MotionArtifact {
                 abi,
@@ -798,8 +861,8 @@ impl VerifiedResourceFactsWire {
             } => Self::Shader {
                 abi: *abi,
                 descriptor: descriptor.clone(),
-                manifest_bytes_base64: BASE64_STANDARD.encode(manifest_bytes),
-                source_bytes_base64: BASE64_STANDARD.encode(source_bytes),
+                manifest_bytes: resource_bytes.append(manifest_bytes),
+                source_bytes: resource_bytes.append(source_bytes),
             },
         })
     }
@@ -905,7 +968,10 @@ impl VerifiedBindingBundleWire {
         Ok(())
     }
 
-    fn into_domain(self) -> Result<(ResourceBindings, Capabilities), String> {
+    fn into_domain(
+        self,
+        resource_bytes: &[u8],
+    ) -> Result<(ResourceBindings, Capabilities), String> {
         for (resource_id, binding) in &self.bindings {
             if resource_id.trim().is_empty() {
                 return Err("[verified_binding_bundle] resource id must not be empty".to_owned());
@@ -937,7 +1003,7 @@ impl VerifiedBindingBundleWire {
             let mut domain = ResourceBinding::new(
                 binding.digest,
                 VerifiedHandleId::new(binding.handle).map_err(|error| error.to_string())?,
-                binding.facts.into_domain()?,
+                binding.facts.into_domain(resource_bytes)?,
             );
             for dependency in binding.dependencies {
                 domain = domain.with_dependency(
@@ -984,7 +1050,7 @@ impl UnresolvedBindingBundleWire {
         timeline: &valle_timeline::internal::CanonicalTimeline,
     ) -> Result<VerifiedBindingBundleWire, String> {
         let Self {
-            bindings: unresolved,
+            bindings: mut unresolved,
             capabilities,
         } = self;
         let mut pending: Vec<_> = crate::render::document_resource_root_ids(timeline)
@@ -997,16 +1063,16 @@ impl UnresolvedBindingBundleWire {
             if !visited.insert(resource_id.clone()) {
                 continue;
             }
-            let Some(raw_binding) = unresolved.get(&resource_id) else {
+            let Some(raw_binding) = unresolved.remove(&resource_id) else {
                 // Preserve the Engine's normal missing-binding diagnostic. The
                 // closure decoder only proves supplied binding values.
                 continue;
             };
-            validate_safe_numbers(raw_binding).map_err(|error| {
+            validate_safe_numbers(&raw_binding).map_err(|error| {
                 format!("[verified_binding_bundle] {error} for {resource_id:?}")
             })?;
-            let binding: ResourceBindingWire = serde_json::from_value(raw_binding.clone())
-                .map_err(|error| {
+            let binding: ResourceBindingWire =
+                serde_json::from_value(raw_binding).map_err(|error| {
                     format!(
                         "[verified_binding_bundle] invalid closed binding {resource_id:?}: {error}"
                     )
@@ -1096,21 +1162,15 @@ impl VerifiedResourceFactsWire {
         }
     }
 
-    fn into_domain(self) -> Result<VerifiedResourceFacts, String> {
+    fn into_domain(self, resource_bytes: &[u8]) -> Result<VerifiedResourceFacts, String> {
         Ok(match self {
-            Self::Model3d {
+            Self::Model3d { descriptor, bytes } => VerifiedResourceFacts::Model3d {
                 descriptor,
-                bytes_base64,
-            } => VerifiedResourceFacts::Model3d {
-                descriptor,
-                bytes: decode_base64_payload(bytes_base64, "model3d.bytesBase64")?,
+                bytes: bytes.resolve(resource_bytes)?,
             },
-            Self::Environment {
+            Self::Environment { descriptor, bytes } => VerifiedResourceFacts::Environment {
                 descriptor,
-                bytes_base64,
-            } => VerifiedResourceFacts::Environment {
-                descriptor,
-                bytes: decode_base64_payload(bytes_base64, "environment.bytesBase64")?,
+                bytes: bytes.resolve(resource_bytes)?,
             },
             Self::Video {
                 descriptor,
@@ -1133,12 +1193,9 @@ impl VerifiedResourceFactsWire {
                 descriptor,
                 temporal_footprint: temporal_footprint.into_domain(),
             },
-            Self::Font {
+            Self::Font { descriptor, bytes } => VerifiedResourceFacts::Font {
                 descriptor,
-                bytes_base64,
-            } => VerifiedResourceFacts::Font {
-                descriptor,
-                bytes: decode_base64_payload(bytes_base64, "font.bytesBase64")?,
+                bytes: bytes.resolve(resource_bytes)?,
             },
             Self::MotionArtifact {
                 abi,
@@ -1159,34 +1216,16 @@ impl VerifiedResourceFactsWire {
             Self::Shader {
                 abi,
                 descriptor,
-                manifest_bytes_base64,
-                source_bytes_base64,
+                manifest_bytes,
+                source_bytes,
             } => VerifiedResourceFacts::Shader {
                 abi,
                 descriptor,
-                manifest_bytes: decode_base64_payload(
-                    manifest_bytes_base64,
-                    "shader.manifestBytesBase64",
-                )?,
-                source_bytes: decode_base64_payload(
-                    source_bytes_base64,
-                    "shader.sourceBytesBase64",
-                )?,
+                manifest_bytes: manifest_bytes.resolve(resource_bytes)?,
+                source_bytes: source_bytes.resolve(resource_bytes)?,
             },
         })
     }
-}
-
-fn decode_base64_payload(encoded: String, field: &str) -> Result<Arc<[u8]>, String> {
-    let bytes = BASE64_STANDARD
-        .decode(encoded.as_bytes())
-        .map_err(|error| format!("[verified_binding_bundle] invalid {field}: {error}"))?;
-    if BASE64_STANDARD.encode(&bytes) != encoded {
-        return Err(format!(
-            "[verified_binding_bundle] {field} must use canonical padded base64"
-        ));
-    }
-    Ok(Arc::from(bytes))
 }
 
 pub(crate) fn resource_entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
@@ -1408,9 +1447,9 @@ mod tests {
 
     use super::{
         CANONICAL_TIMELINE_MEMBER_PATH, COMMON_PROFILE_KEY, FIXED_PACKAGE_FORMAT, FixedPackageFile,
-        FixedPackageManifest, RESOURCE_MANIFEST_MEMBER_PATH, canonical_fixed_execution_profile,
-        canonical_fixed_package_manifest, canonical_fixed_package_manifest_bytes,
-        canonical_verified_binding_bundle, content_digest, decode_base64_payload,
+        FixedPackageManifest, RESOURCE_MANIFEST_MEMBER_PATH, ResourceByteRange,
+        canonical_fixed_execution_profile, canonical_fixed_package_manifest,
+        canonical_fixed_package_manifest_bytes, canonical_verified_binding_bundle, content_digest,
         empty_fixed_package_fixtures, fixed_package_files, open_verified_fixed_package,
         parse_strict_json, verify_fixed_package,
     };
@@ -1433,6 +1472,7 @@ mod tests {
             manifest_json,
             verified_binding_bundle_json,
             &execution_profile_json,
+            &[],
         );
         let fixed_package_manifest_json = canonical_fixed_package_manifest(&files)?;
         open_verified_fixed_package(&fixed_package_manifest_json, &files)
@@ -1534,7 +1574,7 @@ mod tests {
     #[test]
     fn canonical_fixed_package_manifest_verifies_and_opens() {
         let (timeline, resource_manifest, bundle, profile) = empty_fixed_package_fixtures();
-        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile);
+        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile, &[]);
         let manifest_json = canonical_fixed_package_manifest(&files).unwrap();
         let verified = verify_fixed_package(&manifest_json, &files).unwrap();
 
@@ -1556,7 +1596,7 @@ mod tests {
     fn fixed_package_embeds_the_complete_canonical_execution_profile() {
         let (timeline, resource_manifest, bundle, _) = empty_fixed_package_fixtures();
         let profile_json = common_profile_json();
-        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, profile_json);
+        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, profile_json, &[]);
         let manifest_json = canonical_fixed_package_manifest(&files).unwrap();
         let manifest: FixedPackageManifest = serde_json::from_str(&manifest_json).unwrap();
         let profile_member = manifest
@@ -1574,7 +1614,8 @@ mod tests {
         let mut changed: Value = serde_json::from_str(profile_json).unwrap();
         changed["motionAbi"] = json!("valle.motion/eval@2");
         let changed = String::from_utf8(serde_jcs::to_vec(&changed).unwrap()).unwrap();
-        let changed_files = fixed_package_files(&timeline, &resource_manifest, &bundle, &changed);
+        let changed_files =
+            fixed_package_files(&timeline, &resource_manifest, &bundle, &changed, &[]);
         let error = canonical_fixed_package_manifest(&changed_files).unwrap_err();
         assert!(
             error.contains("unsupported fixed execution policy"),
@@ -1590,7 +1631,7 @@ mod tests {
             .canonical_projection_bytes()
             .unwrap();
         let profile = String::from_utf8(profile).unwrap();
-        let files = fixed_package_files(&timeline, &manifest, &bundle, &profile);
+        let files = fixed_package_files(&timeline, &manifest, &bundle, &profile, &[]);
         let outer = canonical_fixed_package_manifest(&files).unwrap();
         open_verified_fixed_package(&outer, &files).unwrap();
     }
@@ -1646,13 +1687,14 @@ mod tests {
     #[test]
     fn fixed_package_member_swap_is_rejected() {
         let (timeline, resource_manifest, bundle, profile) = empty_fixed_package_fixtures();
-        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile);
+        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile, &[]);
         let manifest_json = canonical_fixed_package_manifest(&files).unwrap();
         let swapped = [
             FixedPackageFile::new(CANONICAL_TIMELINE_MEMBER_PATH, resource_manifest.as_bytes()),
             FixedPackageFile::new(RESOURCE_MANIFEST_MEMBER_PATH, timeline.as_bytes()),
             files[2],
             files[3],
+            files[4],
         ];
 
         let error = verify_fixed_package(&manifest_json, &swapped).unwrap_err();
@@ -1665,7 +1707,7 @@ mod tests {
     #[test]
     fn fixed_package_missing_and_extra_members_are_rejected() {
         let (timeline, resource_manifest, bundle, profile) = empty_fixed_package_fixtures();
-        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile);
+        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile, &[]);
         let manifest_json = canonical_fixed_package_manifest(&files).unwrap();
 
         let missing = verify_fixed_package(&manifest_json, &files[..3]).unwrap_err();
@@ -1683,7 +1725,7 @@ mod tests {
     #[test]
     fn fixed_package_length_digest_and_format_errors_are_rejected() {
         let (timeline, resource_manifest, bundle, profile) = empty_fixed_package_fixtures();
-        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile);
+        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile, &[]);
         let manifest_json = canonical_fixed_package_manifest(&files).unwrap();
         let baseline: FixedPackageManifest = serde_json::from_str(&manifest_json).unwrap();
 
@@ -1709,7 +1751,7 @@ mod tests {
     #[test]
     fn fixed_package_manifest_is_closed_canonical_and_path_normalized() {
         let (timeline, resource_manifest, bundle, profile) = empty_fixed_package_fixtures();
-        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile);
+        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile, &[]);
         let manifest_json = canonical_fixed_package_manifest(&files).unwrap();
         let baseline: FixedPackageManifest = serde_json::from_str(&manifest_json).unwrap();
 
@@ -1794,7 +1836,7 @@ mod tests {
             }
         })
         .to_string();
-        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile);
+        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile, &[]);
         let manifest_json = canonical_fixed_package_manifest(&files).unwrap();
         let verified = verify_fixed_package(&manifest_json, &files).unwrap();
         let actual = verified
@@ -1872,7 +1914,7 @@ mod tests {
             "capabilities": {"camera": false, "artifactAbis": [], "extensionKernels": {}}
         })
         .to_string();
-        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile);
+        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &profile, &[]);
         let manifest_json = canonical_fixed_package_manifest(&files).unwrap();
         let verified = verify_fixed_package(&manifest_json, &files).unwrap();
         let actual = verified
@@ -1934,7 +1976,8 @@ mod tests {
             canonical_verified_binding_bundle(&ResourceBindings::new(), &Capabilities::new())
                 .unwrap();
         let opened =
-            open_test_fixed_package(&timeline, &manifest, &bundle, COMMON_PROFILE_KEY).unwrap();
+            open_test_fixed_package(&timeline, &manifest, &bundle.json, COMMON_PROFILE_KEY)
+                .unwrap();
         assert_eq!(opened.receipt().render_id(), opened.compiled().render_id());
     }
 
@@ -1995,18 +2038,37 @@ mod tests {
     }
 
     #[test]
-    fn bundle_preflight_rejects_unsafe_integer_spellings_and_noncanonical_base64() {
+    fn bundle_preflight_rejects_unsafe_numbers_and_binary_ranges() {
         assert!(
             parse_strict_json(r#"{"handle":9007199254740992.0}"#, "bundle")
                 .unwrap_err()
                 .contains("interoperable JSON range")
         );
         assert_eq!(
-            decode_base64_payload("e30=".to_owned(), "data.bytesBase64")
-                .unwrap()
-                .as_ref(),
-            b"{}"
+            ResourceByteRange {
+                offset: 1,
+                length: 2
+            }
+            .resolve(b"abcd")
+            .unwrap()
+            .as_ref(),
+            b"bc"
         );
-        assert!(decode_base64_payload("e30".to_owned(), "font.bytesBase64").is_err());
+        assert!(
+            ResourceByteRange {
+                offset: 4,
+                length: 1
+            }
+            .resolve(b"abcd")
+            .is_err()
+        );
+        assert!(
+            ResourceByteRange {
+                offset: usize::MAX,
+                length: 1
+            }
+            .resolve(b"abcd")
+            .is_err()
+        );
     }
 }

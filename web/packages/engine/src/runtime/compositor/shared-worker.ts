@@ -7,6 +7,7 @@ import {
   type ProductFrameWorkerRequest,
   type ProductFrameWorkerResponse,
   type ProductRuntimeSnapshot,
+  type MotionKernelDefinition,
 } from "./frame-protocol.ts";
 
 export interface ProductWorkerPort {
@@ -162,7 +163,7 @@ class Host {
   private failed = false;
   private readonly releaseRuntime: () => void;
   private readonly kernels: ProductKernelPool;
-  private readonly motionDefinitions = new Map<string, string>();
+  private readonly motionDefinitions = new Map<string, MotionKernelDefinition>();
   constructor(
     url: string,
     bootstrap: ProductEngineBootstrap,
@@ -334,15 +335,22 @@ class Host {
       for (const [id, json] of Object.entries(message.definitions))
         this.motionDefinitions.set(id, json);
       const inputs = message.jobs.map((input) => {
-        const definitionJson = this.motionDefinitions.get(input.definitionId);
-        if (!definitionJson) throw new Error("Motion kernel definition missing");
+        const definition = this.motionDefinitions.get(input.definitionId);
+        if (!definition) throw new Error("Motion kernel definition missing");
         this.motionDefinitions.delete(input.definitionId);
-        this.motionDefinitions.set(input.definitionId, definitionJson);
-        return { ...input, definitionJson };
+        this.motionDefinitions.set(input.definitionId, definition);
+        return {
+          ...input,
+          definitionJson: definition.json,
+          resourceBytes: definition.resourceBytes,
+        };
       });
       while (
         this.motionDefinitions.size > 4 ||
-        [...this.motionDefinitions.values()].reduce((sum, json) => sum + json.length, 0) >
+        [...this.motionDefinitions.values()].reduce(
+          (sum, definition) => sum + definition.json.length + definition.resourceBytes.byteLength,
+          0,
+        ) >
           64 * 1024 ** 2
       ) {
         this.motionDefinitions.delete(this.motionDefinitions.keys().next().value!);
@@ -355,6 +363,7 @@ class Host {
                 kind: "motion",
                 definitionId: input.definitionId,
                 definitionJson: input.definitionJson,
+                resourceBytes: input.resourceBytes,
                 inputJson: input.inputJson,
                 compact: frame.request.realtime === true,
                 width: frame.request.width,

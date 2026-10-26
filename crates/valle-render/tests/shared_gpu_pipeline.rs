@@ -114,8 +114,9 @@ fn project_from_source(source: &str) -> NativeProject {
     let files = fixed_package_files(
         &timeline,
         std::str::from_utf8(manifest.canonical_bytes()).unwrap(),
-        &bundle,
+        &bundle.json,
         &profile,
+        &bundle.resource_bytes,
     );
     let outer = canonical_fixed_package_manifest(&files).unwrap();
     NativeProject::from_render(

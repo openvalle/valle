@@ -20,7 +20,9 @@ function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
 async function input(fixture: string): Promise<BrowserValleWebPlayerOptions> {
-  return (await fetch(`/__test/input.json?fixture=${fixture}`)).json();
+  const value = await (await fetch(`/__test/input.json?fixture=${fixture}`)).json();
+  value.resourceBytes = new Uint8Array(await (await fetch(value.resourceBytesUrl)).arrayBuffer());
+  return value;
 }
 async function save(name: string, result: BrowserVideoExportResult) {
   assert(result.blob?.size, "MP4 Blob is empty");
@@ -266,15 +268,19 @@ async function checkVideoColor() {
 
 async function checkDirectAudioPcm() {
   const config = await input("av");
-  const player = new BrowserValleWebPlayer({
-    ...config,
-    canvas: document.createElement("canvas"),
-    audioContext: null,
-  });
+  const wasm = await import(new URL("/runtime/engine/valle_engine.js", location.href).href);
+  await wasm.default({ module_or_path: "/runtime/engine/valle_engine_bg.wasm" });
+  const engine = new wasm.ProductEngine();
   try {
-    await player.init();
-    const engine = (player as any).engine;
-    const id = player.renderInfo.renderId;
+    const id = JSON.parse(
+      engine.open_fixed_package(
+        config.fixedPackageManifestJson,
+        config.timelineJson,
+        config.resourceManifestJson,
+        config.verifiedBindingBundleJson,
+        config.resourceBytes ?? new Uint8Array(),
+      ),
+    ).renderId;
     const sources = JSON.parse(engine.audio_sources_json(id, 0n, 8192n));
     assert(sources.length === 1, "audio requirements expanded beyond the active source");
     const digest = sources[0].digest;
@@ -344,6 +350,7 @@ async function checkDirectAudioPcm() {
       config.timelineJson,
       config.resourceManifestJson,
       config.verifiedBindingBundleJson,
+      config.resourceBytes ?? new Uint8Array(),
     );
     assert(!engine.has_audio_pcm(id, digest), "package replacement retained old decoded PCM");
     rejects(() => engine.mix_audio_pcm(id, 0n, 1n));
@@ -355,7 +362,7 @@ async function checkDirectAudioPcm() {
     report.push({ fixture: "audio-scope-and-validation", status: "pass" });
     show();
   } finally {
-    player.close();
+    engine.free();
   }
 }
 

@@ -29,6 +29,7 @@ export type TimelineWorkspaceRuntimeConfig = Omit<
         resourceManifestJson: string;
         resourceManifest: ResourceManifest;
         verifiedBindingBundleJson: string;
+        resourceBytes?: Uint8Array;
       }
     | {
         fixedPackageManifestJson?: never;
@@ -118,6 +119,7 @@ export async function initializeTimelineWorkspaceRuntime(
       timelineJson: config.render.timelineJson,
       resourceManifestJson,
       verifiedBindingBundleJson,
+      resourceBytes: config.render.resourceBytes,
       assets: config.assets,
       assetBaseUrl: config.assetBaseUrl ?? "/assets/",
       proxyBase: config.proxyBase ?? null,

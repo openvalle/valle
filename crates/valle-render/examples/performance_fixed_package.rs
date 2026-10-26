@@ -30,6 +30,7 @@ fn main() -> Result<()> {
         string("resourceManifestJson")?,
         string("verifiedBindingBundleJson")?,
         string("executionProfileJson")?,
+        &[],
     );
     let package = open_verified_fixed_package(string("fixedPackageManifestJson")?, &files)?;
     let mut catalog = NativeResourceCatalog::new();

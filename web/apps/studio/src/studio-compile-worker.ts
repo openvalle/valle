@@ -2,6 +2,7 @@ import { artifactFontUrls } from "./font-demand.ts";
 import { jsonEqual } from "./timeline-save-snapshot.ts";
 import {
   createTimelineCompilerRuntime,
+  resourceByteRange,
   MotionCompileError,
   type MotionCompileOptions,
   type MotionCompilerDiagnostic,
@@ -17,6 +18,11 @@ import {
   prepareAudioAnalysisInputs,
   type AudioAnalysisInput,
 } from "./audio-analysis-input.ts";
+import { frozenShaderBytes } from "./shader-input.ts";
+import {
+  MotionCompilationCache,
+  type MotionCompilationCacheOptions,
+} from "./motion-compilation-cache.ts";
 
 export interface StudioCompileInstance {
   clipPath: string;
@@ -42,12 +48,14 @@ export interface StudioCompileRequest {
   };
   instances: StudioCompileInstance[];
   resourceInputs?: PreviewResourceInput[];
+  resourceBytes?: Uint8Array;
+  resourceBytesSource?: { digest: string; url: string };
 }
 
 export type StudioCompileInitialize = Pick<
   StudioCompileRequest,
   "runtimeAssets" | "runtimeBaseUrl"
-> & { type: "initialize" };
+> & { type: "initialize"; cache?: MotionCompilationCacheOptions };
 
 export type StudioCompileResult =
   | {
@@ -57,10 +65,11 @@ export type StudioCompileResult =
       package: PreparedPreviewPackage;
       timings: {
         runtimeMs: number;
-        fontsMs: number;
+        inputsMs: number;
         compileMs: number;
         prepareMs: number;
         compilations: number;
+        persistentCacheHits: number;
         cacheHit: boolean;
       };
       warnings: MotionCompilerDiagnostic[];
@@ -84,6 +93,71 @@ let cachedInputs = "";
 let cachedResult: StudioCompileResult | null = null;
 const compiledInstances = new Map<string, ReturnType<WebCompilerRuntime["compileMotionModules"]>>();
 const immutableFonts = new Map<string, Promise<Uint8Array>>();
+const binaryInputs = new Map<string, Promise<Uint8Array>>();
+let compilationCache: MotionCompilationCache | undefined;
+
+async function inputBytes(request: StudioCompileRequest): Promise<Uint8Array> {
+  if (request.resourceBytes) return request.resourceBytes;
+  const source = request.resourceBytesSource;
+  if (!source) return new Uint8Array();
+  let loading = binaryInputs.get(source.digest);
+  if (!loading) {
+    loading = (async () => {
+      const response = await fetch(source.url);
+      if (!response.ok) throw new Error(`Resource bytes: HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (`sha256:${await digestBytes(bytes)}` !== source.digest)
+        throw new Error("resource bytes changed during transfer");
+      return bytes;
+    })();
+    binaryInputs.set(source.digest, loading);
+    void loading.catch(() => {
+      if (binaryInputs.get(source.digest) === loading) binaryInputs.delete(source.digest);
+    });
+    if (binaryInputs.size > 2) binaryInputs.delete(binaryInputs.keys().next().value!);
+  }
+  return loading;
+}
+
+function binaryOptions(
+  instance: StudioCompileInstance,
+  resources: Map<unknown, PreviewResourceInput>,
+  bytes: Uint8Array,
+  views: Map<string, Uint8Array>,
+): StudioCompileInstance {
+  const fonts = { ...instance.options?.fontAliases };
+  const shaders = [...(instance.options?.shaders ?? [])];
+  for (const ref of instance.options?.resources ?? []) {
+    const resource = resources.get(ref.contentHash);
+    if (resource?.entry.kind === "font") {
+      let view = views.get(ref.contentHash);
+      if (!view) {
+        view = resourceByteRange(resource.facts.bytes, bytes);
+        views.set(ref.contentHash, view);
+      }
+      fonts[`asset://${ref.control}`] = view;
+    }
+    if (
+      resource?.entry.kind === "shader" &&
+      !shaders.some((shader) => shader.assetControl === ref.control)
+    )
+      shaders.push({
+        assetControl: ref.control,
+        frozenBytes: frozenShaderBytes(
+          resourceByteRange(resource.facts.manifestBytes, bytes),
+          resourceByteRange(resource.facts.sourceBytes, bytes),
+        ),
+      });
+  }
+  return {
+    ...instance,
+    options: {
+      ...instance.options,
+      ...(Object.keys(fonts).length ? { fontAliases: fonts } : {}),
+      ...(shaders.length ? { shaders } : {}),
+    },
+  };
+}
 
 function compilerRuntime(
   options: Pick<StudioCompileRequest, "runtimeAssets" | "runtimeBaseUrl">,
@@ -138,14 +212,6 @@ async function instanceFonts(instance: StudioCompileInstance): Promise<{
     digests.push(digest);
   });
   return { fonts, digests };
-}
-
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let at = 0; at < bytes.length; at += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
-  }
-  return btoa(binary);
 }
 
 function standaloneTimeline(
@@ -265,7 +331,20 @@ export async function compileStudioPreview(
 ): Promise<StudioCompileResult> {
   try {
     const started = performance.now();
-    const compiler = await compilerRuntime(request);
+    const [compiler, resourceBytes] = await Promise.all([
+      compilerRuntime(request),
+      inputBytes(request),
+    ]);
+    const binaryResources = new Map(
+      (request.resourceInputs ?? []).map((resource) => [resource.entry.digest, resource]),
+    );
+    const fontViews = new Map<string, Uint8Array>();
+    request = {
+      ...request,
+      instances: request.instances.map((instance) =>
+        binaryOptions(instance, binaryResources, resourceBytes, fontViews),
+      ),
+    };
     request = {
       ...request,
       instances: request.instances.map((instance) => ({
@@ -314,22 +393,6 @@ export async function compileStudioPreview(
         }),
       };
     }
-    // Fetch canonical PCM in this long-lived Worker. Source edits only send URLs
-    // and digests from the UI; they do not clone the song through postMessage.
-    request = {
-      ...request,
-      instances: await Promise.all(
-        request.instances.map(async (instance) => {
-          if (
-            !instance.audioUrls?.length ||
-            !Object.values(instance.modules).some((source) => source.includes("audioAnalysis"))
-          )
-            return instance;
-          const audioSources = await prepareAudioAnalysisInputs(instance.audioUrls);
-          return { ...instance, options: { ...instance.options, audioSources } };
-        }),
-      ),
-    };
     const runtimeMs = performance.now() - started;
     const byteDigests = new WeakMap<Uint8Array, Promise<string>>();
     const digest = (bytes: Uint8Array): Promise<string> => {
@@ -344,11 +407,53 @@ export async function compileStudioPreview(
       request.instances.map((instance) => motionCompileOptionIdentity(instance.options, digest)),
     );
     let compilations = 0;
-    let preliminaryCompileMs = 0;
+    let persistentCacheHits = 0;
+    let compileMs = 0;
+    const audioIdentities = request.instances.map((instance) =>
+      instance.audioUrls?.map(({ control, contentHash }) => ({ control, contentHash })),
+    );
     const currentCompilations = new Map<
       string,
-      ReturnType<WebCompilerRuntime["compileMotionModules"]>
+      Promise<ReturnType<WebCompilerRuntime["compileMotionModules"]>>
     >();
+    const compile = (
+      key: string,
+      instance: StudioCompileInstance,
+      options: MotionCompileOptions,
+    ): Promise<ReturnType<WebCompilerRuntime["compileMotionModules"]>> => {
+      const known = compiledInstances.get(key);
+      if (known) return Promise.resolve(known);
+      let pending = currentCompilations.get(key);
+      if (!pending) {
+        pending = (async () => {
+          let compiled = await compilationCache?.get(key);
+          if (compiled) persistentCacheHits++;
+          else {
+            let audioSources = options.audioSources;
+            if (
+              !audioSources &&
+              instance.audioUrls?.length &&
+              Object.values(instance.modules).some((source) => source.includes("audioAnalysis"))
+            )
+              audioSources = await prepareAudioAnalysisInputs(instance.audioUrls);
+            const began = performance.now();
+            compiled = compiler.compileMotionModules(instance.entry, instance.modules, {
+              ...options,
+              audioSources,
+            });
+            compileMs += performance.now() - began;
+            compilations++;
+            void compilationCache?.put(key, compiled);
+          }
+          compiledInstances.set(key, compiled);
+          if (compiledInstances.size > 32)
+            compiledInstances.delete(compiledInstances.keys().next().value!);
+          return compiled;
+        })();
+        currentCompilations.set(key, pending);
+      }
+      return pending;
+    };
     const preliminary = new Map<number, ReturnType<WebCompilerRuntime["compileMotionModules"]>>();
     const hydrated = await Promise.all(
       request.instances.map(async (instance, index) => {
@@ -367,24 +472,15 @@ export async function compileStudioPreview(
           instance.entry,
           instance.modules,
           optionIdentities[index],
+          audioIdentities[index],
           "without-measurement-fonts",
         ]);
-        let compiled = currentCompilations.get(key) ?? compiledInstances.get(key);
-        if (!compiled) {
-          compilations += 1;
-          const compileStarted = performance.now();
-          compiled = compiler.compileMotionModules(instance.entry, instance.modules, {
-            ...instance.options,
-            fonts: [],
-            // Bound faces are only a compile-time input when helpers measure or outline text.
-            fontAliases: undefined,
-          });
-          preliminaryCompileMs += performance.now() - compileStarted;
-          currentCompilations.set(key, compiled);
-          compiledInstances.set(key, compiled);
-          if (compiledInstances.size > 32)
-            compiledInstances.delete(compiledInstances.keys().next().value!);
-        }
+        const compiled = await compile(key, instance, {
+          ...instance.options,
+          fonts: [],
+          // Bound faces are only a compile-time input when helpers measure or outline text.
+          fontAliases: undefined,
+        });
         preliminary.set(index, compiled);
         return instanceFonts({
           ...instance,
@@ -399,7 +495,6 @@ export async function compileStudioPreview(
         });
       }),
     );
-    const fontsMs = performance.now() - started - runtimeMs - preliminaryCompileMs;
     const cacheKey = JSON.stringify([
       request.authorTimeline,
       request.standalone,
@@ -408,9 +503,11 @@ export async function compileStudioPreview(
         instance.entry,
         instance.modules,
         optionIdentities[index],
+        audioIdentities[index],
         hydrated[index]!.digests,
       ]),
       request.resourceInputs,
+      request.resourceBytesSource?.digest ?? (await digestBytes(resourceBytes)),
     ]);
     if (cachedInputs === cacheKey && cachedResult?.status === "ok") {
       return {
@@ -418,51 +515,45 @@ export async function compileStudioPreview(
         id: request.id,
         timings: {
           runtimeMs,
-          fontsMs,
-          compileMs: preliminaryCompileMs,
+          inputsMs: performance.now() - started - runtimeMs - compileMs,
+          compileMs,
           prepareMs: 0,
           compilations,
+          persistentCacheHits,
           cacheHit: true,
         },
       };
     }
-    const compileStarted = performance.now();
-    let instances = request.instances.map((instance, index) => {
-      const fonts = hydrated[index]!.fonts;
-      const instanceKey = JSON.stringify([
-        instance.entry,
-        instance.modules,
-        optionIdentities[index],
-        hydrated[index]!.digests,
-      ]);
-      let compiled =
-        preliminary.get(index) ??
-        currentCompilations.get(instanceKey) ??
-        compiledInstances.get(instanceKey);
-      if (!compiled) {
-        compilations += 1;
-        compiled = compiler.compileMotionModules(instance.entry, instance.modules, {
-          ...instance.options,
-          fonts: fonts.map((font) => font.bytes),
-        });
-        currentCompilations.set(instanceKey, compiled);
-        compiledInstances.set(instanceKey, compiled);
-        if (compiledInstances.size > 32)
-          compiledInstances.delete(compiledInstances.keys().next().value!);
-      }
-      const needed = artifactFontUrls(compiled.artifact, [
-        { url: "provided", role: "font" as const },
-        { url: "provided", role: "formula-font" as const },
-      ]);
-      const roles = new Set(needed.map((font) => font.role));
-      return {
-        clipPath: instance.clipPath,
-        ...compiled,
-        fonts: fonts
-          .filter((font) => roles.has(font.role))
-          .map((font) => ({ bytesBase64: base64(font.bytes), role: font.role })),
-      };
-    });
+    let instances = await Promise.all(
+      request.instances.map(async (instance, index) => {
+        const fonts = hydrated[index]!.fonts;
+        const instanceKey = JSON.stringify([
+          instance.entry,
+          instance.modules,
+          optionIdentities[index],
+          audioIdentities[index],
+          hydrated[index]!.digests,
+        ]);
+        const compiled =
+          preliminary.get(index) ??
+          (await compile(instanceKey, instance, {
+            ...instance.options,
+            fonts: fonts.map((font) => font.bytes),
+          }));
+        const needed = artifactFontUrls(compiled.artifact, [
+          { url: "provided", role: "font" as const },
+          { url: "provided", role: "formula-font" as const },
+        ]);
+        const roles = new Set(needed.map((font) => font.role));
+        return {
+          clipPath: instance.clipPath,
+          ...compiled,
+          fonts: fonts
+            .filter((font) => roles.has(font.role))
+            .map((font) => ({ bytes: font.bytes, role: font.role })),
+        };
+      }),
+    );
     let authorTimeline =
       request.authorTimeline ??
       (request.standalone && instances.length === 1
@@ -492,19 +583,13 @@ export async function compileStudioPreview(
           original.entry,
           original.modules,
           await motionCompileOptionIdentity(options, digest),
+          audioIdentities[0],
           hydrated[0]!.digests,
         ]);
-        let compiled = compiledInstances.get(instanceKey);
-        if (!compiled) {
-          compiled = compiler.compileMotionModules(original.entry, original.modules, {
-            ...options,
-            fonts: hydrated[0]!.fonts.map((font) => font.bytes),
-          });
-          compilations++;
-          compiledInstances.set(instanceKey, compiled);
-          if (compiledInstances.size > 32)
-            compiledInstances.delete(compiledInstances.keys().next().value!);
-        }
+        const compiled = await compile(instanceKey, original, {
+          ...options,
+          fonts: hydrated[0]!.fonts.map((font) => font.bytes),
+        });
         instances[0] = { ...instances[0]!, ...compiled };
         conversionWarnings.push({
           class: "warning",
@@ -516,7 +601,7 @@ export async function compileStudioPreview(
         });
       }
     }
-    const compileMs = performance.now() - compileStarted + preliminaryCompileMs;
+    const inputsMs = performance.now() - started - runtimeMs - compileMs;
     const prepareStarted = performance.now();
     const prepared = compiler.preparePreviewPackage({
       authorTimeline,
@@ -527,6 +612,7 @@ export async function compileStudioPreview(
         fonts: instance.fonts,
       })),
       resourceInputs: request.resourceInputs ?? [],
+      resourceBytes,
     });
     const prepareMs = performance.now() - prepareStarted;
     const result: StudioCompileResult = {
@@ -534,7 +620,15 @@ export async function compileStudioPreview(
       status: "ok",
       authorTimeline,
       package: prepared,
-      timings: { runtimeMs, fontsMs, compileMs, prepareMs, compilations, cacheHit: false },
+      timings: {
+        runtimeMs,
+        inputsMs,
+        compileMs,
+        prepareMs,
+        compilations,
+        persistentCacheHits,
+        cacheHit: false,
+      },
       warnings: [
         ...new Map(
           [...instances.flatMap((instance) => instance.warnings), ...conversionWarnings].map(
@@ -568,6 +662,9 @@ export async function compileStudioPreview(
 if (typeof self !== "undefined" && "postMessage" in self && "onmessage" in self) {
   self.onmessage = (event: MessageEvent<StudioCompileRequest | StudioCompileInitialize>) => {
     if ("type" in event.data) {
+      compilationCache = event.data.cache
+        ? new MotionCompilationCache(event.data.cache)
+        : undefined;
       // Media capture can proceed while WASM initializes; compilation still observes failures.
       void compilerRuntime(event.data).catch(() => undefined);
     } else {

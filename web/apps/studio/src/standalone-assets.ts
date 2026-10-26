@@ -1,4 +1,8 @@
-import type { MotionCompileOptions, PreviewResourceInput } from "valle-engine";
+import {
+  resourceByteRange,
+  type MotionCompileOptions,
+  type PreviewResourceInput,
+} from "valle-engine";
 import type { MotionContext } from "./host.ts";
 import { frozenShaderBytes } from "./shader-input.ts";
 
@@ -7,6 +11,7 @@ export interface StandaloneAssets {
   resourceInputs: PreviewResourceInput[];
   locators: Array<{ id: string; url: string }>;
   options: MotionCompileOptions;
+  resourceBytes?: Uint8Array;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -14,10 +19,6 @@ function record(value: unknown): Record<string, unknown> {
     throw new Error("Motion asset package is incomplete");
   }
   return value as Record<string, unknown>;
-}
-
-function decodeBase64(value: string): Uint8Array {
-  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
 }
 
 /** Reuse the Host's frozen media facts; the Worker owns new JSX and Timeline compilation. */
@@ -59,15 +60,12 @@ export function standaloneAssetsFromMotionContext(
       );
     }
     if (entry.kind === "shader") {
-      const shader = context.shaders.find(
-        (item) => item.uri === `shader://${digest.slice("sha256:".length)}`,
-      );
-      if (!shader) throw new Error(`Motion shader asset ${name} has no frozen source package`);
+      const bytes = context.resourceBytes ?? new Uint8Array();
       shaders.push({
         assetControl: name,
         frozenBytes: frozenShaderBytes(
-          Uint8Array.from(shader.manifestBytes),
-          Uint8Array.from(shader.sourceBytes),
+          resourceByteRange(facts.manifestBytes, bytes),
+          resourceByteRange(facts.sourceBytes, bytes),
         ),
       });
     }
@@ -75,9 +73,10 @@ export function standaloneAssetsFromMotionContext(
     resourceInputs.push({ id: `resource:${alias}`, entry, facts });
     resources.push({ control: name, contentHash: digest });
     if (entry.kind === "font") {
-      if (typeof facts.bytesBase64 !== "string")
-        throw new Error(`Font asset ${name} has no frozen bytes`);
-      fontAliases[`asset://${name}`] = decodeBase64(facts.bytesBase64);
+      fontAliases[`asset://${name}`] = resourceByteRange(
+        facts.bytes,
+        context.resourceBytes ?? new Uint8Array(),
+      );
     }
   }
   const locators = context.resourceLocators.flatMap(({ id, url }) => {
@@ -86,6 +85,7 @@ export function standaloneAssetsFromMotionContext(
   });
   return {
     bindings: assetBindings,
+    resourceBytes: context.resourceBytes,
     resourceInputs,
     locators,
     options: {

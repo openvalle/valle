@@ -32,6 +32,7 @@ export class VallePlayerElement extends LitElement {
     timelineJson: { attribute: false },
     resourceManifestJson: { attribute: false },
     verifiedBindingBundleJson: { attribute: false },
+    resourceBytes: { attribute: false },
     assets: { attribute: false },
     fonts: { attribute: false },
     runtimeAssets: { attribute: false },
@@ -105,6 +106,7 @@ export class VallePlayerElement extends LitElement {
   declare timelineJson: string;
   declare resourceManifestJson: string;
   declare verifiedBindingBundleJson: string;
+  declare resourceBytes: Uint8Array;
   declare assets: VallePlayerOptions["assets"];
   declare fonts: VallePlayerOptions["fonts"];
   declare runtimeAssets: VallePlayerOptions["runtimeAssets"] | null;
@@ -132,6 +134,7 @@ export class VallePlayerElement extends LitElement {
     this.timelineJson = "";
     this.resourceManifestJson = "";
     this.verifiedBindingBundleJson = "";
+    this.resourceBytes = new Uint8Array();
     this.runtimeAssets = null;
     this.state = "new";
     this.errorMessage = "";
@@ -188,6 +191,7 @@ export class VallePlayerElement extends LitElement {
       changed.has("timelineJson") ||
       changed.has("resourceManifestJson") ||
       changed.has("verifiedBindingBundleJson") ||
+      changed.has("resourceBytes") ||
       changed.has("runtimeAssets") ||
       changed.has("runtimeBaseUrl")
     ) {
@@ -200,6 +204,7 @@ export class VallePlayerElement extends LitElement {
     this.timelineJson = options.timelineJson;
     this.resourceManifestJson = options.resourceManifestJson;
     this.verifiedBindingBundleJson = options.verifiedBindingBundleJson;
+    this.resourceBytes = options.resourceBytes ?? new Uint8Array();
     this.assets = options.assets;
     this.fonts = options.fonts;
     this.runtimeAssets = options.runtimeAssets;
@@ -237,6 +242,7 @@ export class VallePlayerElement extends LitElement {
       timelineJson: this.timelineJson,
       resourceManifestJson: this.resourceManifestJson,
       verifiedBindingBundleJson: this.verifiedBindingBundleJson,
+      resourceBytes: this.resourceBytes,
       assets: this.assets,
       fonts: this.fonts,
       canvas,

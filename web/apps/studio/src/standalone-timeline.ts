@@ -53,6 +53,7 @@ function compiledPackage(result: Extract<StudioCompileResult, { status: "ok" }>)
     resourceManifestJson: result.package.resourceManifestJson,
     resourceManifest: JSON.parse(result.package.resourceManifestJson) as ResourceManifest,
     verifiedBindingBundleJson: result.package.verifiedBindingBundleJson,
+    resourceBytes: result.package.resourceBytes,
   };
 }
 

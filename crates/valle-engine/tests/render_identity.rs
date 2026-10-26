@@ -640,7 +640,13 @@ fn open_package(
         profile, &baseline,
         "integration tests open only the public fixed profile"
     );
-    let files = fixed_package_files(&timeline_json, manifest_json, &bundle_json, &profile_json);
+    let files = fixed_package_files(
+        &timeline_json,
+        manifest_json,
+        &bundle_json.json,
+        &profile_json,
+        &bundle_json.resource_bytes,
+    );
     let package_manifest = canonical_fixed_package_manifest(&files).unwrap();
     open_verified_fixed_package(&package_manifest, &files).map(|opened| opened.engine_render())
 }
@@ -1603,9 +1609,12 @@ fn a_package_from_before_the_loop_field_does_not_open() {
         .with_binding("asset:logo", binding(&manifest, "asset:logo", None, 3))
         .unwrap();
     let capabilities = Capabilities::new().with_artifact_abi("valle.motion/artifact@1");
-    let mut bundle: Value =
-        serde_json::from_str(&canonical_verified_binding_bundle(&bindings, &capabilities).unwrap())
-            .unwrap();
+    let mut bundle: Value = serde_json::from_str(
+        &canonical_verified_binding_bundle(&bindings, &capabilities)
+            .unwrap()
+            .json,
+    )
+    .unwrap();
     fn forget_loop(value: &mut Value) -> usize {
         match value {
             Value::Object(object) => {
@@ -1622,7 +1631,13 @@ fn a_package_from_before_the_loop_field_does_not_open() {
     let manifest_json = std::str::from_utf8(manifest.canonical_bytes()).unwrap();
     let bundle_json = serde_json::to_string(&bundle).unwrap();
     let profile_json = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).unwrap();
-    let files = fixed_package_files(&timeline_json, manifest_json, &bundle_json, &profile_json);
+    let files = fixed_package_files(
+        &timeline_json,
+        manifest_json,
+        &bundle_json,
+        &profile_json,
+        &[],
+    );
     let package_manifest = canonical_fixed_package_manifest(&files).unwrap();
     let error = open_verified_fixed_package(&package_manifest, &files)
         .err()

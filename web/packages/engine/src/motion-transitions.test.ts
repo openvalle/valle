@@ -741,6 +741,9 @@ export default function I(){const comp = useComposition();return <Scene><ShaderL
           string,
           string
         >;
+        const resourceBytes = new Uint8Array(
+          await (await fetch(new URL(config.resourceBytesUrl!, ready.url))).arrayBuffer(),
+        );
         if (!config.fixedPackageManifestJson)
           throw new Error(JSON.stringify(config.diagnostics ?? config));
         engine = new ProductEngine();
@@ -750,6 +753,7 @@ export default function I(){const comp = useComposition();return <Scene><ShaderL
             config.timelineJson!,
             config.resourceManifestJson!,
             config.verifiedBindingBundleJson!,
+            resourceBytes,
           ),
         );
         executor = new CanvasKitExecutor(ck, {

@@ -5,9 +5,9 @@ export type MotionFontSource = string | Uint8Array;
 export function createMotionFontLoader(
   sources: readonly MotionFontSource[],
   baseUrl: string,
-): () => Promise<string> {
+): () => Promise<Uint8Array[]> {
   const inputs = sources.map((source) => (typeof source === "string" ? source : source.slice()));
-  let pending: Promise<string> | undefined;
+  let pending: Promise<Uint8Array[]> | undefined;
   return () => {
     if (pending) return pending;
     const urls = new Map<string, Promise<Uint8Array>>();
@@ -29,13 +29,9 @@ export function createMotionFontLoader(
           bytes = source;
         }
         if (bytes.byteLength === 0) throw new Error("font bytes must not be empty");
-        let binary = "";
-        for (let at = 0; at < bytes.length; at += 0x8000) {
-          binary += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
-        }
-        return { bytesBase64: btoa(binary) };
+        return bytes;
       }),
-    ).then((fonts) => JSON.stringify(fonts));
+    );
     void pending.catch(() => {
       pending = undefined;
     });

@@ -3259,6 +3259,7 @@ mod tests {
             &manifest,
             &bundle,
             &execution_profile,
+            &[],
         );
         let package_manifest =
             crate::fixed_package::canonical_fixed_package_manifest(&files).unwrap();

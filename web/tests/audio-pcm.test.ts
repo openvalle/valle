@@ -64,6 +64,7 @@ function fixture(
         prepared.timelineJson,
         prepared.resourceManifestJson,
         prepared.verifiedBindingBundleJson,
+        prepared.resourceBytes,
       ),
     ).renderId as string;
   return { engine, id: open(), open, digests };

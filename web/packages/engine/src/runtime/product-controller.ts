@@ -79,6 +79,7 @@ export interface BrowserValleWebPlayerOptions {
   timelineJson: string;
   resourceManifestJson: string;
   verifiedBindingBundleJson: string;
+  resourceBytes?: Uint8Array;
   assets?: BrowserResourceLocator[];
   /** Replace ordinary Motion fonts with this ordered, lazily loaded stack. Omit to use the work's fonts. */
   fonts?: readonly MotionFontSource[];
@@ -104,7 +105,11 @@ export interface BrowserValleWebPlayerOptions {
 
 export type RenderPackageReplacement = Pick<
   BrowserValleWebPlayerOptions,
-  "fixedPackageManifestJson" | "timelineJson" | "resourceManifestJson" | "verifiedBindingBundleJson"
+  | "fixedPackageManifestJson"
+  | "timelineJson"
+  | "resourceManifestJson"
+  | "verifiedBindingBundleJson"
+  | "resourceBytes"
 > &
   Partial<Pick<BrowserValleWebPlayerOptions, "assets">> & {
     isCurrent?: () => boolean;
@@ -197,9 +202,10 @@ interface ValleWasmModule {
     timelineJson: string,
     manifestJson: string,
     bundleJson: string,
-    fontsJson: string,
-  ): string;
-  default(wasmUrl: string): Promise<void>;
+    resourceBytes: Uint8Array,
+    fonts: Uint8Array[],
+  ): [string, Uint8Array];
+  default(input: { module_or_path: string }): Promise<void>;
   canonicalize_timeline_document(timelineJson: string): string;
   timeline_document_view(timelineJson: string): string;
   ProductEngine: new () => BrowserProductEngineWire;
@@ -257,6 +263,7 @@ interface StagedRenderPackage {
   resourceManifestJson: string;
   resourceManifest: ResourceManifest;
   verifiedBindingBundleJson: string;
+  resourceBytes: Uint8Array;
   assets: BrowserResourceLocator[];
   admittedAssets: AdmittedBrowserAssets;
   frozenResources: FrozenBundleResources;
@@ -565,6 +572,7 @@ export class BrowserValleWebPlayer {
   resourceManifestJson: string;
   resourceManifest: ResourceManifest;
   verifiedBindingBundleJson: string;
+  resourceBytes: Uint8Array;
   assets: BrowserResourceLocator[];
   canvas: HTMLCanvasElement | null;
   assetBaseUrl: string;
@@ -581,7 +589,7 @@ export class BrowserValleWebPlayer {
   hitRects: ProductHitRect[] = [];
 
   private readonly trace?: RenderTrace;
-  private readonly loadMotionFonts?: () => Promise<string>;
+  private readonly loadMotionFonts?: () => Promise<Uint8Array[]>;
   private readonly runtimeAssets: PlayerRuntimeAssets;
   private readonly wasmModuleUrl: string;
   private readonly wasmUrl: string;
@@ -678,6 +686,7 @@ export class BrowserValleWebPlayer {
     this.resourceManifestJson = options.resourceManifestJson;
     this.resourceManifest = JSON.parse(options.resourceManifestJson) as ResourceManifest;
     this.verifiedBindingBundleJson = options.verifiedBindingBundleJson;
+    this.resourceBytes = options.resourceBytes ?? new Uint8Array();
     this.assets = options.assets ?? [];
     if (options.fonts !== undefined) {
       const pageUrl = typeof location === "undefined" ? import.meta.url : location.href;
@@ -1787,6 +1796,7 @@ export class BrowserValleWebPlayer {
       timelineJson: this.timelineJson,
       resourceManifestJson: this.resourceManifestJson,
       verifiedBindingBundleJson: this.verifiedBindingBundleJson,
+      resourceBytes: this.resourceBytes,
       assets: this.assets,
     };
   }
@@ -1802,17 +1812,16 @@ export class BrowserValleWebPlayer {
     };
     if (this.loadMotionFonts) {
       const fontsStarted = performance.now();
-      const fontsJson = await this.loadMotionFonts();
-      const selected = JSON.parse(
-        this.wasm.with_motion_fonts(
-          next.fixedPackageManifestJson,
-          next.timelineJson,
-          next.resourceManifestJson,
-          next.verifiedBindingBundleJson,
-          fontsJson,
-        ),
-      ) as RenderPackageReplacement;
-      next = { ...next, ...selected };
+      const fonts = await this.loadMotionFonts();
+      const [json, resourceBytes] = this.wasm.with_motion_fonts(
+        next.fixedPackageManifestJson,
+        next.timelineJson,
+        next.resourceManifestJson,
+        next.verifiedBindingBundleJson,
+        next.resourceBytes ?? new Uint8Array(),
+        fonts,
+      );
+      next = { ...next, ...JSON.parse(json), resourceBytes };
       markPhase("fonts", fontsStarted);
     }
     const canonicalStarted = performance.now();
@@ -1826,6 +1835,7 @@ export class BrowserValleWebPlayer {
     const fixedPackageManifestJson = next.fixedPackageManifestJson;
     const resourceManifestJson = next.resourceManifestJson;
     const verifiedBindingBundleJson = next.verifiedBindingBundleJson;
+    const resourceBytes = next.resourceBytes ?? new Uint8Array();
     const resourceManifest = JSON.parse(resourceManifestJson) as ResourceManifest;
     const assets = (next.assets ?? this.assets).map((asset) => ({ ...asset }));
     const admittedAssets = admitBrowserAssets(assets, resourceManifest);
@@ -1842,6 +1852,7 @@ export class BrowserValleWebPlayer {
         resourceManifestJson,
         verifiedBindingBundleJson,
       );
+      bootstrap.resourceBytes = resourceBytes;
       bootstrap.gpuScene3d = this.gpu && this.renderMode === "realtime";
       const openStarted = performance.now();
       planner = new ProductFramePlannerPool({
@@ -1892,6 +1903,7 @@ export class BrowserValleWebPlayer {
         resourceManifestJson,
         resourceManifest,
         verifiedBindingBundleJson,
+        resourceBytes,
         assets,
         admittedAssets,
         frozenResources,
@@ -1929,6 +1941,7 @@ export class BrowserValleWebPlayer {
     this.resourceManifestJson = staged.resourceManifestJson;
     this.resourceManifest = staged.resourceManifest;
     this.verifiedBindingBundleJson = staged.verifiedBindingBundleJson;
+    this.resourceBytes = staged.resourceBytes;
     this.assets = staged.assets;
     replaceMap(this.assetsById, staged.admittedAssets.byId);
     replaceMap(this.assetByDigest, staged.admittedAssets.byDigest);

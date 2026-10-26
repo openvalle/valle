@@ -71,6 +71,7 @@ test("Wasm reuses closed expressions while random seeks keep current frame input
         preview.timelineJson,
         preview.resourceManifestJson,
         preview.verifiedBindingBundleJson,
+        preview.resourceBytes,
       ),
     );
     for (const frame of [3, 0, 2, 2, 1, 3, 0]) {
@@ -143,6 +144,7 @@ test("prepared inspection keeps visible Scene3D placement through nested transfo
         preview.timelineJson,
         preview.resourceManifestJson,
         preview.verifiedBindingBundleJson,
+        preview.resourceBytes,
       ),
     );
     const seen = new Map<number, string>();
@@ -213,6 +215,7 @@ test("Wasm shares bounded Circle preparation with Echo and resets it on package 
         preview.timelineJson,
         preview.resourceManifestJson,
         preview.verifiedBindingBundleJson,
+        preview.resourceBytes,
       ),
     ).renderId as string;
   try {
@@ -274,6 +277,7 @@ test("Wasm keeps host endpoints and geometry moving while the source holds", () 
         preview.timelineJson,
         preview.resourceManifestJson,
         preview.verifiedBindingBundleJson,
+        preview.resourceBytes,
       ),
     );
     const seen = new Map<number, string>();
@@ -383,6 +387,7 @@ test("Wasm maps overlay timing and rounds the host viewport through the shared e
             preview.timelineJson,
             preview.resourceManifestJson,
             preview.verifiedBindingBundleJson,
+            preview.resourceBytes,
           ),
         );
         const frames = duration * 4,
@@ -518,6 +523,7 @@ test("Wasm shares rounded radial bars and prepared audio-band indices through ra
         preview.timelineJson,
         preview.resourceManifestJson,
         preview.verifiedBindingBundleJson,
+        preview.resourceBytes,
       ),
     );
     const seen = new Map<number, string>();
@@ -702,6 +708,7 @@ test("merged Engine Wasm admits a browser-compiled Motion as a fixed Timeline pa
       preview.timelineJson,
       preview.resourceManifestJson,
       preview.verifiedBindingBundleJson,
+      preview.resourceBytes,
     ),
   );
   const ticket = engine.evaluate_prepare_preview(receipt.renderId, 0n, 64, 64, false);

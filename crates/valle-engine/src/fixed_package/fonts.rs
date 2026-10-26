@@ -8,7 +8,7 @@ use valle_timeline::internal::wire::resource::{
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MotionFontBytes {
-    pub bytes_base64: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Serialize)]
@@ -18,6 +18,8 @@ pub struct MotionFontPackage {
     pub timeline_json: String,
     pub resource_manifest_json: String,
     pub verified_binding_bundle_json: String,
+    #[serde(skip)]
+    pub resource_bytes: Vec<u8>,
 }
 
 /// Select a new ordered font stack before opening a render. This creates a new
@@ -27,10 +29,17 @@ pub fn with_motion_fonts(
     timeline_json: &str,
     manifest_json: &str,
     bundle_json: &str,
+    resource_bytes: &[u8],
     fonts: &[MotionFontBytes],
 ) -> Result<MotionFontPackage, String> {
     let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY)?;
-    let files = fixed_package_files(timeline_json, manifest_json, bundle_json, &profile);
+    let files = fixed_package_files(
+        timeline_json,
+        manifest_json,
+        bundle_json,
+        &profile,
+        resource_bytes,
+    );
     verify_fixed_package(package_json, &files)?;
     let mut manifest: ResourceManifestEnvelopeWire =
         serde_json::from_str(manifest_json).map_err(|error| error.to_string())?;
@@ -43,11 +52,15 @@ pub fn with_motion_fonts(
         .max()
         .unwrap_or(0);
     let mut font_ids = Vec::new();
+    let mut binary = ResourceBytes {
+        bytes: resource_bytes.to_vec(),
+        ranges: BTreeMap::new(),
+    };
     for font in fonts {
-        let bytes = decode_base64_payload(font.bytes_base64.clone(), "font.bytesBase64")?;
-        let face = ttf_parser::Face::parse(&bytes, 0)
+        let bytes = &font.bytes;
+        let face = ttf_parser::Face::parse(bytes, 0)
             .map_err(|error| format!("invalid font (expected TTF/OTF): {error}"))?;
-        let digest = ContentDigest::of_bytes(&bytes);
+        let digest = ContentDigest::of_bytes(bytes);
         let id = format!("font:{}:0", digest.as_hex());
         if font_ids.contains(&id) {
             continue;
@@ -85,7 +98,7 @@ pub fn with_motion_fonts(
                     handle: next_handle,
                     facts: VerifiedResourceFactsWire::Font {
                         descriptor,
-                        bytes_base64: font.bytes_base64.clone(),
+                        bytes: binary.append(bytes),
                     },
                     dependencies: Vec::new(),
                 })
@@ -153,6 +166,7 @@ pub fn with_motion_fonts(
         &resource_manifest_json,
         &verified_binding_bundle_json,
         &profile,
+        &binary.bytes,
     );
     let fixed_package_manifest_json = canonical_fixed_package_manifest(&files)?;
     open_verified_fixed_package(&fixed_package_manifest_json, &files)
@@ -162,6 +176,7 @@ pub fn with_motion_fonts(
         timeline_json: timeline_json.to_owned(),
         resource_manifest_json,
         verified_binding_bundle_json,
+        resource_bytes: binary.bytes,
     })
 }
 

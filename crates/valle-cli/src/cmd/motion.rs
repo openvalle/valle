@@ -1114,6 +1114,11 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
         }
     };
     // Keep normalized bytes and frozen media alive for this preview generation.
+    let resource_bytes_digest = ContentDigest::of_bytes(&fixed_package.resource_bytes);
+    blobs.insert(
+        resource_bytes_digest.as_hex(),
+        crate::preview_store::PreviewFile::Bytes(fixed_package.resource_bytes.into()),
+    );
     for asset in prepared.assets.values() {
         blobs
             .entry(asset.hash.as_hex())
@@ -1197,6 +1202,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
         "resourceManifestJson": fixed_package.resource_manifest_json,
         "resourceManifest": fixed_package.resource_manifest,
         "verifiedBindingBundleJson": fixed_package.verified_binding_bundle_json,
+        "resourceBytesUrl": format!("/preview-assets/{}", resource_bytes_digest.as_hex()),
         "diagnostics": prepared.compiled.warnings,
         // Use the shared runtime asset map.
         "runtimeBaseUrl": "/",

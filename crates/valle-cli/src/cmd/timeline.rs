@@ -193,6 +193,7 @@ pub(crate) struct TimelinePreviewPackage {
     pub fixed_package_manifest_json: String,
     pub resource_manifest_json: String,
     pub verified_binding_bundle_json: String,
+    pub resource_bytes: Vec<u8>,
     pub motion: serde_json::Value,
     pub blobs: std::collections::BTreeMap<String, PreviewFile>,
     pub input_dependencies: std::collections::BTreeMap<String, ContentDigest>,
@@ -220,6 +221,8 @@ type TimelineMediaFacts = (
     Vec<serde_json::Value>,
     std::collections::BTreeMap<String, PreviewFile>,
     std::collections::BTreeMap<String, ContentDigest>,
+    ContentDigest,
+    serde_json::Value,
 );
 
 /// Capture only the media inputs consumed by browser preparation. Motion source
@@ -230,6 +233,12 @@ pub(crate) fn prepare_timeline_media_facts(
     media: &mut FrozenMediaCache,
 ) -> Result<TimelineMediaFacts> {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::time::{Duration, Instant};
+    let started = Instant::now();
+    let mut freeze_time = Duration::ZERO;
+    let mut video_time = Duration::ZERO;
+    let mut audio_time = Duration::ZERO;
+    let mut facts_time = Duration::ZERO;
 
     let original_doc: serde_json::Value = serde_json::from_slice(&timeline_bytes(&timeline)?)?;
     let motion_inputs = valle_compiler::motion_preparation_inputs(&timeline)?;
@@ -295,17 +304,22 @@ pub(crate) fn prepare_timeline_media_facts(
                         "wav" | "mp3" | "m4a" | "aac" | "flac" | "ogg" | "opus"
                     ));
         if video_candidate || audio_candidate {
+            let phase = Instant::now();
             let (hash, file) = media.get(&path)?;
+            freeze_time += phase.elapsed();
             let file = blobs.entry(hash.as_hex().to_owned()).or_insert(file);
             let frozen_path = match file {
                 PreviewFile::File { path, .. } => path.clone(),
                 PreviewFile::Bytes(_) => unreachable!(),
             };
+            let phase = Instant::now();
             let probe = video_candidate
                 .then(|| valle_media::codec::decode::probe_video_presentation(&frozen_path))
                 .and_then(Result::ok);
+            video_time += phase.elapsed();
             if let Some(probe) = probe {
                 record_dependency(&path, hash)?;
+                let phase = Instant::now();
                 super::motion_package::add_probed_video_resource(
                     &mut resources,
                     &id,
@@ -314,11 +328,14 @@ pub(crate) fn prepare_timeline_media_facts(
                     video_audio_used(&original_doc, &alias),
                     probe,
                 )?;
+                video_time += phase.elapsed();
                 continue;
             }
+            let phase = Instant::now();
             if declared_kind != Some(AssetKind::Video)
                 && let Ok(captured) = media.audio(&hash.as_hex(), &frozen_path)
             {
+                audio_time += phase.elapsed();
                 record_dependency(&path, hash)?;
                 resources.add_audio(&id, hash, captured.descriptor)?;
                 continue;
@@ -327,6 +344,7 @@ pub(crate) fn prepare_timeline_media_facts(
                 bail!("resource {alias} is not a valid declared media source");
             }
         }
+        let phase = Instant::now();
         let (mut asset, dependencies) = super::motion::load_asset_with_dependencies(&path)?;
         for (path, digest) in dependencies {
             record_dependency(&path, digest)?;
@@ -361,11 +379,18 @@ pub(crate) fn prepare_timeline_media_facts(
                 _directory: Arc::clone(&frozen),
             });
         resources.add_asset(&id, kind, &asset)?;
+        facts_time += phase.elapsed();
     }
+    let serialize_started = Instant::now();
     let capabilities = resources.capabilities();
-    let bindings = canonical_verified_binding_bundle(&resources.domain_bindings, &capabilities)
+    let bundle = canonical_verified_binding_bundle(&resources.domain_bindings, &capabilities)
         .map_err(|error| anyhow!(error))?;
-    let bindings: serde_json::Value = serde_json::from_str(&bindings)?;
+    let bytes_digest = ContentDigest::of_bytes(&bundle.resource_bytes);
+    blobs.insert(
+        bytes_digest.as_hex(),
+        PreviewFile::Bytes(bundle.resource_bytes.into()),
+    );
+    let bindings: serde_json::Value = serde_json::from_str(&bundle.json)?;
     for (id, entry) in resources.entries {
         let binding = &bindings["bindings"][&id];
         inputs.push(serde_json::json!({
@@ -373,7 +398,15 @@ pub(crate) fn prepare_timeline_media_facts(
             "dependencies": binding["dependencies"],
         }));
     }
-    Ok((inputs, blobs, input_dependencies))
+    let timings = serde_json::json!({
+        "freezeMs": freeze_time.as_secs_f64() * 1000.0,
+        "videoMs": video_time.as_secs_f64() * 1000.0,
+        "audioMs": audio_time.as_secs_f64() * 1000.0,
+        "otherFactsMs": facts_time.as_secs_f64() * 1000.0,
+        "packageMs": serialize_started.elapsed().as_secs_f64() * 1000.0,
+        "totalMs": started.elapsed().as_secs_f64() * 1000.0,
+    });
+    Ok((inputs, blobs, input_dependencies, bytes_digest, timings))
 }
 
 fn prepare_timeline_package_impl(
@@ -633,7 +666,13 @@ fn prepare_timeline_package_impl(
     })?;
     let manifest = std::str::from_utf8(manifest.canonical_bytes())?;
     let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).map_err(|e| anyhow!(e))?;
-    let files = fixed_package_files(&canonical, manifest, &bindings, &profile);
+    let files = fixed_package_files(
+        &canonical,
+        manifest,
+        &bindings.json,
+        &profile,
+        &bindings.resource_bytes,
+    );
     let (package, opened) = build_fixed_package(&files).map_err(|e| anyhow!(e))?;
     captured_motions.verify_dependencies()?;
     Ok(TimelinePreviewPackage {
@@ -643,7 +682,8 @@ fn prepare_timeline_package_impl(
         canonical_timeline_json: canonical,
         fixed_package_manifest_json: package,
         resource_manifest_json: manifest.to_owned(),
-        verified_binding_bundle_json: bindings,
+        verified_binding_bundle_json: bindings.json,
+        resource_bytes: bindings.resource_bytes,
         motion: serde_json::json!({"structures": structures, "problems": [], "shaders": []}),
         blobs,
         input_dependencies,
@@ -1116,7 +1156,7 @@ export default function Caption(props){ const time = useCurrentTime(); const cap
         let author = serde_json::json!({"canvas":{"width":160,"height":48,"fps":4},"resources":{"words":"missing.motion.tsx","font":font},"tracks":{"caption":[{"presenter":{"component":"words"},"style":{"font":"font","fontSize":20},"clips":[{"start":0,"duration":2,"runs":[{"text":"Words","start":0,"end":1.75}]}]}]}});
         let timeline = decode_timeline(&author.to_string()).unwrap();
         let mut media = FrozenMediaCache::default();
-        let (facts, _, dependencies) =
+        let (facts, _, dependencies, _, _) =
             prepare_timeline_media_facts(timeline.clone(), dir.path(), &mut media).unwrap();
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0]["id"], "resource:font");
@@ -1151,7 +1191,7 @@ export default function Caption(props){ const time = useCurrentTime(); const cap
             }], "transitions": [{"from":0,"to":1,"kind":"circleOpen"}]}]}
         });
         let mut cache = FrozenMediaCache::default();
-        let (facts, blobs, input_dependencies) = prepare_timeline_media_facts(
+        let (facts, blobs, input_dependencies, _, _) = prepare_timeline_media_facts(
             decode_timeline(&timeline.to_string()).unwrap(),
             dir.path(),
             &mut cache,
@@ -1200,16 +1240,25 @@ export default function Caption(props){ const time = useCurrentTime(); const cap
                 {"src": "b", "start": 1, "duration": 1}
             ]}]}
         });
-        let (facts, blobs, dependencies) = prepare_timeline_media_facts(
+        let (facts, blobs, dependencies, _, _) = prepare_timeline_media_facts(
             decode_timeline(&timeline.to_string()).unwrap(),
             dir.path(),
             &mut Default::default(),
         )
         .unwrap();
         assert_eq!(facts.len(), 2);
-        assert_eq!(blobs.len(), 1);
+        assert_eq!(
+            blobs
+                .values()
+                .filter(|file| matches!(file, PreviewFile::File { .. }))
+                .count(),
+            1
+        );
         assert_eq!(dependencies.len(), 2);
-        let Some(PreviewFile::File { path, .. }) = blobs.values().next() else {
+        let Some(PreviewFile::File { path, .. }) = blobs
+            .values()
+            .find(|file| matches!(file, PreviewFile::File { .. }))
+        else {
             panic!("missing frozen media source");
         };
         assert_eq!(std::fs::read(path).unwrap(), wav);

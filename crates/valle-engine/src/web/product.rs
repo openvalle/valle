@@ -603,12 +603,14 @@ impl ProductEngine {
         timeline_json: &str,
         manifest_json: &str,
         verified_binding_bundle_json: &str,
+        resource_bytes: &[u8],
     ) -> Result<String, JsError> {
         let opened = open_product_fixed_package(
             fixed_package_manifest_json,
             timeline_json,
             manifest_json,
             verified_binding_bundle_json,
+            resource_bytes,
         )
         .map_err(|error| JsError::new(&error))?;
         let render = opened.engine_render();
@@ -1283,15 +1285,30 @@ impl ProductEngine {
             .ok_or_else(|| JsError::new("unknown Motion kernel definition"))
     }
 
+    pub fn motion_kernel_definition_bytes(&self, id: &str) -> Result<Vec<u8>, JsError> {
+        self.compiler
+            .as_ref()
+            .and_then(|compiler| compiler.motion_definition_bytes(id))
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| JsError::new("unknown Motion kernel definition"))
+    }
+
     pub fn run_motion_kernel(
         &mut self,
         definition_id: &str,
         definition_json: &str,
+        resource_bytes: &[u8],
         input_json: &str,
         compact: bool,
     ) -> Result<Vec<u8>, JsError> {
         self.motion_kernel
-            .run(definition_id, definition_json, input_json, compact)
+            .run(
+                definition_id,
+                definition_json,
+                resource_bytes,
+                input_json,
+                compact,
+            )
             .map_err(|error| js_error("motion_kernel", error))
     }
 
@@ -1783,6 +1800,7 @@ fn open_product_fixed_package(
     timeline_json: &str,
     manifest_json: &str,
     verified_binding_bundle_json: &str,
+    resource_bytes: &[u8],
 ) -> Result<crate::fixed_package::OpenedFixedPackage, String> {
     let execution_profile_json = canonical_fixed_execution_profile(COMMON_PROFILE_KEY)?;
     let files = fixed_package_files(
@@ -1790,6 +1808,7 @@ fn open_product_fixed_package(
         manifest_json,
         verified_binding_bundle_json,
         &execution_profile_json,
+        resource_bytes,
     );
     open_verified_fixed_package(fixed_package_manifest_json, &files)
         .map_err(|error| error.to_string())
@@ -1861,7 +1880,13 @@ mod tests {
     fn fixed_package_fixture() -> (String, String, String, String) {
         let (timeline, resource_manifest, bundle, execution_profile) =
             empty_fixed_package_fixtures();
-        let files = fixed_package_files(&timeline, &resource_manifest, &bundle, &execution_profile);
+        let files = fixed_package_files(
+            &timeline,
+            &resource_manifest,
+            &bundle,
+            &execution_profile,
+            &[],
+        );
         let fixed_package_manifest = canonical_fixed_package_manifest(&files).unwrap();
         (fixed_package_manifest, timeline, resource_manifest, bundle)
     }
@@ -1875,12 +1900,12 @@ mod tests {
             &valle_timeline::internal::decode_canonical(&value.to_string()).unwrap(),
         )
         .unwrap();
-        let files = fixed_package_files(&timeline, &resources, &bundle, &profile);
+        let files = fixed_package_files(&timeline, &resources, &bundle, &profile, &[]);
         let package = canonical_fixed_package_manifest(&files).unwrap();
         let mut engine = ProductEngine::new();
         let receipt: serde_json::Value = serde_json::from_str(
             &engine
-                .open_fixed_package(&package, &timeline, &resources, &bundle)
+                .open_fixed_package(&package, &timeline, &resources, &bundle, &[])
                 .unwrap(),
         )
         .unwrap();
@@ -1900,7 +1925,7 @@ mod tests {
         let mut engine = ProductEngine::new();
         let first: serde_json::Value = serde_json::from_str(
             &engine
-                .open_fixed_package(&fixed_manifest, &timeline, &manifest, &bundle)
+                .open_fixed_package(&fixed_manifest, &timeline, &manifest, &bundle, &[])
                 .unwrap(),
         )
         .unwrap();
@@ -1923,7 +1948,7 @@ mod tests {
         engine.reset();
         let second: serde_json::Value = serde_json::from_str(
             &engine
-                .open_fixed_package(&fixed_manifest, &timeline, &manifest, &bundle)
+                .open_fixed_package(&fixed_manifest, &timeline, &manifest, &bundle, &[])
                 .unwrap(),
         )
         .unwrap();
@@ -1936,7 +1961,7 @@ mod tests {
         let mut engine = ProductEngine::new();
         let receipt: serde_json::Value = serde_json::from_str(
             &engine
-                .open_fixed_package(&fixed_manifest, &timeline, &manifest, &bundle)
+                .open_fixed_package(&fixed_manifest, &timeline, &manifest, &bundle, &[])
                 .unwrap(),
         )
         .unwrap();
@@ -1947,9 +1972,14 @@ mod tests {
     #[test]
     fn web_product_rejects_swapped_member_before_inner_admission() {
         let (fixed_manifest, timeline, resource_manifest, bundle) = fixed_package_fixture();
-        let error =
-            open_product_fixed_package(&fixed_manifest, &resource_manifest, &timeline, &bundle)
-                .unwrap_err();
+        let error = open_product_fixed_package(
+            &fixed_manifest,
+            &resource_manifest,
+            &timeline,
+            &bundle,
+            &[],
+        )
+        .unwrap_err();
         assert!(
             error.starts_with("[fixed_package] byte length mismatch")
                 || error.starts_with("[fixed_package] digest mismatch"),
@@ -1961,17 +1991,24 @@ mod tests {
     fn web_product_rejects_missing_outer_member_before_inner_admission() {
         let (fixed_manifest, timeline, resource_manifest, bundle) = fixed_package_fixture();
         assert!(
-            open_product_fixed_package(&fixed_manifest, &timeline, &resource_manifest, &bundle,)
-                .is_ok(),
+            open_product_fixed_package(
+                &fixed_manifest,
+                &timeline,
+                &resource_manifest,
+                &bundle,
+                &[],
+            )
+            .is_ok(),
             "the unchanged inner package must be admissible"
         );
         let mut manifest: serde_json::Value = serde_json::from_str(&fixed_manifest).unwrap();
         manifest["members"].as_array_mut().unwrap().pop();
         let missing = String::from_utf8(serde_jcs::to_vec(&manifest).unwrap()).unwrap();
-        let error = open_product_fixed_package(&missing, &timeline, &resource_manifest, &bundle)
-            .unwrap_err();
+        let error =
+            open_product_fixed_package(&missing, &timeline, &resource_manifest, &bundle, &[])
+                .unwrap_err();
         assert!(
-            error.starts_with("[fixed_package_manifest] expected 4 closed members"),
+            error.starts_with("[fixed_package_manifest] expected 5 closed members"),
             "unexpected admission layer: {error}"
         );
     }
@@ -1984,6 +2021,7 @@ mod tests {
             &timeline,
             &resource_manifest,
             &bundle,
+            &[],
         )
         .unwrap_err();
         assert_eq!(

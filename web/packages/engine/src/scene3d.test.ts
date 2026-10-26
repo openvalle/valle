@@ -315,6 +315,9 @@ test("project environments and models survive frozen-package reopen and arbitrar
           string,
           string
         >;
+        const resourceBytes = new Uint8Array(
+          await (await fetch(new URL(config.resourceBytesUrl!, ready.url))).arrayBuffer(),
+        );
         const open = () => {
           const engine = new ProductEngine();
           const receipt = JSON.parse(
@@ -323,6 +326,7 @@ test("project environments and models survive frozen-package reopen and arbitrar
               config.timelineJson!,
               config.resourceManifestJson!,
               config.verifiedBindingBundleJson!,
+              resourceBytes,
             ),
           );
           return { engine, renderId: receipt.renderId as string };

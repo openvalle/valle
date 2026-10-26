@@ -357,6 +357,11 @@ async function resourceHost(c: Case, folder: string) {
         authorTimeline: author,
         motionInstances: [],
         resourceInputs: facts.resources,
+        resourceBytes: facts.resourceBytes
+          ? new Uint8Array(
+              await (await fetch(new URL(facts.resourceBytes.url, upstream))).arrayBuffer(),
+            )
+          : new Uint8Array(),
       });
       const urls = boot.runtime.assetUrls;
       config = {
@@ -373,7 +378,16 @@ async function resourceHost(c: Case, folder: string) {
     }
     if (!config.fixedPackageManifestJson)
       throw new Error(`package preparation failed: ${JSON.stringify(config)}`);
-    await writeFile(path.join(folder, "package.json"), JSON.stringify(config, null, 2));
+    if (!config.resourceBytes && config.resourceBytesUrl)
+      config.resourceBytes = new Uint8Array(
+        await (await fetch(new URL(config.resourceBytesUrl, upstream))).arrayBuffer(),
+      );
+    const { resourceBytes, ...metadata } = config;
+    await writeFile(path.join(folder, "resource-bytes.bin"), resourceBytes ?? new Uint8Array());
+    await writeFile(
+      path.join(folder, "package.json"),
+      JSON.stringify({ ...metadata, resourceBytesUrl: "resource-bytes.bin" }, null, 2),
+    );
     return { host, upstream, config, preparationMs: performanceNow() - started };
   } catch (error) {
     host.kill();
@@ -425,7 +439,16 @@ async function browserJob(c: Case, backend: string, job: Record<string, unknown>
             ...job,
             gpu: backend === "web-gpu",
             cpuOutputF32,
-            input: { ...config, assets: config.resourceLocators ?? config.assets },
+            input: {
+              ...config,
+              resourceBytes: undefined,
+              resourceBytesUrl: "/resource-bytes.bin",
+              assets: config.resourceLocators ?? config.assets,
+            },
+          });
+        if (url.pathname === "/resource-bytes.bin")
+          return new Response(config.resourceBytes ?? new Uint8Array(), {
+            headers: { "content-type": "application/octet-stream" },
           });
         if (url.pathname === "/result" && request.method === "POST") {
           resolveResult(await request.json());

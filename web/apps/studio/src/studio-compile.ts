@@ -7,7 +7,6 @@ import type {
 } from "./studio-compile-worker.ts";
 import type { StandaloneAssets } from "./standalone-assets.ts";
 import { type AudioAnalysisInput } from "./audio-analysis-input.ts";
-import { frozenShaderBytes } from "./shader-input.ts";
 
 export type CompilePayload = Omit<StudioCompileRequest, "id">;
 
@@ -47,14 +46,6 @@ export function moduleClosure(
   return { entry: relativeEntry, modules };
 }
 
-function decodeBase64(value: string): Uint8Array {
-  if (typeof Uint8Array.fromBase64 === "function") return Uint8Array.fromBase64(value);
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
 function sourceTextForPath(
   path: string | undefined,
   sources: Record<string, string>,
@@ -73,10 +64,10 @@ export function timelineCompilePayload(
   sources: Record<string, string>,
   resourceInputs: readonly PreviewResourceInput[],
   locators: readonly { id: string; url: string }[] = [],
+  resourceBytesSource?: { digest: string; url: string },
 ): CompilePayload {
   const resources = new Map(resourceInputs.map((resource) => [resource.id, resource]));
   const instances: CompilePayload["instances"] = [];
-  const frozenFonts = new Map<string, Uint8Array>();
   const clips: {
     component: string;
     resources?: Record<string, string>;
@@ -132,37 +123,6 @@ export function timelineCompilePayload(
       return { control, contentHash: resource.entry.digest };
     });
     if (refs.length) options.resources = refs;
-    const aliases: Record<string, Uint8Array> = {};
-    for (const [control, alias] of Object.entries(clip.resources ?? {})) {
-      const resource = resources.get(`resource:${alias}`);
-      if (resource?.entry.kind === "font") {
-        const bytes = resource.facts.bytesBase64;
-        if (typeof bytes !== "string")
-          throw new Error(`Motion font asset ${control} has no frozen bytes`);
-        let font = frozenFonts.get(alias);
-        if (!font) {
-          font = decodeBase64(bytes);
-          frozenFonts.set(alias, font);
-        }
-        aliases[`asset://${control}`] = font;
-      }
-    }
-    if (Object.keys(aliases).length) options.fontAliases = aliases;
-    const shaders: NonNullable<MotionCompileOptions["shaders"]>[number][] = [];
-    for (const [control, alias] of Object.entries(clip.resources ?? {})) {
-      const resource = resources.get(`resource:${alias}`);
-      if (resource?.entry.kind !== "shader") continue;
-      const manifest = resource.facts.manifestBytesBase64;
-      const source = resource.facts.sourceBytesBase64;
-      if (typeof manifest !== "string" || typeof source !== "string") {
-        throw new Error(`Motion shader asset ${control} has no frozen source package`);
-      }
-      shaders.push({
-        assetControl: control,
-        frozenBytes: frozenShaderBytes(decodeBase64(manifest), decodeBase64(source)),
-      });
-    }
-    if (shaders.length) options.shaders = shaders;
     const audioUrls: AudioAnalysisInput[] = [];
     for (const [control, alias] of Object.entries(clip.resources ?? {})) {
       const resource = resources.get(`resource:${alias}`);
@@ -189,6 +149,7 @@ export function timelineCompilePayload(
     authorTimeline: timeline,
     instances,
     resourceInputs: [...resourceInputs],
+    resourceBytesSource,
   };
 }
 
@@ -223,6 +184,7 @@ export function standaloneCompilePayload(
       assets: assets?.bindings,
     },
     resourceInputs: assets?.resourceInputs,
+    resourceBytes: assets?.resourceBytes,
     instances: [
       {
         clipPath: "/tracks/visual/0/clips/0",
@@ -288,6 +250,12 @@ export class StudioCompileClient {
     };
     this.#worker.postMessage({
       type: "initialize",
+      cache: boot.capabilities.compileCache
+        ? {
+            url: new URL("/studio/compile-cache", location.href).href,
+            token: boot.session.token,
+          }
+        : undefined,
       runtimeAssets: playerRuntimeAssetsFromStudioBoot(boot),
       runtimeBaseUrl: location.href,
     } satisfies StudioCompileInitialize);

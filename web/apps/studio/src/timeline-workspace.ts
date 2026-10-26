@@ -105,6 +105,7 @@ function fixedPackageReplacement(config: StudioConfig) {
     timelineJson: config.render.timelineJson,
     resourceManifestJson,
     verifiedBindingBundleJson,
+    resourceBytes: config.render.resourceBytes,
     assets: config.assets,
   };
 }

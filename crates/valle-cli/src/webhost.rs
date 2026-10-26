@@ -72,7 +72,7 @@ fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Res
     {
         (
             serde_json::json!({"kind":"timeline-file", "input":input, "token":file["token"]}),
-            serde_json::json!({"saveTimeline":true,"editMotionProps":false,"writeMotionSource":true}),
+            serde_json::json!({"saveTimeline":true,"editMotionProps":false,"writeMotionSource":true,"compileCache":true}),
             "/assets/".to_owned(),
         )
     } else if config.get("generation").is_some() && config.get("input").is_some() {
@@ -90,6 +90,7 @@ fn studio_boot_from_config(config_json: &str, motion_token: Option<&str>) -> Res
                 "saveTimeline": false,
                 "editMotionProps": true,
                 "writeMotionSource": true,
+                "compileCache": true,
             }),
             "/motion-assets/".to_owned(),
         )
@@ -269,6 +270,93 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<StudioHost>) -> Result<(
         eprintln!("webhost req: {method} {path}");
     }
     let mut out = stream;
+
+    if path == "/studio/compile-cache" || path.starts_with("/studio/compile-cache/") {
+        let token = state
+            .timeline_file
+            .as_ref()
+            .map(|file| file.token.as_str())
+            .or_else(|| {
+                state
+                    .motion_source
+                    .as_ref()
+                    .map(|motion| motion.token.as_str())
+            });
+        if token.is_none_or(|token| {
+            !local_request_authorized(
+                header_value(&headers, "x-valle-token").unwrap_or(""),
+                token,
+                header_value(&headers, "origin").or_else(|| header_value(&headers, "host")),
+            )
+        }) {
+            return write_simple(&mut out, 403, "Forbidden", &[], b"");
+        }
+        if path == "/studio/compile-cache" && method == "GET" {
+            use sha2::{Digest, Sha256};
+            let mut digest = Sha256::new();
+            for path in [
+                crate::webruntime::ENGINE_WASM_PATH,
+                crate::webruntime::STUDIO_COMPILE_WORKER_PATH,
+            ] {
+                let Some(crate::webruntime::HostedFile::VerifiedRuntime(bytes)) =
+                    state.runtime_files.get(path)
+                else {
+                    return write_simple(&mut out, 204, "No Content", &[], b"");
+                };
+                digest.update(
+                    valle_motion::ContentDigest::of_bytes(bytes)
+                        .to_wire()
+                        .as_bytes(),
+                );
+            }
+            let identity = valle_motion::ContentDigest::from_bytes(digest.finalize().into());
+            return write_simple(
+                &mut out,
+                200,
+                "OK",
+                &[
+                    ("Content-Type", "application/json"),
+                    ("Cache-Control", "no-store"),
+                ],
+                serde_json::json!({"compilerDigest":identity})
+                    .to_string()
+                    .as_bytes(),
+            );
+        }
+        let key = path.strip_prefix("/studio/compile-cache/").unwrap_or("");
+        if !crate::compile_cache::valid_key(key) {
+            return write_simple(&mut out, 400, "Bad Request", &[], b"");
+        }
+        let root = valle_media::paths::cache_dir().join("studio-motion");
+        if method == "GET" {
+            return match crate::compile_cache::read(&root, key) {
+                Some(bytes) => write_simple(
+                    &mut out,
+                    200,
+                    "OK",
+                    &[
+                        ("Content-Type", "application/json"),
+                        ("Cache-Control", "no-store"),
+                    ],
+                    &bytes,
+                ),
+                None => write_simple(&mut out, 204, "No Content", &[], b""),
+            };
+        }
+        if method == "POST" {
+            if header_value(&headers, "content-length")
+                .and_then(|value| value.parse::<usize>().ok())
+                .is_none_or(|length| length > crate::compile_cache::MAX_ENTRY_BYTES)
+            {
+                return write_simple(&mut out, 413, "Payload Too Large", &[], b"");
+            }
+            let body = read_body(&mut reader, &headers)?;
+            // Cache failures cannot prevent editing or preparing a valid render.
+            let _ = crate::compile_cache::write(&root, key, body.as_bytes());
+            return write_simple(&mut out, 204, "No Content", &[], b"");
+        }
+        return write_simple(&mut out, 405, "Method Not Allowed", &[], b"");
+    }
 
     if method == "POST" && path == "/result" {
         let body = read_body(&mut reader, &headers)?;
@@ -756,7 +844,12 @@ fn prepare_project_preview(
         .lock()
         .map_err(|_| anyhow::anyhow!("preview preparation poisoned"))?;
     let base = preview_base(state);
-    let package = crate::cmd::timeline::prepare_timeline_preview(timeline, &base, &mut media)?;
+    let mut package = crate::cmd::timeline::prepare_timeline_preview(timeline, &base, &mut media)?;
+    let bytes_digest = valle_motion::ContentDigest::of_bytes(&package.resource_bytes);
+    package.blobs.insert(
+        bytes_digest.as_hex(),
+        crate::preview_store::PreviewFile::Bytes(package.resource_bytes.into()),
+    );
     let manifest: serde_json::Value = serde_json::from_str(&package.resource_manifest_json)?;
     let assets = manifest["entries"]
         .as_object()
@@ -792,6 +885,7 @@ fn prepare_project_preview(
             "resourceManifestJson": package.resource_manifest_json,
             "resourceManifest": manifest,
             "verifiedBindingBundleJson": package.verified_binding_bundle_json,
+            "resourceBytesUrl": format!("/preview-assets/{}", bytes_digest.as_hex()),
         }
     }))
 }
@@ -814,7 +908,7 @@ fn prepare_project_media_facts(
         .prepare
         .lock()
         .map_err(|_| anyhow::anyhow!("preview preparation poisoned"))?;
-    let (resources, blobs, input_dependencies) =
+    let (resources, blobs, input_dependencies, bytes_digest, timings) =
         crate::cmd::timeline::prepare_timeline_media_facts(
             timeline,
             &preview_base(state),
@@ -843,6 +937,8 @@ fn prepare_project_media_facts(
     Ok(serde_json::json!({
         "status": "ok", "resources": resources, "assets": assets,
         "inputDependencies": input_dependencies,
+        "resourceBytes": {"digest": bytes_digest, "url": format!("/preview-assets/{}", bytes_digest.as_hex())},
+        "timings": timings,
     }))
 }
 
@@ -1372,6 +1468,63 @@ fn hex_val(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiler_cache_requires_a_local_session_and_tracks_compiler_contents() {
+        use crate::webruntime::{ENGINE_WASM_PATH, HostedFile, STUDIO_COMPILE_WORKER_PATH};
+        let mut state = Arc::new(StudioHost {
+            runtime_files: BTreeMap::from([
+                (
+                    ENGINE_WASM_PATH.to_owned(),
+                    HostedFile::VerifiedRuntime(Arc::from(b"engine".as_slice())),
+                ),
+                (
+                    STUDIO_COMPILE_WORKER_PATH.to_owned(),
+                    HostedFile::VerifiedRuntime(Arc::from(b"worker".as_slice())),
+                ),
+            ]),
+            assets_dir: None,
+            preview_files: Arc::default(),
+            motion_source: Some(MotionSourceCtx {
+                token: "cache-session".into(),
+                input: "scene.motion.tsx".into(),
+                data: None,
+            }),
+            source_paths: Mutex::default(),
+            config_json: Arc::new(RwLock::new("{}".into())),
+            sse: SseBroadcaster::default(),
+            capture_dir: None,
+            library: None,
+            timeline_file: None,
+            last_report: RwLock::new(None),
+        });
+        let request = |state: &Arc<StudioHost>, path: &str, headers: &str| {
+            String::from_utf8(request_round_trip(state, "GET", path, b"", headers)).unwrap()
+        };
+        assert!(request(&state, "/studio/compile-cache", "").starts_with("HTTP/1.1 403"));
+        let headers = "X-Valle-Token: cache-session\r\n";
+        assert!(
+            request(
+                &state,
+                "/studio/compile-cache",
+                &format!("{headers}Origin: https://example.test\r\n")
+            )
+            .starts_with("HTTP/1.1 403")
+        );
+        assert!(
+            request(&state, "/studio/compile-cache/../outside", headers)
+                .starts_with("HTTP/1.1 400")
+        );
+        let first = request(&state, "/studio/compile-cache", headers);
+        assert!(first.starts_with("HTTP/1.1 200"));
+        assert!(first.contains("\"compilerDigest\":\"sha256:"));
+        assert_eq!(first, request(&state, "/studio/compile-cache", headers));
+        Arc::get_mut(&mut state).unwrap().runtime_files.insert(
+            ENGINE_WASM_PATH.to_owned(),
+            HostedFile::VerifiedRuntime(Arc::from(b"changed engine".as_slice())),
+        );
+        assert_ne!(first, request(&state, "/studio/compile-cache", headers));
+    }
 
     #[test]
     fn audio_analysis_response_uses_the_canonical_source_digest() {

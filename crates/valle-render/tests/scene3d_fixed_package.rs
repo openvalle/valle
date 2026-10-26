@@ -118,7 +118,13 @@ fn verify_fixed_model_package(pbr: bool) {
     )
     .unwrap();
     let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).unwrap();
-    let files = fixed_package_files(&timeline, manifest, &bundle, &profile);
+    let files = fixed_package_files(
+        &timeline,
+        manifest,
+        &bundle.json,
+        &profile,
+        &bundle.resource_bytes,
+    );
     let outer = canonical_fixed_package_manifest(&files).unwrap();
     let render = open_verified_fixed_package(&outer, &files)
         .unwrap()

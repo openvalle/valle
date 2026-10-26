@@ -480,6 +480,9 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
           string,
           string
         >;
+        const resourceBytes = new Uint8Array(
+          await (await fetch(new URL(config.resourceBytesUrl!, ready.url))).arrayBuffer(),
+        );
         const open = () => {
           const engine = new ProductEngine();
           const receipt = JSON.parse(
@@ -488,6 +491,7 @@ test("frozen shaders align Native/CanvasKit sampling and arbitrary-frame results
               config.timelineJson!,
               config.resourceManifestJson!,
               config.verifiedBindingBundleJson!,
+              resourceBytes,
             ),
           );
           return { engine, renderId: receipt.renderId as string };

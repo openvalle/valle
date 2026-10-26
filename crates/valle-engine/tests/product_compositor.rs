@@ -143,7 +143,13 @@ fn compiled_render() -> EngineRender {
     let manifest_json = std::str::from_utf8(manifest.canonical_bytes()).unwrap();
     let bundle_json = canonical_verified_binding_bundle(&bindings, &Capabilities::new()).unwrap();
     let profile_json = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).unwrap();
-    let files = fixed_package_files(&timeline_json, manifest_json, &bundle_json, &profile_json);
+    let files = fixed_package_files(
+        &timeline_json,
+        manifest_json,
+        &bundle_json.json,
+        &profile_json,
+        &bundle_json.resource_bytes,
+    );
     let package_manifest = canonical_fixed_package_manifest(&files).unwrap();
     open_verified_fixed_package(&package_manifest, &files)
         .unwrap()
@@ -232,7 +238,13 @@ fn simultaneous_samples_of_one_video_bind_distinct_handles_with_cached_templates
         let manifest_json = std::str::from_utf8(manifest.canonical_bytes()).unwrap();
         let bundle = canonical_verified_binding_bundle(&bindings, &Capabilities::new()).unwrap();
         let profile = canonical_fixed_execution_profile(COMMON_PROFILE_KEY).unwrap();
-        let files = fixed_package_files(&timeline_json, manifest_json, &bundle, &profile);
+        let files = fixed_package_files(
+            &timeline_json,
+            manifest_json,
+            &bundle.json,
+            &profile,
+            &bundle.resource_bytes,
+        );
         let package = canonical_fixed_package_manifest(&files).unwrap();
         let render = open_verified_fixed_package(&package, &files)
             .unwrap()

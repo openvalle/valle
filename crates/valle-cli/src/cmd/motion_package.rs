@@ -58,6 +58,7 @@ pub(super) struct StandaloneMotionPackage {
     pub resource_manifest_json: String,
     pub resource_manifest: Value,
     pub verified_binding_bundle_json: String,
+    pub resource_bytes: Vec<u8>,
     /// The package opened by the closed-package admission check above, so a native render reuses
     /// it instead of parsing, decoding and hashing the same members a second time.
     pub opened: OpenedFixedPackage,
@@ -135,9 +136,10 @@ pub(super) fn build_standalone_motion_package(
         .context("canonical Timeline is not UTF-8")?;
     let manifest_json = String::from_utf8(manifest.canonical_bytes().to_vec())
         .context("canonical ResourceManifest is not UTF-8")?;
-    let verified_binding_bundle_json =
-        canonical_verified_binding_bundle(&resources.domain_bindings, &capabilities)
-            .map_err(|error| anyhow!(error))?;
+    let bundle = canonical_verified_binding_bundle(&resources.domain_bindings, &capabilities)
+        .map_err(|error| anyhow!(error))?;
+    let verified_binding_bundle_json = bundle.json;
+    let resource_bytes = bundle.resource_bytes;
     let execution_profile_json =
         canonical_fixed_execution_profile(COMMON_PROFILE_KEY).map_err(|error| anyhow!(error))?;
     let files = fixed_package_files(
@@ -145,6 +147,7 @@ pub(super) fn build_standalone_motion_package(
         &manifest_json,
         &verified_binding_bundle_json,
         &execution_profile_json,
+        &resource_bytes,
     );
     let (fixed_package_manifest_json, opened) = build_fixed_package(&files).map_err(|error| {
         anyhow!("standalone Motion fixed package failed closed-package admission: {error}")
@@ -160,6 +163,7 @@ pub(super) fn build_standalone_motion_package(
         resource_manifest_json: manifest_json,
         resource_manifest: manifest_value,
         verified_binding_bundle_json,
+        resource_bytes,
         opened,
     })
 }
@@ -958,7 +962,6 @@ mod tests {
 
     #[test]
     fn host_fonts_replace_text_stack_and_preserve_formula_resources() {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
         let package = text_package(
             r#"export const composition = { width: 320, height: 180, duration: 1 };
 export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="x^2" /></Scene>}"#,
@@ -974,8 +977,9 @@ export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="
             &package.timeline_json,
             &package.resource_manifest_json,
             &package.verified_binding_bundle_json,
+            &package.resource_bytes,
             &[valle_engine::fixed_package::MotionFontBytes {
-                bytes_base64: STANDARD.encode(font),
+                bytes: font.to_vec(),
             }],
         )
         .unwrap();
@@ -1001,6 +1005,7 @@ export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="
             &selected.resource_manifest_json,
             &selected.verified_binding_bundle_json,
             &profile,
+            &selected.resource_bytes,
         );
         let render = open_verified_fixed_package(&selected.fixed_package_manifest_json, &files)
             .unwrap()
@@ -1038,8 +1043,9 @@ export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="
             &selected.timeline_json,
             &selected.resource_manifest_json,
             &selected.verified_binding_bundle_json,
+            &selected.resource_bytes,
             &[valle_engine::fixed_package::MotionFontBytes {
-                bytes_base64: STANDARD.encode(font),
+                bytes: font.to_vec(),
             }],
         )
         .unwrap();
@@ -1083,7 +1089,9 @@ export default function T(){return <Scene><Text>Hello</Text><MathFormula latex="
             )
             .unwrap();
         serde_json::from_str(
-            &canonical_verified_binding_bundle(&bindings, &Capabilities::new()).unwrap(),
+            &canonical_verified_binding_bundle(&bindings, &Capabilities::new())
+                .unwrap()
+                .json,
         )
         .unwrap()
     }

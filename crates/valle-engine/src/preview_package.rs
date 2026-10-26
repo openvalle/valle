@@ -7,7 +7,6 @@ use std::{
     sync::Arc,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use valle_motion::{NodeKind, SceneArtifact};
@@ -23,9 +22,9 @@ use valle_timeline::internal::{
 
 use crate::{
     fixed_package::{
-        COMMON_PROFILE_KEY, build_fixed_package, canonical_fixed_execution_profile,
-        canonical_verified_binding_bundle, fixed_package_files, prepared_resource_facts,
-        resource_entry_digest,
+        COMMON_PROFILE_KEY, ResourceByteRange, build_fixed_package,
+        canonical_fixed_execution_profile, canonical_verified_binding_bundle, fixed_package_files,
+        prepared_resource_facts, resource_entry_digest,
     },
     render::{
         Capabilities, ResourceBinding, ResourceBindings, ResourceDependency, VerifiedHandleId,
@@ -40,6 +39,8 @@ pub struct PreviewPackageInput {
     pub motion_instances: Vec<PreviewMotionInstance>,
     #[serde(default)]
     pub resource_inputs: Vec<PreviewResourceInput>,
+    #[serde(skip)]
+    pub resource_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,7 +57,7 @@ pub struct PreviewMotionInstance {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PreviewFont {
-    pub bytes_base64: String,
+    pub bytes: ResourceByteRange,
     /// `font` or `formula-font`; part of the artifact dependency role.
     pub role: String,
 }
@@ -86,6 +87,8 @@ pub struct PreparedPreview {
     pub timeline_json: String,
     pub resource_manifest_json: String,
     pub verified_binding_bundle_json: String,
+    #[serde(skip)]
+    pub resource_bytes: Vec<u8>,
     pub execution_profile_json: String,
     pub external_resources: Vec<PreviewExternalResource>,
     pub motion_source_metadata: BTreeMap<String, valle_timeline::MotionSourceMetadata>,
@@ -201,7 +204,9 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
                     .iter()
                     .zip(&instance.fonts)
                     .any(|(left, right)| {
-                        left.role != right.role || left.bytes_base64 != right.bytes_base64
+                        left.role != right.role
+                            || left.bytes.offset != right.bytes.offset
+                            || left.bytes.length != right.bytes.length
                     })
             {
                 return Err(format!(
@@ -230,7 +235,8 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
             return Err(format!("preview resource ID is reserved: {}", resource.id));
         }
         let digest = *resource_entry_digest(&resource.entry);
-        let facts = prepared_resource_facts(&resource.entry, resource.facts)?;
+        let facts =
+            prepared_resource_facts(&resource.entry, resource.facts, &input.resource_bytes)?;
         external_resources.push(PreviewExternalResource {
             id: resource.id.clone(),
             digest,
@@ -273,9 +279,7 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
                     "Motion {key} has no formula requiring a formula font"
                 ));
             }
-            let bytes = STANDARD
-                .decode(font.bytes_base64.as_bytes())
-                .map_err(|error| format!("invalid preview font: {error}"))?;
+            let bytes = font.bytes.resolve(&input.resource_bytes)?;
             let digest = ContentDigest::of_bytes(&bytes);
             let id = format!("font:{}:0", digest.as_hex());
             if !resources.entries.contains_key(&id) {
@@ -286,10 +290,7 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
                         digest,
                         descriptor: descriptor.clone(),
                     },
-                    VerifiedResourceFacts::Font {
-                        descriptor,
-                        bytes: Arc::from(bytes),
-                    },
+                    VerifiedResourceFacts::Font { descriptor, bytes },
                     Vec::new(),
                 )?;
             }
@@ -326,14 +327,16 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
     .map_err(|error| error.to_string())?;
     let resource_manifest_json = String::from_utf8(manifest.canonical_bytes().to_vec())
         .map_err(|error| error.to_string())?;
-    let verified_binding_bundle_json =
-        canonical_verified_binding_bundle(&resources.bindings, &capabilities)?;
+    let bundle = canonical_verified_binding_bundle(&resources.bindings, &capabilities)?;
+    let verified_binding_bundle_json = bundle.json;
+    let resource_bytes = bundle.resource_bytes;
     let execution_profile_json = canonical_fixed_execution_profile(COMMON_PROFILE_KEY)?;
     let files = fixed_package_files(
         &timeline_json,
         &resource_manifest_json,
         &verified_binding_bundle_json,
         &execution_profile_json,
+        &resource_bytes,
     );
     let (fixed_package_manifest_json, _) = build_fixed_package(&files)
         .map_err(|error| format!("preview package admission failed: {error}"))?;
@@ -351,6 +354,7 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
         timeline_json,
         resource_manifest_json,
         verified_binding_bundle_json,
+        resource_bytes,
         execution_profile_json,
         external_resources,
         motion_source_metadata,
@@ -408,6 +412,7 @@ mod tests {
                 fonts: Vec::new(),
             }],
             resource_inputs: Vec::new(),
+            resource_bytes: Vec::new(),
         }
     }
 
@@ -419,6 +424,7 @@ mod tests {
             &package.resource_manifest_json,
             &package.verified_binding_bundle_json,
             &package.execution_profile_json,
+            &[],
         );
         let opened =
             open_verified_fixed_package(&package.fixed_package_manifest_json, &files).unwrap();
@@ -442,6 +448,7 @@ mod tests {
             }),
             motion_instances: Vec::new(),
             resource_inputs: Vec::new(),
+            resource_bytes: Vec::new(),
         };
         let package = prepare_preview_package(input).unwrap();
         let files = fixed_package_files(
@@ -449,6 +456,7 @@ mod tests {
             &package.resource_manifest_json,
             &package.verified_binding_bundle_json,
             &package.execution_profile_json,
+            &[],
         );
         let opened =
             open_verified_fixed_package(&package.fixed_package_manifest_json, &files).unwrap();

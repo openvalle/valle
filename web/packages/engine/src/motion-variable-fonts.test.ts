@@ -179,6 +179,9 @@ test("variable Noto axes produce continuous ink and identical random-access fram
           string,
           string
         >;
+        const resourceBytes = new Uint8Array(
+          await (await fetch(new URL(config.resourceBytesUrl!, ready.url))).arrayBuffer(),
+        );
         if (!config.fixedPackageManifestJson) throw new Error(JSON.stringify(config));
         const served = new Uint8Array(
           await (
@@ -193,6 +196,7 @@ test("variable Noto axes produce continuous ink and identical random-access fram
             config.timelineJson!,
             config.resourceManifestJson!,
             config.verifiedBindingBundleJson!,
+            resourceBytes,
           ),
         );
         executor = new CanvasKitExecutor(ck, {

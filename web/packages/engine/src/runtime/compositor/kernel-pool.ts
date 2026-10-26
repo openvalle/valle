@@ -197,6 +197,10 @@ export class ProductKernelPool {
                 slot.definitionId === (job.input as MotionKernelInput).definitionId
                   ? ""
                   : (job.input as MotionKernelInput).definitionJson,
+              resourceBytes:
+                slot.definitionId === (job.input as MotionKernelInput).definitionId
+                  ? new Uint8Array()
+                  : (job.input as MotionKernelInput).resourceBytes,
             }
           : job.input;
         if (isMotion) slot.definitionId = (job.input as MotionKernelInput).definitionId;
@@ -261,7 +265,11 @@ function motionWorkingBytes(input: MotionKernelInput): number {
     )
   )
     throw new Error("invalid Motion working extent");
-  const bytes = width * height * 24 + 16 * 1024 ** 2 + input.definitionJson.length * 2;
+  const bytes =
+    width * height * 24 +
+    16 * 1024 ** 2 +
+    input.definitionJson.length * 2 +
+    input.resourceBytes.byteLength * 2;
   if (!Number.isSafeInteger(bytes)) throw new Error("Motion working set overflow");
   return bytes;
 }
