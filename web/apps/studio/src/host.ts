@@ -296,12 +296,7 @@ export function playerRuntimeAssetsFromStudioBoot(boot: StudioBoot): PlayerRunti
 
 export class TimelineFileHost extends BaseStudioHost {
   async loadTimeline(): Promise<TimelineContext> {
-    return assertTimelineContext({
-      ...(await this.fetchJson("/timeline/get")),
-      runtimeAssets: playerRuntimeAssetsFromStudioBoot(this.boot),
-      assetBaseUrl: this.boot.runtime.assetBaseUrl,
-      proxyBase: this.boot.runtime.proxyBase ?? null,
-    });
+    return timelineContextFromSnapshot(this.boot, await this.fetchJson("/timeline/get"));
   }
 
   private async post(url: string, body: unknown): Promise<Record<string, unknown>> {
@@ -321,6 +316,18 @@ export class TimelineFileHost extends BaseStudioHost {
   async loadMediaFacts(request: TimelinePreviewRequest): Promise<MediaFactsResult> {
     return (await this.post("/timeline/media-facts", request)) as unknown as MediaFactsResult;
   }
+}
+
+export function timelineContextFromSnapshot(
+  boot: StudioBoot,
+  snapshot: Record<string, unknown>,
+): TimelineContext {
+  return assertTimelineContext({
+    ...snapshot,
+    runtimeAssets: playerRuntimeAssetsFromStudioBoot(boot),
+    assetBaseUrl: boot.runtime.assetBaseUrl,
+    proxyBase: boot.runtime.proxyBase ?? null,
+  });
 }
 
 export class MotionFileHost extends BaseStudioHost {

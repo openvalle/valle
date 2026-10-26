@@ -5,7 +5,7 @@ import {
   requireImported,
   type ImportIntent,
 } from "./project-client.ts";
-import { loadStudioHost, type StudioHost } from "./host.ts";
+import { loadStudioHost, timelineContextFromSnapshot, type StudioHost } from "./host.ts";
 import type { ValleStudioApp } from "./studio-shell.ts";
 import { startTimelineStudio } from "./timeline-workspace.ts";
 import { StudioSourceEditor } from "./source-editor.ts";
@@ -277,8 +277,16 @@ async function startDocument(shell: ValleStudioApp): Promise<void> {
           void add({ files: [...event.dataTransfer.files], complete });
       });
     } else {
+      let firstLoad = true;
       await startTimelineStudio({
         sourceEditor,
+        loadTimeline: () => {
+          if (firstLoad) {
+            firstLoad = false;
+            return Promise.resolve(timelineContextFromSnapshot(host.boot, initial));
+          }
+          return host.loadTimeline!();
+        },
         preparePreview: (timeline) => browserSession.prepareTimelinePreview(timeline),
       });
     }

@@ -54,6 +54,7 @@ import {
   type TimelineTransitionKind,
 } from "./timeline-edit.ts";
 import { initializeTimelineWorkspaceRuntime } from "./timeline-workspace-runtime.ts";
+import { previewRasterScale } from "./preview-resolution.ts";
 import {
   assertReloadedTimelineSave,
   captureTimelineSaveSnapshot,
@@ -533,8 +534,15 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     return "kind-visual";
   }
 
+  const previewScale = (current = config) =>
+    current.pxScale ??
+    previewRasterScale(
+      current.timeline.canvas,
+      requiredElement("stageArea").getBoundingClientRect(),
+      window.devicePixelRatio,
+    );
   const workspaceRuntime = await initializeTimelineWorkspaceRuntime(
-    { ...config, runtimeBaseUrl: config.runtimeBaseUrl ?? location.href },
+    { ...config, pxScale: previewScale(), runtimeBaseUrl: config.runtimeBaseUrl ?? location.href },
     player,
   );
   const compileTimeline = workspaceRuntime.compileTimeline;
@@ -710,6 +718,9 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   ): Promise<boolean> {
     const replacement = fixedPackageReplacement(next);
     if (!replacement) return false;
+    const scale = previewScale(next);
+    player.pxScale = scale;
+    if (player.controller?.player) player.controller.player.pxScale = scale;
     const replaceStarted = performance.now();
     if (playerLoaded) {
       await player.replaceRenderPackage({ ...replacement, isCurrent });
@@ -721,6 +732,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         cpuThreads: next.cpuThreads,
         runtimeAssets: next.runtimeAssets,
         runtimeBaseUrl: next.runtimeBaseUrl ?? location.href,
+        pxScale: scale,
       });
       performance.mark("valle-studio-player-load", {
         detail: {
@@ -2823,9 +2835,34 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     });
   }
 
+  let resizingPreview = false;
+  async function resizePreview(): Promise<void> {
+    const runtime = player.controller?.player;
+    if (
+      !previewAvailable ||
+      !runtime ||
+      resizingPreview ||
+      Math.abs(runtime.pxScale - previewScale()) <= 0.01
+    )
+      return;
+    resizingPreview = true;
+    const playing = player.playing;
+    try {
+      do {
+        player.pxScale = runtime.pxScale = previewScale();
+        await player.seek(player.currentTime());
+      } while (Math.abs(runtime.pxScale - previewScale()) > 0.01);
+      if (playing) await player.play();
+    } finally {
+      resizingPreview = false;
+    }
+  }
   const layoutObserver = new ResizeObserver(() => {
     setTimelineZoom(zoomScale);
     positionSelectionBox();
+    void resizePreview().catch((error: unknown) =>
+      console.error("Could not resize preview", error),
+    );
   });
   layoutObserver.observe(requiredElement("timelineScroll"));
   layoutObserver.observe(requiredElement("stageArea"));

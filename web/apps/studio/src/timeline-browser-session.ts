@@ -5,58 +5,54 @@ import type { StudioSourceEditor } from "./source-editor.ts";
 import { StudioCompileClient, timelineCompilePayload } from "./studio-compile.ts";
 
 /** Only bindings and media sources can change the frozen facts supplied by Host. */
-function mediaInputKey(timeline: Timeline): string | null {
-  const motionComponents = new Set<string>();
-  const bindings: unknown[] = [];
-  const media: unknown[] = [];
+export function mediaInputKey(timeline: Timeline): string | null {
+  const uses = new Map<string, Set<string>>();
+  const use = (alias: string, kind: string) => {
+    let kinds = uses.get(alias);
+    if (!kinds) uses.set(alias, (kinds = new Set()));
+    kinds.add(kind);
+  };
+  const bindings = (resources?: Record<string, string> | null) => {
+    for (const alias of Object.values(resources ?? {})) use(alias, "motion");
+  };
   for (const track of timeline.tracks.visual ?? []) {
     for (const clip of track.clips) {
       if (clip.kind === "motion") {
-        motionComponents.add(clip.component);
-        bindings.push(clip.resources ?? null);
-      } else {
-        media.push(clip);
+        bindings(clip.resources);
+      } else if (clip.kind === "image" || clip.kind === "video") {
+        use(clip.src, clip.kind);
+        if (clip.kind === "video" && clip.gain !== 0) use(clip.src, "audio");
       }
       for (const effect of clip.effects ?? []) {
-        motionComponents.add(effect.component);
-        bindings.push(effect.resources ?? null);
+        bindings(effect.resources);
       }
     }
     for (const transition of track.transitions ?? []) {
       if (transition.kind === "motion") {
-        motionComponents.add(transition.component);
-        bindings.push(transition.resources ?? null);
+        bindings(transition.resources);
       }
     }
   }
   for (const track of timeline.tracks.caption ?? []) {
+    use(track.style.font, "font");
     if (track.presenter) {
-      motionComponents.add(track.presenter.component);
-      bindings.push({ ...track.presenter.resources, caption: track.style.font });
+      bindings(track.presenter.resources);
     }
   }
   for (const clip of (timeline.tracks.adjustment ?? []).flatMap((track) => track.clips)) {
     if (clip.kind === "motion") {
-      motionComponents.add(clip.component);
-      bindings.push(clip.resources ?? null);
+      bindings(clip.resources);
     }
   }
-  const external = Object.entries(timeline.resources ?? {}).filter(
-    ([alias]) => !motionComponents.has(alias),
-  );
-  const otherTracks = {
-    audio: timeline.tracks.audio,
-    caption: timeline.tracks.caption,
-    adjustment: timeline.tracks.adjustment,
-  };
-  if (
-    !external.length &&
-    !media.length &&
-    Object.values(otherTracks).every((value) => !value?.length)
-  ) {
-    return null;
+  for (const track of timeline.tracks.audio ?? []) {
+    for (const clip of track.clips) use(clip.src, "audio");
   }
-  return JSON.stringify([external, bindings, media, otherTracks]);
+  if (!uses.size) return null;
+  return JSON.stringify(
+    [...uses]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([alias, kinds]) => [alias, timeline.resources?.[alias] ?? null, [...kinds].sort()]),
+  );
 }
 
 /** Project and Timeline use the same browser preparation as standalone Motion. */
