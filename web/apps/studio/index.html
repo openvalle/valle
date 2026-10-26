@@ -9,17 +9,23 @@
 
 <valle-studio-app id="studioShell">
   <header class="topbar">
-    <a class="brand" href="./" aria-label="Valle Studio">
+    <a class="brand" id="homeButton" href="/?home=1" aria-label="Projects" title="Projects">
       <span class="brand-lockup" aria-hidden="true"></span>
     </a>
-    <div class="doc-title">
-      <span class="project-name" id="projectName">Studio</span>
-      <span class="session-badge" id="sessionBadge"></span>
-    </div>
+    <details class="project-menu" id="projectMenu">
+      <summary class="doc-title">
+        <span class="project-name" id="projectName">Studio</span>
+        <span data-icon="chevron-down"></span>
+      </summary>
+      <div class="project-menu-items">
+        <button id="projectSettingsButton" type="button">Project settings</button>
+        <button id="historyPanelButton" type="button" hidden>History</button>
+        <button id="exportHistoryButton" type="button" hidden>Export history</button>
+        <button id="saveAsProject" type="button" hidden>Save as project</button>
+      </div>
+    </details>
+    <button class="button quiet assets-toggle" id="assetsPanelButton" type="button" aria-pressed="false" aria-label="Assets" title="Assets"><span data-icon="folder"></span><span class="assets-label">Assets</span></button>
     <div class="top-actions">
-      <button class="button quiet" id="homeButton" type="button">Home</button>
-      <button class="button quiet" id="assetsPanelButton" type="button">Assets</button>
-      <button class="button quiet" id="historyPanelButton" type="button" hidden>History</button>
       <span id="saveStatus" class="save-status"></span>
       <button class="problems-button" id="problemsButton" type="button" hidden
         aria-haspopup="dialog" aria-expanded="false" aria-controls="problemsPanel">
@@ -28,12 +34,11 @@
       <span class="top-sep" aria-hidden="true"></span>
       <button class="icon-button" id="undoBtn" type="button" title="Undo (⌘Z)" aria-label="Undo" disabled data-icon="undo"></button>
       <button class="icon-button" id="redoBtn" type="button" title="Redo (⇧⌘Z)" aria-label="Redo" disabled data-icon="redo"></button>
-      <button class="button quiet" id="saveAsProject" type="button" hidden>Save as project</button>
       <studio-project-controls id="projectControls"></studio-project-controls>
       <button class="icon-button" id="inspectorToggle" type="button" title="Show / hide inspector (⌥⌘I)" aria-label="Show / hide inspector" aria-pressed="true" data-icon="panel"></button>
       <span class="top-sep export-sep" aria-hidden="true"></span>
       <button class="button export-trigger" id="exportVideo" type="button" disabled
-        title="Export video" aria-haspopup="dialog" aria-controls="exportVideoDialog">
+        title="Export video" aria-label="Export video" aria-haspopup="dialog" aria-controls="exportVideoDialog">
         <span data-icon="download"></span><span>Export</span>
       </button>
     </div>
@@ -43,27 +48,22 @@
 
   <section class="workspace">
     <section class="preview-pane island">
-      <div class="preview-header">
-        <div class="preview-heading"><span data-icon="film"></span><strong>Preview</strong></div>
-        <div class="viewer-info">
-          <span class="preview-status info" id="previewStatus" role="status">
-            <span class="status-dot"></span><span id="previewStatusText">Loading…</span>
-          </span>
-          <span class="stage-meta" id="stageMeta"></span>
-        </div>
-      </div>
       <div class="stage-area" id="stageArea">
+        <span class="preview-status info" id="previewStatus" role="status">
+          <span class="status-dot"></span><span id="previewStatusText">Loading…</span>
+        </span>
         <div class="stage" id="stageWrap">
-          <valle-player id="studioPlayer" loading-label="Booting render engine…">
+          <valle-player id="studioPlayer" loading-label="Preparing preview…">
             <div class="stage-overlay" id="loading">
               <div class="stack">
                 <div class="spinner"></div>
-                <div id="loadingText">Booting render engine…</div>
+                <div id="loadingText">Preparing preview…</div>
+                <button class="button" id="emptyAssets" type="button" hidden>Add media</button>
               </div>
             </div>
             <div class="stage-overlay err" id="errbox" hidden>
               <div class="stack">
-                <div>Studio error</div>
+                <div>Preview unavailable</div>
                 <pre id="errtext"></pre>
               </div>
             </div>
@@ -76,7 +76,7 @@
       <div class="viewer-footer">
         <studio-transport class="transport" id="studioTransport"></studio-transport>
         <div class="stage-options">
-          <button class="button quiet fit-control" id="stageFit" type="button" title="Fit canvas / actual size">Fit</button>
+          <button class="button quiet fit-control" id="stageFit" type="button" title="Fit picture / actual size" aria-label="Preview size">Fit</button>
           <button class="icon-button" id="focusPreview" type="button" title="Expand preview" aria-label="Expand preview" aria-pressed="false" data-icon="expand"></button>
         </div>
       </div>
@@ -88,10 +88,6 @@
       <div class="inspector-tabs" role="tablist" aria-label="Inspector view">
         <button class="inspector-tab" id="propertiesTab" type="button" role="tab" aria-selected="true">Properties</button>
         <button class="inspector-tab" id="sourceToggle" type="button" role="tab" aria-pressed="false" hidden>Code</button>
-      </div>
-      <div class="inspector-heading">
-        <h1 id="inspectorTitle">Inspector</h1>
-        <span id="inspectorKind" class="type-tag">Project</span>
       </div>
       <div class="inspector-scroll" id="inspectorScroll">
         <studio-inspector id="inspectorBody"></studio-inspector>
@@ -113,13 +109,10 @@
   <section class="timeline-pane island" id="timelinePane" aria-label="Timeline">
     <div class="timeline-toolbar">
       <div class="timeline-heading">
-        <span data-icon="timeline"></span>
-        <strong id="timelineTitle">Timeline</strong>
-        <span class="track-count" id="trackCount"></span>
-        <span class="timeline-selection" id="timelineSelection"></span>
+        <span class="sr-only" id="timelineTitle">Timeline</span>
       </div>
       <div class="timeline-actions">
-        <button class="button quiet" id="fitTimeline" type="button" title="Fit the full timeline" aria-label="Fit timeline">Fit</button>
+        <button class="button quiet" id="fitTimeline" type="button" title="Fit the full timeline" aria-label="Fit timeline">Fit all</button>
         <button class="icon-button" id="zoomOut" type="button" title="Zoom out" aria-label="Zoom out" data-icon="minus"></button>
         <input type="range" id="timelineZoom" min="0.25" max="8" step="0.25" value="1" aria-label="Timeline zoom" />
         <button class="icon-button" id="zoomIn" type="button" title="Zoom in" aria-label="Zoom in" data-icon="plus"></button>
@@ -136,15 +129,27 @@
     </footer>
   </section>
 
+  <dialog id="projectSettingsDialog" class="studio-dialog project-settings-dialog" aria-labelledby="projectSettingsTitle">
+    <header class="project-panel-heading">
+      <h2 id="projectSettingsTitle">Project settings</h2>
+      <button class="icon-button" id="projectSettingsClose" type="button" aria-label="Close project settings" data-icon="close"></button>
+    </header>
+    <dl class="project-settings-facts">
+      <div><dt>Resolution</dt><dd id="projectCanvas">—</dd></div>
+      <div><dt>Frame rate</dt><dd id="projectFps">—</dd></div>
+      <div><dt>Duration</dt><dd id="projectDuration">—</dd></div>
+      <div><dt>Tracks</dt><dd id="projectTracks">—</dd></div>
+    </dl>
+  </dialog>
+
   <dialog id="saveAsProjectDialog" class="studio-dialog" aria-labelledby="saveAsProjectTitle">
     <form id="saveAsProjectForm">
       <h2 id="saveAsProjectTitle">Save as project</h2>
       <label for="saveAsProjectPath">Project directory</label>
       <input id="saveAsProjectPath" type="text" required />
-      <p>The component and its media are copied into a new project.</p>
       <div class="dialog-actions">
         <button class="button quiet" id="saveAsProjectCancel" type="button">Cancel</button>
-        <button class="button primary" type="submit">Save Timeline</button>
+        <button class="button primary" type="submit">Create project</button>
       </div>
     </form>
   </dialog>

@@ -52,6 +52,8 @@ export class ValleStudioApp extends LitElement {
   #problemsOpen = false;
   #conflictDismissed = false;
   #resizeObserver: ResizeObserver | null = null;
+  #saveFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  #wasDirty = false;
 
   constructor() {
     super();
@@ -97,7 +99,6 @@ export class ValleStudioApp extends LitElement {
     } catch {
       /* Storage is optional. */
     }
-    if (innerHeight <= 560) this.shellState = { ...this.shellState, timelineCollapsed: true };
     hydrateIcons(this);
     this.#bindChrome();
     this.#applyShellChrome();
@@ -134,6 +135,7 @@ export class ValleStudioApp extends LitElement {
     this.#unsubscribe = null;
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
+    clearTimeout(this.#saveFeedbackTimer);
     super.disconnectedCallback();
   }
 
@@ -184,6 +186,22 @@ export class ValleStudioApp extends LitElement {
   }
 
   #bindChrome(): void {
+    const menu = this.#req<HTMLDetailsElement>("projectMenu");
+    const settings = this.#req<HTMLDialogElement>("projectSettingsDialog");
+    this.#req("projectSettingsButton").addEventListener("click", () => settings.showModal());
+    this.#req("projectSettingsClose").addEventListener("click", () => settings.close());
+    menu.addEventListener("click", (event) => {
+      if ((event.target as Element).closest("button")) menu.open = false;
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!menu.contains(event.target as Node)) menu.open = false;
+    });
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") menu.open = false;
+    });
+    this.#req("emptyAssets").addEventListener("click", () =>
+      this.#req("assetsPanelButton").click(),
+    );
     this.#req<HTMLButtonElement>("stageFit").addEventListener("click", (event) => {
       const full = this.#req<HTMLElement>("stageArea").classList.toggle("full-size");
       (event.currentTarget as HTMLButtonElement).textContent = full ? "100%" : "Fit";
@@ -266,8 +284,13 @@ export class ValleStudioApp extends LitElement {
     });
 
     inspectorToggle.addEventListener("click", () => {
-      if (innerWidth <= 780) {
+      if (innerWidth <= 1024) {
         this.classList.toggle("mobile-inspector");
+        if (
+          this.classList.contains("mobile-inspector") &&
+          this.#req("assetsPanelButton").getAttribute("aria-pressed") === "true"
+        )
+          this.#req("assetsPanelButton").click();
         inspectorToggle.setAttribute(
           "aria-pressed",
           String(this.classList.contains("mobile-inspector")),
@@ -350,39 +373,27 @@ export class ValleStudioApp extends LitElement {
     this.classList.toggle("preview-focus", state.previewFocus);
 
     this.#text("projectName", state.projectName);
-    const badge = this.#req<HTMLElement>("sessionBadge");
-    badge.textContent =
-      state.session?.kind === "timeline-file"
-        ? "Timeline"
-        : state.session?.kind === "motion-file"
-          ? "Motion"
-          : "";
-    badge.hidden = !state.session;
-
-    this.#text(
-      "inspectorKind",
-      state.session?.kind === "timeline-file"
-        ? "Timeline file"
-        : state.session?.kind === "motion-file"
-          ? "Motion clip"
-          : "Project",
-    );
-
     const undo = this.#req<HTMLButtonElement>("undoBtn");
     const redo = this.#req<HTMLButtonElement>("redoBtn");
     undo.disabled = !state.canUndo;
     redo.disabled = !state.canRedo;
 
     const saveStatus = this.#req<HTMLElement>("saveStatus");
-    saveStatus.classList.toggle("dirty", state.dirty);
+    const dirty = state.dirty || state.sourceDirty;
+    saveStatus.classList.toggle("dirty", dirty);
     saveStatus.classList.toggle("error", state.conflict);
-    saveStatus.textContent = state.conflict
-      ? (state.conflictMessage ?? "External change conflict")
-      : state.sourceDirty
-        ? "Unsaved source"
-        : state.dirty
-          ? "Unsaved changes"
-          : "Saved";
+    if (state.conflict || dirty) {
+      clearTimeout(this.#saveFeedbackTimer);
+      saveStatus.textContent = state.conflict ? "Save conflict" : "Unsaved changes";
+      saveStatus.title = state.conflictMessage ?? "";
+    } else if (this.#wasDirty) {
+      saveStatus.textContent = "Saved";
+      saveStatus.title = "";
+      this.#saveFeedbackTimer = setTimeout(() => {
+        saveStatus.textContent = "";
+      }, 2000);
+    }
+    this.#wasDirty = dirty;
 
     const previewStatus = this.#req<HTMLElement>("previewStatus");
     const previewText = this.#req<HTMLElement>("previewStatusText");
@@ -433,7 +444,7 @@ export class ValleStudioApp extends LitElement {
     this.#req<HTMLButtonElement>("inspectorToggle").setAttribute(
       "aria-pressed",
       String(
-        innerWidth <= 780
+        innerWidth <= 1024
           ? this.classList.contains("mobile-inspector")
           : this.shellState.inspectorVisible,
       ),

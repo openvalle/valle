@@ -89,6 +89,7 @@ export class StudioSourceEditor extends EventTarget {
     this.#pane.hidden = !open;
     this.#previewPane.classList.toggle("source-open", open);
     this.#toggle.setAttribute("aria-pressed", String(open));
+    this.#renderStatus();
     if (open) this.#textarea.focus();
   }
 
@@ -220,11 +221,9 @@ export class StudioSourceEditor extends EventTarget {
     const file = this.#selected ? this.drafts.files.get(this.#selected) : null;
     this.#status.textContent =
       file?.conflict ??
-      (this.#saving
-        ? "Saving…"
-        : file && file.text !== file.savedText
-          ? "Unsaved source"
-          : "Saved");
+      (this.#saving ? "Saving…" : file && file.text !== file.savedText ? "Modified" : "");
     this.#saveButton.disabled = this.#saving || !this.dirty;
+    this.#reloadButton.hidden = !this.dirty && !this.conflicted;
+    this.#reloadButton.textContent = this.conflicted ? "Reload" : "Discard";
   }
 }

@@ -23,6 +23,7 @@ export class StudioTransport extends LitElement {
     timeS: { state: true },
     durationS: { state: true },
     disabled: { type: Boolean },
+    showFrames: { state: true },
   };
 
   declare playing: boolean;
@@ -34,6 +35,7 @@ export class StudioTransport extends LitElement {
   declare timeS: number;
   declare durationS: number;
   declare disabled: boolean;
+  declare showFrames: boolean;
 
   constructor() {
     super();
@@ -46,6 +48,7 @@ export class StudioTransport extends LitElement {
     this.timeS = 0;
     this.durationS = 0;
     this.disabled = false;
+    this.showFrames = false;
   }
 
   connectedCallback(): void {
@@ -150,9 +153,26 @@ export class StudioTransport extends LitElement {
         class="transport-middle"
         style=${`--transport-frame-digits: ${frameDigits}; --transport-time-width: ${timecodeWidth}ch`}
       >
-        <span class="time-code">${timecode}</span>
-        <span class="time-total">/ ${formatTimecode(this.durationS)}</span>
-        <label class="time-input-wrap" title="Current frame of ${this.totalFrames}">
+        <button
+          class="time-display"
+          type="button"
+          ?hidden=${this.showFrames}
+          aria-label=${`Time ${timecode}. Show frame position`}
+          title="Show frame position"
+          @click=${async () => {
+            this.showFrames = true;
+            await this.updateComplete;
+            this.querySelector<HTMLInputElement>("#frameInput")?.focus();
+          }}
+        >
+          <span class="time-code">${timecode}</span>
+          <span class="time-total">/ ${formatTimecode(this.durationS)}</span>
+        </button>
+        <label
+          class="time-input-wrap"
+          ?hidden=${!this.showFrames}
+          title="Current frame of ${this.totalFrames}"
+        >
           <input
             id="frameInput"
             type="number"
@@ -165,7 +185,19 @@ export class StudioTransport extends LitElement {
             @blur=${this.#onFrameInput}
             @keydown=${this.#frameKeydown}
           />
-          <span>f</span>
+          <button
+            class="time-format-toggle"
+            type="button"
+            title="Show timecode"
+            aria-label="Show timecode"
+            @click=${async () => {
+              this.showFrames = false;
+              await this.updateComplete;
+              this.querySelector<HTMLButtonElement>(".time-display")?.focus();
+            }}
+          >
+            f
+          </button>
         </label>
       </div>
       <div class="transport-side end">

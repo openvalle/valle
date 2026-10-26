@@ -1,4 +1,5 @@
 import { html, render } from "lit";
+import { hydrateIcons } from "../../shared/icons.ts";
 import type { StudioHost } from "./host.ts";
 import type { ValleStudioApp } from "./studio-shell.ts";
 import {
@@ -12,7 +13,7 @@ import {
   type RecentProject,
 } from "./project-client.ts";
 
-type Panel = "assets" | "history" | "exports";
+type Panel = "assets" | "history" | "exports" | "export-history";
 const kinds = [
   "video",
   "audio",
@@ -25,12 +26,25 @@ const kinds = [
   "data",
   "other",
 ];
+const kindLabels: Record<string, string> = {
+  video: "Video",
+  audio: "Audio",
+  image: "Image",
+  font: "Font",
+  model3d: "3D model",
+  environment: "Environment",
+  shader: "Shader",
+  component: "Component",
+  data: "Data",
+  other: "File",
+};
 const fileUrl = (scope: "project" | "library", path: string) =>
   `${scope === "project" ? "/project/file/" : "/library/blob/"}${path.split("/").map(encodeURIComponent).join("/")}`;
 
 export class ProjectPanels {
   readonly #services: StudioServices;
   readonly #panel = document.createElement("aside");
+  readonly #dialog = document.createElement("dialog");
   #tab: Panel = "assets";
   #scope: "project" | "library";
   #query = "";
@@ -49,6 +63,8 @@ export class ProjectPanels {
   #noteText = "";
   #noteTime = "";
   #font: FontFace | null = null;
+  #filtersOpen = false;
+  #lastExport: ProjectExportResult | null = null;
 
   constructor(
     readonly host: StudioHost,
@@ -57,23 +73,35 @@ export class ProjectPanels {
     this.#services = new StudioServices(host.boot.session.token);
     this.#scope = host.boot.project ? "project" : "library";
     this.#panel.className = "studio-project-panel island";
-    this.#panel.setAttribute("role", "dialog");
-    this.#panel.setAttribute("aria-label", "Project panels");
+    this.#panel.setAttribute("role", "region");
     this.#panel.hidden = true;
-    shell.append(this.#panel);
-    document
-      .getElementById("assetsPanelButton")!
-      .addEventListener("click", () => this.open("assets"));
+    shell.querySelector(".workspace")!.prepend(this.#panel);
+    this.#dialog.className = "studio-dialog project-tools-dialog";
+    this.#dialog.id = "projectToolsDialog";
+    this.#dialog.setAttribute("aria-labelledby", "projectPanelTitle");
+    this.#dialog.addEventListener("close", () => {
+      if (!this.#dialog.open && this.#panel.parentElement === this.#dialog) this.close();
+    });
+    shell.append(this.#dialog);
+    document.getElementById("assetsPanelButton")!.addEventListener("click", () => {
+      if (this.#tab === "assets" && !this.#panel.hidden) this.close();
+      else this.open("assets");
+    });
     const history = document.getElementById("historyPanelButton")!;
     history.hidden = !host.boot.project?.entry;
     history.addEventListener("click", () => this.open("history"));
-    document.getElementById("homeButton")!.addEventListener("click", () => {
+    const exports = document.getElementById("exportHistoryButton")!;
+    exports.hidden = !host.boot.project?.entry;
+    exports.addEventListener("click", () => this.open("export-history"));
+    document.getElementById("homeButton")!.addEventListener("click", (event) => {
+      event.preventDefault();
       void this.#run(async () => {
         await this.#ensureSaved();
         location.assign("/?home=1");
       });
     });
     if (host.boot.project?.entry) {
+      document.getElementById("exportVideo")!.setAttribute("aria-controls", this.#dialog.id);
       document.getElementById("exportVideo")!.addEventListener(
         "click",
         (event) => {
@@ -96,8 +124,7 @@ export class ProjectPanels {
       }
     });
     window.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && !document.querySelector("dialog[open]"))
-        this.#panel.hidden = true;
+      if (event.key === "Escape" && !document.querySelector("dialog[open]")) this.close();
     });
     shell.addEventListener("studio-assets-changed", () => {
       if (!this.#panel.hidden) void this.#run(() => this.#refresh());
@@ -106,9 +133,32 @@ export class ProjectPanels {
 
   open(tab: Panel): void {
     this.#tab = tab;
+    this.#panel.dataset.panel = tab;
+    this.#panel.setAttribute(
+      "aria-label",
+      tab === "assets" ? "Assets" : tab === "history" ? "History" : "Export",
+    );
+    if (tab === "assets") {
+      if (innerWidth <= 1024) this.shell.classList.remove("mobile-inspector");
+      if (this.#dialog.open) this.#dialog.close();
+      this.shell.querySelector(".workspace")!.prepend(this.#panel);
+    } else {
+      this.#dialog.append(this.#panel);
+    }
     this.#panel.hidden = false;
+    document
+      .getElementById("assetsPanelButton")!
+      .setAttribute("aria-pressed", String(tab === "assets"));
     this.#message = "";
+    this.#render();
+    if (tab !== "assets" && !this.#dialog.open) this.#dialog.showModal();
     void this.#run(() => this.#refresh());
+  }
+
+  close(): void {
+    this.#panel.hidden = true;
+    document.getElementById("assetsPanelButton")!.setAttribute("aria-pressed", "false");
+    if (this.#dialog.open) this.#dialog.close();
   }
 
   async #run(action: () => Promise<void>): Promise<void> {
@@ -143,7 +193,7 @@ export class ProjectPanels {
           op: "history",
         })
       ).snapshots.toReversed();
-    } else if (this.#tab === "exports") {
+    } else if (this.#tab === "exports" || this.#tab === "export-history") {
       this.#exports = await this.#services.request<ProjectExports>("project", { op: "exports" });
     } else {
       if (this.#scope === "project") {
@@ -187,7 +237,7 @@ export class ProjectPanels {
       this.#directory = "";
       this.#kind = "";
       await this.#refresh();
-      this.#message = `Imported ${items.length} file${items.length === 1 ? "" : "s"}. Drag them onto the Timeline to create clips.`;
+      this.#message = `Imported ${items.length} file${items.length === 1 ? "" : "s"}.`;
     });
   }
 
@@ -199,8 +249,7 @@ export class ProjectPanels {
         );
       });
       if (error) throw new Error(error);
-      this.#message =
-        "Added and saved. Undo changes the Timeline; imported files remain in the project.";
+      this.#message = "Added to timeline.";
       await this.#refresh();
     });
   }
@@ -289,10 +338,7 @@ export class ProjectPanels {
     if (!item) return null;
     const url = fileUrl(this.#scope, item.path);
     return html`<section class="asset-detail" aria-label="Asset details">
-      <strong>${item.path}</strong>
-      <p class="muted">
-        ${item.kind}${item.info?.duration ? ` · ${item.info.duration.toFixed(2)} s` : ""}
-      </p>
+      <strong title=${item.path}>${item.path.split(/[\\/]/).pop()}</strong>
       ${item.kind === "image" ? html`<img class="asset-preview" src=${url} alt=${item.path} />` : null}
       ${item.kind === "audio" ? html`<audio class="asset-preview" controls src=${url}></audio>` : null}
       ${item.kind === "video" ? html`<video class="asset-preview" controls src=${url}></video>` : null}
@@ -378,33 +424,36 @@ export class ProjectPanels {
     </section>`;
   }
 
+  #assetScopes() {
+    return html`<div class="project-panel-tabs" role="group" aria-label="Asset source">
+      <button
+        class="button quiet"
+        ?disabled=${!this.host.boot.project || this.#busy}
+        aria-pressed=${this.#scope === "project"}
+        @click=${() => {
+          this.#scope = "project";
+          this.#selected = null;
+          void this.#run(() => this.#refresh());
+        }}
+      >
+        Project</button
+      ><button
+        class="button quiet"
+        ?disabled=${this.#busy}
+        aria-pressed=${this.#scope === "library"}
+        @click=${() => {
+          this.#scope = "library";
+          this.#selected = null;
+          void this.#run(() => this.#refresh());
+        }}
+      >
+        Library
+      </button>
+    </div>`;
+  }
+
   #assets() {
     return html`<div class="project-panel-tools">
-        <div class="project-panel-tabs">
-          <button
-            class="button quiet"
-            ?disabled=${!this.host.boot.project || this.#busy}
-            aria-pressed=${this.#scope === "project"}
-            @click=${() => {
-              this.#scope = "project";
-              this.#selected = null;
-              void this.#run(() => this.#refresh());
-            }}
-          >
-            Project files</button
-          ><button
-            class="button quiet"
-            ?disabled=${this.#busy}
-            aria-pressed=${this.#scope === "library"}
-            @click=${() => {
-              this.#scope = "library";
-              this.#selected = null;
-              void this.#run(() => this.#refresh());
-            }}
-          >
-            Library
-          </button>
-        </div>
         <input
           aria-label="Search assets"
           placeholder="Search assets"
@@ -414,16 +463,8 @@ export class ProjectPanels {
             this.#search();
           }}
         />
-        <div class="asset-filters">
-          <input
-            aria-label="Asset directory"
-            placeholder="Directory"
-            .value=${this.#directory}
-            @input=${(event: Event) => {
-              this.#directory = (event.target as HTMLInputElement).value;
-              this.#search();
-            }}
-          /><select
+        <div class="asset-filter-bar">
+          <select
             aria-label="Asset kind"
             .value=${this.#kind}
             @change=${(event: Event) => {
@@ -432,26 +473,14 @@ export class ProjectPanels {
             }}
           >
             <option value="">All types</option>
-            ${kinds.map((kind) => html`<option value=${kind}>${kind}</option>`)}
+            ${kinds.map((kind) => html`<option value=${kind}>${kindLabels[kind]}</option>`)}
           </select>
-        </div>
-        ${
-          this.#scope === "library"
-            ? html`<input
-                aria-label="Filter asset tag"
-                placeholder="Tag"
-                .value=${this.#tag}
-                @input=${(event: Event) => {
-                  this.#tag = (event.target as HTMLInputElement).value;
-                  this.#search();
-                }}
-              />`
-            : null
-        }
-        ${
-          this.host.boot.project
-            ? html`<label class="button quiet import-files"
-                  >Import files<input
+          ${
+            this.host.boot.project
+              ? html`<label class="button quiet import-files">
+                  Import
+                  <input
+                    class="sr-only"
                     type="file"
                     multiple
                     aria-label="Import project files"
@@ -462,10 +491,42 @@ export class ProjectPanels {
                       input.value = "";
                       void this.#import(files);
                     }}
-                /></label>
-                <p class="muted">Drop files here to copy them into this project.</p>`
-            : html`<p class="muted">Save as a project to import files and create clips.</p>`
-        }
+                  />
+                </label>`
+              : null
+          }
+        </div>
+        <details
+          class="asset-filters"
+          ?open=${this.#filtersOpen}
+          @toggle=${(event: Event) => {
+            this.#filtersOpen = (event.currentTarget as HTMLDetailsElement).open;
+          }}
+        >
+          <summary>Filters${this.#directory || this.#tag ? " · Active" : ""}</summary>
+          <input
+            aria-label="Asset directory"
+            placeholder="Directory"
+            .value=${this.#directory}
+            @input=${(event: Event) => {
+              this.#directory = (event.target as HTMLInputElement).value;
+              this.#search();
+            }}
+          />
+          ${
+            this.#scope === "library"
+              ? html`<input
+                  aria-label="Filter asset tag"
+                  placeholder="Tag"
+                  .value=${this.#tag}
+                  @input=${(event: Event) => {
+                    this.#tag = (event.target as HTMLInputElement).value;
+                    this.#search();
+                  }}
+                />`
+              : null
+          }
+        </details>
       </div>
       <ul class="project-file-list" aria-label="Assets">
         ${this.#items.map(
@@ -474,20 +535,21 @@ export class ProjectPanels {
               <button
                 class="asset-row"
                 draggable="true"
+                title=${item.path}
                 data-asset-path=${item.path}
                 aria-pressed=${this.#selected?.path === item.path}
                 @dragstart=${(event: DragEvent) => this.#drag(event, item)}
                 @click=${() => this.#select(item)}
               >
-                <span>${item.path}</span
+                <span>${item.path.split(/[\\/]/).pop()}</span
                 ><small
-                  >${item.kind}${item.info?.duration ? ` · ${item.info.duration.toFixed(1)}s` : ""}</small
+                  >${kindLabels[item.kind] ?? "File"}${item.info?.duration ? ` · ${item.info.duration.toFixed(1)}s` : ""}</small
                 >
               </button>
             </li>`,
         )}
       </ul>
-      ${!this.#items.length && !this.#busy ? html`<p class="muted">No matching files.</p>` : null}${this.#preview()}`;
+      ${!this.#items.length && !this.#busy ? html`<p class="asset-empty muted">${this.#query || this.#kind || this.#directory || this.#tag ? "No matching files" : this.host.boot.project ? "Drop files here to get started" : "No assets yet"}</p>` : null}${this.#preview()}`;
   }
 
   #history() {
@@ -554,75 +616,99 @@ export class ProjectPanels {
   }
 
   #exportPanel() {
-    return html`<section class="project-panel-tools">
-        <p>
-          Export the saved entry Timeline into renders/. Each full export records its source
-          snapshot.
-        </p>
+    return html`<section class="native-export-body">
+        <dl class="project-settings-facts">
+          ${[
+            ["Resolution", "projectCanvas"],
+            ["Frame rate", "projectFps"],
+            ["Duration", "projectDuration"],
+          ].map(
+            ([label, id]) =>
+              html`<div>
+                <dt>${label}</dt>
+                <dd>${document.getElementById(id!)?.textContent ?? "—"}</dd>
+              </div>`,
+          )}
+        </dl>
+        ${this.#busy ? html`<progress aria-label="Export progress"></progress>` : null}
+        ${this.#lastExport?.outputs.map((output) => html`<a class="export-result" href=${fileUrl("project", output.path)} download><span data-icon="download"></span>${output.path.split("/").pop()}</a>`)}
+      </section>
+      <footer class="native-export-actions">
         <button
-          class="button"
+          class="button primary"
           ?disabled=${this.#busy}
           @click=${() =>
             this.#run(async () => {
               await this.#ensureSaved();
+              this.#lastExport = null;
               this.#message = "Exporting…";
               this.#render();
               const result = await this.#services.request<ProjectExportResult>("project", {
                 op: "render",
               });
-              this.#message = `Exported ${result.outputs.map((output) => output.path).join(", ")}${result.warnings?.length ? " · Media changed during export; see its record." : ""}`;
+              this.#lastExport = result;
+              this.#message = result.warnings?.length
+                ? "Video exported. Media changed during export; check export history."
+                : "Video exported.";
               await this.#refresh();
             })}
         >
           Export video
         </button>
-      </section>
-      <ul class="project-history-list">
-        ${this.#exports.files.map((file) => html`<li><a href=${fileUrl("project", file.path)} download>${file.path}</a><small>${(file.bytes / 1024 / 1024).toFixed(1)} MB</small></li>`)}
+      </footer>`;
+  }
+
+  #exportHistory() {
+    return html` <ul class="project-history-list">
+        ${this.#exports.files.map((file) => {
+          const record = this.#exports.records.find((record) =>
+            record.outputs.some((output) => output.path === file.path),
+          );
+          return html`<li>
+            <div>
+              <a href=${fileUrl("project", file.path)} title=${file.path} download
+                >${file.path.split("/").pop()}</a
+              >${record ? html`<small>${new Date(record.createdAt).toLocaleString()}</small>${record.warnings?.map((warning) => html`<p>${warning.message}</p>`)}` : null}
+            </div>
+            <small>${(file.bytes / 1024 / 1024).toFixed(1)} MB</small>
+          </li>`;
+        })}
       </ul>
-      <h3>Export records</h3>
-      <ul class="project-history-list">
-        ${this.#exports.records.map(
-          (record) =>
-            html`<li>
-              <div>
-                <strong>Snapshot ${record.snapshot}</strong>
-                <p>${record.outputs.map((output) => output.path).join(", ")}</p>
-                <small>${new Date(record.createdAt).toLocaleString()}</small
-                >${record.warnings?.map((warning) => html`<p>${warning.message}</p>`)}
-              </div>
-            </li>`,
-        )}
-      </ul>`;
+      ${!this.#exports.files.length && !this.#busy ? html`<p class="muted">No exports yet</p>` : null}`;
   }
 
   #render(): void {
+    const title =
+      this.#tab === "assets"
+        ? "Assets"
+        : this.#tab === "history"
+          ? "History"
+          : this.#tab === "exports"
+            ? "Export video"
+            : "Export history";
+    this.#panel.setAttribute("aria-busy", String(this.#busy));
     render(
       html`<header class="project-panel-heading">
-          <h2>
-            ${this.#tab === "assets" ? "Assets" : this.#tab === "history" ? "History" : "Exports"}
-          </h2>
+          <h2 id="projectPanelTitle" class=${this.#tab === "assets" ? "sr-only" : ""}>${title}</h2>
+          ${this.#tab === "assets" ? this.#assetScopes() : null}
           <button
-            class="button quiet"
+            class="icon-button"
             aria-label="Close project panel"
-            @click=${() => {
-              this.#panel.hidden = true;
-            }}
+            title="Close"
+            @click=${() => this.close()}
           >
-            Close
+            <span data-icon="close"></span>
           </button>
         </header>
-        <nav class="project-panel-tabs">
-          ${(["assets", ...(this.host.boot.project?.entry ? ["history", "exports"] : [])] as Panel[]).map((tab) => html`<button class="button quiet" aria-pressed=${this.#tab === tab} ?disabled=${this.#busy} @click=${() => this.open(tab)}>${tab === "assets" ? "Assets" : tab === "history" ? "History" : "Exports"}</button>`)}
-        </nav>
         <p class=${`project-panel-message ${this.#error ? "error" : ""}`} role="status">
           ${this.#message || (this.#busy ? "Loading…" : "")}
         </p>
         <div class="project-panel-content">
-          ${this.#tab === "assets" ? this.#assets() : this.#tab === "history" ? this.#history() : this.#exportPanel()}
+          ${this.#tab === "assets" ? this.#assets() : this.#tab === "history" ? this.#history() : this.#tab === "exports" ? this.#exportPanel() : this.#exportHistory()}
         </div>`,
       this.#panel,
     );
+    hydrateIcons(this.#panel);
   }
 }
 
@@ -635,6 +721,7 @@ export async function mountProjectHome(shell: HTMLElement, token: string): Promi
     width = "1920",
     height = "1080",
     fps = "30",
+    resolution = "1080",
     error = "",
     busy = false;
   const act = async (command: object) => {
@@ -651,15 +738,83 @@ export async function mountProjectHome(shell: HTMLElement, token: string): Promi
       draw();
     }
   };
-  const draw = () =>
+  const draw = () => {
     render(
       html`<main class="studio-home">
         <header>
-          <span class="brand-lockup"></span>
-          <h1>Projects</h1>
+          <div class="home-heading">
+            <span class="brand-lockup"></span>
+            <h1>Projects</h1>
+          </div>
+          <div class="home-actions">
+            <button
+              class="button quiet"
+              ?disabled=${busy}
+              @click=${() => shell.querySelector<HTMLDialogElement>("#homeOpenDialog")!.showModal()}
+            >
+              Open project
+            </button>
+            <button
+              class="button primary"
+              ?disabled=${busy}
+              @click=${() => shell.querySelector<HTMLDialogElement>("#homeCreateDialog")!.showModal()}
+            >
+              New project
+            </button>
+          </div>
         </header>
-        <section class="home-create island">
-          <h2>Create a project</h2>
+        <p class="project-panel-message error" role="status">${error}</p>
+        <section class="home-recents">
+          <h2>Recent</h2>
+          <ul class="recent-projects">
+            ${projects.map(
+              (project) =>
+                html`<li>
+                  <button
+                    class="island"
+                    title=${project.path}
+                    ?disabled=${busy || project.missing}
+                    @click=${() => act({ op: "open", directory: project.path })}
+                  >
+                    <strong>${project.name}</strong><span>${project.path}</span>
+                    <small
+                      >${project.missing ? "Unavailable" : new Date(project.lastOpened).toLocaleDateString()}</small
+                    >
+                  </button>
+                </li>`,
+            )}
+          </ul>
+          ${
+            !projects.length
+              ? html`<div class="home-empty">
+                  <p>No recent projects</p>
+                  <button
+                    class="button quiet"
+                    ?disabled=${busy}
+                    @click=${() => shell.querySelector<HTMLDialogElement>("#homeCreateDialog")!.showModal()}
+                  >
+                    Create your first project
+                  </button>
+                </div>`
+              : null
+          }
+        </section>
+        <dialog
+          id="homeCreateDialog"
+          class="studio-dialog home-project-dialog"
+          aria-labelledby="homeCreateTitle"
+        >
+          <header class="project-panel-heading">
+            <h2 id="homeCreateTitle">Create a project</h2>
+            <button
+              class="icon-button"
+              type="button"
+              aria-label="Close new project"
+              @click=${() => shell.querySelector<HTMLDialogElement>("#homeCreateDialog")!.close()}
+            >
+              <span data-icon="close"></span>
+            </button>
+          </header>
           <form
             @submit=${(event: SubmitEvent) => {
               event.preventDefault();
@@ -667,14 +822,14 @@ export async function mountProjectHome(shell: HTMLElement, token: string): Promi
               void act({
                 op: "create",
                 directory: data.get("directory"),
-                width: Number(data.get("width")),
-                height: Number(data.get("height")),
+                width: Number(width),
+                height: Number(height),
                 fps: data.get("fps"),
               });
             }}
           >
             <label
-              >Project directory<input
+              >Location<input
                 name="directory"
                 aria-label="New project directory"
                 required
@@ -683,41 +838,97 @@ export async function mountProjectHome(shell: HTMLElement, token: string): Promi
                   directory = (event.target as HTMLInputElement).value;
                 }}
             /></label>
-            <div class="home-canvas">
+            <div class="home-presets">
               <label
-                >Width<input
-                  name="width"
-                  type="number"
-                  min="1"
-                  .value=${width}
-                  @input=${(event: Event) => {
-                    width = (event.target as HTMLInputElement).value;
+                >Resolution<select
+                  aria-label="Project resolution"
+                  .value=${resolution}
+                  @change=${(event: Event) => {
+                    resolution = (event.target as HTMLSelectElement).value;
+                    const size = {
+                      "2160": [3840, 2160],
+                      "1080": [1920, 1080],
+                      "720": [1280, 720],
+                      portrait: [1080, 1920],
+                      square: [1080, 1080],
+                    }[resolution];
+                    if (size) {
+                      width = String(size[0]);
+                      height = String(size[1]);
+                    }
+                    draw();
                   }}
-                  required /></label
-              ><label
-                >Height<input
-                  name="height"
-                  type="number"
-                  min="1"
-                  .value=${height}
-                  @input=${(event: Event) => {
-                    height = (event.target as HTMLInputElement).value;
-                  }}
-                  required /></label
-              ><label
-                >FPS<input
+                >
+                  <option value="2160">4K · 3840 × 2160</option>
+                  <option value="1080">1080p · 1920 × 1080</option>
+                  <option value="720">720p · 1280 × 720</option>
+                  <option value="portrait">Portrait · 1080 × 1920</option>
+                  <option value="square">Square · 1080 × 1080</option>
+                  <option value="custom">Custom</option>
+                </select></label
+              >
+              <label
+                >Frame rate<input
                   name="fps"
                   .value=${fps}
+                  required
                   @input=${(event: Event) => {
                     fps = (event.target as HTMLInputElement).value;
                   }}
-                  required
               /></label>
             </div>
-            <button class="button" ?disabled=${busy}>Create project</button>
+            ${
+              resolution === "custom"
+                ? html`<div class="home-canvas">
+                    <label
+                      >Width<input
+                        name="width"
+                        type="number"
+                        min="1"
+                        .value=${width}
+                        @input=${(event: Event) => {
+                          width = (event.target as HTMLInputElement).value;
+                        }}
+                        required /></label
+                    ><label
+                      >Height<input
+                        name="height"
+                        type="number"
+                        min="1"
+                        .value=${height}
+                        @input=${(event: Event) => {
+                          height = (event.target as HTMLInputElement).value;
+                        }}
+                        required
+                    /></label>
+                  </div>`
+                : null
+            }
+            ${error ? html`<p class="error" role="alert">${error}</p>` : null}
+            <div class="dialog-actions">
+              <button class="button primary" ?disabled=${busy}>
+                ${busy ? "Creating…" : "Create project"}
+              </button>
+            </div>
           </form>
+        </dialog>
+        <dialog
+          id="homeOpenDialog"
+          class="studio-dialog home-project-dialog"
+          aria-labelledby="homeOpenTitle"
+        >
+          <header class="project-panel-heading">
+            <h2 id="homeOpenTitle">Open project</h2>
+            <button
+              class="icon-button"
+              type="button"
+              aria-label="Close open project"
+              @click=${() => shell.querySelector<HTMLDialogElement>("#homeOpenDialog")!.close()}
+            >
+              <span data-icon="close"></span>
+            </button>
+          </header>
           <form
-            class="home-open"
             @submit=${(event: SubmitEvent) => {
               event.preventDefault();
               void act({
@@ -727,7 +938,7 @@ export async function mountProjectHome(shell: HTMLElement, token: string): Promi
             }}
           >
             <label
-              >Open project directory<input
+              >Location<input
                 name="directory"
                 aria-label="Open project directory"
                 .value=${openDirectory}
@@ -735,36 +946,19 @@ export async function mountProjectHome(shell: HTMLElement, token: string): Promi
                   openDirectory = (event.target as HTMLInputElement).value;
                 }}
                 required /></label
-            ><button class="button quiet" ?disabled=${busy}>Open</button>
+            >${error ? html`<p class="error" role="alert">${error}</p>` : null}
+            <div class="dialog-actions">
+              <button class="button primary" ?disabled=${busy}>
+                ${busy ? "Opening…" : "Open"}
+              </button>
+            </div>
           </form>
-        </section>
-        <p class="project-panel-message error" role="status">
-          ${error || (busy ? "Opening project…" : "")}
-        </p>
-        <section>
-          <h2>Recent projects</h2>
-          <ul class="recent-projects">
-            ${projects.map(
-              (project) =>
-                html`<li>
-                  <button
-                    class="island"
-                    ?disabled=${busy || project.missing}
-                    @click=${() => act({ op: "open", directory: project.path })}
-                  >
-                    <strong>${project.name}</strong><span>${project.path}</span
-                    ><small
-                      >${project.missing ? "Unavailable" : new Date(project.lastOpened).toLocaleString()}</small
-                    >
-                  </button>
-                </li>`,
-            )}
-          </ul>
-          ${!projects.length ? html`<p class="muted">Your recent projects will appear here.</p>` : null}
-        </section>
+        </dialog>
       </main>`,
       shell,
     );
+    hydrateIcons(shell);
+  };
   try {
     const recent = await services.request<{ projects: RecentProject[]; defaultDirectory: string }>(
       "project",

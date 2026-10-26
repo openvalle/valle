@@ -165,9 +165,9 @@ export class StudioTimeline extends LitElement {
             ${model.ticks.map(
               (tick) => html`
                 <span
-                  class="tick ${tick.label == null ? "minor" : ""}"
+                  class="tick ${tick.label == null ? "minor" : ""} ${tick.leftPx > model.laneWidthPx - 48 ? "end-label" : ""}"
                   style="left:${tick.leftPx}px"
-                  >${tick.label ?? ""}</span
+                  >${tick.label == null ? "" : html`<span class="tick-label">${tick.label}</span>`}</span
                 >
               `,
             )}
@@ -283,8 +283,9 @@ export class StudioInspector extends LitElement {
     if (!model || !model.clipId) {
       return html`
         <div class="empty-inspector">
-          <h2>${model?.title ?? "Nothing selected"}</h2>
-          <p>${model?.emptyHint ?? "Select a clip on the stage or timeline to inspect it."}</p>
+          <span data-icon="sliders"></span>
+          <h2>${model?.title ?? "Select a clip"}</h2>
+          ${model?.emptyHint ? html`<p>${model.emptyHint}</p>` : ""}
         </div>
         ${
           model?.summary?.length
@@ -352,7 +353,7 @@ export class StudioInspector extends LitElement {
                 @click=${this.#openMotion}
               >
                 <span class="icon" data-icon="motion"></span>
-                Edit component · ${model.motionSource}
+                Edit code
               </button>
             `
           : ""
@@ -701,10 +702,11 @@ export class StudioProjectControls extends LitElement {
     return html`
       ${state.conflictMessage ? html`<button class="button" type="button" @click=${() => this.#emit("reload")}>Discard draft and reload</button>` : ""}
       <button
-        class="button primary ${state.saving ? "saving" : ""}"
+        class="button quiet ${state.saving ? "saving" : ""}"
         id="saveBtn"
         type="button"
         ?disabled=${!state.dirty || state.saving === true}
+        ?hidden=${!state.dirty && !state.saving}
         @click=${() => this.#emit("save")}
       >
         ${state.saving ? "Saving…" : "Save"}

@@ -331,7 +331,7 @@ async function run(
       (s) => s.state?.previewStatus === "ready" && s.compiles > before.compiles,
       "browser-compiled draft preview",
     );
-    assert(edited.status === "Unsaved source", `draft status: ${edited.status}`);
+    assert(edited.status === "Modified", `draft status: ${edited.status}`);
     const second = await screenshot("edited");
     if (edit) assert(first !== second, "edited source must change visible preview pixels");
     if (hot) {
@@ -357,7 +357,7 @@ async function run(
       await evaluate("document.querySelector('#sourceSave').click()");
       await poll(
         state,
-        (s) => s.status === "Saved" && s.state?.previewStatus === "ready",
+        (s) => s.state?.sourceDirty === false && s.state?.previewStatus === "ready",
         "saved current preview",
       );
       assert(

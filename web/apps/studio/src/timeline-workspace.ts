@@ -363,6 +363,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   let saving = false;
   let conflictMessage: string | null = null;
   let pixelsPerSecond = 40;
+  let labelWidthPx = 152;
   let playhead: HTMLElement | null = null;
   let canvasDrag: CanvasDragState | null = null;
   let sequenceDragPath: string | null = null;
@@ -518,12 +519,13 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function fitPixelsPerSecond(multiplier: number): void {
+    labelWidthPx = parseFloat(getComputedStyle(shell).getPropertyValue("--label-width")) || 152;
     const duration = Math.max(0.001, documentView.canvas.durationSeconds);
     const available = Math.max(
-      200,
-      requiredElement<HTMLElement>("timelineScroll").clientWidth - 152,
+      1,
+      requiredElement<HTMLElement>("timelineScroll").clientWidth - labelWidthPx - 2,
     );
-    pixelsPerSecond = Math.max(2, Math.min(600, (available / duration) * multiplier));
+    pixelsPerSecond = Math.max(0.01, Math.min(600, (available / duration) * multiplier));
   }
 
   function kindClassOf(kind: string): string {
@@ -761,12 +763,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     return true;
   }
 
-  function stageMetaText(): string {
-    const currentCanvas = workingCopy.canvas;
-    const duration = documentView.canvas.durationSeconds;
-    return `${currentCanvas.width} × ${currentCanvas.height} · ${fps.toFixed(Number.isInteger(fps) ? 0 : 3)} fps · ${formatSeconds(duration)}`;
-  }
-
   function countTracks(): number {
     return projectTimelineSequences(compiledCopy.timeline, documentView).length;
   }
@@ -778,13 +774,14 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       "--canvas-aspect",
       String(workingCopy.canvas.width / workingCopy.canvas.height),
     );
-    document.getElementById("stageMeta")!.textContent = stageMetaText();
-    const trackCount = countTracks();
-    document.getElementById("trackCount")!.textContent =
-      `${trackCount} track${trackCount === 1 ? "" : "s"}`;
-    document.getElementById("timelineSelection")!.textContent = selectedItemId
-      ? `Selected · ${selectedItemId}`
-      : "";
+    document.getElementById("projectCanvas")!.textContent =
+      `${workingCopy.canvas.width} × ${workingCopy.canvas.height}`;
+    document.getElementById("projectFps")!.textContent =
+      `${fps.toFixed(Number.isInteger(fps) ? 0 : 3)} fps`;
+    document.getElementById("projectDuration")!.textContent = formatSeconds(
+      documentView.canvas.durationSeconds,
+    );
+    document.getElementById("projectTracks")!.textContent = String(countTracks());
     document.getElementById("statusbarRight")!.textContent = canSaveTimeline
       ? storageKind === "file"
         ? "Save writes the opened JSON file"
@@ -844,9 +841,12 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
 
   function sequenceView(): TimelineViewModel {
     const duration = Math.max(0.001, documentView.canvas.durationSeconds);
-    const labelWidth = 152;
+    const labelWidth = labelWidthPx;
     const laneWidth = Math.max(1, Math.ceil(duration * pixelsPerSecond));
-    const tickSeconds = pixelsPerSecond >= 120 ? 1 : pixelsPerSecond >= 30 ? 5 : 10;
+    const tickSeconds =
+      [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800, 3600].find(
+        (seconds) => seconds * pixelsPerSecond >= 72,
+      ) ?? Math.ceil(72 / pixelsPerSecond / 3600) * 3600;
     const ticks: TimelineViewModel["ticks"][number][] = [];
     for (let second = 0; second <= duration; second += tickSeconds) {
       ticks.push({
@@ -860,42 +860,45 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         if (half < duration) ticks.push({ leftPx: half * pixelsPerSecond, label: null });
       }
     }
-    const tracks = projectTimelineSequences(compiledCopy.timeline, documentView).map((track) => ({
-      id: track.id,
-      kind: track.band,
-      name: `${track.band.charAt(0).toUpperCase()}${track.band.slice(1)} ${track.index + 1}`,
-      indexLabel: track.band.slice(0, 1).toUpperCase(),
-      selected: Boolean(
-        selectedItemId && track.items.some((entry) => entry.item.id === selectedItemId),
-      ),
-      clips: track.items
-        .filter((entry) => !("type" in entry.item && entry.item.type === "gap"))
-        .map((entry) => {
-          const durationBearing =
-            entry.advancesCursor ||
-            entry.band === "adjustment" ||
-            ("type" in entry.item && entry.item.type === "transition");
-          const kind = sourceKind(entry.item);
-          return {
-            id: entry.item.id,
-            kind,
-            leftPx: Math.max(0, entry.startSeconds * pixelsPerSecond),
-            widthPx: durationBearing ? Math.max(0, entry.durationSeconds * pixelsPerSecond) : 3,
-            title: durationBearing
-              ? `${entry.item.id} · ${formatSeconds(entry.startSeconds)} · ${entry.item.duration}`
-              : `${entry.item.id} · cut ${formatSeconds(entry.startSeconds)} · nominal ${entry.item.duration}`,
-            label: projectedLabel(entry),
-            meta:
-              durationBearing && !("type" in entry.item && entry.item.type === "transition")
-                ? `${Number(entry.durationSeconds.toFixed(2))}s`
-                : undefined,
-            selected: selectedItemId === entry.item.id,
-            timingEditable: durationBearing && entry.timelinePath !== null,
-            readOnly: entry.timelinePath === null,
-            media: mediaFor(entry),
-          };
-        }),
-    }));
+    const trackOrder = { caption: 0, visual: 1, adjustment: 2, audio: 3 };
+    const tracks = projectTimelineSequences(compiledCopy.timeline, documentView)
+      .toSorted((a, b) => trackOrder[a.band] - trackOrder[b.band])
+      .map((track) => ({
+        id: track.id,
+        kind: track.band,
+        name: `${track.band.charAt(0).toUpperCase()}${track.band.slice(1)} ${track.index + 1}`,
+        indexLabel: track.band.slice(0, 1).toUpperCase(),
+        selected: Boolean(
+          selectedItemId && track.items.some((entry) => entry.item.id === selectedItemId),
+        ),
+        clips: track.items
+          .filter((entry) => !("type" in entry.item && entry.item.type === "gap"))
+          .map((entry) => {
+            const durationBearing =
+              entry.advancesCursor ||
+              entry.band === "adjustment" ||
+              ("type" in entry.item && entry.item.type === "transition");
+            const kind = sourceKind(entry.item);
+            return {
+              id: entry.item.id,
+              kind,
+              leftPx: Math.max(0, entry.startSeconds * pixelsPerSecond),
+              widthPx: durationBearing ? Math.max(0, entry.durationSeconds * pixelsPerSecond) : 3,
+              title: durationBearing
+                ? `${entry.item.id} · ${formatSeconds(entry.startSeconds)} · ${entry.item.duration}`
+                : `${entry.item.id} · cut ${formatSeconds(entry.startSeconds)} · nominal ${entry.item.duration}`,
+              label: projectedLabel(entry),
+              meta:
+                durationBearing && !("type" in entry.item && entry.item.type === "transition")
+                  ? `${Number(entry.durationSeconds.toFixed(2))}s`
+                  : undefined,
+              selected: selectedItemId === entry.item.id,
+              timingEditable: durationBearing && entry.timelinePath !== null,
+              readOnly: entry.timelinePath === null,
+              media: mediaFor(entry),
+            };
+          }),
+      }));
     return {
       widthPx: labelWidth + laneWidth,
       laneWidthPx: laneWidth,
@@ -1052,7 +1055,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function positionPlayhead(): void {
-    if (playhead) playhead.style.left = `${152 + currentTime() * pixelsPerSecond}px`;
+    if (playhead) playhead.style.left = `${labelWidthPx + currentTime() * pixelsPerSecond}px`;
     const grip = timelineView.querySelector<HTMLElement>("#rulerGrip");
     if (grip) grip.style.left = `${currentTime() * pixelsPerSecond - 5}px`;
   }
@@ -1137,35 +1140,15 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   function renderInspector(): void {
-    const canvas = workingCopy.canvas;
-    const duration = documentView.canvas.durationSeconds;
-    const totalFrames = Math.round(duration * fps);
-    const bandCounts = (["visual", "caption", "audio", "adjustment"] as const)
-      .map((band) => [band, workingCopy.tracks[band]?.length ?? 0] as const)
-      .filter(([, count]) => count > 0)
-      .map(([band, count]) => `${count} ${band === "visual" ? "video" : band}`);
-    const projectSummary = [
-      { label: "Canvas", value: `${canvas.width} × ${canvas.height}` },
-      { label: "Frame rate", value: `${fps} fps` },
-      { label: "Duration", value: `${formatSeconds(duration)} · ${totalFrames} f` },
-      { label: "Tracks", value: bandCounts.join(" · ") || "None" },
-      ...(storageKind === "file" ? [] : [{ label: "Revision", value: String(baseRevision) }]),
-    ];
     const projected = selectedProjection();
     if (!projected) {
       inspector.renderInspector({
         errorMessage: editError,
         clipId: null,
         kindLabel: storageKind === "file" ? "Timeline file" : "Project",
-        title: shell.shellState.projectName,
-        summary: projectSummary,
+        title: "Select a clip",
         sections: [],
-        emptyHint:
-          storageKind === "file"
-            ? shell.shellState.session?.kind === "motion-file"
-              ? "Motion"
-              : "Timeline"
-            : "Project",
+        emptyHint: "",
       });
       return;
     }
@@ -1233,12 +1216,13 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
           ...new Set(["none", ...Object.keys(transitionLabels), ...templates, effect]),
         ];
         sections.push({
-          title: "Transition to next clip",
+          title: "Transition",
+          collapsed: effect === "none",
           rows: [
             {
               kind: "select",
               key: "transition:kind",
-              label: "Effect",
+              label: "Type",
               value: effect,
               values: effects,
               valueLabels: {
@@ -1287,6 +1271,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         const effects = clip.effects ?? [];
         sections.push({
           title: "Effects",
+          collapsed: effects.length === 0,
           rows: [
             ...effects.map((effect, index) => ({
               kind: "select" as const,
@@ -1475,7 +1460,7 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
         rows.push({ kind: "value", label: "Rotation", value: "Curve-driven · read only" });
       }
       if (visual.source.type === "motion") motionSource = projectedLabel(projected);
-      sections.push({ title: "Appearance", rows });
+      sections.splice(1, 0, { title: "Appearance", rows });
     }
     if (visual?.source.type === "motion" && projected.timelinePath) {
       const info = selectedMotionAuthoring(projected);
@@ -1802,8 +1787,19 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     shell.dispatchIntent({ type: "select", clipId: selectedItemId });
     renderTimeline();
     renderInspector();
+    syncSelectedSource();
     positionSelectionBox();
   }
+
+  function syncSelectedSource(): void {
+    if (!sourceEditor || document.getElementById("sourcePane")!.hidden) return;
+    const selected = selectedProjection();
+    if (selected && sourceKind(selected.item) === "motion") {
+      const path = motionSourcePath(selected);
+      if (path) sourceEditor.open(path);
+    }
+  }
+  document.getElementById("sourceToggle")!.addEventListener("click", syncSelectedSource);
 
   function renderWorkingCopy(): void {
     renderTimeline();
@@ -2649,8 +2645,8 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
       (next.motionInstances ?? []).map((instance) => [instance.clipPath, instance]),
     );
     baseRevision = next.timelineRevision.revision;
-    dirty = false;
-    shell.dispatchIntent({ type: "dirty", value: false });
+    dirty = Boolean(sourceEditor?.dirty);
+    shell.dispatchIntent({ type: "dirty", value: dirty });
     setConflict(null);
     renderWorkingCopy();
     try {

@@ -227,7 +227,16 @@ async function startDocument(shell: ValleStudioApp): Promise<void> {
         status: "empty",
         message: "Import media to start",
       });
-      document.getElementById("loading")!.hidden = true;
+      shell.classList.add("empty-project");
+      document.getElementById("loading")!.hidden = false;
+      document.getElementById("loadingText")!.textContent = "Start with your media";
+      document.getElementById("emptyAssets")!.hidden = false;
+      document.getElementById("studioTransport")!.setAttribute("disabled", "");
+      document.getElementById("projectCanvas")!.textContent =
+        `${initial.timeline.canvas.width} × ${initial.timeline.canvas.height}`;
+      document.getElementById("projectFps")!.textContent = `${initial.timeline.canvas.fps} fps`;
+      document.getElementById("projectDuration")!.textContent = "0:00";
+      document.getElementById("projectTracks")!.textContent = "0";
       document.getElementById("stageBanner")!.textContent =
         "Import media in Assets, then drag it onto the Timeline.";
       document.getElementById("stageBanner")!.hidden = false;

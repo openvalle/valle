@@ -226,7 +226,9 @@ try {
   const panelIdle = () =>
     poll(
       () =>
-        evaluate(`!!document.querySelector('.studio-project-panel > nav button:not([disabled])')`),
+        evaluate(
+          `!!document.querySelector('.studio-project-panel[aria-busy="false"]:not([hidden])')`,
+        ),
       Boolean,
       "project panel idle",
     );
@@ -242,8 +244,14 @@ try {
   await cdp("Page.enable");
   await cdp("Runtime.enable");
   await cdp("Page.navigate", { url: homeUrl });
-  await poll(state, (value) => value.text.includes("Create a project"), "home");
+  await poll(() => evaluate(`!!document.querySelector('.studio-home')`), Boolean, "home");
   await screenshot("home");
+  await evaluate(
+    `Array.from(document.querySelectorAll('button')).find(button=>button.textContent?.trim()==='New project').click()`,
+  );
+  await evaluate(
+    `const resolution=document.querySelector('[aria-label="Project resolution"]');resolution.value='custom';resolution.dispatchEvent(new Event('change',{bubbles:true}));`,
+  );
   await field('[aria-label="New project directory"]', project);
   await field('[name="width"]', "32");
   await field('[name="height"]', "32");
@@ -322,13 +330,53 @@ try {
   );
   console.error("project browser: home and first import passed");
 
+  for (const [width, height] of [
+    [1440, 900],
+    [1024, 768],
+    [390, 844],
+    [844, 390],
+  ]) {
+    await cdp("Emulation.setDeviceMetricsOverride", {
+      width,
+      height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    await click("#fitTimeline");
+    await evaluate("valleStudioPlayer.seek(0.5)");
+    const layout = await poll(
+      () =>
+        evaluate(
+          `(()=>{const timeline=document.querySelector('#tracks'),head=timeline.querySelector('.track-head'),lane=timeline.querySelector('.ruler-lane'),line=timeline.querySelector('#tlPlayhead'),grip=timeline.querySelector('#rulerGrip');return{width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,labelWidth:head.getBoundingClientRect().width,modelLabelWidth:timeline.viewModel.labelWidthPx,playheadDelta:Math.abs(line.getBoundingClientRect().left-grip.getBoundingClientRect().left-5),timelineOverflow:document.querySelector('#timelineScroll').scrollWidth-document.querySelector('#timelineScroll').clientWidth}})()`,
+        ),
+      (value) =>
+        Math.abs(value.labelWidth - value.modelLabelWidth) < 1 && value.playheadDelta < 1.5,
+      `timeline alignment at ${width}×${height}`,
+    );
+    assert(
+      layout.scrollWidth <= width && layout.scrollHeight <= height,
+      `workspace overflow at ${width}×${height}: ${JSON.stringify(layout)}`,
+    );
+    assert(layout.timelineOverflow <= 2, `Fit all overflow at ${width}×${height}`);
+  }
+  await cdp("Emulation.clearDeviceMetricsOverride");
+  console.error("project browser: responsive layout and timeline alignment passed");
+
   await click("#assetsPanelButton");
   await panelIdle();
-  await poll(state, (value) => value.text.includes("Project files"), "asset panel");
+  await poll(
+    () => evaluate(`document.querySelector('.studio-project-panel')?.dataset.panel`),
+    (value) => value === "assets",
+    "asset panel",
+  );
   await evaluate(
     `Array.from(document.querySelectorAll('.studio-project-panel button')).find(button=>button.textContent?.trim()==='Library').click()`,
   );
-  await poll(state, (value) => value.text.includes("music/beat.wav"), "library files");
+  await poll(
+    () => evaluate(`!!document.querySelector('[data-asset-path="music/beat.wav"]')`),
+    Boolean,
+    "library files",
+  );
   await click('[data-asset-path="music/beat.wav"]');
   assert(
     await evaluate(
@@ -410,7 +458,9 @@ try {
     "snapshot waits for the pending import save before checking conflicts",
   );
   assert(
-    await evaluate(`document.querySelector('.studio-project-panel > nav button').disabled`),
+    await evaluate(
+      `document.querySelector('.studio-project-panel').getAttribute('aria-busy')==='true'`,
+    ),
     "snapshot remains pending until the import save response arrives",
   );
   await cdp("Fetch.continueRequest", { requestId: saveRequest });
@@ -463,7 +513,11 @@ try {
   );
   await click("#exportVideo");
   await panelIdle();
-  await poll(state, (value) => value.text.includes("Export records"), "export panel");
+  await poll(
+    () => evaluate(`document.querySelector('.studio-project-panel')?.dataset.panel`),
+    (value) => value === "exports",
+    "export panel",
+  );
   await evaluate(
     `Array.from(document.querySelectorAll('.studio-project-panel button')).find(button=>button.textContent?.trim()==='Export video').click()`,
   );
@@ -515,7 +569,14 @@ try {
   const moved = join(evidence, "moved");
   await rename(project, moved);
   await cdp("Page.navigate", { url: homeUrl });
-  await poll(state, (value) => value.text.includes("Recent projects"), "home after move");
+  await poll(
+    () => evaluate(`!!document.querySelector('.studio-home')`),
+    Boolean,
+    "home after move",
+  );
+  await evaluate(
+    `Array.from(document.querySelectorAll('button')).find(button=>button.textContent?.trim()==='Open project').click()`,
+  );
   await field('[aria-label="Open project directory"]', moved);
   await evaluate(
     `document.querySelector('[aria-label="Open project directory"]').closest('form').requestSubmit()`,
