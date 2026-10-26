@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 #[derive(Clone, Copy, Debug)]
 pub struct GpuRasterTextureVarying {
-    pub uv_over_z: [f32; 2],
+    pub uv: [f32; 2],
     pub dx: [f32; 3],
     pub dy: [f32; 3],
     pub tangent: [f32; 3],

@@ -96,7 +96,7 @@ class FatalBatchWorker {
   }
 }
 
-test("planning identity includes RenderId", () => {
+test("planning identity includes RenderId and independent reference/GPU/delivery modes", () => {
   const input = {
     frame: 7,
     width: 1920,
@@ -106,6 +106,14 @@ test("planning identity includes RenderId", () => {
     maxFrameBytes: 2048n,
   };
   expect(planningKey(RENDER_ID, 1, input)).not.toBe(planningKey(STALE_RENDER_ID, 1, input));
+  for (const flag of ["realtime", "gpuScene3d", "deliveryOutput"] as const) {
+    expect(planningKey(RENDER_ID, 1, { ...input, [flag]: true })).not.toBe(
+      planningKey(RENDER_ID, 1, input),
+    );
+    expect(planningKey(RENDER_ID, 1, { ...input, [flag]: false })).toBe(
+      planningKey(RENDER_ID, 1, input),
+    );
+  }
 });
 
 test("render receipt is narrow and requires positive safe result facts", () => {
@@ -387,7 +395,7 @@ function manualTemplateWorker() {
           inspectionJson: "{}",
           evaluatePrepareMs: 0,
           requestInspectMs: 0,
-          ...(gpuBytes ? { gpuScene3d: { [SCENE_CONTENT]: new Float32Array(gpuBytes / 4) } } : {}),
+          ...(gpuBytes ? { gpuScene3d: { [SCENE_CONTENT]: new Uint8Array(gpuBytes) } } : {}),
           workerTurnGapMs: 0,
           previousReleaseMs: 0,
         },

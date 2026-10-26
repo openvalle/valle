@@ -33,7 +33,7 @@ export interface KernelMessage {
 export interface KernelResult {
   version: number;
   id: number;
-  pixels?: Float32Array;
+  geometry?: Uint8Array;
   motion?: Uint8Array;
   workMs?: number;
   residentBytes?: number;
@@ -109,7 +109,7 @@ export function installKernelWorker(): void {
           );
         } else {
           const input = m.input as Scene3dKernelInput;
-          const pixels = engine.scene3d_gpu_lighting_input!(
+          const geometry = engine.scene3d_gpu_raster_input!(
             input.content,
             input.topology,
             input.canonical,
@@ -118,11 +118,11 @@ export function installKernelWorker(): void {
             {
               version,
               id: m.id,
-              pixels,
+              geometry,
               workMs: performance.now() - started,
               residentBytes: memory!.buffer.byteLength,
             },
-            [pixels.buffer as ArrayBuffer],
+            [geometry.buffer as ArrayBuffer],
           );
         }
       } catch (error) {

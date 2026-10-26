@@ -23,12 +23,14 @@ fn image_pixel(mip: vec4<f32>, p: vec2<i32>, sampling: u32) -> vec4<f32> {
 }
 fn image_level(image: u32, level: u32, uv: vec2<f32>, sampling: u32, linearFilter: bool) -> vec4<f32> {
     let mip = mip_at(image,level);
-    let p = uv*mip.zw-0.5;
+    let p = vec2(stable(uv.x*mip.z),stable(uv.y*mip.w))-0.5;
     if !linearFilter {return image_pixel(mip,vec2<i32>(floor(p+0.5)),sampling);}
     let i = vec2<i32>(floor(p)); let t = p-floor(p);
     let a = image_pixel(mip,i,sampling); let b = image_pixel(mip,i+vec2(1,0),sampling);
     let c = image_pixel(mip,i+vec2(0,1),sampling); let d = image_pixel(mip,i+vec2(1,1),sampling);
-    return (a*(1.0-t.x)+b*t.x)*(1.0-t.y)+(c*(1.0-t.x)+d*t.x)*t.y;
+    let top=stable4(stable4(a*stable(1.0-t.x))+stable4(b*t.x));
+    let bottom=stable4(stable4(c*stable(1.0-t.x))+stable4(d*t.x));
+    return stable4(stable4(top*stable(1.0-t.y))+stable4(bottom*t.y));
 }
 fn sample_image(image: u32, sampling: u32, uv: vec2<f32>, lod: f32) -> vec4<f32> {
     let filterMode = select((sampling/16u)%8u,(sampling/128u)%2u,lod<=0.0);
@@ -39,13 +41,15 @@ fn sample_image(image: u32, sampling: u32, uv: vec2<f32>, lod: f32) -> vec4<f32>
     if filterMode == 2u || filterMode == 3u {a=u32(floor(level+0.5));}
     let first = image_level(image,a,uv,sampling,linearFilter);
     if filterMode < 4u || a+1u >= u32(levels) {return first;}
-    return first+(image_level(image,a+1u,uv,sampling,linearFilter)-first)*(level-f32(a));
+    return stable4(first+stable4(stable4(image_level(image,a+1u,uv,sampling,linearFilter)-first)*stable(level-f32(a))));
 }
 fn texture_slot(material: u32, slot: u32, in: LitVertex) -> vec4<f32> {
     let binding = shading[material+4u+slot];
     if binding.x < 0.0 {return vec4(1.0);}
     let image = u32(binding.x);
-    let uv = in.uvOverZ/in.invZ;
+    var uv=in.uv;
+    // Hardware triangle interpolation carries UV/Z; exact bbox fragments already carry UV.
+    if in.triangle==0xffffffffu {uv=in.uv/in.invZ;}
     let dx = (in.uvDx.xy-uv*in.uvDx.z)/in.invZ;
     let dy = (in.uvDy.xy-uv*in.uvDy.z)/in.invZ;
     let size = mip_at(image,0u).zw;

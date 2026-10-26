@@ -48,6 +48,11 @@ fn project_studio_uses_folder_library_history_and_exports() {
 }
 
 #[test]
+fn scene3d_gpu_raster_matches_cpu_in_the_export_player() {
+    browser_acceptance("scene3d-browser.ts", None);
+}
+
+#[test]
 fn motion_studio_source_drafts_update_preview_and_save() {
     studio("source");
 }

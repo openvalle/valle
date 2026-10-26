@@ -1060,65 +1060,52 @@ impl ProductEngine {
     }
 
     /// Admission stays in Rust even when the browser fulfills pixels on its GPU: one call admits
-    /// the request, prepares its topology once, and returns the lighting input the GPU shades.
-    pub fn scene3d_gpu_lighting_input(
+    /// the request, prepares its topology once, and returns triangles and material records.
+    pub fn scene3d_gpu_raster_input(
         &mut self,
         content_digest: &str,
         topology_digest: &str,
         canonical_request: &str,
-    ) -> Result<Vec<f32>, JsError> {
-        let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
-        let frame = sealed.request();
-        frame
-            .scene
-            .validate()
-            .map_err(|error| js_error("scene3d_request", error))?;
-        frame
-            .frame
-            .validate_for(&frame.scene)
-            .map_err(|error| js_error("scene3d_request", error))?;
-        // Include aggregate geometry and layer budgets, not just each primitive's validation.
-        let resources = valle_motion::scene3d::SceneResources::default();
-        let key = valle_motion::scene3d::prepare_cache_key(
-            &frame.scene,
-            frame.width,
-            frame.height,
-            &resources,
-        )
-        .map_err(|error| js_error("scene3d_gpu_admission", error))?;
-        let prepared = if let Some(prepared) = self.scene3d_prepared.get(&key) {
-            Arc::clone(prepared)
-        } else {
-            let prepared = Arc::new(
-                valle_motion::scene3d::prepare_scene(
-                    &frame.scene,
-                    frame.width,
-                    frame.height,
-                    &resources,
-                )
-                .map_err(|error| js_error("scene3d_gpu_admission", error))?,
-            );
-            if self.scene3d_prepared.len() >= MAX_SCENE3D_PREPARED_CACHE {
-                self.scene3d_prepared.clear();
-            }
-            self.scene3d_prepared.insert(key, Arc::clone(&prepared));
-            prepared
-        };
-        valle_motion::scene3d::prepare_gpu_lighting_input(&prepared, &frame.frame)
-            .map_err(|error| js_error("scene3d_gpu_vertices", error))
-    }
-
-    fn render_scene3d_request_impl(
-        &mut self,
-        content_digest: &str,
-        topology_digest: &str,
-        canonical_request: &str,
-        defer_dof: bool,
     ) -> Result<Vec<u8>, JsError> {
         let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
-        let content_digest = sealed.content_digest();
         let frame = sealed.request();
+        let prepared = self.prepare_scene3d_frame(frame)?;
+        let geometry = valle_motion::scene3d::prepare_gpu_geometry(&prepared, &frame.frame)
+            .map_err(|error| js_error("scene3d_gpu_geometry", error))?;
+        Ok(geometry
+            .and_then(|geometry| geometry.web_packet(&frame.frame))
+            .unwrap_or_default())
+    }
 
+    /// Upload immutable material/environment mip texels once for a content-keyed GPU atlas.
+    pub fn scene3d_gpu_atlas(
+        &mut self,
+        content_digest: &str,
+        topology_digest: &str,
+        canonical_request: &str,
+    ) -> Result<Vec<u8>, JsError> {
+        let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
+        let frame = sealed.request();
+        let prepared = self.prepare_scene3d_frame(frame)?;
+        let geometry = valle_motion::scene3d::prepare_gpu_geometry(&prepared, &frame.frame)
+            .map_err(|error| js_error("scene3d_gpu_geometry", error))?
+            .ok_or_else(|| JsError::new("[scene3d_gpu_atlas] geometry was not admitted"))?;
+        let Some(shading) = geometry.shading.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let atlas = valle_motion::scene3d::GpuRasterAtlas::new(shading, 4096, 256 * 1024 * 1024)
+            .ok_or_else(|| {
+                JsError::new("[scene3d_gpu_atlas] atlas exceeds the GPU resource limit")
+            })?;
+        let mut output = Vec::with_capacity(atlas.byte_len() as usize);
+        atlas.append_bytes(&mut output);
+        Ok(output)
+    }
+
+    fn prepare_scene3d_frame(
+        &mut self,
+        frame: &valle_motion::Scene3DFrameRequest,
+    ) -> Result<Arc<valle_motion::scene3d::PreparedScene>, JsError> {
         let mut resources = valle_motion::scene3d::SceneResources::default();
         if let Some(environment) = &frame.scene.pbr.environment {
             let digest = scene3d_binding_digest(frame, &environment.control)?;
@@ -1184,6 +1171,21 @@ impl ProductEngine {
                 .insert(cache_key, Arc::clone(&prepared));
             prepared
         };
+        Ok(prepared)
+    }
+
+    fn render_scene3d_request_impl(
+        &mut self,
+        content_digest: &str,
+        topology_digest: &str,
+        canonical_request: &str,
+        defer_dof: bool,
+    ) -> Result<Vec<u8>, JsError> {
+        let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
+        let content_digest = sealed.content_digest();
+        let frame = sealed.request();
+
+        let prepared = self.prepare_scene3d_frame(frame)?;
         let raster = if defer_dof {
             valle_motion::scene3d::render_scene_without_depth_of_field(&prepared, &frame.frame)
         } else {

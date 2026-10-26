@@ -5,7 +5,10 @@ use super::{
     MaterialKind, PixelRays, PreparedScene, SUBPIXEL_SCALE, anchor_projections, collect_geometry,
     f16_bits_to_f32, output_color,
 };
+mod atlas;
+mod packet;
 mod shading;
+pub use atlas::GpuRasterAtlas;
 pub use shading::GpuRasterTextureVarying;
 
 #[derive(Clone, Copy, Debug)]
@@ -129,13 +132,12 @@ impl GpuRasterGeometry {
                 bytes.extend_from_slice(&varying.material_index.to_le_bytes());
                 if let Some(textures) = &shading.texture_vertices {
                     let v = textures[index];
-                    for value in v
-                        .uv_over_z
-                        .into_iter()
-                        .chain(v.dx)
-                        .chain(v.dy)
-                        .chain(v.tangent)
-                        .chain(v.bitangent)
+                    for value in
+                        v.uv.into_iter()
+                            .chain(v.dx)
+                            .chain(v.dy)
+                            .chain(v.tangent)
+                            .chain(v.bitangent)
                     {
                         bytes.extend_from_slice(&value.to_le_bytes());
                     }
@@ -248,7 +250,7 @@ pub fn prepare_gpu_geometry(
                 if let Some(textures) = &mut shading.texture_vertices {
                     let v = |v: super::V3| [v.x, v.y, v.z];
                     textures.push(GpuRasterTextureVarying {
-                        uv_over_z: [screen.uv.x * screen.inv_z, screen.uv.y * screen.inv_z],
+                        uv: [screen.uv.x, screen.uv.y],
                         dx: gradients.dx,
                         dy: gradients.dy,
                         tangent: if triangle.has_basis {

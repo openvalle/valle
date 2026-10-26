@@ -46,7 +46,8 @@ export interface ProductEngineWire {
   quantize_sample_seconds(seconds: number, sampleRate: number, count: bigint): bigint;
   set_realtime_geometry?(enabled: boolean): void;
   set_delivery_output?(enabled: boolean): void;
-  scene3d_gpu_lighting_input?(content: string, topology: string, request: string): Float32Array;
+  scene3d_gpu_raster_input?(content: string, topology: string, request: string): Uint8Array;
+  scene3d_gpu_atlas?(content: string, topology: string, request: string): Uint8Array;
   transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void;
   transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void;
   open_fixed_package(
@@ -135,6 +136,8 @@ export interface ProductRenderReceipt {
 
 export interface ProductFrameRequest {
   realtime?: boolean;
+  gpuScene3d?: boolean;
+  deliveryOutput?: boolean;
   trace?: boolean;
   key: string;
   renderId: string;
@@ -160,7 +163,8 @@ export const PRODUCT_RUNTIME_METHODS = [
   "register_scene3d_model",
   "register_scene3d_environment",
   "register_scene3d_texture",
-  "scene3d_gpu_lighting_input",
+  "scene3d_gpu_raster_input",
+  "scene3d_gpu_atlas",
   "render_scene3d_request",
   "render_scene3d_request_deferred",
   "has_scene3d_frame",
@@ -212,7 +216,7 @@ export type ProductFrameWorkerRequest =
 
 export interface ProductFrameRequestStage {
   gpuScene3dJobs?: Record<string, Scene3dKernelInput>;
-  gpuScene3d?: Record<string, Float32Array>;
+  gpuScene3d?: Record<string, Uint8Array>;
   key: string;
   renderId: string;
   epoch: number;
@@ -482,6 +486,10 @@ export function assertProductFrameWorkerRequest(
         throw new TypeError("invalid Motion results packet");
       const request = requireRecord(job.request, "Product frame request");
       requireRenderId(request.renderId, "Product frame request renderId");
+      for (const flag of ["realtime", "gpuScene3d", "deliveryOutput"]) {
+        if (Object.hasOwn(request, flag) && typeof request[flag] !== "boolean")
+          throw new TypeError(`Product frame request ${flag} must be a boolean`);
+      }
     }
   }
 }
@@ -664,8 +672,8 @@ function assertGpuPreparation(stage: Record<string, unknown>): void {
   let bytes = 0;
   for (const [digest, packet] of Object.entries(packets)) {
     requireRenderId(digest, "Scene3D GPU preparation content");
-    if (!(packet instanceof Float32Array) || packet.byteLength === 0)
-      throw new TypeError("Scene3D GPU preparation must contain Float32Array packets");
+    if (!(packet instanceof Uint8Array) || packet.byteLength === 0)
+      throw new TypeError("Scene3D GPU preparation must contain binary geometry packets");
     bytes += packet.byteLength;
   }
   if (bytes > 512 * 1024 * 1024)

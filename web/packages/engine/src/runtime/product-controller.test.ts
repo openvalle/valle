@@ -896,6 +896,82 @@ test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async
   expect(produced.bytes).toBe(8);
 });
 
+test("reference/export Scene3D borrows before atlas uploads and retains CPU geometry fallback", async () => {
+  const bytes = new Uint8Array(320),
+    h = new Uint32Array(bytes.buffer),
+    f = new Float32Array(bytes.buffer);
+  h.set([0x33534756, 16, 16, 0, 13, 1]);
+  f.set([1, 1, 0], 6);
+  h.set([1, 1, 256, 1, 1, 272, 1, 1, 16, 1, 1, 288, 1, 1, 304], 9);
+  h[25] = bytes.length;
+  const canonical = JSON.stringify({ width: 16, height: 16 });
+  const request = {
+    key: {
+      content: SCENE_DIGEST,
+      interpretation: { kind: "scene3d", topology_digest: TOPOLOGY_DIGEST },
+    },
+    expected: { kind: "scene3d" },
+    payload: { kind: "scene3dFrame", canonical_request: canonical },
+  };
+  for (const admitted of [true, false]) {
+    let atlasUploads = 0,
+      rasterCalls = 0,
+      cpuCalls = 0,
+      borrows = 0;
+    const image = { delete() {} },
+      player = playerFixture();
+    const renderer = {
+      accepts: () => true,
+      acceptsPacket: () => true,
+      workingBytes: () => 1024 * 1024,
+      stats: { fallbacks: 0 },
+      async render(_packet: unknown, load: () => Promise<Uint8Array>) {
+        rasterCalls++;
+        await load();
+        return image;
+      },
+    };
+    Object.assign(player, {
+      renderMode: "reference",
+      runtimePurpose: "export",
+      target: { context: {}, canvas: {} },
+      scene3dGpuInit: Promise.resolve(renderer),
+      scene3dDof: { render: () => image },
+      engine: {
+        scene3d_gpu_atlas() {
+          atlasUploads++;
+          return new Uint8Array(16);
+        },
+        render_scene3d_request_deferred() {
+          cpuCalls++;
+          const packet = new Uint8Array(80 + 16 * 16 * 12);
+          new Uint32Array(packet.buffer).set([0x464f4456, 16, 16, 0, 0, 16, 16]);
+          new Float32Array(packet.buffer).set([16, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], 7);
+          return packet;
+        },
+      },
+    });
+    const produced = await player.fulfillRequestUncached(
+      request,
+      true,
+      new Map([
+        [SCENE_DIGEST, { canonical, topology: TOPOLOGY_DIGEST, value: JSON.parse(canonical) }],
+      ]),
+      { [SCENE_DIGEST]: bytes },
+      (additional: number) => {
+        expect(additional).toBeGreaterThan(0);
+        borrows++;
+        return admitted;
+      },
+    );
+    expect(produced.object.image).toBe(image);
+    expect(borrows).toBe(1);
+    expect([atlasUploads, rasterCalls, cpuCalls, renderer.stats.fallbacks]).toEqual(
+      admitted ? [1, 1, 0, 0] : [0, 0, 1, 1],
+    );
+  }
+});
+
 test("Scene3D model and environment admission use frozen bytes and deduplicate registration", async () => {
   for (const kind of ["model", "environment"]) {
     const bytes = Uint8Array.from([1, 2, 3]);

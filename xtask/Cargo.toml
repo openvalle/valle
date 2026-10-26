@@ -12,3 +12,4 @@ serde_json.workspace = true
 tempfile.workspace = true
 sha2.workspace = true
 hex.workspace = true
+naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }

@@ -41,6 +41,9 @@ interface WorkerSlot {
 }
 
 export interface ProductFramePlanningInput {
+  realtime?: boolean;
+  gpuScene3d?: boolean;
+  deliveryOutput?: boolean;
   trace?: boolean;
   frame: number;
   width: number;
@@ -718,6 +721,9 @@ export function planningKey(
     input.width,
     input.height,
     Number(input.transparent),
+    Number(input.realtime === true),
+    Number(input.gpuScene3d === true),
+    Number(input.deliveryOutput === true),
     input.maxSurfaceBytes,
     input.maxFrameBytes,
   ].join(":");

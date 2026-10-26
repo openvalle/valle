@@ -5998,6 +5998,7 @@ version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "hex",
+ "naga",
  "serde_json",
  "sha2",
  "tempfile",

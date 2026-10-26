@@ -15,7 +15,7 @@ import {
   type MotionKernelDefinition,
 } from "./frame-protocol.ts";
 import { decodePackedAbi, RESOURCE_REQUESTS_ABI } from "../../abi/packed.ts";
-import { supportsScene3dGpu } from "./scene3d-gpu-request.ts";
+import { supportsScene3dGpu, scene3dHasExternalResources } from "./scene3d-gpu-request.ts";
 import type { Scene3dGpuRequest } from "../../executor/webgl/scene3d.ts";
 import { executeRuntimeCall } from "./runtime-operations.ts";
 import { installKernelWorker, type Scene3dKernelInput } from "./kernel-worker.ts";
@@ -32,7 +32,6 @@ let messageChain = Promise.resolve();
 const sentTemplateHashes = new Set<string>();
 let lastReadyAt: number | null = null;
 let lastReleaseMs = 0;
-let gpuScene3d = false;
 const motionDefinitionsSent = new Map<string, number>();
 // Dispatch can still prefetch multiple jobs, but publish each frame immediately. Waiting for
 // eight evaluate/prepare calls delays both resource fulfillment and the first visible frame.
@@ -88,7 +87,6 @@ async function handleIncomingMessage(value: unknown): Promise<void> {
 
 async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> {
   if (message.type === "configure") {
-    gpuScene3d = message.bootstrap.gpuScene3d === true;
     engine?.free();
     engine = null;
     renderId = null;
@@ -136,7 +134,7 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
         resources,
         audioProgramJson: next.audio_program_json(openedRenderId),
       };
-      next.set_realtime_geometry?.(gpuScene3d);
+      next.set_realtime_geometry?.(false);
       engine = next;
       renderId = openedRenderId;
       scope.postMessage({
@@ -182,8 +180,8 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
 
   for (let offset = 0; offset < message.jobs.length; offset += RESULT_BATCH_FRAMES) {
     const jobs = message.jobs.slice(offset, offset + RESULT_BATCH_FRAMES);
-    gpuScene3d = jobs[0]?.request.realtime ?? gpuScene3d;
-    engine?.set_realtime_geometry?.(gpuScene3d);
+    engine?.set_realtime_geometry?.(jobs[0]?.request.realtime ?? false);
+    engine?.set_delivery_output?.(jobs[0]?.request.deliveryOutput ?? false);
     const started: StartedFrame[] = [];
     for (const [index, job] of jobs.entries()) {
       try {
@@ -356,7 +354,7 @@ async function startFrame(
     const requestPacket = active.resource_requests(ticket);
     const inspectionJson = active.frame_inspection_json(ticket);
     const gpuJobs: Record<string, Scene3dKernelInput> = {};
-    if (gpuScene3d && active.scene3d_gpu_lighting_input) {
+    if (request.gpuScene3d && active.scene3d_gpu_raster_input) {
       const requests = (await decodePackedAbi(requestPacket, RESOURCE_REQUESTS_ABI)) as Record<
         string,
         any
@@ -367,7 +365,7 @@ async function startFrame(
         if (gpuJobs[content]) continue;
         const canonical = request.payload.canonical_request as string;
         const value = JSON.parse(canonical) as Scene3dGpuRequest;
-        if (!supportsScene3dGpu(value)) continue;
+        if (!supportsScene3dGpu(value) || scene3dHasExternalResources(value)) continue;
         gpuJobs[content] = {
           content,
           topology: request.key.interpretation.topology_digest,

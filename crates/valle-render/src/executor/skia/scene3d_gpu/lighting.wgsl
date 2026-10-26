@@ -9,7 +9,7 @@ struct LitVertex {
     @location(1) normalOverZ: vec3<f32>,
     @location(2) @interpolate(flat) material: u32,
     @location(3) @interpolate(flat) ids: vec2<u32>,
-    @location(4) uvOverZ: vec2<f32>,
+    @location(4) uv: vec2<f32>,
     @location(5) @interpolate(flat) uvDx: vec3<f32>,
     @location(6) @interpolate(flat) uvDy: vec3<f32>,
     @location(7) @interpolate(flat) tangent: vec3<f32>,
@@ -24,7 +24,7 @@ fn make_lit_vertex(position: vec2<f32>, invZ: f32, objectId: u32, nodeId: u32, n
     out.normalOverZ = normalOverZ;
     out.material = material;
     out.ids = vec2(objectId, nodeId);
-    out.uvOverZ=vec2(0.0);out.uvDx=vec3(0.0);out.uvDy=vec3(0.0);out.tangent=vec3(0.0);out.bitangent=vec3(0.0);
+    out.uv=vec2(0.0);out.uvDx=vec3(0.0);out.uvDy=vec3(0.0);out.tangent=vec3(0.0);out.bitangent=vec3(0.0);
     out.triangle=0xffffffffu;
     return out;
 }
@@ -37,7 +37,7 @@ fn make_lit_vertex(position: vec2<f32>, invZ: f32, objectId: u32, nodeId: u32, n
     @location(5) normalOverZ:vec3<f32>,@location(6) material:u32,@location(7) uv:vec2<f32>,
     @location(8) dx:vec3<f32>,@location(9) dy:vec3<f32>,@location(10) tangent:vec3<f32>,@location(11) bitangent:vec3<f32>) -> LitVertex {
     var out=make_lit_vertex(position,invZ,objectId,nodeId,normalOverZ,material);
-    out.uvOverZ=uv;out.uvDx=dx;out.uvDy=dy;out.tangent=tangent;out.bitangent=bitangent;
+    out.uv=uv*invZ;out.uvDx=dx;out.uvDy=dy;out.tangent=tangent;out.bitangent=bitangent;
     return out;
 }
 
@@ -45,6 +45,9 @@ fn make_lit_vertex(position: vec2<f32>, invZ: f32, objectId: u32, nodeId: u32, n
 // Contraction and reciprocal-square-root substitution amplify narrow highlights.
 fn stable(v: f32) -> f32 {
     return bitcast<f32>(bitcast<u32>(v) ^ globals.padding);
+}
+fn stable4(v:vec4<f32>)->vec4<f32> {
+    return bitcast<vec4<f32>>(bitcast<vec4<u32>>(v)^vec4(globals.padding));
 }
 
 // Correct the hardware division estimate before discontinuous PCF/DOF decisions.

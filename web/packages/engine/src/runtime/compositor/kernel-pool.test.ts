@@ -29,7 +29,7 @@ test("stateless kernels run under the shared CPU allowance and release memory af
         data: {
           version,
           id: this.message.id,
-          pixels: new Float32Array([1, 2]),
+          geometry: new Uint8Array([1, 2, 0, 0, 0, 0, 0, 0]),
           workMs: 1,
           residentBytes: 1024,
         },
@@ -68,7 +68,7 @@ test("stateless kernels run under the shared CPU allowance and release memory af
     await Bun.sleep(0);
     abort.abort();
     expect((await cancelled).name).toBe("AbortError");
-    // The posted coverage job drains with its permit; its worker and geometry cache survive.
+    // The posted geometry job drains with its permit; its worker and geometry cache survive.
     await Bun.sleep(0);
     expect(budget.snapshot().activeCpuSlots).toBe(1);
     expect(workers[0]!.terminated).toBe(false);
@@ -188,7 +188,7 @@ test("work cancelled before reaching a worker keeps that idle worker and its cac
         data: {
           version,
           id: this.messages.at(-1).id,
-          pixels: new Float32Array([1]),
+          geometry: new Uint8Array([1, 0, 0, 0]),
           workMs: 1,
           residentBytes: 1024,
         },
@@ -328,7 +328,7 @@ test("worker heaps share the background half of the budget", async () => {
         data: {
           version,
           id: this.message.id,
-          pixels: new Float32Array([1]),
+          geometry: new Uint8Array([1, 0, 0, 0]),
           workMs: 1,
           residentBytes: heap,
         },

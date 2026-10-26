@@ -71,7 +71,7 @@ class Port implements ProductWorkerPort {
   constructor(
     readonly host: Host,
     readonly priority: RuntimePriority,
-    readonly realtime: boolean,
+    readonly gpuScene3d: boolean,
   ) {
     host.ports.add(this);
   }
@@ -84,7 +84,7 @@ class Port implements ProductWorkerPort {
             id: this.prefix + message.id,
             jobs: message.jobs.map((job) => ({
               id: this.prefix + job.id,
-              request: { ...job.request, realtime: this.realtime },
+              request: { ...job.request, gpuScene3d: job.request.gpuScene3d ?? this.gpuScene3d },
             })),
           }
         : { ...message, id: this.prefix + message.id };
@@ -430,7 +430,7 @@ class Host {
           if (memory?.abort.signal.aborted) return;
           const jobs = entry.stage.gpuScene3dJobs;
           if (jobs && memory) {
-            const packets: Record<string, Float32Array> = {};
+            const packets: Record<string, Uint8Array> = {};
             await Promise.all(
               Object.entries(jobs).map(async ([key, input]) => {
                 const result = await this.kernels.run(input, job.priority, memory.abort.signal);
@@ -439,7 +439,7 @@ class Host {
                   return;
                 }
                 memory.leases.push(result.release);
-                packets[key] = result.pixels;
+                if (result.bytes.byteLength) packets[key] = result.bytes;
               }),
             );
             entry.stage.gpuScene3d = packets;

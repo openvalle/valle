@@ -16,7 +16,7 @@ interface Work {
   input: KernelInput;
   priority: RuntimePriority;
   signal: AbortSignal;
-  resolve: (value: { data: Float32Array | Uint8Array; release: () => void }) => void;
+  resolve: (value: { data: Uint8Array; release: () => void }) => void;
   reject: (error: unknown) => void;
 }
 interface Slot {
@@ -46,13 +46,13 @@ export class ProductKernelPool {
     input: Scene3dKernelInput,
     priority: RuntimePriority,
     signal: AbortSignal,
-  ): Promise<{ pixels: Float32Array; release: () => void }> {
+  ): Promise<{ bytes: Uint8Array; release: () => void }> {
     const result = await this.submit(input, priority, signal);
-    if (!(result.data instanceof Float32Array)) {
+    if (!(result.data instanceof Uint8Array)) {
       result.release();
       throw new Error("invalid Scene3D result");
     }
-    return { pixels: result.data, release: result.release };
+    return { bytes: result.data, release: result.release };
   }
   async runMotion(
     input: MotionKernelInput,
@@ -70,7 +70,7 @@ export class ProductKernelPool {
     input: KernelInput,
     priority: RuntimePriority,
     signal: AbortSignal,
-  ): Promise<{ data: Float32Array | Uint8Array; release: () => void }> {
+  ): Promise<{ data: Uint8Array; release: () => void }> {
     signal.throwIfAborted();
     if (this.closed || this.queue.length >= 128)
       return Promise.reject(new Error("kernel dispatch unavailable"));
@@ -134,7 +134,7 @@ export class ProductKernelPool {
       memory = await this.budget.acquireKernel(workingBytes, signal);
       releaseCpu = await this.budget.acquireCpu(job.priority, signal);
       signal.throwIfAborted();
-      const data = await new Promise<Float32Array | Uint8Array>((resolve, reject) => {
+      const data = await new Promise<Uint8Array>((resolve, reject) => {
         const stop = () => {
           done();
           healthy = false;
@@ -165,7 +165,7 @@ export class ProductKernelPool {
             reply.id !== job.id ||
             (!(isMotion
               ? reply.motion instanceof Uint8Array
-              : reply.pixels instanceof Float32Array) &&
+              : reply.geometry instanceof Uint8Array) &&
               !reply.error)
           )
             fail(new Error("invalid kernel response"));
@@ -181,7 +181,7 @@ export class ProductKernelPool {
             }
             this.budget.recordKernelWork(reply.workMs!);
             slot.resident(reply.residentBytes!);
-            resolve(isMotion ? reply.motion! : reply.pixels!);
+            resolve(isMotion ? reply.motion! : reply.geometry!);
           }
         };
         slot.worker.onerror = (event) => {

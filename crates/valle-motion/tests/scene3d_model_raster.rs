@@ -3017,74 +3017,6 @@ fn material_index_overrides_merge_with_complete_frame_values_and_common_alpha_ru
 }
 
 #[test]
-fn gpu_lighting_input_keeps_reference_depth_and_pixel_ownership() {
-    let mut scene = pbr_scene();
-    scene.meshes[0].model_control = None;
-    scene.meshes[0].geometry = Some(ProceduralGeometry::Extrude {
-        path: PathData::new(
-            vec![
-                PathVerb::Move,
-                PathVerb::Line,
-                PathVerb::Line,
-                PathVerb::Line,
-                PathVerb::Close,
-            ],
-            vec![
-                Point::new(-0.8, -1.0),
-                Point::new(0.8, -1.0),
-                Point::new(0.8, 1.0),
-                Point::new(-0.8, 1.0),
-            ],
-        )
-        .unwrap(),
-        depth: 0.5,
-        bevel: 0.05,
-    });
-    scene.pbr.shadows = false;
-    let mut other = scene.meshes[0].clone();
-    other.key = "other".into();
-    scene.meshes.push(other);
-    let mut frame = pbr_frame();
-    let mut other = frame.meshes[0].clone();
-    other.key = "other".into();
-    frame.meshes.push(other);
-    let prepared = prepare_scene(&scene, 127, 65, &SceneResources::default()).unwrap();
-    for angle in [0.0, 45.0, 89.0, 120.0] {
-        frame.meshes[0].transform.rotation_degrees = Vec3::new(23.0, angle, 0.0);
-        frame.meshes[1].transform.translation = Vec3::new(0.2, 0.1, -0.3);
-        for near in [0.1, 4.0] {
-            frame.camera.near = near;
-            let reference = render_scene_with_workers(&prepared, &frame, 1).unwrap();
-            let input =
-                valle_motion::scene3d::prepare_gpu_lighting_input(&prepared, &frame).unwrap();
-            assert_eq!(&input[..4], &[1.0, 127.0, 65.0, 2.0]);
-            let header = 8 + 3 * (127 + 65);
-            let x = input[header] as usize;
-            let y = input[header + 1] as usize;
-            let w = input[header + 2] as usize;
-            let count = input[header + 4] as usize;
-            assert_eq!(input.len(), header + 5 + count * 8);
-            let mut ids = vec![0; 127 * 65];
-            let mut depths = vec![f32::MAX; 127 * 65];
-            for row in input[header + 5..].chunks_exact(8) {
-                let at = row[0] as usize;
-                let index = (y + at / w) * 127 + x + at % w;
-                ids[index] = row[5] as u32;
-                depths[index] = row[4];
-                assert!(row[1..4].iter().all(|v| v.is_finite()));
-                assert_eq!(&row[6..], &[1.0, 1.0]);
-            }
-            assert_eq!(ids, reference.object_ids, "angle={angle}, near={near}");
-            assert_eq!(
-                f32_bytes(&depths),
-                reference.depth_f32_le_bytes(),
-                "angle={angle}, near={near}"
-            );
-        }
-    }
-}
-
-#[test]
 fn gpu_geometry_mask_uses_current_frame_alpha_and_preserves_anchor_projection() {
     use valle_motion::scene3d::AlphaMode;
     let model = glb(&[triangle(0.0, [0.0, 0.0, 1.0])]);
@@ -3146,7 +3078,68 @@ fn gpu_geometry_prepares_textures_blend_shadows_and_dof_without_pixel_planes() {
             render_scene(&prepared, &frame).is_ok(),
             "CPU reference {case}"
         );
+        let packet = geometry.web_packet(&frame).expect("bounded WebGL packet");
+        let header = packet[..256]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_le_bytes(*word))
+            .collect::<Vec<_>>();
+        assert_eq!(&header[..3], &[0x33534756, 64, 64]);
+        assert_eq!(header[3] as usize, geometry.vertices.len());
+        assert_eq!(header[5] & 2 != 0, case == "blend");
+        assert_eq!(header[5] & 4 != 0, case == "dof");
+        assert_eq!(header[24] as usize, shading.shadows.len());
+        assert_eq!(header[25] as usize, packet.len());
+        assert!(packet.len() <= 64 * 64 * 12);
+        let atlas = valle_motion::scene3d::GpuRasterAtlas::new(shading, 4096, 1024 * 1024)
+            .expect("small immutable atlas");
+        let mut texels = vec![];
+        atlas.append_bytes(&mut texels);
+        assert_eq!(texels.len(), header[17] as usize);
+        assert_eq!(&packet[112..144], &atlas.key);
     }
+}
+
+#[test]
+fn web_gpu_packet_falls_back_before_dense_tiny_layers_and_keeps_atlases_frame_independent() {
+    use valle_motion::scene3d::GpuRasterAtlas;
+    let model = glb(&[triangle(0.0, [0.0, 0.0, 1.0])]);
+    let resources = resources(&model);
+    let mut scene = scene();
+    scene.pbr.shadows = true;
+    let mut frame = frame();
+    let tiny = prepare_scene(&scene, 4, 4, &resources).unwrap();
+    assert!(
+        prepare_gpu_geometry(&tiny, &frame)
+            .unwrap()
+            .unwrap()
+            .web_packet(&frame)
+            .is_none()
+    );
+    let prepared = prepare_scene(&scene, 128, 128, &resources).unwrap();
+    let first = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+    frame.exposure = 1.7;
+    frame.meshes[0].material.roughness = Some(0.7);
+    frame.camera.position.0[0] = 0.15;
+    let next = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+    let mut uploads = vec![];
+    for geometry in [&first, &next] {
+        let shading = geometry.shading.as_ref().unwrap();
+        assert!(GpuRasterAtlas::new(shading, 4096, 1).is_none());
+        assert!(GpuRasterAtlas::new(shading, 0, 1024 * 1024).is_none());
+        let atlas = GpuRasterAtlas::new(shading, 4096, 1024 * 1024).unwrap();
+        let mut bytes = vec![];
+        atlas.append_bytes(&mut bytes);
+        uploads.push((atlas.key, bytes));
+    }
+    assert_ne!(first.vertex_bytes(), next.vertex_bytes());
+    assert_eq!(uploads[0], uploads[1]);
+    assert_eq!(
+        first.web_packet(&frame).unwrap()[144..176],
+        next.web_packet(&frame).unwrap()[144..176],
+        "camera, exposure and roughness do not invalidate static shadow maps"
+    );
 }
 
 #[test]

@@ -79,7 +79,12 @@ fn raster_lit_sample(in:LitVertex) -> LitVertex {
         stable(stable(stable(a.y*weights.x)+stable(b.y*weights.y))+stable(c.y*weights.z)),
         stable(stable(stable(a.z*weights.x)+stable(b.z*weights.y))+stable(c.z*weights.z)));
     if stride>13u {
-        out.uvOverZ=vertex_vec2(base+13u)*bary.x+vertex_vec2(base+stride+13u)*bary.y+vertex_vec2(base+stride*2u+13u)*bary.z;
+        // Match CPU's corrected weights before interpolation. Interpolating UV/Z and
+        // dividing afterward moves alpha-mask boundaries by a pixel at delivery sizes.
+        let ua=vertex_vec2(base+13u);let ub=vertex_vec2(base+stride+13u);let uc=vertex_vec2(base+stride*2u+13u);
+        out.uv=vec2(
+            stable(stable(stable(ua.x*weights.x)+stable(ub.x*weights.y))+stable(uc.x*weights.z)),
+            stable(stable(stable(ua.y*weights.x)+stable(ub.y*weights.y))+stable(uc.y*weights.z)));
         out.uvDx=vertex_vec3(base+15u);out.uvDy=vertex_vec3(base+18u);out.tangent=vertex_vec3(base+21u);out.bitangent=vertex_vec3(base+24u);
     }
     return out;

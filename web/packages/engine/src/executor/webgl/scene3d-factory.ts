@@ -11,12 +11,7 @@ export async function createScene3dGpu(
   isCurrent: () => boolean = () => true,
 ): Promise<GpuScene3D | null> {
   const gl = canvas.getContext("webgl2");
-  if (
-    !gl ||
-    !gl.getExtension("EXT_color_buffer_float") ||
-    !gl.getExtension("OES_texture_float_linear")
-  )
-    return null;
+  if (!gl || !gl.getExtension("EXT_color_buffer_float")) return null;
   const response = await fetch(new URL(dfgUrl, import.meta.url));
   if (!response.ok) throw new Error(`Scene3D BRDF resource failed: ${response.status}`);
   const bytes = await response.arrayBuffer();

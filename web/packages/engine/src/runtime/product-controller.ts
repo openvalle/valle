@@ -14,6 +14,7 @@ import {
 } from "../executor/canvaskit/scene3d-dof.ts";
 import { createScene3dGpu } from "../executor/webgl/scene3d-factory.ts";
 import type { GpuScene3D, Scene3dGpuRequest } from "../executor/webgl/scene3d.ts";
+import { decodeScene3dGpuPacket } from "../executor/webgl/scene3d-input.ts";
 import { GpuCircles } from "../executor/webgl/circles.ts";
 import { resetCanvasKitContext, untrackGpuState } from "../executor/webgl/gpu-state.ts";
 // Browser Product Compositor host.
@@ -96,7 +97,7 @@ export interface BrowserValleWebPlayerOptions {
   memoryBytes?: number;
   runtimeBudget?: BrowserRuntimeBudget;
   runtimePurpose?: "preview" | "export";
-  /** Select accelerated preview stages, or retain the reference export path. */
+  /** Realtime also admits approximate 2D geometry; full Scene3D GPU raster is shared. */
   renderMode?: "reference" | "realtime";
   /** Optional bounded CPU trace; capture readbacks and GPU device time are separate. */
   trace?: RenderTrace;
@@ -713,6 +714,7 @@ export class BrowserValleWebPlayer {
     this.runtimeBudget.register(this.memoryOwner, () => {
       this.resourceObjects.dispose();
       this.compositor?.trimWorkingMemory();
+      this.scene3dGpu?.trim();
     });
   }
 
@@ -849,6 +851,7 @@ export class BrowserValleWebPlayer {
     const frameStarted = performance.now();
     const planningInput = {
       ...this.framePlanningInput(frame, width, height, options.transparent === true),
+      ...(forceCpu ? { realtime: false, gpuScene3d: false } : {}),
       trace: this.trace !== undefined,
     };
     const planner = this.requirePlanner();
@@ -916,16 +919,19 @@ export class BrowserValleWebPlayer {
         const extent = request.expected.extent;
         if (extent) required += Number(extent.width) * Number(extent.height) * 32;
       }
-      const gpuScene3d =
-        this.renderMode === "realtime" && this.gpu && !forceCpu && typeof document !== "undefined";
-      required += scene3dWorkingBytes(scene3d, gpuScene3d ? requestStage.gpuScene3d : undefined);
+      const gpuScene3d = this.gpu && !forceCpu && typeof document !== "undefined";
+      const sceneBytes = Math.max(
+        scene3dWorkingBytes(scene3d, gpuScene3d ? requestStage.gpuScene3d : undefined),
+        this.scene3dGpu?.stats.allocatedBytes ?? 0,
+      );
+      required += sceneBytes;
       // The frame envelope now owns the projected packets, replacing their background leases.
       planner.adoptPreparationMemory(planning.key);
       finishMemory = await this.runtimeBudget.admitFrameAfterKernels(
         this.memoryOwner,
         required,
         this.runtimeAbort.signal,
-        pooled,
+        pooled + (this.scene3dGpu?.stats.allocatedBytes ?? 0),
       );
       let borrowedBytes = 0;
       const fulfillmentStarted = performance.now();
@@ -935,6 +941,12 @@ export class BrowserValleWebPlayer {
         scene3d,
         target.gpu,
         requestStage.gpuScene3d,
+        (bytes) => {
+          if (bytes <= 0) return true;
+          const granted = this.runtimeBudget.borrowFrameBytes(bytes);
+          if (granted) borrowedBytes += bytes;
+          return granted;
+        },
       ).finally(() => endFulfill?.());
       this.trace?.worker(
         "lower",
@@ -1024,7 +1036,8 @@ export class BrowserValleWebPlayer {
         Number(report.surfaceResidentBytes) +
         report.rasterLayerCacheBytes +
         frameResources.resourceCache.residentBytes +
-        planner.snapshot().readyBytes;
+        planner.snapshot().readyBytes +
+        (this.scene3dGpu?.stats.allocatedBytes ?? 0);
       const executeMs = performance.now() - executeStarted;
       endExecute?.();
       if (passTimings)
@@ -1315,6 +1328,7 @@ export class BrowserValleWebPlayer {
         if (finishMemory && retainedBytes === 0) {
           this.resourceObjects.dispose();
           this.compositor?.trimWorkingMemory();
+          this.scene3dGpu?.trim();
         }
         finishMemory?.(retainedBytes);
       }
@@ -1855,7 +1869,7 @@ export class BrowserValleWebPlayer {
       );
       bootstrap.resourceBytes = resourceBytes;
       bootstrap.deliveryOutput = this.runtimePurpose === "export";
-      bootstrap.gpuScene3d = this.gpu && this.renderMode === "realtime";
+      bootstrap.gpuScene3d = this.gpu;
       const openStarted = performance.now();
       planner = new ProductFramePlannerPool({
         workerUrl: this.runtimeAssets.workers.productFrame,
@@ -1995,7 +2009,8 @@ export class BrowserValleWebPlayer {
     decoded: readonly PackedValue[],
     scene3dRequests: Map<string, Scene3dFrameRequest>,
     gpu: boolean,
-    projected?: Record<string, Float32Array>,
+    projected?: Record<string, Uint8Array>,
+    borrow?: (bytes: number) => boolean,
   ): Promise<FulfilledFrame> {
     this.resourceObjects.beginFrame();
     try {
@@ -2035,6 +2050,7 @@ export class BrowserValleWebPlayer {
                 gpu,
                 scene3dRequests,
                 projected,
+                borrow,
               ),
             } as const;
           } catch (error) {
@@ -2125,7 +2141,8 @@ export class BrowserValleWebPlayer {
     request: PackedValue & Wire,
     gpu: boolean,
     scene3dRequests: Map<string, Scene3dFrameRequest>,
-    projected?: Record<string, Float32Array>,
+    projected?: Record<string, Uint8Array>,
+    borrow?: (bytes: number) => boolean,
   ): Promise<ProducedBrowserResource> {
     const key = record(request.key, "resource key") as PackedValue & Wire;
     const expected = record(request.expected, "resource expected descriptor");
@@ -2225,17 +2242,11 @@ export class BrowserValleWebPlayer {
       const scene = scene3dRequests.get(contentWire);
       if (!scene) throw new Error(`Scene3D request ${content} was not admitted`);
       const { canonical: canonicalRequest, topology, value } = scene;
-      // A projected packet has already passed Rust admission on a stateless kernel worker.
-      // Supported packets have no external model/texture dependencies.
+      // Stateless workers prepare resource-free scenes. Models/textures share this host's
+      // admitted resource registry and are prepared after those resources are fulfilled.
       if (!projected?.[contentWire])
         await this.ensureScene3dResources(contentWire, topology, canonicalRequest);
-      if (
-        this.renderMode === "realtime" &&
-        gpu &&
-        this.target?.context &&
-        this.target.canvas &&
-        this.planner
-      ) {
+      if (gpu && this.target?.context && this.target.canvas && this.planner) {
         const target = this.target,
           activeEngine = this.engine;
         this.scene3dGpuInit ??= createScene3dGpu(
@@ -2254,24 +2265,41 @@ export class BrowserValleWebPlayer {
         });
         const renderer = await this.scene3dGpuInit;
         if (renderer?.accepts(value)) {
-          const lightingInput =
+          const bytes =
             projected?.[contentWire] ??
-            (await this.runtimeCall<Float32Array>(
-              "scene3d_gpu_lighting_input",
+            (await this.runtimeCall<Uint8Array>(
+              "scene3d_gpu_raster_input",
               contentWire,
               topology,
               canonicalRequest,
             ));
-          const image = await renderer.render({ ...value, lightingInput });
-          return {
-            object: { key, kind: "scene3d", image },
-            bytes: pixelBytes(value.width, value.height, 8),
-            dispose: () => image.delete(),
-            ...empty,
-          };
+          const packet = bytes.byteLength ? decodeScene3dGpuPacket(bytes) : null;
+          if (packet && renderer.acceptsPacket(packet)) {
+            const admitted = projected?.[contentWire]
+              ? bytes.byteLength * 2 + value.width * value.height * 60
+              : value.width * value.height * 128;
+            const additional = Math.max(0, renderer.workingBytes(packet) - admitted);
+            if (additional === 0 || borrow?.(additional)) {
+              const image = await renderer.render(packet, () =>
+                this.runtimeCall<Uint8Array>(
+                  "scene3d_gpu_atlas",
+                  contentWire,
+                  topology,
+                  canonicalRequest,
+                ),
+              );
+              return {
+                object: { key, kind: "scene3d", image },
+                bytes: pixelBytes(value.width, value.height, 8),
+                dispose: () => image.delete(),
+                ...empty,
+              };
+            }
+          }
+          renderer.stats.fallbacks++;
         }
       }
-      if (this.renderMode === "realtime" && gpu && this.target?.context && this.planner) {
+      if (gpu && this.target?.context && this.planner) {
         const packet = await this.runtimeCall<Uint8Array>(
           "render_scene3d_request_deferred",
           contentWire,
@@ -3128,6 +3156,9 @@ export class BrowserValleWebPlayer {
     const maxFrameBytes = BigInt(this.runtimeBudget.memoryBytes);
     const maxSurfaceBytes = maxFrameBytes;
     return {
+      realtime: this.gpu && this.renderMode === "realtime",
+      gpuScene3d: this.gpu,
+      deliveryOutput: this.runtimePurpose === "export",
       frame,
       width,
       height,
@@ -3612,11 +3643,11 @@ function scene3dFrameRequests(requests: readonly PackedValue[]): Map<string, Sce
 }
 
 /** Frame bytes for Scene3D fulfillment. A projected request owns its adopted lighting packet, the
- * GPU copy of it and one F16 output image, and all share the renderer's 68 B/px working targets.
+ * GPU copy of it and one F16 output image, and all share the renderer's bounded working targets.
  * Every other request rasterizes through the 128 B/px CPU working set. */
 function scene3dWorkingBytes(
   scenes: Map<string, Scene3dFrameRequest>,
-  projected?: Record<string, Float32Array>,
+  projected?: Record<string, Uint8Array>,
 ): number {
   let bytes = 0,
     shared = 0;
@@ -3632,7 +3663,7 @@ function scene3dWorkingBytes(
       continue;
     }
     bytes += packet.byteLength * 2 + width * height * 8;
-    shared = Math.max(shared, width * height * 68);
+    shared = Math.max(shared, width * height * 60);
   }
   return bytes + shared;
 }

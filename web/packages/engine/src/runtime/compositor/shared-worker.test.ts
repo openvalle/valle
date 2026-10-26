@@ -150,8 +150,15 @@ test("Motion capture releases the single CPU slot before kernels and resumes the
   }
   globalThis.Worker = MockWorker as unknown as typeof Worker;
   const budget = new BrowserRuntimeBudget({ cpuThreads: 1, memoryBytes: 128 * 1024 ** 2 });
-  const port = sharedProductWorker("https://localhost/worker.js", bootstrap, budget, "playback");
+  const port = sharedProductWorker(
+    "https://localhost/worker.js",
+    { ...bootstrap, gpuScene3d: true },
+    budget,
+    "export",
+  );
   const request = {
+    realtime: false,
+    deliveryOutput: true,
     key: "frame/key",
     renderId,
     epoch: 1,
@@ -173,6 +180,7 @@ test("Motion capture releases the single CPU slot before kernels and resumes the
     await tick();
     const owner = physical[0]!,
       sent = owner.messages[0].jobs[0];
+    expect(sent.request).toMatchObject({ realtime: false, deliveryOutput: true, gpuScene3d: true });
     owner.reply({
       protocolVersion: version,
       type: "motionWork",

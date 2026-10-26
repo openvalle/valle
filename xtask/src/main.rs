@@ -7,13 +7,17 @@ use std::{
 
 mod notices;
 mod package;
+mod web_shaders;
 
 const MARKER: &str = ".valle-distribution";
-const USAGE: &str = "Usage: cargo xtask build [--release]\n       cargo xtask package [--target TRIPLE] [--min-macos VERSION]\n       cargo xtask verify-package BINARY";
+const USAGE: &str = "Usage: cargo xtask build [--release]\n       cargo xtask package [--target TRIPLE] [--min-macos VERSION]\n       cargo xtask verify-package BINARY\n       cargo xtask web-shaders";
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    if args.as_slice() == ["web-shaders"] {
+        return web_shaders::generate(root);
+    }
     if args.first().is_some_and(|arg| arg == "package") {
         return package::package(root, &args[1..]);
     }

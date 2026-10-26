@@ -21,6 +21,7 @@ interface Mirror {
   enabled: Set<number>;
   textures: (WebGLTexture | null)[];
   samplers: (WebGLSampler | null)[];
+  uniforms: (WebGLBuffer | null)[];
   deleted: WeakSet<object>;
   restore: (() => void)[];
 }
@@ -28,6 +29,7 @@ const mirrors = new WeakMap<WebGL2RenderingContext, Mirror>();
 const names = [
   "CURRENT_PROGRAM",
   "ARRAY_BUFFER_BINDING",
+  "UNIFORM_BUFFER_BINDING",
   "VERTEX_ARRAY_BINDING",
   "DRAW_FRAMEBUFFER_BINDING",
   "READ_FRAMEBUFFER_BINDING",
@@ -56,6 +58,7 @@ export function trackGpuState(gl: WebGL2RenderingContext): void {
   const values = Object.fromEntries(names.map((n) => [n, gl.getParameter(gl[n])])),
     textures: (WebGLTexture | null)[] = [],
     samplers: (WebGLSampler | null)[] = [];
+  const uniforms: (WebGLBuffer | null)[] = [];
   const units = gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS) as number;
   for (let i = 0; i < units; i++) {
     gl.activeTexture(gl.TEXTURE0 + i);
@@ -63,10 +66,13 @@ export function trackGpuState(gl: WebGL2RenderingContext): void {
     samplers.push(gl.getParameter(gl.SAMPLER_BINDING));
   }
   gl.activeTexture(values.ACTIVE_TEXTURE);
+  for (let i = 0; i < (gl.getParameter(gl.MAX_UNIFORM_BUFFER_BINDINGS) as number); i++)
+    uniforms.push(gl.getIndexedParameter(gl.UNIFORM_BUFFER_BINDING, i));
   const mirror: Mirror = {
     values,
     textures,
     samplers,
+    uniforms,
     deleted: new WeakSet(),
     enabled: new Set(switches.filter((n) => gl.isEnabled(gl[n])).map((n) => gl[n])),
     restore: [],
@@ -111,6 +117,13 @@ export function trackGpuState(gl: WebGL2RenderingContext): void {
     wrap(method!, (...v) => (values[key!] = v));
   wrap("bindBuffer", (target, buffer) => {
     if (target === gl.ARRAY_BUFFER) values.ARRAY_BUFFER_BINDING = buffer;
+    if (target === gl.UNIFORM_BUFFER) values.UNIFORM_BUFFER_BINDING = buffer;
+  });
+  wrap("bindBufferBase", (target, index, buffer) => {
+    if (target === gl.UNIFORM_BUFFER) {
+      uniforms[index] = buffer;
+      values.UNIFORM_BUFFER_BINDING = buffer;
+    }
   });
   wrap("bindFramebuffer", (target, buffer) => {
     if (target === gl.FRAMEBUFFER || target === gl.DRAW_FRAMEBUFFER)
@@ -137,6 +150,8 @@ export function trackGpuState(gl: WebGL2RenderingContext): void {
   wrap("deleteBuffer", (buffer) => {
     if (buffer) mirror.deleted.add(buffer);
     if (values.ARRAY_BUFFER_BINDING === buffer) values.ARRAY_BUFFER_BINDING = null;
+    if (values.UNIFORM_BUFFER_BINDING === buffer) values.UNIFORM_BUFFER_BINDING = null;
+    for (let i = 0; i < uniforms.length; i++) if (uniforms[i] === buffer) uniforms[i] = null;
   });
   wrap("deleteVertexArray", (vao) => {
     if (vao) mirror.deleted.add(vao);
@@ -185,12 +200,17 @@ export function preserveState(gl: WebGL2RenderingContext): () => void {
     v = { ...mirror.values },
     enabled = new Set(mirror.enabled),
     textures = mirror.textures.slice(),
-    samplers = mirror.samplers.slice();
+    samplers = mirror.samplers.slice(),
+    uniforms = mirror.uniforms.slice();
   const alive = (value: any) => (value && mirror.deleted.has(value) ? null : value);
   return () => {
     gl.useProgram(alive(v.CURRENT_PROGRAM));
     gl.bindVertexArray(alive(v.VERTEX_ARRAY_BINDING));
     gl.bindBuffer(gl.ARRAY_BUFFER, alive(v.ARRAY_BUFFER_BINDING));
+    for (let i = 0; i < uniforms.length; i++)
+      if (mirror.uniforms[i] !== uniforms[i])
+        gl.bindBufferBase(gl.UNIFORM_BUFFER, i, alive(uniforms[i]!));
+    gl.bindBuffer(gl.UNIFORM_BUFFER, alive(v.UNIFORM_BUFFER_BINDING));
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, alive(v.DRAW_FRAMEBUFFER_BINDING));
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, alive(v.READ_FRAMEBUFFER_BINDING));
     gl.viewport(...(v.VIEWPORT as [number, number, number, number]));
