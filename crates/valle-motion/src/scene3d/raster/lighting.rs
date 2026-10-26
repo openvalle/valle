@@ -1,5 +1,5 @@
 //! Generic BRDF lookup and ACES fit. MIT attribution is retained in assets/THREE-LICENSE.txt.
-const DFG_BYTES: &[u8; 1024] = include_bytes!("assets/dfg.rg16f");
+pub(super) const DFG_BYTES: &[u8; 1024] = include_bytes!("assets/dfg.rg16f");
 const DFG: [[f32; 2]; 256] = {
     let mut table = [[0.0; 2]; 256];
     let mut i = 0;

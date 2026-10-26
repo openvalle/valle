@@ -60,8 +60,12 @@ export default function Animated() { const time = useCurrentTime(); const frame 
     } else {
         source.to_owned()
     };
+    project_from_source(&source)
+}
+
+fn project_from_source(source: &str) -> NativeProject {
     let artifact = Arc::new(
-        valle_compiler::motion::compile_motion(&source)
+        valle_compiler::motion::compile_motion(source)
             .unwrap()
             .artifact,
     );
@@ -141,6 +145,8 @@ unsafe extern "C" {
 }
 
 struct InspectSink {
+    width: u32,
+    height: u32,
     muxer: Muxer,
     delivery: FrameDelivery,
     pixels: Vec<Vec<u8>>,
@@ -151,11 +157,17 @@ struct InspectSink {
 
 impl InspectSink {
     fn new(path: &std::path::Path) -> Self {
+        Self::new_sized(path, WIDTH, HEIGHT)
+    }
+
+    fn new_sized(path: &std::path::Path, width: u32, height: u32) -> Self {
         Self {
+            width,
+            height,
             muxer: Muxer::open_ext_with_transport(
                 path,
-                WIDTH,
-                HEIGHT,
+                width,
+                height,
                 30,
                 None,
                 true,
@@ -198,7 +210,7 @@ impl FrameSink for InspectSink {
         let SharedVideoFrameHandle::VideoToolbox(buffer) = delivered.frame.handle() else {
             panic!("expected VideoToolbox frame")
         };
-        let mut pixels = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
+        let mut pixels = Vec::with_capacity((self.width * self.height * 4) as usize);
         // push_shared is called only after Ganesh's completion fence. Retain the owning
         // SharedVideoFrame throughout this read, then pass that same surface to the encoder.
         unsafe {
@@ -206,11 +218,11 @@ impl FrameSink for InspectSink {
             let data = CVPixelBufferGetBaseAddress(buffer).cast::<u8>();
             let stride = CVPixelBufferGetBytesPerRow(buffer);
             assert!(!data.is_null());
-            assert!(stride >= WIDTH as usize * 4);
-            for y in 0..HEIGHT as usize {
+            assert!(stride >= self.width as usize * 4);
+            for y in 0..self.height as usize {
                 pixels.extend_from_slice(std::slice::from_raw_parts(
                     data.add(y * stride),
-                    WIDTH as usize * 4,
+                    self.width as usize * 4,
                 ));
             }
             assert_eq!(CVPixelBufferUnlockBaseAddress(buffer, 1), 0);
@@ -453,6 +465,203 @@ fn raster_shared_delivery_writes_the_readback_pixels_in_place() {
         assert!(sink.finished);
         assert_eq!(sink.keys, indices);
         assert_eq!(sink.pixels, expected, "workers={workers}");
+    }
+}
+
+fn lit_project(kind: &str, aces: bool) -> NativeProject {
+    let source = r##"
+export const composition = { width:96, height:64, fps:30, duration:2 };
+const BALL = lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"), {segments:16});
+export default function Lit() { const time = useCurrentTime(); return <Scene style={{backgroundColor:"#102030"}}>
+<Scene3D key="lit" style={{width:96,height:64}} pbr={{toneMapping:"__TONE__",exposure:0.25+time.seconds*0.6}}
+ camera={{position:[0,0,5],target:[0,0,0],fov:45}}>
+ <Mesh key="main" geometry={BALL} rotateY={time.seconds*90} position={[-0.4,0,0]}
+  material={{type:"__KIND__",color:"#cf7338",metallic:0.1+time.seconds*0.4,roughness:0.0525+time.seconds*0.3,emissive:"#173421",emissiveIntensity:0.2}} />
+ <Mesh key="mixed" geometry={BALL} scale={[-0.5,0.5,0.5]} position={[0.8,0,0.6]}
+  material={{type:"unlit",color:"#3366ee",doubleSided:true}} />
+ <AmbientLight color="#aabbcc" intensity={0.15}/>
+ <HemisphereLight skyColor="#bad6ff" groundColor="#222c15" direction={[0.2,1,0]} intensity={0.3}/>
+ <DirectionalLight direction={[0.8,0.2,1]} color="#ffe4c1" intensity={1.6}/>
+ <DirectionalLight direction={[-1,0.2,1]} color="#7faaff" intensity={0.8}/>
+</Scene3D></Scene>; }
+"##.replace("__KIND__", kind).replace("__TONE__", if aces { "aces" } else { "none" });
+    project_from_source(&source)
+}
+
+#[test]
+#[ignore = "requires real Metal; compares GPU Lambert/PBR with the CPU raster on the same compositor"]
+fn lit_gpu_raster_matches_cpu_reference_through_seeks_and_cache_reset() {
+    const DIR: &str = "VALLE_TEST_LIT_REFERENCE_DIR";
+    let child = std::env::var_os(DIR);
+    let directory = tempfile::tempdir().unwrap();
+    if child.is_none() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lit_gpu_raster_matches_cpu_reference_through_seeks_and_cache_reset",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("VALLE_SCENE3D_RASTER_CPU_REFERENCE", "1")
+            .env(DIR, directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "CPU reference: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        eprint!("{}", String::from_utf8_lossy(&result.stderr));
+    }
+    let path = child
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| directory.path().to_path_buf());
+    for (width, height) in [(384, 256), (1920, 1080), (3840, 2160)] {
+        let output = RenderSpec::new(
+            width,
+            height,
+            RenderQuality::Preview,
+            OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+        )
+        .unwrap();
+        for (kind, aces) in [
+            ("lambert", false),
+            ("lambert", true),
+            ("pbr", false),
+            ("pbr", true),
+        ] {
+            let project = lit_project(kind, aces);
+            let mut runner = project.frame_runner(SkiaBackendKind::Metal).unwrap();
+            runner.render_rgba8(FrameKey::new(0), output).unwrap();
+            let mut times = Vec::new();
+            let mut observed = std::collections::BTreeMap::new();
+            for (index, frame) in [0, 7, 20, 59, 12, 7, 0, 59].into_iter().enumerate() {
+                if index == 5 {
+                    runner.invalidate_surface_generation().unwrap();
+                }
+                let started = Instant::now();
+                let (pixels, evidence) = runner.render_rgba8(FrameKey::new(frame), output).unwrap();
+                if index > 0 && index < 5 {
+                    times.push(started.elapsed().as_secs_f64() * 1000.0);
+                }
+                assert_eq!(
+                    evidence.execution.scene3d_gpu_rasters,
+                    u64::from(child.is_none())
+                );
+                let file = path.join(format!("{width}x{height}-{kind}-{aces}-{frame}.rgba"));
+                if child.is_some() {
+                    std::fs::write(file, pixels.data).unwrap();
+                    continue;
+                }
+                let expected = std::fs::read(file).unwrap();
+                assert_eq!(pixels.data.len(), expected.len());
+                let max_error = pixels
+                    .data
+                    .iter()
+                    .zip(&expected)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap();
+                let changed = pixels
+                    .data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(expected.as_chunks::<4>().0.iter())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                eprintln!(
+                    "lit {width}x{height} {kind} aces={aces} frame={frame}: changed={changed}, max_rgba8_error={max_error}"
+                );
+                let code_tolerance = if kind == "pbr" && !aces { 2 } else { 1 };
+                if max_error > code_tolerance {
+                    for (index, (actual, expected)) in pixels
+                        .data
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(expected.as_chunks::<4>().0.iter())
+                        .enumerate()
+                        .filter(|(_, (a, b))| {
+                            a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 1)
+                        })
+                        .take(8)
+                    {
+                        eprintln!(
+                            "worst ({},{}): GPU={actual:?}, CPU={expected:?}",
+                            index % width as usize,
+                            index / width as usize
+                        );
+                    }
+                }
+                // Untonemapped GGX highlights can span two final SDR code values after
+                // conversion/resampling; Lambert/ACES retain a one-code limit. Visibility
+                // and replay stay exact, with an independent raw F16 limit of 0.001.
+                assert!(
+                    max_error <= code_tolerance,
+                    "{kind}, aces={aces}, frame={frame}: {max_error}"
+                );
+                if let Some(prior) = observed.insert(frame, pixels.data.clone()) {
+                    assert_eq!(prior, pixels.data);
+                }
+            }
+            times.sort_by(f64::total_cmp);
+            eprintln!(
+                "lit timing {width}x{height} {kind} aces={aces} cpu_reference={}: median={:.3}ms including final readback",
+                child.is_some(),
+                times[times.len() / 2]
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires real Metal and VideoToolbox; checks lit GPU lifetime and byte admission"]
+fn lit_shared_delivery_keeps_random_frames_exact_with_bounded_memory() {
+    let project = lit_project("pbr", true);
+    let directory = tempfile::tempdir().unwrap();
+    let frames = [0, 7, 20, 59, 12, 7, 0, 59, 12, 20, 0, 7].map(FrameKey::new);
+    let output = RenderSpec::new(
+        384,
+        256,
+        RenderQuality::Preview,
+        OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+    )
+    .unwrap();
+    let mut expected = None;
+    for workers in [1, 4] {
+        let mut sink = InspectSink::new_sized(
+            &directory.path().join(format!("lit-{workers}.mp4")),
+            384,
+            256,
+        );
+        let budget =
+            valle_render::host::NativeRenderBudget::new(workers, Some(64 * 1024 * 1024)).unwrap();
+        let control = RenderControl::default().with_budget(budget.clone());
+        let report = render_schedule(
+            &project,
+            &frames,
+            output,
+            &mut sink,
+            &control,
+            None,
+            SkiaBackendKind::Metal,
+        )
+        .unwrap();
+        assert_eq!(report.scene3d_gpu_rasters, frames.len() as u64);
+        assert_eq!(report.scene3d_cpu_fallbacks, 0);
+        assert_eq!(report.delivery_readback_bytes, 0);
+        assert_eq!(report.delivery, Some(FrameDelivery::SharedGpu));
+        assert!(sink.finished);
+        assert_eq!(sink.keys, frames.map(|key| key.index()));
+        assert!(budget.memory_report().peak_bytes <= 64 * 1024 * 1024);
+        assert_eq!(budget.memory_report().used_bytes, 0);
+        if let Some(expected) = &expected {
+            assert_eq!(&sink.pixels, expected);
+        } else {
+            expected = Some(sink.pixels);
+        }
     }
 }
 

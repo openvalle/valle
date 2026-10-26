@@ -3114,17 +3114,13 @@ fn gpu_geometry_leaves_unsupported_materials_shadows_and_dof_on_cpu() {
     use valle_motion::scene3d::AlphaMode;
     let model = glb(&[triangle(0.0, [0.0, 0.0, 1.0])]);
     let resources = resources(&model);
-    for case in ["pbr", "lambert", "texture", "blend", "shadows", "dof"] {
+    for case in ["texture", "blend", "shadows", "dof"] {
         let mut scene = scene();
         let mut frame = frame();
         if case != "texture" {
             scene.meshes[0].material.textures.clear();
         }
-        scene.meshes[0].material.kind = Some(match case {
-            "pbr" => MaterialKind::Pbr,
-            "lambert" => MaterialKind::Lambert,
-            _ => MaterialKind::Unlit,
-        });
+        scene.meshes[0].material.kind = Some(MaterialKind::Unlit);
         if case == "blend" {
             scene.meshes[0].material.alpha_mode = Some(AlphaMode::Blend);
         }
@@ -3145,6 +3141,51 @@ fn gpu_geometry_leaves_unsupported_materials_shadows_and_dof_on_cpu() {
         assert!(
             render_scene(&prepared, &frame).is_ok(),
             "CPU fallback {case}"
+        );
+    }
+}
+
+#[test]
+fn gpu_geometry_carries_frame_materials_lighting_and_camera_rays() {
+    let model = glb(&[triangle(0.0, [0.0, 0.0, 1.0])]);
+    let resources = resources(&model);
+    for kind in [MaterialKind::Lambert, MaterialKind::Pbr] {
+        let mut scene = scene();
+        scene.meshes[0].material = MaterialSpec {
+            kind: Some(kind),
+            ..Default::default()
+        };
+        let prepared = prepare_scene(&scene, 127, 65, &resources).unwrap();
+        let mut frame = frame();
+        frame.meshes[0].material.metallic = Some(0.7);
+        frame.meshes[0].material.roughness = Some(0.25);
+        let first = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+        let shading = first.shading.as_ref().unwrap();
+        assert_eq!(first.vertex_stride(), 52);
+        assert_eq!(first.vertex_bytes().len(), first.vertices.len() * 52);
+        assert_eq!(shading.vertices.len(), first.vertices.len());
+        assert_eq!(shading.values[1], [1.0, 1.0, 0.0, 0.0]);
+        assert_eq!(shading.values.len(), 2 + 3 + 2 + 127 + 65);
+        assert_eq!(
+            shading.values[2][3],
+            if kind == MaterialKind::Lambert {
+                1.0
+            } else {
+                2.0
+            }
+        );
+        assert_eq!(shading.values[3][3], 0.7);
+        assert_eq!(shading.values[4][0], 0.25);
+        assert!(shading.values.iter().flatten().all(|v| v.is_finite()));
+        frame.exposure = 1.7;
+        frame.lights = test_lights(0.3, 1.2);
+        let next = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+        assert_eq!(next.vertices, first.vertices);
+        assert_eq!(next.shading.as_ref().unwrap().values[0][3], 1.7);
+        assert_ne!(next.shading.as_ref().unwrap().bytes(), shading.bytes());
+        assert_eq!(
+            next.anchors,
+            render_scene(&prepared, &frame).unwrap().anchors
         );
     }
 }

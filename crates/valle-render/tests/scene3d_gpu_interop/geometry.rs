@@ -5,9 +5,9 @@ use std::{
 };
 use valle_motion::scene3d::{
     AlphaMode, AnchorSpec, CameraFrameState, Color4, Frame3DState, GpuRasterGeometry,
-    MaterialFrameState, MaterialKind, MaterialSpec, MeshFrameState, MeshSpec, Scene3DSpec,
-    SceneResources, Transform3D, Vec3, admit_glb, prepare_gpu_geometry, prepare_scene,
-    render_scene_with_workers,
+    GpuRasterShading, LightFrameState, LightKind, MaterialFrameState, MaterialKind, MaterialSpec,
+    MeshFrameState, MeshSpec, Scene3DSpec, SceneResources, ToneMapping, Transform3D, Vec3,
+    admit_glb, prepare_gpu_geometry, prepare_scene, render_scene_with_workers,
 };
 use wgpu::util::DeviceExt;
 
@@ -39,6 +39,21 @@ struct Fragment {
     out.color = in.color; out.depth = 1.0 / in.invZ;
     out.objectId = in.ids.x; out.nodeId = in.ids.y;
     out.depthTest = out.depth * globals.depthScale;
+    return out;
+}
+"#;
+
+const LIT_VALIDATION: &str = r#"
+struct ValidationFragment {
+    @location(0) color: vec4<f32>, @location(1) depth: f32,
+    @location(2) objectId: u32, @location(3) nodeId: u32,
+    @builtin(frag_depth) depthTest: f32,
+};
+@fragment fn validate_lit(in: LitVertex) -> ValidationFragment {
+    var out: ValidationFragment;
+    out.color = lit_color(in); out.depth = 1.0 / in.invZ;
+    out.objectId = in.ids.x; out.nodeId = in.ids.y;
+    out.depthTest = globals.depthScale / in.invZ;
     return out;
 }
 "#;
@@ -117,12 +132,36 @@ fn read_metadata(
 #[test]
 #[ignore = "requires a real Metal device; compares actual admitted GLB geometry with CPU"]
 fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
+    verify_model_geometry(None);
+}
+
+#[test]
+#[ignore = "requires real Metal; validates the production Lambert/PBR shader and exact visibility"]
+fn lit_model_geometry_preserves_coverage_depth_ids_and_bounded_shading_error() {
+    for kind in [MaterialKind::Lambert, MaterialKind::Pbr] {
+        for tone in [ToneMapping::None, ToneMapping::Aces] {
+            verify_model_geometry(Some((kind, tone)));
+        }
+    }
+}
+
+fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
     let (device, queue, mut context) = shared_device();
+    let source = if lighting.is_some() {
+        format!(
+            "{}\n{}\n{LIT_VALIDATION}",
+            include_str!("../../src/executor/skia/scene3d_gpu/metal.wgsl"),
+            include_str!("../../src/executor/skia/scene3d_gpu/lighting.wgsl")
+        )
+    } else {
+        GEOMETRY.to_owned()
+    };
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("real Scene3D geometry"),
-        source: wgpu::ShaderSource::Wgsl(GEOMETRY.into()),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
     });
     let attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32x4, 3 => Uint32, 4 => Uint32];
+    let lit_attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32x4, 3 => Uint32, 4 => Uint32, 5 => Float32x3, 6 => Uint32];
     let formats = [
         wgpu::TextureFormat::Rgba16Float,
         wgpu::TextureFormat::R32Float,
@@ -135,12 +174,21 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
         layout: None,
         vertex: wgpu::VertexState {
             module: &module,
-            entry_point: Some("vertex"),
+            entry_point: Some(if lighting.is_some() {
+                "lit_vertex"
+            } else {
+                "vertex"
+            }),
             compilation_options: Default::default(),
             buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: GpuRasterGeometry::VERTEX_STRIDE,
+                array_stride: GpuRasterGeometry::VERTEX_STRIDE
+                    + if lighting.is_some() { 16 } else { 0 },
                 step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &attributes,
+                attributes: if lighting.is_some() {
+                    &lit_attributes
+                } else {
+                    &attributes
+                },
             })],
         },
         primitive: Default::default(),
@@ -154,13 +202,51 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
         multisample: Default::default(),
         fragment: Some(wgpu::FragmentState {
             module: &module,
-            entry_point: Some("fragment"),
+            entry_point: Some(if lighting.is_some() {
+                "validate_lit"
+            } else {
+                "fragment"
+            }),
             compilation_options: Default::default(),
             targets: &targets,
         }),
         multiview_mask: None,
         cache: None,
     });
+    let dfg = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("reference BRDF LUT"),
+        size: wgpu::Extent3d {
+            width: 16,
+            height: 16,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rg16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &dfg,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        GpuRasterShading::brdf_lut(),
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(64),
+            rows_per_image: Some(16),
+        },
+        wgpu::Extent3d {
+            width: 16,
+            height: 16,
+            depth_or_array_layers: 1,
+        },
+    );
+    let dfg_view = dfg.create_view(&Default::default());
     for (name, model) in [
         (
             "triangle",
@@ -183,7 +269,7 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
                     model_control: Some("model".into()),
                     geometry: None,
                     material: MaterialSpec {
-                        kind: Some(MaterialKind::Unlit),
+                        kind: Some(lighting.map_or(MaterialKind::Unlit, |(kind, _)| kind)),
                         alpha_mode: Some(if key == "masked" {
                             AlphaMode::Mask
                         } else {
@@ -197,13 +283,25 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
                     node_ids: vec![],
                 })
                 .into(),
-            lights: vec![],
+            lights: if lighting.is_some() {
+                vec![
+                    LightKind::Ambient,
+                    LightKind::Hemisphere,
+                    LightKind::Directional,
+                    LightKind::Directional,
+                ]
+            } else {
+                vec![]
+            },
             anchors: vec![AnchorSpec {
                 key: "center".into(),
                 parent: "mesh".into(),
                 position: Vec3::ZERO,
             }],
-            pbr: Default::default(),
+            pbr: valle_motion::scene3d::PbrOptions {
+                tone_mapping: lighting.map_or(ToneMapping::None, |(_, tone)| tone),
+                ..Default::default()
+            },
         };
         for (width, height) in [(128u32, 128u32), (130, 98)] {
             let prepared = prepare_scene(&scene, width, height, &resources).unwrap();
@@ -251,7 +349,11 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
             let mut observed = BTreeMap::new();
             for sample in [0u32, 7, 2, 15, 3, 8, 0, 7] {
                 let frame = Frame3DState {
-                    exposure: 1.0,
+                    exposure: if lighting.is_some() {
+                        0.25 + sample as f32 * 0.1
+                    } else {
+                        1.0
+                    },
                     environment_intensity: 0.0,
                     environment_rotation_degrees: 0.0,
                     camera: CameraFrameState {
@@ -268,6 +370,12 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
                         .map(|(index, key)| MeshFrameState {
                             key: key.into(),
                             material: MaterialFrameState {
+                                metallic: Some(index as f32 * 0.25),
+                                roughness: Some(if sample == 0 {
+                                    0.0525
+                                } else {
+                                    0.1 + index as f32 * 0.25
+                                }),
                                 color: Some(Color4([
                                     0.2 + index as f32 * 0.15,
                                     0.6,
@@ -306,11 +414,36 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
                             nodes: vec![],
                         })
                         .collect(),
-                    lights: vec![],
+                    lights: if lighting.is_some() {
+                        vec![
+                            LightFrameState::Ambient {
+                                color: Color4([0.6, 0.7, 0.8, 1.0]),
+                                intensity: 0.3,
+                            },
+                            LightFrameState::Hemisphere {
+                                direction: Vec3::new(0.2, 1.0, 0.0),
+                                sky_color: Color4([0.7, 0.8, 1.0, 1.0]),
+                                ground_color: Color4([0.3, 0.2, 0.1, 1.0]),
+                                intensity: 0.5,
+                            },
+                            LightFrameState::Directional {
+                                direction: Vec3::new(0.8, 0.2, 1.0),
+                                color: Color4([1.0, 0.8, 0.6, 1.0]),
+                                intensity: 2.0,
+                            },
+                            LightFrameState::Directional {
+                                direction: Vec3::new(-1.0, 0.2, 1.0),
+                                color: Color4([0.3, 0.5, 1.0, 1.0]),
+                                intensity: 0.7,
+                            },
+                        ]
+                    } else {
+                        vec![]
+                    },
                 };
                 let geometry = prepare_gpu_geometry(&prepared, &frame)
                     .unwrap()
-                    .expect("unlit input should be supported");
+                    .expect("untextured input should be supported");
                 let reference = render_scene_with_workers(&prepared, &frame, 1).unwrap();
                 assert_eq!(geometry.anchors, reference.anchors);
                 let mut vertex_bytes = geometry.vertex_bytes();
@@ -331,13 +464,33 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
                     contents: &globals,
                     usage: wgpu::BufferUsages::UNIFORM,
                 });
+                let shading = geometry.shading.as_ref().map(|shading| {
+                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("production lighting input"),
+                        contents: &shading.bytes(),
+                        usage: wgpu::BufferUsages::STORAGE,
+                    })
+                });
+                let mut entries = vec![wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                }];
+                if let Some(shading) = &shading {
+                    entries.extend([
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: shading.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(&dfg_view),
+                        },
+                    ]);
+                }
                 let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("camera"),
                     layout: &pipeline.get_bind_group_layout(0),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform.as_entire_binding(),
-                    }],
+                    entries: &entries,
                 });
                 let clears = [
                     wgpu::Color::TRANSPARENT,
@@ -408,6 +561,28 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
                     .filter(|(a, b)| a != b)
                     .count();
                 let expected_color = reference.premul_rgba16f_le_bytes();
+                assert!(
+                    color
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .all(|value| u16::from_ne_bytes(*value) <= 0x3c00),
+                    "opaque shader output must be finite and inside [0,1]"
+                );
+                assert!(
+                    color
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .zip(expected_color.as_chunks::<8>().0.iter())
+                        .all(|(a, b)| a[6..8] == b[6..8]),
+                    "coverage alpha must be exact"
+                );
+                for (actual, expected) in depth.iter().zip(&reference.depth) {
+                    if *expected == f32::MAX {
+                        assert_eq!(*actual, f32::MAX.to_bits());
+                    }
+                }
                 let color_errors = color
                     .as_chunks::<8>()
                     .0
@@ -415,6 +590,26 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
                     .zip(expected_color.as_chunks::<8>().0.iter())
                     .filter(|(a, b)| a != b)
                     .count();
+                let half = |bits: u16| {
+                    let exponent = (bits >> 10) & 31;
+                    let mantissa = bits & 1023;
+                    if exponent == 0 {
+                        f32::from(mantissa) / 16_777_216.0
+                    } else {
+                        f32::from_bits(
+                            (u32::from(exponent) + 112) << 23 | u32::from(mantissa) << 13,
+                        )
+                    }
+                };
+                let max_color_error = color
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .zip(expected_color.as_chunks::<2>().0.iter())
+                    .map(|(a, b)| {
+                        (half(u16::from_ne_bytes(*a)) - half(u16::from_ne_bytes(*b))).abs()
+                    })
+                    .fold(0.0_f32, f32::max);
                 let relative_depth_error = depth
                     .iter()
                     .zip(&reference.depth)
@@ -422,7 +617,7 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
                     .map(|(actual, expected)| (f32::from_bits(*actual) - expected).abs() / expected)
                     .fold(0.0_f32, f32::max);
                 eprintln!(
-                    "geometry {name} {width}x{height} frame={sample} triangles={} color_mismatch={color_errors} id_mismatch={id_errors} node_mismatch={node_errors} relative_depth_error={relative_depth_error}",
+                    "geometry {name} {lighting:?} {width}x{height} frame={sample} triangles={} color_mismatch={color_errors} max_color_error={max_color_error} id_mismatch={id_errors} node_mismatch={node_errors} relative_depth_error={relative_depth_error}",
                     geometry.vertices.len() / 3
                 );
                 assert_eq!(
@@ -430,7 +625,14 @@ fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
                     "GPU coverage or depth ownership differs from the CPU reference"
                 );
                 assert_eq!(node_errors, 0);
-                assert_eq!(color_errors, 0);
+                if lighting.is_some() {
+                    assert!(
+                        max_color_error <= 0.001,
+                        "GPU lighting exceeds the F16 sRGB shading tolerance: {max_color_error}"
+                    );
+                } else {
+                    assert_eq!(color_errors, 0);
+                }
                 assert!(relative_depth_error < 1.0e-5);
                 let digest: [u8; 32] = Sha256::digest(&color).into();
                 if let Some(prior) = observed.insert(sample, digest) {

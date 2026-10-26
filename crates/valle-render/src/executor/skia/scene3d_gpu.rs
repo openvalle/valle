@@ -29,7 +29,12 @@ impl Scene3dGpuInput {
         frame: Arc<Frame3DState>,
     ) -> Result<Self, SkiaObjectError> {
         let mut palette = BTreeMap::new();
-        for vertex in geometry.vertices.iter().step_by(3) {
+        for vertex in geometry
+            .vertices
+            .iter()
+            .step_by(3)
+            .filter(|_| geometry.shading.is_none())
+        {
             let key = vertex.color.map(f32::to_bits);
             if palette.contains_key(&key) {
                 continue;
@@ -92,15 +97,27 @@ impl Scene3dGpuInput {
         let cpu = (self.geometry.vertices.capacity() as u64).checked_mul(std::mem::size_of::<
             valle_engine::motion::scene3d::GpuRasterVertex,
         >() as u64)?;
-        cpu.checked_add((self.palette.len() * 32) as u64)
+        let shading = self.geometry.shading.as_ref().map_or(0, |shading| {
+            shading.vertices.capacity()
+                * std::mem::size_of::<valle_engine::motion::scene3d::GpuRasterVarying>()
+                + shading.values.capacity() * 16
+        });
+        cpu.checked_add((self.palette.len() * 32) as u64)?
+            .checked_add(shading as u64)
     }
 
     pub(crate) fn upload_bytes(&self) -> Option<u64> {
         u64::try_from(self.geometry.vertices.len())
             .ok()?
-            .checked_mul(GpuRasterGeometry::VERTEX_STRIDE)?
+            .checked_mul(self.geometry.vertex_stride())?
             .max(4)
-            .checked_add(16)
+            .checked_add(16)?
+            .checked_add(
+                self.geometry
+                    .shading
+                    .as_ref()
+                    .map_or(0, |s| s.values.len() as u64 * 16),
+            )
     }
 
     pub(crate) fn frame_bytes(&self) -> Option<u64> {
@@ -109,21 +126,20 @@ impl Scene3dGpuInput {
 
     #[cfg(target_os = "macos")]
     pub(super) fn vertex_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(
-            self.geometry.vertices.len() * GpuRasterGeometry::VERTEX_STRIDE as usize,
-        );
-        for vertex in &self.geometry.vertices {
+        let mut bytes = self.geometry.vertex_bytes();
+        if self.geometry.shading.is_some() {
+            return bytes;
+        }
+        for (record, vertex) in bytes
+            .as_chunks_mut::<{ GpuRasterGeometry::VERTEX_STRIDE as usize }>()
+            .0
+            .iter_mut()
+            .zip(&self.geometry.vertices)
+        {
             let color = self.palette[&vertex.color.map(f32::to_bits)];
-            for value in vertex
-                .position
-                .into_iter()
-                .chain([vertex.inv_z])
-                .chain(color)
-            {
-                bytes.extend_from_slice(&value.to_le_bytes());
+            for (channel, value) in color.into_iter().enumerate() {
+                record[12 + channel * 4..16 + channel * 4].copy_from_slice(&value.to_le_bytes());
             }
-            bytes.extend_from_slice(&vertex.object_id.to_le_bytes());
-            bytes.extend_from_slice(&vertex.node_id.to_le_bytes());
         }
         bytes
     }

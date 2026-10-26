@@ -2,7 +2,7 @@ use super::Scene3dGpuInput;
 use crate::executor::skia::surface::working_color_space;
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_metal::{MTLCommandQueue, MTLDevice};
-use skia_safe::{AlphaType, ColorType, Image, gpu};
+use skia_safe::{AlphaType, ColorSpace, ColorType, Image, gpu};
 use std::{ffi::c_void, ptr};
 use wgpu::util::DeviceExt;
 
@@ -10,6 +10,9 @@ pub(crate) struct GpuRasterizer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
+    lit_pipeline: wgpu::RenderPipeline,
+    dfg: wgpu::Texture,
+    _lut_memory: Option<valle_engine::motion::memory::MemoryLease>,
 }
 
 pub(crate) struct GpuRasterOutput {
@@ -19,6 +22,7 @@ pub(crate) struct GpuRasterOutput {
     _depth: wgpu::Texture,
     _vertices: wgpu::Buffer,
     _uniform: wgpu::Buffer,
+    _shading: Option<wgpu::Buffer>,
     _memory: Option<valle_engine::motion::memory::MemoryLease>,
 }
 
@@ -59,48 +63,103 @@ impl GpuRasterizer {
         .map_err(|error| error.to_string())?;
         let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Scene3D unlit raster"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("metal.wgsl").into()),
+            label: Some("Scene3D raster"),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "{}\n{}",
+                    include_str!("metal.wgsl"),
+                    include_str!("lighting.wgsl")
+                )
+                .into(),
+            ),
         });
         let attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32x4, 3 => Uint32, 4 => Uint32];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Scene3D unlit raster"),
-            layout: None,
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vertex"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: valle_engine::motion::scene3d::GpuRasterGeometry::VERTEX_STRIDE,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
-            },
-            primitive: Default::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fragment"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::TextureFormat::Rgba16Float.into())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let lit_attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32x4, 3 => Uint32, 4 => Uint32, 5 => Float32x3, 6 => Uint32];
+        let make_pipeline = |lit| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Scene3D raster"),
+                layout: None,
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some(if lit { "lit_vertex" } else { "vertex" }),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride:
+                            valle_engine::motion::scene3d::GpuRasterGeometry::VERTEX_STRIDE
+                                + if lit { 16 } else { 0 },
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: if lit { &lit_attributes } else { &attributes },
+                    })],
+                },
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(if lit { "lit_fragment" } else { "fragment" }),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::TextureFormat::Rgba16Float.into())],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = make_pipeline(false);
+        let lit_pipeline = make_pipeline(true);
         if let Some(error) = pollster::block_on(error_scope.pop()) {
             return Err(error.to_string());
         }
+        let lut_memory = valle_engine::motion::memory::reserve(
+            valle_engine::motion::memory::MemoryKind::Resource,
+            1024,
+        )
+        .map_err(|error| error.to_string())?;
+        let dfg = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Scene3D DFG"),
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &dfg,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            valle_engine::motion::scene3d::GpuRasterShading::brdf_lut(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(64),
+                rows_per_image: Some(16),
+            },
+            wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+        );
         Ok(Self {
             device,
             queue,
             pipeline,
+            lit_pipeline,
+            dfg,
+            _lut_memory: lut_memory,
         })
     }
 
@@ -113,6 +172,11 @@ impl GpuRasterizer {
             .poll(wgpu::PollType::Poll)
             .map_err(|error| error.to_string())?;
         let geometry = &input.geometry;
+        let pipeline = if geometry.shading.is_some() {
+            &self.lit_pipeline
+        } else {
+            &self.pipeline
+        };
         let upload_bytes = input.upload_bytes().ok_or("vertex byte count overflow")?;
         let memory = valle_engine::motion::memory::reserve(
             valle_engine::motion::memory::MemoryKind::Temporary,
@@ -172,13 +236,35 @@ impl GpuRasterizer {
                 contents: &bytes,
                 usage: wgpu::BufferUsages::UNIFORM,
             });
+        let shading = geometry.shading.as_ref().map(|shading| {
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Scene3D lighting"),
+                    contents: &shading.bytes(),
+                    usage: wgpu::BufferUsages::STORAGE,
+                })
+        });
+        let dfg_view = self.dfg.create_view(&Default::default());
+        let mut entries = vec![wgpu::BindGroupEntry {
+            binding: 0,
+            resource: uniform.as_entire_binding(),
+        }];
+        if let Some(shading) = &shading {
+            entries.extend([
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: shading.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&dfg_view),
+                },
+            ]);
+        }
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Scene3D camera"),
-            layout: &self.pipeline.get_bind_group_layout(0),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform.as_entire_binding(),
-            }],
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &entries,
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
@@ -203,7 +289,7 @@ impl GpuRasterizer {
                 }),
                 ..Default::default()
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
             pass.set_vertex_buffer(0, vertices.slice(..));
             pass.draw(0..geometry.vertices.len() as u32, 0..1);
@@ -220,7 +306,7 @@ impl GpuRasterizer {
                 (geometry.width as i32, geometry.height as i32),
                 gpu::Mipmapped::No,
                 &info,
-                "Scene3D unlit raster",
+                "Scene3D raster",
             );
             gpu::images::borrow_texture_from(
                 context,
@@ -228,7 +314,11 @@ impl GpuRasterizer {
                 gpu::SurfaceOrigin::TopLeft,
                 ColorType::RGBAF16,
                 AlphaType::Premul,
-                working_color_space().map_err(|error| error.to_string())?,
+                if geometry.shading.is_some() {
+                    ColorSpace::new_srgb()
+                } else {
+                    working_color_space().map_err(|error| error.to_string())?
+                },
             )
             .ok_or("cannot import Scene3D Metal color texture")?
         };
@@ -239,6 +329,7 @@ impl GpuRasterizer {
             _depth: depth,
             _vertices: vertices,
             _uniform: uniform,
+            _shading: shading,
             _memory: memory,
         })
     }
