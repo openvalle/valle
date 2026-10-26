@@ -931,9 +931,9 @@ mod tests {
         .unwrap()
         .artifact;
         let plain_fonts =
-            super::super::motion::fixed_package_font_blobs(&plain, &[], None).unwrap();
+            super::super::motion::fixed_package_font_blobs(&plain, &[], None, &[]).unwrap();
         let formula_fonts =
-            super::super::motion::fixed_package_font_blobs(&later, &[], None).unwrap();
+            super::super::motion::fixed_package_font_blobs(&later, &[], None, &[]).unwrap();
         let all_formula_count = valle_motion::math_formula::formula_font_pack().count();
         assert!(formula_fonts.len() > plain_fonts.len());
         assert!(formula_fonts.len() < plain_fonts.len() + all_formula_count);
@@ -947,7 +947,8 @@ mod tests {
         let artifact = valle_compiler::motion::compile_motion(source)
             .unwrap()
             .artifact;
-        let fonts = super::super::motion::fixed_package_font_blobs(&artifact, &[], None).unwrap();
+        let fonts =
+            super::super::motion::fixed_package_font_blobs(&artifact, &[], None, &[]).unwrap();
         build_standalone_motion_package(StandaloneMotionPackageInput {
             artifact: &artifact,
             assets: &BTreeMap::new(),

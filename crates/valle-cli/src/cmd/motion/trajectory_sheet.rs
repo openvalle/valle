@@ -47,6 +47,7 @@ pub(super) fn render(
         artifact,
         explicit_fonts,
         caption.map(|caption| caption.text.as_str()),
+        &[serde_json::to_value(prop_bindings)?],
     )?;
     let temp = tempfile::tempdir().context("prepare review sheet resources")?;
     let frozen_assets = super::freeze_assets(assets, temp.path())?;

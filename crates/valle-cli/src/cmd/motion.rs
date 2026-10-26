@@ -176,6 +176,7 @@ fn review(
         artifact,
         &explicit_fonts,
         caption_data.map(|caption| caption.text.as_str()),
+        &[serde_json::to_value(&prop_bindings)?],
     )? {
         fonts.register(valle_motion::motion_font_resource(
             valle_motion::FontSource::from_shared(Arc::new(bytes)),
@@ -329,6 +330,7 @@ fn render(
         artifact,
         &explicit_fonts,
         caption_data.map(|caption| caption.text.as_str()),
+        &[serde_json::to_value(&props)?],
     )?;
     let frozen = tempfile::tempdir().context("creating immutable render resources")?;
     let frozen_assets = freeze_assets(&prepared.assets, frozen.path())?;
@@ -1087,6 +1089,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
         &prepared.compiled.artifact,
         &explicit_font_blobs,
         caption.as_ref().map(|caption| caption.text.as_str()),
+        &[serde_json::to_value(&props)?],
     )?;
     let fixed_package = match super::motion_package::build_standalone_motion_package(
         super::motion_package::StandaloneMotionPackageInput {
@@ -1916,7 +1919,10 @@ pub(super) fn fixed_package_font_blobs(
     artifact: &valle_motion::SceneArtifact,
     explicit: &[Arc<[u8]>],
     caption_text: Option<&str>,
+    prop_bindings: &[serde_json::Value],
 ) -> Result<Vec<Arc<[u8]>>> {
+    let bound = super::motion_fonts::bind_package_text_props(artifact, prop_bindings);
+    let artifact = &bound;
     let mut blobs = explicit.to_vec();
     match caption_text.filter(|_| artifact.reads_caption()) {
         Some(text) => {

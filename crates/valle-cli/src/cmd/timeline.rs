@@ -545,6 +545,7 @@ fn prepare_timeline_package_impl(
                     &artifact,
                     &[],
                     (!caption_text.is_empty()).then_some(caption_text.as_str()),
+                    &motion_prop_bindings(&compiled_json, &id),
                 )?;
                 for (i, bytes) in font_blobs.iter().enumerate() {
                     let digest = resources.intern_font(bytes)?;
@@ -690,6 +691,36 @@ fn prepare_timeline_package_impl(
         catalog,
         opened,
     })
+}
+
+/// Include visual, caption, effect and transition placements, including inactive clips.
+fn motion_prop_bindings(value: &serde_json::Value, component: &str) -> Vec<serde_json::Value> {
+    fn collect(value: &serde_json::Value, component: &str, output: &mut Vec<serde_json::Value>) {
+        match value {
+            serde_json::Value::Object(fields) => {
+                if fields.get("component").and_then(|value| value.as_str()) == Some(component) {
+                    output.push(
+                        fields
+                            .get("props")
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!({})),
+                    );
+                }
+                for child in fields.values() {
+                    collect(child, component, output);
+                }
+            }
+            serde_json::Value::Array(children) => {
+                for child in children {
+                    collect(child, component, output);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut output = Vec::new();
+    collect(value, component, &mut output);
+    output
 }
 
 fn video_audio_used(doc: &serde_json::Value, name: &str) -> bool {

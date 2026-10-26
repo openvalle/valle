@@ -7,6 +7,83 @@ use valle_motion::{
     MotionValue, NodeKind, SceneArtifact, StyleValue, TemplatePart, TextValue,
 };
 
+/// A frozen package owns every prop value (including all step keyframes). Bound free string
+/// controls to that closure, rather than keeping fonts for scripts that cannot occur. Unknown
+/// bindings stay conservative. This copy is only used for selection, never as the packaged artifact.
+pub(super) fn bind_package_text_props(
+    artifact: &SceneArtifact,
+    bindings: &[serde_json::Value],
+) -> SceneArtifact {
+    let mut artifact = artifact.clone();
+    let mut bounded = std::collections::BTreeMap::new();
+    for (name, control) in &artifact.controls.props {
+        if !matches!(control.control, ControlType::String) || bindings.is_empty() {
+            continue;
+        }
+        let mut values = BTreeSet::new();
+        let known = bindings.iter().all(|props| {
+            if let Some(value) = props.get(name) {
+                if let Some(text) = value
+                    .as_str()
+                    .or_else(|| value.get("value").and_then(|v| v.as_str()))
+                {
+                    values.insert(text.to_owned());
+                    return true;
+                }
+                if let Some(frames) = value.get("keyframes").and_then(|v| v.as_array()) {
+                    return !frames.is_empty()
+                        && frames.iter().all(|frame| {
+                            frame
+                                .get("value")
+                                .and_then(|v| v.as_str())
+                                .is_some_and(|text| {
+                                    values.insert(text.to_owned());
+                                    true
+                                })
+                        });
+                }
+                false
+            } else if let Some(MotionValue::Str(text)) = &control.default {
+                values.insert(text.clone());
+                true
+            } else {
+                false
+            }
+        });
+        if known {
+            bounded.insert(name.clone(), values.into_iter().collect::<Vec<_>>());
+        }
+    }
+    let replace = |exprs: &mut Vec<Expr>| {
+        let count = exprs.len();
+        for index in 0..count {
+            let Expr::Prop { name } = &exprs[index] else {
+                continue;
+            };
+            let Some(values) = bounded.get(name) else {
+                continue;
+            };
+            let mut ids = Vec::new();
+            for value in values {
+                ids.push(ExprId(exprs.len() as u32));
+                exprs.push(Expr::Const {
+                    value: MotionValue::Str(value.clone()),
+                });
+            }
+            // Text-bound traversal visits every Pick value; its selector is not evaluated.
+            exprs[index] = Expr::Pick {
+                index: ids[0],
+                values: ids,
+            };
+        }
+    };
+    replace(&mut artifact.exprs);
+    for group in &mut artifact.instance_groups {
+        replace(&mut group.exprs);
+    }
+    artifact
+}
+
 /// The characters a set of text values can produce, bounded to 1 MiB.
 #[derive(Default)]
 struct TextBound {
@@ -329,6 +406,46 @@ pub(super) fn selected_default_fonts(artifact: &SceneArtifact) -> Vec<std::sync:
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn frozen_string_props_keep_all_keyframes_without_loading_unused_scripts() {
+        let artifact = valle_compiler::motion::compile_motion(
+            "export const controls={props:{title:string({default:'Hello'})}}; export default function T(props){return <Text>{props.title}</Text>}"
+        ).unwrap().artifact;
+        let select = |values: &[serde_json::Value]| {
+            selected_default_fonts(&bind_package_text_props(&artifact, values))
+        };
+        assert_eq!(select(&[serde_json::json!({})]).len(), 1);
+        let fonts = select(&[
+            serde_json::json!({"title":{"keyframes":[{"value":"Hello"},{"value":"中文"}]}}),
+        ]);
+        assert!(
+            fonts
+                .iter()
+                .any(|font| font.as_ref() == bundled_font("NotoSansCJKsc-Variable.otf"))
+        );
+        assert!(
+            !fonts
+                .iter()
+                .any(|font| font.as_ref() == bundled_font("Noto-COLRv1.ttf"))
+        );
+        let fonts = select(&[
+            serde_json::json!({"title":"Hello"}),
+            serde_json::json!({"title":{"type":"constant","value":"👨‍👩‍👧‍👦"}}),
+        ]);
+        assert!(
+            fonts
+                .iter()
+                .any(|font| font.as_ref() == bundled_font("Noto-COLRv1.ttf"))
+        );
+        assert_eq!(
+            select(&[serde_json::json!({"title":{"unknown":true}})]).len(),
+            valle_motion::default_motion_fonts().len()
+        );
+        assert_eq!(
+            selected_default_fonts(&artifact).len(),
+            valle_motion::default_motion_fonts().len()
+        );
+    }
     fn bundled_font(name: &str) -> &'static [u8] {
         valle_motion::DEFAULT_MOTION_FONT_FILES
             .iter()
