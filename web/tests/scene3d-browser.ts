@@ -87,12 +87,22 @@ async function deadline<T>(work: Promise<T>): Promise<T> {
   }
 }
 
-for (const resources of [false, true]) {
-  const name = resources ? "assets" : "procedural",
+for (const name of ["unlit", "procedural", "assets"]) {
+  const resources = name === "assets",
     directory = join(evidence, name);
   await mkdir(directory);
   const input = join(directory, "scene.motion.tsx");
-  await Bun.write(input, source(resources));
+  await Bun.write(
+    input,
+    name === "unlit"
+      ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+const BALL=lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"),{segments:8});
+export default function Main(){const time=useCurrentTime();return <Scene>
+<Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,5],target:[0,0,0],fov:45}}>
+<Mesh key="ball" geometry={BALL} rotateY={time.seconds*90} material={{type:"unlit",color:"#cf7338"}}/>
+</Scene3D></Scene>;}`
+      : source(resources),
+  );
   const child = Bun.spawn(
     [
       cli,
@@ -162,7 +172,7 @@ for (const resources of [false, true]) {
         return fetch(new URL(url.pathname + url.search, upstream));
       },
     });
-    const pageUrl = `${host.url}preview.html?scene3dprobe=1${width < 3840 ? "&encode=1" : ""}`,
+    const pageUrl = `${host.url}preview.html?scene3dprobe=1&features=${name}${width < 3840 && name !== "unlit" ? "&encode=1" : ""}`,
       stderrPath = join(directory, "chrome.log");
     chrome = Bun.spawn(
       [

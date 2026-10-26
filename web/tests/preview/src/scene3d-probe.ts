@@ -17,11 +17,15 @@ async function run() {
   const canvases = [document.createElement("canvas"), document.createElement("canvas")];
   document.body.replaceChildren(...canvases);
   const rows = [];
+  const creationMs = [];
+  const features = new URLSearchParams(location.search).get("features");
+  const expectedPrograms = features === "unlit" ? 2 : features === "assets" ? 6 : 5;
   // The optional 4K comparison keeps a CPU reference player beside the GPU player.
   const memoryBytes =
     JSON.parse(config.timelineJson).document.canvas.width >= 3840 ? 4 * 1024 ** 3 : undefined;
   try {
-    for (const [index, gpu] of [false, true].entries())
+    for (const [index, gpu] of [false, true].entries()) {
+      const started = performance.now();
       players.push(
         await createBrowserValleWebPlayer({
           ...config,
@@ -33,6 +37,8 @@ async function run() {
           runtimeBaseUrl: location.href,
         }),
       );
+      creationMs.push(performance.now() - started);
+    }
     const seen = new Map<number, Uint8ClampedArray>();
     const frames = memoryBytes ? [27] : [27, 0, 15, 27];
     for (const frame of frames) {
@@ -85,12 +91,21 @@ async function run() {
       if (prior && prior.some((v, i) => v !== gpu[i]))
         throw new Error(`Scene3D seek changed frame ${frame}`);
       seen.set(frame, gpu);
+      const diagnostics = players[1]!.scene3dGpuDiagnostics;
+      if (diagnostics?.programCompiles !== expectedPrograms)
+        throw new Error(
+          `Scene3D compiled unused or duplicate programs: ${JSON.stringify(diagnostics)}`,
+        );
       rows.push({ frame, maximum, psnr, cpuMs: timings[0], gpuMs: timings[1] });
     }
     const diagnostics = players[1]!.scene3dGpuDiagnostics;
     if (!diagnostics || diagnostics.renders < frames.length || diagnostics.fallbacks !== 0)
       throw new Error(`Scene3D did not rasterize on GPU: ${JSON.stringify(diagnostics)}`);
-    if (diagnostics.atlasUploads !== 1 || diagnostics.shadowRenders < 2)
+    if (
+      features === "unlit"
+        ? diagnostics.atlasUploads !== 0 || diagnostics.shadowRenders !== 0
+        : diagnostics.atlasUploads !== 1 || diagnostics.shadowRenders < 2
+    )
       throw new Error(
         `Scene3D atlas/shadow path was not exercised: ${JSON.stringify(diagnostics)}`,
       );
@@ -150,7 +165,11 @@ async function run() {
         URL.revokeObjectURL(url);
       }
     }
-    return { status: "ok", stats: { rows, scene3dGpu: diagnostics, encoded }, captures: [] };
+    return {
+      status: "ok",
+      stats: { creationMs, rows, scene3dGpu: diagnostics, encoded },
+      captures: [],
+    };
   } finally {
     for (const player of players) await player.close();
   }

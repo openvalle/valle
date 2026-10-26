@@ -3,7 +3,7 @@ import { supportsScene3dGpu } from "../../runtime/compositor/scene3d-gpu-request
 import { preserveState, type CanvasKitGpuHost } from "./gpu-state.ts";
 import type { Scene3dGpuPacket, Scene3dGpuTexture } from "./scene3d-input.ts";
 import shaders from "./scene3d/shaders.json";
-import { scene3dDofFragment, scene3dDecodeFragment } from "./scene3d/dof.ts";
+import { scene3dCopyFragment, scene3dDofFragment, scene3dDecodeFragment } from "./scene3d/dof.ts";
 export type Scene3dGpuHost = CanvasKitGpuHost;
 
 type Vec3 = readonly [number, number, number];
@@ -68,6 +68,7 @@ export interface Scene3dGpuRequest {
 }
 
 type Program = { program: WebGLProgram; locations: Map<string, WebGLUniformLocation | null> };
+type ProgramName = keyof typeof shaders | "copy" | "dof" | "decode";
 type ShaderStage = {
   source: string;
   textures: Record<string, number>;
@@ -104,12 +105,12 @@ export class GpuScene3D {
     shadowRenders: 0,
     shadowCacheHits: 0,
     geometryBytes: 0,
+    programCompiles: 0,
+    compileMs: 0,
   };
   private readonly gl: WebGL2RenderingContext;
   private readonly CK: CanvasKit;
-  private readonly programs: Record<keyof typeof shaders, Program>;
-  private readonly dof: Program;
-  private readonly decode: Program;
+  private readonly programs = new Map<ProgramName, Program>();
   private readonly vao: WebGLVertexArrayObject;
   private readonly globals: WebGLBuffer;
   private readonly shadowRange: WebGLBuffer;
@@ -138,23 +139,6 @@ export class GpuScene3D {
       restore = preserveState(gl);
     try {
       this.maxEdge = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number;
-      this.programs = Object.fromEntries(
-        Object.entries(shaders).map(([name, source]) => {
-          const p = this.program(source.vertex.source, source.fragment.source);
-          gl.useProgram(p.program);
-          for (const stage of [source.vertex, source.fragment] as ShaderStage[]) {
-            for (const [name, unit] of Object.entries(stage.textures))
-              gl.uniform1i(gl.getUniformLocation(p.program, name), unit);
-            for (const [name, unit] of Object.entries(stage.blocks)) {
-              const index = gl.getUniformBlockIndex(p.program, name);
-              if (index !== gl.INVALID_INDEX) gl.uniformBlockBinding(p.program, index, unit);
-            }
-          }
-          return [name, p];
-        }),
-      ) as Record<keyof typeof shaders, Program>;
-      this.dof = this.program(quad, scene3dDofFragment);
-      this.decode = this.program(quad, scene3dDecodeFragment);
       this.vao = gl.createVertexArray()!;
       this.globals = gl.createBuffer()!;
       this.shadowRange = gl.createBuffer()!;
@@ -200,7 +184,40 @@ export class GpuScene3D {
       targets + atlas + shadows + packet.bytes.byteLength * 2 + atlasUpload + pixels * 8 + baseBytes
     );
   }
-  private program(vertex: string, fragment: string): Program {
+  /** Called inside the render's GL state scope. Unused features never compile, and seeks,
+   * target resizes and texture eviction retain the programs owned by this context. */
+  private program(name: ProgramName): Program {
+    const cached = this.programs.get(name);
+    if (cached) return cached;
+    const started = performance.now();
+    const source = name === "copy" || name === "dof" || name === "decode" ? null : shaders[name];
+    const p = this.compileProgram(
+      source?.vertex.source ?? quad,
+      source?.fragment.source ??
+        (name === "copy"
+          ? scene3dCopyFragment
+          : name === "dof"
+            ? scene3dDofFragment
+            : scene3dDecodeFragment),
+    );
+    if (source) {
+      const gl = this.gl;
+      gl.useProgram(p.program);
+      for (const stage of [source.vertex, source.fragment] as ShaderStage[]) {
+        for (const [name, unit] of Object.entries(stage.textures))
+          gl.uniform1i(this.location(p, name), unit);
+        for (const [name, unit] of Object.entries(stage.blocks)) {
+          const index = gl.getUniformBlockIndex(p.program, name);
+          if (index !== gl.INVALID_INDEX) gl.uniformBlockBinding(p.program, index, unit);
+        }
+      }
+    }
+    this.programs.set(name, p);
+    this.stats.programCompiles++;
+    this.stats.compileMs += performance.now() - started;
+    return p;
+  }
+  private compileProgram(vertex: string, fragment: string): Program {
     const gl = this.gl,
       program = gl.createProgram()!;
     try {
@@ -422,7 +439,7 @@ export class GpuScene3D {
       bytes: 1024 * 1024 * packet.shadows.length * 8,
     };
     this.stats.allocatedBytes += this.shadows.bytes;
-    gl.useProgram(this.programs.shadow.program);
+    gl.useProgram(this.program("shadow").program);
     gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
     gl.enable(gl.DEPTH_TEST);
     gl.depthMask(true);
@@ -496,13 +513,13 @@ export class GpuScene3D {
       gl.clear(gl.DEPTH_BUFFER_BIT);
       if (packet.background) {
         gl.disable(gl.DEPTH_TEST);
-        gl.useProgram(this.programs.background.program);
+        gl.useProgram(this.program("background").program);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       }
       gl.enable(gl.DEPTH_TEST);
       gl.depthFunc(gl.LESS);
       gl.depthMask(true);
-      gl.useProgram((packet.lit ? this.programs.lit : this.programs.unlit).program);
+      gl.useProgram(this.program(packet.lit ? "lit" : "unlit").program);
       gl.drawArrays(gl.TRIANGLES, 0, packet.vertices * 2);
       gl.disable(gl.DEPTH_TEST);
       if (packet.blend) {
@@ -514,21 +531,23 @@ export class GpuScene3D {
         this.bind(this.targets!.color, 10);
         this.bind(this.targets!.depth, 11);
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets!.resolved!);
-        gl.useProgram(this.programs.transparency.program);
+        gl.useProgram(this.program("transparency").program);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       }
       const color = packet.blend ? this.targets!.resolvedColor! : this.targets!.color;
       const depth = packet.blend ? this.targets!.resolvedDepth! : this.targets!.depth;
       if (packet.radius > 0) {
+        const decode = this.program("decode");
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets!.decode!);
-        gl.useProgram(this.decode.program);
+        gl.useProgram(decode.program);
         this.bind(color, 0);
-        gl.uniform1i(this.location(this.decode, "source"), 0);
-        gl.uniform1ui(this.location(this.decode, "precisionBarrier"), 0);
+        gl.uniform1i(this.location(decode, "source"), 0);
+        gl.uniform1ui(this.location(decode, "precisionBarrier"), 0);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       }
+      const output = this.program(packet.radius > 0 ? "dof" : "copy");
       gl.bindFramebuffer(gl.FRAMEBUFFER, outputFramebuffer);
-      gl.useProgram(this.dof.program);
+      gl.useProgram(output.program);
       this.bind(packet.radius > 0 ? this.targets!.decoded! : color, 0);
       this.bind(depth, 1);
       this.bind(color, 2);
@@ -537,12 +556,12 @@ export class GpuScene3D {
         ["depths", 1],
         ["rawSource", 2],
       ] as const)
-        gl.uniform1i(this.location(this.dof, name), unit);
-      gl.uniform1ui(this.location(this.dof, "precisionBarrier"), 0);
-      gl.uniform2f(this.location(this.dof, "size"), packet.width, packet.height);
-      gl.uniform1i(this.location(this.dof, "hasDof"), packet.radius > 0 ? 1 : 0);
-      gl.uniform1f(this.location(this.dof, "focus"), packet.focus);
-      gl.uniform1f(this.location(this.dof, "maxRadius"), packet.radius);
+        gl.uniform1i(this.location(output, name), unit);
+      gl.uniform1ui(this.location(output, "precisionBarrier"), 0);
+      gl.uniform2f(this.location(output, "size"), packet.width, packet.height);
+      gl.uniform1i(this.location(output, "hasDof"), packet.radius > 0 ? 1 : 0);
+      gl.uniform1f(this.location(output, "focus"), packet.focus);
+      gl.uniform1f(this.location(output, "maxRadius"), packet.radius);
       const margin = Math.ceil(packet.radius) + 2;
       const bounds = packet.background
         ? [0, 0, packet.width, packet.height]
@@ -552,7 +571,7 @@ export class GpuScene3D {
             Math.min(packet.width, Math.ceil(packet.bounds[2]) + margin),
             Math.min(packet.height, Math.ceil(packet.bounds[3]) + margin),
           ];
-      gl.uniform4fv(this.location(this.dof, "nearBounds"), bounds);
+      gl.uniform4fv(this.location(output, "nearBounds"), bounds);
       gl.enable(gl.SCISSOR_TEST);
       gl.scissor(
         bounds[0]!,
@@ -591,8 +610,8 @@ export class GpuScene3D {
     if (this.closed) return;
     this.closed = true;
     this.trim();
-    for (const program of [...Object.values(this.programs), this.dof, this.decode])
-      this.gl.deleteProgram(program.program);
+    for (const program of this.programs.values()) this.gl.deleteProgram(program.program);
+    this.programs.clear();
     this.gl.deleteBuffer(this.globals);
     this.gl.deleteBuffer(this.shadowRange);
     this.gl.deleteVertexArray(this.vao);

@@ -1,3 +1,8 @@
+// A scene without DOF only needs an exact copy with the CanvasKit attachment's orientation.
+export const scene3dCopyFragment = `#version 300 es
+precision highp float;precision highp int;out vec4 result;uniform highp sampler2D rawSource;uniform vec2 size;
+void main(){result=texelFetch(rawSource,ivec2(int(gl_FragCoord.x),int(size.y)-1-int(gl_FragCoord.y)),0);}`;
+
 export const scene3dDofFragment = `#version 300 es
 precision highp float;precision highp int;out vec4 result;uniform highp sampler2D source;uniform highp sampler2D rawSource;uniform highp sampler2D depths;
 uniform vec2 size;uniform vec4 visibleBounds;uniform vec4 nearBounds;uniform float focus;uniform float maxRadius;uniform bool hasDof;
