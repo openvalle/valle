@@ -1,6 +1,10 @@
 import type { MotionCompileOptions, PreviewResourceInput, Timeline } from "valle-engine";
 import { playerRuntimeAssetsFromStudioBoot, type StudioBoot } from "./host.ts";
-import type { StudioCompileRequest, StudioCompileResult } from "./studio-compile-worker.ts";
+import type {
+  StudioCompileInitialize,
+  StudioCompileRequest,
+  StudioCompileResult,
+} from "./studio-compile-worker.ts";
 import type { StandaloneAssets } from "./standalone-assets.ts";
 import { type AudioAnalysisInput } from "./audio-analysis-input.ts";
 import { frozenShaderBytes } from "./shader-input.ts";
@@ -282,6 +286,11 @@ export class StudioCompileClient {
       for (const pending of this.#pending.values()) pending.reject(new Error(event.message));
       this.#pending.clear();
     };
+    this.#worker.postMessage({
+      type: "initialize",
+      runtimeAssets: playerRuntimeAssetsFromStudioBoot(boot),
+      runtimeBaseUrl: location.href,
+    } satisfies StudioCompileInitialize);
   }
 
   async compile(payload: CompilePayload): Promise<StudioCompileResult> {

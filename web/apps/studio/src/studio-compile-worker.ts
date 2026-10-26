@@ -44,6 +44,11 @@ export interface StudioCompileRequest {
   resourceInputs?: PreviewResourceInput[];
 }
 
+export type StudioCompileInitialize = Pick<
+  StudioCompileRequest,
+  "runtimeAssets" | "runtimeBaseUrl"
+> & { type: "initialize" };
+
 export type StudioCompileResult =
   | {
       id: number;
@@ -79,6 +84,19 @@ let cachedInputs = "";
 let cachedResult: StudioCompileResult | null = null;
 const compiledInstances = new Map<string, ReturnType<WebCompilerRuntime["compileMotionModules"]>>();
 const immutableFonts = new Map<string, Promise<Uint8Array>>();
+
+function compilerRuntime(
+  options: Pick<StudioCompileRequest, "runtimeAssets" | "runtimeBaseUrl">,
+): Promise<WebCompilerRuntime> {
+  const identity = JSON.stringify([options.runtimeAssets, options.runtimeBaseUrl]);
+  if (identity !== runtimeIdentity) {
+    runtimeIdentity = identity;
+    runtime = createTimelineCompilerRuntime(options);
+    cachedResult = null;
+    compiledInstances.clear();
+  }
+  return runtime!;
+}
 
 async function fontAt(url: string): Promise<Uint8Array> {
   const immutable = url.startsWith("/runtime/fonts/");
@@ -247,17 +265,7 @@ export async function compileStudioPreview(
 ): Promise<StudioCompileResult> {
   try {
     const started = performance.now();
-    const identity = JSON.stringify([request.runtimeAssets, request.runtimeBaseUrl]);
-    if (identity !== runtimeIdentity) {
-      runtimeIdentity = identity;
-      runtime = createTimelineCompilerRuntime({
-        runtimeAssets: request.runtimeAssets,
-        runtimeBaseUrl: request.runtimeBaseUrl,
-      });
-      cachedResult = null;
-      compiledInstances.clear();
-    }
-    const compiler = await runtime!;
+    const compiler = await compilerRuntime(request);
     request = {
       ...request,
       instances: request.instances.map((instance) => ({
@@ -558,7 +566,12 @@ export async function compileStudioPreview(
 }
 
 if (typeof self !== "undefined" && "postMessage" in self && "onmessage" in self) {
-  self.onmessage = (event: MessageEvent<StudioCompileRequest>) => {
-    void compileStudioPreview(event.data).then((result) => self.postMessage(result));
+  self.onmessage = (event: MessageEvent<StudioCompileRequest | StudioCompileInitialize>) => {
+    if ("type" in event.data) {
+      // Media capture can proceed while WASM initializes; compilation still observes failures.
+      void compilerRuntime(event.data).catch(() => undefined);
+    } else {
+      void compileStudioPreview(event.data).then((result) => self.postMessage(result));
+    }
   };
 }
