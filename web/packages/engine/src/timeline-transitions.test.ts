@@ -137,6 +137,7 @@ test("all 13 Timeline transitions render exact endpoints and analytic midpoints 
         );
         if (!config.fixedPackageManifestJson) throw new Error(JSON.stringify(config));
         engine = new ProductEngine();
+        engine.set_delivery_output(true);
         const receipt = JSON.parse(
           engine.open_fixed_package(
             config.fixedPackageManifestJson!,

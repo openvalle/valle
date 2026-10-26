@@ -320,6 +320,7 @@ test("project environments and models survive frozen-package reopen and arbitrar
         );
         const open = () => {
           const engine = new ProductEngine();
+          engine.set_delivery_output(true);
           const receipt = JSON.parse(
             engine.open_fixed_package(
               config.fixedPackageManifestJson!,

@@ -8,6 +8,15 @@ import { initSync, ProductEngine } from "../generated/web/valle_engine.js";
 import { decodePackedAbi, RESOURCE_REQUESTS_ABI, type PackedValue } from "./abi/packed.ts";
 import { CanvasKitExecutor, type CanvasKitExternalObject } from "./executor/canvaskit/executor.ts";
 import { compareFrames, type PixelRule } from "../../../tests/performance/pixels.ts";
+import { outputDitherPixels } from "./executor/canvaskit/output-transform.ts";
+
+// Effect probes address final delivery pixels. Keep their analytic #102030 background
+// oracle, including its deterministic quantization, under the same contract as the export.
+const deliveryNoise = outputDitherPixels(0);
+function backgroundRed(x: number, y: number): number {
+  const noise = deliveryNoise[((y % 128) * 128 + (x % 128)) * 4]! * (2 / 255) - 1;
+  return Math.round(16 + noise);
+}
 
 // Build the CLI and WASM first. Each package comes from actual Motion authoring;
 // analytic probes keep agreement between two equally wrong backends from passing.
@@ -2901,6 +2910,7 @@ test("Motion composition, easing and color interpolation match analytic pixels o
         if (!config.fixedPackageManifestJson)
           throw new Error(`Motion preparation failed: ${JSON.stringify(config)}`);
         engine = new ProductEngine();
+        engine.set_delivery_output(true);
         const receipt = JSON.parse(
           engine.open_fixed_package(
             config.fixedPackageManifestJson!,
@@ -3430,7 +3440,9 @@ test("Motion composition, easing and color interpolation match analytic pixels o
           Math.abs(red("film-grain-zero", 320, 180) - red("film-grain-no-filter", 320, 180)),
           `${label} film-grain zero amount`,
         ).toBeLessThanOrEqual(2);
-        expect(red("film-grain", 100, 180), `${label} film-grain outside node`).toBe(16);
+        expect(red("film-grain", 100, 180), `${label} film-grain outside node`).toBe(
+          backgroundRed(100, 180),
+        );
         let changed = 0;
         for (let x = 230; x < 390; x++)
           if (red("film-grain", x, 180) !== red("film-grain-seed", x, 180)) changed++;
@@ -3467,7 +3479,9 @@ test("Motion composition, easing and color interpolation match analytic pixels o
           leftEdge("lens-distortion-k2"),
           `${label} lens-distortion k2 changes the lens`,
         ).toBeGreaterThan(leftEdge("lens-distortion"));
-        expect(red("lens-distortion", 190, 180), `${label} lens-distortion outside frame`).toBe(16);
+        expect(red("lens-distortion", 190, 180), `${label} lens-distortion outside frame`).toBe(
+          backgroundRed(190, 180),
+        );
         const cropRed = (name: string, x: number, y: number) => image(name)[(y * 320 + x) * 4]!;
         expect(
           cropRed("lens-distortion-crop", 316, 180),
@@ -4330,7 +4344,9 @@ test("Motion composition, easing and color interpolation match analytic pixels o
         span(59, 470, 471, 150),
         `${label} path-modifiers wide stroke outline`,
       ).toBeGreaterThanOrEqual(38);
-      expect(red(0, 320, 190), `${label} path-modifiers stroke ring keeps its hole`).toBe(16);
+      expect(red(0, 320, 190), `${label} path-modifiers stroke ring keeps its hole`).toBe(
+        backgroundRed(320, 190),
+      );
     }
     for (const label of ["native", "web"] as const) {
       const moving = frameImages.get("shutter-sampling/20")![label];

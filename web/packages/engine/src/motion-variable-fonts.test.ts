@@ -190,6 +190,7 @@ test("variable Noto axes produce continuous ink and identical random-access fram
         );
         expect(served).toEqual(font);
         engine = new ProductEngine();
+        engine.set_delivery_output(true);
         const receipt = JSON.parse(
           engine.open_fixed_package(
             config.fixedPackageManifestJson!,
