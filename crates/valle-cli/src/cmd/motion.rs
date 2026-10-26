@@ -1009,7 +1009,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
             unreachable!("media cache returns disk-backed files");
         };
         asset.path = path.clone();
-        blobs.insert(digest.to_string(), file);
+        blobs.insert(digest.as_hex(), file);
     }
 
     let shaders = shader_registry(&assets)?;
@@ -1116,7 +1116,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
     // Keep normalized bytes and frozen media alive for this preview generation.
     for asset in prepared.assets.values() {
         blobs
-            .entry(asset.hash.to_string())
+            .entry(asset.hash.as_hex())
             .or_insert_with(|| crate::preview_store::PreviewFile::Bytes(Arc::clone(&asset.bytes)));
     }
     request
@@ -1146,7 +1146,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
             serde_json::json!({
                 "name": name,
                 "kind": kind,
-                "url": format!("/preview-assets/{}", prepared.assets[name].hash),
+                "url": format!("/preview-assets/{}", prepared.assets[name].hash.as_hex()),
             })
         })
         .collect::<Vec<_>>();
@@ -1156,7 +1156,7 @@ fn studio_native_state_json(request: &StudioRequest, generation: u64) -> Result<
         .map(|control| {
             serde_json::json!({
                 "id": format!("asset:{control}"),
-                "url": format!("/preview-assets/{}", prepared.assets[control].hash),
+                "url": format!("/preview-assets/{}", prepared.assets[control].hash.as_hex()),
             })
         })
         .collect::<Vec<_>>();
@@ -2218,7 +2218,7 @@ export default function Main(){return <Scene><Video src="asset://film" style={{w
             serde_json::from_str(&studio_state_json(&request, 1).unwrap()).unwrap();
         assert_eq!(state["status"], "ok");
         assert_eq!(state["assets"][0]["kind"], "video");
-        let digest = ContentDigest::of_bytes(&original).to_string();
+        let digest = ContentDigest::of_bytes(&original).as_hex();
         let file = request
             .preview_files
             .files
@@ -2248,6 +2248,52 @@ export default function Main(){return <Scene><Video src="asset://film" style={{w
             web_assets_dir: None,
             port: 0,
         }
+    }
+
+    #[test]
+    fn studio_audio_locator_uses_the_same_hex_key_as_timeline_preview() {
+        use valle_media::{codec::FloatWavWriter, frame::AudioBuffer};
+
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("beat.wav");
+        let mut writer = FloatWavWriter::create(&audio, 48_000, 1).unwrap();
+        writer
+            .write(&AudioBuffer {
+                samples: vec![0.0; 48_000],
+                sample_rate: 48_000,
+                channels: 1,
+            })
+            .unwrap();
+        writer.finish().unwrap();
+        let digest = ContentDigest::of_bytes(&std::fs::read(&audio).unwrap());
+        let input = dir.path().join("audio.motion.tsx");
+        std::fs::write(&input, r#"export const composition={width:32,height:32,fps:4,duration:1};
+export const controls={assets:{beat:asset({kind:"audio",required:true})}};
+const BEAT=audioAnalysis("asset://beat",{bands:8,rate:4});
+export default function Main(){const time=useCurrentTime();return <Scene><View style={{width:32,height:BEAT.level(time.seconds)*32}}/></Scene>;}
+"#).unwrap();
+        let mut request = request(input);
+        request.asset_specs = vec![format!("beat={}", audio.display())];
+        let state: serde_json::Value =
+            serde_json::from_str(&studio_state_json(&request, 1).unwrap()).unwrap();
+        assert_eq!(state["status"], "ok", "{state}");
+        assert_eq!(
+            state["resourceLocators"][0]["url"],
+            format!("/preview-assets/{}", digest.as_hex())
+        );
+        assert_eq!(
+            state["resourceManifest"]["entries"]["asset:beat"]["digest"],
+            digest.to_wire()
+        );
+        assert_eq!(
+            request
+                .preview_files
+                .audio_pcm(&digest.as_hex())
+                .unwrap()
+                .unwrap()
+                .len(),
+            48_000 * 4
+        );
     }
 
     #[test]
