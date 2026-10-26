@@ -1330,6 +1330,9 @@ pub fn run() -> std::process::ExitCode {
                 "command_failed"
             };
             let (mut fields, mut hint) = (serde_json::Map::new(), None);
+            if let Some(located) = e.downcast_ref::<cmd::motion_diagnostics::SourceLocated>() {
+                fields.insert("source".into(), located.location.clone());
+            }
             if let Some(valle_render::host::PipelineError::AtFrame {
                 frame,
                 seconds,
@@ -1368,7 +1371,7 @@ fn failed_frame(error: &anyhow::Error) -> Option<&valle_render::host::PipelineEr
         match pipeline {
             Some(failed @ PipelineError::AtFrame { .. }) => Some(failed),
             _ => cause
-                .downcast_ref::<cmd::motion::SourceLocated>()
+                .downcast_ref::<cmd::motion_diagnostics::SourceLocated>()
                 .and_then(|located| failed_frame(&located.error)),
         }
     })

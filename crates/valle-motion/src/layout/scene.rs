@@ -132,8 +132,15 @@ impl core::fmt::Display for LayoutError {
             ),
             LayoutError::BadStyle {
                 node,
-                reason, ..
-            } => write!(f, "node `{node}`: {reason}"),
+                declarations,
+                reason,
+            } => {
+                write!(f, "node `{node}`: ")?;
+                if !declarations.is_empty() {
+                    write!(f, "style `{declarations}`: ")?;
+                }
+                f.write_str(reason)
+            }
             LayoutError::BadPaint { node, reason } => {
                 write!(f, "node `{node}`: bad paint ({reason})")
             }
@@ -2442,8 +2449,32 @@ fn resolve_instance_batch(
         |at, values| {
             let invalid = |property: &str| LayoutError::BadStyle {
                 node: group.keys.key_at(at).unwrap_or_default(),
-                declarations: property.into(),
-                reason: "instance template needs a finite supported value".into(),
+                declarations: format!(
+                    "{property}: {}",
+                    resolved_style(&group.template, values, at, property)
+                        .ok()
+                        .flatten()
+                        .map(css_token)
+                        .unwrap_or_else(|| "<missing>".into())
+                ),
+                reason: match group
+                    .template
+                    .styles
+                    .iter()
+                    .find(|style| style.property == property)
+                    .map(|style| &style.value)
+                {
+                    Some(StyleValue::Expr { expr }) => format!(
+                        "expression {}: {}",
+                        expr.0,
+                        if property == "opacity" {
+                            "opacity must be finite and in [0, 1]"
+                        } else {
+                            "instance template needs a finite supported value"
+                        }
+                    ),
+                    _ => "instance template needs a finite supported value".into(),
+                },
             };
             if let Some(visibility) = group.template.visibility {
                 match values.get(visibility.0 as usize) {
@@ -5913,6 +5944,20 @@ fn declarations(
             StyleValue::Static { value } => value,
             StyleValue::Expr { expr } => value(values, *expr, at)?,
         };
+        if style.property == "opacity"
+            && let MotionValue::Number(opacity) = value
+            && (!opacity.is_finite() || !(0.0..=1.0).contains(opacity))
+        {
+            let reason = "opacity must be finite and in [0, 1]";
+            return Err(LayoutError::BadStyle {
+                node: node.key.clone(),
+                declarations: format!("opacity: {opacity}"),
+                reason: match style.value {
+                    StyleValue::Expr { expr } => format!("expression {}: {reason}", expr.0),
+                    _ => reason.into(),
+                },
+            });
+        }
         if matches!(style.property.as_str(), "filter" | "backdrop-filter") {
             // Preserve the numeric parameter diagnostic before the generic CSS
             // parser wraps the entire declaration block into one error.

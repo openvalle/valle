@@ -379,12 +379,15 @@ fn render(
             progress: crate::output::render_progress(),
         },
     );
+    let source_maps =
+        super::motion_diagnostics::SourceMaps::motion(prepared.compiled.source_map.clone());
     if let Some(check) = check {
         // Plan every frame before rendering the checked one, so the report lists every frame that
         // cannot be planned, the checked frame included.
         let cost = if check.cost {
             let size = tuning.output_size.unwrap_or(canvas.tuple());
-            let (cost, failures) = super::render_delivery::frame_costs(&renderer, fps, size)?;
+            let (cost, failures) =
+                super::render_delivery::frame_costs(&renderer, fps, size, &source_maps)?;
             if failures != 0 {
                 crate::output::emit(serde_json::json!({"status":"error",
                     "component":artifact.component, "cost":cost,
@@ -398,7 +401,7 @@ fn render(
         };
         let (summary, _) = plan
             .execute(&renderer)
-            .map_err(|error| source_error(error, &prepared.compiled))?;
+            .map_err(|error| source_maps.attach(error, &renderer))?;
         let checked_frame = frame.unwrap_or(0);
         let host_frame =
             u32::try_from(checked_frame).context("checked frame must be nonnegative")?;
@@ -442,7 +445,7 @@ fn render(
                 "totalFrames": delivery.duration_frames,
                 "actualDurationSeconds": f64::from(delivery.duration_frames) * f64::from(fps.denominator()) / fps.numerator() as f64,
             })),
-        ).map_err(|error| source_error(error,&prepared.compiled))?;
+        ).map_err(|error| source_maps.attach(error, &renderer))?;
     }
     Ok(std::process::ExitCode::SUCCESS)
 }
@@ -453,72 +456,6 @@ struct MotionCheck {
     /// Plan every output frame and report its cost.
     cost: bool,
 }
-
-/// Runtime artifacts intentionally contain no source text. Attach the source
-/// map at the authoring boundary, where the same frozen compilation is present.
-fn source_error(
-    error: anyhow::Error,
-    compiled: &valle_compiler::motion::CompiledMotion,
-) -> anyhow::Error {
-    let message = format!("{error:#}");
-    let expression = message
-        .split("expression ")
-        .nth(1)
-        .and_then(|s| s.split_once(':'))
-        .and_then(|(id, _)| id.parse::<u32>().ok());
-    let instance = message
-        .split("instance group ")
-        .nth(1)
-        .and_then(|s| s.split_once(':'))
-        .and_then(|(id, _)| id.parse::<usize>().ok());
-    let expressions = match instance {
-        Some(group) => compiled
-            .source_map
-            .instance_exprs
-            .get(group)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]),
-        None => &compiled.source_map.exprs,
-    };
-    let location = expression
-        .and_then(|id| expressions.iter().find(|m| m.id.0 == id))
-        .map(|m| (&m.source_path, &m.span))
-        .or_else(|| {
-            compiled
-                .source_map
-                .nodes
-                .iter()
-                .find(|node| {
-                    message.contains(&format!("node `{}`", node.key))
-                        || message.contains(&format!("Transition '{}'", node.key))
-                })
-                .map(|m| (&m.source_path, &m.span))
-        });
-    if let Some((path, span)) = location {
-        anyhow::Error::new(SourceLocated {
-            message: format!("{message} ({path}:{}:{})", span.line, span.column),
-            error,
-        })
-    } else {
-        error
-    }
-}
-
-/// An error message with its source location. It keeps the original error, from which the
-/// command takes its error code and failed frame.
-#[derive(Debug)]
-pub(crate) struct SourceLocated {
-    message: String,
-    pub(crate) error: anyhow::Error,
-}
-
-impl std::fmt::Display for SourceLocated {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for SourceLocated {}
 
 #[derive(Clone)]
 struct StudioRequest {

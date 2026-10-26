@@ -440,6 +440,7 @@ pub(super) fn frame_costs(
     renderer: &valle_render::host::NativeRenderer,
     fps: FrameRate,
     (width, height): (u32, u32),
+    sources: &super::motion_diagnostics::SourceMaps,
 ) -> Result<(serde_json::Value, usize)> {
     use std::cmp::Reverse;
     let seconds = |frame: valle_engine::render::FrameKey| {
@@ -460,6 +461,10 @@ pub(super) fn frame_costs(
                     "seconds":seconds(frame), "error":error.to_string()});
                 if let Some(path) = error.path() {
                     failure["path"] = path.into();
+                }
+                if let Some(source) = sources.location(renderer.project().compiled(), frame, &error)
+                {
+                    failure["source"] = source;
                 }
                 failures.push(failure);
             }

@@ -13,6 +13,7 @@ pub mod models;
 
 pub mod motion;
 
+pub(crate) mod motion_diagnostics;
 mod motion_fonts;
 mod motion_package;
 pub mod project;

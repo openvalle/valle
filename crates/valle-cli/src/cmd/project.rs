@@ -379,6 +379,7 @@ fn check_with_cost(project: &Project, cost: bool) -> Result<Value> {
                     &renderer,
                     canvas.frame_rate(),
                     (canvas.width(), canvas.height()),
+                    &prepared.source_maps,
                 )?;
                 result["cost"] = costs;
                 if failures != 0 {

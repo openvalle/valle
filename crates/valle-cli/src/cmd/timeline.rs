@@ -129,7 +129,8 @@ fn render_document_impl(
         warnings.extend(clock_warnings(opened.compiled())?);
         return Ok(std::process::ExitCode::SUCCESS);
     }
-    plan.deliver_and_report(&renderer, &opened, &observation, None)?;
+    plan.deliver_and_report(&renderer, &opened, &observation, None)
+        .map_err(|error| prepared.source_maps.attach(error, &renderer))?;
     Ok(std::process::ExitCode::SUCCESS)
 }
 
@@ -185,6 +186,7 @@ fn document_path(id: &str) -> String {
 
 /// One frozen preparation shared by Native delivery and browser previews.
 pub(crate) struct TimelinePreviewPackage {
+    pub(super) source_maps: super::motion_diagnostics::SourceMaps,
     pub snapshot_inputs: Vec<valle_project::folder::CapturedInput>,
     pub timeline_json: String,
     pub canonical_timeline_json: String,
@@ -540,6 +542,7 @@ fn prepare_timeline_package_impl(
     let mut catalog = NativeResourceCatalog::new();
     let mut blobs = std::collections::BTreeMap::new();
     let mut structures = Vec::new();
+    let mut source_maps = super::motion_diagnostics::SourceMaps::default();
     if let Some(locators) = doc["resources"].as_object() {
         let mut used = std::collections::BTreeSet::new();
         collect_used_resources(&doc["tracks"], &mut used);
@@ -589,6 +592,7 @@ fn prepare_timeline_package_impl(
                 let prepared = prepared_motions
                     .remove(name)
                     .ok_or_else(|| anyhow!("missing prepared Motion instance {name}"))?;
+                source_maps.insert(id.clone(), prepared.compiled.source_map.clone());
                 let mut source_map = serde_json::to_value(&prepared.compiled.source_map)?;
                 source_map["entry"] = serde_json::json!(path);
                 let artifact = prepared.compiled.artifact;
@@ -771,6 +775,7 @@ fn prepare_timeline_package_impl(
     let (package, opened) = build_fixed_package(&files).map_err(|e| anyhow!(e))?;
     captured_motions.verify_dependencies()?;
     Ok(TimelinePreviewPackage {
+        source_maps,
         snapshot_inputs,
         timeline_json,
         canonical_timeline_json: canonical,

@@ -130,7 +130,9 @@ pub(super) fn render(
             ..Default::default()
         },
     );
-    let (summary, details) = plan.execute(&renderer)?;
+    let (summary, details) = plan
+        .execute(&renderer)
+        .map_err(|error| prepared.source_maps.attach(error, &renderer))?;
     let mut staged = details["outputs"]
         .as_array()
         .into_iter()
