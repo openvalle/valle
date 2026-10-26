@@ -8,7 +8,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use ff::{Dictionary, Packet, Rational, codec, encoder, format, frame, software};
 
 use super::ffi::{
-    YuvMatrix, ffmpeg_init, fill_plane0, set_sws_colorspace, tag_bt709_limited, write_mp4_header,
+    YuvMatrix, ffmpeg_init, fill_plane0, set_sws_colorspace, tag_bt709_frame, tag_bt709_limited,
+    write_mp4_header, yuv_scaling_flags,
 };
 use crate::codec::alpha::TransparentVideoCodec;
 use crate::codec::muxer::VideoTransfer;
@@ -202,7 +203,7 @@ impl TransparentVideoMuxer {
                 format::Pixel::YUVA444P10LE,
                 width,
                 height,
-                software::scaling::Flags::BILINEAR,
+                yuv_scaling_flags(),
             )?;
             set_sws_colorspace(&mut sws, YuvMatrix::Bt709, false, false);
             Some(sws)
@@ -296,6 +297,7 @@ impl TransparentVideoMuxer {
             let mut converted =
                 frame::Video::new(format::Pixel::YUVA444P10LE, self.width, self.height);
             sws.run(&source, &mut converted)?;
+            tag_bt709_frame(&mut converted, VideoTransfer::Bt709);
             converted
         } else {
             let mut argb = vec![0u8; expected];

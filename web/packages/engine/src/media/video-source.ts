@@ -1,9 +1,4 @@
-import {
-  EncodedPacketSink,
-  VideoSampleSink,
-  type InputVideoTrack,
-  type VideoSample,
-} from "mediabunny";
+import { EncodedPacketSink, VideoSample, VideoSampleSink, type InputVideoTrack } from "mediabunny";
 import { createMediaInput, type BrowserMediaInput } from "./input.ts";
 
 const FRAME_TIME_EPS_S = 1e-6; // Match the native frame-at-source-time boundary.
@@ -50,6 +45,7 @@ export function createDecoderRing({
   let iterator: AsyncGenerator<VideoSample> | undefined;
   let current: VideoSample | undefined, next: VideoSample | undefined;
   let initialized: Promise<void> | undefined;
+  let proresColor: VideoColorSpaceInit | undefined;
   let queue: Promise<unknown> = Promise.resolve();
   const checkOpen = () => {
     if (closed) throw new Error("video source is closed");
@@ -58,6 +54,7 @@ export function createDecoderRing({
     const track = await input.getPrimaryVideoTrack();
     if (!track) throw new Error("no video track");
     await prepareDecoder(track);
+    if (track.codec === "prores") proresColor = await track.getColorSpace();
     baseTime = await track.getFirstTimestamp();
     checkOpen();
     sink = new VideoSampleSink(track);
@@ -71,7 +68,8 @@ export function createDecoderRing({
     next = undefined;
   };
   const take = async (active: AsyncGenerator<VideoSample>) => {
-    const sample = (await active.next()).value || undefined;
+    let sample = (await active.next()).value || undefined;
+    if (sample && proresColor) sample = await restoreProresColor(sample, proresColor);
     if (closed) {
       sample?.close();
       checkOpen();
@@ -126,6 +124,59 @@ export function createDecoderRing({
       input.dispose();
     },
   };
+}
+
+/** The ProRes extension reads frame-header tags, which may be absent even when MOV has colr.
+ * Fill only missing YUV tags before the browser converts pixels. Keep the decoded bit depth,
+ * alpha, crop and timing; RGB conversion here would already have used the wrong matrix.
+ */
+async function restoreProresColor(
+  sample: VideoSample,
+  fallback: VideoColorSpaceInit,
+): Promise<VideoSample> {
+  const frame = sample.toVideoFrame();
+  try {
+    const current = frame.colorSpace.toJSON();
+    const colorSpace = {
+      primaries: current.primaries ?? fallback.primaries,
+      transfer: current.transfer ?? fallback.transfer,
+      matrix: current.matrix ?? fallback.matrix,
+      fullRange: current.fullRange ?? fallback.fullRange,
+    };
+    if (
+      !frame.format?.startsWith("I") ||
+      !(["primaries", "transfer", "matrix", "fullRange"] as const).some(
+        (field) => current[field] == null && fallback[field] != null,
+      )
+    )
+      return sample;
+    const options = { rect: { x: 0, y: 0, width: frame.codedWidth, height: frame.codedHeight } };
+    const bytes = new Uint8Array(frame.allocationSize(options));
+    const layout = await frame.copyTo(bytes, options);
+    const corrected = new VideoFrame(bytes, {
+      format: frame.format,
+      codedWidth: frame.codedWidth,
+      codedHeight: frame.codedHeight,
+      visibleRect: frame.visibleRect ?? undefined,
+      displayWidth: frame.displayWidth,
+      displayHeight: frame.displayHeight,
+      timestamp: frame.timestamp,
+      duration: frame.duration ?? undefined,
+      layout,
+      colorSpace,
+    });
+    const result = new VideoSample(corrected, {
+      timestamp: sample.timestamp,
+      duration: sample.duration,
+    });
+    sample.close();
+    return result;
+  } catch (error) {
+    sample.close();
+    throw error;
+  } finally {
+    frame.close();
+  }
 }
 
 /** Read keyframe metadata and let the same library decode the selected thumbnail frames. */

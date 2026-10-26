@@ -101,6 +101,7 @@ function fixture(name: string, videoBytes?: Uint8Array) {
     height: 360,
     orientation: "identity",
     videoStream: 0,
+    hasAlpha: false,
     audioStream: null,
     // CanvasSource's browser-generated fixture carries an sRGB transfer (iec61966-2-1),
     // with BT.709 primaries/matrix. Admission facts must match the encoded media.

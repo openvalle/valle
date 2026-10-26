@@ -68,6 +68,10 @@ export async function exportBrowserVideo(
     }
     options.onProgress?.({ phase: "loading", framesCompleted: 0, frameCount: 0 });
     const canvas = document.createElement("canvas");
+    // CanvasSource carries this sRGB signal into VideoFrame and the encoder's color metadata.
+    if (!canvas.getContext("2d", { colorSpace: "srgb" })) {
+      throw new Error("This browser cannot create the sRGB export canvas.");
+    }
     player = new BrowserValleWebPlayer({
       ...input,
       runtimePurpose: "export",

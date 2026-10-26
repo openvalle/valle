@@ -480,7 +480,13 @@ fn import_decoded_frame(
                 &backend,
                 gpu::SurfaceOrigin::TopLeft,
                 ColorType::BGRA8888,
-                AlphaType::Opaque,
+                match interpretation.alpha {
+                    valle_engine::resource::InputAlphaMode::Opaque => AlphaType::Opaque,
+                    valle_engine::resource::InputAlphaMode::StraightCoverage => AlphaType::Unpremul,
+                    valle_engine::resource::InputAlphaMode::PremultipliedCoverage => {
+                        AlphaType::Premul
+                    }
+                },
                 Some(image_color_space),
             )
             .ok_or(SurfaceError::InvalidDecodedGpuFrame)?;
@@ -527,11 +533,15 @@ fn import_decoded_frame(
                 1,
                 "decoded-uv",
             )?;
-            let yuv_color_space = match (decoded.matrix(), decoded.is_full_range()) {
-                (YuvMatrix::Bt601, true) => YUVColorSpace::JPEG_Full,
-                (YuvMatrix::Bt601, false) => YUVColorSpace::Rec601_Limited,
-                (YuvMatrix::Bt709, true) => YUVColorSpace::Rec709_Full,
-                (YuvMatrix::Bt709, false) => YUVColorSpace::Rec709_Limited,
+            let yuv_color_space = if ten_bit {
+                YUVColorSpace::Identity
+            } else {
+                match (decoded.matrix(), decoded.is_full_range()) {
+                    (YuvMatrix::Bt601, true) => YUVColorSpace::JPEG_Full,
+                    (YuvMatrix::Bt601, false) => YUVColorSpace::Rec601_Limited,
+                    (YuvMatrix::Bt709, true) => YUVColorSpace::Rec709_Full,
+                    (YuvMatrix::Bt709, false) => YUVColorSpace::Rec709_Limited,
+                }
             };
             let info = YUVAInfo::new(
                 (display_width as i32, display_height as i32),
@@ -548,9 +558,20 @@ fn import_decoded_frame(
                 gpu::SurfaceOrigin::TopLeft,
             )
             .ok_or(SurfaceError::InvalidDecodedGpuFrame)?;
-            let image =
-                gpu::images::texture_from_yuva_textures(context, &backend, Some(image_color_space))
+            let image = if ten_bit {
+                let planes = gpu::images::texture_from_yuva_textures(context, &backend, None)
                     .ok_or(SurfaceError::InvalidDecodedGpuFrame)?;
+                super::decoded_yuv::p010_image(
+                    context,
+                    &planes,
+                    image_color_space,
+                    decoded.matrix(),
+                    decoded.is_full_range(),
+                )?
+            } else {
+                gpu::images::texture_from_yuva_textures(context, &backend, Some(image_color_space))
+                    .ok_or(SurfaceError::InvalidDecodedGpuFrame)?
+            };
             (image, vec![y_texture, uv_texture])
         }
         _ => return Err(SurfaceError::UnsupportedDecodedPixelFormat { pixel_format }),

@@ -75,6 +75,7 @@ pub struct VideoResourceDescriptorWire {
     pub presentation_index_digest: ContentDigest,
     pub width: u32,
     pub height: u32,
+    pub has_alpha: bool,
     pub orientation: MediaOrientationWire,
     pub color: MediaColorDescriptorWire,
     pub video_stream: u32,

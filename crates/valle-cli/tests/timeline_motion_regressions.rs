@@ -40,6 +40,281 @@ fn pixel(dir: &Path, name: &str, x: usize, y: usize) -> Vec<u8> {
 }
 
 #[test]
+fn transparent_video_matches_its_decoded_image_in_timeline_and_motion() {
+    use valle_media::codec::{
+        TransparentVideoCodec, TransparentVideoMuxer, decode_rgba_frames, write_rgba_png,
+    };
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let mut source = valle_media::frame::RgbaFrame::new(64, 16);
+    for (index, pixel) in source.data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let alpha = [0, 1, 32, 64, 128, 192, 254, 255][index % 64 / 8];
+        pixel.copy_from_slice(&[240, 128, 64, alpha]);
+    }
+    let mut backends = vec!["raster"];
+    if cfg!(target_os = "macos")
+        && std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() == Ok("metal")
+    {
+        backends.push("metal");
+    }
+    let compare = |actual: &valle_media::frame::RgbaFrame,
+                   expected: &valle_media::frame::RgbaFrame,
+                   context: &str| {
+        for x in [4, 12, 20, 28, 36, 44, 52, 60] {
+            let offset = (8 * 64 + x) * 4;
+            let a = &actual.data[offset..offset + 4];
+            let b = &expected.data[offset..offset + 4];
+            assert_eq!(a[3], b[3], "{context} alpha at x={x}: {a:?} != {b:?}");
+            // PNG decoding first premultiplies into 8-bit pixels. Its unassociated RGB near
+            // zero alpha is not an accurate reference for the straight raw-video import.
+            if x >= 20 {
+                assert!(
+                    a[..3].iter().zip(b).all(|(a, b)| a.abs_diff(*b) <= 2),
+                    "{context} at x={x}: {a:?} != {b:?}"
+                );
+            }
+        }
+    };
+    for (name, codec) in [
+        ("qtrle", TransparentVideoCodec::Qtrle),
+        ("prores", TransparentVideoCodec::ProRes4444),
+    ] {
+        let movie = dir.join(format!("{name}.mov"));
+        let mut mux = TransparentVideoMuxer::open_with_codec(&movie, 64, 16, 1, 1, codec).unwrap();
+        mux.encode_video(&source).unwrap();
+        mux.encode_video(&source).unwrap();
+        mux.finish().unwrap();
+        drop(mux);
+        assert!(
+            valle_media::codec::decode::probe_video_presentation(&movie)
+                .unwrap()
+                .has_alpha
+        );
+        write_rgba_png(
+            &dir.join("decoded.png"),
+            &decode_rgba_frames(&movie, Some(1)).unwrap()[0],
+        )
+        .unwrap();
+        for background in [serde_json::Value::Null, json!("#204060")] {
+            for (kind, asset) in [
+                ("image", "decoded.png".to_owned()),
+                ("video", format!("{name}.mov")),
+            ] {
+                let mut clip = json!({"kind":kind,"src":"film","start":0,"duration":1});
+                if kind == "video" {
+                    clip["gain"] = json!(0);
+                }
+                put(
+                    dir,
+                    &format!("{kind}.json"),
+                    json!({"canvas":{"width":64,"height":16,"fps":1,"background":if background.is_null() { json!("#00000000") } else { background.clone() }},"resources":{"film":asset},"tracks":{"visual":[{"clips":[clip]}]}}),
+                );
+            }
+            for backend in &backends {
+                let suffix = if background.is_null() {
+                    "alpha"
+                } else {
+                    "opaque"
+                };
+                for kind in ["image", "video"] {
+                    success(run(
+                        dir,
+                        &[
+                            "timeline",
+                            "render",
+                            &format!("{kind}.json"),
+                            "--frame",
+                            "0",
+                            "--backend",
+                            backend,
+                            "-o",
+                            &format!("{name}-{backend}-{suffix}-{kind}.png"),
+                        ],
+                    ));
+                }
+                let expected = valle_media::codec::read_rgba_png(
+                    &dir.join(format!("{name}-{backend}-{suffix}-image.png")),
+                )
+                .unwrap();
+                let actual = valle_media::codec::read_rgba_png(
+                    &dir.join(format!("{name}-{backend}-{suffix}-video.png")),
+                )
+                .unwrap();
+                compare(&actual, &expected, &format!("{name}, {backend}, {suffix}"));
+                if background.is_null() {
+                    std::fs::write(dir.join("alpha.motion.tsx"), r#"export const composition={width:64,height:16,fps:1,duration:1};
+export const controls={assets:{film:asset({kind:"video",required:true})}};
+export default function Alpha(){return <Scene><Video src="asset://film" style={{width:64,height:16}}/></Scene>;}
+"#).unwrap();
+                    let output = format!("{name}-{backend}-motion.png");
+                    success(run(
+                        dir,
+                        &[
+                            "motion",
+                            "render",
+                            "alpha.motion.tsx",
+                            "--asset",
+                            &format!("film={name}.mov"),
+                            "--frame",
+                            "0",
+                            "--backend",
+                            backend,
+                            "-o",
+                            &output,
+                        ],
+                    ));
+                    let actual = valle_media::codec::read_rgba_png(&dir.join(output)).unwrap();
+                    compare(&actual, &expected, &format!("Motion {name}, {backend}"));
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires FFmpeg libx265 and real Metal/VideoToolbox 10-bit decoding"]
+fn p010_hardware_import_preserves_gray_and_color_for_both_sdr_matrices_and_ranges() {
+    use std::io::Write;
+    let temp = tempfile::tempdir().unwrap();
+    let dir = temp.path();
+    let (width, height) = (256usize, 96usize);
+    for matrix in ["bt709", "smpte170m"] {
+        for full in [false, true] {
+            let mut planes = vec![512u16; width * height * 3 / 2];
+            let levels = if full {
+                [0, 64, 128, 256, 512, 768, 940, 1023]
+            } else {
+                [64, 128, 256, 384, 512, 768, 876, 940]
+            };
+            for y in 0..height {
+                for x in 0..width {
+                    planes[y * width + x] = levels[x / 32];
+                }
+            }
+            for row in 0..height / 2 {
+                let (cb, cr) = [(512, 512), (384, 640), (640, 384)][row / 16];
+                planes[width * height + row * width / 2..width * height + (row + 1) * width / 2]
+                    .fill(cb);
+                planes[width * height * 5 / 4 + row * width / 2
+                    ..width * height * 5 / 4 + (row + 1) * width / 2]
+                    .fill(cr);
+            }
+            let mut ffmpeg = Command::new("ffmpeg")
+                .args([
+                    "-v",
+                    "error",
+                    "-y",
+                    "-f",
+                    "rawvideo",
+                    "-pixel_format",
+                    "yuv420p10le",
+                    "-video_size",
+                    "256x96",
+                    "-framerate",
+                    "30",
+                    "-i",
+                    "pipe:0",
+                    "-frames:v",
+                    "1",
+                    "-c:v",
+                    "libx265",
+                    "-x265-params",
+                    "lossless=1:pools=1:frame-threads=1:log-level=error",
+                    "-color_primaries",
+                    "bt709",
+                    "-color_trc",
+                    "iec61966-2-1",
+                    "-colorspace",
+                    matrix,
+                    "-color_range",
+                    if full { "pc" } else { "tv" },
+                ])
+                .arg(dir.join("source.mp4"))
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            ffmpeg
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(
+                    &planes
+                        .into_iter()
+                        .flat_map(u16::to_le_bytes)
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            let encoded = ffmpeg.wait_with_output().unwrap();
+            assert!(
+                encoded.status.success(),
+                "{}",
+                String::from_utf8_lossy(&encoded.stderr)
+            );
+            put(
+                dir,
+                "ten.json",
+                json!({"canvas":{"width":width,"height":height,"fps":30},"resources":{"film":"source.mp4"},"tracks":{"visual":[{"clips":[{"kind":"video","src":"film","start":0,"duration":1.0/30.0,"gain":0}]}]}}),
+            );
+            let mut images = Vec::new();
+            for backend in ["raster", "metal"] {
+                let output = format!("{matrix}-{full}-{backend}.png");
+                let result = Command::new(env!("CARGO_BIN_EXE_valle"))
+                    .current_dir(dir)
+                    .env("VALLE_HOME", dir.join("home"))
+                    .env("VALLE_TRACE_F16_STAGES", "1")
+                    .args([
+                        "--json",
+                        "timeline",
+                        "render",
+                        "ten.json",
+                        "--frame",
+                        "0",
+                        "--backend",
+                        backend,
+                        "-o",
+                        &output,
+                    ])
+                    .output()
+                    .unwrap();
+                if backend == "metal" {
+                    assert!(
+                        String::from_utf8_lossy(&result.stderr).contains("[valle f16] gpu-p010"),
+                        "did not exercise P010 GPU conversion: {}",
+                        String::from_utf8_lossy(&result.stderr)
+                    );
+                }
+                success(result);
+                images.push(valle_media::codec::read_rgba_png(&dir.join(output)).unwrap());
+            }
+            for y in [16, 48, 80] {
+                for x in (16..width).step_by(32) {
+                    let offset = (y * width + x) * 4;
+                    let expected = &images[0].data[offset..offset + 4];
+                    let actual = &images[1].data[offset..offset + 4];
+                    assert!(
+                        actual
+                            .iter()
+                            .zip(expected)
+                            .all(|(a, b)| a.abs_diff(*b) <= 1),
+                        "{matrix} full={full}, ({x},{y}): {actual:?} != {expected:?}"
+                    );
+                    if y == 16 {
+                        assert!(
+                            actual[0].abs_diff(actual[1]) <= 1
+                                && actual[1].abs_diff(actual[2]) <= 1,
+                            "neutral gray changed hue: {actual:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn scene3d_density_falls_back_before_multiple_producers_exceed_the_frame_budget() {
     let temp = tempfile::tempdir().unwrap();
     let dir = temp.path();
@@ -353,7 +628,7 @@ export default function T(){ const time = useCurrentTime();return <Scene style={
             .unwrap()
             .data;
         assert!(
-            pixels.chunks_exact(4).all(|p| p[3] == 255),
+            pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
             "environment background must cover the scene"
         );
         if let Some(previous) = frames.insert(frame, pixels.clone()) {
@@ -652,7 +927,9 @@ fn model3d_assets_render_from_motion_and_timeline() {
             .data;
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|pixel| pixel[0] > 150)
                 .count()
                 > 100,
@@ -798,7 +1075,9 @@ export default function Card() {{ const time = useCurrentTime(); const frame = M
         let frame = load(name);
         frame
             .data
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .enumerate()
             .filter(|(i, p)| i / frame.width as usize >= 40 && p[0] > 128)
             .count()
@@ -1692,7 +1971,9 @@ float4 valle_main(float2 uv) {
         assert!(inline == descriptor, "frame {frame} differs");
         if frame == "45" {
             let colors = inline
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .collect::<std::collections::BTreeSet<_>>();
             assert!(colors.len() >= 3, "{colors:?}");
         }
@@ -1765,7 +2046,9 @@ export default function Fade() {
         assert!(worst <= 1, "frame {frame} differs by {worst}");
         if frame == "20" {
             let colors = code
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .collect::<std::collections::BTreeSet<_>>();
             assert!(colors.len() >= 2, "{colors:?}");
         }
@@ -2418,7 +2701,10 @@ export default function Card() {
         let pixels = valle_media::codec::read_rgba_png(&dir.join(&output))
             .unwrap()
             .data;
-        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 0), "{input}");
+        assert!(
+            pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0),
+            "{input}"
+        );
     }
     // As an ordinary clip it lays out like an overlay, over transparent frames.
     let clip = |extra: Value| {
@@ -2830,7 +3116,10 @@ fn effect_templates_read_nothing_outside_an_effect() {
         let pixels = valle_media::codec::read_rgba_png(&dir.join(&output))
             .unwrap()
             .data;
-        assert!(pixels.chunks_exact(4).all(|pixel| pixel[3] == 0), "{input}");
+        assert!(
+            pixels.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 0),
+            "{input}"
+        );
     }
     // As an ordinary clip it lays out like an overlay, over a transparent source.
     let solid = json!({"kind": "solid", "color": "#22cc88", "start": 0, "duration": 2});

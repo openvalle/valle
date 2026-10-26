@@ -50,6 +50,7 @@ import {
   type ProductRuntimeMethod,
 } from "./compositor/frame-protocol.ts";
 import { assertCanvaskitImportLayout } from "./visual-layout.ts";
+import { supportsWorkingF16 } from "../executor/canvaskit/working-surface.ts";
 import {
   BrowserResourceCache,
   resourceRequestCacheIdentity,
@@ -2498,14 +2499,15 @@ export class BrowserValleWebPlayer {
         preserveDrawingBuffer: 1,
       });
       const context = handle ? this.CanvasKit.MakeWebGLContext(handle) : null;
-      const surface = context
-        ? this.CanvasKit.MakeOnScreenGLSurface(
-            context,
-            width,
-            height,
-            this.CanvasKit.ColorSpace.SRGB,
-          )
-        : null;
+      const surface =
+        context && supportsWorkingF16(this.CanvasKit, context)
+          ? this.CanvasKit.MakeOnScreenGLSurface(
+              context,
+              width,
+              height,
+              this.CanvasKit.ColorSpace.SRGB,
+            )
+          : null;
       if (surface && context) {
         this.target = { key, surface, gpu: true, context, canvas };
         const gl = canvas.getContext("webgl2");
@@ -2524,7 +2526,7 @@ export class BrowserValleWebPlayer {
     const surface = this.CanvasKit.MakeSurface(width, height);
     if (!surface) throw new Error(`CanvasKit cannot allocate product target ${width}x${height}`);
     this.target = {
-      key: `cpu:${width}x${height}`,
+      key,
       surface,
       gpu: false,
       context: null,

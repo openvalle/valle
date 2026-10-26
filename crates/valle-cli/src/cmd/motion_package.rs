@@ -803,6 +803,7 @@ pub(super) fn add_probed_video_resource(
         )?),
         width: probe.display.width,
         height: probe.display.height,
+        has_alpha: probe.has_alpha,
         orientation: MediaOrientationWire::Identity,
         color: MediaColorDescriptorWire {
             primaries: ColorPrimariesWire::Srgb,

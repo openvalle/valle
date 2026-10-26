@@ -76,6 +76,19 @@ fn prores_4444_mov_keeps_straight_alpha_across_frames() {
     let probe = probe_av(&out).expect("probe ProRes MOV");
     assert_eq!(probe.video.unwrap().0, width);
     assert!(probe.audio.is_none());
+    assert!(
+        valle_media::codec::decode::probe_video_presentation(&out)
+            .unwrap()
+            .has_alpha
+    );
+    // The independent ProRes decoder uses frame-header tags, rather than MOV's colr atom.
+    let bytes = std::fs::read(&out).unwrap();
+    let header = bytes.windows(4).position(|bytes| bytes == b"icpf").unwrap();
+    assert_eq!(
+        &bytes[header + 18..header + 21],
+        &[1, 1, 1],
+        "ProRes frame header must carry BT.709 primaries/transfer/matrix"
+    );
     let decoded = decode_rgba_frames(&out, None).expect("decode ProRes MOV");
     assert_eq!(decoded.len(), 2);
     for frame in decoded {
@@ -89,7 +102,7 @@ fn prores_4444_mov_keeps_straight_alpha_across_frames() {
             let offset = (16 * width + x) as usize * 4;
             for channel in 0..3 {
                 assert!(
-                    frame.data[offset + channel].abs_diff(source.data[offset + channel]) <= 20,
+                    frame.data[offset + channel].abs_diff(source.data[offset + channel]) <= 3,
                     "RGB at x={x}, channel={channel}: {} != {}",
                     frame.data[offset + channel],
                     source.data[offset + channel]

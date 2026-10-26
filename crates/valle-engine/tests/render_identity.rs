@@ -223,7 +223,7 @@ fn video_entry(duration: &str) -> Value {
                 "matrix": "bt709",
                 "fullRange": false
             },
-            "videoStream": 0,
+            "videoStream": 0, "hasAlpha": false,
             "audioStream": null
         }
     })

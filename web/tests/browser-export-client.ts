@@ -9,6 +9,7 @@ import {
   keyframeThumbnails,
 } from "../packages/engine/src/media/video-source.ts";
 import { decodeAudioBuffer } from "../packages/engine/src/media/audio-source.ts";
+import { createMediaInput } from "../packages/engine/src/media/input.ts";
 import { BrowserValleWebPlayer } from "../packages/engine/src/runtime/product-controller.ts";
 
 const status = document.getElementById("status")!;
@@ -26,6 +27,21 @@ async function input(fixture: string): Promise<BrowserValleWebPlayerOptions> {
 }
 async function save(name: string, result: BrowserVideoExportResult) {
   assert(result.blob?.size, "MP4 Blob is empty");
+  const encoded = createMediaInput({ blob: result.blob });
+  try {
+    const track = await encoded.getPrimaryVideoTrack();
+    assert(track, "MP4 has no video track");
+    const color = await track.getColorSpace();
+    assert(
+      color.primaries === "bt709" &&
+        color.transfer === "iec61966-2-1" &&
+        color.matrix === "bt709" &&
+        typeof color.fullRange === "boolean",
+      `MP4 lost its sRGB signal description: ${JSON.stringify(color)}`,
+    );
+  } finally {
+    encoded.dispose();
+  }
   const url = URL.createObjectURL(result.blob);
   const video = document.createElement("video");
   try {
@@ -232,19 +248,46 @@ async function checkVideoColor() {
   } finally {
     source.close();
   }
-  for (const gpu of [false, true]) {
-    const player = new BrowserValleWebPlayer({ ...config, canvas, gpu, audioContext: null });
+  for (const mode of ["cpu", "gpu", "no-f16"]) {
+    const player = new BrowserValleWebPlayer({
+      ...config,
+      canvas,
+      gpu: mode !== "cpu",
+      audioContext: null,
+    });
+    const runtime = player as unknown as {
+      CanvasKit: { MakeRenderTarget: (...args: unknown[]) => unknown };
+      target: { gpu: boolean };
+    };
+    let restoreTarget: (() => void) | undefined;
+    let attempts = 0;
     try {
       await player.init();
+      if (mode === "no-f16") {
+        const make = runtime.CanvasKit.MakeRenderTarget;
+        runtime.CanvasKit.MakeRenderTarget = () => {
+          attempts++;
+          return null;
+        };
+        restoreTarget = () => {
+          runtime.CanvasKit.MakeRenderTarget = make;
+        };
+      }
       for (const frame of [15, 45, 75]) {
         await player.renderFrame(frame);
+        if (mode === "no-f16") assert(!runtime.target.gpu, "unavailable F16 did not select CPU");
         pixels.push({
-          path: gpu ? "gpu" : "cpu",
+          path: mode,
           time: frame / 30,
           drawn: Array.from(context.getImageData(320, 180, 1, 1).data),
         });
       }
+      if (mode === "no-f16") {
+        assert(attempts === 1, `F16 failure was retried every frame (${attempts})`);
+        report.push({ fixture: "f16-target-fallback", status: "pass", attempts });
+      }
     } finally {
+      restoreTarget?.();
       await player.close();
     }
   }

@@ -130,6 +130,11 @@ pub fn rgba_scaling_flags() -> software::scaling::Flags {
         | software::scaling::Flags::FULL_CHR_H_INT
 }
 
+/// Preserve accurate rounding when converting authored RGB into encoder YUV planes.
+pub fn yuv_scaling_flags() -> software::scaling::Flags {
+    software::scaling::Flags::BILINEAR | software::scaling::Flags::ACCURATE_RND
+}
+
 /// Select a matrix from source tags, falling back to height-based SD/HD defaults.
 pub fn matrix_for(space: color::Space, height: u32) -> YuvMatrix {
     match space {
@@ -183,6 +188,17 @@ pub fn set_sws_colorspace(
 pub fn tag_bt709_limited(enc: &mut encoder::video::Video, transfer: VideoTransfer) {
     unsafe {
         let p = enc.as_mut_ptr();
+        (*p).color_primaries = ff::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+        (*p).color_trc = transfer_characteristic(transfer);
+        (*p).colorspace = ff::ffi::AVColorSpace::AVCOL_SPC_BT709;
+        (*p).color_range = ff::ffi::AVColorRange::AVCOL_RANGE_MPEG;
+    }
+}
+
+/// Encoders such as ProRes write frame-header color tags from AVFrame, not AVCodecContext.
+pub fn tag_bt709_frame(frame: &mut frame::Video, transfer: VideoTransfer) {
+    unsafe {
+        let p = frame.as_mut_ptr();
         (*p).color_primaries = ff::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
         (*p).color_trc = transfer_characteristic(transfer);
         (*p).colorspace = ff::ffi::AVColorSpace::AVCOL_SPC_BT709;

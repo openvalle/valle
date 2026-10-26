@@ -31,6 +31,8 @@ pub(crate) struct AvProbeDetails {
 /// Display metadata describes the normalized RGBA frames returned by LibavVideoSource.
 pub struct VideoPresentationProbe {
     pub display: SourceMeta,
+    /// Whether decoded pixels carry a straight coverage alpha channel.
+    pub has_alpha: bool,
     pub stream: u32,
     pub time_base: (i32, i32),
     pub duration_ticks: i64,

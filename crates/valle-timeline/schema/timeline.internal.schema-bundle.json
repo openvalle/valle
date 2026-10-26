@@ -526,6 +526,9 @@
             "duration": {
               "$ref": "#/$defs/RationalTime"
             },
+            "hasAlpha": {
+              "type": "boolean"
+            },
             "height": {
               "format": "uint32",
               "minimum": 0,
@@ -557,6 +560,7 @@
             "presentationIndexDigest",
             "width",
             "height",
+            "hasAlpha",
             "orientation",
             "color",
             "videoStream",

@@ -28,7 +28,7 @@ fn valid_manifest() -> Value {
                     "height": 2160,
                     "orientation": "identity",
                     "color": color(),
-                    "videoStream": 0,
+                    "videoStream": 0, "hasAlpha": false,
                     "audioStream": null
                 }
             },

@@ -12,7 +12,7 @@ use ff::{ChannelLayout, Dictionary, Rational, codec, encoder, format, frame, sof
 use super::encode::{DEFAULT_X264_CRF, DEFAULT_X264_PRESET, software_h264_encoder};
 use super::ffi::{
     YuvMatrix, drain_audio_encoder, drain_video_encoder, ffmpeg_init, fill_plane0,
-    set_sws_colorspace, tag_bt709_limited, transfer_characteristic, write_mp4_header,
+    set_sws_colorspace, tag_bt709_frame, tag_bt709_limited, write_mp4_header, yuv_scaling_flags,
 };
 use super::shared_frame::{SharedVideoFrame, SharedVideoFramePool, VideoFrameTransport};
 use crate::codec::muxer::{Mp4VideoCodec, VideoTransfer};
@@ -570,7 +570,7 @@ impl Muxer {
             format::Pixel::YUV420P,
             width,
             height,
-            software::scaling::Flags::BILINEAR,
+            yuv_scaling_flags(),
         )?;
         // Match RGB-to-YUV conversion to the BT.709 limited-range output tags.
         set_sws_colorspace(&mut sws, YuvMatrix::Bt709, false, false);
@@ -835,14 +835,7 @@ impl Muxer {
                 self.height
             ));
         }
-        let mut inner = frame.into_inner();
-        unsafe {
-            let raw = inner.as_mut_ptr();
-            (*raw).color_primaries = ff::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
-            (*raw).color_trc = transfer_characteristic(self.transfer);
-            (*raw).colorspace = ff::ffi::AVColorSpace::AVCOL_SPC_BT709;
-            (*raw).color_range = ff::ffi::AVColorRange::AVCOL_RANGE_MPEG;
-        }
+        let inner = frame.into_inner();
         self.submit_yuv(inner)?;
         Ok(())
     }
@@ -864,6 +857,7 @@ impl Muxer {
         pts: i64,
         duration_ticks: Option<i64>,
     ) -> Result<frame::Video> {
+        tag_bt709_frame(&mut yuv, self.transfer);
         if let Some(previous) = self.last_video_pts {
             if pts <= previous {
                 return Err(anyhow!(
@@ -1143,7 +1137,7 @@ impl RgbaToYuv {
             format::Pixel::YUV420P,
             width,
             height,
-            software::scaling::Flags::BILINEAR,
+            yuv_scaling_flags(),
         )?;
         // Match the muxer's BT.709 limited-range conversion.
         set_sws_colorspace(&mut sws, YuvMatrix::Bt709, false, false);

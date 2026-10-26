@@ -1506,7 +1506,11 @@ fn semantic_asset(
                 descriptor.width,
                 descriptor.height,
                 descriptor.duration,
-                visual_interpretation(&descriptor.color, descriptor.orientation, true),
+                visual_interpretation(
+                    &descriptor.color,
+                    descriptor.orientation,
+                    !descriptor.has_alpha,
+                ),
             ),
         ),
         VerifiedResourceFacts::Image { descriptor, .. } => (

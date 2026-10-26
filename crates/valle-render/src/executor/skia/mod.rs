@@ -11,6 +11,8 @@ mod cache;
 mod chromatic;
 mod clip_coverage;
 mod color_matrix;
+#[cfg(all(target_os = "macos", feature = "native"))]
+mod decoded_yuv;
 mod draw;
 mod effect;
 mod film_gpu;

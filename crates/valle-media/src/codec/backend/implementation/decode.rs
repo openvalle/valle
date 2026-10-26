@@ -946,8 +946,17 @@ pub fn probe_video_presentation(path: &Path) -> Result<VideoPresentationProbe> {
         anyhow::bail!("video has no positive exact clock");
     }
     let source = LibavVideoSource::open(path)?;
+    let has_alpha = source
+        .decoder
+        .format()
+        .descriptor()
+        .is_some_and(|descriptor| {
+            // SAFETY: the descriptor is a static FFmpeg pixel-format description.
+            unsafe { (*descriptor.as_ptr()).flags & ff::ffi::AV_PIX_FMT_FLAG_ALPHA as u64 != 0 }
+        });
     Ok(VideoPresentationProbe {
         display: source.meta().clone(),
+        has_alpha,
         stream: index as u32,
         time_base: (tb.numerator(), tb.denominator()),
         duration_ticks,

@@ -22,6 +22,64 @@ function playerFixture(): any {
   return player;
 }
 
+test("unusable F16 GPU targets fall back once and release probe resources", () => {
+  const document = globalThis.document;
+  globalThis.document = { createElement: () => ({ getContext: () => null }) } as any;
+  try {
+    for (const failure of ["allocation", "draw", "precision", "success"]) {
+      const player = playerFixture();
+      let probes = 0,
+        imagesDeleted = 0,
+        surfacesDeleted = 0,
+        contextsDeleted = 0;
+      const gpu = { delete: () => contextsDeleted++ };
+      const cpu = { delete() {} };
+      const output = { delete() {} };
+      const probe = {
+        getCanvas: () => ({
+          clear() {
+            if (failure === "draw") throw new Error("no F16 rendering");
+          },
+        }),
+        flush() {},
+        makeImageSnapshot: () => ({
+          getImageInfo: () => ({ colorType: "f16" }),
+          readPixels: () => new Float32Array([0.125, 0.25, failure === "precision" ? 1 : 2, 0.5]),
+          delete: () => imagesDeleted++,
+        }),
+        delete: () => surfacesDeleted++,
+      };
+      Object.assign(player, {
+        gpu: true,
+        CanvasKit: {
+          ColorType: { RGBA_F16: "f16", RGBA_F32: "f32" },
+          AlphaType: { Premul: "premul" },
+          ColorSpace: { SRGB: "srgb" },
+          GetWebGLContext: () => 1,
+          MakeWebGLContext: () => gpu,
+          MakeRenderTarget: () => {
+            probes++;
+            return failure === "allocation" ? null : probe;
+          },
+          MakeOnScreenGLSurface: () => output,
+          MakeSurface: () => cpu,
+        },
+      });
+      const first = player.acquireTarget(64, 32, false);
+      expect(first.gpu).toBe(failure === "success");
+      expect(first.surface).toBe(failure === "success" ? output : cpu);
+      expect(first.context).toBe(failure === "success" ? gpu : null);
+      expect(player.acquireTarget(64, 32, false)).toBe(first);
+      expect(probes).toBe(1);
+      expect(contextsDeleted).toBe(failure === "success" ? 0 : 1);
+      expect(surfacesDeleted).toBe(failure === "allocation" ? 0 : 1);
+      expect(imagesDeleted).toBe(failure === "precision" || failure === "success" ? 1 : 0);
+    }
+  } finally {
+    globalThis.document = document;
+  }
+});
+
 test("waveform peaks stream bounded PCM and preserve bucket boundaries, including empty buckets", async () => {
   const previous = globalThis.OfflineAudioContext;
   const rate = 8000,

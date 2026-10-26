@@ -214,7 +214,7 @@ fn simultaneous_samples_of_one_video_bind_distinct_handles_with_cached_templates
                 "duration":"2/1","timeBase":"1/30","presentationIndexDigest":IMAGE_DIGEST,
                 "width":2,"height":1,"orientation":"identity",
                 "color":{"primaries":"bt709","transfer":"bt709","matrix":"bt709","fullRange":false},
-                "videoStream":0,"audioStream":null
+                "videoStream":0, "hasAlpha": false,"audioStream":null
             }
         }}})).unwrap()).unwrap();
         let ResourceEntryWire::Video { digest, descriptor } = &manifest.entries()["asset:hero"]

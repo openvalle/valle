@@ -1823,7 +1823,7 @@ mod tests {
                         "height": 180,
                         "orientation": "identity",
                         "color": {"primaries": "bt709", "transfer": "bt709", "matrix": "bt709", "fullRange": false},
-                        "videoStream": 0,
+                        "videoStream": 0, "hasAlpha": false,
                         "audioStream": null
                     }
                 },
