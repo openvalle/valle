@@ -182,6 +182,9 @@ export default function Main(){const time=useCurrentTime();return <Scene>
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-extensions",
+        ...(process.argv.includes("--swiftshader")
+          ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
+          : []),
         `--user-data-dir=${join(directory, "chrome")}`,
         pageUrl,
       ],

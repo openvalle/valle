@@ -20,6 +20,8 @@ const RASTER: &str =
     include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/raster.wgsl");
 const TRANSPARENCY: &str =
     include_str!("../../web/packages/engine/src/executor/webgl/scene3d/transparency.wgsl");
+const PRECISION: &str =
+    include_str!("../../web/packages/engine/src/executor/webgl/scene3d/precision.wgsl");
 
 fn array_reads(source: &str, array: &str, function: &str) -> Result<String> {
     let marker = format!("{array}[");
@@ -53,7 +55,18 @@ fn array_reads(source: &str, array: &str, function: &str) -> Result<String> {
 }
 
 fn source() -> Result<String> {
-    let source = format!("{METAL}\n{ASSETS}\n{LIGHTING}\n{SHADOWS}\n{RASTER}\n{TRANSPARENCY}");
+    anyhow::ensure!(
+        LIGHTING.contains(
+            "let residual=stable(fma(-q,b,a));\n    return stable(fma(residual,stable(1.0/b),q));"
+        ),
+        "shared Scene3D division changed; update the ES 3.00 residual correction"
+    );
+    let lighting = LIGHTING.replace(
+        "let residual=stable(fma(-q,b,a));\n    return stable(fma(residual,stable(1.0/b),q));",
+        "return web_divide(a,b,q);",
+    );
+    let source =
+        format!("{METAL}\n{ASSETS}\n{lighting}\n{SHADOWS}\n{RASTER}\n{TRANSPARENCY}\n{PRECISION}");
     let source = source.replace(
         "var<storage, read> shading: array<vec4<f32>>;",
         "var shadingData: texture_2d<f32>;\nfn shading_at(index:u32)->vec4<f32>{let width=textureDimensions(shadingData).x;return textureLoad(shadingData,vec2<i32>(i32(index%width),i32(index/width)),0);}",
