@@ -70,16 +70,23 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
 </Scene3D></Scene>;}`;
 }
 
-async function deadline<T>(work: Promise<T>): Promise<T> {
+async function deadline<T>(work: Promise<T>, lastActivity?: () => number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const started = Date.now();
   try {
     return await Promise.race([
       work,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("Scene3D browser acceptance timed out")),
-          120_000,
-        );
+        const check = () => {
+          const now = Date.now();
+          const remaining = Math.min(
+            120_000 - (now - (lastActivity?.() ?? started)),
+            300_000 - (now - started),
+          );
+          if (remaining <= 0) reject(new Error("Scene3D browser acceptance timed out"));
+          else timer = setTimeout(check, remaining);
+        };
+        timer = setTimeout(check, 120_000);
       }),
     ]);
   } finally {
@@ -148,6 +155,7 @@ export default function Main(){const time=useCurrentTime();return <Scene>
     });
     const stages: unknown[] = [];
     const started = Date.now();
+    let lastActivity = started;
     const preview = join(root, "web/test-dist/preview");
     host = Bun.serve({
       hostname: "127.0.0.1",
@@ -159,6 +167,7 @@ export default function Main(){const time=useCurrentTime();return <Scene>
           return new Response("ok");
         }
         if (url.pathname === "/progress") {
+          lastActivity = Date.now();
           const stage = { elapsedMs: Date.now() - started, ...(await request.json()) };
           stages.push(stage);
           await Bun.write(join(directory, "progress.json"), JSON.stringify(stages, null, 2));
@@ -207,7 +216,9 @@ export default function Main(){const time=useCurrentTime();return <Scene>
       stderrPath,
       isCompleted: () => completed,
     });
-    const report = await deadline(Promise.race([result, exit]));
+    // Software GPU drivers compile and encode on the CI CPU. Bound both stalls
+    // and total time without charging all advancing stages one two-minute budget.
+    const report = await deadline(Promise.race([result, exit]), () => lastActivity);
     completed = true;
     await Bun.write(join(directory, "report.json"), JSON.stringify(report, null, 2));
     if (report.status !== "ok") throw new Error(JSON.stringify(report));
