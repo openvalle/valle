@@ -13,14 +13,22 @@ export async function thirdPartyNotices(repo: string): Promise<string> {
       notices.push(`${path.relative(repo, file)}\n\n${await Bun.file(file).text()}`);
     }
   }
-  const mediaRoot = path.dirname(
-    path.dirname(Bun.resolveSync("mediabunny", path.join(repo, "web/packages/engine"))),
-  );
-  // Mediabunny's entry lives under dist/modules/src; retain its license in bundled runtimes too.
-  const mediaLicense = path.resolve(mediaRoot, "../../LICENSE");
-  notices.push(
-    `mediabunny (MPL-2.0) — https://github.com/Vanilagy/mediabunny\n\n${await Bun.file(mediaLicense).text()}`,
-  );
+  const engine = path.join(repo, "web/packages/engine");
+  const prores = path.dirname(Bun.resolveSync("@mediabunny/prores/package.json", engine));
+  for (const [name, from, url] of [
+    ["mediabunny", engine, "https://github.com/Vanilagy/mediabunny"],
+    [
+      "@mediabunny/prores",
+      engine,
+      "https://github.com/Vanilagy/mediabunny/tree/main/packages/prores",
+    ],
+    ["turbores", prores, "https://github.com/Vanilagy/turbores"],
+  ]) {
+    const directory = path.dirname(Bun.resolveSync(`${name}/package.json`, from));
+    notices.push(
+      `${name} (MPL-2.0) — ${url}\n\n${await Bun.file(path.join(directory, "LICENSE")).text()}`,
+    );
+  }
   return notices.join("\n\n");
 }
 

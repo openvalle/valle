@@ -14,6 +14,7 @@
     "./executor/canvaskit": "./src/executor/canvaskit/index.ts"
   },
   "dependencies": {
+    "@mediabunny/prores": "1.61.3",
     "canvaskit-wasm": "catalog:",
     "mediabunny": "1.61.3"
   },

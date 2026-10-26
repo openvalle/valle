@@ -105,7 +105,6 @@ test("switching video sources retires idle decoders before decoding and preserve
         ["pinned", 1],
         ["next", 1],
       ]),
-      videoBlobs: { get: async () => new Blob([new Uint8Array(1)]) },
       assetUrl: () => "https://example.invalid/video",
     });
     if (allBusy) player.videoRingUsers.set("previous", 1);

@@ -15,6 +15,7 @@ const PATH_CANDIDATES = [
 
 interface BrowserDecodeOptions {
   timeoutMs?: number;
+  sourceType?: "buffer" | "url";
 }
 
 interface BrowserWireFrame {
@@ -273,12 +274,26 @@ export async function decodeVideoFramesInBrowser(
           return new Response(asset, { headers: { "content-type": "text/javascript" } });
         }
       }
-      if (url.pathname === "/video.mp4")
+      if (url.pathname === "/video.mp4") {
+        const range = request.headers.get("range")?.match(/^bytes=(\d+)-(\d*)$/u);
+        if (range) {
+          const start = Number(range[1]);
+          const end = Math.min(Number(range[2] || video.length - 1), video.length - 1);
+          return new Response(video.slice(start, end + 1), {
+            status: 206,
+            headers: {
+              "content-type": "video/mp4",
+              "accept-ranges": "bytes",
+              "content-range": `bytes ${start}-${end}/${video.length}`,
+            },
+          });
+        }
         return new Response(video, { headers: { "content-type": "video/mp4" } });
+      }
       return new Response("not found", { status: 404 });
     },
   });
-  const pageUrl = `http://127.0.0.1:${server.port}/decode.html?src=/video.mp4&times=${timesS.join(",")}`;
+  const pageUrl = `http://127.0.0.1:${server.port}/decode.html?src=/video.mp4&times=${timesS.join(",")}&source=${options.sourceType ?? "buffer"}`;
   const profileDir = createTempDirectory("valle-webcodecs");
   const stderrPath = `${profileDir}/chrome.stderr.log`;
   const child = Bun.spawn({

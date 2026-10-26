@@ -1,7 +1,26 @@
-import { EncodedPacketSink, VideoSampleSink, type VideoSample } from "mediabunny";
+import {
+  EncodedPacketSink,
+  VideoSampleSink,
+  type InputVideoTrack,
+  type VideoSample,
+} from "mediabunny";
 import { createMediaInput, type BrowserMediaInput } from "./input.ts";
 
 const FRAME_TIME_EPS_S = 1e-6; // Match the native frame-at-source-time boundary.
+let proresDecoder: Promise<void> | undefined;
+
+async function prepareDecoder(track: InputVideoTrack): Promise<void> {
+  if (track.codec === "prores") {
+    await (proresDecoder ??= import("@mediabunny/prores").then(({ registerProresDecoder }) => {
+      registerProresDecoder();
+    }));
+  }
+  if (!(await track.canDecode())) {
+    throw new Error(
+      `This browser cannot decode video codec '${track.codec ?? track.internalCodecId}'.`,
+    );
+  }
+}
 
 export interface DecoderRing {
   frameAt(timeS: number): Promise<VideoFrame>;
@@ -38,6 +57,7 @@ export function createDecoderRing({
   const initialize = async () => {
     const track = await input.getPrimaryVideoTrack();
     if (!track) throw new Error("no video track");
+    await prepareDecoder(track);
     baseTime = await track.getFirstTimestamp();
     checkOpen();
     sink = new VideoSampleSink(track);
@@ -122,6 +142,7 @@ export async function keyframeThumbnails({
   try {
     const track = await input.getPrimaryVideoTrack();
     if (!track) throw new Error("no video track");
+    await prepareDecoder(track);
     const origin = await track.getFirstTimestamp();
     const packets = new EncodedPacketSink(track);
     const times: number[] = [];

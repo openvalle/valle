@@ -58,8 +58,9 @@
       throw new Error("WebCodecs VideoDecoder unavailable");
     }
 
-    const buffer = await (await fetch(src)).arrayBuffer();
-    const ring = createDecoderRing({ buffer });
+    const ring = createDecoderRing(params.get("source") === "url"
+      ? { url: new URL(src, location.href).href }
+      : { buffer: await (await fetch(src)).arrayBuffer() });
     const frames = [];
     try {
       for (const timeS of times) {

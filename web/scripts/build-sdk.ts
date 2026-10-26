@@ -29,7 +29,7 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
     target: "browser",
     format: "esm",
     splitting: true,
-    external: ["lit", "mediabunny"],
+    external: ["lit", "mediabunny", "@mediabunny/prores"],
     naming: { entry: "[dir]/[name].mjs", chunk: "chunks/[name]-[hash].mjs" },
   });
   assertBuild(output, "SDK");

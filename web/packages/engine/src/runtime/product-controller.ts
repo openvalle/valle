@@ -6,7 +6,6 @@ import {
 import { PreviewBuffer } from "./compositor/preview-buffer.ts";
 import { waitForGpuCompletion } from "../executor/webgl/gpu-completion.ts";
 import type { RenderTrace } from "./render-trace.ts";
-import { MediaBlobCache } from "../media/media-blob-cache.ts";
 import { createMotionFontLoader, type MotionFontSource } from "../fonts.ts";
 import canvasKitPackage from "canvaskit-wasm/package.json";
 import {
@@ -618,7 +617,6 @@ export class BrowserValleWebPlayer {
   private readonly assetsById = new Map<string, AdmittedBrowserAsset>();
   private readonly assetByDigest = new Map<string, AdmittedBrowserAsset>();
   private readonly assetBytes = new Map<string, Promise<Uint8Array>>();
-  private readonly videoBlobs = new MediaBlobCache();
   private readonly scene3dResourceTasks = new Map<string, Promise<void>>();
   private readonly videoRings = new Map<string, DecoderRing>();
   private readonly videoRingUsers = new Map<string, number>();
@@ -1636,12 +1634,8 @@ export class BrowserValleWebPlayer {
     { height = 26, maxCount = 60 }: { height?: number; maxCount?: number } = {},
   ) {
     const asset = this.requireAsset(assetId, "video");
-    const blob = await this.videoBlobs.get(
-      this.assetUrl(asset),
-      contentDigestHex(asset.contentDigest, "video digest"),
-    );
     this.stats.videoThumbExtracts += 1;
-    return keyframeThumbnails({ blob, height, maxCount });
+    return keyframeThumbnails({ url: this.assetUrl(asset), height, maxCount });
   }
 
   async audioPeaks(assetId: string, { buckets = 2000 }: { buckets?: number } = {}) {
@@ -1766,7 +1760,6 @@ export class BrowserValleWebPlayer {
     this.scene3dResourceTasks.clear();
     this.videoRings.clear();
     this.assetBytes.clear();
-    this.videoBlobs.clear();
     this.audioBuffers.clear();
     for (const reader of this.audioReaders.values()) reader.close();
     this.audioReaders.clear();
@@ -1959,7 +1952,6 @@ export class BrowserValleWebPlayer {
     this.scene3dResourceTasks.clear();
     this.videoRings.clear();
     this.assetBytes.clear();
-    this.videoBlobs.clear();
     this.audioBuffers.clear();
     for (const reader of this.audioReaders.values()) reader.close();
     this.audioReaders.clear();
@@ -2411,7 +2403,7 @@ export class BrowserValleWebPlayer {
         width: frame.displayWidth,
         height: frame.displayHeight,
         colorType: this.CanvasKit.ColorType.RGBA_8888,
-        alphaType: this.CanvasKit.AlphaType.Opaque,
+        alphaType: this.CanvasKit.AlphaType.Unpremul,
       });
       if (image)
         return {
@@ -2443,19 +2435,12 @@ export class BrowserValleWebPlayer {
     }
   }
 
-  private async videoRing(asset: AdmittedBrowserAsset): Promise<DecoderRing> {
+  private videoRing(asset: AdmittedBrowserAsset): DecoderRing {
     let ring = this.videoRings.get(asset.id);
     if (!ring) {
-      const blob = await this.videoBlobs.get(
-        this.assetUrl(asset),
-        contentDigestHex(asset.contentDigest, "video digest"),
-      );
       if (this.closed) throw new Error("player closed during video load");
-      ring = this.videoRings.get(asset.id);
-      if (!ring) {
-        ring = createDecoderRing({ blob });
-        this.videoRings.set(asset.id, ring);
-      }
+      ring = createDecoderRing({ url: this.assetUrl(asset) });
+      this.videoRings.set(asset.id, ring);
     }
     this.videoRings.delete(asset.id);
     this.videoRings.set(asset.id, ring);
