@@ -438,11 +438,18 @@ export function assertProductFrameWorkerRequest(
       bootstrap,
       [
         ...fields,
+        ...(Object.hasOwn(bootstrap, "deliveryOutput") ? ["deliveryOutput"] : []),
         ...(Object.hasOwn(bootstrap, "gpuScene3d") ? ["gpuScene3d"] : []),
         ...(Object.hasOwn(bootstrap, "resourceBytes") ? ["resourceBytes"] : []),
       ],
       "Product frame worker bootstrap",
     );
+    if (
+      Object.hasOwn(bootstrap, "deliveryOutput") &&
+      typeof bootstrap.deliveryOutput !== "boolean"
+    ) {
+      throw new TypeError("Product frame worker deliveryOutput must be a boolean");
+    }
     if (Object.hasOwn(bootstrap, "gpuScene3d") && typeof bootstrap.gpuScene3d !== "boolean") {
       throw new TypeError("Product frame worker gpuScene3d must be a boolean");
     }

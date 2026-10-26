@@ -220,6 +220,7 @@ test("bootstrap is versioned only by the enclosing worker protocol", () => {
 test("bootstrap opens fixed-package metadata and binary resources together", () => {
   const calls: unknown[][] = [];
   const engine = {
+    set_delivery_output: (enabled: boolean) => calls.push(["delivery", enabled]),
     open_fixed_package: (...members: unknown[]) => {
       calls.push(members);
       return JSON.stringify({
@@ -243,9 +244,25 @@ test("bootstrap opens fixed-package metadata and binary resources together", () 
   );
   bootstrap.expectedRenderId = RENDER_ID;
   bootstrap.resourceBytes = new Uint8Array([8, 9]);
+  bootstrap.deliveryOutput = true;
+
+  const configure = {
+    protocolVersion: PRODUCT_FRAME_WORKER_PROTOCOL_VERSION,
+    type: "configure",
+    id: "configure-delivery",
+    bootstrap,
+  };
+  expect(() => assertProductFrameWorkerRequest(configure)).not.toThrow();
+  expect(() =>
+    assertProductFrameWorkerRequest({
+      ...configure,
+      bootstrap: { ...bootstrap, deliveryOutput: "true" },
+    }),
+  ).toThrow("deliveryOutput must be a boolean");
 
   expect(applyProductEngineBootstrap(engine, bootstrap)).toBe(RENDER_ID);
   expect(calls).toEqual([
+    ["delivery", true],
     ["fixed-package", "timeline", "resource-manifest", "binding-bundle", bootstrap.resourceBytes],
   ]);
   expect(() =>
