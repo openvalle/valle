@@ -22,6 +22,16 @@ describe("root runtime manifest closure", () => {
     await expect(assertRuntimeManifest(dist, manifest)).resolves.toBeUndefined();
   });
 
+  test("includes the Studio favicon in the frozen host serving closure", async () => {
+    const htmlPath = manifest.apps.find((app) => app.id === "studio")!.html;
+    const html = await Bun.file(path.join(dist, htmlPath)).text();
+    const href = html.match(/<link\b[^>]*\brel="icon"[^>]*\bhref="([^"]+)"/)?.[1];
+    expect(href).toBeDefined();
+    const icon = path.posix.normalize(path.posix.join(path.posix.dirname(htmlPath), href!));
+    expect(manifest.assets.find((asset) => asset.path === icon)?.owner).toBe("app-studio");
+    expect(manifest.routes[path.posix.basename(icon)]).toBe(icon);
+  });
+
   test("includes emitted Scene3D lookup textures in the frozen host serving closure", async () => {
     const files = await Array.fromAsync(new Bun.Glob("**/dfg-*.rg16f").scan({ cwd: dist }));
     expect(files.length).toBeGreaterThan(0);

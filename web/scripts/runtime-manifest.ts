@@ -65,6 +65,10 @@ export async function emitRuntimeManifests(
         files.push(script);
         claimedAppScripts.add(script);
       }
+      for (const match of source.matchAll(/<link\b[^>]*\brel="icon"[^>]*\bhref="([^"]+)"/g)) {
+        const icon = path.posix.normalize(path.posix.join(path.posix.dirname(html), match[1]));
+        if (!files.includes(icon)) files.push(icon);
+      }
     }
     apps.push(
       await manifestOf(
