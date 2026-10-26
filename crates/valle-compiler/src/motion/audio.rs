@@ -179,6 +179,20 @@ pub(super) fn analyze(pcm: &AudioPcm, bands: u8, rate: u32) -> Result<AudioTable
         return Err("audioAnalysis sample rate must exceed 40 Hz".into());
     }
     let log_range = libm::log(nyquist / 20.0);
+    // Frequency and band membership depend only on this analysis configuration, not its frame.
+    // Keep ascending bins so accumulation and the quantized signal remain byte-identical.
+    let bins: Vec<_> = (1..FFT_SIZE / 2)
+        .filter_map(|bin| {
+            let frequency = bin as f64 * pcm.sample_rate as f64 / FFT_SIZE as f64;
+            if frequency < 20.0 || frequency > nyquist {
+                return None;
+            }
+            let relative = libm::log(frequency / 20.0) / log_range;
+            let band = ((relative * f64::from(bands)).floor() as usize).min(bands as usize - 1);
+            Some((bin, band))
+        })
+        .collect();
+    let mut band_energy = vec![0.0; bands as usize];
     for frame in 0..frames {
         let from = (frame as u128 * u128::from(pcm.sample_rate) / u128::from(rate)) as usize;
         let until = (((frame + 1) as u128 * u128::from(pcm.sample_rate) / u128::from(rate))
@@ -206,20 +220,14 @@ pub(super) fn analyze(pcm: &AudioPcm, bands: u8, rate: u32) -> Result<AudioTable
             *slot = Complex::new(f64::from(sample) * window[index], 0.0);
         }
         fft.process(&mut spectrum);
-        let mut band_energy = vec![0.0; bands as usize];
-        for bin in 1..FFT_SIZE / 2 {
-            let frequency = bin as f64 * pcm.sample_rate as f64 / FFT_SIZE as f64;
-            if frequency < 20.0 || frequency > nyquist {
-                continue;
-            }
-            let relative = libm::log(frequency / 20.0) / log_range;
-            let band = ((relative * f64::from(bands)).floor() as usize).min(bands as usize - 1);
+        band_energy.fill(0.0);
+        for &(bin, band) in &bins {
             let magnitude = spectrum[bin].norm();
             band_energy[band] += magnitude * magnitude;
             flux[frame] += (magnitude - previous[bin]).max(0.0);
             previous[bin] = magnitude;
         }
-        for (band, energy) in band_energy.into_iter().enumerate() {
+        for (band, &energy) in band_energy.iter().enumerate() {
             band_series[band][frame] = quantize(libm::sqrt(energy) * 4.0 / FFT_SIZE as f64);
         }
     }

@@ -6,19 +6,26 @@ use valle_timeline::internal::{
 };
 
 fn render() -> EngineRender {
-    let artifact = Arc::new(
-        valle_compiler::motion::compile_motion(
-            r##"
+    render_with_extra_nodes(crate::prepare::motion_kernel::MIN_KERNEL_NODES)
+}
+
+fn render_with_extra_nodes(extra: usize) -> EngineRender {
+    let nodes = (0..extra)
+        .map(|index| format!(r##"<View key="extra-{index}" style={{{{width:1,height:1,backgroundColor:"#456789"}}}} />"##))
+        .collect::<String>();
+    let source = r##"
 export const composition = { width: 320, height: 180, duration: 1 };
 export default function Card() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
   return <Scene style={{ width: 320, height: 180, backgroundColor: "#123456" }}>
     <View style={{ width: 30, height: 40, left: frame, backgroundColor: "#ff0033" }} />
+    EXTRA_NODES
   </Scene>;
 }
-"##,
-        )
-        .unwrap()
-        .artifact,
+"##.replace("EXTRA_NODES", &nodes);
+    let artifact = Arc::new(
+        valle_compiler::motion::compile_motion(&source)
+            .unwrap()
+            .artifact,
     );
     let digest = ContentDigest::of_bytes(&valle_motion::canonical_bytes(&artifact).unwrap());
     let manifest = decode_resource_manifest(
@@ -88,6 +95,36 @@ export default function Card() { const time = useCurrentTime(); const frame = Ma
     )
     .unwrap();
     EngineRender::open(&timeline, &manifest, &bindings, &capabilities, &profile).unwrap()
+}
+
+#[test]
+fn small_motion_sources_skip_kernel_definitions_and_keep_preparation_exact() {
+    let render = render_with_extra_nodes(0);
+    let mut compiler = render.frame_compiler();
+    let id = render.render_id();
+    let spec = RenderSpec::new(
+        320,
+        180,
+        RenderQuality::Preview,
+        OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+    )
+    .unwrap();
+    for frame in [0, 29, 35, 2] {
+        assert!(
+            compiler
+                .capture_motion_jobs(id, FrameKey::new(frame), spec)
+                .unwrap()
+                .is_empty()
+        );
+        let expected = render
+            .frame_compiler()
+            .evaluate_prepare(id, FrameKey::new(frame), spec)
+            .unwrap();
+        let actual = compiler
+            .evaluate_prepare(id, FrameKey::new(frame), spec)
+            .unwrap();
+        assert_eq!(actual.prepared(), expected.prepared());
+    }
 }
 
 fn packet(

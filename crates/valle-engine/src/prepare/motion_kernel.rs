@@ -17,6 +17,7 @@ use valle_draw::{
 
 type Fonts = Vec<(ContentDigest, Arc<[u8]>, bool)>;
 const MAX_DEFINITION_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MIN_KERNEL_NODES: usize = 128;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -124,7 +125,9 @@ impl MotionPreparation {
         fonts: &Fonts,
         context: CompiledMotionProgramContext<'_>,
     ) -> Result<BuiltMotionProgram, ProgramPrepareError> {
-        if self.oversized_sources.contains(&source) {
+        if self.oversized_sources.contains(&source)
+            || context.prepared.artifact().nodes.len() < MIN_KERNEL_NODES
+        {
             return motion::build_compiled_motion_program(context);
         }
         let definition_id = if matches!(self.stage, Some(Stage::Capture(_))) {

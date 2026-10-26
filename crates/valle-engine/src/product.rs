@@ -118,7 +118,9 @@ impl FrameCompiler {
             .filter_map(|index| render.sources().source(index as u32))
             .filter_map(|source| source.motion())
             .filter_map(|instance| render.motion_scene(instance))
-            .any(|scene| scene.artifact().nodes.len() >= 128)
+            .any(|scene| {
+                scene.artifact().nodes.len() >= crate::prepare::motion_kernel::MIN_KERNEL_NODES
+            })
     }
 
     pub(crate) fn motion_definition(&self, id: &str) -> Option<&str> {
