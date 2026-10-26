@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import { createTimelineCompilerRuntime } from "valle-engine";
 import { compileStudioPreview } from "./studio-compile-worker.ts";
 
 const runtimeBaseUrl = new URL("../../../", import.meta.url).href;
@@ -155,6 +156,11 @@ test("covered project fonts avoid downloading defaults; missing glyphs keep fall
   const covered = await compileStudioPreview({ ...request, id: 104, instances: [instance] });
   expect(covered.status === "ok" ? "ok" : covered.message).toBe("ok");
   if (covered.status !== "ok") return;
+  const compiler = await createTimelineCompilerRuntime({ runtimeAssets, runtimeBaseUrl });
+  expect(covered.instances[0]!.artifactDigest).toBe(
+    compiler.compileMotionModules(instance.entry, instance.modules, instance.options)
+      .artifactDigest,
+  );
   expect(
     Object.keys(JSON.parse(covered.package.resourceManifestJson).entries).filter((id) =>
       id.startsWith("font:"),

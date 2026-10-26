@@ -336,6 +336,7 @@ export async function compileStudioPreview(
       request.instances.map((instance) => motionCompileOptionIdentity(instance.options, digest)),
     );
     let compilations = 0;
+    let preliminaryCompileMs = 0;
     const currentCompilations = new Map<
       string,
       ReturnType<WebCompilerRuntime["compileMotionModules"]>
@@ -347,7 +348,9 @@ export async function compileStudioPreview(
         // Compile-time measurement needs the whole font pack before compiling. This is a superset of
         // the compiler's `mentions_measure` identifier check, so no fontless compile can need fonts.
         if (
-          Object.values(instance.modules).some((source) => /measureText|textOutline/u.test(source))
+          Object.values(instance.modules).some(
+            (source) => source.includes("\\") || /measureText|textOutline/u.test(source),
+          )
         ) {
           return instanceFonts(instance);
         }
@@ -361,10 +364,14 @@ export async function compileStudioPreview(
         let compiled = currentCompilations.get(key) ?? compiledInstances.get(key);
         if (!compiled) {
           compilations += 1;
+          const compileStarted = performance.now();
           compiled = compiler.compileMotionModules(instance.entry, instance.modules, {
             ...instance.options,
             fonts: [],
+            // Bound faces are only a compile-time input when helpers measure or outline text.
+            fontAliases: undefined,
           });
+          preliminaryCompileMs += performance.now() - compileStarted;
           currentCompilations.set(key, compiled);
           compiledInstances.set(key, compiled);
           if (compiledInstances.size > 32)
@@ -384,7 +391,7 @@ export async function compileStudioPreview(
         });
       }),
     );
-    const fontsMs = performance.now() - started - runtimeMs;
+    const fontsMs = performance.now() - started - runtimeMs - preliminaryCompileMs;
     const cacheKey = JSON.stringify([
       request.authorTimeline,
       request.standalone,
@@ -401,7 +408,14 @@ export async function compileStudioPreview(
       return {
         ...cachedResult,
         id: request.id,
-        timings: { runtimeMs, fontsMs, compileMs: 0, prepareMs: 0, compilations, cacheHit: true },
+        timings: {
+          runtimeMs,
+          fontsMs,
+          compileMs: preliminaryCompileMs,
+          prepareMs: 0,
+          compilations,
+          cacheHit: true,
+        },
       };
     }
     const compileStarted = performance.now();
@@ -494,7 +508,7 @@ export async function compileStudioPreview(
         });
       }
     }
-    const compileMs = performance.now() - compileStarted;
+    const compileMs = performance.now() - compileStarted + preliminaryCompileMs;
     const prepareStarted = performance.now();
     const prepared = compiler.preparePreviewPackage({
       authorTimeline,

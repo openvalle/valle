@@ -472,7 +472,19 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<StudioHost>) -> Result<(
 
     if path == "/timeline/get" {
         return match &state.timeline_file {
-            Some(file) => serve_file_json(&mut out, file.snapshot()),
+            Some(file) => {
+                let author_only = raw_path.split_once('?').is_some_and(|(_, query)| {
+                    query.split('&').any(|field| field == "projection=author")
+                });
+                serve_file_json(
+                    &mut out,
+                    if author_only {
+                        file.author_snapshot()
+                    } else {
+                        file.snapshot()
+                    },
+                )
+            }
             None => write_simple(&mut out, 404, "Not Found", &[], b""),
         };
     }

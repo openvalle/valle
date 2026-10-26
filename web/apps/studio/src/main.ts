@@ -39,7 +39,10 @@ async function startDocument(shell: ValleStudioApp): Promise<void> {
   const host = await loadStudioHost(location.search);
   globalThis.valleStudioHost = host;
   await shell.initialize(host);
-  const sourceEditor = await StudioSourceEditor.mount(host);
+  const [sourceEditor, initialTimeline] = await Promise.all([
+    StudioSourceEditor.mount(host),
+    host.boot.session.kind === "timeline-file" ? host.loadTimelineSnapshot!() : null,
+  ]);
   let timelineSessionStarted = false;
   const syncSourceDirty = () =>
     shell.dispatchIntent({ type: "source-dirty", value: sourceEditor.dirty });
@@ -192,19 +195,15 @@ async function startDocument(shell: ValleStudioApp): Promise<void> {
     window.addEventListener("pagehide", (event) => {
       if (!event.persisted) browserSession.close();
     });
-    const initial = await (
-      await fetch("/timeline/get", { headers: { "x-valle-token": host.boot.session.token } })
-    ).json();
+    const initial = initialTimeline!;
     if (initial.empty) {
       let reloadPending = false;
       shell.addEventListener("studio-host-event", (event) => {
         const type = (event as CustomEvent<{ type: string }>).detail.type;
         if ((type !== "timeline" && type !== "project") || reloadPending) return;
         reloadPending = true;
-        void fetch("/timeline/get", { headers: { "x-valle-token": host.boot.session.token } })
-          .then(async (response) => {
-            if (!response.ok) throw new Error(`Timeline reload failed: ${response.status}`);
-            const next = await response.json();
+        void host.loadTimelineSnapshot!()
+          .then((next) => {
             if (!next.empty) location.reload();
           })
           .catch((error: unknown) => console.error("Could not reload empty project", error))
@@ -280,12 +279,16 @@ async function startDocument(shell: ValleStudioApp): Promise<void> {
       let firstLoad = true;
       await startTimelineStudio({
         sourceEditor,
-        loadTimeline: () => {
-          if (firstLoad) {
-            firstLoad = false;
-            return Promise.resolve(timelineContextFromSnapshot(host.boot, initial));
+        loadTimeline: async () => {
+          const snapshot = firstLoad ? initial : await host.loadTimelineSnapshot!();
+          firstLoad = false;
+          const prepared = await browserSession.prepareTimelinePreview(snapshot.timeline);
+          if (prepared.status === "error") {
+            // The existing unavailable projection keeps the arrangement editable while a
+            // broken source is repaired. Successful opens compile only in the browser.
+            return host.loadTimeline!();
           }
-          return host.loadTimeline!();
+          return timelineContextFromSnapshot(host.boot, { ...snapshot, ...prepared });
         },
         preparePreview: (timeline) => browserSession.prepareTimelinePreview(timeline),
       });

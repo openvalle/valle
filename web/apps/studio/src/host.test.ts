@@ -126,7 +126,7 @@ function fixedPackage() {
       parentRevision: null,
       createdAt: "2026-01-01T00:00:00.000Z",
       actor: "test",
-      cause: { type: "genesis" },
+      cause: { type: "genesis" as const },
       intent: null,
     },
     timeline,
@@ -143,6 +143,28 @@ function fixedPackage() {
 }
 
 describe("Studio host adapters", () => {
+  test("author snapshots load without an execution projection", async () => {
+    const boot = assertStudioBoot({
+      protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,
+      session: { kind: "timeline-file", input: "/project/timeline.json", token: "secret" },
+      capabilities,
+      runtime,
+    });
+    const snapshot = {
+      empty: false,
+      timeline: sparseTimeline(),
+      timelineJson: JSON.stringify(sparseTimeline()),
+      timelineRevision: fixedPackage().timelineRevision,
+    };
+    const calls: string[] = [];
+    const host = new TimelineFileHost(boot, async (url) => {
+      calls.push(String(url));
+      return json(snapshot);
+    });
+    expect(await host.loadTimelineSnapshot()).toEqual(snapshot);
+    expect(calls).toEqual(["/timeline/get?projection=author"]);
+  });
+
   test("source file reads and writes carry the bound Studio token", async () => {
     const boot = assertStudioBoot({
       protocolVersion: STUDIO_HOST_PROTOCOL_VERSION,

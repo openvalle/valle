@@ -44,7 +44,11 @@ export function moduleClosure(
 }
 
 function decodeBase64(value: string): Uint8Array {
-  return Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+  if (typeof Uint8Array.fromBase64 === "function") return Uint8Array.fromBase64(value);
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }
 
 function sourceTextForPath(

@@ -112,6 +112,29 @@ impl TimelineFile {
         )
     }
 
+    /// Read the working document without capturing media or compiling Motion. Studio prepares
+    /// its fixed package in the browser; the full projection is only needed on preparation errors.
+    pub fn author_snapshot(&self) -> Result<Value> {
+        let (revision, timeline) = self.read()?;
+        let timeline_json = String::from_utf8(timeline_bytes(&timeline)?)?;
+        let authored: Value = serde_json::from_str(&timeline_json)?;
+        let empty = authored["tracks"]
+            .as_object()
+            .into_iter()
+            .flat_map(|tracks| tracks.values())
+            .flat_map(|tracks| tracks.as_array().into_iter().flatten())
+            .all(|track| {
+                track["clips"]
+                    .as_array()
+                    .is_none_or(|clips| clips.is_empty())
+            });
+        Ok(json!({
+            "empty": empty,
+            "timelineRevision": {"revision":revision,"parentRevision":null,"createdAt":"","actor":"file","cause":{"type":"genesis"},"intent":null},
+            "timeline": authored, "timelineJson": timeline_json,
+        }))
+    }
+
     pub fn snapshot(&self) -> Result<Value> {
         let (revision, timeline) = self.read()?;
         let timeline_json = String::from_utf8(timeline_bytes(&timeline)?)?;
@@ -491,6 +514,33 @@ pub(crate) fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn author_snapshot_reads_no_motion_or_media_and_does_not_admit_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cut.json");
+        let authored = json!({
+            "canvas":{"width":64,"height":64,"fps":30},
+            "resources":{"card":"missing.motion.tsx","hero":"missing.mov"},
+            "tracks":{"visual":[{"clips":[{"kind":"motion","component":"card","start":0,"duration":1,"resources":{"hero":"hero"}}]}]}
+        });
+        std::fs::write(&path, authored.to_string()).unwrap();
+        let file = TimelineFile::open(&path).unwrap();
+        let trace = valle_compiler::motion::CompilationTrace::new(|_| {});
+        let snapshot = file.author_snapshot().unwrap();
+        assert_eq!(trace.metrics().compilations, 0);
+        assert_eq!(snapshot["empty"], false);
+        assert_eq!(snapshot["timeline"], authored);
+        assert_eq!(snapshot["timelineRevision"]["revision"], 1);
+        assert!(snapshot.get("render").is_none());
+        assert!(snapshot.get("motionSourceMetadata").is_none());
+        let saved = file
+            .save(&json!({"baseRevision":1,"timeline":authored}).to_string())
+            .unwrap();
+        assert_eq!(saved["outcome"], "rejected");
+        assert_eq!(file.revision().unwrap(), 1);
+        assert_eq!(file.author_snapshot().unwrap()["timeline"], authored);
+    }
 
     #[test]
     fn an_empty_project_is_an_editable_starting_point_without_a_fake_clip() {

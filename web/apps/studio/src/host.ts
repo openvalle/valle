@@ -46,6 +46,13 @@ export interface TimelineContext {
   warnings?: ReadonlyArray<MotionCompilerDiagnostic>;
 }
 
+export interface TimelineSnapshot {
+  empty: boolean;
+  timelineRevision: StudioTimelineRevision;
+  timelineJson: string;
+  timeline: Timeline;
+}
+
 export interface StudioTimelineRevision {
   revision: number;
   parentRevision: number | null;
@@ -159,6 +166,7 @@ export interface StudioHost {
   saveTimeline?(edit: TimelineEdit): Promise<SaveReport>;
   loadMotion?(request: MotionRequest): Promise<MotionContext>;
   loadMediaFacts?(request: TimelinePreviewRequest): Promise<MediaFactsResult>;
+  loadTimelineSnapshot?(): Promise<TimelineSnapshot>;
   loadSourceFiles(drafts?: Record<string, string>, timeline?: Timeline): Promise<SourceFile[]>;
   writeSourceFile(request: WriteSourceRequest): Promise<WriteSourceResult>;
   saveProject?(request: {
@@ -295,6 +303,21 @@ export function playerRuntimeAssetsFromStudioBoot(boot: StudioBoot): PlayerRunti
 }
 
 export class TimelineFileHost extends BaseStudioHost {
+  async loadTimelineSnapshot(): Promise<TimelineSnapshot> {
+    const value = await this.fetchJson("/timeline/get?projection=author");
+    if (
+      typeof value.empty !== "boolean" ||
+      typeof value.timelineJson !== "string" ||
+      !isTimeline(value.timeline) ||
+      !isRecord(value.timelineRevision) ||
+      !isRevision(value.timelineRevision.revision) ||
+      (value.timelineRevision.parentRevision !== null &&
+        !isRevision(value.timelineRevision.parentRevision))
+    )
+      throw new Error("Timeline snapshot must contain the authoring document and revision");
+    return value as unknown as TimelineSnapshot;
+  }
+
   async loadTimeline(): Promise<TimelineContext> {
     return timelineContextFromSnapshot(this.boot, await this.fetchJson("/timeline/get"));
   }
