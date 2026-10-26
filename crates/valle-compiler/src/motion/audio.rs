@@ -167,6 +167,7 @@ pub(super) fn analyze(pcm: &AudioPcm, bands: u8, rate: u32) -> Result<AudioTable
     let mut flux = vec![0.0; frames];
     let mut planner = FftPlanner::<f64>::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
+    let mut scratch = vec![Complex::new(0.0, 0.0); fft.get_inplace_scratch_len()];
     let window = (0..FFT_SIZE)
         .map(|index| {
             0.5 - 0.5 * libm::cos(2.0 * core::f64::consts::PI * index as f64 / FFT_SIZE as f64)
@@ -219,7 +220,7 @@ pub(super) fn analyze(pcm: &AudioPcm, bands: u8, rate: u32) -> Result<AudioTable
             };
             *slot = Complex::new(f64::from(sample) * window[index], 0.0);
         }
-        fft.process(&mut spectrum);
+        fft.process_with_scratch(&mut spectrum, &mut scratch);
         band_energy.fill(0.0);
         for &(bin, band) in &bins {
             let magnitude = spectrum[bin].norm();

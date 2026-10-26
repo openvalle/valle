@@ -38,6 +38,9 @@ valle-motion = { workspace = true, optional = true }
 valle-media = { workspace = true, optional = true, features = ["beat"] }
 valle-draw = { workspace = true, optional = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rustfft = { workspace = true, features = ["wasm_simd"] }
+
 [features]
 default = []
 jsx = ["dep:oxc", "dep:rquickjs"]
