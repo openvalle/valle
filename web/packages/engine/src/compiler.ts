@@ -31,6 +31,8 @@ interface TimelineCompilerWasmModule {
     shaders: MotionShaderPackage[],
     audioSamples: Float32Array[],
   ): string;
+  motion_module_paths(entry: string, modulesJson: string): string;
+  font_covers_text(bytes: Uint8Array, text: string): boolean;
   prepare_preview_package(inputJson: string): string;
   rewrite_motion_source(inputJson: string): string;
 }
@@ -189,6 +191,10 @@ export interface TimelineCompilerRuntime {
 }
 
 export interface WebCompilerRuntime extends TimelineCompilerRuntime {
+  /** Whether an already bound face covers every non-control character. */
+  fontCoversText(bytes: Uint8Array, text: string): boolean;
+  /** Resolve the exact import closure with the shared Motion linker. */
+  motionModulePaths(entry: string, modules: Record<string, string>): string[];
   /** Immutable Motion inputs, including captions prepared by the shared Rust compiler. */
   motionPreparationInputs(timeline: Timeline): MotionPreparationInput[];
   /** Compile a standalone Motion TSX/JSX source to a Scene artifact. */
@@ -228,6 +234,14 @@ export async function createTimelineCompilerRuntime(
       JSON.parse(
         wasm.motion_preparation_inputs(JSON.stringify(timeline)),
       ) as MotionPreparationInput[],
+    motionModulePaths: (entry, modules) => {
+      const result = JSON.parse(wasm.motion_module_paths(entry, JSON.stringify(modules))) as
+        | { status: "ok"; paths: string[] }
+        | { status: "error"; diagnostics: MotionCompilerDiagnostic[] };
+      if (result.status === "error") throw new MotionCompileError(result.diagnostics);
+      return result.paths;
+    },
+    fontCoversText: (bytes, text) => wasm.font_covers_text(bytes, text),
     compileTimeline: (timeline, motionSources) =>
       compileTimelineWithWasm(wasm, timeline, motionSources),
     canonicalizeTimelineDocument: (timeline) =>

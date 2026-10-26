@@ -83,6 +83,16 @@ impl MotionModuleGraph {
         Self::from_entry_path_with_overrides(input, &BTreeMap::new())
     }
 
+    /// The exact import closure, resolved by the same linker used for compilation.
+    pub fn reachable_paths(&self) -> Result<Vec<String>, Vec<CompilerDiagnostic>> {
+        Ok(Linker::new(self)
+            .link()?
+            .module_infos
+            .into_iter()
+            .map(|module| module.path)
+            .collect())
+    }
+
     /// Resolve a disk-backed closure using current editor text for the named modules.
     /// Override keys are relative to the entry directory, exactly like graph module keys.
     pub fn from_entry_path_with_overrides(
@@ -1396,6 +1406,27 @@ fn normalize_path_buf(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod path_tests {
     use super::*;
+
+    #[test]
+    fn reachable_paths_ignore_unrelated_sources_but_validate_imports() {
+        let mut modules = BTreeMap::from([
+            ("main.motion.tsx".into(), "import { value } from './shared'; export default function Main() { return <Scene />; }".into()),
+            ("shared.ts".into(), "export const value = 3;".into()),
+            ("unrelated.motion.tsx".into(), "not valid TypeScript {{{".into()),
+        ]);
+        let graph = MotionModuleGraph::new("main.motion.tsx", modules.clone()).unwrap();
+        assert_eq!(
+            graph.reachable_paths().unwrap(),
+            ["main.motion.tsx", "shared.ts"]
+        );
+        modules.insert("shared.tsx".into(), "export const value = 4;".into());
+        assert!(
+            MotionModuleGraph::new("main.motion.tsx", modules)
+                .unwrap()
+                .reachable_paths()
+                .is_err()
+        );
+    }
 
     #[test]
     fn module_identity_keeps_forward_slashes_on_every_host() {

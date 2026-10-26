@@ -10,6 +10,55 @@ const runtimeAssets = {
   },
 };
 
+test("Studio caches actual import closures and only recompiles affected components", async () => {
+  const modules = {
+    "a.motion.tsx": `import { size } from './shared'; export const composition={width:64,height:32,fps:4,duration:1}; export default function A(){return <Scene><View style={{width:size,height:10}}/></Scene>;}`,
+    "b.motion.tsx": `import { size } from './shared'; export const composition={width:64,height:32,fps:4,duration:1}; export default function B(){return <Scene><View style={{width:size,height:20}}/></Scene>;}`,
+    "shared.ts": "export const size=10;",
+    "unused.motion.tsx": "not valid TypeScript {{{",
+  };
+  const request = {
+    runtimeAssets,
+    runtimeBaseUrl,
+    authorTimeline: {
+      canvas: { width: 64, height: 32, fps: 4 },
+      resources: { a: "a.motion.tsx", b: "b.motion.tsx" },
+      tracks: {
+        visual: [
+          {
+            clips: [
+              { kind: "motion" as const, component: "a", start: 0, duration: 1 },
+              { kind: "motion" as const, component: "b", start: 1, duration: 1 },
+            ],
+          },
+        ],
+      },
+    },
+    instances: ["a", "b"].map((name, index) => ({
+      clipPath: `/tracks/visual/0/clips/${index}`,
+      entry: `${name}.motion.tsx`,
+      modules,
+    })),
+  };
+  const first = await compileStudioPreview({ ...request, id: 100 });
+  if (first.status !== "ok") throw new Error(first.message);
+  expect(first.timings.compilations).toBe(2);
+  modules["a.motion.tsx"] = modules["a.motion.tsx"].replace("height:10", "height:12");
+  const edited = await compileStudioPreview({ ...request, id: 101 });
+  if (edited.status !== "ok") throw new Error(edited.message);
+  expect(edited.timings.compilations).toBe(1);
+  expect(edited.instances[1]!.artifactDigest).toBe(first.instances[1]!.artifactDigest);
+  modules["unused.motion.tsx"] = "another invalid unused file";
+  const unrelated = await compileStudioPreview({ ...request, id: 102 });
+  if (unrelated.status !== "ok") throw new Error(unrelated.message);
+  expect(unrelated.timings.compilations).toBe(0);
+  expect(unrelated.timings.cacheHit).toBe(true);
+  modules["shared.ts"] = "export const size=12;";
+  const shared = await compileStudioPreview({ ...request, id: 103 });
+  if (shared.status !== "ok") throw new Error(shared.message);
+  expect(shared.timings.compilations).toBe(2);
+});
+
 test("Studio Worker builds an exact one-clip Timeline without retaining unused font inputs", async () => {
   const font = new Uint8Array(
     await readFile(new URL("../../../../assets/fonts/noto/NotoSans-Regular.ttf", import.meta.url)),
@@ -64,6 +113,79 @@ test("Studio Worker loads font URLs before compiling compile-time text measureme
     ],
   });
   expect(result.status === "ok" ? "ok" : JSON.stringify(result)).toBe("ok");
+});
+
+test("covered project fonts avoid downloading defaults; missing glyphs keep fallback", async () => {
+  const font = new Uint8Array(
+    await readFile(new URL("../../../../assets/fonts/noto/NotoSans-Regular.ttf", import.meta.url)),
+  );
+  const digest = `sha256:${new Bun.CryptoHasher("sha256").update(font).digest("hex")}`;
+  const source = (text: string) => `export const composition={width:64,height:32,fps:4,duration:1};
+    export const controls={assets:{brand:asset({kind:"font",required:true})}};
+    export default function T(){return <Scene><Text style={{fontFamily:"asset://brand"}}>${text}</Text></Scene>;}`;
+  const request = {
+    runtimeAssets,
+    runtimeBaseUrl,
+    standalone: {
+      input: "/project/bound-font.motion.tsx",
+      assets: [{ name: "brand", path: "brand.ttf", alias: "brand" }],
+    },
+    resourceInputs: [
+      {
+        id: "resource:brand",
+        entry: { kind: "font" as const, digest, descriptor: { faceIndex: 0, variationAxes: {} } },
+        facts: {
+          kind: "font" as const,
+          descriptor: { faceIndex: 0, variationAxes: {} },
+          bytesBase64: font.toBase64(),
+        },
+      },
+    ],
+  };
+  const instance = {
+    clipPath: "/tracks/visual/0/clips/0",
+    entry: "bound-font.motion.tsx",
+    modules: { "bound-font.motion.tsx": source("Valle") },
+    options: {
+      resources: [{ control: "brand", contentHash: digest }],
+      fontAliases: { "asset://brand": font },
+    },
+    fontUrls: [{ url: "https://invalid.example/not-needed.ttf", role: "font" as const }],
+  };
+  const covered = await compileStudioPreview({ ...request, id: 104, instances: [instance] });
+  expect(covered.status === "ok" ? "ok" : covered.message).toBe("ok");
+  if (covered.status !== "ok") return;
+  expect(
+    Object.keys(JSON.parse(covered.package.resourceManifestJson).entries).filter((id) =>
+      id.startsWith("font:"),
+    ),
+  ).toEqual([]);
+  const missing = await compileStudioPreview({
+    ...request,
+    id: 105,
+    instances: [
+      {
+        ...instance,
+        modules: { "bound-font.motion.tsx": source("中文") },
+        fontUrls: [
+          {
+            url: new URL(
+              "../../../../assets/fonts/noto/NotoSansCJKsc-Variable.otf",
+              import.meta.url,
+            ).href,
+            role: "font",
+          },
+        ],
+      },
+    ],
+  });
+  expect(missing.status === "ok" ? "ok" : missing.message).toBe("ok");
+  if (missing.status !== "ok") return;
+  expect(
+    Object.keys(JSON.parse(missing.package.resourceManifestJson).entries).some((id) =>
+      id.startsWith("font:"),
+    ),
+  ).toBe(true);
 });
 
 test("Studio Worker retains tangent contact warnings across cached previews", async () => {

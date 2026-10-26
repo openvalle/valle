@@ -127,6 +127,20 @@ pub fn compile_motion_jsx(
     ))
 }
 
+/// Resolve imports before selecting Studio's fonts, analysis inputs and compilation cache key.
+#[wasm_bindgen]
+pub fn motion_module_paths(entry: &str, modules_json: &str) -> Result<String, JsError> {
+    let modules: BTreeMap<String, String> =
+        serde_json::from_str(modules_json).map_err(|error| JsError::new(&error.to_string()))?;
+    let value = match MotionModuleGraph::new(entry, modules)
+        .and_then(|graph| graph.reachable_paths())
+    {
+        Ok(paths) => serde_json::json!({ "status": "ok", "paths": paths }),
+        Err(diagnostics) => serde_json::json!({ "status": "error", "diagnostics": diagnostics }),
+    };
+    serde_json::to_string(&value).map_err(|error| JsError::new(&error.to_string()))
+}
+
 /// Compile a complete, project-relative Motion module closure without filesystem access.
 #[wasm_bindgen]
 pub fn compile_motion_modules(

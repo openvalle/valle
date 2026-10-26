@@ -7,7 +7,16 @@ mod motion_compiler;
 mod product;
 mod scene3d_dof;
 mod timeline;
-pub use motion_compiler::{compile_motion_jsx, compile_motion_modules};
+pub use motion_compiler::{compile_motion_jsx, compile_motion_modules, motion_module_paths};
+
+/// Check an already bound font before Studio downloads additional fallback faces.
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn font_covers_text(bytes: &[u8], text: &str) -> bool {
+    ttf_parser::Face::parse(bytes, 0).is_ok_and(|face| {
+        text.chars()
+            .all(|ch| ch.is_control() || face.glyph_index(ch).is_some())
+    })
+}
 pub use product::ProductEngine;
 
 /// Build and self-admit a complete preview package from captured author inputs.

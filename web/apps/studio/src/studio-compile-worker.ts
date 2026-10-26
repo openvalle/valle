@@ -258,6 +258,17 @@ export async function compileStudioPreview(
       compiledInstances.clear();
     }
     const compiler = await runtime!;
+    request = {
+      ...request,
+      instances: request.instances.map((instance) => ({
+        ...instance,
+        modules: Object.fromEntries(
+          compiler
+            .motionModulePaths(instance.entry, instance.modules)
+            .map((path) => [path, instance.modules[path]!]),
+        ),
+      })),
+    };
     if (request.authorTimeline) {
       const prepared = new Map(
         compiler
@@ -362,7 +373,14 @@ export async function compileStudioPreview(
         preliminary.set(index, compiled);
         return instanceFonts({
           ...instance,
-          fontUrls: artifactFontUrls(compiled.artifact, instance.fontUrls),
+          fontUrls: artifactFontUrls(compiled.artifact, instance.fontUrls, (family, text) => {
+            const resource = instance.options?.resources?.find(
+              (resource) => `valle-font-${resource.contentHash.slice("sha256:".length)}` === family,
+            );
+            const bytes =
+              resource && instance.options?.fontAliases?.[`asset://${resource.control}`];
+            return bytes !== undefined && compiler.fontCoversText(bytes, text);
+          }),
         });
       }),
     );

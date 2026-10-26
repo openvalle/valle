@@ -7,7 +7,7 @@ use crate::resource::ContentDigest;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
 use valle_draw::{
@@ -16,6 +16,7 @@ use valle_draw::{
 };
 
 type Fonts = Vec<(ContentDigest, Arc<[u8]>, bool)>;
+const MAX_DEFINITION_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,6 +50,7 @@ pub(crate) enum Stage {
 pub(crate) struct MotionPreparation {
     pub(crate) stage: Option<Stage>,
     definitions: VecDeque<(u32, String, String)>,
+    oversized_sources: BTreeSet<u32>,
 }
 
 impl MotionPreparation {
@@ -58,6 +60,63 @@ impl MotionPreparation {
             .find(|(_, key, _)| key == id)
             .map(|(_, _, json)| json.as_str())
     }
+
+    fn definition_for(
+        &mut self,
+        source: u32,
+        prepared: &valle_motion::PreparedScene,
+        fonts: &Fonts,
+    ) -> Result<Option<String>, ProgramPrepareError> {
+        if self.oversized_sources.contains(&source) {
+            return Ok(None);
+        }
+        if let Some(index) = self.definitions.iter().position(|entry| entry.0 == source) {
+            let entry = self.definitions.remove(index).expect("located definition");
+            let id = entry.1.clone();
+            self.definitions.push_back(entry);
+            return Ok(Some(id));
+        }
+        // Base64 fonts alone can exceed the wire budget. Do not encode and discard the same
+        // immutable font pack on every frame before falling back to ordinary preparation.
+        let font_bytes: usize = fonts
+            .iter()
+            .map(|(_, bytes, _)| bytes.len().div_ceil(3) * 4)
+            .sum();
+        if font_bytes >= MAX_DEFINITION_BYTES {
+            self.oversized_sources.insert(source);
+            return Ok(None);
+        }
+        let json = serde_json::to_string(&Definition {
+            artifact: prepared.artifact().clone(),
+            fonts: fonts
+                .iter()
+                .map(|(digest, bytes, generic)| FontDefinition {
+                    digest: *digest,
+                    bytes: STANDARD.encode(bytes),
+                    generic: *generic,
+                })
+                .collect(),
+        })
+        .map_err(failure)?;
+        if json.len() > MAX_DEFINITION_BYTES {
+            self.oversized_sources.insert(source);
+            return Ok(None);
+        }
+        let id = ContentDigest::of_bytes(json.as_bytes()).to_string();
+        self.definitions.push_back((source, id.clone(), json));
+        while self.definitions.len() > 4
+            || self
+                .definitions
+                .iter()
+                .map(|entry| entry.2.len())
+                .sum::<usize>()
+                > MAX_DEFINITION_BYTES
+        {
+            self.definitions.pop_front();
+        }
+        Ok(Some(id))
+    }
+
     pub(super) fn build(
         &mut self,
         key: &str,
@@ -65,6 +124,17 @@ impl MotionPreparation {
         fonts: &Fonts,
         context: CompiledMotionProgramContext<'_>,
     ) -> Result<BuiltMotionProgram, ProgramPrepareError> {
+        if self.oversized_sources.contains(&source) {
+            return motion::build_compiled_motion_program(context);
+        }
+        let definition_id = if matches!(self.stage, Some(Stage::Capture(_))) {
+            let Some(id) = self.definition_for(source, context.prepared, fonts)? else {
+                return motion::build_compiled_motion_program(context);
+            };
+            Some(id)
+        } else {
+            None
+        };
         let Some(stage) = &mut self.stage else {
             return motion::build_compiled_motion_program(context);
         };
@@ -74,45 +144,9 @@ impl MotionPreparation {
                 .ok_or_else(|| failure("missing Motion kernel result")),
             Stage::Capture(jobs) => {
                 let input = motion::resolve_motion_input(&context)?;
-                let definition_id = if let Some(index) =
-                    self.definitions.iter().position(|entry| entry.0 == source)
-                {
-                    let entry = self.definitions.remove(index).expect("located definition");
-                    let id = entry.1.clone();
-                    self.definitions.push_back(entry);
-                    id
-                } else {
-                    let json = serde_json::to_string(&Definition {
-                        artifact: context.prepared.artifact().clone(),
-                        fonts: fonts
-                            .iter()
-                            .map(|(digest, bytes, generic)| FontDefinition {
-                                digest: *digest,
-                                bytes: STANDARD.encode(bytes),
-                                generic: *generic,
-                            })
-                            .collect(),
-                    })
-                    .map_err(failure)?;
-                    let id = ContentDigest::of_bytes(json.as_bytes()).to_string();
-                    if json.len() <= 64 * 1024 * 1024 {
-                        self.definitions.push_back((source, id.clone(), json));
-                    }
-                    while self.definitions.len() > 4
-                        || self
-                            .definitions
-                            .iter()
-                            .map(|entry| entry.2.len())
-                            .sum::<usize>()
-                            > 64 * 1024 * 1024
-                    {
-                        self.definitions.pop_front();
-                    }
-                    id
-                };
                 jobs.push(MotionKernelJob {
                     key: key.into(),
-                    definition_id,
+                    definition_id: definition_id.expect("capture definition resolved above"),
                     input_json: serde_json::to_string(&input).map_err(failure)?,
                 });
                 // A capture projection is never returned as a ticket. Empty programs only let
@@ -159,7 +193,7 @@ impl MotionKernel {
         input_json: &str,
         compact: bool,
     ) -> Result<Vec<u8>, ProgramPrepareError> {
-        if definition_json.len() > 64 * 1024 * 1024 || input_json.len() > 8 * 1024 * 1024 {
+        if definition_json.len() > MAX_DEFINITION_BYTES || input_json.len() > 8 * 1024 * 1024 {
             return Err(failure("Motion kernel input byte budget"));
         }
         if self
@@ -312,6 +346,39 @@ export default function Card(props) { const time = useCurrentTime(); const frame
             model_resources: BTreeMap::new(),
         };
         (definition, input)
+    }
+
+    #[test]
+    fn oversized_font_packs_do_not_create_or_retry_kernel_definitions() {
+        let (definition, _) = fixture();
+        let scene = valle_motion::prepare_owned_scene(definition.artifact).unwrap();
+        let bytes: Arc<[u8]> = vec![0; 26 * 1024 * 1024].into();
+        let font = (ContentDigest::of_bytes(&bytes), bytes, true);
+        let mut preparation = MotionPreparation::default();
+        assert!(
+            preparation
+                .definition_for(0, &scene, &vec![font.clone(), font])
+                .unwrap()
+                .is_none()
+        );
+        assert!(preparation.definitions.is_empty());
+        // A source is immutable for this preparation owner. Once rejected it cannot repeatedly
+        // allocate and hash another oversized definition while scrubbing later frames.
+        assert!(
+            preparation
+                .definition_for(0, &scene, &vec![])
+                .unwrap()
+                .is_none()
+        );
+        let id = preparation
+            .definition_for(1, &scene, &vec![])
+            .unwrap()
+            .unwrap();
+        assert!(preparation.definition(&id).is_some());
+        assert_eq!(
+            preparation.definition_for(1, &scene, &vec![]).unwrap(),
+            Some(id)
+        );
     }
 
     #[test]
