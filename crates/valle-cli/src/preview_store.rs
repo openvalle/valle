@@ -23,14 +23,45 @@ struct CachedMedia {
     directory: Weak<tempfile::TempDir>,
 }
 
+#[derive(Clone)]
+pub(crate) struct CapturedAudio {
+    pub descriptor: valle_timeline::internal::wire::resource::AudioResourceDescriptorWire,
+    pub pcm: Arc<[u8]>,
+}
+
 /// Reuse unchanged source snapshots while preview generations or HTTP requests own them.
 /// Weak owners let retired files be deleted without another cache eviction policy.
 #[derive(Default)]
 pub(crate) struct FrozenMediaCache {
     entries: BTreeMap<PathBuf, CachedMedia>,
+    audio: BTreeMap<String, CapturedAudio>,
 }
 
 impl FrozenMediaCache {
+    pub fn audio(&mut self, digest: &str, path: &Path) -> Result<CapturedAudio> {
+        if let Some(captured) = self.audio.get(digest) {
+            return Ok(captured.clone());
+        }
+        let (descriptor, pcm) = crate::cmd::preview_audio(path)?;
+        let captured = CapturedAudio { descriptor, pcm };
+        const MAX_CACHED_BYTES: usize = 128 * 1024 * 1024;
+        while !self.audio.is_empty()
+            && self
+                .audio
+                .values()
+                .map(|entry| entry.pcm.len())
+                .sum::<usize>()
+                + captured.pcm.len()
+                > MAX_CACHED_BYTES
+        {
+            self.audio.pop_first();
+        }
+        if captured.pcm.len() <= MAX_CACHED_BYTES {
+            self.audio.insert(digest.to_owned(), captured.clone());
+        }
+        Ok(captured)
+    }
+
     pub fn captured_stamp(
         &self,
         path: &Path,
@@ -126,7 +157,6 @@ impl PreviewFiles {
 #[derive(Default)]
 pub(crate) struct PreviewStore {
     pub files: RwLock<PreviewFiles>,
-    audio: Mutex<BTreeMap<String, Arc<[u8]>>>,
     // A reload/edit must not prepare several multi-gigabyte packages simultaneously.
     pub prepare: Mutex<FrozenMediaCache>,
 }
@@ -145,11 +175,11 @@ impl PreviewStore {
             return Ok(None);
         };
         let mut cache = self
-            .audio
+            .prepare
             .lock()
-            .map_err(|_| anyhow::anyhow!("audio cache poisoned"))?;
-        if let Some(bytes) = cache.get(digest) {
-            return Ok(Some(Arc::clone(bytes)));
+            .map_err(|_| anyhow::anyhow!("preview preparation poisoned"))?;
+        if let Some(captured) = cache.audio.get(digest) {
+            return Ok(Some(Arc::clone(&captured.pcm)));
         }
         let mut temporary = None;
         let path = match &file {
@@ -162,23 +192,9 @@ impl PreviewStore {
                 path
             }
         };
-        let samples = valle_media::codec::decode_audio_mono_f32(&path, 48_000)?;
+        let captured = cache.audio(digest, &path)?;
         drop(temporary);
-        let bytes: Arc<[u8]> = samples
-            .iter()
-            .flat_map(|sample| sample.to_le_bytes())
-            .collect::<Vec<_>>()
-            .into();
-        const MAX_CACHED_BYTES: usize = 128 * 1024 * 1024;
-        while !cache.is_empty()
-            && cache.values().map(|v| v.len()).sum::<usize>() + bytes.len() > MAX_CACHED_BYTES
-        {
-            cache.pop_first();
-        }
-        if bytes.len() <= MAX_CACHED_BYTES {
-            cache.insert(digest.to_owned(), Arc::clone(&bytes));
-        }
-        Ok(Some(bytes))
+        Ok(Some(captured.pcm))
     }
 }
 
@@ -213,6 +229,13 @@ mod tests {
         let expected = valle_media::codec::decode_audio_mono_f32(source.path(), rate).unwrap();
         let digest = ContentDigest::of_bytes(&wav).to_wire();
         let store = PreviewStore::default();
+        let captured = store
+            .prepare
+            .lock()
+            .unwrap()
+            .audio(&digest, source.path())
+            .unwrap();
+        assert_eq!(captured.pcm.len(), samples.len() * 4);
         store.files.write().unwrap().replace(BTreeMap::from([(
             digest.clone(),
             PreviewFile::Bytes(wav.into()),
@@ -220,6 +243,7 @@ mod tests {
         let first = store.audio_pcm(&digest).unwrap().unwrap();
         let second = store.audio_pcm(&digest).unwrap().unwrap();
         assert!(Arc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(&first, &captured.pcm));
         assert_eq!(
             &*first,
             expected

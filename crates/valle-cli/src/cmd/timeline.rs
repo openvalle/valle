@@ -294,44 +294,38 @@ pub(crate) fn prepare_timeline_media_facts(
                         extension.as_str(),
                         "wav" | "mp3" | "m4a" | "aac" | "flac" | "ogg" | "opus"
                     ));
-        let video =
-            video_candidate && valle_media::codec::decode::probe_video_presentation(&path).is_ok();
-        let audio = !video
-            && audio_candidate
-            && matches!(
-                valle_media::codec::audio::probe_audio_stream(&path),
-                Ok(Some(_))
-            );
-        if (declared_kind == Some(AssetKind::Video) && !video)
-            || (declared_kind == Some(AssetKind::Audio) && !audio)
-        {
-            bail!("resource {alias} is not a valid declared media source");
-        }
-        if video || audio {
+        if video_candidate || audio_candidate {
             let (hash, file) = media.get(&path)?;
-            record_dependency(&path, hash)?;
             let file = blobs.entry(hash.as_hex().to_owned()).or_insert(file);
             let frozen_path = match file {
                 PreviewFile::File { path, .. } => path.clone(),
                 PreviewFile::Bytes(_) => unreachable!(),
             };
-            if video {
-                add_video_resource(
+            let probe = video_candidate
+                .then(|| valle_media::codec::decode::probe_video_presentation(&frozen_path))
+                .and_then(Result::ok);
+            if let Some(probe) = probe {
+                record_dependency(&path, hash)?;
+                super::motion_package::add_probed_video_resource(
                     &mut resources,
                     &id,
                     hash,
                     &frozen_path,
                     video_audio_used(&original_doc, &alias),
+                    probe,
                 )?;
-            } else {
-                let asset = super::motion::BoundAsset {
-                    path: frozen_path,
-                    bytes: Arc::from([]),
-                    hash,
-                };
-                resources.add_asset(&id, AssetKind::Audio, &asset)?;
+                continue;
             }
-            continue;
+            if declared_kind != Some(AssetKind::Video)
+                && let Ok(captured) = media.audio(&hash.as_hex(), &frozen_path)
+            {
+                record_dependency(&path, hash)?;
+                resources.add_audio(&id, hash, captured.descriptor)?;
+                continue;
+            }
+            if declared_kind.is_some() {
+                bail!("resource {alias} is not a valid declared media source");
+            }
         }
         let (mut asset, dependencies) = super::motion::load_asset_with_dependencies(&path)?;
         for (path, digest) in dependencies {

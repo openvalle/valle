@@ -421,18 +421,7 @@ impl FixedResources {
             AssetKind::Audio => {
                 let decoded = decode_audio_corpus(asset)?;
                 let descriptor = analyzed_audio_descriptor(&decoded)?;
-                self.add(
-                    resource_id,
-                    ResourceEntryWire::Audio {
-                        digest,
-                        descriptor: descriptor.clone(),
-                    },
-                    VerifiedResourceFacts::Audio {
-                        descriptor: descriptor.clone(),
-                        temporal_footprint: AudioFootprint::default(),
-                    },
-                    Vec::new(),
-                )
+                self.add_audio(resource_id, digest, descriptor)
             }
             AssetKind::Video => add_video_resource(self, resource_id, digest, &asset.path, false)
                 .with_context(|| {
@@ -484,6 +473,26 @@ impl FixedResources {
                 )
             }
         }
+    }
+
+    pub(super) fn add_audio(
+        &mut self,
+        id: &str,
+        digest: ContentDigest,
+        descriptor: AudioResourceDescriptorWire,
+    ) -> Result<()> {
+        self.add(
+            id,
+            ResourceEntryWire::Audio {
+                digest,
+                descriptor: descriptor.clone(),
+            },
+            VerifiedResourceFacts::Audio {
+                descriptor,
+                temporal_footprint: AudioFootprint::default(),
+            },
+            Vec::new(),
+        )
     }
 
     /// Share dependency fonts across Motion components without changing each component's
@@ -695,6 +704,33 @@ fn decode_audio_corpus(asset: &BoundAsset) -> Result<DecodedAudioCorpus> {
     })
 }
 
+pub(crate) fn preview_audio(path: &Path) -> Result<(AudioResourceDescriptorWire, Arc<[u8]>)> {
+    let info = valle_media::codec::audio::probe_audio_stream(path)?
+        .ok_or_else(|| anyhow!("no audio stream in {}", path.display()))?;
+    if !matches!(info.channels, 1 | 2) {
+        bail!(
+            "audio requires mono or stereo; {} has {} channels",
+            path.display(),
+            info.channels
+        );
+    }
+    let samples = valle_media::codec::decode_audio_mono_f32(path, 48_000)?;
+    if samples.is_empty() {
+        bail!("decoded common-profile PCM must contain at least one sample");
+    }
+    let descriptor = analyzed_audio_descriptor(&DecodedAudioCorpus {
+        channels: info.channels,
+        stream: info.stream,
+        sample_count: i64::try_from(samples.len())?,
+    })?;
+    let bytes = samples
+        .into_iter()
+        .flat_map(f32::to_le_bytes)
+        .collect::<Vec<_>>()
+        .into();
+    Ok((descriptor, bytes))
+}
+
 fn entry_digest(entry: &ResourceEntryWire) -> &ContentDigest {
     match entry {
         ResourceEntryWire::Video { digest, .. }
@@ -715,8 +751,19 @@ pub(super) fn add_video_resource(
     path: &Path,
     include_audio: bool,
 ) -> Result<()> {
-    use valle_timeline::internal::wire::resource::*;
     let probe = valle_media::codec::decode::probe_video_presentation(path)?;
+    add_probed_video_resource(resources, id, hash, path, include_audio, probe)
+}
+
+pub(super) fn add_probed_video_resource(
+    resources: &mut FixedResources,
+    id: &str,
+    hash: ContentDigest,
+    path: &Path,
+    include_audio: bool,
+    probe: valle_media::codec::decode::VideoPresentationProbe,
+) -> Result<()> {
+    use valle_timeline::internal::wire::resource::*;
     let audio = valle_media::codec::audio::probe_audio_stream(path)?;
     let mut dependencies = Vec::new();
     if audio.is_some() && include_audio {
@@ -808,6 +855,41 @@ mod tests {
         .unwrap();
         assert_eq!(corpus.sample_count, 3);
         assert_eq!(corpus.channels, 1);
+        let (descriptor, pcm) = preview_audio(file.path()).unwrap();
+        assert_eq!(descriptor, analyzed_audio_descriptor(&corpus).unwrap());
+        assert_eq!(pcm.len(), 3 * 4);
+    }
+
+    #[test]
+    fn shared_analysis_decode_preserves_exact_mono_and_stereo_resource_descriptors() {
+        use valle_media::{codec::FloatWavWriter, frame::AudioBuffer};
+        let directory = tempfile::tempdir().unwrap();
+        for rate in [16_000, 44_100] {
+            for channels in [1, 2] {
+                let path = directory.path().join(format!("{rate}-{channels}.wav"));
+                let mut writer = FloatWavWriter::create(&path, rate, channels).unwrap();
+                writer
+                    .write(&AudioBuffer {
+                        samples: (0..2_137 * usize::from(channels))
+                            .map(|index| (index % 31) as f32 / 31.0 - 0.5)
+                            .collect(),
+                        sample_rate: rate,
+                        channels,
+                    })
+                    .unwrap();
+                writer.finish().unwrap();
+                let asset = BoundAsset {
+                    path: path.clone(),
+                    hash: ContentDigest::of_bytes(&std::fs::read(&path).unwrap()),
+                    bytes: Arc::from([]),
+                };
+                let expected =
+                    analyzed_audio_descriptor(&decode_audio_corpus(&asset).unwrap()).unwrap();
+                let (actual, pcm) = preview_audio(&path).unwrap();
+                assert_eq!(actual, expected, "{rate} Hz / {channels} channels");
+                assert_eq!(pcm.len() % 4, 0);
+            }
+        }
     }
 
     #[test]

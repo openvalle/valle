@@ -597,20 +597,14 @@ impl AudioSource for LibavAudioSource {
 /// Decode audio into mono f32 samples at the requested rate through libav. Use bounded streaming
 /// chunks while accumulating the output samples.
 pub fn decode_audio_mono_f32(path: &Path, sample_rate: u32) -> Result<Vec<f32>> {
-    use crate::transport::source::AudioSource as _;
-    let probe = crate::codec::decode::probe_av(path)?;
-    let duration = probe
-        .audio
-        .filter(|d| *d > 0.0)
-        .or(probe.video.map(|(_, _, d)| d).filter(|d| *d > 0.0))
-        .ok_or_else(|| anyhow!("{}: no audio duration metadata", path.display()))?;
-    let mut src = LibavAudioSource::open(path, sample_rate, 1)?;
-    let mut samples = Vec::with_capacity((duration * sample_rate as f64) as usize + 1);
-    let mut t = 0.0;
-    while t < duration {
-        let dt = (duration - t).min(1.0);
-        samples.extend_from_slice(&src.samples(t, dt)?.samples);
-        t += dt;
+    let mut src = LibavAudioStream::open(path, sample_rate, 1)?;
+    let mut samples = Vec::new();
+    loop {
+        let block = src.read(sample_rate as usize)?;
+        if block.samples.is_empty() {
+            break;
+        }
+        samples.extend_from_slice(&block.samples);
     }
     Ok(samples)
 }

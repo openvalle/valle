@@ -16,6 +16,7 @@ pub mod motion;
 pub(crate) mod motion_diagnostics;
 mod motion_fonts;
 mod motion_package;
+pub(crate) use motion_package::preview_audio;
 pub mod project;
 mod render_delivery;
 pub mod segment;
