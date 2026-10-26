@@ -204,7 +204,10 @@ pub(crate) fn columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
 }
 
 pub(crate) fn validate(conn: &Connection, full: bool) -> Result<()> {
-    let check: String = conn.query_row(
+    // quick_check also asks FTS to read its content and index. Pin one WAL snapshot across all
+    // those reads and schema checks while other connections add tags and update search rows.
+    let snapshot = conn.unchecked_transaction()?;
+    let check: String = snapshot.query_row(
         if full {
             "PRAGMA integrity_check"
         } else {
@@ -228,7 +231,7 @@ pub(crate) fn validate(conn: &Connection, full: bool) -> Result<()> {
         .filter(|sql| !sql.is_empty())
     {
         let table = statement.split_whitespace().nth(2).unwrap();
-        let stored: String = conn.query_row(
+        let stored: String = snapshot.query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
             [table],
             |row| row.get(0),
@@ -237,6 +240,7 @@ pub(crate) fn validate(conn: &Connection, full: bool) -> Result<()> {
             bail!("unsupported primary schema for {table}; user data was preserved");
         }
     }
+    snapshot.commit()?;
     Ok(())
 }
 

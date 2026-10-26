@@ -392,11 +392,14 @@ fn concurrent_tags_are_serialized_without_a_library_filesystem_lock() {
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("clip.txt"), b"clip").unwrap();
     list(&context(&root));
+    let barrier = std::sync::Barrier::new(8);
     std::thread::scope(|scope| {
         let mut tasks = Vec::new();
         for number in 0..8 {
             let root = &root;
+            let barrier = &barrier;
             tasks.push(scope.spawn(move || {
+                barrier.wait();
                 run(
                     &context(root),
                     json!({"op":"tag","path":"clip.txt","add":[format!("tag-{number}")]}),
