@@ -127,11 +127,13 @@ half4 main(float2 position) {
     float outputAlpha = alphaCode < 0.5 ? 1.0 : coverage;
     if (ditherEnabled > 0.5) {
         float3 noise = float3(ditherNoise.eval(mod(floor(position), 128.0) + 0.5).rgb) * 2.0 - 1.0;
-        if (alphaCode > 1.5) {
+        if (alphaCode > 1.5 && alphaCode < 2.5) {
             encoded = floor(clamp(encoded * outputAlpha + noise / 255.0, 0.0, 1.0) * 255.0 + 0.5) / (255.0 * outputAlpha);
         } else {
             encoded = floor(clamp(encoded + noise / 255.0, 0.0, 1.0) * 255.0 + 0.5) / 255.0;
         }
     }
-    return half4(encoded * outputAlpha, outputAlpha);
+    // Code 3 stores unassociated terminal bytes directly. Its host reads raw storage;
+    // ordinary Skia/CanvasKit drawing still receives premultiplied shader colors.
+    return half4(alphaCode > 2.5 ? encoded : encoded * outputAlpha, outputAlpha);
 }

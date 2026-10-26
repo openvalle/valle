@@ -44,6 +44,7 @@ pub(crate) struct EffectRuntime {
     extension_color_gain: Option<Rc<RuntimeEffect>>,
     chroma_key: Option<Rc<RuntimeEffect>>,
     output_transform: Option<(OutputSpec, Rc<RuntimeEffect>)>,
+    output_storage_transform: Option<Rc<RuntimeEffect>>,
     output_noise: Option<Image>,
     counters: EffectCacheCounters,
 }
@@ -74,6 +75,7 @@ impl EffectRuntime {
             extension_color_gain: None,
             chroma_key: None,
             output_transform: None,
+            output_storage_transform: None,
             output_noise: None,
             counters: EffectCacheCounters::default(),
         }
@@ -141,7 +143,8 @@ impl EffectRuntime {
                     } else {
                         self.counters.misses = self.counters.misses.saturating_add(1);
                         self.output_transform =
-                            Some((*spec, Rc::new(compile_output_transform(*spec)?)));
+                            Some((*spec, Rc::new(compile_output_transform(*spec, false)?)));
+                        self.output_storage_transform = None;
                         self.output_noise = output_noise(spec.dither())?;
                     }
                 }
@@ -270,9 +273,10 @@ impl EffectRuntime {
     }
 
     pub(crate) fn output_shader(
-        &self,
+        &mut self,
         input: &Image,
         spec: OutputSpec,
+        raw_storage: bool,
     ) -> Result<Shader, DrawError> {
         if spec.bit_depth() != OutputBitDepth::Eight {
             return Err(DrawError::Unsupported(
@@ -288,6 +292,17 @@ impl EffectRuntime {
                 "outputTransform RuntimeEffect ABI mismatch".into(),
             ));
         }
+        let effect = if raw_storage && spec.alpha() == OutputAlphaMode::StraightCoverage {
+            if self.output_storage_transform.is_none() {
+                self.output_storage_transform =
+                    Some(Rc::new(compile_output_transform(spec, true)?));
+            }
+            self.output_storage_transform
+                .as_ref()
+                .expect("output storage admitted")
+        } else {
+            effect
+        };
         let child = input
             .to_raw_shader(
                 (TileMode::Clamp, TileMode::Clamp),
@@ -852,7 +867,10 @@ fn output_noise(dither: Dither) -> Result<Option<Image>, DrawError> {
     .map(Some)
 }
 
-fn compile_output_transform(spec: OutputSpec) -> Result<RuntimeEffect, DrawError> {
+fn compile_output_transform(
+    spec: OutputSpec,
+    raw_storage: bool,
+) -> Result<RuntimeEffect, DrawError> {
     let primaries = match spec.target().primaries {
         ColorPrimaries::Rec709 => 0.0,
         ColorPrimaries::DisplayP3 => 1.0,
@@ -875,7 +893,13 @@ fn compile_output_transform(spec: OutputSpec) -> Result<RuntimeEffect, DrawError
     };
     let alpha = match spec.alpha() {
         OutputAlphaMode::Opaque => 0.0,
-        OutputAlphaMode::StraightCoverage => 1.0,
+        OutputAlphaMode::StraightCoverage => {
+            if raw_storage {
+                3.0
+            } else {
+                1.0
+            }
+        }
         OutputAlphaMode::PremultipliedCoverage => 2.0,
     };
     let uniforms = [
@@ -2177,26 +2201,42 @@ mod tests {
     }
 
     fn assert_output_shader_matches_reference(spec: OutputSpec) {
-        let mut samples = [
+        let use_metal = cfg!(all(target_os = "macos", feature = "native"))
+            && std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() == Ok("metal");
+        let mut samples = Vec::from([
             [0.0_f32, 0.0, 0.0, 0.0],
             [0.18, 0.18, 0.18, 1.0],
             [1.2, 0.15, 0.04, 1.0],
             [0.10, 0.30, 0.05, 0.5],
-        ];
+        ]);
+        samples.extend(
+            [0.0001, 1.0 / 255.0, 0.01, 0.25, 0.75, 0.999]
+                .map(|alpha| [0.9 * alpha, 0.3 * alpha, 0.15 * alpha, alpha]),
+        );
         if spec.alpha() == OutputAlphaMode::Opaque {
             for sample in &mut samples {
                 sample[3] = 1.0;
             }
         }
         let mut source_bytes = Vec::with_capacity(samples.len() * 4 * size_of::<f32>());
-        for sample in samples {
+        for sample in &samples {
             for channel in sample {
-                source_bytes.extend_from_slice(&channel.to_ne_bytes());
+                if use_metal {
+                    source_bytes.extend_from_slice(
+                        &valle_engine::compositor::bloom::f32_to_half(*channel).to_ne_bytes(),
+                    );
+                } else {
+                    source_bytes.extend_from_slice(&channel.to_ne_bytes());
+                }
             }
         }
         let source_info = ImageInfo::new(
             (samples.len() as i32, 1),
-            ColorType::RGBAF32,
+            if use_metal {
+                ColorType::RGBAF16
+            } else {
+                ColorType::RGBAF32
+            },
             AlphaType::Premul,
             Some(working_color_space().unwrap()),
         );
@@ -2210,19 +2250,35 @@ mod tests {
             rgba8_target_info(spec, Extent2d::new(samples.len() as u32, 1).unwrap()).unwrap();
         let expected = stage_output(&source, spec, &target_info).unwrap();
 
-        let runtime = EffectRuntime {
-            output_transform: Some((spec, Rc::new(compile_output_transform(spec).unwrap()))),
+        let mut runtime = EffectRuntime {
+            output_transform: Some((
+                spec,
+                Rc::new(compile_output_transform(spec, false).unwrap()),
+            )),
             output_noise: output_noise(spec.dither()).unwrap(),
             ..EffectRuntime::new()
         };
-        let shader = runtime.output_shader(&source, spec).unwrap();
+        let shader = runtime.output_shader(&source, spec, use_metal).unwrap();
+        #[cfg(all(target_os = "macos", feature = "native"))]
+        let mut metal = (std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() == Ok("metal"))
+            .then(|| super::super::surface::SurfaceArena::metal().unwrap());
+        #[cfg(all(target_os = "macos", feature = "native"))]
+        let mut target = if let Some(arena) = metal.as_mut() {
+            arena
+                .create_surface(&target_info.with_alpha_type(AlphaType::Premul))
+                .unwrap()
+        } else {
+            surfaces::raster(&target_info, None, None).unwrap()
+        };
+        #[cfg(not(all(target_os = "macos", feature = "native")))]
         let mut target = surfaces::raster(&target_info, None, None).unwrap();
         let mut paint = Paint::default();
         paint.set_blend_mode(BlendMode::Src);
         paint.set_shader(shader);
         target.canvas().draw_paint(&paint);
         let mut actual = vec![0_u8; target_info.compute_min_byte_size()];
-        assert!(target.read_pixels(&target_info, &mut actual, samples.len() * 4, (0, 0),));
+        let read_info = target.image_info();
+        assert!(target.read_pixels(&read_info, &mut actual, samples.len() * 4, (0, 0),));
 
         let maximum_delta = actual
             .iter()

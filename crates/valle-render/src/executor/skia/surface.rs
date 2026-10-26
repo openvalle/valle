@@ -952,7 +952,7 @@ impl SurfaceArena {
         })
     }
 
-    fn create_surface(&mut self, info: &ImageInfo) -> Result<Surface, SurfaceError> {
+    pub(super) fn create_surface(&mut self, info: &ImageInfo) -> Result<Surface, SurfaceError> {
         match &mut self.backend {
             SurfaceBackend::Raster => raster_surface(info),
             #[cfg(all(target_os = "macos", feature = "native"))]
@@ -2265,6 +2265,35 @@ pub enum SurfaceError {
 #[cfg(test)]
 mod capacity_tests {
     use super::*;
+
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn straight_output_transport_preserves_unassociated_bytes() {
+        let mut arena = SurfaceArena::metal().unwrap();
+        let info = ImageInfo::new((256, 1), ColorType::RGBA8888, AlphaType::Premul, None);
+        let effect = skia_safe::RuntimeEffect::make_for_shader(
+            "half4 main(float2 p) { return half4(1.0, 0.5, 0.25, floor(p.x) / 255.0); }",
+            None,
+        )
+        .unwrap();
+        let shader = effect
+            .make_shader(skia_safe::Data::new_empty(), &[], None)
+            .unwrap();
+        let mut frame = test_frame(&mut arena, 1024 * 1024);
+        let image = frame.render_output_shader_to_raster(shader, &info).unwrap();
+        let pixels = image.peek_pixels().unwrap();
+        for (alpha, pixel) in pixels
+            .bytes()
+            .unwrap()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(*pixel, [255, 128, 64, alpha as u8], "alpha={alpha}");
+        }
+    }
 
     #[test]
     fn stable_gaussian_matches_direct_convolution_across_sigma_steps() {

@@ -983,7 +983,7 @@ impl AdmittedSkiaFrame<'_> {
             .get(&self.template.output())
             .cloned()
             .ok_or(SkiaExecuteError::MissingOutput)?;
-        commit_output(&output, target, &self.effects, &mut surface_frame)?;
+        commit_output(&output, target, &mut self.effects, &mut surface_frame)?;
         if let Some(started) = commit_started {
             eprintln!(
                 "[valle compositor commit] {:.3}ms",
@@ -1960,13 +1960,13 @@ fn draw_plan_image(
 fn commit_output(
     image: &PlanImage,
     target: &mut SkiaTarget<'_>,
-    effects: &EffectRuntime,
+    effects: &mut EffectRuntime,
     surface_frame: &mut SurfaceFrame<'_>,
 ) -> Result<(), SkiaExecuteError> {
     let image = image.image().ok_or(SkiaExecuteError::MissingOutput)?;
     let spec = target.output();
     if target.is_direct_gpu() {
-        let shader = effects.output_shader(image, spec)?;
+        let shader = effects.output_shader(image, spec, false)?;
         if !target.commit_shader(shader) {
             return Err(SkiaExecuteError::TargetCommit);
         }
@@ -1976,7 +1976,7 @@ fn commit_output(
         && spec.dither() != valle_engine::resource::Dither::None
         && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
     {
-        if !target.commit_shader(effects.output_shader(image, spec)?) {
+        if !target.commit_shader(effects.output_shader(image, spec, false)?) {
             return Err(SkiaExecuteError::TargetCommit);
         }
         return Ok(());
@@ -1984,12 +1984,30 @@ fn commit_output(
     #[cfg(all(target_os = "macos", feature = "native"))]
     if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Metal
         && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
-        // Metal cannot allocate a straight-alpha render target.
-        && spec.alpha() != valle_engine::resource::OutputAlphaMode::StraightCoverage
     {
-        let shader = effects.output_shader(image, spec)?;
-        let raster = surface_frame.render_output_shader_to_raster(shader, &target.image_info())?;
-        if !target.commit_image(&raster) {
+        let shader = effects.output_shader(image, spec, true)?;
+        let straight = spec.alpha() == valle_engine::resource::OutputAlphaMode::StraightCoverage;
+        // Metal cannot allocate an unassociated-alpha render target. Store the terminal
+        // codes in a premultiplied *transport* surface instead: Src writes every byte,
+        // and its raw readback must never be drawn or unpremultiplied by Skia again.
+        let info = if straight {
+            target
+                .image_info()
+                .with_alpha_type(skia_safe::AlphaType::Premul)
+        } else {
+            target.image_info()
+        };
+        let raster = surface_frame.render_output_shader_to_raster(shader, &info)?;
+        let committed = if straight {
+            let pixels = raster.peek_pixels().ok_or(SkiaExecuteError::TargetCommit)?;
+            target.commit_pixels(
+                pixels.bytes().ok_or(SkiaExecuteError::TargetCommit)?,
+                pixels.row_bytes(),
+            )
+        } else {
+            target.commit_image(&raster)
+        };
+        if !committed {
             return Err(SkiaExecuteError::TargetCommit);
         }
         return Ok(());
@@ -2005,7 +2023,7 @@ fn commit_output(
             if !target.commit_pixels(staging.pixels(), row_bytes) {
                 return Err(SkiaExecuteError::TargetCommit);
             }
-        } else if !target.commit_shader(effects.output_shader(image, spec)?) {
+        } else if !target.commit_shader(effects.output_shader(image, spec, false)?) {
             return Err(SkiaExecuteError::TargetCommit);
         }
         return Ok(());
