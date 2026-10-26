@@ -5915,6 +5915,152 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(all(feature = "native", target_os = "macos"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn velocity_blur_gpu_matches_its_image_filter() {
+        use objc2_metal::MTLDevice;
+        use skia_safe::gpu;
+        let device = objc2_metal::MTLCreateSystemDefaultDevice().unwrap();
+        let queue = device.newCommandQueue().unwrap();
+        // SAFETY: BackendContext retains the live device and queue.
+        let backend = unsafe {
+            gpu::mtl::BackendContext::new(
+                std::ptr::from_ref(&*device).cast(),
+                std::ptr::from_ref(&*queue).cast(),
+            )
+        };
+        let mut context = gpu::direct_contexts::make_metal(&backend, None).unwrap();
+        let info = ImageInfo::new(
+            (73, 51),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(working_color_space().unwrap()),
+        );
+        let image = varied_halves(97, 65);
+        let mut finite = image.peek_pixels().unwrap().bytes().unwrap().to_vec();
+        for bytes in finite.as_chunks_mut::<2>().0 {
+            if u16::from_le_bytes(*bytes) & 0x7c00 == 0x7c00 {
+                *bytes = [0, 0];
+            }
+        }
+        let image = skia_safe::images::raster_from_data(
+            image.image_info(),
+            Data::new_copy(&finite),
+            97 * 8,
+        )
+        .unwrap();
+        for (size, origin) in [
+            ([97, 65], [0, 0]),
+            ([83, 61], [-7, -3]),
+            ([41, 33], [16, 11]),
+        ] {
+            let source = IRect::from_wh(size[0], size[1]);
+            for (from, to) in [
+                ([-3.25, 0.0], [3.25, 0.0]),
+                ([3.65, -1.45], [-3.65, 1.45]),
+                ([-4.0, 0.0], [4.0, 0.0]),
+                ([-4.001, 0.0005], [4.001, -0.0005]),
+                ([-0.075, 0.0], [0.075, 0.0]),
+                ([-10.0, -2.5], [10.0, 2.5]),
+                ([25.25, -1.5], [-25.25, 1.5]),
+                ([-150.0, 20.0], [150.0, -20.0]),
+                ([-9.5, 0.0], [0.0, 0.0]),
+                ([-6.0, 2.0], [3.0, 5.0]),
+            ] {
+                for clip in [None, Some(IRect::from_ltrb(4, 9, 62, 44))] {
+                    let mut draw = |fused: bool| {
+                        let mut surface = gpu::surfaces::render_target(
+                            &mut context,
+                            gpu::Budgeted::Yes,
+                            &info,
+                            None,
+                            gpu::SurfaceOrigin::TopLeft,
+                            None,
+                            None,
+                            None,
+                        )
+                        .unwrap();
+                        surface.canvas().clear(Color4f::new(0.5, 0.5, 0.5, 1.0));
+                        if let Some(clip) = clip {
+                            surface.canvas().clip_irect(clip, ClipOp::Intersect);
+                        }
+                        let drawn = fused
+                            && super::super::velocity::draw_gpu(
+                                &mut surface,
+                                &image,
+                                source,
+                                origin,
+                                from,
+                                to,
+                            )
+                            .unwrap();
+                        let unsafe_tie = Filter::velocity_blur_offsets(from, to)
+                            .unwrap()
+                            .iter()
+                            .flatten()
+                            .any(|v| (v - v.floor() - 0.5).abs() <= 0.001);
+                        assert_eq!(drawn, fused && !unsafe_tie);
+                        if !drawn {
+                            clear_surface(&mut surface).unwrap();
+                            draw_filters(
+                                surface.canvas(),
+                                &image,
+                                source,
+                                origin,
+                                &[Filter::VelocityBlur { from, to }],
+                            )
+                            .unwrap();
+                        }
+                        let mut pixels = vec![0_u8; 73 * 51 * 8];
+                        assert!(surface.read_pixels(&info, &mut pixels, 73 * 8, (0, 0)));
+                        let rgba_info = info
+                            .with_color_type(ColorType::RGBA8888)
+                            .with_alpha_type(AlphaType::Unpremul);
+                        let mut rgba = vec![0_u8; 73 * 51 * 4];
+                        assert!(surface.read_pixels(&rgba_info, &mut rgba, 73 * 4, (0, 0)));
+                        (pixels, rgba)
+                    };
+                    let expected = draw(false);
+                    let actual = draw(true);
+                    let first = expected
+                        .0
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .zip(actual.0.as_chunks::<8>().0)
+                        .enumerate()
+                        .find(|(_, (a, b))| a != b);
+                    let maximum = expected
+                        .1
+                        .iter()
+                        .zip(&actual.1)
+                        .map(|(a, b)| a.abs_diff(*b))
+                        .max()
+                        .unwrap();
+                    let half_delta = expected
+                        .0
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .zip(actual.0.as_chunks::<2>().0)
+                        .map(|(a, b)| {
+                            (valle_engine::compositor::bloom::half_to_f32(u16::from_le_bytes(*a))
+                                - valle_engine::compositor::bloom::half_to_f32(u16::from_le_bytes(
+                                    *b,
+                                )))
+                            .abs()
+                        })
+                        .fold(0.0_f32, f32::max);
+                    assert!(
+                        maximum <= 1 && half_delta <= 0.001,
+                        "{size:?} at {origin:?}, {from:?} to {to:?}, {clip:?}: rgba8 max={maximum}, F16 delta={half_delta}, first={first:?}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn velocity_blur_computed_per_pixel_keeps_the_bytes_of_its_image_filter() {
         let info = |width, height| {

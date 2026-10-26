@@ -1,8 +1,11 @@
 //! Velocity blur: copies of the input along its trail, averaged. Skia's image filter defines it
-//! on every backend; on Raster, `draw` computes the filter's bytes pixel by pixel instead of
-//! through the filter's intermediate surfaces.
+//! on every backend. Raster uses a byte-exact NEON kernel; GPU uses one shader draw where
+//! the filter's sampling coverage is reproducible without its intermediate surfaces.
 
-use skia_safe::{IRect, Image, Surface};
+use skia_safe::{
+    AlphaType, BlendMode, ColorType, Data, IRect, Image, Paint, RuntimeEffect, SamplingOptions,
+    Surface, TileMode, runtime_effect::ChildPtr,
+};
 use valle_draw::program::Filter;
 
 use super::draw::DrawError;
@@ -27,15 +30,124 @@ pub(super) fn weight(samples: usize) -> [f32; 20] {
     ]
 }
 
-/// The velocity blur of the `source` subset of `input`, placed at canvas `origin`, as the image
-/// filter computes it on Raster, written straight into the pixels of the canvas's clip.
-///
-/// The filter samples translated copies of the input at their nearest pixels, weights each
-/// through the color matrix and adds them with Plus blends, each drawn into a surface of its own.
-/// Here each pixel takes the same samples, the same arithmetic and the same rounding of every
-/// partial sum to half floats. Returns `false`, drawing nothing, where the filter's own draw
-/// stays: where Skia would crop, filter or place a copy in a way the kernel does not follow.
-#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+/// A single GPU draw over the scheduled device-space pass. Raster keeps its byte-exact NEON
+/// kernel; the original filter tree remains available for unsupported surfaces and comparisons.
+pub(super) fn draw_gpu(
+    surface: &mut Surface,
+    input: &Image,
+    source: IRect,
+    origin: [i32; 2],
+    from: [f32; 2],
+    to: [f32; 2],
+) -> Result<bool, DrawError> {
+    let info = surface.image_info();
+    if surface.canvas().peek_pixels().is_some()
+        || !surface.canvas().local_to_device_as_3x3().is_identity()
+        || info.color_type() != ColorType::RGBAF16
+        || info.alpha_type() != AlphaType::Premul
+        || input.color_type() != ColorType::RGBAF16
+        || input.alpha_type() != AlphaType::Premul
+        || input.color_space() != info.color_space()
+        || source.is_empty()
+        || source.left != 0
+        || source.top != 0
+        || source.right > input.width()
+        || source.bottom > input.height()
+        || std::env::var_os("VALLE_VELOCITY_BLUR_FILTER_REFERENCE").is_some()
+    {
+        return Ok(false);
+    }
+    let Some(offsets) = offsets(from, to) else {
+        return Ok(false);
+    };
+    let Some(clip) = surface.canvas().device_clip_bounds() else {
+        return Ok(false);
+    };
+    // The filter tree can rescale oversized inputs. GPU texture normalization also makes an
+    // exact half-texel tie depend on its intermediate surface's coordinates. Keep that path
+    // where a single nearest lookup cannot reproduce its coverage reliably.
+    let largest = (2 * clip.width().max(clip.height())).max(2048);
+    let coordinate = (origin[0] as f32).abs() + source.width() as f32;
+    let coordinate = coordinate
+        .max((origin[1] as f32).abs() + source.height() as f32)
+        .max(
+            clip.left
+                .abs()
+                .max(clip.right.abs())
+                .max(clip.top.abs())
+                .max(clip.bottom.abs()) as f32,
+        );
+    let tie_margin = (coordinate * (4.0 * f32::EPSILON)).max(0.001);
+    if source.width() > largest
+        || source.height() > largest
+        || origin.iter().any(|&v| v.unsigned_abs() >= 1_048_576)
+        || offsets
+            .iter()
+            .flat_map(|&(x, y)| [x, y])
+            .any(|v| (v - v.floor() - 0.5).abs() <= tie_margin)
+    {
+        return Ok(false);
+    }
+    thread_local! {
+        static EFFECT: Result<RuntimeEffect, String> = RuntimeEffect::make_for_shader(
+            include_str!("../../../../valle-draw/assets/shaders/velocityblur.sksl"), None,
+        );
+    }
+    EFFECT.with(|effect| {
+        let effect = effect
+            .as_ref()
+            .map_err(|message| DrawError::ShaderCompile {
+                uri: "builtin://velocity-blur".into(),
+                message: message.clone(),
+            })?;
+        let mut uniforms = vec![
+            source.width() as f32,
+            source.height() as f32,
+            origin[0] as f32,
+            origin[1] as f32,
+            offsets.len() as f32,
+            0.0,
+        ];
+        let matrix = weight(offsets.len());
+        uniforms.extend((0..4).flat_map(|column| (0..4).map(move |row| matrix[row * 5 + column])));
+        uniforms.extend([0.0; 4]);
+        uniforms.extend(offsets.iter().flat_map(|&(x, y)| [x, y]));
+        uniforms.resize(26 + 32 * 2, 0.0);
+        let bytes = uniforms
+            .iter()
+            .flat_map(|v| v.to_ne_bytes())
+            .collect::<Vec<_>>();
+        if bytes.len() != effect.uniform_size() {
+            return Err(DrawError::Internal(
+                "GPU velocity blur shader ABI mismatch".into(),
+            ));
+        }
+        let image = input
+            .to_raw_shader(
+                (TileMode::Clamp, TileMode::Clamp),
+                SamplingOptions::default(),
+                None,
+            )
+            .ok_or_else(|| DrawError::Unsupported("GPU velocity blur input".into()))?;
+        let shader = effect
+            .make_shader(Data::new_copy(&bytes), &[ChildPtr::Shader(image)], None)
+            .ok_or_else(|| DrawError::Unsupported("GPU velocity blur shader".into()))?;
+        let mut paint = Paint::default();
+        paint.set_blend_mode(BlendMode::Src);
+        paint.set_shader(shader);
+        surface.canvas().draw_paint(&paint);
+        if std::env::var_os("VALLE_TRACE_F16_STAGES").is_some() {
+            eprintln!(
+                "[valle f16] gpu-velocity-blur {} taps (no intermediate readback)",
+                offsets.len()
+            );
+        }
+        Ok(true)
+    })
+}
+
+/// Draws the velocity blur directly into the scheduled clip, retaining intermediate F16
+/// rounding. Returns false without drawing where Skia's original filter tree is needed.
 pub(super) fn draw(
     surface: &mut Surface,
     input: &Image,
@@ -44,21 +156,17 @@ pub(super) fn draw(
     from: [f32; 2],
     to: [f32; 2],
 ) -> Result<bool, DrawError> {
-    fused::draw(surface, input, source, origin, from, to)
-}
-
-/// The kernel repeats the instructions of Skia's raster pipeline on aarch64; elsewhere the
-/// filter's own draw stays.
-#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
-pub(super) fn draw(
-    _surface: &mut Surface,
-    _input: &Image,
-    _source: IRect,
-    _origin: [i32; 2],
-    _from: [f32; 2],
-    _to: [f32; 2],
-) -> Result<bool, DrawError> {
-    Ok(false)
+    if draw_gpu(surface, input, source, origin, from, to)? {
+        return Ok(true);
+    }
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        fused::draw(surface, input, source, origin, from, to)
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+    {
+        Ok(false)
+    }
 }
 
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]

@@ -1,0 +1,47 @@
+// One draw replaces the translated color-filter / Plus image-filter tree. Each intermediate
+// Plus surface used F16: preserve that rounding instead of accumulating the whole trail in F32.
+uniform shader image;
+uniform float2 sourceSize;
+uniform float2 origin;
+uniform float samples;
+// Native Metal rounds half arithmetic itself; WebGL mediump may retain F32 intermediates.
+uniform float roundPartialSums;
+uniform half4x4 matrix;
+uniform half4 bias;
+uniform float2 offsets[32];
+
+float nearestHalf(float value) {
+    float magnitude = abs(value);
+    if (magnitude == 0.0) return value;
+    float stepSize = exp2(max(-24.0, floor(log2(magnitude)) - 10.0));
+    float scaled = magnitude / stepSize;
+    float base = floor(scaled);
+    float part = scaled - base;
+    float increment = part > 0.5 || (part == 0.5 && mod(base, 2.0) == 1.0) ? 1.0 : 0.0;
+    return sign(value) * (base + increment) * stepSize;
+}
+float4 rounded(float4 value) {
+    return float4(nearestHalf(value.r), nearestHalf(value.g), nearestHalf(value.b), nearestHalf(value.a));
+}
+half4 at(float2 p) {
+    // Skia's nearest sampling resolves an exact texel boundary toward the preceding texel.
+    float2 pixel = ceil(p) - 1.0;
+    if (pixel.x < 0.0 || pixel.y < 0.0 || pixel.x >= sourceSize.x || pixel.y >= sourceSize.y) return half4(0.0);
+    half4 color = image.eval(pixel + 0.5);
+    // The original matrix operates on straight color, clamps, then premultiplies with the
+    // weighted alpha. This also preserves its clipping of out-of-range and HDR input channels.
+    color.rgb /= max(color.a, 0.0001);
+    color = clamp(matrix * color + bias, 0.0, 1.0);
+    color.rgb *= color.a;
+    return color;
+}
+half4 main(float2 p) {
+    half4 sum = at(p - origin - offsets[0]);
+    for (int i = 1; i < 32; ++i) {
+        if (float(i) < samples) {
+            sum = min(sum + at(p - origin - offsets[i]), half4(1.0));
+            if (roundPartialSums > 0.5) sum = half4(rounded(float4(sum)));
+        }
+    }
+    return half4(sum);
+}

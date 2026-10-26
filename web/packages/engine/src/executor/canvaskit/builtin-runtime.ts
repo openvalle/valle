@@ -7,6 +7,7 @@ import lensDistortionSource from "../../../../../../crates/valle-draw/assets/sha
 import noiseDisplacementSource from "../../../../../../crates/valle-draw/assets/shaders/noisedisplacement.sksl" with { type: "text" };
 import scene3dDofSource from "../../../../../../crates/valle-draw/assets/shaders/scene3ddof.sksl" with { type: "text" };
 import chromaticAberrationSource from "../../../../../../crates/valle-draw/assets/shaders/chromaticaberration.sksl" with { type: "text" };
+import velocityBlurSource from "../../../../../../crates/valle-draw/assets/shaders/velocityblur.sksl" with { type: "text" };
 import chromaKeySource from "../../../../../../crates/valle-draw/assets/shaders/chromakey.sksl" with { type: "text" };
 import circleOpenSource from "../../../../../../crates/valle-draw/assets/shaders/circleopen.sksl" with { type: "text" };
 import colorGradeSource from "../../../../../../crates/valle-draw/assets/shaders/colorgrade.sksl" with { type: "text" };
@@ -69,6 +70,7 @@ const BUILTIN_SOURCES = Object.freeze({
   scene3dDof,
   radialBlur: radialBlurSource,
   chromaticAberration: chromaticAberrationSource,
+  velocityBlur: velocityBlurSource,
   circleOpen: circleOpenSource,
   colorGrade: colorGradeSource,
   creativeBlend: creativeBlendSource,

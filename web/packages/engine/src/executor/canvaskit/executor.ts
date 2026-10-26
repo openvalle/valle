@@ -41,6 +41,7 @@ import { RasterTreeCache, type RasterTreeSignature } from "./raster-tree-cache.t
 import { canvasKitGpuCacheBudget } from "./gpu-budget.ts";
 import { drawPyramidFilter, drawPyramidFilterCooperative, pyramidWorkingBytes } from "./pyramid.ts";
 import { drawLensDistortion } from "./lens.ts";
+import { velocityBlurUniforms } from "./velocity.ts";
 import type { CircleBatch, GpuCircles } from "../webgl/circles.ts";
 import { cropProgramInputs } from "./filter-roi.ts";
 import {
@@ -2016,6 +2017,7 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
           "filmGrain",
           "lensDistortion",
           "chromaticAberration",
+          "velocityBlur",
           "noiseDisplacement",
         ].includes(kind),
       ) &&
@@ -2513,6 +2515,33 @@ async function executeProgramPass(
           source.delete();
         }
         return;
+      }
+      if (filter.kind === "velocityBlur" && arena.gpu) {
+        const input = programValue(values, kind.input);
+        if (!input.image) return;
+        const uniforms = velocityBlurUniforms(
+          input.roi,
+          outputRoi,
+          pair(filter.from, "velocity blur trail start"),
+          pair(filter.to, "velocity blur trail end"),
+        );
+        if (uniforms) {
+          const source = input.image.makeShaderOptions(
+            CanvasKit.TileMode.Clamp,
+            CanvasKit.TileMode.Clamp,
+            CanvasKit.FilterMode.Nearest,
+            CanvasKit.MipmapMode.None,
+          );
+          let shader: Shader | null = null;
+          try {
+            shader = builtins.shader("velocityBlur", uniforms, [source]);
+            drawShader(CanvasKit, canvas, shader, "src");
+          } finally {
+            shader?.delete();
+            source.delete();
+          }
+          return;
+        }
       }
       if (filter.kind === "radialBlur") {
         const planner = engineKernels?.plan_radial_blur;
@@ -7911,6 +7940,7 @@ function requiredBuiltinKernels(plan: Wire, programs: Wire[]): Set<BuiltinKernel
         const filter = record(kind.filter, "program filter").kind;
         if (
           filter === "chromaticAberration" ||
+          filter === "velocityBlur" ||
           filter === "filmGrain" ||
           filter === "radialBlur" ||
           filter === "lensDistortion"
