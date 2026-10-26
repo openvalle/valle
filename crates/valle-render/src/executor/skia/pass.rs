@@ -407,7 +407,7 @@ impl AdmittedSkiaFrame<'_> {
         let external_images = materialize_external_visuals(&self.bound, &mut surface_frame)?;
         for program in self.programs.values_mut() {
             program
-                .resolve_deferred_scenes(&external_images.images)
+                .resolve_deferred_visuals(&external_images.images)
                 .map_err(|error| SkiaExecuteError::Program(error.to_string()))?;
         }
 

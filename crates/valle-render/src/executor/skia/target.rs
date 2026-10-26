@@ -557,6 +557,14 @@ impl SkiaExternalObject {
         }
     }
 
+    pub(crate) fn is_deferred_video(&self) -> bool {
+        #[cfg(feature = "native")]
+        if matches!(self.payload, SkiaObjectPayload::DecodedVideo(_)) {
+            return true;
+        }
+        false
+    }
+
     #[cfg(feature = "native")]
     pub(crate) fn decoded_video(&self) -> Option<&Arc<valle_media::SourceFrame>> {
         match &self.payload {

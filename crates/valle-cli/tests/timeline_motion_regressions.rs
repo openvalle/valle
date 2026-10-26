@@ -187,7 +187,7 @@ fn shared_video_samples_crossfade_and_standalone_motion_uses_real_video_facts() 
     } else {
         vec!["raster"]
     };
-    for backend in backends {
+    for &backend in &backends {
         let output = format!("{backend}-%02d.png");
         let report = success(run(
             dir,
@@ -241,6 +241,44 @@ export default function Main(){return <Scene><Video src="asset://film" sourceSta
     }
     let color = pixel(dir, "video.png", 32, 18);
     assert!(color[2] > 200 && color[0] < 20, "{color:?}");
+
+    // Motion textures must retain their node-local timestamps and bind the imported
+    // hardware frame before drawing. A plain Timeline video exercises a different path.
+    std::fs::write(dir.join("sampled.motion.tsx"),r#"export const composition={width:64,height:36,fps:60,duration:1};
+export const controls={assets:{film:asset({kind:"video",required:true})}};
+export default function Main(){const time=useCurrentTime();return <Scene><Video src="asset://film" sourceStart={0.6+time.seconds} speed={0} style={{width:64,height:36}}/></Scene>;}
+"#).unwrap();
+    put(
+        dir,
+        "sampled.json",
+        json!({"canvas":{"width":64,"height":36,"fps":60},"resources":{"motion":"sampled.motion.tsx","film":"source.mp4"},"tracks":{"visual":[{"clips":[{"kind":"motion","component":"motion","start":30,"duration":1,"resources":{"film":"film"}}]}]}}),
+    );
+    for &backend in &backends {
+        success(run(
+            dir,
+            &[
+                "timeline",
+                "render",
+                "sampled.json",
+                "--frames",
+                "1800,1801,1830,1859",
+                "--backend",
+                backend,
+                "--threads",
+                "1",
+                "-o",
+                &format!("sampled-{backend}-%d.png"),
+            ],
+        ));
+        for (frame, red) in [(1800, true), (1801, true), (1830, false), (1859, false)] {
+            let color = pixel(dir, &format!("sampled-{backend}-{frame}.png"), 32, 18);
+            let (wanted, other) = if red { (0, 2) } else { (2, 0) };
+            assert!(
+                color[wanted] > 200 && color[other] < 20,
+                "{backend} frame {frame}: {color:?}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -34,8 +34,8 @@ use valle_engine::compositor::{
 use valle_engine::{
     prepare::{DeviceRect, DeviceTransform, ExternalSample},
     resource::{
-        ColorDescription, ContentDigest, Extent2d, InputAlphaMode, ResourceInterpretation,
-        SignalLuminance, VisualInterpretation,
+        ColorDescription, ContentDigest, Extent2d, ExternalResourceDesc, InputAlphaMode,
+        ResourceInterpretation, SignalLuminance, VisualInterpretation,
     },
 };
 
@@ -119,6 +119,7 @@ pub(crate) struct ProgramTexture {
     image: Image,
     interpretation: Option<VisualInterpretation>,
     size: [u32; 2],
+    deferred_slot: Option<ExternalSlotId>,
 }
 
 impl ProgramTexture {
@@ -127,6 +128,7 @@ impl ProgramTexture {
         let size = [image.width() as u32, image.height() as u32];
         Self {
             image,
+            deferred_slot: None,
             interpretation: Some(VisualInterpretation::new(
                 ColorDescription::LINEAR_REC2020,
                 SignalLuminance::SDR_100,
@@ -178,6 +180,7 @@ impl ProgramRuntime {
             let object = bound
                 .get(slot)
                 .ok_or_else(|| DrawError::MissingTexture(requirement.key.clone()))?;
+            let mut deferred_slot = None;
             let (image, interpretation, size) =
                 match (&object.key().interpretation, requirement.color_domain) {
                     (
@@ -196,13 +199,24 @@ impl ProgramRuntime {
                     (ResourceInterpretation::Visual { interpretation }, domain)
                         if domain != valle_draw::requirements::ColorDomain::Data =>
                     {
-                        let image = object
-                            .visual_image()
-                            .ok_or_else(|| DrawError::MissingTexture(requirement.key.clone()))?;
+                        let image = match object.visual_image() {
+                            Some(image) => image.clone(),
+                            None if object.is_deferred_video() => {
+                                deferred_slot = Some(slot);
+                                transparent_pixel()?
+                            }
+                            None => {
+                                return Err(DrawError::MissingTexture(requirement.key.clone()));
+                            }
+                        };
+                        let ExternalResourceDesc::VisualFrame { extent, .. } = object.descriptor()
+                        else {
+                            return Err(DrawError::MissingTexture(requirement.key.clone()));
+                        };
                         (
-                            image.clone(),
+                            image,
                             Some(*interpretation),
-                            [image.width() as u32, image.height() as u32],
+                            [extent.width(), extent.height()],
                         )
                     }
                     _ => return Err(DrawError::MissingTexture(requirement.key.clone())),
@@ -214,6 +228,7 @@ impl ProgramRuntime {
                         image,
                         interpretation,
                         size,
+                        deferred_slot,
                     },
                 )
                 .is_some()
@@ -417,10 +432,21 @@ impl ProgramRuntime {
         }
     }
 
-    pub(crate) fn resolve_deferred_scenes(
+    pub(crate) fn resolve_deferred_visuals(
         &mut self,
         images: &BTreeMap<ExternalSlotId, Image>,
     ) -> Result<(), DrawError> {
+        for (key, texture) in &mut self.textures {
+            if let Some(slot) = texture.deferred_slot.take() {
+                // Admission validates the texture ABI before a GPU context is borrowed.
+                // Replace its preflight placeholder with the exact imported video frame
+                // (or its CPU fallback) before any image or shader can sample it.
+                texture.image = images
+                    .get(&slot)
+                    .cloned()
+                    .ok_or_else(|| DrawError::MissingTexture(key.key.clone()))?;
+            }
+        }
         for scene in self.scenes.values_mut() {
             if let SceneImage::Deferred(slot) = scene {
                 *scene = SceneImage::Ready(images.get(slot).cloned().ok_or_else(|| {
