@@ -3363,6 +3363,14 @@ function drawBatchNode(
     shape.kind === "roundRect"
       ? roundRect(CanvasKit, record(shape.value, "instance round rect"))
       : null;
+  const rectangleFill =
+    shape.kind === "rect" ||
+    (shape.kind === "roundRect" &&
+      array(record(shape.value, "instance round rect").radii, "instance radii").every((radius) =>
+        numberArray(radius, 2, "instance radius").every((value) => value === 0),
+      )) ||
+    (shape.kind === "path" &&
+      paintRectangleBounds(requiredIndex(program.paths, shape.value, "batch path")) !== null);
   let fixedDash: ReturnType<typeof CanvasKit.PathEffect.MakeDash> | null = null;
   try {
     fillPaint.setAntiAlias(true);
@@ -3487,12 +3495,12 @@ function drawBatchNode(
       const strokeAlpha =
         strokeRange === null ? alpha : strokeView.getFloat32(strokeOffset + 12, true);
       if (opacity <= 0 || (alpha <= 0 && (strokeWidth <= 0 || strokeAlpha <= 0))) continue;
-      // A fill-only rectangle produces one draw. Folding group opacity into its paint
-      // avoids allocating and compositing a separate GPU layer for every instance.
+      // Rectangle-equivalent fills share the existing rectangle coverage path. Curves,
+      // images and a visible stroke retain their isolated opacity layer.
       const directOpacity =
         imageNode === null &&
-        shape.kind === "rect" &&
-        strokeWidth === 0 &&
+        rectangleFill &&
+        !(strokeWidth > 0 && strokeAlpha > 0) &&
         alpha > 0 &&
         (pathStyle === null || pathStyle.fill === true);
       if (opacity < 1 && !directOpacity) {

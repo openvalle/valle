@@ -4206,18 +4206,23 @@ fn write_f32s(data: &mut [u8], offset: usize, values: &[f32]) -> Result<(), Draw
 
 fn exact_instance_opacity(
     canvas: &skia_safe::Canvas,
-    shape: &InstanceShape,
+    rectangle: Rect,
     transform: valle_draw::program::Affine2d,
     color: LinearColor,
     opacity: f32,
+    stroke_width: f32,
 ) -> bool {
-    if !matches!(shape, InstanceShape::Rect)
-        || !canvas.is_clip_rect()
-        || color.alpha != 1.0
-        || ![color.red, color.green, color.blue]
+    use valle_engine::compositor::bloom::{f32_to_half, half_to_f32};
+    if !matches!(
+        canvas.image_info().color_type(),
+        ColorType::RGBAF16 | ColorType::RGBAF32
+    ) || !canvas.is_clip_rect()
+        || ![color.red, color.green, color.blue, color.alpha]
             .iter()
-            .all(|value| *value == 0.0 || *value == 1.0)
-        || ![0.5, 0.25, 0.125].contains(&opacity)
+            .all(|value| {
+                half_to_f32(f32_to_half(*value)) == *value
+                    && half_to_f32(f32_to_half(*value * opacity)) == *value * opacity
+            })
     {
         return false;
     }
@@ -4227,11 +4232,44 @@ fn exact_instance_opacity(
         a as f32, c as f32, e as f32, b as f32, d as f32, f as f32, 0.0, 0.0, 1.0,
     );
     let combined = Matrix::concat(&matrix, &local);
-    let (bounds, rectangular) = combined.map_rect(SkRect::from_xywh(0.0, 0.0, 1.0, 1.0));
-    rectangular
-        && [bounds.left, bounds.top, bounds.right, bounds.bottom]
-            .iter()
-            .all(|value| value.is_finite() && value.fract() == 0.0)
+    let Some(clip) = canvas.device_clip_bounds() else {
+        return false;
+    };
+    let exact_edges = |rect| {
+        let (bounds, rectangular) = combined.map_rect(sk_rect(rect));
+        rectangular
+            && [bounds.left, bounds.top, bounds.right, bounds.bottom]
+                .iter()
+                .all(|value| value.is_finite() && value.fract() == 0.0)
+            // An antialiased rectangular clip can still have fractional edge
+            // coverage. Keep the draw inside its fully covered interior.
+            && bounds.left >= clip.left as f32 + 1.0
+            && bounds.top >= clip.top as f32 + 1.0
+            && bounds.right <= clip.right as f32 - 1.0
+            && bounds.bottom <= clip.bottom as f32 - 1.0
+    };
+    if stroke_width == 0.0 {
+        exact_edges(rectangle)
+    } else {
+        let half = f64::from(stroke_width) * 0.5;
+        let inner = Rect::from_edges(
+            rectangle.left() + half,
+            rectangle.top() + half,
+            rectangle.right() - half,
+            rectangle.bottom() - half,
+        );
+        // Mitered rectangle strokes have only an inner and outer rectangular edge.
+        // Keep collapsed strokes on the reference path.
+        inner.width > 0.0
+            && inner.height > 0.0
+            && exact_edges(inner)
+            && exact_edges(Rect::from_edges(
+                rectangle.left() - half,
+                rectangle.top() - half,
+                rectangle.right() + half,
+                rectangle.bottom() + half,
+            ))
+    }
 }
 
 fn draw_instance_batch(
@@ -4328,6 +4366,32 @@ fn draw_instance_batch(
     } else {
         None
     };
+    let rectangle = match &batch.shape {
+        InstanceShape::Rect => Some(Rect::new(0.0, 0.0, 1.0, 1.0)),
+        InstanceShape::RoundRect(rect)
+            if rect.radii.iter().flatten().all(|radius| *radius == 0.0) =>
+        {
+            Some(rect.rect)
+        }
+        InstanceShape::Path(_) => {
+            batch_path
+                .as_ref()
+                .and_then(|path| path.is_rect())
+                .map(|(bounds, _, _)| {
+                    Rect::from_edges(
+                        f64::from(bounds.left),
+                        f64::from(bounds.top),
+                        f64::from(bounds.right),
+                        f64::from(bounds.bottom),
+                    )
+                })
+        }
+        _ => None,
+    };
+    #[cfg(all(feature = "native", target_os = "macos"))]
+    let gpu = canvas.recording_context().is_some();
+    #[cfg(not(all(feature = "native", target_os = "macos")))]
+    let gpu = false;
     for row in 0..batch.instances.len() {
         let opacity = batch.instances.opacities[row];
         let color = batch.instances.colors[row];
@@ -4348,18 +4412,30 @@ fn draw_instance_batch(
         let stroke = stroke_width > 0.0 && stroke_color.alpha > 0.0;
         // Only fold the proven exact case. Fractional coverage and arbitrary F16 colors
         // round differently through an isolated layer, even for one draw.
-        let direct_opacity = fill
-            && !stroke
-            && exact_instance_opacity(canvas, &batch.shape, transform, color, opacity);
-        let color = if direct_opacity {
-            color.scale_opacity(opacity)
+        let direct_opacity = opacity < 1.0
+            && fill != stroke
+            && (!stroke || !matches!(batch.shape, InstanceShape::Path(_)))
+            && rectangle.is_some_and(|rectangle| {
+                exact_instance_opacity(
+                    canvas,
+                    rectangle,
+                    transform,
+                    if fill { color } else { stroke_color },
+                    opacity,
+                    if stroke { stroke_width } else { 0.0 },
+                )
+            });
+        // Ganesh restores an isolated image with an eight-bit vertex alpha. A
+        // runtime color shader uses a float uniform instead; match the restore's
+        // alpha before bypassing that image operation.
+        let paint_opacity = if direct_opacity {
+            if gpu {
+                (opacity * 255.0).round() / 255.0
+            } else {
+                opacity
+            }
         } else {
-            color
-        };
-        let stroke_color = if direct_opacity {
-            stroke_color.scale_opacity(opacity)
-        } else {
-            stroke_color
+            1.0
         };
         let local_bounds = match &batch.shape {
             InstanceShape::Path(_) => path_local_bounds.map(|bounds| {
@@ -4416,6 +4492,7 @@ fn draw_instance_batch(
             )?;
         } else if color.alpha > 0.0 && batch.path_style.as_ref().is_none_or(|style| style.fill) {
             set_working_color(&mut paint, color)?;
+            paint.set_alpha_f(paint_opacity);
             paint.set_style(PaintStyle::Fill);
             paint.set_path_effect(None);
             match &batch.shape {
@@ -4440,6 +4517,7 @@ fn draw_instance_batch(
                 let mut row_paint = SkPaint::default();
                 row_paint.set_anti_alias(true);
                 set_working_color(&mut row_paint, stroke_color)?;
+                row_paint.set_alpha_f(paint_opacity);
                 row_paint.set_style(PaintStyle::Stroke);
                 row_paint.set_stroke_width(stroke_width);
                 row_paint.set_stroke_miter(style.miter_limit);
@@ -4468,6 +4546,7 @@ fn draw_instance_batch(
                 row_paint
             } else {
                 set_working_color(&mut paint, stroke_color)?;
+                paint.set_alpha_f(paint_opacity);
                 paint.set_style(PaintStyle::Stroke);
                 paint.set_stroke_width(stroke_width);
                 &paint
@@ -6557,14 +6636,67 @@ mod tests {
 
     #[test]
     fn single_draw_instance_opacity_matches_isolated_group_coverage() {
+        check_instance_opacity(
+            &[ColorType::RGBAF16, ColorType::RGBAF32, ColorType::RGBA8888],
+            |info| skia_safe::surfaces::raster(info, None, None).unwrap(),
+        );
+    }
+
+    #[cfg(all(feature = "native", target_os = "macos"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn instance_opacity_preserves_metal_coverage() {
+        use objc2_metal::MTLDevice;
+        use skia_safe::gpu;
+        let device = objc2_metal::MTLCreateSystemDefaultDevice().unwrap();
+        let queue = device.newCommandQueue().unwrap();
+        // SAFETY: BackendContext retains the live device and queue.
+        let backend = unsafe {
+            gpu::mtl::BackendContext::new(
+                std::ptr::from_ref(&*device).cast(),
+                std::ptr::from_ref(&*queue).cast(),
+            )
+        };
+        let mut context = gpu::direct_contexts::make_metal(&backend, None).unwrap();
+        check_instance_opacity(&[ColorType::RGBAF16], |info| {
+            gpu::surfaces::render_target(
+                &mut context,
+                gpu::Budgeted::Yes,
+                info,
+                None,
+                gpu::SurfaceOrigin::TopLeft,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+    }
+
+    fn check_instance_opacity(
+        color_types: &[ColorType],
+        mut make_surface: impl FnMut(&ImageInfo) -> Surface,
+    ) {
         use valle_draw::program::{Affine2d, DrawProgramBuilder, InstanceColumns};
+        let rectangle_path = valle_draw::program::PathData {
+            verbs: vec![
+                valle_draw::program::PathVerb::MoveTo,
+                valle_draw::program::PathVerb::LineTo,
+                valle_draw::program::PathVerb::LineTo,
+                valle_draw::program::PathVerb::LineTo,
+                valle_draw::program::PathVerb::Close,
+            ],
+            points: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        };
+        let rectangle_id = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 64.0))
+            .push_path(rectangle_path.clone());
         let read_info = ImageInfo::new(
             (64, 64),
             skia_safe::ColorType::RGBAF32,
             skia_safe::AlphaType::Premul,
             Some(working_color_space().unwrap()),
         );
-        for color_type in [skia_safe::ColorType::RGBAF16, skia_safe::ColorType::RGBAF32] {
+        for &color_type in color_types {
             let info = read_info.with_color_type(color_type);
             for shape in [
                 InstanceShape::Circle,
@@ -6573,8 +6705,13 @@ mod tests {
                     Rect::new(0.0, 0.0, 1.0, 1.0),
                     [0.2; 4],
                 )),
+                InstanceShape::RoundRect(RoundRect::circular(
+                    Rect::new(0.0, 0.0, 1.0, 1.0),
+                    [0.0; 4],
+                )),
+                InstanceShape::Path(rectangle_id),
             ] {
-                for stroke in [0.0, 0.2] {
+                for stroke in [0.0, 0.25] {
                     for (transform, color, opacity) in [
                         (
                             Affine2d([24.0, 7.0, -4.0, 22.0, 18.3, 12.7]),
@@ -6586,6 +6723,21 @@ mod tests {
                             LinearColor::new(1.0, 1.0, 1.0, 1.0),
                             0.5,
                         ),
+                        (
+                            Affine2d([24.0, 0.0, 0.0, 24.0, 12.0, 12.0]),
+                            LinearColor::new(0.5, 0.125, 0.25, 0.5),
+                            0.75,
+                        ),
+                        (
+                            Affine2d([24.0, 0.0, 0.0, 24.0, 12.0, 12.0]),
+                            LinearColor::new(0.0, 0.0, 0.0, 0.0),
+                            0.375,
+                        ),
+                        (
+                            Affine2d([24.0, 0.0, 0.0, 24.0, 12.0, 12.0]),
+                            LinearColor::new(2.0, -0.25, 4.0, 0.5),
+                            0.625,
+                        ),
                     ] {
                         let batch = InstanceBatchNode {
                             shape: shape.clone(),
@@ -6593,65 +6745,119 @@ mod tests {
                             instances: InstanceColumns {
                                 transforms: vec![transform],
                                 colors: vec![color],
-                                stroke_colors: vec![LinearColor::new(0.05, 0.1, 0.5, 0.5)],
+                                stroke_colors: vec![LinearColor::new(0.125, 0.25, 0.5, 0.5)],
                                 stroke_widths: vec![stroke],
                                 opacities: vec![opacity],
                                 dash_offsets: Vec::new(),
                             },
                         };
                         let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 64.0, 64.0));
+                        if matches!(shape, InstanceShape::Path(_)) {
+                            builder.push_path(rectangle_path.clone());
+                        }
                         let root = builder.push_node(Node::InstanceBatch(batch.clone()));
                         builder.add_root(root);
                         let program = builder.finish().unwrap();
-                        let render = |isolated: bool| {
-                            let mut surface =
-                                skia_safe::surfaces::raster(&info, None, None).unwrap();
-                            surface.canvas().clear(Color4f::new(0.1, 0.2, 0.3, 0.7));
-                            let mut batch = batch.clone();
-                            if matches!(shape, InstanceShape::Rect)
-                                && stroke == 0.0
-                                && opacity == 0.5
-                            {
-                                assert!(exact_instance_opacity(
-                                    surface.canvas(),
-                                    &shape,
-                                    transform,
-                                    color,
-                                    opacity
-                                ));
-                            }
-                            if isolated {
-                                let bounds = match batch.shape {
-                                    InstanceShape::Rect | InstanceShape::RoundRect(_)
-                                        if stroke == 0.0 =>
-                                    {
-                                        Transform2d::from_affine(transform)
-                                            .map_bounds(Rect::new(0.0, 0.0, 1.0, 1.0))
-                                            .map(sk_rect)
+                        for clip in 0..3 {
+                            let mut render = |isolated: bool| {
+                                let mut surface = make_surface(&info);
+                                surface.canvas().clear(Color4f::new(0.1, 0.2, 0.3, 0.7));
+                                match clip {
+                                    1 => {
+                                        surface.canvas().clip_rect(
+                                            SkRect::from_xywh(14.25, 14.125, 20.5, 30.5),
+                                            ClipOp::Intersect,
+                                            true,
+                                        );
                                     }
-                                    _ => None,
-                                };
-                                surface.canvas().save_layer_alpha_f(bounds, opacity);
-                                batch.instances.opacities[0] = 1.0;
-                            }
-                            draw_instance_batch(
-                                &program,
-                                &BTreeMap::new(),
-                                surface.canvas(),
-                                &batch,
-                            )
-                            .unwrap();
-                            if isolated {
-                                surface.canvas().restore();
-                            }
-                            let mut bytes = vec![0u8; 64 * 64 * 16];
-                            assert!(surface.read_pixels(&read_info, &mut bytes, 64 * 16, (0, 0)));
-                            bytes
-                        };
-                        assert!(
-                            render(false) == render(true),
-                            "shape={shape:?} stroke={stroke} opacity={opacity} color_type={color_type:?}"
-                        );
+                                    2 => {
+                                        surface.canvas().clip_rrect(
+                                            RRect::new_rect_xy(
+                                                SkRect::from_xywh(10.0, 10.0, 40.0, 40.0),
+                                                8.0,
+                                                8.0,
+                                            ),
+                                            ClipOp::Intersect,
+                                            true,
+                                        );
+                                    }
+                                    _ => (),
+                                }
+                                let mut batch = batch.clone();
+                                if matches!(shape, InstanceShape::Rect)
+                                    && stroke == 0.0
+                                    && opacity == 0.5
+                                    && clip == 0
+                                    && color_type != ColorType::RGBA8888
+                                {
+                                    assert!(exact_instance_opacity(
+                                        surface.canvas(),
+                                        Rect::new(0.0, 0.0, 1.0, 1.0),
+                                        transform,
+                                        color,
+                                        opacity,
+                                        0.0,
+                                    ));
+                                }
+                                if isolated {
+                                    let bounds = match batch.shape {
+                                        InstanceShape::Path(_) => {
+                                            Transform2d::from_affine(transform)
+                                                .map_bounds(Rect::from_edges(
+                                                    -2.0 * f64::from(stroke),
+                                                    -2.0 * f64::from(stroke),
+                                                    1.0 + 2.0 * f64::from(stroke),
+                                                    1.0 + 2.0 * f64::from(stroke),
+                                                ))
+                                                .map(sk_rect)
+                                        }
+                                        InstanceShape::Rect | InstanceShape::RoundRect(_)
+                                            if stroke == 0.0 =>
+                                        {
+                                            Transform2d::from_affine(transform)
+                                                .map_bounds(Rect::new(0.0, 0.0, 1.0, 1.0))
+                                                .map(sk_rect)
+                                        }
+                                        _ => None,
+                                    };
+                                    surface.canvas().save_layer_alpha_f(bounds, opacity);
+                                    batch.instances.opacities[0] = 1.0;
+                                }
+                                draw_instance_batch(
+                                    &program,
+                                    &BTreeMap::new(),
+                                    surface.canvas(),
+                                    &batch,
+                                )
+                                .unwrap();
+                                if isolated {
+                                    surface.canvas().restore();
+                                }
+                                let mut bytes = vec![0u8; 64 * 64 * 16];
+                                assert!(surface.read_pixels(
+                                    &read_info,
+                                    &mut bytes,
+                                    64 * 16,
+                                    (0, 0)
+                                ));
+                                bytes
+                            };
+                            let actual = render(false);
+                            let expected = render(true);
+                            let max = actual
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .zip(expected.as_chunks::<4>().0)
+                                .map(|(a, b)| {
+                                    (f32::from_ne_bytes(*a) - f32::from_ne_bytes(*b)).abs()
+                                })
+                                .fold(0.0_f32, f32::max);
+                            assert!(
+                                actual == expected,
+                                "shape={shape:?} stroke={stroke} opacity={opacity} color={color:?} color_type={color_type:?} clip={clip} max={max}"
+                            );
+                        }
                     }
                 }
             }
