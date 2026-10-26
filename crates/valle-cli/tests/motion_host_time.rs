@@ -1,6 +1,8 @@
 //! Run Metal acceptance outside the sandbox with
 //! `VALLE_TEST_NATIVE_BACKEND=metal cargo test -p valle-cli --test motion_host_time -- --include-ignored --test-threads=1`.
 
+mod support;
+
 use serde_json::Value;
 use std::{
     path::Path,
@@ -135,7 +137,10 @@ fn assert_host_endpoint(path: &Path, frame: u32) {
     // The last frame of the host shows the end of the scene, which it holds from 1 s.
     let (left, top) = if frame == 0 { (0, 0) } else { (40, 8) };
     let at = (top * 64 + left) * 4;
-    assert_eq!(&pixels[at..at + 4], &[255, 255, 255, 255]);
+    assert_eq!(
+        &pixels[at..at + 4],
+        &support::srgb_delivery_pixel([255; 4], left, top)
+    );
     let outside = (top * 64 + left + 12) * 4;
     assert_eq!(&pixels[outside..outside + 4], &[0, 0, 0, 0]);
 }
@@ -252,7 +257,10 @@ export default function Main() { const time = useCurrentTime(); const comp = use
                 assert_eq!((info.width, info.height), (width, height));
                 // The last frame shows the end of the template: 2 s.
                 let left = if frame == "0" { 0 } else { 16 };
-                assert_eq!(&pixels[left * 4..left * 4 + 4], &[255, 255, 255, 255]);
+                assert_eq!(
+                    &pixels[left * 4..left * 4 + 4],
+                    &support::srgb_delivery_pixel([255; 4], left, 0)
+                );
                 let outside = (height / 2 * width + left as u32) as usize * 4;
                 assert_eq!(&pixels[outside..outside + 4], &[0, 0, 0, 0]);
                 images.push(bytes);

@@ -4556,9 +4556,15 @@ test("Motion composition, easing and color interpolation match analytic pixels o
     for (const label of ["native", "web"] as const) {
       const wave = frameImages.get("geometry-batch-distance/30")![label];
       const noDelay = frameImages.get("geometry-batch-distance-zero-step/30")![label];
-      const center = (index: number) => wave[(204 * 640 + 144 + 100 * index) * 4]!;
-      expect(center(0)).toBe(center(4));
-      expect(center(1)).toBe(center(3));
+      const center = (index: number) => {
+        const x = 144 + 100 * index;
+        const noise = deliveryNoise[((204 % 128) * 128 + (x % 128)) * 4]! * (2 / 255) - 1;
+        return wave[(204 * 640 + x) * 4]! - noise;
+      };
+      // Different positions receive different noise. Remove its known offset before
+      // comparing symmetry; rounding each endpoint contributes at most half a code.
+      expect(Math.abs(center(0) - center(4))).toBeLessThanOrEqual(1);
+      expect(Math.abs(center(1) - center(3))).toBeLessThanOrEqual(1);
       expect(center(2), `${label} center starts first`).toBeGreaterThan(center(1) + 20);
       expect(center(1), `${label} inner starts before outer`).toBeGreaterThan(center(0) + 20);
       let changed = 0;

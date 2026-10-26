@@ -197,7 +197,6 @@ fn text_outline_is_extruded_into_rotating_lit_scene_geometry() {
     }
     let mut widths = Vec::new();
     for image in &frames {
-        let background = &image.data[..4];
         let mut center_ink = 0;
         let mut min_x = image.width as usize;
         let mut max_x = 0;
@@ -206,7 +205,9 @@ fn text_outline_is_extruded_into_rotating_lit_scene_geometry() {
             for x in 0..image.width as usize {
                 let at = (y * image.width as usize + x) * 4;
                 let pixel = &image.data[at..at + 4];
-                if pixel != background {
+                // The authored #101010 background gains at most one code of delivery
+                // dither. Count visible geometry, rather than that quantization noise.
+                if pixel[..3].iter().any(|channel| channel.abs_diff(16) > 1) {
                     min_x = min_x.min(x);
                     max_x = max_x.max(x);
                     *blue_levels.entry(pixel[2]).or_default() += 1;

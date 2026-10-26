@@ -207,25 +207,43 @@ export default function Cover(props){ const comp = useComposition(); return <Sce
             assert_eq!(old, pixels);
         }
     }
-    assert!(
-        frames[&0]
-            .chunks_exact(4)
-            .all(|p| p[..3] == [0x12, 0x34, 0x56])
-    );
+    // Render caption-free references through the same delivery path. The frozen spatial
+    // dither and F16 working colors must match exactly, including every background pixel.
+    let solid = |color: &str| {
+        let output = format!("solid-{}.png", &color[1..]);
+        let mut background = timeline.clone();
+        background["tracks"]["caption"] = json!([]);
+        background["tracks"]["visual"][0]["clips"][0]["color"] = json!(color);
+        write(&background);
+        report(run(
+            dir.path(),
+            &[
+                "timeline",
+                "render",
+                "captions.timeline.json",
+                "--frame",
+                "0",
+                "-o",
+                &output,
+                "--json",
+            ],
+        ));
+        valle_media::codec::read_rgba_png(&dir.path().join(output))
+            .unwrap()
+            .data
+    };
+    let background = solid("#123456");
+    assert_eq!(frames[&0], background);
     assert_ne!(
         frames[&4], frames[&6],
         "host word timing must continue while the source holds"
     );
-    assert!(
-        frames[&7].chunks_exact(4).all(|p| p[..3] == [0, 0, 255]),
+    assert_eq!(
+        frames[&7],
+        solid("#0000ff"),
         "later caption track must composite on top"
     );
-    assert!(
-        frames[&9]
-            .chunks_exact(4)
-            .all(|p| p[..3] == [0x12, 0x34, 0x56]),
-        "caption end is exclusive"
-    );
+    assert_eq!(frames[&9], background, "caption end is exclusive");
     // First admitted frame is 0.25 s, but the authored start is 0.125 s.
     // A word ending at local 0.1 s has already ended; a frame-origin clock would highlight it.
     timeline["tracks"]["caption"][0]["clips"][0]["runs"][0]["end"] = json!(0.1);

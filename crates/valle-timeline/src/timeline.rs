@@ -799,6 +799,29 @@ fn valid_resource_url(value: &str) -> bool {
     true
 }
 
+fn pointer_escape(value: &str) -> String {
+    value.replace('~', "~0").replace('/', "~1")
+}
+
+fn map_json_error(error: CanonicalJsonError) -> TimelineDecodeError {
+    let (issue, path) = match error {
+        CanonicalJsonError::Utf8Bom => (TimelineJsonIssue::Utf8Bom, String::new()),
+        CanonicalJsonError::InvalidUnicode => (TimelineJsonIssue::InvalidUnicode, String::new()),
+        CanonicalJsonError::DuplicateObjectKey { key } => (
+            TimelineJsonIssue::DuplicateObjectKey,
+            format!("/<duplicate:{key}>"),
+        ),
+        CanonicalJsonError::UnsafeInteger { .. } => {
+            (TimelineJsonIssue::UnsafeInteger, String::new())
+        }
+        CanonicalJsonError::NonFiniteNumber => (TimelineJsonIssue::NonFiniteNumber, String::new()),
+        CanonicalJsonError::MalformedJson | CanonicalJsonError::Encode => {
+            (TimelineJsonIssue::MalformedJson, String::new())
+        }
+    };
+    TimelineDecodeError::CanonicalJson { issue, path }
+}
+
 #[cfg(test)]
 mod resource_url_tests {
     use super::valid_resource_url;
@@ -827,27 +850,4 @@ mod resource_url_tests {
             assert!(!valid_resource_url(value), "{value}");
         }
     }
-}
-
-fn pointer_escape(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
-}
-
-fn map_json_error(error: CanonicalJsonError) -> TimelineDecodeError {
-    let (issue, path) = match error {
-        CanonicalJsonError::Utf8Bom => (TimelineJsonIssue::Utf8Bom, String::new()),
-        CanonicalJsonError::InvalidUnicode => (TimelineJsonIssue::InvalidUnicode, String::new()),
-        CanonicalJsonError::DuplicateObjectKey { key } => (
-            TimelineJsonIssue::DuplicateObjectKey,
-            format!("/<duplicate:{key}>"),
-        ),
-        CanonicalJsonError::UnsafeInteger { .. } => {
-            (TimelineJsonIssue::UnsafeInteger, String::new())
-        }
-        CanonicalJsonError::NonFiniteNumber => (TimelineJsonIssue::NonFiniteNumber, String::new()),
-        CanonicalJsonError::MalformedJson | CanonicalJsonError::Encode => {
-            (TimelineJsonIssue::MalformedJson, String::new())
-        }
-    };
-    TimelineDecodeError::CanonicalJson { issue, path }
 }

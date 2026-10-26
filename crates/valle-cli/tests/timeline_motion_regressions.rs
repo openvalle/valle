@@ -1,4 +1,6 @@
 //! Exercise authored inputs through the actual CLI, package admission and native delivery.
+mod support;
+
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -37,6 +39,10 @@ fn pixel(dir: &Path, name: &str, x: usize, y: usize) -> Vec<u8> {
     let frame = valle_media::codec::read_rgba_png(&dir.join(name)).unwrap();
     let offset = (y * frame.width as usize + x) * 4;
     frame.data[offset..offset + 3].to_vec()
+}
+
+fn delivered_rgb(color: [u8; 3], x: usize, y: usize) -> Vec<u8> {
+    support::srgb_delivery_pixel([color[0], color[1], color[2], 255], x, y)[..3].to_vec()
 }
 
 #[test]
@@ -658,6 +664,8 @@ export default function T(){ const time = useCurrentTime();return <Scene style={
             "scene.timeline.json",
             "--frame",
             "60",
+            "--backend",
+            "raster",
             "-o",
             "timeline.png",
         ],
@@ -1328,8 +1336,8 @@ export const controls=({assets:{hero:asset({kind:"image"})}});export default fun
     );
     success(run(dir, &["timeline", "check", "timeline.json"]));
     for (frame, file, color) in [
-        ("0", "red-out.png", vec![255, 0, 0]),
-        ("10", "blue-out.png", vec![0, 0, 255]),
+        ("0", "red-out.png", [255, 0, 0]),
+        ("10", "blue-out.png", [0, 0, 255]),
     ] {
         success(run(
             dir,
@@ -1343,7 +1351,7 @@ export const controls=({assets:{hero:asset({kind:"image"})}});export default fun
                 file,
             ],
         ));
-        assert_eq!(pixel(dir, file, 32, 32), color);
+        assert_eq!(pixel(dir, file, 32, 32), delivered_rgb(color, 32, 32));
     }
     // Explicit inline images still render when the line contains no text glyphs.
     std::fs::write(dir.join("image.motion.tsx"),r#"export const composition = { width: 64, height: 64, fps: 10, duration: 9 };
@@ -1360,7 +1368,10 @@ export const controls=({assets:{hero:asset({kind:"image"})}});export default fun
             "inline.png",
         ],
     ));
-    assert_eq!(pixel(dir, "inline.png", 16, 16), vec![255, 0, 0]);
+    assert_eq!(
+        pixel(dir, "inline.png", 16, 16),
+        delivered_rgb([255, 0, 0], 16, 16)
+    );
     put(
         dir,
         "cover.json",
@@ -1378,7 +1389,10 @@ export const controls=({assets:{hero:asset({kind:"image"})}});export default fun
             "cover.png",
         ],
     ));
-    assert_eq!(pixel(dir, "cover.png", 1, 1), vec![255, 0, 0]);
+    assert_eq!(
+        pixel(dir, "cover.png", 1, 1),
+        delivered_rgb([255, 0, 0], 1, 1)
+    );
 }
 
 #[test]
@@ -1863,6 +1877,7 @@ export const controls=({assets:{effect:asset({kind:"shader"}),image:asset({kind:
     ] {
         let output = render("nearest", wrap);
         let actual = [0, 16, 32, 48].map(|x| pixel(dir, &output, x, 32)[0]);
+        let expected = [0, 16, 32, 48].map(|x| delivered_rgb([expected[x / 16]; 3], x, 32)[0]);
         assert_eq!(actual, expected, "{wrap}");
     }
     let output = render("linear", "clamp");
@@ -2346,7 +2361,7 @@ fn shader_content_preserves_local_coordinates_and_complete_input() {
     assert!(pixel(dir, "result.png", 20, 20)[0] >= 253);
     assert_eq!(
         pixel(dir, "result.png", 32, 32),
-        [0, 0, 0],
+        delivered_rgb([0, 0, 0], 32, 32),
         "content outside its bounds is transparent"
     );
     render(
@@ -2355,10 +2370,13 @@ fn shader_content_preserves_local_coordinates_and_complete_input() {
     );
     assert_eq!(
         pixel(dir, "result.png", 16, 32),
-        [255, 255, 255],
+        delivered_rgb([255, 255, 255], 16, 32),
         "shader generates pixels from empty content"
     );
-    assert_eq!(pixel(dir, "result.png", 48, 32), [0, 0, 0]);
+    assert_eq!(
+        pixel(dir, "result.png", 48, 32),
+        delivered_rgb([0, 0, 0], 48, 32)
+    );
     put(
         dir,
         "effect.shader.json",
@@ -2375,16 +2393,22 @@ fn shader_content_preserves_local_coordinates_and_complete_input() {
     );
     assert_eq!(
         pixel(dir, "result.png", 20, 32),
-        [255, 255, 255],
+        delivered_rgb([255, 255, 255], 20, 32),
         "padding retains output beyond the border box"
     );
     assert_eq!(
         pixel(dir, "result.png", 28, 32),
-        [255, 255, 255],
+        delivered_rgb([255, 255, 255], 28, 32),
         "padding does not redefine content UVs"
     );
-    assert_eq!(pixel(dir, "result.png", 40, 32), [0, 0, 0]);
-    assert_eq!(pixel(dir, "result.png", 12, 32), [0, 0, 0]);
+    assert_eq!(
+        pixel(dir, "result.png", 40, 32),
+        delivered_rgb([0, 0, 0], 40, 32)
+    );
+    assert_eq!(
+        pixel(dir, "result.png", 12, 32),
+        delivered_rgb([0, 0, 0], 12, 32)
+    );
 }
 
 #[test]
@@ -2442,8 +2466,8 @@ export default function DataScene(props) { const data = useData();
     };
     put(dir, "data.timeline.json", timeline("#ff0000"));
     for (frame, file, color) in [
-        ("0", "red.png", vec![255, 0, 0]),
-        ("10", "blue.png", vec![0, 0, 255]),
+        ("0", "red.png", [255, 0, 0]),
+        ("10", "blue.png", [0, 0, 255]),
     ] {
         success(run(
             dir,
@@ -2457,7 +2481,7 @@ export default function DataScene(props) { const data = useData();
                 file,
             ],
         ));
-        assert_eq!(pixel(dir, file, 16, 16), color);
+        assert_eq!(pixel(dir, file, 16, 16), delivered_rgb(color, 16, 16));
     }
     put(dir, "data.timeline.json", timeline("#00ff00"));
     success(run(
@@ -2735,7 +2759,10 @@ export default function Card() {
             "clip.png",
         ],
     ));
-    assert_eq!(pixel(dir, "clip.png", 32, 16), vec![0x22, 0xcc, 0x88]);
+    assert_eq!(
+        pixel(dir, "clip.png", 32, 16),
+        delivered_rgb([0x22, 0xcc, 0x88], 32, 16)
+    );
     let error = |name: &str, timeline: Value| -> String {
         put(dir, name, timeline);
         let output = run(dir, &["timeline", "check", name]);
@@ -3070,7 +3097,7 @@ fn motion_effects_replace_the_picture_they_read_as_their_source() {
     );
     assert_eq!(
         pixel(dir, "adjust-invert-0.png", 40, 20),
-        vec![0xff, 0x20, 0x50]
+        delivered_rgb([0xff, 0x20, 0x50], 40, 20)
     );
     let inside = pixel(dir, "adjust-invert-20.png", 40, 20);
     assert!(close(&inside, &inverted_red), "{inside:?}");
@@ -3143,7 +3170,10 @@ fn effect_templates_read_nothing_outside_an_effect() {
             "clip.png",
         ],
     ));
-    assert_eq!(pixel(dir, "clip.png", 32, 16), vec![0x22, 0xcc, 0x88]);
+    assert_eq!(
+        pixel(dir, "clip.png", 32, 16),
+        delivered_rgb([0x22, 0xcc, 0x88], 32, 16)
+    );
     let error = |name: &str, timeline: Value| -> String {
         put(dir, name, timeline);
         let output = run(dir, &["timeline", "check", name]);

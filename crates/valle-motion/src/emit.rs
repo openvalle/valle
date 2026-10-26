@@ -4773,7 +4773,8 @@ fn scene3d_projected_density(output_scale: f64, transform: Homography, bounds: R
         return f64::from(crate::scene3d::MAX_LAYER_EDGE)
             / bounds.width.min(bounds.height).max(1.0);
     }
-    let denominator = minimum.abs().min(maximum.abs()).powi(2);
+    let min_w = minimum.abs().min(maximum.abs());
+    let denominator = min_w * min_w;
     let max_x = |slope: f64, intercept: f64| {
         xs.map(|x| (slope * x + intercept).abs())
             .into_iter()
