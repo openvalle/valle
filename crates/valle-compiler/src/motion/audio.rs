@@ -450,20 +450,27 @@ impl<'s> Compiler<'s> {
                 "audioAnalysis asset `{control}` has no reliable beat grid (confidence {confidence:.3}); beatPhase returns 0. Use onset(t, length) for individual events or beatConfidence(t) to inspect periodic support"
             ));
         }
+        let mut instance_band = None;
         let band = if method == "band" {
             let index = arguments[0]
                 .as_expression()
                 .and_then(|expr| self.eval_static(expr))
                 .and_then(|value| value.as_u64());
-            let Some(index) = index.filter(|index| *index < bands) else {
+            if let Some(index) = index.filter(|index| *index < bands) {
+                Some(index as usize)
+            } else if let Some(expression) = arguments[0].as_expression()
+                && let Some(count) = self.instance_audio_band_count(expression, bands)
+            {
+                instance_band = Some((self.lower_expr(expression)?, count));
+                None
+            } else {
                 self.illegal(
                     DiagCode::BuiltinRejected,
                     arguments[0].span(),
                     "audioAnalysis band index must be a static integer within the band count",
                 );
                 return Some(None);
-            };
-            Some(index as usize)
+            }
         } else {
             None
         };
@@ -504,10 +511,71 @@ impl<'s> Compiler<'s> {
         if let Some(length) = length {
             self.check_onset_length(length, time, arguments[1].span());
         }
+        if let Some((index, count)) = instance_band {
+            // The prepared numeric column proves the index is an integer in range.
+            // Reuse ordinary AudioSample/Select expressions: uniform times are sampled
+            // once per band and frame by the existing instance evaluation plan.
+            let mut samples = (0..count)
+                .map(|band| {
+                    let signal = self.audio_tables[&key]
+                        .signal(method, Some(band as usize), None)
+                        .expect("proved band range");
+                    self.push(Expr::AudioSample { time, signal }, span)
+                })
+                .collect::<Vec<_>>();
+            let mut result = samples.pop().expect("nonempty band range");
+            for (band, sample) in samples.into_iter().enumerate().rev() {
+                let band = self.push(
+                    Expr::Const {
+                        value: MotionValue::Number(band as f64),
+                    },
+                    arguments[0].span(),
+                );
+                let condition = self.compare(valle_motion::CompareOp::Eq, index, band, span);
+                result = self.push(
+                    Expr::Select {
+                        condition,
+                        when_true: sample,
+                        when_false: result,
+                    },
+                    span,
+                );
+            }
+            return Some(Some(result));
+        }
         let signal = self.audio_tables[&key]
             .signal(method, band, length)
             .expect("validated audio field");
         Some(Some(self.push(Expr::AudioSample { time, signal }, span)))
+    }
+
+    fn instance_audio_band_count(
+        &mut self,
+        expression: &Expression<'_>,
+        bands: u64,
+    ) -> Option<u64> {
+        let scope = self.instance_scope.as_ref()?;
+        let maximum = scope.scalar_max?;
+        let parameter = scope.parameter.clone();
+        let binding = self.bindings.scalars.get(&parameter)?;
+        if !matches!(self.expr_arena.values.get(binding.0 as usize), Some(Expr::InstanceField { column, .. })
+            if scope.fields.get("_value").is_some_and(|(expected, _)| column == expected))
+        {
+            return None;
+        }
+        match peel_expr(expression) {
+            Expression::Identifier(id) if id.name.as_str() == parameter && maximum < bands => {
+                Some(maximum + 1)
+            }
+            Expression::BinaryExpression(binary)
+                if binary.operator == oxc::syntax::operator::BinaryOperator::Remainder
+                    && matches!(peel_expr(&binary.left), Expression::Identifier(id) if id.name.as_str() == parameter) =>
+            {
+                let modulus = self.eval_static(&binary.right)?.as_u64()?;
+                (modulus > 0 && modulus <= bands).then_some(modulus.min(maximum + 1))
+            }
+            _ => None,
+        }
     }
 }
 

@@ -34,6 +34,73 @@ fn compile_card_module(source: &str) -> valle_motion::SceneArtifact {
 }
 
 #[test]
+fn scalar_radial_bars_share_a_layout_template_and_match_expanded_geometry() {
+    let source = include_str!("fixtures/motion/composition/radial-bars.motion.tsx");
+    let compiled = compile_motion(source).unwrap();
+    assert!(
+        compiled
+            .warnings
+            .iter()
+            .all(|warning| warning.code != DiagCode::InstanceFallback),
+        "{:?}",
+        compiled.warnings
+    );
+    let compact = compiled.artifact;
+    let expanded = compile_motion(&source.replace("ray-${i}", "ray-${i + 0}"))
+        .unwrap()
+        .artifact;
+    assert_eq!(compact.instance_groups.len(), 1);
+    assert!(expanded.instance_groups.is_empty());
+    assert_eq!(compact.instance_groups[0].rows(), 72);
+    assert_eq!(
+        compact.instance_groups[0].keys.key_at(17).as_deref(),
+        Some("ray-17")
+    );
+    assert!(compact.nodes.len() < 5);
+    compact.validate().unwrap();
+    let fonts = Fonts::default();
+    for frame in [0, 7, 30, 59, 7] {
+        let context = motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+        let trees = [&compact, &expanded].map(|artifact| {
+            build_tree(
+                &prepare_scene(artifact).unwrap(),
+                &context,
+                &resolve_props(&artifact.controls, &Default::default()).unwrap(),
+                &LayoutOptions {
+                    viewport: Viewport::new((640, 360)),
+                    fonts: &fonts,
+                    styles: None,
+                },
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            valle_motion::layout_boxes(&compact, &trees[0]).unwrap(),
+            valle_motion::layout_boxes(&expanded, &trees[1]).unwrap(),
+            "frame {frame}"
+        );
+        assert_eq!(
+            emit(&trees[0], &default_font_naming).unwrap().program,
+            emit(&trees[1], &default_font_naming).unwrap().program,
+            "frame {frame}"
+        );
+    }
+}
+
+#[test]
+fn scalar_instance_keys_keep_duplicate_validation_and_safe_fallbacks() {
+    let source = include_str!("fixtures/motion/composition/radial-bars.motion.tsx");
+    assert!(
+        compile_motion(&source.replace("Array.from({ length: 72 }, (_, i) => i)", "[0, 0]"))
+            .is_err()
+    );
+    for replacement in ["ray-${i + 1}", "ray-\\u0061${i}"] {
+        let compiled = compile_motion(&source.replace("ray-${i}", replacement)).unwrap();
+        assert!(compiled.artifact.instance_groups.is_empty());
+    }
+}
+
+#[test]
 fn component_card_map_shares_one_template_and_preserves_component_keys() {
     let source = component_card_rows(4);
     let compiled = compile_motion(&source).unwrap();
@@ -1909,9 +1976,9 @@ fn expanded_maps_explain_why_instancing_was_skipped() {
         (
             grid(8).replace(
                 "left: cell.x",
-                "position: \"absolute\", rotate: \"15deg\", left: cell.x",
+                "position: \"absolute\", filter: \"blur(2px)\", left: cell.x",
             ),
-            "View style.rotate",
+            "View style.filter",
         ),
         (
             circle_grid(8).replace("fill={dot.color}", "fill={dot.color} stroke=\"#fff\""),

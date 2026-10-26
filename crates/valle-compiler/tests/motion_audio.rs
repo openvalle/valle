@@ -29,6 +29,89 @@ export default function AudioBars() { const time = useCurrentTime();
 "##;
 
 #[test]
+fn prepared_numeric_audio_band_indices_share_a_template_without_changing_samples() {
+    let hash = ContentDigest::of_bytes(b"instance-band-tones");
+    let mut audio = AudioAnalysisEnv::default();
+    audio.sources.insert(
+        "beat".into(),
+        Arc::new(AudioPcm {
+            content_hash: hash,
+            sample_rate: 8000,
+            samples: (0..16000)
+                .map(|index| {
+                    let time = index as f64 / 8000.0;
+                    (0.3 * libm::sin(time * core::f64::consts::TAU * 220.0)
+                        + 0.2 * libm::sin(time * core::f64::consts::TAU * 900.0))
+                        as f32
+                })
+                .collect(),
+        }),
+    );
+    let source = include_str!("fixtures/motion/composition/radial-bars.motion.tsx")
+        .replace("const rays", "export const controls={assets:{beat:asset({kind:'audio',required:true})}};\nconst BEAT=audioAnalysis('asset://beat',{bands:12,rate:30});\nconst rays")
+        .replace("(Math.sin(i * 0.73 + t * 3) + 1) * 28", "BEAT.band(i % 12, t) * 56");
+    let compile = |source: &str| {
+        compile_motion_with_full_env_and_data_and_audio(
+            source,
+            &[ResourceRef {
+                control: "beat".into(),
+                content_hash: hash,
+            }],
+            None,
+            None,
+            None,
+            Some(&audio),
+            None,
+        )
+    };
+    let compact = compile(&source).unwrap();
+    assert_eq!(
+        compact.artifact.instance_groups.len(),
+        1,
+        "{:?}",
+        compact.warnings
+    );
+    let expanded = compile(&source.replace("ray-${i}", "ray-${i + 0}")).unwrap();
+    let fonts = valle_motion::Fonts::default();
+    for frame in [0, 7, 30, 59, 7] {
+        let context = valle_motion::motion_context_at_frame(
+            frame,
+            60,
+            valle_timeline::FrameRate::new(30, 1).unwrap(),
+        )
+        .unwrap();
+        let programs = [&compact, &expanded].map(|compiled| {
+            let artifact = &compiled.artifact;
+            let prepared = valle_motion::prepare_scene(artifact).unwrap();
+            let tree = valle_motion::build_tree(
+                &prepared,
+                &context,
+                &valle_motion::resolve_props(&artifact.controls, &Default::default()).unwrap(),
+                &valle_motion::LayoutOptions {
+                    viewport: valle_motion::Viewport::new((640, 360)),
+                    fonts: &fonts,
+                    styles: None,
+                },
+            )
+            .unwrap();
+            valle_motion::emit::emit(&tree, &valle_motion::default_font_naming)
+                .unwrap()
+                .program
+        });
+        assert_eq!(programs[0], programs[1], "frame {frame}");
+    }
+    assert!(compile(&source.replace("i % 12", "i % 13")).is_err());
+    assert!(compile(&source.replace("i % 12", "i % 0")).is_err());
+    let shadowed = source
+        .replace(
+            "const rays",
+            "function readBand(i,t) { return BEAT.band(i % 12,t); }\nconst rays",
+        )
+        .replace("BEAT.band(i % 12, t)", "readBand(t, t)");
+    assert!(compile(&shadowed).is_err());
+}
+
+#[test]
 fn uncertain_beat_phase_has_a_source_warning_and_exposes_confidence() {
     let hash = ContentDigest::of_bytes(b"silence");
     let mut audio = AudioAnalysisEnv::default();

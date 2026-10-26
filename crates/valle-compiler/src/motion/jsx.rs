@@ -194,12 +194,7 @@ impl<'s> Compiler<'s> {
             match name.name.as_str() {
                 "key" => {
                     key = if self.instance_scope.as_ref().is_some_and(|scope| {
-                        matches!(&attribute.value,
-                            Some(JSXAttributeValue::ExpressionContainer(container))
-                            if matches!(container.expression.as_expression().map(peel_expr),
-                                Some(Expression::StaticMemberExpression(member))
-                                if matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == scope.parameter)
-                                    && member.property.name.as_str() == scope.key_field))
+                        attribute.span() == scope.key_span
                     }) {
                         self.instance_scope.as_ref().map(|scope| scope.template_key.clone())
                     } else if self.caption_row.is_some()

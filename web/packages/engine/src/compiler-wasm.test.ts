@@ -479,6 +479,86 @@ test("merged Engine Wasm freezes supplied PCM for audio-driven Motion", () => {
   ).toThrow(MotionCompileError);
 });
 
+test("Wasm shares rounded radial bars and prepared audio-band indices through random seeks", async () => {
+  const source = await readFile(
+    new URL(
+      "../../../../crates/valle-compiler/tests/fixtures/motion/composition/radial-bars.motion.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const compiled = compileMotionJsxWithWasm({ compile_motion_jsx }, source);
+  expect(compiled.artifact.nodes).toHaveLength(2);
+  expect(compiled.artifact.instanceGroups).toHaveLength(1);
+  const preview = preparePreviewPackageWithWasm(
+    { prepare_preview_package },
+    {
+      authorTimeline: {
+        canvas: { width: 640, height: 360, fps: 30 },
+        resources: { main: "radial.motion.tsx" },
+        tracks: {
+          visual: [{ clips: [{ kind: "motion", component: "main", start: 0, duration: 2 }] }],
+        },
+      },
+      motionInstances: [
+        {
+          clipPath: "/tracks/visual/0/clips/0",
+          artifact: compiled.artifact,
+          artifactDigest: compiled.artifactDigest,
+          fonts: [],
+        },
+      ],
+    },
+  );
+  const engine = new ProductEngine();
+  try {
+    const receipt = JSON.parse(
+      engine.open_fixed_package(
+        preview.fixedPackageManifestJson,
+        preview.timelineJson,
+        preview.resourceManifestJson,
+        preview.verifiedBindingBundleJson,
+      ),
+    );
+    const seen = new Map<number, string>();
+    for (const frame of [0, 7, 30, 59, 7, 0]) {
+      const ticket = engine.evaluate_prepare_preview(
+        receipt.renderId,
+        BigInt(frame),
+        640,
+        360,
+        false,
+      );
+      try {
+        const boxes = JSON.parse(engine.frame_inspection_json(ticket)).motion[0].boxes;
+        expect(Object.keys(boxes).filter((key) => key.startsWith("ray-"))).toHaveLength(72);
+        const previous = seen.get(frame);
+        if (previous !== undefined) expect(JSON.stringify(boxes)).toBe(previous);
+        else seen.set(frame, JSON.stringify(boxes));
+      } finally {
+        engine.release_ticket(ticket);
+      }
+    }
+  } finally {
+    engine.free();
+  }
+  const hash = `sha256:${"a".repeat(64)}`;
+  const audioSource = source
+    .replace(
+      "const rays",
+      "export const controls={assets:{beat:asset({kind:'audio',required:true})}};\nconst BEAT=audioAnalysis('asset://beat',{bands:12,rate:30});\nconst rays",
+    )
+    .replace("(Math.sin(i * 0.73 + t * 3) + 1) * 28", "BEAT.band(i % 12, t) * 56");
+  const audio = compileMotionJsxWithWasm({ compile_motion_jsx }, audioSource, {
+    resources: [{ control: "beat", contentHash: hash }],
+    audioSources: [
+      { control: "beat", contentHash: hash, sampleRate: 8000, samples: new Float32Array(16000) },
+    ],
+  });
+  expect(audio.artifact.instanceGroups).toHaveLength(1);
+  expect(audio.warnings.some((warning) => warning.code === "instance-fallback")).toBe(false);
+});
+
 test("pulse audio analysis produces the Native artifact digest in WASM", async () => {
   const source = await readFile(
     new URL(

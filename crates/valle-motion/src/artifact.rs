@@ -2164,6 +2164,11 @@ fn layout_instance_descendant_style_supported(
         "background-color" if !is_text => matches!(value_type, ExprType::Color | ExprType::String),
         "color" if is_text => matches!(value_type, ExprType::Color | ExprType::String),
         "opacity" => value_type == ExprType::Number,
+        "rotate" if !is_text => matches!(value_type, ExprType::Angle | ExprType::String),
+        "transform" if !is_text => value_type == ExprType::String,
+        "transform-origin" if !is_text => {
+            matches!(&style.value, StyleValue::Static { value } if matches!(ExprType::of_value(value), ExprType::String | ExprType::Point | ExprType::Length2))
+        }
         "font-weight" if is_text => matches!(value_type, ExprType::Number | ExprType::String),
         "text-align" | "white-space" if is_text => value_type == ExprType::String,
         "display" | "position" | "flex-direction" | "justify-content" | "align-items"
@@ -3189,6 +3194,11 @@ impl SceneArtifact {
                                     | "border-radius"
                                     | "background-color"
                                     | "opacity"
+                                    | "left"
+                                    | "top"
+                                    | "rotate"
+                                    | "transform-origin"
+                                    | "transform"
                             )
                         }));
             if invalid_layout_template {
@@ -3343,37 +3353,7 @@ impl SceneArtifact {
                     ));
                 }
                 for (style_at, style) in group.template.styles.iter().enumerate() {
-                    if layout_text {
-                        if !layout_instance_descendant_style_supported(style, &types, true) {
-                            errors.push(ValidationError::new(
-                                format!("{path}/template/styles/{style_at}"),
-                                "layout instance Text style is unsupported",
-                            ));
-                        }
-                        continue;
-                    }
-                    let value_type = match &style.value {
-                        StyleValue::Static { value } => ExprType::of_value(value),
-                        StyleValue::Expr { expr } => {
-                            match types.get(expr.0 as usize).copied().flatten() {
-                                Some(value_type) => value_type,
-                                None => continue,
-                            }
-                        }
-                    };
-                    let supported = match style.property.as_str() {
-                        "background-color" => {
-                            matches!(value_type, ExprType::Color | ExprType::String)
-                        }
-                        "opacity" => value_type == ExprType::Number,
-                        _ => {
-                            value_type == ExprType::Number
-                                || matches!(&style.value,
-                            StyleValue::Static { value: MotionValue::Length(length) }
-                                if length.unit == crate::value::LengthUnit::Px && length.value.is_finite())
-                        }
-                    };
-                    if !supported {
+                    if !layout_instance_descendant_style_supported(style, &types, layout_text) {
                         errors.push(ValidationError::new(
                             format!("{path}/template/styles/{style_at}/value"),
                             "layout instance style has an unsupported value type",

@@ -620,6 +620,10 @@ The prepared object provides `level(t)`, `band(index, t)`, `onset(t, length)`, `
 and `beatConfidence(t)`, each read at `t` seconds of the sound; its signals are frozen into the
 compiled artifact and are read without decoding at frame time. Bind the declared audio control
 with `--asset beat=beat.wav`.
+The band index is normally a prepare-time integer. In a shared template over a prepared
+nonnegative integer array, `band(i, t)` or `band(i % N, t)` is also accepted when the compiler
+proves every possible index is within the band count. `N` must be a positive prepare-time
+integer. The existing frozen signals and expression evaluator handle the selection.
 `level` and `band` run in straight lines between analysis values and hold the last value to the
 end of the sound; before its start and past its end there is no sound, and they are 0.
 `onset(t, length)` is 1 at each detected onset and falls to 0 over `length` seconds, a static
@@ -2585,6 +2589,12 @@ and the [Text root list](../crates/valle-compiler/tests/fixtures/motion/composit
 Other maps retain per-item JSX lowering. Maps with at least 64 items emit an
 `instance-fallback` warning with the source position and reason; smaller maps do not
 produce this optimization warning. Path trimming currently uses that path.
+Prepared nonnegative integer arrays also support a key such as ``key={`ray-${i}`}``,
+with a literal prefix and suffix around the item. An absolute `View` with rounded corners,
+`rotate`, `transform`, or a static `transformOrigin` can share a layout template while keeping
+the ordinary per-row layout and paint. This reduces compilation work without replacing the
+rounded or rotated geometry with a rectangle batch; see the
+[radial bars fixture](../crates/valle-compiler/tests/fixtures/motion/composition/radial-bars.motion.tsx).
 The instance table stores numbers, points, colors, rectangles, booleans and strings in
 homogeneous columns; template expressions reconstruct only the values needed for each row.
 When an `Array.from` row field is a numeric function of its index using arithmetic,

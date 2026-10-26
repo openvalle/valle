@@ -329,7 +329,7 @@ export default function P() { const time = useCurrentTime();
 }
 
 #[test]
-fn static_map_expands_while_named_repeater_uses_layout_instances() {
+fn prepared_scalar_maps_and_named_repeaters_share_layout_templates() {
     let compiled = compile_motion(
         r##"
 const ITEMS = [0, 1, 2, 3];
@@ -338,14 +338,23 @@ export default function P() {
 }
 "##,
     )
-    .expect("static list expands");
+    .expect("prepared scalar list compiles");
     let boxes = compiled
         .artifact
         .nodes
         .iter()
         .filter(|node| matches!(node.kind, NodeKind::Box))
         .count();
-    assert_eq!(boxes, 5, "root plus four fixed copies");
+    assert_eq!(boxes, 1, "only the root is outside the shared template");
+    assert_eq!(compiled.artifact.instance_groups.len(), 1);
+    assert_eq!(compiled.artifact.instance_groups[0].rows(), 4);
+    assert_eq!(
+        compiled.artifact.instance_groups[0]
+            .keys
+            .key_at(2)
+            .as_deref(),
+        Some("copy-2")
+    );
 
     let repeated = compile_motion(
         r#"const I=defineRepeater({count:4}); export default function P(){return <View>{I.map((x)=><View key={x.key}/>)}</View>;}"#,
@@ -357,5 +366,5 @@ export default function P() {
         repeated.artifact.instance_groups[0].template_node_count(),
         1
     );
-    assert!(repeated.artifact.nodes.len() < compiled.artifact.nodes.len());
+    assert_eq!(repeated.artifact.nodes.len(), compiled.artifact.nodes.len());
 }

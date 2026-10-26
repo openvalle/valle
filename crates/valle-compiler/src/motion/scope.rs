@@ -1633,6 +1633,13 @@ impl<'s> Compiler<'s> {
             return None;
         }
         let mut key_field = None;
+        let mut key_span = None;
+        // A common prepared array is simply 0..N. Keep it as a numeric column when
+        // its key is a literal prefix/suffix around the item, just as object rows are.
+        let scalar_rows = items
+            .iter()
+            .all(|item| item.as_u64().is_some_and(|value| value <= (1_u64 << 53)));
+        let mut scalar_key = None;
         let mut has_absolute_class = false;
         let mut has_absolute_style = false;
         let mut has_style = false;
@@ -1662,16 +1669,32 @@ impl<'s> Compiler<'s> {
                     else {
                         return None;
                     };
-                    let Some(Expression::StaticMemberExpression(member)) =
-                        container.expression.as_expression().map(peel_expr)
-                    else {
-                        return None;
-                    };
-                    if !matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == parameter)
-                    {
-                        return None;
+                    key_span = Some(attribute.span());
+                    match container.expression.as_expression().map(peel_expr)? {
+                        Expression::StaticMemberExpression(member)
+                            if !scalar_rows
+                                && matches!(&member.object, Expression::Identifier(id) if id.name.as_str() == parameter) =>
+                        {
+                            key_field = Some(member.property.name.to_string());
+                        }
+                        Expression::TemplateLiteral(template)
+                            if scalar_rows
+                                && template.quasis.len() == 2
+                                && template.expressions.len() == 1
+                                && matches!(peel_expr(&template.expressions[0]), Expression::Identifier(id) if id.name.as_str() == parameter)
+                                && template
+                                    .quasis
+                                    .iter()
+                                    .all(|quasi| !quasi.value.raw.contains('\\')) =>
+                        {
+                            scalar_key = Some((
+                                template.quasis[0].value.raw.as_str(),
+                                template.quasis[1].value.raw.as_str(),
+                            ));
+                            key_field = Some("_key".into());
+                        }
+                        _ => return None,
                     }
-                    key_field = Some(member.property.name.to_string());
                 }
                 "className" => {
                     if !(is_view || is_group || is_text) {
@@ -1770,6 +1793,8 @@ impl<'s> Compiler<'s> {
                                     | "paddingBottom"
                                     | "paddingLeft"
                                     | "borderRadius"
+                                    | "rotate"
+                                    | "transformOrigin"
                             )
                         }) {
                             return None;
@@ -1838,11 +1863,26 @@ impl<'s> Compiler<'s> {
         }
         has_absolute_class |= has_absolute_style;
         let key_field = key_field?;
-        let layout_view = is_component || is_group || is_text || is_view && !has_absolute_class;
+        let scalar_items;
+        let items = if let Some((prefix, suffix)) = scalar_key {
+            scalar_items = items.iter().map(|item| serde_json::json!({"_value":item,"_key":format!("{prefix}{item}{suffix}")})).collect::<Vec<_>>();
+            scalar_items.as_slice()
+        } else {
+            items
+        };
+        let layout_view = is_component
+            || is_group
+            || is_text
+            || is_view
+                && (!has_absolute_class
+                    || style_names.iter().any(|name| {
+                        matches!(name.as_str(), "borderRadius" | "rotate" | "transformOrigin")
+                    }));
         if !element.children.is_empty() && !layout_view {
             return None;
         }
         if layout_view
+            && !has_absolute_class
             && style_names
                 .iter()
                 .any(|name| matches!(name.as_str(), "left" | "top" | "transform"))
@@ -1980,11 +2020,24 @@ impl<'s> Compiler<'s> {
         let prefix_len = self.expr_arena.values.len();
         let saved_bindings = self.bindings.clone();
         let saved_scope = self.instance_scope.replace(InstanceCompileScope {
-            parameter,
-            key_field,
+            parameter: parameter.clone(),
+            key_span: key_span?,
+            scalar_max: scalar_key.map(|_| {
+                items
+                    .iter()
+                    .filter_map(|item| item["_value"].as_u64())
+                    .max()
+                    .unwrap_or(0)
+            }),
             template_key: local_template_key,
             fields,
         });
+        if scalar_key.is_some() {
+            self.bindings.unbind(&parameter);
+            let (column, value_type) = self.instance_scope.as_ref()?.fields["_value"];
+            let expression = self.push(Expr::InstanceField { column, value_type }, arrow.span());
+            self.bindings.scalars.insert(parameter, expression);
+        }
         let index_binding = arrow
             .params
             .items
@@ -2118,11 +2171,20 @@ impl<'s> Compiler<'s> {
                                 | "border-radius"
                                 | "background-color"
                                 | "opacity"
+                                | "left"
+                                | "top"
+                                | "rotate"
+                                | "transform-origin"
+                                | "transform"
                         )
                     }));
         let template_types_supported = template.styles.iter().all(|style| {
-            if text_root_supported {
-                return pending_instance_style_supported(style, &group_arena.types, true);
+            if layout_view {
+                return pending_instance_style_supported(
+                    style,
+                    &group_arena.types,
+                    text_root_supported,
+                );
             }
             use valle_motion::expr::ExprType;
             match &style.value {
@@ -2537,13 +2599,7 @@ impl<'s> Compiler<'s> {
             let prop_name = prop_name.name.to_string();
             if prop_name == "key" {
                 if let Some(scope) = self.instance_scope.as_ref()
-                    && matches!(&attribute.value,
-                        Some(JSXAttributeValue::ExpressionContainer(container))
-                        if matches!(container.expression.as_expression().map(peel_expr),
-                            Some(Expression::StaticMemberExpression(member))
-                            if matches!(&member.object, Expression::Identifier(id)
-                                if id.name.as_str() == scope.parameter)
-                                && member.property.name.as_str() == scope.key_field))
+                    && attribute.span() == scope.key_span
                 {
                     scoped_instance_key = Some(self.scoped_key(&scope.template_key));
                 } else {
@@ -3003,6 +3059,11 @@ fn pending_instance_style_supported(
         "background-color" if !is_text => matches!(value_type, ExprType::Color | ExprType::String),
         "color" if is_text => matches!(value_type, ExprType::Color | ExprType::String),
         "opacity" => value_type == ExprType::Number,
+        "rotate" if !is_text => matches!(value_type, ExprType::Angle | ExprType::String),
+        "transform" if !is_text => value_type == ExprType::String,
+        "transform-origin" if !is_text => {
+            matches!(&style.value, StyleValue::Static { value } if matches!(ExprType::of_value(value), ExprType::String | ExprType::Point | ExprType::Length2))
+        }
         "font-weight" if is_text => matches!(value_type, ExprType::Number | ExprType::String),
         "text-align" | "white-space" if is_text => value_type == ExprType::String,
         "display" | "position" | "flex-direction" | "justify-content" | "align-items"
