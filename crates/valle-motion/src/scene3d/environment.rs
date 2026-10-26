@@ -80,6 +80,12 @@ pub struct EnvironmentAsset {
 }
 
 impl EnvironmentAsset {
+    /// Frozen diffuse cube followed by the specular roughness chain, in face order.
+    pub fn gpu_cubes(&self) -> impl Iterator<Item = (u32, &[[f32; 3]])> {
+        std::iter::once(&self.diffuse)
+            .chain(&self.specular)
+            .map(|cube| (cube.size, cube.pixels.as_slice()))
+    }
     pub fn descriptor(
         &self,
     ) -> valle_timeline::internal::wire::resource::EnvironmentResourceDescriptorWire {

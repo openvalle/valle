@@ -70,6 +70,25 @@ pub(crate) struct ModelTextureBinding {
     mag_filter: u32,
 }
 
+impl ModelTextureBinding {
+    pub(crate) fn gpu_sampler(self) -> u32 {
+        let wrap = |v| match v {
+            33071 => 0,
+            33648 => 2,
+            _ => 1,
+        };
+        let min = match self.min_filter {
+            9728 => 0,
+            9729 => 1,
+            v => v - 9982,
+        };
+        wrap(self.wrap_s)
+            + wrap(self.wrap_t) * 4
+            + min * 16
+            + u32::from(self.mag_filter == 9729) * 128
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 struct MipLevel {
     width: u32,
@@ -85,6 +104,11 @@ pub struct MaterialImage {
     levels: Vec<MipLevel>,
 }
 impl MaterialImage {
+    pub fn gpu_mips(&self) -> impl Iterator<Item = ([u32; 2], &[f32])> {
+        self.levels
+            .iter()
+            .map(|level| ([level.width, level.height], &*level.rgba))
+    }
     pub fn size(&self) -> [u32; 2] {
         [self.levels[0].width, self.levels[0].height]
     }

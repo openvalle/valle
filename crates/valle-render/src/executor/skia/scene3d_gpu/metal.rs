@@ -1,32 +1,52 @@
-use super::Scene3dGpuInput;
+use super::shadows::{ShadowRasterizer, ShadowSet};
+use super::transparency::{Transparency, TransparencyOutput};
+use super::{Scene3dGpuInput, assets::Atlas};
 use crate::executor::skia::surface::working_color_space;
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_metal::{MTLCommandQueue, MTLDevice};
 use skia_safe::{AlphaType, ColorSpace, ColorType, Image, gpu};
-use std::{ffi::c_void, ptr};
+use std::{ffi::c_void, ptr, sync::Arc};
 use wgpu::util::DeviceExt;
 
 pub(crate) struct GpuRasterizer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipeline: wgpu::RenderPipeline,
-    lit_pipeline: wgpu::RenderPipeline,
+    pipelines: [wgpu::RenderPipeline; 4],
+    background_pipelines: [wgpu::RenderPipeline; 2],
+    atlas: Option<Arc<Atlas>>,
+    shadow_rasterizer: ShadowRasterizer,
+    shadows: Option<Arc<ShadowSet>>,
+    transparency: Transparency,
     dfg: wgpu::Texture,
     _lut_memory: Option<valle_engine::motion::memory::MemoryLease>,
 }
 
 pub(crate) struct GpuRasterOutput {
     pub image: Image,
+    pub depth_image: Option<Image>,
     pub upload_bytes: u64,
     _color: wgpu::Texture,
     _depth: wgpu::Texture,
+    _packed_depth: Option<wgpu::Texture>,
     _vertices: wgpu::Buffer,
     _uniform: wgpu::Buffer,
     _shading: Option<wgpu::Buffer>,
+    _atlas: Option<Arc<Atlas>>,
+    _shadows: Option<Arc<ShadowSet>>,
+    _transparency: Option<TransparencyOutput>,
     _memory: Option<valle_engine::motion::memory::MemoryLease>,
 }
 
 impl GpuRasterizer {
+    pub(crate) fn trim_assets(&mut self, limit: usize) {
+        if self.atlas.as_ref().map_or(0, |a| a.bytes) + self.shadows.as_ref().map_or(0, |s| s.bytes)
+            > limit as u64
+        {
+            self.atlas = None;
+            self.shadows = None;
+        }
+    }
+
     pub(crate) fn new(
         raw_device: Retained<ProtocolObject<dyn MTLDevice>>,
         raw_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
@@ -66,52 +86,134 @@ impl GpuRasterizer {
             label: Some("Scene3D raster"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}\n{}",
                     include_str!("metal.wgsl"),
-                    include_str!("lighting.wgsl")
+                    include_str!("assets.wgsl"),
+                    include_str!("lighting.wgsl"),
+                    include_str!("shadows.wgsl"),
+                    include_str!("transparency.wgsl"),
+                    include_str!("raster.wgsl")
                 )
                 .into(),
             ),
         });
-        let attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32x4, 3 => Uint32, 4 => Uint32];
-        let lit_attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32x4, 3 => Uint32, 4 => Uint32, 5 => Float32x3, 6 => Uint32];
-        let make_pipeline = |lit| {
+        let binding = |binding, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
+            ty,
+            count: None,
+        };
+        let texture_binding = wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        };
+        let lit_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Scene3D lighting"),
+            entries: &[
+                binding(
+                    0,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ),
+                binding(
+                    1,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ),
+                binding(2, texture_binding),
+                binding(3, texture_binding),
+                binding(
+                    6,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ),
+                binding(
+                    4,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                ),
+            ],
+        });
+        let lit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Scene3D lighting"),
+            bind_group_layouts: &[Some(&lit_group_layout)],
+            immediate_size: 0,
+        });
+        let make_pipeline = |mode, packed_depth, background| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Scene3D raster"),
-                layout: None,
+                layout: (mode != 0 || background).then_some(&lit_layout),
                 vertex: wgpu::VertexState {
                     module: &module,
-                    entry_point: Some(if lit { "lit_vertex" } else { "vertex" }),
+                    entry_point: Some(if background {
+                        "background_vertex"
+                    } else {
+                        match mode {
+                            0 => "raster_vertex",
+                            _ => "raster_lit_vertex",
+                        }
+                    }),
                     compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride:
-                            valle_engine::motion::scene3d::GpuRasterGeometry::VERTEX_STRIDE
-                                + if lit { 16 } else { 0 },
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: if lit { &lit_attributes } else { &attributes },
-                    })],
+                    buffers: &[],
                 },
                 primitive: Default::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    depth_write_enabled: Some(!background),
+                    depth_compare: Some(if background {
+                        wgpu::CompareFunction::Always
+                    } else {
+                        wgpu::CompareFunction::Less
+                    }),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: Some(if lit { "lit_fragment" } else { "fragment" }),
+                    entry_point: Some(if background {
+                        "background_fragment"
+                    } else if mode != 0 {
+                        "raster_lit_fragment"
+                    } else {
+                        "raster_fragment"
+                    }),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::TextureFormat::Rgba16Float.into())],
+                    targets: &[
+                        Some(wgpu::TextureFormat::Rgba16Float.into()),
+                        if packed_depth {
+                            Some(wgpu::TextureFormat::Rgba8Unorm.into())
+                        } else {
+                            None
+                        },
+                    ],
                 }),
                 multiview_mask: None,
                 cache: None,
             })
         };
-        let pipeline = make_pipeline(false);
-        let lit_pipeline = make_pipeline(true);
+        let pipelines = [
+            make_pipeline(0, false, false),
+            make_pipeline(1, false, false),
+            make_pipeline(0, true, false),
+            make_pipeline(1, true, false),
+        ];
+        let background_pipelines = [make_pipeline(1, false, true), make_pipeline(1, true, true)];
+        let shadow_rasterizer = ShadowRasterizer::new(&device, &module);
+        let transparency = Transparency::new(&device, &module, &lit_group_layout);
         if let Some(error) = pollster::block_on(error_scope.pop()) {
             return Err(error.to_string());
         }
@@ -156,8 +258,12 @@ impl GpuRasterizer {
         Ok(Self {
             device,
             queue,
-            pipeline,
-            lit_pipeline,
+            pipelines,
+            background_pipelines,
+            atlas: None,
+            shadow_rasterizer,
+            shadows: None,
+            transparency,
             dfg,
             _lut_memory: lut_memory,
         })
@@ -167,20 +273,51 @@ impl GpuRasterizer {
         &mut self,
         input: &Scene3dGpuInput,
         context: &mut gpu::DirectContext,
-    ) -> Result<GpuRasterOutput, String> {
+    ) -> Result<Option<GpuRasterOutput>, String> {
         self.device
             .poll(wgpu::PollType::Poll)
             .map_err(|error| error.to_string())?;
         let geometry = &input.geometry;
-        let pipeline = if geometry.shading.is_some() {
-            &self.lit_pipeline
+        if geometry.width > self.device.limits().max_texture_dimension_2d
+            || geometry.height > self.device.limits().max_texture_dimension_2d
+        {
+            return Ok(None);
+        }
+        let dof = input
+            .frame
+            .camera
+            .depth_of_field
+            .is_some_and(|d| d.max_blur_radius > 0.0);
+        let blend = input.has_blend();
+        let opaque_depth = dof && !blend;
+        let mut asset_upload_bytes = 0;
+        self.trim_assets(context.resource_cache_limit());
+        let atlas = if let Some(shading) = &geometry.shading {
+            let key = Atlas::key(shading);
+            if self.atlas.as_ref().is_none_or(|atlas| atlas.key != key) {
+                self.atlas = None;
+                self.shadows = None;
+                self.atlas = Atlas::build(
+                    shading,
+                    &self.device,
+                    &self.queue,
+                    context.resource_cache_limit(),
+                )?;
+                asset_upload_bytes = self.atlas.as_ref().map_or(0, |a| a.bytes);
+            }
+            let Some(atlas) = self.atlas.clone() else {
+                return Ok(None);
+            };
+            Some(atlas)
         } else {
-            &self.pipeline
+            None
         };
+        let mode = usize::from(geometry.shading.is_some());
+        let pipeline = &self.pipelines[mode + 2 * usize::from(opaque_depth)];
         let upload_bytes = input.upload_bytes().ok_or("vertex byte count overflow")?;
         let memory = valle_engine::motion::memory::reserve(
             valle_engine::motion::memory::MemoryKind::Temporary,
-            u64::from(geometry.width) * u64::from(geometry.height) * 12 + upload_bytes,
+            input.texture_bytes() + upload_bytes,
         )
         .map_err(|error| error.to_string())?;
         let _staging = valle_engine::motion::memory::reserve(
@@ -207,6 +344,10 @@ impl GpuRasterizer {
         };
         let color = make_texture(wgpu::TextureFormat::Rgba16Float);
         let depth = make_texture(wgpu::TextureFormat::Depth32Float);
+        let packed_depth = opaque_depth.then(|| make_texture(wgpu::TextureFormat::Rgba8Unorm));
+        let packed_view = packed_depth
+            .as_ref()
+            .map(|t| t.create_view(&Default::default()));
         let color_view = color.create_view(&Default::default());
         let depth_view = depth.create_view(&Default::default());
         let mut bytes = input.vertex_bytes();
@@ -218,7 +359,7 @@ impl GpuRasterizer {
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Scene3D vertices"),
                 contents: &bytes,
-                usage: wgpu::BufferUsages::VERTEX,
+                usage: wgpu::BufferUsages::STORAGE,
             });
         let bytes = [
             geometry.width as f32,
@@ -244,11 +385,53 @@ impl GpuRasterizer {
                     usage: wgpu::BufferUsages::STORAGE,
                 })
         });
+        let mut shadow_upload_bytes = 0;
+        let shadows = if let (Some(data), Some(buffer), Some(atlas)) =
+            (&geometry.shading, &shading, &atlas)
+        {
+            let key = ShadowRasterizer::key(data);
+            if self.shadows.as_ref().is_none_or(|maps| maps.key != key) {
+                self.shadows = None;
+                self.shadows = self.shadow_rasterizer.render(
+                    data,
+                    buffer,
+                    &uniform,
+                    atlas,
+                    &self.device,
+                    &self.queue,
+                    context
+                        .resource_cache_limit()
+                        .saturating_sub(atlas.bytes as usize),
+                )?;
+                shadow_upload_bytes = self.shadows.as_ref().map_or(0, |s| s.upload_bytes);
+            }
+            let Some(maps) = self.shadows.clone() else {
+                return Ok(None);
+            };
+            Some(maps)
+        } else {
+            None
+        };
         let dfg_view = self.dfg.create_view(&Default::default());
-        let mut entries = vec![wgpu::BindGroupEntry {
-            binding: 0,
-            resource: uniform.as_entire_binding(),
-        }];
+        let atlas_view = atlas
+            .as_ref()
+            .map(|a| a.texture.create_view(&Default::default()));
+        let shadow_view = shadows.as_ref().map(|s| {
+            s.texture.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            })
+        });
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: vertices.as_entire_binding(),
+            },
+        ];
         if let Some(shading) = &shading {
             entries.extend([
                 wgpu::BindGroupEntry {
@@ -258,6 +441,18 @@ impl GpuRasterizer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&dfg_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(
+                        atlas_view.as_ref().ok_or("missing material atlas")?,
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(
+                        shadow_view.as_ref().ok_or("missing shadow maps")?,
+                    ),
                 },
             ]);
         }
@@ -270,15 +465,33 @@ impl GpuRasterizer {
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Scene3D triangles"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &color_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &color_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    packed_view
+                        .as_ref()
+                        .map(|view| wgpu::RenderPassColorAttachment {
+                            view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: 1.0,
+                                    g: 1.0,
+                                    b: 127.0 / 255.0,
+                                    a: 127.0 / 255.0,
+                                }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        }),
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
@@ -289,16 +502,54 @@ impl GpuRasterizer {
                 }),
                 ..Default::default()
             });
-            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
-            pass.set_vertex_buffer(0, vertices.slice(..));
-            pass.draw(0..geometry.vertices.len() as u32, 0..1);
+            if geometry
+                .shading
+                .as_ref()
+                .is_some_and(|s| (s.values[1][3] as u32 & 2) != 0)
+            {
+                pass.set_pipeline(&self.background_pipelines[usize::from(opaque_depth)]);
+                pass.draw(0..3, 0..1);
+            }
+            pass.set_pipeline(pipeline);
+            pass.draw(0..geometry.vertices.len() as u32 * 2, 0..1);
         }
+        let transparency = blend.then(|| {
+            self.transparency.encode(
+                &self.device,
+                &mut encoder,
+                &group,
+                geometry.vertices.len() as u32,
+                &color,
+                &depth,
+                dof,
+            )
+        });
         self.queue.submit([encoder.finish()]);
+        let depth_image = if dof {
+            transparency
+                .as_ref()
+                .map(|o| &o.depth)
+                .or(packed_depth.as_ref())
+        } else {
+            None
+        }
+        .map(|texture| {
+            import_image(
+                context,
+                texture,
+                ColorType::RGBA8888,
+                AlphaType::Unpremul,
+                None,
+            )
+        })
+        .transpose()?;
         // SAFETY: these textures and buffers are retained in GpuRasterOutput until Ganesh's
         // completion fence. Both APIs submit to the exact same Metal command queue.
         let image = unsafe {
-            let raw = color
+            let raw = transparency
+                .as_ref()
+                .map_or(&color, |o| &o.color)
                 .as_hal::<wgpu::hal::api::Metal>()
                 .ok_or("Metal texture unavailable")?;
             let info = gpu::mtl::TextureInfo::new(ptr::from_ref(raw.raw_handle()).cast::<c_void>());
@@ -322,15 +573,54 @@ impl GpuRasterizer {
             )
             .ok_or("cannot import Scene3D Metal color texture")?
         };
-        Ok(GpuRasterOutput {
+        Ok(Some(GpuRasterOutput {
             image,
-            upload_bytes,
+            depth_image,
+            upload_bytes: upload_bytes + shadow_upload_bytes + asset_upload_bytes,
             _color: color,
             _depth: depth,
+            _packed_depth: packed_depth,
             _vertices: vertices,
             _uniform: uniform,
             _shading: shading,
+            _atlas: atlas,
+            _shadows: shadows,
+            _transparency: transparency,
             _memory: memory,
-        })
+        }))
     }
 }
+
+fn import_image(
+    context: &mut gpu::DirectContext,
+    texture: &wgpu::Texture,
+    color: ColorType,
+    alpha: AlphaType,
+    space: Option<ColorSpace>,
+) -> Result<Image, String> {
+    // SAFETY: the owning output retains the texture through the shared Ganesh completion fence.
+    unsafe {
+        let raw = texture
+            .as_hal::<wgpu::hal::api::Metal>()
+            .ok_or("Metal texture unavailable")?;
+        let info = gpu::mtl::TextureInfo::new(ptr::from_ref(raw.raw_handle()).cast::<c_void>());
+        let backend = gpu::backend_textures::make_mtl(
+            (texture.width() as i32, texture.height() as i32),
+            gpu::Mipmapped::No,
+            &info,
+            "Scene3D depth",
+        );
+        gpu::images::borrow_texture_from(
+            context,
+            &backend,
+            gpu::SurfaceOrigin::TopLeft,
+            color,
+            alpha,
+            space,
+        )
+        .ok_or_else(|| "cannot import Scene3D Metal depth".to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests;

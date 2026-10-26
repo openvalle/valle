@@ -4,7 +4,7 @@ use super::{
     WorldVertex, center_range, covered_span, is_top_left, orient_fixed, round_fixed,
 };
 
-const SHADOW_SIZE: usize = 1024;
+pub(super) const SHADOW_SIZE: usize = 1024;
 
 pub(super) fn render_maps(
     directions: &[(V3, [f32; 3])],
@@ -90,6 +90,7 @@ pub(super) struct ShadowMap {
     scale_x: f32,
     scale_y: f32,
     depth_span: f32,
+    min_depth: f32,
     depth: Vec<f32>,
 }
 
@@ -107,6 +108,29 @@ impl ShadowMap {
         casters: &ShadowCasters,
         meshes: &[FrameMesh<'_>],
     ) -> Option<Self> {
+        let (mut map, vertices, fixed) = Self::prepare(direction, casters, meshes)?;
+        map.depth = vec![f32::MAX; SHADOW_SIZE * SHADOW_SIZE];
+        for triangle in &casters.triangles {
+            let mesh = &meshes[triangle.mesh_index];
+            let material = &mesh.materials[triangle.material_index].values;
+            if material.alpha_mode != AlphaMode::Blend {
+                let corners = triangle.vertices.map(|index| index as usize);
+                map.raster_triangle(
+                    corners.map(|index| vertices[index]),
+                    corners.map(|index| fixed[index]),
+                    mesh,
+                    material,
+                );
+            }
+        }
+        Some(map)
+    }
+
+    fn prepare(
+        direction: V3,
+        casters: &ShadowCasters,
+        meshes: &[FrameMesh<'_>],
+    ) -> Option<(Self, Vec<ShadowVertex>, Vec<FixedPoint>)> {
         let forward = direction * -1.0;
         let reference_up = if forward.y.abs() > 0.99 {
             V3::new(0.0, 0.0, 1.0)
@@ -155,7 +179,7 @@ impl ShadowMap {
         max_y += margin_y;
         let span_x = span_x + 2.0 * margin_x;
         let span_y = span_y + 2.0 * margin_y;
-        let mut map = Self {
+        let map = Self {
             right,
             up,
             forward,
@@ -164,7 +188,8 @@ impl ShadowMap {
             scale_x: SHADOW_SIZE as f32 / span_x,
             scale_y: SHADOW_SIZE as f32 / span_y,
             depth_span: (max_depth - min_depth).max(0.001),
-            depth: vec![f32::MAX; SHADOW_SIZE * SHADOW_SIZE],
+            min_depth,
+            depth: Vec::new(),
         };
         let vertices = light
             .iter()
@@ -183,41 +208,20 @@ impl ShadowMap {
                 y: round_fixed(vertex.y * SUBPIXEL_SCALE),
             })
             .collect::<Vec<_>>();
-        for triangle in &casters.triangles {
-            let mesh = &meshes[triangle.mesh_index];
-            let material = &mesh.materials[triangle.material_index].values;
-            if material.alpha_mode != AlphaMode::Blend {
-                let corners = triangle.vertices.map(|index| index as usize);
-                map.raster_triangle(
-                    corners.map(|index| vertices[index]),
-                    corners.map(|index| fixed[index]),
-                    mesh,
-                    material,
-                );
-            }
-        }
-        Some(map)
+        Some((map, vertices, fixed))
     }
 
     fn raster_triangle(
         &mut self,
-        mut vertices: [ShadowVertex; 3],
-        mut fixed: [FixedPoint; 3],
+        vertices: [ShadowVertex; 3],
+        fixed: [FixedPoint; 3],
         mesh: &FrameMesh<'_>,
         material: &super::ModelMaterial,
     ) {
-        let area_f32 = orient(vertices[0], vertices[1], vertices[2]);
-        if area_f32.abs() <= 1.0e-8 || (area_f32 > 0.0 && !material.double_sided) {
+        let Some((vertices, fixed, area)) = orient_triangle(vertices, fixed, material.double_sided)
+        else {
             return;
-        }
-        if area_f32 < 0.0 {
-            vertices.swap(1, 2);
-            fixed.swap(1, 2);
-        }
-        let area = orient_fixed(fixed[0], fixed[1], fixed[2]);
-        if area <= 0 {
-            return;
-        }
+        };
         // Only texels whose centers lie within the snapped corners can be covered.
         let Some((min_x, max_x)) = center_range(fixed.map(|point| point.x), SHADOW_SIZE as u32)
         else {
@@ -387,6 +391,82 @@ fn pcf(depth: &[f32], ix: i32, iy: i32, receiver: f32) -> f32 {
 
 fn orient(a: ShadowVertex, b: ShadowVertex, c: ShadowVertex) -> f32 {
     (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+fn orient_triangle(
+    mut vertices: [ShadowVertex; 3],
+    mut fixed: [FixedPoint; 3],
+    double_sided: bool,
+) -> Option<([ShadowVertex; 3], [FixedPoint; 3], i64)> {
+    let area_f32 = orient(vertices[0], vertices[1], vertices[2]);
+    if area_f32.abs() <= 1e-8 || (area_f32 > 0.0 && !double_sided) {
+        return None;
+    }
+    if area_f32 < 0.0 {
+        vertices.swap(1, 2);
+        fixed.swap(1, 2);
+    }
+    let area = orient_fixed(fixed[0], fixed[1], fixed[2]);
+    (area > 0).then_some((vertices, fixed, area))
+}
+
+/// CPU and GPU share projection, caster selection, culling and snapped coverage.
+pub(super) fn gpu_maps(
+    directions: &[(V3, [f32; 3])],
+    casters: &ShadowCasters,
+    meshes: &[FrameMesh<'_>],
+    shading: &super::GpuRasterShading,
+) -> Vec<super::gpu::GpuRasterShadow> {
+    directions
+        .iter()
+        .enumerate()
+        .filter_map(|(light, (direction, _))| {
+            let (map, vertices, fixed) = ShadowMap::prepare(*direction, casters, meshes)?;
+            let mut output = Vec::new();
+            for triangle in &casters.triangles {
+                let material =
+                    &meshes[triangle.mesh_index].materials[triangle.material_index].values;
+                if material.alpha_mode == AlphaMode::Blend {
+                    continue;
+                }
+                let corners = triangle.vertices.map(|i| i as usize);
+                let Some((vertices, fixed, area)) = orient_triangle(
+                    corners.map(|i| vertices[i]),
+                    corners.map(|i| fixed[i]),
+                    material.double_sided,
+                ) else {
+                    continue;
+                };
+                for (vertex, point) in vertices.into_iter().zip(fixed) {
+                    output.push(super::gpu::GpuRasterShadowVertex {
+                        position: [
+                            point.x as f32 / SUBPIXEL_SCALE,
+                            point.y as f32 / SUBPIXEL_SCALE,
+                        ],
+                        depth: vertex.depth,
+                        uv: [vertex.uv.x, vertex.uv.y],
+                        material: shading.material_id(triangle.mesh_index, triangle.material_index),
+                        inv_area: 1.0 / area as f32,
+                    });
+                }
+            }
+            let mut scale = 1.0;
+            while map.depth_span * scale >= 1.0 {
+                scale *= 0.5;
+            }
+            let v = |v: V3, w| [v.x, v.y, v.z, w];
+            Some(super::gpu::GpuRasterShadow {
+                light: light as u32,
+                vertices: output,
+                values: [
+                    v(map.right, map.min_x),
+                    v(map.up, map.max_y),
+                    v(map.forward, map.depth_span),
+                    [map.scale_x, map.scale_y, map.min_depth, scale],
+                ],
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

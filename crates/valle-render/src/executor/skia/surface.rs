@@ -792,7 +792,7 @@ enum SurfaceBackend {
         device: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>,
         queue:
             objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandQueue>>,
-        scene3d_gpu: Option<Result<super::scene3d_gpu::GpuRasterizer, String>>,
+        scene3d_gpu: Option<Result<Box<super::scene3d_gpu::GpuRasterizer>, String>>,
     },
 }
 
@@ -823,10 +823,18 @@ impl core::fmt::Debug for SurfaceArena {
 impl SurfaceArena {
     pub(crate) fn set_gpu_resource_cache_limit(&mut self, bytes: usize) {
         #[cfg(all(target_os = "macos", feature = "native"))]
-        if let SurfaceBackend::Metal { context, .. } = &mut self.backend {
+        if let SurfaceBackend::Metal {
+            context,
+            scene3d_gpu,
+            ..
+        } = &mut self.backend
+        {
             // A soft target for live plus purgeable resources; referenced resources cannot
             // be purged immediately, so this is not a hard limit on driver allocation.
             context.set_resource_cache_limit(bytes);
+            if let Some(Ok(renderer)) = scene3d_gpu {
+                renderer.trim_assets(bytes);
+            }
         }
         #[cfg(not(all(target_os = "macos", feature = "native")))]
         let _ = bytes;
@@ -1123,6 +1131,14 @@ impl SurfaceArena {
         self.entries.clear();
         self.scratch_free.clear();
         self.delivery_surface = None;
+        #[cfg(all(target_os = "macos", feature = "native"))]
+        if let SurfaceBackend::Metal {
+            scene3d_gpu: Some(Ok(renderer)),
+            ..
+        } = &mut self.backend
+        {
+            renderer.trim_assets(0);
+        }
         #[cfg(all(target_os = "macos", feature = "native"))]
         self.pending_external_imports.clear();
         self.generation_id = self.generation_id.saturating_add(1).max(1);
@@ -1460,14 +1476,20 @@ impl<'arena> SurfaceFrame<'arena> {
         }
         // RGBA16F + Depth32Float stay alive until the frame completion fence. Deduct
         // them from the remaining surface allowance before allocating either texture.
-        let gpu_bytes = (bytes.checked_mul(3).ok_or(SurfaceError::ByteOverflow)? / 2)
+        let dof = input
+            .frame
+            .camera
+            .depth_of_field
+            .filter(|d| d.max_blur_radius > 0.0);
+        let gpu_bytes = input
+            .texture_bytes()
             .checked_add(input.upload_bytes().ok_or(SurfaceError::ByteOverflow)?)
             .ok_or(SurfaceError::ByteOverflow)?;
         let required_bytes = self
             .report
             .physical_bytes
             .checked_add(self.scratch_checked_out_bytes)
-            .and_then(|value| value.checked_add(bytes))
+            .and_then(|value| value.checked_add(bytes * if dof.is_some() { 2 } else { 1 }))
             .and_then(|value| value.checked_add(gpu_bytes))
             .ok_or(SurfaceError::ByteOverflow)?;
         let output = match &mut self.arena.backend {
@@ -1481,7 +1503,8 @@ impl<'arena> SurfaceFrame<'arena> {
             } => {
                 if scene3d_gpu.is_none() {
                     let renderer =
-                        super::scene3d_gpu::GpuRasterizer::new(device.clone(), queue.clone());
+                        super::scene3d_gpu::GpuRasterizer::new(device.clone(), queue.clone())
+                            .map(Box::new);
                     if let Err(reason) = &renderer {
                         eprintln!("warning: Scene3D GPU raster unavailable, using CPU: {reason}");
                     }
@@ -1496,34 +1519,48 @@ impl<'arena> SurfaceFrame<'arena> {
                         max_bytes: self.max_frame_bytes,
                     });
                 }
-                self.max_frame_bytes -= gpu_bytes;
-                renderer
+                let Some(output) = renderer
                     .render(input, context)
                     .map_err(SurfaceError::Scene3dGpu)?
+                else {
+                    return Ok(None);
+                };
+                self.max_frame_bytes -= gpu_bytes;
+                output
             }
         };
         // Keep the cached image Skia-owned. The only copy is GPU -> GPU, into a frame-budgeted
         // scratch surface; borrowed wgpu textures never escape into persistent program caches.
-        let image = {
-            let mut scratch = self.scratch(&[extent])?;
-            let target = scratch.surface_mut(0)?;
-            let mut paint = Paint::default();
-            paint.set_blend_mode(BlendMode::Src);
-            target
-                .canvas()
-                .draw_image(&output.image, (0, 0), Some(&paint));
-            target.image_snapshot()
-        };
         let upload_bytes = output.upload_bytes;
+        let color = output.image.clone();
+        let depth = output.depth_image.clone();
         self.arena
             .pending_external_imports
             .push(ImportedMetalImage {
-                image: image.clone(),
+                image: color.clone(),
                 _textures: Vec::new(),
                 _source: ImportedMetalOwner::Scene {
                     _resources: Box::new((output, object.clone())),
                 },
             });
+        let image = if let Some(dof) = dof {
+            let input = super::scene3d_dof::Scene3dDofInput::from_gpu(
+                extent,
+                color,
+                depth.ok_or_else(|| SurfaceError::Scene3dGpu("missing GPU depth".into()))?,
+                dof,
+                input.frame.camera.far,
+            );
+            super::scene3d_dof::render(&input, self)
+                .map_err(|e| SurfaceError::Scene3dGpu(e.to_string()))?
+        } else {
+            let mut scratch = self.scratch(&[extent])?;
+            let target = scratch.surface_mut(0)?;
+            let mut paint = Paint::default();
+            paint.set_blend_mode(BlendMode::Src);
+            target.canvas().draw_image(&color, (0, 0), Some(&paint));
+            target.image_snapshot()
+        };
         Ok(Some((image, upload_bytes)))
     }
 

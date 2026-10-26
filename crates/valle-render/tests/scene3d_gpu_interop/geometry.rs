@@ -149,9 +149,12 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
     let (device, queue, mut context) = shared_device();
     let source = if lighting.is_some() {
         format!(
-            "{}\n{}\n{LIT_VALIDATION}",
+            "{}\n{}\n{}\n{}\n{}\n{LIT_VALIDATION}",
             include_str!("../../src/executor/skia/scene3d_gpu/metal.wgsl"),
-            include_str!("../../src/executor/skia/scene3d_gpu/lighting.wgsl")
+            include_str!("../../src/executor/skia/scene3d_gpu/assets.wgsl"),
+            include_str!("../../src/executor/skia/scene3d_gpu/lighting.wgsl"),
+            include_str!("../../src/executor/skia/scene3d_gpu/shadows.wgsl"),
+            include_str!("../../src/executor/skia/scene3d_gpu/raster.wgsl")
         )
     } else {
         GEOMETRY.to_owned()
@@ -247,6 +250,25 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
         },
     );
     let dfg_view = dfg.create_view(&Default::default());
+    let atlas = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("unused atlas"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let atlas_view = atlas.create_view(&Default::default());
+    let shadow_view = atlas.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::D2Array),
+        ..Default::default()
+    });
     for (name, model) in [
         (
             "triangle",
@@ -484,6 +506,14 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
                         wgpu::BindGroupEntry {
                             binding: 2,
                             resource: wgpu::BindingResource::TextureView(&dfg_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(&atlas_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(&shadow_view),
                         },
                     ]);
                 }

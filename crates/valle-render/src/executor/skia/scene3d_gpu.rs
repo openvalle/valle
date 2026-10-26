@@ -10,7 +10,13 @@ use std::{collections::BTreeMap, sync::Arc};
 use valle_engine::motion::scene3d::{Frame3DState, GpuRasterGeometry, PreparedScene};
 
 #[cfg(target_os = "macos")]
+mod assets;
+#[cfg(target_os = "macos")]
 mod metal;
+#[cfg(target_os = "macos")]
+mod shadows;
+#[cfg(target_os = "macos")]
+mod transparency;
 #[cfg(target_os = "macos")]
 pub(super) use metal::{GpuRasterOutput, GpuRasterizer};
 
@@ -99,8 +105,26 @@ impl Scene3dGpuInput {
         >() as u64)?;
         let shading = self.geometry.shading.as_ref().map_or(0, |shading| {
             shading.vertices.capacity()
-                * std::mem::size_of::<valle_engine::motion::scene3d::GpuRasterVarying>()
-                + shading.values.capacity() * 16
+                    * std::mem::size_of::<valle_engine::motion::scene3d::GpuRasterVarying>()
+                    + shading.values.capacity() * 16
+                    + shading.texture_vertices.as_ref().map_or(0, |v| {
+                        v.capacity()
+                            * std::mem::size_of::<
+                                valle_engine::motion::scene3d::GpuRasterTextureVarying,
+                            >()
+                    })
+                    + shading
+                        .shadows
+                        .iter()
+                        .map(|s| {
+                            s.vertices.capacity()
+                                * std::mem::size_of::<
+                                    valle_engine::motion::scene3d::GpuRasterShadowVertex,
+                                >()
+                        })
+                        .sum::<usize>()
+                    + shading.shadows.capacity()
+                        * std::mem::size_of::<valle_engine::motion::scene3d::GpuRasterShadow>()
         });
         cpu.checked_add((self.palette.len() * 32) as u64)?
             .checked_add(shading as u64)
@@ -121,7 +145,45 @@ impl Scene3dGpuInput {
     }
 
     pub(crate) fn frame_bytes(&self) -> Option<u64> {
-        self.resident_bytes()?.checked_add(self.upload_bytes()?)
+        self.resident_bytes()?
+            .checked_add(self.upload_bytes()?)?
+            .checked_add(self.geometry.shading.as_ref().map_or(0, |s| {
+                s.shadows
+                    .iter()
+                    .map(|s| (s.vertices.len() as u64 * 28).max(4) + 16)
+                    .sum::<u64>()
+            }))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn texture_bytes(&self) -> u64 {
+        let dof = self
+            .frame
+            .camera
+            .depth_of_field
+            .is_some_and(|d| d.max_blur_radius > 0.0);
+        u64::from(self.geometry.width)
+            * u64::from(self.geometry.height)
+            * if self.has_blend() {
+                if dof { 68 } else { 64 }
+            } else if dof {
+                16
+            } else {
+                12
+            }
+            + if self.has_blend() && !dof { 4 } else { 0 }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn has_blend(&self) -> bool {
+        self.geometry.shading.as_ref().is_some_and(|s| {
+            (0..s.values[1][0] as usize).any(|i| {
+                s.values[valle_engine::motion::scene3d::GpuRasterShading::HEADER_LEN
+                    + i * valle_engine::motion::scene3d::GpuRasterShading::MATERIAL_STRIDE
+                    + 2][3]
+                    != 0.0
+            })
+        })
     }
 
     #[cfg(target_os = "macos")]
@@ -139,6 +201,20 @@ impl Scene3dGpuInput {
             let color = self.palette[&vertex.color.map(f32::to_bits)];
             for (channel, value) in color.into_iter().enumerate() {
                 record[12 + channel * 4..16 + channel * 4].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        // Picking keeps its CPU metadata. Reuse the unlit upload's object-id word for the
+        // exact area reciprocal, rather than adding another vertex field or buffer.
+        for triangle in bytes.as_chunks_mut::<108>().0 {
+            let point = |at: usize| {
+                [at, at + 4].map(|i| {
+                    (f32::from_le_bytes(triangle[i..i + 4].try_into().unwrap()) * 256.0) as i64
+                })
+            };
+            let [a, b, c] = [0, 36, 72].map(point);
+            let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            for at in [28, 64, 100] {
+                triangle[at..at + 4].copy_from_slice(&(1.0 / area as f32).to_le_bytes());
             }
         }
         bytes

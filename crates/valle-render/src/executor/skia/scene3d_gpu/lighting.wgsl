@@ -9,17 +9,35 @@ struct LitVertex {
     @location(1) normalOverZ: vec3<f32>,
     @location(2) @interpolate(flat) material: u32,
     @location(3) @interpolate(flat) ids: vec2<u32>,
+    @location(4) uvOverZ: vec2<f32>,
+    @location(5) @interpolate(flat) uvDx: vec3<f32>,
+    @location(6) @interpolate(flat) uvDy: vec3<f32>,
+    @location(7) @interpolate(flat) tangent: vec3<f32>,
+    @location(8) @interpolate(flat) bitangent: vec3<f32>,
+    @location(9) @interpolate(flat) triangle:u32,
 };
 
-@vertex fn lit_vertex(@location(0) position: vec2<f32>, @location(1) invZ: f32,
-    @location(3) objectId: u32, @location(4) nodeId: u32,
-    @location(5) normalOverZ: vec3<f32>, @location(6) material: u32) -> LitVertex {
+fn make_lit_vertex(position: vec2<f32>, invZ: f32, objectId: u32, nodeId: u32, normalOverZ: vec3<f32>, material: u32) -> LitVertex {
     var out: LitVertex;
     out.position = vec4(position / globals.extent * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.5, 1.0);
     out.invZ = invZ;
     out.normalOverZ = normalOverZ;
     out.material = material;
     out.ids = vec2(objectId, nodeId);
+    out.uvOverZ=vec2(0.0);out.uvDx=vec3(0.0);out.uvDy=vec3(0.0);out.tangent=vec3(0.0);out.bitangent=vec3(0.0);
+    out.triangle=0xffffffffu;
+    return out;
+}
+
+@vertex fn lit_vertex(@location(0) position:vec2<f32>,@location(1) invZ:f32,@location(3) objectId:u32,@location(4) nodeId:u32,
+    @location(5) normalOverZ:vec3<f32>,@location(6) material:u32) -> LitVertex {
+    return make_lit_vertex(position,invZ,objectId,nodeId,normalOverZ,material);
+}
+@vertex fn textured_vertex(@location(0) position:vec2<f32>,@location(1) invZ:f32,@location(3) objectId:u32,@location(4) nodeId:u32,
+    @location(5) normalOverZ:vec3<f32>,@location(6) material:u32,@location(7) uv:vec2<f32>,
+    @location(8) dx:vec3<f32>,@location(9) dy:vec3<f32>,@location(10) tangent:vec3<f32>,@location(11) bitangent:vec3<f32>) -> LitVertex {
+    var out=make_lit_vertex(position,invZ,objectId,nodeId,normalOverZ,material);
+    out.uvOverZ=uv;out.uvDx=dx;out.uvDy=dy;out.tangent=tangent;out.bitangent=bitangent;
     return out;
 }
 
@@ -29,12 +47,19 @@ fn stable(v: f32) -> f32 {
     return bitcast<f32>(bitcast<u32>(v) ^ globals.padding);
 }
 
+// Correct the hardware division estimate before discontinuous PCF/DOF decisions.
+fn precise_divide(a:f32,b:f32) -> f32 {
+    let q=stable(a/b);
+    let residual=stable(fma(-q,b,a));
+    return stable(fma(residual,stable(1.0/b),q));
+}
+
 fn dot3(a: vec3<f32>, b: vec3<f32>) -> f32 {
     return stable(stable(stable(a.x * b.x) + stable(a.y * b.y)) + stable(a.z * b.z));
 }
 
 fn unit(v: vec3<f32>) -> vec3<f32> {
-    return v * stable(1.0 / max(stable(sqrt(dot3(v, v))), 1e-12));
+    return v * precise_divide(1.0,max(stable(sqrt(dot3(v, v))), 1e-12));
 }
 
 fn dfg_at(roughness: f32, nv: f32) -> vec2<f32> {
@@ -111,35 +136,53 @@ fn half_even(v: f32) -> f32 {
     return unpack2x16float(halfBits).x;
 }
 
-fn lit_color(in: LitVertex) -> vec4<f32> {
+fn scattering(f0:vec3<f32>,fab:vec2<f32>) -> mat2x3<f32> {
+    let single=f0*fab.x+fab.y;let missing=1.0-fab.x-fab.y;let average=f0+(vec3(1.0)-f0)/21.0;
+    return mat2x3(single,single*average/(vec3(1.0)-missing*average)*missing);
+}
+fn camera_ray(pixel:vec2<u32>) -> vec3<f32> {
+    let counts=vec3<u32>(shading[1].xyz);
+    let rayStart=HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u;
+    return shading[rayStart+pixel.x].xyz+shading[rayStart+u32(globals.extent.x)+pixel.y].xyz;
+}
+fn lit_radiance(in: LitVertex) -> vec4<f32> {
     let counts = vec3<u32>(shading[1].xyz);
-    let material = 2u + in.material * 3u;
-    let base = shading[material].rgb;
+    let material = HEADER + in.material * MATERIAL;
+    let baseTex=texture_slot(material,0u,in);
+    let base = shading[material].rgb*baseTex.rgb;
     let kind = u32(shading[material].a);
-    let emission = shading[material + 1u].rgb;
-    let metallic = shading[material + 1u].a;
-    let roughness = shading[material + 2u].x;
-    let lightStart = 2u + counts.x * 3u;
+    let emission = shading[material + 1u].rgb*texture_slot(material,4u,in).rgb;
+    let mr=texture_slot(material,1u,in);
+    let metallic = shading[material + 1u].a*mr.b;
+    let roughness = max(shading[material + 2u].x*mr.g,0.0525);
+    let coverage=shading[material+2u].y*baseTex.a;
+    if shading[material+2u].z >= 0.0 && coverage < shading[material+2u].z {discard;}
+    let ao=1.0+shading[material+3u].y*(texture_slot(material,3u,in).r-1.0);
+    let lightStart = HEADER + counts.x * MATERIAL;
     let hemiStart = lightStart + counts.y * 2u;
-    let rayStart = hemiStart + counts.z * 3u;
     let pixel = vec2<u32>(in.position.xy);
-    let ray = shading[rayStart + pixel.x].xyz
-        + shading[rayStart + u32(globals.extent.x) + pixel.y].xyz;
-    let n = unit(in.normalOverZ / in.invZ);
+    let ray = camera_ray(pixel);
+    var n = unit(select(in.normalOverZ,in.normalOverZ / in.invZ,in.triangle==0xffffffffu));
+    if shading[material+6u].x >= 0.0 && dot(in.tangent,in.tangent)>0.0 {
+        let texel=texture_slot(material,2u,in);let t=unit(in.tangent-n*dot3(n,in.tangent));
+        let c=cross(n,t);let b=c*select(1.0,-1.0,dot3(c,in.bitangent)<0.0);
+        n=unit(t*((texel.r*2.0-1.0)*shading[material+3u].x)+b*((texel.g*2.0-1.0)*shading[material+3u].x)+n*(texel.b*2.0-1.0));
+    }
     let v = unit(-ray);
     var radiance = base;
     var fab = vec2(0.0);
     if kind == 1u {
-        var factor = shading[0].rgb;
+        var factor = shading[0].rgb*ao;
         for (var i = 0u; i < counts.y; i++) {
             let at = lightStart + i * 2u;
-            factor += shading[at + 1u].rgb * max(dot(n, shading[at].xyz), 0.0);
+            factor += shading[at + 1u].rgb * max(dot(n, shading[at].xyz), 0.0)*shadow_visibility(i,camera_position(ray,in.invZ),n);
         }
         for (var i = 0u; i < counts.z; i++) {
             let at = hemiStart + i * 3u;
             let t = dot(n, shading[at].xyz) * 0.5 + 0.5;
-            factor += shading[at + 2u].rgb * (1.0 - t) + shading[at + 1u].rgb * t;
+            factor += (shading[at + 2u].rgb * (1.0 - t) + shading[at + 1u].rgb * t)*ao;
         }
+        factor+=env_diffuse(n)*ao;
         radiance = base * factor;
     }
     if kind == 2u {
@@ -154,24 +197,56 @@ fn lit_color(in: LitVertex) -> vec4<f32> {
             let t = dot(n, shading[at].xyz) * 0.5 + 0.5;
             irradiance += (shading[at + 2u].rgb * (1.0 - t) + shading[at + 1u].rgb * t) / PI;
         }
-        radiance = base * (1.0 - metallic) * (1.0 - single - multi) * irradiance;
+        radiance = base * (1.0 - metallic) * (1.0 - single - multi) * irradiance*ao;
+        if shading[3].z >= 0.0 {
+            let reflection=n*(2.0*dot3(n,v))-v;let r4=roughness*roughness*roughness*roughness;
+            let specular=env_specular(unit(reflection*(1.0-r4)+n*r4),roughness);let diffuse=env_diffuse(n);
+            let specularAo=clamp(pow(clamp(dot3(n,v),0.0,1.0)+ao,exp2(-16.0*roughness-1.0))-1.0+ao,0.0,1.0);
+            let metal=scattering(base,fab);let dielectric=scattering(vec3(0.04),fab);
+            let s=dielectric[0]*(1.0-metallic)+metal[0]*metallic;let m=dielectric[1]*(1.0-metallic)+metal[1]*metallic;
+            radiance+=(specular*s+diffuse*m)*specularAo+base*(1.0-metallic)*(1.0-single-multi)*diffuse*ao;
+        }
     }
     radiance += emission;
     if kind == 2u {
         for (var i = 0u; i < counts.y; i++) {
             let at = lightStart + i * 2u;
-            radiance += direct(base, metallic, roughness, n, v, shading[at].xyz, fab) * shading[at + 1u].rgb;
+            radiance += direct(base, metallic, roughness, n, v, shading[at].xyz, fab) * shading[at + 1u].rgb*shadow_visibility(i,camera_position(ray,in.invZ),n);
         }
     }
     var display = radiance * shading[0].a;
-    if shading[1].a != 0.0 { display = aces(radiance, shading[0].a); }
+    if (u32(shading[1].a)&1u) != 0u { display = aces(radiance, shading[0].a); }
     display = clamp(display, vec3(0.0), vec3(1.0));
-    return vec4(half_even(srgb(display.r)), half_even(srgb(display.g)), half_even(srgb(display.b)), 1.0);
+    return vec4(display,select(1.0,coverage,shading[material+2u].w!=0.0));
+}
+fn lit_color(in:LitVertex) -> vec4<f32> {
+    let c=lit_radiance(in);
+    return vec4(half_even(srgb(c.r)*c.a),half_even(srgb(c.g)*c.a),half_even(srgb(c.b)*c.a),half_even(c.a));
+}
+
+fn camera_position(ray:vec3<f32>,inverse:f32) -> vec3<f32> {
+    let z=precise_divide(1.0,inverse);let eye=shading[2].xyz;
+    return vec3(stable(eye.x+stable(ray.x*z)),stable(eye.y+stable(ray.y*z)),stable(eye.z+stable(ray.z*z)));
 }
 
 @fragment fn lit_fragment(in: LitVertex) -> Fragment {
+    if shading[HEADER+in.material*MATERIAL+2u].w!=0.0 {discard;}
     var out: Fragment;
     out.color = lit_color(in);
     out.depth = globals.depthScale / in.invZ;
+    out.packedDepth = pack_depth(1.0 / in.invZ);
     return out;
+}
+
+@vertex fn background_vertex(@builtin(vertex_index) index:u32) -> LitVertex {
+    let points=array(vec2(-1.0,-1.0),vec2(3.0,-1.0),vec2(-1.0,3.0));
+    var out=make_lit_vertex(vec2(0.0),1.0,0u,0u,vec3(0.0),0u);
+    out.position=vec4(points[index],0.5,1.0);return out;
+}
+@fragment fn background_fragment(in:LitVertex) -> Fragment {
+    var radiance=env_specular(unit(camera_ray(vec2<u32>(in.position.xy))),0.0);
+    var display=radiance*shading[0].a;
+    if (u32(shading[1].a)&1u)!=0u {display=aces(radiance,shading[0].a);}
+    display=clamp(display,vec3(0.0),vec3(1.0));
+    return Fragment(vec4(half_even(srgb(display.r)),half_even(srgb(display.g)),half_even(srgb(display.b)),1.0),pack_depth(bitcast<f32>(0x7f7fffffu)),1.0);
 }

@@ -5,6 +5,8 @@ use super::{
     MaterialKind, PixelRays, PreparedScene, SUBPIXEL_SCALE, anchor_projections, collect_geometry,
     f16_bits_to_f32, output_color,
 };
+mod shading;
+pub use shading::GpuRasterTextureVarying;
 
 #[derive(Clone, Copy, Debug)]
 pub struct GpuRasterVarying {
@@ -15,9 +17,45 @@ pub struct GpuRasterVarying {
 #[derive(Clone, Debug)]
 pub struct GpuRasterShading {
     pub vertices: Vec<GpuRasterVarying>,
-    /// vec4 records: ambient/exposure, counts/tone, three per material, two per
-    /// directional light, three per hemisphere, then camera ray columns and rows.
+    pub texture_vertices: Option<Vec<GpuRasterTextureVarying>>,
+    pub textures: Vec<std::sync::Arc<crate::scene3d::MaterialImage>>,
+    pub environment: Option<std::sync::Arc<crate::scene3d::EnvironmentAsset>>,
+    pub shadows: Vec<GpuRasterShadow>,
+    material_offsets: Vec<u32>,
+    /// vec4 records: five scene headers, nine per material, two per directional light,
+    /// three per hemisphere, camera ray columns/rows, then four per shadow projection.
     pub values: Vec<[f32; 4]>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct GpuRasterShadowVertex {
+    pub position: [f32; 2],
+    pub depth: f32,
+    pub uv: [f32; 2],
+    pub material: u32,
+    pub inv_area: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct GpuRasterShadow {
+    pub light: u32,
+    pub vertices: Vec<GpuRasterShadowVertex>,
+    pub values: [[f32; 4]; 4],
+}
+
+impl GpuRasterShadow {
+    pub const SIZE: u32 = super::shadow::SHADOW_SIZE as u32;
+    pub fn vertex_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.vertices.len() * 28);
+        for v in &self.vertices {
+            for value in v.position.into_iter().chain([v.depth]).chain(v.uv) {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            bytes.extend_from_slice(&v.material.to_le_bytes());
+            bytes.extend_from_slice(&v.inv_area.to_le_bytes());
+        }
+        bytes
+    }
 }
 
 impl GpuRasterShading {
@@ -40,7 +78,7 @@ pub struct GpuRasterVertex {
     pub position: [f32; 2],
     /// Interpolate linearly in screen space, then invert to recover camera-space depth.
     pub inv_z: f32,
-    /// Constant Unlit sRGB at the reference F16 boundary; lit packets use material data.
+    /// Constant Unlit sRGB, or the original normal XYZ and coverage inverse area for lit packets.
     pub color: [f32; 4],
     pub object_id: u32,
     pub node_id: u32,
@@ -63,7 +101,11 @@ impl GpuRasterGeometry {
     pub const VERTEX_STRIDE: u64 = 36;
 
     pub fn vertex_stride(&self) -> u64 {
-        Self::VERTEX_STRIDE + if self.shading.is_some() { 16 } else { 0 }
+        Self::VERTEX_STRIDE
+            + self
+                .shading
+                .as_ref()
+                .map_or(0, |s| if s.texture_vertices.is_some() { 72 } else { 16 })
     }
 
     pub fn vertex_bytes(&self) -> Vec<u8> {
@@ -85,14 +127,27 @@ impl GpuRasterGeometry {
                     bytes.extend_from_slice(&value.to_le_bytes());
                 }
                 bytes.extend_from_slice(&varying.material_index.to_le_bytes());
+                if let Some(textures) = &shading.texture_vertices {
+                    let v = textures[index];
+                    for value in v
+                        .uv_over_z
+                        .into_iter()
+                        .chain(v.dx)
+                        .chain(v.dy)
+                        .chain(v.tangent)
+                        .chain(v.bitangent)
+                    {
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
             }
         }
         bytes
     }
 }
 
-/// Prepare untextured opaque/mask geometry and optional Lambert/PBR shading. Unsupported
-/// features return `None`; invalid scenes/frames and work-budget violations remain errors.
+/// Prepare geometry, current materials and optional lighting, texture and shadow inputs.
+/// Invalid scenes/frames and work-budget violations remain errors.
 /// This does not allocate color, depth or ID planes or perform CPU pixel rasterization.
 pub fn prepare_gpu_geometry(
     prepared: &PreparedScene,
@@ -101,20 +156,6 @@ pub fn prepare_gpu_geometry(
     prepared.scene.validate()?;
     frame.validate_for(&prepared.scene)?;
     prepared.budget.validate()?;
-    if prepared.scene.pbr.environment.is_some()
-        || prepared.scene.pbr.shadows
-        || frame
-            .camera
-            .depth_of_field
-            .is_some_and(|dof| dof.max_blur_radius > 0.0)
-        || prepared.meshes.iter().any(|mesh| {
-            mesh.materials.iter().any(|material| {
-                material.values.uses_uv() || material.values.alpha_mode == AlphaMode::Blend
-            })
-        })
-    {
-        return Ok(None);
-    }
     let camera = Camera::new(frame, prepared.width, prepared.height)?;
     let geometry = collect_geometry(prepared, frame, &camera)?;
     if geometry.tile_references > MAX_TILE_REFERENCES {
@@ -126,13 +167,23 @@ pub fn prepare_gpu_geometry(
         return Err(errors);
     }
     let mut vertices = Vec::with_capacity(geometry.commands.len() * 3);
-    let lit = prepared
-        .meshes
-        .iter()
-        .any(|mesh| mesh.materials.iter().any(|m| m.kind != MaterialKind::Unlit));
-    let mut varyings = Vec::new();
-    let mut materials = Vec::new();
-    let mut material_ids = std::collections::BTreeMap::new();
+    let lit = prepared.scene.pbr.shadows
+        || prepared.environment.is_some()
+        || prepared.meshes.iter().any(|m| {
+            m.materials
+                .iter()
+                .any(|m| m.values.uses_uv() || m.values.alpha_mode == AlphaMode::Blend)
+        })
+        || frame
+            .camera
+            .depth_of_field
+            .is_some_and(|dof| dof.max_blur_radius > 0.0)
+        || prepared
+            .meshes
+            .iter()
+            .any(|mesh| mesh.materials.iter().any(|m| m.kind != MaterialKind::Unlit));
+    let mut shading =
+        lit.then(|| GpuRasterShading::new(prepared, frame, &geometry.frame_meshes, &camera));
     for command in &geometry.commands {
         let mesh = &geometry.frame_meshes[command.mesh_index];
         let material = &mesh.materials[command.material_index].values;
@@ -156,36 +207,15 @@ pub fn prepare_gpu_geometry(
             )
             .map(f16_bits_to_f32)
         };
-        let material_index = if lit {
-            *material_ids
-                .entry((command.mesh_index, command.material_index))
-                .or_insert_with(|| {
-                    let index = materials.len() as u32 / 3;
-                    let kind = match mesh.materials[command.material_index].kind {
-                        MaterialKind::Unlit => 0.0,
-                        MaterialKind::Lambert => 1.0,
-                        MaterialKind::Pbr => 2.0,
-                    };
-                    materials.extend([
-                        [
-                            material.base_color[0],
-                            material.base_color[1],
-                            material.base_color[2],
-                            kind,
-                        ],
-                        [
-                            material.emissive[0] * material.emissive_intensity,
-                            material.emissive[1] * material.emissive_intensity,
-                            material.emissive[2] * material.emissive_intensity,
-                            material.metallic,
-                        ],
-                        [material.roughness.max(0.0525), 0.0, 0.0, 0.0],
-                    ]);
-                    index
-                })
-        } else {
-            0
-        };
+        let material_index = shading.as_ref().map_or(0, |s| {
+            s.material_id(command.mesh_index, command.material_index)
+        });
+        let triangle = super::pbr::Triangle::new(
+            mesh.materials[command.material_index].kind,
+            material,
+            command.world,
+        );
+        let gradients = super::pbr::Gradients::new(command.coverage.vertices);
         for (screen, fixed) in command.coverage.vertices.iter().zip(command.coverage.fixed) {
             vertices.push(GpuRasterVertex {
                 position: [
@@ -193,12 +223,21 @@ pub fn prepare_gpu_geometry(
                     fixed.y as f32 / SUBPIXEL_SCALE,
                 ],
                 inv_z: screen.inv_z,
-                color,
+                color: if lit {
+                    [
+                        screen.normal.x,
+                        screen.normal.y,
+                        screen.normal.z,
+                        command.coverage.inv_area,
+                    ]
+                } else {
+                    color
+                },
                 object_id: mesh.mesh.object_id,
                 node_id: command.node_id,
             });
-            if lit {
-                varyings.push(GpuRasterVarying {
+            if let Some(shading) = &mut shading {
+                shading.vertices.push(GpuRasterVarying {
                     normal_over_z: [
                         screen.normal.x * screen.inv_z,
                         screen.normal.y * screen.inv_z,
@@ -206,7 +245,46 @@ pub fn prepare_gpu_geometry(
                     ],
                     material_index,
                 });
+                if let Some(textures) = &mut shading.texture_vertices {
+                    let v = |v: super::V3| [v.x, v.y, v.z];
+                    textures.push(GpuRasterTextureVarying {
+                        uv_over_z: [screen.uv.x * screen.inv_z, screen.uv.y * screen.inv_z],
+                        dx: gradients.dx,
+                        dy: gradients.dy,
+                        tangent: if triangle.has_basis {
+                            v(triangle.tangent)
+                        } else {
+                            [0.0; 3]
+                        },
+                        bitangent: if triangle.has_basis {
+                            v(triangle.bitangent)
+                        } else {
+                            [0.0; 3]
+                        },
+                    });
+                }
             }
+        }
+    }
+    if prepared.scene.pbr.shadows {
+        let s = shading.as_mut().expect("shadows require shader data");
+        let lights = Lights::new(&prepared.scene, frame, prepared.environment.clone());
+        s.shadows = super::shadow::gpu_maps(
+            &lights.directional,
+            &geometry.casters,
+            &geometry.frame_meshes,
+            s,
+        );
+        s.values[4][2] = s.values.len() as f32;
+        s.values[4][3] = s.shadows.len() as f32;
+        let light_start = GpuRasterShading::HEADER_LEN
+            + s.values[1][0] as usize * GpuRasterShading::MATERIAL_STRIDE;
+        for i in 0..lights.directional.len() {
+            s.values[light_start + i * 2][3] = -1.0;
+        }
+        for (layer, shadow) in s.shadows.iter().enumerate() {
+            s.values[light_start + shadow.light as usize * 2][3] = layer as f32;
+            s.values.extend(shadow.values);
         }
     }
     let mut depth_scale = 1.0;
@@ -219,47 +297,6 @@ pub fn prepare_gpu_geometry(
         vertices,
         anchors: anchor_projections(&prepared.scene, &camera, &geometry.transforms),
         depth_scale,
-        shading: lit.then(|| {
-            let lights = Lights::new(&prepared.scene, frame, None);
-            let mut values = vec![
-                [
-                    lights.ambient[0],
-                    lights.ambient[1],
-                    lights.ambient[2],
-                    frame.exposure,
-                ],
-                [
-                    (materials.len() / 3) as f32,
-                    lights.directional.len() as f32,
-                    lights.hemisphere.len() as f32,
-                    if prepared.scene.pbr.tone_mapping == crate::scene3d::ToneMapping::Aces {
-                        1.0
-                    } else {
-                        0.0
-                    },
-                ],
-            ];
-            values.extend(materials);
-            for (direction, color) in &lights.directional {
-                values.push([direction.x, direction.y, direction.z, 0.0]);
-                values.push([color[0], color[1], color[2], 0.0]);
-            }
-            for (direction, sky, ground) in &lights.hemisphere {
-                values.push([direction.x, direction.y, direction.z, 0.0]);
-                values.push([sky[0], sky[1], sky[2], 0.0]);
-                values.push([ground[0], ground[1], ground[2], 0.0]);
-            }
-            let rays = PixelRays::new(&camera);
-            values.extend(
-                rays.columns
-                    .into_iter()
-                    .chain(rays.rows)
-                    .map(|ray| [ray.x, ray.y, ray.z, 0.0]),
-            );
-            GpuRasterShading {
-                vertices: varyings,
-                values,
-            }
-        }),
+        shading,
     }))
 }

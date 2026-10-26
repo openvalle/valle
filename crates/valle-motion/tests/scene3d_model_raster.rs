@@ -3110,7 +3110,7 @@ fn gpu_geometry_mask_uses_current_frame_alpha_and_preserves_anchor_projection() 
 }
 
 #[test]
-fn gpu_geometry_leaves_unsupported_materials_shadows_and_dof_on_cpu() {
+fn gpu_geometry_prepares_textures_blend_shadows_and_dof_without_pixel_planes() {
     use valle_motion::scene3d::AlphaMode;
     let model = glb(&[triangle(0.0, [0.0, 0.0, 1.0])]);
     let resources = resources(&model);
@@ -3134,13 +3134,17 @@ fn gpu_geometry_leaves_unsupported_materials_shadows_and_dof_on_cpu() {
             });
         }
         let prepared = prepare_scene(&scene, 64, 64, &resources).unwrap();
-        assert!(
-            prepare_gpu_geometry(&prepared, &frame).unwrap().is_none(),
-            "{case}"
+        let geometry = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+        let shading = geometry.shading.as_ref().unwrap();
+        assert_eq!(shading.texture_vertices.is_some(), case == "texture");
+        assert_eq!(shading.shadows.len(), usize::from(case == "shadows"));
+        assert_eq!(
+            geometry.anchors,
+            render_scene(&prepared, &frame).unwrap().anchors
         );
         assert!(
             render_scene(&prepared, &frame).is_ok(),
-            "CPU fallback {case}"
+            "CPU reference {case}"
         );
     }
 }
@@ -3165,17 +3169,17 @@ fn gpu_geometry_carries_frame_materials_lighting_and_camera_rays() {
         assert_eq!(first.vertex_bytes().len(), first.vertices.len() * 52);
         assert_eq!(shading.vertices.len(), first.vertices.len());
         assert_eq!(shading.values[1], [1.0, 1.0, 0.0, 0.0]);
-        assert_eq!(shading.values.len(), 2 + 3 + 2 + 127 + 65);
+        assert_eq!(shading.values.len(), 5 + 9 + 2 + 127 + 65);
         assert_eq!(
-            shading.values[2][3],
+            shading.values[5][3],
             if kind == MaterialKind::Lambert {
                 1.0
             } else {
                 2.0
             }
         );
-        assert_eq!(shading.values[3][3], 0.7);
-        assert_eq!(shading.values[4][0], 0.25);
+        assert_eq!(shading.values[6][3], 0.7);
+        assert_eq!(shading.values[7][0], 0.25);
         assert!(shading.values.iter().flatten().all(|v| v.is_finite()));
         frame.exposure = 1.7;
         frame.lights = test_lights(0.3, 1.2);

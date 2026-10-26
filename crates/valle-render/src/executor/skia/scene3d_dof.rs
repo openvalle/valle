@@ -24,6 +24,37 @@ pub(crate) struct Scene3dDofInput {
 }
 
 impl Scene3dDofInput {
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    pub(crate) fn from_gpu(
+        extent: Extent2d,
+        color: Image,
+        depth: Image,
+        dof: valle_engine::motion::scene3d::DepthOfFieldState,
+        far: f32,
+    ) -> Self {
+        let (width, height) = (extent.width(), extent.height());
+        Self {
+            extent,
+            color,
+            depth,
+            input_region: Region::full(width as usize, height as usize),
+            uniforms: [
+                width as f32,
+                height as f32,
+                dof.focus_distance,
+                dof.max_blur_radius,
+                0.0,
+                0.0,
+                width as f32,
+                height as f32,
+                0.0,
+                0.0,
+                width as f32,
+                height as f32,
+                far,
+            ],
+        }
+    }
     pub(crate) fn new(
         extent: Extent2d,
         premul_rgba16f: &[u16],

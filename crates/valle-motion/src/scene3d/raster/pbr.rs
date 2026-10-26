@@ -5,9 +5,9 @@ use crate::scene3d::{AlphaMode, MaterialKind, ModelMaterial, asset::ModelTexture
 pub(super) struct Triangle<'a> {
     pub kind: MaterialKind,
     pub material: &'a ModelMaterial,
-    tangent: V3,
-    bitangent: V3,
-    has_basis: bool,
+    pub(super) tangent: V3,
+    pub(super) bitangent: V3,
+    pub(super) has_basis: bool,
 }
 
 impl<'a> Triangle<'a> {
@@ -65,8 +65,8 @@ impl<'a> Triangle<'a> {
 /// Gradients of the perspective-correct UV quotient, in one output pixel. No neighboring frame
 /// or mutable sampling state is needed to choose a mip level.
 pub(super) struct Gradients {
-    dx: [f32; 3], // d(u/z), d(v/z), d(1/z)
-    dy: [f32; 3],
+    pub(super) dx: [f32; 3], // d(u/z), d(v/z), d(1/z)
+    pub(super) dy: [f32; 3],
 }
 
 impl Gradients {

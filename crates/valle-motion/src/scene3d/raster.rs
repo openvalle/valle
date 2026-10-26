@@ -16,7 +16,8 @@ mod dof;
 mod fresnel;
 mod gpu;
 pub use gpu::{
-    GpuRasterGeometry, GpuRasterShading, GpuRasterVarying, GpuRasterVertex, prepare_gpu_geometry,
+    GpuRasterGeometry, GpuRasterShading, GpuRasterShadow, GpuRasterShadowVertex,
+    GpuRasterTextureVarying, GpuRasterVarying, GpuRasterVertex, prepare_gpu_geometry,
 };
 mod lighting;
 mod pbr;

@@ -469,6 +469,14 @@ fn raster_shared_delivery_writes_the_readback_pixels_in_place() {
 }
 
 fn lit_project(kind: &str, aces: bool) -> NativeProject {
+    lit_project_with_dof(kind, aces, false)
+}
+
+fn lit_project_with_dof(kind: &str, aces: bool, dof: bool) -> NativeProject {
+    lit_project_features(kind, aces, dof, false)
+}
+
+fn lit_project_features(kind: &str, aces: bool, dof: bool, advanced: bool) -> NativeProject {
     let source = r##"
 export const composition = { width:96, height:64, fps:30, duration:2 };
 const BALL = lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"), {segments:16});
@@ -485,6 +493,22 @@ export default function Lit() { const time = useCurrentTime(); return <Scene sty
  <DirectionalLight direction={[-1,0.2,1]} color="#7faaff" intensity={0.8}/>
 </Scene3D></Scene>; }
 "##.replace("__KIND__", kind).replace("__TONE__", if aces { "aces" } else { "none" });
+    let source = if dof {
+        source.replace(
+            "fov:45",
+            "fov:45,depthOfField:{focusDistance:5,maxBlurRadius:8}",
+        )
+    } else {
+        source
+    };
+    let source = if advanced {
+        source.replace("segments:16", "segments:8").replace("pbr={{toneMapping", "pbr={{shadows:true,toneMapping")
+            .replace(" <AmbientLight",r##" <Mesh key="glass" geometry={BALL} position={[0.1+time.seconds*0.15,0,1.1]} scale={[0.45,0.45,0.45]}
+ material={{type:"pbr",alphaMode:"blend",color:"#45aadd66",metallic:0.4,roughness:0.2}} />
+ <AmbientLight"##)
+    } else {
+        source
+    };
     project_from_source(&source)
 }
 
@@ -619,12 +643,18 @@ fn lit_gpu_raster_matches_cpu_reference_through_seeks_and_cache_reset() {
 #[test]
 #[ignore = "requires real Metal and VideoToolbox; checks lit GPU lifetime and byte admission"]
 fn lit_shared_delivery_keeps_random_frames_exact_with_bounded_memory() {
-    let project = lit_project("pbr", true);
+    verify_lit_shared_delivery(false);
+    verify_lit_shared_delivery(true);
+}
+
+fn verify_lit_shared_delivery(advanced: bool) {
+    let project = lit_project_features("pbr", true, advanced, advanced);
+    let (width, height) = if advanced { (480, 320) } else { (384, 256) };
     let directory = tempfile::tempdir().unwrap();
     let frames = [0, 7, 20, 59, 12, 7, 0, 59, 12, 20, 0, 7].map(FrameKey::new);
     let output = RenderSpec::new(
-        384,
-        256,
+        width,
+        height,
         RenderQuality::Preview,
         OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
     )
@@ -633,11 +663,15 @@ fn lit_shared_delivery_keeps_random_frames_exact_with_bounded_memory() {
     for workers in [1, 4] {
         let mut sink = InspectSink::new_sized(
             &directory.path().join(format!("lit-{workers}.mp4")),
-            384,
-            256,
+            width,
+            height,
         );
-        let budget =
-            valle_render::host::NativeRenderBudget::new(workers, Some(64 * 1024 * 1024)).unwrap();
+        let limit = if advanced {
+            128 * 1024 * 1024
+        } else {
+            64 * 1024 * 1024
+        };
+        let budget = valle_render::host::NativeRenderBudget::new(workers, Some(limit)).unwrap();
         let control = RenderControl::default().with_budget(budget.clone());
         let report = render_schedule(
             &project,
@@ -649,13 +683,18 @@ fn lit_shared_delivery_keeps_random_frames_exact_with_bounded_memory() {
             SkiaBackendKind::Metal,
         )
         .unwrap();
-        assert_eq!(report.scene3d_gpu_rasters, frames.len() as u64);
+        assert_eq!(
+            report.scene3d_gpu_rasters,
+            frames.len() as u64,
+            "advanced={advanced} workers={workers} memory={:?}",
+            budget.memory_report()
+        );
         assert_eq!(report.scene3d_cpu_fallbacks, 0);
         assert_eq!(report.delivery_readback_bytes, 0);
         assert_eq!(report.delivery, Some(FrameDelivery::SharedGpu));
         assert!(sink.finished);
         assert_eq!(sink.keys, frames.map(|key| key.index()));
-        assert!(budget.memory_report().peak_bytes <= 64 * 1024 * 1024);
+        assert!(budget.memory_report().peak_bytes <= limit);
         assert_eq!(budget.memory_report().used_bytes, 0);
         if let Some(expected) = &expected {
             assert_eq!(&sink.pixels, expected);
@@ -666,17 +705,192 @@ fn lit_shared_delivery_keeps_random_frames_exact_with_bounded_memory() {
 }
 
 #[test]
+#[ignore = "requires real Metal; verifies direct GPU color/depth -> Ganesh DOF without intermediate readback"]
+fn gpu_geometry_dof_matches_cpu_geometry_dof() {
+    const DIR: &str = "VALLE_TEST_DOF_REFERENCE_DIR";
+    let child = std::env::var_os(DIR);
+    let directory = tempfile::tempdir().unwrap();
+    if child.is_none() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "gpu_geometry_dof_matches_cpu_geometry_dof",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("VALLE_SCENE3D_RASTER_CPU_REFERENCE", "1")
+            .env(DIR, directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "CPU reference: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let path = child
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| directory.path().to_path_buf());
+    let output = RenderSpec::new(
+        384,
+        256,
+        RenderQuality::Preview,
+        OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+    )
+    .unwrap();
+    for kind in ["unlit", "lambert", "pbr"] {
+        let project = lit_project_with_dof(kind, true, true);
+        let mut runner = project.frame_runner(SkiaBackendKind::Metal).unwrap();
+        for frame in [0, 7, 20, 59, 12, 7] {
+            let (pixels, evidence) = runner.render_rgba8(FrameKey::new(frame), output).unwrap();
+            assert_eq!(
+                evidence.execution.scene3d_gpu_rasters,
+                u64::from(child.is_none())
+            );
+            let file = path.join(format!("{kind}-{frame}.rgba"));
+            if child.is_some() {
+                std::fs::write(file, pixels.data).unwrap();
+                continue;
+            }
+            let expected = std::fs::read(file).unwrap();
+            let maximum = pixels
+                .data
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            eprintln!("GPU geometry DOF {kind} frame={frame}: max_rgba8_error={maximum}");
+            assert!(maximum <= 2, "{kind} frame={frame}: {maximum}");
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires real Metal; checks combined PCF, OIT and GPU depth of field at delivery sizes"]
+fn shadows_blend_and_dof_reach_delivery_without_intermediate_readback() {
+    const DIR: &str = "VALLE_TEST_ADVANCED_REFERENCE_DIR";
+    let child = std::env::var_os(DIR);
+    let directory = tempfile::tempdir().unwrap();
+    if child.is_none() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "shadows_blend_and_dof_reach_delivery_without_intermediate_readback",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("VALLE_SCENE3D_RASTER_CPU_REFERENCE", "1")
+            .env(DIR, directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "CPU reference: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let path = child
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| directory.path().to_path_buf());
+    let project = lit_project_features("pbr", true, true, true);
+    for (width, height) in [(480, 320), (1920, 1080), (3840, 2160)] {
+        let spec = RenderSpec::new(
+            width,
+            height,
+            RenderQuality::Preview,
+            OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+        )
+        .unwrap();
+        let mut runner = project.frame_runner(SkiaBackendKind::Metal).unwrap();
+        let mut previous = None;
+        for frame in [0, 20, 59, 20] {
+            let (pixels, evidence) = runner.render_rgba8(FrameKey::new(frame), spec).unwrap();
+            assert_eq!(
+                evidence.execution.scene3d_gpu_rasters,
+                u64::from(child.is_none())
+            );
+            let file = path.join(format!("{width}-{height}-{frame}.rgba"));
+            if child.is_some() {
+                std::fs::write(file, pixels.data).unwrap();
+                continue;
+            }
+            let expected = std::fs::read(file).unwrap();
+            let maximum = pixels
+                .data
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            eprintln!(
+                "combined shadows/blend/DOF {width}x{height} frame={frame}: max_rgba8_error={maximum}"
+            );
+            if maximum > 1 {
+                let errors = pixels
+                    .data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(expected.as_chunks::<4>().0)
+                    .enumerate()
+                    .filter(|(_, (a, b))| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 1))
+                    .map(|(i, (a, b))| ((i % width as usize, i / width as usize), a, b))
+                    .take(12)
+                    .collect::<Vec<_>>();
+                eprintln!("sample_errors={errors:?}");
+            }
+            assert!(maximum <= 1, "{width}x{height} frame={frame}: {maximum}");
+            if frame == 20
+                && let Some(p) = previous.replace(pixels.data)
+            {
+                assert_eq!(p, previous.as_ref().unwrap().as_slice());
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires real Metal and VideoToolbox"]
 fn shared_delivery_cancellation_and_sink_failure_drain_blocked_preparers() {
-    for gpu_raster in [false, true] {
-        let project = project_with_gpu_raster(gpu_raster);
+    for case in 0..3 {
+        let advanced = case == 2;
+        let project = if advanced {
+            lit_project_features("pbr", true, true, true)
+        } else {
+            project_with_gpu_raster(case == 1)
+        };
+        let output = if advanced {
+            RenderSpec::new(
+                480,
+                320,
+                RenderQuality::Preview,
+                OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+            )
+            .unwrap()
+        } else {
+            spec()
+        };
         let dir = tempfile::tempdir().unwrap();
         let frames = (0..24).map(FrameKey::new).collect::<Vec<_>>();
         for failure in [false, true] {
-            let mut sink = InspectSink::new(&dir.path().join(format!("failure-{failure}.mp4")));
+            let mut sink = InspectSink::new_sized(
+                &dir.path().join(format!("failure-{failure}.mp4")),
+                output.width(),
+                output.height(),
+            );
             sink.fail_at = failure.then_some(1);
-            let budget =
-                valle_render::host::NativeRenderBudget::new(4, Some(16 * 1024 * 1024)).unwrap();
+            let budget = valle_render::host::NativeRenderBudget::new(
+                4,
+                Some(if advanced {
+                    128 * 1024 * 1024
+                } else {
+                    16 * 1024 * 1024
+                }),
+            )
+            .unwrap();
             let control = RenderControl::default().with_budget(budget.clone());
             let cancel = control.clone();
             let progress: valle_render::host::ProgressCallback = Arc::new(move |done, _| {
@@ -687,7 +901,7 @@ fn shared_delivery_cancellation_and_sink_failure_drain_blocked_preparers() {
             let error = render_schedule(
                 &project,
                 &frames,
-                spec(),
+                output,
                 &mut sink,
                 &control,
                 Some(&progress),

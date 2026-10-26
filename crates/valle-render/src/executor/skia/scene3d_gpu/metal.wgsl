@@ -15,11 +15,17 @@ struct Vertex {
 }
 struct Fragment {
     @location(0) color: vec4<f32>,
+    @location(1) packedDepth: vec4<f32>,
     @builtin(frag_depth) depth: f32,
 };
+fn pack_depth(depth: f32) -> vec4<f32> {
+    let bits = bitcast<u32>(depth);
+    return vec4<f32>(vec4(bits,bits >> 8u,bits >> 16u,bits >> 24u) & vec4(255u)) / 255.0;
+}
 @fragment fn fragment(in: Vertex) -> Fragment {
     var out: Fragment;
     out.color = in.color;
     out.depth = globals.depthScale / in.invZ;
+    out.packedDepth = pack_depth(1.0 / in.invZ);
     return out;
 }

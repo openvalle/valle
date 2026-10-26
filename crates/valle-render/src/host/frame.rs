@@ -996,10 +996,28 @@ fn frame_working_bytes<P: ResourceProvider>(
                 };
                 let frame = frame.request();
                 let pixels = u64::from(frame.width) * u64::from(frame.height);
-                // Layers rasterize one at a time, each releasing its working set before the next
-                // starts; every result (colour, plus depth for deferred depth of field) stays.
+                // CPU layers release working planes sequentially. GPU producers, including OIT
+                // storage, remain owned until the common completion fence, so sum their allowance.
                 resources = checked_add(resources, pixels * 12)?;
-                scene3d_working = scene3d_working.max(pixels * 96);
+                scene3d_working = if admission.backend() == SkiaBackendKind::Raster {
+                    scene3d_working.max(pixels * 96)
+                } else {
+                    let shadow_bytes = if frame.scene.pbr.shadows {
+                        frame
+                            .scene
+                            .lights
+                            .iter()
+                            .filter(|light| {
+                                **light == valle_engine::motion::scene3d::LightKind::Directional
+                            })
+                            .count() as u64
+                            * u64::from(valle_engine::motion::scene3d::GpuRasterShadow::SIZE).pow(2)
+                            * 8
+                    } else {
+                        0
+                    };
+                    checked_add(scene3d_working, checked_add(pixels * 96, shadow_bytes)?)?
+                };
                 scene3d.push(Extent2d::new(frame.width, frame.height)?);
             }
             _ => resources = checked_add(resources, provider.source_resident_bytes(request))?,
@@ -1017,6 +1035,13 @@ fn frame_working_bytes<P: ResourceProvider>(
     let output = u64::from(spec.width()) * u64::from(spec.height()) * 4;
     let execution_bytes = checked_add(execution_bytes, output * 3)?;
     let bytes = checked_add(checked_add(execution_bytes, resources)?, scene3d_working)?;
+    // GPU Scene3D kernels use the same conservative 3D allowance after preparation.
+    // Keep it until completion, also allowing an unavailable GPU to run the CPU reference.
+    let execution_bytes = if admission.backend() != SkiaBackendKind::Raster {
+        checked_add(execution_bytes, scene3d_working)?
+    } else {
+        execution_bytes
+    };
     Ok((bytes, execution_bytes))
 }
 
