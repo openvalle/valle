@@ -1,0 +1,444 @@
+use super::*;
+use std::{
+    sync::{Arc, mpsc},
+    time::Duration,
+};
+use valle_motion::scene3d::{
+    AlphaMode, AnchorSpec, CameraFrameState, Color4, Frame3DState, GpuRasterGeometry,
+    MaterialFrameState, MaterialKind, MaterialSpec, MeshFrameState, MeshSpec, Scene3DSpec,
+    SceneResources, Transform3D, Vec3, admit_glb, prepare_gpu_geometry, prepare_scene,
+    render_scene_with_workers,
+};
+use wgpu::util::DeviceExt;
+
+const GEOMETRY: &str = r#"
+struct Globals { extent: vec2<f32>, depthScale: f32, barrier: u32 };
+@group(0) @binding(0) var<uniform> globals: Globals;
+struct Vertex {
+    @builtin(position) position: vec4<f32>,
+    @location(0) invZ: f32,
+    @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) ids: vec2<u32>,
+};
+@vertex fn vertex(@location(0) position: vec2<f32>, @location(1) invZ: f32,
+    @location(2) color: vec4<f32>, @location(3) objectId: u32, @location(4) nodeId: u32) -> Vertex {
+    var out: Vertex;
+    out.position = vec4(position / globals.extent * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.5, 1.0);
+    out.invZ = invZ; out.color = color; out.ids = vec2(objectId, nodeId);
+    return out;
+}
+struct Fragment {
+    @location(0) color: vec4<f32>,
+    @location(1) depth: f32,
+    @location(2) objectId: u32,
+    @location(3) nodeId: u32,
+    @builtin(frag_depth) depthTest: f32,
+};
+@fragment fn fragment(in: Vertex) -> Fragment {
+    var out: Fragment;
+    out.color = in.color; out.depth = 1.0 / in.invZ;
+    out.objectId = in.ids.x; out.nodeId = in.ids.y;
+    out.depthTest = out.depth * globals.depthScale;
+    return out;
+}
+"#;
+
+fn read_metadata(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    textures: [&wgpu::Texture; 3],
+) -> [Vec<u32>; 3] {
+    let (width, height) = (textures[0].width(), textures[0].height());
+    let stride = (width * 4).div_ceil(256) * 256;
+    let plane_bytes = u64::from(stride) * u64::from(height);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("final metadata validation"),
+        size: plane_bytes * 3,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    for (i, texture) in textures.iter().enumerate() {
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: i as u64 * plane_bytes,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    let submission = queue.submit([encoder.finish()]);
+    let (send, receive) = mpsc::channel();
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            send.send(result).unwrap()
+        });
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: Some(submission),
+            timeout: Some(Duration::from_secs(30)),
+        })
+        .unwrap();
+    receive
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap()
+        .unwrap();
+    let bytes = buffer.slice(..).get_mapped_range().unwrap();
+    let planes = std::array::from_fn(|plane| {
+        (0..height)
+            .flat_map(|y| (0..width).map(move |x| (y, x)))
+            .map(|(y, x)| {
+                let offset =
+                    plane * plane_bytes as usize + y as usize * stride as usize + x as usize * 4;
+                u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+            })
+            .collect()
+    });
+    drop(bytes);
+    buffer.unmap();
+    planes
+}
+
+#[test]
+#[ignore = "requires a real Metal device; compares actual admitted GLB geometry with CPU"]
+fn actual_model_geometry_preserves_coverage_depth_ids_and_anchors() {
+    let (device, queue, mut context) = shared_device();
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("real Scene3D geometry"),
+        source: wgpu::ShaderSource::Wgsl(GEOMETRY.into()),
+    });
+    let attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32, 2 => Float32x4, 3 => Uint32, 4 => Uint32];
+    let formats = [
+        wgpu::TextureFormat::Rgba16Float,
+        wgpu::TextureFormat::R32Float,
+        wgpu::TextureFormat::R32Uint,
+        wgpu::TextureFormat::R32Uint,
+    ];
+    let targets = formats.map(|format| Some(format.into()));
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("real Scene3D geometry"),
+        layout: None,
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: Some("vertex"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: GpuRasterGeometry::VERTEX_STRIDE,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &attributes,
+            })],
+        },
+        primitive: Default::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: Some("fragment"),
+            compilation_options: Default::default(),
+            targets: &targets,
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    for (name, model) in [
+        (
+            "triangle",
+            include_bytes!("../../../valle-motion/tests/fixtures/scene3d/triangle.glb").as_slice(),
+        ),
+        (
+            "sphere",
+            include_bytes!("../../../valle-motion/tests/fixtures/scene3d/sphere.glb").as_slice(),
+        ),
+    ] {
+        let model = Arc::new(admit_glb(model).unwrap());
+        let resources = SceneResources {
+            models: BTreeMap::from([("model".to_owned(), model)]),
+            ..Default::default()
+        };
+        let scene = Scene3DSpec {
+            meshes: ["mesh", "behind", "tie", "masked"]
+                .map(|key| MeshSpec {
+                    key: key.into(),
+                    model_control: Some("model".into()),
+                    geometry: None,
+                    material: MaterialSpec {
+                        kind: Some(MaterialKind::Unlit),
+                        alpha_mode: Some(if key == "masked" {
+                            AlphaMode::Mask
+                        } else {
+                            AlphaMode::Opaque
+                        }),
+                        double_sided: Some(key == "masked"),
+                        ..Default::default()
+                    },
+                    material_overrides: vec![],
+                    animation_clip: None,
+                    node_ids: vec![],
+                })
+                .into(),
+            lights: vec![],
+            anchors: vec![AnchorSpec {
+                key: "center".into(),
+                parent: "mesh".into(),
+                position: Vec3::ZERO,
+            }],
+            pbr: Default::default(),
+        };
+        for (width, height) in [(128u32, 128u32), (130, 98)] {
+            let prepared = prepare_scene(&scene, width, height, &resources).unwrap();
+            let make_texture = |format| {
+                device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("real geometry target"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                })
+            };
+            let planes = formats.map(make_texture);
+            let views = planes
+                .each_ref()
+                .map(|texture| texture.create_view(&Default::default()));
+            let depth_test = make_texture(wgpu::TextureFormat::Depth32Float);
+            let depth_view = depth_test.create_view(&Default::default());
+            let info = ImageInfo::new(
+                (width as i32, height as i32),
+                ColorType::RGBAF16,
+                AlphaType::Premul,
+                None,
+            );
+            let mut output = gpu::surfaces::render_target(
+                &mut context,
+                gpu::Budgeted::Yes,
+                &info,
+                None,
+                gpu::SurfaceOrigin::TopLeft,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let mut observed = BTreeMap::new();
+            for sample in [0u32, 7, 2, 15, 3, 8, 0, 7] {
+                let frame = Frame3DState {
+                    exposure: 1.0,
+                    environment_intensity: 0.0,
+                    environment_rotation_degrees: 0.0,
+                    camera: CameraFrameState {
+                        position: Vec3::new(0.0, 0.0, 5.0),
+                        target: Vec3::ZERO,
+                        fov_y_degrees: 45.0,
+                        near: if sample == 2 { 4.9 } else { 0.1 },
+                        far: if sample == 15 { 5.1 } else { 100.0 },
+                        depth_of_field: None,
+                    },
+                    meshes: ["mesh", "behind", "tie", "masked"]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, key)| MeshFrameState {
+                            key: key.into(),
+                            material: MaterialFrameState {
+                                color: Some(Color4([
+                                    0.2 + index as f32 * 0.15,
+                                    0.6,
+                                    0.9,
+                                    if key == "masked" && sample % 2 == 0 {
+                                        0.2
+                                    } else {
+                                        0.9
+                                    },
+                                ])),
+                                ..Default::default()
+                            },
+                            material_overrides: vec![],
+                            animation_time: None,
+                            transform: Transform3D {
+                                translation: Vec3::new(
+                                    if sample == 8 { 2.0 } else { 0.0 },
+                                    0.0,
+                                    match key {
+                                        "behind" => -0.25,
+                                        "masked" => 0.2,
+                                        _ => 0.0,
+                                    },
+                                ),
+                                rotation_degrees: Vec3::new(
+                                    sample as f32 * 1.3,
+                                    sample as f32 * 7.5,
+                                    0.0,
+                                ),
+                                scale: Vec3::new(
+                                    if sample % 2 == 0 { 1.0 } else { -1.0 },
+                                    1.0,
+                                    1.0,
+                                ),
+                            },
+                            nodes: vec![],
+                        })
+                        .collect(),
+                    lights: vec![],
+                };
+                let geometry = prepare_gpu_geometry(&prepared, &frame)
+                    .unwrap()
+                    .expect("unlit input should be supported");
+                let reference = render_scene_with_workers(&prepared, &frame, 1).unwrap();
+                assert_eq!(geometry.anchors, reference.anchors);
+                let mut vertex_bytes = geometry.vertex_bytes();
+                if vertex_bytes.is_empty() {
+                    vertex_bytes.resize(4, 0);
+                }
+                let vertex = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("prepared model vertices"),
+                    contents: &vertex_bytes,
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let mut globals = Vec::new();
+                for value in [width as f32, height as f32, geometry.depth_scale, 0.0] {
+                    globals.extend_from_slice(&value.to_le_bytes());
+                }
+                let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("camera"),
+                    contents: &globals,
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("camera"),
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform.as_entire_binding(),
+                    }],
+                });
+                let clears = [
+                    wgpu::Color::TRANSPARENT,
+                    wgpu::Color {
+                        r: f64::from(f32::MAX),
+                        ..wgpu::Color::TRANSPARENT
+                    },
+                    wgpu::Color::TRANSPARENT,
+                    wgpu::Color {
+                        r: f64::from(u32::MAX),
+                        ..wgpu::Color::TRANSPARENT
+                    },
+                ];
+                let attachments = std::array::from_fn::<_, 4, _>(|i| {
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &views[i],
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(clears[i]),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })
+                });
+                let mut encoder = device.create_command_encoder(&Default::default());
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("actual models"),
+                        color_attachments: &attachments,
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        ..Default::default()
+                    });
+                    pass.set_pipeline(&pipeline);
+                    pass.set_bind_group(0, &group, &[]);
+                    pass.set_vertex_buffer(0, vertex.slice(..));
+                    pass.draw(0..geometry.vertices.len() as u32, 0..1);
+                }
+                queue.submit([encoder.finish()]);
+                let image = import(
+                    &mut context,
+                    &planes[0],
+                    ColorType::RGBAF16,
+                    AlphaType::Premul,
+                );
+                let mut paint = Paint::default();
+                paint.set_blend_mode(BlendMode::Src);
+                output.canvas().draw_image(&image, (0, 0), Some(&paint));
+                context.flush_and_submit_surface(&mut output, gpu::SyncCpu::No);
+                let mut color = vec![0; width as usize * height as usize * 8];
+                assert!(output.read_pixels(&info, &mut color, width as usize * 8, (0, 0)));
+                let [depth, object_ids, node_ids] =
+                    read_metadata(&device, &queue, [&planes[1], &planes[2], &planes[3]]);
+                let id_errors = object_ids
+                    .iter()
+                    .zip(&reference.object_ids)
+                    .filter(|(a, b)| a != b)
+                    .count();
+                let node_errors = node_ids
+                    .iter()
+                    .zip(&reference.node_ids)
+                    .filter(|(a, b)| a != b)
+                    .count();
+                let expected_color = reference.premul_rgba16f_le_bytes();
+                let color_errors = color
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .zip(expected_color.as_chunks::<8>().0.iter())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                let relative_depth_error = depth
+                    .iter()
+                    .zip(&reference.depth)
+                    .filter(|(_, z)| **z != f32::MAX)
+                    .map(|(actual, expected)| (f32::from_bits(*actual) - expected).abs() / expected)
+                    .fold(0.0_f32, f32::max);
+                eprintln!(
+                    "geometry {name} {width}x{height} frame={sample} triangles={} color_mismatch={color_errors} id_mismatch={id_errors} node_mismatch={node_errors} relative_depth_error={relative_depth_error}",
+                    geometry.vertices.len() / 3
+                );
+                assert_eq!(
+                    id_errors, 0,
+                    "GPU coverage or depth ownership differs from the CPU reference"
+                );
+                assert_eq!(node_errors, 0);
+                assert_eq!(color_errors, 0);
+                assert!(relative_depth_error < 1.0e-5);
+                let digest: [u8; 32] = Sha256::digest(&color).into();
+                if let Some(prior) = observed.insert(sample, digest) {
+                    assert_eq!(prior, digest);
+                }
+            }
+            drop(output);
+            context.free_gpu_resources();
+        }
+    }
+}

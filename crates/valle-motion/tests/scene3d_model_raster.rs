@@ -10,8 +10,9 @@ use valle_motion::scene3d::{
     LightKind, MaterialFrameState, MaterialImage, MaterialKind, MaterialSpec, MaterialTexture,
     MaterialTextureSlot, MeshFrameState, MeshSpec, MipmapFilter, ProceduralGeometry, RasterFrame,
     Scene3DSpec, SceneResources, TextureFilter, TextureRole, TextureWrap, Transform3D, Vec3,
-    admit_glb, prepare_cache_key, prepare_scene, project_anchors, render_scene,
-    render_scene_reusing, render_scene_reusing_with_workers, render_scene_with_workers,
+    admit_glb, prepare_cache_key, prepare_gpu_geometry, prepare_scene, project_anchors,
+    render_scene, render_scene_reusing, render_scene_reusing_with_workers,
+    render_scene_with_workers,
 };
 
 const RASTER_GOLDEN: &str = include_str!("golden/software-raster.json");
@@ -3080,5 +3081,70 @@ fn gpu_lighting_input_keeps_reference_depth_and_pixel_ownership() {
                 "angle={angle}, near={near}"
             );
         }
+    }
+}
+
+#[test]
+fn gpu_geometry_mask_uses_current_frame_alpha_and_preserves_anchor_projection() {
+    use valle_motion::scene3d::AlphaMode;
+    let model = glb(&[triangle(0.0, [0.0, 0.0, 1.0])]);
+    let resources = resources(&model);
+    let mut scene = scene();
+    scene.meshes[0].material = MaterialSpec {
+        kind: Some(MaterialKind::Unlit),
+        alpha_mode: Some(AlphaMode::Mask),
+        ..Default::default()
+    };
+    let prepared = prepare_scene(&scene, 127, 65, &resources).unwrap();
+    let mut frame = frame();
+    for alpha in [0.1, 0.8, 0.1] {
+        frame.meshes[0].material.color = Some(Color4([0.3, 0.7, 0.9, alpha]));
+        let packet = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+        let reference = render_scene(&prepared, &frame).unwrap();
+        assert_eq!(packet.anchors, reference.anchors);
+        assert_eq!(packet.vertices.is_empty(), alpha < 0.5);
+        assert_eq!(packet.vertex_bytes().len(), packet.vertices.len() * 36);
+    }
+    frame.camera.near = -1.0;
+    assert!(prepare_gpu_geometry(&prepared, &frame).is_err());
+}
+
+#[test]
+fn gpu_geometry_leaves_unsupported_materials_shadows_and_dof_on_cpu() {
+    use valle_motion::scene3d::AlphaMode;
+    let model = glb(&[triangle(0.0, [0.0, 0.0, 1.0])]);
+    let resources = resources(&model);
+    for case in ["pbr", "lambert", "texture", "blend", "shadows", "dof"] {
+        let mut scene = scene();
+        let mut frame = frame();
+        if case != "texture" {
+            scene.meshes[0].material.textures.clear();
+        }
+        scene.meshes[0].material.kind = Some(match case {
+            "pbr" => MaterialKind::Pbr,
+            "lambert" => MaterialKind::Lambert,
+            _ => MaterialKind::Unlit,
+        });
+        if case == "blend" {
+            scene.meshes[0].material.alpha_mode = Some(AlphaMode::Blend);
+        }
+        if case == "shadows" {
+            scene.pbr.shadows = true;
+        }
+        if case == "dof" {
+            frame.camera.depth_of_field = Some(DepthOfFieldState {
+                focus_distance: 4.0,
+                max_blur_radius: 4.0,
+            });
+        }
+        let prepared = prepare_scene(&scene, 64, 64, &resources).unwrap();
+        assert!(
+            prepare_gpu_geometry(&prepared, &frame).unwrap().is_none(),
+            "{case}"
+        );
+        assert!(
+            render_scene(&prepared, &frame).is_ok(),
+            "CPU fallback {case}"
+        );
     }
 }

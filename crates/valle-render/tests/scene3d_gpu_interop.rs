@@ -1,6 +1,9 @@
 //! Stage 28 feasibility probe: WGSL rasterization -> shared Metal textures -> Ganesh.
 #![cfg(target_os = "macos")]
 
+#[path = "scene3d_gpu_interop/geometry.rs"]
+mod geometry;
+
 use std::{collections::BTreeMap, ffi::c_void, time::Instant};
 
 use sha2::{Digest, Sha256};
@@ -87,9 +90,7 @@ fn import(
     }
 }
 
-#[test]
-#[ignore = "requires a real Metal device"]
-fn wgsl_raster_color_and_depth_share_skia_device_without_intermediate_readback() {
+fn shared_device() -> (wgpu::Device, wgpu::Queue, gpu::DirectContext) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::METAL,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -108,6 +109,13 @@ fn wgsl_raster_color_and_depth_share_skia_device_without_intermediate_readback()
     };
     let mut context = gpu::direct_contexts::make_metal(&backend, None).unwrap();
     context.set_resource_cache_limit(32 * 1024 * 1024);
+    (device, queue, context)
+}
+
+#[test]
+#[ignore = "requires a real Metal device"]
+fn wgsl_raster_color_and_depth_share_skia_device_without_intermediate_readback() {
+    let (device, queue, mut context) = shared_device();
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("scene3d-interop"),
         source: wgpu::ShaderSource::Wgsl(RASTER.into()),

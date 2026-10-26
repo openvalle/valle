@@ -14,6 +14,8 @@ use super::{
 mod color;
 mod dof;
 mod fresnel;
+mod gpu;
+pub use gpu::{GpuRasterGeometry, GpuRasterVertex, prepare_gpu_geometry};
 mod lighting;
 mod pbr;
 mod shadow;
@@ -1194,59 +1196,19 @@ pub fn prepare_gpu_lighting_input(
     Ok(output)
 }
 
-fn render_scene_impl(
-    prepared: &PreparedScene,
+struct FrameGeometry<'a> {
+    transforms: Vec<MeshTransform>,
+    frame_meshes: Vec<FrameMesh<'a>>,
+    commands: Vec<RasterCommand>,
+    tile_references: u64,
+    casters: shadow::ShadowCasters,
+}
+
+fn collect_geometry<'a>(
+    prepared: &'a PreparedScene,
     frame: &Frame3DState,
-    reusable: Option<RasterFrame>,
-    workers: usize,
-    apply_depth_of_field: bool,
-) -> Result<RasterFrame, ContractErrors> {
-    // Opt-in phase diagnostics only; not part of frame identity or render decisions.
-    let trace = !cfg!(target_arch = "wasm32") && std::env::var_os("VALLE_PERF_SCENE3D").is_some();
-    let mut phase = trace.then(std::time::Instant::now);
-    let mut phases = Vec::new();
-    let mut checkpoint = |name: &'static str| {
-        if let Some(start) = phase.as_mut() {
-            phases.push((name, start.elapsed().as_micros()));
-            *start = std::time::Instant::now();
-        }
-    };
-    prepared.scene.validate()?;
-    frame.validate_for(&prepared.scene)?;
-    prepared.budget.validate()?;
-    let pixel_count = usize::try_from(prepared.budget.layer_pixels().unwrap_or_default())
-        .expect("layer budget fits usize on supported targets");
-    let mut output = match reusable {
-        Some(mut output)
-            if output.width == prepared.width
-                && output.height == prepared.height
-                && output.premul_rgba16f.len() == pixel_count * 4
-                && output.depth.len() == pixel_count
-                && output.object_ids.len() == pixel_count
-                && output.node_ids.len() == pixel_count =>
-        {
-            output.anchors.clear();
-            output
-        }
-        _ => RasterFrame {
-            width: prepared.width,
-            height: prepared.height,
-            premul_rgba16f: vec![0; pixel_count * 4],
-            depth: vec![CLEAR_DEPTH; pixel_count],
-            object_ids: vec![BACKGROUND_OBJECT_ID; pixel_count],
-            node_ids: vec![BACKGROUND_NODE_ID; pixel_count],
-            anchors: Vec::with_capacity(prepared.scene.anchors.len()),
-        },
-    };
-    let camera = Camera::new(frame, prepared.width, prepared.height)?;
-    checkpoint("allocate");
-    let mut lights = Lights::new(&prepared.scene, frame, prepared.environment.clone());
-    let environment_background = prepared
-        .scene
-        .pbr
-        .environment
-        .as_ref()
-        .is_some_and(|e| e.background);
+    camera: &Camera,
+) -> Result<FrameGeometry<'a>, ContractErrors> {
     let mut transforms = Vec::with_capacity(prepared.meshes.len());
     let mut frame_meshes = Vec::with_capacity(prepared.meshes.len());
     let mut commands = Vec::new();
@@ -1401,7 +1363,7 @@ fn render_scene_impl(
                         }
                         casters.push_triangle(corners, mesh_index, material_index);
                     }
-                    project_world_triangle(vertices, &camera, |screen| {
+                    project_world_triangle(vertices, camera, |screen| {
                         let min_x = screen
                             .iter()
                             .map(|vertex| vertex.x)
@@ -1451,6 +1413,76 @@ fn render_scene_impl(
             }
         }
     }
+    Ok(FrameGeometry {
+        transforms,
+        frame_meshes,
+        commands,
+        tile_references,
+        casters,
+    })
+}
+
+fn render_scene_impl(
+    prepared: &PreparedScene,
+    frame: &Frame3DState,
+    reusable: Option<RasterFrame>,
+    workers: usize,
+    apply_depth_of_field: bool,
+) -> Result<RasterFrame, ContractErrors> {
+    // Opt-in phase diagnostics only; not part of frame identity or render decisions.
+    let trace = !cfg!(target_arch = "wasm32") && std::env::var_os("VALLE_PERF_SCENE3D").is_some();
+    let mut phase = trace.then(std::time::Instant::now);
+    let mut phases = Vec::new();
+    let mut checkpoint = |name: &'static str| {
+        if let Some(start) = phase.as_mut() {
+            phases.push((name, start.elapsed().as_micros()));
+            *start = std::time::Instant::now();
+        }
+    };
+    prepared.scene.validate()?;
+    frame.validate_for(&prepared.scene)?;
+    prepared.budget.validate()?;
+    let pixel_count = usize::try_from(prepared.budget.layer_pixels().unwrap_or_default())
+        .expect("layer budget fits usize on supported targets");
+    let mut output = match reusable {
+        Some(mut output)
+            if output.width == prepared.width
+                && output.height == prepared.height
+                && output.premul_rgba16f.len() == pixel_count * 4
+                && output.depth.len() == pixel_count
+                && output.object_ids.len() == pixel_count
+                && output.node_ids.len() == pixel_count =>
+        {
+            output.anchors.clear();
+            output
+        }
+        _ => RasterFrame {
+            width: prepared.width,
+            height: prepared.height,
+            premul_rgba16f: vec![0; pixel_count * 4],
+            depth: vec![CLEAR_DEPTH; pixel_count],
+            object_ids: vec![BACKGROUND_OBJECT_ID; pixel_count],
+            node_ids: vec![BACKGROUND_NODE_ID; pixel_count],
+            anchors: Vec::with_capacity(prepared.scene.anchors.len()),
+        },
+    };
+    let camera = Camera::new(frame, prepared.width, prepared.height)?;
+    checkpoint("allocate");
+    let mut lights = Lights::new(&prepared.scene, frame, prepared.environment.clone());
+    let environment_background = prepared
+        .scene
+        .pbr
+        .environment
+        .as_ref()
+        .is_some_and(|e| e.background);
+    let FrameGeometry {
+        transforms,
+        frame_meshes,
+        commands,
+        tile_references,
+        casters,
+    } = collect_geometry(prepared, frame, &camera)?;
+    let shadows = prepared.scene.pbr.shadows;
     checkpoint("geometry");
     if shadows {
         lights.shadow_maps =
