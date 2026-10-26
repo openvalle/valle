@@ -60,6 +60,8 @@ enum SkiaObjectPayload {
     RuntimeShader(Arc<[u8]>),
     Scene3d(Image),
     Scene3dDof(super::scene3d_dof::Scene3dDofInput),
+    #[cfg(feature = "native")]
+    Scene3dGpu(Arc<super::scene3d_gpu::Scene3dGpuInput>),
 }
 
 impl core::fmt::Debug for SkiaExternalObject {
@@ -73,6 +75,8 @@ impl core::fmt::Debug for SkiaExternalObject {
             SkiaObjectPayload::RuntimeShader(_) => "runtimeShader",
             SkiaObjectPayload::Scene3d(_) => "scene3d",
             SkiaObjectPayload::Scene3dDof(_) => "scene3dDof",
+            #[cfg(feature = "native")]
+            SkiaObjectPayload::Scene3dGpu(_) => "scene3dGpu",
         };
         formatter
             .debug_struct("SkiaExternalObject")
@@ -382,6 +386,61 @@ impl SkiaExternalObject {
         }
     }
 
+    pub(crate) fn is_deferred_scene3d(&self) -> bool {
+        match &self.payload {
+            SkiaObjectPayload::Scene3dDof(_) => true,
+            #[cfg(feature = "native")]
+            SkiaObjectPayload::Scene3dGpu(_) => true,
+            _ => false,
+        }
+    }
+
+    #[cfg(feature = "native")]
+    pub(crate) fn scene3d_gpu(
+        key: ResourceKey,
+        geometry: valle_engine::motion::scene3d::GpuRasterGeometry,
+        prepared: Arc<valle_engine::motion::scene3d::PreparedScene>,
+        frame: Arc<valle_engine::motion::scene3d::Frame3DState>,
+    ) -> Result<Self, SkiaObjectError> {
+        if !matches!(key.interpretation, ResourceInterpretation::Scene3d { .. }) {
+            return Err(SkiaObjectError::WrongInterpretation {
+                expected: "scene3d",
+            });
+        }
+        let input = super::scene3d_gpu::Scene3dGpuInput::new(geometry, prepared, frame)?;
+        Ok(Self {
+            memory: None,
+            key,
+            descriptor: ExternalResourceDesc::Scene3d,
+            payload: SkiaObjectPayload::Scene3dGpu(Arc::new(input)),
+        })
+    }
+
+    #[cfg(feature = "native")]
+    pub(crate) fn deferred_scene3d_gpu(&self) -> Option<&super::scene3d_gpu::Scene3dGpuInput> {
+        match &self.payload {
+            SkiaObjectPayload::Scene3dGpu(input) => Some(input),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "native")]
+    pub(crate) fn scene3d_gpu_fallback(&self) -> Result<Self, SkiaObjectError> {
+        let input = self
+            .deferred_scene3d_gpu()
+            .ok_or(SkiaObjectError::InvalidWorkingPayload)?;
+        let _working = valle_engine::motion::memory::reserve(
+            valle_engine::motion::memory::MemoryKind::Temporary,
+            u64::from(input.geometry.width) * u64::from(input.geometry.height) * 96,
+        )
+        .map_err(|error| SkiaObjectError::Scene3dFallback(error.to_string()))?;
+        let raster = valle_engine::motion::scene3d::render_scene(&input.prepared, &input.frame)
+            .map_err(|error| SkiaObjectError::Scene3dFallback(error.to_string()))?;
+        let extent = Extent2d::new(raster.width, raster.height)
+            .map_err(|_| SkiaObjectError::InvalidExtent)?;
+        Self::scene3d_rgba16f(self.key.clone(), extent, &raster.premul_rgba16f)
+    }
+
     /// Normalize premultiplied sRGB half-float Scene3D pixels into the working color space.
     pub fn scene3d_rgba16f(
         key: ResourceKey,
@@ -489,6 +548,8 @@ impl SkiaExternalObject {
             SkiaObjectPayload::Visual(image) | SkiaObjectPayload::Scene3d(image) => Some(image),
             #[cfg(feature = "native")]
             SkiaObjectPayload::DecodedVideo(_) => None,
+            #[cfg(feature = "native")]
+            SkiaObjectPayload::Scene3dGpu(_) => None,
             SkiaObjectPayload::Scene3dDof(_)
             | SkiaObjectPayload::DataTexture(_)
             | SkiaObjectPayload::FontBytes(_)
@@ -542,6 +603,8 @@ impl SkiaExternalObject {
 
     pub(crate) fn resident_bytes(&self) -> Option<u64> {
         match &self.payload {
+            #[cfg(feature = "native")]
+            SkiaObjectPayload::Scene3dGpu(input) => input.resident_bytes(),
             SkiaObjectPayload::Scene3dDof(input) => Some(input.resident_bytes()),
             SkiaObjectPayload::Visual(image)
             | SkiaObjectPayload::Scene3d(image)
@@ -669,6 +732,9 @@ impl<'a> SkiaTarget<'a> {
 
 #[derive(Debug, Error)]
 pub enum SkiaObjectError {
+    #[cfg(feature = "native")]
+    #[error("Scene3D CPU fallback failed: {0}")]
+    Scene3dFallback(String),
     #[error("invalid data texture: {0}")]
     DataTexture(String),
     #[error("external object requires {expected} interpretation")]

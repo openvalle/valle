@@ -256,7 +256,20 @@ pub(crate) struct SubmittedSharedMetalFrame {
 struct ImportedMetalImage {
     image: Image,
     _textures: Vec<CoreFoundationHandle>,
-    _source: Arc<valle_media::SourceFrame>,
+    _source: ImportedMetalOwner,
+}
+
+#[cfg(all(target_os = "macos", feature = "native"))]
+enum ImportedMetalOwner {
+    Video {
+        _frame: Arc<valle_media::SourceFrame>,
+    },
+    Scene {
+        _resources: Box<(
+            super::scene3d_gpu::GpuRasterOutput,
+            super::SkiaExternalObject,
+        )>,
+    },
 }
 
 #[cfg(all(target_os = "macos", feature = "native"))]
@@ -423,6 +436,7 @@ fn import_decoded_frame(
     let SurfaceBackend::Metal {
         context,
         texture_cache,
+        ..
     } = backend
     else {
         return Err(SurfaceError::InvalidDecodedGpuFrame);
@@ -547,7 +561,9 @@ fn import_decoded_frame(
     Ok(ImportedMetalImage {
         image,
         _textures: textures,
-        _source: Arc::clone(source),
+        _source: ImportedMetalOwner::Video {
+            _frame: Arc::clone(source),
+        },
     })
 }
 
@@ -773,6 +789,10 @@ enum SurfaceBackend {
     Metal {
         context: gpu::DirectContext,
         texture_cache: CoreFoundationHandle,
+        device: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>,
+        queue:
+            objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLCommandQueue>>,
+        scene3d_gpu: Option<Result<super::scene3d_gpu::GpuRasterizer, String>>,
     },
 }
 
@@ -886,6 +906,9 @@ impl SurfaceArena {
             backend: SurfaceBackend::Metal {
                 context,
                 texture_cache: CoreFoundationHandle(texture_cache),
+                device,
+                queue,
+                scene3d_gpu: None,
             },
             generation: None,
             generation_id: 0,
@@ -931,6 +954,7 @@ impl SurfaceArena {
         let SurfaceBackend::Metal {
             context,
             texture_cache,
+            ..
         } = &mut self.backend
         else {
             return Err(SurfaceError::SharedFrameRequiresMetal);
@@ -1415,6 +1439,92 @@ pub(crate) struct SurfaceFrame<'a> {
 impl<'arena> SurfaceFrame<'arena> {
     pub(crate) const fn backend_kind(&self) -> SkiaBackendKind {
         self.arena.backend_kind()
+    }
+
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    pub(crate) fn render_scene3d_gpu(
+        &mut self,
+        object: &super::SkiaExternalObject,
+    ) -> Result<Option<(Image, u64)>, SurfaceError> {
+        let input = object
+            .deferred_scene3d_gpu()
+            .ok_or_else(|| SurfaceError::Scene3dGpu("missing deferred geometry".into()))?;
+        let extent = Extent2d::new(input.geometry.width, input.geometry.height)
+            .map_err(|_| SurfaceError::InvalidExtent)?;
+        let bytes = working_info(extent)?.compute_min_byte_size() as u64;
+        if bytes > self.max_surface_bytes {
+            return Err(SurfaceError::SurfaceBudgetExceeded {
+                required_bytes: bytes,
+                max_bytes: self.max_surface_bytes,
+            });
+        }
+        // RGBA16F + Depth32Float stay alive until the frame completion fence. Deduct
+        // them from the remaining surface allowance before allocating either texture.
+        let gpu_bytes = (bytes.checked_mul(3).ok_or(SurfaceError::ByteOverflow)? / 2)
+            .checked_add(input.upload_bytes().ok_or(SurfaceError::ByteOverflow)?)
+            .ok_or(SurfaceError::ByteOverflow)?;
+        let required_bytes = self
+            .report
+            .physical_bytes
+            .checked_add(self.scratch_checked_out_bytes)
+            .and_then(|value| value.checked_add(bytes))
+            .and_then(|value| value.checked_add(gpu_bytes))
+            .ok_or(SurfaceError::ByteOverflow)?;
+        let output = match &mut self.arena.backend {
+            SurfaceBackend::Raster => return Ok(None),
+            SurfaceBackend::Metal {
+                context,
+                device,
+                queue,
+                scene3d_gpu,
+                ..
+            } => {
+                if scene3d_gpu.is_none() {
+                    let renderer =
+                        super::scene3d_gpu::GpuRasterizer::new(device.clone(), queue.clone());
+                    if let Err(reason) = &renderer {
+                        eprintln!("warning: Scene3D GPU raster unavailable, using CPU: {reason}");
+                    }
+                    *scene3d_gpu = Some(renderer);
+                }
+                let Some(Ok(renderer)) = scene3d_gpu.as_mut() else {
+                    return Ok(None);
+                };
+                if required_bytes > self.max_frame_bytes {
+                    return Err(SurfaceError::FrameBudgetExceeded {
+                        required_bytes,
+                        max_bytes: self.max_frame_bytes,
+                    });
+                }
+                self.max_frame_bytes -= gpu_bytes;
+                renderer
+                    .render(input, context)
+                    .map_err(SurfaceError::Scene3dGpu)?
+            }
+        };
+        // Keep the cached image Skia-owned. The only copy is GPU -> GPU, into a frame-budgeted
+        // scratch surface; borrowed wgpu textures never escape into persistent program caches.
+        let image = {
+            let mut scratch = self.scratch(&[extent])?;
+            let target = scratch.surface_mut(0)?;
+            let mut paint = Paint::default();
+            paint.set_blend_mode(BlendMode::Src);
+            target
+                .canvas()
+                .draw_image(&output.image, (0, 0), Some(&paint));
+            target.image_snapshot()
+        };
+        let upload_bytes = output.upload_bytes;
+        self.arena
+            .pending_external_imports
+            .push(ImportedMetalImage {
+                image: image.clone(),
+                _textures: Vec::new(),
+                _source: ImportedMetalOwner::Scene {
+                    _resources: Box::new((output, object.clone())),
+                },
+            });
+        Ok(Some((image, upload_bytes)))
     }
 
     /// CPU output staging buffers retained by the executor across frames.
@@ -2047,6 +2157,9 @@ pub enum SurfaceError {
     #[cfg(all(target_os = "macos", feature = "native"))]
     #[error("Metal compositor unavailable: {0}")]
     MetalUnavailable(&'static str),
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[error("Scene3D GPU raster failed: {0}")]
+    Scene3dGpu(String),
     #[cfg(all(target_os = "macos", feature = "native"))]
     #[error("shared GPU frame requires the Metal compositor")]
     SharedFrameRequiresMetal,

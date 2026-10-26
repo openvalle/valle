@@ -209,6 +209,8 @@ pub struct PipelineReport {
     pub built_in_kernel_cache_hits: u64,
     pub built_in_kernel_cache_misses: u64,
     pub external_gpu_imports: u64,
+    pub scene3d_gpu_rasters: u64,
+    pub scene3d_cpu_fallbacks: u64,
     pub cpu_upload_bytes: u64,
     pub surface_generation_invalidations: u64,
     pub plan_surface_backend_allocations: u64,
@@ -778,6 +780,8 @@ struct PipelineAccumulator {
     built_in_kernel_cache_hits: u64,
     built_in_kernel_cache_misses: u64,
     external_gpu_imports: u64,
+    scene3d_gpu_rasters: u64,
+    scene3d_cpu_fallbacks: u64,
     cpu_upload_bytes: u64,
     surface_generation_invalidations: u64,
     plan_surface_backend_allocations: u64,
@@ -936,6 +940,10 @@ impl PipelineAccumulator {
         )?;
         self.external_gpu_imports =
             add_u64(self.external_gpu_imports, execution.external_gpu_imports)?;
+        self.scene3d_gpu_rasters =
+            add_u64(self.scene3d_gpu_rasters, execution.scene3d_gpu_rasters)?;
+        self.scene3d_cpu_fallbacks =
+            add_u64(self.scene3d_cpu_fallbacks, execution.scene3d_cpu_fallbacks)?;
         self.cpu_upload_bytes = add_u64(self.cpu_upload_bytes, execution.cpu_upload_bytes)?;
         let surfaces = execution.surfaces;
         self.surface_generation_invalidations = add_u64(
@@ -1116,6 +1124,8 @@ impl PipelineAccumulator {
             built_in_kernel_cache_hits: self.built_in_kernel_cache_hits,
             built_in_kernel_cache_misses: self.built_in_kernel_cache_misses,
             external_gpu_imports: self.external_gpu_imports,
+            scene3d_gpu_rasters: self.scene3d_gpu_rasters,
+            scene3d_cpu_fallbacks: self.scene3d_cpu_fallbacks,
             cpu_upload_bytes: self.cpu_upload_bytes,
             surface_generation_invalidations: self.surface_generation_invalidations,
             plan_surface_backend_allocations: self.plan_surface_backend_allocations,

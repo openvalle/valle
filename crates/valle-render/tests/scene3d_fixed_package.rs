@@ -169,10 +169,24 @@ fn verify_fixed_model_package(pbr: bool) {
         let (pixels, evidence) = cold.render_rgba8(FrameKey::new(frame), spec).unwrap();
         assert_eq!(evidence.scene3d.requests, 1);
         assert_eq!(evidence.scene3d.prepared_cache_misses, 1);
+        let uses_gpu = backend != SkiaBackendKind::Raster && !pbr;
+        assert_eq!(evidence.execution.scene3d_gpu_rasters, u64::from(uses_gpu));
+        assert_eq!(
+            evidence.execution.scene3d_cpu_fallbacks,
+            u64::from(!uses_gpu)
+        );
+        if uses_gpu {
+            let mut reference = project.frame_runner(SkiaBackendKind::Raster).unwrap();
+            let (expected, _) = reference.render_rgba8(FrameKey::new(frame), spec).unwrap();
+            assert_eq!(pixels.data, expected.data, "GPU/CPU frame={frame}");
+            assert!(evidence.execution.cpu_upload_bytes < 64 * 64 * 8);
+        }
         assert!(
             pixels
                 .data
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|p| p[0] > if pbr { 50 } else { 150 })
                 .count()
                 > 100

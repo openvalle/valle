@@ -4,7 +4,7 @@ use skia_safe::{BlendMode, Color4f, IRect, Image, Paint, Surface};
 use thiserror::Error;
 use valle_engine::{
     compositor::{
-        BoundExternalObjects, ExternalBindError, bind_external_objects,
+        BoundExternalObjects, ExternalBindError, ExternalObject, bind_external_objects,
         lower::{
             BackendCapabilities, BoundExecutionPass, BoundProgramSchedule, BoundProgramSchedules,
             CompositeMode, CopyOperation, ExecutionPassId, ExecutionPassKind, KernelInvocation,
@@ -15,7 +15,7 @@ use valle_engine::{
     prepare::{
         DeviceRect, DeviceTransform, DynamicBindingId, DynamicBindingKind, DynamicValue, ProgramId,
     },
-    resource::{ContentDigest, Extent2d},
+    resource::{ContentDigest, Extent2d, ExternalResourceDesc},
 };
 
 use super::{
@@ -308,6 +308,10 @@ pub struct SkiaExecutionReport {
     pub built_in_kernel_cache_hits: u64,
     pub built_in_kernel_cache_misses: u64,
     pub external_gpu_imports: u64,
+    /// Scene3D layers rasterized from geometry on this executor's GPU.
+    pub scene3d_gpu_rasters: u64,
+    /// Scene3D layers using CPU rasterization, including unsupported GPU materials.
+    pub scene3d_cpu_fallbacks: u64,
     pub cpu_upload_bytes: u64,
     pub surfaces: SkiaSurfaceReport,
     pub committed: bool,
@@ -1019,6 +1023,8 @@ impl AdmittedSkiaFrame<'_> {
             built_in_kernel_cache_hits: self.effect_cache_counters.hits,
             built_in_kernel_cache_misses: self.effect_cache_counters.misses,
             external_gpu_imports: external_images.gpu_imports,
+            scene3d_gpu_rasters: external_images.scene3d_gpu_rasters,
+            scene3d_cpu_fallbacks: external_images.scene3d_cpu_fallbacks,
             cpu_upload_bytes: external_images.cpu_upload_bytes,
             surfaces: surface_report,
             committed: true,
@@ -1339,8 +1345,8 @@ fn preflight_executor_surface_budget(
 /// Every outer slot stays allocated for the whole frame. A pass also checks out scratch
 /// surfaces (program slots and helpers, kernel and import scratch), copies inputs into
 /// full-frame images, and a software F16 filter reserves its CPU working set; the largest pass
-/// sets the peak. On GPU backends each 3D layer may first apply its depth of field in two
-/// scratch surfaces and keep the result for the frame. Scratch a pass returns waits in the
+/// sets the peak. Each GPU 3D layer retains either its raster color/depth plus a Skia copy,
+/// or depth-of-field scratch and its result. Scratch a pass returns waits in the
 /// reusable pool still charged to this frame while later passes run; the pool keeps at most
 /// `pool_bytes`. Caches, and surfaces pooled by earlier frames, are charged to the shared
 /// budget instead.
@@ -1595,6 +1601,8 @@ struct MaterializedExternalVisuals {
     images: BTreeMap<valle_engine::compositor::lower::ExternalSlotId, Image>,
     gpu_imports: u64,
     cpu_upload_bytes: u64,
+    scene3d_gpu_rasters: u64,
+    scene3d_cpu_fallbacks: u64,
 }
 
 fn materialize_external_visuals(
@@ -1612,8 +1620,57 @@ fn materialize_external_visuals(
     let mut cpu_upload_bytes = 0_u64;
     #[cfg(not(feature = "native"))]
     let cpu_upload_bytes = 0_u64;
+    #[cfg(feature = "native")]
+    let mut scene3d_gpu_rasters = 0_u64;
+    #[cfg(not(feature = "native"))]
+    let scene3d_gpu_rasters = 0_u64;
+    let mut scene3d_cpu_fallbacks = 0_u64;
     for binding in bound.objects() {
         let object = binding.object();
+        #[cfg(feature = "native")]
+        if object.deferred_scene3d_gpu().is_some() {
+            #[cfg(target_os = "macos")]
+            let rendered = surfaces.render_scene3d_gpu(object)?;
+            #[cfg(not(target_os = "macos"))]
+            let rendered: Option<(Image, u64)> = None;
+            let image = if let Some((image, upload_bytes)) = rendered {
+                scene3d_gpu_rasters = scene3d_gpu_rasters
+                    .checked_add(1)
+                    .ok_or(SkiaExecuteError::ExternalTransferAccounting)?;
+                gpu_imports = gpu_imports
+                    .checked_add(1)
+                    .ok_or(SkiaExecuteError::ExternalTransferAccounting)?;
+                cpu_upload_bytes = cpu_upload_bytes
+                    .checked_add(upload_bytes)
+                    .ok_or(SkiaExecuteError::ExternalTransferAccounting)?;
+                image
+            } else {
+                let fallback = object
+                    .scene3d_gpu_fallback()
+                    .map_err(|error| SkiaExecuteError::Program(error.to_string()))?;
+                scene3d_cpu_fallbacks = scene3d_cpu_fallbacks
+                    .checked_add(1)
+                    .ok_or(SkiaExecuteError::ExternalTransferAccounting)?;
+                cpu_upload_bytes = cpu_upload_bytes
+                    .checked_add(
+                        fallback
+                            .resident_bytes()
+                            .ok_or(SkiaExecuteError::ExternalTransferAccounting)?,
+                    )
+                    .ok_or(SkiaExecuteError::ExternalTransferAccounting)?;
+                fallback
+                    .visual_image()
+                    .ok_or(SkiaExecuteError::ExternalTransferAccounting)?
+                    .clone()
+            };
+            images.insert(binding.slot(), image);
+            continue;
+        }
+        if matches!(object.descriptor(), ExternalResourceDesc::Scene3d) {
+            scene3d_cpu_fallbacks = scene3d_cpu_fallbacks
+                .checked_add(1)
+                .ok_or(SkiaExecuteError::ExternalTransferAccounting)?;
+        }
         let image = if let Some(input) = object.deferred_scene3d_dof() {
             #[cfg(feature = "native")]
             {
@@ -1674,6 +1731,8 @@ fn materialize_external_visuals(
         images,
         gpu_imports,
         cpu_upload_bytes,
+        scene3d_gpu_rasters,
+        scene3d_cpu_fallbacks,
     })
 }
 

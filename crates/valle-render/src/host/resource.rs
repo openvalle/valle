@@ -279,6 +279,7 @@ pub struct NativeResourceProvider {
     video_memory: BTreeMap<ContentDigest, Option<valle_engine::motion::memory::MemoryLease>>,
     video_transport: VideoFrameTransport,
     defer_scene3d_dof: bool,
+    defer_scene3d_geometry: bool,
     models: BTreeMap<ContentDigest, Arc<AdmittedModel>>,
     environments: BTreeMap<ContentDigest, Arc<valle_engine::motion::scene3d::EnvironmentAsset>>,
     textures: BTreeMap<(ContentDigest, TextureRole), Arc<MaterialImage>>,
@@ -308,6 +309,7 @@ impl NativeResourceProvider {
             video_memory: BTreeMap::new(),
             video_transport: VideoFrameTransport::Cpu,
             defer_scene3d_dof: false,
+            defer_scene3d_geometry: false,
             models: BTreeMap::new(),
             environments: BTreeMap::new(),
             textures: BTreeMap::new(),
@@ -567,6 +569,7 @@ impl NativeResourceProvider {
             extent,
             key: request.key().clone(),
             defer_dof: self.defer_scene3d_dof,
+            defer_geometry: self.defer_scene3d_geometry,
         })
     }
 
@@ -772,6 +775,7 @@ pub(super) struct Scene3dWork {
     extent: Extent2d,
     key: valle_engine::resource::ResourceKey,
     defer_dof: bool,
+    defer_geometry: bool,
 }
 impl Scene3dWork {
     pub(super) fn render(
@@ -784,12 +788,40 @@ impl Scene3dWork {
             extent,
             key,
             defer_dof,
+            defer_geometry,
         } = self;
         let frame = sealed.request();
         let _working = valle_engine::motion::memory::reserve(
             valle_engine::motion::memory::MemoryKind::Temporary,
             u64::from(frame.width) * u64::from(frame.height) * 96,
         )?;
+        if defer_geometry {
+            let started = Instant::now();
+            let geometry =
+                valle_engine::motion::scene3d::prepare_gpu_geometry(&prepared, &frame.frame)
+                    .map_err(|error| NativeResourceError::SceneRender {
+                        reason: error.to_string(),
+                    })?;
+            add_elapsed(&mut report.prepare_us, started.elapsed())?;
+            if let Some(geometry) = geometry {
+                let object = SkiaExternalObject::scene3d_gpu(
+                    key.clone(),
+                    geometry,
+                    Arc::clone(&prepared),
+                    Arc::new(frame.frame.clone()),
+                )?;
+                // Tiny outputs with dense geometry can retain more vertices than the
+                // current per-pixel admission reserves. Keep the CPU path for them.
+                let geometry_allowance = u64::from(frame.width) * u64::from(frame.height) * 12;
+                if object
+                    .deferred_scene3d_gpu()
+                    .and_then(|input| input.frame_bytes())
+                    .is_some_and(|bytes| bytes <= geometry_allowance)
+                {
+                    return Ok(object);
+                }
+            }
+        }
         let raster_started = Instant::now();
         let deferred_dof = defer_dof
             && frame
@@ -907,11 +939,18 @@ impl ResourceProvider for NativeResourceProvider {
         };
         let defer_scene3d_dof = backend != SkiaBackendKind::Raster
             && std::env::var_os("VALLE_SCENE3D_DOF_CPU_REFERENCE").is_none();
-        if defer_scene3d_dof != self.defer_scene3d_dof && !self.objects.entries.is_empty() {
+        let defer_scene3d_geometry = backend != SkiaBackendKind::Raster
+            && std::env::var_os("VALLE_SCENE3D_RASTER_CPU_REFERENCE").is_none()
+            && std::env::var_os("VALLE_SCENE3D_DOF_CPU_REFERENCE").is_none();
+        if (defer_scene3d_dof != self.defer_scene3d_dof
+            || defer_scene3d_geometry != self.defer_scene3d_geometry)
+            && !self.objects.entries.is_empty()
+        {
             // A deferred GPU image is not usable on Raster after a backend switch.
             self.invalidate_generation()?;
         }
         self.defer_scene3d_dof = defer_scene3d_dof;
+        self.defer_scene3d_geometry = defer_scene3d_geometry;
         Ok(())
     }
 }
@@ -1041,6 +1080,7 @@ mod tests {
     fn switching_back_to_raster_invalidates_deferred_resource_generation() {
         let mut provider = NativeResourceProvider::new(Arc::new(NativeResourceCatalog::new()));
         provider.defer_scene3d_dof = true;
+        provider.defer_scene3d_geometry = true;
         let (identity, object) = cached_frame(0);
         provider
             .objects
@@ -1048,6 +1088,7 @@ mod tests {
             .unwrap();
         provider.configure_backend(SkiaBackendKind::Raster).unwrap();
         assert!(!provider.defer_scene3d_dof);
+        assert!(!provider.defer_scene3d_geometry);
         assert!(provider.objects.entries.is_empty());
         assert_eq!(provider.cache_generation, 2);
     }

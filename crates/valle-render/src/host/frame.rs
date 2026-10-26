@@ -1049,6 +1049,8 @@ fn execute_prepared_with(
         "rasterLayerBytes": execution.raster_layer_cache_bytes,
         "surfacePoolBytes": execution.surfaces.pool_bytes,
         "uploadBytes": execution.cpu_upload_bytes,
+        "scene3dGpuRasters": execution.scene3d_gpu_rasters,
+        "scene3dCpuFallbacks": execution.scene3d_cpu_fallbacks,
     }));
     }
     let mut timings = prepared.timings;

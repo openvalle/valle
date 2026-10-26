@@ -23,6 +23,8 @@ mod output;
 mod pass;
 mod radial_gpu;
 mod scene3d_dof;
+#[cfg(feature = "native")]
+mod scene3d_gpu;
 mod scene3d_region;
 mod surface;
 mod target;

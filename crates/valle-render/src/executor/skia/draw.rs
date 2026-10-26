@@ -289,7 +289,7 @@ impl ProgramRuntime {
                 Some(image) => SceneImage::Ready(image.clone()),
                 None if bound
                     .get(binding.slot)
-                    .is_some_and(|object| object.deferred_scene3d_dof().is_some()) =>
+                    .is_some_and(SkiaExternalObject::is_deferred_scene3d) =>
                 {
                     SceneImage::Deferred(binding.slot)
                 }

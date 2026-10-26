@@ -40,6 +40,12 @@ pub(super) fn delivery_report(
             "audioOnly": summary.audio_only,
         }),
     );
+    if let Some(pipeline) = &summary.pipeline {
+        report.get_mut("delivery").expect("delivery report")["scene3d"] = json!({
+            "gpuRasters": pipeline.scene3d_gpu_rasters,
+            "cpuFallbacks": pipeline.scene3d_cpu_fallbacks,
+        });
+    }
     if let Some(pipeline) = &summary.pipeline
         && let Some(budget) = pipeline.budget
     {

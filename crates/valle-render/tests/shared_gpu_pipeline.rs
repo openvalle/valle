@@ -29,7 +29,15 @@ const WIDTH: u32 = 96;
 const HEIGHT: u32 = 64;
 
 fn project() -> NativeProject {
-    let artifact = Arc::new(valle_compiler::motion::compile_motion(r##"
+    project_with_gpu_raster(false)
+}
+
+fn project_with_gpu_raster(gpu_raster: bool) -> NativeProject {
+    project_with_raster_segments(gpu_raster, 3)
+}
+
+fn project_with_raster_segments(gpu_raster: bool, segments: u32) -> NativeProject {
+    let source = r##"
 export const composition = { width: 96, height: 64, fps: 30, duration: 2 };
 const BALL = lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"), { segments: 16 });
 export default function Animated() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);
@@ -42,7 +50,21 @@ export default function Animated() { const time = useCurrentTime(); const frame 
     <View style={{position:"absolute",left:frame,top:2,width:8,height:4,backgroundColor:"#33CC99"}} />
   </Scene>;
 }
-"##).unwrap().artifact);
+"##;
+    let source = if gpu_raster {
+        source
+            .replace(",depthOfField:{focusDistance:5,maxBlurRadius:4}", "")
+            .replace("#FF553399", "#FF5533")
+            .replace("segments: 16", &format!("segments: {segments}"))
+            .replace("<View style={{position:\"absolute\",left:frame,top:2,width:8,height:4,backgroundColor:\"#33CC99\"}} />", "")
+    } else {
+        source.to_owned()
+    };
+    let artifact = Arc::new(
+        valle_compiler::motion::compile_motion(&source)
+            .unwrap()
+            .artifact,
+    );
     let digest = ContentDigest::of_bytes(&valle_motion::canonical_bytes(&artifact).unwrap());
     let manifest = decode_resource_manifest(&serde_json::to_vec(&json!({"entries":{
         "component:shared":{"kind":"motion-artifact","digest":digest.to_wire(),"abi":"valle.motion/artifact@1",
@@ -209,7 +231,17 @@ impl FrameSink for InspectSink {
 #[test]
 #[ignore = "requires real Metal and VideoToolbox"]
 fn parallel_shared_delivery_preserves_seek_order_exact_pixels_and_no_readback() {
-    let project = project();
+    verify_parallel_shared_delivery(false);
+}
+
+#[test]
+#[ignore = "requires real Metal and VideoToolbox"]
+fn gpu_raster_shared_delivery_retains_textures_through_completion_and_seeks() {
+    verify_parallel_shared_delivery(true);
+}
+
+fn verify_parallel_shared_delivery(gpu_raster: bool) {
+    let project = project_with_gpu_raster(gpu_raster);
     let dir = tempfile::tempdir().unwrap();
     let indices = [
         0, 7, 20, 59, 12, 45, 7, 1, 30, 2, 58, 0, 59, 30, 12, 7, 48, 5, 1, 20, 30, 59, 0, 7,
@@ -223,8 +255,13 @@ fn parallel_shared_delivery_preserves_seek_order_exact_pixels_and_no_readback() 
             &frames,
             spec(),
             &mut sink,
-            &RenderControl::default()
-                .with_budget(valle_render::host::NativeRenderBudget::new(workers, None).unwrap()),
+            &RenderControl::default().with_budget(
+                valle_render::host::NativeRenderBudget::new(
+                    workers,
+                    gpu_raster.then_some(16 * 1024 * 1024),
+                )
+                .unwrap(),
+            ),
             None,
             SkiaBackendKind::Metal,
         )
@@ -233,7 +270,23 @@ fn parallel_shared_delivery_preserves_seek_order_exact_pixels_and_no_readback() 
         assert_eq!(report.frames, frames.len());
         assert_eq!(report.delivery, Some(FrameDelivery::SharedGpu));
         assert_eq!(report.delivery_readback_bytes, 0);
+        assert_eq!(
+            report.scene3d_gpu_rasters,
+            if gpu_raster { frames.len() as u64 } else { 0 }
+        );
+        assert_eq!(
+            report.scene3d_cpu_fallbacks,
+            if gpu_raster { 0 } else { frames.len() as u64 }
+        );
         assert!(report.maximum_in_flight_frames <= workers + 3);
+        assert_eq!(
+            report.budget.unwrap().memory.used_bytes,
+            0,
+            "all GPU leases must return after delivery"
+        );
+        if gpu_raster {
+            assert!(report.budget.unwrap().memory.peak_bytes <= 16 * 1024 * 1024);
+        }
         assert!(sink.finished);
         assert_eq!(sink.keys, indices);
         assert_ne!(sink.pixels[0], sink.pixels[3], "fixture must animate");
@@ -242,6 +295,102 @@ fn parallel_shared_delivery_preserves_seek_order_exact_pixels_and_no_readback() 
         } else {
             baseline = Some(sink.pixels);
         }
+    }
+}
+
+#[test]
+#[ignore = "requires real Metal; measures native Scene3D including final output readback"]
+fn gpu_raster_scales_to_delivery_resolution_without_pixel_uploads() {
+    // Keep the CPU-reference environment isolated from concurrently running tests.
+    const REFERENCE_DIR: &str = "VALLE_TEST_SCENE3D_REFERENCE_DIR";
+    let child_directory = std::env::var_os(REFERENCE_DIR);
+    let directory = tempfile::tempdir().unwrap();
+    if child_directory.is_none() {
+        let reference = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "gpu_raster_scales_to_delivery_resolution_without_pixel_uploads",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("VALLE_SCENE3D_RASTER_CPU_REFERENCE", "1")
+            .env(REFERENCE_DIR, directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            reference.status.success(),
+            "CPU reference failed: {}",
+            String::from_utf8_lossy(&reference.stderr)
+        );
+        eprint!("{}", String::from_utf8_lossy(&reference.stderr));
+    }
+    let path = child_directory
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| directory.path().to_path_buf());
+    let project = project_with_gpu_raster(true);
+    let tiny = RenderSpec::new(
+        8,
+        8,
+        RenderQuality::Preview,
+        OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+    )
+    .unwrap();
+    let (_, evidence) = project_with_raster_segments(true, 16)
+        .frame_runner(SkiaBackendKind::Metal)
+        .unwrap()
+        .render_rgba8(FrameKey::new(0), tiny)
+        .unwrap();
+    assert_eq!(
+        evidence.execution.scene3d_gpu_rasters, 0,
+        "dense geometry at tiny sizes retains the CPU admission bound"
+    );
+    assert_eq!(evidence.execution.scene3d_cpu_fallbacks, 1);
+    for (width, height) in [(1920, 1080), (3840, 2160)] {
+        let output = RenderSpec::new(
+            width,
+            height,
+            RenderQuality::Preview,
+            OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+        )
+        .unwrap();
+        let mut runner = project.frame_runner(SkiaBackendKind::Metal).unwrap();
+        runner.render_rgba8(FrameKey::new(0), output).unwrap();
+        let mut samples = Vec::new();
+        let mut upload_bytes = Vec::new();
+        for frame in [0, 7, 20, 59, 12, 7] {
+            let started = Instant::now();
+            let (pixels, evidence) = runner.render_rgba8(FrameKey::new(frame), output).unwrap();
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+            upload_bytes.push(evidence.execution.cpu_upload_bytes);
+            let file = path.join(format!("{width}x{height}-{frame}.rgba"));
+            if child_directory.is_some() {
+                assert_eq!(evidence.execution.scene3d_gpu_rasters, 0);
+                assert_eq!(evidence.execution.scene3d_cpu_fallbacks, 1);
+                std::fs::write(file, pixels.data).unwrap();
+            } else {
+                assert_eq!(evidence.execution.scene3d_gpu_rasters, 1);
+                assert_eq!(evidence.execution.scene3d_cpu_fallbacks, 0);
+                let expected = std::fs::read(file).unwrap();
+                assert_eq!(pixels.data.len(), expected.len());
+                let mismatches = pixels
+                    .data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(expected.as_chunks::<4>().0.iter())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                assert_eq!(mismatches, 0, "{width}x{height}, frame={frame}");
+                assert!(evidence.execution.cpu_upload_bytes < u64::from(width) * u64::from(height));
+            }
+        }
+        samples.sort_by(f64::total_cmp);
+        eprintln!(
+            "Scene3D Metal cpu_reference={} {width}x{height}: warm median {:.3}ms including final readback, upload_bytes={upload_bytes:?}",
+            child_directory.is_some(),
+            samples[samples.len() / 2]
+        );
     }
 }
 
@@ -310,38 +459,43 @@ fn raster_shared_delivery_writes_the_readback_pixels_in_place() {
 #[test]
 #[ignore = "requires real Metal and VideoToolbox"]
 fn shared_delivery_cancellation_and_sink_failure_drain_blocked_preparers() {
-    let project = project();
-    let dir = tempfile::tempdir().unwrap();
-    let frames = (0..24).map(FrameKey::new).collect::<Vec<_>>();
-    for failure in [false, true] {
-        let mut sink = InspectSink::new(&dir.path().join(format!("failure-{failure}.mp4")));
-        sink.fail_at = failure.then_some(1);
-        let control = RenderControl::default();
-        let cancel = control.clone();
-        let progress: valle_render::host::ProgressCallback = Arc::new(move |done, _| {
-            if !failure && done == 1 {
-                cancel.cancel();
+    for gpu_raster in [false, true] {
+        let project = project_with_gpu_raster(gpu_raster);
+        let dir = tempfile::tempdir().unwrap();
+        let frames = (0..24).map(FrameKey::new).collect::<Vec<_>>();
+        for failure in [false, true] {
+            let mut sink = InspectSink::new(&dir.path().join(format!("failure-{failure}.mp4")));
+            sink.fail_at = failure.then_some(1);
+            let budget =
+                valle_render::host::NativeRenderBudget::new(4, Some(16 * 1024 * 1024)).unwrap();
+            let control = RenderControl::default().with_budget(budget.clone());
+            let cancel = control.clone();
+            let progress: valle_render::host::ProgressCallback = Arc::new(move |done, _| {
+                if !failure && done == 1 {
+                    cancel.cancel();
+                }
+            });
+            let error = render_schedule(
+                &project,
+                &frames,
+                spec(),
+                &mut sink,
+                &control,
+                Some(&progress),
+                SkiaBackendKind::Metal,
+            )
+            .unwrap_err();
+            if failure {
+                assert!(
+                    matches!(error, PipelineError::Sink(ref text) if text.contains("intentional sink failure"))
+                );
+            } else {
+                assert!(matches!(error, PipelineError::Cancelled));
             }
-        });
-        let error = render_schedule(
-            &project,
-            &frames,
-            spec(),
-            &mut sink,
-            &control,
-            Some(&progress),
-            SkiaBackendKind::Metal,
-        )
-        .unwrap_err();
-        if failure {
-            assert!(
-                matches!(error, PipelineError::Sink(ref text) if text.contains("intentional sink failure"))
-            );
-        } else {
-            assert!(matches!(error, PipelineError::Cancelled));
+            assert_eq!(sink.keys.len(), 1);
+            assert!(!sink.finished);
+            assert_eq!(budget.memory_report().used_bytes, 0);
         }
-        assert_eq!(sink.keys.len(), 1);
-        assert!(!sink.finished);
     }
 }
 
