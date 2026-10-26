@@ -2,7 +2,11 @@ import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { initSync, ProductEngine } from "../../../generated/web/valle_engine.js";
 import { CanvasKitBuiltinRuntime } from "./builtin-runtime.ts";
-import { drawSrgbPreviewCpu, srgbPreviewScratchBytes } from "./output-transform.ts";
+import {
+  drawSrgbPreviewCpu,
+  srgbPreviewScratchBytes,
+  outputDitherPixels,
+} from "./output-transform.ts";
 import type { CanvasKit } from "canvaskit-wasm";
 
 const { default: init } = (await import("canvaskit-wasm")) as unknown as {
@@ -10,6 +14,12 @@ const { default: init } = (await import("canvaskit-wasm")) as unknown as {
 };
 const ck = await init({
   locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir),
+});
+
+test("delivery noise matches Native's bounded seeded TPDF table", () => {
+  expect(new Bun.CryptoHasher("sha256").update(outputDitherPixels(0)).digest("hex")).toBe(
+    "3155af14f33803983c8af3cbda65e595791a1918e721b83675eac07686ea3f87",
+  );
 });
 initSync({
   module: await readFile(new URL("../../../generated/web/valle_engine_bg.wasm", import.meta.url)),
@@ -70,11 +80,13 @@ test("CPU SDR output matches shared SkSL across gamut, near-black and coverage b
         ck.FilterMode.Linear,
         ck.MipmapMode.None,
       );
+      const noise = builtins.outputNoise(null);
       const shader = builtins.shader(
         "outputTransform",
-        [0, 1, 0, 1, opaque ? 0 : 1, 100, 100],
-        [child],
+        [0, 1, 0, 1, opaque ? 0 : 1, 100, 100, 0],
+        [child, noise],
       );
+      noise.delete();
       const paint = new ck.Paint();
       paint.setShader(shader);
       paint.setBlendMode(ck.BlendMode.Src);

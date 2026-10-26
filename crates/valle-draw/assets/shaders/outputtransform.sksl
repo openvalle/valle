@@ -1,4 +1,5 @@
 uniform shader content;
+uniform shader ditherNoise;
 uniform float primariesCode;
 uniform float transferCode;
 uniform float toneMapCode;
@@ -6,6 +7,7 @@ uniform float gamutMapCode;
 uniform float alphaCode;
 uniform float referenceWhiteNits;
 uniform float peakNits;
+uniform float ditherEnabled;
 
 float3 fromWorking(float3 working) {
     if (primariesCode < 0.5) {
@@ -123,5 +125,13 @@ half4 main(float2 position) {
     float3 mapped = gamutMap(fromWorking(working), maximum);
     float3 encoded = encodeTransfer(mapped);
     float outputAlpha = alphaCode < 0.5 ? 1.0 : coverage;
+    if (ditherEnabled > 0.5) {
+        float3 noise = float3(ditherNoise.eval(mod(floor(position), 128.0) + 0.5).rgb) * 2.0 - 1.0;
+        if (alphaCode > 1.5) {
+            encoded = floor(clamp(encoded * outputAlpha + noise / 255.0, 0.0, 1.0) * 255.0 + 0.5) / (255.0 * outputAlpha);
+        } else {
+            encoded = floor(clamp(encoded + noise / 255.0, 0.0, 1.0) * 255.0 + 0.5) / 255.0;
+        }
+    }
     return half4(encoded * outputAlpha, outputAlpha);
 }

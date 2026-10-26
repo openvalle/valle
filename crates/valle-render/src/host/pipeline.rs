@@ -265,7 +265,12 @@ pub fn render_schedule(
     let workers =
         budget.frame_parallelism(budget.threads().min(4).min(frames.len()).max(1), spec)?;
     // Raster writes an encoder's shared frames on its usual pipeline; only GPU backends stage them.
-    let shared_gpu = backend != SkiaBackendKind::Raster && sink.shared_frame_pool().is_some();
+    // Software conversion/encoding runs on the delivery actor while the drawing actor renders
+    // the following shared surface. Keep their CPU work independent instead of putting encoding
+    // on the GPU submission loop used by hardware encoders.
+    let shared_gpu = backend != SkiaBackendKind::Raster
+        && sink.shared_frame_pool().is_some()
+        && !sink.shared_frame_cpu_readback();
     let contexts = if shared_gpu { 3 } else { 1 };
     let owners = super::budget::ResidencyOwners {
         providers: 1,
@@ -1303,6 +1308,9 @@ impl FrameSink for TraceSink<'_> {
     }
     fn shared_frame_pool(&self) -> Option<valle_media::SharedVideoFramePool> {
         self.sink.shared_frame_pool()
+    }
+    fn shared_frame_cpu_readback(&self) -> bool {
+        self.sink.shared_frame_cpu_readback()
     }
     fn push_shared(&mut self, frame: super::DeliveredSharedFrame<'_>) -> anyhow::Result<()> {
         let _span = self.trace.map(|t| t.span("encode.push", serde_json::json!({"frame": frame.key.index(), "sequence": frame.sequence, "readbackBytes": frame.evidence.delivery_readback_bytes})));

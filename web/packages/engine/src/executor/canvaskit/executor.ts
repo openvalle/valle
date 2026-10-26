@@ -7945,11 +7945,8 @@ function admitCanvasKitOutput(plan: Wire): void {
     );
   }
   const dither = record(output.dither, "output dither");
-  if (dither.kind !== "none") {
-    fail(
-      "output_dither",
-      "CanvasKit cannot reproduce the compositor's exact 64-bit triangular dither ABI",
-    );
+  if (dither.kind !== "none" && dither.kind !== "triangular") {
+    fail("output_dither", "unsupported output dither");
   }
 }
 
@@ -7967,6 +7964,7 @@ async function drawOutputTransform(
   const spec = record(operation.spec, "output transform spec");
   const target = record(spec.target, "output color target");
   const luminance = record(spec.luminance, "output luminance");
+  const dither = record(spec.dither, "output dither");
   const uniforms = [
     primariesCode(String(target.primaries)),
     transferCode(String(target.transfer)),
@@ -7979,9 +7977,11 @@ async function drawOutputTransform(
     ),
     positiveId(luminance.referenceWhite, "output reference white"),
     positiveId(luminance.peak, "output peak luminance"),
+    dither.kind === "none" ? 0 : 1,
   ];
   if (
     cpuKernel &&
+    dither.kind === "none" &&
     input &&
     target.primaries === "rec709" &&
     target.transfer === "srgb" &&
@@ -8004,7 +8004,19 @@ async function drawOutputTransform(
     )
       return;
   }
-  drawBuiltinImage(CanvasKit, builtins, canvas, "outputTransform", uniforms, [input], "src");
+  const child = imageOrTransparentShader(CanvasKit, input);
+  const noise = builtins.outputNoise(dither.kind === "none" ? null : Number(dither.seed));
+  try {
+    const shader = builtins.shader("outputTransform", uniforms, [child, noise]);
+    try {
+      drawShader(CanvasKit, canvas, shader, "src");
+    } finally {
+      shader.delete();
+    }
+  } finally {
+    child.delete();
+    noise.delete();
+  }
 }
 
 function enumCode(value: string, values: readonly string[], label: string): number {
@@ -8707,7 +8719,18 @@ function normalizedExternalShader(
   } else if (object.kind !== "scene3d") {
     fail("external_type", "only visual and Scene3D images enter the working color domain");
   }
-  const child = imageShader(CanvasKit, object.image, sampling, wrap);
+  const mipmapped =
+    object.kind === "scene3d" && sampling === "linearClamp"
+      ? object.image.makeCopyWithDefaultMipmaps()
+      : null;
+  const child = mipmapped
+    ? mipmapped.makeShaderOptions(
+        CanvasKit.TileMode.Clamp,
+        CanvasKit.TileMode.Clamp,
+        CanvasKit.FilterMode.Linear,
+        CanvasKit.MipmapMode.Linear,
+      )
+    : imageShader(CanvasKit, object.image, sampling, wrap);
   try {
     return builtins.shader(
       "normalizeInput",
@@ -8716,6 +8739,7 @@ function normalizedExternalShader(
     );
   } finally {
     child.delete();
+    mipmapped?.delete();
   }
 }
 

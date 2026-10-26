@@ -998,7 +998,9 @@ fn frame_working_bytes<P: ResourceProvider>(
                 let pixels = u64::from(frame.width) * u64::from(frame.height);
                 // CPU layers release working planes sequentially. GPU producers, including OIT
                 // storage, remain owned until the common completion fence, so sum their allowance.
-                resources = checked_add(resources, pixels * 12)?;
+                // Color/depth plus a conservative base plane for the complete mip chain,
+                // including thin rasters whose mipmaps exceed one third of the base.
+                resources = checked_add(resources, pixels * 20)?;
                 scene3d_working = if admission.backend() == SkiaBackendKind::Raster {
                     scene3d_working.max(pixels * 96)
                 } else {

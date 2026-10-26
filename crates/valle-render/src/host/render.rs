@@ -153,7 +153,7 @@ impl NativeRenderer {
             width,
             height,
             RenderQuality::Final,
-            OutputSpec::srgb_preview(self.options.background)?,
+            OutputSpec::srgb_delivery(self.options.background)?,
         )?;
         let capabilities = super::frame::delivery_capabilities().map_err(anyhow::Error::from)?;
         let render = self.project.render();
@@ -196,7 +196,12 @@ impl NativeRenderer {
         frame: FrameKey,
         output: &Path,
     ) -> Result<RenderSummary, NativeRenderError> {
-        self.render_png_frames(&[frame], &[output.to_owned()], None)
+        self.render_png_frames_with_quality(
+            &[frame],
+            &[output.to_owned()],
+            None,
+            RenderQuality::Preview,
+        )
     }
 
     /// Deliver exact frame keys in caller order, retaining duplicates for contact sheets.
@@ -207,6 +212,16 @@ impl NativeRenderer {
         frames: &[FrameKey],
         outputs: &[PathBuf],
         storyboard: Option<(&Path, u32)>,
+    ) -> Result<RenderSummary, NativeRenderError> {
+        self.render_png_frames_with_quality(frames, outputs, storyboard, RenderQuality::Final)
+    }
+
+    fn render_png_frames_with_quality(
+        &self,
+        frames: &[FrameKey],
+        outputs: &[PathBuf],
+        storyboard: Option<(&Path, u32)>,
+        quality: RenderQuality,
     ) -> Result<RenderSummary, NativeRenderError> {
         if frames.is_empty()
             || (!outputs.is_empty() && outputs.len() != frames.len())
@@ -222,8 +237,12 @@ impl NativeRenderer {
         let spec = RenderSpec::new(
             width,
             height,
-            RenderQuality::Preview,
-            OutputSpec::srgb_preview(self.options.background)?,
+            quality,
+            if quality == RenderQuality::Final {
+                OutputSpec::srgb_delivery(self.options.background)?
+            } else {
+                OutputSpec::srgb_preview(self.options.background)?
+            },
         )?;
         let mut paths = outputs.to_vec();
         if let Some((path, _)) = storyboard {
@@ -322,10 +341,11 @@ impl NativeRenderer {
         let [cell_width, cell_height] = storyboard_extent(canvas.width(), canvas.height());
         let mut options = self.options.clone();
         options.output_size = Some((cell_width, cell_height));
-        NativeRenderer::new(self.project.clone(), options).render_png_frames(
+        NativeRenderer::new(self.project.clone(), options).render_png_frames_with_quality(
             &frames,
             &[],
             Some((output, columns)),
+            RenderQuality::Preview,
         )
     }
 
@@ -359,7 +379,7 @@ impl NativeRenderer {
             width,
             height,
             RenderQuality::Final,
-            OutputSpec::srgb_preview(self.options.background)?,
+            OutputSpec::srgb_delivery(self.options.background)?,
         )?;
         let canvas = self.project.compiled().canvas();
         let frames = FrameSchedule::All.frames(canvas)?;
@@ -430,7 +450,7 @@ impl NativeRenderer {
             background,
             ToneMap::None,
             GamutMap::ChromaCompress,
-            Dither::None,
+            Dither::Triangular { seed: 0 },
             OutputBitDepth::Eight,
             SignalLuminance::SDR_100,
         )?;
@@ -454,7 +474,7 @@ impl NativeRenderer {
             self.options.bitrate,
             hardware,
             self.encoder_threads(hardware)?,
-            selected_video_transport(hardware),
+            selected_video_transport(hardware, self.options.backend),
         )?;
         let mut sink = Mp4Sink::new(
             muxer,
@@ -528,7 +548,7 @@ impl NativeRenderer {
             self.options.bitrate,
             self.options.hardware_encode,
             self.encoder_threads(self.options.hardware_encode)?,
-            selected_video_transport(self.options.hardware_encode),
+            selected_video_transport(self.options.hardware_encode, self.options.backend),
         )?;
         let mut sink = Mp4Sink::new(
             muxer,
@@ -640,10 +660,13 @@ fn require_video_extent(width: u32, height: u32) -> Result<(), NativeRenderError
     Ok(())
 }
 
-/// A macOS hardware encoder hands out BGRA surfaces that either backend fills in place: Metal
-/// renders into them and Raster writes them through a CPU mapping. VideoToolbox converts to YUV.
-fn selected_video_transport(hardware_encode: bool) -> VideoFrameTransport {
-    if hardware_encode && cfg!(target_os = "macos") {
+/// macOS Metal stages BGRA surfaces for hardware submission or delayed software readback.
+/// Raster also uses shared surfaces when the hardware encoder consumes them directly.
+fn selected_video_transport(
+    hardware_encode: bool,
+    backend: SkiaBackendKind,
+) -> VideoFrameTransport {
+    if (hardware_encode || backend != SkiaBackendKind::Raster) && cfg!(target_os = "macos") {
         VideoFrameTransport::SharedGpu
     } else {
         VideoFrameTransport::Cpu

@@ -106,6 +106,7 @@ async function handleMessage(message: ProductFrameWorkerRequest): Promise<void> 
       timelineJson: canonicalTimelineJson,
     };
     const next = new wasm.ProductEngine();
+    next.set_delivery_output?.(bootstrap.deliveryOutput === true);
     try {
       const receipt = parseProductRenderReceipt(
         next.open_fixed_package(

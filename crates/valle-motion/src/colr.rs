@@ -357,7 +357,7 @@ pub(crate) fn emit_run(
     recording: &mut ProgramRecording,
     run: &takumi_core::layout::inline::PositionedInlineRun,
     layout: takumi_core::geometry::ComputedLayout,
-    shadow: Option<(f64, f64, Rgba)>,
+    shadow: Option<(f64, f64, valle_draw::program::LinearColor)>,
     placements: Option<&[Option<Affine>]>,
 ) -> Result<bool, &'static str> {
     use takumi_core::style::Affine as TAffine;
@@ -449,7 +449,7 @@ pub(crate) fn emit_run(
             recording.push(RecordCmd::Path {
                 path,
                 fill_rule: FillRule::NonZero,
-                fill: Some(Paint::Solid(color)),
+                fill: Some(Paint::FloatSolid(color)),
                 stroke: None,
             });
             recording.push(RecordCmd::End);

@@ -418,11 +418,6 @@ impl Muxer {
         let mut octx = format::output(&path).with_context(|| format!("open {}", path.display()))?;
         let global_header = octx.format().flags().contains(format::Flags::GLOBAL_HEADER);
 
-        if video_transport == VideoFrameTransport::SharedGpu && !hw {
-            return Err(anyhow!(
-                "shared GPU frames require a platform hardware encoder"
-            ));
-        }
         let shared_frame_pool: Option<SharedVideoFramePool> =
             if video_transport == VideoFrameTransport::SharedGpu {
                 #[cfg(target_os = "macos")]
@@ -444,7 +439,7 @@ impl Muxer {
             .video()?;
         vb.set_width(width);
         vb.set_height(height);
-        vb.set_format(if shared_frame_pool.is_some() {
+        vb.set_format(if shared_frame_pool.is_some() && hw {
             format::Pixel::VIDEOTOOLBOX
         } else {
             format::Pixel::YUV420P
@@ -462,7 +457,7 @@ impl Muxer {
         if global_header {
             vb.set_flags(codec::Flags::GLOBAL_HEADER);
         }
-        if let Some(pool) = &shared_frame_pool {
+        if let Some(pool) = shared_frame_pool.as_ref().filter(|_| hw) {
             // SAFETY: the cloned AVBufferRef is transferred to AVCodecContext before open; the
             // context owns and releases it. `pool` independently keeps the same hardware pool
             // alive so raster workers can acquire frames.
@@ -564,7 +559,11 @@ impl Muxer {
             });
 
         let mut sws = software::scaling::Context::get(
-            format::Pixel::RGBA,
+            if shared_frame_pool.is_some() && !hw {
+                format::Pixel::BGRA
+            } else {
+                format::Pixel::RGBA
+            },
             width,
             height,
             format::Pixel::YUV420P,
@@ -614,6 +613,10 @@ impl Muxer {
     /// Clone the encoder-owned frame pool for a GPU raster worker.
     pub fn shared_frame_pool(&self) -> Option<SharedVideoFramePool> {
         self.shared_frame_pool.clone()
+    }
+
+    pub fn shared_frame_cpu_readback(&self) -> bool {
+        self.shared_frame_pool.is_some() && self.venc.format() != format::Pixel::VIDEOTOOLBOX
     }
 
     /// Opt-in CPU wall timings for this muxer, independent of other active exports.
@@ -836,7 +839,39 @@ impl Muxer {
             ));
         }
         let inner = frame.into_inner();
-        self.submit_yuv(inner)?;
+        if self.venc.format() == format::Pixel::VIDEOTOOLBOX {
+            self.submit_yuv(inner)?;
+        } else {
+            // The renderer has already waited for this frame's GPU fence while newer frames
+            // remain in flight. Read its BGRA surface here, overlapping software conversion
+            // and encoding with the following GPU work instead of read_pixels in execution.
+            let yuv = crate::perf::time_enc_convert(|| -> Result<frame::Video> {
+                let staging = self.rgba_staging.get_or_insert_with(frame::Video::empty);
+                let (code, elapsed) =
+                    crate::perf::time_encoder_part(self.encoder_timings.is_some(), || unsafe {
+                        ff::ffi::av_hwframe_transfer_data(staging.as_mut_ptr(), inner.as_ptr(), 0)
+                    });
+                if code < 0 {
+                    return Err(anyhow!("read shared BGRA frame: {}", ff::Error::from(code)));
+                }
+                if let Some(timings) = &mut self.encoder_timings {
+                    timings.shared_readback_ns = timings.shared_readback_ns.saturating_add(elapsed);
+                    timings.shared_readback_bytes = timings
+                        .shared_readback_bytes
+                        .saturating_add(u64::from(self.width) * u64::from(self.height) * 4);
+                }
+                if staging.format() != format::Pixel::BGRA {
+                    return Err(anyhow!("shared frame did not transfer as BGRA"));
+                }
+                let mut yuv = self.spare_yuv.take().unwrap_or_else(|| {
+                    frame::Video::new(format::Pixel::YUV420P, self.width, self.height)
+                });
+                self.sws.run(staging, &mut yuv)?;
+                Ok(yuv)
+            })?;
+            let submitted = self.submit_yuv(yuv)?;
+            self.recycle_yuv(submitted);
+        }
         Ok(())
     }
 

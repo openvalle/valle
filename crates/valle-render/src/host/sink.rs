@@ -40,9 +40,13 @@ pub trait FrameSink {
 
     fn push(&mut self, frame: DeliveredFrame<'_>) -> Result<()>;
 
-    /// Returns an encoder-owned pool only when the sink requires direct shared-GPU delivery.
+    /// Shared surfaces may feed either a hardware encoder or delayed software readback.
     fn shared_frame_pool(&self) -> Option<SharedVideoFramePool> {
         None
+    }
+
+    fn shared_frame_cpu_readback(&self) -> bool {
+        false
     }
 
     fn push_shared(&mut self, _frame: DeliveredSharedFrame<'_>) -> Result<()> {
@@ -296,6 +300,10 @@ impl FrameSink for Mp4Sink {
         self.muxer.shared_frame_pool()
     }
 
+    fn shared_frame_cpu_readback(&self) -> bool {
+        self.muxer.shared_frame_cpu_readback()
+    }
+
     fn push_shared(&mut self, frame: DeliveredSharedFrame<'_>) -> Result<()> {
         let started = std::time::Instant::now();
         self.muxer.encode_shared(frame.frame)?;
@@ -317,10 +325,12 @@ impl FrameSink for Mp4Sink {
             );
             if let Some(timing) = self.muxer.encoder_timings() {
                 eprintln!(
-                    "[valle encoder] send={:.3}ms drain-mux={:.3}ms automatic-silence={:.3}ms",
+                    "[valle encoder] send={:.3}ms drain-mux={:.3}ms automatic-silence={:.3}ms shared-readback={:.3}ms shared-readback-bytes={}",
                     timing.send_ns as f64 / 1_000_000.0,
                     timing.drain_mux_ns as f64 / 1_000_000.0,
-                    timing.automatic_silence_ns as f64 / 1_000_000.0
+                    timing.automatic_silence_ns as f64 / 1_000_000.0,
+                    timing.shared_readback_ns as f64 / 1_000_000.0,
+                    timing.shared_readback_bytes,
                 );
             }
         }

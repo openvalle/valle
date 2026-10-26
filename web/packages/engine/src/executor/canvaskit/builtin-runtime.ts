@@ -1,4 +1,5 @@
-import type { CanvasKit, RuntimeEffect, Shader } from "canvaskit-wasm";
+import type { CanvasKit, RuntimeEffect, Shader, Image } from "canvaskit-wasm";
+import { outputDitherPixels } from "./output-transform.ts";
 
 import radialBlurSource from "../../../../../../crates/valle-draw/assets/shaders/radialblur.sksl" with { type: "text" };
 import filmGrainSource from "../../../../../../crates/valle-draw/assets/shaders/filmgrain.sksl" with { type: "text" };
@@ -111,6 +112,34 @@ export const BUILTIN_KERNELS = Object.freeze(Object.keys(BUILTIN_SOURCES) as Bui
  * before a frame surface is touched.
  */
 export class CanvasKitBuiltinRuntime {
+  private noise: { seed: number; image: Image } | null = null;
+
+  outputNoise(seed: number | null): Shader {
+    const ck = this.CanvasKit;
+    if (seed === null) return ck.Shader.MakeColor(ck.Color4f(0.5, 0.5, 0.5, 1), ck.ColorSpace.SRGB);
+    if (this.noise?.seed !== seed) {
+      const image = ck.MakeImage(
+        {
+          width: 128,
+          height: 128,
+          colorType: ck.ColorType.RGBA_8888,
+          alphaType: ck.AlphaType.Opaque,
+          colorSpace: ck.ColorSpace.SRGB,
+        },
+        outputDitherPixels(seed),
+        128 * 4,
+      );
+      if (!image) throw new Error("cannot allocate output dither texture");
+      this.noise?.image.delete();
+      this.noise = { seed, image };
+    }
+    return this.noise.image.makeShaderOptions(
+      ck.TileMode.Clamp,
+      ck.TileMode.Clamp,
+      ck.FilterMode.Nearest,
+      ck.MipmapMode.None,
+    );
+  }
   private readonly effects = new Map<BuiltinKernel, RuntimeEffect>();
 
   constructor(private readonly CanvasKit: CanvasKit) {}
@@ -151,6 +180,8 @@ export class CanvasKitBuiltinRuntime {
   }
 
   dispose(): void {
+    this.noise?.image.delete();
+    this.noise = null;
     for (const effect of this.effects.values()) effect.delete();
     this.effects.clear();
   }

@@ -27,6 +27,8 @@ pub fn init_from_env_and_reset() {
 /// Send may block inside the codec; these counters do not measure encoder device execution.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct EncoderTimings {
+    pub shared_readback_ns: u64,
+    pub shared_readback_bytes: u64,
     pub send_ns: u64,
     pub drain_mux_ns: u64,
     pub automatic_silence_ns: u64,

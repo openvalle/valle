@@ -27,6 +27,67 @@ pub struct AuthorColor {
 }
 
 impl AuthorColor {
+    /// CSS parsing keeps fractional channels; the layout parser's byte colors are only probes.
+    pub fn parse(source: &str) -> Option<Self> {
+        if !source.contains('(') {
+            return crate::Rgba::parse(source).map(Self::from_srgb8);
+        }
+        let parsed = color::parse_color(source)
+            .ok()?
+            .to_alpha_color::<color::Srgb>()
+            .components;
+        let mut channels = parsed.map(f64::from);
+        if let Some((name, args)) = source.trim().split_once('(')
+            && (name.eq_ignore_ascii_case("rgb") || name.eq_ignore_ascii_case("rgba"))
+        {
+            let parts = args
+                .trim_end_matches(')')
+                .split(|ch: char| ch.is_ascii_whitespace() || ch == ',' || ch == '/')
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>();
+            if (3..=4).contains(&parts.len()) {
+                let precise = parts
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        let (value, denominator) = value
+                            .strip_suffix('%')
+                            .map_or((*value, if index == 3 { 1.0 } else { 255.0 }), |value| {
+                                (value, 100.0)
+                            });
+                        value
+                            .parse::<f64>()
+                            .ok()
+                            .map(|value| (value / denominator).clamp(0.0, 1.0))
+                    })
+                    .collect::<Option<Vec<_>>>();
+                if let Some(precise) = precise {
+                    channels[..precise.len()].copy_from_slice(&precise);
+                }
+            }
+        }
+        let [r, g, b, a] = channels;
+        Some(Self {
+            red: decode_srgb_channel(r),
+            green: decode_srgb_channel(g),
+            blue: decode_srgb_channel(b),
+            alpha: a,
+        })
+    }
+
+    pub fn to_css(self) -> String {
+        let byte = self.to_srgb8();
+        if Self::from_srgb8(byte) == self {
+            return byte.to_hex();
+        }
+        format!(
+            "rgba({} {} {} / {})",
+            encode_srgb_channel(self.red) * 255.0,
+            encode_srgb_channel(self.green) * 255.0,
+            encode_srgb_channel(self.blue) * 255.0,
+            self.alpha
+        )
+    }
     pub fn from_srgb8(color: crate::Rgba) -> Self {
         Self {
             red: decode_srgb_channel(f64::from(color.r) / 255.0),
@@ -79,6 +140,12 @@ impl AuthorColor {
 }
 
 impl LinearColor {
+    pub fn is_finite(self) -> bool {
+        [self.red, self.green, self.blue, self.alpha]
+            .into_iter()
+            .all(f32::is_finite)
+            && (0.0..=1.0).contains(&self.alpha)
+    }
     pub const fn new(red: f32, green: f32, blue: f32, alpha: f32) -> Self {
         Self {
             red,

@@ -375,6 +375,14 @@ impl Muxer {
         }
     }
 
+    pub fn shared_frame_cpu_readback(&self) -> bool {
+        match &self.0 {
+            Inner::V7(inner) => inner.shared_frame_cpu_readback(),
+            Inner::V8(inner) => inner.shared_frame_cpu_readback(),
+            Inner::V9(inner) => inner.shared_frame_cpu_readback(),
+        }
+    }
+
     /// Per-export encoder CPU wall timings when VALLE_PERF is enabled.
     pub fn encoder_timings(&self) -> Option<super::perf::EncoderTimings> {
         match &self.0 {

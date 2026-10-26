@@ -265,7 +265,7 @@ fn quantize(
             let levels = ((1u32 << bit_depth) - 1) as f32;
             let mut codes = [0u16; 4];
             for channel in 0..4 {
-                let noise = if channel == 3 {
+                let noise = if channel == 3 || encoded[3] == 0.0 {
                     0.0
                 } else {
                     dither(spec.dither(), position, channel as u32) / levels
@@ -282,13 +282,36 @@ fn dither(method: Dither, position: [u32; 2], channel: u32) -> f32 {
     match method {
         Dither::None => 0.0,
         Dither::Triangular { seed } => {
-            let key = seed
-                ^ u64::from(position[0]).wrapping_mul(0x9e37_79b9_7f4a_7c15)
-                ^ u64::from(position[1]).wrapping_mul(0xbf58_476d_1ce4_e5b9)
-                ^ u64::from(channel).wrapping_mul(0x94d0_49bb_1331_11eb);
-            unit_hash(key) - unit_hash(key ^ 0xd6e8_feb8_6659_fd93)
+            f32::from(dither_code(seed, position, channel)) * (2.0 / 255.0) - 1.0
         }
     }
+}
+
+/// A bounded, exactly reproducible noise texture also works in SkSL's portable ES2 subset
+/// (which has no 64-bit integers or bitwise operators). Alpha is never dithered. Quantizing
+/// the noise itself to eight bits changes it by at most 1/255 of a destination code.
+pub const OUTPUT_DITHER_SIZE: u32 = 128;
+
+pub fn output_dither_pixels(seed: u64) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity((OUTPUT_DITHER_SIZE * OUTPUT_DITHER_SIZE * 4) as usize);
+    for y in 0..OUTPUT_DITHER_SIZE {
+        for x in 0..OUTPUT_DITHER_SIZE {
+            for channel in 0..3 {
+                pixels.push(dither_code(seed, [x, y], channel));
+            }
+            pixels.push(255);
+        }
+    }
+    pixels
+}
+
+fn dither_code(seed: u64, position: [u32; 2], channel: u32) -> u8 {
+    let key = seed
+        ^ u64::from(position[0] % OUTPUT_DITHER_SIZE).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ u64::from(position[1] % OUTPUT_DITHER_SIZE).wrapping_mul(0xbf58_476d_1ce4_e5b9)
+        ^ u64::from(channel).wrapping_mul(0x94d0_49bb_1331_11eb);
+    let noise = unit_hash(key) - unit_hash(key ^ 0xd6e8_feb8_6659_fd93);
+    ((noise * 0.5 + 0.5) * 255.0).round() as u8
 }
 
 fn unit_hash(mut value: u64) -> f32 {
@@ -399,6 +422,30 @@ pub enum OutputMathError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dither_texture_is_shared_with_web_and_has_zero_mean_triangular_noise() {
+        assert_eq!(
+            crate::resource::ContentDigest::of_bytes(&output_dither_pixels(0)).as_hex(),
+            "3155af14f33803983c8af3cbda65e595791a1918e721b83675eac07686ea3f87"
+        );
+        let noise = output_dither_pixels(0)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|pixel| {
+                pixel[..3]
+                    .iter()
+                    .map(|value| f64::from(*value) * 2.0 / 255.0 - 1.0)
+            })
+            .collect::<Vec<_>>();
+        let mean = noise.iter().sum::<f64>() / noise.len() as f64;
+        let variance = noise.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / noise.len() as f64;
+        assert!(
+            mean.abs() < 0.01 && (variance - 1.0 / 6.0).abs() < 0.01,
+            "{mean} {variance}"
+        );
+    }
     use crate::resource::{
         AuthorSrgbStraight, Dither, GamutMap, LuminanceNits, OutputBackground, OutputColorEncoding,
         SignalLuminance,

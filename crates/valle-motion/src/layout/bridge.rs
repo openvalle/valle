@@ -267,6 +267,8 @@ pub struct LayoutTree {
     /// Evaluated typed glyph-outline colors before Takumi's 8-bit shaping brush.
     pub(crate) text_stroke_colors:
         Rc<std::collections::HashMap<String, valle_draw::program::AuthorColor>>,
+    pub(crate) paint_colors:
+        Rc<std::collections::HashMap<String, crate::style::precise_color::PreciseCssColors>>,
     pub keys: std::sync::Arc<std::collections::HashMap<u64, String>>,
     /// Scene key to evaluated unit parameters; emission reads these without reevaluation.
     pub units: Rc<std::collections::HashMap<String, Vec<ResolvedUnit>>>,

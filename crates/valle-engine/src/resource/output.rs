@@ -189,6 +189,14 @@ impl OutputSpec {
         )
     }
 
+    /// Frozen integer delivery uses a fixed spatial seed. Reusing it across frames preserves
+    /// random-access determinism and avoids temporal grain/flicker in otherwise static artwork.
+    pub fn srgb_delivery(background: OutputBackground) -> Result<Self, OutputSpecError> {
+        let mut output = Self::srgb_preview(background)?;
+        output.dither = Dither::Triangular { seed: 0 };
+        Ok(output)
+    }
+
     pub const fn target(self) -> OutputColorEncoding {
         self.target
     }

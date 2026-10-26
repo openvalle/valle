@@ -287,7 +287,7 @@ pub fn css_token(value: &MotionValue) -> String {
             };
             format!("{}{unit}", number_token(value.value))
         }
-        MotionValue::Color(value) => value.to_srgb8().to_hex(),
+        MotionValue::Color(value) => value.to_css(),
         MotionValue::Point(value) => format!("{} {}", number_token(value.x), number_token(value.y)),
         MotionValue::Vec2(value) => format!("{} {}", number_token(value.x), number_token(value.y)),
         MotionValue::Rect(value) => format!(

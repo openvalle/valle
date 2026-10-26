@@ -1972,9 +1972,17 @@ fn commit_output(
         }
         return Ok(());
     }
+    if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Raster
+        && spec.dither() != valle_engine::resource::Dither::None
+        && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
+    {
+        if !target.commit_shader(effects.output_shader(image, spec)?) {
+            return Err(SkiaExecuteError::TargetCommit);
+        }
+        return Ok(());
+    }
     #[cfg(all(target_os = "macos", feature = "native"))]
     if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Metal
-        && spec.dither() == valle_engine::resource::Dither::None
         && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
         // Metal cannot allocate a straight-alpha render target.
         && spec.alpha() != valle_engine::resource::OutputAlphaMode::StraightCoverage

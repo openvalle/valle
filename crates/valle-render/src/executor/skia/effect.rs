@@ -44,6 +44,7 @@ pub(crate) struct EffectRuntime {
     extension_color_gain: Option<Rc<RuntimeEffect>>,
     chroma_key: Option<Rc<RuntimeEffect>>,
     output_transform: Option<(OutputSpec, Rc<RuntimeEffect>)>,
+    output_noise: Option<Image>,
     counters: EffectCacheCounters,
 }
 
@@ -73,6 +74,7 @@ impl EffectRuntime {
             extension_color_gain: None,
             chroma_key: None,
             output_transform: None,
+            output_noise: None,
             counters: EffectCacheCounters::default(),
         }
     }
@@ -140,6 +142,7 @@ impl EffectRuntime {
                         self.counters.misses = self.counters.misses.saturating_add(1);
                         self.output_transform =
                             Some((*spec, Rc::new(compile_output_transform(*spec)?)));
+                        self.output_noise = output_noise(spec.dither())?;
                     }
                 }
                 _ => {}
@@ -271,16 +274,16 @@ impl EffectRuntime {
         input: &Image,
         spec: OutputSpec,
     ) -> Result<Shader, DrawError> {
-        if spec.dither() != Dither::None || spec.bit_depth() != OutputBitDepth::Eight {
+        if spec.bit_depth() != OutputBitDepth::Eight {
             return Err(DrawError::Unsupported(
-                "direct GPU output requires non-dithered eight-bit delivery".into(),
+                "direct GPU output requires eight-bit delivery".into(),
             ));
         }
         let (admitted_spec, effect) = self
             .output_transform
             .as_ref()
             .ok_or_else(|| DrawError::Unsupported("outputTransform".into()))?;
-        if *admitted_spec != spec || effect.uniform_size() != 0 || effect.children().len() != 1 {
+        if *admitted_spec != spec || effect.uniform_size() != 0 || effect.children().len() != 2 {
             return Err(DrawError::Internal(
                 "outputTransform RuntimeEffect ABI mismatch".into(),
             ));
@@ -292,8 +295,23 @@ impl EffectRuntime {
                 None,
             )
             .ok_or_else(|| DrawError::Unsupported("raw output image shader".into()))?;
+        let noise = if let Some(image) = &self.output_noise {
+            image
+                .to_raw_shader(
+                    (TileMode::Clamp, TileMode::Clamp),
+                    SamplingOptions::default(),
+                    None,
+                )
+                .ok_or_else(|| DrawError::Unsupported("output dither shader".into()))?
+        } else {
+            shaders::color(skia_safe::Color::TRANSPARENT)
+        };
         effect
-            .make_shader(Data::new_empty(), &[ChildPtr::Shader(child)], None)
+            .make_shader(
+                Data::new_empty(),
+                &[ChildPtr::Shader(child), ChildPtr::Shader(noise)],
+                None,
+            )
             .ok_or_else(|| DrawError::Unsupported("outputTransform shader".into()))
     }
 
@@ -814,6 +832,26 @@ pub(crate) fn apply_filter_into(
 
 // OutputSpec is fixed for an admitted plan. Specialize the shared shader once so the CPU
 // raster pipeline does not execute uniform branches for formats this output never uses.
+fn output_noise(dither: Dither) -> Result<Option<Image>, DrawError> {
+    use valle_engine::compositor::reference::{OUTPUT_DITHER_SIZE, output_dither_pixels};
+    let Dither::Triangular { seed } = dither else {
+        return Ok(None);
+    };
+    let info = ImageInfo::new(
+        (OUTPUT_DITHER_SIZE as i32, OUTPUT_DITHER_SIZE as i32),
+        ColorType::RGBA8888,
+        AlphaType::Opaque,
+        None,
+    );
+    images::raster_from_data(
+        &info,
+        Data::new_copy(&output_dither_pixels(seed)),
+        OUTPUT_DITHER_SIZE as usize * 4,
+    )
+    .ok_or_else(|| DrawError::Unsupported("output dither texture".into()))
+    .map(Some)
+}
+
 fn compile_output_transform(spec: OutputSpec) -> Result<RuntimeEffect, DrawError> {
     let primaries = match spec.target().primaries {
         ColorPrimaries::Rec709 => 0.0,
@@ -848,6 +886,11 @@ fn compile_output_transform(spec: OutputSpec) -> Result<RuntimeEffect, DrawError
         alpha,
         f32::from(spec.reference_white().get()),
         f32::from(spec.peak_luminance().get()),
+        if spec.dither() == Dither::None {
+            0.0
+        } else {
+            1.0
+        },
     ];
     let mut source = OUTPUT_TRANSFORM.to_owned();
     for (name, value) in [
@@ -858,6 +901,7 @@ fn compile_output_transform(spec: OutputSpec) -> Result<RuntimeEffect, DrawError
         "alphaCode",
         "referenceWhiteNits",
         "peakNits",
+        "ditherEnabled",
     ]
     .into_iter()
     .zip(uniforms)
@@ -2122,6 +2166,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dithered_output_matches_reference_for_opaque_and_transparent_delivery() {
+        for background in [
+            OutputBackground::Transparent,
+            OutputBackground::opaque_srgb([0, 0, 0]),
+        ] {
+            assert_output_shader_matches_reference(OutputSpec::srgb_delivery(background).unwrap());
+        }
+    }
+
     fn assert_output_shader_matches_reference(spec: OutputSpec) {
         let mut samples = [
             [0.0_f32, 0.0, 0.0, 0.0],
@@ -2158,6 +2212,7 @@ mod tests {
 
         let runtime = EffectRuntime {
             output_transform: Some((spec, Rc::new(compile_output_transform(spec).unwrap()))),
+            output_noise: output_noise(spec.dither()).unwrap(),
             ..EffectRuntime::new()
         };
         let shader = runtime.output_shader(&source, spec).unwrap();

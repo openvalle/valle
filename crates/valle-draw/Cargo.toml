@@ -16,6 +16,7 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 libm.workspace = true
+color.workspace = true
 ts-rs = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 

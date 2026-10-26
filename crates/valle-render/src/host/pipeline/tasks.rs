@@ -205,6 +205,13 @@ pub(super) fn render(
                         };
                         let rendered = match shared {
                             #[cfg(target_os = "macos")]
+                            Some(pool) if backend != SkiaBackendKind::Raster => executor
+                                .render_prepared_shared_frame(packet, spec, pool)
+                                .and_then(|submitted| executor.finish_shared_frame(submitted))
+                                .map(|(frame, evidence)| {
+                                    (CompletedPixels::Shared(frame), evidence)
+                                }),
+                            #[cfg(target_os = "macos")]
                             Some(pool) => executor
                                 .render_prepared_shared_raster(packet, spec, pool)
                                 .map(|(frame, evidence)| {

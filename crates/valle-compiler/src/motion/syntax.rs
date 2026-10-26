@@ -58,11 +58,7 @@ pub(super) fn motion_value_from_string(value: &str) -> MotionValue {
         .map(MotionValue::Length2)
         .or_else(|| Length::parse(value).map(MotionValue::Length))
         .or_else(|| Angle::parse(value).map(MotionValue::Angle))
-        .or_else(|| {
-            Rgba::parse(value)
-                .map(valle_draw::program::AuthorColor::from_srgb8)
-                .map(MotionValue::Color)
-        })
+        .or_else(|| valle_draw::program::AuthorColor::parse(value).map(MotionValue::Color))
         .unwrap_or_else(|| MotionValue::Str(value.to_string()))
 }
 

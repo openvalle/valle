@@ -767,7 +767,7 @@ impl<'a> RecordingCompiler<'a> {
                     sigma_x: *blur_sigma as f32,
                     sigma_y: *blur_sigma as f32,
                     spread: *spread as f32,
-                    color: LinearColor::from_srgb8(*color),
+                    color: *color,
                     inset: *inset,
                 }));
                 self.push_node(node);

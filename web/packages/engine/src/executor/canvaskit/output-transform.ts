@@ -12,6 +12,36 @@ export interface SrgbPreviewCpuKernel {
 }
 
 const SCRATCH_ROWS = 64;
+
+/** Same bounded SplitMix64 TPDF table as Engine. ES2 shaders cannot do integer bitwise math. */
+export function outputDitherPixels(seed: number): Uint8Array {
+  if (!Number.isSafeInteger(seed) || seed < 0) throw new Error("invalid output dither seed");
+  const mask = (1n << 64n) - 1n;
+  const hash = (value: bigint): number => {
+    value = (value + 0x9e3779b97f4a7c15n) & mask;
+    value = ((value ^ (value >> 30n)) * 0xbf58476d1ce4e5b9n) & mask;
+    value = ((value ^ (value >> 27n)) * 0x94d049bb133111ebn) & mask;
+    value ^= value >> 31n;
+    return Number(value >> 40n) / 16777216;
+  };
+  const pixels = new Uint8Array(128 * 128 * 4);
+  const f32 = Math.fround;
+  for (let y = 0; y < 128; y++)
+    for (let x = 0; x < 128; x++) {
+      const offset = (y * 128 + x) * 4;
+      for (let channel = 0; channel < 3; channel++) {
+        const key =
+          BigInt(seed) ^
+          ((BigInt(x) * 0x9e3779b97f4a7c15n) & mask) ^
+          ((BigInt(y) * 0xbf58476d1ce4e5b9n) & mask) ^
+          ((BigInt(channel) * 0x94d049bb133111ebn) & mask);
+        const noise = f32(hash(key) - hash(key ^ 0xd6e8feb86659fd93n));
+        pixels[offset + channel] = Math.round(f32(f32(f32(noise * 0.5) + 0.5) * 255));
+      }
+      pixels[offset + 3] = 255;
+    }
+  return pixels;
+}
 export function srgbPreviewScratchBytes(width: number, height: number, f16 = false): bigint {
   return BigInt(width) * BigInt(Math.min(height, SCRATCH_ROWS)) * (f16 ? 8n : 16n);
 }

@@ -29,6 +29,7 @@ block2 = "0.6.2"
 clap = "4.6.6"
 ctrlc = "3.5.2"
 cosmic-text = "0.19"
+color = "0.3"
 crossbeam-channel = "0.5.17"
 cssparser = "0.37.0"
 valle-ffmpeg = { version = "0.1.0", default-features = false }

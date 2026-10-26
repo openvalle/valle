@@ -507,6 +507,7 @@ fn emit_with_faces_and_catalog(
         out: &mut out,
         fonts: BTreeMap::new(),
         cur: TAffine::IDENTITY,
+        world: Homography::IDENTITY,
         reserved_batch_instances,
         grain_instances: 0,
         painted_formulas: HashSet::new(),
@@ -658,6 +659,7 @@ struct Emitter<'a> {
     /// Current absolute transform composed from emitted transform groups, used to derive relative
     /// transforms from scene positions.
     cur: TAffine,
+    world: Homography,
     /// Authored GeometryBatch instances that will occupy the display budget,
     /// whether or not they have been interned yet. Paper grain shares what is
     /// left of [`valle_draw::program::recording::MAX_BATCH_INSTANCES_PER_RECORDING`].
@@ -676,6 +678,7 @@ struct Emitter<'a> {
 struct Open {
     depth: usize,
     prev: TAffine,
+    world: Homography,
     /// A culled CSS 3D plane suppresses its complete stacking context. Treating it as merely
     /// "no perspective wrapper" would paint the untransformed source plane for scale(0) and
     /// backface-visibility:hidden.
@@ -977,6 +980,7 @@ impl Emitter<'_> {
                 out: self.out,
                 fonts,
                 cur: self.cur,
+                world: self.world,
                 reserved_batch_instances: self.reserved_batch_instances,
                 grain_instances: self.grain_instances,
                 painted_formulas,
@@ -1033,6 +1037,7 @@ impl Emitter<'_> {
         Open {
             depth: 0,
             prev: self.cur,
+            world: self.world,
             hidden: false,
             projected: false,
         }
@@ -1086,6 +1091,7 @@ impl Emitter<'_> {
         let mut depth = 0usize;
         let mut projected = false;
         let prev = self.cur;
+        let previous_world = self.world;
 
         // Scene transforms are absolute, while recording transforms concatenate. Emit
         // inverse(current) * absolute to avoid applying parent transforms twice.
@@ -1103,6 +1109,7 @@ impl Emitter<'_> {
                 });
                 depth += 1;
                 self.cur = np.transform;
+                self.world = Homography::from_affine(affine_of(rel)).then(self.world);
             }
         }
 
@@ -1282,6 +1289,7 @@ impl Emitter<'_> {
                 depth += 1;
                 projected = true;
                 self.projections += 1;
+                self.world = matrix.then(self.world);
             }
         }
 
@@ -1306,7 +1314,7 @@ impl Emitter<'_> {
         // its background. A field member's shadows and surface draw with its field.
         // Match upstream shell paint order.
         if let Some((key, glass, material, outline)) = &glass {
-            let shadows = self.box_shadow_cmds(node, border_box, radii, false);
+            let shadows = self.box_shadow_cmds(np, node, border_box, radii, false);
             self.shadows_outside(shadows, outline);
             let plane = self.layer_perspective(np, node, border_box, key)?;
             let placement = Homography::from_affine(affine_of(np.transform));
@@ -1351,6 +1359,7 @@ impl Emitter<'_> {
         Ok(Open {
             depth,
             prev,
+            world: previous_world,
             hidden: false,
             projected,
         })
@@ -1364,6 +1373,7 @@ impl Emitter<'_> {
             self.projections -= 1;
         }
         self.cur = open.prev;
+        self.world = open.world;
     }
 
     /// The projection a node's own pixels draw through inside its 2D transform: its CSS 3D plane
@@ -1669,10 +1679,8 @@ impl Emitter<'_> {
                             );
                         }
                     }
-                    // Use the largest affine singular value so shear cannot under-sample.
-                    // Perspective sampling remains on the conservative layout-density path.
                     let density =
-                        scene3d_density(self.out.raster_scale.scale, affine_of(np.transform));
+                        scene3d_projected_density(self.out.raster_scale.scale, self.world, dst);
                     let used: u64 = self
                         .out
                         .scene3d_frames
@@ -2086,7 +2094,7 @@ impl Emitter<'_> {
         // Paint text shadows in reverse declaration order below the main text. Bake offsets into
         // glyph positions and use existing blur groups with shadow sigma equal to half the radius.
         if let Some(shadows) = &ctx.style.text_shadow {
-            for sh in shadows.iter().rev() {
+            for (index, sh) in shadows.iter().enumerate().rev() {
                 // Text-shadow lengths do not accept percentage bases.
                 let px = |l: takumi_core::style::Length| f64::from(l.to_px(&ctx.sizing, 0.0));
                 let (dx, dy, blur) = (
@@ -2094,7 +2102,12 @@ impl Emitter<'_> {
                     px(sh.offset_y),
                     px(sh.blur_radius).max(0.0),
                 );
-                let color = rgba_of(sh.color.resolve(ctx.current_color));
+                let color = self.precise_layer_color(
+                    np,
+                    "text-shadow",
+                    index,
+                    rgba_of(sh.color.resolve(ctx.current_color)),
+                );
                 let filtered = blur > 0.0;
                 if filtered {
                     // Shadow Gaussian sigma is half the CSS blur radius.
@@ -2382,7 +2395,7 @@ impl Emitter<'_> {
         &mut self,
         run: &PositionedInlineRun,
         layout: takumi_core::geometry::ComputedLayout,
-        shadow: Option<(f64, f64, Rgba)>,
+        shadow: Option<(f64, f64, LinearColor)>,
         placements: Option<&[Option<Affine>]>,
     ) -> bool {
         // Color glyph palettes belong to the foreground fill only. CSS text-shadow deliberately
@@ -2476,7 +2489,7 @@ impl Emitter<'_> {
         np: &NodePaint,
         run: &PositionedInlineRun,
         layout: takumi_core::geometry::ComputedLayout,
-        shadow: Option<(f64, f64, Rgba)>,
+        shadow: Option<(f64, f64, LinearColor)>,
         source_ranges: Option<GlyphSource>,
         placements: Option<&[Option<Affine>]>,
     ) {
@@ -2594,18 +2607,22 @@ impl Emitter<'_> {
                 }),
             ),
             Some((_, _, sc)) => {
-                let tint = |a: u8| {
-                    Rgba::new(
-                        sc.r,
-                        sc.g,
-                        sc.b,
-                        ((u16::from(sc.a) * u16::from(a)) / 255) as u8,
-                    )
-                };
+                let tint =
+                    |a: f32| LinearColor::new(sc.red * a, sc.green * a, sc.blue * a, sc.alpha * a);
                 (
-                    Paint::Solid(tint(rgba_of(shaped.brush.color).a)),
-                    declared_stroke
-                        .map(|(w, c)| valle_draw::program::recording::Stroke::solid(tint(c.a), w)),
+                    Paint::FloatSolid(tint(
+                        authored_fill
+                            .map_or(f32::from(rgba_of(shaped.brush.color).a) / 255.0, |c| {
+                                c.alpha as f32
+                            }),
+                    )),
+                    declared_stroke.map(|(w, c)| {
+                        let mut stroke = valle_draw::program::recording::Stroke::solid(c, w);
+                        stroke.paint = Paint::FloatSolid(tint(
+                            authored_stroke.map_or(f32::from(c.a) / 255.0, |c| c.alpha as f32),
+                        ));
+                        stroke
+                    }),
                 )
             }
         };
@@ -2910,7 +2927,7 @@ impl Emitter<'_> {
                         f64::from(geometry.tile_width),
                         f64::from(geometry.tile_height),
                     );
-                    match self.gradient_paint(image, node, tile) {
+                    match self.gradient_paint(np, index, image, node, tile) {
                         Some(paint) => self.fill_box_with(tile, [Point::new(0.0, 0.0); 4], paint),
                         None => {
                             self.unsupported(np, "background-image (URL or unsupported gradient)");
@@ -2927,6 +2944,8 @@ impl Emitter<'_> {
     /// duplicating CSS calculations. Return None for unsupported forms.
     fn gradient_paint(
         &mut self,
+        np: &NodePaint,
+        layer: usize,
         image: &takumi_core::style::BackgroundImage,
         node: &RenderNode,
         border_box: Rect,
@@ -2984,11 +3003,13 @@ impl Emitter<'_> {
                 let point_at = |t: f64| {
                     valle_draw::Point::new(cx + (t - half) * dir_x, cy + (t - half) * dir_y)
                 };
-                let stops: Vec<(f64, Rgba)> = resolved
+                let colors = self.precise_gradient_colors(np, layer, &resolved);
+                let stops: Vec<_> = resolved
                     .iter()
-                    .map(|s| ((f64::from(s.position) - t0) / extent, rgba_of(s.color)))
+                    .zip(colors)
+                    .map(|(s, color)| ((f64::from(s.position) - t0) / extent, color))
                     .collect();
-                let span = self.out.recording.intern_stops(&stops);
+                let span = self.out.recording.intern_author_stops(&stops);
                 Some(Paint::Linear(
                     valle_draw::program::recording::LinearGradient {
                         interpolation: crate::style::background::gradient_interpolation(
@@ -3024,16 +3045,13 @@ impl Emitter<'_> {
                 } else {
                     (0.0, tile.radius_scale.max(1e-6))
                 };
+                let colors = self.precise_gradient_colors(np, layer, &resolved);
                 let stops = resolved
                     .iter()
-                    .map(|stop| {
-                        (
-                            f64::from((stop.position - t0) / extent),
-                            rgba_of(stop.color),
-                        )
-                    })
+                    .zip(colors)
+                    .map(|(stop, color)| (f64::from((stop.position - t0) / extent), color))
                     .collect::<Vec<_>>();
-                let span = self.out.recording.intern_stops(&stops);
+                let span = self.out.recording.intern_author_stops(&stops);
                 let full_radius = f64::from(tile.radius_scale.max(1e-6));
                 let tile_scale = f64::from(extent) / full_radius;
                 Some(Paint::Radial(
@@ -3077,16 +3095,13 @@ impl Emitter<'_> {
                 } else {
                     (0.0, 360.0)
                 };
+                let colors = self.precise_gradient_colors(np, layer, &resolved);
                 let stops = resolved
                     .iter()
-                    .map(|stop| {
-                        (
-                            f64::from((stop.position - t0) / extent),
-                            rgba_of(stop.color),
-                        )
-                    })
+                    .zip(colors)
+                    .map(|(stop, color)| (f64::from((stop.position - t0) / extent), color))
                     .collect::<Vec<_>>();
-                let span = self.out.recording.intern_stops(&stops);
+                let span = self.out.recording.intern_author_stops(&stops);
                 Some(Paint::Conic(
                     valle_draw::program::recording::ConicGradient {
                         interpolation: crate::style::background::gradient_interpolation(
@@ -3109,6 +3124,61 @@ impl Emitter<'_> {
         }
     }
 
+    fn precise_color(&self, np: &NodePaint, property: &str, fallback: Rgba) -> LinearColor {
+        self.node_key(np)
+            .and_then(|key| self.tree.paint_colors.get(key))
+            .and_then(|colors| colors.color(property, fallback))
+            .map_or_else(
+                || LinearColor::from_srgb8(fallback),
+                |color| color.to_working(),
+            )
+    }
+
+    fn precise_layer_color(
+        &self,
+        np: &NodePaint,
+        property: &str,
+        layer: usize,
+        fallback: Rgba,
+    ) -> LinearColor {
+        self.node_key(np)
+            .and_then(|key| self.tree.paint_colors.get(key))
+            .and_then(|colors| colors.layers(property))
+            .and_then(|layers| layers.get(layer))
+            .and_then(|colors| colors.first())
+            .copied()
+            .filter(|color| crate::style::precise_color::matches_byte(*color, fallback))
+            .map_or_else(
+                || LinearColor::from_srgb8(fallback),
+                |color| color.to_working(),
+            )
+    }
+
+    fn precise_gradient_colors(
+        &self,
+        np: &NodePaint,
+        layer: usize,
+        stops: &[takumi_core::style::ResolvedGradientStop],
+    ) -> Vec<valle_draw::program::AuthorColor> {
+        let authored = self
+            .node_key(np)
+            .and_then(|key| self.tree.paint_colors.get(key))
+            .and_then(|colors| colors.layers("background-image"))
+            .and_then(|layers| layers.get(layer));
+        if let Some(colors) = authored
+            && colors.len() == stops.len()
+            && colors.iter().zip(stops).all(|(color, stop)| {
+                crate::style::precise_color::matches_byte(*color, rgba_of(stop.color))
+            })
+        {
+            return colors.clone();
+        }
+        stops
+            .iter()
+            .map(|stop| valle_draw::program::AuthorColor::from_srgb8(rgba_of(stop.color)))
+            .collect()
+    }
+
     fn border(
         &mut self,
         np: &NodePaint,
@@ -3124,10 +3194,26 @@ impl Emitter<'_> {
         }
         let c = node.context.current_color;
         let (tl, tr, br, bl) = (
-            style.border_top_color.resolve(c),
-            style.border_right_color.resolve(c),
-            style.border_bottom_color.resolve(c),
-            style.border_left_color.resolve(c),
+            self.precise_color(
+                np,
+                "border-top-color",
+                rgba_of(style.border_top_color.resolve(c)),
+            ),
+            self.precise_color(
+                np,
+                "border-right-color",
+                rgba_of(style.border_right_color.resolve(c)),
+            ),
+            self.precise_color(
+                np,
+                "border-bottom-color",
+                rgba_of(style.border_bottom_color.resolve(c)),
+            ),
+            self.precise_color(
+                np,
+                "border-left-color",
+                rgba_of(style.border_left_color.resolve(c)),
+            ),
         );
         use takumi_core::style::BorderStyle;
         let styles = [
@@ -3147,7 +3233,7 @@ impl Emitter<'_> {
             && w.left == w.top
             && styles.iter().all(|style| *style == styles[0]);
         if uniform {
-            if !self.styled_ring(border_box, radii, f64::from(w.left), rgba_of(tl), styles[0]) {
+            if !self.styled_ring(border_box, radii, f64::from(w.left), tl, styles[0]) {
                 self.unsupported(np, "groove/ridge/inset/outset border styles");
             }
             return;
@@ -3187,7 +3273,7 @@ impl Emitter<'_> {
         ];
         for (side, width, color, side_style) in sides {
             // Skip invisible edges.
-            if !(side_style.is_rendered() && width > 0.0) || color.0[3] == 0 {
+            if !(side_style.is_rendered() && width > 0.0) || color.alpha == 0.0 {
                 continue;
             }
             let mut cmds = Vec::new();
@@ -3206,7 +3292,7 @@ impl Emitter<'_> {
                     fill_rule: FillRule::NonZero,
                 });
                 // Use each side's own ring width and clipping polygon.
-                self.ring(border_box, radii, f64::from(width), rgba_of(color));
+                self.ring(border_box, radii, f64::from(width), color);
                 self.push(RecordCmd::End);
             } else {
                 props.append_side_polygon_commands_at(
@@ -3221,7 +3307,7 @@ impl Emitter<'_> {
                 self.push(RecordCmd::Path {
                     path,
                     fill_rule: FillRule::NonZero,
-                    fill: Some(Paint::Solid(rgba_of(color))),
+                    fill: Some(Paint::FloatSolid(color)),
                     stroke: None,
                 });
             }
@@ -3285,7 +3371,13 @@ impl Emitter<'_> {
         for (i, p) in geo.border.radius.0.iter().enumerate() {
             radii[i] = Point::new(f64::from(p.x), f64::from(p.y));
         }
-        if !self.styled_ring(outer, radii, width, rgba_of(color), style.outline_style) {
+        if !self.styled_ring(
+            outer,
+            radii,
+            width,
+            self.precise_color(np, "outline-color", rgba_of(color)),
+            style.outline_style,
+        ) {
             self.unsupported(np, "groove/ridge/inset/outset outline styles");
         }
     }
@@ -3296,11 +3388,11 @@ impl Emitter<'_> {
         outer: Rect,
         radii: [Point; 4],
         width: f64,
-        color: Rgba,
+        color: LinearColor,
         style: takumi_core::style::BorderStyle,
     ) -> bool {
         use takumi_core::style::BorderStyle;
-        if width <= 0.0 || color.a == 0 {
+        if width <= 0.0 || color.alpha == 0.0 {
             return true;
         }
         match style {
@@ -3356,11 +3448,18 @@ impl Emitter<'_> {
         outer: Rect,
         radii: [Point; 4],
         width: f64,
-        color: Rgba,
+        color: LinearColor,
         dash: Vec<f64>,
         cap: Cap,
     ) {
-        self.painted_stroke_ring(outer, radii, width, Paint::Solid(color), Some(dash), cap);
+        self.painted_stroke_ring(
+            outer,
+            radii,
+            width,
+            Paint::FloatSolid(color),
+            Some(dash),
+            cap,
+        );
     }
 
     fn painted_stroke_ring(
@@ -3401,7 +3500,7 @@ impl Emitter<'_> {
     }
 
     /// Build a uniform ring from outer and inner rounded rectangles using even-odd fill.
-    fn ring(&mut self, outer: Rect, radii: [Point; 4], width: f64, color: Rgba) {
+    fn ring(&mut self, outer: Rect, radii: [Point; 4], width: f64, color: LinearColor) {
         let inner = Rect::new(
             outer.x + width,
             outer.y + width,
@@ -3416,7 +3515,7 @@ impl Emitter<'_> {
         self.push(RecordCmd::Path {
             path,
             fill_rule: FillRule::EvenOdd,
-            fill: Some(Paint::Solid(color)),
+            fill: Some(Paint::FloatSolid(color)),
             stroke: None,
         });
     }
@@ -3455,7 +3554,7 @@ impl Emitter<'_> {
             dy,
             blur_sigma,
             spread,
-            color: Rgba::new(0, 0, 0, alpha),
+            color: LinearColor::from_srgb8(Rgba::new(0, 0, 0, alpha)),
             inset: false,
         });
     }
@@ -3542,13 +3641,13 @@ impl Emitter<'_> {
 
     fn box_shadows(
         &mut self,
-        _np: &NodePaint,
+        np: &NodePaint,
         node: &RenderNode,
         border_box: Rect,
         radii: [Point; 4],
         inset: bool,
     ) {
-        for shadow in self.box_shadow_cmds(node, border_box, radii, inset) {
+        for shadow in self.box_shadow_cmds(np, node, border_box, radii, inset) {
             self.push(shadow);
         }
     }
@@ -3556,6 +3655,7 @@ impl Emitter<'_> {
     /// A node's outer or inset box shadows, in written order.
     fn box_shadow_cmds(
         &self,
+        np: &NodePaint,
         node: &RenderNode,
         border_box: Rect,
         radii: [Point; 4],
@@ -3571,8 +3671,9 @@ impl Emitter<'_> {
         };
         shadows
             .iter()
-            .filter(|s| s.inset == inset)
-            .map(|s| {
+            .enumerate()
+            .filter(|(_, s)| s.inset == inset)
+            .map(|(index, s)| {
                 let sized = takumi_core::shadow::SizedShadow {
                     offset_x: s.offset_x.to_px(&ctx.sizing, size.width),
                     offset_y: s.offset_y.to_px(&ctx.sizing, size.height),
@@ -3590,7 +3691,7 @@ impl Emitter<'_> {
                     // Convert shadow blur radius to Gaussian sigma by dividing by two.
                     blur_sigma: f64::from(sized.blur_radius) / 2.0,
                     spread: f64::from(sized.spread_radius),
-                    color: rgba_of(sized.color),
+                    color: self.precise_layer_color(np, "box-shadow", index, rgba_of(sized.color)),
                     inset,
                 }
             })
@@ -4653,6 +4754,48 @@ fn project_cluster_ranges(
         .collect()
 }
 
+fn scene3d_projected_density(output_scale: f64, transform: Homography, bounds: Rect) -> f64 {
+    let [a, b, c, d, e, f, g, h, i] = transform.0;
+    if g == 0.0 && h == 0.0 && i != 0.0 {
+        return scene3d_density(output_scale, Affine([a / i, d / i, b / i, e / i, 0.0, 0.0]));
+    }
+    let xs = [bounds.x, bounds.x + bounds.width];
+    let ys = [bounds.y, bounds.y + bounds.height];
+    let ws = xs
+        .into_iter()
+        .flat_map(|x| ys.map(|y| g * x + h * y + i))
+        .collect::<Vec<_>>();
+    let minimum = ws.iter().copied().fold(f64::INFINITY, f64::min);
+    let maximum = ws.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    // A rectangle crossing the vanishing line has unbounded magnification. Request the
+    // maximum useful density; existing pixel/edge budgets still choose the admitted extent.
+    if minimum <= 0.0 && maximum >= 0.0 {
+        return f64::from(crate::scene3d::MAX_LAYER_EDGE)
+            / bounds.width.min(bounds.height).max(1.0);
+    }
+    let denominator = minimum.abs().min(maximum.abs()).powi(2);
+    let max_x = |slope: f64, intercept: f64| {
+        xs.map(|x| (slope * x + intercept).abs())
+            .into_iter()
+            .fold(0.0, f64::max)
+            / denominator
+    };
+    let max_y = |slope: f64, intercept: f64| {
+        ys.map(|y| (slope * y + intercept).abs())
+            .into_iter()
+            .fold(0.0, f64::max)
+            / denominator
+    };
+    // Every Jacobian numerator is linear in x or y, and w is linear on the box. These
+    // bounds cover its entire interior, unlike sampling just the four projected edge lengths.
+    let aa = max_y(a * h - b * g, a * i - c * g);
+    let bb = max_x(b * g - a * h, b * i - c * h);
+    let cc = max_y(d * h - e * g, d * i - f * g);
+    let dd = max_x(e * g - d * h, e * i - f * h);
+    let stretch = valle_draw::math::sqrt((aa + cc).max(bb + dd) * (aa + bb).max(cc + dd));
+    quantized_scene3d_density(output_scale * stretch)
+}
+
 fn scene3d_density(output_scale: f64, transform: Affine) -> f64 {
     let a = transform.0;
     let trace = a[0] * a[0] + a[1] * a[1] + a[2] * a[2] + a[3] * a[3];
@@ -4660,7 +4803,11 @@ fn scene3d_density(output_scale: f64, transform: Affine) -> f64 {
     let stretch = valle_draw::math::sqrt(
         (trace + valle_draw::math::sqrt((trace * trace - 4.0 * det * det).max(0.0))) * 0.5,
     );
-    let requested = (output_scale * stretch).max(1.0);
+    quantized_scene3d_density(output_scale * stretch)
+}
+
+fn quantized_scene3d_density(requested: f64) -> f64 {
+    let requested = requested.clamp(1.0, f64::from(crate::scene3d::MAX_LAYER_EDGE));
     let steps = valle_draw::math::ln(requested) * core::f64::consts::LOG2_E * 4.0;
     // An f32 rotation is only approximately orthogonal. Keep its roundoff from repeatedly
     // switching between neighboring density bins at a constant physical scale.
@@ -4735,6 +4882,36 @@ mod tests {
         assert!(
             super::scene3d_density(1.001, valle_draw::program::recording::Affine::IDENTITY) > 1.0
         );
+    }
+
+    #[test]
+    fn projected_density_bounds_every_interior_jacobian_and_vanishing_line() {
+        use valle_draw::{Point, Rect, program::recording::Homography};
+        let bounds = Rect::new(0.0, 0.0, 200.0, 120.0);
+        for g in [-0.003, 0.001, 0.004] {
+            let matrix = Homography([1.3, 0.7, 30.0, -0.2, 0.9, 15.0, g, -0.001, 1.0]);
+            let density = super::scene3d_projected_density(2.0, matrix, bounds);
+            for y in 0..=24 {
+                for x in 0..=40 {
+                    let point = Point::new(f64::from(x) * 5.0, f64::from(y) * 5.0);
+                    let here = matrix.try_apply(point).unwrap();
+                    for angle in 0..32 {
+                        let (sin, cos) =
+                            (f64::from(angle) * std::f64::consts::TAU / 32.0).sin_cos();
+                        let next = matrix
+                            .try_apply(Point::new(point.x + cos * 1e-5, point.y + sin * 1e-5))
+                            .unwrap();
+                        let stretch = (next.x - here.x).hypot(next.y - here.y) / 1e-5;
+                        assert!(stretch * 2.0 <= density * (1.0 + 1e-6));
+                    }
+                }
+            }
+        }
+        let horizon = Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -0.01, 0.0, 1.0]);
+        let density = super::scene3d_projected_density(1.0, horizon, bounds);
+        assert!(density.is_finite() && density > 1.0);
+        let (w, h, limited) = super::scene3d_extent(bounds, density, 100_000);
+        assert!(limited && u64::from(w) * u64::from(h) <= 100_000);
     }
 
     fn span(start: u32, end: u32) -> Span {

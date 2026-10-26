@@ -1854,6 +1854,7 @@ export class BrowserValleWebPlayer {
         verifiedBindingBundleJson,
       );
       bootstrap.resourceBytes = resourceBytes;
+      bootstrap.deliveryOutput = this.runtimePurpose === "export";
       bootstrap.gpuScene3d = this.gpu && this.renderMode === "realtime";
       const openStarted = performance.now();
       planner = new ProductFramePlannerPool({

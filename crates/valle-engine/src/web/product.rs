@@ -144,6 +144,7 @@ pub struct ProductEngine {
     tickets: BTreeMap<u32, Ticket>,
     next_ticket: u32,
     realtime_geometry: bool,
+    delivery_output: bool,
     motion_kernel: crate::prepare::motion_kernel::MotionKernel,
 }
 
@@ -203,8 +204,13 @@ impl ProductEngine {
             tickets: BTreeMap::new(),
             next_ticket: 1,
             realtime_geometry: false,
+            delivery_output: false,
             motion_kernel: Default::default(),
         }
+    }
+
+    pub fn set_delivery_output(&mut self, enabled: bool) {
+        self.delivery_output = enabled;
     }
 
     /// CPU preview output using the shared color math. CanvasKit owns F16 storage and final
@@ -1357,9 +1363,13 @@ impl ProductEngine {
                 ),
             }
         };
-        let output =
-            OutputSpec::srgb_preview(background).map_err(|error| js_error("output_spec", error))?;
-        RenderSpec::new(width, height, RenderQuality::Preview, output)
+        let (quality, output) = if self.delivery_output {
+            (RenderQuality::Final, OutputSpec::srgb_delivery(background))
+        } else {
+            (RenderQuality::Preview, OutputSpec::srgb_preview(background))
+        };
+        let output = output.map_err(|error| js_error("output_spec", error))?;
+        RenderSpec::new(width, height, quality, output)
             .map_err(|error| js_error("render_spec", error))
     }
 

@@ -5255,6 +5255,7 @@ dependencies = [
 name = "valle-draw"
 version = "0.1.0-rc.2"
 dependencies = [
+ "color",
  "hex",
  "libm",
  "schemars",

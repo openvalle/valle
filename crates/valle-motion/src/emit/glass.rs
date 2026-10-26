@@ -396,7 +396,7 @@ impl Emitter<'_> {
                 continue;
             };
             members.push(Member {
-                shadows: self.box_shadow_cmds(node, border_box, radii, false),
+                shadows: self.box_shadow_cmds(np, node, border_box, radii, false),
                 outline,
                 shape,
                 fill_rule,

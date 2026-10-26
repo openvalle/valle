@@ -236,6 +236,7 @@ struct LayoutInstanceRow {
     declarations: String,
     background_color: Option<valle_draw::program::AuthorColor>,
     text_color: Option<valle_draw::program::AuthorColor>,
+    paint_colors: crate::style::precise_color::PreciseCssColors,
     text: Option<String>,
     children: Vec<LayoutInstanceRow>,
 }
@@ -1675,9 +1676,20 @@ pub(super) fn build_tree_inner(
     };
     let mut background_colors = authored_style_colors(artifact, &values, "background-color");
     let mut text_colors = authored_style_colors(artifact, &values, "color");
+    let mut paint_colors: HashMap<_, _> = artifact
+        .nodes
+        .iter()
+        .map(|node| {
+            (
+                node.key.clone(),
+                crate::style::precise_color::PreciseCssColors::new(&node.styles, &values),
+            )
+        })
+        .collect();
     for rows in layout_instances.values() {
         for row in rows {
             visit_layout_instance_node(row, &mut |node| {
+                paint_colors.insert(node.key.clone(), node.paint_colors.clone());
                 if let Some(color) = node.background_color {
                     background_colors.insert(node.key.clone(), color);
                 }
@@ -1700,6 +1712,7 @@ pub(super) fn build_tree_inner(
         background_colors: Rc::new(background_colors),
         text_colors: Rc::new(text_colors),
         text_stroke_colors: Rc::new(text_stroke_colors),
+        paint_colors: Rc::new(paint_colors),
         keys,
         units: Rc::new(units),
         render_keys: Rc::new(render_keys),
@@ -2265,6 +2278,7 @@ fn resolve_layout_instance_node(
         declarations: declarations(template, values, visible, row)?,
         background_color: color("background-color")?,
         text_color: color("color")?,
+        paint_colors: crate::style::precise_color::PreciseCssColors::new(&template.styles, values),
         text,
         children: children
             .iter()

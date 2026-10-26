@@ -15,6 +15,7 @@ use takumi_core::style::{
 
 pub mod advanced_filter;
 pub(crate) mod background;
+pub(crate) mod precise_color;
 pub(crate) use background::gradient_background_source;
 pub mod blend;
 mod diagnostic;

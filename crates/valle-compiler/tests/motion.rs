@@ -23,6 +23,7 @@ mod motion_compute;
 mod motion_conditional_classes;
 mod motion_contact_policy;
 mod motion_convex_morph;
+mod motion_css_color_precision;
 mod motion_detachable;
 mod motion_dynamic_css;
 mod motion_easing;

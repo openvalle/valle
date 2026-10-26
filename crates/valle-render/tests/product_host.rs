@@ -41,6 +41,95 @@ fn project() -> NativeProject {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
+#[ignore = "requires real Metal and CoreVideo; software H.264 uses delayed shared-surface readback"]
+fn metal_software_encoding_delivers_all_frames_with_bounded_shared_surfaces() {
+    use valle_media::codec::{
+        LibavVideoSource, Mp4VideoCodec, Muxer, VideoFrameTransport, VideoSource, VideoTransfer,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let mut decoded = Vec::new();
+    for staged in [false, true] {
+        let path = directory.path().join(format!("{staged}.mp4"));
+        let backend = SkiaBackendKind::Metal;
+        if !staged {
+            // Reference is the same Metal compositor and encoder with synchronous RGBA
+            // delivery. Raster/GPU sampling differences are outside this transport test.
+            let project = project();
+            let mut runner = project.frame_runner(backend).unwrap();
+            let spec = RenderSpec::new(
+                128,
+                128,
+                RenderQuality::Final,
+                OutputSpec::srgb_delivery(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+            )
+            .unwrap();
+            let mut muxer = Muxer::open_ext_rational_with_transport(
+                &path,
+                128,
+                128,
+                30,
+                1,
+                Mp4VideoCodec::H264,
+                VideoTransfer::Srgb,
+                None,
+                false,
+                Some(1),
+                VideoFrameTransport::Cpu,
+            )
+            .unwrap();
+            for frame in 0..30 {
+                muxer
+                    .encode_video(&runner.render_rgba8(FrameKey::new(frame), spec).unwrap().0)
+                    .unwrap();
+            }
+            muxer.finish().unwrap();
+        } else {
+            let renderer = NativeRenderer::new(
+                project(),
+                NativeRenderOptions {
+                    backend,
+                    output_size: Some((128, 128)),
+                    background: OutputBackground::opaque_srgb([0, 0, 0]),
+                    encode_threads: Some(1),
+                    budget: valle_render::host::NativeRenderBudget::new(4, Some(128 * 1024 * 1024))
+                        .unwrap(),
+                    ..NativeRenderOptions::default()
+                },
+            );
+            let summary = renderer.export_mp4(&path).unwrap();
+            let report = summary.pipeline.unwrap();
+            assert_eq!(report.frames, 30);
+            assert_eq!(report.budget.unwrap().memory.used_bytes, 0);
+            assert_eq!(
+                report.delivery,
+                Some(valle_render::host::FrameDelivery::SharedGpu)
+            );
+            assert_eq!(
+                report.delivery_readback_bytes, 0,
+                "compositor reads no CPU pixels; software encoder reads completed shared surfaces"
+            );
+        }
+        let mut video = LibavVideoSource::open(&path).unwrap();
+        decoded.push(
+            [0.0, 0.5, 29.0 / 30.0, 0.0].map(|time| video.frame_at(time).unwrap().data.clone()),
+        );
+    }
+    for (cpu, gpu) in decoded[0].iter().zip(&decoded[1]) {
+        let max = cpu
+            .iter()
+            .zip(gpu)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert_eq!(
+            max, 0,
+            "shared BGRA transport must preserve software encoding pixels"
+        );
+    }
+}
+
+#[test]
 fn native_storyboard_and_sparse_schedule_use_the_admitted_clock() {
     let project = project();
     let canvas = project.compiled().canvas();

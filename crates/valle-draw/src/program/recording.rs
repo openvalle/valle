@@ -1237,7 +1237,7 @@ pub enum RecordCmd {
         /// Gaussian sigma equals half the CSS shadow blur radius.
         blur_sigma: f64,
         spread: f64,
-        color: Rgba,
+        color: super::LinearColor,
         inset: bool,
     },
 }
@@ -1668,6 +1668,7 @@ mod finite {
                 dy,
                 blur_sigma,
                 spread,
+                color,
                 ..
             } => {
                 rrect(r)
@@ -1675,6 +1676,7 @@ mod finite {
                     && dy.is_finite()
                     && blur_sigma.is_finite()
                     && spread.is_finite()
+                    && color.is_finite()
             }
             RecordCmd::BeginGroup
             | RecordCmd::BeginAlphaMask

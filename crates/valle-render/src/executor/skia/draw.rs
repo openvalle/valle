@@ -1523,11 +1523,28 @@ impl ProgramRuntime {
                         "Scene3D DOF was not materialized".into(),
                     ));
                 };
+                // Prefilter all levels once for this draw. Trilinear sampling remains smooth
+                // through minification and quarter-octave raster-density changes.
+                let (mut width, mut height) = (image.width() as u64, image.height() as u64);
+                let mut mip_bytes = 0;
+                while width > 1 || height > 1 {
+                    width = (width / 2).max(1);
+                    height = (height / 2).max(1);
+                    mip_bytes += width * height * 8;
+                }
+                let _mip_memory = valle_engine::motion::memory::reserve(
+                    valle_engine::motion::memory::MemoryKind::Temporary,
+                    mip_bytes,
+                )
+                .map_err(|error| DrawError::Surface(error.to_string()))?;
+                let mipmapped = image
+                    .with_default_mipmaps()
+                    .ok_or_else(|| DrawError::Surface("Scene3D mipmap generation failed".into()))?;
                 canvas.draw_image_rect_with_sampling_options(
-                    image,
+                    &mipmapped,
                     None,
                     sk_rect(scene.bounds),
-                    SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
+                    SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear),
                     &SkPaint::default(),
                 );
             }

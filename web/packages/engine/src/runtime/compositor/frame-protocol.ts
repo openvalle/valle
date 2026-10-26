@@ -45,6 +45,7 @@ export interface ProductEngineWire {
   ): bigint;
   quantize_sample_seconds(seconds: number, sampleRate: number, count: bigint): bigint;
   set_realtime_geometry?(enabled: boolean): void;
+  set_delivery_output?(enabled: boolean): void;
   scene3d_gpu_lighting_input?(content: string, topology: string, request: string): Float32Array;
   transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void;
   transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void;
@@ -110,6 +111,7 @@ export interface ProductWasmModule {
 }
 
 export interface ProductEngineBootstrap {
+  deliveryOutput?: boolean;
   gpuScene3d?: boolean;
   wasmModuleUrl: string;
   wasmUrl: string;
@@ -346,6 +348,7 @@ export function applyProductEngineBootstrap(
   engine: ProductEngineWire,
   bootstrap: ProductEngineBootstrap,
 ): string {
+  engine.set_delivery_output?.(bootstrap.deliveryOutput === true);
   const receipt = parseProductRenderReceipt(
     engine.open_fixed_package(
       bootstrap.fixedPackageManifestJson,
