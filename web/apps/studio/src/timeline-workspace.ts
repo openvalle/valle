@@ -2612,8 +2612,6 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
   }
 
   async function reloadSavedSnapshot(automatic: boolean): Promise<void> {
-    const startingCopy = workingCopy;
-    const startingRevision = baseRevision;
     const previousStatus = shell.shellState.previewStatus;
     const previousMessage = shell.shellState.previewMessage;
     if (!automatic) {
@@ -2637,12 +2635,9 @@ async function main(options: TimelineWorkspaceOptions = {}): Promise<void> {
     await options.beforeReload?.();
     const next = (await loadTimeline()) as StudioConfig;
     // Loading includes asynchronous source discovery and preview compilation.
-    // An edit or save made in that time owns the newer working copy.
-    if (
-      automatic &&
-      (workingCopy !== startingCopy || baseRevision !== startingRevision || dirty || saving)
-    )
-      return;
+    // Preserve drafts and accepted saves, while allowing a newer clean reload
+    // to follow another reload that finished in the meantime.
+    if (automatic && (dirty || saving || next.timelineRevision.revision < baseRevision)) return;
     draftPreview.invalidate();
     config = next;
     showWarnings(next.warnings);
