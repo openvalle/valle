@@ -143,6 +143,7 @@ pub(crate) fn canonicalize(
         node_geometry: Vec::new(),
         requirements: DrawRequirements::default(),
     };
+    super::optimize::fold_group_opacity(&mut program);
     let node_geometry = derive_node_geometries(&program)?;
     let requirements = derive_requirements(&program, &node_geometry)?;
     program.node_geometry = node_geometry;
@@ -1067,6 +1068,7 @@ impl<'a> Canonicalizer<'a> {
                 Node::Path(path)
             }
             Node::InstanceBatch(mut batch) => {
+                super::optimize::fold_instance_opacity(&mut batch, self.raw_paths);
                 if let super::InstanceShape::Path(path) = &mut batch.shape {
                     *path = self.remap_path(*path);
                 }

@@ -12,6 +12,7 @@ mod interpolation;
 pub use instance_compact::with_instance_compaction;
 pub(crate) use interpolation::determinism_samples as gradient_determinism_samples;
 mod node;
+mod optimize;
 mod packed;
 mod paint;
 mod path;

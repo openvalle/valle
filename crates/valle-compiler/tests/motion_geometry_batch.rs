@@ -9,6 +9,73 @@ use valle_motion::{
 };
 
 #[test]
+fn ordinary_rectangular_views_do_not_allocate_per_leaf_opacity_layers() {
+    let source = r##"
+const items = defineRepeater({ count: 32, keyPrefix: "tile" });
+export default function Example() { return <Scene style={{width:640,height:360}}>
+  {items.map(row => <View key={row.key} style={{position:"absolute",left:row.index*12,
+    top:20,width:8,height:9,backgroundColor:"#4ba8e5",opacity:0.63}} />)}
+</Scene>; }
+"##;
+    let artifact = compile_motion(source).unwrap().artifact;
+    let prepared = prepare_scene(&artifact).unwrap();
+    let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+    let context = motion_context_at_frame(0, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+    let fonts = Fonts::default();
+    let tree = build_tree(
+        &prepared,
+        &context,
+        &props,
+        &LayoutOptions {
+            viewport: Viewport::new((640, 360)),
+            fonts: &fonts,
+            styles: None,
+        },
+    )
+    .unwrap();
+    let program = emit(&tree, &default_font_naming).unwrap().program;
+    assert_eq!(
+        program
+            .nodes()
+            .iter()
+            .filter(|node| matches!(node, Node::Group(group) if group.opacity != 1.0))
+            .count(),
+        0
+    );
+    let batches = program
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            Node::InstanceBatch(batch) => Some(batch),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        batches
+            .iter()
+            .map(|batch| batch.instances.len())
+            .sum::<usize>(),
+        32
+    );
+    assert!(batches.iter().all(|batch| {
+        batch
+            .instances
+            .opacities
+            .iter()
+            .all(|opacity| *opacity == 1.0)
+    }));
+    assert!(batches.iter().all(|batch| {
+        batch
+            .instances
+            .colors
+            .iter()
+            .all(|color| color.alpha == 0.63)
+    }));
+
+    program.validate().unwrap();
+}
+
+#[test]
 fn distance_stagger_uses_per_instance_delays_and_zero_matches_scalar_zero() {
     let source = include_str!("fixtures/motion/composition/distance-stagger-batch.motion.tsx");
     let compiled = compile_motion(source).expect("distance stagger compiles");

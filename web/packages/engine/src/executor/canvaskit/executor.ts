@@ -3392,14 +3392,6 @@ function drawBatchNode(
     shape.kind === "roundRect"
       ? roundRect(CanvasKit, record(shape.value, "instance round rect"))
       : null;
-  const rectangleFill =
-    shape.kind === "rect" ||
-    (shape.kind === "roundRect" &&
-      array(record(shape.value, "instance round rect").radii, "instance radii").every((radius) =>
-        numberArray(radius, 2, "instance radius").every((value) => value === 0),
-      )) ||
-    (shape.kind === "path" &&
-      paintRectangleBounds(requiredIndex(program.paths, shape.value, "batch path")) !== null);
   let fixedDash: ReturnType<typeof CanvasKit.PathEffect.MakeDash> | null = null;
   try {
     fillPaint.setAntiAlias(true);
@@ -3524,15 +3516,9 @@ function drawBatchNode(
       const strokeAlpha =
         strokeRange === null ? alpha : strokeView.getFloat32(strokeOffset + 12, true);
       if (opacity <= 0 || (alpha <= 0 && (strokeWidth <= 0 || strokeAlpha <= 0))) continue;
-      // Rectangle-equivalent fills share the existing rectangle coverage path. Curves,
-      // images and a visible stroke retain their isolated opacity layer.
-      const directOpacity =
-        imageNode === null &&
-        rectangleFill &&
-        !(strokeWidth > 0 && strokeAlpha > 0) &&
-        alpha > 0 &&
-        (pathStyle === null || pathStyle.fill === true);
-      if (opacity < 1 && !directOpacity) {
+      // Single-coverage opacity is folded by the shared DrawProgram compiler. Remaining
+      // opacity isolates overlapping paints or image tinting.
+      if (opacity < 1) {
         layerPaint.setAlphaf(opacity);
         const bounds = instanceOpacityBounds(program, shape, pathStyle, strokeWidth, [
           a,
@@ -3570,7 +3556,7 @@ function drawBatchNode(
             view.getFloat32(colorOffset + 4, true),
             view.getFloat32(colorOffset + 8, true),
             alpha,
-            directOpacity ? opacity : 1,
+            1,
           );
           drawShape(fillPaint);
         }
@@ -3583,7 +3569,7 @@ function drawBatchNode(
               strokeView.getFloat32(strokeOffset + 4, true),
               strokeView.getFloat32(strokeOffset + 8, true),
               strokeAlpha,
-              directOpacity ? opacity : 1,
+              1,
             );
           } else if (alpha > 0) {
             setColor(
@@ -3593,7 +3579,7 @@ function drawBatchNode(
               view.getFloat32(colorOffset + 4, true),
               view.getFloat32(colorOffset + 8, true),
               alpha,
-              directOpacity ? opacity : 1,
+              1,
             );
           } else {
             fail("wire_shape", "visible stroke requires a visible color");
@@ -3616,7 +3602,7 @@ function drawBatchNode(
       } finally {
         canvas.restore();
       }
-      if (opacity < 1 && !directOpacity) canvas.restore();
+      if (opacity < 1) canvas.restore();
     }
   } finally {
     atlas?.image.delete();

@@ -82,7 +82,10 @@ impl FrameSink for Capture {
 #[test]
 fn constrained_single_and_parallel_schedules_preserve_random_access_pixels() {
     let project = project();
-    let frames = [0, 15, 3, 0, 29, 10].map(FrameKey::new);
+    let frames = [
+        0, 15, 3, 0, 29, 10, 2, 20, 8, 14, 29, 7, 11, 0, 19, 27, 3, 29,
+    ]
+    .map(FrameKey::new);
     let mut reference = Capture::default();
     render_schedule(
         &project,
@@ -94,8 +97,9 @@ fn constrained_single_and_parallel_schedules_preserve_random_access_pixels() {
         SkiaBackendKind::Raster,
     )
     .unwrap();
-    for threads in [1, 4] {
-        let budget = NativeRenderBudget::new(threads, Some(64 * 1024 * 1024)).unwrap();
+    for (threads, memory_mib) in [(1, 64), (4, 64), (8, 64), (16, 64), (16, 12)] {
+        let memory_bytes = memory_mib * 1024 * 1024;
+        let budget = NativeRenderBudget::new(threads, Some(memory_bytes)).unwrap();
         let control = RenderControl::with_deadline(Instant::now() + Duration::from_secs(10))
             .with_budget(budget);
         let mut sink = Capture::default();
@@ -111,17 +115,24 @@ fn constrained_single_and_parallel_schedules_preserve_random_access_pixels() {
         .unwrap();
         assert_eq!(sink.frames, reference.frames);
         assert!(sink.finished);
-        assert!(report.preparation_tasks <= threads);
+        assert!(report.preparation_tasks > 0 && report.preparation_tasks <= threads);
+        assert_eq!(report.budget.unwrap().executors, report.preparation_tasks);
         assert!(report.maximum_in_flight_frames <= threads + 1);
-        // One immutable image is decoded once for the session, regardless of task concurrency.
-        assert_eq!(report.resource_cache_misses, 1);
-        assert_eq!(report.resource_cache_hits, (frames.len() - 1) as u64);
+        // One owner shares the image across tasks. Low-memory admission can evict it;
+        // those extra decodes must preserve pixels and release their leases too.
+        assert_eq!(
+            report.resource_cache_misses + report.resource_cache_hits,
+            frames.len() as u64
+        );
+        if memory_mib == 64 {
+            assert_eq!(report.resource_cache_misses, 1);
+        }
         let budget = report.budget.unwrap();
         assert_eq!(budget.cpu_threads, threads);
         assert_eq!(budget.resource_providers, 1);
         assert!(budget.peak_cpu_slots <= threads);
-        assert!(budget.configured_capacity_bytes.unwrap() <= 64 * 1024 * 1024);
-        assert!(budget.memory.peak_bytes <= 64 * 1024 * 1024);
+        assert!(budget.configured_capacity_bytes.unwrap() <= memory_bytes);
+        assert!(budget.memory.peak_bytes <= memory_bytes);
         assert!(budget.memory.peak_live_bytes > 0);
         assert_eq!(budget.memory.used_bytes, 0);
     }

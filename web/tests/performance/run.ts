@@ -487,7 +487,11 @@ async function browserJob(c: Case, backend: string, job: Record<string, unknown>
             return new Response(asset);
           }
         }
-        return fetch(`${upstream}${url.pathname}${url.search}`, { headers: request.headers });
+        // The resource host validates its own port. Forwarding the browser's proxy Host
+        // header rejects otherwise valid image/video requests before asset lookup.
+        const headers = new Headers(request.headers);
+        headers.delete("host");
+        return fetch(`${upstream}${url.pathname}${url.search}`, { headers });
       },
     });
     const profile = path.join(folder, "chrome-profile");
@@ -742,6 +746,9 @@ async function qaCase(c: Case, backend: string, golden: any) {
     backend,
     pass,
     rule,
+    // Same-backend optimization comparisons must not inherit looser cross-backend RGB
+    // exceptions (for example, particles). Only the registered geometric edge allowance applies.
+    optimizationRule: { ...c.rule, edge: suite.qa.backendRules[backend]?.edge ?? 0 },
     comparisons: rows.length,
     maxRgb: Math.max(...rows.map((r) => r.rgbMax)),
     maxAlpha: Math.max(...rows.map((r) => r.alphaMax)),

@@ -17,11 +17,21 @@
       0,
       30,
       0,
-      59
+      59,
+      0,
+      59,
+      30,
+      30,
+      0,
+      59,
+      59,
+      0,
+      30
     ],
     "threadAllowances": [
       1,
-      4
+      4,
+      16
     ],
     "resourceCacheBytes": 1,
     "backendRules": {
@@ -477,6 +487,38 @@
           "height": 120
         }
       ],
+      "order": true
+    },
+    {
+      "id": "translucent-instances",
+      "source": "fixtures/translucent-instances.motion.tsx",
+      "group": "heavy",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true
+    },
+    {
+      "id": "opacity-views",
+      "source": "fixtures/opacity-views.motion.tsx",
+      "group": "heavy",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
       "order": true
     }
   ]

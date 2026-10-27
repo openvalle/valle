@@ -11,7 +11,7 @@ const { default: CanvasKitInit } = (await import("canvaskit-wasm")) as unknown a
 };
 const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 
-test("rectangle-equivalent instance fills skip layers and preserve isolated F16 pixels", async () => {
+test("remaining instance opacity isolates the entire row on every shape", async () => {
   const CK = await CanvasKitInit({
     locateFile: () => Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir),
   });
@@ -25,7 +25,7 @@ test("rectangle-equivalent instance fills skip layers and preserve isolated F16 
   };
   const rect = { x: 0, y: 0, width: 1, height: 1 };
   for (const [shape, expectedLayers, fill, opacity, strokeWidth, strokeAlpha] of [
-    [{ kind: "rect" }, 0, true, 0.75, 0, 0],
+    [{ kind: "rect" }, 2, true, 0.75, 0, 0],
     [
       {
         kind: "roundRect",
@@ -39,13 +39,13 @@ test("rectangle-equivalent instance fills skip layers and preserve isolated F16 
           ],
         },
       },
-      0,
+      2,
       true,
       0.75,
       0,
       0,
     ],
-    [{ kind: "path", value: 0 }, 0, true, 0.75, 1, 0],
+    [{ kind: "path", value: 0 }, 2, true, 0.75, 1, 0],
     [{ kind: "circle" }, 2, true, 0.75, 0, 0],
     [
       {
