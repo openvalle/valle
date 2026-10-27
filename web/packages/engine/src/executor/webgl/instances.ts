@@ -4,7 +4,7 @@ import type { Canvas, CanvasKit, Image, Surface } from "canvaskit-wasm";
 import type { DrawProgramWire, LinearColorWire } from "../canvaskit/draw-program.ts";
 import { preserveState, type CanvasKitGpuHost } from "./gpu-state.ts";
 
-interface CircleGroup {
+interface GeometryGroup {
   clip?: unknown;
   mask?: unknown;
   backdrop?: unknown;
@@ -23,17 +23,18 @@ interface CirclePath {
   path: number;
 }
 
-export interface CircleBatch {
+export interface GpuInstanceBatch {
   shape: { kind: string; value?: unknown };
   instances: { start: number; count: number };
   pathStyle?: { fill?: boolean } | null;
 }
 
-interface CircleRow extends Array<number> {
+interface InstanceRow extends Array<number> {
   cubic?: boolean;
+  rect?: boolean;
 }
 
-interface CircleSlot {
+interface GeometrySlot {
   width: number;
   height: number;
   surface?: Surface;
@@ -41,18 +42,21 @@ interface CircleSlot {
   fbo?: WebGLFramebuffer | null;
 }
 
-interface CircleOptions {
+interface GeometryOptions {
+  reference?: boolean;
   f16?: boolean;
   roi?: boolean;
   nativeInstances?: boolean;
   pool?: boolean;
 }
 
-interface CircleStats {
+interface GeometryStats {
   precision: "F16" | "RGBA8";
   roi: boolean;
   batches: number;
   circles: number;
+  rectangles: number;
+  programCompiles: number;
   allocatedBytes: number;
   extractionMs: number;
   recordMs: number;
@@ -67,11 +71,11 @@ interface CircleStats {
 
 type TimingStage =
   "clearFlushMs" | "stateReadMs" | "glDrawMs" | "stateRestoreMs" | "snapshotMs" | "compositeMs";
-type CircleHost = CanvasKitGpuHost & {
+type GeometryHost = CanvasKitGpuHost & {
   /** Required only for the RGBA8 external-texture path (f16: false). */
   surface?: Surface;
 };
-// Real-time GPU geometry consumes admitted DrawPrograms; CPU/reference mode keeps Skia paths.
+// Reference mode admits exact integer opaque rectangles; realtime also admits circle coverage.
 // It replaces eligible contiguous circle runs, retaining surrounding CanvasKit effects/layers.
 const vertex = `#version 300 es
 precision highp float;
@@ -112,7 +116,9 @@ void main(){
   vec2 delta=gl_FragCoord.xy-vEllipse.xy;
   float radius=min(vEllipse.z,vEllipse.w);
   float coverage;
-  if(cubicPath>0.){
+  if(cubicPath>1.5){
+    coverage=all(lessThan(abs(delta),vEllipse.zw))?1.:0.;
+  }else if(cubicPath>0.){
     vec2 q=abs(delta)/vEllipse.zw;
     float k=.5522847498307936;
     float control=k*vEllipse.z*vEllipse.w/length(vEllipse.zw)<1.?(1.+k)*.5:1.5*k*.5+.5;
@@ -142,6 +148,61 @@ void main(){
   result=value;
 }`;
 
+function rectangleRow(
+  draw: DrawProgramWire,
+  total: readonly number[],
+  i: number,
+  opaque: boolean,
+): InstanceRow | null {
+  const { view, count } = draw.batchInstances;
+  if (i < 0 || i >= count || total[6] !== 0 || total[7] !== 0 || total[8] !== 1) return null;
+  if (
+    view.getFloat32(count * 68 + i * 4, true) !== 0 ||
+    view.getFloat32(count * 64 + i * 4, true) !== 1
+  )
+    return null;
+  const k = i * 48,
+    a = view.getFloat64(k, true),
+    b = view.getFloat64(k + 8, true),
+    c = view.getFloat64(k + 16, true),
+    d = view.getFloat64(k + 24, true),
+    e = view.getFloat64(k + 32, true),
+    f = view.getFloat64(k + 40, true);
+  const aa = total[0] * a + total[1] * b,
+    bb = total[3] * a + total[4] * b,
+    cc = total[0] * c + total[1] * d,
+    dd = total[3] * c + total[4] * d,
+    x = total[0] * e + total[1] * f + total[2],
+    y = total[3] * e + total[4] * f + total[5];
+  if (!((bb === 0 && cc === 0) || (aa === 0 && dd === 0))) return null;
+  const left = Math.min(x, x + aa, x + cc, x + aa + cc),
+    right = Math.max(x, x + aa, x + cc, x + aa + cc),
+    top = Math.min(y, y + bb, y + dd, y + bb + dd),
+    bottom = Math.max(y, y + bb, y + dd, y + bb + dd);
+  if (
+    right <= left ||
+    bottom <= top ||
+    ![left, right, top, bottom].every((v) => Number.isInteger(v) && Math.abs(v) < 1048576)
+  )
+    return null;
+  const color = count * 48 + i * 16,
+    alpha = view.getFloat32(color + 12, true);
+  if (opaque && alpha !== 1) return null;
+  const row: InstanceRow = [
+    (left + right) / 2,
+    (top + bottom) / 2,
+    (right - left) / 2,
+    (bottom - top) / 2,
+    view.getFloat32(color, true),
+    view.getFloat32(color + 4, true),
+    view.getFloat32(color + 8, true),
+    alpha,
+    1,
+  ];
+  row.rect = true;
+  return row;
+}
+
 function halfRound(value: number): number {
   if (value === 0) return 0;
   const step = 2 ** Math.max(-24, Math.floor(Math.log2(Math.abs(value))) - 10);
@@ -158,7 +219,7 @@ function multiply(a: readonly number[], b: readonly number[]): number[] {
       a[Math.floor(i / 3) * 3 + 2] * b[6 + (i % 3)],
   );
 }
-function simpleGroup(g: CircleGroup): boolean {
+function simpleGroup(g: GeometryGroup): boolean {
   return (
     !g.clip &&
     !g.mask &&
@@ -176,12 +237,12 @@ function leaf(
   matrix: readonly number[],
   opacity = 1,
   depth = 0,
-): CircleRow | null {
+): InstanceRow | null {
   if (depth > 12) return null;
   const tagged = draw.nodes[id];
   if (!tagged) return null;
   if (tagged.kind === "group") {
-    const value = tagged.value as CircleGroup;
+    const value = tagged.value as GeometryGroup;
     if (!simpleGroup(value) || value.children.length !== 1 || (opacity < 1 && value.opacity < 1))
       return null;
     return leaf(
@@ -244,7 +305,7 @@ function leaf(
   )
     return null;
   const c = paint.value as LinearColorWire;
-  const row: CircleRow = [
+  const row: InstanceRow = [
     matrix[0] * cx + matrix[2],
     matrix[4] * cy + matrix[5],
     Math.abs(matrix[0] * rx),
@@ -259,29 +320,39 @@ function leaf(
   return row;
 }
 
-export class GpuCircles {
-  declare private readonly host: CircleHost;
+export class GpuInstances {
+  declare private readonly host: GeometryHost;
   declare private readonly CK: CanvasKit;
   declare private readonly gl: WebGL2RenderingContext;
   declare private readonly f16: boolean;
   declare private readonly roi: boolean;
   declare private readonly nativeInstances: boolean;
   declare private readonly pool: boolean;
-  declare private readonly program: WebGLProgram;
-  declare private readonly vao: WebGLVertexArrayObject | null;
-  declare private readonly buffer: WebGLBuffer | null;
-  declare private readonly extent: WebGLUniformLocation | null;
-  declare private readonly origin: WebGLUniformLocation | null;
-  declare private readonly bottomLeft: WebGLUniformLocation | null;
-  declare private readonly cubicPath: WebGLUniformLocation | null;
-  declare private slots: CircleSlot[];
+  declare private readonly reference: boolean;
+  private safePrograms?: WeakMap<DrawProgramWire, boolean>;
+  private bufferBytes = 0;
+  private borrow: ((bytes: bigint) => boolean) | null = null;
+  private program: WebGLProgram | null = null;
+  private vao: WebGLVertexArrayObject | null = null;
+  private buffer: WebGLBuffer | null = null;
+  private extent: WebGLUniformLocation | null = null;
+  private origin: WebGLUniformLocation | null = null;
+  private bottomLeft: WebGLUniformLocation | null = null;
+  private cubicPath: WebGLUniformLocation | null = null;
+  declare private slots: GeometrySlot[];
   declare private cursor: number;
   declare private closed: boolean | undefined;
-  declare readonly stats: CircleStats;
+  declare readonly stats: GeometryStats;
 
   constructor(
-    host: CircleHost,
-    { f16 = true, roi = true, nativeInstances = true, pool = true }: CircleOptions = {},
+    host: GeometryHost,
+    {
+      f16 = true,
+      roi = true,
+      nativeInstances = true,
+      pool = true,
+      reference = false,
+    }: GeometryOptions = {},
   ) {
     this.host = host;
     this.CK = host.CanvasKit;
@@ -290,68 +361,102 @@ export class GpuCircles {
     this.roi = roi;
     this.nativeInstances = nativeInstances;
     this.pool = pool;
+    this.reference = reference;
     if (!this.gl) throw new Error("WebGL2 GPU target unavailable");
-    const gl = this.gl;
-    const restore = preserveState(gl);
-    const shader = (type: number, source: string): WebGLShader => {
-      const s = gl.createShader(type)!;
-      gl.shaderSource(s, source);
-      gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)!);
-      return s;
-    };
-    this.program = gl.createProgram()!;
-    const vs = shader(gl.VERTEX_SHADER, vertex),
-      fs = shader(gl.FRAGMENT_SHADER, fragment);
-    gl.attachShader(this.program, vs);
-    gl.attachShader(this.program, fs);
-    gl.linkProgram(this.program);
-    if (!gl.getProgramParameter(this.program, gl.LINK_STATUS))
-      throw new Error(gl.getProgramInfoLog(this.program)!);
-    gl.deleteShader(vs);
-    gl.deleteShader(fs);
-    this.vao = gl.createVertexArray();
-    this.buffer = gl.createBuffer();
-    gl.bindVertexArray(this.vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    for (const [i, size, offset] of [
-      [0, 4, 0],
-      [1, 4, 16],
-      [2, 1, 32],
-    ]) {
-      gl.enableVertexAttribArray(i);
-      gl.vertexAttribPointer(i, size, gl.FLOAT, false, 36, offset);
-      gl.vertexAttribDivisor(i, 1);
-    }
-    this.extent = gl.getUniformLocation(this.program, "extent");
-    this.origin = gl.getUniformLocation(this.program, "origin");
-    this.bottomLeft = gl.getUniformLocation(this.program, "bottomLeft");
-    this.cubicPath = gl.getUniformLocation(this.program, "cubicPath");
     this.slots = [];
     this.stats = {
       precision: f16 ? "F16" : "RGBA8",
       roi,
       batches: 0,
       circles: 0,
+      rectangles: 0,
+      programCompiles: 0,
       extractionMs: 0,
       recordMs: 0,
       allocatedBytes: 0,
     };
     this.beginFrame();
-    restore();
-    host.resetContext();
+  }
+  private initialize(): void {
+    if (this.program) return;
+    const gl = this.gl,
+      restore = preserveState(gl);
+    const shaders: WebGLShader[] = [];
+    try {
+      const shader = (type: number, source: string): WebGLShader => {
+        const s = gl.createShader(type)!;
+        shaders.push(s);
+        gl.shaderSource(s, source);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s)!);
+        return s;
+      };
+      this.program = gl.createProgram()!;
+      const vs = shader(gl.VERTEX_SHADER, vertex),
+        fs = shader(gl.FRAGMENT_SHADER, fragment);
+      gl.attachShader(this.program, vs);
+      gl.attachShader(this.program, fs);
+      gl.linkProgram(this.program);
+      if (!gl.getProgramParameter(this.program, gl.LINK_STATUS))
+        throw new Error(gl.getProgramInfoLog(this.program)!);
+      this.vao = gl.createVertexArray();
+      this.buffer = gl.createBuffer();
+      gl.bindVertexArray(this.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+      for (const [i, size, offset] of [
+        [0, 4, 0],
+        [1, 4, 16],
+        [2, 1, 32],
+      ]) {
+        gl.enableVertexAttribArray(i);
+        gl.vertexAttribPointer(i, size, gl.FLOAT, false, 36, offset);
+        gl.vertexAttribDivisor(i, 1);
+      }
+      this.extent = gl.getUniformLocation(this.program, "extent");
+      this.origin = gl.getUniformLocation(this.program, "origin");
+      this.bottomLeft = gl.getUniformLocation(this.program, "bottomLeft");
+      this.cubicPath = gl.getUniformLocation(this.program, "cubicPath");
+
+      this.stats.programCompiles++;
+    } catch (error) {
+      gl.deleteBuffer(this.buffer);
+      gl.deleteVertexArray(this.vao);
+      gl.deleteProgram(this.program);
+      this.buffer = this.vao = this.program = null;
+      throw error;
+    } finally {
+      for (const shader of shaders) gl.deleteShader(shader);
+      restore();
+      this.host.resetContext();
+    }
+  }
+  private unclipped(draw: DrawProgramWire): boolean {
+    if (!this.reference) return true;
+    const cache = (this.safePrograms ??= new WeakMap());
+    let safe = cache.get(draw);
+    if (safe === undefined) {
+      safe = draw.nodes.every((node) => {
+        if (node.kind !== "group") return true;
+        const group = node.value as GeometryGroup;
+        return simpleGroup(group) && group.opacity === 1;
+      });
+      cache.set(draw, safe);
+    }
+    return safe;
   }
   private time(stage: TimingStage, start: number): void {
     this.stats[stage] = (this.stats[stage] ?? 0) + performance.now() - start;
   }
-  beginFrame(): void {
+  beginFrame(borrow?: (bytes: bigint) => boolean): void {
+    this.borrow = borrow ?? null;
     this.cursor = 0;
   }
   endFrame(): void {
     for (const slot of this.slots.splice(this.cursor)) {
       slot.image?.delete();
-      slot.surface?.delete();
-      this.stats.allocatedBytes -= slot.width * slot.height * 8;
+      if (slot.surface) slot.surface.delete();
+      else this.gl.deleteFramebuffer(slot.fbo!);
+      this.stats.allocatedBytes -= slot.width * slot.height * (this.f16 ? 8 : 4);
     }
   }
   canCrop(
@@ -378,20 +483,21 @@ export class GpuCircles {
       if (depth > 12) return false;
       const n = draw.nodes[id];
       if (n?.kind === "group") {
-        const v = n.value as CircleGroup;
+        const v = n.value as GeometryGroup;
         return (
           simpleGroup(v) &&
           v.children.every((id) => walk(id, multiply(total, v.transform), depth + 1))
         );
       }
-      const v = n?.value as CircleBatch;
+      const v = n?.value as GpuInstanceBatch;
       if (
         n?.kind !== "instanceBatch" ||
         v.instances.count < 64 ||
-        !["circle", "path"].includes(v.shape.kind)
+        !["circle", "path", "rect"].includes(v.shape.kind)
       )
         return false;
       if (v.pathStyle && v.pathStyle.fill !== true) return false;
+      if (this.reference && (v.shape.kind !== "rect" || !this.unclipped(draw))) return false;
       if (v.shape.kind === "path") {
         const path = draw.paths[v.shape.value as number];
         if (!(
@@ -412,6 +518,11 @@ export class GpuCircles {
         total[8] !== 1
       )
         return false;
+      if (v.shape.kind === "rect") {
+        for (let i = v.instances.start; i < v.instances.start + v.instances.count; i++)
+          if (!rectangleRow(draw, total, i, this.reference)) return false;
+        return true;
+      }
       for (let i = v.instances.start; i < v.instances.start + v.instances.count; i++) {
         const offset = i * 48,
           a = view.getFloat64(offset, true),
@@ -442,7 +553,7 @@ export class GpuCircles {
     roots: readonly number[],
     matrix: readonly number[],
   ): boolean {
-    if (roots.length < 64) return false;
+    if (this.reference || roots.length < 64) return false;
     const started = performance.now(),
       total = multiply(canvas.getTotalMatrix(), matrix),
       rows = [];
@@ -470,6 +581,10 @@ export class GpuCircles {
     matrix: readonly number[],
     fallback: (node: number) => void,
   ): void {
+    if (this.reference) {
+      for (const id of roots) fallback(id);
+      return;
+    }
     const total = multiply(canvas.getTotalMatrix(), matrix);
     let i = 0;
     while (i < roots.length) {
@@ -477,7 +592,7 @@ export class GpuCircles {
       let end = i;
       for (; end < roots.length; end++) {
         const row = leaf(draw, roots[end], total);
-        if (!row) break;
+        if (!row || (rows.length > 0 && row.cubic !== rows[0].cubic)) break;
         rows.push(row);
       }
       if (
@@ -496,7 +611,27 @@ export class GpuCircles {
       i += count;
     }
   }
-  batch(CK: CanvasKit, canvas: Canvas, draw: DrawProgramWire, node: CircleBatch): boolean {
+  batch(CK: CanvasKit, canvas: Canvas, draw: DrawProgramWire, node: GpuInstanceBatch): boolean {
+    if (node.shape.kind === "rect") {
+      if (
+        !this.nativeInstances ||
+        node.instances.count < 64 ||
+        !this.unclipped(draw) ||
+        (node.pathStyle && node.pathStyle.fill !== true)
+      )
+        return false;
+      const start = performance.now(),
+        total = canvas.getTotalMatrix(),
+        rows: InstanceRow[] = [];
+      for (let i = node.instances.start; i < node.instances.start + node.instances.count; i++) {
+        const row = rectangleRow(draw, total, i, this.reference);
+        if (!row) return false;
+        if (row[7] > 0) rows.push(row);
+      }
+      this.stats.extractionMs += performance.now() - start;
+      return !rows.length || this.drawRows(CK, canvas, rows);
+    }
+    if (this.reference) return false;
     const pathBatch = node.shape.kind === "path";
     if (!pathBatch && !this.nativeInstances) return false;
     if (
@@ -568,7 +703,7 @@ export class GpuCircles {
         opacity = view.getFloat32(n * 64 + i * 4, true);
       if (alpha <= 0 || opacity <= 0) continue;
       const quantize = pathBatch ? halfRound : (v: number) => v;
-      const row: CircleRow = [
+      const row: InstanceRow = [
         total[0] * e + total[1] * f + total[2],
         total[3] * e + total[4] * f + total[5],
         rx,
@@ -584,18 +719,20 @@ export class GpuCircles {
     }
     this.stats.extractionMs += performance.now() - started;
     if (!rows.length) return true;
-    this.stats.instanceCircles = (this.stats.instanceCircles ?? 0) + rows.length;
-    return this.drawRows(CK, canvas, rows);
+    const drawn = this.drawRows(CK, canvas, rows);
+    if (drawn) this.stats.instanceCircles = (this.stats.instanceCircles ?? 0) + rows.length;
+    return drawn;
   }
-  private drawRows(CK: CanvasKit, canvas: Canvas, rows: CircleRow[]): boolean {
+  private drawRows(CK: CanvasKit, canvas: Canvas, rows: InstanceRow[]): boolean {
     let [x0, y0, x1, y1] = canvas.getDeviceClipBounds();
     if (this.roi) {
       let left = Infinity,
         top = Infinity,
         right = -Infinity,
         bottom = -Infinity;
-      for (const [x, y, rx, ry] of rows) {
-        const padding = Math.max(rx, ry) / Math.min(rx, ry) + 1;
+      for (const row of rows) {
+        const [x, y, rx, ry] = row;
+        const padding = row.rect ? 1 : Math.max(rx, ry) / Math.min(rx, ry) + 1;
         left = Math.min(left, x - rx - padding);
         top = Math.min(top, y - ry - padding);
         right = Math.max(right, x + rx + padding);
@@ -615,20 +752,24 @@ export class GpuCircles {
     const data = new Float32Array(rows.flat());
     const gl = this.gl,
       recordStarted = performance.now();
-    let slot: CircleSlot | null | undefined = this.slots[this.cursor++];
+    let slot: GeometrySlot | null | undefined = this.slots[this.cursor++];
     if (this.pool) {
       width = slot && slot.width >= width ? slot.width : Math.ceil(width / 128) * 128;
       height = slot && slot.height >= height ? slot.height : Math.ceil(height / 128) * 128;
     }
     const oldBytes = slot ? slot.width * slot.height * (this.f16 ? 8 : 4) : 0;
     const newBytes = width * height * (this.f16 ? 8 : 4);
+    const bufferDelta = data.byteLength - this.bufferBytes;
+    const extra = Math.max(0, newBytes - oldBytes) + Math.max(0, bufferDelta);
     if (
       newBytes > 64 * 1024 * 1024 ||
-      this.stats.allocatedBytes - oldBytes + newBytes > 256 * 1024 * 1024
+      this.stats.allocatedBytes - oldBytes + newBytes + bufferDelta > 256 * 1024 * 1024 ||
+      (extra > 0 && this.borrow && !this.borrow(BigInt(extra)))
     ) {
       this.cursor--;
       return false;
     }
+    this.initialize();
     if (slot && (slot.width !== width || slot.height !== height)) {
       slot.image?.delete();
       if (slot.surface) slot.surface.delete();
@@ -711,10 +852,12 @@ export class GpuCircles {
     gl.uniform2f(this.extent, width, height);
     gl.uniform2f(this.origin, x0, y0);
     gl.uniform1f(this.bottomLeft, this.f16 ? 1 : 0);
-    gl.uniform1f(this.cubicPath, rows[0].cubic ? 1 : 0);
+    gl.uniform1f(this.cubicPath, rows[0].rect ? 2 : rows[0].cubic ? 1 : 0);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STREAM_DRAW);
+    this.stats.allocatedBytes += bufferDelta;
+    this.bufferBytes = data.byteLength;
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, rows.length);
     this.time("glDrawMs", drawStarted);
     const restoreStarted = performance.now();
@@ -734,9 +877,26 @@ export class GpuCircles {
     canvas.restore();
     this.time("compositeMs", compositeStarted);
     this.stats.batches++;
-    this.stats.circles += rows.length;
+    if (rows[0].rect) this.stats.rectangles += rows.length;
+    else this.stats.circles += rows.length;
     this.stats.recordMs += performance.now() - recordStarted;
     return true;
+  }
+  trim(): void {
+    const restore = preserveState(this.gl);
+    try {
+      this.cursor = 0;
+      this.endFrame();
+      if (this.buffer && this.bufferBytes) {
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.buffer);
+        this.gl.bufferData(this.gl.ARRAY_BUFFER, 0, this.gl.STREAM_DRAW);
+        this.stats.allocatedBytes -= this.bufferBytes;
+        this.bufferBytes = 0;
+      }
+    } finally {
+      restore();
+      this.host.resetContext();
+    }
   }
   dispose(): void {
     if (this.closed) return;

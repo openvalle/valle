@@ -42,7 +42,7 @@ import { canvasKitGpuCacheBudget } from "./gpu-budget.ts";
 import { drawPyramidFilter, drawPyramidFilterCooperative, pyramidWorkingBytes } from "./pyramid.ts";
 import { drawLensDistortion } from "./lens.ts";
 import { velocityBlurUniforms } from "./velocity.ts";
-import type { CircleBatch, GpuCircles } from "../webgl/circles.ts";
+import type { GpuInstanceBatch, GpuInstances } from "../webgl/instances.ts";
 import { cropProgramInputs } from "./filter-roi.ts";
 import {
   CanvasKitBuiltinRuntime,
@@ -74,7 +74,7 @@ export interface CanvasKitExecutionTarget {
   readonly boundedPathClipLayers?: boolean;
   readonly fuseClipPaints?: boolean;
   readonly retainRasterTrees?: boolean;
-  readonly geometryRenderer?: GpuCircles | null;
+  readonly geometryRenderer?: GpuInstances | null;
   readonly surface: Surface;
   /** GPU context used for working F16 surfaces. Null selects CanvasKit's CPU surface factory. */
   readonly directContext?: GrDirectContext | null;
@@ -101,7 +101,7 @@ export interface CanvasKitExecutionTarget {
 export interface CanvasKitPlanOptions {
   /** Working F16 surfaces live on a GPU context; otherwise on CanvasKit's CPU surface factory. */
   readonly gpu: boolean;
-  readonly geometryRenderer?: GpuCircles | null;
+  readonly geometryRenderer?: GpuInstances | null;
   /** Same immutable limits admitted by Engine lowering for this frame. */
   readonly maxSurfaceBytes?: bigint;
   readonly maxFrameBytes?: bigint;
@@ -1051,7 +1051,7 @@ async function runCanvasKitFrame(
   arena.deferGpuFlush = target.deferGpuFlush === true;
   arena.boundedPathClipLayers = target.boundedPathClipLayers === true;
   arena.fuseClipPaints = target.fuseClipPaints === true;
-  arena.geometryRenderer?.beginFrame();
+  arena.geometryRenderer?.beginFrame(target.borrowSurfaceBytes);
   const resources = new Map<number, ImageValue>();
   const externalResourceById = new Map<number, CanvasKitExternalObject>();
   for (const raw of array(plan.resources, "plan.resources")) {
@@ -3364,7 +3364,7 @@ function drawBatchNode(
   arena?: SurfaceArena,
 ): void {
   const program = admitted.draw;
-  if (arena?.geometryRenderer?.batch(CanvasKit, canvas, program, node as CircleBatch)) return;
+  if (arena?.geometryRenderer?.batch(CanvasKit, canvas, program, node as GpuInstanceBatch)) return;
   const shape = record(node.shape, "instance shape");
   const imageRegion = shape.kind === "image" ? record(shape.value, "instance image region") : null;
   const imageNode =
@@ -5876,7 +5876,7 @@ class SurfaceArena {
   boundedPathClipLayers = false;
   fuseClipPaints = false;
   pathClipElisions = 0;
-  geometryRenderer: GpuCircles | null = null;
+  geometryRenderer: GpuInstances | null = null;
   yieldToPresentation: (() => Promise<void>) | null = null;
   private readonly slots = new Map<string, PooledSlot>();
   private readonly freeTransients = new Map<Surface, { width: number; height: number }>();
@@ -6965,7 +6965,7 @@ function planProgramRuns(
   structures: ReadonlyMap<number, ProgramStructure>,
   schedule: BoundOuterSchedule,
   dynamic: Map<number, Wire>,
-  geometryRenderer: GpuCircles | null,
+  geometryRenderer: GpuInstances | null,
 ): Map<number, ProgramRun> {
   const runs = new Map<number, ProgramRun>();
   const planner = executor.engineKernels?.plan_pyramid_filter?.bind(executor.engineKernels);

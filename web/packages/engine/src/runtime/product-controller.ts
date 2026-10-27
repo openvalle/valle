@@ -15,7 +15,7 @@ import {
 import { createScene3dGpu } from "../executor/webgl/scene3d-factory.ts";
 import type { GpuScene3D, Scene3dGpuRequest } from "../executor/webgl/scene3d.ts";
 import { decodeScene3dGpuPacket } from "../executor/webgl/scene3d-input.ts";
-import { GpuCircles } from "../executor/webgl/circles.ts";
+import { GpuInstances } from "../executor/webgl/instances.ts";
 import { resetCanvasKitContext, untrackGpuState } from "../executor/webgl/gpu-state.ts";
 // Browser Product Compositor host.
 //
@@ -601,7 +601,7 @@ export class BrowserValleWebPlayer {
   private scene3dDof: CanvasKitScene3dDof | null = null;
   private scene3dGpu: GpuScene3D | null = null;
   private scene3dGpuInit: Promise<GpuScene3D | null> | null = null;
-  private gpuCircles: GpuCircles | null = null;
+  private gpuGeometry: GpuInstances | null = null;
   private currentScene3dRequests = new Map<string, Scene3dFrameRequest>();
   private readonly renderMode: "reference" | "realtime";
   readonly runtimeBudget: BrowserRuntimeBudget;
@@ -715,6 +715,7 @@ export class BrowserValleWebPlayer {
       this.resourceObjects.dispose();
       this.compositor?.trimWorkingMemory();
       this.scene3dGpu?.trim();
+      this.gpuGeometry?.trim();
     });
   }
 
@@ -749,7 +750,7 @@ export class BrowserValleWebPlayer {
     return this.scene3dGpu ? { ...this.scene3dGpu.stats } : null;
   }
   get geometryGpuDiagnostics() {
-    return this.gpuCircles ? { ...this.gpuCircles.stats } : null;
+    return this.gpuGeometry ? { ...this.gpuGeometry.stats } : null;
   }
 
   lastFrameTimeS(): number {
@@ -795,6 +796,24 @@ export class BrowserValleWebPlayer {
 
   async renderFrame(frame: number, options: RenderOptions = {}) {
     return (await this.renderFrameDetailed(frame, options, true)).result;
+  }
+
+  /** Consume the rendered canvas before another frame can reuse it. GPU exports use the
+   * render target directly; software exports use the configured 2D canvas. */
+  async renderFrameForExport(
+    frame: number,
+    options: RenderOptions,
+    consume: (canvas: HTMLCanvasElement, result: ProductRenderResult) => Promise<void>,
+  ): Promise<ProductRenderResult> {
+    return (
+      await this.renderFrameDetailed(frame, options, false, async (completed) => {
+        const target = this.target!;
+        if (!target.canvas) this.presentTarget(target, completed.width, completed.height);
+        const canvas = target.canvas ?? this.canvas;
+        if (!canvas) throw new Error("Software video export requires a canvas destination.");
+        await consume(canvas, completed.result);
+      })
+    ).result;
   }
   private renderFrameDetailed(
     frame: number,
@@ -905,7 +924,7 @@ export class BrowserValleWebPlayer {
         readyStage.schedulePacket,
         {
           gpu: target.context != null,
-          geometryRenderer: this.gpuCircles,
+          geometryRenderer: this.gpuGeometry,
           maxSurfaceBytes: planningInput.maxSurfaceBytes,
           maxFrameBytes: planningInput.maxFrameBytes,
         },
@@ -919,6 +938,7 @@ export class BrowserValleWebPlayer {
         const extent = request.expected.extent;
         if (extent) required += Number(extent.width) * Number(extent.height) * 32;
       }
+      required += this.gpuGeometry?.stats.allocatedBytes ?? 0;
       const gpuScene3d = this.gpu && !forceCpu && typeof document !== "undefined";
       const sceneBytes = Math.max(
         scene3dWorkingBytes(scene3d, gpuScene3d ? requestStage.gpuScene3d : undefined),
@@ -1002,7 +1022,7 @@ export class BrowserValleWebPlayer {
           boundedPathClipLayers: this.renderMode === "realtime",
           fuseClipPaints: this.renderMode === "realtime",
           retainRasterTrees: this.renderMode === "realtime",
-          geometryRenderer: this.gpuCircles,
+          geometryRenderer: this.gpuGeometry,
           yieldToPresentation: !publish && target.gpu && cooperative ? yieldToHost : undefined,
           directContext: target.context,
           maxSurfaceBytes: planningInput.maxSurfaceBytes,
@@ -1037,7 +1057,8 @@ export class BrowserValleWebPlayer {
         report.rasterLayerCacheBytes +
         frameResources.resourceCache.residentBytes +
         planner.snapshot().readyBytes +
-        (this.scene3dGpu?.stats.allocatedBytes ?? 0);
+        (this.scene3dGpu?.stats.allocatedBytes ?? 0) +
+        (this.gpuGeometry?.stats.allocatedBytes ?? 0);
       const executeMs = performance.now() - executeStarted;
       endExecute?.();
       if (passTimings)
@@ -1329,6 +1350,7 @@ export class BrowserValleWebPlayer {
           this.resourceObjects.dispose();
           this.compositor?.trimWorkingMemory();
           this.scene3dGpu?.trim();
+          this.gpuGeometry?.trim();
         }
         finishMemory?.(retainedBytes);
       }
@@ -1771,8 +1793,8 @@ export class BrowserValleWebPlayer {
     this.scene3dGpu?.dispose();
     this.scene3dGpu = null;
     this.scene3dGpuInit = null;
-    this.gpuCircles?.dispose();
-    this.gpuCircles = null;
+    this.gpuGeometry?.dispose();
+    this.gpuGeometry = null;
     const closingGl = this.target?.canvas?.getContext("webgl2");
     if (closingGl) untrackGpuState(closingGl);
     this.currentScene3dRequests.clear();
@@ -2514,8 +2536,8 @@ export class BrowserValleWebPlayer {
     this.scene3dGpu?.dispose();
     this.scene3dGpu = null;
     this.scene3dGpuInit = null;
-    this.gpuCircles?.dispose();
-    this.gpuCircles = null;
+    this.gpuGeometry?.dispose();
+    this.gpuGeometry = null;
     const retiredGl = this.target?.canvas?.getContext("webgl2");
     if (retiredGl) untrackGpuState(retiredGl);
     this.target?.surface.delete();
@@ -2540,13 +2562,16 @@ export class BrowserValleWebPlayer {
       if (surface && context) {
         this.target = { key, surface, gpu: true, context, canvas };
         const gl = canvas.getContext("webgl2");
-        if (this.renderMode === "realtime" && gl?.getExtension("EXT_color_buffer_float")) {
-          this.gpuCircles = new GpuCircles({
-            CanvasKit: this.CanvasKit,
-            context,
-            gl,
-            resetContext: () => resetCanvasKitContext(surface),
-          });
+        if (gl?.getExtension("EXT_color_buffer_float")) {
+          this.gpuGeometry = new GpuInstances(
+            {
+              CanvasKit: this.CanvasKit,
+              context,
+              gl,
+              resetContext: () => resetCanvasKitContext(surface),
+            },
+            { reference: this.renderMode === "reference" },
+          );
         }
         return this.target;
       }

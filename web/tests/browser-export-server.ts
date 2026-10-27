@@ -41,6 +41,10 @@ export default function Grow(){ const time = useCurrentTime(); const frame = Mat
 return <Scene style={{width:640,height:360,backgroundColor:"#102030"}}>
   <View key="card" style={{position:"absolute",left:8,top:8,width:size,height:size,backgroundColor:"#ff8040",filter:"blur(2px)"}}/>
 </Scene>;}`;
+const instancesSource = `export const composition={width:640,height:360,fps:60,duration:0.2};
+const ROWS=Array.from({length:128},(_,i)=>({id:'r'+i,x:8+(i%16)*28,y:8+Math.floor(i/32)*60}));
+export default function Main(){const time=useCurrentTime();return <Scene className="relative h-full w-full" style={{backgroundColor:'#102030'}}>
+{ROWS.map(row=><View key={row.id} className="absolute" style={{left:row.x,top:row.y,width:20,height:20+Math.floor(time.seconds*60),backgroundColor:'#67e8f9'}}/>)}</Scene>;}`;
 
 function tone() {
   const rate = 48_000,
@@ -89,7 +93,7 @@ const runtimeAssets = {
 };
 
 function fixture(name: string, videoBytes?: Uint8Array) {
-  const motion = name === "motion" || name === "over-budget";
+  const motion = name === "motion" || name === "over-budget" || name === "instances";
   const fractional = name === "fractional";
   const hasAudio = name === "av" || name === "short-av" || name === "video-av";
   const isVideo = name === "video" || name === "video-av";
@@ -123,9 +127,22 @@ function fixture(name: string, videoBytes?: Uint8Array) {
       : []),
     ...(hasAudio ? [audioResource] : []),
   ];
-  const duration = name === "long" ? 30 : fractional ? 1.001 : name === "short-av" ? 1 / 30 : 3;
+  const duration =
+    name === "long"
+      ? 30
+      : fractional
+        ? 1.001
+        : name === "short-av"
+          ? 1 / 30
+          : name === "instances"
+            ? 0.2
+            : 3;
   const author: Timeline = {
-    canvas: { width: name === "odd" ? 641 : 640, height: 360, fps: fractional ? "30000/1001" : 30 },
+    canvas: {
+      width: name === "odd" ? 641 : 640,
+      height: 360,
+      fps: fractional ? "30000/1001" : name === "instances" ? 60 : 30,
+    },
     resources: {
       ...(motion ? { scene: sourcePath } : {}),
       ...(hasAudio ? { tone: "/fixtures/tone.wav" } : {}),
@@ -163,7 +180,7 @@ function fixture(name: string, videoBytes?: Uint8Array) {
   const compiled = motion
     ? compileMotionJsxWithWasm(
         { compile_motion_jsx },
-        name === "over-budget" ? overBudgetSource : source,
+        name === "over-budget" ? overBudgetSource : name === "instances" ? instancesSource : source,
       )
     : null;
   const prepared = preparePreviewPackageWithWasm(
@@ -207,10 +224,9 @@ function fixture(name: string, videoBytes?: Uint8Array) {
   };
 }
 const fixtures = new Map(
-  ["motion", "av", "short-av", "fractional", "long", "odd", "over-budget"].map((name) => [
-    name,
-    fixture(name),
-  ]),
+  ["motion", "av", "short-av", "fractional", "long", "odd", "over-budget", "instances"].map(
+    (name) => [name, fixture(name)],
+  ),
 );
 const selected = process.env.VALLE_BROWSER_EXPORT_FIXTURE ?? "av";
 if (selected === "video" || selected === "video-av") {

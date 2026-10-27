@@ -1,6 +1,7 @@
 import {
   BufferTarget,
-  CanvasSource,
+  VideoSample,
+  VideoSampleSource,
   Mp4OutputFormat,
   Output,
   Quality,
@@ -68,7 +69,7 @@ export async function exportBrowserVideo(
     }
     options.onProgress?.({ phase: "loading", framesCompleted: 0, frameCount: 0 });
     const canvas = document.createElement("canvas");
-    // CanvasSource carries this sRGB signal into VideoFrame and the encoder's color metadata.
+    // The software fallback keeps an sRGB destination; GPU frames bypass this canvas.
     if (!canvas.getContext("2d", { colorSpace: "srgb" })) {
       throw new Error("This browser cannot create the sRGB export canvas.");
     }
@@ -121,7 +122,7 @@ export async function exportBrowserVideo(
       ? new StreamTarget(fileSink.stream, { chunked: true, chunkSize: 1_048_576 })
       : new BufferTarget();
     output = new Output({ format: new Mp4OutputFormat({ fastStart: false }), target });
-    const video = new CanvasSource(canvas, {
+    const video = new VideoSampleSource({
       codec: "avc",
       quality,
       latencyMode: "quality",
@@ -159,8 +160,32 @@ export async function exportBrowserVideo(
     for (let frame = 0; frame < plan.frameCount; frame++) {
       checkCancelled();
       const sourceFrame = plan.sourceFrame(frame);
-      const result = await player
-        .renderFrame(sourceFrame, { rasterScale: plan.rasterScale })
+      await player
+        .renderFrameForExport(
+          sourceFrame,
+          { rasterScale: plan.rasterScale },
+          async (source, result) => {
+            executionBackends.add(result.executionProfile.surfaceBackend);
+            if (result.frame.renderId !== info.renderId || result.frame.index !== sourceFrame) {
+              throw new Error("Export frame does not match the frozen render package.");
+            }
+            checkCancelled();
+            // Derive timestamps from the absolute frame, never an accumulated float clock.
+            const timestamp = plan.timestamp(frame);
+            const nextTimestamp = plan.endTimestamp(frame);
+            const endEncode = input.trace?.span("encode.push", { frame: sourceFrame });
+            const sample = new VideoSample(source, {
+              timestamp,
+              duration: nextTimestamp - timestamp,
+            });
+            try {
+              await video.add(sample);
+            } finally {
+              sample.close();
+              endEncode?.();
+            }
+          },
+        )
         .catch((error: unknown) => {
           checkCancelled();
           if (error instanceof DOMException && error.name === "AbortError") throw error;
@@ -171,17 +196,8 @@ export async function exportBrowserVideo(
             cause: error,
           });
         });
-      executionBackends.add(result.executionProfile.surfaceBackend);
-      if (result.frame.renderId !== info.renderId || result.frame.index !== sourceFrame) {
-        throw new Error("Export frame does not match the frozen render package.");
-      }
       checkCancelled();
-      // Derive every timestamp from the absolute frame number, never an accumulated float clock.
-      const timestamp = plan.timestamp(frame);
       const nextTimestamp = plan.endTimestamp(frame);
-      const endEncode = input.trace?.span("encode.push", { frame: sourceFrame });
-      await video.add(timestamp, nextTimestamp - timestamp);
-      endEncode?.();
       await addAudioUntil(nextTimestamp);
       options.onProgress?.({
         phase: "rendering",

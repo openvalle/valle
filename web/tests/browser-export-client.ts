@@ -11,6 +11,7 @@ import {
 import { decodeAudioBuffer } from "../packages/engine/src/media/audio-source.ts";
 import { createMediaInput } from "../packages/engine/src/media/input.ts";
 import { BrowserValleWebPlayer } from "../packages/engine/src/runtime/product-controller.ts";
+import { GpuInstances } from "../packages/engine/src/executor/webgl/instances.ts";
 
 const status = document.getElementById("status")!;
 const report: Array<Record<string, unknown>> = [];
@@ -509,6 +510,122 @@ async function checkDeliverySettings() {
     AudioEncoder.prototype.configure = configureAudio;
   }
 }
+
+async function checkGpuInstancesAndExportHandoff() {
+  const config = await input("instances");
+  const batch = GpuInstances.prototype.batch;
+  const crop = GpuInstances.prototype.canCrop;
+  const begin = GpuInstances.prototype.beginFrame;
+  const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+  let enabled = false,
+    deny = false,
+    copies = 0,
+    rectangles = 0;
+  GpuInstances.prototype.batch = function (...args) {
+    const before = this.stats.rectangles;
+    const result = enabled && batch.apply(this, args);
+    rectangles += this.stats.rectangles - before;
+    return result;
+  };
+  GpuInstances.prototype.canCrop = function (...args) {
+    return enabled && !deny && crop.apply(this, args);
+  };
+  GpuInstances.prototype.beginFrame = function (borrow) {
+    begin.call(this, deny ? () => false : borrow);
+  };
+  CanvasRenderingContext2D.prototype.drawImage = function (
+    this: CanvasRenderingContext2D,
+    source,
+    ...args
+  ) {
+    if (source instanceof HTMLCanvasElement && source.getContext("webgl2")) copies++;
+    return Reflect.apply(drawImage, this, [source, ...args]);
+  } as typeof drawImage;
+  const players: BrowserValleWebPlayer[] = [];
+  const canvases = [
+    document.createElement("canvas"),
+    document.createElement("canvas"),
+    document.createElement("canvas"),
+  ];
+  try {
+    for (const canvas of canvases) {
+      const player = new BrowserValleWebPlayer({
+        ...config,
+        canvas,
+        gpu: true,
+        renderMode: "reference",
+        runtimePurpose: "export",
+      });
+      players.push(player);
+      await player.init();
+    }
+    const seen = new Map<number, Uint8ClampedArray>();
+    for (const frame of [0, 3, 6, 3]) {
+      const pixels: Uint8ClampedArray[] = [];
+      for (let i = 0; i < players.length; i++) {
+        enabled = i !== 0;
+        deny = i === 2;
+        await players[i]!.renderFrame(frame);
+        pixels.push(
+          canvases[i]!.getContext("2d", { willReadFrequently: true })!.getImageData(0, 0, 640, 360)
+            .data,
+        );
+      }
+      const baseline = pixels[0]!;
+      for (const actual of pixels.slice(1))
+        assert(
+          actual.every((v, i) => v === baseline[i]),
+          `rectangle coverage or budget fallback changed frame ${frame}`,
+        );
+      const prior = seen.get(frame);
+      if (prior)
+        assert(
+          prior.every((v, i) => v === pixels[1]![i]),
+          "rectangle seek changed pixels",
+        );
+      seen.set(frame, pixels[1]!);
+    }
+    const diagnostics = players[1]!.geometryGpuDiagnostics;
+    assert(
+      diagnostics && diagnostics.rectangles > 0 && diagnostics.programCompiles === 1,
+      "opaque rectangle GPU path was not exercised",
+    );
+    assert(
+      players[2]!.geometryGpuDiagnostics?.allocatedBytes === 0,
+      "denied geometry budget allocated GPU storage",
+    );
+    enabled = true;
+    deny = false;
+    copies = 0;
+    const before = rectangles;
+    const result = await exportBrowserVideo({ ...config, gpu: true }, { includeAudio: false });
+    assert(
+      result.executionBackends?.includes("canvaskit-gpu") && rectangles > before,
+      "reference export did not batch GPU rectangles",
+    );
+    assert(copies === 0, `GPU export used ${copies} Canvas2D copies`);
+    await save("gpu-instances", result);
+    const cpu = await exportBrowserVideo({ ...config, gpu: false }, { includeAudio: false });
+    assert(
+      cpu.executionBackends?.includes("canvaskit-cpu"),
+      "software export fallback was not exercised",
+    );
+    await save("cpu-instances", cpu);
+    report.push({
+      fixture: "gpu-instances-and-direct-export",
+      status: "pass",
+      diagnostics,
+      canvas2dCopies: copies,
+    });
+    show();
+  } finally {
+    GpuInstances.prototype.batch = batch;
+    GpuInstances.prototype.canCrop = crop;
+    GpuInstances.prototype.beginFrame = begin;
+    CanvasRenderingContext2D.prototype.drawImage = drawImage;
+    for (const player of players) await player.close();
+  }
+}
 try {
   for (const fixture of ["motion", "av", "short-av", "fractional", "video", "video-av"]) {
     const config = await input(fixture);
@@ -539,6 +656,7 @@ try {
   await checkVideoColor();
   await checkDirectAudioPcm();
   await checkDeliverySettings();
+  await checkGpuInstancesAndExportHandoff();
   const controller = new AbortController();
   let cancelledFrames = 0;
   try {
