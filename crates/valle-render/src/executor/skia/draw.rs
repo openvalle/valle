@@ -4431,9 +4431,15 @@ fn draw_instance_batch(
         }
         _ => None,
     };
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     let gpu = canvas.recording_context().is_some();
-    #[cfg(not(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows"))))]
+    #[cfg(not(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    )))]
     let gpu = false;
     for row in 0..batch.instances.len() {
         let opacity = batch.instances.opacities[row];

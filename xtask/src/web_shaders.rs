@@ -8,8 +8,8 @@ use naga::{
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, fs, path::Path};
 
-const METAL: &str =
-    include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/metal.wgsl");
+const COMMON: &str =
+    include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/common.wgsl");
 const ASSETS: &str =
     include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/assets.wgsl");
 const LIGHTING: &str =
@@ -66,7 +66,7 @@ fn source() -> Result<String> {
         "return web_divide(a,b,q);",
     );
     let source =
-        format!("{METAL}\n{ASSETS}\n{lighting}\n{SHADOWS}\n{RASTER}\n{TRANSPARENCY}\n{PRECISION}");
+        format!("{COMMON}\n{ASSETS}\n{lighting}\n{SHADOWS}\n{RASTER}\n{TRANSPARENCY}\n{PRECISION}");
     let source = source.replace(
         "var<storage, read> shading: array<vec4<f32>>;",
         "var shadingData: texture_2d<f32>;\nfn shading_at(index:u32)->vec4<f32>{let width=textureDimensions(shadingData).x;return textureLoad(shadingData,vec2<i32>(i32(index%width),i32(index/width)),0);}",

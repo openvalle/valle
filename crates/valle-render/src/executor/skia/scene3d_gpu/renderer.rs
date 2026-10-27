@@ -303,7 +303,8 @@ impl GpuRasterizer {
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING | interop_copy_usage(),
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | interop_copy_usage(),
                 view_formats: &[],
             })
         };
@@ -491,23 +492,45 @@ impl GpuRasterizer {
             )
         });
         let color_texture = transparency.as_ref().map_or(&color, |o| &o.color);
-        let depth_texture = dof.then(|| {
-            transparency.as_ref().map(|o| &o.depth).or(packed_depth.as_ref())
-        }).flatten();
+        let depth_texture = dof
+            .then(|| {
+                transparency
+                    .as_ref()
+                    .map(|o| &o.depth)
+                    .or(packed_depth.as_ref())
+            })
+            .flatten();
         // Establish the producer -> compositor dependency before submitting. On Vulkan this
         // transitions both images to SHADER_READ_ONLY_OPTIMAL, including compute OIT output.
         // Ganesh samples them on the exact same device/queue; no CPU wait/readback is involved.
         #[cfg(any(target_os = "linux", target_os = "windows"))]
-        encoder.transition_resources(std::iter::empty(),
-            std::iter::once(color_texture).chain(depth_texture).map(|texture| wgpu::TextureTransition {
-                texture, selector: None, state: wgpu::TextureUses::RESOURCE,
-            }));
+        encoder.transition_resources(
+            std::iter::empty(),
+            std::iter::once(color_texture)
+                .chain(depth_texture)
+                .map(|texture| wgpu::TextureTransition {
+                    texture,
+                    selector: None,
+                    state: wgpu::TextureUses::RESOURCE,
+                }),
+        );
         self.queue.submit([encoder.finish()]);
-        let depth_image = depth_texture.map(|texture| {
-            import_image(context, texture, ColorType::RGBA8888, AlphaType::Unpremul, None)
-        }).transpose()?;
+        let depth_image = depth_texture
+            .map(|texture| {
+                import_image(
+                    context,
+                    texture,
+                    ColorType::RGBA8888,
+                    AlphaType::Unpremul,
+                    None,
+                )
+            })
+            .transpose()?;
         let image = import_image(
-            context, color_texture, ColorType::RGBAF16, AlphaType::Premul,
+            context,
+            color_texture,
+            ColorType::RGBAF16,
+            AlphaType::Premul,
             Some(if geometry.shading.is_some() {
                 ColorSpace::new_srgb()
             } else {

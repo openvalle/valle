@@ -167,7 +167,10 @@ impl SkiaExecutor {
         Ok(self.surfaces.submit_shared_frame(target)?)
     }
 
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     pub(crate) fn opacity_layer_cache_usage(&self) -> (usize, bool) {
         let cache = self
             .caches
@@ -179,7 +182,9 @@ impl SkiaExecutor {
 
     #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
     pub(crate) fn supports_async_vulkan_output(&mut self) -> bool {
-        self.surfaces.vulkan_context_mut().is_some_and(|c| c.shared_device().is_some())
+        self.surfaces
+            .vulkan_context_mut()
+            .is_some_and(|c| c.shared_device().is_some())
     }
 
     #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
@@ -189,16 +194,23 @@ impl SkiaExecutor {
 
     #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
     pub(crate) fn acquire_vulkan_output(
-        &mut self, width: u32, height: u32, output: valle_engine::resource::OutputSpec,
+        &mut self,
+        width: u32,
+        height: u32,
+        output: valle_engine::resource::OutputSpec,
     ) -> Result<super::vulkan_delivery::VulkanOutput, SkiaExecuteError> {
-        let context = self.surfaces.vulkan_context_mut().ok_or_else(||
-            super::surface::SurfaceError::VulkanUnavailable("output requires Vulkan".into()))?;
-        Ok(super::vulkan_delivery::VulkanOutput::new(context, width, height, output)?)
+        let context = self.surfaces.vulkan_context_mut().ok_or_else(|| {
+            super::surface::SurfaceError::VulkanUnavailable("output requires Vulkan".into())
+        })?;
+        Ok(super::vulkan_delivery::VulkanOutput::new(
+            context, width, height, output,
+        )?)
     }
 
     #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
     pub(crate) fn submit_vulkan_output(
-        &mut self, output: super::vulkan_delivery::VulkanOutput,
+        &mut self,
+        output: super::vulkan_delivery::VulkanOutput,
     ) -> Result<super::vulkan_delivery::SubmittedVulkanOutput, SkiaExecuteError> {
         Ok(self.surfaces.submit_vulkan_output(output)?)
     }
@@ -1028,7 +1040,10 @@ impl AdmittedSkiaFrame<'_> {
                 started.elapsed().as_secs_f64() * 1_000.0,
             );
         }
-        #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        #[cfg(all(
+            feature = "native",
+            any(target_os = "macos", target_os = "linux", target_os = "windows")
+        ))]
         if !target.is_direct_gpu() {
             surface_frame.release_completed_external_imports();
         }
@@ -2022,7 +2037,10 @@ fn commit_output(
         }
         return Ok(());
     }
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     if surface_frame.backend_kind() != super::surface::SkiaBackendKind::Raster
         && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
     {

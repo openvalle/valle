@@ -18,12 +18,20 @@ pub(super) fn import_image(
     // the image to RESOURCE before submission. SurfaceArena retains the wgpu owner until
     // all Ganesh reads complete, including early errors, invalidation and context teardown.
     unsafe {
-        let raw = texture.as_hal::<wgpu::hal::api::Vulkan>()
+        let raw = texture
+            .as_hal::<wgpu::hal::api::Vulkan>()
             .ok_or("Vulkan texture unavailable")?;
         let mut info = gpu::vk::ImageInfo::new(
-            raw.raw_handle().as_raw() as _, gpu::vk::Alloc::default(),
-            gpu::vk::ImageTiling::OPTIMAL, gpu::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            format, 1, None, None, None, None,
+            raw.raw_handle().as_raw() as _,
+            gpu::vk::Alloc::default(),
+            gpu::vk::ImageTiling::OPTIMAL,
+            gpu::vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            format,
+            1,
+            None,
+            None,
+            None,
+            None,
         );
         let usage = texture.usage();
         let mut flags = ash::vk::ImageUsageFlags::SAMPLED;
@@ -41,10 +49,18 @@ pub(super) fn import_image(
         }
         info.image_usage_flags = flags.as_raw();
         let backend = gpu::backend_textures::make_vk(
-            (texture.width() as i32, texture.height() as i32), &info, "Scene3D Vulkan",
+            (texture.width() as i32, texture.height() as i32),
+            &info,
+            "Scene3D Vulkan",
         );
         gpu::images::borrow_texture_from(
-            context, &backend, gpu::SurfaceOrigin::TopLeft, color, alpha, space,
-        ).ok_or_else(|| "cannot import Scene3D Vulkan texture".into())
+            context,
+            &backend,
+            gpu::SurfaceOrigin::TopLeft,
+            color,
+            alpha,
+            space,
+        )
+        .ok_or_else(|| "cannot import Scene3D Vulkan texture".into())
     }
 }

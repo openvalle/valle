@@ -46,9 +46,12 @@ fn project() -> NativeProject {
 fn vulkan_image_upload_survives_surface_reset_and_context_recreation() {
     let project = project();
     let spec = RenderSpec::new(
-        128, 128, RenderQuality::Final,
+        128,
+        128,
+        RenderQuality::Final,
         OutputSpec::srgb_delivery(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
     let mut baseline = None;
     for _ in 0..3 {
         let mut runner = project.frame_runner(SkiaBackendKind::Vulkan).unwrap();

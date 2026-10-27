@@ -249,7 +249,12 @@ fn fullhd_sphere_matches_raster_on_real_gpu() {
         assert_ne!(&pixels[center..center + 4], &[0, 0, 0, 255]);
         renders.push(pixels);
     }
-    let worst = renders[0].iter().zip(&renders[1]).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    let worst = renders[0]
+        .iter()
+        .zip(&renders[1])
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap();
     assert!(worst <= 2, "Scene3D GPU/CPU max channel diff {worst}");
 }
 
@@ -289,10 +294,7 @@ export default function DepthOfField() {
         let gpu = render(dir.path(), &name, &source, GPU);
         if radius >= 6.0 {
             assert_ne!(raster, sharp, "CPU depth of field did not change the image");
-            assert_ne!(
-                gpu, sharp,
-                "GPU depth of field did not change the image"
-            );
+            assert_ne!(gpu, sharp, "GPU depth of field did not change the image");
         }
         let worst = raster
             .iter()
@@ -321,7 +323,10 @@ export default function Filters() {
 "##;
     let raster = render(dir.path(), "blur-shadow", source, "raster");
     let gpu = render(dir.path(), "blur-shadow", source, GPU);
-    assert!(gpu.chunks_exact(4).any(|pixel| pixel[3] > 0 && pixel[3] < 255));
+    assert!(
+        gpu.chunks_exact(4)
+            .any(|pixel| pixel[3] > 0 && pixel[3] < 255)
+    );
     assert!(gpu.chunks_exact(4).any(|pixel| pixel[3] == 0));
     // Compare visible premultiplied colors: straight RGB at zero alpha is undefined.
     for (cpu, gpu) in raster.chunks_exact(4).zip(gpu.chunks_exact(4)) {

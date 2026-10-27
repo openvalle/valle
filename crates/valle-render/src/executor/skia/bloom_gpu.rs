@@ -42,12 +42,12 @@ struct Effects {
 impl Effects {
     fn compile() -> Result<Self, DrawError> {
         let compile = |name, source| {
-            RuntimeEffect::make_for_shader(super::f16_gpu::rounded_shader(source), None).map_err(|message| {
-                DrawError::ShaderCompile {
+            RuntimeEffect::make_for_shader(super::f16_gpu::rounded_shader(source), None).map_err(
+                |message| DrawError::ShaderCompile {
                     uri: format!("builtin://gpu-pyramid/{name}"),
                     message,
-                }
-            })
+                },
+            )
         };
         Ok(Self {
             threshold: compile("threshold", THRESHOLD)?,

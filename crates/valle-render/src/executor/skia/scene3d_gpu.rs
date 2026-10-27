@@ -13,14 +13,14 @@ use valle_engine::motion::scene3d::{Frame3DState, GpuRasterGeometry, PreparedSce
 mod assets;
 #[cfg(target_os = "macos")]
 pub(super) mod metal;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-mod vulkan;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod renderer;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod shadows;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod transparency;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod vulkan;
 #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 pub(super) use renderer::{GpuRasterOutput, GpuRasterizer};
 

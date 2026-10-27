@@ -1,14 +1,30 @@
 //! Vulkan submission, asynchronous readback and ordered delivery on real hardware.
 #![cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
 
-use std::{sync::Arc, time::{Duration, Instant}};
 use serde_json::json;
-use valle_compiler::timeline_contract::{ResourceEntryWire, canonical_bytes, decode_canonical, decode_resource_manifest};
-use valle_engine::{fixed_package::*, frame::{RenderQuality, RenderSpec}, render::{Capabilities, FrameKey,
-    ResourceBinding, ResourceBindings, VerifiedHandleId, VerifiedResourceFacts, VisualFootprint},
-    resource::{ContentDigest, OutputBackground, OutputSpec}};
-use valle_render::{executor::skia::SkiaBackendKind, host::{DeliveredFrame, FrameDelivery, FrameSink,
-    NativeProject, NativeResourceCatalog, NativeRenderBudget, PipelineError, RenderControl, RenderTrace, render_schedule}};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use valle_compiler::timeline_contract::{
+    ResourceEntryWire, canonical_bytes, decode_canonical, decode_resource_manifest,
+};
+use valle_engine::{
+    fixed_package::*,
+    frame::{RenderQuality, RenderSpec},
+    render::{
+        Capabilities, FrameKey, ResourceBinding, ResourceBindings, VerifiedHandleId,
+        VerifiedResourceFacts, VisualFootprint,
+    },
+    resource::{ContentDigest, OutputBackground, OutputSpec},
+};
+use valle_render::{
+    executor::skia::SkiaBackendKind,
+    host::{
+        DeliveredFrame, FrameDelivery, FrameSink, NativeProject, NativeRenderBudget,
+        NativeResourceCatalog, PipelineError, RenderControl, RenderTrace, render_schedule,
+    },
+};
 
 const WIDTH: u32 = 98;
 const HEIGHT: u32 = 64;
@@ -136,16 +152,30 @@ impl FrameSink for InspectSink {
     fn push(&mut self, frame: DeliveredFrame<'_>) -> anyhow::Result<()> {
         assert_eq!(frame.sequence, self.pixels.len());
         assert_eq!(frame.evidence.delivery, FrameDelivery::AsyncCpuReadback);
-        assert_eq!(frame.evidence.delivery_readback_bytes, u64::from(WIDTH * HEIGHT * 4));
+        assert_eq!(
+            frame.evidence.delivery_readback_bytes,
+            u64::from(WIDTH * HEIGHT * 4)
+        );
         assert!(frame.evidence.timings.gpu_completion_wait_us.is_some());
-        if self.fail_at == Some(frame.sequence) { anyhow::bail!("intentional sink failure"); }
-        if self.slow { std::thread::sleep(Duration::from_millis(8)); }
+        if self.fail_at == Some(frame.sequence) {
+            anyhow::bail!("intentional sink failure");
+        }
+        if self.slow {
+            std::thread::sleep(Duration::from_millis(8));
+        }
         self.keys.push(frame.key.index());
         self.pixels.push(frame.pixels.data.clone());
-        if frame.sequence == 2 && let Some(control) = &self.cancel { control.cancel(); }
+        if frame.sequence == 2
+            && let Some(control) = &self.cancel
+        {
+            control.cancel();
+        }
         Ok(())
     }
-    fn finish(&mut self) -> anyhow::Result<()> { self.finished = true; Ok(()) }
+    fn finish(&mut self) -> anyhow::Result<()> {
+        self.finished = true;
+        Ok(())
+    }
 }
 
 #[test]
@@ -155,32 +185,69 @@ fn asynchronous_readback_preserves_pixels_seek_order_and_budget() {
         let project = project_with_gpu_raster(gpu);
         let frames = [0, 7, 20, 59, 12, 45, 7, 1, 30, 2, 58, 0, 59, 30, 12, 7].map(FrameKey::new);
         let mut reference = project.frame_runner(SkiaBackendKind::Vulkan).unwrap();
-        let expected: Vec<_> = frames.iter().map(|&key| reference.render_rgba8(key, spec()).unwrap().0.data).collect();
+        let expected: Vec<_> = frames
+            .iter()
+            .map(|&key| reference.render_rgba8(key, spec()).unwrap().0.data)
+            .collect();
         for threads in [1, 2, 4] {
             let trace = RenderTrace::new(100_000);
-            let control = RenderControl::default().with_trace(trace.clone()).with_budget(
-                NativeRenderBudget::new(threads, Some(24 * 1024 * 1024)).unwrap());
-            let mut sink = InspectSink { slow: threads == 4, ..Default::default() };
-            let report = render_schedule(&project, &frames, spec(), &mut sink, &control, None,
-                SkiaBackendKind::Vulkan).unwrap();
+            let control = RenderControl::default()
+                .with_trace(trace.clone())
+                .with_budget(NativeRenderBudget::new(threads, Some(24 * 1024 * 1024)).unwrap());
+            let mut sink = InspectSink {
+                slow: threads == 4,
+                ..Default::default()
+            };
+            let report = render_schedule(
+                &project,
+                &frames,
+                spec(),
+                &mut sink,
+                &control,
+                None,
+                SkiaBackendKind::Vulkan,
+            )
+            .unwrap();
             assert!(sink.finished);
             assert_eq!(sink.keys, frames.map(|key| key.index()));
             for (index, (actual, expected)) in sink.pixels.iter().zip(&expected).enumerate() {
                 let different = actual.iter().zip(expected).filter(|(a, b)| a != b).count();
-                let maximum = actual.iter().zip(expected).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-                assert_eq!(different, 0, "gpu={gpu}, threads={threads}, frame={index}, max difference={maximum}");
+                let maximum = actual
+                    .iter()
+                    .zip(expected)
+                    .map(|(a, b)| a.abs_diff(*b))
+                    .max()
+                    .unwrap();
+                assert_eq!(
+                    different, 0,
+                    "gpu={gpu}, threads={threads}, frame={index}, max difference={maximum}"
+                );
             }
             assert_eq!(report.frames, frames.len());
-            assert_eq!(report.scene3d_gpu_rasters, if gpu { frames.len() as u64 } else { 0 });
-            assert_eq!(report.scene3d_cpu_fallbacks, if gpu { 0 } else { frames.len() as u64 });
+            assert_eq!(
+                report.scene3d_gpu_rasters,
+                if gpu { frames.len() as u64 } else { 0 }
+            );
+            assert_eq!(
+                report.scene3d_cpu_fallbacks,
+                if gpu { 0 } else { frames.len() as u64 }
+            );
             let memory = report.budget.unwrap().memory;
             assert_eq!(memory.used_bytes, 0);
             assert!(memory.peak_bytes <= 24 * 1024 * 1024);
             let events = trace.snapshot(json!({}));
-            let queues: Vec<_> = events["traceEvents"].as_array().unwrap().iter()
-                .filter(|e| e["name"] == "vulkan.queue").collect();
+            let queues: Vec<_> = events["traceEvents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["name"] == "vulkan.queue")
+                .collect();
             assert_eq!(queues.len(), frames.len());
-            assert!(queues.iter().all(|e| e["args"]["pending"].as_u64().unwrap() <= threads.min(3) as u64));
+            assert!(
+                queues
+                    .iter()
+                    .all(|e| e["args"]["pending"].as_u64().unwrap() <= threads.min(3) as u64)
+            );
         }
     }
 }
@@ -194,19 +261,41 @@ fn cancellation_and_sink_failure_retire_pending_gpu_resources() {
         let budget = NativeRenderBudget::new(4, Some(32 * 1024 * 1024)).unwrap();
         let control = RenderControl::default().with_budget(budget);
         let mut sink = InspectSink {
-            fail_at: (!cancel).then_some(3), cancel: cancel.then(|| control.clone()), ..Default::default()
+            fail_at: (!cancel).then_some(3),
+            cancel: cancel.then(|| control.clone()),
+            ..Default::default()
         };
         let started = Instant::now();
-        let error = render_schedule(&project, &frames, spec(), &mut sink, &control, None,
-            SkiaBackendKind::Vulkan).unwrap_err();
+        let error = render_schedule(
+            &project,
+            &frames,
+            spec(),
+            &mut sink,
+            &control,
+            None,
+            SkiaBackendKind::Vulkan,
+        )
+        .unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(30));
         assert!(!sink.finished);
         assert_eq!(sink.keys, [0, 1, 2]);
-        assert!(matches!(error, PipelineError::Cancelled) || (!cancel && error.to_string().contains("intentional sink failure")), "{error}");
+        assert!(
+            matches!(error, PipelineError::Cancelled)
+                || (!cancel && error.to_string().contains("intentional sink failure")),
+            "{error}"
+        );
         // A fresh context must remain usable after all pending work was discarded.
         let mut recovery = InspectSink::default();
-        render_schedule(&project, &frames[..4], spec(), &mut recovery, &RenderControl::default(), None,
-            SkiaBackendKind::Vulkan).unwrap();
+        render_schedule(
+            &project,
+            &frames[..4],
+            spec(),
+            &mut recovery,
+            &RenderControl::default(),
+            None,
+            SkiaBackendKind::Vulkan,
+        )
+        .unwrap();
         assert!(recovery.finished);
     }
 }

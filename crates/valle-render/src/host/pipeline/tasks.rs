@@ -180,8 +180,19 @@ pub(super) fn render(
                     let mut executor = control.execution_stage(project, backend, spec)?;
                     #[cfg(any(target_os = "linux", target_os = "windows"))]
                     if shared.is_none() && executor.supports_async_vulkan_output(spec) {
-                        return vulkan::run(executor, project, spec, control, &prepared, &output,
-                            abort, failed, sink_us, frames.len(), window);
+                        return vulkan::run(
+                            executor,
+                            project,
+                            spec,
+                            control,
+                            &prepared,
+                            &output,
+                            abort,
+                            failed,
+                            sink_us,
+                            frames.len(),
+                            window,
+                        );
                     }
                     while let Some((sequence, key, packet)) =
                         receive(&prepared, abort, control, || {
@@ -329,8 +340,10 @@ pub(super) fn render(
                 }
                 .map_err(|e| PipelineError::Sink(e.to_string()))?;
                 #[cfg(any(target_os = "linux", target_os = "windows"))]
-                sink_us.store(sink_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
-                    Ordering::Release);
+                sink_us.store(
+                    sink_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+                    Ordering::Release,
+                );
                 drop(memory);
                 drop(delivery_memory);
                 delivered += 1;

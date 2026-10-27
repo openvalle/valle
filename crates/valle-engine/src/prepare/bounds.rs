@@ -1389,7 +1389,10 @@ mod tests {
             assert!(bounds.output.pixels() < bounds.content.pixels());
             assert_eq!(bounds.validate_wire(), Ok(()));
             let wire = serde_json::to_value(bounds).unwrap();
-            assert_eq!(serde_json::from_value::<PreparedBounds>(wire).unwrap(), bounds);
+            assert_eq!(
+                serde_json::from_value::<PreparedBounds>(wire).unwrap(),
+                bounds
+            );
         }
     }
 

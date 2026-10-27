@@ -273,10 +273,17 @@ pub fn render_schedule(
         && !sink.shared_frame_cpu_readback();
     let asynchronous_gpu = shared_gpu;
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    let asynchronous_gpu = asynchronous_gpu || (backend == SkiaBackendKind::Vulkan
-        && spec.output().alpha() == valle_engine::resource::OutputAlphaMode::Opaque
-        && spec.output().bit_depth() == valle_engine::resource::OutputBitDepth::Eight);
-    let contexts = if shared_gpu { 3 } else if asynchronous_gpu { workers.min(3) } else { 1 };
+    let asynchronous_gpu = asynchronous_gpu
+        || (backend == SkiaBackendKind::Vulkan
+            && spec.output().alpha() == valle_engine::resource::OutputAlphaMode::Opaque
+            && spec.output().bit_depth() == valle_engine::resource::OutputBitDepth::Eight);
+    let contexts = if shared_gpu {
+        3
+    } else if asynchronous_gpu {
+        workers.min(3)
+    } else {
+        1
+    };
     let owners = super::budget::ResidencyOwners {
         providers: 1,
         executors: if asynchronous_gpu {
@@ -1028,8 +1035,12 @@ impl PipelineAccumulator {
                         .ok_or(PipelineError::MissingDeliveryEvidence)?,
                 )?;
                 if evidence.delivery == FrameDelivery::AsyncCpuReadback {
-                    self.gpu_completion_wait_us = add_u64(self.gpu_completion_wait_us,
-                        timings.gpu_completion_wait_us.ok_or(PipelineError::MissingDeliveryEvidence)?)?;
+                    self.gpu_completion_wait_us = add_u64(
+                        self.gpu_completion_wait_us,
+                        timings
+                            .gpu_completion_wait_us
+                            .ok_or(PipelineError::MissingDeliveryEvidence)?,
+                    )?;
                 } else if timings.gpu_completion_wait_us.is_some() {
                     return Err(PipelineError::InvalidDeliveryEvidence);
                 }

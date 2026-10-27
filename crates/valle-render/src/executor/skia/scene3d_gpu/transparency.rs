@@ -149,7 +149,8 @@ impl Transparency {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::STORAGE_BINDING
                     | super::renderer::interop_copy_usage(),
                 view_formats: &[],
             })

@@ -554,23 +554,29 @@ fn renderer() -> (GpuRasterizer, gpu::DirectContext) {
     (GpuRasterizer::new(device, queue).unwrap(), context)
 }
 
-
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 struct TestContext(super::super::super::vulkan::VulkanContext);
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 impl std::ops::Deref for TestContext {
     type Target = gpu::DirectContext;
-    fn deref(&self) -> &Self::Target { &self.0.context }
+    fn deref(&self) -> &Self::Target {
+        &self.0.context
+    }
 }
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 impl std::ops::DerefMut for TestContext {
-    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0.context }
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0.context
+    }
 }
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn renderer() -> (GpuRasterizer, TestContext) {
     let context = super::super::super::vulkan::VulkanContext::new().unwrap();
     let (device, queue) = context.shared_device().expect("real shared Vulkan device");
-    (GpuRasterizer::new(device, queue).unwrap(), TestContext(context))
+    (
+        GpuRasterizer::new(device, queue).unwrap(),
+        TestContext(context),
+    )
 }
 
 #[test]

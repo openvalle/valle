@@ -17,8 +17,13 @@ pub(super) struct VulkanContext {
 }
 
 enum VulkanOwner {
-    Shared { device: wgpu::Device, queue: wgpu::Queue },
-    RasterOnly { _device: DeviceOwner },
+    Shared {
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    },
+    RasterOnly {
+        _device: DeviceOwner,
+    },
 }
 
 struct InstanceOwner {
@@ -94,7 +99,10 @@ impl VulkanContext {
         let mut allocated = 0_u64;
         let mut available = 0_u64;
         for i in 0..heaps.memory_heap_count as usize {
-            if heaps.memory_heaps[i].flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL) {
+            if heaps.memory_heaps[i]
+                .flags
+                .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
+            {
                 allocated = allocated.saturating_add(budget.heap_usage[i]);
                 available = available.saturating_add(budget.heap_budget[i]);
             }
@@ -110,8 +118,14 @@ impl VulkanContext {
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN));
-        adapters.retain(|adapter| matches!(adapter.get_info().device_type,
-            wgpu::DeviceType::DiscreteGpu | wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::VirtualGpu));
+        adapters.retain(|adapter| {
+            matches!(
+                adapter.get_info().device_type,
+                wgpu::DeviceType::DiscreteGpu
+                    | wgpu::DeviceType::IntegratedGpu
+                    | wgpu::DeviceType::VirtualGpu
+            )
+        });
         adapters.sort_by_key(|adapter| match adapter.get_info().device_type {
             wgpu::DeviceType::DiscreteGpu => 0,
             wgpu::DeviceType::IntegratedGpu => 1,
@@ -119,14 +133,18 @@ impl VulkanContext {
         });
         let mut last_error = unavailable("no hardware wgpu Vulkan adapter");
         for adapter in adapters {
-            let result = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .map_err(|error| unavailable(format!("create shared Vulkan device: {error}")))
-                .and_then(|(device, queue)| Self::from_wgpu(device, queue));
+            let result =
+                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                    .map_err(|error| unavailable(format!("create shared Vulkan device: {error}")))
+                    .and_then(|(device, queue)| Self::from_wgpu(device, queue));
             match result {
                 Ok(context) => {
                     if std::env::var_os("VALLE_PERF").is_some() {
-                        eprintln!("[valle vulkan] device={} shared-wgpu initialize={:.3}ms",
-                            adapter.get_info().name, started.elapsed().as_secs_f64() * 1000.0);
+                        eprintln!(
+                            "[valle vulkan] device={} shared-wgpu initialize={:.3}ms",
+                            adapter.get_info().name,
+                            started.elapsed().as_secs_f64() * 1000.0
+                        );
                     }
                     return Ok(context);
                 }
@@ -146,31 +164,50 @@ impl VulkanContext {
             let get_proc = |of| {
                 let function = unsafe {
                     match of {
-                        gpu::vk::GetProcOf::Instance(handle, name) => instance.entry()
+                        gpu::vk::GetProcOf::Instance(handle, name) => instance
+                            .entry()
                             .get_instance_proc_addr(vk::Instance::from_raw(handle as u64), name),
-                        gpu::vk::GetProcOf::Device(handle, name) => instance.raw_instance()
+                        gpu::vk::GetProcOf::Device(handle, name) => instance
+                            .raw_instance()
                             .get_device_proc_addr(vk::Device::from_raw(handle as u64), name),
                     }
                 };
-                function.map_or(std::ptr::null(), |function| function as *const std::ffi::c_void)
+                function.map_or(std::ptr::null(), |function| {
+                    function as *const std::ffi::c_void
+                })
             };
-            let instance_extensions: Vec<_> = instance.extensions().iter()
-                .filter_map(|name| name.to_str().ok()).collect();
-            let device_extensions: Vec<_> = raw.enabled_device_extensions().iter()
-                .filter_map(|name| name.to_str().ok()).collect();
+            let instance_extensions: Vec<_> = instance
+                .extensions()
+                .iter()
+                .filter_map(|name| name.to_str().ok())
+                .collect();
+            let device_extensions: Vec<_> = raw
+                .enabled_device_extensions()
+                .iter()
+                .filter_map(|name| name.to_str().ok())
+                .collect();
             let backend = unsafe {
                 gpu::vk::BackendContext::new_builder(
                     instance.raw_instance().handle().as_raw() as _,
-                    raw.raw_physical_device().as_raw() as _, raw.raw_device().handle().as_raw() as _,
-                    (raw.raw_queue().as_raw() as _, raw.queue_family_index() as usize),
-                    &get_proc, Some(instance.instance_api_version().into()),
-                ).with_extensions(&instance_extensions, &device_extensions).build()
+                    raw.raw_physical_device().as_raw() as _,
+                    raw.raw_device().handle().as_raw() as _,
+                    (
+                        raw.raw_queue().as_raw() as _,
+                        raw.queue_family_index() as usize,
+                    ),
+                    &get_proc,
+                    Some(instance.instance_api_version().into()),
+                )
+                .with_extensions(&instance_extensions, &device_extensions)
+                .build()
             };
             gpu::direct_contexts::make_vulkan(&backend, None)
                 .ok_or_else(|| unavailable("cannot create Ganesh on wgpu Vulkan device"))?
         };
         let mut result = Self {
-            context, scene3d_gpu: None, owner: VulkanOwner::Shared { device, queue },
+            context,
+            scene3d_gpu: None,
+            owner: VulkanOwner::Shared { device, queue },
         };
         result.probe()?;
         Ok(result)
@@ -188,7 +225,10 @@ impl VulkanContext {
         let info = vk::InstanceCreateInfo::default().application_info(&app);
         let instance = unsafe { entry.create_instance(&info, None) }
             .map_err(|error| unavailable(format!("create Vulkan 1.1 instance: {error}")))?;
-        let owner = std::sync::Arc::new(InstanceOwner { instance, _entry: entry });
+        let owner = std::sync::Arc::new(InstanceOwner {
+            instance,
+            _entry: entry,
+        });
         let instance = &owner.instance;
         let physical_devices = unsafe { instance.enumerate_physical_devices() }
             .map_err(|error| unavailable(format!("enumerate GPUs: {error}")))?;
@@ -214,13 +254,16 @@ impl VulkanContext {
                 | vk::FormatFeatureFlags::TRANSFER_DST;
             if ![vk::Format::R16G16B16A16_SFLOAT, vk::Format::R8G8B8A8_UNORM]
                 .into_iter()
-                .all(|format| unsafe {
-                    instance.get_physical_device_format_properties(physical, format)
-                }.optimal_tiling_features.contains(required))
+                .all(|format| {
+                    unsafe { instance.get_physical_device_format_properties(physical, format) }
+                        .optimal_tiling_features
+                        .contains(required)
+                })
             {
                 continue;
             }
-            let families = unsafe { instance.get_physical_device_queue_family_properties(physical) };
+            let families =
+                unsafe { instance.get_physical_device_queue_family_properties(physical) };
             if let Some(index) = families.iter().position(|family| {
                 family.queue_count > 0 && family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
             }) {
@@ -234,8 +277,11 @@ impl VulkanContext {
                 Ok(context) => {
                     if std::env::var_os("VALLE_PERF").is_some() {
                         let name = unsafe { CStr::from_ptr(properties.device_name.as_ptr()) };
-                        eprintln!("[valle vulkan] device={} initialize={:.3}ms",
-                            name.to_string_lossy(), started.elapsed().as_secs_f64() * 1000.0);
+                        eprintln!(
+                            "[valle vulkan] device={} initialize={:.3}ms",
+                            name.to_string_lossy(),
+                            started.elapsed().as_secs_f64() * 1000.0
+                        );
                     }
                     return Ok(context);
                 }
@@ -257,20 +303,27 @@ impl VulkanContext {
         let info = vk::DeviceCreateInfo::default().queue_create_infos(&queues);
         let device = unsafe { instance.instance.create_device(physical, &info, None) }
             .map_err(|error| unavailable(format!("create graphics device: {error}")))?;
-        let owner = DeviceOwner { device, _instance: instance };
+        let owner = DeviceOwner {
+            device,
+            _instance: instance,
+        };
         let instance = &owner._instance;
         let queue = unsafe { owner.device.get_device_queue(family, 0) };
         let get_proc = |of| {
             // Skia resolves these functions synchronously while constructing its context.
             let function = unsafe {
                 match of {
-                    gpu::vk::GetProcOf::Instance(handle, name) => instance._entry
+                    gpu::vk::GetProcOf::Instance(handle, name) => instance
+                        ._entry
                         .get_instance_proc_addr(vk::Instance::from_raw(handle as u64), name),
-                    gpu::vk::GetProcOf::Device(handle, name) => instance.instance
+                    gpu::vk::GetProcOf::Device(handle, name) => instance
+                        .instance
                         .get_device_proc_addr(vk::Device::from_raw(handle as u64), name),
                 }
             };
-            function.map_or(std::ptr::null(), |function| function as *const std::ffi::c_void)
+            function.map_or(std::ptr::null(), |function| {
+                function as *const std::ffi::c_void
+            })
         };
         // SAFETY: DeviceOwner outlives Ganesh and every surface/image from this context.
         // Cap the API before Skia constructs its allocator, matching VkApplicationInfo.
@@ -282,13 +335,16 @@ impl VulkanContext {
                 (queue.as_raw() as _, family as usize),
                 &get_proc,
                 Some(API_VERSION.into()),
-            ).build()
+            )
+            .build()
         };
         let context = gpu::direct_contexts::make_vulkan(&backend, None)
             .ok_or_else(|| unavailable("cannot create Ganesh Vulkan context"))?;
         drop(backend);
         let mut result = Self {
-            context, scene3d_gpu: None, owner: VulkanOwner::RasterOnly { _device: owner },
+            context,
+            scene3d_gpu: None,
+            owner: VulkanOwner::RasterOnly { _device: owner },
         };
         result.probe()?;
         Ok(result)
@@ -300,9 +356,16 @@ impl VulkanContext {
         // An installed loader alone is not evidence that rendering works.
         let info = working_info(valle_engine::resource::Extent2d::new(1, 1).unwrap())?;
         let mut surface = gpu::surfaces::render_target(
-            &mut self.context, gpu::Budgeted::Yes, &info, None,
-            gpu::SurfaceOrigin::TopLeft, None, false, false,
-        ).ok_or_else(|| unavailable("cannot allocate F16 render target"))?;
+            &mut self.context,
+            gpu::Budgeted::Yes,
+            &info,
+            None,
+            gpu::SurfaceOrigin::TopLeft,
+            None,
+            false,
+            false,
+        )
+        .ok_or_else(|| unavailable("cannot allocate F16 render target"))?;
         surface.canvas().clear(skia_safe::Color::TRANSPARENT);
         let mut pixels = [0_u8; 8];
         if !surface.read_pixels(&info, &mut pixels, 8, (0, 0)) {
@@ -335,29 +398,51 @@ mod tests {
         let mut context = VulkanContext::new().unwrap();
         let info = working_info(valle_engine::resource::Extent2d::new(1, 1).unwrap()).unwrap();
         let mut surface = gpu::surfaces::render_target(
-            &mut context.context, gpu::Budgeted::Yes, &info, None,
-            gpu::SurfaceOrigin::TopLeft, None, false, false,
-        ).unwrap();
+            &mut context.context,
+            gpu::Budgeted::Yes,
+            &info,
+            None,
+            gpu::SurfaceOrigin::TopLeft,
+            None,
+            false,
+            false,
+        )
+        .unwrap();
         let effect = skia_safe::RuntimeEffect::make_for_shader(
             super::super::f16_gpu::rounded_shader(
-                "uniform float4 value; half4 main(float2 xy) { return half4(value); }"
-            ), None,
-        ).unwrap();
+                "uniform float4 value; half4 main(float2 xy) { return half4(value); }",
+            ),
+            None,
+        )
+        .unwrap();
         for (values, expected) in [
-            ([1.0006_f32, 0.5003, 0.25015, 1.0], [0x3c01, 0x3801, 0x3401, 0x3c00]),
-            ([1.0 + 1.0 / 2048.0, 1.0 + 3.0 / 2048.0, -1.0006, 1.0], [0x3c00, 0x3c02, 0xbc01, 0x3c00]),
-            ([0.0, 1.0 / 33_554_432.0, 3.0 / 33_554_432.0, 1.0], [0, 0, 2, 0x3c00]),
+            (
+                [1.0006_f32, 0.5003, 0.25015, 1.0],
+                [0x3c01, 0x3801, 0x3401, 0x3c00],
+            ),
+            (
+                [1.0 + 1.0 / 2048.0, 1.0 + 3.0 / 2048.0, -1.0006, 1.0],
+                [0x3c00, 0x3c02, 0xbc01, 0x3c00],
+            ),
+            (
+                [0.0, 1.0 / 33_554_432.0, 3.0 / 33_554_432.0, 1.0],
+                [0, 0, 2, 0x3c00],
+            ),
         ] {
             let bytes: Vec<_> = values.into_iter().flat_map(f32::to_ne_bytes).collect();
-            let shader = effect.make_shader(skia_safe::Data::new_copy(&bytes), &[], None).unwrap();
+            let shader = effect
+                .make_shader(skia_safe::Data::new_copy(&bytes), &[], None)
+                .unwrap();
             let mut paint = skia_safe::Paint::default();
             paint.set_shader(shader);
             paint.set_blend_mode(skia_safe::BlendMode::Src);
             surface.canvas().draw_paint(&paint);
             let mut pixels = [0_u8; 8];
             assert!(surface.read_pixels(&info, &mut pixels, 8, (0, 0)));
-            let bits: Vec<_> = pixels.chunks_exact(2)
-                .map(|bytes| u16::from_ne_bytes([bytes[0], bytes[1]])).collect();
+            let bits: Vec<_> = pixels
+                .chunks_exact(2)
+                .map(|bytes| u16::from_ne_bytes([bytes[0], bytes[1]]))
+                .collect();
             assert_eq!(bits, expected, "{values:?}");
         }
     }

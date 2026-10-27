@@ -681,7 +681,10 @@ impl<'a> SkiaTarget<'a> {
         })
     }
 
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     pub(crate) fn direct_gpu(
         surface: &'a mut Surface,
         output: OutputSpec,
@@ -717,7 +720,10 @@ impl<'a> SkiaTarget<'a> {
         true
     }
 
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     pub(crate) fn commit_image(&mut self, image: &Image) -> bool {
         if *image.image_info() != self.surface.image_info() {
             return false;

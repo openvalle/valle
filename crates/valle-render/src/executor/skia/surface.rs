@@ -8,12 +8,15 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
-#[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-use skia_safe::{gpu, BlendMode, Color4f, Paint, Shader};
 use skia_safe::{
     AlphaType, ColorSpace, ColorType, IRect, Image, ImageInfo, Surface, named_primaries,
     named_transfer_fn, surfaces,
 };
+#[cfg(all(
+    feature = "native",
+    any(target_os = "macos", target_os = "linux", target_os = "windows")
+))]
+use skia_safe::{BlendMode, Color4f, Paint, Shader, gpu};
 #[cfg(all(target_os = "macos", feature = "native"))]
 use skia_safe::{EncodedOrigin, YUVAInfo, YUVColorSpace};
 
@@ -823,7 +826,10 @@ pub(crate) struct SurfaceArena {
     #[cfg(all(target_os = "macos", feature = "native"))]
     pending_external_imports: Vec<ImportedMetalImage>,
     #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
-    pending_scene3d_imports: Vec<(super::scene3d_gpu::GpuRasterOutput, super::SkiaExternalObject)>,
+    pending_scene3d_imports: Vec<(
+        super::scene3d_gpu::GpuRasterOutput,
+        super::SkiaExternalObject,
+    )>,
     // Drop all retained surfaces before the context, device and Vulkan loader.
     backend: SurfaceBackend,
 }
@@ -832,7 +838,10 @@ impl Drop for SurfaceArena {
     fn drop(&mut self) {
         // An error can abandon a frame before its normal output readback. Flush before
         // field destruction so borrowed wgpu textures cannot die under queued Skia reads.
-        #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        #[cfg(all(
+            feature = "native",
+            any(target_os = "macos", target_os = "linux", target_os = "windows")
+        ))]
         if let Some(context) = self.backend.context_mut() {
             context.flush_submit_and_sync_cpu();
         }
@@ -867,7 +876,10 @@ impl core::fmt::Debug for SurfaceBackend {
 }
 
 impl SurfaceBackend {
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     fn context_mut(&mut self) -> Option<&mut gpu::DirectContext> {
         match self {
             Self::Raster => None,
@@ -1022,7 +1034,10 @@ impl SurfaceArena {
     }
 
     pub(super) fn create_surface(&mut self, info: &ImageInfo) -> Result<Surface, SurfaceError> {
-        #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        #[cfg(all(
+            feature = "native",
+            any(target_os = "macos", target_os = "linux", target_os = "windows")
+        ))]
         if let Some(context) = self.backend.context_mut() {
             let surface = gpu::surfaces::render_target(
                 context,
@@ -1033,7 +1048,8 @@ impl SurfaceArena {
                 None,
                 Some(false),
                 Some(false),
-            ).ok_or(SurfaceError::Allocation)?;
+            )
+            .ok_or(SurfaceError::Allocation)?;
             count_surface_allocation();
             return Ok(surface);
         }
@@ -1054,9 +1070,14 @@ impl SurfaceArena {
         output: super::vulkan_delivery::VulkanOutput,
     ) -> Result<super::vulkan_delivery::SubmittedVulkanOutput, SurfaceError> {
         let SurfaceBackend::Vulkan(context) = &mut self.backend else {
-            return Err(SurfaceError::VulkanUnavailable("output requires Vulkan".into()));
+            return Err(SurfaceError::VulkanUnavailable(
+                "output requires Vulkan".into(),
+            ));
         };
-        output.submit(&mut context.context, std::mem::take(&mut self.pending_scene3d_imports))
+        output.submit(
+            &mut context.context,
+            std::mem::take(&mut self.pending_scene3d_imports),
+        )
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
@@ -1576,7 +1597,10 @@ impl<'arena> SurfaceFrame<'arena> {
         self.arena.backend_kind()
     }
 
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     pub(crate) fn render_scene3d_gpu(
         &mut self,
         object: &super::SkiaExternalObject,
@@ -1616,19 +1640,27 @@ impl<'arena> SurfaceFrame<'arena> {
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             SurfaceBackend::Vulkan(backend) => {
                 if backend.scene3d_gpu.is_none() {
-                    let Some((device, queue)) = backend.shared_device() else { return Ok(None); };
-                    backend.scene3d_gpu = Some(
-                        super::scene3d_gpu::GpuRasterizer::new(device, queue).map(Box::new)
-                    );
+                    let Some((device, queue)) = backend.shared_device() else {
+                        return Ok(None);
+                    };
+                    backend.scene3d_gpu =
+                        Some(super::scene3d_gpu::GpuRasterizer::new(device, queue).map(Box::new));
                 }
-                let Some(Ok(renderer)) = &mut backend.scene3d_gpu else { return Ok(None); };
+                let Some(Ok(renderer)) = &mut backend.scene3d_gpu else {
+                    return Ok(None);
+                };
                 if required_bytes > self.max_frame_bytes {
                     return Err(SurfaceError::FrameBudgetExceeded {
-                        required_bytes, max_bytes: self.max_frame_bytes,
+                        required_bytes,
+                        max_bytes: self.max_frame_bytes,
                     });
                 }
-                let Some(output) = renderer.render(input, &mut backend.context)
-                    .map_err(SurfaceError::Scene3dGpu)? else { return Ok(None); };
+                let Some(output) = renderer
+                    .render(input, &mut backend.context)
+                    .map_err(SurfaceError::Scene3dGpu)?
+                else {
+                    return Ok(None);
+                };
                 self.max_frame_bytes -= gpu_bytes;
                 output
             }
@@ -1641,10 +1673,11 @@ impl<'arena> SurfaceFrame<'arena> {
                 ..
             } => {
                 if scene3d_gpu.is_none() {
-                    let renderer =
-                        super::scene3d_gpu::metal::device(device.clone(), queue.clone())
-                            .and_then(|(device, queue)| super::scene3d_gpu::GpuRasterizer::new(device, queue))
-                            .map(Box::new);
+                    let renderer = super::scene3d_gpu::metal::device(device.clone(), queue.clone())
+                        .and_then(|(device, queue)| {
+                            super::scene3d_gpu::GpuRasterizer::new(device, queue)
+                        })
+                        .map(Box::new);
                     if let Err(reason) = &renderer {
                         eprintln!("warning: Scene3D GPU raster unavailable, using CPU: {reason}");
                     }
@@ -1685,7 +1718,9 @@ impl<'arena> SurfaceFrame<'arena> {
                 },
             });
         #[cfg(any(target_os = "linux", target_os = "windows"))]
-        self.arena.pending_scene3d_imports.push((output, object.clone()));
+        self.arena
+            .pending_scene3d_imports
+            .push((output, object.clone()));
         let image = if let Some(dof) = dof {
             let input = super::scene3d_dof::Scene3dDofInput::from_gpu(
                 extent,
@@ -1734,7 +1769,10 @@ impl<'arena> SurfaceFrame<'arena> {
         }
     }
 
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     pub(crate) fn release_completed_external_imports(&mut self) {
         #[cfg(target_os = "macos")]
         self.arena.pending_external_imports.clear();
@@ -1743,7 +1781,10 @@ impl<'arena> SurfaceFrame<'arena> {
     }
 
     pub(crate) fn prepare_cpu_image(&mut self, image: &Image) -> Result<Image, SurfaceError> {
-        #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        #[cfg(all(
+            feature = "native",
+            any(target_os = "macos", target_os = "linux", target_os = "windows")
+        ))]
         if let Some(context) = self.arena.backend.context_mut() {
             context.flush_submit_and_sync_cpu();
             return image
@@ -1753,7 +1794,10 @@ impl<'arena> SurfaceFrame<'arena> {
         Ok(image.clone())
     }
 
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     pub(crate) fn render_output_shader_to_raster(
         &mut self,
         shader: Shader,
@@ -1808,7 +1852,11 @@ impl<'arena> SurfaceFrame<'arena> {
             paint.set_shader(shader);
             entry.surface.canvas().draw_paint(&paint);
             let image = entry.surface.image_snapshot();
-            let context = self.arena.backend.context_mut().ok_or(SurfaceError::Readback)?;
+            let context = self
+                .arena
+                .backend
+                .context_mut()
+                .ok_or(SurfaceError::Readback)?;
             context.flush_submit_and_sync_cpu();
             image
                 .make_raster_image(Some(context), skia_safe::image::CachingHint::Disallow)
@@ -1823,7 +1871,10 @@ impl<'arena> SurfaceFrame<'arena> {
         result
     }
 
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     fn allocate_delivery_surface(
         &mut self,
         extent: Extent2d,
@@ -2339,7 +2390,10 @@ pub enum SurfaceError {
     #[cfg(all(target_os = "macos", feature = "native"))]
     #[error("Metal compositor unavailable: {0}")]
     MetalUnavailable(&'static str),
-    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
     #[error("Scene3D GPU raster failed: {0}")]
     Scene3dGpu(String),
     #[cfg(all(target_os = "macos", feature = "native"))]

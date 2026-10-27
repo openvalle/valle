@@ -2,12 +2,17 @@
 //! fragment output to F16; a pyramid must use the CPU reference's nearest-even rounding.
 
 pub(super) fn rounded_shader(source: &str) -> std::borrow::Cow<'_, str> {
-    if !cfg!(all(feature = "native", any(target_os = "linux", target_os = "windows"))) {
+    if !cfg!(all(
+        feature = "native",
+        any(target_os = "linux", target_os = "windows")
+    )) {
         return source.into();
     }
     // Keep calculations in float until the explicit rounding below. All existing pyramid
     // entry points return half4, which can otherwise narrow before the wrapper runs.
-    let body = source.replace("half4", "float4").replace("main(float2", "effectValue(float2");
+    let body = source
+        .replace("half4", "float4")
+        .replace("main(float2", "effectValue(float2");
     format!("{ROUND}\n{body}\nhalf4 main(float2 xy) {{ return roundF16(effectValue(xy)); }}").into()
 }
 
