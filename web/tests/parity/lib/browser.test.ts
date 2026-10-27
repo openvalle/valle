@@ -15,6 +15,24 @@ const rosettaAvailable =
   Bun.spawnSync(["/usr/bin/arch", "-x86_64", "/usr/bin/uname", "-m"], { stderr: "ignore" })
     .exitCode === 0;
 
+test("explicit software WebGL configuration reaches every browser launcher", () => {
+  const module = new URL("./browser.ts", import.meta.url).href;
+  const child = Bun.spawnSync(
+    [
+      process.execPath,
+      "-e",
+      `import {browserLaunchCommand} from ${JSON.stringify(module)}; console.log(JSON.stringify(browserLaunchCommand("chrome")));`,
+    ],
+    { env: { ...process.env, VALLE_WEB_PARITY_SWIFTSHADER: "1" } },
+  );
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(new TextDecoder().decode(child.stdout)).slice(-3)).toEqual([
+    "chrome",
+    "--use-angle=swiftshader",
+    "--enable-unsafe-swiftshader",
+  ]);
+});
+
 test.skipIf(!appleSilicon)(
   "launches universal executables with the native host architecture",
   () => {

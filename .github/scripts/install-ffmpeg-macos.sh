@@ -49,7 +49,8 @@ if [ ! -f "$root/.complete" ] || [ "$(cat "$root/.complete")" != "$stamp" ]; the
         --extra-cflags="$flags" --extra-ldflags="$flags" --pkg-config=pkg-config \
         --host-cflags="$flags -isysroot $sdk" --host-ldflags="$flags -isysroot $sdk" \
         --disable-autodetect --disable-doc --disable-debug --disable-asm \
-        --disable-static --enable-shared --enable-gpl --enable-libx264 --enable-zlib; then
+        --disable-static --enable-shared --enable-gpl --enable-libx264 --enable-zlib \
+        --enable-videotoolbox; then
         if [ -f ffbuild/config.log ]; then
           cp ffbuild/config.log "$PACKAGE_LOGS/ffmpeg-config-$version.log"
           tail -n 80 ffbuild/config.log
@@ -68,6 +69,7 @@ for major in 7 8 9; do
   lipo "$prefix/lib/libavcodec.dylib" -verify_arch x86_64
   "$prefix/bin/ffmpeg" -version > "$PACKAGE_LOGS/ffmpeg-cli-$major.txt"
   grep -E "^ffmpeg version ${major}[. ]" "$PACKAGE_LOGS/ffmpeg-cli-$major.txt"
+  "$prefix/bin/ffmpeg" -hide_banner -hwaccels | grep -Fx videotoolbox
   echo "VALLE_TEST_FFMPEG${major}_DIR=$prefix/lib" >> "$GITHUB_ENV"
 done
 echo "VALLE_FFMPEG_DIR=$root/9/lib" >> "$GITHUB_ENV"

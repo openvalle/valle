@@ -235,7 +235,7 @@ jobs:
         run: |
           cargo test --locked --release --target '${{ inputs.target }}' -p valle-cli --features embedded-runtime --lib --test web_runtime --test ffmpeg_runtime -- --include-ignored --test-threads=1 2>&1 | tee "$PACKAGE_LOGS/cli-tests.log"
       - name: Require Studio browser acceptance
-        if: inputs.ci && inputs.arch == 'arm64'
+        if: inputs.ci
         run: |
           if ! bun -e 'import {resolveBrowser} from "./web/tests/parity/lib/browser.ts"; process.exit(resolveBrowser() ? 0 : 1)'; then
             brew install --cask google-chrome
@@ -244,6 +244,10 @@ jobs:
           "$browser" --version
           echo "VALLE_WEB_PARITY_BROWSER=$browser" >> "$GITHUB_ENV"
           echo "VALLE_WEB_PLAYER_REQUIRE_BROWSER=1" >> "$GITHUB_ENV"
+          if [ '${{ inputs.arch }}' = x86_64 ]; then
+            # Intel runners expose a blocklisted virtual GPU. Exercise WebGL explicitly.
+            echo "VALLE_WEB_PARITY_SWIFTSHADER=1" >> "$GITHUB_ENV"
+          fi
       - name: Test Rust workspace
         if: inputs.ci
         env:

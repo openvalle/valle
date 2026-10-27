@@ -64,7 +64,11 @@ let appleSiliconHost: boolean | undefined;
 
 /** Keep Chrome native even when an x86_64 Rust test selects Rosetta for its descendants. */
 export function browserLaunchCommand(browser: string): string[] {
-  if (process.platform !== "darwin") return [browser];
+  const flags =
+    process.env.VALLE_WEB_PARITY_SWIFTSHADER === "1"
+      ? ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
+      : [];
+  if (process.platform !== "darwin") return [browser, ...flags];
   appleSiliconHost ??=
     process.arch === "arm64" ||
     new TextDecoder()
@@ -75,7 +79,7 @@ export function browserLaunchCommand(browser: string): string[] {
         }).stdout,
       )
       .trim() === "1";
-  return appleSiliconHost ? ["/usr/bin/arch", "-arm64", browser] : [browser];
+  return appleSiliconHost ? ["/usr/bin/arch", "-arm64", browser, ...flags] : [browser, ...flags];
 }
 
 export interface BrowserExitContext {
