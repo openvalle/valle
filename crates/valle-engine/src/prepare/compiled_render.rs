@@ -784,7 +784,7 @@ fn prepare_endpoint(
                     .scene3d_asset(*resource.digest(), bytes, path)
                     .map_err(|error| PrepareError::at(format!("{path}.motion.scene3d"), error))?;
             }
-            let mut fixture = motion::FixtureProgram::new(built.program);
+            let mut fixture = motion::FixtureProgram::from_shared(built.program);
             for frame in built.scene3d_frames {
                 fixture = fixture.with_scene3d_frame(frame);
             }

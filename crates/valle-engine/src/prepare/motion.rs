@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, VecDeque},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ use super::{
 };
 
 pub(crate) struct BuiltMotionProgram {
-    pub program: DrawProgram,
+    pub program: Arc<CachedDrawProgram>,
     pub scene3d_frames: Vec<valle_motion::SealedScene3DFrame>,
     pub scene3d_sampling: Vec<valle_motion::emit::Scene3DSampling>,
     pub layout_boxes: BTreeMap<String, [f32; 4]>,
@@ -49,6 +49,62 @@ impl std::ops::Deref for MotionFontSet {
     type Target = valle_motion::Fonts;
     fn deref(&self) -> &Self::Target {
         &self.text
+    }
+}
+
+/// One immutable arena and its canonical encoding, shared by preparation and kernel transport.
+#[derive(Debug)]
+pub(crate) struct CachedDrawProgram {
+    arena: Arc<DrawProgram>,
+    encoding: OnceLock<Vec<u8>>,
+    digest: OnceLock<ContentDigest>,
+}
+
+impl CachedDrawProgram {
+    pub(super) fn new(program: DrawProgram) -> Self {
+        Self {
+            arena: Arc::new(program),
+            encoding: OnceLock::new(),
+            digest: OnceLock::new(),
+        }
+    }
+
+    #[cfg(any(feature = "web", test))]
+    pub(super) fn from_packed(bytes: &[u8]) -> Result<Self, valle_draw::program::PackedDrawError> {
+        Ok(Self {
+            arena: Arc::new(DrawProgram::from_packed(bytes)?),
+            encoding: OnceLock::from(bytes.to_vec()),
+            digest: OnceLock::new(),
+        })
+    }
+
+    pub(super) fn packed(&self) -> Result<&[u8], valle_draw::program::PackedDrawError> {
+        if self.encoding.get().is_none() {
+            let bytes = self.arena.packed_bytes()?;
+            let _ = self.encoding.set(bytes);
+        }
+        Ok(self
+            .encoding
+            .get()
+            .expect("canonical encoding initialized above"))
+    }
+
+    fn digest(&self) -> Result<ContentDigest, valle_draw::program::PackedDrawError> {
+        let bytes = self.packed()?;
+        Ok(*self.digest.get_or_init(|| ContentDigest::of_bytes(bytes)))
+    }
+}
+
+impl std::ops::Deref for CachedDrawProgram {
+    type Target = DrawProgram;
+    fn deref(&self) -> &Self::Target {
+        &self.arena
+    }
+}
+
+impl PartialEq for CachedDrawProgram {
+    fn eq(&self, other: &Self) -> bool {
+        self.arena == other.arena
     }
 }
 
@@ -300,7 +356,7 @@ pub(super) fn build_motion_program(
         });
     }
     Ok(BuiltMotionProgram {
-        program: report.program,
+        program: Arc::new(CachedDrawProgram::new(report.program)),
         scene3d_frames: report.scene3d_frames,
         scene3d_sampling: report.scene3d_sampling,
         layout_boxes,
@@ -438,7 +494,7 @@ impl valle_draw::program::ProgramResourceCatalog for CompiledMotionProgramCatalo
 
 #[derive(Debug, Clone)]
 pub struct FixtureProgram {
-    program: DrawProgram,
+    program: Arc<CachedDrawProgram>,
     assets: BTreeMap<String, SemanticAsset>,
     fonts: Vec<SemanticFont>,
     structures: BTreeMap<String, SemanticStructure>,
@@ -447,6 +503,10 @@ pub struct FixtureProgram {
 
 impl FixtureProgram {
     pub fn new(program: DrawProgram) -> Self {
+        Self::from_shared(Arc::new(CachedDrawProgram::new(program)))
+    }
+
+    pub(super) fn from_shared(program: Arc<CachedDrawProgram>) -> Self {
         Self {
             program,
             assets: BTreeMap::new(),
@@ -744,19 +804,19 @@ pub(crate) fn prepare_program(
             .push(ProgramStructureBinding { key, handle });
     }
 
-    let packed = context.fixture.program.packed_bytes()?;
-    let content_hash = ContentDigest::of_bytes(&packed);
+    let packed = context.fixture.program.packed()?;
+    let content_hash = context.fixture.program.digest()?;
     Ok(PreparedProgram {
         id,
         kind: context.kind,
         semantic_path: context.semantic_path.to_owned(),
         content_hash,
         viewport: context.fixture.program.viewport(),
-        packed,
+        packed: packed.to_vec(),
         requirements,
         resources: bindings,
         destination_uses: Vec::new(),
-        runtime_program: Some(Arc::new(context.fixture.program.clone())),
+        runtime_program: Some(Arc::clone(&context.fixture.program.arena)),
     })
 }
 
@@ -1033,6 +1093,89 @@ export default function Card() {{
         assert_eq!(internal_request, alias_request);
         assert_eq!(internal_request.face_hash.into_bytes(), *digest.as_bytes());
         assert_eq!(internal_request.face_index, 0);
+    }
+}
+
+#[cfg(test)]
+mod cached_program_tests {
+    use super::*;
+
+    #[test]
+    fn fixture_clones_share_the_arena_and_encoding_without_hashing_transport() {
+        let fixture = FixtureProgram::empty(Extent2d::new(32, 32).unwrap());
+        let cloned = fixture.clone();
+        assert!(Arc::ptr_eq(&fixture.program, &cloned.program));
+        let packed = fixture.program.packed().unwrap();
+        assert!(std::ptr::eq(packed, cloned.program.packed().unwrap()));
+        assert!(fixture.program.digest.get().is_none());
+        let decoded = CachedDrawProgram::from_packed(packed).unwrap();
+        assert_eq!(decoded.packed().unwrap(), packed);
+        assert!(decoded.digest.get().is_none());
+        assert_eq!(decoded.digest().unwrap(), fixture.program.digest().unwrap());
+        assert_eq!(decoded.digest().unwrap(), ContentDigest::of_bytes(packed));
+    }
+
+    #[test]
+    fn encoding_reuse_preserves_signed_zero_and_rejects_malformed_packets() {
+        let programs = [0.0, -0.0].map(|x| {
+            CachedDrawProgram::new(
+                DrawProgramBuilder::new(Rect::new(x, 0.0, 32.0, 32.0))
+                    .finish()
+                    .unwrap(),
+            )
+        });
+        assert_ne!(programs[0].packed().unwrap(), programs[1].packed().unwrap());
+        assert_ne!(programs[0].digest().unwrap(), programs[1].digest().unwrap());
+        for program in programs {
+            let bytes = program.packed().unwrap();
+            let decoded = CachedDrawProgram::from_packed(bytes).unwrap();
+            assert_eq!(
+                decoded.viewport().x.to_bits(),
+                program.viewport().x.to_bits()
+            );
+            assert_eq!(decoded.packed().unwrap(), bytes);
+            assert!(CachedDrawProgram::from_packed(&bytes[..bytes.len() - 1]).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "manual preparation encoding throughput comparison"]
+    fn cached_program_encoding_benchmark() {
+        use std::{hint::black_box, time::Instant};
+        use valle_draw::program::{Group, Node};
+        let mut builder = DrawProgramBuilder::new(Rect::new(0.0, 0.0, 32.0, 32.0));
+        let children = (0..5000)
+            .map(|_| builder.push_node(Node::Group(Group::plain(Vec::new()))))
+            .collect();
+        let root = builder.push_node(Node::Group(Group::plain(children)));
+        builder.add_root(root);
+        let program = builder.finish().unwrap();
+        let cached = Arc::new(CachedDrawProgram::new(program.clone()));
+        let expected = cached.digest().unwrap();
+        let mut elapsed = Vec::new();
+        for reuse in [false, true, true, false] {
+            let started = Instant::now();
+            for _ in 0..100 {
+                let (bytes, digest, arena) = if reuse {
+                    (
+                        cached.packed().unwrap().to_vec(),
+                        cached.digest().unwrap(),
+                        Arc::clone(&cached.arena),
+                    )
+                } else {
+                    let bytes = program.packed_bytes().unwrap();
+                    let digest = ContentDigest::of_bytes(&bytes);
+                    (bytes, digest, Arc::new(program.clone()))
+                };
+                assert_eq!(digest, expected);
+                black_box((bytes, arena));
+            }
+            elapsed.push((reuse, started.elapsed().as_secs_f64()));
+        }
+        eprintln!(
+            "100 preparations, {} encoded bytes: {elapsed:?}",
+            cached.packed().unwrap().len()
+        );
     }
 }
 

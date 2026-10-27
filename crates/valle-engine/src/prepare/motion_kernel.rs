@@ -10,10 +10,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
-use valle_draw::{
-    Rect,
-    program::{DrawProgram, DrawProgramBuilder},
-};
+use valle_draw::{Rect, program::DrawProgramBuilder};
 
 type Fonts = Vec<(ContentDigest, Arc<[u8]>, bool)>;
 const MAX_DEFINITION_BYTES: usize = 64 * 1024 * 1024;
@@ -178,14 +175,16 @@ impl MotionPreparation {
                 // A capture projection is never returned as a ticket. Empty programs only let
                 // the normal traversal discover all clips, including transition endpoints.
                 Ok(BuiltMotionProgram {
-                    program: DrawProgramBuilder::new(Rect::new(
-                        0.0,
-                        0.0,
-                        f64::from(input.viewport.width()),
-                        f64::from(input.viewport.height()),
-                    ))
-                    .finish()
-                    .map_err(failure)?,
+                    program: Arc::new(motion::CachedDrawProgram::new(
+                        DrawProgramBuilder::new(Rect::new(
+                            0.0,
+                            0.0,
+                            f64::from(input.viewport.width()),
+                            f64::from(input.viewport.height()),
+                        ))
+                        .finish()
+                        .map_err(failure)?,
+                    )),
                     scene3d_frames: Vec::new(),
                     scene3d_sampling: Vec::new(),
                     layout_boxes: BTreeMap::new(),
@@ -260,7 +259,7 @@ impl MotionKernel {
             layout_boxes: built.layout_boxes,
         })
         .map_err(failure)?;
-        let program = built.program.packed_bytes().map_err(failure)?;
+        let program = built.program.packed().map_err(failure)?;
         let mut bytes = Vec::with_capacity(4 + metadata.len() + program.len());
         bytes.extend_from_slice(
             &u32::try_from(metadata.len())
@@ -268,7 +267,7 @@ impl MotionKernel {
                 .to_le_bytes(),
         );
         bytes.extend_from_slice(&metadata);
-        bytes.extend_from_slice(&program);
+        bytes.extend_from_slice(program);
         Ok(bytes)
     }
 }
@@ -283,7 +282,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<BuiltMotionProgram, ProgramPrepareE
         .filter(|end| *end < bytes.len())
         .ok_or_else(|| failure("Motion kernel metadata size"))?;
     let metadata: Metadata = serde_json::from_slice(&bytes[4..end]).map_err(failure)?;
-    let program = DrawProgram::from_packed(&bytes[end..]).map_err(failure)?;
+    let program = Arc::new(motion::CachedDrawProgram::from_packed(&bytes[end..]).map_err(failure)?);
     Ok(BuiltMotionProgram {
         program,
         scene3d_frames: metadata.scene3d_frames,
