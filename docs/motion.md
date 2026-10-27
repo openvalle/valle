@@ -2816,21 +2816,23 @@ post-process softens geometry before and after the focus plane and spreads blurr
 foreground silhouettes over more distant pixels. It changes the Scene3D color
 plane; depth, anchors and picking retain the original geometric values.
 
-Scene3D geometry rasterization runs on the CPU. With the native Raster backend,
-depth of field uses bounded row workers and skips transparent regions beyond the
-blur's reach; Web uses the same CPU kernel. With the native Metal backend, the
-resolved color and depth are uploaded once and depth of field runs on the GPU,
-keeping its result on the composition device without an intermediate readback.
-On little-endian hosts, depth upload copies the existing float bytes directly;
-the shader resolves clear-depth sentinels without a separate CPU packing buffer.
-`VALLE_SCENE3D_DOF_CPU_REFERENCE=1` selects the CPU kernel for Metal comparisons;
+Native Metal and Vulkan use a shared wgpu renderer for Scene3D rasterization,
+materials, shadows and transparency. Geometry preparation remains on the CPU;
+the resulting GPU color and depth textures feed Skia composition and depth of
+field without an intermediate readback. Unsupported devices or workloads use
+CPU rasterization. Raster and Web use the CPU depth-of-field kernel, with bounded
+row workers and transparent-region skipping. When a CPU-rasterized scene feeds
+GPU depth of field, color and depth are uploaded once; little-endian hosts copy
+the existing depth float bytes without a separate CPU packing buffer.
+`VALLE_SCENE3D_RASTER_CPU_REFERENCE=1` selects CPU rasterization for comparisons.
+`VALLE_SCENE3D_DOF_CPU_REFERENCE=1` selects CPU rasterization and depth of field;
 `VALLE_TRACE_F16_STAGES=1` reports the GPU stage when it is used.
 
 CPU depth of field decodes a compact source rectangle covering the output and
 its complete sampling halo. Sample coordinates and accumulation order stay in
 the original layer space. Native sRGB-to-working-color conversion also copies
 and converts only the nonzero source rectangle into a full-size, zeroed surface.
-Metal stages compact color/depth inputs with two blur-radius margins, retaining
+GPU stages compact CPU color/depth inputs with two blur-radius margins, retaining
 depth even at transparent pixels within that footprint. Their shaders sample in
 original layer coordinates, and resource accounting uses the compact input size.
 `VALLE_PERF_SCENE3D=1` reports processed versus full pixel counts for nonempty CPU

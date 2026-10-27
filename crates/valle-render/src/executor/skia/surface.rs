@@ -47,11 +47,13 @@ impl SkiaBackendKind {
         Self::Raster
     }
 
-    /// Only Metal currently shares Scene3D producer textures with the compositor.
+    /// GPU backends can retain deferred Scene3D input and fall back on unsupported devices.
     pub const fn supports_scene3d_gpu(self) -> bool {
         match self {
             #[cfg(all(target_os = "macos", feature = "native"))]
             Self::Metal => true,
+            #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+            Self::Vulkan => true,
             _ => false,
         }
     }
@@ -820,8 +822,21 @@ pub(crate) struct SurfaceArena {
     output_staging: super::output::OutputStaging,
     #[cfg(all(target_os = "macos", feature = "native"))]
     pending_external_imports: Vec<ImportedMetalImage>,
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pending_scene3d_imports: Vec<(super::scene3d_gpu::GpuRasterOutput, super::SkiaExternalObject)>,
     // Drop all retained surfaces before the context, device and Vulkan loader.
     backend: SurfaceBackend,
+}
+
+impl Drop for SurfaceArena {
+    fn drop(&mut self) {
+        // An error can abandon a frame before its normal output readback. Flush before
+        // field destruction so borrowed wgpu textures cannot die under queued Skia reads.
+        #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        if let Some(context) = self.backend.context_mut() {
+            context.flush_submit_and_sync_cpu();
+        }
+    }
 }
 
 enum SurfaceBackend {
@@ -897,6 +912,9 @@ impl SurfaceArena {
         #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
         if let SurfaceBackend::Vulkan(backend) = &mut self.backend {
             backend.context.set_resource_cache_limit(bytes);
+            if let Some(Ok(renderer)) = &mut backend.scene3d_gpu {
+                renderer.trim_assets(bytes);
+            }
         }
         let _ = bytes;
     }
@@ -917,6 +935,8 @@ impl SurfaceArena {
             output_staging: super::output::OutputStaging::default(),
             #[cfg(all(target_os = "macos", feature = "native"))]
             pending_external_imports: Vec::new(),
+            #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+            pending_scene3d_imports: Vec::new(),
         }
     }
 
@@ -932,10 +952,9 @@ impl SurfaceArena {
 
     #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
     pub(crate) fn vulkan() -> Result<Self, SurfaceError> {
-        Ok(Self {
-            backend: SurfaceBackend::Vulkan(Box::new(super::vulkan::VulkanContext::new()?)),
-            ..Self::new()
-        })
+        let mut arena = Self::new();
+        arena.backend = SurfaceBackend::Vulkan(Box::new(super::vulkan::VulkanContext::new()?));
+        Ok(arena)
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
@@ -1189,6 +1208,19 @@ impl SurfaceArena {
     }
 
     pub(crate) fn invalidate(&mut self) {
+        #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+        if !self.pending_scene3d_imports.is_empty() {
+            if let Some(context) = self.backend.context_mut() {
+                context.flush_submit_and_sync_cpu();
+            }
+            self.pending_scene3d_imports.clear();
+        }
+        #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+        if let SurfaceBackend::Vulkan(backend) = &mut self.backend {
+            if let Some(Ok(renderer)) = &mut backend.scene3d_gpu {
+                renderer.trim_assets(0);
+            }
+        }
         if self.generation.take().is_some()
             || !self.entries.is_empty()
             || !self.scratch_free.is_empty()
@@ -1525,7 +1557,7 @@ impl<'arena> SurfaceFrame<'arena> {
         self.arena.backend_kind()
     }
 
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub(crate) fn render_scene3d_gpu(
         &mut self,
         object: &super::SkiaExternalObject,
@@ -1562,6 +1594,26 @@ impl<'arena> SurfaceFrame<'arena> {
             .ok_or(SurfaceError::ByteOverflow)?;
         let output = match &mut self.arena.backend {
             SurfaceBackend::Raster => return Ok(None),
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            SurfaceBackend::Vulkan(backend) => {
+                if backend.scene3d_gpu.is_none() {
+                    let Some((device, queue)) = backend.shared_device() else { return Ok(None); };
+                    backend.scene3d_gpu = Some(
+                        super::scene3d_gpu::GpuRasterizer::new(device, queue).map(Box::new)
+                    );
+                }
+                let Some(Ok(renderer)) = &mut backend.scene3d_gpu else { return Ok(None); };
+                if required_bytes > self.max_frame_bytes {
+                    return Err(SurfaceError::FrameBudgetExceeded {
+                        required_bytes, max_bytes: self.max_frame_bytes,
+                    });
+                }
+                let Some(output) = renderer.render(input, &mut backend.context)
+                    .map_err(SurfaceError::Scene3dGpu)? else { return Ok(None); };
+                self.max_frame_bytes -= gpu_bytes;
+                output
+            }
+            #[cfg(target_os = "macos")]
             SurfaceBackend::Metal {
                 context,
                 device,
@@ -1571,7 +1623,8 @@ impl<'arena> SurfaceFrame<'arena> {
             } => {
                 if scene3d_gpu.is_none() {
                     let renderer =
-                        super::scene3d_gpu::GpuRasterizer::new(device.clone(), queue.clone())
+                        super::scene3d_gpu::metal::device(device.clone(), queue.clone())
+                            .and_then(|(device, queue)| super::scene3d_gpu::GpuRasterizer::new(device, queue))
                             .map(Box::new);
                     if let Err(reason) = &renderer {
                         eprintln!("warning: Scene3D GPU raster unavailable, using CPU: {reason}");
@@ -1602,6 +1655,7 @@ impl<'arena> SurfaceFrame<'arena> {
         let upload_bytes = output.upload_bytes;
         let color = output.image.clone();
         let depth = output.depth_image.clone();
+        #[cfg(target_os = "macos")]
         self.arena
             .pending_external_imports
             .push(ImportedMetalImage {
@@ -1611,6 +1665,8 @@ impl<'arena> SurfaceFrame<'arena> {
                     _resources: Box::new((output, object.clone())),
                 },
             });
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        self.arena.pending_scene3d_imports.push((output, object.clone()));
         let image = if let Some(dof) = dof {
             let input = super::scene3d_dof::Scene3dDofInput::from_gpu(
                 extent,
@@ -1659,9 +1715,12 @@ impl<'arena> SurfaceFrame<'arena> {
         }
     }
 
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub(crate) fn release_completed_external_imports(&mut self) {
+        #[cfg(target_os = "macos")]
         self.arena.pending_external_imports.clear();
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        self.arena.pending_scene3d_imports.clear();
     }
 
     pub(crate) fn prepare_cpu_image(&mut self, image: &Image) -> Result<Image, SurfaceError> {
@@ -2261,7 +2320,7 @@ pub enum SurfaceError {
     #[cfg(all(target_os = "macos", feature = "native"))]
     #[error("Metal compositor unavailable: {0}")]
     MetalUnavailable(&'static str),
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     #[error("Scene3D GPU raster failed: {0}")]
     Scene3dGpu(String),
     #[cfg(all(target_os = "macos", feature = "native"))]

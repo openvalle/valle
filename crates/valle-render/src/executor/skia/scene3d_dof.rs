@@ -24,7 +24,7 @@ pub(crate) struct Scene3dDofInput {
 }
 
 impl Scene3dDofInput {
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub(crate) fn from_gpu(
         extent: Extent2d,
         color: Image,

@@ -173,7 +173,7 @@ fn fixture_spec(
 }
 
 #[test]
-#[ignore = "requires real Metal; exercises varying mip data, wrap/filter modes, normal maps and alpha-mask shadows"]
+#[ignore = "requires a real GPU; exercises varying mip data, wrap/filter modes, normal maps and alpha-mask shadows"]
 fn textured_mips_masks_and_samplers_match_cpu_reference() {
     let (mut rasterizer, mut context) = renderer();
     let (mut scene, mut frame, mut resources) = fixture_spec(false, true, false);
@@ -339,7 +339,7 @@ fn read_color(
 }
 
 #[test]
-#[ignore = "requires real Metal; verifies PCF, fixed-point OIT, geometry replay and GPU depth"]
+#[ignore = "requires a real GPU; verifies PCF, fixed-point OIT, geometry replay and GPU depth"]
 fn shadows_and_transparency_match_cpu_reference_and_submission_order() {
     let (mut rasterizer, mut context) = renderer();
     for (environment, shadows, blend) in [
@@ -430,7 +430,7 @@ fn shadows_and_transparency_match_cpu_reference_and_submission_order() {
 }
 
 #[test]
-#[ignore = "requires real Metal; verifies full shadow-cache keys, reuse and eviction"]
+#[ignore = "requires a real GPU; verifies full shadow-cache keys, reuse and eviction"]
 fn shadow_cache_tracks_casters_alpha_and_lights_and_survives_eviction() {
     let (mut rasterizer, mut context) = renderer();
     let (prepared, mut frame) = fixture_features(false, true, false);
@@ -535,7 +535,10 @@ fn shadow_cache_tracks_casters_alpha_and_lights_and_survives_eviction() {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn renderer() -> (GpuRasterizer, gpu::DirectContext) {
+    use objc2_metal::MTLDevice;
+    use std::ptr;
     let device = objc2_metal::MTLCreateSystemDefaultDevice().expect("real Metal device");
     let queue = device.newCommandQueue().unwrap();
     // SAFETY: both contexts retain the same live Metal objects and use their exact queue.
@@ -547,11 +550,31 @@ fn renderer() -> (GpuRasterizer, gpu::DirectContext) {
     };
     let mut context = gpu::direct_contexts::make_metal(&backend, None).unwrap();
     context.set_resource_cache_limit(64 * 1024 * 1024);
+    let (device, queue) = super::super::metal::device(device, queue).unwrap();
     (GpuRasterizer::new(device, queue).unwrap(), context)
 }
 
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+struct TestContext(super::super::super::vulkan::VulkanContext);
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+impl std::ops::Deref for TestContext {
+    type Target = gpu::DirectContext;
+    fn deref(&self) -> &Self::Target { &self.0.context }
+}
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+impl std::ops::DerefMut for TestContext {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.0.context }
+}
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn renderer() -> (GpuRasterizer, TestContext) {
+    let context = super::super::super::vulkan::VulkanContext::new().unwrap();
+    let (device, queue) = context.shared_device().expect("real shared Vulkan device");
+    (GpuRasterizer::new(device, queue).unwrap(), TestContext(context))
+}
+
 #[test]
-#[ignore = "requires real Metal; compares five material maps, environment rotation/background and seeks"]
+#[ignore = "requires a real GPU; compares five material maps, environment rotation/background and seeks"]
 fn material_maps_and_environment_match_cpu_reference() {
     let (mut rasterizer, mut context) = renderer();
     for environment in [false, true] {

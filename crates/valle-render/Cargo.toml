@@ -35,6 +35,8 @@ native = ["motion", "valle-media/libav", "valle-engine/text", "dep:crossbeam-cha
 skia-safe = { workspace = true, optional = true, features = ["vulkan", "ganesh"] }
 # Load the driver at runtime so the same binary also works without a Vulkan installation.
 ash = { version = "0.38.0", default-features = false, features = ["loaded", "std"], optional = true }
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "vulkan", "wgsl"], optional = true }
+pollster = { version = "0.4.0", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 skia-safe = { workspace = true, optional = true, features = ["metal", "ganesh"] }

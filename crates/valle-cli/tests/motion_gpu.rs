@@ -20,7 +20,7 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
         name if name.starts_with("radial-") => Some("gpu-radial-blur"),
         name if name.starts_with("film-") => Some("gpu-film-grain"),
         name if name.starts_with("lens-") => Some("gpu-lens-distortion"),
-        name if name.starts_with("scene3d-dof-") && GPU == "metal" => Some("gpu-scene3d-dof"),
+        name if name.starts_with("scene3d-dof-") => Some("gpu-scene3d-dof"),
         _ => None,
     };
     let input = dir.join(format!("{name}.motion.tsx"));
@@ -232,6 +232,10 @@ fn fullhd_sphere_matches_raster_on_real_gpu() {
         );
         let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
         assert_eq!(report["delivery"]["backend"], backend);
+        if backend == GPU {
+            assert_eq!(report["delivery"]["scene3d"]["gpuRasters"], 1);
+            assert_eq!(report["delivery"]["scene3d"]["cpuFallbacks"], 0);
+        }
         assert!(report["delivery"]["timing"]["renderMs"].as_f64().unwrap() > 0.0);
         let mut reader = png::Decoder::new(BufReader::new(std::fs::File::open(output).unwrap()))
             .read_info()
@@ -246,7 +250,7 @@ fn fullhd_sphere_matches_raster_on_real_gpu() {
         renders.push(pixels);
     }
     let worst = renders[0].iter().zip(&renders[1]).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
-    assert!(worst <= 2, "Scene3D CPU fallback upload changed pixels: {worst}");
+    assert!(worst <= 2, "Scene3D GPU/CPU max channel diff {worst}");
 }
 
 #[test]

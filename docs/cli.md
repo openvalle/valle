@@ -190,9 +190,13 @@ selects Metal on macOS or Vulkan on Windows/Linux when a usable hardware GPU is
 available, and otherwise falls back to Raster. `--backend raster` explicitly selects
 CPU composition; `--backend vulkan` on Windows/Linux requires Vulkan 1.1 and a GPU
 that supports F16 render targets, and reports initialization failure instead of
-falling back. Vulkan uses the existing Skia drawing and SkSL effects, then reads
-output back for software encoding. Scene3D and video decoding remain on CPU in
-this path; Vulkan composition does not enable hardware video encoding. The Vulkan
+falling back. Vulkan uses the existing Skia drawing and SkSL effects. Scene3D uses
+wgpu on the same Vulkan device and queue for rasterization, materials, shadows
+and transparency; color and depth textures pass directly to Skia for composition
+and depth of field. Scene preparation and geometry evaluation still use the CPU.
+If the shared wgpu device or a Scene3D workload is unsupported, Scene3D falls back
+to CPU while Skia can continue using Vulkan. Final output is read back for software
+encoding; this path does not enable hardware video decoding or encoding. The Vulkan
 loader comes from the graphics driver and is loaded at runtime, so a CPU-only
 machine can still run the same binary. See `valle motion render --help` for constraints.
 

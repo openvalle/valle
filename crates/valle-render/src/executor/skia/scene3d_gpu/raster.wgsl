@@ -46,8 +46,8 @@ fn bbox_position(index:u32,stride:u32,extent:vec2<f32>) -> vec4<f32> {
     let base=(index/6u)*3u*stride;
     let a=vertex_vec2(base);let b=vertex_vec2(base+stride);let c=vertex_vec2(base+2u*stride);
     let lo=floor(min(a,min(b,c)));let hi=ceil(max(a,max(b,c)));
-    let corner=array(vec2(0.0,0.0),vec2(1.0,0.0),vec2(0.0,1.0),vec2(0.0,1.0),vec2(1.0,0.0),vec2(1.0,1.0));
-    let p=mix(lo,hi,corner[index%6u]);
+    let corner=index%6u;
+    let p=mix(lo,hi,vec2(select(0.0,1.0,corner==1u || corner>=4u),select(0.0,1.0,corner==2u || corner==3u || corner==5u)));
     return vec4(p/extent*vec2(2.0,-2.0)+vec2(-1.0,1.0),0.5,1.0);
 }
 fn raster_inverse_z(base:u32,stride:u32,bary:vec3<f32>) -> f32 {
@@ -64,30 +64,30 @@ struct RasterVertex { @builtin(position) position:vec4<f32>,@location(0) @interp
     return Fragment(vec4(vertex_vec3(base+3u),vertex_float(base+6u)),pack_depth(depth),globals.depthScale*depth);
 }
 @vertex fn raster_lit_vertex(@builtin(vertex_index) index:u32) -> LitVertex {
-    var out=make_lit_vertex(vec2(0.0),1.0,0u,0u,vec3(0.0),0u);
-    out.position=bbox_position(index,u32(shading[4].x),globals.extent);out.triangle=index/6u;
-    return out;
+    return LitVertex(bbox_position(index,u32(shading[4].x),globals.extent),1.0,vec3(0.0),0u,vec2(0u),
+        vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),index/6u);
 }
 fn raster_lit_sample(in:LitVertex) -> LitVertex {
     let stride=u32(shading[4].x);let base=in.triangle*3u*stride;
     let bary=raster_bary(base,stride,in.position.xy);let inverse=raster_inverse_z(base,stride,bary);
-    var out=in;out.invZ=inverse;out.material=rasterVertices[base+12u];out.ids=vec2(rasterVertices[base+7u],rasterVertices[base+8u]);
     let weights=vec3(precise_divide(stable(bary.x*vertex_float(base+2u)),inverse),precise_divide(stable(bary.y*vertex_float(base+stride+2u)),inverse),precise_divide(stable(bary.z*vertex_float(base+stride*2u+2u)),inverse));
     let a=vertex_vec3(base+3u);let b=vertex_vec3(base+stride+3u);let c=vertex_vec3(base+stride*2u+3u);
-    out.normalOverZ=vec3(
+    let normal=vec3(
         stable(stable(stable(a.x*weights.x)+stable(b.x*weights.y))+stable(c.x*weights.z)),
         stable(stable(stable(a.y*weights.x)+stable(b.y*weights.y))+stable(c.y*weights.z)),
         stable(stable(stable(a.z*weights.x)+stable(b.z*weights.y))+stable(c.z*weights.z)));
+    var uv=in.uv;var dx=in.uvDx;var dy=in.uvDy;var tangent=in.tangent;var bitangent=in.bitangent;
     if stride>13u {
         // Match CPU's corrected weights before interpolation. Interpolating UV/Z and
         // dividing afterward moves alpha-mask boundaries by a pixel at delivery sizes.
         let ua=vertex_vec2(base+13u);let ub=vertex_vec2(base+stride+13u);let uc=vertex_vec2(base+stride*2u+13u);
-        out.uv=vec2(
+        uv=vec2(
             stable(stable(stable(ua.x*weights.x)+stable(ub.x*weights.y))+stable(uc.x*weights.z)),
             stable(stable(stable(ua.y*weights.x)+stable(ub.y*weights.y))+stable(uc.y*weights.z)));
-        out.uvDx=vertex_vec3(base+15u);out.uvDy=vertex_vec3(base+18u);out.tangent=vertex_vec3(base+21u);out.bitangent=vertex_vec3(base+24u);
+        dx=vertex_vec3(base+15u);dy=vertex_vec3(base+18u);tangent=vertex_vec3(base+21u);bitangent=vertex_vec3(base+24u);
     }
-    return out;
+    return LitVertex(in.position,inverse,normal,rasterVertices[base+12u],vec2(rasterVertices[base+7u],rasterVertices[base+8u]),
+        uv,dx,dy,tangent,bitangent,in.triangle);
 }
 @fragment fn raster_lit_fragment(in:LitVertex) -> Fragment {
     let sample=raster_lit_sample(in);

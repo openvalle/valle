@@ -18,15 +18,8 @@ struct LitVertex {
 };
 
 fn make_lit_vertex(position: vec2<f32>, invZ: f32, objectId: u32, nodeId: u32, normalOverZ: vec3<f32>, material: u32) -> LitVertex {
-    var out: LitVertex;
-    out.position = vec4(position / globals.extent * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.5, 1.0);
-    out.invZ = invZ;
-    out.normalOverZ = normalOverZ;
-    out.material = material;
-    out.ids = vec2(objectId, nodeId);
-    out.uv=vec2(0.0);out.uvDx=vec3(0.0);out.uvDy=vec3(0.0);out.tangent=vec3(0.0);out.bitangent=vec3(0.0);
-    out.triangle=0xffffffffu;
-    return out;
+    return LitVertex(vec4(position / globals.extent * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.5, 1.0),
+        invZ,normalOverZ,material,vec2(objectId,nodeId),vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0xffffffffu);
 }
 
 @vertex fn lit_vertex(@location(0) position:vec2<f32>,@location(1) invZ:f32,@location(3) objectId:u32,@location(4) nodeId:u32,
@@ -36,9 +29,8 @@ fn make_lit_vertex(position: vec2<f32>, invZ: f32, objectId: u32, nodeId: u32, n
 @vertex fn textured_vertex(@location(0) position:vec2<f32>,@location(1) invZ:f32,@location(3) objectId:u32,@location(4) nodeId:u32,
     @location(5) normalOverZ:vec3<f32>,@location(6) material:u32,@location(7) uv:vec2<f32>,
     @location(8) dx:vec3<f32>,@location(9) dy:vec3<f32>,@location(10) tangent:vec3<f32>,@location(11) bitangent:vec3<f32>) -> LitVertex {
-    var out=make_lit_vertex(position,invZ,objectId,nodeId,normalOverZ,material);
-    out.uv=uv*invZ;out.uvDx=dx;out.uvDy=dy;out.tangent=tangent;out.bitangent=bitangent;
-    return out;
+    let out=make_lit_vertex(position,invZ,objectId,nodeId,normalOverZ,material);
+    return LitVertex(out.position,invZ,normalOverZ,material,out.ids,uv*invZ,dx,dy,tangent,bitangent,out.triangle);
 }
 
 // Zero-valued uniform boundary: retain f32 rounding in the normal/GGX terms.
@@ -234,17 +226,13 @@ fn camera_position(ray:vec3<f32>,inverse:f32) -> vec3<f32> {
 
 @fragment fn lit_fragment(in: LitVertex) -> Fragment {
     if shading[HEADER+in.material*MATERIAL+2u].w!=0.0 {discard;}
-    var out: Fragment;
-    out.color = lit_color(in);
-    out.depth = globals.depthScale / in.invZ;
-    out.packedDepth = pack_depth(1.0 / in.invZ);
-    return out;
+    return Fragment(lit_color(in), pack_depth(1.0 / in.invZ), globals.depthScale / in.invZ);
 }
 
 @vertex fn background_vertex(@builtin(vertex_index) index:u32) -> LitVertex {
-    let points=array(vec2(-1.0,-1.0),vec2(3.0,-1.0),vec2(-1.0,3.0));
-    var out=make_lit_vertex(vec2(0.0),1.0,0u,0u,vec3(0.0),0u);
-    out.position=vec4(points[index],0.5,1.0);return out;
+    let point=vec2(select(-1.0,3.0,index==1u),select(-1.0,3.0,index==2u));
+    return LitVertex(vec4(point,0.5,1.0),1.0,vec3(0.0),0u,vec2(0u),vec2(0.0),
+        vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0xffffffffu);
 }
 @fragment fn background_fragment(in:LitVertex) -> Fragment {
     var radiance=env_specular(unit(camera_ray(vec2<u32>(in.position.xy))),0.0);

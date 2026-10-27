@@ -150,7 +150,7 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
     let source = if lighting.is_some() {
         format!(
             "{}\n{}\n{}\n{}\n{}\n{LIT_VALIDATION}",
-            include_str!("../../src/executor/skia/scene3d_gpu/metal.wgsl"),
+            include_str!("../../src/executor/skia/scene3d_gpu/common.wgsl"),
             include_str!("../../src/executor/skia/scene3d_gpu/assets.wgsl"),
             include_str!("../../src/executor/skia/scene3d_gpu/lighting.wgsl"),
             include_str!("../../src/executor/skia/scene3d_gpu/shadows.wgsl"),

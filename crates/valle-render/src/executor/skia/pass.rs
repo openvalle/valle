@@ -1002,7 +1002,7 @@ impl AdmittedSkiaFrame<'_> {
                 started.elapsed().as_secs_f64() * 1_000.0,
             );
         }
-        #[cfg(all(target_os = "macos", feature = "native"))]
+        #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         if !target.is_direct_gpu() {
             surface_frame.release_completed_external_imports();
         }
@@ -1641,9 +1641,9 @@ fn materialize_external_visuals(
         let object = binding.object();
         #[cfg(feature = "native")]
         if object.deferred_scene3d_gpu().is_some() {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
             let rendered = surfaces.render_scene3d_gpu(object)?;
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
             let rendered: Option<(Image, u64)> = None;
             let image = if let Some((image, upload_bytes)) = rendered {
                 scene3d_gpu_rasters = scene3d_gpu_rasters

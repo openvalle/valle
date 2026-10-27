@@ -9,16 +9,20 @@ use skia_safe::{
 use std::{collections::BTreeMap, sync::Arc};
 use valle_engine::motion::scene3d::{Frame3DState, GpuRasterGeometry, PreparedScene};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod assets;
 #[cfg(target_os = "macos")]
-mod metal;
-#[cfg(target_os = "macos")]
+pub(super) mod metal;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod vulkan;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+mod renderer;
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod shadows;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 mod transparency;
-#[cfg(target_os = "macos")]
-pub(super) use metal::{GpuRasterOutput, GpuRasterizer};
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+pub(super) use renderer::{GpuRasterOutput, GpuRasterizer};
 
 #[derive(Clone, Debug)]
 pub(crate) struct Scene3dGpuInput {
@@ -155,7 +159,7 @@ impl Scene3dGpuInput {
             }))
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     pub(crate) fn texture_bytes(&self) -> u64 {
         let dof = self
             .frame
@@ -174,7 +178,7 @@ impl Scene3dGpuInput {
             + if self.has_blend() && !dof { 4 } else { 0 }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     pub(crate) fn has_blend(&self) -> bool {
         self.geometry.shading.as_ref().is_some_and(|s| {
             (0..s.values[1][0] as usize).any(|i| {
@@ -186,7 +190,7 @@ impl Scene3dGpuInput {
         })
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     pub(super) fn vertex_bytes(&self) -> Vec<u8> {
         let mut bytes = self.geometry.vertex_bytes();
         if self.geometry.shading.is_some() {

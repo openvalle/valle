@@ -3,7 +3,7 @@ use std::{sync::mpsc, time::Duration};
 use wgpu::util::DeviceExt;
 
 #[test]
-#[ignore = "requires real Metal; verifies full-width signed edges and f32 rounding against Rust i64"]
+#[ignore = "requires a real GPU; verifies full-width signed edges and f32 rounding against Rust i64"]
 fn integer_edges_and_rounding_match_cpu_at_large_coordinates() {
     let (renderer, _context) = renderer();
     let device = &renderer.device;
@@ -31,7 +31,7 @@ fn integer_edges_and_rounding_match_cpu_at_large_coordinates() {
         .collect::<Vec<[i32; 6]>>();
     let source = format!(
         "{}\n{}\n{}\n{}\n{}\n{}\n{}",
-        include_str!("../../metal.wgsl"),
+        include_str!("../../common.wgsl"),
         include_str!("../../assets.wgsl"),
         include_str!("../../lighting.wgsl"),
         include_str!("../../shadows.wgsl"),
