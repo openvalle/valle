@@ -600,7 +600,11 @@ pub(crate) fn layer_geometry(
     let content_projected = project_local_bounds(local_content, viewport, device_transform)?;
     let content = projected_to_device(content_projected, root)?;
     let mut output_projected = project_local_bounds(local_output, viewport, device_transform)?;
-    let mut max_intermediate_pixels = projected_to_device(output_projected, root)?.pixels();
+    // Animated visibility can leave output smaller than the retained content bounds.
+    // Both rectangles must fit the budget carried by PreparedBounds.
+    let mut max_intermediate_pixels = content
+        .pixels()
+        .max(projected_to_device(output_projected, root)?.pixels());
     if let Some(geometry) = geometry {
         let scale = geometry
             .scale_domain
@@ -1355,6 +1359,38 @@ mod tests {
         noncanonical_empty["content"] =
             serde_json::json!({"x": 12, "y": 10, "width": 0, "height": 0});
         assert!(serde_json::from_value::<PreparedBounds>(noncanonical_empty).is_err());
+    }
+
+    #[test]
+    fn layer_budget_covers_content_when_animated_output_shrinks() {
+        let viewport = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let content = LocalBounds::from_rect(Rect::new(20.0, 10.0, 160.0, 60.0));
+        for output in [
+            LocalBounds::EMPTY,
+            LocalBounds::from_rect(Rect::new(20.0, 10.0, 10.0, 20.0)),
+        ] {
+            let (_, bounds) = layer_geometry(LayerGeometryInput {
+                transform: &resolved_transform(),
+                animation: &ResolvedClipAnimation::RASTER_IDENTITY,
+                camera: None,
+                mask: None,
+                mapping: mapping(200.0, 100.0),
+                output: [200, 100],
+                geometry: Some(LocalGeometry {
+                    viewport,
+                    content,
+                    output,
+                    scale_domain: content,
+                    max_intermediate_pixels: 0,
+                }),
+            })
+            .unwrap();
+            assert_eq!(bounds.content, DeviceRect::new(20, 10, 160, 60));
+            assert!(bounds.output.pixels() < bounds.content.pixels());
+            assert_eq!(bounds.validate_wire(), Ok(()));
+            let wire = serde_json::to_value(bounds).unwrap();
+            assert_eq!(serde_json::from_value::<PreparedBounds>(wire).unwrap(), bounds);
+        }
     }
 
     #[test]
