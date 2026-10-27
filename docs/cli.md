@@ -195,8 +195,12 @@ wgpu on the same Vulkan device and queue for rasterization, materials, shadows
 and transparency; color and depth textures pass directly to Skia for composition
 and depth of field. Scene preparation and geometry evaluation still use the CPU.
 If the shared wgpu device or a Scene3D workload is unsupported, Scene3D falls back
-to CPU while Skia can continue using Vulkan. Final output is read back for software
-encoding; this path does not enable hardware video decoding or encoding. The Vulkan
+to CPU while Skia can continue using Vulkan. Opaque eight-bit Vulkan output uses
+asynchronous GPU-to-CPU copies, with at most three pending readbacks inside the
+bounded frame window. Software encoding overlaps subsequent GPU rendering. Optional
+GPU context growth is gated by measured throughput and driver heap budgets; ordered
+shadow workloads retain one context. Final output still crosses CPU memory; this
+path does not enable hardware video decoding or encoding. The Vulkan
 loader comes from the graphics driver and is loaded at runtime, so a CPU-only
 machine can still run the same binary. See `valle motion render --help` for constraints.
 

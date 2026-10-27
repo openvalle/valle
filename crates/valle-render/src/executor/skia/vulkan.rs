@@ -75,6 +75,34 @@ impl VulkanContext {
         }
     }
 
+    /// Driver heap usage is device-wide, not this process's allocation count. It gates only
+    /// optional context growth; the host's managed memory budget remains independently enforced.
+    pub fn memory_budget(&self) -> Option<(u64, u64)> {
+        let (device, _) = self.shared_device()?;
+        let raw = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }?;
+        let instance = raw.shared_instance().raw_instance();
+        let physical = raw.raw_physical_device();
+        let supported = unsafe { instance.enumerate_device_extension_properties(physical) }.ok()?;
+        if !supported.iter().any(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) }
+            == ash::ext::memory_budget::NAME) {
+            return None;
+        }
+        let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        let mut properties = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
+        unsafe { instance.get_physical_device_memory_properties2(physical, &mut properties) };
+        let heaps = properties.memory_properties;
+        let mut allocated = 0_u64;
+        let mut available = 0_u64;
+        for i in 0..heaps.memory_heap_count as usize {
+            if heaps.memory_heaps[i].flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL) {
+                allocated = allocated.saturating_add(budget.heap_usage[i]);
+                available = available.saturating_add(budget.heap_budget[i]);
+            }
+        }
+        // Retain headroom for codecs, other clients and allocations outside our managed caches.
+        (available > 0).then_some((allocated, available.saturating_mul(3) / 4))
+    }
+
     fn shared() -> Result<Self, SurfaceError> {
         let started = std::time::Instant::now();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {

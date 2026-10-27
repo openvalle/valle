@@ -177,6 +177,8 @@ pub enum FrameDelivery {
     Surface,
     /// The caller requested tightly packed CPU RGBA bytes.
     CpuReadback,
+    /// A queued GPU copy completed before tightly packed CPU RGBA was delivered.
+    AsyncCpuReadback,
     /// An encoder-owned platform surface was rendered and submitted without CPU readback.
     SharedGpu,
     /// Raster wrote an encoder-owned platform surface in place through a CPU mapping.
@@ -195,8 +197,8 @@ pub struct FrameTimings {
     pub execute_us: u64,
     /// Present only for `render_rgba8`; caller-owned GPU/surface delivery has no CPU readback.
     pub delivery_readback_us: Option<u64>,
-    /// Present only for shared-GPU delivery; queue residence is included in `total_us`, while this
-    /// field measures only CPU time blocked waiting for Ganesh's completion callback.
+    /// Present for asynchronous GPU delivery; queue residence is included in `total_us`, while
+    /// this field measures only CPU time waiting for GPU completion.
     pub gpu_completion_wait_us: Option<u64>,
     pub total_us: u64,
 }
@@ -220,7 +222,7 @@ pub(crate) struct PreparedFrame {
     timings: FrameTimings,
 }
 
-#[cfg(all(target_os = "macos", feature = "native"))]
+#[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 impl PreparedFrame {
     pub(crate) fn needs_ordered_shadow_context(&self) -> bool {
         // Ganesh's blurred shape masks can round differently after a different
@@ -244,6 +246,22 @@ pub(crate) struct SubmittedSharedFrame {
     submitted: SubmittedSharedMetalFrame,
     evidence: FrameEvidence,
     started: Instant,
+}
+
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+pub(crate) struct SubmittedVulkanFrame {
+    submitted: crate::executor::skia::vulkan_delivery::SubmittedVulkanOutput,
+    _memory: Option<valle_engine::motion::memory::MemoryLease>,
+    trace: Option<TraceFrame>,
+    evidence: FrameEvidence,
+    started: Instant,
+}
+
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+impl SubmittedVulkanFrame {
+    pub(crate) fn ready(&self) -> Result<bool, FrameRenderError> {
+        Ok(self.submitted.ready().map_err(SkiaExecuteError::from)?)
+    }
 }
 
 /// The one Native per-frame orchestration path.
@@ -550,6 +568,60 @@ impl<P: ResourceProvider> FramePreparationStage<P> {
 
 #[cfg(feature = "native")]
 impl FrameExecutionStage {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub(crate) fn supports_async_vulkan_output(&mut self, spec: RenderSpec) -> bool {
+        spec.output().alpha() == valle_engine::resource::OutputAlphaMode::Opaque
+            && spec.output().bit_depth() == valle_engine::resource::OutputBitDepth::Eight
+            && self.executor.supports_async_vulkan_output()
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub(crate) fn vulkan_memory(&mut self) -> Option<super::gpu_schedule::GpuMemory> {
+        self.executor.vulkan_memory().map(|(allocated, budget)|
+            super::gpu_schedule::GpuMemory { allocated, budget })
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub(crate) fn render_prepared_vulkan_frame(
+        &mut self, prepared: PreparedFrame, spec: RenderSpec,
+    ) -> Result<SubmittedVulkanFrame, FrameRenderError> {
+        let width = u64::from(spec.width());
+        let height = u64::from(spec.height());
+        let bytes = (width * 4 + (width * 4).div_ceil(256) * 256) * height;
+        let reserve = || valle_engine::motion::memory::reserve(
+            valle_engine::motion::memory::MemoryKind::Delivery, bytes);
+        let memory = match &prepared.memory_credit {
+            Some(credit) => credit.run(reserve),
+            None => reserve(),
+        }?;
+        let started = prepared.started;
+        let trace = prepared.trace.clone();
+        let mut output = self.executor.acquire_vulkan_output(spec.width(), spec.height(), spec.output())?;
+        let mut target = SkiaTarget::direct_gpu(&mut output.surface, spec.output())?;
+        let budget = self.cpu_budget.clone();
+        let evidence = budgeted(budget.as_ref(), || execute_prepared_with(
+            &mut self.executor, prepared, &mut target, FrameDelivery::AsyncCpuReadback,
+        ))?;
+        let _submit = trace.as_ref().map(|t| t.span("execute.submit"));
+        let submitted = self.executor.submit_vulkan_output(output)?;
+        Ok(SubmittedVulkanFrame { submitted, _memory: memory, trace, evidence, started })
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub(crate) fn finish_vulkan_frame(
+        &mut self, submitted: SubmittedVulkanFrame, wait_us: u64,
+    ) -> Result<(RgbaFrame, FrameEvidence), FrameRenderError> {
+        let _readback = submitted.trace.as_ref().map(|t| t.span("delivery.readback"));
+        let started = Instant::now();
+        let pixels = submitted.submitted.read().map_err(SkiaExecuteError::from)?;
+        let mut evidence = submitted.evidence;
+        evidence.delivery_readback_bytes = pixels.data.len() as u64;
+        evidence.timings.delivery_readback_us = Some(elapsed_us(started));
+        evidence.timings.gpu_completion_wait_us = Some(wait_us);
+        evidence.timings.total_us = elapsed_us(submitted.started);
+        Ok((pixels, evidence))
+    }
+
     pub(crate) fn trim_memory(&mut self) {
         self.cpu_delivery_surface = None;
         self.executor.invalidate_surface_generation();
@@ -577,7 +649,7 @@ impl FrameExecutionStage {
         })
     }
 
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub(crate) fn opacity_layer_cache_usage(&self) -> (usize, bool) {
         self.executor.opacity_layer_cache_usage()
     }
@@ -1057,6 +1129,12 @@ fn frame_working_bytes<P: ResourceProvider>(
     // The RGBA readback and the delivery surfaces an executor keeps (CPU target, Metal output).
     let output = u64::from(spec.width()) * u64::from(spec.height()) * 4;
     let execution_bytes = checked_add(execution_bytes, output * 3)?;
+    // Asynchronous Vulkan readback buffers have 256-byte row alignment.
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    let execution_bytes = if admission.backend() == SkiaBackendKind::Vulkan {
+        let row = u64::from(spec.width()) * 4;
+        checked_add(execution_bytes, (row.div_ceil(256) * 256 - row) * u64::from(spec.height()))?
+    } else { execution_bytes };
     let bytes = checked_add(checked_add(execution_bytes, resources)?, scene3d_working)?;
     // GPU Scene3D kernels use the same conservative 3D allowance after preparation.
     // Keep it until completion, also allowing an unavailable GPU to run the CPU reference.

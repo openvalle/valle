@@ -230,7 +230,7 @@ impl SmallOpacityCache {
     pub(crate) fn bytes(&self) -> usize {
         self.bytes
     }
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub(crate) fn under_pressure(&self) -> bool {
         self.bytes >= self.byte_limit / 4 * 3
     }

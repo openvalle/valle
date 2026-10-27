@@ -12,6 +12,9 @@ use std::{
 
 const CHECK_INTERVAL: Duration = Duration::from_millis(10);
 
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod vulkan;
+
 /// A frame's outcome. Failed frames are delivered in frame order like completed ones, so the
 /// render reports the earliest failed frame, as rendering one frame at a time would.
 #[expect(
@@ -123,6 +126,8 @@ pub(super) fn render(
     let abort = AtomicBool::new(false);
     // The earliest failed frame; later frames need no work.
     let failed = AtomicUsize::new(usize::MAX);
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let sink_us = std::sync::atomic::AtomicU64::new(0);
     let shared = shared.as_ref();
     let mut metrics = PipelineAccumulator::for_render_id(project.render_id());
     let mut delivered = 0;
@@ -168,9 +173,16 @@ pub(super) fn render(
             let prepared = prepared_rx.clone();
             let output = output_tx.clone();
             let (abort, failed) = (&abort, &failed);
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            let sink_us = &sink_us;
             scope.spawn(move || {
                 actor(abort, &output, control, || {
                     let mut executor = control.execution_stage(project, backend, spec)?;
+                    #[cfg(any(target_os = "linux", target_os = "windows"))]
+                    if shared.is_none() && executor.supports_async_vulkan_output(spec) {
+                        return vulkan::run(executor, project, spec, control, &prepared, &output,
+                            abort, failed, sink_us, frames.len(), window);
+                    }
                     while let Some((sequence, key, packet)) =
                         receive(&prepared, abort, control, || {
                             if budget_pressure(control) {
@@ -294,6 +306,8 @@ pub(super) fn render(
                     Outcome::Failed(_, error) => return Err(error),
                 };
                 metrics.add(&evidence)?;
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                let sink_started = Instant::now();
                 let push = || match pixels {
                     CompletedPixels::Rgba(pixels) => sink.push(DeliveredFrame {
                         sequence,
@@ -314,6 +328,9 @@ pub(super) fn render(
                     None => push(),
                 }
                 .map_err(|e| PipelineError::Sink(e.to_string()))?;
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                sink_us.store(sink_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+                    Ordering::Release);
                 drop(memory);
                 drop(delivery_memory);
                 delivered += 1;

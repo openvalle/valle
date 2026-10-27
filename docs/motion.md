@@ -3360,6 +3360,14 @@ releasing its surfaces. Raster with hardware encoding writes each frame into the
 same encoder-owned surfaces through a CPU mapping, so on either backend
 VideoToolbox, not the CPU, converts frames to YUV. PNG and CPU-delivery paths use
 the same frame concurrency.
+On Windows/Linux, opaque eight-bit output on a shared Vulkan device queues up to
+three asynchronous readbacks, then delivers CPU RGBA in frame order to the software
+encoder. Preparation, GPU execution/copy and encoding overlap within the same bounded
+frame window. GPU context probes use throughput and device-local heap pressure;
+unhelpful probes are rolled back. This is asynchronous CPU readback, not direct
+hardware-encoder delivery. Other output formats and Skia-only Vulkan devices keep
+the synchronous output path. Cancellation and sink failure retire pending GPU work
+before releasing imported textures and readback storage.
 Scene3D's CPU raster tiles, CPU glow and bloom pyramids and a software encoder draw
 from the same `--threads` allowance and never add threads beyond it.
 `--ffmpeg-log-level info` adds encoder diagnostics on stderr; `--events` adds

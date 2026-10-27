@@ -681,7 +681,7 @@ impl<'a> SkiaTarget<'a> {
         })
     }
 
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub(crate) fn direct_gpu(
         surface: &'a mut Surface,
         output: OutputSpec,

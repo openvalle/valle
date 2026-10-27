@@ -167,7 +167,7 @@ impl SkiaExecutor {
         Ok(self.surfaces.submit_shared_frame(target)?)
     }
 
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub(crate) fn opacity_layer_cache_usage(&self) -> (usize, bool) {
         let cache = self
             .caches
@@ -175,6 +175,32 @@ impl SkiaExecutor {
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         (cache.bytes(), cache.under_pressure())
+    }
+
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pub(crate) fn supports_async_vulkan_output(&mut self) -> bool {
+        self.surfaces.vulkan_context_mut().is_some_and(|c| c.shared_device().is_some())
+    }
+
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pub(crate) fn vulkan_memory(&mut self) -> Option<(u64, u64)> {
+        self.surfaces.vulkan_context_mut()?.memory_budget()
+    }
+
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pub(crate) fn acquire_vulkan_output(
+        &mut self, width: u32, height: u32, output: valle_engine::resource::OutputSpec,
+    ) -> Result<super::vulkan_delivery::VulkanOutput, SkiaExecuteError> {
+        let context = self.surfaces.vulkan_context_mut().ok_or_else(||
+            super::surface::SurfaceError::VulkanUnavailable("output requires Vulkan".into()))?;
+        Ok(super::vulkan_delivery::VulkanOutput::new(context, width, height, output)?)
+    }
+
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pub(crate) fn submit_vulkan_output(
+        &mut self, output: super::vulkan_delivery::VulkanOutput,
+    ) -> Result<super::vulkan_delivery::SubmittedVulkanOutput, SkiaExecuteError> {
+        Ok(self.surfaces.submit_vulkan_output(output)?)
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]

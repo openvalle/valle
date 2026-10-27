@@ -34,6 +34,8 @@ mod target;
 mod velocity;
 #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
 mod vulkan;
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+pub(crate) mod vulkan_delivery;
 
 #[cfg(feature = "native")]
 pub(crate) use cache::SkiaCacheLimits;

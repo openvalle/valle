@@ -12,7 +12,7 @@ mod budget;
 #[cfg(feature = "native")]
 mod delivery;
 mod frame;
-#[cfg(all(feature = "native", target_os = "macos"))]
+#[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod gpu_schedule;
 #[cfg(feature = "native")]
 mod pipeline;

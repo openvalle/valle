@@ -1040,6 +1040,25 @@ impl SurfaceArena {
         raster_surface(info)
     }
 
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pub(crate) fn vulkan_context_mut(&mut self) -> Option<&mut super::vulkan::VulkanContext> {
+        match &mut self.backend {
+            SurfaceBackend::Vulkan(context) => Some(context),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pub(crate) fn submit_vulkan_output(
+        &mut self,
+        output: super::vulkan_delivery::VulkanOutput,
+    ) -> Result<super::vulkan_delivery::SubmittedVulkanOutput, SurfaceError> {
+        let SurfaceBackend::Vulkan(context) = &mut self.backend else {
+            return Err(SurfaceError::VulkanUnavailable("output requires Vulkan".into()));
+        };
+        output.submit(&mut context.context, std::mem::take(&mut self.pending_scene3d_imports))
+    }
+
     #[cfg(all(target_os = "macos", feature = "native"))]
     pub(crate) fn acquire_shared_frame(
         &mut self,

@@ -1,4 +1,4 @@
-//! Conservative, feedback-driven concurrency for the shared Metal delivery path.
+//! Conservative, feedback-driven concurrency for the asynchronous GPU delivery paths.
 //! This changes scheduling only; shader selection and pixel semantics stay in the executor.
 
 const WINDOW_FRAMES: usize = 24;
@@ -14,12 +14,12 @@ const MINIMUM_EXTRA_BYTES: u64 = 512 * 1024 * 1024;
 const REUSE_RESIDENCY_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct MetalMemory {
+pub(super) struct GpuMemory {
     pub allocated: u64,
     pub budget: u64,
 }
 
-impl MetalMemory {
+impl GpuMemory {
     fn permits_growth(self, queues: usize, target: usize) -> bool {
         let extra = (self.allocated / queues as u64)
             .max(MINIMUM_EXTRA_BYTES)
@@ -28,14 +28,15 @@ impl MetalMemory {
     }
 }
 
-pub(super) fn metal_memory() -> Option<MetalMemory> {
+#[cfg(target_os = "macos")]
+pub(super) fn metal_memory() -> Option<GpuMemory> {
     use objc2_metal::MTLDevice;
     let device = objc2_metal::MTLCreateSystemDefaultDevice()?;
     // Device allocations include all this process's Metal contexts, including Scene3D.
     // Leave half the recommended working set available to CPU/encoder/system work.
     // This gates optional concurrency; it is not a hard limit on one frame's resources.
     let budget = device.recommendedMaxWorkingSetSize() / 2;
-    (budget > 0).then(|| MetalMemory {
+    (budget > 0).then(|| GpuMemory {
         allocated: device.currentAllocatedSize() as u64,
         budget,
     })
@@ -208,7 +209,7 @@ impl AdaptiveQueues {
         &mut self,
         sample: QueueSample,
         remaining: usize,
-        memory: impl FnOnce() -> Option<MetalMemory>,
+        memory: impl FnOnce() -> Option<GpuMemory>,
     ) -> Option<QueueChange> {
         if self.maximum == 1 {
             return None;
@@ -236,7 +237,7 @@ impl AdaptiveQueues {
         let memory = memory();
         if std::env::var_os("VALLE_PERF").is_some() {
             eprintln!(
-                "[valle metal] queue-window queues={} frames={} frame-us={} gpu-wait-us={} prepare-wait-us={} sink-us={} submit-us={} execute-us={} allocated={} budget={}",
+                "[valle gpu] queue-window queues={} frames={} frame-us={} gpu-wait-us={} prepare-wait-us={} sink-us={} submit-us={} execute-us={} allocated={} budget={}",
                 self.queues,
                 window.frames,
                 window.sample.wall_us / window.frames as u64,
@@ -275,7 +276,7 @@ impl AdaptiveQueues {
                         return self.change(previous, previous, "no-throughput-gain");
                     }
                     if std::env::var_os("VALLE_PERF").is_some() {
-                        eprintln!("[valle metal] queue-probe accepted queues={}", self.queues);
+                        eprintln!("[valle gpu] queue-probe accepted queues={}", self.queues);
                     }
                 }
                 Probe::Recheck {
@@ -369,7 +370,7 @@ mod tests {
     fn feed(
         policy: &mut AdaptiveQueues,
         sample: QueueSample,
-        memory: MetalMemory,
+        memory: GpuMemory,
     ) -> Vec<QueueChange> {
         let frames = if matches!(policy.probe, Some(Probe::Recheck { .. })) {
             RECHECK_FRAMES
@@ -381,11 +382,11 @@ mod tests {
             .collect()
     }
 
-    fn start_probe(policy: &mut AdaptiveQueues, memory: MetalMemory) -> Vec<QueueChange> {
+    fn start_probe(policy: &mut AdaptiveQueues, memory: GpuMemory) -> Vec<QueueChange> {
         feed(policy, sample(20_000, 12_000), memory)
     }
 
-    const MEMORY: MetalMemory = MetalMemory {
+    const MEMORY: GpuMemory = GpuMemory {
         allocated: 1024 * 1024 * 1024,
         budget: 6 * 1024 * 1024 * 1024,
     };
@@ -449,7 +450,7 @@ mod tests {
     fn persistent_surface_working_set_can_limit_or_prevent_growth() {
         let mut policy = AdaptiveQueues::new(3);
         let mut work = sample(20_000, 12_000);
-        let memory = MetalMemory {
+        let memory = GpuMemory {
             allocated: 100 * 1024 * 1024,
             budget: 2500 * 1024 * 1024,
         };
@@ -507,7 +508,7 @@ mod tests {
 
     #[test]
     fn process_wide_memory_and_shadow_restrictions_override_gpu_wait() {
-        let tight = MetalMemory {
+        let tight = GpuMemory {
             budget: MEMORY.allocated + MINIMUM_EXTRA_BYTES - 1,
             ..MEMORY
         };
@@ -517,7 +518,7 @@ mod tests {
         let result = feed(
             &mut policy,
             sample(15_000, 7_000),
-            MetalMemory {
+            GpuMemory {
                 budget: 1,
                 ..MEMORY
             },
@@ -543,7 +544,7 @@ mod tests {
 
     #[test]
     fn memory_can_limit_a_probe_to_two_contexts() {
-        let memory = MetalMemory {
+        let memory = GpuMemory {
             budget: MEMORY.allocated * 2,
             ..MEMORY
         };
@@ -615,7 +616,7 @@ mod tests {
             feed(&mut policy, grown, MEMORY);
             assert_eq!((policy.queues, policy.retained_queues), (1, 3));
             let memory = if memory_pressure {
-                MetalMemory {
+                GpuMemory {
                     budget: 1,
                     ..MEMORY
                 }
