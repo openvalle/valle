@@ -86,6 +86,13 @@ export default function Title() {
   sets the number of nodes comes from a module `const` or `useData()`, not from props.
 - `interpolate` takes stops written as literals or constants. For a destination that depends
   on a prop, interpolate from 0 to 1 and multiply.
+- For visual movement, keep layout positions fixed and animate `translate: point(dx, dy)`
+  with fractional offsets. Animating `left`/`top` or margins can produce pixel steps in
+  slow moves; do not round the offsets. Move a card and its attached decorations together.
+  Animate layout only when wrapping, sibling placement or box size should change.
+  `motionPath`/`follow` and `layoutTransition: flip(...)` already own movement: do not add
+  translation on the same node. See "Smooth movement" in `valle docs motion`; if a move
+  steps, inspect consecutive frames before changing FPS or adding blur.
 - The compiler rejects what it cannot render and usually names what to write instead; apply
   that. Check unfamiliar CSS against the guide's "Unsupported CSS" section.
 

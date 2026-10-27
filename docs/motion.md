@@ -1007,7 +1007,7 @@ const motion = simulate({
     return { x: state.x + velocity * dt, velocity };
   },
 });
-// In the component: left: motion.at(seconds).x
+// In the component: left: 100, translate: point(motion.at(seconds).x - 100, 0)
 ```
 
 `simulate({ dt, duration, init, step })` runs `step` at fixed `dt` increments in the
@@ -1209,6 +1209,9 @@ positioned children. `Scene` does not automatically center its children. In a fl
 row, set `flexShrink: 0` when an authored item must keep its width. Hidden overflow
 plus a border radius is the usual rounded card clip.
 
+For visual movement without changing layout, keep these positions fixed and use
+[smooth movement](#smooth-movement) with `translate`.
+
 ### Flex and Grid
 
 | Properties | Values / example |
@@ -1288,6 +1291,58 @@ Gradient stops currently must resolve inside the emitted gradient's `[0, 1]`
 offset range. CSS stops outside that range can fail DrawProgram validation;
 extending/remapping the gradient rather than clamping its stops remains unimplemented
 ([CSS gradient stop positions](https://www.w3.org/TR/css-images-3/#linear-gradient-syntax)).
+
+### Smooth movement
+
+For slides, floating cards, orbiting labels and switch thumbs, keep the layout box
+fixed and animate `translate: point(dx, dy)`. Use `left`/`top` for the base position;
+keep `right`/`bottom`, margins and other layout inputs stable when the intent is
+only to move the painted element. The equivalent CSS `transform: translate(...)`
+is also supported; see [Transforms](#transforms) for composition order.
+
+Dynamic layout coordinates are supported, but layout can snap them to a pixel
+grid. A slow movement can then hold the same position for several frames before
+jumping to the next pixel. Scaling the output magnifies that step: one layout
+pixel becomes two output pixels when a 960×540 canvas is delivered at 1920×1080.
+Translation retains fractional displacement after layout. Keep its offsets
+continuous; do not round them or replace the time function with integer-frame
+positions unless stepped motion is intentional.
+
+Save as `smooth-move.motion.tsx`:
+
+```tsx
+export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
+
+export default function SmoothMove() {
+  const { seconds } = useCurrentTime();
+  const dx = interpolate(seconds, [0, 2], [0, 160], { easing: "easeInOut" });
+  const dy = Math.sin(seconds * 3) * 6;
+  return (
+    <Scene className="relative h-full w-full">
+      <View style={{ position: "absolute", left: 80, top: 140,
+        width: 96, height: 48, borderRadius: 12, backgroundColor: "#2563eb",
+        translate: point(dx, dy) }} />
+    </Scene>
+  );
+}
+```
+
+Here the base stays at `(80, 140)`, instead of animating `left: 80 + dx` and
+`top: 140 + dy`. Move a card and its attached decorations through one parent
+transform when they should travel together. Inline text needs a transformable
+box; see the inline-box rule in [Transforms](#transforms).
+
+Keep layout animation when the intent is to change wrapping, sibling placement
+or the actual box size. `translate` does not reflow neighboring content. Existing
+`motionPath`/`follow` and `layoutTransition: flip(...)` own their node's movement;
+use their progress inputs and do not add a second translation on the same node.
+Geometry and Scene3D have their own position APIs. This recommendation is for
+moving CSS layout boxes, not a replacement for every coordinate in a scene.
+
+If a slow move still steps, inspect consecutive PNG frames around that interval
+with identical render inputs. Check the position expressions and layout before
+changing the frame rate or adding motion blur. This addresses spatial stepping;
+fast motion at a low frame rate can still show temporal strobing.
 
 ### Transforms
 
@@ -2457,8 +2512,8 @@ export default function GlassDemo() {
         <Text style={{ fontSize: 32, color: "#ffffff" }}>Glass</Text>
       </Glass>
       <GlassField merge={{ distance: 32 }} light={{ intensity: 0.4 }}>
-        <Glass style={{ position: "absolute", left: 0, transform: `translateX(${x}px)`, top: 130, width: 100, height: 100,
-          borderRadius: "50%" }} />
+        <Glass style={{ position: "absolute", left: 330, top: 130, width: 100, height: 100,
+          translate: point(x - 330, 0), borderRadius: "50%" }} />
         <Glass presence={interpolate(progress, [0, 0.4], [0, 1])}
           style={{ position: "absolute", left: 500, top: 130, width: 100, height: 100,
             borderRadius: "50%" }} />
@@ -3236,6 +3291,7 @@ accepted programs and rejection cases.
 | A blur is rejected at certain frames | Clamp its computed radius to non-negative values |
 | Post-layout dependency error | Keep bounds/anchors out of size, ordinary layout and text content |
 | PNG and MP4 show different animation states | Match all render inputs and compare the same zero-based frame |
+| Slow movement holds still, then jumps a pixel or two | Keep the layout position fixed and animate fractional `translate`; inspect consecutive frames and avoid rounding the offsets. See [Smooth movement](#smooth-movement) |
 | Slow export | Find the heaviest frames and passes with `motion check --cost` and reduce layers, blur and overdraw there first; tune `--backend`, `--threads` and encoding separately |
 
 CSS values and expanded utilities share property diagnostics. Machine-readable compiler
