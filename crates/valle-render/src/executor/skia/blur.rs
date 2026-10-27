@@ -1,5 +1,6 @@
-//! Direct separable convolution for raster float surfaces. Skia's specialized CPU blur
-//! handles A8/8888 only; its float fallback evaluates a general shader for every tap.
+//! Separable Gaussian convolution for raster float surfaces. Small/constant spans use direct
+//! taps; larger varying spans use a finite-support recursive approximation under the same
+//! transparent-boundary contract. Skia's specialized CPU blur only handles A8/8888.
 
 use skia_safe::{
     AlphaType, BlendMode, Canvas, ColorType, Data, FilterMode, IRect, Image, ImageInfo, MipmapMode,
@@ -9,8 +10,10 @@ use valle_draw::program::{FILTER_GAUSSIAN_SUPPORT_SIGMAS, Filter};
 
 use super::{draw::DrawError, effect::straight_color};
 
-// Very wide kernels are cheaper on Skia's downsampled path. Bound direct convolution's
-// work and temporary extent rather than replacing that path with an unbounded tap loop.
+mod recursive;
+
+// Retain Skia's downsampled path outside the quality-validated radius. Expanding recursive
+// convolution beyond sigma 32 differs from that approximation by more than the RGB 2 budget.
 const MAX_DIRECT_RADIUS: usize = 96;
 
 /// Draws at integer device coordinates, respecting the existing canvas clip. Returns false
@@ -35,12 +38,11 @@ pub(super) fn draw(
     if !is_raster_float(canvas, input) || source.is_empty() {
         return Ok(false);
     }
-    let Some(horizontal) = kernel(sigma_x) else {
+    if !supports(filter) {
         return Ok(false);
-    };
-    let Some(vertical) = kernel(sigma_y) else {
-        return Ok(false);
-    };
+    }
+    let horizontal = kernel(sigma_x).expect("admitted sigma");
+    let vertical = kernel(sigma_y).expect("admitted sigma");
     let rx = horizontal.len() / 2;
     let ry = vertical.len() / 2;
     let width = source.width() as usize;
@@ -63,6 +65,13 @@ pub(super) fn draw(
     ) {
         return Err(DrawError::Surface("float blur input read failed".into()));
     }
+    let apply = |pixels: &[f32], channels| {
+        if recursive::applies(sigma_x, sigma_y) {
+            recursive::convolve(pixels, width, height, channels, sigma_x, sigma_y)
+        } else {
+            convolve(pixels, width, height, channels, &horizontal, &vertical)
+        }
+    };
     let blurred = if shadow.is_some() {
         let alpha = pixels
             .as_chunks::<4>()
@@ -70,13 +79,13 @@ pub(super) fn draw(
             .iter()
             .map(|pixel| pixel[3])
             .collect::<Vec<_>>();
-        let coverage = convolve(&alpha, width, height, 1, &horizontal, &vertical);
+        let coverage = apply(&alpha, 1);
         coverage
             .into_iter()
             .flat_map(|a| [0.0, 0.0, 0.0, a])
             .collect::<Vec<_>>()
     } else {
-        convolve(&pixels, width, height, 4, &horizontal, &vertical)
+        apply(&pixels, 4)
     };
     // The convolution no longer needs its input. Release it before allocating the image's
     // owned output storage, especially when several CPU frames are being rendered at once.
@@ -147,11 +156,9 @@ pub(super) fn supports(filter: &Filter) -> bool {
         Filter::Blur { sigma_x, sigma_y }
         | Filter::DropShadow {
             sigma_x, sigma_y, ..
-        } => [*sigma_x, *sigma_y].into_iter().all(|sigma| {
-            sigma.is_finite()
-                && sigma >= 0.0
-                && (sigma * FILTER_GAUSSIAN_SUPPORT_SIGMAS).ceil() <= MAX_DIRECT_RADIUS as f32
-        }),
+        } => [*sigma_x, *sigma_y]
+            .into_iter()
+            .all(|sigma| (0.0..=recursive::MAX_SIGMA).contains(&sigma)),
         _ => false,
     }
 }
