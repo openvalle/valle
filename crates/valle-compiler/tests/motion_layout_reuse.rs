@@ -169,6 +169,59 @@ fn unsupported_and_geometry_changing_scenes_use_the_full_path() {
 }
 
 #[test]
+fn animated_paint_reuses_geometry_and_preserves_inherited_colors_and_effects() {
+    let source = r##"
+export default function Paint() { const time = useCurrentTime();
+ return <Scene style={{width:320,height:240,color:time.seconds<1?'#fa3456':'#45cdef'}}>
+  <View style={{width:210,height:160,padding:12,borderWidth:3,borderStyle:'solid',
+    backgroundColor:time.seconds<1?'#162f49':'#ad381f',
+    borderColor:'currentColor',borderRadius:time.seconds*4,
+    boxShadow:`${time.seconds*2}px 3px 4px #123456`,
+    outlineColor:time.seconds<1?'#abc':'#def',outlineWidth:2,outlineStyle:'solid',
+    isolation:time.seconds<1?'auto':'isolate',mixBlendMode:time.seconds<1?'normal':'multiply'}}>
+   <Text style={{fontSize:18,textShadow:`1px ${time.seconds}px 2px #345678`,
+     visibility:time.seconds<1?'visible':'hidden'}}>Inherited color</Text>
+   <Text style={{fontSize:14,color:'currentColor'}}>Still visible</Text>
+  </View>
+ </Scene>;
+}
+"##;
+    let artifact = compile_motion(source).unwrap().artifact;
+    let prepared = prepare_scene(&artifact).unwrap();
+    let fonts = fonts("NotoSans-Regular.ttf");
+    let cache = LayoutCache::new(&prepared, &fonts).expect("paint cannot change box geometry");
+    let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+    let viewport = Viewport::new((320, 240));
+    let styles = StyleCache::new();
+    let mut seen = BTreeMap::new();
+    for (index, frame) in [0, 59, 17, 30, 1, 59, 0].into_iter().enumerate() {
+        let ctx = valle_motion::motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap())
+            .unwrap();
+        let full = valle_motion::build_tree(
+            &prepared,
+            &ctx,
+            &props,
+            &LayoutOptions {
+                viewport,
+                fonts: &fonts,
+                styles: None,
+            },
+        )
+        .unwrap();
+        let (cached, timings) = cache
+            .build_tree_profiled(&ctx, &props, viewport, Some(&styles))
+            .unwrap();
+        assert_eq!(timings.layout_reused, index > 0);
+        let actual = bytes(&cached);
+        assert_eq!(actual, bytes(&full), "frame {frame}");
+        if let Some(previous) = seen.insert(frame, actual.clone()) {
+            assert_eq!(actual, previous, "repeated frame {frame}");
+        }
+    }
+    assert_ne!(seen[&0], seen[&59]);
+}
+
+#[test]
 fn css_3d_projection_and_filters_reuse_boxes_without_retaining_previous_paint() {
     let source = r##"
 export default function Projection() { const time = useCurrentTime(); const frame = Math.floor(time.seconds * 30);

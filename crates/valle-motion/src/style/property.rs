@@ -868,6 +868,10 @@ pub fn property_spec(name: &str) -> PropertySpec<'_> {
             } else {
                 Impact::PAINT
             };
+            // These declarations change paint/cascade only. Each frame still builds fresh
+            // computed styles and paint records; only the immutable box geometry is reused.
+            // In particular, color/currentColor and visibility are never cached as geometry.
+            spec.geometry_reuse = Reuse::AcrossFrames;
             spec.post_layout = true;
             spec
         }

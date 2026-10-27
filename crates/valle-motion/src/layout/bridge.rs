@@ -199,6 +199,94 @@ pub(crate) fn parse_style(cache: Option<&StyleCache>, declarations: &str) -> Res
     }
 }
 
+/// Ordered style inputs for a frame. Numeric paint values enter the cascade directly, while
+/// authored CSS is parsed/cached one declaration at a time. A changing opacity must not force
+/// reparsing every layout declaration on the same node. Keep source order and each declaration's
+/// importance so shorthand/longhand and inherited/currentColor semantics remain Takumi's.
+#[derive(Default)]
+pub(crate) struct FrameDeclarations(Vec<FrameDeclaration>);
+
+enum FrameDeclaration {
+    Css(String),
+    Typed(takumi_core::style::StyleDeclaration),
+}
+
+impl FrameDeclarations {
+    pub(crate) fn push_css(&mut self, css: String) {
+        if !css.is_empty() {
+            self.0.push(FrameDeclaration::Css(css));
+        }
+    }
+
+    pub(crate) fn push_typed(&mut self, value: takumi_core::style::StyleDeclaration) {
+        self.0.push(FrameDeclaration::Typed(value));
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(crate) fn source(&self) -> String {
+        self.0
+            .iter()
+            .map(|entry| match entry {
+                FrameDeclaration::Css(css) => css.clone(),
+                FrameDeclaration::Typed(value) => format!("{value:?}"),
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    pub(crate) fn resolve(&self, cache: Option<&StyleCache>) -> Result<Style, String> {
+        let mut result = Style::default();
+        for entry in &self.0 {
+            match entry {
+                FrameDeclaration::Typed(value) => result.push(value.clone(), false),
+                FrameDeclaration::Css(css) => {
+                    // Every entry contains one authored declaration. Shorthands can expand to
+                    // multiple longhands; they all carry that declaration's importance.
+                    let parsed = parse_style(cache, css)?;
+                    let important = !parsed.declarations.importance.is_empty();
+                    for declaration in parsed.declarations.iter() {
+                        result.push(declaration.clone(), important);
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+}
+
+pub(crate) fn typed_paint_declaration(
+    property: &str,
+    value: &crate::MotionValue,
+) -> Option<takumi_core::style::StyleDeclaration> {
+    use takumi_core::style::{Color, ColorInput, PercentageNumber, StyleDeclaration as D};
+    match (property, value) {
+        ("opacity", crate::MotionValue::Number(value)) => {
+            Some(D::opacity(PercentageNumber(*value as f32)))
+        }
+        (_, crate::MotionValue::Color(value)) => {
+            // This byte color participates in Takumi's cascade and shaping brush identity.
+            // Motion's precise color sidecars retain the original floating-point paint value.
+            let color = value.to_srgb8();
+            let color = ColorInput::Value(Color([color.r, color.g, color.b, color.a]));
+            Some(match property {
+                "color" => D::color(color),
+                "background-color" => D::background_color(color),
+                "border-top-color" => D::border_top_color(color),
+                "border-right-color" => D::border_right_color(color),
+                "border-bottom-color" => D::border_bottom_color(color),
+                "border-left-color" => D::border_left_color(color),
+                "outline-color" => D::outline_color(color),
+                "-webkit-text-stroke-color" => D::webkit_text_stroke_color(Some(color)),
+                _ => return None,
+            })
+        }
+        _ => None,
+    }
+}
+
 impl LayoutOptions<'_> {
     /// Takumi's independent CSS animation clock is never advanced. MotionContext is the only clock.
     pub const TIME_MS: u64 = 0;
@@ -666,3 +754,86 @@ pub(crate) struct VideoContent {
 
 // Keep the type visible in rustdoc for the single-clock invariant above.
 const _: Option<MotionContext> = None;
+
+#[cfg(test)]
+mod frame_style_tests {
+    use super::*;
+    use crate::MotionValue;
+    use valle_draw::program::AuthorColor;
+
+    #[test]
+    fn typed_paint_matches_the_css_cascade_values() {
+        for property in [
+            "color",
+            "background-color",
+            "border-top-color",
+            "border-right-color",
+            "border-bottom-color",
+            "border-left-color",
+            "outline-color",
+            "-webkit-text-stroke-color",
+        ] {
+            for n in 0..=255 {
+                let value = MotionValue::Color(AuthorColor::from_srgb8(valle_draw::Rgba::new(
+                    n,
+                    255 - n,
+                    n.wrapping_mul(53),
+                    n,
+                )));
+                let typed = typed_paint_declaration(property, &value).unwrap();
+                let css =
+                    crate::style::parse_property(property, &crate::css_token(&value)).unwrap();
+                assert_eq!(css.declarations.iter().collect::<Vec<_>>(), [&typed]);
+            }
+            for (red, alpha) in [(0.00017, 0.123), (0.32, 0.87654), (-0.1, 1.0), (1.7, 0.5)] {
+                let value = MotionValue::Color(AuthorColor {
+                    red,
+                    green: 0.0123,
+                    blue: 0.789,
+                    alpha,
+                });
+                let typed = typed_paint_declaration(property, &value).unwrap();
+                let css =
+                    crate::style::parse_property(property, &crate::css_token(&value)).unwrap();
+                assert_eq!(
+                    css.declarations.iter().collect::<Vec<_>>(),
+                    [&typed],
+                    "{property}: {value:?}"
+                );
+            }
+        }
+        for opacity in [0.0, 1.0, 0.123456789, f64::from(f32::MIN_POSITIVE)] {
+            let typed = typed_paint_declaration("opacity", &MotionValue::Number(opacity)).unwrap();
+            let css = crate::style::parse_property("opacity", &opacity.to_string()).unwrap();
+            assert_eq!(css.declarations.iter().collect::<Vec<_>>(), [&typed]);
+        }
+    }
+
+    #[test]
+    fn typed_paint_keeps_order_and_importance_without_css_cache_churn() {
+        let cache = StyleCache::new();
+        for i in 0..100 {
+            let mut declarations = FrameDeclarations::default();
+            declarations.push_css("width: 24px".into());
+            declarations.push_css("opacity: .25 !important".into());
+            declarations.push_typed(
+                typed_paint_declaration("opacity", &MotionValue::Number(f64::from(i) / 100.0))
+                    .unwrap(),
+            );
+            declarations.push_css("color: currentColor".into());
+            let resolved = declarations.resolve(Some(&cache)).unwrap();
+            let expected = parse_style(
+                None,
+                &format!(
+                    "width: 24px; opacity: .25 !important; opacity: {}; color: currentColor",
+                    f64::from(i) / 100.0
+                ),
+            )
+            .unwrap();
+            // Equality includes positional importance, so this detects accidentally upgrading
+            // an ordinary later declaration merely because the property appeared earlier.
+            assert_eq!(resolved, expected);
+        }
+        assert_eq!(cache.stats(), (297, 3));
+    }
+}

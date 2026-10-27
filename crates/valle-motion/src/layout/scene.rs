@@ -34,7 +34,8 @@ use valle_motion::{
 use super::activation::{ActivationPlan, InstanceRangeGate, InstanceRowSelection};
 use super::dependencies::{SceneDependencies, TemporalSampling};
 use crate::layout::bridge::{
-    EchoSample, LayoutOptions, LayoutTree, ResolvedUnit, TemporalSample, parse_style,
+    EchoSample, FrameDeclarations, LayoutOptions, LayoutTree, ResolvedUnit, TemporalSample,
+    parse_style,
 };
 
 /// Fail-closed failures from Scene Artifact evaluation or layout construction.
@@ -214,6 +215,9 @@ pub struct PreparedScene {
     sample_roots: Option<Vec<ExprId>>,
     requires_explicit_viewport: bool,
     layout_classes: Vec<Vec<String>>,
+    /// Parsed once, still cascaded against this frame's parent. This contains specified
+    /// declarations only, never inherited colors or computed styles from another frame.
+    static_styles: Arc<Vec<Option<takumi_core::style::Style>>>,
     layout_probes: Vec<(crate::ExprId, MotionValue)>,
     // Mask sources and transition children have special containing-block placement. Compute
     // membership once rather than searching every scene node for every emitted node.
@@ -233,7 +237,7 @@ pub struct PreparedScene {
 struct LayoutInstanceRow {
     key: String,
     class_name: String,
-    declarations: String,
+    declarations: FrameDeclarations,
     background_color: Option<valle_draw::program::AuthorColor>,
     text_color: Option<valle_draw::program::AuthorColor>,
     paint_colors: crate::style::precise_color::PreciseCssColors,
@@ -615,6 +619,35 @@ fn prepare_admitted(
             _ => {}
         }
     }
+    let static_styles = artifact
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(at, node)| {
+            if node.visibility.is_some()
+                || positioned_children[at] & 2 != 0
+                || matches!(
+                    node.kind,
+                    NodeKind::MathFormula { .. } | NodeKind::Transition { .. }
+                )
+                || node
+                    .styles
+                    .iter()
+                    .any(|style| matches!(style.value, StyleValue::Expr { .. }))
+            {
+                return Ok(None);
+            }
+            let declarations = declarations(node, &[], true, at)?;
+            declarations
+                .resolve(None)
+                .map(Some)
+                .map_err(|reason| LayoutError::BadStyle {
+                    node: node.key.clone(),
+                    declarations: declarations.source(),
+                    reason,
+                })
+        })
+        .collect::<Result<Vec<_>, LayoutError>>()?;
     Ok(PreparedScene {
         sample_scene,
         sample_roots,
@@ -627,6 +660,7 @@ fn prepare_admitted(
         particle_trajectories: Arc::new(particle_trajectories),
         instance_activation: Arc::new(instance_activation),
         layout_classes,
+        static_styles: Arc::new(static_styles),
         // Only expressions that read the viewport still need both dimensions; the canvas itself
         // comes from the artifact's delivery contract.
         requires_explicit_viewport: artifact
@@ -5554,10 +5588,10 @@ fn projected_instance_node(
         );
     node = node.with_class_name(row.class_name.clone());
     if !row.declarations.is_empty() {
-        node = node.with_style(parse_style(cache, &row.declarations).map_err(|reason| {
+        node = node.with_style(row.declarations.resolve(cache).map_err(|reason| {
             LayoutError::BadStyle {
                 node: row.key.clone(),
-                declarations: row.declarations.clone(),
+                declarations: row.declarations.source(),
                 reason,
             }
         })?);
@@ -5850,6 +5884,10 @@ fn projected_nodes_of(
     }
     node = node.with_class_name(active_classes.join(" "));
 
+    if let Some(style) = &prepared.static_styles[at] {
+        return Ok(vec![node.with_style(style.clone())]);
+    }
+
     let visible = match template.visibility {
         Some(expr) => match value(values, expr, at)? {
             MotionValue::Bool(value) => *value,
@@ -5865,28 +5903,20 @@ fn projected_nodes_of(
     let mut declarations = declarations(template, values, visible, at)?;
     if is_transition_child || matches!(template.kind, NodeKind::Transition { .. }) {
         // These are semantic subtree boundaries even when the author requests isolation:auto.
-        declarations.push_str("; isolation: isolate !important");
+        declarations.push_css("isolation: isolate !important".into());
     }
     if let NodeKind::MathFormula { .. } = &template.kind
         && let Some(fragment) = formulas.get(&template.key)
     {
         let total_h = (fragment.height + fragment.depth).max(0.0);
-        let size = format!(
-            "width: {}px; height: {}px",
-            fragment.width.max(0.0),
-            total_h
-        );
-        declarations = if declarations.is_empty() {
-            size
-        } else {
-            format!("{declarations}; {size}")
-        };
+        declarations.push_css(format!("width: {}px", fragment.width.max(0.0)));
+        declarations.push_css(format!("height: {}px", total_h));
     }
     if !declarations.is_empty() {
-        node = node.with_style(parse_style(cache, &declarations).map_err(|reason| {
+        node = node.with_style(declarations.resolve(cache).map_err(|reason| {
             LayoutError::BadStyle {
                 node: template.key.clone(),
-                declarations: declarations.clone(),
+                declarations: declarations.source(),
                 reason,
             }
         })?);
@@ -5912,7 +5942,8 @@ fn declarations(
     values: &[MotionValue],
     visible: bool,
     at: usize,
-) -> Result<String, LayoutError> {
+) -> Result<FrameDeclarations, LayoutError> {
+    let mut resolved = FrameDeclarations::default();
     let mut declarations = String::new();
     let motion_anchor = node.styles.iter().find_map(|style| {
         if style.property != "motion-path-anchor" {
@@ -5948,6 +5979,7 @@ fn declarations(
             "0px 0px"
         });
     }
+    resolved.push_css(std::mem::take(&mut declarations));
     for style in &node.styles {
         // Author `--*` is rejected at admission, and Motion consumes its own bindings before CSS
         // layout; skip both here so they never enter the cascade.
@@ -5971,6 +6003,10 @@ fn declarations(
                     _ => reason.into(),
                 },
             });
+        }
+        if let Some(declaration) = super::bridge::typed_paint_declaration(&style.property, value) {
+            resolved.push_typed(declaration);
+            continue;
         }
         if matches!(style.property.as_str(), "filter" | "backdrop-filter") {
             // Preserve the numeric parameter diagnostic before the generic CSS
@@ -6025,6 +6061,7 @@ fn declarations(
         } else {
             declarations.push_str(&crate::style::value_token(&style.property, value));
         }
+        resolved.push_css(std::mem::take(&mut declarations));
     }
     if !visible {
         if !declarations.is_empty() {
@@ -6032,7 +6069,8 @@ fn declarations(
         }
         declarations.push_str("visibility: hidden");
     }
-    Ok(declarations)
+    resolved.push_css(declarations);
+    Ok(resolved)
 }
 
 fn value(values: &[MotionValue], expr: ExprId, at: usize) -> Result<&MotionValue, LayoutError> {
@@ -7125,7 +7163,7 @@ mod tests {
         };
 
         assert_eq!(
-            declarations(&node, &[], true, 0).unwrap(),
+            declarations(&node, &[], true, 0).unwrap().source(),
             "transform-origin: 50% 50%; translate: calc(30px - 50%) calc(20px - 50%); rotate: calc(45deg + 15deg)"
         );
     }
