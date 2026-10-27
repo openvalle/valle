@@ -29,11 +29,13 @@ fn frozen_pbr_package_preserves_material_lighting_pixels_through_seeks_and_cache
 }
 
 fn verify_fixed_model_package(pbr: bool) {
-    // Select Metal explicitly outside the sandbox; an unavailable GPU must fail the test.
+    // Select hardware explicitly; an unavailable GPU must fail the test.
     let backend = match std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() {
         Err(std::env::VarError::NotPresent) | Ok("raster") => SkiaBackendKind::Raster,
         #[cfg(target_os = "macos")]
         Ok("metal") => SkiaBackendKind::Metal,
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        Ok("vulkan") => SkiaBackendKind::Vulkan,
         other => panic!("unsupported test backend: {other:?}"),
     };
     let (source, model_bytes): (&str, &[u8]) = if pbr {
@@ -175,7 +177,7 @@ fn verify_fixed_model_package(pbr: bool) {
         let (pixels, evidence) = cold.render_rgba8(FrameKey::new(frame), spec).unwrap();
         assert_eq!(evidence.scene3d.requests, 1);
         assert_eq!(evidence.scene3d.prepared_cache_misses, 1);
-        let uses_gpu = backend != SkiaBackendKind::Raster;
+        let uses_gpu = backend.supports_scene3d_gpu();
         assert_eq!(evidence.execution.scene3d_gpu_rasters, u64::from(uses_gpu));
         assert_eq!(
             evidence.execution.scene3d_cpu_fallbacks,

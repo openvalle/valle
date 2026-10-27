@@ -42,7 +42,7 @@ struct Effects {
 impl Effects {
     fn compile() -> Result<Self, DrawError> {
         let compile = |name, source| {
-            RuntimeEffect::make_for_shader(source, None).map_err(|message| {
+            RuntimeEffect::make_for_shader(super::f16_gpu::rounded_shader(source), None).map_err(|message| {
                 DrawError::ShaderCompile {
                     uri: format!("builtin://gpu-pyramid/{name}"),
                     message,
@@ -440,7 +440,7 @@ fn pass(
         .ok_or_else(|| DrawError::Surface("GPU pyramid allocation failed".into()))?;
     draw(&mut surface, effect, inputs, uniforms)?;
     let image = surface.image_snapshot();
-    debug_assert!(image.is_texture_backed(), "GPU pyramid stage left Metal");
+    debug_assert!(image.is_texture_backed(), "GPU pyramid stage left the GPU");
     Ok(image)
 }
 

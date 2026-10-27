@@ -717,7 +717,7 @@ impl<'a> SkiaTarget<'a> {
         true
     }
 
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub(crate) fn commit_image(&mut self, image: &Image) -> bool {
         if *image.image_info() != self.surface.image_info() {
             return false;

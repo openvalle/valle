@@ -923,6 +923,8 @@ export default function Demo() { const time = useCurrentTime();
     let backend = report["delivery"]["backend"].as_str().unwrap();
     if cfg!(target_os = "macos") {
         assert!(["metal", "raster"].contains(&backend));
+    } else if cfg!(any(target_os = "linux", target_os = "windows")) {
+        assert!(["vulkan", "raster"].contains(&backend));
     } else {
         assert_eq!(backend, "raster");
     }

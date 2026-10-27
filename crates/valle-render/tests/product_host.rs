@@ -41,6 +41,42 @@ fn project() -> NativeProject {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[ignore = "requires a hardware Vulkan GPU"]
+fn vulkan_image_upload_survives_surface_reset_and_context_recreation() {
+    let project = project();
+    let spec = RenderSpec::new(
+        128, 128, RenderQuality::Final,
+        OutputSpec::srgb_delivery(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+    ).unwrap();
+    let mut baseline = None;
+    for _ in 0..3 {
+        let mut runner = project.frame_runner(SkiaBackendKind::Vulkan).unwrap();
+        for _ in 0..3 {
+            let (frame, _) = runner.render_rgba8(FrameKey::new(0), spec).unwrap();
+            // Asymmetric corners catch flipped uploads and RGBA/BGRA channel swaps.
+            for (x, y, expected) in [
+                (8, 8, [255_u8, 0, 0, 255]),
+                (119, 8, [0, 255, 0, 255]),
+                (8, 119, [0, 0, 255, 255]),
+                (119, 119, [255, 255, 255, 255]),
+            ] {
+                let at = (y * 128 + x) * 4;
+                for (actual, expected) in frame.data[at..at + 4].iter().zip(expected) {
+                    assert!(actual.abs_diff(expected) <= 2, "upload at ({x}, {y})");
+                }
+            }
+            if let Some(baseline) = &baseline {
+                assert_eq!(&frame.data, baseline);
+            } else {
+                baseline = Some(frame.data);
+            }
+            runner.invalidate_surface_generation().unwrap();
+        }
+    }
+}
+
+#[test]
 #[cfg(target_os = "macos")]
 #[ignore = "requires real Metal and CoreVideo; software H.264 uses delayed shared-surface readback"]
 fn metal_software_encoding_delivers_all_frames_with_bounded_shared_surfaces() {
@@ -391,6 +427,8 @@ export default function Demo(props) { const time = useCurrentTime(); const frame
     let backend = match std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() {
         #[cfg(target_os = "macos")]
         Ok("metal") => SkiaBackendKind::Metal,
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        Ok("vulkan") => SkiaBackendKind::Vulkan,
         Ok("raster") | Err(_) => SkiaBackendKind::Raster,
         Ok(value) => panic!("unsupported test backend {value}"),
     };

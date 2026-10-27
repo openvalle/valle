@@ -809,6 +809,8 @@ pub enum RenderBackend {
     Raster,
     #[cfg(target_os = "macos")]
     Metal,
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    Vulkan,
 }
 
 impl From<RenderBackend> for valle_render::executor::skia::SkiaBackendKind {
@@ -816,6 +818,8 @@ impl From<RenderBackend> for valle_render::executor::skia::SkiaBackendKind {
         match value {
             RenderBackend::Auto => Self::preferred_available(),
             RenderBackend::Raster => Self::Raster,
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            RenderBackend::Vulkan => Self::Vulkan,
             #[cfg(target_os = "macos")]
             RenderBackend::Metal => Self::Metal,
         }

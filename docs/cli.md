@@ -186,8 +186,15 @@ fewer when either limit allows less. Timeline render accepts the same two option
 H.264 delivery also accepts `--encode-threads N` (the software encoder's share of
 `--threads`, a quarter by default) or `--hardware-encode`; `--bitrate` requires
 a hardware encoder (`--hardware-encode` or `--codec hevc`). These encoder controls are rejected for PNG and transparent MOV. `--backend auto`
-selects an available Metal device on macOS and otherwise Raster; `--backend raster`
-explicitly selects CPU composition. See `valle motion render --help` for constraints.
+selects Metal on macOS or Vulkan on Windows/Linux when a usable hardware GPU is
+available, and otherwise falls back to Raster. `--backend raster` explicitly selects
+CPU composition; `--backend vulkan` on Windows/Linux requires Vulkan 1.1 and a GPU
+that supports F16 render targets, and reports initialization failure instead of
+falling back. Vulkan uses the existing Skia drawing and SkSL effects, then reads
+output back for software encoding. Scene3D and video decoding remain on CPU in
+this path; Vulkan composition does not enable hardware video encoding. The Vulkan
+loader comes from the graphics driver and is loaded at runtime, so a CPU-only
+machine can still run the same binary. See `valle motion render --help` for constraints.
 
 ## Timeline: edit a document and render it
 

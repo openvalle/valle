@@ -1,8 +1,13 @@
 //! Opt-in hardware acceptance. Run outside the sandbox with
-//! `cargo test -p valle-cli --test motion_metal -- --ignored --test-threads=1`.
-#![cfg(target_os = "macos")]
+//! `cargo test -p valle-cli --test motion_gpu -- --ignored --test-threads=1`.
+#![cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
 
 use std::{io::BufReader, path::Path, process::Command};
+
+#[cfg(target_os = "macos")]
+const GPU: &str = "metal";
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+const GPU: &str = "vulkan";
 
 fn render(dir: &Path, name: &str, source: &str, backend: &str) -> Vec<u8> {
     render_size(dir, name, source, backend, (640, 360))
@@ -15,7 +20,7 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
         name if name.starts_with("radial-") => Some("gpu-radial-blur"),
         name if name.starts_with("film-") => Some("gpu-film-grain"),
         name if name.starts_with("lens-") => Some("gpu-lens-distortion"),
-        name if name.starts_with("scene3d-dof-") => Some("gpu-scene3d-dof"),
+        name if name.starts_with("scene3d-dof-") && GPU == "metal" => Some("gpu-scene3d-dof"),
         _ => None,
     };
     let input = dir.join(format!("{name}.motion.tsx"));
@@ -40,7 +45,7 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
     command.env_remove("VALLE_FILM_GRAIN_CPU_REFERENCE");
     command.env_remove("VALLE_LENS_DISTORTION_CPU_REFERENCE");
     command.env_remove("VALLE_SCENE3D_DOF_CPU_REFERENCE");
-    if gpu_stage.is_some() && backend == "metal" {
+    if gpu_stage.is_some() && backend == GPU {
         command.env("VALLE_TRACE_F16_STAGES", "1");
     }
     let result = command.output().unwrap();
@@ -52,7 +57,7 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
     );
     let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(report["delivery"]["backend"], backend);
-    if backend == "metal" {
+    if backend == GPU {
         let trace = String::from_utf8_lossy(&result.stderr);
         assert!(!trace.contains("Shader compilation error"), "{trace}");
         if let Some(stage) = gpu_stage {
@@ -75,30 +80,30 @@ fn render_size(dir: &Path, name: &str, source: &str, backend: &str, size: (u32, 
 }
 
 #[test]
-#[ignore = "requires a real Metal device; run outside the sandbox with --ignored"]
-fn fullhd_bloom_stays_on_metal_and_matches_raster() {
+#[ignore = "requires a hardware GPU; run with --ignored"]
+fn fullhd_bloom_stays_on_gpu_and_matches_raster() {
     let dir = tempfile::tempdir().unwrap();
     let source = include_str!(
         "../../valle-compiler/tests/fixtures/motion/composition/scene-bloom.motion.tsx"
     )
     .replace("width: 640, height: 360", "width: 1920, height: 1080");
     let raster = render_size(dir.path(), "bloom-fullhd", &source, "raster", (1920, 1080));
-    let metal = render_size(dir.path(), "bloom-fullhd", &source, "metal", (1920, 1080));
+    let gpu = render_size(dir.path(), "bloom-fullhd", &source, GPU, (1920, 1080));
     let worst = raster
         .iter()
-        .zip(&metal)
+        .zip(&gpu)
         .map(|(a, b)| a.abs_diff(*b))
         .max()
         .unwrap();
     assert!(
         worst <= 2,
-        "scene-bloom 1080p Raster/Metal max channel diff {worst}"
+        "scene-bloom 1080p Raster/GPU max channel diff {worst}"
     );
 }
 
 #[test]
-#[ignore = "requires a real Metal device; run outside the sandbox with --ignored"]
-fn shared_f16_filters_render_on_real_metal() {
+#[ignore = "requires a hardware GPU; run with --ignored"]
+fn shared_f16_filters_render_on_real_gpu() {
     let dir = tempfile::tempdir().unwrap();
     let glow =
         include_str!("../../valle-compiler/tests/fixtures/motion/composition/node-glow.motion.tsx");
@@ -159,14 +164,14 @@ fn shared_f16_filters_render_on_real_metal() {
         ("lens-transparent", transparent_lens.as_str()),
     ] {
         let raster = render(dir.path(), name, source, "raster");
-        let metal = render(dir.path(), name, source, "metal");
+        let gpu = render(dir.path(), name, source, GPU);
         if name == "node-glow" {
-            let pixel = |x: usize, y: usize| &metal[(y * 640 + x) * 4..(y * 640 + x) * 4 + 4];
+            let pixel = |x: usize, y: usize| &gpu[(y * 640 + x) * 4..(y * 640 + x) * 4 + 4];
             assert!(pixel(380, 180)[1] >= 40, "glow halo is missing");
             assert!(pixel(480, 180)[1] <= 22, "glow extends past its radius");
         }
         if name == "radial-blur" {
-            let pixel = |x: usize, y: usize| &metal[(y * 640 + x) * 4..(y * 640 + x) * 4 + 4];
+            let pixel = |x: usize, y: usize| &gpu[(y * 640 + x) * 4..(y * 640 + x) * 4 + 4];
             assert!(pixel(370, 180)[0] >= 80, "radial blur is missing");
             assert!(
                 pixel(380, 180)[0] <= 20,
@@ -174,7 +179,7 @@ fn shared_f16_filters_render_on_real_metal() {
             );
         }
         if name == "film-grain" {
-            let pixel = |x: usize, y: usize| &metal[(y * 640 + x) * 4..(y * 640 + x) * 4 + 4];
+            let pixel = |x: usize, y: usize| &gpu[(y * 640 + x) * 4..(y * 640 + x) * 4 + 4];
             assert_ne!(
                 pixel(300, 180)[0],
                 pixel(320, 180)[0],
@@ -182,7 +187,7 @@ fn shared_f16_filters_render_on_real_metal() {
             );
         }
         if name == "lens-distortion" {
-            let pixel = |x: usize, y: usize| &metal[(y * 640 + x) * 4..(y * 640 + x) * 4 + 4];
+            let pixel = |x: usize, y: usize| &gpu[(y * 640 + x) * 4..(y * 640 + x) * 4 + 4];
             assert!(pixel(248, 180)[0] >= 200, "lens distortion is missing");
             assert!(
                 pixel(220, 180)[0] <= 60,
@@ -191,24 +196,24 @@ fn shared_f16_filters_render_on_real_metal() {
         }
         let worst = raster
             .iter()
-            .zip(&metal)
+            .zip(&gpu)
             .map(|(a, b)| a.abs_diff(*b))
             .max()
             .unwrap();
-        assert!(worst <= 2, "{name}: Raster/Metal max channel diff {worst}");
+        assert!(worst <= 2, "{name}: Raster/GPU max channel diff {worst}");
     }
 }
 
 #[test]
-#[ignore = "requires a real Metal device; run outside the sandbox with --ignored"]
-fn fullhd_sphere_matches_raster_on_real_metal() {
+#[ignore = "requires a hardware GPU; run with --ignored"]
+fn fullhd_sphere_matches_raster_on_real_gpu() {
     let dir = tempfile::tempdir().unwrap();
     let model = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../valle-motion/tests/fixtures/scene3d/sphere.glb");
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../valle-compiler/tests/fixtures/motion/composition/sphere-scene3d.motion.tsx");
     let mut renders = Vec::new();
-    for backend in ["raster", "metal"] {
+    for backend in ["raster", GPU] {
         let output = dir.path().join(format!("sphere-{backend}.png"));
         let result = Command::new(env!("CARGO_BIN_EXE_valle"))
             .args(["--json", "motion", "render"])
@@ -240,12 +245,13 @@ fn fullhd_sphere_matches_raster_on_real_metal() {
         assert_ne!(&pixels[center..center + 4], &[0, 0, 0, 255]);
         renders.push(pixels);
     }
-    assert_eq!(renders[0], renders[1]);
+    let worst = renders[0].iter().zip(&renders[1]).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+    assert!(worst <= 2, "Scene3D CPU fallback upload changed pixels: {worst}");
 }
 
 #[test]
-#[ignore = "requires a real Metal device; run outside the sandbox with --ignored"]
-fn scene3d_dof_stays_on_metal_and_matches_cpu_at_depth_boundaries() {
+#[ignore = "requires a hardware GPU; run with --ignored"]
+fn scene3d_dof_preserves_cpu_depth_boundaries() {
     let dir = tempfile::tempdir().unwrap();
     // Near/far overlap, a focus-plane surface, translucent color, and clipped geometry.
     // All geometry is procedural, so this also exercises deferred Scene3D resource binding.
@@ -276,20 +282,51 @@ export default function DepthOfField() {
         let source = source.replace("RADIUS", &radius.to_string());
         let name = format!("scene3d-dof-{radius}");
         let raster = render(dir.path(), &name, &source, "raster");
-        let metal = render(dir.path(), &name, &source, "metal");
+        let gpu = render(dir.path(), &name, &source, GPU);
         if radius >= 6.0 {
             assert_ne!(raster, sharp, "CPU depth of field did not change the image");
             assert_ne!(
-                metal, sharp,
-                "Metal depth of field did not change the image"
+                gpu, sharp,
+                "GPU depth of field did not change the image"
             );
         }
         let worst = raster
             .iter()
-            .zip(&metal)
+            .zip(&gpu)
             .map(|(a, b)| a.abs_diff(*b))
             .max()
             .unwrap();
-        assert!(worst <= 2, "{name}: Raster/Metal max channel diff {worst}");
+        assert!(worst <= 2, "{name}: Raster/GPU max channel diff {worst}");
+    }
+}
+
+#[test]
+#[ignore = "requires a hardware GPU; run with --ignored"]
+fn blur_shadow_and_transparent_delivery_match_raster() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = r##"
+export const composition = { width: 640, height: 360, fps: 30, duration: 2 };
+export default function Filters() {
+  return <Scene style={{ width: 640, height: 360 }}>
+    <View style={{ position: "absolute", left: 70, top: 110, width: 120, height: 120,
+      backgroundColor: "#22d3ee", filter: "blur(12px)", opacity: 0.65 }} />
+    <View style={{ position: "absolute", left: 370, top: 110, width: 120, height: 120,
+      backgroundColor: "#fb923c", boxShadow: "12px 8px 24px #22d3ee80" }} />
+  </Scene>;
+}
+"##;
+    let raster = render(dir.path(), "blur-shadow", source, "raster");
+    let gpu = render(dir.path(), "blur-shadow", source, GPU);
+    assert!(gpu.chunks_exact(4).any(|pixel| pixel[3] > 0 && pixel[3] < 255));
+    assert!(gpu.chunks_exact(4).any(|pixel| pixel[3] == 0));
+    // Compare visible premultiplied colors: straight RGB at zero alpha is undefined.
+    for (cpu, gpu) in raster.chunks_exact(4).zip(gpu.chunks_exact(4)) {
+        assert!(cpu[3].abs_diff(gpu[3]) <= 2, "alpha: {cpu:?} {gpu:?}");
+        for channel in 0..3 {
+            let a = f32::from(cpu[channel]) * f32::from(cpu[3]) / 255.0;
+            let b = f32::from(gpu[channel]) * f32::from(gpu[3]) / 255.0;
+            // Two alpha codes plus one straight-color code can differ by three visible codes.
+            assert!((a - b).abs() <= 3.0, "blur/shadow: {cpu:?} {gpu:?}");
+        }
     }
 }

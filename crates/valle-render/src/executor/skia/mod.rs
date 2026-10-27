@@ -15,6 +15,7 @@ mod color_matrix;
 mod decoded_yuv;
 mod draw;
 mod effect;
+mod f16_gpu;
 mod film_gpu;
 mod gaussian_gpu;
 mod gradient_fill;
@@ -31,6 +32,8 @@ mod scene3d_region;
 mod surface;
 mod target;
 mod velocity;
+#[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+mod vulkan;
 
 #[cfg(feature = "native")]
 pub(crate) use cache::SkiaCacheLimits;

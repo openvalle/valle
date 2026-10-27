@@ -465,6 +465,10 @@ fn shared_video_samples_crossfade_and_standalone_motion_uses_real_video_facts() 
         && std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() == Ok("metal")
     {
         vec!["raster", "metal"]
+    } else if cfg!(any(target_os = "linux", target_os = "windows"))
+        && std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() == Ok("vulkan")
+    {
+        vec!["raster", "vulkan"]
     } else {
         vec!["raster"]
     };

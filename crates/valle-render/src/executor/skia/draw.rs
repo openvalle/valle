@@ -698,7 +698,7 @@ impl ProgramRuntime {
             return snapshot_program_target(target, target_location, output_roi);
         }
 
-        // Shared F16 filters consume CPU bytes. Ganesh images need their Metal context
+        // Shared F16 filters consume CPU bytes. Ganesh images need their GPU context
         // for readback, which must happen before borrowing the destination surface.
         let cpu_filter_input = if let ProgramPassKind::ApplyFilter { input, filter, .. } = pass {
             if uses_cpu_f16_filter(filter) && !uses_gpu_f16_filter(filter, surfaces.backend_kind())
@@ -4431,9 +4431,9 @@ fn draw_instance_batch(
         }
         _ => None,
     };
-    #[cfg(all(feature = "native", target_os = "macos"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     let gpu = canvas.recording_context().is_some();
-    #[cfg(not(all(feature = "native", target_os = "macos")))]
+    #[cfg(not(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows"))))]
     let gpu = false;
     for row in 0..batch.instances.len() {
         let opacity = batch.instances.opacities[row];

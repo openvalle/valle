@@ -8,14 +8,14 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
-#[cfg(all(target_os = "macos", feature = "native"))]
-use skia_safe::gpu;
+#[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+use skia_safe::{gpu, BlendMode, Color4f, Paint, Shader};
 use skia_safe::{
     AlphaType, ColorSpace, ColorType, IRect, Image, ImageInfo, Surface, named_primaries,
     named_transfer_fn, surfaces,
 };
 #[cfg(all(target_os = "macos", feature = "native"))]
-use skia_safe::{BlendMode, Color4f, EncodedOrigin, Paint, Shader, YUVAInfo, YUVColorSpace};
+use skia_safe::{EncodedOrigin, YUVAInfo, YUVColorSpace};
 
 /// Physical Skia storage selected for a runner. This is execution evidence, not a capability
 /// discriminator: Engine lowering still consumes only the immutable capability contract.
@@ -24,6 +24,8 @@ pub enum SkiaBackendKind {
     Raster,
     #[cfg(all(target_os = "macos", feature = "native"))]
     Metal,
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    Vulkan,
 }
 
 impl SkiaBackendKind {
@@ -34,7 +36,24 @@ impl SkiaBackendKind {
         if objc2_metal::MTLCreateSystemDefaultDevice().is_some() {
             return Self::Metal;
         }
+        #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+        match super::vulkan::VulkanContext::new() {
+            Ok(_) => return Self::Vulkan,
+            Err(error) if std::env::var_os("VALLE_PERF").is_some() => {
+                eprintln!("[valle] {error}; using Raster");
+            }
+            Err(_) => {}
+        }
         Self::Raster
+    }
+
+    /// Only Metal currently shares Scene3D producer textures with the compositor.
+    pub const fn supports_scene3d_gpu(self) -> bool {
+        match self {
+            #[cfg(all(target_os = "macos", feature = "native"))]
+            Self::Metal => true,
+            _ => false,
+        }
     }
 }
 
@@ -791,7 +810,6 @@ impl core::fmt::Debug for SurfaceEntry {
 /// frame, while subsequent frames reuse the same backend allocation.
 pub(crate) struct SurfaceArena {
     pool_byte_limit: u64,
-    backend: SurfaceBackend,
     generation: Option<SurfaceGeneration>,
     generation_id: u64,
     invalidations: u64,
@@ -802,10 +820,14 @@ pub(crate) struct SurfaceArena {
     output_staging: super::output::OutputStaging,
     #[cfg(all(target_os = "macos", feature = "native"))]
     pending_external_imports: Vec<ImportedMetalImage>,
+    // Drop all retained surfaces before the context, device and Vulkan loader.
+    backend: SurfaceBackend,
 }
 
 enum SurfaceBackend {
     Raster,
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    Vulkan(Box<super::vulkan::VulkanContext>),
     #[cfg(all(target_os = "macos", feature = "native"))]
     Metal {
         context: gpu::DirectContext,
@@ -821,8 +843,23 @@ impl core::fmt::Debug for SurfaceBackend {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Raster => formatter.write_str("Raster"),
+            #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+            Self::Vulkan(_) => formatter.write_str("Vulkan"),
             #[cfg(all(target_os = "macos", feature = "native"))]
             Self::Metal { .. } => formatter.write_str("Metal"),
+        }
+    }
+}
+
+impl SurfaceBackend {
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    fn context_mut(&mut self) -> Option<&mut gpu::DirectContext> {
+        match self {
+            Self::Raster => None,
+            #[cfg(all(target_os = "macos", feature = "native"))]
+            Self::Metal { context, .. } => Some(context),
+            #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+            Self::Vulkan(backend) => Some(&mut backend.context),
         }
     }
 }
@@ -857,7 +894,10 @@ impl SurfaceArena {
                 renderer.trim_assets(bytes);
             }
         }
-        #[cfg(not(all(target_os = "macos", feature = "native")))]
+        #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+        if let SurfaceBackend::Vulkan(backend) = &mut self.backend {
+            backend.context.set_resource_cache_limit(bytes);
+        }
         let _ = bytes;
     }
     pub(crate) fn set_pool_byte_limit(&mut self, bytes: u64) {
@@ -883,9 +923,19 @@ impl SurfaceArena {
     pub(crate) const fn backend_kind(&self) -> SkiaBackendKind {
         match &self.backend {
             SurfaceBackend::Raster => SkiaBackendKind::Raster,
+            #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+            SurfaceBackend::Vulkan(_) => SkiaBackendKind::Vulkan,
             #[cfg(all(target_os = "macos", feature = "native"))]
             SurfaceBackend::Metal { .. } => SkiaBackendKind::Metal,
         }
+    }
+
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pub(crate) fn vulkan() -> Result<Self, SurfaceError> {
+        Ok(Self {
+            backend: SurfaceBackend::Vulkan(Box::new(super::vulkan::VulkanContext::new()?)),
+            ..Self::new()
+        })
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
@@ -953,25 +1003,22 @@ impl SurfaceArena {
     }
 
     pub(super) fn create_surface(&mut self, info: &ImageInfo) -> Result<Surface, SurfaceError> {
-        match &mut self.backend {
-            SurfaceBackend::Raster => raster_surface(info),
-            #[cfg(all(target_os = "macos", feature = "native"))]
-            SurfaceBackend::Metal { context, .. } => {
-                let surface = gpu::surfaces::render_target(
-                    context,
-                    gpu::Budgeted::Yes,
-                    info,
-                    None::<usize>,
-                    Some(gpu::SurfaceOrigin::TopLeft),
-                    None,
-                    Some(false),
-                    Some(false),
-                )
-                .ok_or(SurfaceError::Allocation)?;
-                count_surface_allocation();
-                Ok(surface)
-            }
+        #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        if let Some(context) = self.backend.context_mut() {
+            let surface = gpu::surfaces::render_target(
+                context,
+                gpu::Budgeted::Yes,
+                info,
+                None::<usize>,
+                Some(gpu::SurfaceOrigin::TopLeft),
+                None,
+                Some(false),
+                Some(false),
+            ).ok_or(SurfaceError::Allocation)?;
+            count_surface_allocation();
+            return Ok(surface);
         }
+        raster_surface(info)
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
@@ -1618,26 +1665,24 @@ impl<'arena> SurfaceFrame<'arena> {
     }
 
     pub(crate) fn prepare_cpu_image(&mut self, image: &Image) -> Result<Image, SurfaceError> {
-        match &mut self.arena.backend {
-            SurfaceBackend::Raster => Ok(image.clone()),
-            #[cfg(all(target_os = "macos", feature = "native"))]
-            SurfaceBackend::Metal { context, .. } => {
-                context.flush_submit_and_sync_cpu();
-                image
-                    .make_raster_image(Some(context), skia_safe::image::CachingHint::Disallow)
-                    .ok_or(SurfaceError::Readback)
-            }
+        #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        if let Some(context) = self.arena.backend.context_mut() {
+            context.flush_submit_and_sync_cpu();
+            return image
+                .make_raster_image(Some(context), skia_safe::image::CachingHint::Disallow)
+                .ok_or(SurfaceError::Readback);
         }
+        Ok(image.clone())
     }
 
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     pub(crate) fn render_output_shader_to_raster(
         &mut self,
         shader: Shader,
         info: &ImageInfo,
     ) -> Result<Image, SurfaceError> {
-        if !matches!(self.arena.backend, SurfaceBackend::Metal { .. }) {
-            return Err(SurfaceError::SharedFrameRequiresMetal);
+        if self.arena.backend.context_mut().is_none() {
+            return Err(SurfaceError::Readback);
         }
         let width = u32::try_from(info.width()).map_err(|_| SurfaceError::InvalidExtent)?;
         let height = u32::try_from(info.height()).map_err(|_| SurfaceError::InvalidExtent)?;
@@ -1685,9 +1730,7 @@ impl<'arena> SurfaceFrame<'arena> {
             paint.set_shader(shader);
             entry.surface.canvas().draw_paint(&paint);
             let image = entry.surface.image_snapshot();
-            let SurfaceBackend::Metal { context, .. } = &mut self.arena.backend else {
-                return Err(SurfaceError::SharedFrameRequiresMetal);
-            };
+            let context = self.arena.backend.context_mut().ok_or(SurfaceError::Readback)?;
             context.flush_submit_and_sync_cpu();
             image
                 .make_raster_image(Some(context), skia_safe::image::CachingHint::Disallow)
@@ -1702,7 +1745,7 @@ impl<'arena> SurfaceFrame<'arena> {
         result
     }
 
-    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     fn allocate_delivery_surface(
         &mut self,
         extent: Extent2d,
@@ -2210,6 +2253,9 @@ pub enum SurfaceError {
     UnsupportedInputColorSpace,
     #[error("Skia surface allocation failed")]
     Allocation,
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    #[error("Vulkan compositor unavailable: {0}")]
+    VulkanUnavailable(String),
     #[error("GPU working image could not be materialized for a CPU sink")]
     Readback,
     #[cfg(all(target_os = "macos", feature = "native"))]

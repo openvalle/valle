@@ -972,12 +972,14 @@ impl ResourceProvider for NativeResourceProvider {
         }
         self.video_transport = match backend {
             SkiaBackendKind::Raster => VideoFrameTransport::Cpu,
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            SkiaBackendKind::Vulkan => VideoFrameTransport::Cpu,
             #[cfg(target_os = "macos")]
             SkiaBackendKind::Metal => VideoFrameTransport::SharedGpu,
         };
-        let defer_scene3d_dof = backend != SkiaBackendKind::Raster
+        let defer_scene3d_dof = backend.supports_scene3d_gpu()
             && std::env::var_os("VALLE_SCENE3D_DOF_CPU_REFERENCE").is_none();
-        let defer_scene3d_geometry = backend != SkiaBackendKind::Raster
+        let defer_scene3d_geometry = backend.supports_scene3d_gpu()
             && std::env::var_os("VALLE_SCENE3D_RASTER_CPU_REFERENCE").is_none()
             && std::env::var_os("VALLE_SCENE3D_DOF_CPU_REFERENCE").is_none();
         if (defer_scene3d_dof != self.defer_scene3d_dof

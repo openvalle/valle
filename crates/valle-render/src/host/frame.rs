@@ -290,6 +290,8 @@ impl<P: ResourceProvider> FrameRunner<P> {
     ) -> Result<Self, FrameRenderError> {
         match backend {
             SkiaBackendKind::Raster => Self::cpu(render, provider),
+            #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+            SkiaBackendKind::Vulkan => Self::vulkan(render, provider),
             #[cfg(all(target_os = "macos", feature = "native"))]
             SkiaBackendKind::Metal => Self::metal(render, provider),
         }
@@ -297,6 +299,23 @@ impl<P: ResourceProvider> FrameRunner<P> {
 
     pub fn cpu(render: EngineRender, provider: P) -> Result<Self, FrameRenderError> {
         Self::new(render, provider, delivery_capabilities()?)
+    }
+
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pub fn vulkan(render: EngineRender, provider: P) -> Result<Self, FrameRenderError> {
+        let compiler = render.frame_compiler();
+        let mut runner = Self {
+            trace: None,
+            cpu_budget: None,
+            render,
+            compiler,
+            executor: SkiaExecutor::vulkan(delivery_capabilities()?)?,
+            provider,
+            cpu_delivery_surface: None,
+            next_generation: 1,
+        };
+        runner.configure_provider_backend()?;
+        Ok(runner)
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
@@ -543,6 +562,8 @@ impl FrameExecutionStage {
     ) -> Result<Self, FrameRenderError> {
         let mut executor = match backend {
             SkiaBackendKind::Raster => SkiaExecutor::new(capabilities)?,
+            #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+            SkiaBackendKind::Vulkan => SkiaExecutor::vulkan(capabilities)?,
             #[cfg(target_os = "macos")]
             SkiaBackendKind::Metal => SkiaExecutor::metal(capabilities)?,
         };
@@ -1001,7 +1022,7 @@ fn frame_working_bytes<P: ResourceProvider>(
                 // Color/depth plus a conservative base plane for the complete mip chain,
                 // including thin rasters whose mipmaps exceed one third of the base.
                 resources = checked_add(resources, pixels * 20)?;
-                scene3d_working = if admission.backend() == SkiaBackendKind::Raster {
+                scene3d_working = if !admission.backend().supports_scene3d_gpu() {
                     scene3d_working.max(pixels * 96)
                 } else {
                     let shadow_bytes = if frame.scene.pbr.shadows {
@@ -1039,7 +1060,7 @@ fn frame_working_bytes<P: ResourceProvider>(
     let bytes = checked_add(checked_add(execution_bytes, resources)?, scene3d_working)?;
     // GPU Scene3D kernels use the same conservative 3D allowance after preparation.
     // Keep it until completion, also allowing an unavailable GPU to run the CPU reference.
-    let execution_bytes = if admission.backend() != SkiaBackendKind::Raster {
+    let execution_bytes = if admission.backend().supports_scene3d_gpu() {
         checked_add(execution_bytes, scene3d_working)?
     } else {
         execution_bytes

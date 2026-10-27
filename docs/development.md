@@ -54,6 +54,12 @@ not enough. Motion checks, PNG frames and Studio work without them.
 Runtime 1.28, beside `valle` or named by `ORT_DYLIB_PATH`; see the
 [Media guide](media.md#models-and-runtimes).
 
+Native composition uses Metal on macOS and Vulkan on Windows/Linux. Vulkan needs a
+Vulkan 1.1 driver with F16 render-target support; it works headlessly, without X11 or
+a swapchain. The loader is loaded dynamically, and `--backend auto` falls back to
+Raster if initialization or an F16 readback probe fails. Vulkan does not require
+CUDA, NVENC or a Vulkan SDK at runtime.
+
 ## Repository
 
 | Path | Contents |
@@ -100,6 +106,19 @@ Some files are generated, and the checks fail when they are stale. Regenerate th
 | Timeline JSON Schema | `cargo run -p valle-timeline --features schema --bin valle-schema-gen` |
 | Web protocol types | `cd web && bun run generate:protocol` |
 | The Unsupported CSS tables in `docs/motion.md` | `VALLE_UPDATE_DOCS=1 cargo test -p valle-motion --test style_suggestions` |
+
+Hardware compositor acceptance (Metal on macOS, Vulkan on Windows/Linux):
+
+```sh
+cargo test --release -p valle-cli --test motion_gpu -- --ignored --test-threads=1
+cargo test --release -p valle-cli --test vulkan_fallback
+# On a Vulkan machine, also check texture upload, cache reset and F16 rounding:
+VALLE_TEST_NATIVE_BACKEND=vulkan cargo test --release -p valle-render --features native --test product_host --test scene3d_fixed_package -- --include-ignored --test-threads=1
+cargo test --release -p valle-render --features native --lib effect_passes_round_f16 -- --ignored
+```
+
+The hardware tests require a real GPU; they never treat software Vulkan as GPU
+acceptance. The fallback test hides the driver only in its child processes.
 
 ## Continuous integration
 

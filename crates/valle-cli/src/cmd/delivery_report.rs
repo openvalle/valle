@@ -70,6 +70,8 @@ pub(super) fn delivery_report(
         report.get_mut("delivery").expect("delivery report")["backend"] =
             json!(match profile.surface_backend {
                 SkiaBackendKind::Raster => "raster",
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                SkiaBackendKind::Vulkan => "vulkan",
                 #[cfg(target_os = "macos")]
                 SkiaBackendKind::Metal => "metal",
             });

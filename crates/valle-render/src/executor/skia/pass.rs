@@ -77,6 +77,18 @@ impl SkiaExecutor {
         })
     }
 
+    #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
+    pub fn vulkan(capabilities: BackendCapabilities) -> Result<Self, SkiaExecuteError> {
+        capabilities.validate()?;
+        Ok(Self {
+            capabilities,
+            effects: EffectRuntime::new(),
+            caches: BackendCaches::new(),
+            raster_layers: RasterLayerCache::new(),
+            surfaces: SurfaceArena::vulkan()?,
+        })
+    }
+
     pub const fn capabilities(&self) -> &BackendCapabilities {
         &self.capabilities
     }
@@ -1683,8 +1695,8 @@ fn materialize_external_visuals(
                     .map_err(|error| SkiaExecuteError::Program(error.to_string()))?,
             )
         } else if let Some(image) = object.visual_image() {
-            #[cfg(all(feature = "native", target_os = "macos"))]
-            if surfaces.backend_kind() == super::surface::SkiaBackendKind::Metal {
+            #[cfg(feature = "native")]
+            if surfaces.backend_kind() != super::surface::SkiaBackendKind::Raster {
                 cpu_upload_bytes = cpu_upload_bytes
                     .checked_add(
                         object
@@ -1984,13 +1996,13 @@ fn commit_output(
         }
         return Ok(());
     }
-    #[cfg(all(target_os = "macos", feature = "native"))]
-    if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Metal
+    #[cfg(all(feature = "native", any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    if surface_frame.backend_kind() != super::surface::SkiaBackendKind::Raster
         && spec.bit_depth() == valle_engine::resource::OutputBitDepth::Eight
     {
         let shader = effects.output_shader(image, spec, true)?;
         let straight = spec.alpha() == valle_engine::resource::OutputAlphaMode::StraightCoverage;
-        // Metal cannot allocate an unassociated-alpha render target. Store the terminal
+        // Ganesh cannot allocate an unassociated-alpha render target. Store the terminal
         // codes in a premultiplied *transport* surface instead: Src writes every byte,
         // and its raw readback must never be drawn or unpremultiplied by Skia again.
         let info = if straight {
