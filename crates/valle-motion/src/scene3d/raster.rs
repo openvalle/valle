@@ -19,6 +19,8 @@ pub use gpu::{
     GpuRasterAtlas, GpuRasterGeometry, GpuRasterShading, GpuRasterShadow, GpuRasterShadowVertex,
     GpuRasterTextureVarying, GpuRasterVarying, GpuRasterVertex, prepare_gpu_geometry,
 };
+#[cfg(test)]
+mod geometry_reuse_tests;
 mod lighting;
 mod pbr;
 mod shadow;
@@ -951,6 +953,15 @@ fn collect_geometry<'a>(
     frame: &Frame3DState,
     camera: &Camera,
 ) -> Result<FrameGeometry<'a>, ContractErrors> {
+    collect_geometry_reusing(prepared, frame, camera, true)
+}
+
+fn collect_geometry_reusing<'a>(
+    prepared: &'a PreparedScene,
+    frame: &Frame3DState,
+    camera: &Camera,
+    reuse_vertices: bool,
+) -> Result<FrameGeometry<'a>, ContractErrors> {
     let mut transforms = Vec::with_capacity(prepared.meshes.len());
     let mut frame_meshes = Vec::with_capacity(prepared.meshes.len());
     let mut commands = Vec::new();
@@ -1011,18 +1022,26 @@ fn collect_geometry<'a>(
                     .values
                     .double_sided;
                 let start = primitive.first_index as usize;
-                // Static indexed primitives reuse the exact same transformed vertex in
-                // adjacent triangles. Keep the cache local to this instance/primitive/frame;
-                // deformed face normals retain the existing per-triangle path below.
-                let mut transformed_vertices = (instance.skin.is_none()
+                // Indexed smooth vertices share deformation, world transform and projection.
+                // Deformed face normals remain triangle-specific. The cache lasts one frame.
+                let node_transform = if instance.skin.is_some() {
+                    super::asset::Affine::identity()
+                } else {
+                    instance.transform
+                };
+                let reuse_projected = reuse_vertices
+                    && primitive.index_count >= primitive.vertex_count.saturating_mul(2);
+                let mut transformed_vertices = ((instance.skin.is_none()
                     && instance.weights.is_empty())
-                .then(|| vec![None; primitive.vertex_count as usize]);
+                    || (reuse_projected && primitive.has_normal))
+                    .then(|| vec![None; primitive.vertex_count as usize]);
                 for triangle in mesh.model.indices[start..start + primitive.index_count as usize]
                     .as_chunks::<3>()
                     .0
                 {
                     // Cached vertices also share one shadow caster; deformed triangles own theirs.
                     let mut caster_corners = None;
+                    let mut projected_corners = None;
                     let mut vertices = if let Some(cache) = &mut transformed_vertices {
                         let mut vertices = [WorldVertex {
                             position: V3::new(0.0, 0.0, 0.0),
@@ -1030,25 +1049,57 @@ fn collect_geometry<'a>(
                             uv: V2 { x: 0.0, y: 0.0 },
                         }; 3];
                         let mut corners = [0; 3];
+                        let mut projections = [None; 3];
                         for (corner, &index) in triangle.iter().enumerate() {
                             let entry = &mut cache[(index - primitive.first_vertex) as usize];
-                            (vertices[corner], corners[corner]) = if let Some(cached) = *entry {
+                            let cached: CachedGeometryVertex = if let Some(cached) = *entry {
                                 cached
                             } else {
-                                let vertex = mesh.model.vertices[index as usize];
-                                validate_deformed_position(vertex, instance.transform)?;
-                                let vertex =
-                                    transformed_vertex(vertex, instance.transform, transform);
+                                let mut vertex = morphed_vertex(
+                                    &mesh.model,
+                                    primitive_index,
+                                    index,
+                                    &instance.weights,
+                                );
+                                if instance.skin.is_some() {
+                                    let attributes = mesh.model.skin_vertices[primitive_index]
+                                        .as_ref()
+                                        .expect("admission requires skin attributes");
+                                    vertex = skinned_vertex(
+                                        vertex,
+                                        attributes[(index - primitive.first_vertex) as usize],
+                                        &instance.joint_palette,
+                                    );
+                                }
+                                validate_deformed_position(vertex, node_transform)?;
+                                let vertex = transformed_vertex(vertex, node_transform, transform);
                                 let caster = if shadows {
                                     casters.push_vertex(vertex)
                                 } else {
                                     0
                                 };
-                                *entry = Some((vertex, caster));
-                                (vertex, caster)
+                                let cached = CachedGeometryVertex {
+                                    world: vertex,
+                                    caster,
+                                    projection: reuse_projected.then(|| {
+                                        let p = camera.project_vertex(vertex);
+                                        CachedProjection {
+                                            view: p.view.position,
+                                            screen: p.screen.map(|p| [p.x, p.y, p.inv_z]),
+                                        }
+                                    }),
+                                };
+                                *entry = Some(cached);
+                                cached
                             };
+                            vertices[corner] = cached.world;
+                            corners[corner] = cached.caster;
+                            projections[corner] =
+                                cached.projection.map(|p| p.with_attributes(cached.world));
                         }
                         caster_corners = Some(corners);
+                        projected_corners = reuse_projected
+                            .then(|| projections.map(|p| p.expect("cached projection")));
                         vertices
                     } else {
                         let mut local = std::array::from_fn(|corner| {
@@ -1096,6 +1147,9 @@ fn collect_geometry<'a>(
                         != transform.mirrored();
                     if mirrored {
                         vertices.swap(1, 2);
+                        if let Some(projected) = &mut projected_corners {
+                            projected.swap(1, 2);
+                        }
                     }
                     if shadows {
                         let mut corners = caster_corners
@@ -1105,7 +1159,7 @@ fn collect_geometry<'a>(
                         }
                         casters.push_triangle(corners, mesh_index, material_index);
                     }
-                    project_world_triangle(vertices, camera, |screen| {
+                    let emit = |screen: [ScreenVertex; 3]| {
                         let min_x = screen
                             .iter()
                             .map(|vertex| vertex.x)
@@ -1150,7 +1204,12 @@ fn collect_geometry<'a>(
                                 });
                             }
                         }
-                    });
+                    };
+                    if let Some(projected) = projected_corners {
+                        project_view_triangle(projected, camera, emit);
+                    } else {
+                        project_world_triangle(vertices, camera, emit);
+                    }
                 }
             }
         }
@@ -1170,6 +1229,24 @@ fn render_scene_impl(
     reusable: Option<RasterFrame>,
     workers: usize,
     apply_depth_of_field: bool,
+) -> Result<RasterFrame, ContractErrors> {
+    render_scene_with_geometry_reuse(
+        prepared,
+        frame,
+        reusable,
+        workers,
+        apply_depth_of_field,
+        true,
+    )
+}
+
+fn render_scene_with_geometry_reuse(
+    prepared: &PreparedScene,
+    frame: &Frame3DState,
+    reusable: Option<RasterFrame>,
+    workers: usize,
+    apply_depth_of_field: bool,
+    reuse_vertices: bool,
 ) -> Result<RasterFrame, ContractErrors> {
     // Opt-in phase diagnostics only; not part of frame identity or render decisions.
     let trace = !cfg!(target_arch = "wasm32") && std::env::var_os("VALLE_PERF_SCENE3D").is_some();
@@ -1223,7 +1300,7 @@ fn render_scene_impl(
         commands,
         tile_references,
         casters,
-    } = collect_geometry(prepared, frame, &camera)?;
+    } = collect_geometry_reusing(prepared, frame, &camera, reuse_vertices)?;
     let shadows = prepared.scene.pbr.shadows;
     checkpoint("geometry");
     if shadows {
@@ -1637,6 +1714,40 @@ struct WorldVertex {
     position: V3,
     normal: V3,
     uv: V2,
+}
+
+#[derive(Clone, Copy)]
+struct CachedGeometryVertex {
+    world: WorldVertex,
+    caster: u32,
+    projection: Option<CachedProjection>,
+}
+
+/// Keep only projected positions; normals and UVs already live in the shared world vertex.
+#[derive(Clone, Copy)]
+struct CachedProjection {
+    view: V3,
+    screen: Option<[f32; 3]>,
+}
+
+impl CachedProjection {
+    fn with_attributes(self, world: WorldVertex) -> ProjectedVertex {
+        ProjectedVertex {
+            view: ViewVertex {
+                position: self.view,
+                normal: world.normal,
+                uv: world.uv,
+            },
+            screen: self.screen.map(|[x, y, inv_z]| ScreenVertex {
+                x,
+                y,
+                inv_z,
+                view_z: self.view.z,
+                normal: world.normal,
+                uv: world.uv,
+            }),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
