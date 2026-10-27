@@ -272,6 +272,18 @@ impl EffectRuntime {
         draw_composite(output, &local, backdrop, BlendMode::SrcOver, 1.0)
     }
 
+    #[cfg(test)]
+    pub(super) fn output_for_test(spec: OutputSpec) -> Self {
+        Self {
+            output_transform: Some((
+                spec,
+                Rc::new(compile_output_transform(spec, false).unwrap()),
+            )),
+            output_noise: output_noise(spec.dither()).unwrap(),
+            ..Self::new()
+        }
+    }
+
     pub(crate) fn output_shader(
         &mut self,
         input: &Image,
@@ -2250,14 +2262,7 @@ mod tests {
             rgba8_target_info(spec, Extent2d::new(samples.len() as u32, 1).unwrap()).unwrap();
         let expected = stage_output(&source, spec, &target_info).unwrap();
 
-        let mut runtime = EffectRuntime {
-            output_transform: Some((
-                spec,
-                Rc::new(compile_output_transform(spec, false).unwrap()),
-            )),
-            output_noise: output_noise(spec.dither()).unwrap(),
-            ..EffectRuntime::new()
-        };
+        let mut runtime = EffectRuntime::output_for_test(spec);
         let shader = runtime.output_shader(&source, spec, use_metal).unwrap();
         #[cfg(all(target_os = "macos", feature = "native"))]
         let mut metal = (std::env::var("VALLE_TEST_NATIVE_BACKEND").as_deref() == Ok("metal"))

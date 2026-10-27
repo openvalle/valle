@@ -1271,6 +1271,7 @@ impl SurfaceArena {
         self.entries.clear();
         self.scratch_free.clear();
         self.delivery_surface = None;
+        self.output_staging.clear_cache();
         #[cfg(all(target_os = "macos", feature = "native"))]
         if let SurfaceBackend::Metal {
             scene3d_gpu: Some(Ok(renderer)),

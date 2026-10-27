@@ -25,7 +25,10 @@ use super::{
     draw::{DrawError, ProgramRuntime, ProgramTerminal, erase_raster},
     effect::{EffectCacheCounters, EffectRuntime, apply_prepared_mask, set_working_color},
     import::render_import,
-    output::{prefers_cached_output, stage_output_into, stage_sdr_output_into, validate_target},
+    output::{
+        prefers_cached_output, stage_cpu_sdr_output_into, stage_output_into, stage_sdr_output_into,
+        validate_target,
+    },
     surface::{
         PlanImage, SkiaBackendKind, SurfaceAllocationScope, SurfaceArena, SurfaceError,
         SurfaceFrame, SurfaceFrameReport, working_info,
@@ -2024,6 +2027,17 @@ fn commit_output(
             return Err(SkiaExecuteError::TargetCommit);
         }
         return Ok(());
+    }
+    if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Raster {
+        let staging = surface_frame.output_staging_mut();
+        if let Some(row_bytes) =
+            stage_cpu_sdr_output_into(image, spec, &target.image_info(), staging)?
+        {
+            if !target.commit_pixels(staging.pixels(), row_bytes) {
+                return Err(SkiaExecuteError::TargetCommit);
+            }
+            return Ok(());
+        }
     }
     if surface_frame.backend_kind() == super::surface::SkiaBackendKind::Raster
         // Use the canonical delivery conversion on x86: its integer bytes must not depend on

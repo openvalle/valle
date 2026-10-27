@@ -14,6 +14,8 @@ use valle_engine::{
 
 use super::{draw::DrawError, surface::working_color_space};
 
+mod cpu;
+
 #[cfg(test)]
 pub(crate) struct StagedOutput {
     pixels: Vec<u8>,
@@ -30,22 +32,118 @@ impl StagedOutput {
 // bounds this scratch to 3.75 MiB at 4K instead of retaining 126.6 MiB in every CPU worker.
 const OUTPUT_STRIPE_ROWS: usize = 64;
 
-/// Reusable CPU buffers for exact output staging. Capacity persists across frames; contents never
-/// do, because every use fully overwrites the working readback and rebuilds the pixel bytes.
+/// Reusable CPU output buffers. Each frame rewrites the pixels; cached SDR colors are keyed by
+/// all input bits and the complete output contract, before position-dependent dither.
 #[derive(Debug, Default)]
 pub(crate) struct OutputStaging {
     working: Vec<f32>,
     pixels: Vec<u8>,
+    sdr: Option<CachedSdrOutput>,
+}
+
+#[derive(Debug)]
+struct CachedSdrOutput {
+    _memory: Option<valle_engine::motion::memory::MemoryLease>,
+    spec: OutputSpec,
+    converter: cpu::Converter,
+}
+
+/// Opaque SDR delivery directly from resident F16 working pixels. This is an RGBA8/BGRA8
+/// terminal, retaining the normal encoder path. HDR, coverage alpha, tone mapping and other
+/// source formats keep their existing conversion. The interpolated sRGB curve is bounded to
+/// less than 0.07 of one 8-bit code; final bytes can differ from the exact reference by one.
+pub(crate) fn stage_cpu_sdr_output_into(
+    image: &Image,
+    spec: OutputSpec,
+    target_info: &ImageInfo,
+    staging: &mut OutputStaging,
+) -> Result<Option<usize>, DrawError> {
+    use valle_engine::{
+        motion::memory::{self, MemoryKind},
+        resource::ToneMap,
+    };
+    if spec.alpha() != OutputAlphaMode::Opaque
+        || spec.bit_depth() != OutputBitDepth::Eight
+        || spec.target().primaries != ColorPrimaries::Rec709
+        || spec.target().transfer != TransferFunction::Srgb
+        || spec.tone_map() != ToneMap::None
+        || spec.reference_white().get() != 100
+    {
+        staging.sdr = None;
+        return Ok(None);
+    }
+    validate_target(spec, target_info)?;
+    if image.dimensions() != target_info.dimensions() {
+        return Err(DrawError::Surface("output extent mismatch".into()));
+    }
+    let Some(pixmap) = image.peek_pixels() else {
+        return Ok(None);
+    };
+    if pixmap.color_type() != ColorType::RGBAF16
+        || pixmap.alpha_type() != AlphaType::Premul
+        || pixmap.color_space().as_ref()
+            != Some(&working_color_space().map_err(|e| DrawError::Surface(e.to_string()))?)
+    {
+        return Ok(None);
+    }
+    let Some(bytes) = pixmap.bytes() else {
+        return Ok(None);
+    };
+    if staging.sdr.as_ref().is_none_or(|state| state.spec != spec) {
+        staging.sdr = None;
+        // This optional cache survives frames, so it must not spend a frame's working credit.
+        // Under pressure the existing converter remains available without this allocation.
+        let Ok(memory) = memory::reserve_retained(
+            MemoryKind::Delivery,
+            cpu::Converter::retained_bytes(spec.dither()) as u64,
+        ) else {
+            return Ok(None);
+        };
+        let Ok(_temporary) = memory::reserve_retained(
+            MemoryKind::Temporary,
+            cpu::Converter::construction_bytes(spec.dither()) as u64,
+        ) else {
+            return Ok(None);
+        };
+        staging.sdr = Some(CachedSdrOutput {
+            _memory: memory,
+            spec,
+            converter: cpu::Converter::new(spec),
+        });
+    }
+    let cached = prefers_cached_output(image);
+    let state = staging.sdr.as_mut().unwrap();
+    let width = image.width() as usize;
+    let height = image.height() as usize;
+    staging.pixels.resize(width * height * 4, 0);
+    let swap = target_info.color_type() == ColorType::BGRA8888;
+    for (y, output) in staging.pixels.chunks_exact_mut(width * 4).enumerate() {
+        state
+            .converter
+            .row(
+                &bytes[y * pixmap.row_bytes()..][..width * 8],
+                y,
+                swap,
+                cached,
+                output,
+            )
+            .map_err(|error| DrawError::Surface(error.into()))?;
+    }
+    Ok(Some(width * 4))
 }
 
 impl OutputStaging {
     pub(crate) fn pixels(&self) -> &[u8] {
         &self.pixels
     }
+
+    pub(crate) fn clear_cache(&mut self) {
+        self.sdr = None;
+    }
 }
 
-// Sample the existing raster pixels without readback. Continuous-tone frames (gradients/video)
-// favor Skia's shader; flat-color graphics favor exact memoized conversion. This selects cost,
+// Sample existing raster pixels without readback. Continuous-tone frames (gradients/video)
+// favor uncached batches; flat-color graphics favor exact-key memoization. This selects cost,
 // never a different color contract.
 pub(crate) fn prefers_cached_output(image: &Image) -> bool {
     let Some(pixmap) = image.peek_pixels() else {
@@ -698,7 +796,8 @@ fn round_code(value: f32) -> u8 {
 
 // The bounded [0,1] SDR curve is shared across frames and output primaries/white levels.
 // Linear interpolation is within 0.07 of one 8-bit code (including Rec.709's join).
-// HDR, dither and higher bit depths retain the exact delivery implementation.
+// HDR and higher bit depths retain the exact delivery implementation. CPU SDR dither is applied
+// after this shared curve, at the original canvas coordinates.
 fn transfer_lut(transfer: TransferFunction) -> Option<&'static [f32]> {
     use std::sync::OnceLock;
     static SRGB: OnceLock<Vec<f32>> = OnceLock::new();
@@ -1327,7 +1426,7 @@ mod tests {
     }
 
     #[test]
-    fn continuous_color_frames_keep_the_shader_path() {
+    fn continuous_color_frames_bypass_color_memoization() {
         let info = ImageInfo::new((64, 64), ColorType::RGBA8888, AlphaType::Premul, None);
         let flat = [32, 64, 128, 255].repeat(64 * 64);
         let ramp = (0..64 * 64)

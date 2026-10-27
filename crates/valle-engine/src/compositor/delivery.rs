@@ -4,13 +4,18 @@
 //! executor. GPU/Web kernels are required to match these results; CPU executors may call it
 //! directly after reading their private working surface.
 
-use crate::resource::OutputSpec;
+use crate::resource::{ColorPrimaries, OutputSpec};
 
 pub use super::reference::{
     OutputMathError as DeliveryError, OutputStorage as DeliveryStorage,
     ReferenceOutputSample as DeliverySample, gamut_map as map_output_gamut,
     luminance_weights as output_luminance_weights,
 };
+
+/// Linear Rec.2020 to target primaries, using the reference executor's f64 coefficients.
+pub const fn output_primaries_matrix(primaries: ColorPrimaries) -> [[f64; 3]; 3] {
+    super::reference::working_primaries_matrix(primaries)
+}
 
 /// Transforms one Linear Rec.2020 premultiplied working pixel through the complete OutputSpec.
 pub fn transform_working_pixel(

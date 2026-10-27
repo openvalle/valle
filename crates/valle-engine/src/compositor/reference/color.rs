@@ -236,12 +236,20 @@ pub(crate) fn working_to_primaries(
     rgb: [f32; 3],
     primaries: ColorPrimaries,
 ) -> Result<[f32; 3], ColorMathError> {
-    let matrix = match primaries {
+    if primaries == ColorPrimaries::Rec2020 {
+        return validate_rgb(rgb);
+    }
+    multiply_matrix(working_primaries_matrix(primaries), rgb)
+}
+
+/// Canonical coefficients for CPU/GPU delivery kernels. Accumulate in f64 in column order,
+/// without fused multiply-add, then round once to f32 to match `working_to_primaries`.
+pub(crate) const fn working_primaries_matrix(primaries: ColorPrimaries) -> [[f64; 3]; 3] {
+    match primaries {
         ColorPrimaries::Rec709 => WORKING_TO_REC709,
         ColorPrimaries::DisplayP3 => WORKING_TO_DISPLAY_P3,
-        ColorPrimaries::Rec2020 => return validate_rgb(rgb),
-    };
-    multiply_matrix(matrix, rgb)
+        ColorPrimaries::Rec2020 => [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    }
 }
 
 pub(crate) fn decode_transfer(value: f32, transfer: TransferFunction) -> f32 {
