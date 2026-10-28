@@ -706,7 +706,8 @@
           "minimumWindowRun": 2
         },
         "tracks": []
-      }
+      },
+      "durationS": 2
     },
     {
       "id": "text-parameters",
@@ -760,7 +761,8 @@
         },
         "tracks": []
       },
-      "motionKernel": true
+      "motionKernel": true,
+      "durationS": 2
     }
   ]
 }

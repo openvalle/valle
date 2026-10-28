@@ -801,6 +801,10 @@ impl PlanProgram {
             .or_else(|| self.paint_frame.get().map(|frame| frame.program()))
     }
 
+    pub fn paint_frame(&self) -> Option<&valle_draw::program::PaintFrame> {
+        self.paint_frame.get()
+    }
+
     pub fn local_plan(&self) -> &ProgramPlan {
         &self.deref().local_plan
     }

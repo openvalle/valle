@@ -55,6 +55,7 @@ import {
   bindPaintParameters,
   decodePaintTemplate,
   paintDigest,
+  subtreeParameterKey,
   type PaintTemplateWire,
 } from "./paint-template.ts";
 
@@ -506,8 +507,11 @@ export class CanvasKitExecutor {
   private readonly runtimeShaders = new Map<string, RuntimeEffect>();
   private readonly rasterLayers = new Map<
     string,
-    { image: Image; roi: DeviceRoi; bytes: number }
+    { image: Image; roi: DeviceRoi; bytes: number; pins: number; retained: boolean; used: number }
   >();
+  private readonly rasterWitnesses = new Map<string, true>();
+  private rasterLimit = RASTER_LAYER_CACHE_BYTES;
+  private rasterEpoch = 0;
   private cacheCounters = emptyExecutorCacheCounters();
 
   constructor(
@@ -578,6 +582,8 @@ export class CanvasKitExecutor {
         maxFrameBytes,
       );
     }
+    this.rasterLimit = Math.min(RASTER_LAYER_CACHE_BYTES, Number(maxFrameBytes / 16n));
+    this.rasterEpoch++;
     this.workingArena.beginFrame(frame);
     return this.workingArena;
   }
@@ -759,6 +765,7 @@ export class CanvasKitExecutor {
     }
     this.cacheCounters.rasterHits += 1;
     touch(this.rasterLayers, key, cached);
+    cached.used = this.rasterEpoch;
     return { image: cached.image, owned: false, roi: cached.roi };
   }
 
@@ -767,31 +774,101 @@ export class CanvasKitExecutor {
     return this.cacheCounters.rasterBytes;
   }
 
-  retainRasterLayer(key: string, value: ImageValue): boolean {
+  /** A pass may still use a snapshot after another pass evicts its cache entry. */
+  pinRasterLayer(
+    key: string,
+    countLookup = true,
+  ): { value: ImageValue; release: () => void } | null {
+    const cached = this.rasterLayers.get(key);
+    if (countLookup) {
+      if (cached) this.cacheCounters.rasterHits++;
+      else this.cacheCounters.rasterMisses++;
+    }
+    if (!cached) return null;
+    touch(this.rasterLayers, key, cached);
+    cached.used = this.rasterEpoch;
+    const value = { image: cached.image, owned: false, roi: cached.roi };
+    cached.pins++;
+    let released = false;
+    return {
+      value,
+      release: () => {
+        if (released) return;
+        released = true;
+        cached.pins--;
+        if (!cached.retained && cached.pins === 0) {
+          cached.image.delete();
+          this.cacheCounters.rasterBytes -= cached.bytes;
+        }
+      },
+    };
+  }
+
+  prepareLocalRaster(key: string, bytes: number): boolean {
+    if (bytes > this.rasterLimit) return false;
+    const protectedEntries = [...this.rasterLayers.values()].filter(
+      (entry) => entry.used >= this.rasterEpoch - 1,
+    );
+    if (
+      protectedEntries.length >= 64 ||
+      protectedEntries.reduce((sum, entry) => sum + entry.bytes, bytes) > this.rasterLimit
+    )
+      return false;
+    if (!this.rasterWitnesses.has(key)) {
+      // Exact parameter keys can be large; do not let optional history retain unbounded data.
+      if (key.length <= 4096) {
+        if (this.rasterWitnesses.size >= 256)
+          this.rasterWitnesses.delete(this.rasterWitnesses.keys().next().value!);
+        this.rasterWitnesses.set(key, true);
+      }
+      return false;
+    }
+    return true;
+  }
+
+  retainRasterLayer(key: string, value: ImageValue, requireRepeat = false): boolean {
     if (!value.owned || !value.image) return false;
-    const bytes = value.roi.width * value.roi.height * 8;
-    if (bytes > RASTER_LAYER_CACHE_BYTES) return false;
+    const bytes = value.image.width() * value.image.height() * 8;
+    if (bytes > this.rasterLimit || this.rasterLayers.has(key)) return false;
+    if (requireRepeat && !this.prepareLocalRaster(key, bytes)) return false;
     while (
       this.rasterLayers.size >= 64 ||
-      this.cacheCounters.rasterBytes + bytes > RASTER_LAYER_CACHE_BYTES
+      this.cacheCounters.rasterBytes + bytes > this.rasterLimit
     ) {
       const oldest = this.rasterLayers.entries().next().value;
-      if (!oldest) break;
-      oldest[1].image.delete();
+      if (!oldest) return false;
+      oldest[1].retained = false;
+      if (oldest[1].pins === 0) {
+        oldest[1].image.delete();
+        this.cacheCounters.rasterBytes -= oldest[1].bytes;
+      }
       this.rasterLayers.delete(oldest[0]);
-      this.cacheCounters.rasterBytes -= oldest[1].bytes;
+      this.cacheCounters.rasterEntries = this.rasterLayers.size;
     }
-    this.rasterLayers.set(key, { image: value.image, roi: value.roi, bytes });
+    this.rasterLayers.set(key, {
+      image: value.image,
+      roi: value.roi,
+      bytes,
+      pins: 0,
+      retained: true,
+      used: this.rasterEpoch,
+    });
     this.cacheCounters.rasterEntries = this.rasterLayers.size;
     this.cacheCounters.rasterBytes += bytes;
     return true;
   }
 
   private clearRasterLayers(): void {
-    for (const value of this.rasterLayers.values()) value.image.delete();
+    for (const value of this.rasterLayers.values()) {
+      value.retained = false;
+      if (value.pins === 0) {
+        value.image.delete();
+        this.cacheCounters.rasterBytes -= value.bytes;
+      }
+    }
     this.rasterLayers.clear();
+    this.rasterWitnesses.clear();
     this.cacheCounters.rasterEntries = 0;
-    this.cacheCounters.rasterBytes = 0;
   }
 
   trimCaches(): void {
@@ -1100,6 +1177,8 @@ async function runCanvasKitFrame(
   arena.onLocalPassTiming = target.onLocalPassTiming ?? null;
   arena.onRasterLeafTiming = target.onRasterLeafTiming ?? null;
   arena.trees = target.retainRasterTrees && arena.gpu ? executor.trees : null;
+  arena.rasterCache = executor;
+  arena.rasterSpec = JSON.stringify(plan.renderSpec, bigintJson);
   arena.yieldToPresentation = target.yieldToPresentation ?? null;
   arena.deferGpuFlush = target.deferGpuFlush === true;
   arena.boundedPathClipLayers = target.boundedPathClipLayers === true;
@@ -1236,7 +1315,11 @@ async function runCanvasKitFrame(
             try {
               drawImageValue(CanvasKit, canvas, result, 1, "src");
               if (!cached && cacheKey !== null)
-                retained = executor.retainRasterLayer(cacheKey, result);
+                retained = executor.retainRasterLayer(
+                  cacheKey,
+                  result,
+                  program.plan.paintParameters === true,
+                );
             } finally {
               if (result.owned && !retained) result.image?.delete();
             }
@@ -1857,12 +1940,22 @@ async function executeProgram(
   const retiredValues: ImageValue[] = [];
   const localSlotImages = new Map<number, Image>();
   const retiredImages = new Set<Image>();
+  const pinnedImages = new Set<Image>();
+  const pins = new Map<number, { references: number; release: () => void }>();
+  const terminalAliases = new Set([positiveId(localPlan.output, "local output")]);
+  for (const step of [...bound.passes].reverse()) {
+    if (terminalAliases.has(step.output) && step.storage.kind === "alias")
+      terminalAliases.add(positiveId(step.storage.source, "local alias"));
+  }
   let result = transparentValue();
   const retire = (resources: readonly number[]): void => {
     for (const resource of resources) {
       const value = required(values, resource, "retired program resource");
       if (value.owned) retiredValues.push(value);
       values.delete(resource);
+      const pin = pins.get(resource);
+      if (pin && --pin.references === 0) pin.release();
+      pins.delete(resource);
     }
   };
   try {
@@ -1892,6 +1985,11 @@ async function executeProgram(
         continue;
       }
       if (storage.kind === "alias") {
+        const pin = pins.get(positiveId(storage.source, "program alias source"));
+        if (pin) {
+          pin.references++;
+          pins.set(output, pin);
+        }
         values.set(
           output,
           borrowedValue(
@@ -1919,6 +2017,30 @@ async function executeProgram(
       }
       const slot =
         storage.kind === "surface" ? positiveId(storage.slot, "bound program surface slot") : 0;
+      const cacheKey =
+        slot === 0 || terminalAliases.has(output)
+          ? null
+          : localRasterKey(
+              admitted,
+              kind,
+              device,
+              localPlan,
+              outputRoi,
+              required(bound.slotExtents, slot, "bound slot extent"),
+              arena.rasterSpec,
+            );
+      const cached = cacheKey == null ? null : arena.rasterCache?.pinRasterLayer(cacheKey);
+      if (cached) {
+        pinnedImages.add(cached.value.image!);
+        pins.set(output, { references: 1, release: cached.release });
+        values.set(output, cached.value);
+        retire(step.retireAfter);
+        continue;
+      }
+      const retainLocal =
+        cacheKey != null &&
+        arena.rasterCache?.prepareLocalRaster(cacheKey, outputRoi.width * outputRoi.height * 8) ===
+          true;
       const localStarted = arena.onLocalPassTiming ? performance.now() : 0;
       let surface: Surface;
       if (slot === 0) {
@@ -1928,6 +2050,7 @@ async function executeProgram(
         if (prior) {
           retiredImages.add(prior);
           prior.delete();
+          localSlotImages.delete(slot);
         }
         const slotExtent = required(bound.slotExtents, slot, "bound program slot extent");
         if (!slotExtent) fail("program_schedule", `visible program slot ${slot} has no extent`);
@@ -1965,7 +2088,9 @@ async function executeProgram(
           }
           if (!arena.gpu || !arena.deferGpuFlush) surface.flush();
           const at = arena.onLocalPassTiming ? performance.now() : 0;
-          const image = surface.makeImageSnapshot();
+          const image = surface.makeImageSnapshot(
+            !retainLocal ? undefined : new Int32Array([0, 0, outputRoi.width, outputRoi.height]),
+          );
           if (arena.onLocalPassTiming) localSnapshotMs = performance.now() - at;
           return image;
         } finally {
@@ -1979,8 +2104,17 @@ async function executeProgram(
         drawMs: performance.now() - localStarted - localSnapshotMs,
         snapshotMs: localSnapshotMs,
       });
-      if (slot !== 0) localSlotImages.set(slot, snapshot);
-      const value = { image: snapshot, owned: true, roi: outputRoi };
+      let value: ImageValue = { image: snapshot, owned: true, roi: outputRoi };
+      if (
+        retainLocal &&
+        cacheKey != null &&
+        arena.rasterCache?.retainRasterLayer(cacheKey, value, true)
+      ) {
+        const pinned = arena.rasterCache.pinRasterLayer(cacheKey, false)!;
+        pinnedImages.add(snapshot);
+        pins.set(output, { references: 1, release: pinned.release });
+        value = pinned.value;
+      } else if (slot !== 0) localSlotImages.set(slot, snapshot);
       values.set(output, value);
       if (storage.kind === "output") result = value;
       retire(step.retireAfter);
@@ -1998,6 +2132,7 @@ async function executeProgram(
         value.owned &&
         value.image &&
         value.image !== result.image &&
+        !pinnedImages.has(value.image) &&
         !retiredImages.has(value.image) &&
         !liveSlotImages.has(value.image)
       ) {
@@ -2008,7 +2143,33 @@ async function executeProgram(
     for (const image of liveSlotImages) {
       if (image !== result.image && !retiredImages.has(image)) image.delete();
     }
+    for (const pin of new Set(pins.values())) pin.release();
   }
+}
+
+function localRasterKey(
+  program: ProgramStructure,
+  kind: Wire,
+  device: number[],
+  localPlan: Wire,
+  roi: DeviceRoi,
+  extent: { width: number; height: number } | null,
+  spec: string,
+): string | null {
+  if (!extent || roi.width * roi.height < 1024) return null;
+  const roots =
+    kind.kind === "rasterTree" ? kind.roots : kind.kind === "rasterNode" ? [kind.node] : null;
+  if (roots === null) return null;
+  const key = subtreeParameterKey(program.draw, roots);
+  if (key === null) return null;
+  return JSON.stringify([
+    key,
+    kind.kind,
+    programMatrix(program, localPlan, kind.output, device),
+    roi,
+    extent,
+    spec,
+  ]);
 }
 
 function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterPlan | null {
@@ -5935,6 +6096,8 @@ interface PooledSlot {
 }
 
 class SurfaceArena {
+  rasterCache: CanvasKitExecutor | null = null;
+  rasterSpec = "";
   trees: RasterTreeCache | null = null;
   treeSignatures = new Map<number, RasterTreeSignature | null>();
   recordingClipPaints = false;
@@ -7154,6 +7317,24 @@ function frameWorkingSet(
         );
         surfaces = need.surfaces;
         images = need.images;
+        if (!run.direct) {
+          const localPlan = record(program.plan.localPlan, "program.localPlan");
+          const passes = array(localPlan.passes, "local passes");
+          for (const [index, local] of run.bound.passes.entries()) {
+            if (local.storage.kind !== "surface") continue;
+            const bounds = required(
+              run.bound.slotExtents,
+              positiveId(local.storage.slot, "local slot"),
+              "local extent",
+            );
+            const kind = record(record(passes[index], "local pass").kind, "local kind");
+            if (
+              localRasterKey(program, kind, run.device, localPlan, local.deviceRoi, bounds, "") !==
+              null
+            )
+              layerBytes += roiBytes(local.deviceRoi);
+          }
+        }
         // A host frame under a viewport short of the frame is cut into a transient of its own.
         const frames = kind.kind === "rasterProgram" ? frameInputs(kind).length : 0;
         const region = frames === 0 ? root : frameRegion(run.device, extent);

@@ -6,6 +6,7 @@
 
 mod arena;
 mod compile;
+mod dependencies;
 mod group;
 mod instance_compact;
 mod interpolation;
@@ -28,6 +29,7 @@ pub use compile::{
     ProgramRecordingError, ProgramResourceCatalog, ProgramTextureExtent, compile_recording,
     compile_recording_with_catalog, compile_recording_with_paint_origins,
 };
+pub use dependencies::{SubtreeDependencies, SubtreeResource};
 pub use group::{
     BackdropRead, BackdropScope, BlendMode, BlendSpace, Clip, FILTER_GAUSSIAN_SUPPORT_SIGMAS,
     FillRule, Filter, Group, MAX_SHADER_LAYER_PIXELS, Mask, MaskMode, RoundRect,
@@ -41,7 +43,7 @@ pub use node::{
     StrokeCap, StrokeJoin,
 };
 pub use packed::{DRAW_PROGRAM_FORMAT_VERSION, PackedDrawError};
-pub use paint::{AuthorColor, GradientStop, LinearColor, Paint, SpreadMode};
+pub use paint::{AuthorColor, GradientStop, LinearColor, Paint, SpreadMode, decode_srgb_straight};
 pub use paint_table::{PaintIter, PaintTable};
 pub use path::{PathData, PathVerb};
 pub use template::{PaintFrame, PaintParameter, PaintTemplate, PaintTemplateError};
@@ -322,5 +324,3 @@ mod tests {
         ));
     }
 }
-
-pub use paint::decode_srgb_straight;

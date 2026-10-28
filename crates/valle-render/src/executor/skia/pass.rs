@@ -445,8 +445,13 @@ impl AdmittedSkiaFrame<'_> {
         raster_layers: &mut RasterLayerCache,
     ) -> Result<SkiaExecutionReport, SkiaExecuteError> {
         preflight_target(self.template, target)?;
+        raster_layers.begin_frame();
         let extent = render_extent(self.template)?;
         let info = working_info(extent)?;
+        let render_spec = ContentDigest::of_bytes(
+            &serde_json::to_vec(&self.template.render_spec())
+                .expect("validated render spec is serializable"),
+        );
         let root = DeviceRect::full(extent.width(), extent.height());
         let mut surfaces = BTreeMap::<PlanResourceId, PlanImage>::new();
         let allocation_scope = SurfaceAllocationScope::begin()?;
@@ -651,10 +656,18 @@ impl AdmittedSkiaFrame<'_> {
                                     roi: output_roi,
                                 },
                                 helper_index,
+                                raster_layers,
+                                render_spec,
                             )?
                         };
                         if let Some(key) = cache_key {
-                            raster_layers.insert(key, image.clone());
+                            if plan.paint_frame().is_some() {
+                                // Animated full-frame snapshots must not evict the reusable
+                                // local passes merely because their first evaluation finished.
+                                let _ = raster_layers.retain(key, image.clone(), true);
+                            } else {
+                                raster_layers.insert(key, image.clone());
+                            }
                         }
                         (image, true)
                     }
@@ -702,6 +715,8 @@ impl AdmittedSkiaFrame<'_> {
                             &mut scratch,
                             ProgramTerminal::Scratch(terminal_index),
                             helper_index,
+                            raster_layers,
+                            render_spec,
                         )?
                     };
                     let destination = surface(&surfaces, *destination)?;

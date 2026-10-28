@@ -52,6 +52,8 @@ pub(crate) struct RasterLayerCache {
     observed_large: BoundedCache<RasterLayerKey, ()>,
     hits: u64,
     misses: u64,
+    frame_start: u64,
+    previous_frame_start: u64,
 }
 
 impl std::fmt::Debug for RasterLayerCache {
@@ -68,6 +70,8 @@ impl RasterLayerCache {
     pub(crate) fn set_byte_limit(&mut self, bytes: usize) {
         self.images = BoundedCache::new(RASTER_LAYER_CACHE_LIMIT).with_weight_limit(bytes);
         self.observed_large = BoundedCache::new(LARGE_RASTER_HISTORY_LIMIT);
+        self.frame_start = 0;
+        self.previous_frame_start = 0;
     }
     pub(crate) fn new() -> Self {
         Self {
@@ -76,6 +80,8 @@ impl RasterLayerCache {
             observed_large: BoundedCache::new(LARGE_RASTER_HISTORY_LIMIT),
             hits: 0,
             misses: 0,
+            frame_start: 0,
+            previous_frame_start: 0,
         }
     }
 
@@ -83,6 +89,13 @@ impl RasterLayerCache {
         let limit = self.images.maximum_weight;
         self.images = BoundedCache::new(RASTER_LAYER_CACHE_LIMIT).with_weight_limit(limit);
         self.observed_large = BoundedCache::new(LARGE_RASTER_HISTORY_LIMIT);
+        self.frame_start = 0;
+        self.previous_frame_start = 0;
+    }
+
+    pub(crate) fn begin_frame(&mut self) {
+        self.previous_frame_start = self.frame_start;
+        self.frame_start = self.images.clock;
     }
 
     pub(crate) fn get(&mut self, key: &RasterLayerKey) -> Option<PlanImage> {
@@ -98,26 +111,77 @@ impl RasterLayerCache {
         }
     }
 
-    pub(crate) fn insert(&mut self, key: RasterLayerKey, mut image: PlanImage) {
-        let weight = usize::try_from(image.roi().pixels().saturating_mul(8)).unwrap_or(usize::MAX);
-        if weight > self.images.maximum_weight {
-            return;
+    pub(crate) fn insert(&mut self, key: RasterLayerKey, image: PlanImage) {
+        let _ = self.retain(key, image, false);
+    }
+
+    /// Decide optional snapshot work before making a compact copy. One-off dynamic values
+    /// only enter the bounded witness table and keep the normal zero-extra-copy execution.
+    pub(crate) fn prepare_local(&mut self, key: &RasterLayerKey, bytes: usize) -> bool {
+        if bytes > self.images.maximum_weight || !self.has_local_room(bytes) {
+            return false;
         }
-        if weight >= LARGE_RASTER_LAYER_BYTES && image.image().is_some_and(Image::is_texture_backed)
+        let repeated = self.observed_large.get(key).is_some();
+        self.observed_large.insert(key.clone(), ());
+        repeated
+    }
+
+    fn has_local_room(&self, bytes: usize) -> bool {
+        let protected = self
+            .images
+            .values
+            .values()
+            .filter(|entry| entry.last_use > self.previous_frame_start)
+            .fold((0usize, 0usize), |(count, bytes), entry| {
+                (count + 1, bytes.saturating_add(entry.weight))
+            });
+        protected.0 < self.images.maximum
+            && protected.1.saturating_add(bytes) <= self.images.maximum_weight
+    }
+
+    /// Local snapshots may be larger than their ROI because scheduled slots are reused. Charge
+    /// their actual backing extent, and retain a dynamic subtree only after an identical request.
+    pub(crate) fn retain(
+        &mut self,
+        key: RasterLayerKey,
+        mut image: PlanImage,
+        require_repeat: bool,
+    ) -> Option<PlanImage> {
+        let pixels = image.image().map_or(0, |image| {
+            (image.width() as u64).saturating_mul(image.height() as u64)
+        });
+        let weight = usize::try_from(pixels.saturating_mul(8)).unwrap_or(usize::MAX);
+        if weight > self.images.maximum_weight {
+            return None;
+        }
+        if require_repeat {
+            // A cyclic working set larger than the cache must not evict every useful image
+            // before its next use. Preserve entries touched in either of the last two runs;
+            // stale entries remain ordinary LRU victims. This changes residency only.
+            if !self.has_local_room(weight) {
+                return None;
+            }
+        }
+        if require_repeat
+            || (weight >= LARGE_RASTER_LAYER_BYTES
+                && image.image().is_some_and(Image::is_texture_backed))
         {
             // A full dynamic frame otherwise pins its snapshot and forces copy-on-write
             // on every subsequent GPU rasterization, despite never producing a cache hit.
-            // Retain only bounded keys on the first GPU request. CPU images keep their
-            // established admission/retirement behavior; dropping these snapshots earlier
-            // increased measured CPU peak footprint without improving export throughput.
+            // Retain only bounded keys on the first GPU request. Literal CPU programs keep
+            // their established admission behavior; parameterized programs and local subtrees
+            // request repeated use explicitly so one-off frames cannot displace reusable work.
             let repeated = self.observed_large.get(&key).is_some();
             self.observed_large.insert(key.clone(), ());
             if !repeated {
-                return;
+                return None;
             }
         }
         if image.admit_retention(weight as u64) {
-            self.images.insert_weighted(key, image, weight);
+            self.images.insert_weighted(key, image.clone(), weight);
+            Some(image)
+        } else {
+            None
         }
     }
 
@@ -517,6 +581,61 @@ impl BackendCaches {
 mod tests {
     use super::*;
 
+    #[test]
+    fn local_snapshots_charge_backing_storage_and_hold_leases_across_eviction() {
+        use valle_engine::motion::{cpu::CpuBudget, memory::MemoryBudget};
+        let bytes = 64 * 64 * 8;
+        let budget = MemoryBudget::new(Some(bytes));
+        let cpu = CpuBudget::new_with_memory(1, Some(budget.clone())).unwrap();
+        cpu.run(|| {
+            let info = skia_safe::ImageInfo::new(
+                (64, 64),
+                skia_safe::ColorType::RGBAF16,
+                skia_safe::AlphaType::Premul,
+                None,
+            );
+            // The ROI is tiny, but all of this snapshot's backing is pinned.
+            let image = PlanImage::new(
+                skia_safe::surfaces::raster(&info, None, None)
+                    .unwrap()
+                    .image_snapshot(),
+                valle_engine::prepare::DeviceRect::full(1, 1),
+            );
+            let mut cache = RasterLayerCache::new();
+            cache.set_byte_limit(bytes as usize - 1);
+            assert!(
+                cache
+                    .retain(large_raster_key(0), image.clone(), true)
+                    .is_none()
+            );
+            cache.set_byte_limit(bytes as usize);
+            assert!(
+                cache
+                    .retain(large_raster_key(0), image.clone(), true)
+                    .is_none()
+            );
+            let retained = cache
+                .retain(large_raster_key(0), image.clone(), true)
+                .unwrap();
+            assert_eq!(cache.counters().3, bytes as usize);
+            assert_eq!(budget.report().used_bytes, bytes);
+            cache.clear();
+            assert_eq!(cache.counters().3, 0);
+            assert_eq!(budget.report().used_bytes, bytes);
+            // Eviction cannot release storage still consumed by a pass in the current frame.
+            assert!(
+                cache
+                    .retain(large_raster_key(1), image.clone(), false)
+                    .is_none()
+            );
+            drop(retained);
+            assert_eq!(budget.report().used_bytes, 0);
+            assert!(cache.retain(large_raster_key(1), image, false).is_some());
+            cache.clear();
+            assert_eq!(budget.report().used_bytes, 0);
+        });
+    }
+
     fn large_raster_key(index: u32) -> RasterLayerKey {
         RasterLayerKey {
             program: ContentDigest::of_bytes(&index.to_le_bytes()),
@@ -525,6 +644,106 @@ mod tests {
             transform: [0; 9],
             roi: (0, 0, 1536, 1024),
         }
+    }
+
+    #[test]
+    fn a_cyclic_subtree_working_set_keeps_useful_entries_without_growing() {
+        let info = skia_safe::ImageInfo::new(
+            (16, 16),
+            skia_safe::ColorType::RGBAF16,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let image = PlanImage::new(
+            skia_safe::surfaces::raster(&info, None, None)
+                .unwrap()
+                .image_snapshot(),
+            valle_engine::prepare::DeviceRect::full(16, 16),
+        );
+        let mut cache = RasterLayerCache::new();
+        cache.set_byte_limit(2 * 16 * 16 * 8);
+        for frame in 0..8 {
+            cache.begin_frame();
+            let before = cache.counters().0;
+            for subtree in 0..6 {
+                let key = large_raster_key(subtree);
+                if cache.get(&key).is_none() && cache.prepare_local(&key, 16 * 16 * 8) {
+                    let _ = cache.retain(key, image.clone(), true);
+                }
+            }
+            assert!(cache.counters().3 <= 2 * 16 * 16 * 8);
+            if frame > 1 {
+                assert_eq!(cache.counters().0 - before, 2);
+            }
+        }
+        // Entries no longer read become replaceable after two runs, including random seeks.
+        cache.begin_frame();
+        cache.begin_frame();
+        cache.begin_frame();
+        let key = large_raster_key(10);
+        assert!(!cache.prepare_local(&key, 16 * 16 * 8));
+        assert!(cache.prepare_local(&key, 16 * 16 * 8));
+        assert!(cache.retain(key.clone(), image, true).is_some());
+        assert!(cache.get(&key).is_some());
+    }
+
+    #[test]
+    fn compact_cached_snapshots_preserve_hdr_and_transparent_f16_lanes() {
+        use skia_safe::{AlphaType, ColorType, IRect, ImageInfo, image::CachingHint};
+        let color = super::super::surface::working_color_space().unwrap();
+        let info = ImageInfo::new(
+            (128, 96),
+            ColorType::RGBAF16,
+            AlphaType::Premul,
+            Some(color.clone()),
+        );
+        let mut surface = skia_safe::surfaces::raster(&info, None, None).unwrap();
+        let pixels: Vec<u8> = (0..128 * 96)
+            .flat_map(|index| {
+                let lanes: [u16; 4] = if index % 7 == 0 {
+                    [0; 4]
+                } else {
+                    [0x4400, 0x0001, 0xb000, 0x3800]
+                };
+                lanes.into_iter().flat_map(u16::to_ne_bytes)
+            })
+            .collect();
+        assert!(
+            surface
+                .canvas()
+                .write_pixels(&info, &pixels, 128 * 8, (0, 0))
+        );
+        let compact_info =
+            ImageInfo::new((48, 40), ColorType::RGBAF16, AlphaType::Premul, Some(color));
+        let mut expected = vec![0; 48 * 40 * 8];
+        assert!(surface.read_pixels(&compact_info, &mut expected, 48 * 8, (0, 0)));
+        let snapshot = surface
+            .image_snapshot_with_bounds(IRect::from_wh(48, 40))
+            .unwrap();
+        let mut cache = RasterLayerCache::new();
+        let key = large_raster_key(5);
+        assert!(!cache.prepare_local(&key, expected.len()));
+        assert!(cache.prepare_local(&key, expected.len()));
+        let retained = cache
+            .retain(
+                key.clone(),
+                PlanImage::new(snapshot, valle_engine::prepare::DeviceRect::full(48, 40)),
+                true,
+            )
+            .unwrap();
+        surface.canvas().clear(skia_safe::Color::BLACK);
+        let image = cache.get(&key).unwrap();
+        cache.clear();
+        let mut actual = vec![0; expected.len()];
+        assert!(image.image().unwrap().read_pixels(
+            &compact_info,
+            &mut actual,
+            48 * 8,
+            (0, 0),
+            CachingHint::Disallow
+        ));
+        assert_eq!(actual, expected);
+        assert_eq!(retained.image().unwrap().dimensions(), (48, 40).into());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! change bounds, resource requirements, or pass topology; range-affecting bindings must supply
 //! their own range analysis before they can join this contract.
 
-use super::{DrawProgram, LinearColor, Paint, PaintId};
+use super::{DrawProgram, LinearColor, NodeId, Paint, PaintId, SubtreeDependencies};
 use sha2::{Digest, Sha256};
 use std::sync::{Arc, OnceLock};
 
@@ -21,6 +21,7 @@ pub struct PaintTemplate {
     slots: usize,
     encoding: OnceLock<Vec<u8>>,
     digest: OnceLock<[u8; 32]>,
+    dependencies: OnceLock<Vec<Arc<SubtreeDependencies>>>,
 }
 
 /// A frame owns only its exact working-color values; all geometry belongs to its template.
@@ -86,6 +87,7 @@ impl PaintTemplate {
             slots,
             encoding: OnceLock::new(),
             digest: OnceLock::new(),
+            dependencies: OnceLock::new(),
         })
     }
 
@@ -118,6 +120,14 @@ impl PaintTemplate {
 
     pub fn bindings(&self) -> &[PaintParameter] {
         &self.bindings
+    }
+
+    /// Derived once per immutable template; hot queries never walk static descendants.
+    pub fn subtree_dependencies(&self, node: NodeId) -> Option<&SubtreeDependencies> {
+        self.dependencies
+            .get_or_init(|| super::dependencies::derive(&self.program, &self.bindings))
+            .get(node.raw() as usize)
+            .map(Arc::as_ref)
     }
 
     pub fn bind_frame(
@@ -217,6 +227,34 @@ impl PaintFrame {
         &self.program
     }
 
+    /// Identity of an ordered set of complete, destination-independent subtrees. Only their
+    /// actual parameter reads participate. Resolved external-resource identities are not part
+    /// of this API, so such subtrees deliberately return None. Pixel caches must additionally
+    /// key the device transform, clipping, render specification and backend/context generation.
+    pub fn self_contained_subtree_digest(&self, roots: &[NodeId]) -> Option<[u8; 32]> {
+        let mut slots = std::collections::BTreeSet::new();
+        let mut hash = Sha256::new();
+        hash.update(b"valle.paint-subtree@1\0");
+        hash.update(self.template.digest().ok()?);
+        hash.update((roots.len() as u64).to_le_bytes());
+        for root in roots {
+            let dependencies = self.template.subtree_dependencies(*root)?;
+            if dependencies.reads_destination() || !dependencies.resources().is_empty() {
+                return None;
+            }
+            hash.update(root.raw().to_le_bytes());
+            slots.extend(dependencies.slots().iter().copied());
+        }
+        for slot in slots {
+            hash.update((slot as u64).to_le_bytes());
+            let color = self.values[slot];
+            for lane in [color.red, color.green, color.blue, color.alpha] {
+                hash.update(lane.to_le_bytes());
+            }
+        }
+        Some(hash.finalize().into())
+    }
+
     pub fn parameter_bytes(&self) -> Vec<u8> {
         self.values
             .iter()
@@ -297,6 +335,185 @@ mod tests {
     use super::*;
     use crate::{Rect, program::*};
     use std::sync::Arc;
+
+    #[test]
+    fn subtree_identity_tracks_exact_consumers_including_masks_and_shared_paints() {
+        let mut b = DrawProgramBuilder::new(Rect::new(0., 0., 64., 64.));
+        let paints: Vec<_> = (0..3)
+            .map(|index| {
+                b.push_paint(Paint::Solid(LinearColor::new(
+                    index as f32 / 4.,
+                    0.,
+                    0.,
+                    1.,
+                )))
+            })
+            .collect();
+        let path = b.push_path(PathData {
+            verbs: vec![
+                PathVerb::MoveTo,
+                PathVerb::LineTo,
+                PathVerb::LineTo,
+                PathVerb::Close,
+            ],
+            points: vec![[0., 0.], [64., 0.], [64., 64.]],
+        });
+        let leaves: Vec<_> = [0, 1, 2, 0]
+            .into_iter()
+            .map(|index| {
+                b.push_node(Node::Path(PathNode {
+                    path,
+                    fill_rule: FillRule::NonZero,
+                    fill: Some(paints[index]),
+                    stroke: None,
+                }))
+            })
+            .collect();
+        let mut masked = Group::plain(vec![leaves[0]]);
+        masked.mask = Some(Mask {
+            source: leaves[1],
+            mode: MaskMode::Alpha,
+        });
+        let masked = b.push_node(Node::Group(masked));
+        b.add_root(masked);
+        b.add_root(leaves[2]);
+        b.add_root(leaves[3]);
+        let template = Arc::new(
+            PaintTemplate::new(
+                b.finish().unwrap(),
+                vec![
+                    PaintParameter {
+                        paint: paints[0],
+                        slot: 0,
+                    },
+                    PaintParameter {
+                        paint: paints[1],
+                        slot: 1,
+                    },
+                ],
+                2,
+            )
+            .unwrap(),
+        );
+        let roots = template.program().roots();
+        assert_eq!(
+            template.subtree_dependencies(roots[0]).unwrap().slots(),
+            &[0, 1]
+        );
+        assert!(
+            template
+                .subtree_dependencies(roots[1])
+                .unwrap()
+                .slots()
+                .is_empty()
+        );
+        assert_eq!(
+            template.subtree_dependencies(roots[2]).unwrap().slots(),
+            &[0]
+        );
+        let values = [
+            LinearColor::new(0.2, 0., 0., 1.),
+            LinearColor::new(0.4, 0., 0., 1.),
+        ];
+        let baseline = template.bind_frame(values.to_vec()).unwrap();
+        for slot in 0..2 {
+            let mut changed = values;
+            // A one-ULP change is a distinct dependency, even when an 8-bit output is equal.
+            changed[slot].red = f32::from_bits(changed[slot].red.to_bits() + 1);
+            let frame = template.bind_frame(changed.to_vec()).unwrap();
+            assert_ne!(
+                baseline.self_contained_subtree_digest(&roots[..1]),
+                frame.self_contained_subtree_digest(&roots[..1])
+            );
+            assert_eq!(
+                baseline.self_contained_subtree_digest(&roots[1..2]),
+                frame.self_contained_subtree_digest(&roots[1..2])
+            );
+            assert_eq!(
+                baseline.self_contained_subtree_digest(&roots[2..])
+                    == frame.self_contained_subtree_digest(&roots[2..]),
+                slot == 1,
+            );
+        }
+        assert_ne!(
+            baseline.self_contained_subtree_digest(&[roots[0], roots[2]]),
+            baseline.self_contained_subtree_digest(&[roots[2], roots[0]])
+        );
+        assert!(
+            baseline
+                .self_contained_subtree_digest(&[NodeId::from_raw(u32::MAX)])
+                .is_none()
+        );
+        let cold = Arc::new(PaintTemplate::from_packed(template.packed().unwrap()).unwrap());
+        let cold = cold.bind_frame(values.to_vec()).unwrap();
+        for root in roots {
+            assert_eq!(
+                baseline.self_contained_subtree_digest(&[*root]),
+                cold.self_contained_subtree_digest(&[*root])
+            );
+        }
+    }
+
+    #[test]
+    fn resource_and_destination_reads_cannot_use_a_self_contained_cache_key() {
+        use crate::requirements::{
+            AlphaMode, ColorDomain, ExternalTexture, SamplingMode, TextureKind,
+        };
+        let mut b = DrawProgramBuilder::new(Rect::new(0., 0., 64., 64.));
+        let texture = ExternalTexture {
+            key: "test://image".into(),
+            kind: TextureKind::Image,
+            color_domain: ColorDomain::LinearRec2020,
+            alpha: AlphaMode::Premultiplied,
+            sample_time_micros: None,
+        };
+        let image = b.push_node(Node::Image(ImageNode {
+            texture: texture.clone(),
+            src: Rect::new(0., 0., 1., 1.),
+            dst: Rect::new(0., 0., 64., 64.),
+            sampling: SamplingMode::LinearClamp,
+            opacity: 1.,
+        }));
+        b.add_root(image);
+        let template = Arc::new(PaintTemplate::new(b.finish().unwrap(), vec![], 0).unwrap());
+        let root = template.program().roots()[0];
+        assert_eq!(
+            template.subtree_dependencies(root).unwrap().resources(),
+            &[SubtreeResource::Texture(texture)]
+        );
+        assert!(
+            template
+                .bind_frame(vec![])
+                .unwrap()
+                .self_contained_subtree_digest(&[root])
+                .is_none()
+        );
+
+        let source = program(LinearColor::new(0.5, 0., 0., 1.));
+        let mut b = DrawProgramBuilder::new(source.viewport());
+        b.push_path(source.paths()[0].clone());
+        b.push_paint(source.paints()[0].clone());
+        let leaf = b.push_node(source.nodes()[0].clone());
+        let mut group = Group::plain(vec![leaf]);
+        group.internal_blend = BlendMode::Multiply;
+        let root = b.push_node(Node::Group(group));
+        b.add_root(root);
+        let template = Arc::new(PaintTemplate::new(b.finish().unwrap(), vec![], 0).unwrap());
+        let root = template.program().roots()[0];
+        assert!(
+            template
+                .subtree_dependencies(root)
+                .unwrap()
+                .reads_destination()
+        );
+        assert!(
+            template
+                .bind_frame(vec![])
+                .unwrap()
+                .self_contained_subtree_digest(&[root])
+                .is_none()
+        );
+    }
 
     fn program(color: LinearColor) -> DrawProgram {
         let mut b = DrawProgramBuilder::new(Rect::new(0., 0., 64., 64.));

@@ -20,6 +20,36 @@ const { default: CanvasKitInit } = (await import("canvaskit-wasm")) as unknown a
 const wasmPath = Bun.resolveSync("canvaskit-wasm/bin/canvaskit.wasm", import.meta.dir);
 
 describe("long-lived CanvasKit executor caches", () => {
+  test("local raster retention charges actual pixels and pins survive eviction", async () => {
+    const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+    const executor = new CanvasKitExecutor(ck);
+    const surface = ck.MakeSurface(32, 32)!;
+    const image = surface.makeImageSnapshot();
+    const bytes = 32 * 32 * 8;
+    const value = { image, owned: true, roi: { x: 0, y: 0, width: 1, height: 1 } };
+    let transferred = false;
+    try {
+      executor.arena(null, 32, 32, BigInt(bytes), BigInt(bytes * 16)).endFrame();
+      expect(executor.retainRasterLayer("local", value, true)).toBe(false);
+      expect(executor.retainRasterLayer("local", value, true)).toBe(true);
+      transferred = true;
+      const pin = executor.pinRasterLayer("local")!;
+      expect(executor.rasterLayerBytes).toBe(bytes);
+      executor.trimWorkingMemory();
+      expect(image.isDeleted()).toBe(false);
+      expect(executor.rasterLayerBytes).toBe(bytes);
+      expect(executor.rasterLayer("local")).toBeNull();
+      pin.release();
+      expect(image.isDeleted()).toBe(true);
+      expect(executor.rasterLayerBytes).toBe(0);
+      pin.release();
+      expect(executor.rasterLayerBytes).toBe(0);
+    } finally {
+      if (!transferred) image.delete();
+      surface.delete();
+      executor.dispose();
+    }
+  });
   test("GPU retention follows the admitted frame budget and changes with its context", async () => {
     const ck = await CanvasKitInit({ locateFile: () => wasmPath });
     const executor = new CanvasKitExecutor(ck);

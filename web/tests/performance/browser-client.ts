@@ -191,7 +191,7 @@ async function run() {
   const result = await exportBrowserVideo(input, {
     width: job.width,
     height: job.height,
-    frameRate: 60,
+    frameRate: job.fps,
     includeAudio: false,
     videoBitrate: job.bitrate,
   });
@@ -203,7 +203,7 @@ async function run() {
     !result.blob ||
     result.width !== job.width ||
     result.height !== job.height ||
-    result.frameCount !== 600
+    result.frameCount !== job.frameCount
   )
     throw new Error("export schedule/dimensions drift");
   await post("export.mp4", result.blob);

@@ -1,17 +1,35 @@
 import { expect, test } from "bun:test";
-import { DRAW_PROGRAM_ABI, drawProgramPaint } from "./draw-program.ts";
-import { decodePaintTemplate, bindPaintParameters, paintDigest } from "./paint-template.ts";
+import { DRAW_PROGRAM_ABI, drawProgramPaint, type TaggedWire } from "./draw-program.ts";
+import {
+  decodePaintTemplate,
+  bindPaintParameters,
+  paintDigest,
+  subtreeParameterKey,
+} from "./paint-template.ts";
 import { encodeTestPaths } from "./path-arena.test-helper.ts";
 
-function fixture(): Uint8Array {
+function fixture(nodes: TaggedWire[] = []): Uint8Array {
   const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
   const sections = [
-    json([]),
-    json([]),
+    json(nodes.length === 0 ? [] : [nodes.length - 1]),
+    json(nodes),
     new Uint8Array(),
     new Uint8Array(),
     new Uint8Array(),
-    encodeTestPaths([]),
+    encodeTestPaths(
+      nodes.length === 0
+        ? []
+        : [
+            {
+              verbs: ["moveTo", "lineTo", "lineTo", "close"],
+              points: [
+                [0, 0],
+                [64, 0],
+                [64, 64],
+              ],
+            },
+          ],
+    ),
     json([
       { kind: "solid", value: { red: 0, green: 0, blue: 0, alpha: 0 } },
       { kind: "solid", value: { red: 0.5, green: 0, blue: 0, alpha: 1 } },
@@ -32,7 +50,13 @@ function fixture(): Uint8Array {
   for (const [index, bytes] of sections.entries()) {
     const at = DRAW_PROGRAM_ABI.headerBytes + index * DRAW_PROGRAM_ABI.sectionEntryBytes;
     view.setUint16(at, [1, 2, 7, 8, 9, 3, 4, 5, 6][index]!, true);
-    view.setUint32(at + 4, [0, 0, 0, 0, 0, 0, 2, 1, 1][index]!, true);
+    view.setUint32(
+      at + 4,
+      [nodes.length === 0 ? 0 : 1, nodes.length, 0, 0, 0, nodes.length === 0 ? 0 : 1, 2, 1, 1][
+        index
+      ]!,
+      true,
+    );
     view.setBigUint64(at + 8, BigInt(cursor), true);
     view.setBigUint64(at + 16, BigInt(bytes.length), true);
     draw.set(bytes, cursor);
@@ -57,6 +81,50 @@ async function frameDigest(template: Uint8Array, parameters: Uint8Array) {
   bytes.set(parameters, domain.length + 32);
   return paintDigest(bytes);
 }
+
+test("subtree keys read masks and strokes, ignore unrelated paint, and preserve admitted bits", async () => {
+  const nodes: TaggedWire[] = [
+    { kind: "path", value: { path: 0, fill: 0 } },
+    { kind: "path", value: { path: 0, fill: 1 } },
+    {
+      kind: "group",
+      value: { children: [1], mask: { source: 0, mode: "alpha" }, internalBlend: "normal" },
+    },
+    { kind: "path", value: { path: 0, fill: 1, stroke: { paint: 0, width: 1 } } },
+    { kind: "image", value: {} },
+    { kind: "group", value: { children: [1], internalBlend: "multiply" } },
+    { kind: "group", value: { children: [2, 3, 4, 5], internalBlend: "normal" } },
+  ];
+  const bytes = fixture(nodes);
+  const template = await decodePaintTemplate(bytes, await paintDigest(bytes));
+  const keys = [];
+  for (const red of [0, -0, 0.25, 0.25000003, 0]) {
+    const parameters = new Uint8Array(16);
+    const view = new DataView(parameters.buffer);
+    view.setFloat32(0, red, true);
+    view.setFloat32(12, 1, true);
+    const draw = await bindPaintParameters(
+      template,
+      parameters,
+      await frameDigest(bytes, parameters),
+    );
+    const row = nodes.map((_, index) => subtreeParameterKey(draw, [index]));
+    expect(row[4]).toBeNull();
+    expect(row[5]).toBeNull();
+    expect(row[6]).toBeNull();
+    expect(subtreeParameterKey(draw, [9999])).toBeNull();
+    expect(subtreeParameterKey(draw, [0, 1])).not.toBe(subtreeParameterKey(draw, [1, 0]));
+    // Mutating the caller's transport buffer cannot silently change a retained frame's key.
+    parameters.fill(0);
+    expect(subtreeParameterKey(draw, [0])).toBe(row[0]);
+    keys.push(row);
+  }
+  for (const row of keys.slice(1, 4)) {
+    expect(row[1]).toBe(keys[0]![1]);
+    for (const root of [0, 2, 3]) expect(row[root]).not.toBe(keys[0]![root]);
+  }
+  expect(keys[0]).toEqual(keys[4]);
+});
 
 test("paint frames preserve f32 bits, share geometry, and leave earlier frames immutable", async () => {
   const bytes = fixture();

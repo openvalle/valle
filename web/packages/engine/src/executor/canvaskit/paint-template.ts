@@ -15,6 +15,94 @@ export interface PaintTemplateWire {
   readonly bindings: ReadonlyArray<readonly [number, number]>;
 }
 
+const parameterFrames = new WeakMap<
+  DrawProgramWire,
+  { template: PaintTemplateWire; bytes: Uint8Array }
+>();
+const dependencyIndices = new WeakMap<
+  PaintTemplateWire,
+  {
+    nodes: Map<number, readonly number[] | null>;
+    paints: Map<number, number>;
+  }
+>();
+
+/** Exact paint reads of destination-independent, resource-free subtrees. Geometry and static
+ * colors are already identified by the admitted template digest. Unknown node classes fail
+ * closed; image/font/shader/scene resources need resolved host identities before admission. */
+export function subtreeParameterKey(
+  draw: DrawProgramWire,
+  roots: readonly number[],
+): string | null {
+  const frame = parameterFrames.get(draw);
+  if (!frame) return null;
+  let index = dependencyIndices.get(frame.template);
+  if (!index) {
+    index = { nodes: new Map(), paints: new Map(frame.template.bindings) };
+    dependencyIndices.set(frame.template, index);
+  }
+  const { nodes: memo, paints } = index;
+  const visit = (id: number, depth = 0): readonly number[] | null => {
+    if (memo.has(id)) return memo.get(id)!;
+    if (depth > 128 || !Number.isSafeInteger(id) || id < 0) return null;
+    const node = frame.template.draw.nodes[id];
+    if (!node) return null;
+    const value = node.value as Record<string, any>;
+    const slots = new Set<number>();
+    const paint = (id: number | null | undefined) => {
+      if (id == null) return;
+      const slot = paints.get(id);
+      if (slot !== undefined) slots.add(slot);
+    };
+    // Install a sentinel before descent: forged cyclic node graphs cannot recurse forever.
+    memo.set(id, null);
+    switch (node.kind) {
+      case "path":
+        paint(value.fill);
+        paint(value.stroke?.paint);
+        break;
+      case "group": {
+        if (
+          value.backdrop != null ||
+          value.internalBlend !== "normal" ||
+          value.shader != null ||
+          value.transition?.kernel?.kind === "shader"
+        )
+          return null;
+        const children = [...value.children];
+        if (value.mask != null) children.push(value.mask.source);
+        for (const child of children) {
+          const dependencies = visit(child, depth + 1);
+          if (dependencies === null) return null;
+          for (const slot of dependencies) slots.add(slot);
+        }
+        break;
+      }
+      case "instanceBatch":
+        if (value.shape?.kind === "image") return null;
+        break;
+      case "shadow":
+        break;
+      default:
+        return null;
+    }
+    const result = [...slots].sort((a, b) => a - b);
+    memo.set(id, result);
+    return result;
+  };
+  const slots = new Set<number>();
+  for (const root of roots) {
+    const dependencies = visit(root);
+    if (dependencies === null) return null;
+    for (const slot of dependencies) slots.add(slot);
+  }
+  const view = new DataView(frame.bytes.buffer, frame.bytes.byteOffset, frame.bytes.byteLength);
+  const parameters = [...slots]
+    .sort((a, b) => a - b)
+    .map((slot) => [slot, ...[0, 4, 8, 12].map((lane) => view.getUint32(slot * 16 + lane, true))]);
+  return JSON.stringify(["paint-subtree@1", [...frame.template.digest], roots, parameters]);
+}
+
 export async function paintDigest(bytes: Uint8Array): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array(bytes)));
   return `sha256:${Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
@@ -104,5 +192,8 @@ export async function bindPaintParameters(
   if ((await paintDigest(identity)) !== expected) fail();
   const paintOverrides = new Map<number, TaggedWire>();
   for (const [paint, slot] of template.bindings) paintOverrides.set(paint, colors[slot]!);
-  return { ...template.draw, paintOverrides };
+  const draw = { ...template.draw, paintOverrides };
+  // Own the admitted bits: transport buffers may be reused after this function returns.
+  parameterFrames.set(draw, { template, bytes: bytes.slice() });
+  return draw;
 }

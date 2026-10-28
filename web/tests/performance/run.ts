@@ -27,6 +27,7 @@ type Case = {
   regions: Region[];
   order?: boolean;
   motionKernel?: boolean;
+  durationS?: number;
   temporal?: {
     rule: TemporalRule;
     tracks: (Region & { dx: number; dy: number })[];
@@ -996,7 +997,7 @@ async function orderCase(c: Case, backend: string) {
   );
 }
 
-function validateVideo(file: string, backend: string) {
+function validateVideo(file: string, backend: string, durationS: number) {
   const streams = JSON.parse(
     runSync([
       "ffprobe",
@@ -1017,9 +1018,9 @@ function validateVideo(file: string, backend: string) {
     (codec === "hevc" && value.codec_tag_string !== "hvc1") ||
     value.width !== performance.width ||
     value.height !== performance.height ||
-    Number(value.nb_read_frames) !== 600 ||
-    value.avg_frame_rate !== "60/1" ||
-    Math.abs(Number(value.duration) - 10) > 1 / 60
+    Number(value.nb_read_frames) !== Math.round(durationS * performance.fps) ||
+    value.avg_frame_rate !== `${performance.fps}/1` ||
+    Math.abs(Number(value.duration) - durationS) > 1 / performance.fps
   )
     throw new Error(`video metadata drift: ${file} ${JSON.stringify(value)}`);
   const audio = streams.filter((s: any) => s.codec_type === "audio");
@@ -1037,6 +1038,7 @@ function validateVideo(file: string, backend: string) {
 }
 
 async function benchCase(c: Case, backend: string, round: number, trace: boolean) {
+  const durationS = c.durationS ?? performance.durationS;
   const folder = path.join(output, "bench", backend, c.id, trace ? "trace" : `round-${round}`);
   let result: any;
   if (backend.startsWith("native")) {
@@ -1048,7 +1050,7 @@ async function benchCase(c: Case, backend: string, round: number, trace: boolean
         "-o",
         video,
         "--fps",
-        "60",
+        String(performance.fps),
         "--output-size",
         `${performance.width}x${performance.height}`,
         "--threads",
@@ -1070,12 +1072,14 @@ async function benchCase(c: Case, backend: string, round: number, trace: boolean
         width: performance.width,
         height: performance.height,
         bitrate: performance.bitrate,
+        fps: performance.fps,
+        frameCount: Math.round(durationS * performance.fps),
         trace,
       },
       folder,
     );
   }
-  const video = validateVideo(path.join(folder, "export.mp4"), backend);
+  const video = validateVideo(path.join(folder, "export.mp4"), backend, durationS);
   const stages: Record<string, number> = {};
   if (result.trace)
     for (const event of result.trace.traceEvents)
@@ -1087,8 +1091,8 @@ async function benchCase(c: Case, backend: string, round: number, trace: boolean
     round,
     trace,
     wallMs: result.wallMs,
-    fps: 600000 / result.wallMs,
-    rtf: 10000 / result.wallMs,
+    fps: (Math.round(durationS * performance.fps) * 1000) / result.wallMs,
+    rtf: (durationS * 1000) / result.wallMs,
     peakFootprintBytes: result.peakFootprintBytes ?? null,
     peakRssBytes: result.peakRssBytes ?? null,
     peakProcessTreeRssBytes: result.peakProcessTreeRssBytes ?? null,

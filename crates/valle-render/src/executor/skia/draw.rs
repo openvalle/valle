@@ -42,7 +42,7 @@ use valle_engine::{
 use super::{
     SkiaExternalObject,
     blend::BlendRuntime,
-    cache::{BackendCaches, SmallOpacityCache},
+    cache::{BackendCaches, RasterLayerCache, RasterLayerKey, SmallOpacityCache},
     clip_coverage,
     effect::{draw_filters_into, set_working_color, straight_color},
     gradient_fill,
@@ -470,6 +470,8 @@ impl ProgramRuntime {
         surfaces: &mut ScratchSurfaces<'_, '_>,
         terminal: ProgramTerminal,
         helper_index: Option<usize>,
+        raster_cache: &mut RasterLayerCache,
+        render_spec: ContentDigest,
     ) -> Result<PlanImage, DrawError> {
         if schedule.passes().len() != plan.local_plan().passes().len() {
             return Err(DrawError::Internal(
@@ -508,6 +510,8 @@ impl ProgramRuntime {
             .collect::<BTreeMap<_, _>>();
         let read_outside = read_outside_roi(plan, schedule);
         let mut resources = BTreeMap::<ProgramResourceId, Option<ProgramImage>>::new();
+        // Keep shared retention charges alive even if a later pass evicts the same cache entry.
+        let mut retained_images = BTreeMap::<ProgramResourceId, PlanImage>::new();
         let terminal_origin = match terminal {
             ProgramTerminal::Plan { roi, .. } => {
                 if roi != output_roi {
@@ -539,7 +543,12 @@ impl ProgramRuntime {
                         .cloned()
                         .ok_or(DrawError::MissingDestination(destination.get()))?,
                 ),
-                ProgramStorageKind::Alias { source } => resource(&resources, source)?.cloned(),
+                ProgramStorageKind::Alias { source } => {
+                    if let Some(retained) = retained_images.get(&source).cloned() {
+                        retained_images.insert(output, retained);
+                    }
+                    resource(&resources, source)?.cloned()
+                }
                 ProgramStorageKind::Surface { slot } => {
                     let roi = step.device_roi();
                     if roi.is_empty() {
@@ -548,22 +557,60 @@ impl ProgramRuntime {
                         let index = *local_slots
                             .get(&slot)
                             .ok_or(DrawError::MissingProgramSurface(slot.get()))?;
-                        let image = self.render_program_pass_at(
-                            surfaces,
-                            ProgramTerminal::Scratch(index),
-                            helper_index,
-                            plan,
-                            &pass.kind,
-                            output,
-                            transform,
-                            &destinations,
-                            &resources,
-                            extent,
-                            info,
-                            [roi.x, roi.y],
-                            roi,
-                            read_outside.contains(&output),
-                        )?;
+                        let key = if read_outside.contains(&output) {
+                            None
+                        } else {
+                            self.local_raster_key(
+                                plan,
+                                &pass.kind,
+                                output,
+                                transform,
+                                roi,
+                                render_spec,
+                            )?
+                        };
+                        let cached = key.as_ref().and_then(|key| raster_cache.get(key));
+                        let image = if let Some(cached) = cached {
+                            let image = cached.image().expect("cached raster image").clone();
+                            retained_images.insert(output, cached);
+                            image
+                        } else {
+                            let retain = key.as_ref().is_some_and(|key| {
+                                raster_cache.prepare_local(
+                                    key,
+                                    usize::try_from(roi.pixels().saturating_mul(8))
+                                        .unwrap_or(usize::MAX),
+                                )
+                            });
+                            let image = self.render_program_pass_at(
+                                surfaces,
+                                ProgramTerminal::Scratch(index),
+                                helper_index,
+                                plan,
+                                &pass.kind,
+                                output,
+                                transform,
+                                &destinations,
+                                &resources,
+                                extent,
+                                info,
+                                [roi.x, roi.y],
+                                roi,
+                                read_outside.contains(&output),
+                                retain,
+                            )?;
+                            if retain
+                                && let Some(key) = key
+                                && let Some(retained) = raster_cache.retain(
+                                    key,
+                                    PlanImage::new(image.clone(), roi),
+                                    true,
+                                )
+                            {
+                                retained_images.insert(output, retained);
+                            }
+                            image
+                        };
                         Some(ProgramImage { image, roi })
                     }
                 }
@@ -585,6 +632,7 @@ impl ProgramRuntime {
                         roi,
                         // A scratch terminal is read as a whole root image.
                         true,
+                        false,
                     )?;
                     Some(ProgramImage {
                         image,
@@ -597,6 +645,7 @@ impl ProgramRuntime {
             }
             for resource in step.retire_after() {
                 resources.remove(resource);
+                retained_images.remove(resource);
             }
             if let Some(started) = started {
                 let name = match &pass.kind {
@@ -634,7 +683,48 @@ impl ProgramRuntime {
         Ok(match terminal {
             ProgramTerminal::Plan { roi, .. } => PlanImage::new(image.image, roi),
             ProgramTerminal::Scratch(_) => PlanImage::root(image.image, extent),
-        })
+        }
+        .inherit_retention(retained_images.get(&plan.local_plan().output())))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn local_raster_key(
+        &self,
+        plan: &PlanProgram,
+        pass: &ProgramPassKind,
+        output: ProgramResourceId,
+        transform: DeviceTransform,
+        roi: DeviceRect,
+        render_spec: ContentDigest,
+    ) -> Result<Option<RasterLayerKey>, DrawError> {
+        let Some(frame) = plan.paint_frame() else {
+            return Ok(None);
+        };
+        let (roots, kind) = match pass {
+            ProgramPassKind::RasterTree { roots, .. } => {
+                (roots.as_slice(), b"local-raster-tree@1".as_slice())
+            }
+            ProgramPassKind::RasterNode { node, .. } => (
+                std::slice::from_ref(node),
+                b"local-raster-node@1".as_slice(),
+            ),
+            _ => return Ok(None),
+        };
+        if roi.pixels() < 1024 {
+            return Ok(None);
+        }
+        let Some(digest) = frame.self_contained_subtree_digest(roots) else {
+            return Ok(None);
+        };
+        Ok(Some(RasterLayerKey {
+            program: ContentDigest::from_bytes(digest),
+            frame: ContentDigest::of_bytes(kind),
+            render_spec,
+            transform: self
+                .device_matrix_values(plan, output, transform)?
+                .map(f64::to_bits),
+            roi: (roi.x, roi.y, roi.width, roi.height),
+        }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -654,6 +744,7 @@ impl ProgramRuntime {
         target_origin: [i32; 2],
         output_roi: DeviceRect,
         clear_outside: bool,
+        compact_snapshot: bool,
     ) -> Result<Image, DrawError> {
         if let ProgramPassKind::Backdrop {
             input,
@@ -695,7 +786,7 @@ impl ProgramRuntime {
                 self.program.paths(),
                 target_origin,
             )?;
-            return snapshot_program_target(target, target_location, output_roi);
+            return snapshot_program_target(target, target_location, output_roi, compact_snapshot);
         }
 
         // Shared F16 filters consume CPU bytes. Ganesh images need their GPU context
@@ -760,7 +851,7 @@ impl ProgramRuntime {
             target.canvas().restore_to_count(count);
         }
         rendered?;
-        snapshot_program_target(target, target_location, output_roi)
+        snapshot_program_target(target, target_location, output_roi, compact_snapshot)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2579,9 +2670,12 @@ fn snapshot_program_target(
     target: &mut Surface,
     location: ProgramTerminal,
     roi: DeviceRect,
+    compact: bool,
 ) -> Result<Image, DrawError> {
     match location {
-        ProgramTerminal::Plan { .. } => {
+        ProgramTerminal::Plan { .. } | ProgramTerminal::Scratch(_)
+            if compact || matches!(location, ProgramTerminal::Plan { .. }) =>
+        {
             let width = i32::try_from(roi.width)
                 .map_err(|_| DrawError::Internal("program ROI width overflow".into()))?;
             let height = i32::try_from(roi.height)
@@ -2590,7 +2684,7 @@ fn snapshot_program_target(
                 .image_snapshot_with_bounds(IRect::from_xywh(0, 0, width, height))
                 .ok_or_else(|| DrawError::Internal("program target snapshot failed".into()))
         }
-        ProgramTerminal::Scratch(_) => Ok(target.image_snapshot()),
+        _ => Ok(target.image_snapshot()),
     }
 }
 

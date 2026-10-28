@@ -231,6 +231,11 @@ impl PlanImage {
         self.image.as_ref()
     }
 
+    pub(crate) fn inherit_retention(mut self, source: Option<&Self>) -> Self {
+        self.retention = source.and_then(|source| source.retention.clone());
+        self
+    }
+
     /// Retaining a snapshot can trigger copy-on-write on its original surface. Charge that
     /// independent storage before caching, and keep the lease on every returned image clone.
     pub(crate) fn admit_retention(&mut self, bytes: u64) -> bool {
