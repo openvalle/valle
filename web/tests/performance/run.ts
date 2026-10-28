@@ -11,6 +11,7 @@ import {
   waitForUnexpectedBrowserExit,
 } from "../parity/lib/browser.ts";
 import { compareFrames, crop, type PixelRule, type Region } from "./pixels.ts";
+import { compareSequence, type TemporalFrame, type TemporalRule } from "./temporal.ts";
 import { median, option, ROOT, sha256 } from "../../scripts/motion/common.ts";
 
 const BASE = import.meta.dir;
@@ -26,6 +27,10 @@ type Case = {
   regions: Region[];
   order?: boolean;
   motionKernel?: boolean;
+  temporal?: {
+    rule: TemporalRule;
+    tracks: (Region & { dx: number; dy: number })[];
+  };
 };
 const suite = (await Bun.file(path.join(BASE, "suite.json")).json()) as {
   qa: {
@@ -36,6 +41,7 @@ const suite = (await Bun.file(path.join(BASE, "suite.json")).json()) as {
     threadAllowances: number[];
     resourceCacheBytes: number;
     backendRules: Record<string, Partial<PixelRule>>;
+    continuousFrames?: number;
   };
   order: { frames: number; stride: number };
   performance: {
@@ -55,7 +61,7 @@ const suite = (await Bun.file(path.join(BASE, "suite.json")).json()) as {
 const args = Bun.argv.slice(2);
 if (args.includes("--help")) {
   console.log(
-    "bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|order|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--qa-4k --golden-dir DIR] [--browser-timeout-ms 300000] [--cpu-output-f32] [--codec h264|hevc] [--cli BINARY --fixed-runner BINARY --web-assets-dir DIR] [--compare BASELINE/run.json] [--update-golden]",
+    "bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|order|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--qa-4k --golden-dir DIR] [--continuous-frames 24 --golden-dir DIR] [--browser-timeout-ms 300000] [--cpu-output-f32] [--codec h264|hevc] [--cli BINARY --fixed-runner BINARY --web-assets-dir DIR] [--compare BASELINE/run.json] [--update-golden]",
   );
   process.exit(0);
 }
@@ -97,6 +103,19 @@ if (await Bun.file(path.join(output, "run.json")).exists())
   throw new Error("result directory already used");
 await mkdir(output, { recursive: true });
 const goldenDir = path.resolve(option(args, "--golden-dir", path.join(BASE, "golden")));
+if (args.includes("--continuous-frames")) {
+  const count = Number(option(args, "--continuous-frames"));
+  if (!Number.isSafeInteger(count) || count < 2 || count > 128)
+    throw new Error("continuous frames must be 2..128");
+  if (goldenDir === path.join(BASE, "golden"))
+    throw new Error("continuous QA requires a separate --golden-dir");
+  for (const c of cases)
+    if (!c.temporal || count < c.temporal.rule.windowFrames + c.temporal.rule.minimumWindowRun - 1)
+      throw new Error(`missing temporal contract or insufficient frames: ${c.id}`);
+  suite.qa.continuousFrames = count;
+  suite.qa.frames = Array.from({ length: count }, (_, i) => i);
+  suite.qa.order = [...suite.qa.frames, ...suite.qa.frames.toReversed()];
+}
 if (args.includes("--qa-4k")) {
   if (goldenDir === path.join(BASE, "golden"))
     throw new Error(
@@ -106,7 +125,7 @@ if (args.includes("--qa-4k")) {
   const scaleY = suite.performance.target.height / suite.qa.height;
   suite.qa.width = suite.performance.target.width;
   suite.qa.height = suite.performance.target.height;
-  for (const c of cases)
+  for (const c of cases) {
     c.regions = c.regions.map((region) => ({
       ...region,
       x: region.x * scaleX,
@@ -114,7 +133,34 @@ if (args.includes("--qa-4k")) {
       width: region.width * scaleX,
       height: region.height * scaleY,
     }));
+    if (c.temporal)
+      c.temporal.tracks = c.temporal.tracks.map((track) => ({
+        ...track,
+        x: track.x * scaleX,
+        y: track.y * scaleY,
+        width: track.width * scaleX,
+        height: track.height * scaleY,
+        dx: track.dx * scaleX,
+        dy: track.dy * scaleY,
+      }));
+  }
 }
+const temporalContract = (c: Case) =>
+  suite.qa.continuousFrames && c.temporal
+    ? {
+        rule: c.temporal.rule,
+        tracks: c.temporal.tracks.map(({ name, width, height, x, y, dx, dy }) => ({
+          name,
+          width,
+          height,
+          positions: suite.qa.frames.map((frame) => ({
+            frame,
+            x: x + frame * dx,
+            y: y + frame * dy,
+          })),
+        })),
+      }
+    : undefined;
 const assetArgs = (c: Case) =>
   Object.entries(c.assets).flatMap(([id, file]) => ["--asset", `${id}=${path.join(ROOT, file)}`]);
 const source = (c: Case) => path.join(BASE, c.source);
@@ -649,6 +695,7 @@ async function qaCase(c: Case, backend: string, golden: any) {
   if (
     JSON.stringify(saved.rule) !== JSON.stringify(c.rule) ||
     JSON.stringify(saved.repeatRule) !== JSON.stringify(c.repeatRule) ||
+    JSON.stringify(saved.temporal) !== JSON.stringify(temporalContract(c)) ||
     JSON.stringify(saved.backendRules ?? {}) !== JSON.stringify(c.backendRules ?? {})
   )
     throw new Error(`registered pixel tolerance changed: ${c.id}`);
@@ -657,10 +704,29 @@ async function qaCase(c: Case, backend: string, golden: any) {
     throw new Error(`golden pixels changed: ${c.id}`);
   const rows: any[] = [];
   const cold = new Map<number, ReturnType<typeof crop>>();
-  const compare = async (actual: ReturnType<typeof crop>, frame: number, label: string) => {
+  const temporal = temporalContract(c);
+  const sequences = new Map<string, TemporalFrame[]>();
+  const compare = async (
+    actual: ReturnType<typeof crop>,
+    frame: number,
+    label: string,
+    session: string,
+    sequence: number,
+  ) => {
     const index = frames.indexOf(frame);
     if (index < 0) throw new Error("unexpected frame key");
-    const expected = crop(references, index * width, 0, width, height);
+    const columns = Math.min(4, frames.length);
+    const expected = crop(
+      references,
+      (index % columns) * width,
+      Math.floor(index / columns) * height,
+      width,
+      height,
+    );
+    if (temporal && sequence < suite.qa.continuousFrames!) {
+      if (!sequences.has(session)) sequences.set(session, []);
+      sequences.get(session)!.push({ frame, reference: expected, actual });
+    }
     const result = compareFrames(expected, actual, rule);
     const regions = c.regions.map((r) => {
       const { diff: _diff, ...m } = compareFrames(expected, actual, rule, r);
@@ -713,6 +779,8 @@ async function qaCase(c: Case, backend: string, golden: any) {
           crop(image, (i % columns) * width, Math.floor(i / columns) * height, width, height),
           frame,
           `n${threads}-${i}`,
+          `n${threads}`,
+          i,
         );
     }
   } else {
@@ -737,12 +805,28 @@ async function qaCase(c: Case, backend: string, golden: any) {
           await readPng(path.join(folder, entry.name)),
           entry.frame,
           entry.name.replace(/\.png$/, ""),
+          entry.bypass ? "bypass" : "warm",
+          entry.sequence,
         );
   }
-  const pass = rows.every((r) => r.pass && (!r.repeat || r.repeat.pass));
+  const temporalResults = temporal
+    ? [...sequences].map(([session, captured]) => {
+        if (captured.length !== suite.qa.continuousFrames)
+          throw new Error(`incomplete continuous capture: ${session}`);
+        return { session, ...compareSequence(captured, temporal.rule, temporal.tracks) };
+      })
+    : [];
+  if (
+    temporal &&
+    temporalResults.length !== (backend.startsWith("native") ? suite.qa.threadAllowances.length : 2)
+  )
+    throw new Error("missing continuous capture sessions");
+  const pass =
+    rows.every((r) => r.pass && (!r.repeat || r.repeat.pass)) &&
+    temporalResults.every((r) => r.pass);
   await writeFile(
     path.join(folder, "pixels.json"),
-    JSON.stringify({ pass, rule, repeatRule: c.repeatRule, rows }, null, 2),
+    JSON.stringify({ pass, rule, repeatRule: c.repeatRule, temporalResults, rows }, null, 2),
   );
   report.qa.push({
     case: c.id,
@@ -752,6 +836,8 @@ async function qaCase(c: Case, backend: string, golden: any) {
     // Same-backend optimization comparisons must not inherit looser cross-backend RGB
     // exceptions (for example, particles). Only the registered geometric edge allowance applies.
     optimizationRule: { ...c.rule, edge: suite.qa.backendRules[backend]?.edge ?? 0 },
+    temporal,
+    temporalPass: temporal ? temporalResults.every((r) => r.pass) : null,
     comparisons: rows.length,
     maxRgb: Math.max(...rows.map((r) => r.rgbMax)),
     maxAlpha: Math.max(...rows.map((r) => r.alphaMax)),
@@ -1081,6 +1167,7 @@ try {
         rule: c.rule,
         repeatRule: c.repeatRule,
         backendRules: c.backendRules ?? {},
+        temporal: temporalContract(c),
         generatedAt: new Date().toISOString(),
         generator: {
           gitHead: report.identities.gitHead,

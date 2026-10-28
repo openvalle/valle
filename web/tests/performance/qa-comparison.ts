@@ -1,9 +1,20 @@
 import type { PixelRule } from "./pixels.ts";
+import type { MotionTrack, TemporalRule } from "./temporal.ts";
+
+export interface TemporalContract {
+  rule: TemporalRule;
+  tracks: MotionTrack[];
+}
 
 interface Run {
   settings: { qa: unknown };
   identities: { cases: Record<string, unknown> };
-  qa: { case: string; backend: string; optimizationRule?: PixelRule }[];
+  qa: {
+    case: string;
+    backend: string;
+    optimizationRule?: PixelRule;
+    temporal?: TemporalContract;
+  }[];
 }
 
 /** Fail closed before reading pixels: missing captures and a changed tolerance are not a pass. */
@@ -33,10 +44,15 @@ export function comparisonCases(before: Run, after: Run, rules: "exact" | "regis
         JSON.stringify(previous.optimizationRule) !== JSON.stringify(current.optimizationRule))
     )
       throw new Error(`optimization tolerance missing or changed: ${c}/${backend}`);
+    if (JSON.stringify(previous.temporal) !== JSON.stringify(current.temporal))
+      throw new Error(`temporal tolerance or trajectory changed: ${c}/${backend}`);
+    if ((after.settings.qa as { continuousFrames?: number }).continuousFrames && !current.temporal)
+      throw new Error(`continuous capture is missing a temporal contract: ${c}/${backend}`);
     return {
       case: c,
       backend,
       rule: rules === "exact" ? { rgb: 0, alpha: 0 } : current.optimizationRule!,
+      temporal: current.temporal,
     };
   });
 }

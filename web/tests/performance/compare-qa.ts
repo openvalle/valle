@@ -5,6 +5,7 @@ import { option } from "../../scripts/motion/common.ts";
 import { readPng } from "../parity/lib/png.ts";
 import { compareFrames, crop, type PixelRule } from "./pixels.ts";
 import { comparisonCases } from "./qa-comparison.ts";
+import { compareSequence, type TemporalFrame } from "./temporal.ts";
 
 const args = Bun.argv.slice(2);
 if (args.includes("--help")) {
@@ -32,6 +33,7 @@ const report: any = {
   scope:
     "same backend and captured request: premultiplied RGB, alpha and black/white composition; repeat and cross-backend gates remain independent",
   rows: [],
+  temporal: [],
 };
 await mkdir(output, { recursive: true });
 const save = () => writeFile(path.join(output, "run.json"), JSON.stringify(report, null, 2) + "\n");
@@ -76,10 +78,25 @@ async function compare(
 }
 
 try {
-  for (const { case: c, backend, rule } of comparisonCases(before, after, rules)) {
+  for (const { case: c, backend, rule, temporal } of comparisonCases(before, after, rules)) {
     const beforeFolder = path.join(beforeDir, "qa", backend, c);
     const afterFolder = path.join(afterDir, "qa", backend, c);
     const start = report.rows.length;
+    const continuous = new Map<string, TemporalFrame[]>();
+    const capture = async (
+      reference: TemporalFrame["reference"],
+      actual: TemporalFrame["actual"],
+      session: string,
+      sequence: number,
+      frame: number,
+      label: string,
+    ) => {
+      await compare(reference, actual, c, backend, label, frame, rule);
+      if (temporal && sequence < qa.continuousFrames) {
+        if (!continuous.has(session)) continuous.set(session, []);
+        continuous.get(session)!.push({ frame, reference, actual });
+      }
+    };
     if (backend.startsWith("native")) {
       for (const threads of qa.threadAllowances) {
         const reference = await readPng(path.join(beforeFolder, `threads-${threads}`, "sheet.png"));
@@ -88,14 +105,13 @@ try {
         for (const [sequence, frame] of qa.order.entries()) {
           const x = (sequence % columns) * qa.width,
             y = Math.floor(sequence / columns) * qa.height;
-          await compare(
+          await capture(
             crop(reference, x, y, qa.width, qa.height),
             crop(actual, x, y, qa.width, qa.height),
-            c,
-            backend,
-            `n${threads}-${sequence}`,
+            `n${threads}`,
+            sequence,
             frame,
-            rule,
+            `n${threads}-${sequence}`,
           );
         }
       }
@@ -103,16 +119,29 @@ try {
       for (const session of ["warm", "bypass"])
         for (const [sequence, frame] of qa.order.entries()) {
           const label = `${session}-${sequence}-${frame}`;
-          await compare(
+          await capture(
             await readPng(path.join(beforeFolder, `${label}.png`)),
             await readPng(path.join(afterFolder, `${label}.png`)),
-            c,
-            backend,
-            label,
+            session,
+            sequence,
             frame,
-            rule,
+            label,
           );
         }
+    }
+    if (temporal) {
+      if (continuous.size !== (backend.startsWith("native") ? qa.threadAllowances.length : 2))
+        throw new Error("missing continuous comparison sessions");
+      for (const [session, frames] of continuous) {
+        if (frames.length !== qa.continuousFrames)
+          throw new Error(`incomplete continuous comparison: ${session}`);
+        report.temporal.push({
+          case: c,
+          backend,
+          session,
+          ...compareSequence(frames, temporal.rule, temporal.tracks),
+        });
+      }
     }
     const rows = report.rows.slice(start);
     console.log(
@@ -120,7 +149,10 @@ try {
     );
     await save();
   }
-  report.status = report.rows.every((row: any) => row.pass) ? "passed" : "failed";
+  report.status =
+    report.rows.every((row: any) => row.pass) && report.temporal.every((row: any) => row.pass)
+      ? "passed"
+      : "failed";
   report.comparisons = report.rows.length;
 } catch (error) {
   report.status = "failed";

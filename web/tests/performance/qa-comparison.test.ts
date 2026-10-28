@@ -70,3 +70,40 @@ test("registered comparison still rejects lost detail, wrong frames and wrong co
   for (const actual of [row([16, 16, 16]), row([255, 16, 16]), row([16, 128, 16])])
     expect(compareFrames(reference, actual, rule).pass).toBe(false);
 });
+
+test("continuous acceptance requires the same registered temporal thresholds and trajectory", () => {
+  const make = () => ({
+    ...run(),
+    settings: { qa: { continuousFrames: 8 } },
+    qa: [
+      {
+        ...run().qa[0]!,
+        temporal: {
+          rule: {
+            windowFrames: 4,
+            rgbRange: 2,
+            alphaRange: 2,
+            minimumPixels: 1,
+            minimumWindowRun: 2,
+          },
+          tracks: [{ name: "moving", width: 1, height: 1, positions: [{ frame: 0, x: 1, y: 0 }] }],
+        },
+      },
+    ],
+  });
+  expect(comparisonCases(make(), make(), "registered")).toHaveLength(1);
+  for (const change of [
+    (r: ReturnType<typeof make>) => {
+      r.qa[0]!.temporal.rule.rgbRange = 4;
+    },
+    (r: ReturnType<typeof make>) => {
+      r.qa[0]!.temporal.tracks[0]!.positions[0]!.x = 2;
+    },
+  ]) {
+    const after = make();
+    change(after);
+    expect(() => comparisonCases(make(), after, "registered")).toThrow();
+  }
+  const missing = { ...make(), qa: run().qa };
+  expect(() => comparisonCases(missing, missing, "registered")).toThrow();
+});

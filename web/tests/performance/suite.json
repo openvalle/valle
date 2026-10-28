@@ -585,7 +585,17 @@
       },
       "regions": [],
       "order": true,
-      "motionKernel": true
+      "motionKernel": true,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": []
+      }
     },
     {
       "id": "opacity-guards",
@@ -602,7 +612,75 @@
       },
       "regions": [],
       "order": true,
-      "motionKernel": true
+      "motionKernel": true,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": []
+      }
+    },
+    {
+      "id": "quality-detail",
+      "source": "fixtures/quality-detail.motion.tsx",
+      "group": "regular",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [
+        {
+          "name": "small-text",
+          "x": 10,
+          "y": 82,
+          "width": 200,
+          "height": 18
+        },
+        {
+          "name": "dark-gradient",
+          "x": 12,
+          "y": 108,
+          "width": 288,
+          "height": 24
+        },
+        {
+          "name": "high-frequency",
+          "x": 12,
+          "y": 146,
+          "width": 64,
+          "height": 16
+        }
+      ],
+      "order": true,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": [
+          {
+            "name": "moving-lines",
+            "x": 8,
+            "y": 16,
+            "width": 64,
+            "height": 52,
+            "dx": 1,
+            "dy": 0
+          }
+        ]
+      }
     }
   ]
 }
