@@ -49,7 +49,7 @@ pub(crate) struct RasterLayerKey {
 
 pub(crate) struct RasterLayerCache {
     images: BoundedCache<RasterLayerKey, PlanImage>,
-    observed_large: BoundedCache<RasterLayerKey, ()>,
+    observed_large: BoundedCache<RasterLayerKey, u8>,
     hits: u64,
     misses: u64,
     frame_start: u64,
@@ -121,9 +121,12 @@ impl RasterLayerCache {
         if bytes > self.images.maximum_weight || !self.has_local_room(bytes) {
             return false;
         }
-        let repeated = self.observed_large.get(key).is_some();
-        self.observed_large.insert(key.clone(), ());
-        repeated
+        let observed = self.observed_large.get(key).copied().unwrap_or(0);
+        self.observed_large
+            .insert(key.clone(), observed.saturating_add(1));
+        // A symmetric animation often visits each value exactly twice. Retaining on the
+        // second encounter would fill the cache without ever serving a subsequent hit.
+        observed >= 2
     }
 
     fn has_local_room(&self, bytes: usize) -> bool {
@@ -171,8 +174,10 @@ impl RasterLayerCache {
             // Retain only bounded keys on the first GPU request. Literal CPU programs keep
             // their established admission behavior; parameterized programs and local subtrees
             // request repeated use explicitly so one-off frames cannot displace reusable work.
-            let repeated = self.observed_large.get(&key).is_some();
-            self.observed_large.insert(key.clone(), ());
+            let observed = self.observed_large.get(&key).copied().unwrap_or(0);
+            let repeated = observed >= if require_repeat { 2 } else { 1 };
+            self.observed_large
+                .insert(key.clone(), observed.saturating_add(1));
             if !repeated {
                 return None;
             }
@@ -614,6 +619,11 @@ mod tests {
                     .retain(large_raster_key(0), image.clone(), true)
                     .is_none()
             );
+            assert!(
+                cache
+                    .retain(large_raster_key(0), image.clone(), true)
+                    .is_none()
+            );
             let retained = cache
                 .retain(large_raster_key(0), image.clone(), true)
                 .unwrap();
@@ -634,6 +644,17 @@ mod tests {
             cache.clear();
             assert_eq!(budget.report().used_bytes, 0);
         });
+    }
+
+    #[test]
+    fn an_out_and_back_parameter_cycle_keeps_witnesses_without_pixels() {
+        let mut cache = RasterLayerCache::new();
+        for id in (0..32).chain((0..32).rev()) {
+            cache.begin_frame();
+            assert!(!cache.prepare_local(&large_raster_key(id), 4096));
+        }
+        assert_eq!(cache.counters().3, 0);
+        assert!(cache.prepare_local(&large_raster_key(0), 4096));
     }
 
     fn large_raster_key(index: u32) -> RasterLayerKey {
@@ -672,7 +693,7 @@ mod tests {
                 }
             }
             assert!(cache.counters().3 <= 2 * 16 * 16 * 8);
-            if frame > 1 {
+            if frame > 2 {
                 assert_eq!(cache.counters().0 - before, 2);
             }
         }
@@ -681,6 +702,7 @@ mod tests {
         cache.begin_frame();
         cache.begin_frame();
         let key = large_raster_key(10);
+        assert!(!cache.prepare_local(&key, 16 * 16 * 8));
         assert!(!cache.prepare_local(&key, 16 * 16 * 8));
         assert!(cache.prepare_local(&key, 16 * 16 * 8));
         assert!(cache.retain(key.clone(), image, true).is_some());
@@ -722,6 +744,7 @@ mod tests {
             .unwrap();
         let mut cache = RasterLayerCache::new();
         let key = large_raster_key(5);
+        assert!(!cache.prepare_local(&key, expected.len()));
         assert!(!cache.prepare_local(&key, expected.len()));
         assert!(cache.prepare_local(&key, expected.len()));
         let retained = cache

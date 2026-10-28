@@ -455,6 +455,28 @@
         "fixedRunner": null
       },
       "referenceCode": "db0eb5a9871fbd132446117387e00228a5d74997"
+    },
+    "temporal-repeat": {
+      "identity": {
+        "sourceSha256": "25e1aeb55bbf055615407cb0837aeb26bb6ca8096418478f48371b8b2a14b5c2",
+        "assets": {}
+      },
+      "pngSha256": "a545ffac56a4b03b8b7f649cfb3669ca464ac38880eedbb712febe0b352a96c3",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T10:34:55.052Z",
+      "generator": {
+        "gitHead": "9bd3cd5a9e4ceeedef0ded6035ae3bd82c895af8",
+        "cli": "eeadb14207f0117cfe1961565c326dfc8ebd8c5529387060b2f9bd3506a8cf08",
+        "fixedRunner": null
+      }
     }
   }
 }

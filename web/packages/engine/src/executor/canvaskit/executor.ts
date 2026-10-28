@@ -509,7 +509,7 @@ export class CanvasKitExecutor {
     string,
     { image: Image; roi: DeviceRoi; bytes: number; pins: number; retained: boolean; used: number }
   >();
-  private readonly rasterWitnesses = new Map<string, true>();
+  private readonly rasterWitnesses = new Map<string, number>();
   private rasterLimit = RASTER_LAYER_CACHE_BYTES;
   private rasterEpoch = 0;
   private cacheCounters = emptyExecutorCacheCounters();
@@ -814,16 +814,15 @@ export class CanvasKitExecutor {
       protectedEntries.reduce((sum, entry) => sum + entry.bytes, bytes) > this.rasterLimit
     )
       return false;
-    if (!this.rasterWitnesses.has(key)) {
-      // Exact parameter keys can be large; do not let optional history retain unbounded data.
-      if (key.length <= 4096) {
-        if (this.rasterWitnesses.size >= 256)
-          this.rasterWitnesses.delete(this.rasterWitnesses.keys().next().value!);
-        this.rasterWitnesses.set(key, true);
-      }
-      return false;
-    }
-    return true;
+    const observed = this.rasterWitnesses.get(key) ?? 0;
+    // Exact parameter keys can be large; do not let optional history retain unbounded data.
+    // Two encounters can be an out-and-back animation with no later cache use. Require a
+    // third encounter before paying for pixels; static/repeated samples quickly qualify.
+    if (key.length > 4096) return false;
+    if (!this.rasterWitnesses.has(key) && this.rasterWitnesses.size >= 256)
+      this.rasterWitnesses.delete(this.rasterWitnesses.keys().next().value!);
+    this.rasterWitnesses.set(key, Math.min(3, observed + 1));
+    return observed >= 2;
   }
 
   retainRasterLayer(key: string, value: ImageValue, requireRepeat = false): boolean {

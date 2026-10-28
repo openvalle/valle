@@ -31,6 +31,7 @@ describe("long-lived CanvasKit executor caches", () => {
     try {
       executor.arena(null, 32, 32, BigInt(bytes), BigInt(bytes * 16)).endFrame();
       expect(executor.retainRasterLayer("local", value, true)).toBe(false);
+      expect(executor.retainRasterLayer("local", value, true)).toBe(false);
       expect(executor.retainRasterLayer("local", value, true)).toBe(true);
       transferred = true;
       const pin = executor.pinRasterLayer("local")!;
