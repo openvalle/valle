@@ -458,7 +458,7 @@ export class GpuScene3D {
         new Float32Array([shadow.minimum, shadow.scale, index * 1024, 0]),
       );
       gl.viewport(0, index * 1024, 1024, 1024);
-      gl.drawArrays(gl.TRIANGLES, 0, shadow.vertices * 2);
+      gl.drawArrays(gl.TRIANGLES, 0, shadow.vertices);
       this.stats.shadowRenders++;
     }
   }
@@ -509,7 +509,7 @@ export class GpuScene3D {
       gl.clearBufferfv(gl.COLOR, 0, new Float32Array([0, 0, 0, 0]));
       gl.clearBufferfv(gl.COLOR, 1, new Float32Array([1, 1, 127 / 255, 127 / 255]));
       gl.depthMask(true);
-      gl.clearDepth(1);
+      gl.clearDepth(0);
       gl.clear(gl.DEPTH_BUFFER_BIT);
       if (packet.background) {
         gl.disable(gl.DEPTH_TEST);
@@ -517,10 +517,10 @@ export class GpuScene3D {
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       }
       gl.enable(gl.DEPTH_TEST);
-      gl.depthFunc(gl.LESS);
+      gl.depthFunc(gl.GREATER);
       gl.depthMask(true);
       gl.useProgram(this.program(packet.lit ? "lit" : "unlit").program);
-      gl.drawArrays(gl.TRIANGLES, 0, packet.vertices * 2);
+      gl.drawArrays(gl.TRIANGLES, 0, packet.vertices);
       gl.disable(gl.DEPTH_TEST);
       if (packet.blend) {
         const references = this.upload(packet.references, true),
@@ -580,6 +580,15 @@ export class GpuScene3D {
         Math.max(0, bounds[3]! - bounds[1]!),
       );
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+      // CanvasKit's render targets own mip levels. External GL writes bypass Ganesh's
+      // dirty tracking, so refresh those levels before the image is sampled at a smaller size.
+      const outputTexture = gl.getFramebufferAttachmentParameter(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT0,
+        gl.FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
+      ) as WebGLTexture;
+      this.bind(outputTexture, 15);
+      gl.generateMipmap(gl.TEXTURE_2D);
       this.stats.renders++;
       this.stats.geometryBytes += packet.bytes.byteLength;
     } finally {

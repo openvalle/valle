@@ -11,9 +11,15 @@ fn web_reference(index:u32)->u32 {
 }
 fn web_inside(triangle:u32,pixel:vec2<f32>)->bool {
     let stride=u32(shading[4].x);let base=triangle*stride*3u;
-    let a=vec2<i32>(vertex_vec2(base)*256.0);let b=vec2<i32>(vertex_vec2(base+stride)*256.0);let c=vec2<i32>(vertex_vec2(base+2u*stride)*256.0);
-    let p=vec2<i32>(floor(pixel))*256+128;
-    return edge_inside(edge64(b,c,p),b,c)&&edge_inside(edge64(c,a,p),c,a)&&edge_inside(edge64(a,b,p),a,b);
+    let a=vertex_vec2(base);let b=vertex_vec2(base+stride);let c=vertex_vec2(base+2u*stride);
+    let p=floor(pixel)+vec2(0.5);
+    return web_edge_inside(raster_edge(b,c,p),b,c)&&web_edge_inside(raster_edge(c,a,p),c,a)&&web_edge_inside(raster_edge(a,b,p),a,b);
+}
+// WebGL's tile resolve has no fixed-function triangle coverage. Keep its top-left fill
+// convention, sharing floating interpolation with Native without emulated 64-bit products.
+fn web_edge_inside(edge:f32,a:vec2<f32>,b:vec2<f32>)->bool {
+    let d=b-a;
+    return edge>0.0 || (edge==0.0 && (d.y>0.0 || (d.y==0.0 && d.x<0.0)));
 }
 fn web_sum(value:f32)->vec2<u32> {
     let rounded=floor(value+0.5);let high=u32(floor(rounded/4294967296.0));
@@ -71,5 +77,5 @@ fn web_unpack_depth(value:vec4<f32>)->f32 {
         var straight=vec3(0.0);if alpha>0.0 {straight=clamp((transparent*coverage+backdrop*reveal)/alpha,vec3(0.0),vec3(1.0));}
         result=vec4(half_even(srgb(straight.r)*alpha),half_even(srgb(straight.g)*alpha),half_even(srgb(straight.b)*alpha),half_even(alpha));
     }
-    return Fragment(result,pack_depth(nearest),1.0);
+    return Fragment(result,pack_depth(nearest));
 }

@@ -69,15 +69,20 @@ async function run() {
       });
       try {
         await player.init();
+        const rasterScale = job.width / player.renderInfo.canvasWidth;
+        if (Math.round(player.renderInfo.canvasHeight * rasterScale) !== job.height)
+          throw new Error("QA output aspect ratio differs from the composition");
         if (bypass) {
-          await player.renderFrame(0, { rasterScale: 0.75, transparent: true });
+          await player.renderFrame(0, { rasterScale: rasterScale * 0.75, transparent: true });
         }
         for (const [sequence, frame] of (job.order as number[]).entries()) {
           const result = await player.renderFrame(frame, {
-            rasterScale: job.width / 640,
+            rasterScale,
             transparent: true,
           });
           assertPath(result);
+          if (canvas.width !== job.width || canvas.height !== job.height)
+            throw new Error("QA capture dimensions differ from the requested output");
           // Capture the canvas after the requested backend rendered. Never set png:true (CPU).
           const blob = await new Promise<Blob>((resolve, reject) =>
             canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("capture failed")))),
@@ -86,7 +91,11 @@ async function run() {
           await post(name, blob);
           outputs.push({ name, frame, sequence, bypass, profile: result.executionProfile });
         }
-        outputs.push({ session: bypass ? "bypass" : "warm", stats: player.stats });
+        outputs.push({
+          session: bypass ? "bypass" : "warm",
+          stats: player.stats,
+          scene3dGpu: player.scene3dGpuDiagnostics,
+        });
       } finally {
         await player.close();
       }
@@ -106,10 +115,11 @@ async function run() {
       const player = new BrowserValleWebPlayer(input);
       try {
         await player.init();
+        const rasterScale = job.width / player.renderInfo.canvasWidth;
+        if (Math.round(player.renderInfo.canvasHeight * rasterScale) !== job.height)
+          throw new Error("order-test aspect ratio differs from the composition");
         for (const frame of frames) {
-          assertPath(
-            await player.renderFrame(frame, { rasterScale: job.width / 640, transparent: true }),
-          );
+          assertPath(await player.renderFrame(frame, { rasterScale, transparent: true }));
           const blob = await new Promise<Blob>((resolve, reject) =>
             canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("capture failed")))),
           );

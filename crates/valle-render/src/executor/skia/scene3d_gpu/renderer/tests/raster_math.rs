@@ -3,8 +3,8 @@ use std::{sync::mpsc, time::Duration};
 use wgpu::util::DeviceExt;
 
 #[test]
-#[ignore = "requires a real GPU; verifies full-width signed edges and f32 rounding against Rust i64"]
-fn integer_edges_and_rounding_match_cpu_at_large_coordinates() {
+#[ignore = "requires a real GPU; verifies floating interpolation over viewport-sized coordinates"]
+fn floating_edges_bound_interpolation_error_at_large_coordinates() {
     let (renderer, _context) = renderer();
     let device = &renderer.device;
     let queue = &renderer.queue;
@@ -44,9 +44,8 @@ fn integer_edges_and_rounding_match_cpu_at_large_coordinates() {
     let a=vec2<i32>(i32(rasterVertices[base]),i32(rasterVertices[base+1u]));
     let b=vec2<i32>(i32(rasterVertices[base+2u]),i32(rasterVertices[base+3u]));
     let p=vec2<i32>(i32(rasterVertices[base+4u]),i32(rasterVertices[base+5u]));
-    let edge=edge64(a,b,p);var value=0.0;
-    if i32(edge.y)>=0 {value=positive_float64(edge);}
-    mathResults[id.x]=vec4(edge,bitcast<u32>(value),select(0u,1u,edge_inside(edge,a,b)));
+    let edge=raster_edge(vec2<f32>(a)/256.0,vec2<f32>(b)/256.0,vec2<f32>(p)/256.0);
+    mathResults[id.x]=vec4(bitcast<u32>(edge),0u,0u,0u);
 }
 "#
     );
@@ -122,21 +121,13 @@ fn integer_edges_and_rounding_match_cpu_at_large_coordinates() {
     for (record, bytes) in records.iter().zip(data.as_chunks::<16>().0) {
         let [ax, ay, bx, by, px, py] = record.map(i64::from);
         let edge = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-        let bits = edge as u64;
-        let inside = edge > 0 || (edge == 0 && (by > ay || (by == ay && bx < ax)));
-        let expected = [
-            bits as u32,
-            (bits >> 32) as u32,
-            if edge >= 0 {
-                (edge as f32).to_bits()
-            } else {
-                0
-            },
-            u32::from(inside),
-        ];
-        let actual: [u32; 4] = std::array::from_fn(|i| {
-            u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap())
-        });
-        assert_eq!(actual, expected, "edge inputs={record:?}");
+        let expected = edge as f64 / 65536.0;
+        let actual = f32::from_le_bytes(bytes[..4].try_into().unwrap()) as f64;
+        let magnitude =
+            (((bx - ax) * (py - ay)).abs() + ((by - ay) * (px - ax)).abs()) as f64 / 65536.0;
+        assert!(
+            (actual - expected).abs() <= magnitude * 2e-7 + 1e-6,
+            "edge inputs={record:?}, {actual}/{expected}"
+        );
     }
 }

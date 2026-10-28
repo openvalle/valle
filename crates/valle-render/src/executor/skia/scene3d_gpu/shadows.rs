@@ -72,7 +72,7 @@ impl ShadowRasterizer {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -287,7 +287,7 @@ impl ShadowRasterizer {
                 });
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &group, &[]);
-                pass.draw(0..map.vertices.len() as u32 * 2, 0..1);
+                pass.draw(0..map.vertices.len() as u32, 0..1);
             }
             buffers.extend([vertices, range]);
         }

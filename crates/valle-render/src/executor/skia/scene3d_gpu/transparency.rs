@@ -217,7 +217,7 @@ impl Transparency {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, group, &[]);
             pass.set_bind_group(1, &accumulation, &[]);
-            pass.draw(0..count * 2, 0..1);
+            pass.draw(0..count, 0..1);
         }
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());

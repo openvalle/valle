@@ -520,6 +520,22 @@
       },
       "regions": [],
       "order": true
+    },
+    {
+      "id": "scene3d",
+      "source": "fixtures/scene3d.motion.tsx",
+      "group": "heavy",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true
     }
   ]
 }

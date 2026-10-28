@@ -94,7 +94,8 @@ pub struct GpuRasterGeometry {
     /// Independent triangles in the same submission order as the CPU renderer.
     pub vertices: Vec<GpuRasterVertex>,
     pub anchors: Vec<AnchorProjection>,
-    /// A power of two, so scaling camera depth into a depth attachment is exact.
+    /// A power of two no greater than the near plane. GPU depth is depth_scale / z
+    /// (reverse Z), linearly interpolated by fixed-function rasterization.
     pub depth_scale: f32,
     /// Absent for the exact, constant-color Unlit path.
     pub shading: Option<GpuRasterShading>,
@@ -290,7 +291,7 @@ pub fn prepare_gpu_geometry(
         }
     }
     let mut depth_scale = 1.0;
-    while frame.camera.far * depth_scale >= 1.0 {
+    while depth_scale > frame.camera.near {
         depth_scale *= 0.5;
     }
     Ok(Some(GpuRasterGeometry {

@@ -22,17 +22,6 @@ fn make_lit_vertex(position: vec2<f32>, invZ: f32, objectId: u32, nodeId: u32, n
         invZ,normalOverZ,material,vec2(objectId,nodeId),vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0xffffffffu);
 }
 
-@vertex fn lit_vertex(@location(0) position:vec2<f32>,@location(1) invZ:f32,@location(3) objectId:u32,@location(4) nodeId:u32,
-    @location(5) normalOverZ:vec3<f32>,@location(6) material:u32) -> LitVertex {
-    return make_lit_vertex(position,invZ,objectId,nodeId,normalOverZ,material);
-}
-@vertex fn textured_vertex(@location(0) position:vec2<f32>,@location(1) invZ:f32,@location(3) objectId:u32,@location(4) nodeId:u32,
-    @location(5) normalOverZ:vec3<f32>,@location(6) material:u32,@location(7) uv:vec2<f32>,
-    @location(8) dx:vec3<f32>,@location(9) dy:vec3<f32>,@location(10) tangent:vec3<f32>,@location(11) bitangent:vec3<f32>) -> LitVertex {
-    let out=make_lit_vertex(position,invZ,objectId,nodeId,normalOverZ,material);
-    return LitVertex(out.position,invZ,normalOverZ,material,out.ids,uv*invZ,dx,dy,tangent,bitangent,out.triangle);
-}
-
 // Zero-valued uniform boundary: retain f32 rounding in the normal/GGX terms.
 // Contraction and reciprocal-square-root substitution amplify narrow highlights.
 fn stable(v: f32) -> f32 {
@@ -224,11 +213,6 @@ fn camera_position(ray:vec3<f32>,inverse:f32) -> vec3<f32> {
     return vec3(stable(eye.x+stable(ray.x*z)),stable(eye.y+stable(ray.y*z)),stable(eye.z+stable(ray.z*z)));
 }
 
-@fragment fn lit_fragment(in: LitVertex) -> Fragment {
-    if shading[HEADER+in.material*MATERIAL+2u].w!=0.0 {discard;}
-    return Fragment(lit_color(in), pack_depth(1.0 / in.invZ), globals.depthScale / in.invZ);
-}
-
 @vertex fn background_vertex(@builtin(vertex_index) index:u32) -> LitVertex {
     let point=vec2(select(-1.0,3.0,index==1u),select(-1.0,3.0,index==2u));
     return LitVertex(vec4(point,0.5,1.0),1.0,vec3(0.0),0u,vec2(0u),vec2(0.0),
@@ -239,5 +223,5 @@ fn camera_position(ray:vec3<f32>,inverse:f32) -> vec3<f32> {
     var display=radiance*shading[0].a;
     if (u32(shading[1].a)&1u)!=0u {display=aces(radiance,shading[0].a);}
     display=clamp(display,vec3(0.0),vec3(1.0));
-    return Fragment(vec4(half_even(srgb(display.r)),half_even(srgb(display.g)),half_even(srgb(display.b)),1.0),pack_depth(bitcast<f32>(0x7f7fffffu)),1.0);
+    return Fragment(vec4(half_even(srgb(display.r)),half_even(srgb(display.g)),half_even(srgb(display.b)),1.0),pack_depth(bitcast<f32>(0x7f7fffffu)));
 }

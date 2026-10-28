@@ -44,7 +44,7 @@ fn optical_depth(alpha:f32) -> f32 {
     let material=HEADER+in.material*MATERIAL;
     if shading[material+2u].w==0.0 {discard;}
     let pixel=vec2<i32>(in.position.xy);let z=precise_divide(1.0,in.invZ);
-    if z*globals.depthScale>=textureLoad(opaqueDepth,pixel,0) {discard;}
+    if input.position.z<=textureLoad(opaqueDepth,pixel,0) {discard;}
     let c=lit_radiance(in);let alpha=c.a;
     if alpha<=0.0 {discard;}
     let optical=optical_depth(min(alpha,0.99999994))*1000000000.0;
@@ -69,7 +69,7 @@ fn linear_srgb(v:f32) -> f32 {
     let weight=sum_read(3u,index);
     var depth=bitcast<f32>(0x7f7fffffu);
     let storedDepth=textureLoad(opaqueDepth,pixel,0);
-    if storedDepth<1.0 {depth=storedDepth/globals.depthScale;}
+    if storedDepth>0.0 {depth=precise_divide(globals.depthScale,storedDepth);}
     if weight>0.0 {
         var reveal=0.0;
         if (atomicLoad(&extinction[index].hi)&0x80000000u)==0u {reveal=exp(-sum_read(4u,index)/1000000000.0);}

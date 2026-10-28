@@ -38,7 +38,7 @@ struct Fragment {
     var out: Fragment;
     out.color = in.color; out.depth = 1.0 / in.invZ;
     out.objectId = in.ids.x; out.nodeId = in.ids.y;
-    out.depthTest = out.depth * globals.depthScale;
+    out.depthTest = globals.depthScale / out.depth;
     return out;
 }
 "#;
@@ -53,7 +53,7 @@ struct ValidationFragment {
     var out: ValidationFragment;
     out.color = lit_color(in); out.depth = 1.0 / in.invZ;
     out.objectId = in.ids.x; out.nodeId = in.ids.y;
-    out.depthTest = globals.depthScale / in.invZ;
+    out.depthTest = globals.depthScale * in.invZ;
     return out;
 }
 "#;
@@ -198,7 +198,7 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Less),
+            depth_compare: Some(wgpu::CompareFunction::Greater),
             stencil: Default::default(),
             bias: Default::default(),
         }),
@@ -553,7 +553,7 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
                         depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                             view: &depth_view,
                             depth_ops: Some(wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(1.0),
+                                load: wgpu::LoadOp::Clear(0.0),
                                 store: wgpu::StoreOp::Store,
                             }),
                             stencil_ops: None,

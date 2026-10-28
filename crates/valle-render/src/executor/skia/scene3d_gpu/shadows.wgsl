@@ -8,10 +8,10 @@ struct ShadowVertex {
     @location(3) @interpolate(flat) triangle:u32,
 };
 @vertex fn shadow_vertex(@builtin(vertex_index) index:u32) -> ShadowVertex {
-    let base=(index/6u)*21u;
-    return ShadowVertex(bbox_position(index,7u,vec2(1024.0)),0.0,vec2(0.0),rasterVertices[base+5u],index/6u);
+    let base=(index/3u)*21u;
+    return ShadowVertex(triangle_position(index,7u,vec2(1024.0),(vertex_float(index*7u+2u)-shadowRange.x)*shadowRange.y),0.0,vec2(0.0),rasterVertices[base+5u],index/3u);
 }
-struct ShadowFragment { @location(0) depth:f32,@builtin(frag_depth) depthTest:f32 };
+struct ShadowFragment { @location(0) depth:f32 };
 @fragment fn shadow_fragment(in:ShadowVertex) -> ShadowFragment {
     let base=in.triangle*21u;let bary=raster_bary(base,7u,in.position.xy);
     let depth=stable(stable(stable(vertex_float(base+2u)*bary.x)+stable(vertex_float(base+9u)*bary.y))+stable(vertex_float(base+16u)*bary.z));
@@ -24,7 +24,7 @@ struct ShadowFragment { @location(0) depth:f32,@builtin(frag_depth) depthTest:f3
         if binding.x>=0.0 {coverage*=sample_image(u32(binding.x),u32(binding.y),uv,0.0).a;}
         if coverage<alpha.z {discard;}
     }
-    return ShadowFragment(depth,(depth-shadowRange.x)*shadowRange.y);
+    return ShadowFragment(depth);
 }
 
 fn shadow_visibility(light:u32,position:vec3<f32>,normal:vec3<f32>) -> f32 {

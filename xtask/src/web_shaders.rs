@@ -76,12 +76,6 @@ fn source() -> Result<String> {
     ).replace("shadowMaps:texture_2d_array<f32>", "shadowMaps:texture_2d<f32>")
         .replace("textureLoad(shadowMaps,at,layer,0)", "textureLoad(shadowMaps,at+vec2(0,layer*1024),0)")
         .replace("raster_bary(base,7u,in.position.xy)", "raster_bary(base,7u,in.position.xy-vec2(0.0,shadowRange.z))");
-    // The edge conversion scales a positive integer mantissa by a small power of two.
-    // WebGL2's ES 3.00 lacks ldexp; this exact binary scaling needs no approximation.
-    let source = source.replace(
-        "ldexp(f32(mantissa),i32(shift))",
-        "f32(mantissa)*exp2(f32(shift))",
-    );
     array_reads(
         &array_reads(&source, "shading", "shading_at")?,
         "rasterVertices",

@@ -141,7 +141,7 @@ impl GpuRasterizer {
                     depth_compare: Some(if background {
                         wgpu::CompareFunction::Always
                     } else {
-                        wgpu::CompareFunction::Less
+                        wgpu::CompareFunction::Greater
                     }),
                     stencil: Default::default(),
                     bias: Default::default(),
@@ -461,7 +461,7 @@ impl GpuRasterizer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -478,7 +478,7 @@ impl GpuRasterizer {
                 pass.draw(0..3, 0..1);
             }
             pass.set_pipeline(pipeline);
-            pass.draw(0..geometry.vertices.len() as u32 * 2, 0..1);
+            pass.draw(0..geometry.vertices.len() as u32, 0..1);
         }
         let transparency = blend.then(|| {
             self.transparency.encode(
