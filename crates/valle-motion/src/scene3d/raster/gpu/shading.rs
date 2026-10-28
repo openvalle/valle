@@ -186,6 +186,7 @@ impl GpuRasterShading {
             texture_vertices: (!textures.is_empty()).then(Vec::new),
             textures,
             shadows: Vec::new(),
+            shadow_source_key: crate::ContentDigest::of_bytes(&[]),
             environment: prepared.environment.clone(),
             values,
             material_offsets,

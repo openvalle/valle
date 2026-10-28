@@ -1,6 +1,5 @@
 //! One bounded shadow set, keyed by projected geometry, alpha sampling and light projection.
 use super::assets::Atlas;
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use valle_engine::{
     motion::{
@@ -118,35 +117,7 @@ impl ShadowRasterizer {
     }
 
     pub fn key(shading: &GpuRasterShading) -> ContentDigest {
-        if shading.shadows.is_empty() {
-            return ContentDigest::of_bytes(&[]);
-        }
-        let mut key = Sha256::new();
-        for map in &shading.shadows {
-            key.update(map.light.to_le_bytes());
-            for value in map.values.into_iter().flatten() {
-                key.update(value.to_le_bytes());
-            }
-            for v in &map.vertices {
-                for value in v.position.into_iter().chain([v.depth]).chain(v.uv) {
-                    key.update(value.to_le_bytes());
-                }
-                key.update(v.material.to_le_bytes());
-            }
-        }
-        let start = GpuRasterShading::HEADER_LEN;
-        for material in 0..shading.values[1][0] as usize {
-            for value in
-                &shading.values[start + material * GpuRasterShading::MATERIAL_STRIDE + 2][1..]
-            {
-                key.update(value.to_le_bytes());
-            }
-            for value in shading.values[start + material * GpuRasterShading::MATERIAL_STRIDE + 4] {
-                key.update(value.to_le_bytes());
-            }
-        }
-        key.update(Atlas::key(shading).as_bytes());
-        ContentDigest::from_bytes(key.finalize().into())
+        shading.shadow_content_key()
     }
 
     #[allow(clippy::too_many_arguments)]

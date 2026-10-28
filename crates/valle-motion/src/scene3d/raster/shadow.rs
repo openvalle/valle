@@ -1,8 +1,12 @@
-//! Orthographic depth maps for directional lights. Built anew from each random-access frame.
+//! Orthographic depth maps for directional lights, retained only by exact caster content.
 use super::{
     AlphaMode, FixedPoint, FrameMesh, SUBPIXEL_BITS, SUBPIXEL_SCALE, SUBPIXEL_STEP, V2, V3,
     WorldVertex, center_range, covered_span, is_top_left, orient_fixed, round_fixed,
 };
+mod cache;
+use crate::ContentDigest;
+pub(super) use cache::{ShadowCache, ShadowMaps};
+use sha2::{Digest, Sha256};
 
 pub(super) const SHADOW_SIZE: usize = 1024;
 
@@ -12,39 +16,10 @@ pub(super) fn render_maps(
     meshes: &[FrameMesh<'_>],
     workers: usize,
 ) -> Vec<Option<ShadowMap>> {
-    let workers = if cfg!(target_arch = "wasm32") {
-        1
-    } else {
-        workers.clamp(1, super::MAX_RASTER_WORKERS)
-    }
-    .min(directions.len());
-    if workers <= 1 {
-        return directions
-            .iter()
-            .map(|(direction, _)| ShadowMap::render(*direction, casters, meshes))
-            .collect();
-    }
-    // Lights are independent. Keep each result in its original slot so shadow
-    // lookup and light accumulation retain their deterministic ordering.
-    let mut maps = (0..directions.len()).map(|_| None).collect::<Vec<_>>();
-    crate::cpu::parallel_scope(workers, |scope, workers| {
-        let chunk_size = directions.len().div_ceil(workers);
-        let mut chunks = maps
-            .chunks_mut(chunk_size)
-            .zip(directions.chunks(chunk_size));
-        let (caller_maps, caller_directions) = chunks.next().unwrap();
-        for (maps, directions) in chunks {
-            scope.spawn(move || {
-                for (map, (direction, _)) in maps.iter_mut().zip(directions) {
-                    *map = ShadowMap::render(*direction, casters, meshes);
-                }
-            });
-        }
-        for (map, (direction, _)) in caller_maps.iter_mut().zip(caller_directions) {
-            *map = ShadowMap::render(*direction, casters, meshes);
-        }
-    });
-    maps
+    directions
+        .iter()
+        .map(|(direction, _)| ShadowMap::render(*direction, casters, meshes, workers))
+        .collect()
 }
 
 /// World-space shadow casters. Each transformed vertex is stored once and triangles name their
@@ -64,6 +39,71 @@ struct ShadowTriangle {
 }
 
 impl ShadowCasters {
+    /// One source identity for CPU, Native GPU and WebGL shadows. Camera, exposure, light
+    /// color and PBR shading do not change these maps. Every input to projection, face
+    /// selection and alpha sampling does. Hash exact post-morph/skin world positions;
+    /// a model/animation name alone is not enough for arbitrary seeking.
+    pub(super) fn content_key(
+        &self,
+        directions: &[(V3, [f32; 3])],
+        meshes: &[FrameMesh<'_>],
+    ) -> ContentDigest {
+        let mut hash = Sha256::new();
+        hash.update(b"valle.scene3d.shadow-source@1");
+        hash.update((SHADOW_SIZE as u32).to_le_bytes());
+        hash.update((directions.len() as u64).to_le_bytes());
+        for (direction, _) in directions {
+            for value in [direction.x, direction.y, direction.z] {
+                hash.update(value.to_le_bytes());
+            }
+        }
+        hash.update((self.positions.len() as u64).to_le_bytes());
+        for (position, uv) in self.positions.iter().zip(&self.uvs) {
+            for value in [position.x, position.y, position.z, uv.x, uv.y] {
+                hash.update(value.to_le_bytes());
+            }
+        }
+        hash.update((self.triangles.len() as u64).to_le_bytes());
+        for triangle in &self.triangles {
+            for index in triangle.vertices {
+                hash.update(index.to_le_bytes());
+            }
+            hash.update((triangle.mesh_index as u64).to_le_bytes());
+            hash.update((triangle.material_index as u64).to_le_bytes());
+        }
+        hash.update((meshes.len() as u64).to_le_bytes());
+        for mesh in meshes {
+            hash.update((mesh.materials.len() as u64).to_le_bytes());
+            for material in &mesh.materials {
+                let material = &material.values;
+                hash.update([
+                    match material.alpha_mode {
+                        AlphaMode::Opaque => 0,
+                        AlphaMode::Mask => 1,
+                        AlphaMode::Blend => 2,
+                    },
+                    u8::from(material.double_sided),
+                ]);
+                hash.update(material.base_color[3].to_le_bytes());
+                hash.update([u8::from(material.alpha_cutoff.is_some())]);
+                if let Some(cutoff) = material.alpha_cutoff {
+                    hash.update(cutoff.to_le_bytes());
+                }
+                hash.update([u8::from(material.base_color_texture.is_some())]);
+                if let Some(binding) = material.base_color_texture {
+                    let image = &mesh.mesh.images[binding.image];
+                    hash.update(image.content_digest().as_bytes());
+                    hash.update([match image.role() {
+                        crate::scene3d::TextureRole::Color => 0,
+                        crate::scene3d::TextureRole::Data => 1,
+                    }]);
+                    hash.update(binding.gpu_sampler().to_le_bytes());
+                }
+            }
+        }
+        ContentDigest::from_bytes(hash.finalize().into())
+    }
+
     pub fn push_vertex(&mut self, vertex: WorldVertex) -> u32 {
         let index = u32::try_from(self.positions.len())
             .expect("Scene3D triangle budget bounds shadow caster vertices");
@@ -81,6 +121,7 @@ impl ShadowCasters {
     }
 }
 
+#[derive(Debug)]
 pub(super) struct ShadowMap {
     right: V3,
     up: V3,
@@ -107,22 +148,44 @@ impl ShadowMap {
         direction: V3,
         casters: &ShadowCasters,
         meshes: &[FrameMesh<'_>],
+        workers: usize,
     ) -> Option<Self> {
         let (mut map, vertices, fixed) = Self::prepare(direction, casters, meshes)?;
         map.depth = vec![f32::MAX; SHADOW_SIZE * SHADOW_SIZE];
-        for triangle in &casters.triangles {
-            let mesh = &meshes[triangle.mesh_index];
-            let material = &mesh.materials[triangle.material_index].values;
-            if material.alpha_mode != AlphaMode::Blend {
-                let corners = triangle.vertices.map(|index| index as usize);
-                map.raster_triangle(
-                    corners.map(|index| vertices[index]),
-                    corners.map(|index| fixed[index]),
-                    mesh,
-                    material,
-                );
+        let rows = |first_y, depth: &mut [f32]| {
+            // Each band sees triangles in submission order, retaining exact coplanar and
+            // masked depth semantics. Only disjoint output rows execute concurrently.
+            for triangle in &casters.triangles {
+                let mesh = &meshes[triangle.mesh_index];
+                let material = &mesh.materials[triangle.material_index].values;
+                if material.alpha_mode != AlphaMode::Blend {
+                    let corners = triangle.vertices.map(|index| index as usize);
+                    Self::raster_triangle(
+                        depth,
+                        first_y,
+                        corners.map(|index| vertices[index]),
+                        corners.map(|index| fixed[index]),
+                        mesh,
+                        material,
+                    );
+                }
             }
-        }
+        };
+        let workers = if cfg!(target_arch = "wasm32") {
+            1
+        } else {
+            workers.clamp(1, super::MAX_RASTER_WORKERS)
+        };
+        crate::cpu::parallel_scope(workers, |scope, workers| {
+            let band = SHADOW_SIZE.div_ceil(workers).next_multiple_of(32);
+            let mut chunks = map.depth.chunks_mut(band * SHADOW_SIZE).enumerate();
+            let (_, first) = chunks.next().unwrap();
+            for (index, depth) in chunks {
+                let rows = &rows;
+                scope.spawn(move || rows(index * band, depth));
+            }
+            rows(0, first);
+        });
         Some(map)
     }
 
@@ -212,7 +275,8 @@ impl ShadowMap {
     }
 
     fn raster_triangle(
-        &mut self,
+        depth_plane: &mut [f32],
+        first_y: usize,
         vertices: [ShadowVertex; 3],
         fixed: [FixedPoint; 3],
         mesh: &FrameMesh<'_>,
@@ -232,6 +296,11 @@ impl ShadowMap {
             return;
         };
         let [min_x, max_x, min_y, max_y] = [min_x, max_x, min_y, max_y].map(|value| value as usize);
+        let min_y = min_y.max(first_y);
+        let max_y = max_y.min(first_y + depth_plane.len() / SHADOW_SIZE - 1);
+        if min_y > max_y {
+            return;
+        }
         let top_left = [
             is_top_left(fixed[1], fixed[2]),
             is_top_left(fixed[2], fixed[0]),
@@ -264,11 +333,12 @@ impl ShadowMap {
             [step_x, step_y],
             top_left,
             |index, edge| {
+                let index = index - first_y * SHADOW_SIZE;
                 let bary = edge.map(|v| v as f32 * inv_area);
                 let depth = vertices[0].depth * bary[0]
                     + vertices[1].depth * bary[1]
                     + vertices[2].depth * bary[2];
-                if depth >= self.depth[index] {
+                if depth >= depth_plane[index] {
                     return;
                 }
                 if material.alpha_mode == AlphaMode::Mask {
@@ -288,7 +358,7 @@ impl ShadowMap {
                         return;
                     }
                 }
-                self.depth[index] = depth;
+                depth_plane[index] = depth;
             },
         );
     }

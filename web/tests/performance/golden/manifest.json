@@ -525,6 +525,50 @@
         "cli": "22186daab66d03ff205298956f315ae84943d939f8032b561d918866014254a2",
         "fixedRunner": "cfe547810c2a3ac6aadbda89ddad546e01d6652d5473f302a1f91561d7681423"
       }
+    },
+    "scene3d-shadow-static": {
+      "identity": {
+        "sourceSha256": "ba8cafafc278ac176430caf24f2956f034425f5a8b5555414d4ac88c670cac42",
+        "assets": {}
+      },
+      "pngSha256": "d9d1dbe2ba8e0364766d4ec2446bd678127da4c306b7f08053ef0d9ec26af7e7",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T11:53:10.899Z",
+      "generator": {
+        "gitHead": "ba290dfa30e507454c37c63ee2f994fc4a8d10aa",
+        "cli": "88c2d700c99baa3008aaf2e0a66d67f3e8ae680ba64328c369c360d4439bcd31",
+        "fixedRunner": "dc3464e27e8a65cd29f0783f462f3efc303d1eb37f9c28b093d3290874f8a263"
+      }
+    },
+    "scene3d-shadow-dynamic": {
+      "identity": {
+        "sourceSha256": "d5056905ddc8ca6692ff08d258f871e6e4b49ab0fe2152d953d3284b51b26906",
+        "assets": {}
+      },
+      "pngSha256": "aba2cf099c425e044bdede0f4429d60287ef270e7ebae4022ddaf5578deb1f32",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T11:53:11.218Z",
+      "generator": {
+        "gitHead": "ba290dfa30e507454c37c63ee2f994fc4a8d10aa",
+        "cli": "88c2d700c99baa3008aaf2e0a66d67f3e8ae680ba64328c369c360d4439bcd31",
+        "fixedRunner": "dc3464e27e8a65cd29f0783f462f3efc303d1eb37f9c28b093d3290874f8a263"
+      }
     }
   }
 }

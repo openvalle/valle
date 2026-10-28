@@ -101,6 +101,11 @@ impl MemoryBudget {
     pub fn limit(&self) -> Option<u64> {
         self.0.limit
     }
+
+    /// Whether two handles charge the same host ledger, independent of the configured limit.
+    pub fn same_budget(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
     pub fn active_credits(&self) -> usize {
         self.0.credits.load(Ordering::Acquire)
     }

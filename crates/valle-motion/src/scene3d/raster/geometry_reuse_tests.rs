@@ -38,7 +38,7 @@ fn without_normals(bytes: &[u8]) -> Vec<u8> {
     result
 }
 
-fn fixture(bytes: &[u8], shadows: bool) -> (PreparedScene, Frame3DState) {
+pub(super) fn fixture(bytes: &[u8], shadows: bool) -> (PreparedScene, Frame3DState) {
     let mut scene = Scene3DSpec {
         pbr: Default::default(),
         meshes: vec![MeshSpec {

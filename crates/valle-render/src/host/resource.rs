@@ -904,6 +904,9 @@ impl ResourceProvider for NativeResourceProvider {
 
     fn trim_memory(&mut self) {
         self.objects.clear();
+        for scene in self.scenes.values() {
+            scene.trim_shadow_cache();
+        }
         // Keep bounded immutable topology. Clearing it whenever another frame waits for bytes
         // repeats geometry construction and serializes the shared provider under pressure.
         self.video

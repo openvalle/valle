@@ -855,6 +855,62 @@
       "kind": "timeline",
       "frozenHostPackage": true,
       "fps": 30
+    },
+    {
+      "id": "scene3d-shadow-static",
+      "source": "fixtures/scene3d-shadow-static.motion.tsx",
+      "group": "heavy",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true,
+      "durationS": 2,
+      "fps": 30,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": []
+      }
+    },
+    {
+      "id": "scene3d-shadow-dynamic",
+      "source": "fixtures/scene3d-shadow-dynamic.motion.tsx",
+      "group": "heavy",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true,
+      "durationS": 2,
+      "fps": 30,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": []
+      }
     }
   ]
 }

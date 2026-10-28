@@ -24,6 +24,8 @@ pub struct GpuRasterShading {
     pub textures: Vec<std::sync::Arc<crate::scene3d::MaterialImage>>,
     pub environment: Option<std::sync::Arc<crate::scene3d::EnvironmentAsset>>,
     pub shadows: Vec<GpuRasterShadow>,
+    /// Identity of the sealed caster/light/alpha inputs used to derive `shadows`.
+    shadow_source_key: crate::ContentDigest,
     material_offsets: Vec<u32>,
     /// vec4 records: five scene headers, nine per material, two per directional light,
     /// three per hemisphere, camera ray columns/rows, then four per shadow projection.
@@ -62,6 +64,11 @@ impl GpuRasterShadow {
 }
 
 impl GpuRasterShading {
+    /// Shared with CPU shadows. Prepared packets are immutable rendering inputs; camera,
+    /// exposure, roughness and unrelated atlas textures do not invalidate a directional map.
+    pub fn shadow_content_key(&self) -> crate::ContentDigest {
+        self.shadow_source_key
+    }
     pub fn brdf_lut() -> &'static [u8; 1024] {
         super::lighting::DFG_BYTES
     }
@@ -272,6 +279,9 @@ pub fn prepare_gpu_geometry(
     if prepared.scene.pbr.shadows {
         let s = shading.as_mut().expect("shadows require shader data");
         let lights = Lights::new(&prepared.scene, frame, prepared.environment.clone());
+        s.shadow_source_key = geometry
+            .casters
+            .content_key(&lights.directional, &geometry.frame_meshes);
         s.shadows = super::shadow::gpu_maps(
             &lights.directional,
             &geometry.casters,

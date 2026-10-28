@@ -1,7 +1,6 @@
 //! Bounded WebGL2 upload packet. Contains triangles and material records, never CPU coverage.
 use super::{GpuRasterAtlas, GpuRasterGeometry};
 use crate::scene3d::Frame3DState;
-use sha2::{Digest, Sha256};
 
 const HEADER_WORDS: usize = 64;
 const TILE: u32 = 16;
@@ -179,33 +178,13 @@ impl GpuRasterGeometry {
         header[18..21].copy_from_slice(&texture(&mut output, &references)?);
         header[21..24].copy_from_slice(&texture(&mut output, &offsets)?);
         header[27] = tiles.len() as u32;
-        let mut shadow_key = Sha256::new();
-        if let Some(atlas) = atlas {
-            shadow_key.update(atlas.key);
-        }
         if let Some(s) = shading {
-            for i in 0..s.values[1][0] as usize {
-                let at = super::GpuRasterShading::HEADER_LEN
-                    + i * super::GpuRasterShading::MATERIAL_STRIDE;
-                for value in s.values[at + 2][1..]
-                    .iter()
-                    .copied()
-                    .chain(s.values[at + 4])
-                {
-                    shadow_key.update(value.to_le_bytes());
-                }
-            }
             header[24] = s.shadows.len() as u32;
             for (layer, shadow) in s.shadows.iter().enumerate() {
                 if layer >= 2 {
                     return None;
                 }
                 let encoded = shadow.vertex_bytes();
-                shadow_key.update(shadow.light.to_le_bytes());
-                shadow_key.update(&encoded);
-                for value in shadow.values.into_iter().flatten() {
-                    shadow_key.update(value.to_le_bytes());
-                }
                 let [width, height, offset] = texture(&mut output, &encoded)?;
                 header[48 + layer * 8..56 + layer * 8].copy_from_slice(&[
                     shadow.vertices.len() as u32,
@@ -219,9 +198,13 @@ impl GpuRasterGeometry {
                 ]);
             }
         }
+        let shadow_key = shading.map_or_else(
+            || crate::ContentDigest::of_bytes(&[]),
+            |s| s.shadow_content_key(),
+        );
         for (word, value) in header[36..44]
             .iter_mut()
-            .zip(shadow_key.finalize().as_chunks::<4>().0)
+            .zip(shadow_key.as_bytes().as_chunks::<4>().0)
         {
             *word = u32::from_le_bytes(*value);
         }

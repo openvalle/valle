@@ -281,6 +281,7 @@ pub struct PreparedScene {
     meshes: Vec<PreparedMesh>,
     budget: BudgetUsage,
     environment: Option<Arc<super::EnvironmentAsset>>,
+    shadow_cache: Arc<shadow::ShadowCache>,
 }
 
 impl PreparedScene {
@@ -294,6 +295,11 @@ impl PreparedScene {
 
     pub fn budget(&self) -> BudgetUsage {
         self.budget
+    }
+
+    /// Evict optional pixel storage without rebuilding immutable admitted geometry.
+    pub fn trim_shadow_cache(&self) {
+        self.shadow_cache.clear();
     }
 }
 
@@ -888,6 +894,7 @@ pub fn prepare_scene(
         meshes,
         budget,
         environment,
+        shadow_cache: Arc::default(),
     })
 }
 
@@ -1305,7 +1312,9 @@ fn render_scene_with_geometry_reuse(
     checkpoint("geometry");
     if shadows {
         lights.shadow_maps =
-            shadow::render_maps(&lights.directional, &casters, &frame_meshes, workers);
+            prepared
+                .shadow_cache
+                .render(&lights.directional, &casters, &frame_meshes, workers);
     }
     checkpoint("shadows");
     let column_count = prepared.width.div_ceil(TILE_COLUMNS) as usize;
@@ -2133,7 +2142,7 @@ fn transformed_vertex(
 struct Lights {
     ambient: [f32; 3],
     directional: Vec<(V3, [f32; 3])>,
-    shadow_maps: Vec<Option<shadow::ShadowMap>>,
+    shadow_maps: Arc<shadow::ShadowMaps>,
     hemisphere: Vec<(V3, [f32; 3], [f32; 3])>,
     environment: Option<Arc<super::EnvironmentAsset>>,
     pbr: super::PbrOptions,
@@ -2185,7 +2194,7 @@ impl Lights {
         Self {
             ambient,
             directional,
-            shadow_maps: Vec::new(),
+            shadow_maps: Arc::default(),
             hemisphere,
             environment,
             pbr: scene.pbr.clone(),
@@ -2209,6 +2218,7 @@ impl Lights {
 
     fn shadow_visibility(&self, index: usize, position: V3, normal: V3) -> f32 {
         self.shadow_maps
+            .maps
             .get(index)
             .and_then(Option::as_ref)
             .map_or(1.0, |map| map.visibility(position, normal))
