@@ -22,6 +22,7 @@ pub struct PaintTemplate {
     encoding: OnceLock<Vec<u8>>,
     digest: OnceLock<[u8; 32]>,
     dependencies: OnceLock<Vec<Arc<SubtreeDependencies>>>,
+    static_identities: OnceLock<Vec<Option<u32>>>,
 }
 
 /// A frame owns only its exact working-color values; all geometry belongs to its template.
@@ -88,6 +89,7 @@ impl PaintTemplate {
             encoding: OnceLock::new(),
             digest: OnceLock::new(),
             dependencies: OnceLock::new(),
+            static_identities: OnceLock::new(),
         })
     }
 
@@ -234,7 +236,7 @@ impl PaintFrame {
     pub fn self_contained_subtree_digest(&self, roots: &[NodeId]) -> Option<[u8; 32]> {
         let mut slots = std::collections::BTreeSet::new();
         let mut hash = Sha256::new();
-        hash.update(b"valle.paint-subtree@1\0");
+        hash.update(b"valle.paint-subtree@2\0");
         hash.update(self.template.digest().ok()?);
         hash.update((roots.len() as u64).to_le_bytes());
         for root in roots {
@@ -242,7 +244,16 @@ impl PaintFrame {
             if dependencies.reads_destination() || !dependencies.resources().is_empty() {
                 return None;
             }
-            hash.update(root.raw().to_le_bytes());
+            let identity = if dependencies.slots().is_empty() {
+                self.template
+                    .static_identities
+                    .get_or_init(|| super::static_identity::derive(&self.template))
+                    [root.raw() as usize]
+            } else {
+                None
+            };
+            hash.update([u8::from(identity.is_some())]);
+            hash.update(identity.unwrap_or(root.raw()).to_le_bytes());
             slots.extend(dependencies.slots().iter().copied());
         }
         for slot in slots {

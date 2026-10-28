@@ -20,6 +20,7 @@ mod paint_table;
 mod path;
 #[doc(hidden)]
 pub mod recording;
+mod static_identity;
 mod template;
 mod transform;
 mod validate;

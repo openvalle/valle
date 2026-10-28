@@ -7,6 +7,7 @@ import {
   subtreeParameterKey,
 } from "./paint-template.ts";
 import { encodeTestPaths } from "./path-arena.test-helper.ts";
+import { staticSubtreeIdentities } from "./static-subtree-identity.ts";
 
 function fixture(nodes: TaggedWire[] = []): Uint8Array {
   const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
@@ -81,6 +82,73 @@ async function frameDigest(template: Uint8Array, parameters: Uint8Array) {
   bytes.set(parameters, domain.length + 32);
   return paintDigest(bytes);
 }
+
+test("static duplicates share cache identity without merging dynamic consumers", async () => {
+  const nodes: TaggedWire[] = [
+    { kind: "path", value: { path: 0, fill: 1 } },
+    { kind: "path", value: { path: 0, fill: 1 } },
+    { kind: "path", value: { path: 0, fill: 0 } },
+    { kind: "path", value: { path: 0, fill: 0 } },
+    {
+      kind: "group",
+      value: { children: [0], mask: { source: 1, mode: "alpha" }, internalBlend: "normal" },
+    },
+    {
+      kind: "group",
+      value: { children: [1], mask: { source: 0, mode: "alpha" }, internalBlend: "normal" },
+    },
+    {
+      kind: "group",
+      value: { children: [1], mask: { source: 0, mode: "luminance" }, internalBlend: "normal" },
+    },
+  ];
+  const bytes = fixture(nodes);
+  const parameters = new Uint8Array(16);
+  new DataView(parameters.buffer).setFloat32(12, 1, true);
+  const capture = async () => {
+    const template = await decodePaintTemplate(bytes, await paintDigest(bytes));
+    const draw = await bindPaintParameters(
+      template,
+      parameters,
+      await frameDigest(bytes, parameters),
+    );
+    return nodes.map((_, id) => subtreeParameterKey(draw, [id]));
+  };
+  const keys = await capture();
+  expect(keys[0]).not.toBeNull();
+  expect(keys[0]).toBe(keys[1]);
+  expect(keys[2]).not.toBe(keys[3]);
+  expect(keys[4]).toBe(keys[5]);
+  expect(keys[4]).not.toBe(keys[6]);
+  expect(await capture()).toEqual(keys);
+});
+
+test("static structural identities preserve reference contents, order and exact numbers", async () => {
+  const bytes = fixture([{ kind: "path", value: { path: 0, fill: 1 } }]);
+  const draw = structuredClone((await decodePaintTemplate(bytes, await paintDigest(bytes))).draw);
+  draw.paths.push(structuredClone(draw.paths[0]!));
+  draw.paints.push(structuredClone(draw.paints[1]!));
+  const node = (path: number, fill: number): TaggedWire => ({
+    kind: "path",
+    value: { path, fill },
+  });
+  draw.nodes = [node(0, 1), node(1, 2)];
+  const ids = () => staticSubtreeIdentities(draw, () => []);
+  expect(ids()[0]).toBe(ids()[1]);
+  draw.paths[1]!.points[0]![0] = -0;
+  expect(ids()[0]).not.toBe(ids()[1]);
+  draw.paths[1]!.points[0]![0] = 0;
+  (draw.paints[2]!.value as Record<string, number>).red = 0.5000000000000001;
+  expect(ids()[0]).not.toBe(ids()[1]);
+  draw.nodes.push(
+    { kind: "group", value: { children: [0, 1] } },
+    { kind: "group", value: { children: [1, 0] } },
+    { kind: "instanceBatch", value: {} },
+  );
+  expect(ids()[2]).not.toBe(ids()[3]);
+  expect(ids()[4]).toBeNull();
+  expect(staticSubtreeIdentities(draw, () => null)).toEqual([null, null, null, null, null]);
+});
 
 test("subtree keys read masks and strokes, ignore unrelated paint, and preserve admitted bits", async () => {
   const nodes: TaggedWire[] = [

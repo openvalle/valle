@@ -6,6 +6,7 @@ import {
   type TaggedWire,
 } from "./draw-program.ts";
 import type { PathArenaCache } from "./path-arena-cache.ts";
+import { staticSubtreeIdentities } from "./static-subtree-identity.ts";
 
 /** VLPAINT1 is the canonical Rust PaintTemplate encoding; parameter lanes are exact LE f32. */
 export interface PaintTemplateWire {
@@ -24,6 +25,7 @@ const dependencyIndices = new WeakMap<
   {
     nodes: Map<number, readonly number[] | null>;
     paints: Map<number, number>;
+    staticIdentities?: Array<number | null>;
   }
 >();
 
@@ -91,16 +93,23 @@ export function subtreeParameterKey(
     return result;
   };
   const slots = new Set<number>();
+  const identities: Array<readonly [string, number]> = [];
   for (const root of roots) {
     const dependencies = visit(root);
     if (dependencies === null) return null;
+    let identity: number | null = null;
+    if (dependencies.length === 0) {
+      index.staticIdentities ??= staticSubtreeIdentities(frame.template.draw, visit);
+      identity = index.staticIdentities[root] ?? null;
+    }
+    identities.push(identity === null ? ["node", root] : ["static", identity]);
     for (const slot of dependencies) slots.add(slot);
   }
   const view = new DataView(frame.bytes.buffer, frame.bytes.byteOffset, frame.bytes.byteLength);
   const parameters = [...slots]
     .sort((a, b) => a - b)
     .map((slot) => [slot, ...[0, 4, 8, 12].map((lane) => view.getUint32(slot * 16 + lane, true))]);
-  return JSON.stringify(["paint-subtree@1", [...frame.template.digest], roots, parameters]);
+  return JSON.stringify(["paint-subtree@2", [...frame.template.digest], identities, parameters]);
 }
 
 export async function paintDigest(bytes: Uint8Array): Promise<string> {
