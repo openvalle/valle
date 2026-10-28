@@ -256,7 +256,7 @@ export class ProductKernelPool {
 }
 
 function motionWorkingBytes(input: MotionKernelInput): number {
-  const viewport = JSON.parse(input.inputJson).viewport;
+  const viewport = JSON.parse(input.inputJson).frame?.viewport;
   const width = Math.max(input.width, Number(viewport?.width));
   const height = Math.max(input.height, Number(viewport?.height));
   if (

@@ -10,6 +10,10 @@ fn render() -> EngineRender {
 }
 
 fn render_with_extra_nodes(extra: usize) -> EngineRender {
+    render_fixture(extra, false)
+}
+
+fn render_fixture(extra: usize, paint_only: bool) -> EngineRender {
     let nodes = (0..extra)
         .map(|index| format!(r##"<View key="extra-{index}" style={{{{width:1,height:1,backgroundColor:"#456789"}}}} />"##))
         .collect::<String>();
@@ -22,6 +26,14 @@ export default function Card() { const time = useCurrentTime(); const frame = Ma
   </Scene>;
 }
 "##.replace("EXTRA_NODES", &nodes);
+    let source = if paint_only {
+        source.replace(
+            "left: frame, backgroundColor: \"#ff0033\"",
+            "backgroundColor: interpolate(time.seconds, [0,1], [\"#aa3520\",\"#207bbb\"])",
+        )
+    } else {
+        source
+    };
     let artifact = Arc::new(
         valle_compiler::motion::compile_motion(&source)
             .unwrap()
@@ -202,4 +214,45 @@ fn captured_transition_endpoints_resume_exactly_and_failure_does_not_poison_next
             .is_err()
     );
     assert!(staged.caches.motion_preparation.stage.is_none());
+}
+
+#[test]
+fn parameter_kernel_results_remain_exact_after_inflight_cache_eviction() {
+    let render = render_fixture(crate::prepare::motion_kernel::MIN_KERNEL_NODES, true);
+    let id = render.render_id();
+    let mut direct = render.frame_compiler();
+    let mut staged = render.frame_compiler();
+    let mut kernel = MotionKernel::default();
+    let spec = RenderSpec::new(
+        320,
+        180,
+        RenderQuality::Preview,
+        OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+    )
+    .unwrap();
+    let mut cold_bytes = 0;
+    for (index, frame) in [13, 3, 10, 2, 13].into_iter().enumerate() {
+        let key = FrameKey::new(frame);
+        let jobs = staged.capture_motion_jobs(id, key, spec).unwrap();
+        assert_eq!(jobs.len(), 1);
+        let bytes = packet(jobs, &staged, &mut kernel);
+        if index == 0 {
+            cold_bytes = bytes.len();
+        }
+        if index == 1 {
+            assert!(
+                bytes.len() * 10 < cold_bytes,
+                "cold={cold_bytes}, hot={}",
+                bytes.len()
+            );
+            // The result was dispatched while its template was resident. Eviction before
+            // completion must rebuild from this frame's authoritative inputs and stay exact.
+            staged.caches.motion_preparation.results = Default::default();
+        }
+        let actual = staged
+            .evaluate_prepare_motion(id, key, spec, &bytes)
+            .unwrap();
+        let expected = direct.evaluate_prepare(id, key, spec).unwrap();
+        assert_eq!(actual.prepared(), expected.prepared());
+    }
 }

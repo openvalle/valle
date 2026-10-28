@@ -12,8 +12,8 @@ use std::{
 use valle_draw::{
     Rect,
     program::{
-        AuthorColor, DrawProgram, LinearColor, Node, Paint, PaintId, PaintParameter, PaintTemplate,
-        ProgramResourceCatalog,
+        AuthorColor, DrawProgram, LinearColor, Node, Paint, PaintFrame, PaintId, PaintParameter,
+        PaintTemplate, ProgramResourceCatalog,
     },
 };
 
@@ -37,6 +37,7 @@ pub struct PaintPreparationStats {
 
 pub struct PreparedPaintFrame {
     pub program: Arc<DrawProgram>,
+    pub paint_frame: Option<PaintFrame>,
     pub layout_boxes: Arc<BTreeMap<String, [f32; 4]>>,
     pub stats: PaintPreparationStats,
 }
@@ -56,10 +57,11 @@ struct Snapshot {
     program: Arc<DrawProgram>,
     boxes: Arc<BTreeMap<String, [f32; 4]>>,
     bindings: Option<Bindings>,
+    paint_frame: Option<PaintFrame>,
 }
 
 struct Bindings {
-    template: PaintTemplate,
+    template: Arc<PaintTemplate>,
     // Exact paint interning is part of today's canonical program. Do not reuse a topology if
     // changing a value would merge two previously distinct paints or split a shared paint.
     static_colors: BTreeSet<[u32; 4]>,
@@ -136,13 +138,15 @@ impl Bindings {
             })
             .collect();
         Some(Self {
-            template: PaintTemplate::new(report.program.clone(), bindings, values.len()).ok()?,
+            template: Arc::new(
+                PaintTemplate::new(report.program.clone(), bindings, values.len()).ok()?,
+            ),
             static_colors,
             slots,
         })
     }
 
-    fn bind(&self, values: &[MotionValue]) -> Option<DrawProgram> {
+    fn bind(&self, values: &[MotionValue]) -> Option<PaintFrame> {
         let colors = colors(values)?;
         let mut distinct = BTreeMap::new();
         for (paint, slot) in &self.slots {
@@ -156,7 +160,7 @@ impl Bindings {
                 return None;
             }
         }
-        self.template.bind(&colors).ok()
+        self.template.bind_frame(colors).ok()
     }
 }
 
@@ -308,18 +312,19 @@ impl PaintProgramCache {
                     .zip(&values)
                     .all(|(a, b)| a.bitwise_eq(b))
             {
-                Some(snapshot.program.clone())
+                Some((snapshot.program.clone(), snapshot.paint_frame.clone()))
             } else {
                 snapshot
                     .bindings
                     .as_ref()
                     .and_then(|b| b.bind(&values))
-                    .map(Arc::new)
+                    .map(|frame| (frame.program().clone(), Some(frame)))
             };
-            if let Some(program) = program {
+            if let Some((program, paint_frame)) = program {
                 stats.reused_template = true;
                 return Ok(PreparedPaintFrame {
                     program,
+                    paint_frame,
                     layout_boxes: snapshot.boxes.clone(),
                     stats,
                 });
@@ -360,17 +365,23 @@ impl PaintProgramCache {
         let bindings = cacheable
             .then(|| Bindings::new(&report, &self.sources, &values))
             .flatten();
-        let program = Arc::new(report.program);
+        let paint_frame = bindings.as_ref().and_then(|b| b.bind(&values));
+        let program = paint_frame
+            .as_ref()
+            .map(|frame| frame.program().clone())
+            .unwrap_or_else(|| Arc::new(report.program));
         self.snapshot = cacheable.then(|| Snapshot {
             key,
             values,
             program: program.clone(),
             boxes: boxes.clone(),
             bindings,
+            paint_frame: paint_frame.clone(),
         });
         stats.emitted_program = true;
         Ok(PreparedPaintFrame {
             program,
+            paint_frame,
             layout_boxes: boxes,
             stats,
         })

@@ -188,7 +188,11 @@ test("Motion capture releases the single CPU slot before kernels and resumes the
       request: sent.request,
       definitions: { [renderId]: { json: "scene", resourceBytes: new Uint8Array([1, 2, 3]) } },
       jobs: [
-        { key: "clip", definitionId: renderId, inputJson: '{"viewport":{"width":2,"height":2}}' },
+        {
+          key: "clip",
+          definitionId: renderId,
+          inputJson: '{"frame":{"viewport":{"width":2,"height":2}},"knownTemplates":[]}',
+        },
       ],
     });
     await tick();

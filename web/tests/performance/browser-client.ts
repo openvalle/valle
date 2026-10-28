@@ -11,6 +11,25 @@ const { exportBrowserVideo } = (await import(
   exportUrl
 )) as typeof import("../../packages/engine/src/export.ts");
 const job = await (await fetch("/job.json")).json();
+// QA observes the actual transferred kernel replies, so a small fixture cannot accidentally
+// claim worker coverage while remaining below the artifact-node admission threshold.
+const motionPacketBytes = new Map<number, number>();
+if (job.mode === "qa") {
+  const NativeWorker = globalThis.Worker;
+  globalThis.Worker = class extends NativeWorker {
+    constructor(url: string | URL, options?: WorkerOptions) {
+      super(url, options);
+      this.addEventListener("message", (event) => {
+        const bytes = event.data?.motion;
+        if (bytes instanceof Uint8Array)
+          motionPacketBytes.set(
+            bytes.byteLength,
+            (motionPacketBytes.get(bytes.byteLength) ?? 0) + 1,
+          );
+      });
+    }
+  };
+}
 if (job.input.resourceBytesUrl)
   job.input.resourceBytes = new Uint8Array(
     await (await fetch(job.input.resourceBytesUrl)).arrayBuffer(),
@@ -104,6 +123,7 @@ async function run() {
       status: "ok",
       gpu,
       outputs,
+      motionPacketBytes: Object.fromEntries(motionPacketBytes),
       userAgent: navigator.userAgent,
       trace: trace?.snapshot({ backend: job.gpu ? "web-gpu" : "web-cpu" }),
     };

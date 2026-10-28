@@ -63,6 +63,8 @@ impl std::ops::Deref for MotionFontSet {
 #[derive(Debug)]
 pub(crate) struct CachedDrawProgram {
     arena: Arc<DrawProgram>,
+    #[cfg(any(feature = "web", test))]
+    pub(super) paint_frame: Option<valle_draw::program::PaintFrame>,
     encoding: OnceLock<Vec<u8>>,
     digest: OnceLock<ContentDigest>,
 }
@@ -75,6 +77,18 @@ impl CachedDrawProgram {
     fn from_shared(program: Arc<DrawProgram>) -> Self {
         Self {
             arena: program,
+            #[cfg(any(feature = "web", test))]
+            paint_frame: None,
+            encoding: OnceLock::new(),
+            digest: OnceLock::new(),
+        }
+    }
+
+    pub(super) fn from_paint_frame(frame: valle_draw::program::PaintFrame) -> Self {
+        Self {
+            arena: frame.program().clone(),
+            #[cfg(any(feature = "web", test))]
+            paint_frame: Some(frame),
             encoding: OnceLock::new(),
             digest: OnceLock::new(),
         }
@@ -84,6 +98,8 @@ impl CachedDrawProgram {
     pub(super) fn from_packed(bytes: &[u8]) -> Result<Self, valle_draw::program::PackedDrawError> {
         Ok(Self {
             arena: Arc::new(DrawProgram::from_packed(bytes)?),
+            #[cfg(any(feature = "web", test))]
+            paint_frame: None,
             encoding: OnceLock::from(bytes.to_vec()),
             digest: OnceLock::new(),
         })
@@ -375,7 +391,10 @@ pub(super) fn build_motion_program(
                 .as_ref()
                 .is_none_or(|program| !Arc::ptr_eq(&program.arena, &frame.program))
             {
-                entry.encoded = Some(Arc::new(CachedDrawProgram::from_shared(frame.program)));
+                entry.encoded = Some(Arc::new(match frame.paint_frame {
+                    Some(frame) => CachedDrawProgram::from_paint_frame(frame),
+                    None => CachedDrawProgram::from_shared(frame.program),
+                }));
             }
             return Ok(BuiltMotionProgram {
                 program: entry.encoded.as_ref().expect("initialized above").clone(),

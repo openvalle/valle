@@ -552,6 +552,23 @@
       },
       "regions": [],
       "order": true
+    },
+    {
+      "id": "paint-kernel",
+      "source": "fixtures/paint-kernel.motion.tsx",
+      "group": "core",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true,
+      "motionKernel": true
     }
   ]
 }

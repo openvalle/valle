@@ -25,6 +25,7 @@ type Case = {
   backendRules?: Record<string, Partial<PixelRule>>;
   regions: Region[];
   order?: boolean;
+  motionKernel?: boolean;
 };
 const suite = (await Bun.file(path.join(BASE, "suite.json")).json()) as {
   qa: {
@@ -728,6 +729,8 @@ async function qaCase(c: Case, backend: string, golden: any) {
       },
       folder,
     );
+    if (c.motionKernel && !Object.keys(r.motionPacketBytes ?? {}).length)
+      throw new Error(`${c.id} did not exercise a Motion kernel worker`);
     for (const entry of r.outputs)
       if (entry.name)
         await compare(

@@ -44,7 +44,7 @@ pub use packed::{DRAW_PROGRAM_FORMAT_VERSION, PackedDrawError};
 pub use paint::{AuthorColor, GradientStop, LinearColor, Paint, SpreadMode};
 pub use paint_table::{PaintIter, PaintTable};
 pub use path::{PathData, PathVerb};
-pub use template::{PaintParameter, PaintTemplate, PaintTemplateError};
+pub use template::{PaintFrame, PaintParameter, PaintTemplate, PaintTemplateError};
 pub use transform::{Affine2d, Transform2d};
 pub use validate::{
     DrawProgramError, MAX_EDGES, MAX_FILTER_SIGMA, MAX_FILTERS, MAX_GLYPHS, MAX_GROUP_DEPTH,

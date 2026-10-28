@@ -168,9 +168,13 @@ impl FrameCompiler {
         spec: RenderSpec,
         packet: &[u8],
     ) -> Result<PreparedTicket, ProductEngineError> {
-        use crate::prepare::motion_kernel::{Stage, decode_results};
-        let results =
-            decode_results(packet).map_err(|error| PrepareError::at("motionKernel", error))?;
+        use crate::prepare::motion_kernel::Stage;
+        let results = self
+            .caches
+            .motion_preparation
+            .results
+            .decode_results(packet)
+            .map_err(|error| PrepareError::at("motionKernel", error))?;
         self.caches.motion_preparation.stage = Some(Stage::Complete(results));
         let result = self.evaluate_prepare(render_id, key, spec);
         let stage = self.caches.motion_preparation.stage.take();

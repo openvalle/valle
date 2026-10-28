@@ -12,6 +12,16 @@ use std::{
 };
 use valle_draw::{Rect, program::DrawProgramBuilder};
 
+mod transport;
+use transport::{Receiver, ResultProgram};
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Input<T = MotionFrameInput> {
+    frame: T,
+    known_templates: Vec<ContentDigest>,
+}
+
 type Fonts = Vec<(ContentDigest, Arc<[u8]>, bool)>;
 const MAX_DEFINITION_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MIN_KERNEL_NODES: usize = 128;
@@ -42,7 +52,7 @@ pub(crate) struct MotionKernelJob {
 
 pub(crate) enum Stage {
     Capture(Vec<MotionKernelJob>),
-    Complete(BTreeMap<String, BuiltMotionProgram>),
+    Complete(BTreeMap<String, ResultProgram>),
 }
 
 struct CachedDefinition {
@@ -56,6 +66,7 @@ struct CachedDefinition {
 pub(crate) struct MotionPreparation {
     pub(crate) stage: Option<Stage>,
     definitions: VecDeque<CachedDefinition>,
+    pub(crate) results: Receiver,
     oversized_sources: BTreeSet<u32>,
 }
 
@@ -162,15 +173,21 @@ impl MotionPreparation {
             return motion::build_compiled_motion_program(context);
         };
         match stage {
-            Stage::Complete(results) => results
-                .remove(key)
-                .ok_or_else(|| failure("missing Motion kernel result")),
+            Stage::Complete(results) => match results.remove(key) {
+                Some(ResultProgram::Built(program)) => Ok(program),
+                Some(ResultProgram::Rebuild) => motion::build_compiled_motion_program(context),
+                None => Err(failure("missing Motion kernel result")),
+            },
             Stage::Capture(jobs) => {
                 let input = motion::resolve_motion_input(&context)?;
                 jobs.push(MotionKernelJob {
                     key: key.into(),
                     definition_id: definition_id.expect("capture definition resolved above"),
-                    input_json: serde_json::to_string(&input).map_err(failure)?,
+                    input_json: serde_json::to_string(&Input {
+                        frame: &input,
+                        known_templates: self.results.known_templates(),
+                    })
+                    .map_err(failure)?,
                 });
                 // A capture projection is never returned as a ticket. Empty programs only let
                 // the normal traversal discover all clips, including transition endpoints.
@@ -200,6 +217,7 @@ pub(crate) struct MotionKernel {
     fonts: motion::MotionFontCache,
     styles: valle_motion::StyleCache,
     faces: valle_motion::FaceCache,
+    encoder: transport::Encoder,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -248,89 +266,30 @@ impl MotionKernel {
             self.scene = Some((definition_id.into(), scene, fonts));
         }
         let (_, scene, dependencies) = self.scene.as_ref().expect("initialized above");
-        let input: MotionFrameInput = serde_json::from_str(input_json).map_err(failure)?;
+        let input: Input = serde_json::from_str(input_json).map_err(failure)?;
+        if input.known_templates.len() > transport::MAX_TEMPLATES {
+            return Err(failure("Motion known template count budget"));
+        }
         let fonts = self.fonts.get(dependencies)?;
         let built = valle_draw::program::with_instance_compaction(compact, || {
-            motion::build_motion_program(scene, &input, &self.styles, &self.faces, fonts)
+            motion::build_motion_program(scene, &input.frame, &self.styles, &self.faces, fonts)
         })?;
-        let metadata = serde_json::to_vec(&Metadata {
-            scene3d_frames: built.scene3d_frames,
-            scene3d_sampling: built.scene3d_sampling,
-            layout_boxes: built.layout_boxes,
-        })
-        .map_err(failure)?;
-        let program = built.program.packed().map_err(failure)?;
-        let mut bytes = Vec::with_capacity(4 + metadata.len() + program.len());
-        bytes.extend_from_slice(
-            &u32::try_from(metadata.len())
-                .map_err(failure)?
-                .to_le_bytes(),
-        );
-        bytes.extend_from_slice(&metadata);
-        bytes.extend_from_slice(program);
-        Ok(bytes)
+        self.encoder.encode(built, &input.known_templates)
     }
 }
 
-pub(super) fn decode(bytes: &[u8]) -> Result<BuiltMotionProgram, ProgramPrepareError> {
-    if bytes.len() < 4 || bytes.len() > 128 * 1024 * 1024 {
-        return Err(failure("Motion kernel packet size"));
+#[cfg(test)]
+fn decode(bytes: &[u8]) -> Result<BuiltMotionProgram, ProgramPrepareError> {
+    match Receiver::default().decode(bytes)? {
+        ResultProgram::Built(program) => Ok(program),
+        ResultProgram::Rebuild => Err(failure("missing template in standalone decoder")),
     }
-    let length = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
-    let end = 4_usize
-        .checked_add(length)
-        .filter(|end| *end < bytes.len())
-        .ok_or_else(|| failure("Motion kernel metadata size"))?;
-    let metadata: Metadata = serde_json::from_slice(&bytes[4..end]).map_err(failure)?;
-    let program = Arc::new(motion::CachedDrawProgram::from_packed(&bytes[end..]).map_err(failure)?);
-    Ok(BuiltMotionProgram {
-        program,
-        scene3d_frames: metadata.scene3d_frames,
-        scene3d_sampling: metadata.scene3d_sampling,
-        layout_boxes: metadata.layout_boxes,
-    })
 }
 
 pub(super) fn failure(reason: impl std::fmt::Display) -> ProgramPrepareError {
     ProgramPrepareError::CompiledInvariant {
         reason: reason.to_string(),
     }
-}
-
-pub(crate) fn decode_results(
-    mut bytes: &[u8],
-) -> Result<BTreeMap<String, BuiltMotionProgram>, ProgramPrepareError> {
-    fn field<'a>(bytes: &mut &'a [u8]) -> Result<&'a [u8], ProgramPrepareError> {
-        if bytes.len() < 4 {
-            return Err(failure("truncated Motion result field"));
-        }
-        let length = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
-        *bytes = &bytes[4..];
-        if length > bytes.len() {
-            return Err(failure("Motion result field length"));
-        }
-        let result = &bytes[..length];
-        *bytes = &bytes[length..];
-        Ok(result)
-    }
-    if bytes.len() > 128 * 1024 * 1024 {
-        return Err(failure("Motion results byte budget"));
-    }
-    let mut results = BTreeMap::new();
-    while !bytes.is_empty() {
-        if results.len() >= 128 {
-            return Err(failure("Motion results count budget"));
-        }
-        let key = std::str::from_utf8(field(&mut bytes)?).map_err(failure)?;
-        if key.len() > 4096 || key.is_empty() {
-            return Err(failure("Motion result key"));
-        }
-        let value = decode(field(&mut bytes)?)?;
-        if results.insert(key.into(), value).is_some() {
-            return Err(failure("duplicate Motion result key"));
-        }
-    }
-    Ok(results)
 }
 
 #[cfg(test)]
@@ -454,7 +413,11 @@ export default function Card(props) { const time = useCurrentTime(); const frame
                     &id,
                     &json,
                     &binary,
-                    &serde_json::to_string(&input).unwrap(),
+                    &serde_json::to_string(&Input {
+                        frame: &input,
+                        known_templates: Vec::new(),
+                    })
+                    .unwrap(),
                     false,
                 )
                 .unwrap();
@@ -471,7 +434,17 @@ export default function Card(props) { const time = useCurrentTime(); const frame
         }
         assert!(
             kernels[0]
-                .run(&id, "", &[], &serde_json::to_string(&input).unwrap(), false)
+                .run(
+                    &id,
+                    "",
+                    &[],
+                    &serde_json::to_string(&Input {
+                        frame: &input,
+                        known_templates: Vec::new()
+                    })
+                    .unwrap(),
+                    false
+                )
                 .is_ok()
         );
     }
@@ -481,7 +454,11 @@ export default function Card(props) { const time = useCurrentTime(); const frame
         let (mut definition, input, binary) = fixture();
         let json = serde_json::to_string(&definition).unwrap();
         let id = ContentDigest::of_bytes(json.as_bytes()).to_string();
-        let input = serde_json::to_string(&input).unwrap();
+        let input = serde_json::to_string(&Input {
+            frame: &input,
+            known_templates: Vec::new(),
+        })
+        .unwrap();
         let mut kernel = MotionKernel::default();
         assert!(kernel.run(&id, "{}", &binary, &input, false).is_err());
         assert!(
@@ -502,8 +479,8 @@ export default function Card(props) { const time = useCurrentTime(); const frame
             records.extend_from_slice(&(packet.len() as u32).to_le_bytes());
             records.extend_from_slice(&packet);
         }
-        assert!(decode_results(&records).is_err());
-        assert!(decode_results(&[1, 0, 0, 0]).is_err());
+        assert!(Receiver::default().decode_results(&records).is_err());
+        assert!(Receiver::default().decode_results(&[1, 0, 0, 0]).is_err());
         definition.fonts[0].digest = ContentDigest::of_bytes(b"wrong font");
         let json = serde_json::to_string(&definition).unwrap();
         let id = ContentDigest::of_bytes(json.as_bytes()).to_string();
