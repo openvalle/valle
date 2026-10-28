@@ -4,7 +4,10 @@ use std::{path::Path, sync::Arc, time::Instant};
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use valle_engine::{
-    fixed_package::{fixed_package_files, open_verified_fixed_package},
+    fixed_package::{
+        COMMON_PROFILE_KEY, canonical_fixed_execution_profile, fixed_package_files,
+        open_verified_fixed_package,
+    },
     render::FrameKey,
     resource::{ContentDigest, OutputBackground},
 };
@@ -25,11 +28,19 @@ fn main() -> Result<()> {
         |key: &str| -> Result<&str> { job[key].as_str().with_context(|| format!("missing {key}")) };
     let number =
         |key: &str| -> Result<u64> { job[key].as_u64().with_context(|| format!("missing {key}")) };
+    // The product host's config omits this reconstructible common member. The normal package
+    // verifier below still checks its exact bytes against the manifest; another policy fails.
+    let profile = job["executionProfileJson"]
+        .as_str()
+        .map(str::to_owned)
+        .map(Ok)
+        .unwrap_or_else(|| canonical_fixed_execution_profile(COMMON_PROFILE_KEY))
+        .map_err(anyhow::Error::msg)?;
     let files = fixed_package_files(
         string("timelineJson")?,
         string("resourceManifestJson")?,
         string("verifiedBindingBundleJson")?,
-        string("executionProfileJson")?,
+        &profile,
         &[],
     );
     let package = open_verified_fixed_package(string("fixedPackageManifestJson")?, &files)?;

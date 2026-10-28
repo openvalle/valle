@@ -40,6 +40,7 @@ import { RasterPathCache } from "./raster-path-cache.ts";
 import { RasterPaintCache, type FillPaintLease } from "./raster-paint-cache.ts";
 import { RasterTreeCache, type RasterTreeSignature } from "./raster-tree-cache.ts";
 import { canvasKitGpuCacheBudget } from "./gpu-budget.ts";
+import { localRasterPlacement } from "./raster-cache-placement.ts";
 import { drawPyramidFilter, drawPyramidFilterCooperative, pyramidWorkingBytes } from "./pyramid.ts";
 import { drawLensDistortion } from "./lens.ts";
 import { velocityBlurUniforms } from "./velocity.ts";
@@ -1942,9 +1943,20 @@ async function executeProgram(
   const pinnedImages = new Set<Image>();
   const pins = new Map<number, { references: number; release: () => void }>();
   const terminalAliases = new Set([positiveId(localPlan.output, "local output")]);
+  // These consumers sample whole slot images, not strict ROI copies. Keep their sources
+  // on the original rendering path, as Native does, rather than relocating compact pixels.
+  const wholeImageReads = new Set<number>();
+  for (const raw of array(localPlan.passes, "local passes")) {
+    const kind = record(record(raw, "local pass").kind, "local pass kind");
+    if (kind.kind === "applyMask") wholeImageReads.add(positiveId(kind.mask, "mask source"));
+    else if (kind.kind === "applyTransition" || kind.kind === "applyShader")
+      for (const input of programPassReads(kind)) wholeImageReads.add(input);
+  }
   for (const step of [...bound.passes].reverse()) {
     if (terminalAliases.has(step.output) && step.storage.kind === "alias")
       terminalAliases.add(positiveId(step.storage.source, "local alias"));
+    if (wholeImageReads.has(step.output) && step.storage.kind === "alias")
+      wholeImageReads.add(positiveId(step.storage.source, "local alias"));
   }
   let result = transparentValue();
   const retire = (resources: readonly number[]): void => {
@@ -2017,7 +2029,7 @@ async function executeProgram(
       const slot =
         storage.kind === "surface" ? positiveId(storage.slot, "bound program surface slot") : 0;
       const cacheKey =
-        slot === 0 || terminalAliases.has(output)
+        slot === 0 || terminalAliases.has(output) || wholeImageReads.has(output)
           ? null
           : localRasterKey(
               admitted,
@@ -2032,7 +2044,9 @@ async function executeProgram(
       if (cached) {
         pinnedImages.add(cached.value.image!);
         pins.set(output, { references: 1, release: cached.release });
-        values.set(output, cached.value);
+        // Cached pixels are local to their compact ROI. Integer parent translation may
+        // change the destination origin while retaining identical local raster coordinates.
+        values.set(output, { ...cached.value, roi: outputRoi });
         retire(step.retireAfter);
         continue;
       }
@@ -2161,14 +2175,11 @@ function localRasterKey(
   if (roots === null) return null;
   const key = subtreeParameterKey(program.draw, roots);
   if (key === null) return null;
-  return JSON.stringify([
-    key,
-    kind.kind,
+  const placement = localRasterPlacement(
     programMatrix(program, localPlan, kind.output, device),
     roi,
-    extent,
-    spec,
-  ]);
+  );
+  return JSON.stringify([key, kind.kind, placement.matrix, placement.roi, extent, spec]);
 }
 
 function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterPlan | null {

@@ -716,14 +716,16 @@ impl ProgramRuntime {
         let Some(digest) = frame.self_contained_subtree_digest(roots) else {
             return Ok(None);
         };
+        let (transform, roi) = super::raster_cache_placement::local_placement(
+            self.device_matrix_values(plan, output, transform)?,
+            roi,
+        );
         Ok(Some(RasterLayerKey {
             program: ContentDigest::from_bytes(digest),
             frame: ContentDigest::of_bytes(kind),
             render_spec,
-            transform: self
-                .device_matrix_values(plan, output, transform)?
-                .map(f64::to_bits),
-            roi: (roi.x, roi.y, roi.width, roi.height),
+            transform,
+            roi,
         }))
     }
 

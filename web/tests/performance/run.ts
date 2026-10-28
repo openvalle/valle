@@ -27,7 +27,10 @@ type Case = {
   regions: Region[];
   order?: boolean;
   motionKernel?: boolean;
+  /** Capture the production host's frozen Timeline package, including compiled Motion clips. */
+  frozenHostPackage?: boolean;
   durationS?: number;
+  fps?: number;
   temporal?: {
     rule: TemporalRule;
     tracks: (Region & { dx: number; dy: number })[];
@@ -378,7 +381,7 @@ async function resourceHost(c: Case, folder: string) {
     reader.releaseLock();
     const upstream = new URL(JSON.parse(line.split("\n")[0]!).url).origin;
     let config = await (await fetch(`${upstream}/config.json`)).json();
-    if (c.kind === "timeline") {
+    if (c.kind === "timeline" && !c.frozenHostPackage) {
       const boot = await (await fetch(`${upstream}/studio/boot.json`)).json();
       const author = await Bun.file(source(c)).json();
       const factsResponse = await fetch(`${upstream}/timeline/media-facts`, {
@@ -997,7 +1000,7 @@ async function orderCase(c: Case, backend: string) {
   );
 }
 
-function validateVideo(file: string, backend: string, durationS: number) {
+function validateVideo(file: string, backend: string, durationS: number, fps: number) {
   const streams = JSON.parse(
     runSync([
       "ffprobe",
@@ -1018,9 +1021,9 @@ function validateVideo(file: string, backend: string, durationS: number) {
     (codec === "hevc" && value.codec_tag_string !== "hvc1") ||
     value.width !== performance.width ||
     value.height !== performance.height ||
-    Number(value.nb_read_frames) !== Math.round(durationS * performance.fps) ||
-    value.avg_frame_rate !== `${performance.fps}/1` ||
-    Math.abs(Number(value.duration) - durationS) > 1 / performance.fps
+    Number(value.nb_read_frames) !== Math.round(durationS * fps) ||
+    value.avg_frame_rate !== `${fps}/1` ||
+    Math.abs(Number(value.duration) - durationS) > 1 / fps
   )
     throw new Error(`video metadata drift: ${file} ${JSON.stringify(value)}`);
   const audio = streams.filter((s: any) => s.codec_type === "audio");
@@ -1039,6 +1042,7 @@ function validateVideo(file: string, backend: string, durationS: number) {
 
 async function benchCase(c: Case, backend: string, round: number, trace: boolean) {
   const durationS = c.durationS ?? performance.durationS;
+  const fps = c.fps ?? performance.fps;
   const folder = path.join(output, "bench", backend, c.id, trace ? "trace" : `round-${round}`);
   let result: any;
   if (backend.startsWith("native")) {
@@ -1050,7 +1054,7 @@ async function benchCase(c: Case, backend: string, round: number, trace: boolean
         "-o",
         video,
         "--fps",
-        String(performance.fps),
+        String(fps),
         "--output-size",
         `${performance.width}x${performance.height}`,
         "--threads",
@@ -1072,14 +1076,14 @@ async function benchCase(c: Case, backend: string, round: number, trace: boolean
         width: performance.width,
         height: performance.height,
         bitrate: performance.bitrate,
-        fps: performance.fps,
-        frameCount: Math.round(durationS * performance.fps),
+        fps,
+        frameCount: Math.round(durationS * fps),
         trace,
       },
       folder,
     );
   }
-  const video = validateVideo(path.join(folder, "export.mp4"), backend, durationS);
+  const video = validateVideo(path.join(folder, "export.mp4"), backend, durationS, fps);
   const stages: Record<string, number> = {};
   if (result.trace)
     for (const event of result.trace.traceEvents)
@@ -1091,7 +1095,7 @@ async function benchCase(c: Case, backend: string, round: number, trace: boolean
     round,
     trace,
     wallMs: result.wallMs,
-    fps: (Math.round(durationS * performance.fps) * 1000) / result.wallMs,
+    fps: (Math.round(durationS * fps) * 1000) / result.wallMs,
     rtf: (durationS * 1000) / result.wallMs,
     peakFootprintBytes: result.peakFootprintBytes ?? null,
     peakRssBytes: result.peakRssBytes ?? null,

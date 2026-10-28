@@ -791,6 +791,70 @@
       },
       "motionKernel": true,
       "durationS": 2
+    },
+    {
+      "id": "translation-integer",
+      "source": "fixtures/translation-integer.timeline.json",
+      "group": "heavy",
+      "assets": {
+        "motion": "web/tests/performance/fixtures/temporal-static.motion.tsx"
+      },
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": []
+      },
+      "durationS": 2,
+      "kind": "timeline",
+      "frozenHostPackage": true,
+      "fps": 30
+    },
+    {
+      "id": "translation-phase",
+      "source": "fixtures/translation-phase.timeline.json",
+      "group": "heavy",
+      "assets": {
+        "motion": "web/tests/performance/fixtures/temporal-static.motion.tsx"
+      },
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": []
+      },
+      "durationS": 2,
+      "kind": "timeline",
+      "frozenHostPackage": true,
+      "fps": 30
     }
   ]
 }

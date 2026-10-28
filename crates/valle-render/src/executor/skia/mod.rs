@@ -25,6 +25,7 @@ mod noise;
 mod output;
 mod pass;
 mod radial_gpu;
+mod raster_cache_placement;
 mod scene3d_dof;
 #[cfg(feature = "native")]
 mod scene3d_gpu;
