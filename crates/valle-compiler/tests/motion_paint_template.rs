@@ -376,6 +376,134 @@ fn signed_zero_props_and_clips_preserve_canonical_bytes() {
     );
 }
 
+/// Compare canonical bytes and template identity with a fresh cache at the same input. This
+/// catches history-dependent variant selection even when two variants draw identical pixels.
+fn guarded_sequence(
+    source: &str,
+    sequence: &[u32],
+    check_cold: bool,
+) -> Vec<valle_motion::layout::PaintPreparationStats> {
+    let artifact = compile_motion(source).unwrap().artifact;
+    let scene = valle_motion::prepare_scene(&artifact).unwrap();
+    let fonts = fonts();
+    let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+    let viewport = Viewport::new((640, 360));
+    let mut cache = PaintProgramCache::new(&scene, &fonts).unwrap();
+    let mut stats = Vec::new();
+    for frame in sequence {
+        let ctx = valle_motion::motion_context_at_frame(*frame, 64, FrameRate::new(30, 1).unwrap())
+            .unwrap();
+        let prepare = |cache: &mut PaintProgramCache| {
+            cache
+                .prepare(
+                    &ctx,
+                    &props,
+                    viewport,
+                    None,
+                    None,
+                    &|_: &str| None,
+                    None,
+                    Default::default(),
+                )
+                .unwrap()
+        };
+        let actual = prepare(&mut cache);
+        let tree = valle_motion::build_tree(
+            &scene,
+            &ctx,
+            &props,
+            &LayoutOptions {
+                viewport,
+                fonts: &fonts,
+                styles: None,
+            },
+        )
+        .unwrap();
+        let expected = valle_motion::emit(&tree, &valle_motion::default_font_naming).unwrap();
+        assert_eq!(
+            actual.program.packed_bytes().unwrap(),
+            expected.program.packed_bytes().unwrap(),
+            "frame {frame}"
+        );
+        if check_cold {
+            let cold = prepare(&mut PaintProgramCache::new(&scene, &fonts).unwrap());
+            let identity = |result: &valle_motion::layout::PreparedPaintFrame| {
+                result
+                    .paint_frame
+                    .as_ref()
+                    .map(|f| (f.template().digest().unwrap(), f.parameter_bytes()))
+            };
+            assert_eq!(
+                identity(&actual),
+                identity(&cold),
+                "cold identity frame {frame}"
+            );
+        }
+        assert!(actual.stats.resident_variants <= 16);
+        stats.push(actual.stats);
+    }
+    stats
+}
+
+#[test]
+fn guarded_variants_reuse_shared_static_dynamic_and_omitted_paints() {
+    let source = r##"export default function Demo(){const t=useCurrentTime(); return <Scene style={{width:640,height:360,backgroundColor:'red'}}>
+    <View style={{width:80,height:70,backgroundColor:interpolate(t.seconds,[0,1,2],['red','blue','red'])}}/>
+    <View style={{width:80,height:70,backgroundColor:interpolate(t.seconds,[0,1,2],['red','blue','green'])}}/>
+    <View style={{width:80,height:70,backgroundColor:interpolate(t.seconds,[0,1,2],['#bb224400','#bb2244ff','#bb224400'])}}/>
+    </Scene>}"##;
+    let stats = guarded_sequence(source, &[0, 0, 15, 30, 45, 59, 0, 45, 30, 15, 0], true);
+    assert!(
+        stats[1].reused_template,
+        "omitted + shared static paint must be reusable"
+    );
+    assert!(
+        stats[3].reused_template,
+        "two dynamic sources may share one changing paint"
+    );
+    assert!(stats[5..].iter().all(|s| s.reused_template));
+    assert_eq!(stats.last().unwrap().resident_variants, 3);
+}
+
+#[test]
+fn more_than_sixteen_guard_variants_keep_cold_hot_reverse_and_evicted_identity() {
+    let nodes = (0..5).map(|i| format!(r##"<View key="color{i}" style={{{{width:30,height:20,backgroundColor:interpolate(Math.floor((t.seconds*30+0.1)/{})%2,[0,1],['#{:06x}00','#{:06x}ff'])}}}}/>"##, 1 << i, 0x224466 + i * 31, 0x224466 + i * 31)).collect::<String>();
+    let source = format!(
+        r#"export default function Demo(){{const t=useCurrentTime();return <Scene style={{{{width:640,height:360}}}}>{nodes}</Scene>}}"#
+    );
+    let order: Vec<_> = (0..32)
+        .chain((0..32).rev())
+        .chain((0..32).map(|i| (i * 13) % 32))
+        .chain([0, 0, 31, 31])
+        .collect();
+    let stats = guarded_sequence(&source, &order, true);
+    assert!(
+        stats[..32]
+            .iter()
+            .all(|s| s.emitted_program && !s.reused_template)
+    );
+    assert!(stats[32..48].iter().all(|s| s.reused_template));
+    assert!(stats[48..64].iter().all(|s| s.emitted_program));
+    assert_eq!(stats[31].resident_variants, 16);
+    assert!(stats[97].reused_template);
+    assert!(stats[99].reused_template);
+}
+
+#[test]
+fn static_opacity_siblings_do_not_hide_pre_fold_paint_interning_dependencies() {
+    let source = r##"export default function Demo(){const t=useCurrentTime();return <Scene style={{width:640,height:360}}>
+    <View style={{width:80,height:70,backgroundColor:interpolate(t.seconds,[0,1,2],['red','blue','red'])}}/>
+    <View style={{width:80,height:70,opacity:0.5,backgroundColor:'red'}}/>
+    <View style={{width:80,height:70,backgroundColor:'blue'}}/>
+    </Scene>}"##;
+    let stats = guarded_sequence(source, &[15, 0, 30, 59, 0, 15], true);
+    assert!(
+        stats
+            .iter()
+            .all(|s| s.emitted_program && s.resident_variants == 0)
+    );
+}
+
 #[test]
 #[ignore = "isolated preparation benchmark; run optimized and without concurrent builds"]
 fn preparation_template_benchmark() {

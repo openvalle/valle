@@ -41,7 +41,7 @@ pub struct EmitReport {
     /// Explicit background consumers captured during emission, before any parameter binding.
     /// Empty if instance compaction changed the recording's leaf structure.
     pub(crate) background_paints:
-        BTreeMap<String, (valle_draw::program::NodeId, valle_draw::program::PaintId)>,
+        BTreeMap<String, Option<(valle_draw::program::NodeId, valle_draw::program::PaintId)>>,
     /// Complete frame-local Scene3D requests referenced by typed `Scene3d` program nodes. Hosts
     /// fulfill these like any other content-addressed resource; the executor sees only the bound
     /// raster object.
@@ -91,7 +91,8 @@ struct EmissionState {
     scene3d_frames: Vec<crate::SealedScene3DFrame>,
     unsupported: Vec<(String, &'static str)>,
     parameter_nodes: Option<std::collections::BTreeSet<String>>,
-    background_paths: BTreeMap<String, usize>,
+    // None records an explicitly omitted transparent background, not a missing/unvisited node.
+    background_paths: BTreeMap<String, Option<usize>>,
 }
 
 /// Emission failure. Reject inconsistent layout or scene state rather than returning an empty
@@ -603,6 +604,11 @@ fn emit_with_faces_and_catalog(
     // Masks can reorder their source; instance compaction needs its own column bindings. Do not
     // infer either mapping from coincidentally equal paint values.
     let background_paints = if out.background_paths.is_empty()
+        // Opacity canonicalization can change paint interning even for a static sibling. Its
+        // pre-fold dependencies need explicit provenance before it can use these color guards.
+        || out.recording.cmds.iter().any(|cmd| {
+            matches!(cmd, RecordCmd::BeginOpacity { alpha } | RecordCmd::BeginSaveLayer { alpha, .. } if *alpha != 1.0)
+        })
         || program.nodes().iter().any(|node| {
             matches!(node, valle_draw::program::Node::InstanceBatch(_))
                 || matches!(node, valle_draw::program::Node::Group(group) if group.mask.is_some())
@@ -639,8 +645,11 @@ fn emit_with_faces_and_catalog(
             out.background_paths
                 .iter()
                 .filter_map(|(key, command)| {
+                    let Some(command) = command else {
+                        return Some((key.clone(), None));
+                    };
                     let (node, paint) = paths[commands[command]];
-                    paint.map(|paint| (key.clone(), (node, paint)))
+                    paint.map(|paint| (key.clone(), Some((node, paint))))
                 })
                 .collect()
         }
@@ -2950,6 +2959,21 @@ impl Emitter<'_> {
     ) {
         // Paint the background color beneath background images.
         let color = style.background_color.resolve(node.context.current_color);
+        if color.0[3] == 0
+            && let Some(key) = self.node_key(np)
+            && self
+                .out
+                .parameter_nodes
+                .as_ref()
+                .is_some_and(|nodes| nodes.contains(key))
+            && self
+                .tree
+                .background_colors
+                .get(key)
+                .is_some_and(|authored| authored.to_srgb8() == rgba_of(color))
+        {
+            self.out.background_paths.insert(key.to_owned(), None);
+        }
         if color.0[3] != 0 {
             let authored = self
                 .node_key(np)
@@ -2966,7 +2990,7 @@ impl Emitter<'_> {
                 {
                     self.out
                         .background_paths
-                        .insert(key.to_owned(), self.out.recording.cmds.len());
+                        .insert(key.to_owned(), Some(self.out.recording.cmds.len()));
                 }
                 self.fill_box_with(border_box, radii, Paint::FloatSolid(color));
             } else {

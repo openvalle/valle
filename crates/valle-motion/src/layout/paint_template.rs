@@ -6,7 +6,7 @@
 use super::{LayoutCache, LayoutError, PreparedScene, StyleCache, Viewport, reuse::GeometryKey};
 use crate::{EvalInputs, ExprId, MotionContext, MotionValue, ResolvedProps, StyleValue};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
 };
 use valle_draw::{
@@ -33,6 +33,8 @@ pub struct PaintPreparationStats {
     pub parameter_slots: usize,
     pub reused_template: bool,
     pub emitted_program: bool,
+    pub resident_variants: usize,
+    pub checked_variants: usize,
 }
 
 pub struct PreparedPaintFrame {
@@ -52,25 +54,69 @@ struct TemplateKey {
 }
 
 struct Snapshot {
-    key: TemplateKey,
     values: Vec<MotionValue>,
     program: Arc<DrawProgram>,
     boxes: Arc<BTreeMap<String, [f32; 4]>>,
-    bindings: Option<Bindings>,
+    bindings: Bindings,
     paint_frame: Option<PaintFrame>,
 }
 
+// Both caps affect residency only. Oversized or evicted variants still produce the same
+// parameter template, but will be rebuilt on the next request. The byte cap accounts encoded
+// template storage, not allocator RSS or the host's surface/flight budget.
+const MAX_VARIANTS: usize = 16;
+const MAX_TEMPLATE_BYTES: usize = 8 * 1024 * 1024;
+
 struct Bindings {
     template: Arc<PaintTemplate>,
-    // Exact paint interning is part of today's canonical program. Do not reuse a topology if
-    // changing a value would merge two previously distinct paints or split a shared paint.
+    omitted: Vec<bool>,
+    // Static lookup is built once; hot guards never scan unrelated nodes or paint arenas.
     static_colors: BTreeSet<[u32; 4]>,
-    slots: Vec<(PaintId, usize)>,
+    groups: Vec<PaintGroup>,
+}
+
+struct PaintGroup {
+    paint: PaintId,
+    slots: Vec<usize>,
+    // A paint read by a static consumer cannot change, even when dynamic consumers share it.
+    pinned: Option<[u32; 4]>,
+}
+
+fn color_bits(c: LinearColor) -> [u32; 4] {
+    [c.red, c.green, c.blue, c.alpha].map(f32::to_bits)
 }
 
 fn color_key(c: LinearColor) -> [u32; 4] {
-    // Paint equality considers positive and negative zero equal.
+    // Paint interning considers positive and negative zero equal; parameter bytes do not.
     [c.red, c.green, c.blue, c.alpha].map(|v| if v == 0.0 { 0 } else { v.to_bits() })
+}
+
+struct ColorInputs {
+    colors: Vec<LinearColor>,
+    omitted: Vec<bool>,
+}
+
+impl ColorInputs {
+    fn new(values: &[MotionValue]) -> Option<Self> {
+        let mut colors = Vec::with_capacity(values.len());
+        let mut omitted = Vec::with_capacity(values.len());
+        for value in values {
+            let MotionValue::Color(color) = value else {
+                return None;
+            };
+            if !color.is_finite() {
+                return None;
+            }
+            let working = AuthorColor::to_working(*color);
+            if !working.is_finite() {
+                return None;
+            }
+            colors.push(working);
+            // This is the emitter's CSS alpha probe, not a new transparency threshold.
+            omitted.push(color.to_srgb8().a == 0);
+        }
+        Some(Self { colors, omitted })
+    }
 }
 
 impl Bindings {
@@ -79,22 +125,30 @@ impl Bindings {
         sources: &BTreeMap<String, usize>,
         values: &[MotionValue],
     ) -> Option<Self> {
-        let colors = colors(values)?;
-        let mut paints = BTreeMap::new();
+        let inputs = ColorInputs::new(values)?;
+        let mut paints = BTreeMap::<PaintId, Vec<(valle_draw::program::NodeId, usize)>>::new();
         let mut consumers = BTreeSet::new();
         for (key, slot) in sources {
-            let (node, paint) = *report.background_paints.get(key)?;
-            if report.program.paints()[paint.raw() as usize] != Paint::Solid(colors[*slot]) {
-                // Includes opacity folding, overridden declarations, and non-typed paints.
+            let consumer = *report.background_paints.get(key)?;
+            if inputs.omitted[*slot] {
+                if consumer.is_some() {
+                    return None;
+                }
+                continue;
+            }
+            let (node, paint) = consumer?;
+            let Paint::Solid(color) = report.program.paints()[paint.raw() as usize] else {
+                return None;
+            };
+            if color_bits(color) != color_bits(inputs.colors[*slot]) {
+                // Includes opacity folding, cascade overrides, and signed-zero ambiguity in
+                // shared paints. Never infer declaration provenance from numeric equality.
                 return None;
             }
-            if let Some(previous) = paints.insert(paint, *slot)
-                && previous != *slot
-            {
-                return None;
-            }
-            consumers.insert(node);
+            paints.entry(paint).or_default().push((node, *slot));
+            consumers.insert((node, paint));
         }
+        let mut pinned = BTreeSet::new();
         for (index, node) in report.program.nodes().iter().enumerate() {
             let reads: Vec<_> = match node {
                 Node::Path(path) => path
@@ -107,10 +161,13 @@ impl Bindings {
                     .collect(),
                 _ => Vec::new(),
             };
-            if reads.iter().any(|p| paints.contains_key(p))
-                && !consumers.contains(&valle_draw::program::NodeId::from_raw(index as u32))
-            {
-                return None;
+            for paint in reads {
+                if paints.contains_key(&paint)
+                    && !consumers
+                        .contains(&(valle_draw::program::NodeId::from_raw(index as u32), paint))
+                {
+                    pinned.insert(paint);
+                }
             }
         }
         let static_colors = report
@@ -119,7 +176,8 @@ impl Bindings {
             .iter()
             .enumerate()
             .filter_map(|(index, paint)| {
-                if paints.contains_key(&PaintId::from_raw(index as u32)) {
+                let id = PaintId::from_raw(index as u32);
+                if paints.contains_key(&id) && !pinned.contains(&id) {
                     return None;
                 }
                 if let Paint::Solid(c) = paint {
@@ -129,57 +187,81 @@ impl Bindings {
                 }
             })
             .collect();
-        let slots: Vec<_> = paints.into_iter().collect();
-        let bindings = slots
+        let groups: Vec<_> = paints
+            .into_iter()
+            .map(|(paint, mut consumers)| {
+                // Canonical node order follows paint use order for the admitted recording class.
+                consumers.sort_unstable();
+                let slots = consumers.into_iter().map(|(_, slot)| slot).collect();
+                let pinned = pinned.contains(&paint).then(|| {
+                    let Paint::Solid(color) = report.program.paints()[paint.raw() as usize] else {
+                        unreachable!()
+                    };
+                    color_bits(color)
+                });
+                PaintGroup {
+                    paint,
+                    slots,
+                    pinned,
+                }
+            })
+            .collect();
+        let bindings = groups
             .iter()
-            .map(|(paint, slot)| PaintParameter {
-                paint: *paint,
-                slot: *slot,
+            .filter(|g| g.pinned.is_none())
+            .map(|g| PaintParameter {
+                paint: g.paint,
+                slot: g.slots[0],
             })
             .collect();
         Some(Self {
             template: Arc::new(
                 PaintTemplate::new(report.program.clone(), bindings, values.len()).ok()?,
             ),
+            omitted: inputs.omitted,
             static_colors,
-            slots,
+            groups,
         })
     }
 
-    fn bind(&self, values: &[MotionValue]) -> Option<PaintFrame> {
-        let colors = colors(values)?;
+    fn accepts(&self, inputs: &ColorInputs) -> bool {
+        if self.omitted != inputs.omitted {
+            return false;
+        }
         let mut distinct = BTreeMap::new();
-        for (paint, slot) in &self.slots {
-            let key = color_key(colors[*slot]);
-            if self.static_colors.contains(&key) {
-                return None;
-            }
-            if let Some(previous) = distinct.insert(key, *paint)
-                && previous != *paint
+        for group in &self.groups {
+            let color = inputs.colors[group.slots[0]];
+            let bits = color_bits(color);
+            if group
+                .slots
+                .iter()
+                .any(|slot| color_bits(inputs.colors[*slot]) != bits)
             {
-                return None;
+                return false;
+            }
+            if let Some(pinned) = group.pinned {
+                if pinned != bits {
+                    return false;
+                }
+                continue;
+            }
+            let key = color_key(color);
+            if self.static_colors.contains(&key) || distinct.insert(key, group.paint).is_some() {
+                return false;
             }
         }
-        self.template.bind_frame(colors).ok()
+        true
+    }
+
+    fn bind(&self, inputs: &ColorInputs) -> Option<PaintFrame> {
+        self.accepts(inputs)
+            .then(|| self.template.bind_frame(inputs.colors.clone()).ok())
+            .flatten()
     }
 }
 
-fn colors(values: &[MotionValue]) -> Option<Vec<LinearColor>> {
-    values
-        .iter()
-        .map(|value| {
-            let MotionValue::Color(color) = value else {
-                return None;
-            };
-            // The existing emitter omits backgrounds whose CSS alpha probe rounds to zero. That
-            // changes structure, so select the full lowering at this boundary; retain HDR RGB.
-            (color.is_finite() && color.to_srgb8().a != 0).then(|| AuthorColor::to_working(*color))
-        })
-        .collect()
-}
-
-/// Worker-local, bounded to one immutable scene/font registry and one resident variant. Eviction
-/// only changes preparation cost. A cold evaluation always selects the same canonical program.
+/// Worker-local variants for one immutable scene/font registry and one geometry/host key.
+/// Guards inspect only current values. LRU residency changes cost, never canonical output.
 pub struct PaintProgramCache {
     prepared: PreparedScene,
     layout: LayoutCache,
@@ -188,7 +270,9 @@ pub struct PaintProgramCache {
     roots: Vec<ExprId>,
     sources: BTreeMap<String, usize>,
     nodes: BTreeSet<String>,
-    snapshot: Option<Snapshot>,
+    key: Option<TemplateKey>,
+    variants: VecDeque<Snapshot>,
+    template_bytes: usize,
 }
 
 impl PaintProgramCache {
@@ -246,7 +330,9 @@ impl PaintProgramCache {
             roots,
             sources,
             nodes,
-            snapshot: None,
+            key: None,
+            variants: VecDeque::new(),
+            template_bytes: 0,
         })
     }
 
@@ -255,7 +341,9 @@ impl PaintProgramCache {
     }
 
     pub fn clear(&mut self) {
-        self.snapshot = None;
+        self.key = None;
+        self.variants.clear();
+        self.template_bytes = 0;
         self.layout.clear();
     }
 
@@ -282,10 +370,12 @@ impl PaintProgramCache {
             parameter_slots: self.roots.len(),
             ..Default::default()
         };
-        if let Some(snapshot) = &self.snapshot
-            && snapshot.key == key
-            && (snapshot.bindings.is_some() || self.roots.is_empty())
-        {
+        if self.key.as_ref() != Some(&key) {
+            self.variants.clear();
+            self.template_bytes = 0;
+            self.key = Some(key);
+        }
+        if !self.variants.is_empty() {
             let evaluated = crate::eval::eval_roots_planned(
                 self.prepared.artifact(),
                 &self.plan,
@@ -305,29 +395,39 @@ impl PaintProgramCache {
             .map_err(LayoutError::Eval)?;
             let values: Vec<_> = self.roots.iter().map(|id| evaluated[id].clone()).collect();
             stats.evaluated_expressions = self.order.len();
-            let program = if snapshot.values.len() == values.len()
-                && snapshot
-                    .values
-                    .iter()
-                    .zip(&values)
-                    .all(|(a, b)| a.bitwise_eq(b))
-            {
-                Some((snapshot.program.clone(), snapshot.paint_frame.clone()))
-            } else {
-                snapshot
-                    .bindings
-                    .as_ref()
-                    .and_then(|b| b.bind(&values))
-                    .map(|frame| (frame.program().clone(), Some(frame)))
-            };
-            if let Some((program, paint_frame)) = program {
-                stats.reused_template = true;
-                return Ok(PreparedPaintFrame {
-                    program,
-                    paint_frame,
-                    layout_boxes: snapshot.boxes.clone(),
-                    stats,
+            if let Some(inputs) = ColorInputs::new(&values) {
+                let found = self.variants.iter().rposition(|snapshot| {
+                    stats.checked_variants += 1;
+                    snapshot.bindings.accepts(&inputs)
                 });
+                if let Some(index) = found {
+                    let snapshot = self.variants.remove(index).expect("resident variant");
+                    let (program, paint_frame) = if snapshot
+                        .values
+                        .iter()
+                        .zip(&values)
+                        .all(|(a, b)| a.bitwise_eq(b))
+                    {
+                        (snapshot.program.clone(), snapshot.paint_frame.clone())
+                    } else {
+                        let frame = snapshot
+                            .bindings
+                            .template
+                            .bind_frame(inputs.colors)
+                            .expect("accepted color inputs");
+                        (frame.program().clone(), Some(frame))
+                    };
+                    let boxes = snapshot.boxes.clone();
+                    self.variants.push_back(snapshot);
+                    stats.reused_template = true;
+                    stats.resident_variants = self.variants.len();
+                    return Ok(PreparedPaintFrame {
+                        program,
+                        paint_frame,
+                        layout_boxes: boxes,
+                        stats,
+                    });
+                }
             }
         }
         // The full activation pass determines which expressions are live on a cold frame. Do
@@ -365,19 +465,42 @@ impl PaintProgramCache {
         let bindings = cacheable
             .then(|| Bindings::new(&report, &self.sources, &values))
             .flatten();
-        let paint_frame = bindings.as_ref().and_then(|b| b.bind(&values));
+        let paint_frame = bindings
+            .as_ref()
+            .and_then(|b| b.bind(&ColorInputs::new(&values)?));
         let program = paint_frame
             .as_ref()
             .map(|frame| frame.program().clone())
             .unwrap_or_else(|| Arc::new(report.program));
-        self.snapshot = cacheable.then(|| Snapshot {
-            key,
-            values,
-            program: program.clone(),
-            boxes: boxes.clone(),
-            bindings,
-            paint_frame: paint_frame.clone(),
-        });
+        if let Some(bindings) = bindings {
+            // Packing happens only on construction and is shared with later transport/digests.
+            let bytes = bindings.template.packed().map_or(usize::MAX, <[u8]>::len);
+            if bytes <= MAX_TEMPLATE_BYTES {
+                while self.variants.len() >= MAX_VARIANTS
+                    || self.template_bytes + bytes > MAX_TEMPLATE_BYTES
+                {
+                    let old = self
+                        .variants
+                        .pop_front()
+                        .expect("nonempty cache over quota");
+                    self.template_bytes -= old
+                        .bindings
+                        .template
+                        .packed()
+                        .expect("resident encoding")
+                        .len();
+                }
+                self.template_bytes += bytes;
+                self.variants.push_back(Snapshot {
+                    values,
+                    program: program.clone(),
+                    boxes: boxes.clone(),
+                    bindings,
+                    paint_frame: paint_frame.clone(),
+                });
+            }
+        }
+        stats.resident_variants = self.variants.len();
         stats.emitted_program = true;
         Ok(PreparedPaintFrame {
             program,
