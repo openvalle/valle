@@ -8,6 +8,39 @@ use crate::{
     ContextInput, Expr, MotionValue, NodeId, NodeKind, SceneArtifact, StyleBinding, StyleValue,
 };
 
+/// Proof for sharing the *layout tree* of this request's temporal samples. Keep sampling,
+/// recording and F16 accumulation unchanged. Props, fonts and viewport belong to the request;
+/// clocks vary between samples. This first class excludes implicit time/resource producers,
+/// visibility ranges, unit text, CSS utilities and auto-velocity estimation.
+pub(super) fn sample_tree_invariant(
+    artifact: &SceneArtifact,
+    plan: &crate::eval::EvalPlan,
+) -> bool {
+    artifact.camera.is_none()
+        && !samples_read_output_time(artifact)
+        && artifact.nodes.iter().all(|node| {
+            matches!(
+                node.kind,
+                NodeKind::Group
+                    | NodeKind::Box
+                    | NodeKind::Shutter { .. }
+                    | NodeKind::Echo { .. }
+                    | NodeKind::Text {
+                        text: crate::TextValue::Static { .. },
+                        per_unit: None,
+                        path: None
+                    }
+            ) && node.space.is_none()
+                && node.visibility.is_none()
+                && node.class_names.is_empty()
+                && node.class_conditions.is_empty()
+                && node
+                    .expr_refs_outside_per_unit()
+                    .into_iter()
+                    .all(|(_, id)| !plan.sample_dependent(id))
+        })
+}
+
 /// Whether a temporal sample's tree depends on its output time beyond the scene time it shows:
 /// the scene reads the clip clock, or blurs by motion, whose trail lies around the sample.
 pub(super) fn samples_read_output_time(artifact: &SceneArtifact) -> bool {

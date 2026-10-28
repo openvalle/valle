@@ -162,6 +162,181 @@ fn shutter_reuses_static_instance_template_values() {
 }
 
 #[test]
+fn temporal_layout_reuses_proven_invariant_samples_without_folding_exposure() {
+    for (open, close, expected) in [
+        (
+            "<Shutter key=\"sample\" samples={16} angle={180}>",
+            "</Shutter>",
+            16,
+        ),
+        (
+            "<Echo key=\"sample\" count={8} delay={0.02} decay={0.8}>",
+            "</Echo>",
+            8,
+        ),
+    ] {
+        let source = format!(
+            r##"
+export const composition = {{ width: 96, height: 64, fps: 30, duration: 2 }};
+export default function Demo() {{ const time = useCurrentTime();
+  return <Scene style={{{{ width: 96, height: 64 }}}}>
+    {open}<View key="content" style={{{{ opacity: 1, width: 48, height: 32, backgroundColor: "#88442280" }}}}>
+      <View style={{{{ position: "absolute", left: 12, top: 4, width: 32, height: 16, backgroundColor: "#3355aa80" }}}} />
+    </View>{close}
+  </Scene>;
+}}
+"##
+        );
+        // Equal paint values with an explicit clock dependency force independent sample trees.
+        // This is an independent full-layout oracle, not a product optimization toggle.
+        let reference = source.replace("opacity: 1,", "opacity: 1 + time.seconds * 0,");
+        let prepare = |source: &str| {
+            let artifact = compile_motion(source).unwrap().artifact;
+            let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+            (prepare_scene(&artifact).unwrap(), props)
+        };
+        let (prepared, props) = prepare(&source);
+        let (full, full_props) = prepare(&reference);
+        let fonts = Fonts::default();
+        let options = LayoutOptions {
+            viewport: Viewport::new((96, 64)),
+            fonts: &fonts,
+            styles: None,
+        };
+        for frame in [30, 0, 59, 15, 30] {
+            let context =
+                motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+            let (actual, stats) =
+                build_tree_profiled(&prepared, &context, &props, &options).unwrap();
+            let (reference, full_stats) =
+                build_tree_profiled(&full, &context, &full_props, &options).unwrap();
+            assert_eq!(stats.temporal_sample_trees, 1);
+            // At clip boundaries the existing clock already coalesces clamped sample times.
+            let times = reference
+                .shutter_sample_times("sample")
+                .or_else(|| reference.echo_sample_times("sample"))
+                .unwrap();
+            assert_eq!(times.len(), expected);
+            let unique = times
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            assert_eq!(full_stats.temporal_sample_trees, unique);
+            assert_eq!(
+                actual.shutter_sample_times("sample"),
+                reference.shutter_sample_times("sample")
+            );
+            assert_eq!(
+                actual.echo_sample_times("sample"),
+                reference.echo_sample_times("sample")
+            );
+            assert_eq!(
+                emit(&actual, &default_font_naming)
+                    .unwrap()
+                    .program
+                    .packed_bytes()
+                    .unwrap(),
+                emit(&reference, &default_font_naming)
+                    .unwrap()
+                    .program
+                    .packed_bytes()
+                    .unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn temporal_layout_invariance_rejects_clock_values_even_when_only_paint_changes() {
+    for value in ["time.seconds", "time.clipSeconds", "time.progress"] {
+        let source = format!(
+            r##"
+export const composition = {{ width: 96, height: 64, fps: 30, duration: 2 }};
+export default function Demo() {{ const time = useCurrentTime();
+  return <Scene><Shutter key="sample" samples={{8}} angle={{180}}>
+    <View style={{{{ width: 48, height: 32, opacity: {value}, backgroundColor: "#884422" }}}} />
+  </Shutter></Scene>;
+}}
+"##
+        );
+        let artifact = compile_motion(&source).unwrap().artifact;
+        let prepared = prepare_scene(&artifact).unwrap();
+        let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+        let fonts = Fonts::default();
+        let context = motion_context_at_frame(15, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+        let (_, stats) = build_tree_profiled(
+            &prepared,
+            &context,
+            &props,
+            &LayoutOptions {
+                viewport: Viewport::new((96, 64)),
+                fonts: &fonts,
+                styles: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(stats.temporal_sample_trees, 8, "{value}");
+    }
+}
+
+#[test]
+fn temporal_layout_sharing_never_retains_props_or_viewport_across_requests() {
+    use std::collections::BTreeMap;
+    let source = r##"
+export const controls = ({props:{size:number({default:30,min:1,max:100})}});
+export const composition = {width:96,height:64,fps:30,duration:2};
+export default function Demo(props) { const time = useCurrentTime();
+  return <Scene style={{width:"100%",height:"100%"}}><Shutter key="sample" samples={8} angle={180}>
+    <View style={{width:props.size,height:24,opacity:1,backgroundColor:"#88442280"}} />
+  </Shutter></Scene>;
+}
+"##;
+    let artifact = compile_motion(source).unwrap().artifact;
+    let prepared = prepare_scene(&artifact).unwrap();
+    let full = prepare_scene(
+        &compile_motion(&source.replace("opacity:1", "opacity:1+time.seconds*0"))
+            .unwrap()
+            .artifact,
+    )
+    .unwrap();
+    let context = motion_context_at_frame(20, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+    let fonts = Fonts::default();
+    let mut previous = None;
+    for (size, width) in [(20., 96), (40., 192), (20., 96)] {
+        let props = resolve_props(
+            &artifact.controls,
+            &BTreeMap::from([("size".into(), valle_motion::MotionValue::Number(size))]),
+        )
+        .unwrap();
+        let options = LayoutOptions {
+            viewport: Viewport::new((width, 64)),
+            fonts: &fonts,
+            styles: None,
+        };
+        let (actual, stats) = build_tree_profiled(&prepared, &context, &props, &options).unwrap();
+        let reference = build_tree(&full, &context, &props, &options).unwrap();
+        assert_eq!(stats.temporal_sample_trees, 1);
+        let bytes = emit(&actual, &default_font_naming)
+            .unwrap()
+            .program
+            .packed_bytes()
+            .unwrap();
+        assert_eq!(
+            bytes,
+            emit(&reference, &default_font_naming)
+                .unwrap()
+                .program
+                .packed_bytes()
+                .unwrap()
+        );
+        if let Some(previous) = previous {
+            assert_ne!(bytes, previous);
+        }
+        previous = Some(bytes);
+    }
+}
+
+#[test]
 fn shutter_admission_rejects_invalid_samples_and_angle() {
     assert!(compile_motion(&SHUTTER_SAMPLING.replace("samples={8}", "samples={0}")).is_err());
     assert!(compile_motion(&SHUTTER_SAMPLING.replace("samples={8}", "samples={33}")).is_err());

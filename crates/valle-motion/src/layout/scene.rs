@@ -230,6 +230,8 @@ pub struct PreparedScene {
     /// Whether a temporal sample's tree depends on its output time beyond the scene time it
     /// shows, so samples that show the same scene time cannot share one.
     samples_read_output_time: bool,
+    /// Conservative load-time proof for sharing this scene's temporal layout within a request.
+    temporal_tree_invariant: bool,
     /// The admitted packages of the artifact's inline shaders, in artifact order.
     inline_shaders: Arc<[crate::shader::ShaderPackage]>,
 }
@@ -648,7 +650,9 @@ fn prepare_admitted(
                 })
         })
         .collect::<Result<Vec<_>, LayoutError>>()?;
+    let temporal_tree_invariant = super::temporal::sample_tree_invariant(&artifact, &eval_plan);
     Ok(PreparedScene {
+        temporal_tree_invariant,
         sample_scene,
         sample_roots,
         eval_plan,
@@ -713,6 +717,8 @@ pub struct LayoutTimings {
     pub auto_blur_neighbor_layouts: u8,
     /// Authored nodes retained in each temporal layout, before instance row projection.
     pub temporal_layout_nodes: usize,
+    /// Distinct retained layout trees used by Shutter/Echo, not the number of rendered samples.
+    pub temporal_sample_trees: usize,
     pub evaluated_expressions: usize,
     /// Static expressions computed once and reused across this request's temporal samples.
     pub sample_static_computed: usize,
@@ -766,6 +772,19 @@ pub fn build_tree_profiled(
             timings.instance_static_reused,
         ) = shared.instance_counts();
     }
+    timings.temporal_sample_trees = tree
+        .shutters
+        .values()
+        .flatten()
+        .map(|s| Rc::as_ptr(&s.tree))
+        .chain(
+            tree.echoes
+                .values()
+                .flatten()
+                .map(|s| Rc::as_ptr(&s.sample.tree)),
+        )
+        .collect::<HashSet<_>>()
+        .len();
     Ok((tree, timings))
 }
 
@@ -3876,11 +3895,12 @@ fn normalized(matrix: Homography) -> Homography {
 
 /// The trees of one frame's temporal samples, by what each shows: its scene time, and its output
 /// time where the tree also depends on that (see `PreparedScene::samples_read_output_time`).
+/// None denotes the admitted request-invariant class; it never crosses a frame request.
 type SampleTrees = HashMap<
-    (
+    Option<(
         valle_timeline::internal::SampleTime,
         Option<valle_timeline::RationalTime>,
-    ),
+    )>,
     Rc<LayoutTree>,
 >;
 
@@ -3893,15 +3913,18 @@ fn sample_tree(
     trees: &mut SampleTrees,
     shared: Option<&mut RequestValueCache>,
 ) -> Result<TemporalSample, LayoutError> {
-    let key = (
+    let sample_prepared = prepared.sample_scene.as_deref().unwrap_or(prepared);
+    // None is a proof-derived key, not a previous-frame heuristic. This map is local to the
+    // current request, so fonts, props, host clock mapping and viewport cannot change under it.
+    let key = (!sample_prepared.temporal_tree_invariant).then_some((
         sample.sample,
         prepared.samples_read_output_time.then_some(sample.at),
-    );
+    ));
     let tree = if let Some(tree) = trees.get(&key) {
         Rc::clone(tree)
     } else {
         let tree = Rc::new(build_tree_inner(
-            prepared.sample_scene.as_deref().unwrap_or(prepared),
+            sample_prepared,
             sample,
             props,
             opts,
