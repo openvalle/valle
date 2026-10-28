@@ -45,6 +45,22 @@ pub(crate) struct Affine {
     pub mirrored: bool,
 }
 impl Affine {
+    /// Three position rows followed by three inverse-transpose normal rows.
+    pub(crate) fn gpu_rows(self) -> [[f32; 4]; 6] {
+        std::array::from_fn(|r| {
+            if r < 3 {
+                [
+                    self.matrix[r],
+                    self.matrix[4 + r],
+                    self.matrix[8 + r],
+                    self.matrix[12 + r],
+                ]
+            } else {
+                let r = r - 3;
+                [self.normal[0][r], self.normal[1][r], self.normal[2][r], 0.0]
+            }
+        })
+    }
     pub(crate) fn identity() -> Self {
         Self {
             matrix: [

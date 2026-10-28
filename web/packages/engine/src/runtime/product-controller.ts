@@ -2305,13 +2305,22 @@ export class BrowserValleWebPlayer {
               : value.width * value.height * 128;
             const additional = Math.max(0, renderer.workingBytes(packet) - admitted);
             if (additional === 0 || borrow?.(additional)) {
-              const image = await renderer.render(packet, () =>
-                this.runtimeCall<Uint8Array>(
-                  "scene3d_gpu_atlas",
-                  contentWire,
-                  topology,
-                  canonicalRequest,
-                ),
+              const image = await renderer.render(
+                packet,
+                () =>
+                  this.runtimeCall<Uint8Array>(
+                    "scene3d_gpu_atlas",
+                    contentWire,
+                    topology,
+                    canonicalRequest,
+                  ),
+                () =>
+                  this.runtimeCall<Uint8Array>(
+                    "scene3d_gpu_mesh",
+                    contentWire,
+                    topology,
+                    canonicalRequest,
+                  ),
               );
               return {
                 object: { key, kind: "scene3d", image },

@@ -836,7 +836,14 @@ impl Scene3dWork {
         if defer_geometry {
             let started = Instant::now();
             let geometry =
-                valle_engine::motion::scene3d::prepare_gpu_geometry(&prepared, &frame.frame)
+                valle_engine::motion::scene3d::prepare_gpu_mesh_geometry(&prepared, &frame.frame)
+                    .and_then(|mesh| match mesh {
+                        Some(mesh) => Ok(Some(mesh)),
+                        None => valle_engine::motion::scene3d::prepare_gpu_geometry(
+                            &prepared,
+                            &frame.frame,
+                        ),
+                    })
                     .map_err(|error| NativeResourceError::SceneRender {
                         reason: error.to_string(),
                     })?;

@@ -58,17 +58,20 @@ impl GpuRasterGeometry {
             WEB_GPU_PACKET_MAGIC,
             self.width,
             self.height,
-            u32::try_from(self.vertices.len()).ok()?,
+            self.vertex_count(),
             (self.vertex_stride() / 4) as u32,
             u32::from(shading.is_some())
                 | (u32::from(blend) << 1)
                 | (u32::from(dof.is_some()) << 2)
-                | (u32::from(shading.is_some_and(|s| s.values[1][3] as u32 & 2 != 0)) << 3),
+                | (u32::from(shading.is_some_and(|s| s.values[1][3] as u32 & 2 != 0)) << 3)
+                | (u32::from(self.mesh.is_some()) << 4),
             self.depth_scale.to_bits(),
             dof.map_or(1.0, |d| d.focus_distance).to_bits(),
             dof.map_or(0.0, |d| d.max_blur_radius).to_bits(),
         ]);
-        let bounds = if self.vertices.is_empty() {
+        let bounds = if self.mesh.is_some() {
+            [0.0, 0.0, self.width as f32, self.height as f32]
+        } else if self.vertices.is_empty() {
             [0.0; 4]
         } else {
             [
@@ -198,10 +201,22 @@ impl GpuRasterGeometry {
                 ]);
             }
         }
-        let shadow_key = shading.map_or_else(
-            || crate::ContentDigest::of_bytes(&[]),
-            |s| s.shadow_content_key(),
+        let shadow_key = self.mesh.as_ref().map_or_else(
+            || {
+                shading.map_or_else(
+                    || crate::ContentDigest::of_bytes(&[]),
+                    |s| s.shadow_content_key(),
+                )
+            },
+            |m| m.key,
         );
+        if let Some(mesh) = &self.mesh {
+            let (width, height) = mesh.web_extent();
+            if height > 4096 {
+                return None;
+            }
+            header[48..51].copy_from_slice(&[width, height, width * height * 16]);
+        }
         for (word, value) in header[36..44]
             .iter_mut()
             .zip(shadow_key.as_bytes().as_chunks::<4>().0)

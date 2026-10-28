@@ -18,6 +18,8 @@ const SHADOWS: &str =
     include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/shadows.wgsl");
 const RASTER: &str =
     include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/raster.wgsl");
+const MESH: &str =
+    include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/mesh.wgsl");
 const TRANSPARENCY: &str =
     include_str!("../../web/packages/engine/src/executor/webgl/scene3d/transparency.wgsl");
 const PRECISION: &str =
@@ -65,8 +67,9 @@ fn source() -> Result<String> {
         "let residual=stable(fma(-q,b,a));\n    return stable(fma(residual,stable(1.0/b),q));",
         "return web_divide(a,b,q);",
     );
-    let source =
-        format!("{COMMON}\n{ASSETS}\n{lighting}\n{SHADOWS}\n{RASTER}\n{TRANSPARENCY}\n{PRECISION}");
+    let source = format!(
+        "{COMMON}\n{ASSETS}\n{lighting}\n{SHADOWS}\n{RASTER}\n{MESH}\n{TRANSPARENCY}\n{PRECISION}"
+    );
     let source = source.replace(
         "var<storage, read> shading: array<vec4<f32>>;",
         "var shadingData: texture_2d<f32>;\nfn shading_at(index:u32)->vec4<f32>{let width=textureDimensions(shadingData).x;return textureLoad(shadingData,vec2<i32>(i32(index%width),i32(index/width)),0);}",
@@ -139,6 +142,7 @@ fn generated() -> Result<String> {
     for (name, vertex, fragment) in [
         ("unlit", "raster_vertex", "raster_fragment"),
         ("lit", "raster_lit_vertex", "raster_lit_fragment"),
+        ("mesh", "mesh_vertex", "mesh_fragment"),
         ("shadow", "shadow_vertex", "shadow_fragment"),
         ("background", "background_vertex", "background_fragment"),
         ("transparency", "background_vertex", "web_transparency"),

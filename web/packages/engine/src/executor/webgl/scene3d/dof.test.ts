@@ -15,3 +15,16 @@ test("wholly defocused geometry omits classification while focus-crossing ranges
   expect(needsDofTiles({ ...packet, radius: 0.4 })).toBe(true);
   expect(needsDofTiles({ ...packet, radius: 0 })).toBe(false);
 });
+
+test("GPU-deformed meshes classify real depth without scanning absent projected vertices", () => {
+  const packet = {
+    radius: 8,
+    focus: 5,
+    stride: 13,
+    vertices: 300,
+    vertexData: { width: 1, height: 1, words: new Uint32Array(4) },
+    mesh: { width: 64, height: 64, bytes: 65536, key: "source" },
+  };
+  expect(needsDofTiles(packet)).toBe(true);
+  expect(needsDofTiles({ ...packet, radius: 0 })).toBe(false);
+});

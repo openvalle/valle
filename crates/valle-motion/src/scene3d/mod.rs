@@ -16,13 +16,14 @@ pub use asset::{
 pub use environment::{EnvironmentAsset, EnvironmentSettings};
 pub use procedural::ProceduralGeometry;
 pub use raster::{
-    AnchorProjection, BACKGROUND_NODE_ID, BACKGROUND_OBJECT_ID, CLEAR_DEPTH, GpuRasterAtlas,
-    GpuRasterGeometry, GpuRasterShading, GpuRasterShadow, GpuRasterShadowVertex,
+    AnchorProjection, BACKGROUND_NODE_ID, BACKGROUND_OBJECT_ID, CLEAR_DEPTH, GpuMeshData,
+    GpuRasterAtlas, GpuRasterGeometry, GpuRasterShading, GpuRasterShadow, GpuRasterShadowVertex,
     GpuRasterTextureVarying, GpuRasterVarying, GpuRasterVertex, PreparedScene, RasterFrame,
     Scene3DAnchorMetadata, Scene3DFrameMetadata, Scene3DObjectMetadata, Scene3DPick,
-    ScenePrepareCacheKey, SceneResources, prepare_cache_key, prepare_gpu_geometry, prepare_scene,
-    project_anchors, render_scene, render_scene_reusing, render_scene_reusing_with_workers,
-    render_scene_with_workers, render_scene_without_depth_of_field,
+    ScenePrepareCacheKey, SceneResources, prepare_cache_key, prepare_gpu_geometry,
+    prepare_gpu_mesh_geometry, prepare_scene, project_anchors, render_scene, render_scene_reusing,
+    render_scene_reusing_with_workers, render_scene_with_workers,
+    render_scene_without_depth_of_field,
 };
 
 use std::collections::BTreeSet;

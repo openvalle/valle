@@ -94,7 +94,16 @@ async function deadline<T>(work: Promise<T>, lastActivity?: () => number): Promi
   }
 }
 
-for (const name of ["unlit", "procedural", "assets"]) {
+const cases = process.argv
+  .find((arg) => arg.startsWith("--cases="))
+  ?.slice(8)
+  .split(",") ?? ["unlit", "morph", "skin", "clip", "procedural", "assets"];
+if (
+  cases.some((name) => !["unlit", "morph", "skin", "clip", "procedural", "assets"].includes(name))
+)
+  throw new Error("Unknown Scene3D case");
+for (const name of cases) {
+  const animated = name === "morph" || name === "skin";
   const resources = name === "assets",
     directory = join(evidence, name);
   await mkdir(directory);
@@ -108,7 +117,24 @@ export default function Main(){const time=useCurrentTime();return <Scene>
 <Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,5],target:[0,0,0],fov:45}}>
 <Mesh key="ball" geometry={BALL} rotateY={time.seconds*90} material={{type:"unlit",color:"#cf7338"}}/>
 </Scene3D></Scene>;}`
-      : source(resources),
+      : name === "clip"
+        ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+export const controls={assets:{model:asset({kind:"model3d"})}};
+const textures={baseColor:null,metallicRoughness:null,normal:null,occlusion:null,emissive:null};
+export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
+<Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,3],target:[0,0,0],fov:45,near:time.seconds<1?0.1:3,far:time.seconds<1?3:100}}>
+<Mesh key="first" src="asset://model" material={{type:"unlit",color:time.seconds<1?"#cc201066":"#cc2010ff",alphaMode:"mask",alphaCutoff:0.5,emissiveIntensity:0,textures}}/>
+<Mesh key="second" src="asset://model" material={{type:"unlit",color:"#1020cc",alphaMode:"mask",alphaCutoff:0.5,emissiveIntensity:0,textures}}/>
+</Scene3D></Scene>;}`
+        : animated
+          ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+export const controls={assets:{model:asset({kind:"model3d"})}};
+export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
+<Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,${name === "skin" ? 15 : 5}],target:[0,0,0],fov:45}}>
+<Mesh key="model" src="asset://model" animation={{clip:0,time:time.seconds*2}} rotateY={time.seconds*45} scale={[-1,1,1]} material={{type:"pbr",color:"#cf7338",roughness:0.4}}/>
+<AmbientLight intensity={0.4}/><DirectionalLight direction={[0.4,0.8,1]} intensity={1.2}/>
+</Scene3D></Scene>;}`
+          : source(resources),
   );
   const child = Bun.spawn(
     [
@@ -121,6 +147,12 @@ export default function Main(){const time=useCurrentTime();return <Scene>
       "0",
       "--web-assets-dir",
       runtime,
+      ...(animated || name === "clip"
+        ? [
+            "--asset",
+            `model=${join(root, `crates/valle-motion/tests/fixtures/scene3d/${name === "clip" ? "pbr" : name === "skin" ? "rigged-simple" : "animated-morph-cube"}.glb`)}`,
+          ]
+        : []),
       ...(resources
         ? [
             "--asset",

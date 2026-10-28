@@ -135,17 +135,20 @@ impl Scene3dGpuInput {
     }
 
     pub(crate) fn upload_bytes(&self) -> Option<u64> {
-        u64::try_from(self.geometry.vertices.len())
-            .ok()?
-            .checked_mul(self.geometry.vertex_stride())?
-            .max(4)
-            .checked_add(16)?
-            .checked_add(
-                self.geometry
-                    .shading
-                    .as_ref()
-                    .map_or(0, |s| s.values.len() as u64 * 16),
-            )
+        let vertices = if self.geometry.mesh.is_some() {
+            0
+        } else {
+            u64::try_from(self.geometry.vertices.len())
+                .ok()?
+                .checked_mul(self.geometry.vertex_stride())?
+                .max(4)
+        };
+        vertices.checked_add(16)?.checked_add(
+            self.geometry
+                .shading
+                .as_ref()
+                .map_or(0, |s| s.values.len() as u64 * 16),
+        )
     }
 
     pub(crate) fn frame_bytes(&self) -> Option<u64> {

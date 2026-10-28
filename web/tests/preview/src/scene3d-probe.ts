@@ -29,7 +29,8 @@ async function run() {
   const rows = [];
   const creationMs = [];
   const features = new URLSearchParams(location.search).get("features");
-  const expectedPrograms = features === "unlit" ? 2 : features === "assets" ? 6 : 5;
+  const direct = ["unlit", "morph", "skin", "clip"].includes(features ?? "");
+  const expectedPrograms = direct ? 2 : features === "assets" ? 8 : 7;
   // The optional 4K comparison keeps a CPU reference player beside the GPU player.
   const memoryBytes =
     JSON.parse(config.timelineJson).document.canvas.width >= 3840 ? 4 * 1024 ** 3 : undefined;
@@ -51,7 +52,7 @@ async function run() {
       creationMs.push(performance.now() - started);
     }
     const seen = new Map<number, Uint8ClampedArray>();
-    const frames = memoryBytes ? [27] : [27, 0, 15, 27];
+    const frames = memoryBytes ? [27] : features === "clip" ? [27, 0, 15, 45, 27] : [27, 0, 15, 27];
     for (const frame of frames) {
       const pixels: Uint8ClampedArray[] = [];
       const timings = [];
@@ -111,11 +112,16 @@ async function run() {
       rows.push({ frame, maximum, psnr, cpuMs: timings[0], gpuMs: timings[1] });
     }
     const diagnostics = players[1]!.scene3dGpuDiagnostics;
-    if (!diagnostics || diagnostics.renders < frames.length || diagnostics.fallbacks !== 0)
+    // Clip intentionally has two distinct frame states; identical requests may reuse
+    // a retained frame. Its pixel comparisons still cover both camera boundaries.
+    const minimumRenders = features === "clip" && !memoryBytes ? 2 : frames.length;
+    if (!diagnostics || diagnostics.renders < minimumRenders || diagnostics.fallbacks !== 0)
       throw new Error(`Scene3D did not rasterize on GPU: ${JSON.stringify(diagnostics)}`);
     if (
-      features === "unlit"
-        ? diagnostics.atlasUploads !== 0 || diagnostics.shadowRenders !== 0
+      direct
+        ? diagnostics.atlasUploads !== 1 ||
+          diagnostics.meshUploads !== 1 ||
+          diagnostics.shadowRenders !== 0
         : diagnostics.atlasUploads !== 1 || diagnostics.shadowRenders < 2
     )
       throw new Error(

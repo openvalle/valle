@@ -122,6 +122,7 @@ export class GpuScene3D {
     allocatedBytes: 0,
     fallbacks: 0,
     atlasUploads: 0,
+    meshUploads: 0,
     shadowRenders: 0,
     shadowCacheHits: 0,
     geometryBytes: 0,
@@ -140,6 +141,7 @@ export class GpuScene3D {
   private output?: Surface;
   private targets?: Targets;
   private atlas?: { key: string; texture: WebGLTexture; bytes: number };
+  private mesh?: { key: string; texture: WebGLTexture; bytes: number };
   private shadows?: {
     key: string;
     texture: WebGLTexture;
@@ -187,6 +189,7 @@ export class GpuScene3D {
         packet.tiles,
         ...packet.shadows,
         ...(packet.lit ? [packet.atlas] : []),
+        ...(packet.mesh ? [packet.mesh] : []),
       ].every((t) => t.width <= this.maxEdge && t.height <= this.maxEdge) &&
       packet.shadows.length * 1024 <= this.maxEdge
     );
@@ -202,8 +205,18 @@ export class GpuScene3D {
       ? packet.shadows.length * 1024 * 1024 * 8
       : (this.shadows?.bytes ?? 0);
     const atlasUpload = packet.lit && this.atlas?.key !== packet.atlas.key ? packet.atlas.bytes : 0;
+    const mesh = packet.mesh?.bytes ?? this.mesh?.bytes ?? 0;
+    const meshUpload = packet.mesh && this.mesh?.key !== packet.mesh.key ? packet.mesh.bytes : 0;
     return (
-      targets + atlas + shadows + packet.bytes.byteLength * 2 + atlasUpload + pixels * 8 + baseBytes
+      targets +
+      atlas +
+      shadows +
+      mesh +
+      packet.bytes.byteLength * 2 +
+      atlasUpload +
+      meshUpload +
+      pixels * 8 +
+      baseBytes
     );
   }
   /** Called inside the render's GL state scope. Unused features never compile, and seeks,
@@ -497,7 +510,11 @@ export class GpuScene3D {
       this.stats.shadowRenders++;
     }
   }
-  async render(packet: Scene3dGpuPacket, loadAtlas: () => Promise<Uint8Array>): Promise<Image> {
+  async render(
+    packet: Scene3dGpuPacket,
+    loadAtlas: () => Promise<Uint8Array>,
+    loadMesh?: () => Promise<Uint8Array>,
+  ): Promise<Image> {
     if (this.closed) throw new Error("GPU Scene3D renderer is closed");
     const preparationStarted = performance.now(),
       gl = this.gl,
@@ -505,6 +522,7 @@ export class GpuScene3D {
     // Resource fetches yield before taking a GL state snapshot; another player may present meanwhile.
     const atlasBytes =
       packet.lit && this.atlas?.key !== packet.atlas.key ? await loadAtlas() : null;
+    const meshBytes = packet.mesh && this.mesh?.key !== packet.mesh.key ? await loadMesh?.() : null;
     this.stats.prepareMs += performance.now() - preparationStarted;
     const started = performance.now();
     this.ensureTargets(packet);
@@ -519,9 +537,38 @@ export class GpuScene3D {
     const restore = preserveState(gl);
     try {
       this.ensureAtlas(packet, atlasBytes);
+      if (packet.mesh && this.mesh?.key !== packet.mesh.key) {
+        if (
+          !meshBytes ||
+          meshBytes.byteLength !== packet.mesh.bytes ||
+          meshBytes.byteOffset % 4 !== 0
+        )
+          throw new Error("Scene3D mesh upload does not match its admitted extent");
+        if (this.mesh) {
+          gl.deleteTexture(this.mesh.texture);
+          this.stats.allocatedBytes -= this.mesh.bytes;
+        }
+        const texture = this.upload(
+          {
+            ...packet.mesh,
+            words: new Uint32Array(
+              meshBytes.buffer,
+              meshBytes.byteOffset,
+              meshBytes.byteLength / 4,
+            ),
+          },
+          true,
+        );
+        this.mesh = { ...packet.mesh, texture };
+        this.stats.allocatedBytes += this.mesh.bytes;
+        this.stats.meshUploads++;
+      }
       gl.bindVertexArray(this.vao);
       gl.disable(gl.BLEND);
       gl.disable(gl.CULL_FACE);
+      // Naga maps WGPU's top-left framebuffer to GL by negating clip Y. Keep
+      // gl_FrontFacing consistent with the shared shader's CCW model winding.
+      gl.frontFace(gl.CW);
       gl.disable(gl.STENCIL_TEST);
       gl.disable(gl.SCISSOR_TEST);
       gl.colorMask(true, true, true, true);
@@ -530,9 +577,10 @@ export class GpuScene3D {
         0,
         new Float32Array([packet.width, packet.height, packet.depthScale, 0]),
       );
-      const vertexData = this.upload(packet.vertexData, true),
+      const vertexData = packet.mesh ? this.mesh!.texture : this.upload(packet.vertexData, true),
         shading = this.upload(packet.shading, false);
-      temporary.push(vertexData, shading);
+      temporary.push(shading);
+      if (!packet.mesh) temporary.push(vertexData);
       this.bind(shading, 1);
       this.bind(this.dfg, 2);
       this.bind(this.atlas?.texture ?? this.empty, 3);
@@ -552,9 +600,9 @@ export class GpuScene3D {
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       }
       gl.enable(gl.DEPTH_TEST);
-      gl.depthFunc(gl.GREATER);
+      gl.depthFunc(packet.mesh ? gl.GEQUAL : gl.GREATER);
       gl.depthMask(true);
-      gl.useProgram(this.program(packet.lit ? "lit" : "unlit").program);
+      gl.useProgram(this.program(packet.mesh ? "mesh" : packet.lit ? "lit" : "unlit").program);
       gl.drawArrays(gl.TRIANGLES, 0, packet.vertices);
       gl.disable(gl.DEPTH_TEST);
       if (packet.blend) {
@@ -666,6 +714,11 @@ export class GpuScene3D {
     return this.output!.makeImageSnapshot();
   }
   trim(): void {
+    if (this.mesh) {
+      this.gl.deleteTexture(this.mesh.texture);
+      this.stats.allocatedBytes -= this.mesh.bytes;
+      this.mesh = undefined;
+    }
     this.clearTargets();
     if (this.atlas) {
       this.gl.deleteTexture(this.atlas.texture);

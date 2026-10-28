@@ -16,8 +16,9 @@ mod dof;
 mod fresnel;
 mod gpu;
 pub use gpu::{
-    GpuRasterAtlas, GpuRasterGeometry, GpuRasterShading, GpuRasterShadow, GpuRasterShadowVertex,
-    GpuRasterTextureVarying, GpuRasterVarying, GpuRasterVertex, prepare_gpu_geometry,
+    GpuMeshData, GpuRasterAtlas, GpuRasterGeometry, GpuRasterShading, GpuRasterShadow,
+    GpuRasterShadowVertex, GpuRasterTextureVarying, GpuRasterVarying, GpuRasterVertex,
+    prepare_gpu_geometry, prepare_gpu_mesh_geometry,
 };
 #[cfg(test)]
 mod geometry_reuse_tests;
@@ -282,6 +283,7 @@ pub struct PreparedScene {
     budget: BudgetUsage,
     environment: Option<Arc<super::EnvironmentAsset>>,
     shadow_cache: Arc<shadow::ShadowCache>,
+    gpu_mesh_cache: Arc<gpu::GpuMeshCache>,
 }
 
 impl PreparedScene {
@@ -297,9 +299,10 @@ impl PreparedScene {
         self.budget
     }
 
-    /// Evict optional pixel storage without rebuilding immutable admitted geometry.
+    /// Evict optional shadow/upload storage. In-flight packets keep their own byte leases.
     pub fn trim_shadow_cache(&self) {
         self.shadow_cache.clear();
+        self.gpu_mesh_cache.clear();
     }
 }
 
@@ -895,6 +898,7 @@ pub fn prepare_scene(
         budget,
         environment,
         shadow_cache: Arc::default(),
+        gpu_mesh_cache: Arc::default(),
     })
 }
 
@@ -2430,6 +2434,40 @@ fn raster_projected_triangle(
     if min_x > max_x || min_y > max_y {
         return;
     }
+    // Unlit color depends only on base/emissive textures, exposure and tone mapping.
+    // Without those two textures it is constant over this triangle. Other material
+    // maps and all geometric varyings are irrelevant to its radiance and coverage.
+    let constant = if shading.kind == MaterialKind::Unlit
+        && shading.material.base_color_texture.is_none()
+        && shading.material.emissive_texture.is_none()
+        && (!deferred || !matches!(fragments, Fragments::Opaque { .. }))
+    {
+        let material = shading.material;
+        if material
+            .alpha_cutoff
+            .is_some_and(|cutoff| material.base_color[3] < cutoff)
+        {
+            return;
+        }
+        let radiance = std::array::from_fn(|i| {
+            material.base_color[i] + material.emissive[i] * material.emissive_intensity
+        });
+        Some((
+            if material.alpha_mode == AlphaMode::Blend {
+                [0; 4]
+            } else {
+                output_color(radiance, 1.0, lights.pbr.tone_mapping, lights.exposure)
+            },
+            display_linear(radiance, lights.pbr.tone_mapping, lights.exposure),
+            if material.alpha_mode == AlphaMode::Blend {
+                material.base_color[3]
+            } else {
+                1.0
+            },
+        ))
+    } else {
+        None
+    };
     let gradients = shading
         .material
         .uses_uv()
@@ -2477,6 +2515,15 @@ fn raster_projected_triangle(
                 offset += 1;
                 continue;
             }
+            if let Some((color, _, _)) = constant
+                && matches!(fragments, Fragments::Owned { .. })
+            {
+                // Visibility already stored the exact winning depth and IDs. A constant
+                // opaque surface only needs a color write, with no interpolation at all.
+                output.color[row][offset * 4..offset * 4 + 4].copy_from_slice(&color);
+                offset += 1;
+                continue;
+            }
             let bary = [
                 current_edge[0] as f32 * inv_area,
                 current_edge[1] as f32 * inv_area,
@@ -2513,6 +2560,21 @@ fn raster_projected_triangle(
                 output.object_ids[row][offset] = mesh.object_id;
                 output.node_ids[row][offset] = node_id;
                 winners.claim(pixel, *command);
+                offset += 1;
+                continue;
+            }
+            if let Some((color, display, alpha)) = constant {
+                if let Fragments::Transparent(accumulation) = &mut fragments {
+                    accumulation[pixel].add(display, alpha, depth, mesh.object_id, node_id);
+                } else {
+                    output.color[row][offset * 4..offset * 4 + 4].copy_from_slice(&color);
+                    if let Fragments::Opaque { winners, .. } = &mut fragments {
+                        output.depth[row][offset] = depth;
+                        output.object_ids[row][offset] = mesh.object_id;
+                        output.node_ids[row][offset] = node_id;
+                        winners.release(pixel);
+                    }
+                }
                 offset += 1;
                 continue;
             }

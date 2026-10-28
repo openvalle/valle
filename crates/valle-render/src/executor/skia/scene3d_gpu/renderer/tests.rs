@@ -3,6 +3,7 @@ use super::*;
 use skia_safe::{Color, ImageInfo, Paint};
 use std::collections::BTreeMap;
 use valle_engine::motion::scene3d::*;
+mod mesh;
 mod raster_math;
 
 fn half(bits: u16) -> f32 {

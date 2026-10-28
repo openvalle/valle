@@ -9,8 +9,11 @@ use wgpu::util::DeviceExt;
 pub(crate) struct GpuRasterizer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipelines: [wgpu::RenderPipeline; 4],
-    background_pipelines: [wgpu::RenderPipeline; 2],
+    pipelines: [Option<wgpu::RenderPipeline>; 6],
+    module: wgpu::ShaderModule,
+    lit_layout: wgpu::PipelineLayout,
+    mesh: Option<Arc<MeshBuffer>>,
+    background_pipelines: [Option<wgpu::RenderPipeline>; 2],
     atlas: Option<Arc<Atlas>>,
     shadow_rasterizer: ShadowRasterizer,
     shadows: Option<Arc<ShadowSet>>,
@@ -26,7 +29,8 @@ pub(crate) struct GpuRasterOutput {
     _color: wgpu::Texture,
     _depth: wgpu::Texture,
     _packed_depth: Option<wgpu::Texture>,
-    _vertices: wgpu::Buffer,
+    _vertices: Arc<wgpu::Buffer>,
+    _mesh: Option<Arc<MeshBuffer>>,
     _uniform: wgpu::Buffer,
     _shading: Option<wgpu::Buffer>,
     _atlas: Option<Arc<Atlas>>,
@@ -35,13 +39,24 @@ pub(crate) struct GpuRasterOutput {
     _memory: Option<valle_engine::motion::memory::MemoryLease>,
 }
 
+struct MeshBuffer {
+    key: valle_engine::motion::ContentDigest,
+    buffer: Arc<wgpu::Buffer>,
+    bytes: u64,
+    budget: Option<valle_engine::motion::memory::MemoryBudget>,
+    _memory: Option<valle_engine::motion::memory::MemoryLease>,
+}
+
 impl GpuRasterizer {
     pub(crate) fn trim_assets(&mut self, limit: usize) {
-        if self.atlas.as_ref().map_or(0, |a| a.bytes) + self.shadows.as_ref().map_or(0, |s| s.bytes)
+        if self.atlas.as_ref().map_or(0, |a| a.bytes)
+            + self.shadows.as_ref().map_or(0, |s| s.bytes)
+            + self.mesh.as_ref().map_or(0, |m| m.bytes)
             > limit as u64
         {
             self.atlas = None;
             self.shadows = None;
+            self.mesh = None;
         }
     }
 
@@ -51,13 +66,14 @@ impl GpuRasterizer {
             label: Some("Scene3D raster"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}\n{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     include_str!("common.wgsl"),
                     include_str!("assets.wgsl"),
                     include_str!("lighting.wgsl"),
                     include_str!("shadows.wgsl"),
                     include_str!("transparency.wgsl"),
-                    include_str!("raster.wgsl")
+                    include_str!("raster.wgsl"),
+                    include_str!("mesh.wgsl")
                 )
                 .into(),
             ),
@@ -117,66 +133,6 @@ impl GpuRasterizer {
             bind_group_layouts: &[Some(&lit_group_layout)],
             immediate_size: 0,
         });
-        let make_pipeline = |mode, packed_depth, background| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Scene3D raster"),
-                layout: (mode != 0 || background).then_some(&lit_layout),
-                vertex: wgpu::VertexState {
-                    module: &module,
-                    entry_point: Some(if background {
-                        "background_vertex"
-                    } else {
-                        match mode {
-                            0 => "raster_vertex",
-                            _ => "raster_lit_vertex",
-                        }
-                    }),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                primitive: Default::default(),
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(!background),
-                    depth_compare: Some(if background {
-                        wgpu::CompareFunction::Always
-                    } else {
-                        wgpu::CompareFunction::Greater
-                    }),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &module,
-                    entry_point: Some(if background {
-                        "background_fragment"
-                    } else if mode != 0 {
-                        "raster_lit_fragment"
-                    } else {
-                        "raster_fragment"
-                    }),
-                    compilation_options: Default::default(),
-                    targets: &[
-                        Some(wgpu::TextureFormat::Rgba16Float.into()),
-                        if packed_depth {
-                            Some(wgpu::TextureFormat::Rgba8Unorm.into())
-                        } else {
-                            None
-                        },
-                    ],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let pipelines = [
-            make_pipeline(0, false, false),
-            make_pipeline(1, false, false),
-            make_pipeline(0, true, false),
-            make_pipeline(1, true, false),
-        ];
-        let background_pipelines = [make_pipeline(1, false, true), make_pipeline(1, true, true)];
         let shadow_rasterizer = ShadowRasterizer::new(&device, &module);
         let transparency = Transparency::new(&device, &module, &lit_group_layout);
         if let Some(error) = pollster::block_on(error_scope.pop()) {
@@ -223,8 +179,11 @@ impl GpuRasterizer {
         Ok(Self {
             device,
             queue,
-            pipelines,
-            background_pipelines,
+            pipelines: [None, None, None, None, None, None],
+            module,
+            lit_layout,
+            mesh: None,
+            background_pipelines: [None, None],
             atlas: None,
             shadow_rasterizer,
             shadows: None,
@@ -232,6 +191,71 @@ impl GpuRasterizer {
             dfg,
             _lut_memory: lut_memory,
         })
+    }
+
+    fn make_pipeline(
+        &self,
+        mode: usize,
+        packed_depth: bool,
+        background: bool,
+    ) -> wgpu::RenderPipeline {
+        self.device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Scene3D raster"),
+                layout: (mode != 0 || background).then_some(&self.lit_layout),
+                vertex: wgpu::VertexState {
+                    module: &self.module,
+                    entry_point: Some(if background {
+                        "background_vertex"
+                    } else {
+                        match mode {
+                            0 => "raster_vertex",
+                            2 => "mesh_vertex",
+                            _ => "raster_lit_vertex",
+                        }
+                    }),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(!background),
+                    depth_compare: Some(if background {
+                        wgpu::CompareFunction::Always
+                    } else if mode == 2 {
+                        wgpu::CompareFunction::GreaterEqual
+                    } else {
+                        wgpu::CompareFunction::Greater
+                    }),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.module,
+                    entry_point: Some(if background {
+                        "background_fragment"
+                    } else if mode == 2 {
+                        "mesh_fragment"
+                    } else if mode != 0 {
+                        "raster_lit_fragment"
+                    } else {
+                        "raster_fragment"
+                    }),
+                    compilation_options: Default::default(),
+                    targets: &[
+                        Some(wgpu::TextureFormat::Rgba16Float.into()),
+                        if packed_depth {
+                            Some(wgpu::TextureFormat::Rgba8Unorm.into())
+                        } else {
+                            None
+                        },
+                    ],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
     }
 
     pub(crate) fn render(
@@ -262,6 +286,7 @@ impl GpuRasterizer {
             if self.atlas.as_ref().is_none_or(|atlas| atlas.key != key) {
                 self.atlas = None;
                 self.shadows = None;
+                self.mesh = None;
                 self.atlas = Atlas::build(
                     shading,
                     &self.device,
@@ -277,8 +302,32 @@ impl GpuRasterizer {
         } else {
             None
         };
-        let mode = usize::from(geometry.shading.is_some());
-        let pipeline = &self.pipelines[mode + 2 * usize::from(opaque_depth)];
+        let mode = if geometry.mesh.is_some() {
+            2
+        } else {
+            usize::from(geometry.shading.is_some())
+        };
+        let index = mode + 3 * usize::from(opaque_depth);
+        let background = geometry
+            .shading
+            .as_ref()
+            .is_some_and(|s| (s.values[1][3] as u32 & 2) != 0);
+        if self.pipelines[index].is_none()
+            || (background && self.background_pipelines[usize::from(opaque_depth)].is_none())
+        {
+            let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            if self.pipelines[index].is_none() {
+                self.pipelines[index] = Some(self.make_pipeline(mode, opaque_depth, false));
+            }
+            if background && self.background_pipelines[usize::from(opaque_depth)].is_none() {
+                self.background_pipelines[usize::from(opaque_depth)] =
+                    Some(self.make_pipeline(1, opaque_depth, true));
+            }
+            if let Some(error) = pollster::block_on(scope.pop()) {
+                return Err(error.to_string());
+            }
+        }
+        let pipeline = self.pipelines[index].as_ref().expect("pipeline prepared");
         let upload_bytes = input.upload_bytes().ok_or("vertex byte count overflow")?;
         let memory = valle_engine::motion::memory::reserve(
             valle_engine::motion::memory::MemoryKind::Temporary,
@@ -316,17 +365,73 @@ impl GpuRasterizer {
             .map(|t| t.create_view(&Default::default()));
         let color_view = color.create_view(&Default::default());
         let depth_view = depth.create_view(&Default::default());
-        let mut bytes = input.vertex_bytes();
-        if bytes.is_empty() {
-            bytes.resize(4, 0);
-        }
-        let vertices = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Scene3D vertices"),
-                contents: &bytes,
-                usage: wgpu::BufferUsages::STORAGE,
-            });
+        let mesh = if let Some(source) = &geometry.mesh {
+            let budget = valle_engine::motion::cpu::memory_budget();
+            if self.mesh.as_ref().is_none_or(|m| {
+                m.key != source.key
+                    || match (&m.budget, &budget) {
+                        (None, None) => false,
+                        (Some(a), Some(b)) => !a.same_budget(b),
+                        _ => true,
+                    }
+            }) {
+                self.mesh = None;
+                let bytes = source.bytes().len() as u64;
+                let available = (context.resource_cache_limit() as u64)
+                    .saturating_sub(self.atlas.as_ref().map_or(0, |a| a.bytes))
+                    .saturating_sub(self.shadows.as_ref().map_or(0, |s| s.bytes));
+                if bytes > available || bytes > self.device.limits().max_storage_buffer_binding_size
+                {
+                    return Ok(None);
+                }
+                let Ok(memory) = valle_engine::motion::memory::reserve_retained(
+                    valle_engine::motion::memory::MemoryKind::Resource,
+                    bytes,
+                ) else {
+                    return Ok(None);
+                };
+                let Ok(_staging) = valle_engine::motion::memory::reserve_retained(
+                    valle_engine::motion::memory::MemoryKind::Temporary,
+                    bytes,
+                ) else {
+                    return Ok(None);
+                };
+                let buffer = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Scene3D immutable model"),
+                        contents: source.bytes(),
+                        usage: wgpu::BufferUsages::STORAGE,
+                    });
+                asset_upload_bytes += bytes;
+                self.mesh = Some(Arc::new(MeshBuffer {
+                    key: source.key,
+                    buffer: Arc::new(buffer),
+                    bytes,
+                    budget,
+                    _memory: memory,
+                }));
+            }
+            self.mesh.clone()
+        } else {
+            None
+        };
+        let vertices = if let Some(mesh) = &mesh {
+            Arc::clone(&mesh.buffer)
+        } else {
+            let mut bytes = input.vertex_bytes();
+            if bytes.is_empty() {
+                bytes.resize(4, 0);
+            }
+            Arc::new(
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("Scene3D vertices"),
+                        contents: &bytes,
+                        usage: wgpu::BufferUsages::STORAGE,
+                    }),
+            )
+        };
         let bytes = [
             geometry.width as f32,
             geometry.height as f32,
@@ -367,7 +472,8 @@ impl GpuRasterizer {
                     &self.queue,
                     context
                         .resource_cache_limit()
-                        .saturating_sub(atlas.bytes as usize),
+                        .saturating_sub(atlas.bytes as usize)
+                        .saturating_sub(self.mesh.as_ref().map_or(0, |m| m.bytes as usize)),
                 )?;
                 shadow_upload_bytes = self.shadows.as_ref().map_or(0, |s| s.upload_bytes);
             }
@@ -474,11 +580,15 @@ impl GpuRasterizer {
                 .as_ref()
                 .is_some_and(|s| (s.values[1][3] as u32 & 2) != 0)
             {
-                pass.set_pipeline(&self.background_pipelines[usize::from(opaque_depth)]);
+                pass.set_pipeline(
+                    self.background_pipelines[usize::from(opaque_depth)]
+                        .as_ref()
+                        .expect("background prepared"),
+                );
                 pass.draw(0..3, 0..1);
             }
             pass.set_pipeline(pipeline);
-            pass.draw(0..geometry.vertices.len() as u32, 0..1);
+            pass.draw(0..geometry.vertex_count(), 0..1);
         }
         let transparency = blend.then(|| {
             self.transparency.encode(
@@ -545,6 +655,7 @@ impl GpuRasterizer {
             _depth: depth,
             _packed_depth: packed_depth,
             _vertices: vertices,
+            _mesh: mesh,
             _uniform: uniform,
             _shading: shading,
             _atlas: atlas,

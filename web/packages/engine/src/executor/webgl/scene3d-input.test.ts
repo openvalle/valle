@@ -79,3 +79,27 @@ test("truncated, overlapping, oversized and invalid triangle or tile packets are
   new Float32Array(shadow.buffer)[53] = 0;
   expect(() => decode(shadow)).toThrow("shadow data");
 });
+
+test("immutable mesh packets separate source storage from per-frame parameters", () => {
+  const bytes = packet(true),
+    h = new Uint32Array(bytes.buffer);
+  h[3] = 30;
+  h[5] = 17;
+  h[27] = 0;
+  h.set([16, 4, 1024], 48);
+  const p = decode(bytes);
+  expect(p.vertices).toBe(30);
+  expect(p.mesh).toMatchObject({ width: 16, height: 4, bytes: 1024 });
+  for (const [at, value] of [
+    [5, 19],
+    [24, 1],
+    [48, 0],
+    [49, 4097],
+    [50, 16],
+    [3, 66],
+  ]) {
+    const invalid = bytes.slice();
+    new Uint32Array(invalid.buffer)[at!] = value!;
+    expect(() => decode(invalid)).toThrow();
+  }
+});

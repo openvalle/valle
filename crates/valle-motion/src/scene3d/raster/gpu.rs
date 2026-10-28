@@ -1,14 +1,18 @@
-//! GPU triangle input using the CPU reference's validated transforms, six-plane clipping,
-//! culling and 8-bit subpixel grid. Pixel coverage and depth evaluation remain on the GPU.
+//! GPU inputs: retained source meshes with vertex-stage deformation, or the projected
+//! CPU reference packet for features that still consume exact CPU geometry. Both use
+//! GPU coverage and depth; projected packets keep CPU six-plane clipping and snapping.
 use super::{
     AlphaMode, AnchorProjection, Camera, ContractErrors, Frame3DState, Lights, MAX_TILE_REFERENCES,
     MaterialKind, PixelRays, PreparedScene, SUBPIXEL_SCALE, anchor_projections, collect_geometry,
     f16_bits_to_f32, output_color,
 };
 mod atlas;
+mod mesh;
 mod packet;
 mod shading;
 pub use atlas::GpuRasterAtlas;
+pub(super) use mesh::GpuMeshCache;
+pub use mesh::{GpuMeshData, prepare_gpu_mesh_geometry};
 pub use shading::GpuRasterTextureVarying;
 
 #[derive(Clone, Copy, Debug)]
@@ -101,14 +105,22 @@ pub struct GpuRasterGeometry {
     /// Independent triangles in the same submission order as the CPU renderer.
     pub vertices: Vec<GpuRasterVertex>,
     pub anchors: Vec<AnchorProjection>,
-    /// A power of two no greater than the near plane. GPU depth is depth_scale / z
-    /// (reverse Z), linearly interpolated by fixed-function rasterization.
+    /// Projected packets use depth_scale / z (reverse Z). Retained source meshes instead
+    /// use finite reverse Z from the camera near/far rows for hardware clipping.
     pub depth_scale: f32,
     /// Absent for the exact, constant-color Unlit path.
     pub shading: Option<GpuRasterShading>,
+    /// Immutable indexed source geometry. When present, vertices are transformed and
+    /// clipped on the GPU; `vertices` is empty and shading carries per-frame parameters.
+    pub mesh: Option<std::sync::Arc<GpuMeshData>>,
 }
 
 impl GpuRasterGeometry {
+    pub fn vertex_count(&self) -> u32 {
+        self.mesh
+            .as_ref()
+            .map_or(self.vertices.len() as u32, |m| m.vertex_count)
+    }
     pub const VERTEX_STRIDE: u64 = 36;
 
     pub fn vertex_stride(&self) -> u64 {
@@ -311,5 +323,6 @@ pub fn prepare_gpu_geometry(
         anchors: anchor_projections(&prepared.scene, &camera, &geometry.transforms),
         depth_scale,
         shading,
+        mesh: None,
     }))
 }

@@ -28,6 +28,7 @@ export interface Scene3dGpuPacket {
   atlas: { width: number; height: number; bytes: number; key: string };
   shadows: Scene3dGpuShadow[];
   shadowKey: string;
+  mesh?: { width: number; height: number; bytes: number; key: string };
 }
 
 /** Borrow admitted triangle/uniform uploads. The immutable atlas travels once, separately. */
@@ -61,7 +62,7 @@ export function decodeScene3dGpuPacket(bytes: Uint8Array): Scene3dGpuPacket {
     width * height > 8_388_608 ||
     vertices % 3 !== 0 ||
     ![9, 13, 27].includes(stride) ||
-    flags > 15 ||
+    flags > 31 ||
     header[25] !== bytes.byteLength ||
     !Number.isFinite(floats[6]) ||
     floats[6]! <= 0 ||
@@ -93,8 +94,10 @@ export function decodeScene3dGpuPacket(bytes: Uint8Array): Scene3dGpuPacket {
     tiles = texture(21);
   const lit = (flags & 1) !== 0,
     blend = (flags & 2) !== 0;
+  const direct = (flags & 16) !== 0;
   if (
-    vertices * stride > vertexData.words.length ||
+    (!direct && vertices * stride > vertexData.words.length) ||
+    (direct && (!lit || blend || stride !== 13 || header[24] !== 0)) ||
     (lit ? stride === 9 : stride !== 9) ||
     (!lit && (flags & 10) !== 0)
   )
@@ -134,6 +137,19 @@ export function decodeScene3dGpuPacket(bytes: Uint8Array): Scene3dGpuPacket {
       byte.toString(16).padStart(2, "0"),
     ).join("");
   const atlas = { width: header[15]!, height: header[16]!, bytes: header[17]!, key: hex(112, 32) };
+  const mesh = direct
+    ? { width: header[48]!, height: header[49]!, bytes: header[50]!, key: hex(144, 32) }
+    : undefined;
+  if (
+    mesh &&
+    (!mesh.width ||
+      !mesh.height ||
+      mesh.width > 4096 ||
+      mesh.height > 4096 ||
+      mesh.bytes !== mesh.width * mesh.height * 16 ||
+      vertices * 16 > mesh.bytes)
+  )
+    invalid("mesh extent");
   if (
     lit &&
     (!atlas.width ||
@@ -166,5 +182,6 @@ export function decodeScene3dGpuPacket(bytes: Uint8Array): Scene3dGpuPacket {
     atlas,
     shadows,
     shadowKey: hex(144, 32),
+    mesh,
   };
 }

@@ -47,6 +47,7 @@ export interface ProductEngineWire {
   set_realtime_geometry?(enabled: boolean): void;
   set_delivery_output?(enabled: boolean): void;
   scene3d_gpu_raster_input?(content: string, topology: string, request: string): Uint8Array;
+  scene3d_gpu_mesh?(content: string, topology: string, request: string): Uint8Array;
   scene3d_gpu_atlas?(content: string, topology: string, request: string): Uint8Array;
   transform_srgb_preview_pixels(pixels: Float32Array, opaque: boolean): void;
   transform_srgb_preview_f16?(pixels: Uint8Array, opaque: boolean): void;
@@ -165,6 +166,7 @@ export const PRODUCT_RUNTIME_METHODS = [
   "register_scene3d_texture",
   "scene3d_gpu_raster_input",
   "scene3d_gpu_atlas",
+  "scene3d_gpu_mesh",
   "render_scene3d_request",
   "render_scene3d_request_deferred",
   "has_scene3d_frame",

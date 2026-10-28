@@ -2,9 +2,14 @@ import type { Scene3dGpuPacket } from "../scene3d-input.ts";
 
 /** Opportunity estimate only: false runs the complete gather, so misses cannot change pixels. */
 export function needsDofTiles(
-  packet: Pick<Scene3dGpuPacket, "radius" | "focus" | "vertexData" | "vertices" | "stride">,
+  packet: Pick<
+    Scene3dGpuPacket,
+    "radius" | "focus" | "vertexData" | "vertices" | "stride" | "mesh"
+  >,
 ): boolean {
   if (packet.radius <= 0) return false;
+  // Source meshes have no CPU projected depths. Classify the actual GPU depth tiles.
+  if (packet.mesh) return true;
   const words = packet.vertexData.words;
   const values = new Float32Array(words.buffer, words.byteOffset, words.length);
   let min = 3.4028234663852886e38;

@@ -158,6 +158,85 @@ fn indexed_deformation_and_projection_match_triangle_reference_bits() {
 }
 
 #[test]
+fn constant_unlit_matches_full_shading_and_visibility_bits() {
+    use crate::scene3d::ToneMapping;
+
+    // White unit ambient Lambert is an independent full per-pixel shading reference for
+    // untextured Unlit. It still interpolates normals/view rays, shades and encodes every
+    // visible pixel, including masks and OIT; no optimization-disabling test switch is used.
+    let mut visible_cases = 0;
+    for bytes in [
+        include_bytes!("../../../tests/fixtures/scene3d/rigged-simple.glb").as_slice(),
+        include_bytes!("../../../tests/fixtures/scene3d/animated-morph-cube.glb").as_slice(),
+    ] {
+        for tone in [ToneMapping::None, ToneMapping::Aces] {
+            for (mode, alpha, cutoff) in [
+                (AlphaMode::Opaque, 0.4, None),
+                (AlphaMode::Mask, 0.5, Some(0.5)),
+                (AlphaMode::Mask, 0.4, Some(0.5)),
+                (AlphaMode::Blend, 0.4, None),
+                (AlphaMode::Blend, 0.0, None),
+            ] {
+                let (mut reference, mut frame) = fixture(bytes, false);
+                reference.scene.pbr.tone_mapping = tone;
+                reference.scene.lights = vec![LightKind::Ambient];
+                frame.lights = vec![LightFrameState::Ambient {
+                    color: Color4([1.0; 4]),
+                    intensity: 1.0,
+                }];
+                frame.meshes[0].material.color = Some(Color4([0.15, 0.6, 0.9, alpha]));
+                for mesh in &mut reference.meshes {
+                    for material in &mut mesh.materials {
+                        material.kind = MaterialKind::Lambert;
+                        material.values = ModelMaterial {
+                            alpha_mode: mode,
+                            alpha_cutoff: cutoff,
+                            emissive: [0.01, 0.3, 0.8],
+                            emissive_intensity: 0.7,
+                            double_sided: true,
+                            ..Default::default()
+                        };
+                    }
+                }
+                let mut candidate = reference.clone();
+                for mesh in &mut candidate.meshes {
+                    for material in &mut mesh.materials {
+                        material.kind = MaterialKind::Unlit;
+                    }
+                }
+                for (time, exposure, close) in
+                    [(0.0, 0.2, false), (0.7, 1.0, true), (0.0, 2.0, false)]
+                {
+                    frame.meshes[0].animation_time = Some(time);
+                    frame.meshes[0].transform.rotation_degrees = Vec3::new(7.0, 19.0, -3.0);
+                    frame.meshes[0].transform.scale.0[0] = if close { -1.0 } else { 1.0 };
+                    frame.camera.position.0[2] = if close { 1.0 } else { 15.0 };
+                    frame.exposure = exposure;
+                    let expected =
+                        render_scene_with_geometry_reuse(&reference, &frame, None, 1, true, true)
+                            .unwrap();
+                    let actual =
+                        render_scene_with_geometry_reuse(&candidate, &frame, None, 4, true, true)
+                            .unwrap();
+                    assert_eq!(
+                        actual, expected,
+                        "{tone:?} {mode:?} alpha={alpha} time={time}"
+                    );
+                    assert_eq!(actual.depth_f32_le_bytes(), expected.depth_f32_le_bytes());
+                    visible_cases += usize::from(
+                        actual
+                            .object_ids
+                            .iter()
+                            .any(|&id| id != BACKGROUND_OBJECT_ID),
+                    );
+                }
+            }
+        }
+    }
+    assert!(visible_cases >= 24, "test must shade visible surfaces");
+}
+
+#[test]
 #[ignore = "manual Scene3D geometry preparation throughput comparison"]
 fn indexed_geometry_preparation_benchmark() {
     use std::{hint::black_box, time::Instant};

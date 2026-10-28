@@ -1070,7 +1070,11 @@ impl ProductEngine {
         let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
         let frame = sealed.request();
         let prepared = self.prepare_scene3d_frame(frame)?;
-        let geometry = valle_motion::scene3d::prepare_gpu_geometry(&prepared, &frame.frame)
+        let geometry = valle_motion::scene3d::prepare_gpu_mesh_geometry(&prepared, &frame.frame)
+            .and_then(|mesh| match mesh {
+                Some(mesh) => Ok(Some(mesh)),
+                None => valle_motion::scene3d::prepare_gpu_geometry(&prepared, &frame.frame),
+            })
             .map_err(|error| js_error("scene3d_gpu_geometry", error))?;
         Ok(geometry
             .and_then(|geometry| geometry.web_packet(&frame.frame))
@@ -1087,7 +1091,11 @@ impl ProductEngine {
         let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
         let frame = sealed.request();
         let prepared = self.prepare_scene3d_frame(frame)?;
-        let geometry = valle_motion::scene3d::prepare_gpu_geometry(&prepared, &frame.frame)
+        let geometry = valle_motion::scene3d::prepare_gpu_mesh_geometry(&prepared, &frame.frame)
+            .and_then(|mesh| match mesh {
+                Some(mesh) => Ok(Some(mesh)),
+                None => valle_motion::scene3d::prepare_gpu_geometry(&prepared, &frame.frame),
+            })
             .map_err(|error| js_error("scene3d_gpu_geometry", error))?
             .ok_or_else(|| JsError::new("[scene3d_gpu_atlas] geometry was not admitted"))?;
         let Some(shading) = geometry.shading.as_ref() else {
@@ -1100,6 +1108,22 @@ impl ProductEngine {
         let mut output = Vec::with_capacity(atlas.byte_len() as usize);
         atlas.append_bytes(&mut output);
         Ok(output)
+    }
+
+    /// Static indexed geometry is transferred once per content key, separately from frame matrices.
+    pub fn scene3d_gpu_mesh(
+        &mut self,
+        content_digest: &str,
+        topology_digest: &str,
+        canonical_request: &str,
+    ) -> Result<Vec<u8>, JsError> {
+        let sealed = open_scene3d_request(content_digest, topology_digest, canonical_request)?;
+        let frame = sealed.request();
+        let prepared = self.prepare_scene3d_frame(frame)?;
+        let geometry = valle_motion::scene3d::prepare_gpu_mesh_geometry(&prepared, &frame.frame)
+            .map_err(|error| js_error("scene3d_gpu_mesh", error))?
+            .ok_or_else(|| JsError::new("[scene3d_gpu_mesh] geometry was not admitted"))?;
+        Ok(geometry.mesh.expect("mesh packet").web_bytes())
     }
 
     fn prepare_scene3d_frame(
