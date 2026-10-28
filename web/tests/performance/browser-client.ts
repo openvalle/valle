@@ -2,6 +2,7 @@ import type {
   BrowserValleWebPlayerOptions,
   ProductRenderResult,
 } from "../../packages/engine/src/index.ts";
+import { decodePackedAbi, RENDER_BINDINGS_ABI } from "../../packages/engine/src/abi/packed.ts";
 const runtimeUrl = "/packages/engine/index.mjs";
 const { BrowserValleWebPlayer, RenderTrace } = (await import(
   runtimeUrl
@@ -14,6 +15,7 @@ const job = await (await fetch("/job.json")).json();
 // QA observes the actual transferred kernel replies, so a small fixture cannot accidentally
 // claim worker coverage while remaining below the artifact-node admission threshold.
 const motionPacketBytes = new Map<number, number>();
+const bindingPackets: Uint8Array[] = [];
 if (job.mode === "qa") {
   const NativeWorker = globalThis.Worker;
   globalThis.Worker = class extends NativeWorker {
@@ -26,9 +28,39 @@ if (job.mode === "qa") {
             bytes.byteLength,
             (motionPacketBytes.get(bytes.byteLength) ?? 0) + 1,
           );
+        for (const entry of event.data?.entries ?? [{ stage: event.data?.stage }]) {
+          const packet = entry.stage?.bindingPacket;
+          if (packet instanceof Uint8Array) bindingPackets.push(packet.slice());
+        }
       });
     }
   };
+}
+
+async function inspectProgramTransport() {
+  const parameters: Record<number, number> = {};
+  let literalPrograms = 0;
+  for (const packet of bindingPackets) {
+    // Diagnostic inspection also reads independent pre-change runtimes. The executor itself
+    // enforces its pinned ABI; this observer uses the packet's version to compare transports.
+    const formatVersion = new DataView(
+      packet.buffer,
+      packet.byteOffset,
+      packet.byteLength,
+    ).getUint32(8, true);
+    const bindings = (await decodePackedAbi(packet, { ...RENDER_BINDINGS_ABI, formatVersion })) as {
+      programs: Array<{ parameters?: { bytes: string }; patch: string; framePatch: string }>;
+    };
+    for (const program of bindings.programs) {
+      if (program.parameters) {
+        if (program.patch !== "" || program.framePatch !== "")
+          throw new Error("mixed parameter and patch transport");
+        const bytes = atob(program.parameters.bytes).length;
+        parameters[bytes] = (parameters[bytes] ?? 0) + 1;
+      } else literalPrograms++;
+    }
+  }
+  return { parameters, literalPrograms, packets: bindingPackets.length };
 }
 if (job.input.resourceBytesUrl)
   job.input.resourceBytes = new Uint8Array(
@@ -124,6 +156,7 @@ async function run() {
       gpu,
       outputs,
       motionPacketBytes: Object.fromEntries(motionPacketBytes),
+      programTransport: await inspectProgramTransport(),
       userAgent: navigator.userAgent,
       trace: trace?.snapshot({ backend: job.gpu ? "web-gpu" : "web-cpu" }),
     };

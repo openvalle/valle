@@ -47,7 +47,7 @@ export const DRAW_PROGRAM_ABI = Object.freeze({
 export const RENDER_PLAN_ABI = Object.freeze({
   "kind": "RenderPlanTemplate",
   "magic": "VLPLAN\u0000\u0000",
-  "formatVersion": 2,
+  "formatVersion": 3,
   "headerBytes": 24,
   "endianness": "little",
   "endiannessMarker": 16909060,
@@ -57,7 +57,7 @@ export const RENDER_PLAN_ABI = Object.freeze({
 export const RENDER_BINDINGS_ABI = Object.freeze({
   "kind": "RenderBindings",
   "magic": "VLBIND\u0000\u0000",
-  "formatVersion": 1,
+  "formatVersion": 2,
   "headerBytes": 24,
   "endianness": "little",
   "endiannessMarker": 16909060,
@@ -82,6 +82,11 @@ export const BOUND_PROGRAM_SCHEDULES_ABI = Object.freeze({
   "endianness": "little",
   "endiannessMarker": 16909060,
   "maximumBytes": 16777216
+});
+
+export const PAINT_TEMPLATE_ABI = Object.freeze({
+  "magic": "VLPAINT1",
+  "maximumSlots": 65536
 });
 
 export const PROGRAM_PATCH_ABI = Object.freeze({

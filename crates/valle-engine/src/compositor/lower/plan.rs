@@ -32,7 +32,10 @@ use super::{
     program_patch,
 };
 
-pub const RENDER_PLAN_FORMAT_VERSION: u32 = 2;
+mod paint_parameters;
+use paint_parameters::{AdmittedPaintLayout, ProgramPaintParameters};
+
+pub const RENDER_PLAN_FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -79,14 +82,18 @@ pub struct PlanProgram {
     frame_hash: ContentDigest,
     patch: Vec<u8>,
     frame_patch: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parameters: Option<ProgramPaintParameters>,
     #[serde(skip)]
-    frame: OnceLock<PlanProgramFrame>,
+    frame: OnceLock<Arc<PlanProgramFrame>>,
     #[serde(skip)]
     packed: OnceLock<Vec<u8>>,
     /// The producer's immutable validated arena, retained only by in-process frame packets.
     /// Wire decoding cannot supply this proof and must admit its own packed DrawProgram.
     #[serde(skip)]
     runtime_program: Option<Arc<DrawProgram>>,
+    #[serde(skip)]
+    paint_frame: OnceLock<valle_draw::program::PaintFrame>,
     #[serde(skip)]
     structure_hash: OnceLock<ContentDigest>,
     #[serde(skip)]
@@ -109,6 +116,8 @@ struct PlanProgramWire {
     patch: Vec<u8>,
     #[serde(with = "packed_program_bytes")]
     frame_patch: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parameters: Option<ProgramPaintParameters>,
 }
 
 /// Exact admitted program contract carried by one frame binding packet. It is exposed only
@@ -166,9 +175,10 @@ pub(super) mod packed_program_bytes {
 
 /// Static physical identity of one program slot in a reusable RenderPlan template.
 ///
-/// The content hash, packed DrawProgram, animated geometry/paint, local bounds and current
-/// resource identities live in `RenderBindings.programs`. Only data that can change pass/storage
-/// topology is retained here. A frame program must reproduce `structure_hash` before execution.
+/// Literal programs reconstruct geometry and local ranges from independent frame patches.
+/// Paint-only templates also retain immutable geometry, ranges and the derived local plan;
+/// their frames carry exact color parameters. Both representations admit their own identity
+/// and resource contract before execution.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PlanProgramLayout {
@@ -176,6 +186,9 @@ pub struct PlanProgramLayout {
     pub kind: PreparedProgramKind,
     pub semantic_path: String,
     pub structure_hash: ContentDigest,
+    /// A normalized PaintTemplate baseline uses parameter frames instead of binary patches.
+    #[serde(default)]
+    pub paint_parameters: bool,
     pub baseline_content_hash: ContentDigest,
     #[serde(with = "packed_program_bytes")]
     pub baseline_packed: Vec<u8>,
@@ -188,6 +201,8 @@ pub struct PlanProgramLayout {
     /// reconstruct it during their one-time baseline admission.
     #[serde(skip)]
     attached_structure: OnceLock<ProgramStructureProjection>,
+    #[serde(skip)]
+    attached_paint: OnceLock<Arc<AdmittedPaintLayout>>,
 }
 
 impl PlanProgram {
@@ -236,6 +251,8 @@ impl PlanProgram {
             kind: frame.kind,
             semantic_path: frame.semantic_path.clone(),
             structure_hash,
+            paint_parameters: false,
+            attached_paint: OnceLock::new(),
             baseline_content_hash,
             baseline_packed: packed.clone(),
             baseline_frame_hash,
@@ -250,7 +267,9 @@ impl PlanProgram {
             frame_hash: baseline_frame_hash,
             patch,
             frame_patch,
-            frame: OnceLock::from(frame),
+            parameters: None,
+            paint_frame: OnceLock::new(),
+            frame: OnceLock::from(Arc::from(frame)),
             packed: OnceLock::from(packed),
             runtime_program,
             structure_hash: OnceLock::from(structure_hash),
@@ -307,6 +326,8 @@ impl PlanProgram {
             kind: frame.kind,
             semantic_path: frame.semantic_path.clone(),
             structure_hash,
+            paint_parameters: false,
+            attached_paint: OnceLock::new(),
             baseline_content_hash,
             baseline_packed: packed.clone(),
             baseline_frame_hash,
@@ -321,7 +342,9 @@ impl PlanProgram {
             frame_hash: baseline_content_hash,
             patch: Vec::new(),
             frame_patch: Vec::new(),
-            frame: OnceLock::from(frame),
+            parameters: None,
+            paint_frame: OnceLock::new(),
+            frame: OnceLock::from(Arc::from(frame)),
             packed: OnceLock::from(packed),
             runtime_program: Some(runtime_program),
             structure_hash: OnceLock::from(structure_hash),
@@ -370,7 +393,8 @@ impl PlanProgram {
             local_schedule,
         };
         let structure_hash = program_structure_hash(&frame)?;
-        if id != layout.id
+        if layout.paint_parameters
+            || id != layout.id
             || frame.kind != layout.kind
             || frame.semantic_path != layout.semantic_path
             || structure_hash != layout.structure_hash
@@ -394,7 +418,9 @@ impl PlanProgram {
             frame_hash,
             patch,
             frame_patch,
-            frame: OnceLock::from(frame),
+            parameters: None,
+            paint_frame: OnceLock::new(),
+            frame: OnceLock::from(Arc::from(frame)),
             packed: OnceLock::from(packed),
             runtime_program,
             structure_hash: OnceLock::from(structure_hash),
@@ -440,14 +466,14 @@ impl PlanProgram {
             local_plan,
             local_schedule,
         };
-        Self::from_constructed_frame(content_hash, packed, runtime_program, frame, layout)
+        Self::from_constructed_frame(content_hash, packed, runtime_program, frame.into(), layout)
     }
 
     fn from_constructed_frame(
         content_hash: ContentDigest,
         packed: Vec<u8>,
         runtime_program: Arc<DrawProgram>,
-        frame: PlanProgramFrame,
+        frame: Arc<PlanProgramFrame>,
         layout: &PlanProgramLayout,
     ) -> Result<Self, PlanValidationError> {
         let content = content_hash;
@@ -456,7 +482,8 @@ impl PlanProgram {
             Some(expected) => expected == &structure,
             None => program_structure_hash(&frame)? == layout.structure_hash,
         };
-        if frame.id != layout.id
+        if layout.paint_parameters
+            || frame.id != layout.id
             || frame.kind != layout.kind
             || frame.semantic_path != layout.semantic_path
             || !structure_matches
@@ -476,6 +503,8 @@ impl PlanProgram {
             frame_hash: content,
             patch: Vec::new(),
             frame_patch: Vec::new(),
+            parameters: None,
+            paint_frame: OnceLock::new(),
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
             runtime_program: Some(runtime_program),
@@ -494,6 +523,20 @@ impl PlanProgram {
     /// Cheap validation for the minimal binding payload. Full DrawProgram admission needs the
     /// corresponding template layout and is performed by [`Self::admit_layout`].
     pub fn validate_payload(&self) -> Result<(), PlanValidationError> {
+        if let Some(parameters) = &self.parameters {
+            if self.constructed
+                || !self.patch.is_empty()
+                || !self.frame_patch.is_empty()
+                || parameters.bytes.len() > 65536 * 16
+                || parameters.bytes.len() % 16 != 0
+            {
+                return Err(invalid(
+                    "program.parameters",
+                    "invalid parameter payload or mixed program representations",
+                ));
+            }
+            return Ok(());
+        }
         if self.constructed {
             if !self.patch.is_empty()
                 || !self.frame_patch.is_empty()
@@ -517,6 +560,14 @@ impl PlanProgram {
         Ok(())
     }
 
+    pub(crate) fn has_attached_program(&self) -> bool {
+        self.constructed
+            || (self.paint_frame.get().is_some()
+                && self.frame.get().is_some()
+                && self.admitted_baseline.get().is_some()
+                && self.structure_hash.get().is_some())
+    }
+
     pub(crate) const fn is_constructed(&self) -> bool {
         self.constructed
     }
@@ -531,6 +582,9 @@ impl PlanProgram {
                 "program.id",
                 "frame program id does not match its layout",
             ));
+        }
+        if self.parameters.is_some() || layout.paint_parameters {
+            return self.admit_paint_layout(layout);
         }
         let admission = PlanProgramAdmissionKey {
             content: layout.baseline_content_hash,
@@ -607,7 +661,7 @@ impl PlanProgram {
             .set(packed)
             .map_err(|_| invalid("program.packed", "frame program admission raced"))?;
         self.frame
-            .set(frame)
+            .set(Arc::new(frame))
             .map_err(|_| invalid("program.frame", "frame program admission raced"))?;
         Ok(())
     }
@@ -616,6 +670,12 @@ impl PlanProgram {
     /// The result remains random-access: it never depends on another frame's binding packet.
     pub(crate) fn rebase(&self, layout: &PlanProgramLayout) -> Result<Self, PlanValidationError> {
         self.validate_payload()?;
+        if self.parameters.is_some() {
+            self.admit_paint_layout(layout)?;
+            let mut rebound = self.clone();
+            rebound.initial_layout = None;
+            return Ok(rebound);
+        }
         let packed = self
             .packed
             .get()
@@ -626,7 +686,8 @@ impl PlanProgram {
             .get()
             .ok_or_else(|| invalid("program.frame", "frame program has not been admitted"))?
             .clone();
-        if self.structure_hash.get() != Some(&layout.structure_hash)
+        if layout.paint_parameters
+            || self.structure_hash.get() != Some(&layout.structure_hash)
             || frame.id != layout.id
             || frame.kind != layout.kind
             || frame.semantic_path != layout.semantic_path
@@ -650,6 +711,8 @@ impl PlanProgram {
             frame_hash,
             patch,
             frame_patch,
+            parameters: None,
+            paint_frame: OnceLock::new(),
             frame: OnceLock::from(frame),
             packed: OnceLock::from(packed),
             structure_hash: OnceLock::from(layout.structure_hash),
@@ -667,6 +730,10 @@ impl PlanProgram {
         self,
         layout: &PlanProgramLayout,
     ) -> Result<Self, PlanValidationError> {
+        if self.parameters.is_some() {
+            self.admit_paint_layout(layout)?;
+            return Ok(self);
+        }
         let packed = self
             .packed
             .into_inner()
@@ -697,15 +764,41 @@ impl PlanProgram {
     }
 
     pub fn packed(&self) -> &[u8] {
-        self.packed
-            .get()
-            .expect("template admission reconstructs every frame DrawProgram")
+        self.packed.get_or_init(|| {
+            self.runtime_program()
+                .expect("template admission attaches every parameter frame")
+                .packed_bytes()
+                .expect("admitted drawing program has a canonical encoding")
+        })
     }
 
-    /// Shares the exact validated arena produced by trusted in-process lowering. Deserialized
-    /// programs return `None`; executors must independently decode and validate their bytes.
+    /// Conservative retained encoding cost without materializing a parameter frame. Charging
+    /// its whole shared template per entry deliberately overestimates this cache's ownership.
+    pub fn encoding_cost_bytes(&self) -> usize {
+        if let Some(frame) = self.paint_frame.get() {
+            frame
+                .template()
+                .packed()
+                .expect("admitted paint template")
+                .len()
+                .saturating_add(
+                    self.parameters
+                        .as_ref()
+                        .expect("parameter frame")
+                        .bytes
+                        .len(),
+                )
+        } else {
+            self.packed().len()
+        }
+    }
+
+    /// Shares the exact validated arena from in-process lowering or admitted paint parameters.
+    /// Literal wire programs return `None` and executors decode their independently admitted bytes.
     pub fn runtime_program(&self) -> Option<&Arc<DrawProgram>> {
-        self.runtime_program.as_ref()
+        self.runtime_program
+            .as_ref()
+            .or_else(|| self.paint_frame.get().map(|frame| frame.program()))
     }
 
     pub fn local_plan(&self) -> &ProgramPlan {
@@ -740,6 +833,7 @@ impl PartialEq for PlanProgram {
             && self.frame_hash == other.frame_hash
             && self.patch == other.patch
             && self.frame_patch == other.frame_patch
+            && self.parameters == other.parameters
     }
 }
 
@@ -751,6 +845,7 @@ impl From<PlanProgram> for PlanProgramWire {
             frame_hash: value.frame_hash,
             patch: value.patch,
             frame_patch: value.frame_patch,
+            parameters: value.parameters,
         }
     }
 }
@@ -765,6 +860,8 @@ impl TryFrom<PlanProgramWire> for PlanProgram {
             frame_hash: value.frame_hash,
             patch: value.patch,
             frame_patch: value.frame_patch,
+            parameters: value.parameters,
+            paint_frame: OnceLock::new(),
             frame: OnceLock::new(),
             packed: OnceLock::new(),
             runtime_program: None,
@@ -780,6 +877,9 @@ impl TryFrom<PlanProgramWire> for PlanProgram {
 
 impl PlanProgramLayout {
     fn validate_baseline(&self) -> Result<(), PlanValidationError> {
+        if self.paint_parameters {
+            return self.validate_paint_baseline();
+        }
         if self.baseline_content_hash != ContentDigest::of_bytes(&self.baseline_packed) {
             return Err(invalid(
                 "program.baselineContentHash",
@@ -1965,6 +2065,8 @@ struct RenderPlanStructureSeed<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PlanProgramStructureSeed<'a> {
+    paint_parameters: bool,
+    paint_template: Option<&'a ContentDigest>,
     id: ProgramId,
     kind: PreparedProgramKind,
     semantic_path: &'a str,
@@ -1998,6 +2100,10 @@ impl<'a> From<&'a PlanProgramLayout> for PlanProgramStructureSeed<'a> {
             kind: value.kind,
             semantic_path: &value.semantic_path,
             structure_hash: &value.structure_hash,
+            paint_parameters: value.paint_parameters,
+            paint_template: value
+                .paint_parameters
+                .then_some(&value.baseline_content_hash),
             resources: &value.resources,
             destination_uses: &value.destination_uses,
         }

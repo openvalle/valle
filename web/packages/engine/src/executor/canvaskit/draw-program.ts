@@ -58,8 +58,14 @@ export interface DrawProgramWire {
   dashOffsets: DashOffsetTableWire;
   paths: PathWire[];
   paints: TaggedWire[];
+  /** Sparse frame values over a shared immutable template paint table. */
+  paintOverrides?: ReadonlyMap<number, TaggedWire>;
   viewport: RectWire;
   requirements: Record<string, unknown>;
+}
+
+export function drawProgramPaint(draw: DrawProgramWire, id: number): TaggedWire | undefined {
+  return draw.paintOverrides?.get(id) ?? draw.paints[id];
 }
 
 export class PackedDrawProgramError extends Error {

@@ -63,7 +63,6 @@ impl std::ops::Deref for MotionFontSet {
 #[derive(Debug)]
 pub(crate) struct CachedDrawProgram {
     arena: Arc<DrawProgram>,
-    #[cfg(any(feature = "web", test))]
     pub(super) paint_frame: Option<valle_draw::program::PaintFrame>,
     encoding: OnceLock<Vec<u8>>,
     digest: OnceLock<ContentDigest>,
@@ -77,7 +76,6 @@ impl CachedDrawProgram {
     fn from_shared(program: Arc<DrawProgram>) -> Self {
         Self {
             arena: program,
-            #[cfg(any(feature = "web", test))]
             paint_frame: None,
             encoding: OnceLock::new(),
             digest: OnceLock::new(),
@@ -87,7 +85,6 @@ impl CachedDrawProgram {
     pub(super) fn from_paint_frame(frame: valle_draw::program::PaintFrame) -> Self {
         Self {
             arena: frame.program().clone(),
-            #[cfg(any(feature = "web", test))]
             paint_frame: Some(frame),
             encoding: OnceLock::new(),
             digest: OnceLock::new(),
@@ -98,7 +95,6 @@ impl CachedDrawProgram {
     pub(super) fn from_packed(bytes: &[u8]) -> Result<Self, valle_draw::program::PackedDrawError> {
         Ok(Self {
             arena: Arc::new(DrawProgram::from_packed(bytes)?),
-            #[cfg(any(feature = "web", test))]
             paint_frame: None,
             encoding: OnceLock::from(bytes.to_vec()),
             digest: OnceLock::new(),
@@ -739,6 +735,10 @@ pub struct PreparedProgram {
     pub content_hash: ContentDigest,
     pub viewport: Rect,
     pub packed: Vec<u8>,
+    /// Mutually exclusive with `packed`. Its content hash names the normalized template and
+    /// exact parameter bits, not a materialized DrawProgram encoding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint_frame: Option<valle_draw::program::PaintFrame>,
     pub requirements: valle_draw::requirements::DrawRequirements,
     pub resources: ProgramResourceBindings,
     pub destination_uses: Vec<PreparedDestinationUse>,
@@ -750,7 +750,9 @@ pub struct PreparedProgram {
 
 impl PreparedProgram {
     pub(crate) fn runtime_program(&self) -> Option<&Arc<DrawProgram>> {
-        self.runtime_program.as_ref()
+        self.runtime_program
+            .as_ref()
+            .or_else(|| self.paint_frame.as_ref().map(|frame| frame.program()))
     }
 }
 
@@ -762,6 +764,7 @@ impl PartialEq for PreparedProgram {
             && self.content_hash == other.content_hash
             && self.viewport == other.viewport
             && self.packed == other.packed
+            && self.paint_frame == other.paint_frame
             && self.requirements == other.requirements
             && self.resources == other.resources
             && self.destination_uses == other.destination_uses
@@ -897,15 +900,23 @@ pub(crate) fn prepare_program(
             .push(ProgramStructureBinding { key, handle });
     }
 
-    let packed = context.fixture.program.packed()?;
-    let content_hash = context.fixture.program.digest()?;
+    let paint_frame = context.fixture.program.paint_frame.clone();
+    let (packed, content_hash) = if let Some(frame) = &paint_frame {
+        (Vec::new(), ContentDigest::from_bytes(frame.digest()?))
+    } else {
+        (
+            context.fixture.program.packed()?.to_vec(),
+            context.fixture.program.digest()?,
+        )
+    };
     Ok(PreparedProgram {
         id,
         kind: context.kind,
         semantic_path: context.semantic_path.to_owned(),
         content_hash,
         viewport: context.fixture.program.viewport(),
-        packed: packed.to_vec(),
+        packed,
+        paint_frame,
         requirements,
         resources: bindings,
         destination_uses: Vec::new(),
@@ -1009,6 +1020,8 @@ pub enum ProgramPrepareError {
     StructureDigestMismatch { key: String },
     #[error(transparent)]
     Packed(#[from] valle_draw::program::PackedDrawError),
+    #[error(transparent)]
+    PaintTemplate(#[from] valle_draw::program::PaintTemplateError),
     #[error(transparent)]
     Request(#[from] RequestError),
 }

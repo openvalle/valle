@@ -1,5 +1,5 @@
 import type { SkPicture } from "canvaskit-wasm";
-import type { DrawProgramWire, PathWire } from "./draw-program.ts";
+import { drawProgramPaint, type DrawProgramWire, type PathWire } from "./draw-program.ts";
 
 export interface RasterTreeSignature {
   key: string;
@@ -47,7 +47,7 @@ export class RasterTreeCache {
       }
       return String(identity);
     };
-    const paint = (id: number | null) => (id == null ? null : draw.paints[id]);
+    const paint = (id: number | null) => (id == null ? null : drawProgramPaint(draw, id));
     let result: RasterTreeSignature | null = null;
     if (node!.kind === "path" || (node!.kind === "glyphRun" && value.outline != null)) {
       const pathIndex = node!.kind === "path" ? value.path : value.outline,

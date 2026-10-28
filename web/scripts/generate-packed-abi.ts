@@ -7,6 +7,7 @@ const REPO_ROOT = resolve(WEB_ROOT, "..");
 const SOURCE_PATHS = Object.freeze({
   drawPacked: "crates/valle-draw/src/program/packed.rs",
   drawValidate: "crates/valle-draw/src/program/validate.rs",
+  drawTemplate: "crates/valle-draw/src/program/template.rs",
   enginePacked: "crates/valle-engine/src/compositor/lower/packed.rs",
   renderPlan: "crates/valle-engine/src/compositor/lower/plan.rs",
   renderBindings: "crates/valle-engine/src/compositor/lower/bindings.rs",
@@ -18,6 +19,7 @@ const SOURCE_PATHS = Object.freeze({
 export interface PackedAbiSources {
   readonly drawPacked: string;
   readonly drawValidate: string;
+  readonly drawTemplate: string;
   readonly enginePacked: string;
   readonly renderPlan: string;
   readonly renderBindings: string;
@@ -114,6 +116,10 @@ export function renderPackedAbi(sources: PackedAbiSources): string {
       engineHeaderBytes,
       engineEndianness,
     ),
+    paintTemplate: {
+      magic: rustMagic(sources.drawTemplate, "MAGIC"),
+      maximumSlots: rustInteger(sources.drawValidate, "MAX_PAINTS"),
+    },
     programPatch: {
       kind: "ProgramPatch",
       magic: rustMagic(sources.programPatch, "MAGIC"),
@@ -155,6 +161,8 @@ export const RENDER_BINDINGS_ABI = Object.freeze(${literal(model.renderBindings)
 export const RESOURCE_REQUESTS_ABI = Object.freeze(${literal(model.resourceRequests)});
 
 export const BOUND_PROGRAM_SCHEDULES_ABI = Object.freeze(${literal(model.boundSchedules)});
+
+export const PAINT_TEMPLATE_ABI = Object.freeze(${literal(model.paintTemplate)});
 
 export const PROGRAM_PATCH_ABI = Object.freeze(${literal(model.programPatch)});
 `;

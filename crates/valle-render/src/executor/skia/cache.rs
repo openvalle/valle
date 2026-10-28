@@ -400,7 +400,7 @@ impl BackendCaches {
         }
     }
 
-    /// Programs are keyed by the plan's content hash, the digest of their packed bytes.
+    /// Programs use the admitted literal or template-plus-parameters content identity.
     pub(crate) fn program(&mut self, plan: &PlanProgram) -> Result<Arc<DrawProgram>, DrawError> {
         if let Some(cached) = self.programs.get(plan.content_hash()) {
             self.counters.program_hits = self.counters.program_hits.saturating_add(1);
@@ -420,13 +420,12 @@ impl BackendCaches {
         };
         // Charge the packed payload plus decoded node/geometry slots. This is a bounded
         // retained-program cost, not an assertion about allocator or process RSS.
-        let weight = plan
-            .packed()
-            .len()
-            .saturating_add(program.nodes().len().saturating_mul(
-                std::mem::size_of::<valle_draw::program::Node>()
-                    + std::mem::size_of::<valle_draw::program::NodeGeometry>(),
-            ));
+        let weight =
+            plan.encoding_cost_bytes()
+                .saturating_add(program.nodes().len().saturating_mul(
+                    std::mem::size_of::<valle_draw::program::Node>()
+                        + std::mem::size_of::<valle_draw::program::NodeGeometry>(),
+                ));
         self.programs
             .insert_weighted(*plan.content_hash(), Arc::clone(&program), weight);
         Ok(program)

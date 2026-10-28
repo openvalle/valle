@@ -45,6 +45,12 @@ pub enum PaintTemplateError {
 }
 
 impl PaintTemplate {
+    /// The normalized immutable arena. Paint parameters cannot alter this arena's geometry,
+    /// requirements, bounds, or execution topology.
+    pub fn program(&self) -> &DrawProgram {
+        &self.program
+    }
+
     pub fn new(
         mut program: DrawProgram,
         mut bindings: Vec<PaintParameter>,
@@ -246,6 +252,43 @@ impl PaintFrame {
         hash.update(self.template.digest()?);
         hash.update(self.parameter_bytes());
         Ok(hash.finalize().into())
+    }
+}
+
+// Standalone PreparedFrame packets own their template. RenderBindings use a separate admitted
+// template reference and transmit only parameters; this codec is not their per-frame wire path.
+impl serde::Serialize for PaintFrame {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeStruct};
+        let mut wire = serializer.serialize_struct("PaintFrame", 2)?;
+        wire.serialize_field(
+            "template",
+            self.template.packed().map_err(S::Error::custom)?,
+        )?;
+        wire.serialize_field("parameters", &self.parameter_bytes())?;
+        wire.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PaintFrame {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            template: Vec<u8>,
+            parameters: Vec<u8>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let template = PaintTemplate::from_packed(&wire.template).map_err(D::Error::custom)?;
+        Self::from_parameters(Arc::new(template), &wire.parameters).map_err(D::Error::custom)
+    }
+}
+
+impl PartialEq for PaintFrame {
+    fn eq(&self, other: &Self) -> bool {
+        self.template.digest().ok() == other.template.digest().ok()
+            && self.parameter_bytes() == other.parameter_bytes()
     }
 }
 

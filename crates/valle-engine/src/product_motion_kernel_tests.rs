@@ -254,5 +254,24 @@ fn parameter_kernel_results_remain_exact_after_inflight_cache_eviction() {
             .unwrap();
         let expected = direct.evaluate_prepare(id, key, spec).unwrap();
         assert_eq!(actual.prepared(), expected.prepared());
+        assert!(
+            actual
+                .prepared()
+                .frame
+                .programs
+                .iter()
+                .any(|program| program.paint_frame.is_some())
+        );
+        let mut decoded: crate::prepare::PreparedFrame =
+            serde_json::from_slice(&serde_json::to_vec(&actual.prepared().frame).unwrap()).unwrap();
+        decoded.validate().unwrap();
+        let parameter = decoded
+            .programs
+            .iter_mut()
+            .find(|program| program.paint_frame.is_some())
+            .unwrap();
+        assert!(parameter.packed.is_empty());
+        parameter.packed.push(1);
+        assert!(decoded.validate().is_err());
     }
 }

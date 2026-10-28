@@ -75,6 +75,10 @@ test("scope identity includes transforms, clip rules and changed fill or stroke 
   const key = () => cache.signature(draw, 1, new Map())?.key;
   const original = key();
   expect(original).toBeDefined();
+  draw.paintOverrides = new Map([[0, { kind: "solid", value: [0.25, 0, 0, 1] }]]);
+  expect(key()).not.toBe(original);
+  draw.paintOverrides = undefined;
+  expect(key()).toBe(original);
   group.transform[2] = 1;
   expect(key()).not.toBe(original);
   group.transform[2] = 0;

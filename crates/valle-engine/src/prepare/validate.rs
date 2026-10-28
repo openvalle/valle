@@ -1038,11 +1038,31 @@ pub(crate) fn validate_prepared_program_table(
                 "program ids must be contiguous and index ordered",
             ));
         }
-        // Constructed frames pack and hash each program in this process; only wire input needs
-        // its payload re-derived.
+        // Only wire input needs its identity re-derived. A parameter frame was independently
+        // admitted by its typed decoder and cannot also supply a literal program.
         if verify_packed {
-            let decoded = DrawProgram::from_packed(&program.packed)
-                .map_err(|error| invalid(format!("programs[{index}].packed"), error))?;
+            let (decoded, digest) = if let Some(frame) = &program.paint_frame {
+                if !program.packed.is_empty() {
+                    return Err(invalid(
+                        format!("programs[{index}].packed"),
+                        "parameter and literal payloads are mutually exclusive",
+                    ));
+                }
+                (
+                    frame.program().clone(),
+                    ContentDigest::from_bytes(frame.digest().map_err(|error| {
+                        invalid(format!("programs[{index}].paintFrame"), error)
+                    })?),
+                )
+            } else {
+                (
+                    std::sync::Arc::new(
+                        DrawProgram::from_packed(&program.packed)
+                            .map_err(|error| invalid(format!("programs[{index}].packed"), error))?,
+                    ),
+                    ContentDigest::of_bytes(&program.packed),
+                )
+            };
             if decoded.viewport() != program.viewport
                 || decoded.requirements() != &program.requirements
             {
@@ -1051,7 +1071,7 @@ pub(crate) fn validate_prepared_program_table(
                     "packed DrawProgram, viewport and derived requirements disagree",
                 ));
             }
-            if program.content_hash != ContentDigest::of_bytes(&program.packed) {
+            if program.content_hash != digest {
                 return Err(invalid(
                     format!("programs[{index}].contentHash"),
                     "program content hash does not match canonical packed bytes",

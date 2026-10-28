@@ -14,7 +14,7 @@ use crate::{
 
 use super::PlanProgram;
 
-pub const RENDER_BINDINGS_FORMAT_VERSION: u32 = 1;
+pub const RENDER_BINDINGS_FORMAT_VERSION: u32 = 2;
 
 /// Stable, one-based slot in a plan's external binding layout.
 ///
@@ -330,7 +330,10 @@ impl RenderBindings {
         external_ids: Vec<ExternalHandleId>,
         programs: Vec<PlanProgram>,
     ) -> Result<Self, BindingContractError> {
-        if programs.iter().any(|program| !program.is_constructed()) {
+        if programs
+            .iter()
+            .any(|program| !program.has_attached_program())
+        {
             return Err(BindingContractError::Canonical(
                 "constructed bindings require attached frame programs".into(),
             ));

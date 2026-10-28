@@ -28,6 +28,7 @@ import {
 import {
   applyDrawProgramPatch,
   decodeDrawProgram,
+  drawProgramPaint,
   type DrawProgramWire,
   type LinearColorWire,
   type RectWire,
@@ -49,6 +50,13 @@ import {
   TRANSITION_KERNELS,
   type BuiltinKernel,
 } from "./builtin-runtime.ts";
+
+import {
+  bindPaintParameters,
+  decodePaintTemplate,
+  paintDigest,
+  type PaintTemplateWire,
+} from "./paint-template.ts";
 
 type Wire = Record<string, any>;
 const IDENTITY_MATRIX = [1, 0, 0, 0, 1, 0, 0, 0, 1];
@@ -485,6 +493,11 @@ export class CanvasKitExecutor {
   private workingArena: SurfaceArena | null = null;
   private readonly drawPrograms = new Map<string, Promise<DrawProgramWire>>();
   private readonly baselinePrograms = new Map<string, Promise<Uint8Array>>();
+  // Lifetime and eviction follow the admitted plan layout; no extra unbounded residency table.
+  private readonly paintLayouts = new WeakMap<
+    Wire,
+    Promise<ProgramStructure & { template: PaintTemplateWire }>
+  >();
   private readonly planTemplates = new Map<
     string,
     { packet: Uint8Array; admitted: Promise<Wire> }
@@ -608,6 +621,45 @@ export class CanvasKitExecutor {
       return await pending;
     } catch (error) {
       this.drawPrograms.delete(key);
+      throw error;
+    }
+  }
+
+  async paintLayout(layout: Wire): Promise<ProgramStructure & { template: PaintTemplateWire }> {
+    const cached = this.paintLayouts.get(layout);
+    if (cached) return cached;
+    const pending = (async () => {
+      const template = await decodePaintTemplate(
+        templateBytes(layout.baselinePacked, "program.baselinePacked"),
+        digestString(layout.baselineContentHash, "program.baselineContentHash"),
+        this.pathArenas,
+      );
+      const metadata = templateBytes(layout.baselineFramePacked, "program.baselineFramePacked");
+      if ((await paintDigest(metadata)) !== layout.baselineFrameHash)
+        fail("program_contract", "paint metadata digest mismatch");
+      const payload = record(
+        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(metadata)),
+        "paint metadata",
+      );
+      if (
+        !deepEqual(template.draw.viewport, payload.viewport) ||
+        !deepEqual(template.draw.requirements, payload.requirements)
+      ) {
+        fail("program_contract", "paint template contract mismatch");
+      }
+      const plan = { ...layout, ...payload };
+      return {
+        plan,
+        draw: template.draw,
+        template,
+        directRaster: directRasterPlan(template.draw, record(plan.localPlan, "program.localPlan")),
+      };
+    })();
+    this.paintLayouts.set(layout, pending);
+    try {
+      return await pending;
+    } catch (error) {
+      this.paintLayouts.delete(layout);
       throw error;
     }
   }
@@ -841,6 +893,7 @@ async function planCanvasKitFrame(
     const structure = await admitProgramStructure(
       executor,
       contract,
+      layout,
       options.onProgramAdmissionStageTiming,
     );
     programContracts.push(structure.plan);
@@ -1626,6 +1679,7 @@ function templateBytes(value: unknown, label: string): Uint8Array {
 async function admitProgramStructure(
   executor: CanvasKitExecutor,
   plan: Wire,
+  layout: Wire,
   onTiming?: (kind: string, milliseconds: number) => void,
 ): Promise<ProgramStructure> {
   let at = onTiming ? performance.now() : 0;
@@ -1635,6 +1689,34 @@ async function admitProgramStructure(
     onTiming(kind, next - at);
     at = next;
   };
+  if (layout.paintParameters || plan.parameters != null) {
+    if (
+      !layout.paintParameters ||
+      plan.parameters == null ||
+      plan.patch !== "" ||
+      plan.framePatch !== "" ||
+      plan.frameHash !== layout.baselineFrameHash
+    ) {
+      fail("program_contract", "mixed paint and literal program payloads or metadata mismatch");
+    }
+    const admitted = await executor.paintLayout(layout);
+    measured("paintTemplate");
+    const parameters = decodeBase64Bytes(
+      record(plan.parameters, "program.parameters").bytes,
+      "program.parameters.bytes",
+    );
+    const draw = await bindPaintParameters(
+      admitted.template,
+      parameters,
+      digestString(plan.contentHash, "program.contentHash"),
+    );
+    measured("paintParameters");
+    return {
+      draw,
+      directRaster: admitted.directRaster,
+      plan: { ...admitted.plan, contentHash: plan.contentHash, frameHash: plan.frameHash },
+    };
+  }
   const baselineHash = digestString(plan.baselineContentHash, "program.baselineContentHash");
   const baselineFrame = templateBytes(plan.baselineFramePacked, "program.baselineFramePacked");
   const baseline = await executor.baselineProgram(
@@ -2925,7 +3007,7 @@ class RasterDrawObjects {
   fill(id: number): Paint {
     let paint = this.fills.get(id);
     if (!paint) {
-      const wire = requiredIndex(this.draw.paints, id, "paint");
+      const wire = requiredPaint(this.draw, id, "paint");
       const lease = this.cache?.acquire(wire, () => makePaint(this.CK, wire));
       paint = lease?.paint ?? makePaint(this.CK, wire);
       if (lease) this.leases.push(lease);
@@ -3329,7 +3411,7 @@ function drawPathNode(
     if (node.fill != null) {
       const paint =
         objects?.fill(node.fill as number) ??
-        makePaint(CanvasKit, requiredIndex(draw.paints, node.fill, "paint"));
+        makePaint(CanvasKit, requiredPaint(draw, node.fill, "paint"));
       try {
         canvas.drawPath(path, paint);
       } finally {
@@ -3338,7 +3420,7 @@ function drawPathNode(
     }
     if (node.stroke != null) {
       const stroke = record(node.stroke, "path stroke");
-      const paint = makePaint(CanvasKit, requiredIndex(draw.paints, stroke.paint, "stroke paint"));
+      const paint = makePaint(CanvasKit, requiredPaint(draw, stroke.paint, "stroke paint"));
       try {
         const effect = configureStrokePaint(CanvasKit, paint, stroke);
         try {
@@ -3838,7 +3920,7 @@ function drawGlyphNode(
     );
     const fill =
       objects?.fill(node.paint as number) ??
-      makePaint(CanvasKit, requiredIndex(admitted.draw.paints, node.paint, "glyph paint"));
+      makePaint(CanvasKit, requiredPaint(admitted.draw, node.paint, "glyph paint"));
     try {
       canvas.drawGlyphs(ids, positions, 0, 0, font, fill);
     } finally {
@@ -3848,7 +3930,7 @@ function drawGlyphNode(
       const stroke = record(node.stroke, "glyph stroke");
       const outline = makePaint(
         CanvasKit,
-        requiredIndex(admitted.draw.paints, stroke.paint, "glyph stroke paint"),
+        requiredPaint(admitted.draw, stroke.paint, "glyph stroke paint"),
       );
       try {
         const effect = configureStrokePaint(CanvasKit, outline, stroke);
@@ -8972,6 +9054,12 @@ function programPassReads(kind: Wire): number[] {
 function required<K, V>(map: ReadonlyMap<K, V>, key: K, label: string): V {
   const value = map.get(key);
   if (value === undefined) fail("missing_value", `${label} '${String(key)}' is absent`);
+  return value;
+}
+function requiredPaint(draw: DrawProgramWire, id: unknown, label: string) {
+  const index = positiveIdOrZero(id, `${label} id`);
+  const value = drawProgramPaint(draw, index);
+  if (value === undefined) fail("missing_value", `${label} ${index} is absent`);
   return value;
 }
 function requiredIndex<T>(values: T[], id: unknown, label: string): T {

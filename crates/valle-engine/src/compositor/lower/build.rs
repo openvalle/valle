@@ -902,8 +902,6 @@ fn lower_programs_impl(
                     }
                 })?)
             };
-            let local_plan = ProgramPlan::derive(&decoded)?;
-            let local_schedule = ProgramSchedule::derive(&local_plan)?;
             let resources = PlanProgramResources {
                 textures: program
                     .resources
@@ -934,6 +932,20 @@ fn lower_programs_impl(
                 )?,
                 scenes: lower_structure_bindings(&program.resources.scenes, external_slots)?,
             };
+            if let Some(frame) = &program.paint_frame {
+                return PlanProgram::from_paint_frame(
+                    program.id,
+                    program.kind,
+                    program.semantic_path.clone(),
+                    frame.clone(),
+                    resources,
+                    program.destination_uses.clone(),
+                    layouts.map(|items| &items[index]),
+                )
+                .map_err(LowerError::from);
+            }
+            let local_plan = ProgramPlan::derive(&decoded)?;
+            let local_schedule = ProgramSchedule::derive(&local_plan)?;
             // Only a same-process producer may attach the immutable admitted arena. A wire
             // decoder cannot manufacture this proof and continues through full admission.
             let admitted_runtime = matches!(mode, LoweringMode::ConstructedWire)

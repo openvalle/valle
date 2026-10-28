@@ -15,6 +15,7 @@ describe("Rust to TypeScript packed ABI generation", () => {
     expect(first).toContain("RESOURCE_REQUESTS_ABI");
     expect(first).toContain("BOUND_PROGRAM_SCHEDULES_ABI");
     expect(first).toContain("PROGRAM_PATCH_ABI");
+    expect(first).toContain("PAINT_TEMPLATE_ABI");
   });
 
   test("changes output when an authoritative Rust layout changes", async () => {
