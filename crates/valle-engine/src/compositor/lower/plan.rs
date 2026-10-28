@@ -23,15 +23,16 @@ use crate::{
         PreparedExternalBackdrop, PreparedMask, PreparedProgramKind, PreparedTransitionKernel,
         ProgramId,
     },
-    resource::{ContentDigest, LogicalTextureDesc, OutputSpec, TextureFormat},
+    resource::{ContentDigest, OutputSpec, TextureFormat},
 };
 
 use super::{
     BindingContractError, ExecutionPassId, ExternalSlotId, PlanBindingLayout, PlanIdError,
-    PlanResourceId, ProgramPlan, ProgramSchedule, RenderBindings, SurfaceSlotId, program_patch,
+    PlanResourceId, ProgramPlan, ProgramSchedule, RenderBindings, SurfaceClass, SurfaceSlotId,
+    program_patch,
 };
 
-pub const RENDER_PLAN_FORMAT_VERSION: u32 = 1;
+pub const RENDER_PLAN_FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1577,9 +1578,8 @@ pub struct SurfaceAllocation {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SurfaceSlot {
     pub id: SurfaceSlotId,
-    pub texture: LogicalTextureDesc,
+    pub surface_class: SurfaceClass,
     pub allocations: Vec<SurfaceAllocation>,
-    pub estimated_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1902,7 +1902,6 @@ pub struct RenderPlanTemplate {
     passes: Vec<ExecutionPass>,
     optimization: OptimizationReport,
     output: PlanResourceId,
-    estimated_peak_surface_bytes: u64,
     /// Construction-time identity of the validated, versioned packed form. The value is derived
     /// rather than serialized, so it cannot make the wire self-referential. Every public
     /// constructor and decoder calls `finalize`; immutable templates never need to repack and
@@ -1938,7 +1937,6 @@ struct RenderPlanTemplateWire {
     passes: Vec<ExecutionPass>,
     optimization: OptimizationReport,
     output: PlanResourceId,
-    estimated_peak_surface_bytes: u64,
 }
 
 /// Canonical identity of the reusable physical template. Per-frame DrawProgram payloads,
@@ -1959,7 +1957,6 @@ struct RenderPlanStructureSeed<'a> {
     passes: &'a [ExecutionPass],
     optimization: &'a OptimizationReport,
     output: PlanResourceId,
-    estimated_peak_surface_bytes: u64,
 }
 
 /// Baseline bytes are physical template payload, but not topology. Excluding them from this seed
@@ -2023,7 +2020,6 @@ impl RenderPlanTemplate {
         passes: Vec<ExecutionPass>,
         optimization: OptimizationReport,
         output: PlanResourceId,
-        estimated_peak_surface_bytes: u64,
     ) -> Result<Self, PlanValidationError> {
         Self::new_impl(
             render_id,
@@ -2039,7 +2035,6 @@ impl RenderPlanTemplate {
             passes,
             optimization,
             output,
-            estimated_peak_surface_bytes,
             true,
             true,
         )
@@ -2063,7 +2058,6 @@ impl RenderPlanTemplate {
         passes: Vec<ExecutionPass>,
         optimization: OptimizationReport,
         output: PlanResourceId,
-        estimated_peak_surface_bytes: u64,
     ) -> Result<Self, PlanValidationError> {
         Self::new_impl(
             render_id,
@@ -2079,7 +2073,6 @@ impl RenderPlanTemplate {
             passes,
             optimization,
             output,
-            estimated_peak_surface_bytes,
             false,
             true,
         )
@@ -2104,7 +2097,6 @@ impl RenderPlanTemplate {
         passes: Vec<ExecutionPass>,
         optimization: OptimizationReport,
         output: PlanResourceId,
-        estimated_peak_surface_bytes: u64,
     ) -> Result<Self, PlanValidationError> {
         Self::new_impl(
             render_id,
@@ -2120,7 +2112,6 @@ impl RenderPlanTemplate {
             passes,
             optimization,
             output,
-            estimated_peak_surface_bytes,
             false,
             false,
         )
@@ -2141,7 +2132,6 @@ impl RenderPlanTemplate {
         passes: Vec<ExecutionPass>,
         optimization: OptimizationReport,
         output: PlanResourceId,
-        estimated_peak_surface_bytes: u64,
         verify_template: bool,
         wire: bool,
     ) -> Result<Self, PlanValidationError> {
@@ -2166,7 +2156,6 @@ impl RenderPlanTemplate {
             passes,
             optimization,
             output,
-            estimated_peak_surface_bytes,
             cached_template_hash,
             cached_packed: Arc::from([]),
             constructed: false,
@@ -2228,7 +2217,6 @@ impl RenderPlanTemplate {
             passes: &self.passes,
             optimization: &self.optimization,
             output: self.output,
-            estimated_peak_surface_bytes: self.estimated_peak_surface_bytes,
         };
         let bytes = canonical::bytes(&seed)
             .map_err(|error| PlanValidationError::Canonical(error.to_string()))?;
@@ -2415,10 +2403,6 @@ impl RenderPlanTemplate {
     pub const fn output(&self) -> PlanResourceId {
         self.output
     }
-
-    pub const fn estimated_peak_surface_bytes(&self) -> u64 {
-        self.estimated_peak_surface_bytes
-    }
 }
 
 impl TryFrom<RenderPlanTemplateWire> for RenderPlanTemplate {
@@ -2442,7 +2426,6 @@ impl TryFrom<RenderPlanTemplateWire> for RenderPlanTemplate {
             passes: value.passes,
             optimization: value.optimization,
             output: value.output,
-            estimated_peak_surface_bytes: value.estimated_peak_surface_bytes,
             cached_template_hash,
             cached_packed: Arc::from([]),
             constructed: false,
@@ -3263,11 +3246,13 @@ impl<'a> PlanValidator<'a> {
                     "surface slot ids must be contiguous and ordered",
                 ));
             }
-            let expected_bytes = texture_bytes(&slot.texture)?;
-            if slot.estimated_bytes != expected_bytes || slot.allocations.is_empty() {
+            slot.surface_class
+                .validate()
+                .map_err(|error| invalid(format!("surfaceSlots[{index}].surfaceClass"), error))?;
+            if slot.allocations.is_empty() {
                 return Err(invalid(
                     format!("surfaceSlots[{index}]"),
-                    "surface byte estimate or allocation table is invalid",
+                    "surface allocation table is empty",
                 ));
             }
             let mut previous = None;
@@ -3314,13 +3299,6 @@ impl<'a> PlanValidator<'a> {
                     "declared liveness does not equal actual pass use",
                 ));
             }
-        }
-        let peak = peak_surface_bytes(&self.template.surface_slots, self.template.passes.len())?;
-        if peak != self.template.estimated_peak_surface_bytes {
-            return Err(invalid(
-                "estimatedPeakSurfaceBytes",
-                "peak estimate does not equal declared liveness",
-            ));
         }
         Ok(())
     }
@@ -3631,18 +3609,6 @@ fn covers_one_based(values: &BTreeSet<u32>, count: u32) -> bool {
             .all(|(actual, expected)| actual == expected)
 }
 
-pub(super) fn texture_bytes(texture: &LogicalTextureDesc) -> Result<u64, PlanValidationError> {
-    let bytes_per_pixel = match texture.format {
-        TextureFormat::Rgba16Float => 8_u64,
-        TextureFormat::Rgba32Float => 16_u64,
-    };
-    u64::from(texture.extent.width())
-        .checked_mul(u64::from(texture.extent.height()))
-        .and_then(|pixels| pixels.checked_mul(bytes_per_pixel))
-        .and_then(|bytes| bytes.checked_mul(u64::from(texture.sample_count())))
-        .ok_or_else(|| invalid("surfaceSlots.texture", "surface byte estimate overflow"))
-}
-
 pub(super) fn resource_interval(
     resource: PlanResourceId,
     resources: &[PlanResource],
@@ -3678,28 +3644,6 @@ pub(super) fn resource_interval(
         first,
         last: *uses.last().expect("non-empty surface use list"),
     })
-}
-
-pub(super) fn peak_surface_bytes(
-    slots: &[SurfaceSlot],
-    pass_count: usize,
-) -> Result<u64, PlanValidationError> {
-    let mut peak = 0_u64;
-    for index in 0..pass_count {
-        let pass = ExecutionPassId::from_index(index)?;
-        let mut current = 0_u64;
-        for slot in slots {
-            if slot.allocations.iter().any(|allocation| {
-                allocation.interval.first <= pass && pass <= allocation.interval.last
-            }) {
-                current = current.checked_add(slot.estimated_bytes).ok_or_else(|| {
-                    invalid("estimatedPeakSurfaceBytes", "peak byte estimate overflow")
-                })?;
-            }
-        }
-        peak = peak.max(current);
-    }
-    Ok(peak)
 }
 
 fn invalid(path: impl Into<String>, reason: impl ToString) -> PlanValidationError {

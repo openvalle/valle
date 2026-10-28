@@ -47,7 +47,7 @@ export const DRAW_PROGRAM_ABI = Object.freeze({
 export const RENDER_PLAN_ABI = Object.freeze({
   "kind": "RenderPlanTemplate",
   "magic": "VLPLAN\u0000\u0000",
-  "formatVersion": 1,
+  "formatVersion": 2,
   "headerBytes": 24,
   "endianness": "little",
   "endiannessMarker": 16909060,

@@ -18,7 +18,7 @@ use super::{
     PlanResourceId, PlanResourceKind, PlanValidationError, ProgramAllocationReason, ProgramPassId,
     ProgramPassInterval, ProgramPassKind, ProgramResourceId, ProgramStorageKind,
     ProgramSurfaceSlotId, RenderBindings, RenderPlanTemplate, SurfaceAllocationReason,
-    SurfaceSlotId,
+    SurfaceClass, SurfaceSlotId,
 };
 
 pub const BOUND_PROGRAM_SCHEDULES_FORMAT_VERSION: u32 = 1;
@@ -642,6 +642,7 @@ fn bind_surface_slots(
 ) -> Result<Vec<BoundSurfaceSlot>, ProgramBindingError> {
     let mut result = Vec::with_capacity(template.surface_slots().len());
     for slot in template.surface_slots() {
+        validate_surface_class(&slot.surface_class, "surfaceSlots", capabilities)?;
         let mut width = 0_u32;
         let mut height = 0_u32;
         let mut allocations = Vec::with_capacity(slot.allocations.len());
@@ -695,7 +696,11 @@ fn bind_surface_slots(
             );
         }
         let estimated_bytes = extent.map_or(Ok(0), |extent| {
-            program_texture_bytes(extent, slot.texture.format, slot.texture.sample_count())
+            program_texture_bytes(
+                extent,
+                slot.surface_class.format,
+                slot.surface_class.sample_count,
+            )
         })?;
         if estimated_bytes > capabilities.max_surface_bytes() {
             return Err(ProgramBindingError::PlanSurfaceBudgetExceeded {
@@ -703,12 +708,6 @@ fn bind_surface_slots(
                 required_bytes: estimated_bytes,
                 max_bytes: capabilities.max_surface_bytes(),
             });
-        }
-        if estimated_bytes > slot.estimated_bytes {
-            return invalid(
-                format!("surfaceSlots[{}]", slot.id.index()),
-                "bound surface exceeds its admitted logical texture",
-            );
         }
         result.push(BoundSurfaceSlot {
             id: slot.id,
@@ -739,7 +738,11 @@ fn bind_program(
     capabilities: &BackendCapabilities,
 ) -> Result<BoundProgramSchedule, ProgramBindingError> {
     if !program.local_schedule().surface_slots().is_empty() {
-        validate_surface_class(program, capabilities)?;
+        validate_surface_class(
+            program.local_schedule().surface_class(),
+            &program.semantic_path,
+            capabilities,
+        )?;
     }
     let destination_rois =
         resolve_destination_rois(program, bounds_reason, transform, root, bindings)?;
@@ -1283,17 +1286,14 @@ fn insert_destination_roi(
 }
 
 fn validate_surface_class(
-    program: &super::PlanProgram,
+    class: &SurfaceClass,
+    path: &str,
     capabilities: &BackendCapabilities,
 ) -> Result<(), ProgramBindingError> {
-    let class = program.local_schedule().surface_class();
     if !capabilities.formats().contains(&class.format) {
         return invalid(
-            &program.semantic_path,
-            format!(
-                "backend does not support program surface format {:?}",
-                class.format
-            ),
+            path,
+            format!("backend does not support surface format {:?}", class.format),
         );
     }
     if let Some(usage) = class
@@ -1303,15 +1303,15 @@ fn validate_surface_class(
         .find(|usage| !capabilities.texture_usages().contains(usage))
     {
         return invalid(
-            &program.semantic_path,
-            format!("backend does not support program surface usage {usage:?}"),
+            path,
+            format!("backend does not support surface usage {usage:?}"),
         );
     }
     if !capabilities.sample_counts().contains(&class.sample_count) {
         return invalid(
-            &program.semantic_path,
+            path,
             format!(
-                "backend does not support program sample count {}",
+                "backend does not support surface sample count {}",
                 class.sample_count
             ),
         );

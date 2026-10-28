@@ -6,7 +6,7 @@ use valle_engine::{
             ExecutionPassKind, ExternalSlot, ExternalSlotId, FramebufferFetchSemantics,
             OptimizationReport, PassInterval, PlanBindingLayout, PlanResource, PlanResourceId,
             PlanResourceKind, RenderBindings, RenderPlanTemplate, SurfaceAllocation,
-            SurfaceAllocationReason, SurfaceSlot, SurfaceSlotId,
+            SurfaceAllocationReason, SurfaceClass, SurfaceSlot, SurfaceSlotId,
         },
     },
     frame::{RenderQuality, RenderSpec},
@@ -133,7 +133,6 @@ fn template_with_fingerprint(fingerprint: ContentDigest) -> RenderPlanTemplate {
         [TextureUsage::Sampled, TextureUsage::ColorAttachment],
     )
     .unwrap();
-    let estimated_bytes = 64 * 48 * 8;
 
     let resources = vec![
         PlanResource {
@@ -155,7 +154,7 @@ fn template_with_fingerprint(fingerprint: ContentDigest) -> RenderPlanTemplate {
     ];
     let surface_slots = vec![SurfaceSlot {
         id: surface,
-        texture,
+        surface_class: SurfaceClass::from(&texture),
         allocations: vec![SurfaceAllocation {
             resource: working,
             interval: PassInterval {
@@ -164,7 +163,6 @@ fn template_with_fingerprint(fingerprint: ContentDigest) -> RenderPlanTemplate {
             },
             reason: SurfaceAllocationReason::WorkingComposite,
         }],
-        estimated_bytes,
     }];
     let passes = vec![
         ExecutionPass {
@@ -205,7 +203,6 @@ fn template_with_fingerprint(fingerprint: ContentDigest) -> RenderPlanTemplate {
         passes,
         optimization,
         output,
-        estimated_bytes,
     )
     .unwrap()
 }
@@ -452,7 +449,10 @@ fn plan_template_hashes_strict_executable_structure_and_binds_atomically() {
     let packed_restored = RenderPlanTemplate::from_packed(&packed).unwrap();
     assert_eq!(packed_restored, template);
     assert_eq!(packed_restored.packed_bytes().unwrap(), packed);
-    assert_eq!(restored.estimated_peak_surface_bytes(), 64 * 48 * 8);
+    let wire = serde_json::to_value(&restored).unwrap();
+    assert!(wire.get("estimatedPeakSurfaceBytes").is_none());
+    assert!(wire["surfaceSlots"][0].get("texture").is_none());
+    assert!(wire["surfaceSlots"][0].get("estimatedBytes").is_none());
 
     let bindings = RenderBindings::new(
         *template.render_id(),

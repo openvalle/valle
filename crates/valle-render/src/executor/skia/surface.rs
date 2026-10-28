@@ -1349,7 +1349,7 @@ impl SurfaceArena {
                 .ok_or(SurfaceError::MissingBoundSlot {
                     slot: slot.id().get(),
                 })?;
-            validate_slot(template_slot, slot, extent)?;
+            validate_slot(template_slot, slot)?;
             let Some(bound_extent) = slot.extent() else {
                 continue;
             };
@@ -2320,18 +2320,11 @@ impl Drop for SurfaceFrame<'_> {
 fn validate_slot(
     slot: &valle_engine::compositor::lower::SurfaceSlot,
     bound: &BoundSurfaceSlot,
-    render_extent: Extent2d,
 ) -> Result<(), SurfaceError> {
-    if slot.texture.extent != render_extent
-        || slot.texture.format != TextureFormat::Rgba16Float
-        || slot.texture.working_space != WorkingColorSpace::LinearRec2020D65
-        || slot.texture.alpha != WorkingAlphaMode::PremultipliedCoverage
-        || slot.texture.sample_count() != 1
-        || slot.estimated_bytes
-            != u64::from(render_extent.width())
-                .checked_mul(u64::from(render_extent.height()))
-                .and_then(|pixels| pixels.checked_mul(8))
-                .ok_or(SurfaceError::ByteOverflow)?
+    if slot.surface_class.format != TextureFormat::Rgba16Float
+        || slot.surface_class.working_space != WorkingColorSpace::LinearRec2020D65
+        || slot.surface_class.alpha != WorkingAlphaMode::PremultipliedCoverage
+        || slot.surface_class.sample_count != 1
     {
         return Err(SurfaceError::UnsupportedPlanSlot {
             slot: slot.id.get(),

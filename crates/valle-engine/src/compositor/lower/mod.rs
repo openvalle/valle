@@ -14,6 +14,7 @@ mod program;
 mod program_frame;
 mod program_patch;
 mod schedule;
+mod surface_class;
 
 pub use bindings::{
     BindingContractError, DynamicSlot, ExternalSlot, ExternalSlotId, PlanBindingLayout,
@@ -55,6 +56,7 @@ pub use program_frame::{
 };
 pub use schedule::{
     ProgramAllocationReason, ProgramPassInterval, ProgramResourceStorage, ProgramSchedule,
-    ProgramScheduleError, ProgramStorageKind, ProgramSurfaceAllocation, ProgramSurfaceClass,
-    ProgramSurfaceSlot,
+    ProgramScheduleError, ProgramStorageKind, ProgramSurfaceAllocation, ProgramSurfaceSlot,
 };
+
+pub use surface_class::SurfaceClass;

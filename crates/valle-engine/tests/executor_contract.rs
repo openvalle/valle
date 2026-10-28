@@ -760,7 +760,10 @@ fn graph_packets_reject_forged_resource_layouts_writers_and_capabilities() {
             serde_json::json!({"kind":"static","rect":{"x":0,"y":0,"width":1,"height":1}}),
         ),
         ("/requiredCapabilities", serde_json::json!([])),
-        ("/surfaceSlots/0/estimatedBytes", serde_json::json!(1)),
+        (
+            "/surfaceSlots/0/surfaceClass/sampleCount",
+            serde_json::json!(3),
+        ),
     ] {
         let mut altered = wire.clone();
         *altered.pointer_mut(pointer).unwrap() = value;

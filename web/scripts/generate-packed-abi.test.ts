@@ -21,8 +21,8 @@ describe("Rust to TypeScript packed ABI generation", () => {
     const sources = await loadPackedAbiSources();
     const baseline = renderPackedAbi(sources);
     const changedRenderPlan = sources.renderPlan.replace(
-      /(pub const RENDER_PLAN_FORMAT_VERSION\s*:\s*u32\s*=\s*)1(\s*;)/,
-      (_match, prefix: string, suffix: string) => `${prefix}2${suffix}`,
+      /(pub const RENDER_PLAN_FORMAT_VERSION\s*:\s*u32\s*=\s*)\d+(\s*;)/,
+      (_match, prefix: string, suffix: string) => `${prefix}999${suffix}`,
     );
     expect(changedRenderPlan).not.toBe(sources.renderPlan);
     const drifted = renderPackedAbi({
@@ -31,7 +31,7 @@ describe("Rust to TypeScript packed ABI generation", () => {
     });
 
     expect(drifted).not.toBe(baseline);
-    expect(drifted).toContain('"formatVersion": 2');
+    expect(drifted).toContain('"formatVersion": 999');
   });
 
   test("fails closed when a required Rust constant disappears", async () => {

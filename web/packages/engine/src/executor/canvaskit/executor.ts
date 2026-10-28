@@ -6387,6 +6387,15 @@ function admitBoundOuterSchedule(
   const retireAfter = activeBytes.map(() => [] as number[]);
   for (let index = 0; index < planSlots.length; index += 1) {
     const slot = record(planSlots[index], `plan.surfaceSlots[${index}]`);
+    const surfaceClass = record(slot.surfaceClass, "surface class");
+    if (
+      surfaceClass.format !== "rgba16Float" ||
+      surfaceClass.workingSpace !== "linearRec2020D65" ||
+      surfaceClass.alpha !== "premultipliedCoverage" ||
+      surfaceClass.sampleCount !== 1
+    ) {
+      fail("surface_contract", "CanvasKit requires single-sample premultiplied Rec.2020 F16");
+    }
     const bound = record(boundSlots[index], `schedule.surfaceSlots[${index}]`);
     const id = positiveId(slot.id, "surface slot id");
     if (positiveId(bound.id, "bound surface slot id") !== id)

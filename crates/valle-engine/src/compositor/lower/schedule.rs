@@ -4,44 +4,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use valle_draw::requirements::LocalBounds;
 
-use crate::resource::{TextureFormat, TextureUsage, WorkingAlphaMode, WorkingColorSpace};
-
 use super::{
     PlanIdError, ProgramDestinationId, ProgramPassId, ProgramPassKind, ProgramPlan,
-    ProgramResourceId, ProgramSurfaceSlotId,
+    ProgramResourceId, ProgramSurfaceSlotId, SurfaceClass,
 };
-
-/// The exact production texture contract shared by every program-local physical surface.
-///
-/// Extent is deliberately absent: it is resolved from each allocation's local bounds and the
-/// frame's `DeviceTransform` when bindings are admitted. Keeping the class in the template makes
-/// backend allocation requirements explicit without turning animated bounds into topology.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProgramSurfaceClass {
-    pub format: TextureFormat,
-    pub working_space: WorkingColorSpace,
-    pub alpha: WorkingAlphaMode,
-    pub usages: Vec<TextureUsage>,
-    pub sample_count: u8,
-}
-
-impl ProgramSurfaceClass {
-    fn production() -> Self {
-        Self {
-            format: TextureFormat::Rgba16Float,
-            working_space: WorkingColorSpace::LinearRec2020D65,
-            alpha: WorkingAlphaMode::PremultipliedCoverage,
-            usages: vec![
-                TextureUsage::Sampled,
-                TextureUsage::StorageRead,
-                TextureUsage::StorageWrite,
-                TextureUsage::ColorAttachment,
-            ],
-            sample_count: 1,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -118,13 +84,13 @@ pub struct ProgramSurfaceSlot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProgramSchedule {
-    surface_class: ProgramSurfaceClass,
+    surface_class: SurfaceClass,
     resources: Vec<ProgramResourceStorage>,
     surface_slots: Vec<ProgramSurfaceSlot>,
 }
 
 impl ProgramSchedule {
-    pub const fn surface_class(&self) -> &ProgramSurfaceClass {
+    pub const fn surface_class(&self) -> &SurfaceClass {
         &self.surface_class
     }
 
@@ -280,7 +246,7 @@ impl<'a> Scheduler<'a> {
             .collect::<Result<Vec<_>, ProgramScheduleError>>()?;
 
         Ok(ProgramSchedule {
-            surface_class: ProgramSurfaceClass::production(),
+            surface_class: SurfaceClass::production(),
             resources,
             surface_slots,
         })

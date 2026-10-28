@@ -26,14 +26,17 @@ use super::{
     PlanProgramResources, PlanResource, PlanResourceId, PlanResourceKind, PlanSourcePipeline,
     PlanStructureBinding, PlanTextureBinding, PlanValidationError, ProgramPlan, ProgramPlanError,
     ProgramSchedule, ProgramScheduleError, RenderPlanTemplate, ResolveReason, ResourceAliasReason,
-    SurfaceAllocation, SurfaceAllocationReason, SurfaceSlot, SurfaceSlotId,
-    plan::{peak_surface_bytes, resource_interval, texture_bytes},
+    SurfaceAllocation, SurfaceAllocationReason, SurfaceClass, SurfaceSlot, SurfaceSlotId,
+    plan::resource_interval,
 };
 
 /// Deterministically lowers an admitted logical graph into a backend-capability-specific plan.
 ///
 /// Dynamic values are intentionally not copied into the template: only their stable id/path/kind
 /// layout is retained. The values themselves remain a per-frame [`super::RenderBindings`] concern.
+/// This admits topology and texture classes, not physical memory. Before allocating surfaces,
+/// callers must bind the selected template with `bind_program_schedules`, which derives current
+/// extents and checks the combined outer/program/data-texture budget.
 pub fn lower_render_graph(
     graph: &RenderGraph,
     dynamic: &DynamicBindings,
@@ -91,7 +94,7 @@ fn lower_render_graph_impl(
     let optimization =
         super::optimizer::optimize(&mut resources, &mut surface_drafts, &mut passes)?;
     let (surface_slots, surface_bindings) =
-        lower_surface_slots(surface_drafts, &resources, &passes, capabilities)?;
+        lower_surface_slots(surface_drafts, &resources, &passes)?;
     for resource in &mut resources {
         if matches!(resource.kind, PlanResourceKind::Surface { .. }) {
             let slot = surface_bindings.get(&resource.id).copied().ok_or(
@@ -102,20 +105,6 @@ fn lower_render_graph_impl(
             resource.kind = PlanResourceKind::Surface { slot };
         }
     }
-    let estimated_peak_surface_bytes = peak_surface_bytes(&surface_slots, passes.len())?;
-    let required_bytes = estimated_peak_surface_bytes
-        .checked_add(bindings.layout.data_texture_bytes())
-        .ok_or(LowerError::FrameBudgetExceeded {
-            required_bytes: u64::MAX,
-            max_bytes: capabilities.max_frame_bytes(),
-        })?;
-    if required_bytes > capabilities.max_frame_bytes() {
-        return Err(LowerError::FrameBudgetExceeded {
-            required_bytes,
-            max_bytes: capabilities.max_frame_bytes(),
-        });
-    }
-
     let capability_fingerprint = capabilities.fingerprint()?;
     let logical_pass_count = u32::try_from(graph.passes.len())
         .map_err(|_| LowerError::CountBudgetExceeded { kind: "pass" })?;
@@ -142,7 +131,6 @@ fn lower_render_graph_impl(
         passes,
         optimization,
         output,
-        estimated_peak_surface_bytes,
     )
     .map_err(LowerError::from)
 }
@@ -241,14 +229,6 @@ fn admit_texture(
         return Err(LowerError::UnsupportedSampleCount {
             resource,
             sample_count: texture.sample_count(),
-        });
-    }
-    let required_bytes = texture_bytes(texture)?;
-    if required_bytes > capabilities.max_surface_bytes() {
-        return Err(LowerError::SurfaceBudgetExceeded {
-            resource,
-            required_bytes,
-            max_bytes: capabilities.max_surface_bytes(),
         });
     }
     Ok(())
@@ -1138,7 +1118,6 @@ fn slot_for_handle(
 }
 
 pub(super) struct SurfaceDraft {
-    pub(super) logical_resource: ResourceId,
     pub(super) resource: PlanResourceId,
     pub(super) texture: LogicalTextureDesc,
     pub(super) reason: SurfaceAllocationReason,
@@ -1172,7 +1151,6 @@ fn lower_resources(
                     BackdropPhysicalChoice::Resolve { .. } => {
                         let slot = SurfaceSlotId::from_index(surfaces.len())?;
                         surfaces.push(SurfaceDraft {
-                            logical_resource: logical.id,
                             resource: id,
                             texture: require_surface_texture(logical)?,
                             reason: SurfaceAllocationReason::BackdropResolve,
@@ -1191,7 +1169,6 @@ fn lower_resources(
                     },
                 )?;
                 surfaces.push(SurfaceDraft {
-                    logical_resource: logical.id,
                     resource: id,
                     texture: require_surface_texture(logical)?,
                     reason,
@@ -1243,35 +1220,27 @@ fn lower_surface_slots(
     drafts: Vec<SurfaceDraft>,
     resources: &[PlanResource],
     passes: &[ExecutionPass],
-    capabilities: &BackendCapabilities,
 ) -> Result<(Vec<SurfaceSlot>, BTreeMap<PlanResourceId, SurfaceSlotId>), LowerError> {
     struct ScheduledDraft {
         draft: SurfaceDraft,
         interval: super::PassInterval,
-        estimated_bytes: u64,
+        surface_class: SurfaceClass,
     }
 
     let mut scheduled = Vec::with_capacity(drafts.len());
     for draft in drafts {
-        let estimated_bytes = texture_bytes(&draft.texture)?;
-        if estimated_bytes > capabilities.max_surface_bytes() {
-            return Err(LowerError::SurfaceBudgetExceeded {
-                resource: draft.logical_resource,
-                required_bytes: estimated_bytes,
-                max_bytes: capabilities.max_surface_bytes(),
-            });
-        }
+        let surface_class = SurfaceClass::from(&draft.texture);
         let interval = resource_interval(draft.resource, resources, passes)?;
         scheduled.push(ScheduledDraft {
             draft,
             interval,
-            estimated_bytes,
+            surface_class,
         });
     }
     scheduled.sort_by_key(|entry| (entry.interval.first, entry.draft.resource));
 
     // Deterministic interval coloring. A physical surface can be reused only when its exact
-    // texture contract and physical ROI class match, and the previous logical value is dead
+    // surface class and physical ROI class match, and the previous logical value is dead
     // before the next writer. Keeping root composites out of regional slots is intentional: a
     // later full-frame allocation must not silently inflate an otherwise ROI-sized pool entry.
     // Inclusive intervals deliberately forbid same-pass input/output aliasing.
@@ -1279,7 +1248,7 @@ fn lower_surface_slots(
     let mut bindings = BTreeMap::new();
     for entry in scheduled {
         let reusable = slots.iter().position(|slot| {
-            slot.texture == entry.draft.texture
+            slot.surface_class == entry.surface_class
                 && slot.allocations.first().is_some_and(|allocation| {
                     allocation_is_regional(allocation.reason)
                         == allocation_is_regional(entry.draft.reason)
@@ -1294,9 +1263,8 @@ fn lower_surface_slots(
             let id = SurfaceSlotId::from_index(slot_index)?;
             slots.push(SurfaceSlot {
                 id,
-                texture: entry.draft.texture.clone(),
+                surface_class: entry.surface_class,
                 allocations: Vec::new(),
-                estimated_bytes: entry.estimated_bytes,
             });
             id
         } else {
@@ -1401,14 +1369,6 @@ pub enum LowerError {
         resource: ResourceId,
         pixel_layout: ExternalPixelLayout,
     },
-    #[error(
-        "resource {resource:?} requires {required_bytes} surface bytes, backend allows {max_bytes}"
-    )]
-    SurfaceBudgetExceeded {
-        resource: ResourceId,
-        required_bytes: u64,
-        max_bytes: u64,
-    },
     #[error("plan requires {required_bytes} peak surface bytes, backend allows {max_bytes}")]
     FrameBudgetExceeded { required_bytes: u64, max_bytes: u64 },
     #[error("lower does not implement logical resource {resource:?}")]
@@ -1446,9 +1406,7 @@ impl LowerError {
     pub const fn exceeds_budget(&self) -> bool {
         matches!(
             self,
-            Self::ExtentExceeded { .. }
-                | Self::SurfaceBudgetExceeded { .. }
-                | Self::FrameBudgetExceeded { .. }
+            Self::ExtentExceeded { .. } | Self::FrameBudgetExceeded { .. }
         )
     }
 

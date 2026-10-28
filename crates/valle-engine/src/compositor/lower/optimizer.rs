@@ -263,7 +263,6 @@ mod tests {
 
     fn draft(value: u32, reason: SurfaceAllocationReason) -> SurfaceDraft {
         SurfaceDraft {
-            logical_resource: graph_resource_id(value),
             resource: resource_id(value),
             texture: texture(),
             reason,
