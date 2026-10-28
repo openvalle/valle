@@ -38,6 +38,10 @@ use crate::layout::bridge::{
 /// Structured local drawing program plus explicit unsupported-feature accounting.
 pub struct EmitReport {
     pub program: valle_draw::program::DrawProgram,
+    /// Explicit background consumers captured during emission, before any parameter binding.
+    /// Empty if instance compaction changed the recording's leaf structure.
+    pub(crate) background_paints:
+        BTreeMap<String, (valle_draw::program::NodeId, valle_draw::program::PaintId)>,
     /// Complete frame-local Scene3D requests referenced by typed `Scene3d` program nodes. Hosts
     /// fulfill these like any other content-addressed resource; the executor sees only the bound
     /// raster object.
@@ -86,6 +90,8 @@ struct EmissionState {
     recording: ProgramRecording,
     scene3d_frames: Vec<crate::SealedScene3DFrame>,
     unsupported: Vec<(String, &'static str)>,
+    parameter_nodes: Option<std::collections::BTreeSet<String>>,
+    background_paths: BTreeMap<String, usize>,
 }
 
 /// Emission failure. Reject inconsistent layout or scene state rather than returning an empty
@@ -239,6 +245,7 @@ pub(crate) fn review_text_ink(
         None,
         true,
         RasterDensity::default(),
+        None,
     )?
     .program;
     // `rect` within `clip`, the screen bounds that the clips and masks around it let through.
@@ -380,6 +387,7 @@ pub fn emit_with_faces(
         None,
         false,
         RasterDensity::default(),
+        None,
     )
 }
 
@@ -400,6 +408,7 @@ pub fn emit_program_with_faces(
         None,
         false,
         RasterDensity::default(),
+        None,
     )
 }
 
@@ -419,6 +428,7 @@ pub fn emit_program_with_faces_clipped(
         Some(clip),
         false,
         RasterDensity::default(),
+        None,
     )
 }
 
@@ -442,9 +452,36 @@ pub fn emit_program_at_density(
         source_clip,
         false,
         raster_scale,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_with_paint_parameters(
+    tree: &LayoutTree,
+    naming: FontNaming<'_>,
+    faces: Option<&FaceCache>,
+    catalog: &dyn valle_draw::program::ProgramResourceCatalog,
+    source_clip: Option<Rect>,
+    raster_scale: RasterDensity,
+    nodes: &std::collections::BTreeSet<String>,
+) -> Result<EmitReport, EmitError> {
+    if !raster_scale.scale.is_finite() || raster_scale.scale <= 0.0 {
+        return Err(EmitError::Program("invalid output raster density".into()));
+    }
+    emit_with_faces_and_catalog(
+        tree,
+        naming,
+        faces,
+        Some(catalog),
+        source_clip,
+        false,
+        raster_scale,
+        Some(nodes),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn emit_with_faces_and_catalog(
     tree: &LayoutTree,
     naming: FontNaming<'_>,
@@ -453,6 +490,7 @@ fn emit_with_faces_and_catalog(
     source_clip: Option<Rect>,
     review_ink: bool,
     raster_scale: RasterDensity,
+    parameter_nodes: Option<&std::collections::BTreeSet<String>>,
 ) -> Result<EmitReport, EmitError> {
     let root_layout = tree
         .layout
@@ -470,6 +508,8 @@ fn emit_with_faces_and_catalog(
         recording: ProgramRecording::new(),
         scene3d_frames: Vec::new(),
         unsupported: Vec::new(),
+        parameter_nodes: parameter_nodes.cloned(),
+        background_paths: BTreeMap::new(),
     };
     validate_transform_matrices(tree)?;
     let contexts = build_stacking_contexts(
@@ -559,7 +599,54 @@ fn emit_with_faces_and_catalog(
         },
         error => EmitError::Program(error.to_string()),
     })?;
+    // Canonical forest traversal preserves recording paint order for ordinary unmasked leaves.
+    // Masks can reorder their source; instance compaction needs its own column bindings. Do not
+    // infer either mapping from coincidentally equal paint values.
+    let background_paints = if out.background_paths.is_empty()
+        || program.nodes().iter().any(|node| {
+            matches!(node, valle_draw::program::Node::InstanceBatch(_))
+                || matches!(node, valle_draw::program::Node::Group(group) if group.mask.is_some())
+        }) {
+        BTreeMap::new()
+    } else {
+        let paths: Vec<_> = program
+            .nodes()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                if let valle_draw::program::Node::Path(path) = node {
+                    Some((
+                        valle_draw::program::NodeId::from_raw(index as u32),
+                        path.fill,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let commands: BTreeMap<_, _> = out
+            .recording
+            .cmds
+            .iter()
+            .enumerate()
+            .filter(|(_, cmd)| matches!(cmd, RecordCmd::Path { .. }))
+            .enumerate()
+            .map(|(ordinal, (command, _))| (command, ordinal))
+            .collect();
+        if commands.len() != paths.len() {
+            BTreeMap::new()
+        } else {
+            out.background_paths
+                .iter()
+                .filter_map(|(key, command)| {
+                    let (node, paint) = paths[commands[command]];
+                    paint.map(|paint| (key.clone(), (node, paint)))
+                })
+                .collect()
+        }
+    };
     Ok(EmitReport {
+        background_paints,
         program,
         scene3d_frames: out.scene3d_frames,
         scene3d_sampling: out.scene3d_sampling,
@@ -2869,7 +2956,19 @@ impl Emitter<'_> {
                 .and_then(|key| self.tree.background_colors.get(key))
                 .filter(|authored| authored.to_srgb8() == rgba_of(color));
             if let Some(authored) = authored {
-                self.fill_box_with(border_box, radii, Paint::FloatSolid(authored.to_working()));
+                let color = authored.to_working();
+                if let Some(key) = self.node_key(np)
+                    && self
+                        .out
+                        .parameter_nodes
+                        .as_ref()
+                        .is_some_and(|nodes| nodes.contains(key))
+                {
+                    self.out
+                        .background_paths
+                        .insert(key.to_owned(), self.out.recording.cmds.len());
+                }
+                self.fill_box_with(border_box, radii, Paint::FloatSolid(color));
             } else {
                 self.fill_box(border_box, radii, rgba_of(color));
             }

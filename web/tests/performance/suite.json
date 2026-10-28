@@ -536,6 +536,22 @@
       },
       "regions": [],
       "order": true
+    },
+    {
+      "id": "paint-parameters",
+      "source": "fixtures/paint-parameters.motion.tsx",
+      "group": "core",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true
     }
   ]
 }

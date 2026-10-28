@@ -73,12 +73,26 @@ pub(super) fn eligible(artifact: &SceneArtifact, types: &[Option<crate::expr::Ex
     })
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(super) struct GeometryKey {
     viewport: (Option<u32>, Option<u32>, u32, u32),
     props: ResolvedProps,
     fps: valle_timeline::FrameRate,
     duration: u32,
+}
+impl PartialEq for GeometryKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.viewport == other.viewport
+            && self.fps == other.fps
+            && self.duration == other.duration
+            && self.props.as_map().len() == other.props.as_map().len()
+            && self
+                .props
+                .as_map()
+                .iter()
+                .zip(other.props.as_map())
+                .all(|((ak, av), (bk, bv))| ak == bk && av.bitwise_eq(bv))
+    }
 }
 impl GeometryKey {
     pub(super) fn new(viewport: Viewport, props: &ResolvedProps, ctx: &MotionContext) -> Self {

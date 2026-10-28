@@ -89,7 +89,10 @@ fn fold_group_opacity_with_limit(program: &mut DrawProgram, max_paints: usize) {
             return;
         }
     }
-    for (index, node) in program.nodes.iter_mut().enumerate() {
+    for (index, node) in std::sync::Arc::make_mut(&mut program.nodes)
+        .iter_mut()
+        .enumerate()
+    {
         let opacity = opacity_by_child.get(&index).copied().unwrap_or(1.0);
         let remap = |paint: &mut PaintId| {
             let id = mapping[&(paint.raw(), opacity.to_bits())];
@@ -114,12 +117,12 @@ fn fold_group_opacity_with_limit(program: &mut DrawProgram, max_paints: usize) {
         }
     }
     for index in groups {
-        let Node::Group(group) = &mut program.nodes[index] else {
+        let Node::Group(group) = &mut std::sync::Arc::make_mut(&mut program.nodes)[index] else {
             unreachable!()
         };
         group.opacity = 1.0;
     }
-    program.paints = paints;
+    program.paints = paints.into();
 }
 
 /// A single fill or stroke has one coverage mask. Multiplying its premultiplied paint by
@@ -237,7 +240,9 @@ mod tests {
         let mut program = builder.finish().unwrap();
         // Supply not-yet-canonical opacities to exercise the pass with a small arena budget.
         for (root, opacity) in program.roots.clone().iter().zip([0.3, 0.6]) {
-            let Node::Group(group) = &mut program.nodes[root.raw() as usize] else {
+            let Node::Group(group) =
+                &mut std::sync::Arc::make_mut(&mut program.nodes)[root.raw() as usize]
+            else {
                 unreachable!()
             };
             group.opacity = opacity;
@@ -276,8 +281,10 @@ mod tests {
     fn groups_with_pixel_operations_keep_their_isolation() {
         for variant in 0..4 {
             let mut program = pending_groups(true);
-            for root in &program.roots {
-                let Node::Group(group) = &mut program.nodes[root.raw() as usize] else {
+            for root in program.roots.iter() {
+                let Node::Group(group) =
+                    &mut std::sync::Arc::make_mut(&mut program.nodes)[root.raw() as usize]
+                else {
                     unreachable!()
                 };
                 match variant {

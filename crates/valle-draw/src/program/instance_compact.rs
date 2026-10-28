@@ -391,7 +391,7 @@ pub fn with_instance_compaction<T>(enabled: bool, build: impl FnOnce() -> T) -> 
     let _restore = Restore(previous);
     build()
 }
-pub(super) fn enabled() -> bool {
+pub fn enabled() -> bool {
     ENABLED.with(std::cell::Cell::get)
 }
 

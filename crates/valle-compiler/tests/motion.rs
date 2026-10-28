@@ -56,6 +56,7 @@ mod motion_measure;
 mod motion_modifiers;
 mod motion_module_linking;
 mod motion_overlay;
+mod motion_paint_template;
 mod motion_paint_validation;
 mod motion_paint_values;
 mod motion_pairs_morph;

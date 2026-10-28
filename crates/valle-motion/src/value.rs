@@ -214,6 +214,38 @@ pub enum MotionValue {
 pub type PropValue = MotionValue;
 
 impl MotionValue {
+    /// Exact cache identity, including signed zero. Arithmetic equality alone is insufficient
+    /// when the cache promises the same canonical floating-point program bytes.
+    pub fn bitwise_eq(&self, other: &Self) -> bool {
+        let number = |a: f64, b: f64| a.to_bits() == b.to_bits();
+        let point = |a: Point, b: Point| number(a.x, b.x) && number(a.y, b.y);
+        let length = |a: Length, b: Length| a.unit == b.unit && number(a.value, b.value);
+        match (self, other) {
+            (Self::Number(a), Self::Number(b)) => number(*a, *b),
+            (Self::Length(a), Self::Length(b)) => length(*a, *b),
+            (Self::Length2(a), Self::Length2(b)) => length(a.x, b.x) && length(a.y, b.y),
+            (Self::Angle(a), Self::Angle(b)) => a.unit == b.unit && number(a.value, b.value),
+            (Self::Color(a), Self::Color(b)) => {
+                [a.red, a.green, a.blue, a.alpha].map(f64::to_bits)
+                    == [b.red, b.green, b.blue, b.alpha].map(f64::to_bits)
+            }
+            (Self::Point(a), Self::Point(b)) => point(*a, *b),
+            (Self::Vec2(a), Self::Vec2(b)) => number(a.x, b.x) && number(a.y, b.y),
+            (Self::Rect(a), Self::Rect(b)) => {
+                [a.x, a.y, a.width, a.height].map(f64::to_bits)
+                    == [b.x, b.y, b.width, b.height].map(f64::to_bits)
+            }
+            (Self::PathData(a), Self::PathData(b)) => {
+                a.verbs == b.verbs
+                    && a.points.len() == b.points.len()
+                    && a.points.iter().zip(&b.points).all(|(a, b)| point(*a, *b))
+            }
+            (Self::Bool(a), Self::Bool(b)) => a == b,
+            (Self::Str(a), Self::Str(b)) | (Self::Enum(a), Self::Enum(b)) => a == b,
+            _ => false,
+        }
+    }
+
     pub fn ty(&self) -> PropType {
         match self {
             MotionValue::Number(_) => PropType::Number,

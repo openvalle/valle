@@ -26,7 +26,7 @@ pub(crate) struct BuiltMotionProgram {
     pub program: Arc<CachedDrawProgram>,
     pub scene3d_frames: Vec<valle_motion::SealedScene3DFrame>,
     pub scene3d_sampling: Vec<valle_motion::emit::Scene3DSampling>,
-    pub layout_boxes: BTreeMap<String, [f32; 4]>,
+    pub layout_boxes: Arc<BTreeMap<String, [f32; 4]>>,
 }
 
 /// Worker-local font registries keyed by ordered dependency digests and default-family roles. A seek can
@@ -42,8 +42,15 @@ pub(super) struct MotionFontSet {
     // Each immutable font set retains only the most recently used admitted scene geometry.
     // The outer font cache is bounded to four entries; replacing either input drops old layout.
     layout: std::cell::RefCell<Option<valle_motion::layout::LayoutCache>>,
+    paint_template: std::cell::RefCell<Option<MotionPaintCache>>,
     #[cfg(target_arch = "wasm32")]
     formulas: valle_motion::math_formula::FormulaFontRegistry,
+}
+
+struct MotionPaintCache {
+    scene: valle_motion::PreparedScene,
+    cache: Option<valle_motion::layout::PaintProgramCache>,
+    encoded: Option<Arc<CachedDrawProgram>>,
 }
 impl std::ops::Deref for MotionFontSet {
     type Target = valle_motion::Fonts;
@@ -62,8 +69,12 @@ pub(crate) struct CachedDrawProgram {
 
 impl CachedDrawProgram {
     pub(super) fn new(program: DrawProgram) -> Self {
+        Self::from_shared(Arc::new(program))
+    }
+
+    fn from_shared(program: Arc<DrawProgram>) -> Self {
         Self {
-            arena: Arc::new(program),
+            arena: program,
             encoding: OnceLock::new(),
             digest: OnceLock::new(),
         }
@@ -151,6 +162,7 @@ impl MotionFontCache {
                 MotionFontSet {
                     text: fonts,
                     layout: Default::default(),
+                    paint_template: Default::default(),
                     #[cfg(target_arch = "wasm32")]
                     formulas,
                 },
@@ -306,6 +318,73 @@ pub(super) fn build_motion_program(
         formula_fonts: &fonts.formulas,
         styles: Some(styles),
     };
+    let catalog = CompiledMotionProgramCatalog {
+        assets: &input.assets,
+        model_resources: &input.model_resources,
+        viewport: input.viewport,
+    };
+    {
+        let mut entry = fonts.paint_template.borrow_mut();
+        if entry
+            .as_ref()
+            .is_none_or(|entry| !std::ptr::eq(entry.scene.artifact(), prepared.artifact()))
+        {
+            *entry = Some(MotionPaintCache {
+                scene: prepared.clone(),
+                cache: valle_motion::layout::PaintProgramCache::new(prepared, &fonts.text),
+                encoded: None,
+            });
+        }
+        if let Some(entry) = entry.as_mut()
+            && let Some(cache) = entry.cache.as_mut()
+        {
+            let frame = cache
+                .prepare(
+                    &motion_context,
+                    &props,
+                    options.viewport,
+                    options.styles,
+                    Some(faces),
+                    &catalog,
+                    input.source_clip,
+                    input.raster_scale,
+                )
+                .map_err(|error| match error {
+                    valle_motion::layout::PaintPreparationError::Layout(error) => {
+                        ProgramPrepareError::MotionLayout {
+                            reason: format!("{error} at frame {local_frame}"),
+                        }
+                    }
+                    valle_motion::layout::PaintPreparationError::Emit(
+                        valle_motion::EmitError::NodeBudget { node, reason },
+                    ) => ProgramPrepareError::MotionBudget { node, reason },
+                    valle_motion::layout::PaintPreparationError::Unsupported(features) => {
+                        ProgramPrepareError::UnsupportedMotionPaint {
+                            features: features
+                                .into_iter()
+                                .map(|(node, feature)| format!("{node}: {feature}"))
+                                .collect(),
+                        }
+                    }
+                    error => ProgramPrepareError::MotionEmit {
+                        reason: error.to_string(),
+                    },
+                })?;
+            if entry
+                .encoded
+                .as_ref()
+                .is_none_or(|program| !Arc::ptr_eq(&program.arena, &frame.program))
+            {
+                entry.encoded = Some(Arc::new(CachedDrawProgram::from_shared(frame.program)));
+            }
+            return Ok(BuiltMotionProgram {
+                program: entry.encoded.as_ref().expect("initialized above").clone(),
+                scene3d_frames: Vec::new(),
+                scene3d_sampling: Vec::new(),
+                layout_boxes: frame.layout_boxes,
+            });
+        }
+    }
     let reused = {
         let mut cache = fonts.layout.borrow_mut();
         if cache.as_ref().is_none_or(|cache| !cache.is_for(prepared)) {
@@ -325,11 +404,6 @@ pub(super) fn build_motion_program(
             reason: error.to_string(),
         }
     })?;
-    let catalog = CompiledMotionProgramCatalog {
-        assets: &input.assets,
-        model_resources: &input.model_resources,
-        viewport: input.viewport,
-    };
     let report = valle_motion::emit::emit_program_at_density(
         &tree,
         &valle_motion::default_font_naming,
@@ -359,7 +433,7 @@ pub(super) fn build_motion_program(
         program: Arc::new(CachedDrawProgram::new(report.program)),
         scene3d_frames: report.scene3d_frames,
         scene3d_sampling: report.scene3d_sampling,
-        layout_boxes,
+        layout_boxes: Arc::new(layout_boxes),
     })
 }
 

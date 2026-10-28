@@ -230,7 +230,7 @@ pub struct MotionFrameInspection {
     pub composition_frame: i64,
     pub source_index: u32,
     pub source_frame: u32,
-    pub boxes: std::collections::BTreeMap<String, [f32; 4]>,
+    pub boxes: std::sync::Arc<std::collections::BTreeMap<String, [f32; 4]>>,
     pub scene3d_sampling: Vec<valle_motion::emit::Scene3DSampling>,
 }
 

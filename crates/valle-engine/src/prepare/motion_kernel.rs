@@ -187,7 +187,7 @@ impl MotionPreparation {
                     )),
                     scene3d_frames: Vec::new(),
                     scene3d_sampling: Vec::new(),
-                    layout_boxes: BTreeMap::new(),
+                    layout_boxes: Default::default(),
                 })
             }
         }
@@ -207,7 +207,7 @@ pub(crate) struct MotionKernel {
 struct Metadata {
     scene3d_frames: Vec<valle_motion::SealedScene3DFrame>,
     scene3d_sampling: Vec<valle_motion::emit::Scene3DSampling>,
-    layout_boxes: BTreeMap<String, [f32; 4]>,
+    layout_boxes: Arc<BTreeMap<String, [f32; 4]>>,
 }
 
 impl MotionKernel {

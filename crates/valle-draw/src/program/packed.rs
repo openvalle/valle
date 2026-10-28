@@ -152,7 +152,7 @@ pub(crate) fn encode(program: &DrawProgram) -> Result<Vec<u8>, PackedDrawError> 
     let (nodes, batch_instances, stroke_colors, dash_offsets) = encode_nodes(&program.nodes)?;
 
     let sections = [
-        encode_section(ROOTS, program.roots.len(), &program.roots)?,
+        encode_section(ROOTS, program.roots.len(), program.roots.as_ref())?,
         encode_section(NODES, nodes.len(), &nodes)?,
         encode_batch_instances(&batch_instances)?,
         encode_stroke_colors(&stroke_colors)?,
@@ -440,10 +440,10 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<DrawProgram, PackedDrawError> {
         paints.clone(),
     )?;
     if program.viewport != viewport
-        || program.roots != roots
-        || program.nodes != nodes
-        || program.paths != paths
-        || program.paints != paints
+        || *program.roots != roots
+        || *program.nodes != nodes
+        || *program.paths != paths
+        || !program.paints.iter().eq(paints.iter())
     {
         return Err(PackedDrawError::InvalidProgram(
             DrawProgramError::NonCanonical,

@@ -9,15 +9,17 @@ mod compile;
 mod group;
 mod instance_compact;
 mod interpolation;
-pub use instance_compact::with_instance_compaction;
+pub use instance_compact::{enabled as instance_compaction_enabled, with_instance_compaction};
 pub(crate) use interpolation::determinism_samples as gradient_determinism_samples;
 mod node;
 mod optimize;
 mod packed;
 mod paint;
+mod paint_table;
 mod path;
 #[doc(hidden)]
 pub mod recording;
+mod template;
 mod transform;
 mod validate;
 
@@ -40,7 +42,9 @@ pub use node::{
 };
 pub use packed::{DRAW_PROGRAM_FORMAT_VERSION, PackedDrawError};
 pub use paint::{AuthorColor, GradientStop, LinearColor, Paint, SpreadMode};
+pub use paint_table::{PaintIter, PaintTable};
 pub use path::{PathData, PathVerb};
+pub use template::{PaintParameter, PaintTemplate, PaintTemplateError};
 pub use transform::{Affine2d, Transform2d};
 pub use validate::{
     DrawProgramError, MAX_EDGES, MAX_FILTER_SIGMA, MAX_FILTERS, MAX_GLYPHS, MAX_GROUP_DEPTH,
@@ -52,6 +56,7 @@ use crate::{
     Rect,
     requirements::{DrawRequirements, LocalBounds},
 };
+use std::sync::Arc;
 
 /// Validator-derived geometry for one canonical node.
 ///
@@ -78,11 +83,11 @@ impl NodeGeometry {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrawProgram {
     pub(crate) viewport: Rect,
-    pub(crate) roots: Vec<NodeId>,
-    pub(crate) nodes: Vec<Node>,
-    pub(crate) paths: Vec<PathData>,
-    pub(crate) paints: Vec<Paint>,
-    pub(crate) node_geometry: Vec<NodeGeometry>,
+    pub(crate) roots: Arc<Vec<NodeId>>,
+    pub(crate) nodes: Arc<Vec<Node>>,
+    pub(crate) paths: Arc<Vec<PathData>>,
+    pub(crate) paints: PaintTable,
+    pub(crate) node_geometry: Arc<Vec<NodeGeometry>>,
     pub(crate) requirements: DrawRequirements,
 }
 
@@ -104,7 +109,7 @@ impl DrawProgram {
         &self.paths
     }
 
-    pub fn paints(&self) -> &[Paint] {
+    pub fn paints(&self) -> &PaintTable {
         &self.paints
     }
 
@@ -225,7 +230,7 @@ mod tests {
         let root = builder.push_node(Node::Group(Group::plain(Vec::new())));
         builder.add_root(root);
         let mut program = builder.finish().expect("empty group");
-        program.node_geometry[0].max_intermediate_pixels = 1;
+        Arc::make_mut(&mut program.node_geometry)[0].max_intermediate_pixels = 1;
         assert_eq!(program.validate(), Err(DrawProgramError::GeometryMismatch));
     }
 

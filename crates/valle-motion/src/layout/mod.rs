@@ -7,6 +7,7 @@ pub(crate) mod bridge;
 mod dependencies;
 mod hit;
 mod instance_cache;
+mod paint_template;
 mod reuse;
 mod review;
 mod scene;
@@ -17,6 +18,9 @@ pub use dependencies::{
 };
 pub use hit::layout_box_at_point;
 pub use instance_cache::InstanceCacheStats;
+pub use paint_template::{
+    PaintPreparationError, PaintPreparationStats, PaintProgramCache, PreparedPaintFrame,
+};
 pub use reuse::LayoutCache;
 pub use review::{
     MotionReview, MotionReviewIssue, MotionTrajectory, MotionTrajectoryPoint, review_motion,

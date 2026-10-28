@@ -136,17 +136,17 @@ pub(crate) fn canonicalize(
         .collect();
     let mut program = DrawProgram {
         viewport,
-        roots: canonical_roots,
-        nodes,
-        paths: canonicalizer.paths,
-        paints: canonicalizer.paints,
-        node_geometry: Vec::new(),
+        roots: canonical_roots.into(),
+        nodes: std::sync::Arc::new(nodes),
+        paths: canonicalizer.paths.into(),
+        paints: canonicalizer.paints.into(),
+        node_geometry: Default::default(),
         requirements: DrawRequirements::default(),
     };
     super::optimize::fold_group_opacity(&mut program);
     let node_geometry = derive_node_geometries(&program)?;
     let requirements = derive_requirements(&program, &node_geometry)?;
-    program.node_geometry = node_geometry;
+    program.node_geometry = node_geometry.into();
     program.requirements = requirements;
     Ok(program)
 }
@@ -154,10 +154,10 @@ pub(crate) fn canonicalize(
 pub(crate) fn validate_canonical(program: &DrawProgram) -> Result<(), DrawProgramError> {
     let rebuilt = canonicalize(
         program.viewport,
-        program.roots.clone(),
+        program.roots.as_ref().clone(),
         program.nodes.iter().cloned().map(Some).collect(),
-        program.paths.clone(),
-        program.paints.clone(),
+        program.paths.as_ref().clone(),
+        program.paints.to_vec(),
     )?;
     if rebuilt.viewport != program.viewport
         || rebuilt.roots != program.roots
@@ -1124,7 +1124,7 @@ fn derive_requirements(
     let mut alpha_modes = BTreeSet::from([AlphaMode::Premultiplied]);
     let mut capabilities = BTreeSet::new();
 
-    for node in &program.nodes {
+    for node in program.nodes.iter() {
         match node {
             Node::Group(group) => {
                 if group.transform != Transform2d::IDENTITY {
@@ -1511,7 +1511,7 @@ fn derive_destination_uses(
     }
 
     let mut uses = Vec::new();
-    for root in &program.roots {
+    for root in program.roots.iter() {
         visit(
             program,
             geometry,
@@ -1538,7 +1538,7 @@ fn map_required_bounds(bounds: Rect, transform: Transform2d) -> Result<Rect, Dra
 
 fn derive_program_geometry(program: &DrawProgram, nodes: &[NodeGeometry]) -> NodeGeometry {
     let mut geometry = NodeGeometry::EMPTY;
-    for root in &program.roots {
+    for root in program.roots.iter() {
         let root = nodes[root.index()];
         geometry.content_bounds = union_bounds(geometry.content_bounds, root.content_bounds);
         geometry.output_bounds = union_bounds(geometry.output_bounds, root.output_bounds);
@@ -1551,7 +1551,7 @@ fn derive_program_geometry(program: &DrawProgram, nodes: &[NodeGeometry]) -> Nod
 
 fn derive_node_geometries(program: &DrawProgram) -> Result<Vec<NodeGeometry>, DrawProgramError> {
     let mut geometry = vec![NodeGeometry::EMPTY; program.nodes.len()];
-    for root in &program.roots {
+    for root in program.roots.iter() {
         derive_node_geometry(program, *root, &mut geometry)?;
     }
     Ok(geometry)
@@ -1944,7 +1944,7 @@ fn derive_filter_footprint(program: &DrawProgram) -> Insets {
     }
 
     let mut maximum = Insets::default();
-    for root in &program.roots {
+    for root in program.roots.iter() {
         visit(program, *root, Insets::default(), &mut maximum);
     }
     maximum
