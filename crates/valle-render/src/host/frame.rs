@@ -302,6 +302,15 @@ pub(crate) struct FrameExecutionStage {
 }
 
 impl<P: ResourceProvider> FrameRunner<P> {
+    /// Capture the next executed frame's premultiplied linear Rec.2020 F16 working image,
+    /// before output gamut, transfer, alpha, dither and integer quantization.
+    pub fn capture_next_working_frame(&mut self) {
+        self.executor.capture_next_working_frame();
+    }
+
+    pub fn take_working_capture(&mut self) -> Option<crate::executor::skia::WorkingF16Capture> {
+        self.executor.take_working_capture()
+    }
     /// Creates one runner for an explicit immutable physical backend. Product code never consults
     /// ambient process state, so preview, export and tests cannot silently select different paths.
     pub fn for_backend(

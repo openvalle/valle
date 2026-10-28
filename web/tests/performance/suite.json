@@ -995,6 +995,74 @@
         },
         "tracks": []
       }
+    },
+    {
+      "id": "working-hdr",
+      "source": "fixtures/working-hdr.motion.tsx",
+      "group": "heavy",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true,
+      "durationS": 2,
+      "fps": 30,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": []
+      },
+      "workingRule": {
+        "rgb": 0.001953125,
+        "alpha": 0.0009765625,
+        "requireHdr": true,
+        "basis": "Absolute linear-premultiplied bounds: two binary16 ULPs at 1 for RGB, one for alpha; no SDR clamp or edge exception. Exact same-backend repeats are checked separately."
+      }
+    },
+    {
+      "id": "quality-combined",
+      "source": "fixtures/quality-combined.motion.tsx",
+      "group": "heavy",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true,
+      "durationS": 2,
+      "fps": 30,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": []
+      },
+      "workingRule": {
+        "rgb": 0.001953125,
+        "alpha": 0.0009765625,
+        "requireHdr": false,
+        "basis": "Absolute linear-premultiplied bounds: two binary16 ULPs at 1 for RGB, one for alpha; no SDR clamp or edge exception. Exact same-backend repeats are checked separately."
+      }
     }
   ]
 }

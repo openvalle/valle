@@ -160,6 +160,8 @@ export interface TimelineSequenceView {
 }
 
 interface RenderOptions {
+  /** Optional diagnostic capture of the actual working image, before output conversion. */
+  onWorkingF16?: import("../executor/canvaskit/executor.ts").CanvasKitExecutionTarget["onWorkingF16"];
   png?: boolean;
   frame?: number;
   rasterScale?: number;
@@ -1025,6 +1027,7 @@ export class BrowserValleWebPlayer {
           geometryRenderer: this.gpuGeometry,
           yieldToPresentation: !publish && target.gpu && cooperative ? yieldToHost : undefined,
           directContext: target.context,
+          onWorkingF16: options.onWorkingF16,
           maxSurfaceBytes: planningInput.maxSurfaceBytes,
           maxFrameBytes: planningInput.maxFrameBytes,
           borrowSurfaceBytes: (bytes) => {

@@ -8,8 +8,9 @@ use valle_engine::{
         COMMON_PROFILE_KEY, canonical_fixed_execution_profile, fixed_package_files,
         open_verified_fixed_package,
     },
+    frame::{RenderQuality, RenderSpec},
     render::FrameKey,
-    resource::{ContentDigest, OutputBackground},
+    resource::{ContentDigest, OutputBackground, OutputSpec},
 };
 use valle_media::codec::Mp4VideoCodec;
 use valle_render::{
@@ -36,15 +37,27 @@ fn main() -> Result<()> {
         .map(Ok)
         .unwrap_or_else(|| canonical_fixed_execution_profile(COMMON_PROFILE_KEY))
         .map_err(anyhow::Error::msg)?;
+    let resource_bytes = job["resourceBytesPath"]
+        .as_str()
+        .map(std::fs::read)
+        .transpose()?
+        .unwrap_or_default();
     let files = fixed_package_files(
         string("timelineJson")?,
         string("resourceManifestJson")?,
         string("verifiedBindingBundleJson")?,
         &profile,
-        &[],
+        &resource_bytes,
     );
     let package = open_verified_fixed_package(string("fixedPackageManifestJson")?, &files)?;
     let mut catalog = NativeResourceCatalog::new();
+    // Frozen fonts travel in the verified binding bundle, not in the asset locator list.
+    let render = package.engine_render();
+    for resource in render.compiled().execution_resources() {
+        if resource.kind() == valle_engine::render::CompiledExecutionResourceKind::FontBytes {
+            catalog.insert_bytes(*resource.content_digest(), resource.bytes());
+        }
+    }
     for asset in job["localAssets"]
         .as_array()
         .context("missing localAssets")?
@@ -72,8 +85,9 @@ fn main() -> Result<()> {
         usize::try_from(number("threads")?)?,
         job["memoryBytes"].as_u64(),
     )?;
+    let project = NativeProject::from_render(render, Arc::new(catalog));
     let renderer = NativeRenderer::new(
-        NativeProject::from_render(package.engine_render(), Arc::new(catalog)),
+        project.clone(),
         NativeRenderOptions {
             backend,
             output_size: Some((
@@ -113,12 +127,50 @@ fn main() -> Result<()> {
         };
         renderer.export_mp4_with_codec(output, codec)?
     };
+    let mut working_captures = Vec::new();
+    if qa && job["workingF16"].as_bool().unwrap_or(false) {
+        let directory = output.parent().context("capture output directory")?;
+        let capture_budget =
+            valle_engine::motion::memory::MemoryBudget::new(job["memoryBytes"].as_u64());
+        let cpu = valle_engine::motion::cpu::CpuBudget::new_with_memory(
+            usize::try_from(number("threads")?)?,
+            Some(capture_budget.clone()),
+        )
+        .map_err(anyhow::Error::msg)?;
+        let mut runner = project.frame_runner(backend)?;
+        let spec = RenderSpec::new(
+            u32::try_from(number("width")?)?,
+            u32::try_from(number("height")?)?,
+            RenderQuality::Final,
+            OutputSpec::srgb_delivery(OutputBackground::Transparent)?,
+        )?;
+        for (sequence, frame) in job["frames"]
+            .as_array()
+            .context("missing frames")?
+            .iter()
+            .enumerate()
+        {
+            let frame = frame.as_i64().context("invalid frame")?;
+            let capture = cpu.run(|| -> Result<_> {
+                runner.capture_next_working_frame();
+                runner.render_rgba8(FrameKey::new(frame), spec)?;
+                runner
+                    .take_working_capture()
+                    .context("missing working F16 capture")
+            })?;
+            let file = format!("working-{sequence}-{frame}.f16");
+            std::fs::write(directory.join(&file), &capture.rgba16f_le)?;
+            working_captures.push(json!({"file":file,"frame":frame,"sequence":sequence,
+                "width":capture.width,"height":capture.height,"bytes":capture.rgba16f_le.len(),
+                "format":"linear-rec2020-premul-rgba16f-le"}));
+        }
+    }
     let memory = budget.memory_report();
     let result = json!({"delivery": {"backend": if string("backend")? == "native-metal" {"metal"} else {"raster"}, "budget": {
         "cpuThreads": budget.threads(), "memoryBudgetBytes": job["memoryBytes"].as_u64(),
         "managedPeakBytes": memory.peak_bytes, "managedPeakLiveBytes": memory.peak_live_bytes,
         "managedRemainingBytes": memory.used_bytes,
-    }}, "frames": summary.frames, "width": summary.width, "height": summary.height});
+    }}, "frames": summary.frames, "width": summary.width, "height": summary.height, "workingCaptures":working_captures});
     if let Some((trace, file)) = trace {
         trace.record("export.total", started, json!({}));
         trace.write(

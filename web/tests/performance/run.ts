@@ -31,6 +31,7 @@ type Case = {
   frozenHostPackage?: boolean;
   durationS?: number;
   fps?: number;
+  workingRule?: { rgb: number; alpha: number; requireHdr: boolean; basis: string };
   temporal?: {
     rule: TemporalRule;
     tracks: (Region & { dx: number; dy: number })[];
@@ -65,7 +66,7 @@ const suite = (await Bun.file(path.join(BASE, "suite.json")).json()) as {
 const args = Bun.argv.slice(2);
 if (args.includes("--help")) {
   console.log(
-    "bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|order|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--qa-4k --golden-dir DIR] [--continuous-frames 24 --golden-dir DIR] [--browser-timeout-ms 300000] [--cpu-output-f32] [--codec h264|hevc] [--cli BINARY --fixed-runner BINARY --web-assets-dir DIR] [--compare BASELINE/run.json] [--update-golden]",
+    "bun web/tests/performance/run.ts --output NEW_DIR [--mode qa|order|bench|all] [--cases ID,...] [--backends native-cpu,native-metal,web-cpu,web-gpu] [--profile preview|1080] [--target-4k] [--qa-4k --golden-dir DIR] [--continuous-frames 24 --golden-dir DIR] [--working-f16] [--browser-timeout-ms 300000] [--cpu-output-f32] [--codec h264|hevc] [--cli BINARY --fixed-runner BINARY --web-assets-dir DIR] [--compare BASELINE/run.json] [--update-golden]",
   );
   process.exit(0);
 }
@@ -91,6 +92,8 @@ if (
 const memorySampleLimit = Math.ceil(browserTimeoutMs / 250) + 4;
 // Diagnostic control: exercise the retained F32 API without changing product artifacts.
 const cpuOutputF32 = args.includes("--cpu-output-f32");
+const workingF16 = args.includes("--working-f16");
+if (workingF16 && mode !== "qa") throw new Error("working F16 readback is a QA-only diagnostic");
 // Native MP4 codec for benchmarks; browser exports stay H.264.
 const nativeCodec = option(args, "--codec", "h264");
 if (!["h264", "hevc"].includes(nativeCodec)) throw new Error(`invalid codec ${nativeCodec}`);
@@ -100,6 +103,8 @@ const cases = selected.map((id) => {
   if (!c) throw new Error(`unknown case ${id}`);
   return c;
 });
+if (workingF16 && cases.some((c) => !c.workingRule))
+  throw new Error("working F16 capture requires a registered per-case contract");
 const backends = option(args, "--backends", "native-cpu,native-metal,web-cpu,web-gpu").split(",");
 if (backends.some((b) => !["native-cpu", "native-metal", "web-cpu", "web-gpu"].includes(b)))
   throw new Error("unknown backend");
@@ -197,7 +202,18 @@ const report: any = {
     cpu: os.cpus()[0]?.model,
     totalMemory: os.totalmem(),
   },
-  settings: { mode, backends, nativeCodec, qa: suite.qa, order: suite.order, performance },
+  settings: {
+    mode,
+    backends,
+    nativeCodec,
+    workingF16,
+    workingRules: workingF16
+      ? Object.fromEntries(cases.map((c) => [c.id, c.workingRule]))
+      : undefined,
+    qa: suite.qa,
+    order: suite.order,
+    performance,
+  },
   identities: {
     cli: sha256(cli),
     suite: sha256(path.join(BASE, "suite.json")),
@@ -223,8 +239,9 @@ report.unmeasured.push(
     reason: "process-tree RSS is sampled and reported separately; cache bytes are owner estimates",
   },
   {
-    coverage: "HDR output, Scene3D, long-run steady memory",
-    reason: "this fixed matrix is SDR 2D with 10-second exports; further suites required",
+    coverage: "HDR delivery and long-run steady memory",
+    reason:
+      "exports are SDR; optional pre-delivery F16 captures and short Scene3D cases do not validate HDR encoding or steady memory over long films",
   },
   {
     metric: "browser hardware encoder identity",
@@ -259,7 +276,7 @@ async function native(c: Case, backend: string, argv: string[], folder: string, 
   ];
   let scope = "fresh CLI process: TSX -> MP4/PNG, includes finalization";
   let preparationMs: number | undefined;
-  if (c.kind === "timeline") {
+  if (c.kind === "timeline" || workingF16) {
     const prepared = await resourceHost(c, folder);
     try {
       preparationMs = prepared.preparationMs;
@@ -273,10 +290,13 @@ async function native(c: Case, backend: string, argv: string[], folder: string, 
         JSON.stringify(
           {
             ...prepared.config,
+            resourceBytes: undefined,
+            resourceBytesPath: path.join(folder, "resource-bytes.bin"),
             localAssets: Object.values(c.assets).map((p) => path.join(ROOT, p)),
             backend,
             mode: frames ? "qa" : "bench",
             frames,
+            workingF16,
             width: size[0],
             height: size[1],
             threads: Number(option(argv, "--threads", "4")),
@@ -490,6 +510,7 @@ async function browserJob(c: Case, backend: string, job: Record<string, unknown>
             ...job,
             gpu: backend === "web-gpu",
             cpuOutputF32,
+            workingF16,
             input: {
               ...config,
               resourceBytes: undefined,
@@ -507,7 +528,7 @@ async function browserJob(c: Case, backend: string, job: Record<string, unknown>
         }
         if (url.pathname.startsWith("/artifact/") && request.method === "POST") {
           const name = url.pathname.slice(10);
-          if (!/^[\w.-]+\.(png|mp4)$/.test(name))
+          if (!/^[\w.-]+\.(png|mp4|f16)$/.test(name))
             return new Response("invalid name", { status: 400 });
           const write = Bun.write(path.join(folder, name), await request.arrayBuffer());
           uploads.push(write);

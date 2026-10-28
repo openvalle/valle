@@ -78,6 +78,9 @@ export interface CanvasKitObjectTable {
 }
 
 export interface CanvasKitExecutionTarget {
+  /** Explicit QA readback, before delivery. Raw premultiplied linear Rec.2020 binary16.
+   * Awaiting the consumer keeps the extra bytes inside this frame's memory admission. */
+  readonly onWorkingF16?: (capture: WorkingF16Capture) => void | Promise<void>;
   /** Intermediate snapshots share the Ganesh context; submit at the frame boundary. */
   readonly deferGpuFlush?: boolean;
   /** Restrict path coverage layers to their conservative contour hull. */
@@ -105,6 +108,12 @@ export interface CanvasKitExecutionTarget {
    * for live surfaces.
    */
   readonly borrowSurfaceBytes?: (bytes: bigint) => boolean;
+}
+
+export interface WorkingF16Capture {
+  readonly width: number;
+  readonly height: number;
+  readonly rgba16fLE: Uint8Array;
 }
 
 /** Planning needs the working-surface backend, not the target or external objects. */
@@ -1427,6 +1436,43 @@ async function runCanvasKitFrame(
               typeof executor.engineKernels?.transform_srgb_preview_f16 === "function",
             );
             try {
+              if (target.onWorkingF16) {
+                const bytes = BigInt(extent.width) * BigInt(extent.height) * 8n;
+                if (
+                  bytes > maxSurfaceBytes ||
+                  (target.borrowSurfaceBytes
+                    ? !target.borrowSurfaceBytes(bytes)
+                    : arena.residentBytes + dataTextureBytes + bytes > maxFrameBytes)
+                )
+                  fail(
+                    "working_capture_budget",
+                    "working F16 capture exceeds the diagnostic memory allowance",
+                  );
+                // Same physical tag as the working surface: read bytes without gamut,
+                // transfer, alpha conversion, output dither or integer quantization.
+                const pixels = input.value.image
+                  ? input.value.image.readPixels(
+                      0,
+                      0,
+                      {
+                        width: extent.width,
+                        height: extent.height,
+                        colorType: CanvasKit.ColorType.RGBA_F16,
+                        alphaType: CanvasKit.AlphaType.Premul,
+                        colorSpace: CanvasKit.ColorSpace.SRGB,
+                      },
+                      undefined,
+                      extent.width * 8,
+                    )
+                  : new Uint8Array(Number(bytes));
+                if (!(pixels instanceof Uint8Array) || pixels.byteLength !== Number(bytes))
+                  fail("working_capture_read", "working F16 capture failed");
+                await target.onWorkingF16({
+                  width: extent.width,
+                  height: extent.height,
+                  rgba16fLE: pixels,
+                });
+              }
               await drawOutputTransform(
                 CanvasKit,
                 builtins,

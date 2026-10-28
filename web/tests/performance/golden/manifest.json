@@ -19,11 +19,21 @@
       0,
       30,
       0,
-      59
+      59,
+      0,
+      59,
+      30,
+      30,
+      0,
+      59,
+      59,
+      0,
+      30
     ],
     "threadAllowances": [
       1,
-      4
+      4,
+      16
     ],
     "resourceCacheBytes": 1,
     "backendRules": {
@@ -38,7 +48,7 @@
   "cases": {
     "text-alpha": {
       "identity": {
-        "sourceSha256": "21533142bf947e06b9764bbd5397b48ef4eef9f8417bcd0dd4127ee3b78f6a07",
+        "sourceSha256": "6f3d5065a1bfc53ede033391829460ad19f595c4348e060ef5d59258a784ab2c",
         "assets": {}
       },
       "pngSha256": "046e9cb7adf8d8444100aca22d73b534ef34c5b4e13eedd5db9d9f2985f5e7b4",
@@ -63,11 +73,22 @@
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
         "cli": "bec30bf12ad0656ff479b72735543855ba214d28da2e550811de282692f1b68f",
         "fixedRunner": "eb3f565b56f9ea988198e31e0a9a6e380b859a8455d2d2982eddc0b91528f9d5"
+      },
+      "referenceIdentity": {
+        "sourceSha256": "21533142bf947e06b9764bbd5397b48ef4eef9f8417bcd0dd4127ee3b78f6a07",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "geometry": {
       "identity": {
-        "sourceSha256": "915144737c1e96b1918bbc603bd6d0c3f5c1302b7b9f6480ecc62d796a24c1b2",
+        "sourceSha256": "62fdf2c41fc8b95e4306e338ed202e2d9052e77ad0ccb1f378054ef702d0f250",
         "assets": {}
       },
       "pngSha256": "6a9c38b5d0c93a26c056315aa89950523c5133d36d4a8e6152681467878bfc3a",
@@ -85,11 +106,22 @@
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
         "cli": "bec30bf12ad0656ff479b72735543855ba214d28da2e550811de282692f1b68f",
         "fixedRunner": "eb3f565b56f9ea988198e31e0a9a6e380b859a8455d2d2982eddc0b91528f9d5"
+      },
+      "referenceIdentity": {
+        "sourceSha256": "915144737c1e96b1918bbc603bd6d0c3f5c1302b7b9f6480ecc62d796a24c1b2",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "image": {
       "identity": {
-        "sourceSha256": "ceb2e7f840043a3ea10e861a8d014271cced2b54d285db42439d147ad9186631",
+        "sourceSha256": "1fe01648b92f4cb596dfc78ac8312d0ba0c2e9908bd4bb9607590ae53c7e3b9e",
         "assets": {
           "sprites": "0557099cced94657a491874cc0cfc7caa0840b90edf9930485b3bf7226cf6e86"
         }
@@ -113,11 +145,24 @@
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
         "cli": "bec30bf12ad0656ff479b72735543855ba214d28da2e550811de282692f1b68f",
         "fixedRunner": "eb3f565b56f9ea988198e31e0a9a6e380b859a8455d2d2982eddc0b91528f9d5"
+      },
+      "referenceIdentity": {
+        "sourceSha256": "ceb2e7f840043a3ea10e861a8d014271cced2b54d285db42439d147ad9186631",
+        "assets": {
+          "sprites": "0557099cced94657a491874cc0cfc7caa0840b90edf9930485b3bf7226cf6e86"
+        }
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "particles": {
       "identity": {
-        "sourceSha256": "ee90241cf51fe60baaf71a979818caa1538707c7ac9f5f274a7e72480a819456",
+        "sourceSha256": "f4d9318664cb3c5d177dc954e595b13571cff06bffaeb0dad747be37a6638f5c",
         "assets": {}
       },
       "pngSha256": "8a4554a6efe4c0e5b3b39e5ccdb32ed4c88c652354658550881bbc28cd463782",
@@ -142,11 +187,22 @@
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
         "cli": "bec30bf12ad0656ff479b72735543855ba214d28da2e550811de282692f1b68f",
         "fixedRunner": "eb3f565b56f9ea988198e31e0a9a6e380b859a8455d2d2982eddc0b91528f9d5"
+      },
+      "referenceIdentity": {
+        "sourceSha256": "ee90241cf51fe60baaf71a979818caa1538707c7ac9f5f274a7e72480a819456",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "mask": {
       "identity": {
-        "sourceSha256": "025595050b837af551717ad7662218df5e38a40ee2f79242abca8fc3fa268a06",
+        "sourceSha256": "48d366cff80be4be1c30864b9c1d2b9ba710dc195ad0f468098f345f015430d0",
         "assets": {}
       },
       "pngSha256": "c05e04f24bc9172e1883809011fafc12d2ec4a8e591b7e6ea21e576d197bf0aa",
@@ -164,6 +220,17 @@
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
         "cli": "bec30bf12ad0656ff479b72735543855ba214d28da2e550811de282692f1b68f",
         "fixedRunner": "eb3f565b56f9ea988198e31e0a9a6e380b859a8455d2d2982eddc0b91528f9d5"
+      },
+      "referenceIdentity": {
+        "sourceSha256": "025595050b837af551717ad7662218df5e38a40ee2f79242abca8fc3fa268a06",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "bloom": {
@@ -190,7 +257,7 @@
     },
     "echo": {
       "identity": {
-        "sourceSha256": "8b18ddadea6e92ac3c72a017ab6301c870296538e1fff0373d85f53a8dfc2459",
+        "sourceSha256": "fa4d90ee8b28d22c2a6d84366665a86ce3f31eac4e77b72f701dc15eddd9e0a8",
         "assets": {}
       },
       "pngSha256": "a92e26a84065e5d45a63619559236e384f773727e6691037d246a33e08f5bf27",
@@ -208,11 +275,22 @@
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
         "cli": "bec30bf12ad0656ff479b72735543855ba214d28da2e550811de282692f1b68f",
         "fixedRunner": "eb3f565b56f9ea988198e31e0a9a6e380b859a8455d2d2982eddc0b91528f9d5"
+      },
+      "referenceIdentity": {
+        "sourceSha256": "8b18ddadea6e92ac3c72a017ab6301c870296538e1fff0373d85f53a8dfc2459",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "shutter": {
       "identity": {
-        "sourceSha256": "1da4bc13a6218adb4f96556fa27913ef6c58db63c71513647493a12d71f5a49c",
+        "sourceSha256": "4a160668482c8186f5bc2e7e9f9fcba9c8db4e1440db00aa9c3f665af9224911",
         "assets": {}
       },
       "pngSha256": "6cf50cce5cef6d2ee279e7931935b41d616d08aaafb1a9c423e52c1f747d5dd1",
@@ -234,6 +312,17 @@
         "gitHead": "2531eb312723830b18a3649ac7bf69f40d65a683",
         "cli": "bec30bf12ad0656ff479b72735543855ba214d28da2e550811de282692f1b68f",
         "fixedRunner": "eb3f565b56f9ea988198e31e0a9a6e380b859a8455d2d2982eddc0b91528f9d5"
+      },
+      "referenceIdentity": {
+        "sourceSha256": "1da4bc13a6218adb4f96556fa27913ef6c58db63c71513647493a12d71f5a49c",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "video": {
@@ -266,7 +355,7 @@
     },
     "grow-glow": {
       "identity": {
-        "sourceSha256": "2427f556243bf581ee1bd5b19334eecb1726802752cd190edb3f3ccbd61b3388",
+        "sourceSha256": "7b83287e118f4697d860189f15bf2d07181523499417c6cc267f05d856554ee0",
         "assets": {}
       },
       "pngSha256": "56f65cc839c149b5501415811fcc25523fc10d1acb08c1f537d6c165de000645",
@@ -284,11 +373,22 @@
         "gitHead": "172afcf1635feed2229c7ca1949a2e72f357ea4e",
         "cli": "779fae6557d765dcd67255650eb07aae6760bbdc6d3048bc681b0b6d72d5b6a2",
         "fixedRunner": null
+      },
+      "referenceIdentity": {
+        "sourceSha256": "2427f556243bf581ee1bd5b19334eecb1726802752cd190edb3f3ccbd61b3388",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "clip-glow": {
       "identity": {
-        "sourceSha256": "ee5ae593d4194a9cb0c500878bba678250f984fa487b1e590f4bf63c9bb16ba1",
+        "sourceSha256": "95044c03a7e70eafea07484e99d7ae4a2d5c98bb174e0b77cc42650dcd336b87",
         "assets": {}
       },
       "pngSha256": "13a7db92a84a9c70dc9a51596794f4d4f4ceef4b57bce617416b9abe1ed3c277",
@@ -306,11 +406,22 @@
         "gitHead": "172afcf1635feed2229c7ca1949a2e72f357ea4e",
         "cli": "779fae6557d765dcd67255650eb07aae6760bbdc6d3048bc681b0b6d72d5b6a2",
         "fixedRunner": null
+      },
+      "referenceIdentity": {
+        "sourceSha256": "ee5ae593d4194a9cb0c500878bba678250f984fa487b1e590f4bf63c9bb16ba1",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "dynamic-text": {
       "identity": {
-        "sourceSha256": "5d00410324b1c371008dd37b75c8afd1aba14f979fd7474d9c9c13bb7c490c98",
+        "sourceSha256": "ddc6b0249bb699bf8c5d34f7707395820dcf3824a2d81f502a71a34371e75f6f",
         "assets": {}
       },
       "pngSha256": "68490bf2d98825ee55c212f1fd7edc21d093e99f8179123e455f21305799d28e",
@@ -328,11 +439,22 @@
         "gitHead": "ab1809cd88791a3405858a03537ffe8b8d9500eb",
         "cli": "1b479abd85b960400f7e199032b474a0c5744d7c57408fbc6b6a8355278af6b9",
         "fixedRunner": null
+      },
+      "referenceIdentity": {
+        "sourceSha256": "5d00410324b1c371008dd37b75c8afd1aba14f979fd7474d9c9c13bb7c490c98",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "echo-circles": {
       "identity": {
-        "sourceSha256": "fc9f57e0dd287f51e14ace7c4d1388c3971d7e2eba18a181e45cd3db1a76a337",
+        "sourceSha256": "394953dd591e9e91440a2da40dd004db8331cc7efc4ede930173376a4c0020bf",
         "assets": {}
       },
       "pngSha256": "f9bc97076e9e41efeb27f3e8cf865ae75ba11c84b194d50b4aa1e72a98310aea",
@@ -357,11 +479,22 @@
         "gitHead": "53902e1d3282f64843728a3714f3eecb284ab805",
         "cli": "4c8fb964da3409118d5696ba18cb9d8629a7aaebeb60aa9e5b919e6937c22a72",
         "fixedRunner": null
+      },
+      "referenceIdentity": {
+        "sourceSha256": "fc9f57e0dd287f51e14ace7c4d1388c3971d7e2eba18a181e45cd3db1a76a337",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "cache-shapes": {
       "identity": {
-        "sourceSha256": "c09de1945ca96dd1018dd022d0c96e4d141611838b0aaa8ceabcd5943a9a3b21",
+        "sourceSha256": "bf1cc23ec094cbea9c29101ed39ce2ee11336394dd7ef124f026a832f1b10bdf",
         "assets": {}
       },
       "pngSha256": "dcf63cae080d62dc12143c19a1ff8f263a5d6a48b9a1db30fb9b8a66a356577f",
@@ -386,6 +519,17 @@
         "gitHead": "53902e1d3282f64843728a3714f3eecb284ab805",
         "cli": "4c8fb964da3409118d5696ba18cb9d8629a7aaebeb60aa9e5b919e6937c22a72",
         "fixedRunner": null
+      },
+      "referenceIdentity": {
+        "sourceSha256": "c09de1945ca96dd1018dd022d0c96e4d141611838b0aaa8ceabcd5943a9a3b21",
+        "assets": {}
+      },
+      "sourceMigration": {
+        "commits": [
+          "8d678d0ccb853d11d39d879ebd037f83fc552d83",
+          "e5bef9414e2f99130ec701b302cb8b95f61d8bd1"
+        ],
+        "reason": "Audited authoring API migration from component context to useCurrentTime and seconds-based sampling. Original reference PNG and generator remain unchanged; current captures must still pass the original pixel rules. This metadata update is not a pixel acceptance result."
       }
     },
     "flat-colors": {
@@ -570,6 +714,204 @@
         "fixedRunner": "dc3464e27e8a65cd29f0783f462f3efc303d1eb37f9c28b093d3290874f8a263"
       }
     },
+    "scene3d": {
+      "identity": {
+        "sourceSha256": "e03281a3baefed9f460a0a229e80ee65ec4f8d0cb1b23796c55800fe3fbca2d5",
+        "assets": {}
+      },
+      "pngSha256": "54fa3c6387abf7aa2fa398c9032407f01e1349a923a5771f42535839f2f967ee",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:55.878Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "paint-parameters": {
+      "identity": {
+        "sourceSha256": "184428f6c6e0d376bdb0b6879fd46af955b17eb64e279707c6844ce8cd415643",
+        "assets": {}
+      },
+      "pngSha256": "4b2c69b39ba695c44e40d01cdef5702e2adc8e4d055c073dd0aad3115b7391fc",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:55.947Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "paint-kernel": {
+      "identity": {
+        "sourceSha256": "1d38c7eacafaf3740d22b3f7f3e36d3627b45bbc0994080fe03a4860a4af4ae1",
+        "assets": {}
+      },
+      "pngSha256": "cb474893cdfa666a3c7310b9e9bb928a714dab7299400d0ae8e8223d8272b75f",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:56.063Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "paint-guards": {
+      "identity": {
+        "sourceSha256": "a5e3b09d30d5fe14cf03c6ea92af58f9b46f87d359dc6cff3b69f63f43d1278d",
+        "assets": {}
+      },
+      "pngSha256": "b194cfeb6848fe45c1b3345ec8296cef5c5812deacdb5e025457ba816429f7c1",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:56.180Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "opacity-guards": {
+      "identity": {
+        "sourceSha256": "f1d86fbdbc7cc09e80bd43be4d2d555632d8ccf552094ec12ac8b26819026b1f",
+        "assets": {}
+      },
+      "pngSha256": "6a2364ba89074aa806abe6e2da29afdfc9667e43f0c25ca96f6d092b5f93c297",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:56.298Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "quality-detail": {
+      "identity": {
+        "sourceSha256": "a4e4d977350a5260683a056e07bb0e38db636e272ff1ebbf07b6bc4b790c3243",
+        "assets": {}
+      },
+      "pngSha256": "54e6ef3a480f5b185b32b813eb60766376f39b46c6af78bfb589b23f3e25e525",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:56.391Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "temporal-static": {
+      "identity": {
+        "sourceSha256": "bc40cc13eb334e908876d9e59644fa266bab585d213c407c176d9f8faabd4c3d",
+        "assets": {}
+      },
+      "pngSha256": "4e704594a835ae6b8c303afdb0b96573ed709e4735e182305919ca38dd64c43d",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:56.518Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "text-parameters": {
+      "identity": {
+        "sourceSha256": "077adb590e71227b48d9bef2f417109004a265c87c9990fc5de200ce14130427",
+        "assets": {}
+      },
+      "pngSha256": "d83f3b1de2cb3dd3b8d3aca5f48a39ace7010cdf1175a469cf3674aaea4b54c4",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:56.644Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "temporal-paint": {
+      "identity": {
+        "sourceSha256": "64205cc9bf480758b5fa6d822dd972dfed75133c88ee864c490d5dcb75aa8eb3",
+        "assets": {}
+      },
+      "pngSha256": "aec5663ea6e5ac9bf820ba511fa234b234068535ba88b2f950bb3d1a38b4588a",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:56.830Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
     "scene3d-dof-focus": {
       "identity": {
         "sourceSha256": "4da6ed82dbad1aba8754f80416d036c11a098dc8ce6d345b9ceb62aa6d7bc7f3",
@@ -635,6 +977,88 @@
         "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
         "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
       }
+    },
+    "working-hdr": {
+      "identity": {
+        "sourceSha256": "b06b9d3f1450e598ea6cb18d6a2f218baf5f1e127479055993468879068145d8",
+        "assets": {}
+      },
+      "pngSha256": "2306b5d9dd4f0c67af4d38ebcdc88e647beab7ac70f4d7dedc85f0d044215ad5",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:06:00.199Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "quality-combined": {
+      "identity": {
+        "sourceSha256": "120b6adc7c5aae504df1520e6a4e74321ef035d13cdb34184c589ea062239a63",
+        "assets": {}
+      },
+      "pngSha256": "ee5b75019a67427a26c049f8003a7b11569cd44494c2f122f24fd708bc122092",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:06:00.287Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
     }
-  }
+  },
+  "verificationScheduleHistory": [
+    {
+      "qa": {
+        "width": 320,
+        "height": 180,
+        "frames": [
+          0,
+          30,
+          59
+        ],
+        "order": [
+          0,
+          30,
+          59,
+          59,
+          30,
+          0,
+          30,
+          0,
+          59
+        ],
+        "threadAllowances": [
+          1,
+          4
+        ],
+        "resourceCacheBytes": 1,
+        "backendRules": {
+          "native-metal": {
+            "edge": 1
+          },
+          "web-gpu": {
+            "edge": 1
+          }
+        }
+      },
+      "note": "Original reference pixels retain their per-case source, generator and PNG identities. Only replay order and thread coverage changed; width, height, unique reference frames and tolerance rules are unchanged."
+    }
+  ]
 }

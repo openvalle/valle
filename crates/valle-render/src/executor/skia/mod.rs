@@ -33,6 +33,8 @@ mod scene3d_region;
 mod surface;
 mod target;
 mod velocity;
+mod working_capture;
+pub use working_capture::WorkingF16Capture;
 #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]
 mod vulkan;
 #[cfg(all(feature = "native", any(target_os = "linux", target_os = "windows")))]

@@ -127,10 +127,39 @@ async function run() {
           await player.renderFrame(0, { rasterScale: rasterScale * 0.75, transparent: true });
         }
         for (const [sequence, frame] of (job.order as number[]).entries()) {
+          const working: {
+            name: string;
+            width: number;
+            height: number;
+            bytes: number;
+            format: string;
+          }[] = [];
           const result = await player.renderFrame(frame, {
             rasterScale,
             transparent: true,
+            onWorkingF16: job.workingF16
+              ? async (capture) => {
+                  const name = `${bypass ? "bypass" : "warm"}-${sequence}-${frame}.f16`;
+                  if (capture.width !== job.width || capture.height !== job.height)
+                    throw new Error("working capture dimensions drifted");
+                  const raw = capture.rgba16fLE;
+                  const body =
+                    raw.buffer instanceof ArrayBuffer
+                      ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
+                      : raw.slice();
+                  await post(name, body);
+                  working.push({
+                    name,
+                    width: capture.width,
+                    height: capture.height,
+                    bytes: capture.rgba16fLE.byteLength,
+                    format: "linear-rec2020-premul-rgba16f-le",
+                  });
+                }
+              : undefined,
           });
+          if (job.workingF16 && working.length !== 1)
+            throw new Error("working capture missing or duplicated");
           assertPath(result);
           if (canvas.width !== job.width || canvas.height !== job.height)
             throw new Error("QA capture dimensions differ from the requested output");
@@ -140,7 +169,14 @@ async function run() {
           );
           const name = `${bypass ? "bypass" : "warm"}-${sequence}-${frame}.png`;
           await post(name, blob);
-          outputs.push({ name, frame, sequence, bypass, profile: result.executionProfile });
+          outputs.push({
+            name,
+            frame,
+            sequence,
+            bypass,
+            profile: result.executionProfile,
+            working,
+          });
         }
         outputs.push({
           session: bypass ? "bypass" : "warm",

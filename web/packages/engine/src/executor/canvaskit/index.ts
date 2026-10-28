@@ -8,6 +8,7 @@ export {
   type CanvasKitExecutionReport,
   type CanvasKitSurfaceKind,
   type CanvasKitExecutionTarget,
+  type WorkingF16Capture,
   type CanvasKitPassTiming,
   type CanvasKitExternalObject,
   type CanvasKitObjectTable,

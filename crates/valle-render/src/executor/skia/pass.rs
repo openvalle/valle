@@ -44,6 +44,8 @@ pub struct SkiaExecutor {
     caches: BackendCaches,
     raster_layers: RasterLayerCache,
     surfaces: SurfaceArena,
+    capture_working: bool,
+    working_capture: Option<super::WorkingF16Capture>,
 }
 
 impl SkiaExecutor {
@@ -65,6 +67,8 @@ impl SkiaExecutor {
             caches: BackendCaches::new(),
             raster_layers: RasterLayerCache::new(),
             surfaces: SurfaceArena::new(),
+            capture_working: false,
+            working_capture: None,
         })
     }
 
@@ -77,6 +81,8 @@ impl SkiaExecutor {
             caches: BackendCaches::new(),
             raster_layers: RasterLayerCache::new(),
             surfaces: SurfaceArena::metal()?,
+            capture_working: false,
+            working_capture: None,
         })
     }
 
@@ -89,11 +95,24 @@ impl SkiaExecutor {
             caches: BackendCaches::new(),
             raster_layers: RasterLayerCache::new(),
             surfaces: SurfaceArena::vulkan()?,
+            capture_working: false,
+            working_capture: None,
         })
     }
 
     pub const fn capabilities(&self) -> &BackendCapabilities {
         &self.capabilities
+    }
+
+    /// Opt-in diagnostics only: the next admitted execution captures working F16 before
+    /// delivery. Default rendering allocates nothing and performs no additional readback.
+    pub fn capture_next_working_frame(&mut self) {
+        self.working_capture = None;
+        self.capture_working = true;
+    }
+
+    pub fn take_working_capture(&mut self) -> Option<super::WorkingF16Capture> {
+        self.working_capture.take()
     }
 
     pub const fn backend_kind(&self) -> super::surface::SkiaBackendKind {
@@ -150,7 +169,18 @@ impl SkiaExecutor {
         target: &mut SkiaTarget<'_>,
     ) -> Result<SkiaExecutionReport, SkiaExecuteError> {
         let admitted = self.admit(template, bindings, objects, target)?;
-        admitted.execute_with_arena(target, &mut self.surfaces, &mut self.raster_layers)
+        let capture =
+            std::mem::take(&mut self.capture_working).then_some(&mut self.working_capture);
+        let result = admitted.execute_with_arena(
+            target,
+            &mut self.surfaces,
+            &mut self.raster_layers,
+            capture,
+        );
+        if result.is_err() {
+            self.working_capture = None;
+        }
+        result
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
@@ -435,7 +465,7 @@ impl AdmittedSkiaFrame<'_> {
     ) -> Result<SkiaExecutionReport, SkiaExecuteError> {
         let mut arena = SurfaceArena::new();
         let mut raster_layers = RasterLayerCache::new();
-        self.execute_with_arena(target, &mut arena, &mut raster_layers)
+        self.execute_with_arena(target, &mut arena, &mut raster_layers, None)
     }
 
     fn execute_with_arena(
@@ -443,6 +473,7 @@ impl AdmittedSkiaFrame<'_> {
         target: &mut SkiaTarget<'_>,
         arena: &mut SurfaceArena,
         raster_layers: &mut RasterLayerCache,
+        capture: Option<&mut Option<super::WorkingF16Capture>>,
     ) -> Result<SkiaExecutionReport, SkiaExecuteError> {
         preflight_target(self.template, target)?;
         raster_layers.begin_frame();
@@ -1051,6 +1082,13 @@ impl AdmittedSkiaFrame<'_> {
             .get(&self.template.output())
             .cloned()
             .ok_or(SkiaExecuteError::MissingOutput)?;
+        if let Some(capture) = capture {
+            *capture = Some(super::working_capture::capture(
+                &output,
+                extent,
+                &mut surface_frame,
+            )?);
+        }
         commit_output(&output, target, &mut self.effects, &mut surface_frame)?;
         if let Some(started) = commit_started {
             eprintln!(
