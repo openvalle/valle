@@ -26,7 +26,7 @@ mod validate;
 pub use arena::{NodeId, PaintId, PathId};
 pub use compile::{
     ProgramRecordingError, ProgramResourceCatalog, ProgramTextureExtent, compile_recording,
-    compile_recording_with_catalog,
+    compile_recording_with_catalog, compile_recording_with_paint_origins,
 };
 pub use group::{
     BackdropRead, BackdropScope, BlendMode, BlendSpace, Clip, FILTER_GAUSSIAN_SUPPORT_SIGMAS,
@@ -77,6 +77,15 @@ impl NodeGeometry {
         output_bounds: LocalBounds::Empty,
         max_intermediate_pixels: 0,
     };
+}
+
+/// Construction provenance for one canonical paint, before the shared opacity rewrite.
+/// Not serialized or trusted as an executable authority; producers use it to bind parameter
+/// dependencies without guessing an opacity factor from coincidentally equal final colors.
+#[derive(Debug, Clone)]
+pub struct PaintOrigin {
+    pub source: Paint,
+    pub opacity: f32,
 }
 
 /// Validated immutable arena. Fields stay private so requirements cannot be forged.
@@ -207,6 +216,20 @@ impl DrawProgramBuilder {
 
     pub fn add_root(&mut self, root: NodeId) {
         self.roots.push(root);
+    }
+
+    fn finish_with_paint_origins(
+        self,
+        origins: Option<&mut Vec<PaintOrigin>>,
+    ) -> Result<DrawProgram, DrawProgramError> {
+        validate::canonicalize_with_paint_origins(
+            self.viewport,
+            self.roots,
+            self.nodes,
+            self.paths,
+            self.paints,
+            origins,
+        )
     }
 
     pub fn finish(self) -> Result<DrawProgram, DrawProgramError> {

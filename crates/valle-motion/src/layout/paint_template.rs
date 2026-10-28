@@ -1,4 +1,4 @@
-//! First preparation template: fixed layout/paint structure with typed background-color slots.
+//! Preparation templates for typed background colors and admitted rectangular opacity folds.
 //! Admission is conservative and load-time. No previous frame is needed to evaluate a slot.
 //! Other dynamic styles, resource producers, and instance columns keep their existing lowering
 //! until they have explicit bindings and range contracts.
@@ -71,7 +71,8 @@ struct Bindings {
     template: Arc<PaintTemplate>,
     omitted: Vec<bool>,
     // Static lookup is built once; hot guards never scan unrelated nodes or paint arenas.
-    static_colors: BTreeSet<[u32; 4]>,
+    static_paints: BTreeSet<PaintKey>,
+    unit_opacity: Vec<bool>,
     groups: Vec<PaintGroup>,
 }
 
@@ -79,7 +80,7 @@ struct PaintGroup {
     paint: PaintId,
     slots: Vec<usize>,
     // A paint read by a static consumer cannot change, even when dynamic consumers share it.
-    pinned: Option<[u32; 4]>,
+    pinned: Option<(PaintKey, [u32; 4])>,
 }
 
 fn color_bits(c: LinearColor) -> [u32; 4] {
@@ -91,31 +92,94 @@ fn color_key(c: LinearColor) -> [u32; 4] {
     [c.red, c.green, c.blue, c.alpha].map(|v| if v == 0.0 { 0 } else { v.to_bits() })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct PaintKey {
+    color: [u32; 4],
+    opacity: u32,
+}
+
+impl PaintKey {
+    fn new(color: LinearColor, opacity: f32) -> Self {
+        Self {
+            color: color_key(color),
+            opacity: opacity.to_bits(),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum InputBinding {
+    Root(usize),
+    Static(MotionValue),
+}
+impl InputBinding {
+    fn value<'a>(&'a self, values: &'a [MotionValue]) -> &'a MotionValue {
+        match self {
+            Self::Root(slot) => &values[*slot],
+            Self::Static(value) => value,
+        }
+    }
+}
+
+struct PaintSource {
+    color: InputBinding,
+    opacity: InputBinding,
+}
+
 struct ColorInputs {
     colors: Vec<LinearColor>,
+    originals: Vec<LinearColor>,
+    keys: Vec<PaintKey>,
     omitted: Vec<bool>,
+    unit_opacity: Vec<bool>,
 }
 
 impl ColorInputs {
-    fn new(values: &[MotionValue]) -> Option<Self> {
-        let mut colors = Vec::with_capacity(values.len());
-        let mut omitted = Vec::with_capacity(values.len());
-        for value in values {
-            let MotionValue::Color(color) = value else {
+    fn new(values: &[MotionValue], sources: &[PaintSource]) -> Option<Self> {
+        let mut inputs = Self {
+            colors: Vec::new(),
+            originals: Vec::new(),
+            keys: Vec::new(),
+            omitted: Vec::new(),
+            unit_opacity: Vec::new(),
+        };
+        for source in sources {
+            let color = match source.color.value(values) {
+                MotionValue::Color(color) => *color,
+                MotionValue::Str(color) => AuthorColor::parse(color)?,
+                _ => return None,
+            };
+            let MotionValue::Number(opacity) = source.opacity.value(values) else {
                 return None;
             };
-            if !color.is_finite() {
+            if !color.is_finite() || !opacity.is_finite() || !(0.0..=1.0).contains(opacity) {
                 return None;
             }
-            let working = AuthorColor::to_working(*color);
-            if !working.is_finite() {
+            // The style bridge and canonical opacity rewrite both operate at f32 precision.
+            let opacity = *opacity as f32;
+            let working = AuthorColor::to_working(color);
+            let scaled = if opacity == 1.0 {
+                working
+            } else {
+                LinearColor::new(
+                    working.red * opacity,
+                    working.green * opacity,
+                    working.blue * opacity,
+                    working.alpha * opacity,
+                )
+            };
+            if !working.is_finite() || !scaled.is_finite() {
                 return None;
             }
-            colors.push(working);
-            // This is the emitter's CSS alpha probe, not a new transparency threshold.
-            omitted.push(color.to_srgb8().a == 0);
+            inputs.colors.push(scaled);
+            inputs.originals.push(working);
+            inputs.keys.push(PaintKey::new(working, opacity));
+            inputs
+                .omitted
+                .push(color.to_srgb8().a == 0 || opacity == 0.0);
+            inputs.unit_opacity.push(opacity == 1.0);
         }
-        Some(Self { colors, omitted })
+        Some(inputs)
     }
 }
 
@@ -123,9 +187,8 @@ impl Bindings {
     fn new(
         report: &crate::EmitReport,
         sources: &BTreeMap<String, usize>,
-        values: &[MotionValue],
+        inputs: &ColorInputs,
     ) -> Option<Self> {
-        let inputs = ColorInputs::new(values)?;
         let mut paints = BTreeMap::<PaintId, Vec<(valle_draw::program::NodeId, usize)>>::new();
         let mut consumers = BTreeSet::new();
         for (key, slot) in sources {
@@ -140,8 +203,15 @@ impl Bindings {
             let Paint::Solid(color) = report.program.paints()[paint.raw() as usize] else {
                 return None;
             };
-            if color_bits(color) != color_bits(inputs.colors[*slot]) {
-                // Includes opacity folding, cascade overrides, and signed-zero ambiguity in
+            let origin = report.paint_origins.get(paint.raw() as usize)?;
+            let Paint::Solid(original) = origin.source else {
+                return None;
+            };
+            if PaintKey::new(original, origin.opacity) != inputs.keys[*slot]
+                || color_bits(original) != color_bits(inputs.originals[*slot])
+                || color_bits(color) != color_bits(inputs.colors[*slot])
+            {
+                // Rejects unbound group opacity, cascade overrides, and signed-zero ambiguity in
                 // shared paints. Never infer declaration provenance from numeric equality.
                 return None;
             }
@@ -170,18 +240,17 @@ impl Bindings {
                 }
             }
         }
-        let static_colors = report
-            .program
-            .paints()
+        let static_paints = report
+            .paint_origins
             .iter()
             .enumerate()
-            .filter_map(|(index, paint)| {
+            .filter_map(|(index, origin)| {
                 let id = PaintId::from_raw(index as u32);
                 if paints.contains_key(&id) && !pinned.contains(&id) {
                     return None;
                 }
-                if let Paint::Solid(c) = paint {
-                    Some(color_key(*c))
+                if let Paint::Solid(c) = origin.source {
+                    Some(PaintKey::new(c, origin.opacity))
                 } else {
                     None
                 }
@@ -197,7 +266,11 @@ impl Bindings {
                     let Paint::Solid(color) = report.program.paints()[paint.raw() as usize] else {
                         unreachable!()
                     };
-                    color_bits(color)
+                    let origin = &report.paint_origins[paint.raw() as usize];
+                    let Paint::Solid(original) = origin.source else {
+                        unreachable!()
+                    };
+                    (PaintKey::new(original, origin.opacity), color_bits(color))
                 });
                 PaintGroup {
                     paint,
@@ -216,37 +289,38 @@ impl Bindings {
             .collect();
         Some(Self {
             template: Arc::new(
-                PaintTemplate::new(report.program.clone(), bindings, values.len()).ok()?,
+                PaintTemplate::new(report.program.clone(), bindings, inputs.colors.len()).ok()?,
             ),
-            omitted: inputs.omitted,
-            static_colors,
+            omitted: inputs.omitted.clone(),
+            unit_opacity: inputs.unit_opacity.clone(),
+            static_paints,
             groups,
         })
     }
 
     fn accepts(&self, inputs: &ColorInputs) -> bool {
-        if self.omitted != inputs.omitted {
+        if self.omitted != inputs.omitted || self.unit_opacity != inputs.unit_opacity {
             return false;
         }
         let mut distinct = BTreeMap::new();
         for group in &self.groups {
             let color = inputs.colors[group.slots[0]];
             let bits = color_bits(color);
+            let key = inputs.keys[group.slots[0]];
             if group
                 .slots
                 .iter()
-                .any(|slot| color_bits(inputs.colors[*slot]) != bits)
+                .any(|slot| color_bits(inputs.colors[*slot]) != bits || inputs.keys[*slot] != key)
             {
                 return false;
             }
             if let Some(pinned) = group.pinned {
-                if pinned != bits {
+                if pinned != (key, bits) {
                     return false;
                 }
                 continue;
             }
-            let key = color_key(color);
-            if self.static_colors.contains(&key) || distinct.insert(key, group.paint).is_some() {
+            if self.static_paints.contains(&key) || distinct.insert(key, group.paint).is_some() {
                 return false;
             }
         }
@@ -269,6 +343,7 @@ pub struct PaintProgramCache {
     order: Vec<ExprId>,
     roots: Vec<ExprId>,
     sources: BTreeMap<String, usize>,
+    inputs: Vec<PaintSource>,
     nodes: BTreeSet<String>,
     key: Option<TemplateKey>,
     variants: VecDeque<Snapshot>,
@@ -282,22 +357,62 @@ impl PaintProgramCache {
         let plan = crate::eval::EvalPlan::new(&artifact.exprs);
         let mut expressions = BTreeMap::new();
         for node in &artifact.nodes {
-            let mut background = None;
+            let binding = |property: &str| {
+                node.styles
+                    .iter()
+                    .rev()
+                    .find(|s| s.property == property)
+                    .map(|s| s.value.clone())
+            };
+            let color = binding("background-color");
+            let opacity = binding("opacity");
+            let dynamic_opacity =
+                matches!(&opacity, Some(StyleValue::Expr { expr }) if plan.sample_dependent(*expr));
             for style in &node.styles {
-                if style.property == "background-color" {
-                    background = match style.value {
-                        StyleValue::Expr { expr } => Some(expr),
-                        _ => None,
-                    };
-                } else if let StyleValue::Expr { expr } = style.value
+                if !matches!(style.property.as_str(), "background-color" | "opacity")
+                    && let StyleValue::Expr { expr } = style.value
                     && plan.sample_dependent(expr)
                 {
                     return None;
                 }
             }
-            if let Some(expr) = background {
-                // Until cascade origins are recorded, do not infer that a matching color means
-                // this declaration won against a shorthand or an important utility.
+            if dynamic_opacity
+                && (!matches!(node.kind, crate::NodeKind::Box)
+                    || node.children.start != node.children.end
+                    || node.styles.iter().any(|s| {
+                        !matches!(
+                            s.property.as_str(),
+                            "opacity"
+                                | "background-color"
+                                | "width"
+                                | "height"
+                                | "min-width"
+                                | "min-height"
+                                | "max-width"
+                                | "max-height"
+                                | "position"
+                                | "left"
+                                | "right"
+                                | "top"
+                                | "bottom"
+                                | "margin"
+                                | "margin-left"
+                                | "margin-right"
+                                | "margin-top"
+                                | "margin-bottom"
+                                | "translate"
+                                | "rotate"
+                                | "scale"
+                                | "transform"
+                                | "transform-origin"
+                                | "z-index"
+                        )
+                    }))
+            {
+                return None;
+            }
+            if dynamic_opacity || matches!(color, Some(StyleValue::Expr { .. })) {
+                // Cascade origins and inherited/dynamic groups need their own explicit bindings.
                 if !node.class_names.is_empty()
                     || !node.class_conditions.is_empty()
                     || node
@@ -307,18 +422,46 @@ impl PaintProgramCache {
                 {
                     return None;
                 }
-                expressions.insert(node.key.clone(), expr);
+                expressions.insert(
+                    node.key.clone(),
+                    (
+                        color.unwrap_or(StyleValue::Static {
+                            value: MotionValue::Color(AuthorColor::from_srgb8(
+                                valle_draw::Rgba::new(0, 0, 0, 0),
+                            )),
+                        }),
+                        opacity.unwrap_or(StyleValue::Static {
+                            value: MotionValue::Number(1.0),
+                        }),
+                    ),
+                );
             }
         }
         let roots: Vec<_> = expressions
             .values()
-            .copied()
+            .flat_map(|(color, opacity)| [color, opacity])
+            .filter_map(|v| match v {
+                StyleValue::Expr { expr } => Some(*expr),
+                _ => None,
+            })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        let input = |value| match value {
+            StyleValue::Expr { expr } => InputBinding::Root(roots.binary_search(&expr).unwrap()),
+            StyleValue::Static { value } => InputBinding::Static(value),
+        };
+        let mut inputs = Vec::new();
         let sources: BTreeMap<_, _> = expressions
             .into_iter()
-            .map(|(key, expr)| (key, roots.binary_search(&expr).unwrap()))
+            .map(|(key, (color, opacity))| {
+                let slot = inputs.len();
+                inputs.push(PaintSource {
+                    color: input(color),
+                    opacity: input(opacity),
+                });
+                (key, slot)
+            })
             .collect();
         let nodes = sources.keys().cloned().collect();
         let order = plan.schedule(roots.iter().copied());
@@ -329,6 +472,7 @@ impl PaintProgramCache {
             order,
             roots,
             sources,
+            inputs,
             nodes,
             key: None,
             variants: VecDeque::new(),
@@ -367,7 +511,7 @@ impl PaintProgramCache {
             clock: ctx.clock,
         };
         let mut stats = PaintPreparationStats {
-            parameter_slots: self.roots.len(),
+            parameter_slots: self.inputs.len(),
             ..Default::default()
         };
         if self.key.as_ref() != Some(&key) {
@@ -395,7 +539,7 @@ impl PaintProgramCache {
             .map_err(LayoutError::Eval)?;
             let values: Vec<_> = self.roots.iter().map(|id| evaluated[id].clone()).collect();
             stats.evaluated_expressions = self.order.len();
-            if let Some(inputs) = ColorInputs::new(&values) {
+            if let Some(inputs) = ColorInputs::new(&values, &self.inputs) {
                 let found = self.variants.iter().rposition(|snapshot| {
                     stats.checked_variants += 1;
                     snapshot.bindings.accepts(&inputs)
@@ -463,11 +607,17 @@ impl PaintProgramCache {
             && requirements.runtime_shaders.is_empty()
             && requirements.scene3d.is_empty();
         let bindings = cacheable
-            .then(|| Bindings::new(&report, &self.sources, &values))
+            .then(|| {
+                Bindings::new(
+                    &report,
+                    &self.sources,
+                    &ColorInputs::new(&values, &self.inputs)?,
+                )
+            })
             .flatten();
         let paint_frame = bindings
             .as_ref()
-            .and_then(|b| b.bind(&ColorInputs::new(&values)?));
+            .and_then(|b| b.bind(&ColorInputs::new(&values, &self.inputs)?));
         let program = paint_frame
             .as_ref()
             .map(|frame| frame.program().clone())

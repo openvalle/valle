@@ -38,6 +38,7 @@ use crate::layout::bridge::{
 /// Structured local drawing program plus explicit unsupported-feature accounting.
 pub struct EmitReport {
     pub program: valle_draw::program::DrawProgram,
+    pub(crate) paint_origins: Vec<valle_draw::program::PaintOrigin>,
     /// Explicit background consumers captured during emission, before any parameter binding.
     /// Empty if instance compaction changed the recording's leaf structure.
     pub(crate) background_paints:
@@ -512,7 +513,7 @@ fn emit_with_faces_and_catalog(
         parameter_nodes: parameter_nodes.cloned(),
         background_paths: BTreeMap::new(),
     };
-    validate_transform_matrices(tree)?;
+    validate_transform_matrices(tree, &mut out)?;
     let contexts = build_stacking_contexts(
         &tree.root,
         &tree.layout,
@@ -584,12 +585,31 @@ fn emit_with_faces_and_catalog(
                 f64::from(height) / dpr
             }),
     );
-    let program = match catalog {
-        Some(textures) => {
-            let catalog = EmissionResourceCatalog::new(textures, &out.scene3d_frames);
-            valle_draw::program::compile_recording_with_catalog(viewport, &out.recording, &catalog)
+    let compile = |catalog: Option<&dyn valle_draw::program::ProgramResourceCatalog>| {
+        if parameter_nodes.is_some() {
+            valle_draw::program::compile_recording_with_paint_origins(
+                viewport,
+                &out.recording,
+                catalog,
+            )
+        } else {
+            match catalog {
+                Some(catalog) => valle_draw::program::compile_recording_with_catalog(
+                    viewport,
+                    &out.recording,
+                    catalog,
+                ),
+                None => valle_draw::program::compile_recording(viewport, &out.recording),
+            }
+            .map(|program| (program, Vec::new()))
         }
-        None => valle_draw::program::compile_recording(viewport, &out.recording),
+    };
+    let (program, paint_origins) = match catalog {
+        Some(textures) => compile(Some(&EmissionResourceCatalog::new(
+            textures,
+            &out.scene3d_frames,
+        ))),
+        None => compile(None),
     }
     .map_err(|error| match error {
         valle_draw::program::ProgramRecordingError::Program(
@@ -604,11 +624,6 @@ fn emit_with_faces_and_catalog(
     // Masks can reorder their source; instance compaction needs its own column bindings. Do not
     // infer either mapping from coincidentally equal paint values.
     let background_paints = if out.background_paths.is_empty()
-        // Opacity canonicalization can change paint interning even for a static sibling. Its
-        // pre-fold dependencies need explicit provenance before it can use these color guards.
-        || out.recording.cmds.iter().any(|cmd| {
-            matches!(cmd, RecordCmd::BeginOpacity { alpha } | RecordCmd::BeginSaveLayer { alpha, .. } if *alpha != 1.0)
-        })
         || program.nodes().iter().any(|node| {
             matches!(node, valle_draw::program::Node::InstanceBatch(_))
                 || matches!(node, valle_draw::program::Node::Group(group) if group.mask.is_some())
@@ -655,6 +670,7 @@ fn emit_with_faces_and_catalog(
         }
     };
     Ok(EmitReport {
+        paint_origins,
         background_paints,
         program,
         scene3d_frames: out.scene3d_frames,
@@ -666,7 +682,10 @@ fn emit_with_faces_and_catalog(
 /// The upstream painter may cull a non-finite matrix as if it were singular. Check
 /// computed box transforms before that culling so numeric overflow cannot become a
 /// successful empty frame. Use the same resolved sizes and ancestor composition.
-fn validate_transform_matrices(tree: &LayoutTree) -> Result<(), EmitError> {
+fn validate_transform_matrices(
+    tree: &LayoutTree,
+    out: &mut EmissionState,
+) -> Result<(), EmitError> {
     let mut pending = vec![(&tree.root, NodeId::ROOT, TAffine::IDENTITY)];
     while let Some((node, id, parent)) = pending.pop() {
         let Ok(layout) = tree.layout.layout(id) else {
@@ -677,6 +696,17 @@ fn validate_transform_matrices(tree: &LayoutTree) -> Result<(), EmitError> {
             layout.size.height,
             &node.context.sizing,
         );
+        // Takumi removes zero-opacity nodes before emitting stacking contexts. Preserve the
+        // explicit omission proof here; a missing consumer must never mean "probably hidden".
+        if node.context.style.opacity.0 == 0.0
+            && let Some(key) = tree.keys.get(&u64::from(id))
+            && out
+                .parameter_nodes
+                .as_ref()
+                .is_some_and(|nodes| nodes.contains(key))
+        {
+            out.background_paths.insert(key.clone(), None);
+        }
         let matrix = parent * TAffine::translation(layout.location.x, layout.location.y) * local;
         if !matrix.to_cols_array().into_iter().all(f32::is_finite) {
             return Err(EmitError::BadStyle {

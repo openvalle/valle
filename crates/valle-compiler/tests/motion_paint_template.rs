@@ -490,18 +490,62 @@ fn more_than_sixteen_guard_variants_keep_cold_hot_reverse_and_evicted_identity()
 }
 
 #[test]
-fn static_opacity_siblings_do_not_hide_pre_fold_paint_interning_dependencies() {
+fn static_opacity_siblings_use_explicit_pre_fold_paint_interning_dependencies() {
     let source = r##"export default function Demo(){const t=useCurrentTime();return <Scene style={{width:640,height:360}}>
     <View style={{width:80,height:70,backgroundColor:interpolate(t.seconds,[0,1,2],['red','blue','red'])}}/>
     <View style={{width:80,height:70,opacity:0.5,backgroundColor:'red'}}/>
     <View style={{width:80,height:70,backgroundColor:'blue'}}/>
     </Scene>}"##;
     let stats = guarded_sequence(source, &[15, 0, 30, 59, 0, 15], true);
+    assert!(stats[4..].iter().all(|s| s.reused_template));
+}
+
+#[test]
+fn rectangular_opacity_parameters_preserve_zero_one_and_interning_guards() {
+    let text = r##"export default function Demo(){const t=useCurrentTime();return <Scene style={{width:640,height:360}}>
+    <View style={{width:80,height:60,backgroundColor:'red',opacity:interpolate(t.seconds,[0,1,2],[0,0.5,1])}}/>
+    <View style={{width:80,height:60,backgroundColor:'red',opacity:interpolate(t.seconds,[0,1,2],[1,0.5,0])}}/>
+    <View style={{width:80,height:60,backgroundColor:'red',opacity:0.5}}/>
+    <View style={{width:80,height:60,backgroundColor:'#ff000080'}}/>
+    </Scene>}"##;
+    let stats = guarded_sequence(text, &[0, 0, 15, 30, 45, 59, 60, 60, 0, 30, 15, 45], true);
+    assert!(stats[1].reused_template, "zero-opacity omission");
     assert!(
-        stats
-            .iter()
-            .all(|s| s.emitted_program && s.resident_variants == 0)
+        stats[4].reused_template,
+        "different fold coefficients preserve the variant"
     );
+    assert!(stats[5].reused_template);
+    assert!(stats[7..].iter().all(|s| s.reused_template));
+}
+
+#[test]
+fn animated_color_and_opacity_bind_without_repeating_static_geometry() {
+    let text = r##"export default function Demo(){const t=useCurrentTime();return <Scene style={{width:640,height:360}}>
+    <View style={{width:80,height:60,backgroundColor:interpolate(t.seconds,[0,2],['#aa3520','#207bbb']),opacity:interpolate(t.seconds,[0,2],[0.2,0.8])}}/>
+    </Scene>}"##;
+    let stats = guarded_sequence(text, &[0, 15, 30, 59, 0, 45, 30, 0], true);
+    assert!(
+        stats[1..]
+            .iter()
+            .all(|s| s.reused_template && !s.emitted_program)
+    );
+    assert!(stats.iter().all(|s| s.parameter_slots == 1));
+}
+
+#[test]
+fn unsupported_opacity_consumers_do_not_enter_rectangular_paint_binding() {
+    for content in [
+        "<View style={{width:80,height:60,opacity:t.progress}}><View style={{width:10,height:10,backgroundColor:'red'}}/></View>",
+        "<View style={{width:80,height:60,opacity:t.progress,backgroundColor:'red',borderRadius:10}}/>",
+        "<Text style={{opacity:t.progress}}>Text</Text>",
+    ] {
+        let text = format!(
+            "export default function Demo(){{const t=useCurrentTime();return <Scene>{content}</Scene>}}"
+        );
+        let artifact = compile_motion(&text).unwrap().artifact;
+        let scene = valle_motion::prepare_scene(&artifact).unwrap();
+        assert!(PaintProgramCache::new(&scene, &fonts()).is_none());
+    }
 }
 
 #[test]

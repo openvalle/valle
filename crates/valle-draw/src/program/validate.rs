@@ -96,6 +96,17 @@ pub(crate) fn canonicalize(
     paths: Vec<PathData>,
     paints: Vec<Paint>,
 ) -> Result<DrawProgram, DrawProgramError> {
+    canonicalize_with_paint_origins(viewport, roots, nodes, paths, paints, None)
+}
+
+pub(super) fn canonicalize_with_paint_origins(
+    viewport: Rect,
+    roots: Vec<NodeId>,
+    nodes: Vec<Option<Node>>,
+    paths: Vec<PathData>,
+    paints: Vec<Paint>,
+    origins: Option<&mut Vec<super::PaintOrigin>>,
+) -> Result<DrawProgram, DrawProgramError> {
     validate_viewport(viewport)?;
     validate_raw(&roots, &nodes, &paths, &paints)?;
 
@@ -143,7 +154,7 @@ pub(crate) fn canonicalize(
         node_geometry: Default::default(),
         requirements: DrawRequirements::default(),
     };
-    super::optimize::fold_group_opacity(&mut program);
+    super::optimize::fold_group_opacity(&mut program, origins);
     let node_geometry = derive_node_geometries(&program)?;
     let requirements = derive_requirements(&program, &node_geometry)?;
     program.node_geometry = node_geometry.into();

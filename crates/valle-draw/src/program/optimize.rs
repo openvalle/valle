@@ -9,11 +9,33 @@ use super::{
 /// Resolve ordinary rectangular View opacity at IR construction too. A shared source paint
 /// can appear under different group opacities, so create independent scaled paints and then
 /// compact the paint arena in canonical first-use order. Never mutate a shared source paint.
-pub(super) fn fold_group_opacity(program: &mut DrawProgram) {
-    fold_group_opacity_with_limit(program, super::MAX_PAINTS);
+pub(super) fn fold_group_opacity(
+    program: &mut DrawProgram,
+    origins: Option<&mut Vec<super::PaintOrigin>>,
+) {
+    fold_group_opacity_with_origins(program, super::MAX_PAINTS, origins);
 }
 
+#[cfg(test)]
 fn fold_group_opacity_with_limit(program: &mut DrawProgram, max_paints: usize) {
+    fold_group_opacity_with_origins(program, max_paints, None);
+}
+
+fn fold_group_opacity_with_origins(
+    program: &mut DrawProgram,
+    max_paints: usize,
+    mut origins: Option<&mut Vec<super::PaintOrigin>>,
+) {
+    if let Some(origins) = origins.as_mut() {
+        **origins = program
+            .paints
+            .iter()
+            .map(|source| super::PaintOrigin {
+                source: source.clone(),
+                opacity: 1.0,
+            })
+            .collect();
+    }
     let mut opacity_by_child = std::collections::BTreeMap::new();
     let mut groups = Vec::new();
     for (index, node) in program.nodes.iter().enumerate() {
@@ -121,6 +143,19 @@ fn fold_group_opacity_with_limit(program: &mut DrawProgram, max_paints: usize) {
             unreachable!()
         };
         group.opacity = 1.0;
+    }
+    if let Some(origins) = origins {
+        let source = std::mem::take(origins);
+        origins.resize_with(paints.len(), || super::PaintOrigin {
+            source: Paint::Solid(LinearColor::new(0., 0., 0., 0.)),
+            opacity: 1.,
+        });
+        for ((paint, opacity), id) in mapping {
+            origins[id.raw() as usize] = super::PaintOrigin {
+                source: source[paint as usize].source.clone(),
+                opacity: f32::from_bits(opacity),
+            };
+        }
     }
     program.paints = paints.into();
 }
@@ -278,6 +313,41 @@ mod tests {
     }
 
     #[test]
+    fn opacity_provenance_matches_the_shared_rewrite_and_budget_fallback() {
+        for shared in [false, true] {
+            for limit in [1, 3] {
+                let original = pending_groups(shared);
+                let mut reference = original.clone();
+                fold_group_opacity_with_limit(&mut reference, limit);
+                let mut actual = original.clone();
+                let mut origins = Vec::new();
+                fold_group_opacity_with_origins(&mut actual, limit, Some(&mut origins));
+                assert_eq!(actual, reference);
+                assert_eq!(origins.len(), actual.paints.len());
+                for (paint, origin) in actual.paints.iter().zip(&origins) {
+                    let Paint::Solid(color) = origin.source else {
+                        unreachable!()
+                    };
+                    let reconstructed = if origin.opacity == 1.0 {
+                        color
+                    } else {
+                        scale(color, origin.opacity)
+                    };
+                    assert_eq!(*paint, Paint::Solid(reconstructed));
+                }
+                if limit == 1 {
+                    assert!(origins.iter().all(|o| o.opacity == 1.0));
+                } else {
+                    assert_eq!(
+                        origins.iter().map(|o| o.opacity).collect::<Vec<_>>(),
+                        [0.3, 0.6]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn groups_with_pixel_operations_keep_their_isolation() {
         for variant in 0..4 {
             let mut program = pending_groups(true);
@@ -298,7 +368,7 @@ mod tests {
                 }
             }
             let before = program.clone();
-            fold_group_opacity(&mut program);
+            fold_group_opacity(&mut program, None);
             assert_eq!(program, before);
         }
     }

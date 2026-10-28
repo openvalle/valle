@@ -56,7 +56,7 @@ pub fn compile_recording(
     recording
         .validate()
         .map_err(|error| ProgramRecordingError::InvalidRecording(format!("{error:?}")))?;
-    RecordingCompiler::new(viewport, recording, None).compile()
+    RecordingCompiler::new(viewport, recording, None).compile(None)
 }
 
 pub(super) fn instance_transform(
@@ -221,7 +221,23 @@ pub fn compile_recording_with_catalog(
     recording
         .validate()
         .map_err(|error| ProgramRecordingError::InvalidRecording(format!("{error:?}")))?;
-    RecordingCompiler::new(viewport, recording, Some(catalog)).compile()
+    RecordingCompiler::new(viewport, recording, Some(catalog)).compile(None)
+}
+
+/// Compile with producer-only provenance from the same canonical opacity rewrite used by all
+/// executors. No second compile or comparison against guessed output colors is needed.
+pub fn compile_recording_with_paint_origins(
+    viewport: Rect,
+    recording: &recording::ProgramRecording,
+    catalog: Option<&dyn ProgramResourceCatalog>,
+) -> Result<(DrawProgram, Vec<super::PaintOrigin>), ProgramRecordingError> {
+    recording
+        .validate()
+        .map_err(|error| ProgramRecordingError::InvalidRecording(format!("{error:?}")))?;
+    let mut origins = Vec::new();
+    let program =
+        RecordingCompiler::new(viewport, recording, catalog).compile(Some(&mut origins))?;
+    Ok((program, origins))
 }
 
 // These folds transfer fields without multiplying transforms or opacity. A clip remains
@@ -294,7 +310,10 @@ impl<'a> RecordingCompiler<'a> {
         }
     }
 
-    fn compile(mut self) -> Result<DrawProgram, ProgramRecordingError> {
+    fn compile(
+        mut self,
+        origins: Option<&mut Vec<super::PaintOrigin>>,
+    ) -> Result<DrawProgram, ProgramRecordingError> {
         for (command_index, command) in self.source.cmds.iter().enumerate() {
             self.command(command_index, command)?;
         }
@@ -309,7 +328,9 @@ impl<'a> RecordingCompiler<'a> {
         if super::instance_compact::enabled() {
             self.builder = super::instance_compact::compact(self.builder);
         }
-        self.builder.finish().map_err(Into::into)
+        self.builder
+            .finish_with_paint_origins(origins)
+            .map_err(Into::into)
     }
 
     fn command(

@@ -586,6 +586,23 @@
       "regions": [],
       "order": true,
       "motionKernel": true
+    },
+    {
+      "id": "opacity-guards",
+      "source": "fixtures/opacity-guards.motion.tsx",
+      "group": "core",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true,
+      "motionKernel": true
     }
   ]
 }
