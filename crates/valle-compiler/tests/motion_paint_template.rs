@@ -228,6 +228,24 @@ fn host_clock_inputs_are_evaluated_and_host_duration_invalidates_static_paint() 
             "'#8a3520'",
         ),
         source.replace("comp.clipDuration/4", "1"),
+        source
+            .replace(
+                "<View style",
+                "<Shutter samples={8} angle={180}><View style",
+            )
+            .replace(
+                "/></Scene>",
+                "/><View style={{width:10,height:10,backgroundColor:'white'}}/></Shutter></Scene>",
+            ),
+        source
+            .replace(
+                "<View style",
+                "<Echo count={4} delay={0.07} decay={0.8}><View style",
+            )
+            .replace(
+                "/></Scene>",
+                "/><View style={{width:10,height:10,backgroundColor:'white'}}/></Echo></Scene>",
+            ),
     ] {
         let artifact = compile_motion(&input).unwrap().artifact;
         let scene = valle_motion::prepare_scene(&artifact).unwrap();
@@ -522,7 +540,7 @@ fn rectangular_opacity_parameters_preserve_zero_one_and_interning_guards() {
         stats[4].reused_template,
         "different fold coefficients preserve the variant"
     );
-    assert!(stats[5].reused_template);
+    assert!(stats[5].reused_template, "{stats:?}");
     assert!(stats[7..].iter().all(|s| s.reused_template));
 }
 
@@ -657,22 +675,19 @@ fn temporal_templates_guard_paints_shared_with_static_exposures() {
 }
 
 #[test]
-fn temporal_templates_reject_time_dependent_sample_contents_and_ancestors() {
+fn temporal_templates_reject_unbound_sample_geometry_and_inheritance() {
     for (open, close) in [
         ("<Shutter samples={8} angle={180}>", "</Shutter>"),
         ("<Echo count={8} delay={0.05} decay={0.7}>", "</Echo>"),
     ] {
         for (parent, child) in [
-            (
-                "",
-                "backgroundColor:interpolate(t.seconds,[0,2],['red','blue'])",
-            ),
-            ("", "opacity:t.progress"),
+            ("", "translate:point(t.seconds * 10, 0)"),
+            ("", "height:40 + t.seconds"),
             (
                 "color:interpolate(t.seconds,[0,2],['red','blue'])",
                 "backgroundColor:'white'",
             ),
-            ("", "opacity:t.clipSeconds"),
+            ("", "filter:`blur(${t.seconds}px)`"),
         ] {
             let text = format!(
                 "export default function Demo(){{const t=useCurrentTime();return <Scene><View style={{{{{parent}}}}}>{open}<View style={{{{width:80,height:40,{child}}}}}/><Text>Inherited</Text>{close}</View></Scene>}}"
@@ -682,6 +697,126 @@ fn temporal_templates_reject_time_dependent_sample_contents_and_ancestors() {
             assert!(PaintProgramCache::new(&scene, &fonts()).is_none(), "{text}");
         }
     }
+}
+
+#[test]
+fn temporal_paint_parameters_match_full_samples_across_guards_and_seeks() {
+    for (open, close, samples) in [
+        ("<Shutter samples={8} angle={180}>", "</Shutter>", 8),
+        ("<Echo count={8} delay={0.05} decay={0.7}>", "</Echo>", 9),
+    ] {
+        for style in [
+            "backgroundColor:interpolate(t.seconds,[0,1,2],['red','blue','red'])",
+            "backgroundColor:interpolate(t.seconds,[0,1,2],['#ff000000','#0000ffff','#ff000000'])",
+            "backgroundColor:'red',opacity:interpolate(t.seconds,[0,1,2],[0,1,0])",
+            "backgroundColor:interpolate(t.clipSeconds,[0,1,2],['red','blue','red']),opacity:t.clipProgress",
+        ] {
+            let text = format!(
+                "export const controls=({{props:{{size:number({{default:80,min:1,max:300}})}}}});\nexport default function Demo(props){{const t=useCurrentTime();return <Scene style={{{{width:640,height:360}}}}><View style={{{{width:200,height:100,rotate:'8deg',opacity:0.7}}}}>{open}<View key=\"sampled\" style={{{{width:props.size,height:40,{style}}}}}/><Text style={{{{fontSize:18,color:'white'}}}}>Fixed text</Text>{close}</View></Scene>}}"
+            );
+            check(&text, true);
+            let stats = guarded_sequence(&text, &[0, 15, 63, 30, 1, 0, 59, 30, 15], true);
+            assert!(stats.iter().all(|s| s.parameter_slots == samples));
+            assert!(stats[5].reused_template, "{open} {style}");
+            assert!(
+                stats[7..].iter().all(|s| s.reused_template),
+                "{open} {style}"
+            );
+        }
+    }
+}
+
+#[test]
+fn temporal_text_and_multiple_scopes_keep_distinct_color_consumers() {
+    let text = "export default function Demo(){const t=useCurrentTime();const c=interpolate(t.seconds,[0,1,2],['red','blue','red']);return <Scene style={{width:640,height:360}}><Shutter samples={8} angle={180}><View style={{width:200,height:60}}><Text style={{fontSize:22,color:c}}>Shutter</Text></View></Shutter><Echo count={4} delay={0.07} decay={0.8}><View style={{width:200,height:60}}><Text style={{fontSize:22,color:c}}>Echo</Text></View></Echo><Text style={{fontSize:22,color:c}}>Current</Text><Text style={{fontSize:22,color:'red'}}>Pinned</Text></Scene>}";
+    let stats = guarded_sequence(text, &[0, 15, 63, 30, 1, 0, 59, 30, 15], true);
+    assert!(stats.iter().all(|s| s.parameter_slots == 14));
+    assert!(stats[5].reused_template, "{stats:?}");
+    assert!(stats[7..].iter().all(|s| s.reused_template));
+}
+
+#[test]
+fn temporal_parameter_hits_preserve_current_tree_arithmetic_errors() {
+    let source = "export default function Demo(){const t=useCurrentTime();return <Scene style={{width:640,height:360}}><Shutter samples={8} angle={180}><View style={{width:80,height:40,backgroundColor:interpolate(Math.sin(1/(t.seconds-1)),[-1,1],['red','blue'])}}/><View style={{width:10,height:10,backgroundColor:'white'}}/></Shutter></Scene>}";
+    let other_scope = "export default function Demo(){const t=useCurrentTime();return <Scene style={{width:640,height:360}}><Shutter samples={8} angle={180}><View style={{width:80,height:40,backgroundColor:'white'}}/></Shutter><Echo count={2} delay={0.2} decay={0.8}><View style={{width:80,height:40,backgroundColor:interpolate(Math.sin(1/(t.seconds-953/960)),[-1,1],['red','blue'])}}/><View style={{width:10,height:10,backgroundColor:'white'}}/></Echo></Scene>}";
+    for source in [source, other_scope] {
+        let artifact = compile_motion(source).unwrap().artifact;
+        let scene = valle_motion::prepare_scene(&artifact).unwrap();
+        let fonts = Fonts::default();
+        let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+        let mut cache = PaintProgramCache::new(&scene, &fonts).unwrap();
+        let prepare = |cache: &mut PaintProgramCache, frame| {
+            let ctx =
+                valle_motion::motion_context_at_frame(frame, 60, FrameRate::new(30, 1).unwrap())
+                    .unwrap();
+            cache.prepare(
+                &ctx,
+                &props,
+                Viewport::new((640, 360)),
+                None,
+                None,
+                &|_: &str| None,
+                None,
+                Default::default(),
+            )
+        };
+        prepare(&mut cache, 15).unwrap();
+        assert!(prepare(&mut cache, 15).unwrap().stats.reused_template);
+        let hot = prepare(&mut cache, 30)
+            .err()
+            .expect("center value must still be evaluated");
+        let cold = prepare(&mut PaintProgramCache::new(&scene, &fonts).unwrap(), 30)
+            .err()
+            .unwrap();
+        assert_eq!(hot.to_string(), cold.to_string());
+    }
+}
+
+#[test]
+fn temporal_parameter_guards_keep_identity_after_variant_eviction() {
+    let nodes = (0..5).map(|i| format!(r##"<View key="color{i}" style={{{{width:30,height:20,backgroundColor:interpolate(Math.floor((t.seconds*30+0.1)/{})%2,[0,1],['#{:06x}00','#{:06x}ff'])}}}}/>"##, 1 << i, 0x224466 + i * 31, 0x224466 + i * 31)).collect::<String>();
+    let source = format!(
+        "export default function Demo(){{const t=useCurrentTime();return <Scene><Shutter samples={{2}} angle={{180}}>{nodes}<View style={{{{width:10,height:10,backgroundColor:'white'}}}}/></Shutter></Scene>}}"
+    );
+    let order: Vec<_> = (1..33).chain((1..33).rev()).chain([1, 1, 32, 32]).collect();
+    let stats = guarded_sequence(&source, &order, true);
+    assert_eq!(stats[31].resident_variants, 16);
+    assert!(stats[..32].iter().all(|s| s.emitted_program));
+    assert!(stats[32..48].iter().all(|s| s.reused_template));
+    assert!(stats[48..64].iter().all(|s| s.emitted_program));
+    assert!(stats[65].reused_template);
+    assert!(stats[67].reused_template);
+}
+
+#[test]
+fn temporal_hot_evaluation_does_not_scale_with_unrelated_static_nodes() {
+    let mut counts = Vec::new();
+    for count in [20, 200] {
+        let fixed = (0..count).map(|i| format!(r##"<View style={{{{position:'absolute',left:{},top:100,width:2,height:2,backgroundColor:'#{:06x}'}}}}/>"##, i * 3, 0x404040 + i * 977)).collect::<String>();
+        let source = format!(
+            "export default function Demo(){{const t=useCurrentTime();return <Scene><Shutter samples={{8}} angle={{180}}><View style={{{{width:80,height:40,backgroundColor:interpolate(t.seconds,[0,2],['red','blue'])}}}}/>{fixed}</Shutter></Scene>}}"
+        );
+        let stats = guarded_sequence(&source, &[15, 30, 17, 30], false);
+        assert!(
+            stats[1..]
+                .iter()
+                .all(|s| s.reused_template && !s.emitted_program)
+        );
+        counts.push((stats[1].evaluated_expressions, stats[1].parameter_slots));
+    }
+    assert_eq!(counts[0], counts[1]);
+    assert_eq!(counts[0].1, 8);
+}
+
+#[test]
+fn inline_text_without_sample_consumers_keeps_full_emission() {
+    let text = "export default function Demo(){const t=useCurrentTime();return <Scene><Shutter samples={8} angle={180}><Text style={{color:interpolate(t.seconds,[0,2],['red','blue'])}}>Inline</Text></Shutter></Scene>}";
+    let stats = guarded_sequence(text, &[0, 15, 30, 15, 0], true);
+    assert!(
+        stats
+            .iter()
+            .all(|s| !s.reused_template && s.emitted_program)
+    );
 }
 
 #[test]

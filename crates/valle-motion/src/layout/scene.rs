@@ -289,13 +289,8 @@ impl PreparedScene {
     pub fn can_reuse_layout(&self) -> bool {
         self.layout_reusable
     }
-    pub(super) fn temporal_samples_invariant(&self) -> bool {
-        self.dependencies.temporal_nodes().is_empty()
-            || self
-                .sample_scene
-                .as_deref()
-                .unwrap_or(self)
-                .temporal_tree_invariant
+    pub(super) fn temporal_artifact(&self) -> &SceneArtifact {
+        self.sample_scene.as_deref().unwrap_or(self).artifact()
     }
     pub(super) fn same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.artifact, &other.artifact)

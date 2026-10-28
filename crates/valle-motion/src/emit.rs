@@ -43,10 +43,12 @@ pub struct EmitReport {
     pub(crate) paint_origins: Vec<valle_draw::program::PaintOrigin>,
     /// Explicit background consumers captured during emission, before any parameter binding.
     /// Empty if instance compaction changed the recording's leaf structure.
-    pub(crate) background_paints:
-        BTreeMap<String, Option<(valle_draw::program::NodeId, valle_draw::program::PaintId)>>,
+    pub(crate) background_paints: BTreeMap<
+        PaintOccurrence,
+        Option<(valle_draw::program::NodeId, valle_draw::program::PaintId)>,
+    >,
     pub(crate) text_paints:
-        BTreeMap<String, Vec<(valle_draw::program::NodeId, valle_draw::program::PaintId)>>,
+        BTreeMap<PaintOccurrence, Vec<(valle_draw::program::NodeId, valle_draw::program::PaintId)>>,
     /// Complete frame-local Scene3D requests referenced by typed `Scene3d` program nodes. Hosts
     /// fulfill these like any other content-addressed resource; the executor sees only the bound
     /// raster object.
@@ -112,10 +114,34 @@ struct EmissionState {
     scene3d_frames: Vec<crate::SealedScene3DFrame>,
     unsupported: Vec<(String, &'static str)>,
     parameter_nodes: Option<PaintParameterNodes>,
+    parameter_sample: Option<TemporalPaintSample>,
     // None records an explicitly omitted transparent background, not a missing/unvisited node.
-    background_paths: BTreeMap<String, Option<usize>>,
+    background_paths: BTreeMap<PaintOccurrence, Option<usize>>,
     // None records a glyph source whose fill also controls unbound palette/shadow/stroke paint.
-    text_commands: BTreeMap<String, Option<Vec<usize>>>,
+    text_commands: BTreeMap<PaintOccurrence, Option<Vec<usize>>>,
+}
+
+/// A declaration has a distinct consumer at each exposure, even when colors currently match.
+/// The scope and ordinal are structural; sample time and cache history are not source identity.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct TemporalPaintSample {
+    pub scope: String,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PaintOccurrence {
+    pub key: String,
+    pub sample: Option<TemporalPaintSample>,
+}
+
+impl EmissionState {
+    fn paint_occurrence(&self, key: &str) -> PaintOccurrence {
+        PaintOccurrence {
+            key: key.to_owned(),
+            sample: self.parameter_sample.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -540,6 +566,7 @@ fn emit_with_faces_and_catalog(
         scene3d_frames: Vec::new(),
         unsupported: Vec::new(),
         parameter_nodes: parameter_nodes.cloned(),
+        parameter_sample: None,
         background_paths: BTreeMap::new(),
         text_commands: BTreeMap::new(),
     };
@@ -782,7 +809,7 @@ fn validate_transform_matrices(
                 .as_ref()
                 .is_some_and(|nodes| nodes.background.contains(key))
         {
-            out.background_paths.insert(key.clone(), None);
+            out.background_paths.insert(out.paint_occurrence(key), None);
         }
         let matrix = parent * TAffine::translation(layout.location.x, layout.location.y) * local;
         if !matrix.to_cols_array().into_iter().all(f32::is_finite) {
@@ -1092,7 +1119,7 @@ impl Emitter<'_> {
             alpha: 1.0,
         });
         let mut recorded = None;
-        for sample in samples {
+        for (index, sample) in samples.iter().enumerate() {
             self.push(RecordCmd::BeginBlend {
                 mode: valle_draw::program::recording::BlendMode::Plus,
                 space: valle_draw::program::BlendSpace::Linear,
@@ -1101,7 +1128,7 @@ impl Emitter<'_> {
                 bounds: Some(bounds),
                 alpha: 1.0 / samples.len() as f64,
             });
-            self.paint_temporal_sample_cached(key, sample, &mut recorded)?;
+            self.paint_temporal_sample_cached(key, index, sample, &mut recorded)?;
             self.push(RecordCmd::End);
             self.push(RecordCmd::End);
         }
@@ -1130,7 +1157,7 @@ impl Emitter<'_> {
             return Ok(());
         }
         let mut recorded = None;
-        for sample in samples {
+        for (index, sample) in samples.iter().enumerate() {
             if sample.opacity <= 0.0 {
                 continue;
             }
@@ -1138,7 +1165,7 @@ impl Emitter<'_> {
                 bounds: Some(bounds),
                 alpha: f64::from(sample.opacity),
             });
-            self.paint_temporal_sample_cached(key, &sample.sample, &mut recorded)?;
+            self.paint_temporal_sample_cached(key, index, &sample.sample, &mut recorded)?;
             self.push(RecordCmd::End);
         }
         Ok(())
@@ -1147,6 +1174,7 @@ impl Emitter<'_> {
     fn paint_temporal_sample_cached(
         &mut self,
         key: &str,
+        index: usize,
         sample: &crate::layout::bridge::TemporalSample,
         recorded: &mut Option<TemporalRecording>,
     ) -> Result<(), EmitError> {
@@ -1173,7 +1201,17 @@ impl Emitter<'_> {
         };
         let before = effects(self);
         let start = self.out.recording.cmds.len();
-        self.paint_temporal_sample(key, sample)?;
+        let previous = self.out.parameter_sample.take();
+        if self.out.parameter_nodes.is_some() {
+            self.out.parameter_sample = Some(TemporalPaintSample {
+                scope: key.to_owned(),
+                index,
+            });
+            validate_transform_matrices(&sample.tree, self.out)?;
+        }
+        let result = self.paint_temporal_sample(key, sample);
+        self.out.parameter_sample = previous;
+        result?;
         self.out.temporal_recordings.built += 1;
         // Budget-consuming grain, formula visitation, producers and diagnostics are not pure
         // recording effects. Keep their normal emission instead of replaying only their commands.
@@ -2756,7 +2794,7 @@ impl Emitter<'_> {
                 })
                 .or_else(|| self.node_key(np))
                 .filter(|key| nodes.text.contains(*key))
-                .map(str::to_owned)
+                .map(|key| self.out.paint_occurrence(key))
         });
         if self.out.review_ink && shadow.is_some() {
             return;
@@ -3166,7 +3204,9 @@ impl Emitter<'_> {
                 .get(key)
                 .is_some_and(|authored| authored.to_srgb8() == rgba_of(color))
         {
-            self.out.background_paths.insert(key.to_owned(), None);
+            self.out
+                .background_paths
+                .insert(self.out.paint_occurrence(key), None);
         }
         if color.0[3] != 0 {
             let authored = self
@@ -3182,9 +3222,10 @@ impl Emitter<'_> {
                         .as_ref()
                         .is_some_and(|nodes| nodes.background.contains(key))
                 {
-                    self.out
-                        .background_paths
-                        .insert(key.to_owned(), Some(self.out.recording.cmds.len()));
+                    self.out.background_paths.insert(
+                        self.out.paint_occurrence(key),
+                        Some(self.out.recording.cmds.len()),
+                    );
                 }
                 self.fill_box_with(border_box, radii, Paint::FloatSolid(color));
             } else {

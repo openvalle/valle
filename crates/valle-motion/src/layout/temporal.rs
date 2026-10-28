@@ -71,11 +71,29 @@ impl SampleClockChecks {
         Self(checks)
     }
 
-    pub(super) fn validate(&self, ctx: &crate::MotionContext) -> Result<(), LayoutError> {
+    pub(super) fn contexts(
+        &self,
+        ctx: &crate::MotionContext,
+    ) -> Result<
+        std::collections::BTreeMap<crate::emit::TemporalPaintSample, crate::MotionContext>,
+        LayoutError,
+    > {
+        let mut contexts = std::collections::BTreeMap::new();
         for (key, shutter, offsets) in &self.0 {
-            visit_sample_contexts(*shutter, key, offsets, ctx, |_| Ok(()))?;
+            let mut index = 0;
+            visit_sample_contexts(*shutter, key, offsets, ctx, |sample| {
+                contexts.insert(
+                    crate::emit::TemporalPaintSample {
+                        scope: key.clone(),
+                        index,
+                    },
+                    *sample,
+                );
+                index += 1;
+                Ok(())
+            })?;
         }
-        Ok(())
+        Ok(contexts)
     }
 }
 

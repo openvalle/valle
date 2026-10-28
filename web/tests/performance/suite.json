@@ -734,6 +734,33 @@
         },
         "tracks": []
       }
+    },
+    {
+      "id": "temporal-paint",
+      "source": "fixtures/temporal-paint.motion.tsx",
+      "group": "heavy",
+      "assets": {},
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "regions": [],
+      "order": true,
+      "temporal": {
+        "rule": {
+          "windowFrames": 8,
+          "rgbRange": 2,
+          "alphaRange": 2,
+          "minimumPixels": 1,
+          "minimumWindowRun": 2
+        },
+        "tracks": []
+      },
+      "motionKernel": true
     }
   ]
 }

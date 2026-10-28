@@ -4,6 +4,7 @@
 //! until they have explicit bindings and range contracts.
 
 use super::{LayoutCache, LayoutError, PreparedScene, StyleCache, Viewport, reuse::GeometryKey};
+use crate::emit::{PaintOccurrence, TemporalPaintSample};
 use crate::{EvalInputs, ExprId, MotionContext, MotionValue, ResolvedProps, StyleValue};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -130,13 +131,27 @@ struct PaintSource {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum PaintConsumer {
-    Background(String),
-    Text(String),
+    Background(PaintOccurrence),
+    Text(PaintOccurrence),
 }
 
 /// A leaf's foreground cannot implicitly change its shell or an inline child's styles. Glyph
 /// emission separately rejects palette layers, inherited text shadows/strokes, and missing
 /// author-color provenance. These need bindings for every additional color/alpha dependency.
+impl PaintConsumer {
+    fn occurrence(&self) -> &PaintOccurrence {
+        match self {
+            Self::Background(source) | Self::Text(source) => source,
+        }
+    }
+}
+
+struct ParameterEvaluation {
+    // Root indices in the flat value buffer. Each exposure evaluates only its own expressions.
+    roots: Vec<(usize, ExprId)>,
+    order: Vec<ExprId>,
+}
+
 fn text_color_eligible(node: &crate::SceneNode) -> bool {
     matches!(
         node.kind,
@@ -426,8 +441,8 @@ pub struct PaintProgramCache {
     prepared: PreparedScene,
     layout: LayoutCache,
     plan: crate::eval::EvalPlan,
-    order: Vec<ExprId>,
-    roots: Vec<ExprId>,
+    evaluations: BTreeMap<Option<TemporalPaintSample>, ParameterEvaluation>,
+    roots: Vec<(Option<TemporalPaintSample>, ExprId)>,
     sources: BTreeMap<PaintConsumer, usize>,
     inputs: Vec<PaintSource>,
     nodes: crate::emit::PaintParameterNodes,
@@ -438,36 +453,54 @@ pub struct PaintProgramCache {
 
 impl PaintProgramCache {
     pub fn new(prepared: &PreparedScene, fonts: &crate::Fonts) -> Option<Self> {
-        if !prepared.temporal_samples_invariant() {
-            return None;
-        }
         let layout = LayoutCache::new(prepared, fonts)?;
         let artifact = prepared.artifact();
         let plan = crate::eval::EvalPlan::new(&artifact.exprs);
-        // A sampled background has multiple consumers/weights, not one current-frame slot.
-        // Keep the proven-static sample subtrees literal; props/viewport/host changes invalidate
-        // the whole key. Unrelated animated branches can still bind ordinary paint parameters.
-        let mut sampled = BTreeSet::new();
-        let mut pending: Vec<_> = prepared
-            .dependencies()
-            .temporal_nodes()
-            .iter()
-            .map(|n| n.node)
-            .collect();
-        while let Some(id) = pending.pop() {
-            if !sampled.insert(id) {
-                continue;
+        // Nested temporal scopes are rejected by artifact validation. Only descendants are
+        // sampled: the wrapper itself is drawn once with the current frame's style.
+        let mut sampled = BTreeMap::new();
+        for scope in prepared.dependencies().temporal_nodes() {
+            let node = &artifact.nodes[scope.node.0 as usize];
+            let mut pending = artifact.node_children
+                [node.children.start as usize..node.children.end as usize]
+                .to_vec();
+            while let Some(id) = pending.pop() {
+                sampled.insert(id, scope);
+                let node = &artifact.nodes[id.0 as usize];
+                pending.extend(
+                    &artifact.node_children
+                        [node.children.start as usize..node.children.end as usize],
+                );
             }
-            let node = &artifact.nodes[id.0 as usize];
-            pending.extend(
-                &artifact.node_children[node.children.start as usize..node.children.end as usize],
-            );
         }
         let mut expressions = BTreeMap::new();
         for (index, node) in artifact.nodes.iter().enumerate() {
-            if sampled.contains(&crate::NodeId(index as u32)) {
-                continue;
-            }
+            let scope = sampled.get(&crate::NodeId(index as u32)).copied();
+            let occurrences = || {
+                let mut occurrences = Vec::new();
+                if scope.is_none_or(|scope| {
+                    matches!(
+                        scope.sampling,
+                        super::dependencies::TemporalSampling::Echo { .. }
+                    )
+                }) {
+                    occurrences.push(PaintOccurrence {
+                        key: node.key.clone(),
+                        sample: None,
+                    });
+                }
+                if let Some(scope) = scope {
+                    let key = &artifact.nodes[scope.node.0 as usize].key;
+                    occurrences.extend((0..scope.offsets.len()).map(|index| PaintOccurrence {
+                        key: node.key.clone(),
+                        sample: Some(TemporalPaintSample {
+                            scope: key.clone(),
+                            index,
+                        }),
+                    }));
+                }
+                occurrences
+            };
             let binding = |property: &str| {
                 node.styles
                     .iter()
@@ -528,7 +561,9 @@ impl PaintProgramCache {
             {
                 return None;
             }
-            if dynamic_opacity || matches!(color, Some(StyleValue::Expr { .. })) {
+            let dynamic_background = matches!(&color, Some(StyleValue::Expr { expr })
+                if scope.is_none() || plan.sample_dependent(*expr));
+            if dynamic_opacity || dynamic_background {
                 // Cascade origins and inherited/dynamic groups need their own explicit bindings.
                 if !node.class_names.is_empty()
                     || !node.class_conditions.is_empty()
@@ -539,45 +574,52 @@ impl PaintProgramCache {
                 {
                     return None;
                 }
-                expressions.insert(
-                    PaintConsumer::Background(node.key.clone()),
-                    (
-                        color.unwrap_or(StyleValue::Static {
-                            value: MotionValue::Color(AuthorColor::from_srgb8(
-                                valle_draw::Rgba::new(0, 0, 0, 0),
-                            )),
-                        }),
-                        opacity.unwrap_or(StyleValue::Static {
-                            value: MotionValue::Number(1.0),
-                        }),
-                    ),
-                );
+                for occurrence in occurrences() {
+                    expressions.insert(
+                        PaintConsumer::Background(occurrence),
+                        (
+                            color.clone().unwrap_or(StyleValue::Static {
+                                value: MotionValue::Color(AuthorColor::from_srgb8(
+                                    valle_draw::Rgba::new(0, 0, 0, 0),
+                                )),
+                            }),
+                            opacity.clone().unwrap_or(StyleValue::Static {
+                                value: MotionValue::Number(1.0),
+                            }),
+                        ),
+                    );
+                }
             }
             if dynamic_text {
-                expressions.insert(
-                    PaintConsumer::Text(node.key.clone()),
-                    (
-                        text_color.expect("dynamic text color"),
-                        // Glyph opacity remains an explicit group; it is not a rectangle fold.
-                        StyleValue::Static {
-                            value: MotionValue::Number(1.0),
-                        },
-                    ),
-                );
+                for occurrence in occurrences() {
+                    expressions.insert(
+                        PaintConsumer::Text(occurrence),
+                        (
+                            text_color.clone().expect("dynamic text color"),
+                            // Glyph opacity remains an explicit group; it is not a rectangle fold.
+                            StyleValue::Static {
+                                value: MotionValue::Number(1.0),
+                            },
+                        ),
+                    );
+                }
             }
         }
         let roots: Vec<_> = expressions
-            .values()
-            .flat_map(|(color, opacity)| [color, opacity])
-            .filter_map(|v| match v {
-                StyleValue::Expr { expr } => Some(*expr),
-                _ => None,
+            .iter()
+            .flat_map(|(source, (color, opacity))| {
+                [color, opacity].into_iter().filter_map(|v| match v {
+                    StyleValue::Expr { expr } => Some((source.occurrence().sample.clone(), *expr)),
+                    _ => None,
+                })
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        let input = |value| match value {
-            StyleValue::Expr { expr } => InputBinding::Root(roots.binary_search(&expr).unwrap()),
+        let input = |sample: &Option<TemporalPaintSample>, value| match value {
+            StyleValue::Expr { expr } => {
+                InputBinding::Root(roots.binary_search(&(sample.clone(), expr)).unwrap())
+            }
             StyleValue::Static { value } => InputBinding::Static(value),
         };
         let mut inputs = Vec::new();
@@ -586,8 +628,8 @@ impl PaintProgramCache {
             .map(|(key, (color, opacity))| {
                 let slot = inputs.len();
                 inputs.push(PaintSource {
-                    color: input(color),
-                    opacity: input(opacity),
+                    color: input(&key.occurrence().sample, color),
+                    opacity: input(&key.occurrence().sample, opacity),
                     omit_transparent: matches!(key, PaintConsumer::Background(_)),
                 });
                 (key, slot)
@@ -597,19 +639,84 @@ impl PaintProgramCache {
         for source in sources.keys() {
             match source {
                 PaintConsumer::Background(key) => {
-                    nodes.background.insert(key.clone());
+                    nodes.background.insert(key.key.clone());
                 }
                 PaintConsumer::Text(key) => {
-                    nodes.text.insert(key.clone());
+                    nodes.text.insert(key.key.clone());
                 }
             }
         }
-        let order = plan.schedule(roots.iter().copied());
+        let mut evaluations = BTreeMap::<_, ParameterEvaluation>::new();
+        for (index, (sample, root)) in roots.iter().enumerate() {
+            evaluations
+                .entry(sample.clone())
+                .or_insert_with(|| ParameterEvaluation {
+                    roots: Vec::new(),
+                    order: Vec::new(),
+                })
+                .roots
+                .push((index, *root));
+        }
+        // Full preparation also evaluates the current tree and retained sample-tree inputs
+        // that a particular exposure does not paint. Preserve their arithmetic errors (including
+        // invalid center values between valid shutter phases) without rebuilding those trees.
+        // Static expressions were already checked under this geometry/host key on the cold path.
+        let dynamic_roots = |artifact: &crate::SceneArtifact| {
+            artifact
+                .nodes
+                .iter()
+                .flat_map(|node| node.expr_refs_outside_per_unit())
+                .map(|(_, id)| id)
+                .filter(|id| plan.sample_dependent(*id))
+                .collect::<BTreeSet<_>>()
+        };
+        let temporal = prepared.dependencies().temporal_nodes();
+        let sample_roots = dynamic_roots(prepared.temporal_artifact());
+        if !temporal.is_empty() {
+            evaluations
+                .entry(None)
+                .or_insert_with(|| ParameterEvaluation {
+                    roots: Vec::new(),
+                    order: Vec::new(),
+                });
+            if !sample_roots.is_empty() {
+                for scope in temporal {
+                    for index in 0..scope.offsets.len() {
+                        evaluations
+                            .entry(Some(TemporalPaintSample {
+                                scope: artifact.nodes[scope.node.0 as usize].key.clone(),
+                                index,
+                            }))
+                            .or_insert_with(|| ParameterEvaluation {
+                                roots: Vec::new(),
+                                order: Vec::new(),
+                            });
+                    }
+                }
+            }
+        }
+        let current_roots = dynamic_roots(artifact);
+        for (sample, evaluation) in &mut evaluations {
+            let validation = if temporal.is_empty() {
+                None
+            } else if sample.is_some() {
+                Some(&sample_roots)
+            } else {
+                Some(&current_roots)
+            };
+            evaluation.order = plan.schedule(
+                evaluation.roots.iter().map(|(_, id)| *id).chain(
+                    validation
+                        .into_iter()
+                        .flat_map(|roots| roots.iter().copied()),
+                ),
+            );
+        }
         Some(Self {
             prepared: prepared.clone(),
             layout,
             plan,
-            order,
+            evaluations,
             roots,
             sources,
             inputs,
@@ -659,33 +766,49 @@ impl PaintProgramCache {
             self.template_bytes = 0;
             self.key = Some(key);
         }
-        if !self.variants.is_empty() {
-            let evaluated = crate::eval::eval_roots_planned(
-                self.prepared.artifact(),
-                &self.plan,
-                EvalInputs {
-                    ctx,
-                    props,
-                    unit: None,
-                    viewport: viewport.size.width.zip(viewport.size.height).map(|(w, h)| {
-                        (
-                            f64::from(w) / f64::from(viewport.device_pixel_ratio),
-                            f64::from(h) / f64::from(viewport.device_pixel_ratio),
-                        )
-                    }),
-                },
-                &self.order,
-            )
-            .map_err(LayoutError::Eval)?;
-            let values: Vec<_> = self.roots.iter().map(|id| evaluated[id].clone()).collect();
-            stats.evaluated_expressions = self.order.len();
+        if let Some(snapshot) = self.variants.back() {
+            let contexts = snapshot.sample_clocks.contexts(ctx)?;
+            let mut values = vec![MotionValue::Bool(false); self.roots.len()];
+            for (sample, evaluation) in &self.evaluations {
+                let sample_ctx = match sample {
+                    None => ctx,
+                    Some(sample) => {
+                        let Some(ctx) = contexts.get(sample) else {
+                            // A statically hidden scope was not evaluated on the cold path either.
+                            debug_assert!(evaluation.roots.is_empty());
+                            continue;
+                        };
+                        ctx
+                    }
+                };
+                let evaluated = crate::eval::eval_roots_planned(
+                    self.prepared.artifact(),
+                    &self.plan,
+                    EvalInputs {
+                        ctx: sample_ctx,
+                        props,
+                        unit: None,
+                        viewport: viewport.size.width.zip(viewport.size.height).map(|(w, h)| {
+                            (
+                                f64::from(w) / f64::from(viewport.device_pixel_ratio),
+                                f64::from(h) / f64::from(viewport.device_pixel_ratio),
+                            )
+                        }),
+                    },
+                    &evaluation.order,
+                )
+                .map_err(LayoutError::Eval)?;
+                for &(index, id) in &evaluation.roots {
+                    values[index] = evaluated[&id].clone();
+                }
+                stats.evaluated_expressions += evaluation.order.len();
+            }
             if let Some(inputs) = ColorInputs::new(&values, &self.inputs) {
                 let found = self.variants.iter().rposition(|snapshot| {
                     stats.checked_variants += 1;
                     snapshot.bindings.accepts(&inputs)
                 });
                 if let Some(index) = found {
-                    self.variants[index].sample_clocks.validate(ctx)?;
                     let snapshot = self.variants.remove(index).expect("resident variant");
                     let (program, paint_frame) = if snapshot
                         .values
@@ -722,10 +845,27 @@ impl PaintProgramCache {
             .prepared
             .frame_evaluation_stats(ctx)
             .evaluated_expressions;
-        let values: Vec<_> = self
+        let values: Option<Vec<_>> = self
             .roots
             .iter()
-            .map(|id| tree.values[id.0 as usize].clone())
+            .map(|(sample, id)| {
+                let source = match sample {
+                    None => &tree,
+                    Some(sample) => {
+                        if let Some(samples) = tree.shutters.get(&sample.scope) {
+                            &samples.get(sample.index)?.tree
+                        } else {
+                            &tree
+                                .echoes
+                                .get(&sample.scope)?
+                                .get(sample.index)?
+                                .sample
+                                .tree
+                        }
+                    }
+                };
+                Some(source.values[id.0 as usize].clone())
+            })
             .collect();
         let boxes = Arc::new(super::layout_boxes(self.prepared.artifact(), &tree)?);
         let report = crate::emit::emit_with_paint_parameters(
@@ -752,13 +892,13 @@ impl PaintProgramCache {
                 Bindings::new(
                     &report,
                     &self.sources,
-                    &ColorInputs::new(&values, &self.inputs)?,
+                    &ColorInputs::new(values.as_ref()?, &self.inputs)?,
                 )
             })
             .flatten();
         let paint_frame = bindings
             .as_ref()
-            .and_then(|b| b.bind(&ColorInputs::new(&values, &self.inputs)?));
+            .and_then(|b| b.bind(&ColorInputs::new(values.as_ref()?, &self.inputs)?));
         let program = paint_frame
             .as_ref()
             .map(|frame| frame.program().clone())
@@ -784,7 +924,7 @@ impl PaintProgramCache {
                 self.template_bytes += bytes;
                 self.variants.push_back(Snapshot {
                     sample_clocks: super::temporal::SampleClockChecks::new(&self.prepared, &tree),
-                    values,
+                    values: values.expect("bound sample values"),
                     program: program.clone(),
                     boxes: boxes.clone(),
                     bindings,
