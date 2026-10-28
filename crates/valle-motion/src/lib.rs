@@ -80,8 +80,8 @@ pub use controls::{
 pub use diag::{DiagClass, DiagCode, MotionDiagnostic};
 pub use domain::MotionViewport;
 pub use emit::{
-    EmitError, EmitReport, FaceCache, default_font_naming, emit, emit_program_with_faces,
-    emit_with_faces,
+    EmitError, EmitReport, FaceCache, TemporalRecordingStats, default_font_naming, emit,
+    emit_program_with_faces, emit_with_faces,
 };
 pub use eval::eval_instances;
 pub use eval::{

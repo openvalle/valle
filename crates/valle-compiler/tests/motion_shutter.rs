@@ -230,19 +230,97 @@ export default function Demo() {{ const time = useCurrentTime();
                 actual.echo_sample_times("sample"),
                 reference.echo_sample_times("sample")
             );
+            let actual = emit(&actual, &default_font_naming).unwrap();
+            let reference = emit(&reference, &default_font_naming).unwrap();
+            assert_eq!(actual.temporal_recordings.built, 1);
+            assert_eq!(actual.temporal_recordings.reused, expected - 1);
+            assert!(actual.temporal_recordings.commands_replayed > 0);
+            assert_eq!(reference.temporal_recordings.built, expected);
+            assert_eq!(reference.temporal_recordings.reused, 0);
             assert_eq!(
-                emit(&actual, &default_font_naming)
-                    .unwrap()
-                    .program
-                    .packed_bytes()
-                    .unwrap(),
-                emit(&reference, &default_font_naming)
-                    .unwrap()
-                    .program
-                    .packed_bytes()
-                    .unwrap()
+                actual.program.packed_bytes().unwrap(),
+                reference.program.packed_bytes().unwrap()
             );
         }
+    }
+}
+
+#[test]
+fn temporal_recording_reuses_side_tables_but_preserves_grain_accounting() {
+    let mut fonts = Fonts::default();
+    let font = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/fonts/noto/NotoSans-Regular.ttf"),
+    )
+    .unwrap();
+    fonts
+        .register(valle_motion::FontResource::new(font.as_slice()))
+        .unwrap();
+    for (content, pure) in [
+        (
+            r##"<Text style={{fontFamily:"Noto Sans",fontSize:14,color:"#aabbcc80"}}>Sample glyphs</Text>"##,
+            true,
+        ),
+        (
+            r##"<View style={{width:40,height:24,borderRadius:4,border:"2px solid #aa3311",backgroundImage:"linear-gradient(90deg, #3377bb80, #ddaa3380)",filter:"blur(2px)",boxShadow:"1px 2px 3px #22334480"}} />"##,
+            true,
+        ),
+        (
+            r##"<View style={{width:48,height:32,backgroundColor:"#aabbcc",paperGrain:0.5}} />"##,
+            false,
+        ),
+    ] {
+        let source = format!(
+            r##"
+export const composition = {{width:160,height:90,fps:30,duration:2}};
+export default function Demo() {{ const time = useCurrentTime();
+  return <Scene style={{{{width:160,height:90,opacity:1}}}}>
+    <View style={{{{position:"absolute",left:3.5,top:4,width:64,height:48,rotate:"8deg"}}}}>
+      <Shutter samples={{4}} angle={{180}}>{content}</Shutter>
+    </View>
+    <View style={{{{position:"absolute",left:84,top:12,width:64,height:48}}}}>
+      <Echo count={{4}} delay={{0.02}} decay={{0.8}}>{content}</Echo>
+    </View>
+  </Scene>;
+}}
+"##
+        );
+        let evaluate = |source: &str| {
+            let artifact = compile_motion(source).unwrap().artifact;
+            let prepared = prepare_scene(&artifact).unwrap();
+            let props = resolve_props(&artifact.controls, &Default::default()).unwrap();
+            let context = motion_context_at_frame(20, 60, FrameRate::new(30, 1).unwrap()).unwrap();
+            let tree = build_tree(
+                &prepared,
+                &context,
+                &props,
+                &LayoutOptions {
+                    viewport: Viewport::new((160, 90)),
+                    fonts: &fonts,
+                    styles: None,
+                },
+            )
+            .unwrap();
+            emit(&tree, &default_font_naming).unwrap()
+        };
+        let actual = evaluate(&source);
+        let reference = evaluate(&source.replace("opacity:1", "opacity:1+time.seconds*0"));
+        assert_eq!(
+            actual.temporal_recordings.built,
+            if pure { 2 } else { 8 },
+            "{content}"
+        );
+        assert_eq!(
+            actual.temporal_recordings.reused,
+            if pure { 6 } else { 0 },
+            "{content}"
+        );
+        assert_eq!(
+            actual.program.packed_bytes().unwrap(),
+            reference.program.packed_bytes().unwrap(),
+            "{content}"
+        );
+        assert_eq!(actual.unsupported, reference.unsupported);
     }
 }
 

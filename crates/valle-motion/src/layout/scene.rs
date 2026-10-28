@@ -289,6 +289,14 @@ impl PreparedScene {
     pub fn can_reuse_layout(&self) -> bool {
         self.layout_reusable
     }
+    pub(super) fn temporal_samples_invariant(&self) -> bool {
+        self.dependencies.temporal_nodes().is_empty()
+            || self
+                .sample_scene
+                .as_deref()
+                .unwrap_or(self)
+                .temporal_tree_invariant
+    }
     pub(super) fn same_instance(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.artifact, &other.artifact)
     }
@@ -3941,6 +3949,7 @@ fn sample_tree(
         at: sample.at,
         time: sample.sample,
         tree,
+        tree_invariant: sample_prepared.temporal_tree_invariant,
     })
 }
 
@@ -3983,27 +3992,18 @@ fn resolve_shutter_samples(
         if painted.is_some_and(|scopes| !scopes.contains(key)) {
             continue;
         }
-        let bad_time = || LayoutError::BadShutter {
-            node: key.to_owned(),
-            reason: "shutter sample overflows exact time".into(),
-        };
-        let frame_duration = ctx.frame_duration().ok_or_else(bad_time)?;
         let mut exposure = Vec::with_capacity(phases.len());
-        for &phase in phases {
-            let sample = frame_duration
-                .checked_mul(phase)
-                .ok()
-                .and_then(|offset| ctx.offset(offset))
-                .ok_or_else(bad_time)?;
+        super::temporal::visit_sample_contexts(true, key, phases, ctx, |sample| {
             exposure.push(sample_tree(
                 prepared,
-                &sample,
+                sample,
                 props,
                 opts,
                 trees,
                 shared.as_deref_mut(),
             )?);
-        }
+            Ok(())
+        })?;
         out.insert(key.to_owned(), exposure);
     }
     Ok(out)
@@ -4052,17 +4052,14 @@ fn resolve_echo_samples(
         }
         let mut trail = Vec::with_capacity(offsets.len());
         // Echo offsets are output seconds.
-        for (index, &offset) in offsets.iter().enumerate() {
-            let lag = count - index as u8;
-            let sample = ctx.offset(offset).ok_or_else(|| LayoutError::BadEcho {
-                node: key.to_owned(),
-                reason: "echo sample overflows exact time".into(),
-            })?;
+        super::temporal::visit_sample_contexts(false, key, offsets, ctx, |sample| {
+            let lag = count - trail.len() as u8;
             trail.push(EchoSample {
-                sample: sample_tree(prepared, &sample, props, opts, trees, shared.as_deref_mut())?,
+                sample: sample_tree(prepared, sample, props, opts, trees, shared.as_deref_mut())?,
                 opacity: valle_draw::math::pow(decay, f64::from(lag)) as f32,
             });
-        }
+            Ok(())
+        })?;
         out.insert(key.to_owned(), trail);
     }
     Ok(out)

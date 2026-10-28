@@ -38,6 +38,8 @@ use crate::layout::bridge::{
 /// Structured local drawing program plus explicit unsupported-feature accounting.
 pub struct EmitReport {
     pub program: valle_draw::program::DrawProgram,
+    /// Preparation diagnostics; do not affect program identity or the number of exposures.
+    pub temporal_recordings: TemporalRecordingStats,
     pub(crate) paint_origins: Vec<valle_draw::program::PaintOrigin>,
     /// Explicit background consumers captured during emission, before any parameter binding.
     /// Empty if instance compaction changed the recording's leaf structure.
@@ -51,6 +53,21 @@ pub struct EmitReport {
     /// Unsupported features encountered during emission, paired with node keys for caller
     /// diagnostics.
     pub unsupported: Vec<(String, &'static str)>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TemporalRecordingStats {
+    pub built: usize,
+    pub reused: usize,
+    pub commands_replayed: usize,
+}
+
+/// A command range in this emission's append-only recording. Side-table spans still name the
+/// same immutable paths, paints, glyphs and resource descriptors. Scoped to one temporal node:
+/// its parent transform and composition state cannot change while replaying its sample body.
+struct TemporalRecording {
+    tree: std::rc::Rc<LayoutTree>,
+    commands: std::ops::Range<usize>,
 }
 
 /// Resolution decisions are authoring inspection, separate from layout and picking coordinates.
@@ -89,6 +106,7 @@ struct EmissionState {
     raster_scale: RasterDensity,
     scene3d_sampling: Vec<Scene3DSampling>,
     recording: ProgramRecording,
+    temporal_recordings: TemporalRecordingStats,
     scene3d_frames: Vec<crate::SealedScene3DFrame>,
     unsupported: Vec<(String, &'static str)>,
     parameter_nodes: Option<std::collections::BTreeSet<String>>,
@@ -508,6 +526,7 @@ fn emit_with_faces_and_catalog(
         raster_scale,
         scene3d_sampling: Vec::new(),
         recording: ProgramRecording::new(),
+        temporal_recordings: TemporalRecordingStats::default(),
         scene3d_frames: Vec::new(),
         unsupported: Vec::new(),
         parameter_nodes: parameter_nodes.cloned(),
@@ -670,6 +689,7 @@ fn emit_with_faces_and_catalog(
         }
     };
     Ok(EmitReport {
+        temporal_recordings: out.temporal_recordings,
         paint_origins,
         background_paints,
         program,
@@ -1014,6 +1034,7 @@ impl Emitter<'_> {
             bounds: Some(bounds),
             alpha: 1.0,
         });
+        let mut recorded = None;
         for sample in samples {
             self.push(RecordCmd::BeginBlend {
                 mode: valle_draw::program::recording::BlendMode::Plus,
@@ -1023,7 +1044,7 @@ impl Emitter<'_> {
                 bounds: Some(bounds),
                 alpha: 1.0 / samples.len() as f64,
             });
-            self.paint_temporal_sample(key, sample)?;
+            self.paint_temporal_sample_cached(key, sample, &mut recorded)?;
             self.push(RecordCmd::End);
             self.push(RecordCmd::End);
         }
@@ -1051,6 +1072,7 @@ impl Emitter<'_> {
         if bounds.is_empty() {
             return Ok(());
         }
+        let mut recorded = None;
         for sample in samples {
             if sample.opacity <= 0.0 {
                 continue;
@@ -1059,8 +1081,52 @@ impl Emitter<'_> {
                 bounds: Some(bounds),
                 alpha: f64::from(sample.opacity),
             });
-            self.paint_temporal_sample(key, &sample.sample)?;
+            self.paint_temporal_sample_cached(key, &sample.sample, &mut recorded)?;
             self.push(RecordCmd::End);
+        }
+        Ok(())
+    }
+
+    fn paint_temporal_sample_cached(
+        &mut self,
+        key: &str,
+        sample: &crate::layout::bridge::TemporalSample,
+        recorded: &mut Option<TemporalRecording>,
+    ) -> Result<(), EmitError> {
+        if sample.tree_invariant
+            && let Some(recorded) = recorded
+            && std::rc::Rc::ptr_eq(&recorded.tree, &sample.tree)
+        {
+            self.out
+                .recording
+                .cmds
+                .extend_from_within(recorded.commands.clone());
+            self.out.temporal_recordings.reused += 1;
+            self.out.temporal_recordings.commands_replayed += recorded.commands.len();
+            return Ok(());
+        }
+        let effects = |emitter: &Self| {
+            (
+                emitter.grain_instances,
+                emitter.painted_formulas.len(),
+                emitter.out.scene3d_frames.len(),
+                emitter.out.scene3d_sampling.len(),
+                emitter.out.unsupported.len(),
+            )
+        };
+        let before = effects(self);
+        let start = self.out.recording.cmds.len();
+        self.paint_temporal_sample(key, sample)?;
+        self.out.temporal_recordings.built += 1;
+        // Budget-consuming grain, formula visitation, producers and diagnostics are not pure
+        // recording effects. Keep their normal emission instead of replaying only their commands.
+        if sample.tree_invariant && self.out.parameter_nodes.is_none() && effects(self) == before {
+            *recorded = Some(TemporalRecording {
+                tree: std::rc::Rc::clone(&sample.tree),
+                commands: start..self.out.recording.cmds.len(),
+            });
+        } else {
+            *recorded = None;
         }
         Ok(())
     }

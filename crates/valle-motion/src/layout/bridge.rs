@@ -332,6 +332,8 @@ pub(crate) struct TemporalSample {
     /// The scene time it shows.
     pub time: valle_timeline::internal::SampleTime,
     pub tree: Rc<LayoutTree>,
+    /// Load-time proof of the admitted clock-independent tree class, not inferred from pixels.
+    pub tree_invariant: bool,
 }
 
 #[derive(Clone)]

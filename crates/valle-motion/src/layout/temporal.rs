@@ -3,10 +3,81 @@
 //! margin collapsing, percentage bases or transform origins. Cross-node readers pin their source
 //! subtrees, even if currently inactive.
 
-use super::dependencies::SceneDependencies;
+use super::dependencies::{SceneDependencies, TemporalSampling};
+use super::{LayoutError, LayoutTree, PreparedScene};
 use crate::{
     ContextInput, Expr, MotionValue, NodeId, NodeKind, SceneArtifact, StyleBinding, StyleValue,
 };
+
+/// The same checked clock arithmetic serves full layout and retained templates. Static pixels
+/// do not make overflowing sample times legal. Keep visits in exposure order and report the
+/// original scope-specific error, including the frame-duration check for an empty Shutter.
+pub(super) fn visit_sample_contexts(
+    shutter: bool,
+    key: &str,
+    offsets: &[valle_timeline::RationalTime],
+    ctx: &crate::MotionContext,
+    mut visit: impl FnMut(&crate::MotionContext) -> Result<(), LayoutError>,
+) -> Result<(), LayoutError> {
+    let bad_time = || {
+        if shutter {
+            LayoutError::BadShutter {
+                node: key.to_owned(),
+                reason: "shutter sample overflows exact time".into(),
+            }
+        } else {
+            LayoutError::BadEcho {
+                node: key.to_owned(),
+                reason: "echo sample overflows exact time".into(),
+            }
+        }
+    };
+    let scale = shutter
+        .then(|| ctx.frame_duration().ok_or_else(bad_time))
+        .transpose()?;
+    for &offset in offsets {
+        let offset = match scale {
+            Some(scale) => scale.checked_mul(offset).map_err(|_| bad_time())?,
+            None => offset,
+        };
+        let sample = ctx.offset(offset).ok_or_else(bad_time)?;
+        visit(&sample)?;
+    }
+    Ok(())
+}
+
+/// Only scopes visited by the cold layout are checked. Hidden scopes may have invalid sample
+/// offsets without being evaluated. Admission fixes their visibility under the template key.
+pub(super) struct SampleClockChecks(Vec<(String, bool, Vec<valle_timeline::RationalTime>)>);
+
+impl SampleClockChecks {
+    pub(super) fn new(prepared: &PreparedScene, tree: &LayoutTree) -> Self {
+        let nodes = prepared.dependencies().temporal_nodes();
+        let mut checks = Vec::new();
+        // Full layout visits every Shutter before any Echo, regardless of tree order.
+        for shutter in [true, false] {
+            for node in nodes {
+                if matches!(node.sampling, TemporalSampling::Shutter { .. }) != shutter {
+                    continue;
+                }
+                let key = &prepared.artifact().nodes[node.node.0 as usize].key;
+                if (shutter && tree.shutters.contains_key(key))
+                    || (!shutter && tree.echoes.contains_key(key))
+                {
+                    checks.push((key.clone(), shutter, node.offsets.clone()));
+                }
+            }
+        }
+        Self(checks)
+    }
+
+    pub(super) fn validate(&self, ctx: &crate::MotionContext) -> Result<(), LayoutError> {
+        for (key, shutter, offsets) in &self.0 {
+            visit_sample_contexts(*shutter, key, offsets, ctx, |_| Ok(()))?;
+        }
+        Ok(())
+    }
+}
 
 /// Proof for sharing the *layout tree* of this request's temporal samples. Keep sampling,
 /// recording and F16 accumulation unchanged. Props, fonts and viewport belong to the request;

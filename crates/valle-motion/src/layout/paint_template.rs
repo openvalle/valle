@@ -59,6 +59,7 @@ struct Snapshot {
     boxes: Arc<BTreeMap<String, [f32; 4]>>,
     bindings: Bindings,
     paint_frame: Option<PaintFrame>,
+    sample_clocks: super::temporal::SampleClockChecks,
 }
 
 // Both caps affect residency only. Oversized or evicted variants still produce the same
@@ -352,11 +353,36 @@ pub struct PaintProgramCache {
 
 impl PaintProgramCache {
     pub fn new(prepared: &PreparedScene, fonts: &crate::Fonts) -> Option<Self> {
+        if !prepared.temporal_samples_invariant() {
+            return None;
+        }
         let layout = LayoutCache::new(prepared, fonts)?;
         let artifact = prepared.artifact();
         let plan = crate::eval::EvalPlan::new(&artifact.exprs);
+        // A sampled background has multiple consumers/weights, not one current-frame slot.
+        // Keep the proven-static sample subtrees literal; props/viewport/host changes invalidate
+        // the whole key. Unrelated animated branches can still bind ordinary paint parameters.
+        let mut sampled = BTreeSet::new();
+        let mut pending: Vec<_> = prepared
+            .dependencies()
+            .temporal_nodes()
+            .iter()
+            .map(|n| n.node)
+            .collect();
+        while let Some(id) = pending.pop() {
+            if !sampled.insert(id) {
+                continue;
+            }
+            let node = &artifact.nodes[id.0 as usize];
+            pending.extend(
+                &artifact.node_children[node.children.start as usize..node.children.end as usize],
+            );
+        }
         let mut expressions = BTreeMap::new();
-        for node in &artifact.nodes {
+        for (index, node) in artifact.nodes.iter().enumerate() {
+            if sampled.contains(&crate::NodeId(index as u32)) {
+                continue;
+            }
             let binding = |property: &str| {
                 node.styles
                     .iter()
@@ -545,6 +571,7 @@ impl PaintProgramCache {
                     snapshot.bindings.accepts(&inputs)
                 });
                 if let Some(index) = found {
+                    self.variants[index].sample_clocks.validate(ctx)?;
                     let snapshot = self.variants.remove(index).expect("resident variant");
                     let (program, paint_frame) = if snapshot
                         .values
@@ -642,6 +669,7 @@ impl PaintProgramCache {
                 }
                 self.template_bytes += bytes;
                 self.variants.push_back(Snapshot {
+                    sample_clocks: super::temporal::SampleClockChecks::new(&self.prepared, &tree),
                     values,
                     program: program.clone(),
                     boxes: boxes.clone(),

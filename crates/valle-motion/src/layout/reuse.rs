@@ -40,6 +40,8 @@ pub(super) fn eligible(artifact: &SceneArtifact, types: &[Option<crate::expr::Ex
             node.kind,
             NodeKind::Group
                 | NodeKind::Box
+                | NodeKind::Shutter { .. }
+                | NodeKind::Echo { .. }
                 | NodeKind::Text {
                     text: TextValue::Static { .. },
                     per_unit: None,

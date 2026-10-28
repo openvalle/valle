@@ -549,6 +549,146 @@ fn unsupported_opacity_consumers_do_not_enter_rectangular_paint_binding() {
 }
 
 #[test]
+fn static_temporal_scopes_bind_only_unrelated_current_frame_paint() {
+    for (open, close) in [
+        ("<Shutter samples={16} angle={180}>", "</Shutter>"),
+        ("<Echo count={8} delay={0.05} decay={0.7}>", "</Echo>"),
+    ] {
+        let text = format!(
+            r##"export const controls=({{props:{{size:number({{default:80,min:1,max:300}})}}}});
+            export default function Demo(props){{const t=useCurrentTime();return <Scene style={{{{width:640,height:360}}}}>
+            <View style={{{{width:200,height:100,rotate:'8deg',opacity:0.7}}}}>{open}
+            <View style={{{{width:props.size,height:40,backgroundColor:interpolate(props.size,[1,300],['#ffffff80','#33445580']),borderRadius:5,boxShadow:'1px 2px 3px #22334480',filter:'blur(1px)'}}}}/>
+            <Text style={{{{fontSize:18,color:'#ffffff80'}}}}>Sampled text</Text>{close}</View>
+            <View style={{{{position:'absolute',left:10,top:200,width:80,height:40,backgroundColor:interpolate(t.seconds,[0,2],['#113322','#ddccaa'])}}}}/>
+            </Scene>}}"##
+        );
+        check(&text, true);
+        let stats = guarded_sequence(&text, &[0, 15, 63, 30, 1, 0, 59, 30], true);
+        assert!(stats.iter().all(|s| s.parameter_slots == 1));
+        assert!(
+            stats[1..]
+                .iter()
+                .all(|s| s.reused_template && !s.emitted_program)
+        );
+    }
+}
+
+#[test]
+fn temporal_templates_guard_paints_shared_with_static_exposures() {
+    let text = r##"export default function Demo(){const t=useCurrentTime();return <Scene style={{width:640,height:360}}>
+        <Shutter samples={8} angle={180}><View style={{width:80,height:40,backgroundColor:'red'}}/></Shutter>
+        <Echo count={8} delay={0.05} decay={0.7}><View style={{width:80,height:40,backgroundColor:'red'}}/></Echo>
+        <View style={{position:'absolute',top:100,width:80,height:40,backgroundColor:interpolate(t.seconds,[0,1,2],['red','blue','red'])}}/>
+        </Scene>}"##;
+    let stats = guarded_sequence(text, &[0, 15, 30, 63, 0, 30, 15, 63], true);
+    assert!(stats[4..].iter().all(|s| s.reused_template));
+}
+
+#[test]
+fn temporal_templates_reject_time_dependent_sample_contents_and_ancestors() {
+    for (open, close) in [
+        ("<Shutter samples={8} angle={180}>", "</Shutter>"),
+        ("<Echo count={8} delay={0.05} decay={0.7}>", "</Echo>"),
+    ] {
+        for (parent, child) in [
+            (
+                "",
+                "backgroundColor:interpolate(t.seconds,[0,2],['red','blue'])",
+            ),
+            ("", "opacity:t.progress"),
+            (
+                "color:interpolate(t.seconds,[0,2],['red','blue'])",
+                "backgroundColor:'white'",
+            ),
+            ("", "opacity:t.clipSeconds"),
+        ] {
+            let text = format!(
+                "export default function Demo(){{const t=useCurrentTime();return <Scene><View style={{{{{parent}}}}}>{open}<View style={{{{width:80,height:40,{child}}}}}/><Text>Inherited</Text>{close}</View></Scene>}}"
+            );
+            let artifact = compile_motion(&text).unwrap().artifact;
+            let scene = valle_motion::prepare_scene(&artifact).unwrap();
+            assert!(PaintProgramCache::new(&scene, &fonts()).is_none(), "{text}");
+        }
+    }
+}
+
+#[test]
+fn inactive_temporal_scopes_keep_current_frame_parameter_binding() {
+    for (open, close) in [
+        ("<Shutter samples={1} angle={0}>", "</Shutter>"),
+        ("<Echo count={8} delay={0.05} decay={0}>", "</Echo>"),
+    ] {
+        let text = format!(
+            "export default function Demo(){{const t=useCurrentTime();return <Scene>{open}<View style={{{{width:80,height:40,backgroundColor:interpolate(t.seconds,[0,2],['red','blue'])}}}}/>{close}</Scene>}}"
+        );
+        let stats = guarded_sequence(&text, &[0, 15, 63, 30, 1, 0], true);
+        assert!(stats.iter().all(|s| s.parameter_slots == 1));
+        assert!(stats[1..].iter().all(|s| s.reused_template));
+    }
+}
+
+#[test]
+fn temporal_template_hits_preserve_sample_clock_errors_and_hidden_scope_pruning() {
+    for (open, close, at) in [
+        (
+            "<Shutter key=\"sample\" samples={8} angle={180}>",
+            "</Shutter>",
+            i64::MAX,
+        ),
+        (
+            "<Echo key=\"sample\" count={8} delay={0.05} decay={0.7}>",
+            "</Echo>",
+            i64::MIN,
+        ),
+    ] {
+        for hidden in [false, true] {
+            let text = format!(
+                "export default function Demo(){{return <Scene><View style={{{{opacity:{}}}}}>{open}<View style={{{{width:80,height:40,backgroundColor:'red'}}}}/>{close}</View></Scene>}}",
+                if hidden { 0 } else { 1 }
+            );
+            let artifact = compile_motion(&text).unwrap().artifact;
+            let scene = valle_motion::prepare_scene(&artifact).unwrap();
+            let fonts = Fonts::default();
+            let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
+            let mut cache = PaintProgramCache::new(&scene, &fonts).unwrap();
+            let mut ctx =
+                valle_motion::motion_context_at_frame(30, 60, FrameRate::new(30, 1).unwrap())
+                    .unwrap();
+            let viewport = Viewport::new((640, 360));
+            let prepare = |cache: &mut PaintProgramCache, ctx: &valle_motion::MotionContext| {
+                cache.prepare(
+                    ctx,
+                    &props,
+                    viewport,
+                    None,
+                    None,
+                    &|_: &str| None,
+                    None,
+                    Default::default(),
+                )
+            };
+            prepare(&mut cache, &ctx).unwrap();
+            assert!(prepare(&mut cache, &ctx).unwrap().stats.reused_template);
+            // Public contexts can carry a sample output time whose subframe arithmetic fails.
+            // A previously built template must preserve the full path's validation behavior.
+            ctx.at = valle_timeline::RationalTime::new(at, 1).unwrap();
+            let hot = prepare(&mut cache, &ctx);
+            let cold = prepare(&mut PaintProgramCache::new(&scene, &fonts).unwrap(), &ctx);
+            if hidden {
+                assert!(hot.unwrap().stats.reused_template);
+                assert!(cold.is_ok());
+            } else {
+                assert_eq!(
+                    hot.err().unwrap().to_string(),
+                    cold.err().unwrap().to_string()
+                );
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "isolated preparation benchmark; run optimized and without concurrent builds"]
 fn preparation_template_benchmark() {
     use std::{hint::black_box, time::Instant};
