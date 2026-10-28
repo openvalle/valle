@@ -11,8 +11,18 @@ use skia_safe::{
 use std::cell::RefCell;
 use valle_engine::resource::Extent2d;
 
-const SOURCE: &str = include_str!("../../../../valle-draw/assets/shaders/scene3ddof.sksl");
-thread_local! { static EFFECT: RefCell<Option<RuntimeEffect>> = const { RefCell::new(None) }; }
+const SOURCE: &str = concat!(
+    include_str!("../../../../valle-draw/assets/shaders/scene3ddofcommon.sksl"),
+    include_str!("../../../../valle-draw/assets/shaders/scene3ddof.sksl")
+);
+const CLASSIFY: &str = concat!(
+    include_str!("../../../../valle-draw/assets/shaders/scene3ddofcommon.sksl"),
+    include_str!("../../../../valle-draw/assets/shaders/scene3ddofclassify.sksl")
+);
+const DILATE: &str = include_str!("../../../../valle-draw/assets/shaders/scene3ddofdilate.sksl");
+thread_local! {
+    static EFFECT: RefCell<Option<[RuntimeEffect; 3]>> = const { RefCell::new(None) };
+}
 
 #[derive(Clone)]
 pub(crate) struct Scene3dDofInput {
@@ -21,6 +31,7 @@ pub(crate) struct Scene3dDofInput {
     depth: Image,
     input_region: Region,
     uniforms: [f32; 13],
+    classify_tiles: bool,
 }
 
 impl Scene3dDofInput {
@@ -34,10 +45,12 @@ impl Scene3dDofInput {
         depth: Image,
         dof: valle_engine::motion::scene3d::DepthOfFieldState,
         far: f32,
+        classify_tiles: bool,
     ) -> Self {
         let (width, height) = (extent.width(), extent.height());
         Self {
             extent,
+            classify_tiles,
             color,
             depth,
             input_region: Region::full(width as usize, height as usize),
@@ -177,8 +190,16 @@ impl Scene3dDofInput {
         };
         let [x0, y0, x1, y1] = expand(visible);
         let [nx0, ny0, nx1, ny1] = expand(near);
+        let classify_tiles = might_have_sharp_depth(
+            focus_distance,
+            max_blur_radius,
+            camera_depth
+                .iter()
+                .map(|&z| if z == f32::MAX { far } else { z }),
+        );
         Ok(Self {
             extent,
+            classify_tiles,
             color,
             depth,
             input_region,
@@ -205,6 +226,20 @@ impl Scene3dDofInput {
     }
 }
 
+/// An inexpensive opportunity estimate, not a correctness guard: a false estimate runs
+/// the complete original gather. It avoids two extra passes on wholly defocused scenes.
+pub(crate) fn might_have_sharp_depth(
+    focus: f32,
+    radius: f32,
+    depths: impl Iterator<Item = f32>,
+) -> bool {
+    let (min, max) = depths.fold((f32::INFINITY, 0.0_f32), |(min, max), z| {
+        (min.min(z), max.max(z))
+    });
+    let coc = |z: f32| (radius * (1.0 - focus / z).abs()).min(radius);
+    (min <= focus && max >= focus) || coc(min).min(coc(max)) < 0.5
+}
+
 fn grow(bounds: &mut Option<[u32; 4]>, x: u32, y: u32) {
     *bounds = Some(match *bounds {
         Some([x0, y0, x1, y1]) => [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
@@ -221,26 +256,37 @@ pub(super) fn render(
             "deferred Scene3D DOF requires a GPU surface".into(),
         ));
     }
-    let mut scratch = surfaces.scratch(&[input.extent, input.extent])?;
+    let grid = Extent2d::new(
+        input.extent.width().div_ceil(16),
+        input.extent.height().div_ceil(16),
+    )
+    .map_err(|_| DrawError::Internal("Scene3D DOF tile extent".into()))?;
+    let extents = [input.extent, input.extent, grid, grid];
+    let mut scratch = surfaces.scratch(&extents[..if input.classify_tiles { 4 } else { 2 }])?;
     EFFECT.with(|cell| {
         let mut effect = cell.borrow_mut();
         if effect.is_none() {
-            *effect = Some(
-                RuntimeEffect::make_for_shader(SOURCE, None).map_err(|message| {
+            let compile = |source| {
+                RuntimeEffect::make_for_shader(source, None).map_err(|message| {
                     DrawError::ShaderCompile {
                         uri: "builtin://scene3d-dof".into(),
                         message,
                     }
-                })?,
-            );
+                })
+            };
+            *effect = Some([compile(SOURCE)?, compile(CLASSIFY)?, compile(DILATE)?]);
         }
-        let effect = effect.as_ref().unwrap();
+        let [effect, classify, dilate] = effect.as_ref().unwrap();
         let bytes = input
             .uniforms
             .iter()
             .flat_map(|v| v.to_ne_bytes())
             .collect::<Vec<_>>();
-        if effect.uniform_size() != bytes.len() || effect.children().len() != 2 {
+        if effect.uniform_size() != bytes.len()
+            || effect.children().len() != 3
+            || classify.uniform_size() != bytes.len()
+            || classify.children().len() != 2
+        {
             return Err(DrawError::Internal(
                 "Scene3D DOF shader ABI mismatch".into(),
             ));
@@ -258,11 +304,47 @@ pub(super) fn render(
                 .ok_or_else(|| DrawError::Surface("Scene3D DOF input shader".into()))
         });
         let [color, depth] = children;
-        let shader = effect
-            .make_shader(Data::new_copy(&bytes), &[color?, depth?], None)
-            .ok_or_else(|| DrawError::Surface("Scene3D DOF shader instantiation".into()))?;
+        let (color, depth) = (color?, depth?);
         let mut paint = Paint::default();
         paint.set_blend_mode(BlendMode::Src);
+        let sharp = if input.classify_tiles {
+            let classifier = classify
+                .make_shader(
+                    Data::new_copy(&bytes),
+                    &[color.clone(), depth.clone()],
+                    None,
+                )
+                .ok_or_else(|| DrawError::Surface("Scene3D DOF classifier".into()))?;
+            paint.set_shader(classifier);
+            scratch.surface_mut(2)?.canvas().draw_paint(&paint);
+            let raw_shader = |image: Image| {
+                image
+                    .to_raw_shader(
+                        (TileMode::Decal, TileMode::Decal),
+                        SamplingOptions::new(FilterMode::Nearest, MipmapMode::None),
+                        None,
+                    )
+                    .map(ChildPtr::Shader)
+                    .ok_or_else(|| DrawError::Surface("Scene3D DOF tile shader".into()))
+            };
+            let classification = raw_shader(scratch.surface_mut(2)?.image_snapshot())?;
+            let halo = ((input.uniforms[3].max(1.0).ceil() as u32 + 1).div_ceil(16)) as f32;
+            let tile_bytes: Vec<_> = [grid.width() as f32, grid.height() as f32, halo]
+                .iter()
+                .flat_map(|v| v.to_ne_bytes())
+                .collect();
+            let expanded = dilate
+                .make_shader(Data::new_copy(&tile_bytes), &[classification], None)
+                .ok_or_else(|| DrawError::Surface("Scene3D DOF foreground support".into()))?;
+            paint.set_shader(expanded);
+            scratch.surface_mut(3)?.canvas().draw_paint(&paint);
+            raw_shader(scratch.surface_mut(3)?.image_snapshot())?
+        } else {
+            ChildPtr::Shader(skia_safe::shaders::color(skia_safe::Color::TRANSPARENT))
+        };
+        let shader = effect
+            .make_shader(Data::new_copy(&bytes), &[color, depth, sharp], None)
+            .ok_or_else(|| DrawError::Surface("Scene3D DOF shader instantiation".into()))?;
         paint.set_shader(shader);
         let raw = scratch.surface_mut(0)?;
         raw.canvas().draw_paint(&paint);
@@ -293,6 +375,27 @@ pub(super) fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wholly_defocused_depths_do_not_need_classification() {
+        assert!(!might_have_sharp_depth(
+            3.0,
+            16.0,
+            [4.25, 9.0, 100.0].into_iter()
+        ));
+        assert!(might_have_sharp_depth(
+            9.0,
+            16.0,
+            [4.25, 9.0, 100.0].into_iter()
+        ));
+        assert!(might_have_sharp_depth(3.0, 16.0, [1.0, 5.0].into_iter()));
+        assert!(might_have_sharp_depth(3.0, 0.4, [9.0, 100.0].into_iter()));
+        assert!(!might_have_sharp_depth(
+            20.0,
+            16.0,
+            [1.0, 2.0, 3.0].into_iter()
+        ));
+    }
 
     #[test]
     fn depth_upload_owns_exact_little_endian_bits_including_clear_depth() {
@@ -363,6 +466,12 @@ mod tests {
     fn depth_gather_shader_compiles_without_gpu_and_matches_the_host_abi() {
         let effect = RuntimeEffect::make_for_shader(SOURCE, None).unwrap();
         assert_eq!(effect.uniform_size(), 13 * std::mem::size_of::<f32>());
-        assert_eq!(effect.children().len(), 2);
+        assert_eq!(effect.children().len(), 3);
+        let classify = RuntimeEffect::make_for_shader(CLASSIFY, None).unwrap();
+        assert_eq!(classify.uniform_size(), 13 * size_of::<f32>());
+        assert_eq!(classify.children().len(), 2);
+        let dilate = RuntimeEffect::make_for_shader(DILATE, None).unwrap();
+        assert_eq!(dilate.uniform_size(), 3 * size_of::<f32>());
+        assert_eq!(dilate.children().len(), 1);
     }
 }

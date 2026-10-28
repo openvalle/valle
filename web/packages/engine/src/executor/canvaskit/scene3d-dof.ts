@@ -62,12 +62,13 @@ export class CanvasKitScene3dDof {
   private readonly builtins: CanvasKitBuiltinRuntime;
   private surface: Surface | null = null;
   private extent = "";
+  private tiles: [Surface, Surface] | null = null;
   constructor(
     private readonly ck: CanvasKit,
     private readonly context: GrDirectContext,
   ) {
     this.builtins = new CanvasKitBuiltinRuntime(ck);
-    this.builtins.admit(["scene3dDof"]);
+    this.builtins.admit(["scene3dDof", "scene3dDofClassify", "scene3dDofDilate"]);
   }
 
   render(input: DeferredScene3dDof): Image {
@@ -102,9 +103,16 @@ export class CanvasKitScene3dDof {
       packed: Shader | null = null,
       shader: Shader | null = null;
     const paint = new ck.Paint();
+    const temporary: { delete(): void }[] = [];
+    const own = <T extends { delete(): void }>(value: T): T => {
+      temporary.push(value);
+      return value;
+    };
     try {
       const extent = `${input.width}x${input.height}`;
       if (extent !== this.extent) {
+        this.tiles?.forEach((tile) => tile.delete());
+        this.tiles = null;
         this.surface?.delete();
         this.surface = null;
         this.extent = "";
@@ -114,6 +122,19 @@ export class CanvasKitScene3dDof {
           height: input.height,
         });
         if (!this.surface) throw new Error("Scene3D DOF output allocation failed");
+        const tileInfo = {
+          ...info,
+          width: Math.ceil(input.width / 16),
+          height: Math.ceil(input.height / 16),
+        };
+        const first = ck.MakeRenderTarget(this.context, tileInfo);
+        const second = ck.MakeRenderTarget(this.context, tileInfo);
+        if (!first || !second) {
+          first?.delete();
+          second?.delete();
+          throw new Error("Scene3D DOF tile allocation failed");
+        }
+        this.tiles = [first, second];
         this.extent = extent;
       }
       source = color.makeShaderOptions(
@@ -130,7 +151,59 @@ export class CanvasKitScene3dDof {
         ck.MipmapMode.None,
         [0.25, 0, input.x, 0, 1, input.y, 0, 0, 1],
       );
-      shader = this.builtins.shader("scene3dDof", input.uniforms, [source, packed], true);
+      paint.setBlendMode(ck.BlendMode.Src);
+      // False only disables this optimization; the full original gather still executes.
+      const depths = new Float32Array(
+        input.depth.buffer,
+        input.depth.byteOffset,
+        input.depth.byteLength / 4,
+      );
+      let minDepth = Infinity,
+        maxDepth = 0;
+      for (let z of depths) {
+        if (z === 3.4028234663852886e38) z = input.uniforms[12]!;
+        minDepth = Math.min(minDepth, z);
+        maxDepth = Math.max(maxDepth, z);
+      }
+      const focus = input.uniforms[2]!,
+        radius = input.uniforms[3]!;
+      const coc = (z: number) => Math.min(radius * Math.abs(1 - focus / z), radius);
+      const classify =
+        (minDepth <= focus && maxDepth >= focus) || Math.min(coc(minDepth), coc(maxDepth)) < 0.5;
+      let sharp: Shader;
+      if (classify) {
+        const classifier = own(
+          this.builtins.shader("scene3dDofClassify", input.uniforms, [source, packed]),
+        );
+        paint.setShader(classifier);
+        this.tiles![0].getCanvas().drawPaint(paint);
+        const tileShader = (surface: Surface) =>
+          own(
+            own(surface.makeImageSnapshot()).makeShaderOptions(
+              ck.TileMode.Decal,
+              ck.TileMode.Decal,
+              ck.FilterMode.Nearest,
+              ck.MipmapMode.None,
+            ),
+          );
+        const expanded = own(
+          this.builtins.shader(
+            "scene3dDofDilate",
+            [
+              Math.ceil(input.width / 16),
+              Math.ceil(input.height / 16),
+              Math.ceil((Math.ceil(Math.max(1, input.uniforms[3]!)) + 1) / 16),
+            ],
+            [tileShader(this.tiles![0])],
+          ),
+        );
+        paint.setShader(expanded);
+        this.tiles![1].getCanvas().drawPaint(paint);
+        sharp = tileShader(this.tiles![1]);
+      } else {
+        sharp = own(ck.Shader.MakeColor(ck.TRANSPARENT, ck.ColorSpace.SRGB));
+      }
+      shader = this.builtins.shader("scene3dDof", input.uniforms, [source, packed, sharp], true);
       paint.setBlendMode(ck.BlendMode.Src);
       paint.setShader(shader);
       this.surface!.getCanvas().drawPaint(paint);
@@ -138,6 +211,7 @@ export class CanvasKitScene3dDof {
       return this.surface!.makeImageSnapshot();
     } finally {
       paint.delete();
+      temporary.reverse().forEach((value) => value.delete());
       shader?.delete();
       source?.delete();
       packed?.delete();
@@ -147,6 +221,8 @@ export class CanvasKitScene3dDof {
   }
 
   dispose(): void {
+    this.tiles?.forEach((tile) => tile.delete());
+    this.tiles = null;
     this.surface?.delete();
     this.surface = null;
     this.extent = "";

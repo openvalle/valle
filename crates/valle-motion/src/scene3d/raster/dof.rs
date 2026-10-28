@@ -19,6 +19,7 @@ const DIRECTIONS: [(f32, f32); 8] = [
 const MAIN_RINGS: [f32; 4] = [0.125, 0.25, 0.5, 1.0];
 const NEAR_RING_WEIGHTS: [f32; 4] = [4.0, 2.0, 1.0, 0.5];
 const NEAR_WEIGHT_SUM: f32 = 8.0 * (4.0 + 2.0 + 1.0 + 0.5);
+mod tiles;
 
 #[derive(Clone, Copy)]
 struct NearTap {
@@ -97,6 +98,10 @@ pub(super) fn apply(frame: &mut RasterFrame, camera: &CameraFrameState, workers:
     }
     let width = frame.width as usize;
     let height = frame.height as usize;
+    let tiles = tiles::Activity::new(frame, dof, camera.far);
+    if !tiles.any() {
+        return;
+    }
     let mut near_bounds: Option<(usize, usize, usize, usize)> = None;
     let mut visible_bounds: Option<(usize, usize, usize, usize)> = None;
     for (index, pixel) in frame.premul_rgba16f.as_chunks::<4>().0.iter().enumerate() {
@@ -180,7 +185,7 @@ pub(super) fn apply(frame: &mut RasterFrame, camera: &CameraFrameState, workers:
         for (row, pixels) in rows.chunks_exact_mut(stride).enumerate() {
             let y = first_y + row;
             for x in min_x..=max_x {
-                if !reach.covered(x, y) {
+                if !tiles.at(x, y) || !reach.covered(x, y) {
                     continue;
                 }
                 let index = y * width + x;
@@ -664,6 +669,50 @@ mod tests {
                         actual, expected,
                         "radius={radius} focus={focus} workers={workers}"
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn focused_tiles_preserve_original_f16_bits() {
+        let mut source = fixture(131, 67, true);
+        // Covered and transparent samples, partial tiles, depths on both sides of focus.
+        for (i, z) in source.depth.iter_mut().enumerate() {
+            *z = [4.49, 4.5, 4.51][i % 3];
+        }
+        for radius in [0.4, 6.0, 16.0] {
+            let camera = camera(4.5, radius);
+            let tiles = tiles::Activity::new(&source, camera.depth_of_field.unwrap(), camera.far);
+            assert!(!tiles.any());
+            let mut expected = source.clone();
+            reference::apply(&mut expected, &camera);
+            assert_eq!(expected, source);
+            let mut actual = source.clone();
+            apply(&mut actual, &camera, 4);
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn focused_tile_keeps_foreground_spill_from_neighbor_and_rounding_boundaries() {
+        for radius in [0.49, 0.5, 0.75, 1.5, 6.0, 15.5, 16.0] {
+            for foreground_x in [0, 15, 16, 31, 32, 64] {
+                let mut source = fixture(65, 49, true);
+                source.depth.fill(4.5);
+                for y in 14..18 {
+                    let i = y * 65 + foreground_x;
+                    source.depth[i] = 1.0;
+                    source.premul_rgba16f[i * 4..i * 4 + 4]
+                        .copy_from_slice(&encode([0.5, 0.1, 0.0, 0.5]));
+                }
+                let camera = camera(4.5, radius);
+                let mut expected = source.clone();
+                reference::apply(&mut expected, &camera);
+                for workers in [1, 4] {
+                    let mut actual = source.clone();
+                    apply(&mut actual, &camera, workers);
+                    assert_eq!(actual, expected, "r={radius} x={foreground_x} n={workers}");
                 }
             }
         }

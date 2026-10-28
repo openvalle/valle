@@ -1734,6 +1734,16 @@ impl<'arena> SurfaceFrame<'arena> {
                 depth.ok_or_else(|| SurfaceError::Scene3dGpu("missing GPU depth".into()))?,
                 dof,
                 input.frame.camera.far,
+                super::scene3d_dof::might_have_sharp_depth(
+                    dof.focus_distance,
+                    dof.max_blur_radius,
+                    input
+                        .geometry
+                        .vertices
+                        .iter()
+                        .map(|v| 1.0 / v.inv_z)
+                        .chain(std::iter::once(input.frame.camera.far)),
+                ),
             );
             super::scene3d_dof::render(&input, self)
                 .map_err(|e| SurfaceError::Scene3dGpu(e.to_string()))?

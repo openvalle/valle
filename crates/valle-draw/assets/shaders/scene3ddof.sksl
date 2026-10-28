@@ -1,12 +1,5 @@
 // Same ordered depth-aware gathers as valle-motion/scene3d/raster/dof.rs.
-uniform shader source;
-uniform shader packedDepth;
-uniform float2 size;
-uniform float focus;
-uniform float maxRadius;
-uniform float4 visibleBounds;
-uniform float4 nearBounds;
-uniform float farPlane;
+uniform shader sharpTiles;
 
 float2 directionAt(int i) {
     if (i == 0) return float2(1,0);
@@ -24,16 +17,6 @@ const float4 weights = float4(4.0,2.0,1.0,0.5);
 bool inside(float2 p, float4 bounds) {
     return p.x >= bounds.x && p.y >= bounds.y && p.x < bounds.z && p.y < bounds.w;
 }
-float depthAt(float2 p) {
-    float4 b = floor(float4(packedDepth.eval(p + 0.5)) * 255.0 + 0.5);
-    float exponent = b.w * 2.0 + floor(b.z / 128.0);
-    float mantissa = mod(b.z,128.0)*65536.0 + b.y*256.0 + b.x;
-    // Raw CPU depth uses f32::MAX for uncovered pixels; it is not geometry.
-    if (exponent == 254.0 && mantissa == 8388607.0) return farPlane;
-    return exponent == 0.0 ? (mantissa / 8388608.0) * exp2(-126.0)
-        : (1.0 + mantissa / 8388608.0) * exp2(exponent - 127.0);
-}
-float coc(float depth) { return min(maxRadius * abs(1.0 - focus / depth), maxRadius); }
 float linear(float v) { return v <= 0.04045 ? v / 12.92 : pow((v+0.055)/1.055,2.4); }
 float srgb(float v) { return v <= 0.0031308 ? v*12.92 : 1.055*pow(v,1.0/2.4)-0.055; }
 float4 decode(float4 c) {
@@ -52,7 +35,7 @@ float2 rounded(float2 p) { return sign(p)*floor(abs(p)+0.5); }
 half4 main(float2 xy) {
     float2 p = floor(xy);
     float4 raw = float4(source.eval(p+0.5));
-    if (!inside(p,visibleBounds)) return half4(raw);
+    if (!inside(p,visibleBounds) || sharpTiles.eval(floor(p / 16.0) + 0.5).r > 0.5) return half4(raw);
     float centerDepth = depthAt(p);
     float radius = coc(centerDepth);
     float tolerance = max(centerDepth*0.005,0.005);

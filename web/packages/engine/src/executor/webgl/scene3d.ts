@@ -3,7 +3,14 @@ import { supportsScene3dGpu } from "../../runtime/compositor/scene3d-gpu-request
 import { preserveState, type CanvasKitGpuHost } from "./gpu-state.ts";
 import type { Scene3dGpuPacket, Scene3dGpuTexture } from "./scene3d-input.ts";
 import shaders from "./scene3d/shaders.json";
-import { scene3dCopyFragment, scene3dDofFragment, scene3dDecodeFragment } from "./scene3d/dof.ts";
+import {
+  scene3dCopyFragment,
+  scene3dDofFragment,
+  scene3dDecodeFragment,
+  scene3dClassifyFragment,
+  scene3dDilateFragment,
+  needsDofTiles,
+} from "./scene3d/dof.ts";
 export type Scene3dGpuHost = CanvasKitGpuHost;
 
 type Vec3 = readonly [number, number, number];
@@ -68,7 +75,14 @@ export interface Scene3dGpuRequest {
 }
 
 type Program = { program: WebGLProgram; locations: Map<string, WebGLUniformLocation | null> };
-type ProgramName = keyof typeof shaders | "copy" | "dof" | "decode";
+const postprocess = {
+  copy: scene3dCopyFragment,
+  dof: scene3dDofFragment,
+  decode: scene3dDecodeFragment,
+  classify: scene3dClassifyFragment,
+  dilate: scene3dDilateFragment,
+};
+type ProgramName = keyof typeof shaders | keyof typeof postprocess;
 type ShaderStage = {
   source: string;
   textures: Record<string, number>;
@@ -84,10 +98,16 @@ type Targets = {
   resolved?: WebGLFramebuffer;
   decoded?: WebGLTexture;
   decode?: WebGLFramebuffer;
+  classifications?: WebGLTexture;
+  classify?: WebGLFramebuffer;
+  sharpTiles?: WebGLTexture;
+  dilate?: WebGLFramebuffer;
   textures: WebGLTexture[];
   framebuffers: WebGLFramebuffer[];
   bytes: number;
 };
+const tileBytes = (width: number, height: number, radius: number) =>
+  radius > 0 ? Math.ceil(width / 16) * Math.ceil(height / 16) * 16 : 0;
 const baseBytes = 1024 + 16 + 32; // DFG, empty texel and two uniform blocks.
 const quad = `#version 300 es
 precision highp float;precision highp int;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0.,1.);}`;
@@ -174,7 +194,9 @@ export class GpuScene3D {
   /** Peak owned texture/upload storage for admission, before fetching an uncached atlas. */
   workingBytes(packet: Scene3dGpuPacket): number {
     const pixels = packet.width * packet.height;
-    const targets = pixels * (24 + (packet.blend ? 12 : 0) + (packet.radius > 0 ? 16 : 0));
+    const targets =
+      pixels * (24 + (packet.blend ? 12 : 0) + (packet.radius > 0 ? 16 : 0)) +
+      tileBytes(packet.width, packet.height, packet.radius);
     const atlas = packet.lit ? packet.atlas.bytes : (this.atlas?.bytes ?? 0);
     const shadows = packet.shadows.length
       ? packet.shadows.length * 1024 * 1024 * 8
@@ -190,15 +212,10 @@ export class GpuScene3D {
     const cached = this.programs.get(name);
     if (cached) return cached;
     const started = performance.now();
-    const source = name === "copy" || name === "dof" || name === "decode" ? null : shaders[name];
+    const source = name in shaders ? shaders[name as keyof typeof shaders] : null;
     const p = this.compileProgram(
       source?.vertex.source ?? quad,
-      source?.fragment.source ??
-        (name === "copy"
-          ? scene3dCopyFragment
-          : name === "dof"
-            ? scene3dDofFragment
-            : scene3dDecodeFragment),
+      source?.fragment.source ?? postprocess[name as keyof typeof postprocess],
     );
     if (source) {
       const gl = this.gl;
@@ -351,7 +368,9 @@ export class GpuScene3D {
         opaque,
         textures,
         framebuffers,
-        bytes: width * height * (24 + (blend ? 12 : 0) + (radius > 0 ? 16 : 0)),
+        bytes:
+          width * height * (24 + (blend ? 12 : 0) + (radius > 0 ? 16 : 0)) +
+          tileBytes(width, height, radius),
       };
       if (blend) {
         targets.resolvedColor = allocate(gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
@@ -363,6 +382,22 @@ export class GpuScene3D {
         targets.decoded = allocate(gl.RGBA32F, gl.RGBA, gl.FLOAT);
         targets.decode = this.framebuffer(targets.decoded);
         framebuffers.push(targets.decode);
+        const tile = () => {
+          const value = this.texture(
+            Math.ceil(width / 16),
+            Math.ceil(height / 16),
+            gl.RGBA16F,
+            gl.RGBA,
+            gl.HALF_FLOAT,
+          );
+          textures.push(value);
+          return value;
+        };
+        targets.classifications = tile();
+        targets.classify = this.framebuffer(targets.classifications);
+        targets.sharpTiles = tile();
+        targets.dilate = this.framebuffer(targets.sharpTiles);
+        framebuffers.push(targets.classify, targets.dilate);
       }
     } catch (error) {
       for (const texture of textures) gl.deleteTexture(texture);
@@ -536,6 +571,34 @@ export class GpuScene3D {
       }
       const color = packet.blend ? this.targets!.resolvedColor! : this.targets!.color;
       const depth = packet.blend ? this.targets!.resolvedDepth! : this.targets!.depth;
+      const classifyDof = needsDofTiles(packet);
+      if (classifyDof) {
+        const gridX = Math.ceil(packet.width / 16),
+          gridY = Math.ceil(packet.height / 16);
+        const classify = this.program("classify");
+        gl.viewport(0, 0, gridX, gridY);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets!.classify!);
+        gl.useProgram(classify.program);
+        this.bind(depth, 0);
+        gl.uniform1i(this.location(classify, "depths"), 0);
+        gl.uniform2f(this.location(classify, "size"), packet.width, packet.height);
+        gl.uniform1f(this.location(classify, "focus"), packet.focus);
+        gl.uniform1f(this.location(classify, "maxRadius"), packet.radius);
+        gl.uniform1ui(this.location(classify, "precisionBarrier"), 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        const dilate = this.program("dilate");
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets!.dilate!);
+        gl.useProgram(dilate.program);
+        this.bind(this.targets!.classifications!, 0);
+        gl.uniform1i(this.location(dilate, "classification"), 0);
+        gl.uniform2i(this.location(dilate, "grid"), gridX, gridY);
+        gl.uniform1i(
+          this.location(dilate, "halo"),
+          Math.ceil((Math.ceil(Math.max(1, packet.radius)) + 1) / 16),
+        );
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.viewport(0, 0, packet.width, packet.height);
+      }
       if (packet.radius > 0) {
         const decode = this.program("decode");
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets!.decode!);
@@ -551,15 +614,18 @@ export class GpuScene3D {
       this.bind(packet.radius > 0 ? this.targets!.decoded! : color, 0);
       this.bind(depth, 1);
       this.bind(color, 2);
+      if (packet.radius > 0) this.bind(this.targets!.sharpTiles!, 3);
       for (const [name, unit] of [
         ["source", 0],
         ["depths", 1],
         ["rawSource", 2],
+        ["sharpTiles", 3],
       ] as const)
         gl.uniform1i(this.location(output, name), unit);
       gl.uniform1ui(this.location(output, "precisionBarrier"), 0);
       gl.uniform2f(this.location(output, "size"), packet.width, packet.height);
       gl.uniform1i(this.location(output, "hasDof"), packet.radius > 0 ? 1 : 0);
+      gl.uniform1i(this.location(output, "classifyDof"), classifyDof ? 1 : 0);
       gl.uniform1f(this.location(output, "focus"), packet.focus);
       gl.uniform1f(this.location(output, "maxRadius"), packet.radius);
       const margin = Math.ceil(packet.radius) + 2;

@@ -6,6 +6,9 @@ import filmGrainSource from "../../../../../../crates/valle-draw/assets/shaders/
 import lensDistortionSource from "../../../../../../crates/valle-draw/assets/shaders/lensdistortion.sksl" with { type: "text" };
 import noiseDisplacementSource from "../../../../../../crates/valle-draw/assets/shaders/noisedisplacement.sksl" with { type: "text" };
 import scene3dDofSource from "../../../../../../crates/valle-draw/assets/shaders/scene3ddof.sksl" with { type: "text" };
+import scene3dDofCommon from "../../../../../../crates/valle-draw/assets/shaders/scene3ddofcommon.sksl" with { type: "text" };
+import scene3dDofClassifySource from "../../../../../../crates/valle-draw/assets/shaders/scene3ddofclassify.sksl" with { type: "text" };
+import scene3dDofDilate from "../../../../../../crates/valle-draw/assets/shaders/scene3ddofdilate.sksl" with { type: "text" };
 import chromaticAberrationSource from "../../../../../../crates/valle-draw/assets/shaders/chromaticaberration.sksl" with { type: "text" };
 import velocityBlurSource from "../../../../../../crates/valle-draw/assets/shaders/velocityblur.sksl" with { type: "text" };
 import chromaKeySource from "../../../../../../crates/valle-draw/assets/shaders/chromakey.sksl" with { type: "text" };
@@ -47,8 +50,8 @@ export type BuiltinKernel = keyof typeof BUILTIN_SOURCES;
 // CanvasKit exposes image shaders rather than raw image shaders. Transport depth bytes in
 // Alpha8, where neither color management nor premultiplication can alter the numeric ABI.
 const depthRead = "float4 b = floor(float4(packedDepth.eval(p + 0.5)) * 255.0 + 0.5);";
-if (!scene3dDofSource.includes(depthRead)) throw new Error("Scene3D depth shader ABI drifted");
-const scene3dDof = scene3dDofSource
+if (!scene3dDofCommon.includes(depthRead)) throw new Error("Scene3D depth shader ABI drifted");
+const scene3dDepth = scene3dDofCommon
   .replace(
     depthRead,
     `float4 b = floor(float4(
@@ -67,7 +70,9 @@ const BUILTIN_SOURCES = Object.freeze({
   filmGrain: filmGrainSource,
   lensDistortion: lensDistortionSource,
   noiseDisplacement: noiseDisplacementSource,
-  scene3dDof,
+  scene3dDof: scene3dDepth + scene3dDofSource,
+  scene3dDofClassify: scene3dDepth + scene3dDofClassifySource,
+  scene3dDofDilate,
   radialBlur: radialBlurSource,
   chromaticAberration: chromaticAberrationSource,
   velocityBlur: velocityBlurSource,

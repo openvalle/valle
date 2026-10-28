@@ -569,6 +569,72 @@
         "cli": "88c2d700c99baa3008aaf2e0a66d67f3e8ae680ba64328c369c360d4439bcd31",
         "fixedRunner": "dc3464e27e8a65cd29f0783f462f3efc303d1eb37f9c28b093d3290874f8a263"
       }
+    },
+    "scene3d-dof-focus": {
+      "identity": {
+        "sourceSha256": "4da6ed82dbad1aba8754f80416d036c11a098dc8ce6d345b9ceb62aa6d7bc7f3",
+        "assets": {}
+      },
+      "pngSha256": "678a519fffca08f501f104490c72a5f426371cd29b3c5a38163002aca45145b8",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:57.837Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "scene3d-dof-spill": {
+      "identity": {
+        "sourceSha256": "44c0abff45d33ab517bf9b78c3b5af67e28acb31524856f980e71754910fd3c1",
+        "assets": {}
+      },
+      "pngSha256": "c3603cc92000edf4287537412687acd14d8031a2ce38e55b1d26e5326d651cb6",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:05:58.851Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
+    },
+    "scene3d-dof-blurred": {
+      "identity": {
+        "sourceSha256": "356718f4b2e87c38d1727f0b604cc945439c25cfd091195a0587f797fa56169e",
+        "assets": {}
+      },
+      "pngSha256": "ebda81bfcc975b94a575a697f1601ef31cd1bda98be266d8df4e2e858c2e9db1",
+      "rule": {
+        "rgb": 2,
+        "alpha": 2
+      },
+      "repeatRule": {
+        "rgb": 0,
+        "alpha": 0
+      },
+      "backendRules": {},
+      "generatedAt": "2026-10-28T13:06:00.134Z",
+      "generator": {
+        "gitHead": "a155524fc5eadef6b48fe5d7c11fb24d1f2e59f6",
+        "cli": "f253d3816fb27e8d2f2fd53073dc6294a07d19c717bcc63762a07ffa82714903",
+        "fixedRunner": "3d6adfbe944e303a46b51985f9e93cbf496d886a2c367d6e5d100820f66f4dbe"
+      }
     }
   }
 }

@@ -1,0 +1,17 @@
+// One output texel per 16x16 block. CoC extrema come from depth extrema.
+half4 main(float2 xy) {
+    float2 origin = floor(xy) * 16.0;
+    float nearest = 3.402823466e+38;
+    float farthest = 0.0;
+    for (int y = 0; y < 16; ++y) {
+        for (int x = 0; x < 16; ++x) {
+            float2 p = origin + float2(x, y);
+            if (p.x >= size.x || p.y >= size.y) continue;
+            float z = depthAt(p);
+            nearest = min(nearest, z);
+            farthest = max(farthest, z);
+        }
+    }
+    float nearCoC = nearest < focus ? coc(nearest) : 0.0;
+    return half4(max(coc(nearest), coc(farthest)), nearCoC, 0.0, 1.0);
+}
