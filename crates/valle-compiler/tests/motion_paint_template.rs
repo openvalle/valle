@@ -383,9 +383,17 @@ fn guarded_sequence(
     sequence: &[u32],
     check_cold: bool,
 ) -> Vec<valle_motion::layout::PaintPreparationStats> {
+    guarded_sequence_with_fonts(source, sequence, check_cold, fonts())
+}
+
+fn guarded_sequence_with_fonts(
+    source: &str,
+    sequence: &[u32],
+    check_cold: bool,
+    fonts: Fonts,
+) -> Vec<valle_motion::layout::PaintPreparationStats> {
     let artifact = compile_motion(source).unwrap().artifact;
     let scene = valle_motion::prepare_scene(&artifact).unwrap();
-    let fonts = fonts();
     let props = valle_motion::resolve_props(&artifact.controls, &BTreeMap::new()).unwrap();
     let viewport = Viewport::new((640, 360));
     let mut cache = PaintProgramCache::new(&scene, &fonts).unwrap();
@@ -546,6 +554,69 @@ fn unsupported_opacity_consumers_do_not_enter_rectangular_paint_binding() {
         let scene = valle_motion::prepare_scene(&artifact).unwrap();
         assert!(PaintProgramCache::new(&scene, &fonts()).is_none());
     }
+}
+
+#[test]
+fn text_color_parameters_preserve_glyph_geometry_transparency_and_static_groups() {
+    for alpha in [false, true] {
+        let color = if alpha {
+            "interpolate(t.seconds,[0,1,2],['#b34a1000','#165cadff','#b34a1000'])"
+        } else {
+            "interpolate(t.seconds,[0,1,2],['red','blue','red'])"
+        };
+        let text = format!(
+            r##"export const controls=({{props:{{size:number({{default:80,min:1,max:300}})}}}});
+            export default function Demo(props){{const t=useCurrentTime();return <Scene style={{{{width:640,height:360,backgroundColor:'red'}}}}>
+            <Text style={{{{width:props.size,fontSize:18,color:{color}}}}}>AV fi café text wraps onto multiple lines</Text>
+            <View style={{{{rotate:'7deg',opacity:0.6}}}}><Text style={{{{fontSize:22,color:{color}}}}}>Shared paint</Text></View>
+            <Text style={{{{fontSize:14,color:'red'}}}}>Static red</Text></Scene>}}"##
+        );
+        check(&text, true);
+        let stats = guarded_sequence(&text, &[0, 15, 30, 63, 0, 30, 15, 63], true);
+        assert!(stats.iter().all(|s| s.parameter_slots == 2));
+        assert!(stats[4..].iter().all(|s| s.reused_template));
+    }
+}
+
+#[test]
+fn text_color_consumers_with_unbound_shell_or_inline_dependencies_are_rejected() {
+    for text in [
+        "<Text style={{color:interpolate(t.seconds,[0,2],['red','blue']),border:'1px solid currentColor'}}>Border</Text>",
+        "<Text style={{color:interpolate(t.seconds,[0,2],['red','blue']),textShadow:'1px 1px 3px currentColor'}}>Shadow</Text>",
+        "<Text style={{color:interpolate(t.seconds,[0,2],['red','blue'])}}>Inline <Span>child</Span></Text>",
+        "<Text className='text-red-500' style={{color:interpolate(t.seconds,[0,2],['red','blue'])}}>Cascade</Text>",
+    ] {
+        let source = format!(
+            "export default function Demo(){{const t=useCurrentTime();return <Scene>{text}</Scene>}}"
+        );
+        let artifact = compile_motion(&source).unwrap().artifact;
+        let scene = valle_motion::prepare_scene(&artifact).unwrap();
+        assert!(PaintProgramCache::new(&scene, &fonts()).is_none(), "{text}");
+    }
+}
+
+#[test]
+fn inherited_text_shadows_keep_full_emission_when_text_alpha_changes() {
+    let source = "export default function Demo(){const t=useCurrentTime();return <Scene style={{width:640,height:360,textShadow:'1px 2px 3px black'}}><Text style={{fontSize:20,color:interpolate(t.seconds,[0,2],['#ff000000','#0000ffff'])}}>Shadow alpha</Text></Scene>}";
+    let stats = guarded_sequence(source, &[0, 30, 63, 30, 0], true);
+    assert!(
+        stats
+            .iter()
+            .all(|s| !s.reused_template && s.emitted_program)
+    );
+}
+
+#[test]
+fn text_color_parameters_do_not_partially_bind_color_glyph_runs() {
+    let source = "export default function Demo(){const t=useCurrentTime();return <Scene style={{width:640,height:360}}><Text style={{fontSize:32,color:interpolate(t.seconds,[0,2],['red','blue'])}}>Regular text and 😀 🚀</Text></Scene>}";
+    let mut fonts = Fonts::default();
+    valle_motion::register_default_motion_fonts(&mut fonts).unwrap();
+    let stats = guarded_sequence_with_fonts(source, &[0, 30, 63, 30, 0], true, fonts);
+    assert!(
+        stats
+            .iter()
+            .all(|s| !s.reused_template && s.emitted_program)
+    );
 }
 
 #[test]

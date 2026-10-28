@@ -45,6 +45,8 @@ pub struct EmitReport {
     /// Empty if instance compaction changed the recording's leaf structure.
     pub(crate) background_paints:
         BTreeMap<String, Option<(valle_draw::program::NodeId, valle_draw::program::PaintId)>>,
+    pub(crate) text_paints:
+        BTreeMap<String, Vec<(valle_draw::program::NodeId, valle_draw::program::PaintId)>>,
     /// Complete frame-local Scene3D requests referenced by typed `Scene3d` program nodes. Hosts
     /// fulfill these like any other content-addressed resource; the executor sees only the bound
     /// raster object.
@@ -109,9 +111,17 @@ struct EmissionState {
     temporal_recordings: TemporalRecordingStats,
     scene3d_frames: Vec<crate::SealedScene3DFrame>,
     unsupported: Vec<(String, &'static str)>,
-    parameter_nodes: Option<std::collections::BTreeSet<String>>,
+    parameter_nodes: Option<PaintParameterNodes>,
     // None records an explicitly omitted transparent background, not a missing/unvisited node.
     background_paths: BTreeMap<String, Option<usize>>,
+    // None records a glyph source whose fill also controls unbound palette/shadow/stroke paint.
+    text_commands: BTreeMap<String, Option<Vec<usize>>>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct PaintParameterNodes {
+    pub background: std::collections::BTreeSet<String>,
+    pub text: std::collections::BTreeSet<String>,
 }
 
 /// Emission failure. Reject inconsistent layout or scene state rather than returning an empty
@@ -484,7 +494,7 @@ pub(crate) fn emit_with_paint_parameters(
     catalog: &dyn valle_draw::program::ProgramResourceCatalog,
     source_clip: Option<Rect>,
     raster_scale: RasterDensity,
-    nodes: &std::collections::BTreeSet<String>,
+    nodes: &PaintParameterNodes,
 ) -> Result<EmitReport, EmitError> {
     if !raster_scale.scale.is_finite() || raster_scale.scale <= 0.0 {
         return Err(EmitError::Program("invalid output raster density".into()));
@@ -510,7 +520,7 @@ fn emit_with_faces_and_catalog(
     source_clip: Option<Rect>,
     review_ink: bool,
     raster_scale: RasterDensity,
-    parameter_nodes: Option<&std::collections::BTreeSet<String>>,
+    parameter_nodes: Option<&PaintParameterNodes>,
 ) -> Result<EmitReport, EmitError> {
     let root_layout = tree
         .layout
@@ -531,6 +541,7 @@ fn emit_with_faces_and_catalog(
         unsupported: Vec::new(),
         parameter_nodes: parameter_nodes.cloned(),
         background_paths: BTreeMap::new(),
+        text_commands: BTreeMap::new(),
     };
     validate_transform_matrices(tree, &mut out)?;
     let contexts = build_stacking_contexts(
@@ -642,11 +653,11 @@ fn emit_with_faces_and_catalog(
     // Canonical forest traversal preserves recording paint order for ordinary unmasked leaves.
     // Masks can reorder their source; instance compaction needs its own column bindings. Do not
     // infer either mapping from coincidentally equal paint values.
-    let background_paints = if out.background_paths.is_empty()
-        || program.nodes().iter().any(|node| {
-            matches!(node, valle_draw::program::Node::InstanceBatch(_))
-                || matches!(node, valle_draw::program::Node::Group(group) if group.mask.is_some())
-        }) {
+    let unstable_consumers = program.nodes().iter().any(|node| {
+        matches!(node, valle_draw::program::Node::InstanceBatch(_))
+            || matches!(node, valle_draw::program::Node::Group(group) if group.mask.is_some())
+    });
+    let background_paints = if out.background_paths.is_empty() || unstable_consumers {
         BTreeMap::new()
     } else {
         let paths: Vec<_> = program
@@ -688,10 +699,56 @@ fn emit_with_faces_and_catalog(
                 .collect()
         }
     };
+    let text_paints = if out.text_commands.is_empty() || unstable_consumers {
+        BTreeMap::new()
+    } else {
+        let glyphs: Vec<_> = program
+            .nodes()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                if let valle_draw::program::Node::GlyphRun(run) = node {
+                    Some((
+                        valle_draw::program::NodeId::from_raw(index as u32),
+                        run.paint,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let commands: BTreeMap<_, _> = out
+            .recording
+            .cmds
+            .iter()
+            .enumerate()
+            .filter(|(_, cmd)| matches!(cmd, RecordCmd::GlyphRun { .. }))
+            .enumerate()
+            .map(|(ordinal, (command, _))| (command, ordinal))
+            .collect();
+        if commands.len() != glyphs.len() {
+            BTreeMap::new()
+        } else {
+            out.text_commands
+                .iter()
+                .filter_map(|(key, indices)| {
+                    let indices = indices.as_ref().filter(|indices| !indices.is_empty())?;
+                    Some((
+                        key.clone(),
+                        indices
+                            .iter()
+                            .map(|index| glyphs[commands[index]])
+                            .collect(),
+                    ))
+                })
+                .collect()
+        }
+    };
     Ok(EmitReport {
         temporal_recordings: out.temporal_recordings,
         paint_origins,
         background_paints,
+        text_paints,
         program,
         scene3d_frames: out.scene3d_frames,
         scene3d_sampling: out.scene3d_sampling,
@@ -723,7 +780,7 @@ fn validate_transform_matrices(
             && out
                 .parameter_nodes
                 .as_ref()
-                .is_some_and(|nodes| nodes.contains(key))
+                .is_some_and(|nodes| nodes.background.contains(key))
         {
             out.background_paths.insert(key.clone(), None);
         }
@@ -2685,12 +2742,33 @@ impl Emitter<'_> {
         source_ranges: Option<GlyphSource>,
         placements: Option<&[Option<Affine>]>,
     ) {
+        let parameter_key = self.out.parameter_nodes.as_ref().and_then(|nodes| {
+            if nodes.text.is_empty() {
+                return None;
+            }
+            source_ranges
+                .and_then(|source| {
+                    self.out
+                        .recording
+                        .text_sources
+                        .get(source.node.index())
+                        .map(String::as_str)
+                })
+                .or_else(|| self.node_key(np))
+                .filter(|key| nodes.text.contains(*key))
+                .map(str::to_owned)
+        });
         if self.out.review_ink && shadow.is_some() {
             return;
         }
         if !self.out.review_ink {
             match crate::colr::emit_run(&mut self.out.recording, run, layout, shadow, placements) {
-                Ok(true) => return,
+                Ok(true) => {
+                    if let Some(key) = parameter_key {
+                        self.out.text_commands.insert(key, None);
+                    }
+                    return;
+                }
                 Err(error) => {
                     self.unsupported(np, error);
                     return;
@@ -2736,6 +2814,9 @@ impl Emitter<'_> {
             return;
         }
         if !self.out.review_ink && self.color_outline_run_at(run, layout, shadow, placements) {
+            if let Some(key) = parameter_key {
+                self.out.text_commands.insert(key, None);
+            }
             return;
         }
         // Embedded bitmap glyphs still need an image side-table contract. COLR outline glyphs use
@@ -2843,6 +2924,7 @@ impl Emitter<'_> {
         if run_opacity < 1.0 {
             self.push(RecordCmd::BeginOpacity { alpha: run_opacity });
         }
+        let command_start = self.out.recording.cmds.len();
         self.glyph_chunks(
             font,
             span,
@@ -2858,6 +2940,22 @@ impl Emitter<'_> {
                     .is_ok_and(|face| face.is_variable()))
             .then_some(run),
         );
+        if let Some(key) = parameter_key {
+            if shadow.is_some() || declared_stroke.is_some() || authored_fill.is_none() {
+                self.out.text_commands.insert(key, None);
+            } else if let Some(commands) = self
+                .out
+                .text_commands
+                .entry(key)
+                .or_insert_with(|| Some(Vec::new()))
+            {
+                commands.extend(
+                    (command_start..self.out.recording.cmds.len()).filter(|index| {
+                        matches!(self.out.recording.cmds[*index], RecordCmd::GlyphRun { .. })
+                    }),
+                );
+            }
+        }
         if run_opacity < 1.0 {
             self.push(RecordCmd::End);
         }
@@ -3061,7 +3159,7 @@ impl Emitter<'_> {
                 .out
                 .parameter_nodes
                 .as_ref()
-                .is_some_and(|nodes| nodes.contains(key))
+                .is_some_and(|nodes| nodes.background.contains(key))
             && self
                 .tree
                 .background_colors
@@ -3082,7 +3180,7 @@ impl Emitter<'_> {
                         .out
                         .parameter_nodes
                         .as_ref()
-                        .is_some_and(|nodes| nodes.contains(key))
+                        .is_some_and(|nodes| nodes.background.contains(key))
                 {
                     self.out
                         .background_paths

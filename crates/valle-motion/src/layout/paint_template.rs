@@ -1,4 +1,4 @@
-//! Preparation templates for typed background colors and admitted rectangular opacity folds.
+//! Preparation templates for typed background/text colors and rectangular opacity folds.
 //! Admission is conservative and load-time. No previous frame is needed to evaluate a slot.
 //! Other dynamic styles, resource producers, and instance columns keep their existing lowering
 //! until they have explicit bindings and range contracts.
@@ -125,6 +125,79 @@ impl InputBinding {
 struct PaintSource {
     color: InputBinding,
     opacity: InputBinding,
+    omit_transparent: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum PaintConsumer {
+    Background(String),
+    Text(String),
+}
+
+/// A leaf's foreground cannot implicitly change its shell or an inline child's styles. Glyph
+/// emission separately rejects palette layers, inherited text shadows/strokes, and missing
+/// author-color provenance. These need bindings for every additional color/alpha dependency.
+fn text_color_eligible(node: &crate::SceneNode) -> bool {
+    matches!(
+        node.kind,
+        crate::NodeKind::Text {
+            text: crate::TextValue::Static { .. },
+            per_unit: None,
+            path: None
+        }
+    ) && node.children.start == node.children.end
+        && node.class_names.is_empty()
+        && node.class_conditions.is_empty()
+        && node.styles.iter().all(|s| {
+            matches!(
+                s.property.as_str(),
+                "color"
+                    | "opacity"
+                    | "width"
+                    | "height"
+                    | "min-width"
+                    | "min-height"
+                    | "max-width"
+                    | "max-height"
+                    | "position"
+                    | "left"
+                    | "right"
+                    | "top"
+                    | "bottom"
+                    | "margin"
+                    | "margin-left"
+                    | "margin-right"
+                    | "margin-top"
+                    | "margin-bottom"
+                    | "padding"
+                    | "padding-left"
+                    | "padding-right"
+                    | "padding-top"
+                    | "padding-bottom"
+                    | "translate"
+                    | "rotate"
+                    | "scale"
+                    | "transform"
+                    | "transform-origin"
+                    | "z-index"
+                    | "font-family"
+                    | "font-size"
+                    | "font-weight"
+                    | "font-style"
+                    | "font-stretch"
+                    | "font-feature-settings"
+                    | "font-variation-settings"
+                    | "line-height"
+                    | "letter-spacing"
+                    | "word-spacing"
+                    | "text-align"
+                    | "white-space"
+                    | "direction"
+                    | "flex-grow"
+                    | "flex-shrink"
+                    | "align-self"
+            )
+        })
 }
 
 struct ColorInputs {
@@ -177,7 +250,7 @@ impl ColorInputs {
             inputs.keys.push(PaintKey::new(working, opacity));
             inputs
                 .omitted
-                .push(color.to_srgb8().a == 0 || opacity == 0.0);
+                .push(source.omit_transparent && (color.to_srgb8().a == 0 || opacity == 0.0));
             inputs.unit_opacity.push(opacity == 1.0);
         }
         Some(inputs)
@@ -187,37 +260,49 @@ impl ColorInputs {
 impl Bindings {
     fn new(
         report: &crate::EmitReport,
-        sources: &BTreeMap<String, usize>,
+        sources: &BTreeMap<PaintConsumer, usize>,
         inputs: &ColorInputs,
     ) -> Option<Self> {
         let mut paints = BTreeMap::<PaintId, Vec<(valle_draw::program::NodeId, usize)>>::new();
         let mut consumers = BTreeSet::new();
-        for (key, slot) in sources {
-            let consumer = *report.background_paints.get(key)?;
+        for (source, slot) in sources {
+            let reads = match source {
+                PaintConsumer::Background(key) => report
+                    .background_paints
+                    .get(key)?
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>(),
+                PaintConsumer::Text(key) => report.text_paints.get(key)?.clone(),
+            };
             if inputs.omitted[*slot] {
-                if consumer.is_some() {
+                if !reads.is_empty() {
                     return None;
                 }
                 continue;
             }
-            let (node, paint) = consumer?;
-            let Paint::Solid(color) = report.program.paints()[paint.raw() as usize] else {
-                return None;
-            };
-            let origin = report.paint_origins.get(paint.raw() as usize)?;
-            let Paint::Solid(original) = origin.source else {
-                return None;
-            };
-            if PaintKey::new(original, origin.opacity) != inputs.keys[*slot]
-                || color_bits(original) != color_bits(inputs.originals[*slot])
-                || color_bits(color) != color_bits(inputs.colors[*slot])
-            {
-                // Rejects unbound group opacity, cascade overrides, and signed-zero ambiguity in
-                // shared paints. Never infer declaration provenance from numeric equality.
+            if reads.is_empty() {
                 return None;
             }
-            paints.entry(paint).or_default().push((node, *slot));
-            consumers.insert((node, paint));
+            for (node, paint) in reads {
+                let Paint::Solid(color) = report.program.paints()[paint.raw() as usize] else {
+                    return None;
+                };
+                let origin = report.paint_origins.get(paint.raw() as usize)?;
+                let Paint::Solid(original) = origin.source else {
+                    return None;
+                };
+                if PaintKey::new(original, origin.opacity) != inputs.keys[*slot]
+                    || color_bits(original) != color_bits(inputs.originals[*slot])
+                    || color_bits(color) != color_bits(inputs.colors[*slot])
+                {
+                    // Rejects unbound group opacity, cascade overrides, and signed-zero ambiguity in
+                    // shared paints. Never infer declaration provenance from numeric equality.
+                    return None;
+                }
+                paints.entry(paint).or_default().push((node, *slot));
+                consumers.insert((node, paint));
+            }
         }
         let mut pinned = BTreeSet::new();
         for (index, node) in report.program.nodes().iter().enumerate() {
@@ -343,9 +428,9 @@ pub struct PaintProgramCache {
     plan: crate::eval::EvalPlan,
     order: Vec<ExprId>,
     roots: Vec<ExprId>,
-    sources: BTreeMap<String, usize>,
+    sources: BTreeMap<PaintConsumer, usize>,
     inputs: Vec<PaintSource>,
-    nodes: BTreeSet<String>,
+    nodes: crate::emit::PaintParameterNodes,
     key: Option<TemplateKey>,
     variants: VecDeque<Snapshot>,
     template_bytes: usize,
@@ -391,11 +476,17 @@ impl PaintProgramCache {
                     .map(|s| s.value.clone())
             };
             let color = binding("background-color");
+            let text_color = binding("color");
+            let dynamic_text = matches!(&text_color, Some(StyleValue::Expr { expr }) if plan.sample_dependent(*expr));
+            if dynamic_text && !text_color_eligible(node) {
+                return None;
+            }
             let opacity = binding("opacity");
             let dynamic_opacity =
                 matches!(&opacity, Some(StyleValue::Expr { expr }) if plan.sample_dependent(*expr));
             for style in &node.styles {
                 if !matches!(style.property.as_str(), "background-color" | "opacity")
+                    && !(dynamic_text && style.property == "color")
                     && let StyleValue::Expr { expr } = style.value
                     && plan.sample_dependent(expr)
                 {
@@ -449,7 +540,7 @@ impl PaintProgramCache {
                     return None;
                 }
                 expressions.insert(
-                    node.key.clone(),
+                    PaintConsumer::Background(node.key.clone()),
                     (
                         color.unwrap_or(StyleValue::Static {
                             value: MotionValue::Color(AuthorColor::from_srgb8(
@@ -459,6 +550,18 @@ impl PaintProgramCache {
                         opacity.unwrap_or(StyleValue::Static {
                             value: MotionValue::Number(1.0),
                         }),
+                    ),
+                );
+            }
+            if dynamic_text {
+                expressions.insert(
+                    PaintConsumer::Text(node.key.clone()),
+                    (
+                        text_color.expect("dynamic text color"),
+                        // Glyph opacity remains an explicit group; it is not a rectangle fold.
+                        StyleValue::Static {
+                            value: MotionValue::Number(1.0),
+                        },
                     ),
                 );
             }
@@ -485,11 +588,22 @@ impl PaintProgramCache {
                 inputs.push(PaintSource {
                     color: input(color),
                     opacity: input(opacity),
+                    omit_transparent: matches!(key, PaintConsumer::Background(_)),
                 });
                 (key, slot)
             })
             .collect();
-        let nodes = sources.keys().cloned().collect();
+        let mut nodes = crate::emit::PaintParameterNodes::default();
+        for source in sources.keys() {
+            match source {
+                PaintConsumer::Background(key) => {
+                    nodes.background.insert(key.clone());
+                }
+                PaintConsumer::Text(key) => {
+                    nodes.text.insert(key.clone());
+                }
+            }
+        }
         let order = plan.schedule(roots.iter().copied());
         Some(Self {
             prepared: prepared.clone(),
