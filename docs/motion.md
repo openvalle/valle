@@ -698,6 +698,15 @@ wrapper. A data change requires preparation again; Studio watches the bound JSON
 
 ### Images, video and fonts
 
+Static SVG files can be bound as image assets. Paths, gradients, strokes, patterns,
+clips and masks remain vector commands on native CPU/Metal and Web CPU/GPU; intrinsic
+size comes from the SVG dimensions/viewBox. SVG text uses frozen project fonts and
+becomes outlines; missing fonts or glyphs are errors. No system-font lookup occurs.
+External URLs must be embedded first; only PNG/JPEG/WebP data images are admitted.
+Scripts, foreignObject and SVG animations are rejected. Filtered subtrees use the
+parser's bounded raster fallback at intrinsic resolution. Shader texture sampling
+remains a discrete image operation where its API asks for texels.
+
 Save as `poster.motion.tsx` and provide your own `poster.png`:
 
 ```tsx
@@ -1300,12 +1309,13 @@ keep `right`/`bottom`, margins and other layout inputs stable when the intent is
 only to move the painted element. The equivalent CSS `transform: translate(...)`
 is also supported; see [Transforms](#transforms) for composition order.
 
-Dynamic layout coordinates are supported, but layout can snap them to a pixel
-grid. A slow movement can then hold the same position for several frames before
-jumping to the next pixel. Scaling the output magnifies that step: one layout
-pixel becomes two output pixels when a 960×540 canvas is delivered at 1920×1080.
-Translation retains fractional displacement after layout. Keep its offsets
-continuous; do not round them or replace the time function with integer-frame
+Layout positions, box sizes and padding retain fractional coordinates in ordinary
+nodes, repeated instances and text-measurement constraints. Layout does not snap
+moving boxes to whole pixels. Font shaping still has its own intrinsic measurement
+and line-metric quantization, and raster coverage has finite precision.
+Translation remains preferable for movement that does not need reflow: it changes
+paint after layout and can reuse fixed geometry. Keep either kind of displacement
+continuous; do not round it or replace the time function with integer-frame
 positions unless stepped motion is intentional.
 
 Save as `smooth-move.motion.tsx`:
@@ -2459,14 +2469,22 @@ over the glass and, as in CSS, are not clipped unless `overflow` or a `Clip` say
 | `tint` | The glass's own color, mixed in by its alpha under the light | transparent |
 
 `light.direction` is the screen direction the light comes from, y down (default
-`point(-0.35, -0.94)`, upper left). The edge catches it as a thin line that glows
-inward, brightest on the wall facing the light, dimmer on the wall facing away, and
-in the color of what lies under it. `elevation` is how far the line wraps round the
-edge from those walls: 0 keeps it on them, 1 spreads it round the whole edge (default
-0.55). `intensity` scales the line, its glow, the rim's shading and the dark edge
-just outside the glass, and 0 draws none of them (default 0.65). The light stays
-fixed on the screen, so a turning glass keeps its highlights where the light puts
-them.
+`point(-0.35, -0.94)`, upper left). The curved bevel refracts the backdrop and catches
+a grazing environment reflection; a thin edge glint remains attached to the silhouette.
+The source-facing side is brighter, with a much weaker return on the opposite side.
+Reflection is composited as bounded neutral light rather than multiplying the backdrop's
+brightness, so pale backgrounds do not turn into broad clipped-white bands.
+`elevation` lifts the environment highlight along the bevel and broadens its wrap around
+the rim (0–1, default 0.55). `intensity` scales reflection, glint, shading and the outer
+contour; 0 disables all lighting (default 0.65). The light stays fixed on the screen;
+normal transformation preserves its direction under rotation, skew and nonuniform scale.
+
+Circular-corner rounded rectangles and circles use their exact signed distance and
+normal for optical placement. Unequal/elliptical corners, arbitrary paths, projected
+outlines and merged fields use the coverage-derived approximation. Refraction uses a
+fixed glass IOR of 1.5 and an edge displacement normalized to `refraction`; this remains
+a screen-space material, with an artist-directed environment highlight, not a volumetric
+ray tracer. The same built-in shader code runs on native CPU, Metal and Web.
 
 `material` and `light` take an object literal, a static object, or a literal that
 spreads static objects. Apple's setting from ultra clear to fully tinted is frost,
@@ -2530,9 +2548,11 @@ pixels, and its layers count toward the frame's shader budget.
 A Glass under its own CSS 3D transform or `perspective` frosts and bends on the plane
 it is projected onto: its shape follows the projection, and its lengths scale as the
 projection scales its center. A blur has no single radius under a projection, so a
-Glass inside another element's 3D transform is refused; give the transform to the
-Glass itself. Every value is a function of the frame, so bindings may use any time
-value.
+Glass or GlassField inside another element's 3D transform projects its silhouette
+into viewport pixels and applies optics there. Frost and explicit material lengths
+use the center Jacobian's scale; ancestor clips and opacity still apply. This is
+screen-space optics, not physical volume transmission. Every value is a function
+of the frame, so bindings may use any time value.
 
 ## Data visualization and repeated geometry
 
@@ -3043,7 +3063,10 @@ The renderer recomputes flat normals after deformation when the source has no no
 Tangent accessors are validated but source and morphed tangents are not consumed by the
 current rasterizer. A mesh admits up to eight targets and 64 MiB of decoded morph data;
 weight magnitudes are limited to 16. External URIs, sparse accessors,
-additional joint/weight sets and extensions remain outside the admitted profile.
+additional joint/weight sets and extensions other than `KHR_materials_unlit`,
+`KHR_materials_emissive_strength` and `KHR_texture_transform` remain outside the
+admitted profile. Texture transforms support offset, rotation and scale on
+`TEXCOORD_0`; other texture coordinate sets are not admitted.
 
 Environment lighting uses an explicitly bound `asset({kind: "environment"})` resource:
 
@@ -3077,7 +3100,7 @@ limited shadow detail.
 
 The loader admits a 64 MiB GLB, 262,144 vertices and 131,072 triangles. A Scene3D
 layer can be 3840×2160 within the 8,388,608-pixel budget. A layer
-admits at most 8 textures, 24 Mi pixels and 128 MiB decoded mip/environment storage.
+admits at most 64 textures, 24 Mi pixels and 128 MiB decoded mip/environment storage.
 Geometry storage is shared between nodes, while vertex and triangle work is charged
 for every rendered instance. A prepared output frame additionally allows at most
 16,777,216 pixels across distinct Scene3D raster requests (20 bytes per framebuffer
@@ -3093,6 +3116,32 @@ overlay. The same paint-only dependency rules as `bounds` apply. See
 [Scene3D admission](../crates/valle-compiler/src/motion/scene3d.rs) and
 [model/raster tests](../crates/valle-motion/tests/scene3d_model_raster.rs) for the
 asset and renderer contract.
+
+#### Current UI frames on Scene3D materials
+
+An `effect()` may bind `input://source` to `material.textures.baseColor` or `emissive`;
+a `transition()` uses `input://from` / `input://to` instead. The input is the current
+host picture, captured after prior effects, not a static asset or the previous frame:
+
+```tsx
+export const role = effect();
+// Inside Scene3D, use an authored Mesh with UVs:
+<Mesh key="screen" geometry={extrude(path("M-1 -1L1 -1L1 1L-1 1Z"), {depth:0.02})}
+  material={{type:"unlit", color:"#ffffff", textures:{baseColor:"input://source"}}} />
+```
+
+The textured UI shares depth with other meshes in that Scene3D, including PBR
+transmission. Ordinary 2D siblings outside Scene3D retain compositor draw order.
+Use `unlit` to preserve UI color; use PBR when lighting should affect it.
+Only color slots accept host pictures; normal and other data slots do not.
+Native and browser support CPU and GPU execution, with a bounded float readback
+and texture upload. This first implementation is not a zero-copy path. Existing
+material image dimension and 128 MiB mip-storage limits still apply.
+
+PBR `transmission` (0..1), `thickness` (world units), `attenuationColor` and
+`attenuationDistance` are animatable. This is single-layer screen-space refraction
+of the current opaque scene, with fixed IOR 1.5. It does not include caustics,
+recursive transparent layers or colored transmission shadows.
 
 ### ShaderLayer
 
@@ -3190,6 +3239,13 @@ value on every path. Texture access uses `sampleContent(uv)` and declared
 `sampling: "nearest" | "linear"`, and `wrap: "clamp" | "repeat" | "mirror"`
 (default clamp). Linear filtering interpolates premultiplied linear texels before
 returning a straight color; it counts four texel reads toward the sampling budget.
+
+Declarations may share a type (`float x = uv.x, y = uv.y;`); every variable still
+requires an initializer. Polar math includes `asin`, `acos`, `atan(x)`, and
+`atan(y, x)` / `atan2(y, x)`, with scalar/vector overloads. `asin` and `acos` clamp
+their input to [-1, 1]; `atan2(0, 0)` returns 0. Division by zero returns 0.
+A zero-width `smoothstep(a, a, x)` becomes `step(a, x)`: 0 below the threshold,
+1 at or above it, so zero softness keeps a hard edge rather than erasing the effect.
 
 Set an input's `kind` to `"color"` (the default), `"data"`, or `"backdrop"` (below).
 Color inputs follow these color/alpha rules. Data inputs decode PNG/JPEG channels as
