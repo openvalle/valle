@@ -39,7 +39,7 @@ struct RasterVertex { @builtin(position) position:vec4<f32>,@location(0) @interp
     let storedDepth=vertex_float(index*u32(shading[4].x)+2u);
     let depth=select(storedDepth*globals.depthScale,1.0-storedDepth*globals.depthScale,orthographic());
     return LitVertex(triangle_position(index,u32(shading[4].x),globals.extent,depth),1.0,vec3(0.0),0u,vec2(0u),
-        vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),index/3u);
+        vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),index/3u,vec4(1.0));
 }
 fn raster_lit_sample(in:LitVertex) -> LitVertex {
     let stride=u32(shading[4].x);let base=in.triangle*3u*stride;
@@ -54,7 +54,7 @@ fn raster_lit_sample(in:LitVertex) -> LitVertex {
         stable(stable(stable(a.y*weights.x)+stable(b.y*weights.y))+stable(c.y*weights.z)),
         stable(stable(stable(a.z*weights.x)+stable(b.z*weights.y))+stable(c.z*weights.z)));
     var uv=in.uv;var dx=in.uvDx;var dy=in.uvDy;var tangent=in.tangent;var bitangent=in.bitangent;
-    if stride>13u {
+    if stride>=27u {
         // Match CPU's corrected weights before interpolation. Interpolating UV/Z and
         // dividing afterward moves alpha-mask boundaries by a pixel at delivery sizes.
         let ua=vertex_vec2(base+13u);let ub=vertex_vec2(base+stride+13u);let uc=vertex_vec2(base+stride*2u+13u);
@@ -63,8 +63,10 @@ fn raster_lit_sample(in:LitVertex) -> LitVertex {
             stable(stable(stable(ua.y*weights.x)+stable(ub.y*weights.y))+stable(uc.y*weights.z)));
         dx=vertex_vec3(base+15u);dy=vertex_vec3(base+18u);tangent=vertex_vec3(base+21u);bitangent=vertex_vec3(base+24u);
     }
+    var tint=vec4(1.0);
+    if stride==17u || stride==31u {let at=base+stride-4u;tint=vec4(vertex_vec3(at),vertex_float(at+3u));}
     return LitVertex(in.position,inverse,normal,rasterVertices[base+12u],vec2(rasterVertices[base+7u],rasterVertices[base+8u]),
-        uv,dx,dy,tangent,bitangent,in.triangle);
+        uv,dx,dy,tangent,bitangent,in.triangle,tint);
 }
 @fragment fn raster_lit_fragment(in:LitVertex) -> Fragment {
     let sample=raster_lit_sample(in);

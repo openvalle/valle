@@ -7,6 +7,7 @@ mod area;
 mod bevel;
 mod mesh;
 mod orthographic;
+mod particles;
 mod punctual;
 mod raster_math;
 
@@ -51,6 +52,7 @@ fn fixture_spec(
     };
     let mut scene = Scene3DSpec {
         meshes: vec![MeshSpec {
+            particles: None,
             key: "mesh".into(),
             model_control: Some("model".into()),
             geometry: None,
@@ -113,6 +115,7 @@ fn fixture_spec(
             depth_of_field: None,
         },
         meshes: vec![MeshFrameState {
+            particle_time: None,
             parents: Vec::new(),
             key: "mesh".into(),
             transform: Transform3D::default(),

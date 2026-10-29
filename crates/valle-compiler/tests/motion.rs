@@ -100,3 +100,5 @@ mod motion_variable_fonts;
 mod motion_video;
 mod motion_viewport;
 mod motion_visual_utilities;
+
+mod motion_particles3d;

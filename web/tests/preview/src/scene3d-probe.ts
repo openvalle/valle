@@ -35,10 +35,11 @@ async function run() {
   );
   const localTexture = features === "ui" || features === "ui-transform";
   const volume = features === "volume";
+  const particles = features?.startsWith("particles") ?? false;
   const expectedPrograms =
     direct || localTexture
       ? 2
-      : volume
+      : volume || particles
         ? 3
         : features === "assets" || features === "orthographic"
           ? 8
@@ -151,7 +152,7 @@ async function run() {
         ? diagnostics.atlasUploads < (memoryBytes ? 1 : 2) ||
           diagnostics.meshUploads !== 0 ||
           diagnostics.shadowRenders !== 0
-        : volume
+        : volume || particles
           ? diagnostics.atlasUploads !== 1 || diagnostics.shadowRenders !== 0
           : direct
             ? diagnostics.atlasUploads !== 1 ||

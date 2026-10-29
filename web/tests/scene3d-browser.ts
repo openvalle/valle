@@ -76,6 +76,38 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
 </Scene3D></Scene>;}`;
 }
 
+async function particleSource(name: string): Promise<string> {
+  let source = await Bun.file(
+    join(root, "crates/valle-compiler/tests/fixtures/motion/composition/particles3d.motion.tsx"),
+  ).text();
+  source = source
+    .replaceAll("width:384", `width:${width}`)
+    .replaceAll("height:256", `height:${height}`)
+    .replace("duration:3", "duration:2");
+  if (name === "particles-textured") {
+    source =
+      'export const controls={assets:{map:asset({kind:"image"})}};\n' +
+      source.replace(
+        '<Particles3D key="sparks"',
+        '<Particles3D key="sparks" shape="quad" material={{textures:{baseColor:"asset://map"}}}',
+      );
+  }
+  if (name === "particles-standalone") {
+    const particle = source
+      .slice(source.indexOf('<Particles3D key="sparks"'), source.indexOf("</Group3D>"))
+      .trim();
+    const standalone = particle.replace(
+      'key="sparks"',
+      `key="sparks" camera={{position:[0.5,0.3,5],target:[0,0,0],orbitYaw:seconds*12}} style={{width:${width},height:${height}}}`,
+    );
+    source =
+      source.slice(0, source.indexOf("<Scene3D")) +
+      standalone +
+      source.slice(source.indexOf("</Scene3D>") + "</Scene3D>".length);
+  }
+  return source;
+}
+
 async function deadline<T>(work: Promise<T>, lastActivity?: () => number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const started = Date.now();
@@ -116,6 +148,9 @@ const cases = process.argv
   "ui",
   "ui-transform",
   "volume",
+  "particles",
+  "particles-standalone",
+  "particles-textured",
 ];
 if (
   cases.some(
@@ -133,6 +168,9 @@ if (
         "ui",
         "ui-transform",
         "volume",
+        "particles",
+        "particles-standalone",
+        "particles-textured",
       ].includes(name),
   )
 )
@@ -146,24 +184,26 @@ for (const name of cases) {
   const input = join(directory, "scene.motion.tsx");
   await Bun.write(
     input,
-    name === "ui" || name === "ui-transform"
-      ? (
-          await Bun.file(
-            join(
-              root,
-              "crates/valle-compiler/tests/fixtures/motion/composition/ui-subtree-material.motion.tsx",
-            ),
-          ).text()
-        )
-          .replace("width:384,height:256", `width:${width},height:${height}`)
-          .replace(
-            "style={{width,height}}",
-            name === "ui-transform"
-              ? `style={{width,height,translate:point(-${width / 6},-${height / 15}),rotate:"12deg",scale:0.9}}`
-              : "style={{width,height}}",
+    name.startsWith("particles")
+      ? await particleSource(name)
+      : name === "ui" || name === "ui-transform"
+        ? (
+            await Bun.file(
+              join(
+                root,
+                "crates/valle-compiler/tests/fixtures/motion/composition/ui-subtree-material.motion.tsx",
+              ),
+            ).text()
           )
-      : name === "volume"
-        ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+            .replace("width:384,height:256", `width:${width},height:${height}`)
+            .replace(
+              "style={{width,height}}",
+              name === "ui-transform"
+                ? `style={{width,height,translate:point(-${width / 6},-${height / 15}),rotate:"12deg",scale:0.9}}`
+                : "style={{width,height}}",
+            )
+        : name === "volume"
+          ? `export const composition={width:${width},height:${height},fps:30,duration:2};
 export const controls={assets:{model:asset({kind:"model3d"})}};
 export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
 <Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{type:"orthographic",height:4,position:[0,0,5],target:[0,0,0]}} pbr={{toneMapping:"none"}}>
@@ -171,15 +211,15 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
 <Mesh key="back" geometry={extrude(path("M -2 -2 L 2 -2 L 2 2 L -2 2 Z"),{depth:0.1})} position={[0,0,-1.5]} material={{type:"unlit",color:"#eeeeaa"}}/>
 <AmbientLight intensity={0.4}/><DirectionalLight direction={[0.5,0.5,1]} intensity={1}/>
 </Scene3D></Scene>;}`
-        : name === "unlit"
-          ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+          : name === "unlit"
+            ? `export const composition={width:${width},height:${height},fps:30,duration:2};
 const BALL=lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"),{segments:8});
 export default function Main(){const time=useCurrentTime();return <Scene>
 <Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,5],target:[0,0,0],fov:45}}>
 <Mesh key="ball" geometry={BALL} rotateY={time.seconds*90} material={{type:"unlit",color:"#cf7338"}}/>
 </Scene3D></Scene>;}`
-          : name === "clip"
-            ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+            : name === "clip"
+              ? `export const composition={width:${width},height:${height},fps:30,duration:2};
 export const controls={assets:{model:asset({kind:"model3d"})}};
 const textures={baseColor:null,metallicRoughness:null,normal:null,occlusion:null,emissive:null};
 export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
@@ -187,15 +227,15 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
 <Mesh key="first" src="asset://model" material={{type:"unlit",color:time.seconds<1?"#cc201066":"#cc2010ff",alphaMode:"mask",alphaCutoff:0.5,emissiveIntensity:0,textures}}/>
 <Mesh key="second" src="asset://model" material={{type:"unlit",color:"#1020cc",alphaMode:"mask",alphaCutoff:0.5,emissiveIntensity:0,textures}}/>
 </Scene3D></Scene>;}`
-            : animated
-              ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+              : animated
+                ? `export const composition={width:${width},height:${height},fps:30,duration:2};
 export const controls={assets:{model:asset({kind:"model3d"})}};
 export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
 <Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,${name === "skin" ? 15 : 5}],target:[0,0,0],${name === "orthographic-morph" ? 'type:"orthographic",height:5+time.seconds' : "fov:45"}}}>
 <Mesh key="model" src="asset://model" animation={{clip:0,time:time.seconds*2}} rotateY={time.seconds*45} scale={[-1,1,1]} material={{type:"pbr",color:"#cf7338",roughness:0.4}}/>
 <AmbientLight intensity={0.4}/><DirectionalLight direction={[0.4,0.8,1]} intensity={1.2}/>
 </Scene3D></Scene>;}`
-              : source(resources, name === "orthographic"),
+                : source(resources, name === "orthographic"),
   );
   const child = Bun.spawn(
     [
@@ -214,6 +254,7 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
             `model=${join(root, `crates/valle-motion/tests/fixtures/scene3d/${name === "volume" ? "volume-plane" : name === "clip" ? "pbr" : name === "skin" ? "rigged-simple" : name === "quantized" ? "quantized-sparse" : "animated-morph-cube"}.glb`)}`,
           ]
         : []),
+      ...(name === "particles-textured" ? ["--asset", `map=${join(evidence, "map.png")}`] : []),
       ...(resources
         ? [
             "--asset",

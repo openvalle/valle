@@ -80,7 +80,7 @@ impl<'s> Compiler<'s> {
             "Echo" => ("echo", None),
             "TimeScope" => ("time-scope", None),
             "ShaderLayer" => ("shader-layer", None),
-            "Scene3D" => ("scene3d", None),
+            "Scene3D" | "Particles3D" => ("scene3d", None),
             "Image" | "img" => ("image", None),
             "MathFormula" => ("math-formula", None),
             "Video" | "video" => ("video", None),
@@ -266,6 +266,10 @@ impl<'s> Compiler<'s> {
                         scene_bloom = Some([threshold, knee, intensity, radius]);
                     }
                 }
+                "positions" | "shape" | "sizes" | "fills" | "opacities" | "rotations"
+                | "material" | "position" | "rotation" | "scale" | "translateX" | "translateY"
+                | "translateZ" | "rotateX" | "rotateY" | "rotateZ" | "scaleX" | "scaleY" | "scaleZ"
+                    if tag == "Particles3D" => {}
                 "camera" if kind_tag == "scene3d" => {
                     scene3d_camera = self.attr_object_literal(
                         &attribute.value,

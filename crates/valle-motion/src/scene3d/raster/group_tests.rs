@@ -3,6 +3,7 @@ use crate::scene3d::{MaterialFrameState, MeshFrameState};
 
 fn state(parents: Vec<Transform3D>, transform: Transform3D) -> MeshFrameState {
     MeshFrameState {
+        particle_time: None,
         parents,
         transform,
         key: "subject".into(),

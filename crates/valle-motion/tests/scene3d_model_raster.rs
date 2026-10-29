@@ -189,6 +189,7 @@ fn scene() -> Scene3DSpec {
     Scene3DSpec {
         pbr: Default::default(),
         meshes: vec![MeshSpec {
+            particles: None,
             key: "product".into(),
             model_control: Some("productModel".into()),
             geometry: None,
@@ -238,6 +239,7 @@ fn frame() -> Frame3DState {
         .with_orbit(0.0, 0.0, Some(4.5))
         .unwrap(),
         meshes: vec![MeshFrameState {
+            particle_time: None,
             parents: Vec::new(),
             key: "product".into(),
             material: MaterialFrameState {
@@ -2298,6 +2300,7 @@ fn opaque_shading_after_the_depth_tests_keeps_the_bits_of_shading_each_fragment_
         textures: BTreeMap::new(),
     };
     let mesh = |key: &str, model: Option<&str>, geometry, kind| MeshSpec {
+        particles: None,
         key: key.into(),
         model_control: model.map(Into::into),
         geometry,
@@ -2344,6 +2347,7 @@ fn opaque_shading_after_the_depth_tests_keeps_the_bits_of_shading_each_fragment_
     ];
     let mut frame = pbr_frame();
     let placed = |key: &str, translation: [f32; 3]| MeshFrameState {
+        particle_time: None,
         parents: Vec::new(),
         key: key.into(),
         material: MaterialFrameState::default(),

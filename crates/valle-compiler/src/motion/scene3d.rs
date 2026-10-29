@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod particles;
+
 struct Scene3DChild<'s> {
     element: &'s JSXElement<'s>,
     parents: Vec<Scene3DTransformBinding>,
@@ -75,9 +77,9 @@ impl<'s> Compiler<'s> {
                 chain.push(self.scene3d_mesh_transform(&attrs, element.span())?);
                 self.scene3d_children(&element.children, &chain, groups, result)?;
             } else {
-                if !parents.is_empty() && !matches!(tag, "Mesh" | "Anchor3D") {
+                if !parents.is_empty() && !matches!(tag, "Mesh" | "Anchor3D" | "Particles3D") {
                     self.illegal(DiagCode::GrammarForbidden, element.span(),
-                        "Group3D contains Mesh, Anchor3D and nested Group3D; place lights at the Scene3D boundary");
+                        "Group3D contains Mesh, Particles3D, Anchor3D and nested Group3D; place lights at the Scene3D boundary");
                     return None;
                 }
                 result.push(Scene3DChild {
@@ -375,7 +377,18 @@ impl<'s> Compiler<'s> {
         let mut texture_children = Vec::new();
         let mut has_texture = false;
         let mut children = Vec::new();
-        self.scene3d_children(&element.children, &[], &mut BTreeSet::new(), &mut children)?;
+        let standalone = matches!(&element.opening_element.name,
+            JSXElementName::Identifier(id) if id.name == "Particles3D")
+            || matches!(&element.opening_element.name,
+            JSXElementName::IdentifierReference(id) if id.name == "Particles3D");
+        if standalone {
+            children.push(Scene3DChild {
+                element,
+                parents: Vec::new(),
+            });
+        } else {
+            self.scene3d_children(&element.children, &[], &mut BTreeSet::new(), &mut children)?;
+        }
         for Scene3DChild {
             element: child,
             parents,
@@ -429,6 +442,12 @@ impl<'s> Compiler<'s> {
                 continue;
             }
             match child_tag {
+                "Particles3D" => {
+                    let (spec, binding) = self.lower_particles3d(child, &key, parents, standalone)?;
+                    self.source_ledger.object_spans.push((key.clone(), spec.key.clone(), child.span(), self.component_stack.clone()));
+                    meshes.push(spec);
+                    mesh_frames.push(binding);
+                }
                 "Mesh" => {
                     let attrs = self.scene3d_attributes(
                         child,
@@ -528,6 +547,7 @@ impl<'s> Compiler<'s> {
                         (None, None)
                     };
                     mesh_frames.push(Scene3DMeshBinding {
+                        particle_time: None,
                         parents,
                         key: mesh_key.clone(),
                         material: material_frame,
@@ -544,6 +564,7 @@ impl<'s> Compiler<'s> {
                             self.component_stack.clone(),
                         ));
                     meshes.push(valle_motion::scene3d::MeshSpec {
+                        particles: None,
                         key: mesh_key,
                         model_control,
                         geometry,
@@ -578,7 +599,7 @@ impl<'s> Compiler<'s> {
                     DiagCode::GrammarForbidden,
                     child.span(),
                     format!(
-                        "unknown Scene3D child <{child_tag}>; use Mesh, Group3D, Anchor3D, AmbientLight, DirectionalLight, HemisphereLight, PointLight, SpotLight, RectAreaLight or Texture3D"
+                        "unknown Scene3D child <{child_tag}>; use Mesh, Particles3D, Group3D, Anchor3D, AmbientLight, DirectionalLight, HemisphereLight, PointLight, SpotLight, RectAreaLight or Texture3D"
                     ),
                 ),
             }

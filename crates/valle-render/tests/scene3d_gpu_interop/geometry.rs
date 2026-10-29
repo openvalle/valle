@@ -287,6 +287,7 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
         let scene = Scene3DSpec {
             meshes: ["mesh", "behind", "tie", "masked"]
                 .map(|key| MeshSpec {
+                    particles: None,
                     key: key.into(),
                     model_control: Some("model".into()),
                     geometry: None,
@@ -391,6 +392,7 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
                         .into_iter()
                         .enumerate()
                         .map(|(index, key)| MeshFrameState {
+                            particle_time: None,
                             parents: Vec::new(),
                             key: key.into(),
                             material: MaterialFrameState {

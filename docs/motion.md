@@ -2818,6 +2818,94 @@ layout instance path (see [prepared maps](#automatic-instances-for-prepared-maps
 directly in World fails the frame too, as its rows cannot be planes; put it in a View,
 which its rows are then drawn on.
 
+### Particles3D
+
+`Particles3D` renders deterministic 3D particles without requiring a model or an
+explicit `Scene3D` wrapper. Use `camera` and explicit layout dimensions when it is
+a standalone Motion element:
+
+```tsx
+export const composition = { width: 640, height: 360, fps: 30, duration: 4 };
+export default function Main() {
+  const { seconds } = useCurrentTime();
+  return <Scene style={{ backgroundColor: "#101827" }}>
+    <Particles3D key="sparks" style={{ width: 640, height: 360 }}
+      camera={{ position: [0, 0, 5], target: [0, 0, 0] }}
+      positions={particles3d(seconds, {
+        seed: 17, count: 72,
+        emitter: { min: [-1, -0.5, -1], max: [1, 0.5, 1] },
+        birth: { interval: 0 }, lifetime: 4, loop: true,
+        velocity: { x: [-0.2, 0.2], y: [0.3, 0.8], z: [-0.1, 0.1] },
+        gravity: [0, -0.3, 0], drag: 0.2
+      })}
+      sizes={[0.12, 0.02]} fills={["#ffcc88", "#6699ff"]}
+      opacities={[0.9, 0]} rotations={[0, 90]} />
+  </Scene>;
+}
+```
+
+To combine particles and models, put the same `Particles3D` element inside
+`Scene3D` and remove its `camera`, `pbr` and layout attributes. It shares that
+scene's camera, opaque depth, transparent compositing, lighting and depth of field.
+It can also be a child of `Group3D`. A standalone element is one separately
+composited 3D layer; two separate layers do not occlude each other in 3D.
+
+`positions` must directly call `particles3d(time, options)`. Time is an animated
+number in seconds (absolute value at most 1e9); options are prepare-time data:
+
+| Option | Meaning |
+| --- | --- |
+| `seed` | Required nonnegative safe integer; stable per-particle random initial conditions |
+| `count` | Required integer 1–16384, further limited by expanded geometry budgets |
+| `emitter: {min, max}` | Required ordered `[x,y,z]` bounds in world units; equal bounds make a point, two equal axes make a line |
+| `birth: {interval}` | Required seconds between successive particle births, 0–1e6; zero emits all at time zero |
+| `lifetime` | Required positive seconds, 1e-6–1e6; a particle is alive on `[birth, birth + lifetime)` |
+| `velocity: {x,y,z}` | Required `[min,max]` initial velocity ranges in world units/second |
+| `gravity` | Optional acceleration `[x,y,z]`, world units/second²; default zero |
+| `drag` | Optional linear drag coefficient in 1/second, 0–10000; default zero |
+| `loop` | Optional boolean, default false; repeats the same seeded burst every `max(count * interval, lifetime)` seconds |
+
+Negative time produces no particles. Looping preserves particle identity and repeats
+initial conditions. Each ID has at most one live particle; no simulation history is stored.
+Coordinates, velocity components and gravity components are bounded to ±10000;
+a conservative bound on each full local trajectory must also stay within ±10000.
+
+`shape` is `"circle"` (default, a 16-segment disk) or `"quad"` (two triangles).
+Both face the camera. `sizes`, `fills`, `opacities` and `rotations` each accept a
+single static value or a two-value `[birth, death]` pair, linearly interpolated by
+that particle's lifetime progress. `sizes` is diameter/side in emitter-local world
+units (0–10000, default 0.05). `fills` accepts CSS colors (default white) and
+interpolates in linear light. `opacities` is 0–1 (default 1); `rotations` is in-plane
+degrees (default 0). These are lifetime curves, not per-particle arrays or `field()`
+expressions. The death endpoint is approached before the particle disappears.
+
+The existing Mesh `material` options and animated transforms also work here.
+Defaults are `type:"unlit"`, `alphaMode:"blend"`, `doubleSided:true`. Lifetime
+color multiplies material base color and emission; lifetime alpha multiplies
+material alpha. Use `material.textures.baseColor` with a declared image asset for
+textured sprites, usually with `shape="quad"`. An opaque material intentionally
+ignores fractional alpha; retain blend mode for fading particles. Parent transforms
+move the emitter and its already-born particles together. Billboards remain facing
+the camera; nonuniform scaling determines their horizontal/vertical size from the
+parent transform along the billboard axes. `rotations` controls their visible spin.
+
+One emitter occupies one scene object and one picking identity, rather than one
+model/node per particle. It has no imported animation clips, node overrides or
+indexed material overrides. Anchors can follow the emitter origin, not an individual
+particle. Budget accounting includes every expanded disk (17 vertices/16 triangles)
+or quad (4 vertices/2 triangles), along with other scene geometry. A scene permits
+262144 vertices and 131072 triangles, so disks are limited to 8192 even in isolation.
+
+The public Rust motion kernel (`valle_motion::particles3d`) has no camera or scene
+dependency. It solves gravity and drag analytically from the seed and requested
+time, so arbitrary seeking does not replay earlier frames. Both JSX entry points
+reuse the existing 3D renderer. Motion sampling and billboard projection currently
+run on CPU; CPU, native GPU and Web GPU perform their respective rasterization.
+Particle scenes use the projected-geometry GPU path, with the existing bounded
+CPU fallback for unsupported workloads. This is not GPU particle simulation.
+Billboards can receive lighting/shadows but do not cast shadows. Collision, curl
+forces, trails, mesh-shaped particles and per-particle picking are not provided.
+
 ### Scene3D
 
 `Scene3D` rasterizes a bounded 3D scene into a composited leaf. Give it explicit
@@ -2850,8 +2938,9 @@ on the GPU for transforms, morphing, skinning and clipping; texture, shadow and
 transparent paths currently prepare projected geometry on the CPU. The resulting
 GPU color and depth textures feed Skia composition and depth of
 field without an intermediate readback. Unsupported devices or workloads use
-CPU rasterization. Raster and Web use the CPU depth-of-field kernel, with bounded
-row workers and transparent-region skipping. When a CPU-rasterized scene feeds
+CPU rasterization. CPU rendering uses a depth-of-field kernel with bounded
+row workers and transparent-region skipping; the Web GPU path uses WebGL2
+for rasterization, transparency and depth of field. When a CPU-rasterized scene feeds
 GPU depth of field, color and depth are uploaded once; little-endian hosts copy
 the existing depth float bytes without a separate CPU packing buffer.
 `VALLE_SCENE3D_RASTER_CPU_REFERENCE=1` selects CPU rasterization for comparisons.
@@ -2913,7 +3002,8 @@ Its direct children are explicit leaves, not arbitrary React/Three.js content:
 | Child | Attributes |
 | --- | --- |
 | `Mesh` | Static `key`, exactly one of `src="asset://model"` or `geometry={extrude(...)}`, `geometry={lathe(...)}`, `geometry={tube(...)}`; `material` and indexed `materials` overrides; animated `position`, `rotation`, `scale` triples and `translateX/Y/Z`, `rotateX/Y/Z`, `scaleX/Y/Z`; model-node `nodes` bindings and imported GLB `animation` |
-| `Anchor3D` | Static `key`, parent mesh key and position triple |
+| `Particles3D` | Static `key`, `positions={particles3d(seconds, options)}`, billboard shape and lifetime appearance; shared scene camera, depth and materials |
+| `Anchor3D` | Static `key`, parent mesh or emitter key and position triple |
 | `AmbientLight` | Optional key, opaque `color` (default white), `intensity`; color and intensity may animate |
 | `DirectionalLight` | Animated nonzero `direction` triple, optional key, color (default white), intensity |
 | `HemisphereLight` | Opaque `skyColor` / `groundColor`, optional `direction` (default +Y), key/intensity; colors, direction and intensity may animate |
@@ -3038,7 +3128,7 @@ transform, preserving nonuniform scale, shear produced by nested rotations, and
 mirrored winding. Normals use inverse-transpose transforms. Geometry, shadows,
 depth, picking and `project3d` anchors use the same grouped pose. Group keys must
 be unique within a Scene3D; Mesh keys remain unique across the whole Scene3D.
-Group3D contains Mesh, nested Group3D and Anchor3D; lights stay at the Scene3D
+Group3D contains Mesh, Particles3D, nested Group3D and Anchor3D; lights stay at the Scene3D
 boundary. An Anchor3D's position remains local to its explicitly named parent
 mesh, so a containing group is not applied a second time. Group transform values
 count against the frame expression budget for each mesh that uses them.

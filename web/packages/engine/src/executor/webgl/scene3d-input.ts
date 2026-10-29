@@ -61,7 +61,7 @@ export function decodeScene3dGpuPacket(bytes: Uint8Array): Scene3dGpuPacket {
     height > 4096 ||
     width * height > 8_388_608 ||
     vertices % 3 !== 0 ||
-    ![9, 13, 27].includes(stride) ||
+    ![9, 13, 17, 27, 31].includes(stride) ||
     flags > 31 ||
     header[25] !== bytes.byteLength ||
     !Number.isFinite(floats[6]) ||

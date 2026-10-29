@@ -6,7 +6,9 @@ mod asset;
 mod environment;
 mod material;
 pub use material::*;
+mod particles;
 mod procedural;
+pub use particles::{ParticleShape3D, Particles3DSpec};
 mod raster;
 
 pub use asset::{
@@ -125,6 +127,9 @@ pub enum ToneMapping {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MeshSpec {
+    /// A batch emitter shares scene materials/depth without depending on model assets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub particles: Option<Particles3DSpec>,
     pub key: String,
     /// Logical project control name, resolved to admitted content before rasterization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -506,6 +511,8 @@ pub struct DepthOfFieldState {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MeshFrameState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub particle_time: Option<f64>,
     /// Ordered outermost-to-innermost author groups.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parents: Vec<Transform3D>,
@@ -687,20 +694,36 @@ impl Scene3DSpec {
             if !mesh_keys.insert(mesh.key.as_str()) {
                 errors.push(format!("{path}/key"), "mesh keys must be unique");
             }
-            match (&mesh.model_control, &mesh.geometry) {
-                (Some(control), None) => {
+            match (&mesh.model_control, &mesh.geometry, &mesh.particles) {
+                (Some(control), None, None) => {
                     validate_control(control, &format!("{path}/modelControl"), &mut errors)
                 }
-                (None, Some(geometry)) => {
+                (None, Some(geometry), None) => {
                     if let Err(error) = geometry.validate() {
                         for issue in error.0 {
                             errors.push(format!("{path}{}", issue.path), issue.message);
                         }
                     }
                 }
+                (None, None, Some(particles)) => {
+                    if let Err(error) = particles.validate() {
+                        for issue in error.0 {
+                            errors.push(format!("{path}{}", issue.path), issue.message);
+                        }
+                    }
+                    if mesh.animation_clip.is_some()
+                        || !mesh.node_ids.is_empty()
+                        || !mesh.material_overrides.is_empty()
+                    {
+                        errors.push(
+                            format!("{path}/particles"),
+                            "particle emitters have no imported nodes, clips or indexed materials",
+                        );
+                    }
+                }
                 _ => errors.push(
                     format!("{path}/geometry"),
-                    "Mesh requires exactly one of modelControl or geometry",
+                    "scene object requires exactly one of modelControl, geometry or particles",
                 ),
             }
             if mesh.node_ids.len() > MAX_MODEL_NODES
@@ -816,6 +839,7 @@ impl Scene3DSpec {
                 (1 + m.node_ids.len()) * 9
                     + (1 + m.material_overrides.len()) * MATERIAL_FRAME_SCALARS
                     + usize::from(m.animation_clip.is_some())
+                    + usize::from(m.particles.is_some())
             })
             .sum::<usize>()
             + self
@@ -878,6 +902,16 @@ impl Frame3DState {
         for (index, mesh) in self.meshes.iter().enumerate() {
             let path = format!("/meshes/{index}");
             validate_transform(mesh.transform, &format!("{path}/transform"), &mut errors);
+            if scene
+                .meshes
+                .get(index)
+                .is_some_and(|spec| spec.particles.is_some() != mesh.particle_time.is_some())
+                || mesh
+                    .particle_time
+                    .is_some_and(|t| !t.is_finite() || t.abs() > 1.0e9)
+            {
+                errors.push(format!("{path}/particleTime"), "particle time must be present exactly for an emitter and finite within +/-1e9 seconds");
+            }
             if scene
                 .meshes
                 .get(index)

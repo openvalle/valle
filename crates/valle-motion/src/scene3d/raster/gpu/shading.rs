@@ -108,7 +108,12 @@ impl GpuRasterShading {
                     .map_or(0.0, |e| (e.settings().face_size.ilog2() + 1) as f32),
             ],
             [
-                if textures.is_empty() { 13.0 } else { 27.0 }, // vertex stride in u32 words
+                (if textures.is_empty() { 13.0 } else { 27.0 })
+                    + if prepared.meshes.iter().any(|m| m.particles.is_some()) {
+                        4.0
+                    } else {
+                        0.0
+                    }, // vertex stride in u32 words
                 textures.len() as f32,
                 -1.0,
                 0.0,
@@ -279,6 +284,11 @@ impl GpuRasterShading {
             ],
         ]);
         Self {
+            particle_tints: prepared
+                .meshes
+                .iter()
+                .any(|m| m.particles.is_some())
+                .then(Vec::new),
             vertices: Vec::new(),
             texture_vertices: (!textures.is_empty()).then(Vec::new),
             textures,

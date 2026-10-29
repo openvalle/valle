@@ -28,6 +28,9 @@ mod group_tests;
 mod lighting;
 #[cfg(test)]
 mod orthographic_tests;
+mod particle_render;
+#[cfg(test)]
+mod particle_tests;
 mod pbr;
 mod punctual;
 mod shadow;
@@ -61,6 +64,7 @@ pub struct SceneResources {
 
 #[derive(Clone, Debug)]
 struct PreparedMesh {
+    particles: Option<crate::particles3d::PreparedParticles3D>,
     object_id: u32,
     model: Arc<AdmittedModel>,
     images: Vec<MaterialImage>,
@@ -81,6 +85,7 @@ struct FrameMesh<'a> {
 
 #[derive(Clone, Copy)]
 struct RasterCommand {
+    tint: [f32; 4],
     world: [WorldVertex; 3],
     coverage: Coverage,
     mesh_index: usize,
@@ -724,6 +729,8 @@ pub fn prepare_scene(
                 continue;
             };
             Arc::clone(model)
+        } else if spec.particles.is_some() {
+            Arc::new(super::particles::template())
         } else {
             Arc::new(
                 spec.geometry
@@ -752,8 +759,28 @@ pub fn prepare_scene(
         if model_contents.insert(model.content_digest) {
             model_bytes = model_bytes.saturating_add(model.source_bytes);
         }
-        vertices = vertices.saturating_add(model.rendered_vertex_count());
-        triangles = triangles.saturating_add(model.rendered_triangle_count());
+        let particles = spec
+            .particles
+            .as_ref()
+            .map(|p| {
+                p.motion
+                    .prepare()
+                    .map_err(|e| super::asset::one_error("/particles", e.to_string()))
+            })
+            .transpose()?;
+        if let Some(p) = &particles {
+            model_bytes = model_bytes.saturating_add(p.storage_bytes());
+        }
+        vertices = vertices.saturating_add(
+            spec.particles
+                .as_ref()
+                .map_or_else(|| model.rendered_vertex_count(), |p| p.vertex_count()),
+        );
+        triangles = triangles.saturating_add(
+            spec.particles
+                .as_ref()
+                .map_or_else(|| model.rendered_triangle_count(), |p| p.triangle_count()),
+        );
         for image in &model.images {
             if texture_contents.insert(image.storage_key()) {
                 texture_pixels = texture_pixels.saturating_add(image.pixel_count());
@@ -860,6 +887,7 @@ pub fn prepare_scene(
         }
         material_count = material_count.saturating_add(used.len() as u32);
         meshes.push(PreparedMesh {
+            particles,
             object_id: (index + 1) as u32,
             model,
             images,
@@ -1054,6 +1082,19 @@ fn collect_geometry_reusing<'a>(
             return Err(errors);
         }
         frame_meshes.push(FrameMesh { mesh, materials });
+        if let Some(particles) = &mesh.particles {
+            particle_render::collect(
+                prepared,
+                frame,
+                camera,
+                mesh_index,
+                particles,
+                transform,
+                &mut commands,
+                &mut tile_references,
+            )?;
+            continue;
+        }
         let mut volume_materials = BTreeMap::new();
         for instance in instances {
             let node_transform = if instance.skin.is_some() {
@@ -1300,6 +1341,7 @@ fn collect_geometry_reusing<'a>(
                                 Coverage::new(screen, double_sided, prepared.width, prepared.height)
                             {
                                 commands.push(RasterCommand {
+                                    tint: [1.0; 4],
                                     world: vertices,
                                     coverage,
                                     mesh_index,
@@ -1648,7 +1690,8 @@ fn render_tile(
             if material.values.needs_blend() {
                 continue;
             }
-            let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
+            let values = particle_render::tinted(&material.values, command.tint);
+            let shading = pbr::Triangle::new(material.kind, &values, command.world);
             raster_projected_triangle(
                 &command.coverage,
                 frame_mesh.mesh,
@@ -1671,7 +1714,8 @@ fn render_tile(
             let command = &commands[index];
             let frame_mesh = &frame_meshes[command.mesh_index];
             let material = &frame_mesh.materials[command.material_index];
-            let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
+            let values = particle_render::tinted(&material.values, command.tint);
+            let shading = pbr::Triangle::new(material.kind, &values, command.world);
             raster_projected_triangle(
                 &command.coverage,
                 frame_mesh.mesh,
@@ -1704,7 +1748,8 @@ fn render_tile(
             if !material.values.needs_blend() {
                 continue;
             }
-            let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
+            let values = particle_render::tinted(&material.values, command.tint);
+            let shading = pbr::Triangle::new(material.kind, &values, command.world);
             raster_projected_triangle(
                 &command.coverage,
                 frame_mesh.mesh,

@@ -42,6 +42,7 @@ pub(super) fn fixture(bytes: &[u8], shadows: bool) -> (PreparedScene, Frame3DSta
     let mut scene = Scene3DSpec {
         pbr: Default::default(),
         meshes: vec![MeshSpec {
+            particles: None,
             key: "subject".into(),
             model_control: Some("model".into()),
             geometry: None,
@@ -84,6 +85,7 @@ pub(super) fn fixture(bytes: &[u8], shadows: bool) -> (PreparedScene, Frame3DSta
             depth_of_field: None,
         },
         meshes: vec![MeshFrameState {
+            particle_time: None,
             parents: Vec::new(),
             key: "subject".into(),
             material: MaterialFrameState {

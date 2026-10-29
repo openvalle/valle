@@ -87,12 +87,12 @@ fn mesh_local(source:u32,instance:u32) -> MeshVertex {
     if view.z>=near && view.z<=far {depth=clamp(depth,0.0,divisor);}
     let clip=vec4(xy,depth,divisor);
     return LitVertex(clip,select(1.0,view.z,orthographic()),normal,rasterVertices[index*4u+2u],vec2<u32>(entry.zw),
-        vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0u);
+        vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0u,vec4(1.0));
 }
 @fragment fn mesh_fragment(in:LitVertex,@builtin(front_facing) front:bool) -> Fragment {
     if !front && shading[HEADER+in.material*MATERIAL+3u].z==0.0 {discard;}
     let inverse=select(in.position.w,precise_divide(1.0,in.invZ),orthographic());
     let sample=LitVertex(in.position,inverse,select(-in.normalOverZ,in.normalOverZ,front),
-        in.material,in.ids,in.uv,in.uvDx,in.uvDy,in.tangent,in.bitangent,in.triangle);
+        in.material,in.ids,in.uv,in.uvDx,in.uvDy,in.tangent,in.bitangent,in.triangle,in.tint);
     return Fragment(lit_color(sample),pack_depth(precise_divide(1.0,sample.invZ)));
 }

@@ -13,6 +13,7 @@ fn spec() -> Scene3DSpec {
     Scene3DSpec {
         pbr: Default::default(),
         meshes: vec![MeshSpec {
+            particles: None,
             key: "product".into(),
             model_control: Some("productModel".into()),
             geometry: None,
@@ -62,6 +63,7 @@ fn frame() -> Frame3DState {
         .with_orbit(26.0, 0.0, Some(4.5))
         .unwrap(),
         meshes: vec![MeshFrameState {
+            particle_time: None,
             parents: Vec::new(),
             key: "product".into(),
             material: MaterialFrameState {

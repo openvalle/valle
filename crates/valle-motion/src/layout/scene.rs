@@ -2048,6 +2048,11 @@ fn resolve_scene3d_requests(
                 .iter()
                 .map(|mesh| {
                     Ok(valle_motion::scene3d::MeshFrameState {
+                        particle_time: mesh
+                            .particle_time
+                            .as_ref()
+                            .map(|time| number_value(time, values, at, "scene3d particle time"))
+                            .transpose()?,
                         parents: mesh
                             .parents
                             .iter()

@@ -266,6 +266,7 @@ pub fn prepare_gpu_mesh_geometry(
                 .iter()
                 .any(|m| m.material.transmission.unwrap_or(0.0) > 0.0)
     }) || prepared.scene.pbr.shadows
+        || prepared.meshes.iter().any(|m| m.particles.is_some())
         || prepared.meshes.iter().any(|m| {
             m.materials
                 .iter()

@@ -1135,6 +1135,8 @@ impl Scene3DLightBinding {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DMeshBinding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub particle_time: Option<NumberValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parents: Vec<Scene3DTransformBinding>,
     pub key: String,
@@ -1662,6 +1664,13 @@ impl SceneNode {
                     number(format!("/kind/frame/camera/{name}"), value, &mut refs);
                 }
                 for (at, mesh) in frame.meshes.iter().enumerate() {
+                    if let Some(time) = &mesh.particle_time {
+                        number(
+                            format!("/kind/frame/meshes/{at}/particleTime"),
+                            time,
+                            &mut refs,
+                        );
+                    }
                     if let Some(time) = &mesh.animation_time {
                         number(
                             format!("/kind/frame/meshes/{at}/animationTime"),
@@ -5688,6 +5697,14 @@ impl SceneArtifact {
                     })
                     <= crate::scene3d::MAX_FRAME_SCALARS;
                 for (at, mesh) in frame.meshes.iter().enumerate() {
+                    if scene.meshes.get(at).is_some_and(|spec| {
+                        spec.particles.is_some() != mesh.particle_time.is_some()
+                    }) || mesh.particle_time.as_ref().is_some_and(|time| {
+                        !scalar(time)
+                            || matches!(time, NumberValue::Static{value} if value.abs()>1.0e9)
+                    }) {
+                        meshes_valid = false;
+                    }
                     if scene.meshes.get(at).is_some_and(|spec| {
                         spec.animation_clip.is_some() != mesh.animation_time.is_some()
                     }) || mesh

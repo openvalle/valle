@@ -15,11 +15,12 @@ struct LitVertex {
     @location(7) @interpolate(flat) tangent: vec3<f32>,
     @location(8) @interpolate(flat) bitangent: vec3<f32>,
     @location(9) @interpolate(flat) triangle:u32,
+    @location(10) @interpolate(flat) tint:vec4<f32>,
 };
 
 fn make_lit_vertex(position: vec2<f32>, invZ: f32, objectId: u32, nodeId: u32, normalOverZ: vec3<f32>, material: u32) -> LitVertex {
     return LitVertex(vec4(position / globals.extent * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.5, 1.0),
-        invZ,normalOverZ,material,vec2(objectId,nodeId),vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0xffffffffu);
+        invZ,normalOverZ,material,vec2(objectId,nodeId),vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0xffffffffu,vec4(1.0));
 }
 
 // Zero-valued uniform boundary: retain f32 rounding in the normal/GGX terms.
@@ -167,13 +168,13 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
     let counts = vec3<u32>(shading[1].xyz);
     let material = HEADER + in.material * MATERIAL;
     let baseTex=texture_slot(material,0u,in);
-    let base = shading[material].rgb*baseTex.rgb;
+    let base = shading[material].rgb*baseTex.rgb*in.tint.rgb;
     let kind = u32(shading[material].a);
-    let emission = shading[material + 1u].rgb*texture_slot(material,4u,in).rgb;
+    let emission = shading[material + 1u].rgb*texture_slot(material,4u,in).rgb*in.tint.rgb;
     let mr=texture_slot(material,1u,in);
     let metallic = shading[material + 1u].a*mr.b;
     let roughness = max(shading[material + 2u].x*mr.g,0.0525);
-    let coverage=shading[material+2u].y*baseTex.a;
+    let coverage=shading[material+2u].y*baseTex.a*in.tint.a;
     if shading[material+2u].z >= 0.0 && coverage < shading[material+2u].z {discard;}
     let ao=1.0+shading[material+3u].y*(texture_slot(material,3u,in).r-1.0);
     let lightStart = HEADER + counts.x * MATERIAL;
@@ -295,7 +296,7 @@ fn camera_position(pixel:vec2<u32>,inverse:f32) -> vec3<f32> {
 @vertex fn background_vertex(@builtin(vertex_index) index:u32) -> LitVertex {
     let point=vec2(select(-1.0,3.0,index==1u),select(-1.0,3.0,index==2u));
     return LitVertex(vec4(point,0.5,1.0),1.0,vec3(0.0),0u,vec2(0u),vec2(0.0),
-        vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0xffffffffu);
+        vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0xffffffffu,vec4(1.0));
 }
 @fragment fn background_fragment(in:LitVertex) -> Fragment {
     var radiance=env_specular(unit(camera_ray(vec2<u32>(in.position.xy))),0.0);

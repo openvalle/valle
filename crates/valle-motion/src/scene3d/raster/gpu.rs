@@ -23,6 +23,7 @@ pub struct GpuRasterVarying {
 
 #[derive(Clone, Debug)]
 pub struct GpuRasterShading {
+    pub particle_tints: Option<Vec<[f32; 4]>>,
     pub vertices: Vec<GpuRasterVarying>,
     pub texture_vertices: Option<Vec<GpuRasterTextureVarying>>,
     pub textures: Vec<std::sync::Arc<crate::scene3d::MaterialImage>>,
@@ -132,10 +133,10 @@ impl GpuRasterGeometry {
 
     pub fn vertex_stride(&self) -> u64 {
         Self::VERTEX_STRIDE
-            + self
-                .shading
-                .as_ref()
-                .map_or(0, |s| if s.texture_vertices.is_some() { 72 } else { 16 })
+            + self.shading.as_ref().map_or(0, |s| {
+                (if s.texture_vertices.is_some() { 72 } else { 16 })
+                    + if s.particle_tints.is_some() { 16 } else { 0 }
+            })
     }
 
     pub fn vertex_bytes(&self) -> Vec<u8> {
@@ -169,6 +170,11 @@ impl GpuRasterGeometry {
                         bytes.extend_from_slice(&value.to_le_bytes());
                     }
                 }
+                if let Some(tints) = &shading.particle_tints {
+                    for value in tints[index] {
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
             }
         }
         bytes
@@ -197,6 +203,7 @@ pub fn prepare_gpu_geometry(
     }
     let mut vertices = Vec::with_capacity(geometry.commands.len() * 3);
     let lit = camera.orthographic
+        || prepared.meshes.iter().any(|m| m.particles.is_some())
         || prepared.scene.pbr.shadows
         || prepared.environment.is_some()
         || prepared.meshes.iter().any(|m| {
@@ -219,7 +226,7 @@ pub fn prepare_gpu_geometry(
         let material = &mesh.materials[command.material_index].values;
         if material
             .alpha_cutoff
-            .is_some_and(|cutoff| material.base_color[3] < cutoff)
+            .is_some_and(|cutoff| material.base_color[3] * command.tint[3] < cutoff)
         {
             continue;
         }
@@ -271,6 +278,9 @@ pub fn prepare_gpu_geometry(
                 node_id: command.node_id,
             });
             if let Some(shading) = &mut shading {
+                if let Some(tints) = &mut shading.particle_tints {
+                    tints.push(command.tint);
+                }
                 shading.vertices.push(GpuRasterVarying {
                     normal_over_z: [
                         screen.normal.x * screen.inv_z,
