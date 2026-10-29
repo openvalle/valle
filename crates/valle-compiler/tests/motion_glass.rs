@@ -235,24 +235,47 @@ fn a_glass_blurs_on_the_plane_its_own_projection_maps_it_onto() {
 }
 
 #[test]
-fn a_glass_inside_another_elements_projection_is_refused() {
-    let refusal = "a Glass inside another element's CSS 3D transform or perspective cannot blur";
-    let error = emit_error(
-        r#"<View style={{ width: 200, height: 160, transform: "perspective(300px) rotateY(30deg)" }}>
-      <Glass style={{ width: 100, height: 80 }} />
-    </View>"#,
-        240,
-        160,
-    );
-    assert!(error.contains(refusal), "{error}");
-    let error = emit_error(
-        r#"<View style={{ width: 200, height: 160, transform: "perspective(300px) rotateX(20deg)" }}>
-      <GlassField><Glass style={{ width: 80, height: 80 }} /></GlassField>
-    </View>"#,
-        240,
-        160,
-    );
-    assert!(error.contains(refusal), "{error}");
+fn a_glass_inside_another_elements_projection_uses_viewport_optics() {
+    for transform in [
+        "perspective(300px) rotateY(30deg)",
+        "perspective(300px) rotateX(20deg)",
+    ] {
+        for child in [
+            r#"<Glass material={{ frost: 4 }} style={{ width: 100, height: 80 }} />"#,
+            r#"<GlassField material={{ frost: 4 }}><Glass style={{ width: 100, height: 80 }} /><Glass style={{ width: 70, height: 60, left: 40 }} /></GlassField>"#,
+        ] {
+            let source = format!(
+                r#"<View style={{{{ width: 200, height: 160, transform: "{transform}" }}}}>
+          {child}
+        </View>"#
+            );
+            let program = emit_program(&source, 240, 160).unwrap();
+            let mut frosts = 0;
+            let mut optics = 0;
+            for (above, node) in nodes_with_groups(&program) {
+                let Node::Group(group) = node else {
+                    continue;
+                };
+                if group.backdrop.is_some() || !group.filters.is_empty() {
+                    let world = above.iter().fold(
+                        valle_draw::program::recording::Homography::IDENTITY,
+                        |world, group| {
+                            valle_draw::program::recording::Homography(group.transform.0)
+                                .then(world)
+                        },
+                    );
+                    assert!(
+                        world.0[6].abs() < 1e-12 && world.0[7].abs() < 1e-12,
+                        "blur still projected: {:?}",
+                        world.0
+                    );
+                }
+                frosts += usize::from(group.backdrop.is_some());
+                optics += usize::from(group.shader.is_some());
+            }
+            assert_eq!((frosts, optics), (1, 2));
+        }
+    }
 }
 
 #[test]

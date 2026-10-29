@@ -246,6 +246,57 @@ impl Emitter<'_> {
         self.close(depth);
     }
 
+    /// Neutralize the complete ancestor projection while retaining its clip/opacity groups.
+    /// The silhouette and material lengths then live in viewport pixels, where frost has a
+    /// single radius. The centre Jacobian defines that radius under perspective.
+    pub(super) fn glass_frost_in_viewport(
+        &mut self,
+        glass: &ResolvedGlass,
+        material: &GlassMaterial,
+        outline: &Outline,
+        own_plane: Option<Homography>,
+    ) {
+        let Some(inverse) = self.world.inverse() else {
+            return;
+        };
+        let map = own_plane.unwrap_or(Homography::IDENTITY).then(self.world);
+        self.push(RecordCmd::BeginPerspective { matrix: inverse });
+        self.glass_frost(glass, material, outline, Some(map));
+        self.push(RecordCmd::End);
+    }
+
+    pub(super) fn glass_surface_in_viewport(
+        &mut self,
+        key: &str,
+        glass: &ResolvedGlass,
+        material: &GlassMaterial,
+        outline: &Outline,
+        crossed: usize,
+    ) -> Result<(), EmitError> {
+        let Some(inverse) = self.world.inverse() else {
+            return Ok(());
+        };
+        let Some((outline, scale)) = projected(outline, self.world) else {
+            return Ok(());
+        };
+        let material = GlassMaterial {
+            bevel: material.bevel.map(|v| v * scale),
+            refraction: material.refraction.map(|v| v * scale),
+            ..*material
+        };
+        self.push(RecordCmd::BeginPerspective { matrix: inverse });
+        let result = self.surface(
+            key,
+            glass,
+            &material,
+            &outline,
+            Homography::IDENTITY,
+            crossed + 1,
+        );
+        self.push(RecordCmd::End);
+        result
+    }
+
     /// Draw a Glass's surface. Its backdrop is what lies under the node's own layers, `crossed`
     /// groups above. Under its own projection, the group the node opened last, the surface draws
     /// in the plane the projection maps into, as its frost does: the projection closes around it.
@@ -357,7 +408,24 @@ impl Emitter<'_> {
         let field = tree.glass.fields.get(key).ok_or_else(|| {
             EmitError::Program(format!("GlassField '{key}' has no values for this frame"))
         })?;
-        let space = affine_of(self.field_space(key, first));
+        // The ordinary placements are absolute 2D coordinates. Retain the ancestor's
+        // additional projection once, then collect projected field members in the viewport.
+        let ancestor = if self.projections > 0 {
+            let inverse = affine_of(self.cur)
+                .inverse()
+                .ok_or_else(|| EmitError::BadStyle {
+                    node: key.to_owned(),
+                    reason: "GlassField has a singular ancestor".into(),
+                })?;
+            Some(Homography::from_affine(inverse).then(self.world))
+        } else {
+            None
+        };
+        let space = if ancestor.is_some() {
+            Affine::IDENTITY
+        } else {
+            affine_of(self.field_space(key, first))
+        };
         let from_viewport = space.inverse().ok_or_else(|| EmitError::BadStyle {
             node: key.to_owned(),
             reason: "GlassField lays out in a box with a singular transform".into(),
@@ -390,6 +458,7 @@ impl Emitter<'_> {
             let outline = Outline::of(glass, border_box, radii);
             let to_field = self
                 .local_to_viewport(np, node, border_box, member)?
+                .then(ancestor.unwrap_or(Homography::IDENTITY))
                 .then(Homography::from_affine(from_viewport));
             let (path, fill_rule) = outline.path();
             let Some(shape) = mapped_path(&path, to_field) else {
@@ -431,23 +500,44 @@ impl Emitter<'_> {
             bounds.x + bounds.width / 2.0,
             bounds.y + bounds.height / 2.0,
         );
-        let optics = Optics::of(&field.material, shorter, to_viewport, center);
+        let scale = ancestor
+            .and_then(|map| {
+                map.inverse()
+                    .and_then(|inv| inv.try_apply(center))
+                    .and_then(|local| length_scale(map, local))
+            })
+            .unwrap_or(1.0);
+        let material = GlassMaterial {
+            bevel: field.material.bevel.map(|v| v * scale),
+            refraction: field.material.refraction.map(|v| v * scale),
+            frost: field.material.frost * scale,
+            ..field.material
+        };
+        let optics = Optics::of(&material, shorter, to_viewport, center);
 
         // Draw at the bounds' origin: a shader layer's box starts at its origin.
         let target = Affine::translate(bounds.x, bounds.y).then(space);
-        let current = affine_of(self.cur)
-            .inverse()
-            .ok_or_else(|| EmitError::BadStyle {
-                node: key.to_owned(),
-                reason: "GlassField draws under a singular transform".into(),
-            })?;
-        let relative = target.then(current);
         let mut depth = 0;
-        if relative.0 != Affine::translate(0.0, 0.0).0 {
-            self.push(RecordCmd::BeginTransform {
-                transform: relative,
-            });
-            depth += 1;
+        if ancestor.is_some() {
+            let inverse = self.world.inverse().ok_or_else(|| EmitError::BadStyle {
+                node: key.to_owned(),
+                reason: "GlassField draws under a singular projection".into(),
+            })?;
+            depth += self.begin_projection(Homography::from_affine(target).then(inverse));
+        } else {
+            let current = affine_of(self.cur)
+                .inverse()
+                .ok_or_else(|| EmitError::BadStyle {
+                    node: key.to_owned(),
+                    reason: "GlassField draws under a singular transform".into(),
+                })?;
+            let relative = target.then(current);
+            if relative != Affine::IDENTITY {
+                self.push(RecordCmd::BeginTransform {
+                    transform: relative,
+                });
+                depth += 1;
+            }
         }
         let to_layer = Homography::from_affine(Affine::translate(-bounds.x, -bounds.y));
         let mut shapes = Vec::with_capacity(members.len());
@@ -469,8 +559,8 @@ impl Emitter<'_> {
             }
         }
         let size = Rect::new(0.0, 0.0, bounds.width, bounds.height);
-        let bridge = field.merge / 1.35;
-        let frost = field.material.frost;
+        let bridge = field.merge * scale / 1.35;
+        let frost = material.frost;
         // A member coming in brings its frost in with it: while one does, the frost is masked by
         // the shapes' gray, their presences, and the surface by their coverage.
         let fading = shapes.iter().any(|shape| shape.presence < 1.0);

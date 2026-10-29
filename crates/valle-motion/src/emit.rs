@@ -1496,18 +1496,7 @@ impl Emitter<'_> {
 
         // A Glass frosts what lies behind its shape, then draws its surface over it at its shell.
         // A field member, which has no material of its own, draws with its field.
-        if let Some(key) = key
-            && tree.glass.glass.contains_key(key)
-            && self.projections > 0
-        {
-            return Err(EmitError::BadStyle {
-                node: key.to_owned(),
-                reason: "a Glass inside another element's CSS 3D transform or perspective cannot \
-                         blur, since a blur has no single radius there; give the 3D transform to \
-                         the Glass itself"
-                    .into(),
-            });
-        }
+        let ancestor_projected = self.projections > 0;
         let member = key
             .and_then(|key| tree.glass.glass.get(key))
             .is_some_and(|glass| glass.material.is_none());
@@ -1523,7 +1512,11 @@ impl Emitter<'_> {
         });
         if let Some((key, glass, material, outline)) = &glass {
             let plane = self.layer_perspective(np, node, border_box, key)?;
-            self.glass_frost(glass, material, outline, plane);
+            if ancestor_projected {
+                self.glass_frost_in_viewport(glass, material, outline, plane);
+            } else {
+                self.glass_frost(glass, material, outline, plane);
+            }
         }
 
         // A shader layer's backdrop is what lies under this node's own layers, which begin here.
@@ -1606,7 +1599,11 @@ impl Emitter<'_> {
             let plane = self.layer_perspective(np, node, border_box, key)?;
             let placement = Homography::from_affine(affine_of(np.transform));
             let crossed = depth - own_layers;
-            self.glass_surface(key, glass, material, outline, plane, placement, crossed)?;
+            if ancestor_projected {
+                self.glass_surface_in_viewport(key, glass, material, outline, crossed)?;
+            } else {
+                self.glass_surface(key, glass, material, outline, plane, placement, crossed)?;
+            }
         } else if !member {
             self.box_shadows(np, node, border_box, radii, false);
         }
