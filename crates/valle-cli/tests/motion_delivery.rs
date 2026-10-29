@@ -168,6 +168,53 @@ export default function Test(){{return <Scene style={{{{backgroundColor:'black'}
 }
 
 #[test]
+fn webp_images_preserve_color_and_alpha_through_motion_delivery() {
+    // Lossless WebP, 64 x 36, straight RGBA (255, 32, 32, 192).
+    const WEBP: &[u8] = b"RIFF$\x00\x00\x00WEBPVP8L\x17\x00\x00\x00/?\xc0\x08\x10\x07P\x90\xfe\x17\xa4\xc0\x01 !\xfc_/F\xf4?\xf5\x00\x00";
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("image.webp"), WEBP).unwrap();
+    std::fs::write(dir.path().join("image.motion.tsx"), r#"
+export const composition = {width:64,height:36,fps:30,duration:1};
+export const controls = {assets:{picture:asset({kind:"image"})}};
+export default function Test(){return <Scene><Image src="asset://picture" style={{width:64,height:36}}/></Scene>;}
+"#).unwrap();
+    success(run(
+        dir.path(),
+        &[
+            "motion",
+            "render",
+            "image.motion.tsx",
+            "--asset",
+            "picture=image.webp",
+            "--frame",
+            "0",
+            "--backend",
+            "raster",
+            "--threads",
+            "1",
+            "-o",
+            "frame.png",
+            "--json",
+        ],
+    ));
+    let decoder = png::Decoder::new(BufReader::new(
+        std::fs::File::open(dir.path().join("frame.png")).unwrap(),
+    ));
+    let mut reader = decoder.read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    assert_eq!(
+        (info.width, info.height, info.color_type),
+        (64, 36, png::ColorType::Rgba)
+    );
+    for pixel in pixels[..info.buffer_size()].chunks_exact(4) {
+        for (actual, expected) in pixel.iter().zip([255, 32, 32, 192]) {
+            assert!(actual.abs_diff(expected) <= 1, "{pixel:?}");
+        }
+    }
+}
+
+#[test]
 fn motion_check_reports_tangent_contact_without_failing_and_respects_strict_policy() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("contact.motion.tsx"), CONTACT).unwrap();

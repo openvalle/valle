@@ -24,7 +24,7 @@ fs2 = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
-skia-safe = { workspace = true, optional = true }
+skia-safe = { workspace = true, optional = true, features = ["webp-decode"] }
 ttf-parser = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 [features]
