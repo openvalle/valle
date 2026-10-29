@@ -2272,7 +2272,9 @@ impl Emitter<'_> {
             // Use the same text predicate for emission and missing-glyph reporting.
             // An inline formatting context can contain only replaced images. It has no
             // glyphs to shape and must not be reported as a missing font.
-            if has_own_text(node) || node.has_anonymous_text_item_child() {
+            if (has_own_text(node) || node.has_anonymous_text_item_child())
+                && built.text.chars().any(|c| !is_spacing_or_direction_mark(c))
+            {
                 self.unsupported(np, "text produced no glyphs (no usable font?)");
             }
             // Continue to the inline replaced-image boxes even when there are no glyph runs.
@@ -2643,17 +2645,13 @@ impl Emitter<'_> {
             }
             Err(reject) => {
                 // Takumi matches repeated glyph IDs against the whole shaping run. An empty
-                // glyph can therefore point at a synthetic bidi marker instead of its space.
+                // glyph can therefore point at another space or a synthetic bidi marker.
                 // Such a glyph has no pixels or authored source; never relax checks for ink.
                 if reject == ClusterReject::OutOfRun
                     && !shaped.cluster_ranges.is_empty()
                     && shaped.cluster_ranges.iter().all(|range| {
                         inline_text.get(range.clone()).is_some_and(|text| {
-                            !text.is_empty()
-                                && text.chars().all(|c| {
-                                    matches!(c,
-                                '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-                                })
+                            !text.is_empty() && text.chars().all(is_spacing_or_direction_mark)
                         })
                     })
                     && ttf_parser::Face::parse(shaped.font_data(), shaped.font_index).is_ok_and(
@@ -5010,8 +5008,17 @@ fn cased_text(source: &str, transform: TextTransform) -> (String, Vec<TextSource
     (cased, projection)
 }
 
-fn is_css_collapsible_whitespace(ch: char) -> bool {
-    matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{000c}')
+fn is_spacing_or_direction_mark(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(ch,
+        '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
+fn is_layout_collapsible_whitespace(ch: char) -> bool {
+    // Match the pinned shaper's text_processing::apply_white_space_collapse exactly.
+    // It currently also collapses Unicode spaces. Address the actual shaped text rather
+    // than reporting a valid U+3000/NBSP source as an unsupported paint operation.
+    ch.is_whitespace()
 }
 
 /// Align a CSS-collapsed string with the authored string. A generated single space owns the whole
@@ -5032,15 +5039,15 @@ fn collapsed_text_projection(
             .get(processed_at + 1)
             .map(|(at, _)| *at)
             .unwrap_or(processed.len());
-        if is_css_collapsible_whitespace(processed_ch) {
+        if is_layout_collapsible_whitespace(processed_ch) {
             let source_start = source_chars
                 .get(source_at)
-                .filter(|(_, ch)| is_css_collapsible_whitespace(*ch))
+                .filter(|(_, ch)| is_layout_collapsible_whitespace(*ch))
                 .map(|(at, _)| *at)
                 .ok_or(ClusterReject::NotVerbatim)?;
             while source_chars
                 .get(source_at)
-                .is_some_and(|(_, ch)| is_css_collapsible_whitespace(*ch))
+                .is_some_and(|(_, ch)| is_layout_collapsible_whitespace(*ch))
             {
                 source_at += 1;
             }
@@ -5061,7 +5068,7 @@ fn collapsed_text_projection(
         if processed_at == 0 {
             while source_chars
                 .get(source_at)
-                .is_some_and(|(_, ch)| is_css_collapsible_whitespace(*ch))
+                .is_some_and(|(_, ch)| is_layout_collapsible_whitespace(*ch))
             {
                 source_at += 1;
             }

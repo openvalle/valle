@@ -277,3 +277,20 @@ fn explicit_newlines_after_spaces_override_soft_break_rules() {
         }
     }
 }
+
+#[test]
+fn whitespace_spans_and_unicode_spaces_have_valid_source_addresses() {
+    for body in [
+        r#"<Text style={{whiteSpace:"pre"}}>{"  \n\t"}</Text>"#,
+        r#"<Text style={{fontSize:30}}>{"A　B"}</Text>"#,
+        r#"<Text style={{fontFamily:"monospace",fontSize:24,whiteSpace:"pre"}}><Span>{"  "}</Span><Span style={{color:"red"}}>const</Span><Span>{" "}</Span><Span style={{color:"white"}}>x = 1</Span></Text>"#,
+        r#"<Text style={{fontSize:24}}>{time.seconds < 0.5 ? "" : "Hello"}</Text>"#,
+    ] {
+        let report = emit_source(&scene(body));
+        assert!(
+            report.unsupported.is_empty(),
+            "{body}: {:?}",
+            report.unsupported
+        );
+    }
+}
