@@ -35,14 +35,14 @@ fn transmitted_color(in:LitVertex,reflected:vec4<f32>)->vec4<f32> {
         let color=shading[material+20u].rgb;
         tint*=select(pow(max(color,vec3(1e-30)),vec3(distance/parameters.z)),vec3(0.0),color==vec3(0.0));
     }
-    let z=precise_divide(1.0,in.invZ);let exit=camera_position(ray,in.invZ)+direction*distance-shading[2].xyz;
+    let z=precise_divide(1.0,in.invZ);let exit=camera_position(vec2<u32>(in.position.xy),in.invZ)+direction*distance-shading[2].xyz;
     let counts=vec3<u32>(shading[1].xyz);
     let at=HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u+u32(globals.extent.x)+u32(globals.extent.y);
     let right=shading[at];let up=shading[at+1u];let forward=shading[at+2u];let exitDepth=dot3(exit,forward.xyz);
     if exitDepth<forward.w {let alpha=1.0-weight;return vec4(clamp(reflected.rgb/max(alpha,1e-6),vec3(0.0),vec3(1.0)),reflected.a*alpha);}
-    let screen=(vec2(dot3(exit,right.xyz)*right.w,-dot3(exit,up.xyz)*up.w)/exitDepth*0.5+vec2(0.5))*globals.extent;
+    let screen=(vec2(dot3(exit,right.xyz)*right.w,-dot3(exit,up.xyz)*up.w)/select(exitDepth,1.0,orthographic())*0.5+vec2(0.5))*globals.extent;
     let roughness=max(shading[material+2u].x*mr.g,0.0525);
-    let radius=min(roughness*roughness*distance*up.w*globals.extent.y/(2.0*z),32.0);
+    let radius=min(roughness*roughness*distance*up.w*globals.extent.y/(2.0*select(z,1.0,orthographic())),32.0);
     var sampled=transmission_sample(screen,z)*0.4;
     sampled+=transmission_sample(screen+vec2(-radius,0.0),z)*0.15;
     sampled+=transmission_sample(screen+vec2(radius,0.0),z)*0.15;

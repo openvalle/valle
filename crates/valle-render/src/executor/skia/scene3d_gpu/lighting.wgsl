@@ -126,10 +126,19 @@ fn scattering(f0:vec3<f32>,f90:f32,fab:vec2<f32>) -> mat2x3<f32> {
     let single=f0*fab.x+f90*fab.y;let missing=1.0-fab.x-fab.y;let average=f0+(vec3(f90)-f0)/21.0;
     return mat2x3(single,single*average/(vec3(1.0)-missing*average)*missing);
 }
-fn camera_ray(pixel:vec2<u32>) -> vec3<f32> {
+fn orthographic() -> bool { return (u32(shading[1].w)&8u)!=0u; }
+fn camera_basis() -> u32 {
+    let counts=vec3<u32>(shading[1].xyz);
+    return HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u+u32(globals.extent.x)+u32(globals.extent.y);
+}
+fn camera_sample(pixel:vec2<u32>) -> vec3<f32> {
     let counts=vec3<u32>(shading[1].xyz);
     let rayStart=HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u;
     return shading[rayStart+pixel.x].xyz+shading[rayStart+u32(globals.extent.x)+pixel.y].xyz;
+}
+fn camera_ray(pixel:vec2<u32>) -> vec3<f32> {
+    if orthographic() { return shading[camera_basis()+2u].xyz; }
+    return camera_sample(pixel);
 }
 fn lit_normal(in: LitVertex, material:u32) -> vec3<f32> {
     var n = unit(select(in.normalOverZ,in.normalOverZ / in.invZ,in.triangle==0xffffffffu));
@@ -167,7 +176,7 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
         var factor = shading[0].rgb*ao;
         for (var i = 0u; i < counts.y; i++) {
             let at = lightStart + i * 2u;
-            factor += shading[at + 1u].rgb * max(dot(n, shading[at].xyz), 0.0)*shadow_visibility(i,camera_position(ray,in.invZ),n);
+            factor += shading[at + 1u].rgb * max(dot(n, shading[at].xyz), 0.0)*shadow_visibility(i,camera_position(pixel,in.invZ),n);
         }
         for (var i = 0u; i < counts.z; i++) {
             let at = hemiStart + i * 3u;
@@ -204,7 +213,7 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
     if kind == 2u {
         for (var i = 0u; i < counts.y; i++) {
             let at = lightStart + i * 2u;
-            radiance += direct(base, metallic, roughness, n, v, shading[at].xyz, fab, shading[material+19u].x, optics) * shading[at + 1u].rgb*shadow_visibility(i,camera_position(ray,in.invZ),n);
+            radiance += direct(base, metallic, roughness, n, v, shading[at].xyz, fab, shading[material+19u].x, optics) * shading[at + 1u].rgb*shadow_visibility(i,camera_position(pixel,in.invZ),n);
         }
     }
     if kind == 2u && coating.y > 0.0 {
@@ -215,7 +224,7 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
         for (var i=0u;i<counts.y;i++) {
             let at=lightStart+i*2u;
             radiance+=coating.y*direct(vec3(0.04),1.0,cr,cn,v,shading[at].xyz,cfab,0.0,vec4(0.04,0.04,0.04,1.0))
-                *shading[at+1u].rgb*shadow_visibility(i,camera_position(ray,in.invZ),cn);
+                *shading[at+1u].rgb*shadow_visibility(i,camera_position(pixel,in.invZ),cn);
         }
         if shading[3].z >= 0.0 {
             let r=cn*(2.0*dot3(cn,v))-v;let r4=cr*cr*cr*cr;
@@ -233,8 +242,10 @@ fn lit_color(in:LitVertex) -> vec4<f32> {
     return vec4(half_even(srgb(c.r)*c.a),half_even(srgb(c.g)*c.a),half_even(srgb(c.b)*c.a),half_even(c.a));
 }
 
-fn camera_position(ray:vec3<f32>,inverse:f32) -> vec3<f32> {
+fn camera_position(pixel:vec2<u32>,inverse:f32) -> vec3<f32> {
     let z=precise_divide(1.0,inverse);let eye=shading[2].xyz;
+    let ray=camera_sample(pixel);
+    if orthographic() { return eye+ray+shading[camera_basis()+2u].xyz*z; }
     return vec3(stable(eye.x+stable(ray.x*z)),stable(eye.y+stable(ray.y*z)),stable(eye.z+stable(ray.z*z)));
 }
 

@@ -229,6 +229,7 @@ fn frame() -> Frame3DState {
         camera: CameraFrameState {
             position: Vec3::new(0.0, 0.35, 4.5),
             target: Vec3::new(0.0, 0.1, 0.0),
+            orthographic_height: None,
             fov_y_degrees: 38.0,
             near: 0.1,
             far: 20.0,

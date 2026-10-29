@@ -116,6 +116,8 @@ impl<'s> Compiler<'s> {
             camera_object,
             "Scene3D camera",
             &[
+                "type",
+                "height",
                 "position",
                 "target",
                 "orbitYaw",
@@ -127,6 +129,48 @@ impl<'s> Compiler<'s> {
                 "depthOfField",
             ],
         )?;
+        let projection = match camera_values.get("type") {
+            Some(value) => match self
+                .eval_static(value)
+                .and_then(|v| v.as_str().map(str::to_owned))
+            {
+                Some(value) => value,
+                None => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        value.span(),
+                        "camera type must be a static perspective or orthographic string",
+                    );
+                    return None;
+                }
+            },
+            None => "perspective".into(),
+        };
+        let orthographic_height =
+            match projection.as_str() {
+                "perspective" if !camera_values.contains_key("height") => None,
+                "orthographic" if !camera_values.contains_key("fov") => {
+                    let Some(height) = camera_values.get("height") else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            camera_object.span(),
+                            "orthographic camera requires height in world units",
+                        );
+                        return None;
+                    };
+                    Some(self.number_binding(height, "camera height", |h| {
+                        (0.01..=100_000.0).contains(&h)
+                    })?)
+                }
+                _ => {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        camera_object.span(),
+                        "camera type must be perspective (fov) or orthographic (height)",
+                    );
+                    return None;
+                }
+            };
         let position = self.scene3d_frame_vec3(
             camera_values.get("position").copied(),
             camera_object.span(),
@@ -198,6 +242,7 @@ impl<'s> Compiler<'s> {
             None
         };
         let camera_binding = Scene3DCameraBinding {
+            orthographic_height,
             position,
             target,
             orbit_yaw_degrees,

@@ -90,7 +90,8 @@ impl GpuRasterShading {
 pub struct GpuRasterVertex {
     /// Pixel coordinates snapped to the reference's 1/256-pixel coverage grid.
     pub position: [f32; 2],
-    /// Interpolate linearly in screen space, then invert to recover camera-space depth.
+    /// Perspective packets store inverse depth; orthographic packets store linear depth.
+    /// The projection flag in shading selects both depth decoding and attribute weights.
     pub inv_z: f32,
     /// Constant Unlit sRGB, or the original normal XYZ and coverage inverse area for lit packets.
     pub color: [f32; 4],
@@ -105,7 +106,8 @@ pub struct GpuRasterGeometry {
     /// Independent triangles in the same submission order as the CPU renderer.
     pub vertices: Vec<GpuRasterVertex>,
     pub anchors: Vec<AnchorProjection>,
-    /// Projected packets use depth_scale / z (reverse Z). Retained source meshes instead
+    /// Projected packets use depth_scale / z, or 1 - z * depth_scale for orthographic.
+    /// Retained source meshes instead
     /// use finite reverse Z from the camera near/far rows for hardware clipping.
     pub depth_scale: f32,
     /// Absent for the exact, constant-color Unlit path.
@@ -189,7 +191,8 @@ pub fn prepare_gpu_geometry(
         return Err(errors);
     }
     let mut vertices = Vec::with_capacity(geometry.commands.len() * 3);
-    let lit = prepared.scene.pbr.shadows
+    let lit = camera.orthographic
+        || prepared.scene.pbr.shadows
         || prepared.environment.is_some()
         || prepared.meshes.iter().any(|m| {
             m.materials
@@ -244,7 +247,11 @@ pub fn prepare_gpu_geometry(
                     fixed.x as f32 / SUBPIXEL_SCALE,
                     fixed.y as f32 / SUBPIXEL_SCALE,
                 ],
-                inv_z: screen.inv_z,
+                inv_z: if camera.orthographic {
+                    screen.view_z
+                } else {
+                    screen.inv_z
+                },
                 color: if lit {
                     [
                         screen.normal.x,
@@ -315,6 +322,9 @@ pub fn prepare_gpu_geometry(
     let mut depth_scale = 1.0;
     while depth_scale > frame.camera.near {
         depth_scale *= 0.5;
+    }
+    if camera.orthographic {
+        depth_scale = 0.5 / camera.far;
     }
     Ok(Some(GpuRasterGeometry {
         width: prepared.width,

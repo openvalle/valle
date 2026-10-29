@@ -57,8 +57,9 @@ fn texture_slot(material: u32, slot: u32, in: LitVertex) -> vec4<f32> {
     var uv=in.uv;
     // Hardware triangle interpolation carries UV/Z; exact bbox fragments already carry UV.
     if in.triangle==0xffffffffu {uv=in.uv/in.invZ;}
-    let dx = texture_gradient(material,slot,(in.uvDx.xy-uv*in.uvDx.z)/in.invZ);
-    let dy = texture_gradient(material,slot,(in.uvDy.xy-uv*in.uvDy.z)/in.invZ);
+    let divisor=select(in.invZ,1.0,orthographic());
+    let dx = texture_gradient(material,slot,(in.uvDx.xy-uv*in.uvDx.z)/divisor);
+    let dy = texture_gradient(material,slot,(in.uvDy.xy-uv*in.uvDy.z)/divisor);
     let size = mip_at(image,0u).zw;
     let x = dx*size; let y = dy*size;
     let lod = 0.5*log2(max(max(dot(x,x),dot(y,y)),1e-16));

@@ -4,6 +4,7 @@ use skia_safe::{Color, ImageInfo, Paint};
 use std::collections::BTreeMap;
 use valle_engine::motion::scene3d::*;
 mod mesh;
+mod orthographic;
 mod raster_math;
 
 fn half(bits: u16) -> f32 {
@@ -102,6 +103,7 @@ fn fixture_spec(
         camera: CameraFrameState {
             position: Vec3::new(0.0, 0.0, 3.0),
             target: Vec3::ZERO,
+            orthographic_height: None,
             fov_y_degrees: 45.0,
             near: 0.1,
             far: 100.0,
@@ -869,12 +871,15 @@ fn dielectric_transmission_matches_cpu_reference() {
     };
     let prepared = Arc::new(prepare_scene(&scene, 384, 256, &resources).unwrap());
     let (mut rasterizer, mut context) = renderer();
-    for (thickness, ior, coat) in [
-        (0.8, 1.5, 0.0),
-        (0.8, 2.2, 0.7),
-        (0.0, 1.0, 1.0),
-        (0.8, 1.5, 0.0),
+    for (thickness, ior, coat, height) in [
+        (0.8, 1.5, 0.0, None),
+        (0.8, 2.2, 0.7, None),
+        (0.0, 1.0, 1.0, None),
+        (0.8, 2.2, 0.7, Some(3.0)),
+        (0.0, 1.0, 1.0, Some(3.0)),
+        (0.8, 1.5, 0.0, None),
     ] {
+        frame.camera.orthographic_height = height;
         frame.meshes[2].material.ior = Some(ior);
         frame.meshes[2].material.clearcoat = Some(coat);
         frame.meshes[2].material.clearcoat_roughness = Some(0.2);
@@ -927,7 +932,7 @@ fn dielectric_transmission_matches_cpu_reference() {
         let mean = errors.iter().sum::<f32>() / errors.len() as f32;
         assert!(
             max < 0.02 && mean < 0.0005,
-            "thickness={thickness}: max={max},mean={mean}"
+            "thickness={thickness}, height={height:?}: max={max},mean={mean}"
         );
     }
 }

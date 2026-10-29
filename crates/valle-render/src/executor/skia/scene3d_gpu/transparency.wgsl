@@ -69,7 +69,7 @@ fn linear_srgb(v:f32) -> f32 {
     let weight=sum_read(3u,index);
     var depth=bitcast<f32>(0x7f7fffffu);
     let storedDepth=textureLoad(opaqueDepth,pixel,0);
-    if storedDepth>0.0 {depth=precise_divide(globals.depthScale,storedDepth);}
+    if storedDepth>0.0 {depth=opaque_view_depth(storedDepth);}
     if weight>0.0 {
         var reveal=0.0;
         if (atomicLoad(&extinction[index].hi)&0x80000000u)==0u {reveal=exp(-sum_read(4u,index)/1000000000.0);}
@@ -86,4 +86,8 @@ fn linear_srgb(v:f32) -> f32 {
     if all(id.xy<textureDimensions(resolvedDepth)) {textureStore(resolvedDepth,pixel,pack_depth(depth));}
 }
 
-fn transmission_depth(at:vec2<i32>)->f32 {let value=textureLoad(opaqueDepth,at,0);if value<=0.0{return bitcast<f32>(0x7f7fffffu);}return precise_divide(globals.depthScale,value);}
+fn opaque_view_depth(value:f32)->f32 {
+    if orthographic() { return precise_divide(1.0-value,globals.depthScale); }
+    return precise_divide(globals.depthScale,value);
+}
+fn transmission_depth(at:vec2<i32>)->f32 {let value=textureLoad(opaqueDepth,at,0);if value<=0.0{return bitcast<f32>(0x7f7fffffu);}return opaque_view_depth(value);}

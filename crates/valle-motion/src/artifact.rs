@@ -782,6 +782,8 @@ pub struct Scene3DFrameBinding {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DCameraBinding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orthographic_height: Option<NumberValue>,
     pub position: [NumberValue; 3],
     pub target: [NumberValue; 3],
     pub near: NumberValue,
@@ -817,6 +819,9 @@ impl Scene3DCameraBinding {
             ("orbitYawDegrees", &self.orbit_yaw_degrees),
             ("orbitPitchDegrees", &self.orbit_pitch_degrees),
         ];
+        if let Some(height) = &self.orthographic_height {
+            values.push(("orthographicHeight", height));
+        }
         if let Some(distance) = &self.distance {
             values.push(("distance", distance));
         }
@@ -844,6 +849,10 @@ impl Scene3DCameraBinding {
             ))
         };
         let camera = crate::scene3d::CameraFrameState {
+            orthographic_height: match &self.orthographic_height {
+                Some(h) => Some(number(h)?),
+                None => None,
+            },
             position: vector(&self.position)?,
             target: vector(&self.target)?,
             near: number(&self.near)?,

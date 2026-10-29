@@ -593,6 +593,7 @@ mod tests {
         CameraFrameState {
             position: Vec3([0.0, 0.0, 4.5]),
             target: Vec3([0.0; 3]),
+            orthographic_height: None,
             fov_y_degrees: 45.0,
             near: 0.1,
             far: 100.0,

@@ -50,7 +50,7 @@ try {
   image.delete();
 }
 
-function source(resources: boolean): string {
+function source(resources: boolean, orthographic = false): string {
   const textures = resources
     ? ',textures:{baseColor:"asset://map",metallicRoughness:{src:"asset://map",wrapU:"repeat",wrapV:"mirror",mipmap:"nearest"},normal:"asset://map",occlusion:"asset://map",emissive:"asset://map"}'
     : "";
@@ -58,7 +58,7 @@ function source(resources: boolean): string {
 export const controls={assets:{${resources ? 'model:asset({kind:"model3d"}),map:asset({kind:"image"}),sky:asset({kind:"environment"})' : ""}}};
 const BALL=lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"),{segments:8});
 export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
-<Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[time.seconds*0.05,0,5],target:[0,0,0],fov:45,depthOfField:{focusDistance:5,maxBlurRadius:8}}}
+<Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[time.seconds*0.05,0,5],target:[0,0,0],${orthographic ? 'type:"orthographic",height:4+time.seconds*0.3' : "fov:45"},depthOfField:{focusDistance:5,maxBlurRadius:8}}}
  pbr={{shadows:true,toneMapping:"aces",exposure:0.6+time.seconds*0.3${resources ? ',environment:{src:"asset://sky",rotation:time.seconds*90,intensity:0.3,background:true}' : ""}}}>
  <Group3D key="assembly" rotateZ={time.seconds*12} scale={[1.05,0.95,1]}><Group3D key="inner" rotateY={time.seconds*15}>
  <Mesh key="main" geometry={BALL} rotateY={time.seconds*90} position={[-0.4,0,0]}
@@ -99,14 +99,35 @@ async function deadline<T>(work: Promise<T>, lastActivity?: () => number): Promi
 const cases = process.argv
   .find((arg) => arg.startsWith("--cases="))
   ?.slice(8)
-  .split(",") ?? ["unlit", "morph", "skin", "clip", "procedural", "assets"];
+  .split(",") ?? [
+  "unlit",
+  "morph",
+  "skin",
+  "clip",
+  "procedural",
+  "assets",
+  "orthographic",
+  "orthographic-morph",
+];
 if (
-  cases.some((name) => !["unlit", "morph", "skin", "clip", "procedural", "assets"].includes(name))
+  cases.some(
+    (name) =>
+      ![
+        "unlit",
+        "morph",
+        "skin",
+        "clip",
+        "procedural",
+        "assets",
+        "orthographic",
+        "orthographic-morph",
+      ].includes(name),
+  )
 )
   throw new Error("Unknown Scene3D case");
 for (const name of cases) {
-  const animated = name === "morph" || name === "skin";
-  const resources = name === "assets",
+  const animated = name === "morph" || name === "skin" || name === "orthographic-morph";
+  const resources = name === "assets" || name === "orthographic",
     directory = join(evidence, name);
   await mkdir(directory);
   const input = join(directory, "scene.motion.tsx");
@@ -132,11 +153,11 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
           ? `export const composition={width:${width},height:${height},fps:30,duration:2};
 export const controls={assets:{model:asset({kind:"model3d"})}};
 export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
-<Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,${name === "skin" ? 15 : 5}],target:[0,0,0],fov:45}}>
+<Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,${name === "skin" ? 15 : 5}],target:[0,0,0],${name === "orthographic-morph" ? 'type:"orthographic",height:5+time.seconds' : "fov:45"}}}>
 <Mesh key="model" src="asset://model" animation={{clip:0,time:time.seconds*2}} rotateY={time.seconds*45} scale={[-1,1,1]} material={{type:"pbr",color:"#cf7338",roughness:0.4}}/>
 <AmbientLight intensity={0.4}/><DirectionalLight direction={[0.4,0.8,1]} intensity={1.2}/>
 </Scene3D></Scene>;}`
-          : source(resources),
+          : source(resources, name === "orthographic"),
   );
   const child = Bun.spawn(
     [

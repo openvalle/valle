@@ -127,17 +127,19 @@ impl Sample {
                 coverage * alpha,
             );
         }
-        let screen_x = (exit.dot(camera.right) * camera.focal / camera.aspect / z * 0.5 + 0.5)
+        let divisor = camera.projection_divisor(z);
+        let screen_x = (exit.dot(camera.right) * camera.focal / camera.aspect / divisor * 0.5
+            + 0.5)
             * backdrop.width as f32;
         let screen_y =
-            (-exit.dot(camera.up) * camera.focal / z * 0.5 + 0.5) * backdrop.height as f32;
+            (-exit.dot(camera.up) * camera.focal / divisor * 0.5 + 0.5) * backdrop.height as f32;
         let radius = (self.roughness
             * self.roughness
             * self.distance
             * camera.focal
             * backdrop.height as f32
-            / (2.0 * depth))
-            .min(32.0);
+            / (2.0 * camera.projection_divisor(depth)))
+        .min(32.0);
         let mut sampled = [0.0; 4];
         for (x, y, w) in [
             (0.0, 0.0, 0.4),

@@ -69,6 +69,9 @@ impl GpuRasterShading {
         {
             flags |= 2;
         }
+        if camera.orthographic {
+            flags |= 8;
+        }
         if prepared.scene.pbr.shadows {
             flags |= 4;
         }

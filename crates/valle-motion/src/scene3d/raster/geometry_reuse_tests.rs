@@ -77,6 +77,7 @@ pub(super) fn fixture(bytes: &[u8], shadows: bool) -> (PreparedScene, Frame3DSta
         camera: CameraFrameState {
             position: Vec3::new(0.0, 0.0, 15.0),
             target: Vec3::new(0.0, 0.0, 0.0),
+            orthographic_height: None,
             fov_y_degrees: 45.0,
             near: 0.1,
             far: 40.0,

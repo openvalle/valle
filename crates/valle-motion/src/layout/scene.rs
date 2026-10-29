@@ -1968,6 +1968,12 @@ fn resolve_scene3d_requests(
             Ok(valle_motion::scene3d::Color4(c.to_srgb_straight()))
         };
         let camera = valle_motion::scene3d::CameraFrameState {
+            orthographic_height: frame
+                .camera
+                .orthographic_height
+                .as_ref()
+                .map(|h| scalar(h, "scene3d orthographic height"))
+                .transpose()?,
             position: vector(&frame.camera.position)?,
             target: vector(&frame.camera.target)?,
             near: scalar(&frame.camera.near, "scene3d camera near")?,

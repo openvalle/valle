@@ -36,13 +36,18 @@ struct RasterVertex { @builtin(position) position:vec4<f32>,@location(0) @interp
     return Fragment(vec4(vertex_vec3(base+3u),vertex_float(base+6u)),pack_depth(depth));
 }
 @vertex fn raster_lit_vertex(@builtin(vertex_index) index:u32) -> LitVertex {
-    return LitVertex(triangle_position(index,u32(shading[4].x),globals.extent,vertex_float(index*u32(shading[4].x)+2u)*globals.depthScale),1.0,vec3(0.0),0u,vec2(0u),
+    let storedDepth=vertex_float(index*u32(shading[4].x)+2u);
+    let depth=select(storedDepth*globals.depthScale,1.0-storedDepth*globals.depthScale,orthographic());
+    return LitVertex(triangle_position(index,u32(shading[4].x),globals.extent,depth),1.0,vec3(0.0),0u,vec2(0u),
         vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),index/3u);
 }
 fn raster_lit_sample(in:LitVertex) -> LitVertex {
     let stride=u32(shading[4].x);let base=in.triangle*3u*stride;
-    let bary=raster_bary(base,stride,in.position.xy);let inverse=raster_inverse_z(base,stride,bary);
-    let weights=vec3(precise_divide(stable(bary.x*vertex_float(base+2u)),inverse),precise_divide(stable(bary.y*vertex_float(base+stride+2u)),inverse),precise_divide(stable(bary.z*vertex_float(base+stride*2u+2u)),inverse));
+    let bary=raster_bary(base,stride,in.position.xy);
+    let stored=raster_inverse_z(base,stride,bary);
+    let inverse=select(stored,precise_divide(1.0,stored),orthographic());
+    var weights=vec3(precise_divide(stable(bary.x*vertex_float(base+2u)),inverse),precise_divide(stable(bary.y*vertex_float(base+stride+2u)),inverse),precise_divide(stable(bary.z*vertex_float(base+stride*2u+2u)),inverse));
+    if orthographic() { weights=bary; }
     let a=vertex_vec3(base+3u);let b=vertex_vec3(base+stride+3u);let c=vertex_vec3(base+stride*2u+3u);
     let normal=vec3(
         stable(stable(stable(a.x*weights.x)+stable(b.x*weights.y))+stable(c.x*weights.z)),

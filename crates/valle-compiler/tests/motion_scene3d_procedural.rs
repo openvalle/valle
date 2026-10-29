@@ -284,3 +284,35 @@ fn scene3d_material_host_frames_require_the_corresponding_template_and_color_slo
         .validate()
         .unwrap();
 }
+
+#[test]
+fn orthographic_camera_height_is_animated_and_projection_fields_are_explicit() {
+    let source = SOURCE.replace(
+        "position:[0,0,5],target:[0,0,0]",
+        "type:\"orthographic\",height:4+time.seconds,position:[0,0,5],target:[0,0,0]",
+    );
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let camera = artifact
+        .nodes
+        .iter()
+        .find_map(|n| match &n.kind {
+            NodeKind::Scene3D { frame, .. } => Some(&frame.camera),
+            _ => None,
+        })
+        .unwrap();
+    assert!(matches!(
+        camera.orthographic_height,
+        Some(valle_motion::NumberValue::Expr { .. })
+    ));
+    for bad in [
+        source.replace("height:4+time.seconds,", ""),
+        source.replace("height:4+time.seconds", "height:0"),
+        source.replace("height:4+time.seconds", "height:4,fov:45"),
+        source.replace("orthographic", "perspective"),
+        source.replace("type:\"orthographic\"", "type:42"),
+        source.replace("orthographic", "unknown"),
+    ] {
+        assert!(compile_motion(&bad).is_err(), "{bad}");
+    }
+}

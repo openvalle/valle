@@ -31,68 +31,71 @@ fn gpu_mesh_clip_planes_masks_and_coplanar_order() {
     second.material.color = Some(Color4([0.05, 0.1, 0.8, 1.0]));
     frame.meshes.push(second);
     let prepared = Arc::new(prepare_scene(&scene, 384, 256, &resources).unwrap());
-    for (near, far) in [(0.1, 100.0), (0.1, 3.0), (3.0, 100.0), (0.1, 2.9)] {
-        frame.camera.near = near;
-        frame.camera.far = far;
-        for alpha in [0.4, 0.5, 1.0] {
-            frame.meshes[0].material.color.as_mut().unwrap().0[3] = alpha;
-            let reference = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
-            let actual = prepare_gpu_mesh_geometry(&prepared, &frame)
-                .unwrap()
-                .unwrap();
-            let mut outputs = Vec::new();
-            for geometry in [reference, actual] {
-                let input =
-                    Scene3dGpuInput::new(geometry, prepared.clone(), Arc::new(frame.clone()))
-                        .unwrap();
-                let result = rasterizer.render(&input, &mut context).unwrap().unwrap();
-                // Constant projected Unlit is already working Rec.2020; shaded packets
-                // carry sRGB. Compare after conversion to the same tagged color space.
-                let info = ImageInfo::new(
-                    (384, 256),
-                    ColorType::RGBAF16,
-                    AlphaType::Premul,
-                    ColorSpace::new_srgb(),
-                );
-                let mut pixels = vec![0; info.compute_byte_size(info.min_row_bytes())];
-                assert!(result.image.read_pixels_with_context(
-                    &mut context,
-                    &info,
-                    &mut pixels,
-                    info.min_row_bytes(),
-                    (0, 0),
-                    skia_safe::image::CachingHint::Disallow
-                ));
-                outputs.push(pixels);
-            }
-            let mut visible = 0;
-            for (a, b) in outputs[1]
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .zip(outputs[0].as_chunks::<8>().0)
-            {
-                assert_eq!(
-                    a[6..],
-                    b[6..],
-                    "near={near} far={far} alpha={alpha} coverage"
-                );
-                visible += usize::from(b[6..] != [0, 0]);
-                for channel in 0..3 {
-                    let value = |p: &[u8; 8]| {
-                        half(u16::from_le_bytes(
-                            p[channel * 2..channel * 2 + 2].try_into().unwrap(),
-                        ))
-                    };
-                    assert!(
-                        (value(a) - value(b)).abs() <= 1.0 / 512.0,
-                        "near={near} far={far} alpha={alpha} color/order channel={channel}: {} vs {}",
-                        value(a),
-                        value(b)
+    for height in [None, Some(3.0)] {
+        frame.camera.orthographic_height = height;
+        for (near, far) in [(0.1, 100.0), (0.1, 3.0), (3.0, 100.0), (0.1, 2.9)] {
+            frame.camera.near = near;
+            frame.camera.far = far;
+            for alpha in [0.4, 0.5, 1.0] {
+                frame.meshes[0].material.color.as_mut().unwrap().0[3] = alpha;
+                let reference = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+                let actual = prepare_gpu_mesh_geometry(&prepared, &frame)
+                    .unwrap()
+                    .unwrap();
+                let mut outputs = Vec::new();
+                for geometry in [reference, actual] {
+                    let input =
+                        Scene3dGpuInput::new(geometry, prepared.clone(), Arc::new(frame.clone()))
+                            .unwrap();
+                    let result = rasterizer.render(&input, &mut context).unwrap().unwrap();
+                    // Constant projected Unlit is already working Rec.2020; shaded packets
+                    // carry sRGB. Compare after conversion to the same tagged color space.
+                    let info = ImageInfo::new(
+                        (384, 256),
+                        ColorType::RGBAF16,
+                        AlphaType::Premul,
+                        ColorSpace::new_srgb(),
                     );
+                    let mut pixels = vec![0; info.compute_byte_size(info.min_row_bytes())];
+                    assert!(result.image.read_pixels_with_context(
+                        &mut context,
+                        &info,
+                        &mut pixels,
+                        info.min_row_bytes(),
+                        (0, 0),
+                        skia_safe::image::CachingHint::Disallow
+                    ));
+                    outputs.push(pixels);
                 }
+                let mut visible = 0;
+                for (a, b) in outputs[1]
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .zip(outputs[0].as_chunks::<8>().0)
+                {
+                    assert_eq!(
+                        a[6..],
+                        b[6..],
+                        "near={near} far={far} alpha={alpha} coverage"
+                    );
+                    visible += usize::from(b[6..] != [0, 0]);
+                    for channel in 0..3 {
+                        let value = |p: &[u8; 8]| {
+                            half(u16::from_le_bytes(
+                                p[channel * 2..channel * 2 + 2].try_into().unwrap(),
+                            ))
+                        };
+                        assert!(
+                            (value(a) - value(b)).abs() <= 1.0 / 512.0,
+                            "near={near} far={far} alpha={alpha} color/order channel={channel}: {} vs {}",
+                            value(a),
+                            value(b)
+                        );
+                    }
+                }
+                assert_eq!(visible > 100, far >= 3.0);
             }
-            assert_eq!(visible > 100, far >= 3.0);
         }
     }
 }

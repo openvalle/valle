@@ -25,6 +25,8 @@ mod geometry_reuse_tests;
 #[cfg(test)]
 mod group_tests;
 mod lighting;
+#[cfg(test)]
+mod orthographic_tests;
 mod pbr;
 mod shadow;
 mod transmission;
@@ -1564,8 +1566,12 @@ fn render_tile(
                         / camera.focal;
                     let vertical =
                         (1.0 - (y as f32 + 0.5) / tile.height as f32 * 2.0) / camera.focal;
-                    let ray = (camera.forward + camera.right * horizontal + camera.up * vertical)
-                        .normalized();
+                    let ray = if camera.orthographic {
+                        camera.forward
+                    } else {
+                        (camera.forward + camera.right * horizontal + camera.up * vertical)
+                            .normalized()
+                    };
                     let rgb = environment
                         .specular(lights.environment_direction(ray), 0.0)
                         .map(|v| v * lights.environment_intensity);
@@ -1844,6 +1850,7 @@ struct ScreenVertex {
 }
 
 struct Camera {
+    orthographic: bool,
     eye: V3,
     forward: V3,
     right: V3,
@@ -1869,10 +1876,13 @@ impl PixelRays {
         Self {
             columns: (0..camera.width)
                 .map(|x| {
-                    camera.forward
-                        + camera.right
-                            * ((2.0 * (x as f32 + 0.5) / camera.width as f32 - 1.0) * camera.aspect
-                                / camera.focal)
+                    (if camera.orthographic {
+                        V3::new(0.0, 0.0, 0.0)
+                    } else {
+                        camera.forward
+                    }) + camera.right
+                        * ((2.0 * (x as f32 + 0.5) / camera.width as f32 - 1.0) * camera.aspect
+                            / camera.focal)
                 })
                 .collect(),
             rows: (0..camera.height)
@@ -1938,19 +1948,28 @@ impl super::CameraFrameState {
 }
 
 impl Camera {
+    fn projection_divisor(&self, z: f32) -> f32 {
+        if self.orthographic { 1.0 } else { z }
+    }
+
     fn new(frame: &Frame3DState, width: u32, height: u32) -> Result<Self, ContractErrors> {
         let target = V3::from(frame.camera.target);
         let eye = V3::from(frame.camera.position);
         let forward = (target - eye).normalized();
         let right = forward.cross(V3::Y).normalized();
         let up = right.cross(forward).normalized();
-        let focal = 1.0 / libm::tanf(degrees(frame.camera.fov_y_degrees) * 0.5);
+        let orthographic = frame.camera.orthographic_height.is_some();
+        let focal = frame.camera.orthographic_height.map_or_else(
+            || 1.0 / libm::tanf(degrees(frame.camera.fov_y_degrees) * 0.5),
+            |h| 2.0 / h,
+        );
         if !focal.is_finite() {
             let mut errors = ContractErrors::default();
             errors.push("/camera/fovYDegrees", "camera projection is not finite");
             return Err(errors);
         }
         Ok(Self {
+            orthographic,
             eye,
             forward,
             right,
@@ -1978,7 +1997,11 @@ impl Camera {
     }
 
     fn project(&self, vertex: ViewVertex) -> ScreenVertex {
-        let inv_z = 1.0 / vertex.position.z;
+        let inv_z = if self.orthographic {
+            1.0
+        } else {
+            1.0 / vertex.position.z
+        };
         let ndc_x = vertex.position.x * self.focal * inv_z / self.aspect;
         let ndc_y = vertex.position.y * self.focal * inv_z;
         ScreenVertex {
@@ -1997,12 +2020,13 @@ impl Camera {
         let horizontal = self.aspect / self.focal;
         let vertical = 1.0 / self.focal;
         let position = view.position;
+        let extent = self.projection_divisor(position.z);
         let inside = position.z >= self.near
             && position.z <= self.far
-            && position.x + position.z * horizontal >= 0.0
-            && position.z * horizontal - position.x >= 0.0
-            && position.y + position.z * vertical >= 0.0
-            && position.z * vertical - position.y >= 0.0;
+            && position.x + extent * horizontal >= 0.0
+            && extent * horizontal - position.x >= 0.0
+            && position.y + extent * vertical >= 0.0
+            && extent * vertical - position.y >= 0.0;
         ProjectedVertex {
             view,
             screen: inside.then(|| self.project(view)),
@@ -2376,16 +2400,16 @@ fn project_view_triangle(
     let mut clipped = clip_polygon_by(&view, |vertex| vertex.position.z - camera.near);
     clipped = clip_polygon_by(&clipped, |vertex| camera.far - vertex.position.z);
     clipped = clip_polygon_by(&clipped, |vertex| {
-        vertex.position.x + vertex.position.z * horizontal
+        vertex.position.x + camera.projection_divisor(vertex.position.z) * horizontal
     });
     clipped = clip_polygon_by(&clipped, |vertex| {
-        vertex.position.z * horizontal - vertex.position.x
+        camera.projection_divisor(vertex.position.z) * horizontal - vertex.position.x
     });
     clipped = clip_polygon_by(&clipped, |vertex| {
-        vertex.position.y + vertex.position.z * vertical
+        vertex.position.y + camera.projection_divisor(vertex.position.z) * vertical
     });
     clipped = clip_polygon_by(&clipped, |vertex| {
-        vertex.position.z * vertical - vertex.position.y
+        camera.projection_divisor(vertex.position.z) * vertical - vertex.position.y
     });
     if clipped.len() < 3 {
         return;
@@ -2621,7 +2645,13 @@ fn raster_projected_triangle(
                 offset += 1;
                 continue;
             }
-            let view_z = 1.0 / perspective_sum;
+            let view_z = if camera.orthographic {
+                bary[0] * vertices[0].view_z
+                    + bary[1] * vertices[1].view_z
+                    + bary[2] * vertices[2].view_z
+            } else {
+                1.0 / perspective_sum
+            };
             let depth = view_z;
             let previous = output.depth[row][offset];
             let hidden = match fragments {
@@ -2663,10 +2693,24 @@ fn raster_projected_triangle(
                 offset += 1;
                 continue;
             }
-            let corrected = perspective_weights(bary, vertices, perspective_sum);
+            let corrected = if camera.orthographic {
+                bary
+            } else {
+                perspective_weights(bary, vertices, perspective_sum)
+            };
             let (uv, derivatives) = if let Some(gradients) = &gradients {
                 let uv = interpolated_uv(vertices, corrected);
-                (uv, gradients.at(uv, perspective_sum))
+                (
+                    uv,
+                    gradients.at(
+                        uv,
+                        if camera.orthographic {
+                            1.0
+                        } else {
+                            perspective_sum
+                        },
+                    ),
+                )
             } else {
                 (V2 { x: 0.0, y: 0.0 }, [0.0; 4])
             };
@@ -2674,9 +2718,18 @@ fn raster_projected_triangle(
                 + vertices[1].normal * corrected[1]
                 + vertices[2].normal * corrected[2])
                 .normalized();
-            let ray = pixel_rays.at(x, y);
+            let sample = pixel_rays.at(x, y);
+            let ray = if camera.orthographic {
+                camera.forward
+            } else {
+                sample
+            };
             let view = (ray * -1.0).normalized();
-            let position = camera.eye + ray * view_z;
+            let position = if camera.orthographic {
+                camera.eye + sample + ray * view_z
+            } else {
+                camera.eye + ray * view_z
+            };
             let Some((radiance, alpha, transmitted)) = pbr::shade(
                 mesh,
                 shading,
@@ -3016,6 +3069,7 @@ mod precision_tests {
                 let right = forward.cross(V3::Y).normalized();
                 for focal in [0.02, 1.0, 2.414_213_7, 100.0] {
                     let camera = Camera {
+                        orthographic: false,
                         eye: V3::new(0.0, 0.0, 5.0),
                         forward,
                         right,

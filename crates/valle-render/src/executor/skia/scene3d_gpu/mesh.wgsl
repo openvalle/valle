@@ -72,25 +72,27 @@ fn mesh_local(source:u32,instance:u32) -> MeshVertex {
     let view=vec3(dot3(relative,shading[camera].xyz),dot3(relative,shading[camera+1u].xyz),dot3(relative,shading[camera+2u].xyz));
     let near=shading[camera+2u].w;let far=shading[camera+3u].w;
     var xy=view.xy*vec2(shading[camera].w,shading[camera+1u].w);
-    if view.z>0.0 {
-        let screen=(xy/view.z*vec2(0.5,-0.5)+vec2(0.5))*globals.extent;
+    let divisor=select(view.z,1.0,orthographic());
+    if divisor>0.0 {
+        let screen=(xy/divisor*vec2(0.5,-0.5)+vec2(0.5))*globals.extent;
         let snapped=floor(screen*256.0+vec2(0.5))/256.0;
-        xy=(snapped/globals.extent*vec2(2.0,-2.0)+vec2(-1.0,1.0))*view.z;
+        xy=(snapped/globals.extent*vec2(2.0,-2.0)+vec2(-1.0,1.0))*divisor;
     }
     // Finite reverse-Z gives hardware both near and far clipping, including triangles
     // crossing the camera plane. No CPU clipping or projected vertex upload is needed.
-    var depth=near*(far-view.z)/(far-near);
+    var depth=select(near,1.0,orthographic())*(far-view.z)/(far-near);
     // Reciprocal lowering may round an exactly-on-near-plane depth above clip.w.
     // Clamp only vertices already inside the validated camera interval; outside
     // vertices must keep their out-of-range depth so hardware still clips them.
-    if view.z>=near && view.z<=far {depth=clamp(depth,0.0,view.z);}
-    let clip=vec4(xy,depth,view.z);
-    return LitVertex(clip,1.0,normal,rasterVertices[index*4u+2u],vec2<u32>(entry.zw),
+    if view.z>=near && view.z<=far {depth=clamp(depth,0.0,divisor);}
+    let clip=vec4(xy,depth,divisor);
+    return LitVertex(clip,select(1.0,view.z,orthographic()),normal,rasterVertices[index*4u+2u],vec2<u32>(entry.zw),
         vec2(0.0),vec3(0.0),vec3(0.0),vec3(0.0),vec3(0.0),0u);
 }
 @fragment fn mesh_fragment(in:LitVertex,@builtin(front_facing) front:bool) -> Fragment {
     if !front && shading[HEADER+in.material*MATERIAL+3u].z==0.0 {discard;}
-    let sample=LitVertex(in.position,in.position.w,select(-in.normalOverZ,in.normalOverZ,front),
+    let inverse=select(in.position.w,precise_divide(1.0,in.invZ),orthographic());
+    let sample=LitVertex(in.position,inverse,select(-in.normalOverZ,in.normalOverZ,front),
         in.material,in.ids,in.uv,in.uvDx,in.uvDy,in.tangent,in.bitangent,in.triangle);
     return Fragment(lit_color(sample),pack_depth(precise_divide(1.0,sample.invZ)));
 }

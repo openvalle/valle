@@ -331,6 +331,9 @@ pub struct Frame3DState {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CameraFrameState {
+    /// Visible vertical span in world units; None selects perspective projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orthographic_height: Option<f32>,
     pub position: Vec3,
     pub target: Vec3,
     pub fov_y_degrees: f32,
@@ -642,7 +645,7 @@ impl Scene3DSpec {
     }
 
     pub fn frame_scalar_count(&self) -> usize {
-        14 + self
+        15 + self
             .meshes
             .iter()
             .map(|m| {
@@ -839,6 +842,15 @@ impl CameraFrameState {
 }
 
 fn validate_camera(camera: &CameraFrameState, errors: &mut ContractErrors) {
+    if camera
+        .orthographic_height
+        .is_some_and(|h| !h.is_finite() || !(0.01..=MAX_CAMERA_FAR).contains(&h))
+    {
+        errors.push(
+            "/camera/orthographicHeight",
+            "orthographic height must be finite in 0.01..=100000",
+        );
+    }
     if !camera.position.finite() || !camera.target.finite() {
         errors.push("/camera", "camera position and target must be finite");
     }

@@ -381,6 +381,7 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
                     camera: CameraFrameState {
                         position: Vec3::new(0.0, 0.0, 5.0),
                         target: Vec3::ZERO,
+                        orthographic_height: None,
                         fov_y_degrees: 45.0,
                         near: if sample == 2 { 4.9 } else { 0.1 },
                         far: if sample == 15 { 5.1 } else { 100.0 },

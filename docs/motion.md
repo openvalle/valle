@@ -2828,6 +2828,14 @@ array, as in `const position = [0, 0, 5 - progress]` or a `let` that an `if`
 reassigns, or a `.map` that builds one. Motion resolves orbit controls into the final
 position before submitting the frame; the renderer receives one complete camera.
 FOV defaults to 38° and is restricted to 10–120°; near defaults to 0.1 and far to 1000.
+The default `type: "perspective"` makes distant objects smaller. For parallel
+projection use `camera={{type:"orthographic", height:4, position:[4,3,5], target:[0,0,0]}}`.
+`height` is the visible vertical span in world units (0.01–100000); the horizontal
+span follows the layer's aspect ratio. It accepts frame expressions: decreasing it
+zooms in. Camera distance changes clipping and depth without changing object size.
+`height` is required for orthographic cameras; `fov` is exclusive to perspective
+cameras. Orbit, near/far clipping, anchors, picking, shadows, material textures and
+screen-space transmission support both projections on CPU, native GPU and Web GPU.
 Optional `depthOfField: { focusDistance, maxBlurRadius }` accepts frame expressions
 for both values. `focusDistance` is the camera-space distance of the sharp plane
 (0.01–100000 world units), and `maxBlurRadius` caps the defocus circle at 0–16
@@ -2837,8 +2845,10 @@ foreground silhouettes over more distant pixels. It changes the Scene3D color
 plane; depth, anchors and picking retain the original geometric values.
 
 Native Metal and Vulkan use a shared wgpu renderer for Scene3D rasterization,
-materials, shadows and transparency. Geometry preparation remains on the CPU;
-the resulting GPU color and depth textures feed Skia composition and depth of
+materials, shadows and transparency. Eligible opaque meshes retain source geometry
+on the GPU for transforms, morphing, skinning and clipping; texture, shadow and
+transparent paths currently prepare projected geometry on the CPU. The resulting
+GPU color and depth textures feed Skia composition and depth of
 field without an intermediate readback. Unsupported devices or workloads use
 CPU rasterization. Raster and Web use the CPU depth-of-field kernel, with bounded
 row workers and transparent-region skipping. When a CPU-rasterized scene feeds

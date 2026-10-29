@@ -53,6 +53,7 @@ fn frame() -> Frame3DState {
         camera: CameraFrameState {
             position: Vec3::new(0.0, 1.2, 4.5),
             target: Vec3::new(0.0, 0.4, 0.0),
+            orthographic_height: None,
             fov_y_degrees: 38.0,
             near: 0.1,
             far: 100.0,
@@ -92,7 +93,7 @@ fn frame() -> Frame3DState {
 #[test]
 fn scene_contract_wire_is_exact_strict_and_wasm_clean() {
     let scene = spec();
-    assert_eq!(scene.frame_scalar_count(), 65);
+    assert_eq!(scene.frame_scalar_count(), 66);
     scene.validate().unwrap();
     let json = serde_json::to_value(&scene).unwrap();
     assert_eq!(
@@ -357,7 +358,7 @@ fn node_bindings_have_stable_distinct_ids_and_complete_bounded_frame_transforms(
         .to_vec();
     state.meshes[0].nodes[0].transform.scale.0[0] = -2.0;
     state.validate_for(&scene).unwrap();
-    assert_eq!(scene.frame_scalar_count(), 83);
+    assert_eq!(scene.frame_scalar_count(), 84);
     state.meshes[0].nodes.swap(0, 1);
     assert!(state.validate_for(&scene).is_err());
     state.meshes[0].nodes.swap(0, 1);
