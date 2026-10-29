@@ -486,6 +486,7 @@ pub fn text_outline(
                 bounds.3 = bounds.3.max(p.y);
             }
             let glyph_path = PathData::new(glyph_verbs.clone(), glyph_points.clone())
+                .and_then(|path| path.normalized_font_outline())
                 .map_err(|error| format!("invalid glyph outline: {error}"))?;
             let cluster = shaped
                 .cluster_ranges
@@ -512,8 +513,9 @@ pub fn text_outline(
     if verbs.is_empty() {
         return Err("text produced no vector outline".into());
     }
-    let path =
-        PathData::new(verbs, points).map_err(|error| format!("invalid text outline: {error}"))?;
+    let path = PathData::new(verbs, points)
+        .and_then(|path| path.normalized_font_outline())
+        .map_err(|error| format!("invalid text outline: {error}"))?;
     Ok(OutlinedText {
         path: path.to_svg_path(),
         glyphs,

@@ -196,19 +196,30 @@ fn indexed_smooth_mesh(
     fn bits(v: f32) -> u32 {
         if v == 0.0 { 0 } else { v.to_bits() }
     }
-    let normals = triangles
+    if triangles
         .iter()
-        .map(|t| {
-            face_normal(t[0].0, t[1].0, t[2].0).ok_or_else(|| {
-                error(
-                    "/geometry",
-                    "procedural triangle is degenerate after float conversion",
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+        .flatten()
+        .any(|(position, uv)| position.iter().chain(uv).any(|value| !value.is_finite()))
+    {
+        return Err(error(
+            "/geometry",
+            "procedural triangle has non-finite coordinates",
+        ));
+    }
+    // Curve tessellation and f64 -> f32 coordinates can collapse individual cap slivers.
+    // They have no area and must not abort an otherwise valid solid or contribute NaN normals.
+    let triangles = triangles
+        .iter()
+        .filter_map(|t| face_normal(t[0].0, t[1].0, t[2].0).map(|normal| (t, normal)))
+        .collect::<Vec<_>>();
+    if triangles.is_empty() {
+        return Err(error(
+            "/geometry",
+            "procedural geometry has no nondegenerate triangles",
+        ));
+    }
     let mut neighbors = BTreeMap::<[u32; 3], BTreeMap<[u32; 3], ([f32; 3], f64)>>::new();
-    for (triangle, normal) in triangles.iter().zip(&normals) {
+    for (triangle, normal) in &triangles {
         for corner in 0..3 {
             let p = triangle[corner].0;
             let a: [f64; 3] = std::array::from_fn(|i| {
@@ -238,7 +249,7 @@ fn indexed_smooth_mesh(
     let mut indices = Vec::with_capacity(triangles.len() * 3);
     let mut unique = BTreeMap::<[u32; 8], u32>::new();
     let mut work = 0usize;
-    for (triangle, face) in triangles.iter().zip(normals) {
+    for (triangle, face) in triangles {
         for &(position, uv) in triangle {
             let mut sum = [0.0f64; 3];
             for (normal, weight) in neighbors[&position.map(bits)].values() {
@@ -817,15 +828,15 @@ fn cross2(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
 }
 
 fn face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> Option<[f32; 3]> {
-    let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let u: [f64; 3] = std::array::from_fn(|i| f64::from(b[i]) - f64::from(a[i]));
+    let v: [f64; 3] = std::array::from_fn(|i| f64::from(c[i]) - f64::from(a[i]));
     let cross = [
         u[1] * v[2] - u[2] * v[1],
         u[2] * v[0] - u[0] * v[2],
         u[0] * v[1] - u[1] * v[0],
     ];
-    let length = math::hypot_f32(math::hypot_f32(cross[0], cross[1]), cross[2]);
-    (length > 1e-12 && length.is_finite()).then(|| cross.map(|value| value / length))
+    let length = math::hypot(math::hypot(cross[0], cross[1]), cross[2]);
+    (length > 0.0 && length.is_finite()).then(|| cross.map(|value| (value / length) as f32))
 }
 
 fn error(path: &str, message: &str) -> ContractErrors {
@@ -838,6 +849,25 @@ fn error(path: &str, message: &str) -> ContractErrors {
 mod tests {
     use super::*;
     use valle_draw::PathVerb;
+
+    #[test]
+    fn collapsed_cap_triangles_do_not_discard_the_solid() {
+        let valid = [
+            ([0.0, 0.0, 0.0], [0.0; 2]),
+            ([1.0, 0.0, 0.0], [0.0; 2]),
+            ([0.0, 1.0, 0.0], [0.0; 2]),
+        ];
+        let collapsed = [valid[0]; 3];
+        let (vertices, indices) = indexed_smooth_mesh(&[collapsed, valid]).unwrap();
+        assert_eq!(indices.len(), 3);
+        assert!(
+            vertices
+                .iter()
+                .all(|vertex| vertex.normal == [0.0, 0.0, 1.0])
+        );
+        assert!(indexed_smooth_mesh(&[collapsed]).is_err());
+        assert!(face_normal([0.0; 3], [1e-8, 0.0, 0.0], [0.0, 1e-8, 0.0]).is_some());
+    }
 
     fn square_with_hole() -> PathData {
         PathData::new(

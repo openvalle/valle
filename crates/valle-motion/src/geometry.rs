@@ -1321,6 +1321,59 @@ impl PathData {
             .collect())
     }
 
+    /// Font outlines use nonzero fill and may contain overlapping components or a contour
+    /// that crosses itself. Resolve their filled boundary before using it as a solid profile.
+    /// Keep the original curves when they already define disjoint simple boundaries.
+    pub(crate) fn normalized_font_outline(&self) -> Result<Self, GeometryError> {
+        if let Ok(contours) = self.nested_closed_contours() {
+            // Alternating winding describes holes. A nested contour with the same
+            // winding is still filled under nonzero and must not become a false hole.
+            if contours.iter().all(|contour| {
+                contour.parent.is_none_or(|parent| {
+                    signed_double_area(&contour.points).signum()
+                        != signed_double_area(&contours[parent].points).signum()
+                })
+            }) {
+                return Ok(self.clone());
+            }
+        }
+        use i_overlay::{
+            core::{fill_rule::FillRule, overlay_rule::OverlayRule},
+            float::overlay::FloatOverlay,
+        };
+        let contours = adaptive_flatten(self)?;
+        if contours.iter().any(|contour| !contour.closed) {
+            return Err(GeometryError::ClosedContourRequired);
+        }
+        let input: Vec<Vec<[f64; 2]>> = contours
+            .iter()
+            .map(|contour| contour.points.iter().map(|p| [p.x, p.y]).collect())
+            .collect();
+        let shapes =
+            FloatOverlay::with_subj(&input).overlay(OverlayRule::Subject, FillRule::NonZero);
+        let mut verbs = Vec::new();
+        let mut points = Vec::new();
+        for shape in shapes {
+            for contour in shape {
+                for (index, [x, y]) in contour.into_iter().enumerate() {
+                    if points.len() >= MAX_PATH_POINTS {
+                        return Err(GeometryError::TooComplex);
+                    }
+                    verbs.push(if index == 0 {
+                        PathVerb::Move
+                    } else {
+                        PathVerb::Line
+                    });
+                    points.push(Point::new(x, y));
+                }
+                verbs.push(PathVerb::Close);
+            }
+        }
+        let result = Self::new(verbs, points)?;
+        result.nested_closed_contours()?;
+        Ok(result)
+    }
+
     /// Flatten one authored contour for prepared 3D profiles and centerlines.
     /// A closing point is implicit when `closed` is true.
     pub(crate) fn single_flattened_contour(&self) -> Result<(Vec<Point>, bool), GeometryError> {
@@ -3091,6 +3144,53 @@ fn geometry_number(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn font_outlines_resolve_overlap_without_inventing_holes() {
+        let rectangle = |x: f64, y: f64, size: f64| {
+            PathData::new(
+                vec![
+                    PathVerb::Move,
+                    PathVerb::Line,
+                    PathVerb::Line,
+                    PathVerb::Line,
+                    PathVerb::Close,
+                ],
+                vec![
+                    Point::new(x, y),
+                    Point::new(x + size, y),
+                    Point::new(x + size, y + size),
+                    Point::new(x, y + size),
+                ],
+            )
+            .unwrap()
+        };
+        let join = |a: &PathData, b: &PathData| {
+            PathData::new(
+                [a.verbs.clone(), b.verbs.clone()].concat(),
+                [a.points.clone(), b.points.clone()].concat(),
+            )
+            .unwrap()
+        };
+        let outer = rectangle(0.0, 0.0, 1.0);
+        let overlap = join(&outer, &rectangle(0.5, 0.0, 1.0));
+        assert!(overlap.nested_closed_contours().is_err());
+        let contours = overlap
+            .normalized_font_outline()
+            .unwrap()
+            .nested_closed_contours()
+            .unwrap();
+        assert_eq!(contours.len(), 1);
+        assert!((signed_double_area(&contours[0].points).abs() / 2.0 - 1.5).abs() < 1e-8);
+
+        let inner = rectangle(0.25, 0.25, 0.5);
+        let filled = join(&outer, &inner).normalized_font_outline().unwrap();
+        assert_eq!(filled.nested_closed_contours().unwrap().len(), 1);
+        let hole = join(&outer, &inner.reverse().unwrap());
+        assert_eq!(hole.normalized_font_outline().unwrap(), hole);
+        assert_eq!(outer.normalized_font_outline().unwrap(), outer);
+        assert!(line().normalized_font_outline().is_err());
+    }
 
     fn line() -> PathData {
         PathData::new(
