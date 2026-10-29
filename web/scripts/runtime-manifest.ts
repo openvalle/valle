@@ -93,7 +93,7 @@ export async function emitRuntimeManifests(
   // File-loader dependencies of shared app chunks live outside the app directories. They must
   // enter the verified serving closure too, including the SDK/worker copies of the same LUT.
   const scene3dLookups = (await listFiles(dist))
-    .filter((file) => /^dfg-[\w-]+\.rg16f$/.test(path.basename(file)))
+    .filter((file) => /^lighting-[\w-]+\.rgba16f$/.test(path.basename(file)))
     .map((file) => path.relative(dist, file).replaceAll(path.sep, "/"))
     .sort();
   const engine = await manifestOf(dist, "engine", [

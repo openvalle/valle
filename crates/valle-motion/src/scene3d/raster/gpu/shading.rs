@@ -114,7 +114,12 @@ impl GpuRasterShading {
                 0.0,
             ],
         ];
-        values.push([lights.punctual.len() as f32, 0.0, 0.0, 0.0]);
+        values.push([
+            lights.punctual.len() as f32,
+            lights.area.len() as f32,
+            0.0,
+            0.0,
+        ]);
         let mut material_offsets = Vec::new();
         for mesh in meshes {
             material_offsets
@@ -231,6 +236,12 @@ impl GpuRasterShading {
                 [axis.x, axis.y, axis.z, outer],
                 [inner, 0.0, 0.0, 0.0],
             ]);
+        }
+        for light in &lights.area {
+            for v in [light.position, light.half_width, light.half_height] {
+                values.push([v.x, v.y, v.z, 0.0]);
+            }
+            values.push([light.color[0], light.color[1], light.color[2], 0.0]);
         }
         let rays = PixelRays::new(camera);
         values.extend(

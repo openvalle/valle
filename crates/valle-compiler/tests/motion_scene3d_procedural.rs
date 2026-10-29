@@ -359,3 +359,24 @@ fn punctual_lights_accept_time_bindings_and_reject_invalid_cones() {
         assert!(compile_motion(&bad).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn rectangle_area_light_supports_animation_and_checks_pose_and_size() {
+    let light = r#"<RectAreaLight position={[time.seconds,2,3]} target={[0,0,0]} width={2} height={1} roll={time.seconds*30} intensity={8}/>"#;
+    let source = SOURCE.replace("<AmbientLight intensity={0.3}/>", light);
+    compile_motion(&source)
+        .unwrap()
+        .artifact
+        .validate()
+        .unwrap();
+    for bad in [
+        source.replace("width={2}", "width={0}"),
+        source.replace("height={1}", "height={-1}"),
+        source
+            .replace("time.seconds", "0")
+            .replace("position={[0,2,3]}", "position={[0,0,0]}"),
+        SOURCE.replace("<AmbientLight intensity={0.3}/>", &light.repeat(3)),
+    ] {
+        assert!(compile_motion(&bad).is_err(), "{bad}");
+    }
+}

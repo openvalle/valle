@@ -2106,6 +2106,23 @@ fn resolve_scene3d_requests(
                         use crate::Scene3DLightBinding as Binding;
                         use valle_motion::scene3d::LightFrameState as Light;
                         Ok(match light {
+                            Binding::RectArea {
+                                color: c,
+                                intensity,
+                                position,
+                                target,
+                                width,
+                                height,
+                                roll,
+                            } => Light::RectArea {
+                                color: color(c)?,
+                                intensity: scalar(intensity, "area intensity")?,
+                                position: vector(position)?,
+                                target: vector(target)?,
+                                width: scalar(width, "area width")?,
+                                height: scalar(height, "area height")?,
+                                roll: scalar(roll, "area roll")?,
+                            },
                             Binding::Point {
                                 color: c,
                                 intensity,

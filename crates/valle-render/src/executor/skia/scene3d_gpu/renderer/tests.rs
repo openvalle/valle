@@ -3,6 +3,7 @@ use super::*;
 use skia_safe::{Color, ImageInfo, Paint};
 use std::collections::BTreeMap;
 use valle_engine::motion::scene3d::*;
+mod area;
 mod mesh;
 mod orthographic;
 mod punctual;

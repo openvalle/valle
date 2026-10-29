@@ -2919,6 +2919,7 @@ Its direct children are explicit leaves, not arbitrary React/Three.js content:
 | `HemisphereLight` | Opaque `skyColor` / `groundColor`, optional `direction` (default +Y), key/intensity; colors, direction and intensity may animate |
 | `PointLight` | Required `position`, optional key, opaque `color` (white), `intensity` (1), `range` (0); all numeric/color fields may animate |
 | `SpotLight` | Point-light fields plus `target` (origin), `angle` (30° half-angle), `penumbra` (0.2); all may animate |
+| `RectAreaLight` | Required `position`, optional `target` (origin), `width`/`height` (1), `roll` (0°), key, opaque color and intensity; all numeric/color fields may animate |
 
 Models use a declared `model3d` asset and the admitted GLB format. With no material
 attributes, a Mesh uses the model's metallic/roughness materials. `material` supplies
@@ -3151,6 +3152,21 @@ without shadow maps; `shadows:true` affects directional lights only.
 <PointLight position={[seconds, 2, 3]} intensity={4} range={8} color="#ffd6b3" />
 <SpotLight position={[-2, 3, 4]} target={[0, 0, 0]} intensity={8}
   angle={35} penumbra={0.4} range={10} />
+```
+
+`RectAreaLight` emits from a rectangle toward `target`. It supports Lambert and PBR,
+including clearcoat; Unlit ignores it. Width/height are world units (0.001–10000),
+and `roll` rotates the rectangle about its emission direction. Intensity (0–100000)
+is emitted radiance: enlarging the rectangle increases its total illumination.
+The light is single-sided, has no cutoff and casts no shadow. At most two area
+lights are allowed. It creates illumination, not a visible rectangle mesh.
+CPU and GPU share LTC GGX fit data and explicitly clip the light polygon to the
+shading hemisphere. This gives continuous rectangular highlights without point-light
+sampling noise; it remains an approximation to the full GGX integral.
+
+```tsx
+<RectAreaLight position={[2, 3, 4]} target={[0, 0, 0]}
+  width={3} height={0.5} roll={seconds * 20} intensity={4} color="#fff0d8" />
 ```
 
 `shadows` is a static boolean, false by default. When enabled, each directional

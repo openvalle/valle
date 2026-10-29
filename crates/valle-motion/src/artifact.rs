@@ -888,6 +888,15 @@ impl Scene3DCameraBinding {
     deny_unknown_fields
 )]
 pub enum Scene3DLightBinding {
+    RectArea {
+        color: ColorValue,
+        intensity: NumberValue,
+        position: [NumberValue; 3],
+        target: [NumberValue; 3],
+        width: NumberValue,
+        height: NumberValue,
+        roll: NumberValue,
+    },
     Point {
         color: ColorValue,
         intensity: NumberValue,
@@ -944,6 +953,23 @@ impl Scene3DLightBinding {
             ))
         };
         Some(match self {
+            Self::RectArea {
+                color: c,
+                intensity,
+                position,
+                target,
+                width,
+                height,
+                roll,
+            } => crate::scene3d::LightFrameState::RectArea {
+                color: color(c)?,
+                intensity: number(intensity)?,
+                position: vector(position)?,
+                target: vector(target)?,
+                width: number(width)?,
+                height: number(height)?,
+                roll: number(roll)?,
+            },
             Self::Point {
                 color: c,
                 intensity,
@@ -1005,6 +1031,7 @@ impl Scene3DLightBinding {
     pub fn kind(&self) -> crate::scene3d::LightKind {
         use crate::scene3d::LightKind;
         match self {
+            Self::RectArea { .. } => LightKind::RectArea,
             Self::Point { .. } => LightKind::Point,
             Self::Spot { .. } => LightKind::Spot,
             Self::Ambient { .. } => LightKind::Ambient,
@@ -1014,6 +1041,26 @@ impl Scene3DLightBinding {
     }
     pub fn numbers(&self) -> Vec<(&'static str, &NumberValue)> {
         match self {
+            Self::RectArea {
+                intensity,
+                position,
+                target,
+                width,
+                height,
+                roll,
+                ..
+            } => vec![
+                ("intensity", intensity),
+                ("position/0", &position[0]),
+                ("position/1", &position[1]),
+                ("position/2", &position[2]),
+                ("target/0", &target[0]),
+                ("target/1", &target[1]),
+                ("target/2", &target[2]),
+                ("width", width),
+                ("height", height),
+                ("roll", roll),
+            ],
             Self::Point {
                 intensity,
                 position,
@@ -1070,7 +1117,8 @@ impl Scene3DLightBinding {
     }
     pub fn colors(&self) -> Vec<(&'static str, &ColorValue)> {
         match self {
-            Self::Point { color, .. }
+            Self::RectArea { color, .. }
+            | Self::Point { color, .. }
             | Self::Spot { color, .. }
             | Self::Ambient { color, .. }
             | Self::Directional { color, .. } => vec![("color", color)],
@@ -5596,6 +5644,7 @@ impl SceneArtifact {
                                         light,
                                         Scene3DLightBinding::Point { .. }
                                             | Scene3DLightBinding::Spot { .. }
+                                            | Scene3DLightBinding::RectArea { .. }
                                     ) {
                                         100_000.0
                                     } else {
@@ -5605,6 +5654,11 @@ impl SceneArtifact {
                                     "range" => (0.0..=10_000.0).contains(value),
                                     "angle" => (0.1..=89.9).contains(value),
                                     "penumbra" => (0.0..=1.0).contains(value),
+                                    "width" | "height" => (0.001..=10_000.0).contains(value),
+                                    "roll" => {
+                                        value.abs()
+                                            <= f64::from(crate::scene3d::MAX_ABS_ROTATION_DEGREES)
+                                    }
                                     _ => value.abs() <= f64::from(crate::scene3d::MAX_ABS_POSITION),
                                 },
                             }

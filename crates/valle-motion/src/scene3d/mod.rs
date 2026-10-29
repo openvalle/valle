@@ -156,6 +156,7 @@ pub enum MaterialKind {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum LightKind {
+    RectArea,
     Point,
     Spot,
     Ambient,
@@ -165,6 +166,7 @@ pub enum LightKind {
 impl LightKind {
     pub fn scalar_count(self) -> usize {
         match self {
+            Self::RectArea => 14,
             Self::Point => 9,
             Self::Spot => 14,
             Self::Ambient => 5,
@@ -183,6 +185,15 @@ impl LightKind {
     deny_unknown_fields
 )]
 pub enum LightFrameState {
+    RectArea {
+        color: Color4,
+        intensity: f32,
+        position: Vec3,
+        target: Vec3,
+        width: f32,
+        height: f32,
+        roll: f32,
+    },
     Point {
         color: Color4,
         intensity: f32,
@@ -218,6 +229,7 @@ pub enum LightFrameState {
 impl LightFrameState {
     pub fn kind(&self) -> LightKind {
         match self {
+            Self::RectArea { .. } => LightKind::RectArea,
             Self::Point { .. } => LightKind::Point,
             Self::Spot { .. } => LightKind::Spot,
             Self::Ambient { .. } => LightKind::Ambient,
@@ -232,17 +244,21 @@ impl LightFrameState {
     }
     fn validate_at(&self, path: &str, errors: &mut ContractErrors) {
         let intensity = match self {
-            Self::Point { intensity, .. }
+            Self::RectArea { intensity, .. }
+            | Self::Point { intensity, .. }
             | Self::Spot { intensity, .. }
             | Self::Ambient { intensity, .. }
             | Self::Directional { intensity, .. }
             | Self::Hemisphere { intensity, .. } => *intensity,
         };
-        if matches!(self, Self::Point { .. } | Self::Spot { .. }) {
+        if matches!(
+            self,
+            Self::Point { .. } | Self::Spot { .. } | Self::RectArea { .. }
+        ) {
             if !intensity.is_finite() || !(0.0..=100_000.0).contains(&intensity) {
                 errors.push(
                     format!("{path}/intensity"),
-                    "point/spot intensity must be finite in 0..=100000",
+                    "local light intensity must be finite in 0..=100000",
                 );
             }
         } else {
@@ -257,7 +273,8 @@ impl LightFrameState {
             }
         };
         match self {
-            Self::Point { color: c, .. }
+            Self::RectArea { color: c, .. }
+            | Self::Point { color: c, .. }
             | Self::Spot { color: c, .. }
             | Self::Ambient { color: c, .. }
             | Self::Directional { color: c, .. } => color(*c, "color"),
@@ -321,6 +338,52 @@ impl LightFrameState {
                 errors.push(
                     format!("{path}/cone"),
                     "spotlight angle must be 0.1..=89.9 degrees and penumbra 0..=1",
+                );
+            }
+        }
+        if let Self::RectArea {
+            position,
+            target,
+            width,
+            height,
+            roll,
+            ..
+        } = self
+        {
+            let distance: f32 = position
+                .0
+                .iter()
+                .zip(target.0)
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum();
+            if !position.finite()
+                || !target.finite()
+                || position
+                    .0
+                    .iter()
+                    .chain(target.0.iter())
+                    .any(|v| v.abs() > MAX_ABS_POSITION)
+                || distance <= 1e-12
+            {
+                errors.push(
+                    format!("{path}/pose"),
+                    "area light position/target must be finite, bounded and different",
+                );
+            }
+            if !width.is_finite()
+                || !height.is_finite()
+                || !(0.001..=MAX_ABS_POSITION).contains(width)
+                || !(0.001..=MAX_ABS_POSITION).contains(height)
+            {
+                errors.push(
+                    format!("{path}/size"),
+                    "area light width and height must be in 0.001..=10000",
+                );
+            }
+            if !roll.is_finite() || roll.abs() > MAX_ABS_ROTATION_DEGREES {
+                errors.push(
+                    format!("{path}/roll"),
+                    "area light roll must be finite and bounded",
                 );
             }
         }
@@ -679,6 +742,7 @@ impl Scene3DSpec {
             }
         }
         for (kind, limit, label) in [
+            (LightKind::RectArea, 2, "rectangular area"),
             (LightKind::Ambient, 1, "ambient"),
             (LightKind::Hemisphere, 1, "hemisphere"),
             (

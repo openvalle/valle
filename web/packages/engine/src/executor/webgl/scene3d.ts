@@ -108,7 +108,7 @@ type Targets = {
 };
 const tileBytes = (width: number, height: number, radius: number) =>
   radius > 0 ? Math.ceil(width / 16) * Math.ceil(height / 16) * 16 : 0;
-const baseBytes = 1024 + 16 + 32; // DFG, empty texel and two uniform blocks.
+const baseBytes = 81_920 + 16 + 32; // DFG/LTC, empty texel and two uniform blocks.
 const quad = `#version 300 es
 precision highp float;precision highp int;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);gl_Position=vec4(p*2.-1.,0.,1.);}`;
 
@@ -164,7 +164,14 @@ export class GpuScene3D {
       this.vao = gl.createVertexArray()!;
       this.globals = gl.createBuffer()!;
       this.shadowRange = gl.createBuffer()!;
-      this.dfg = this.texture(16, 16, gl.RG16F, gl.RG, gl.HALF_FLOAT, new Uint16Array(dfgBytes));
+      this.dfg = this.texture(
+        128,
+        80,
+        gl.RGBA16F,
+        gl.RGBA,
+        gl.HALF_FLOAT,
+        new Uint16Array(dfgBytes),
+      );
       this.empty = this.texture(1, 1, gl.RGBA32F, gl.RGBA, gl.FLOAT, new Float32Array(4));
       this.stats.allocatedBytes = baseBytes;
     } finally {

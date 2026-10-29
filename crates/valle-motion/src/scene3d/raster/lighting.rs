@@ -1,4 +1,5 @@
 //! Generic BRDF lookup and ACES fit. MIT attribution is retained in assets/THREE-LICENSE.txt.
+pub(super) const LIGHTING_BYTES: &[u8; 81_920] = include_bytes!("assets/lighting.rgba16f");
 pub(super) const DFG_BYTES: &[u8; 1024] = include_bytes!("assets/dfg.rg16f");
 const DFG: [[f32; 2]; 256] = {
     let mut table = [[0.0; 2]; 256];
@@ -31,7 +32,7 @@ pub(super) fn dfg(roughness: f32, nv: f32) -> [f32; 2] {
     })
 }
 
-const fn half(bits: u16) -> f32 {
+pub(super) const fn half(bits: u16) -> f32 {
     let sign = ((bits as u32) & 0x8000) << 16;
     let exp = (bits >> 10) & 31;
     let mant = (bits & 1023) as u32;

@@ -542,7 +542,7 @@ impl<'s> Compiler<'s> {
                         )?,
                     });
                 }
-                "AmbientLight" | "DirectionalLight" | "HemisphereLight" | "PointLight" | "SpotLight" => {
+                "AmbientLight" | "DirectionalLight" | "HemisphereLight" | "PointLight" | "SpotLight" | "RectAreaLight" => {
                     let binding = self.scene3d_light_binding(child, child_tag)?;
                     lights.push(binding.kind());
                     light_frames.push(binding);
@@ -551,7 +551,7 @@ impl<'s> Compiler<'s> {
                     DiagCode::GrammarForbidden,
                     child.span(),
                     format!(
-                        "unknown Scene3D child <{child_tag}>; use Mesh, Group3D, Anchor3D, AmbientLight, DirectionalLight, HemisphereLight, PointLight or SpotLight"
+                        "unknown Scene3D child <{child_tag}>; use Mesh, Group3D, Anchor3D, AmbientLight, DirectionalLight, HemisphereLight, PointLight, SpotLight or RectAreaLight"
                     ),
                 ),
             }
@@ -1161,6 +1161,16 @@ impl<'s> Compiler<'s> {
         tag: &str,
     ) -> Option<Scene3DLightBinding> {
         let allowed: &[&str] = match tag {
+            "RectAreaLight" => &[
+                "key",
+                "color",
+                "intensity",
+                "position",
+                "target",
+                "width",
+                "height",
+                "roll",
+            ],
             "PointLight" => &["key", "color", "intensity", "position", "range"],
             "SpotLight" => &[
                 "key",
@@ -1190,6 +1200,24 @@ impl<'s> Compiler<'s> {
             NumberValue::Static { value: 0.0 }
         };
         let binding = match tag {
+            "RectAreaLight" => Scene3DLightBinding::RectArea {
+                intensity,
+                color: self.scene3d_light_color(&attrs, "color", Some("#ffffff"))?,
+                position: self.scene3d_frame_attr_vec3(&attrs, "position", None)?,
+                target: self.scene3d_frame_attr_vec3(&attrs, "target", Some([0.0; 3]))?,
+                width: match attrs.get("width") {
+                    Some((v, s)) => self.scene3d_attr_number(v, *s, "area width")?,
+                    None => NumberValue::Static { value: 1.0 },
+                },
+                height: match attrs.get("height") {
+                    Some((v, s)) => self.scene3d_attr_number(v, *s, "area height")?,
+                    None => NumberValue::Static { value: 1.0 },
+                },
+                roll: match attrs.get("roll") {
+                    Some((v, s)) => self.scene3d_attr_number(v, *s, "area roll")?,
+                    None => NumberValue::Static { value: 0.0 },
+                },
+            },
             "PointLight" => Scene3DLightBinding::Point {
                 intensity,
                 range,

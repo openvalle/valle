@@ -30,12 +30,14 @@ fn floating_edges_bound_interpolation_error_at_large_coordinates() {
         })
         .collect::<Vec<[i32; 6]>>();
     let source = format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         include_str!("../../common.wgsl"),
         include_str!("../../assets.wgsl"),
         include_str!("../../lighting.wgsl"),
+        include_str!("../../area.wgsl"),
         include_str!("../../shadows.wgsl"),
         include_str!("../../transparency.wgsl"),
+        include_str!("../../transmission.wgsl"),
         include_str!("../../raster.wgsl"),
         r#"
 @group(0) @binding(7) var<storage,read_write> mathResults:array<vec4<u32>>;

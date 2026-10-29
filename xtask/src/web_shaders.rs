@@ -12,8 +12,10 @@ const COMMON: &str =
     include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/common.wgsl");
 const ASSETS: &str =
     include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/assets.wgsl");
-const LIGHTING: &str =
-    include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/lighting.wgsl");
+const LIGHTING: &str = concat!(
+    include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/lighting.wgsl"),
+    include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/area.wgsl")
+);
 const SHADOWS: &str =
     include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/shadows.wgsl");
 const RASTER: &str =

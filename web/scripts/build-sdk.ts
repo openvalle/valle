@@ -117,7 +117,7 @@ await withBuildDirectory(path.join(root, "dist"), async (dist) => {
         },
         files: [
           "**/*.mjs",
-          "**/*.rg16f",
+          "**/*.rgba16f",
           "types",
           "wasm",
           "workers",

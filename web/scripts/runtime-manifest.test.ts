@@ -33,7 +33,7 @@ describe("root runtime manifest closure", () => {
   });
 
   test("includes emitted Scene3D lookup textures in the frozen host serving closure", async () => {
-    const files = await Array.fromAsync(new Bun.Glob("**/dfg-*.rg16f").scan({ cwd: dist }));
+    const files = await Array.fromAsync(new Bun.Glob("**/lighting-*.rgba16f").scan({ cwd: dist }));
     expect(files.length).toBeGreaterThan(0);
     for (const file of files) {
       const assetPath = file.replaceAll(path.sep, "/");
@@ -41,7 +41,7 @@ describe("root runtime manifest closure", () => {
       expect(asset?.owner).toBe("engine");
       expect(asset?.role).toBe("lookup");
       expect(asset?.license).toBe("MIT");
-      expect(asset?.bytes).toBe(1024);
+      expect(asset?.bytes).toBe(81_920);
     }
   });
 

@@ -271,6 +271,25 @@ pub(super) fn shade(
             }
         }
     }
+    if triangle.kind == MaterialKind::Pbr {
+        let f0: [f32; 3] =
+            std::array::from_fn(|i| optics.0[i] * (1.0 - metallic) + base[i] * metallic);
+        let f90 = optics.1 * (1.0 - metallic) + metallic;
+        let diffuse_energy = 1.0 - optics.0.into_iter().fold(0.0, f32::max);
+        for light in &lights.area {
+            let (diffuse, specular, amplitude) = light.evaluate(n, v, position, roughness);
+            for i in 0..3 {
+                let fresnel = f0[i] * amplitude[0] + (f90 - f0[i]) * amplitude[1];
+                radiance[i] += light.color[i]
+                    * (fresnel * specular
+                        + base[i]
+                            * (1.0 - metallic)
+                            * (1.0 - m.transmission)
+                            * diffuse_energy
+                            * diffuse);
+            }
+        }
+    }
     let mut coat_attenuation = 1.0;
     if triangle.kind == MaterialKind::Pbr && m.clearcoat > 0.0 {
         let nv = coat_normal.dot(v).clamp(0.0, 1.0);
@@ -291,6 +310,13 @@ pub(super) fn shade(
             let visibility = lights.shadow_visibility(index, position, coat_normal);
             for i in 0..3 {
                 radiance[i] += m.clearcoat * reflected[i] * intensity[i] * visibility;
+            }
+        }
+        for light in &lights.area {
+            let (_, specular, amplitude) = light.evaluate(coat_normal, v, position, roughness);
+            let fresnel = 0.04 * amplitude[0] + 0.96 * amplitude[1];
+            for (value, intensity) in radiance.iter_mut().zip(light.color) {
+                *value += m.clearcoat * intensity * fresnel * specular;
             }
         }
         if let Some(environment) = &lights.environment {

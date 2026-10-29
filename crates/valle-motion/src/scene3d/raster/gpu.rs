@@ -73,6 +73,11 @@ impl GpuRasterShading {
     pub fn shadow_content_key(&self) -> crate::ContentDigest {
         self.shadow_source_key
     }
+    pub const LIGHTING_LUT_WIDTH: u32 = 128;
+    pub const LIGHTING_LUT_HEIGHT: u32 = 80;
+    pub fn lighting_lut() -> &'static [u8; 81_920] {
+        super::lighting::LIGHTING_BYTES
+    }
     pub fn brdf_lut() -> &'static [u8; 1024] {
         super::lighting::DFG_BYTES
     }

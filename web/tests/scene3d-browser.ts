@@ -68,6 +68,7 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
  ${resources ? '<Mesh key="model" src="asset://model" position={[1.5,0,-0.8]} rotateY={time.seconds*20} scale={[-1,1,1]} material={{type:"lambert",doubleSided:true,alphaMode:"mask",alphaCutoff:0.4,textures:{baseColor:"asset://map"}}}/>' : ""}
  </Group3D></Group3D>
  <AmbientLight intensity={0.2}/><HemisphereLight skyColor="#b0c0ff" groundColor="#231507" intensity={0.2}/>
+ <RectAreaLight position={[2,2,3]} target={[0,0,0]} width={2} height={0.8} roll={time.seconds*35} intensity={3} color="#ffeecc"/>
  <PointLight position={[time.seconds,1,2]} intensity={2} range={6} color="#ffb070"/>
  <SpotLight position={[-2,2,3]} target={[0,0,0]} intensity={4} angle={30+time.seconds*10} penumbra={0.4} color="#709aff"/>
  <DirectionalLight direction={[0.8,0.2,1]} intensity={1.6}/><DirectionalLight direction={[-1,0.2,1]} intensity={0.8}/>

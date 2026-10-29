@@ -66,10 +66,11 @@ impl GpuRasterizer {
             label: Some("Scene3D raster"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     include_str!("common.wgsl"),
                     include_str!("assets.wgsl"),
                     include_str!("lighting.wgsl"),
+                    include_str!("area.wgsl"),
                     include_str!("shadows.wgsl"),
                     include_str!("transparency.wgsl"),
                     include_str!("transmission.wgsl"),
@@ -141,20 +142,20 @@ impl GpuRasterizer {
         }
         let lut_memory = valle_engine::motion::memory::reserve(
             valle_engine::motion::memory::MemoryKind::Resource,
-            1024,
+            81_920,
         )
         .map_err(|error| error.to_string())?;
         let dfg = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Scene3D DFG"),
             size: wgpu::Extent3d {
-                width: 16,
-                height: 16,
+                width: 128,
+                height: 80,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rg16Float,
+            format: wgpu::TextureFormat::Rgba16Float,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -165,15 +166,15 @@ impl GpuRasterizer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            valle_engine::motion::scene3d::GpuRasterShading::brdf_lut(),
+            valle_engine::motion::scene3d::GpuRasterShading::lighting_lut(),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(64),
-                rows_per_image: Some(16),
+                bytes_per_row: Some(1024),
+                rows_per_image: Some(80),
             },
             wgpu::Extent3d {
-                width: 16,
-                height: 16,
+                width: 128,
+                height: 80,
                 depth_or_array_layers: 1,
             },
         );

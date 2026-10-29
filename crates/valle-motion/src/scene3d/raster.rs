@@ -20,6 +20,7 @@ pub use gpu::{
     GpuRasterShadowVertex, GpuRasterTextureVarying, GpuRasterVarying, GpuRasterVertex,
     prepare_gpu_geometry, prepare_gpu_mesh_geometry,
 };
+mod area;
 #[cfg(test)]
 mod geometry_reuse_tests;
 #[cfg(test)]
@@ -623,7 +624,7 @@ pub fn prepare_cache_key(
     let mut errors = ContractErrors::default();
     let mut hasher = Sha256::new();
     hasher.update(b"valle-scene3d-prepare\0");
-    hasher.update(include_bytes!("raster/assets/dfg.rg16f"));
+    hasher.update(include_bytes!("raster/assets/lighting.rgba16f"));
     hasher.update(width.to_le_bytes());
     hasher.update(height.to_le_bytes());
     let scene_bytes = serde_json::to_vec(scene).expect("Scene3DSpec serialization is infallible");
@@ -2254,6 +2255,7 @@ fn transformed_vertex(
 }
 
 struct Lights {
+    area: Vec<area::Area>,
     punctual: Vec<punctual::Punctual>,
     ambient: [f32; 3],
     directional: Vec<(V3, [f32; 3])>,
@@ -2275,12 +2277,29 @@ impl Lights {
         let mut ambient = [0.0; 3];
         let mut directional = Vec::new();
         let mut punctual = Vec::new();
+        let mut area = Vec::new();
         let mut hemisphere = Vec::new();
         let linear = |c: Color4, intensity: f32| {
             std::array::from_fn(|i| super::asset::srgb_to_linear(c.0[i]) * intensity)
         };
         for light in &frame.lights {
             match light {
+                LightFrameState::RectArea {
+                    color,
+                    intensity,
+                    position,
+                    target,
+                    width,
+                    height,
+                    roll,
+                } => area.push(area::Area::new(
+                    V3::from(*position),
+                    V3::from(*target),
+                    *width,
+                    *height,
+                    *roll,
+                    linear(*color, *intensity),
+                )),
                 LightFrameState::Point {
                     color,
                     intensity,
@@ -2337,6 +2356,7 @@ impl Lights {
             }
         }
         Self {
+            area,
             punctual,
             ambient,
             directional,
@@ -2372,6 +2392,12 @@ impl Lights {
 
     fn factor(&self, normal: V3, occlusion: f32, position: V3) -> [f32; 3] {
         let mut factor = self.ambient.map(|v| v * occlusion);
+        for light in &self.area {
+            let form = light.diffuse(normal, position);
+            for (value, intensity) in factor.iter_mut().zip(light.color) {
+                *value += intensity * form;
+            }
+        }
         for light in &self.punctual {
             let (direction, color) = light.sample(position);
             let cosine = normal.dot(direction).max(0.0);
