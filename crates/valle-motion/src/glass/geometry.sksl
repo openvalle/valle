@@ -1,0 +1,25 @@
+// Shared geometry for both Glass passes. A positive width selects an exact circular-corner
+// rounded box; arbitrary paths and merged fields use their coverage-derived distance instead.
+// geometry.w is the rim layer's padding, not part of the actual shape.
+uniform float4 geometry;
+uniform float4 normalMap;
+
+float3 boxEdge(float2 uv) {
+  float2 p = uv * resolution - geometry.w - 0.5 * geometry.xy;
+  float2 q = abs(p) - 0.5 * geometry.xy + geometry.z;
+  float2 corner = max(q, 0.0);
+  float2 side = float2(p.x < 0.0 ? -1.0 : 1.0, p.y < 0.0 ? -1.0 : 1.0);
+  float n = length(corner);
+  float2 outward = n > 0.00001 ? side * corner / n
+    : (q.x > q.y ? float2(side.x, 0.0) : float2(0.0, side.y));
+  float inside = geometry.z - n - min(max(q.x, q.y), 0.0);
+  return float3(-outward, inside);
+}
+
+// Normals transform by inverse transpose. Transforming only the light by the inverse matrix
+// misplaces the peak of the reflection under nonuniform scale or skew.
+float2 screenNormal(float2 inward) {
+  float2 v = float2(dot(normalMap.xy, inward), dot(normalMap.zw, inward));
+  float n = length(v);
+  return n > 0.00001 ? v / n : float2(0.0);
+}

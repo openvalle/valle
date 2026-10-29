@@ -281,7 +281,7 @@ fn image_binding(manifest: &ResourceManifest) -> ResourceBindings {
         .with_binding(
             "asset:hero",
             ResourceBinding::new(
-                digest.clone(),
+                *digest,
                 VerifiedHandleId::new(7).unwrap(),
                 VerifiedResourceFacts::Image {
                     descriptor: descriptor.clone(),

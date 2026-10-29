@@ -2,7 +2,8 @@
 //! for its shape, a backdrop blur for its frost, the optics shader as a layer whose content is the
 //! shape blurred into a height field and whose backdrop is the frosted backdrop, and the rim
 //! shader as a layer over it, unclipped, whose content is the shape barely blurred, for the line
-//! of light its edge catches, its glow inward and the dark edge just outside it. Both contents
+//! of light its edge catches, its glow inward and the dark edge just outside it. The rim composites
+//! a neutral reflection and shadow without sampling or amplifying the backdrop. Both contents
 //! are opaque inside the shape and gray by the presence of the Glass the shape belongs to, which
 //! scales every effect. Both are written in the inline code of a ShaderLayer and prepared with an
 //! artifact's inline shaders, so every backend draws them as it draws an author's shader.
@@ -13,9 +14,11 @@ use crate::shader::{InlineCode, InputOptions, ShaderPackage, ShaderRole};
 
 /// Uniforms: `sigma` is the height field's blur, `bevel` the width of the curved rim and
 /// `refraction` the backdrop's greatest shift, at the rim, all in layer pixels; `light.xy` is a
-/// unit vector toward the light in layer space and `light.z` how far the glint the rim shader
+/// unit vector toward the light in screen space and `light.z` how far the glint the rim shader
 /// draws wraps round the rim.
-pub const OPTICS_CODE: &str = r#"
+pub const OPTICS_CODE: &str = concat!(
+    include_str!("geometry.sksl"),
+    r#"
 uniform float sigma;
 uniform float bevel;
 uniform float refraction;
@@ -60,10 +63,22 @@ float4 valle_main(float2 uv) {
   // Where two rims meet, the rise is less than a straight edge's at that depth: the lens fades
   // there instead of turning over.
   float sure = clamp(steep / (0.3829249 * exp(-0.48 * z * z)), 0.0, 1.0);
-  // A quarter-circle lens: the greatest shift at the rim, none from the bevel inward. A shift
-  // beyond the bevel folds the rim's view over, as the edge of a thick lens does.
+  if (geometry.x > 0.0) {
+    float3 edge = boxEdge(uv);
+    inward = edge.xy;
+    depth = max(edge.z, 0.0);
+    sure = 1.0;
+    steep = 1.0;
+  }
+  // A rounded bevel gives a 3D normal. Snell's law (air to glass, IOR 1.5) produces
+  // a continuous ray slope through the lens, normalized to the authored edge displacement.
+  // The same normal below controls reflection, instead of unrelated bands painted on top.
   float across = clamp(1.0 - depth / max(bevel, 0.0001), 0.0, 1.0);
-  float lens = 1.0 - sqrt(max(1.0 - across * across, 0.0));
+  float nz = sqrt(max(1.0 - across * across, 0.0));
+  float lateral = across;
+  float eta = 0.6666667;
+  float bend = sqrt(max(1.0 - eta * eta * lateral * lateral, 0.0)) - eta * nz;
+  float lens = lateral * bend / max(eta + nz * bend, 0.0001) / 1.118034;
   float2 shift = inward * (refraction * presence * lens * sure) * texel;
   float4 behind = sample_backdrop(uv + shift);
   if (dispersion > 0.0) {
@@ -77,27 +92,47 @@ float4 valle_main(float2 uv) {
   float4 glass = over(float4(tint.rgb * cover, cover), float4(seen * behind.a, behind.a));
   float3 face = glass.rgb / max(glass.a, 0.000001);
   // The raised rim shades the face behind it, its band shifted along the light.
-  float facing = -dot(inward, light.xy);
+  float2 screenInward = screenNormal(inward);
+  float facing = -dot(screenInward, light.xy);
   float lean = 0.3 * bevel * facing;
   float lead = lean > 0.0 ? smoothstep(0.0, 2.0 * lean, depth) : 1.0;
   float band = lead * (1.0 - smoothstep(0.0, max(0.8 * bevel, 0.0001), depth - lean));
   float shade = steep > 0.0 ? 0.055 * intensity * presence * band * mix(1.0, smoothstep(0.0, 1.0, 0.5 * facing + 0.5), 0.5) : 0.0;
   face = max(face - seen * behind.a * clamp(shade, 0.0, 1.0), 0.0);
-  return glass.a > 0.0 ? float4(face, glass.a) : float4(0.0);
+  // Reflection belongs to the curved surface, not to the backdrop's brightness. A soft
+  // directional source plus grazing-angle Fresnel gives a thin rim and a highlight on the
+  // shoulder of the bevel. Both are bounded source-over coverage, so white scenes stay clear.
+  float3 normal = float3(-screenInward * lateral, nz);
+  // A grazing environment highlight catches the rolled edge. A front-facing point light
+  // would put its half-vector near the face normal, creating a second inset frame instead.
+  // Elevation lifts and broadens this environment lobe without moving the authored XY axis.
+  float3 halfVector = normalize(float3(light.xy, mix(0.2, 0.65, light.z)));
+  // Remove the flat face's response continuously. Gating a nonzero flat-face highlight
+  // at the bevel boundary produces an artificial inner frame, especially on pale scenes.
+  float flatSpecular = pow(max(halfVector.z, 0.0), 64.0);
+  float specular = max(pow(max(dot(normal, halfVector), 0.0), 64.0) - flatSpecular, 0.0)
+      / max(1.0 - flatSpecular, 0.0001);
+  float fresnel = pow(1.0 - nz, 5.0);
+  float reflection = bevel > 0.0 ? clamp(intensity * presence * sure *
+      (0.4 * specular + 0.24 * fresnel * (0.35 + 0.65 * max(facing, 0.0))), 0.0, 1.0) : 0.0;
+  float4 reflected = over(float4(float3(reflection), reflection), float4(face * glass.a, glass.a));
+  return reflected.a > 0.0 ? float4(reflected.rgb / reflected.a, reflected.a) : float4(0.0);
 }
-"#;
+"#
+);
 
 /// Uniforms: `sigma` is the blur of the rim's content, the shape, `glint` the width of the line
-/// of light inside the silhouette, whose glow reaches four and a half times as far unless the
-/// distance stops reading first, and `contour` the width of the dark edge outside it, all in layer
+/// of light inside the silhouette, whose glow reaches twice as far, and `contour` the width of
+/// the dark edge outside it, all in layer
 /// pixels; `light` is as the optics shader's.
-pub const RIM_CODE: &str = r#"
+pub const RIM_CODE: &str = concat!(
+    include_str!("geometry.sksl"),
+    r#"
 uniform float sigma;
 uniform float glint;
 uniform float contour;
 uniform float3 light;
 uniform float intensity;
-uniform shader backdrop;
 
 float coverage(float2 uv) {
   return sampleContent(uv).a;
@@ -129,35 +164,43 @@ float4 valle_main(float2 uv) {
   float c = 4.3307467 + 0.5 * t;
   float z = 1.4142136 * sqrt(max(sqrt(max(c * c - 6.8027211 * t, 0.0)) - c, 0.0));
   float inside = sigma * (x >= 0.0 ? z : -z);
-  float facing = -dot(inward, light.xy);
-  float along = 1.0 - abs(dot(inward, float2(-light.y, light.x)));
-  float lobe = pow(max(along, 0.0), exp2(2.0 - 4.0 * light.z)) * (facing >= 0.0 ? 1.0 : 0.45);
-  // The glint: a line from the silhouette inward, fading over its inner half, then its glow,
-  // falling off quadratically over four and a half widths of the line and tapered to none at 2.9
-  // sigmas, just short of where the distance stops reading; both over the glass's share of the
-  // pixel.
+  if (geometry.x > 0.0) {
+    float3 edge = boxEdge(uv);
+    inward = edge.xy;
+    inside = edge.z;
+    steep = 1.0;
+  }
+  float2 screenInward = screenNormal(inward);
+  float facing = -dot(screenInward, light.xy);
+  // A continuous directional lobe: the source-facing rim carries the reflection. A much
+  // weaker return on the opposite rim suggests internal reflection without becoming a second
+  // light. Elevation broadens the lobe; unlike abs(tangent), this has no cusp at its peak.
+  float exponent = exp2(3.0 - 3.0 * light.z);
+  float front = pow(max(facing, 0.0), exponent);
+  float back = pow(max(-facing, 0.0), exponent);
+  float wrap = 0.12 * light.z * light.z;
+  float lobe = mix(front + 0.12 * back, 1.0, wrap);
+  // Integrate a line over the pixel, including subpixel-width highlights. A broad blurred
+  // normal field used to move the light off small curved silhouettes and give tiny controls
+  // a thick inner halo. Keep this field narrow and its glow within twice the line width.
   float cover = clamp(inside + 0.5, 0.0, 1.0);
-  float line = (1.0 - smoothstep(0.5 * glint, glint, inside)) * cover;
-  float fall = clamp(1.0 - inside / (4.5 * glint), 0.0, 1.0);
-  float u = clamp(inside / (2.9 * sigma), 0.0, 1.0);
-  float taper = 1.0 - u * u * u * u * u * u;
+  float line = cover * (1.0 - smoothstep(0.25 * glint, glint + 0.5, inside));
+  float fall = clamp(1.0 - max(inside, 0.0) / (2.0 * glint), 0.0, 1.0);
+  float taper = 1.0 - smoothstep(2.0 * sigma, 2.9 * sigma, inside);
   float glow = fall * fall * taper * cover;
   float lit = steep > 0.0 ? intensity * presence * lobe : 0.0;
-  float gain = lit * (10.0 * line + 12.0 * glow * (1.0 - line));
-  // The dark edge just outside, box-filtered over the pixel, strongest where the rim turns
-  // across the light and the glint fades.
+  float reflection = clamp(lit * (0.85 * line + 0.18 * glow * (1.0 - line)), 0.0, 1.0);
+  // The outside contour is subordinate to the reflection, strongest away from the light.
   float edge = ramp(0.5 - inside) - ramp(-0.5 - inside);
-  float dark = steep > 0.0 ? clamp(0.9 * intensity * presence * edge * mix(1.0, 1.0 - along, 0.77), 0.0, 1.0) : 0.0;
-  // The glint brightens what lies under it in its own chroma, with a little white on the line
-  // for dark backdrops; the dark edge dims it. One straight color over the backdrop adds both
-  // changes.
-  float4 under = sample_backdrop(uv);
-  float white = 0.15 * lit * line;
-  float3 change = under.rgb * (gain - dark) + white;
-  float alpha = clamp(gain + dark + white, 0.0, 1.0);
-  return alpha > 0.0 ? float4(max(under.rgb + change / alpha, 0.0), alpha) : float4(0.0);
+  float dark = steep > 0.0 ? clamp(0.28 * intensity * presence * edge * (1.0 - 0.7 * front), 0.0, 1.0) : 0.0;
+  // White reflection over a black contour, then ordinary source-over onto the scene. Bounded
+  // reflectance cannot blow a light backdrop into a wide clipped-white band. The straight
+  // color returned here also preserves transparency when there is no opaque backdrop.
+  float alpha = reflection + dark * (1.0 - reflection);
+  return alpha > 0.0 ? float4(float3(reflection / alpha), alpha) : float4(0.0);
 }
-"#;
+"#
+);
 
 /// The optics shader's package, compiled once.
 pub fn optics_package() -> &'static ShaderPackage {
@@ -219,6 +262,8 @@ mod tests {
         assert_eq!(
             names,
             [
+                "geometry",
+                "normalMap",
                 "sigma",
                 "bevel",
                 "refraction",
@@ -238,20 +283,30 @@ mod tests {
     }
 
     #[test]
-    fn the_rim_shader_reads_its_content_and_one_backdrop_texel() {
+    fn the_rim_shader_composites_without_reading_the_backdrop() {
         let package = rim_package();
-        assert_eq!(package.manifest.inputs.len(), 1);
-        assert_eq!(package.manifest.inputs[0].name, "backdrop");
+        assert!(package.manifest.inputs.is_empty());
         let names = package
             .manifest
             .uniforms
             .iter()
             .map(|uniform| uniform.name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(names, ["sigma", "glint", "contour", "light", "intensity"]);
-        // Five coverage reads for the distance and the slope, one backdrop read.
+        assert_eq!(
+            names,
+            [
+                "geometry",
+                "normalMap",
+                "sigma",
+                "glint",
+                "contour",
+                "light",
+                "intensity"
+            ]
+        );
+        // Five coverage reads for the distance and the slope, no backdrop capture.
         assert!(
-            package.work_per_pixel().samples <= 6,
+            package.work_per_pixel().samples <= 5,
             "{:?}",
             package.work_per_pixel()
         );

@@ -71,8 +71,8 @@ impl GlassMaterialBinding {
 pub struct GlassLightBinding {
     /// Screen direction the light comes from, y down.
     pub direction: PointValue,
-    /// How far the glint wraps round the rim from the walls along the light's axis: 0 keeps it
-    /// on them, 1 spreads it over the whole rim.
+    /// Elevation of the environment highlight, 0–1. Higher values lift its reflection
+    /// along the curved bevel and spread the edge glint further around the rim.
     pub elevation: NumberValue,
     /// Strength of the glint, its glow, the rim's shading and the dark edge; 0 draws none of
     /// them.

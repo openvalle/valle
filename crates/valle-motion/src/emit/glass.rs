@@ -1,7 +1,7 @@
 //! Glass draws with ordinary groups and two shaders. A Glass frosts the backdrop inside its
 //! shape before its own layers, then draws its surface at its shell: the optics shader, clipped to
 //! its shape, over its shape blurred into a height field and reading the frosted backdrop; then
-//! the rim shader, unclipped, over its shape barely blurred and reading what lies under it, for
+//! the rim shader, unclipped, over its shape barely blurred, for
 //! the line of light its edge catches and the dark edge just outside. A GlassField draws once,
 //! before the first of its nodes paints: the union of its members' shapes, bridged where they
 //! come within its merge distance, masks its frost and its optics, and its rim draws over them.
@@ -60,13 +60,13 @@ impl Outline {
 
 /// The width of the line of light inside the silhouette and of the dark edge outside it, as
 /// shares of the bevel, and their least widths in layer pixels.
-const GLINT_OF_BEVEL: f64 = 0.15;
-const GLINT_MIN: f64 = 2.0;
-const CONTOUR_OF_BEVEL: f64 = 0.15;
-const CONTOUR_MIN: f64 = 1.0;
-/// The widest blur Skia draws exactly; it draws wider ones through a smaller image. The rim reads
-/// distance from its blur steeply at the silhouette, where that error lights or darkens a pixel.
-const RIM_SIGMA_MAX: f64 = 4.0;
+const GLINT_OF_BEVEL: f64 = 0.075;
+const GLINT_MIN: f64 = 0.65;
+const CONTOUR_OF_BEVEL: f64 = 0.05;
+const CONTOUR_MIN: f64 = 0.5;
+/// Keep the normal field close to the actual silhouette, especially on small rounded controls.
+/// Wider blurs displace the half-coverage contour inward at convex corners.
+const RIM_SIGMA_MAX: f64 = 1.5;
 
 /// The optics and rim shaders' inputs for one surface.
 struct Optics {
@@ -78,6 +78,8 @@ struct Optics {
     saturation: f64,
     tint: [f32; 4],
     light: [f32; 3],
+    normal_map: [f32; 4],
+    geometry: [f32; 4],
     intensity: f64,
     glint: f64,
     contour: f64,
@@ -85,7 +87,7 @@ struct Optics {
 
 impl Optics {
     /// `shorter` is the shorter side the defaults take their shares of; `to_viewport` maps the
-    /// layer to the viewport near `at`, where the screen light turns into the layer's. Presence is
+    /// layer to the viewport near `at`, where its normals turn into screen normals. Presence is
     /// not here: the shaders read it from their content, a member's own in a field.
     fn of(material: &GlassMaterial, shorter: f64, to_viewport: Homography, at: Point) -> Self {
         let shorter = shorter.max(0.0);
@@ -102,7 +104,9 @@ impl Optics {
             dispersion: material.dispersion,
             saturation: material.saturation,
             tint: material.tint.to_srgb_straight(),
-            light: layer_light(material, to_viewport, at),
+            light: screen_light(material),
+            normal_map: normal_map(to_viewport, at),
+            geometry: [0.0; 4],
             intensity: material.intensity,
             glint: (GLINT_OF_BEVEL * bevel).max(GLINT_MIN),
             contour: (CONTOUR_OF_BEVEL * bevel).max(CONTOUR_MIN),
@@ -117,17 +121,18 @@ impl Optics {
             || self.saturation != 1.0
     }
 
-    /// The rim's content blur: the distance it reads reaches about three of it, across the glow
-    /// inside the line of light and the dark edge outside it. At [`RIM_SIGMA_MAX`] the glow tapers
-    /// off short of its 4.5 glints.
+    /// A narrow normal field keeps highlights attached to the silhouette. Distance reads are
+    /// reliable to about three sigma; the shader tapers the glow before that limit.
     fn rim_sigma(&self) -> f64 {
-        (1.5 * self.glint).min(RIM_SIGMA_MAX)
+        (1.25 * self.glint).clamp(0.75, RIM_SIGMA_MAX)
     }
 
     fn shader(&self) -> ResolvedShaderLayer {
         ResolvedShaderLayer {
             program: crate::glass::optics::optics_program(),
             uniforms: vec![
+                vector4("geometry", self.geometry),
+                vector4("normalMap", self.normal_map),
                 float("sigma", self.sigma),
                 float("bevel", self.bevel),
                 float("refraction", self.refraction),
@@ -147,10 +152,14 @@ impl Optics {
         }
     }
 
-    fn rim(&self) -> ResolvedShaderLayer {
+    fn rim(&self, margin: f64) -> ResolvedShaderLayer {
+        let mut geometry = self.geometry;
+        geometry[3] = margin as f32;
         ResolvedShaderLayer {
             program: crate::glass::optics::rim_program(),
             uniforms: vec![
+                vector4("geometry", geometry),
+                vector4("normalMap", self.normal_map),
                 float("sigma", self.rim_sigma()),
                 float("glint", self.glint),
                 float("contour", self.contour),
@@ -160,8 +169,15 @@ impl Optics {
                 },
                 float("intensity", self.intensity),
             ],
-            inputs: vec![backdrop()],
+            inputs: vec![],
         }
+    }
+}
+
+fn vector4(name: &str, value: [f32; 4]) -> ShaderUniformBinding {
+    ShaderUniformBinding {
+        name: name.into(),
+        value: ShaderUniformValue::Float4 { value },
     }
 }
 
@@ -346,12 +362,27 @@ impl Emitter<'_> {
             bounds.x + bounds.width / 2.0,
             bounds.y + bounds.height / 2.0,
         );
-        let optics = Optics::of(
+        let mut optics = Optics::of(
             material,
             bounds.width.min(bounds.height),
             to_viewport,
             center,
         );
+        if let Outline::Box(rrect) = outline {
+            let radius = rrect.radii[0].x;
+            if rrect
+                .radii
+                .iter()
+                .all(|p| (p.x - radius).abs() < 1e-6 && (p.y - radius).abs() < 1e-6)
+            {
+                optics.geometry = [
+                    bounds.width as f32,
+                    bounds.height as f32,
+                    radius.min(0.5 * bounds.width.min(bounds.height)).max(0.0) as f32,
+                    0.0,
+                ];
+            }
+        }
         if glass.presence <= 0.0 || !optics.is_visible() {
             return Ok(());
         }
@@ -617,7 +648,7 @@ impl Emitter<'_> {
         self.push(RecordCmd::End);
     }
 
-    /// The rim shader over the shapes barely blurred, reading what lies under it. Its box reaches
+    /// The rim shader over the shapes barely blurred. Its box reaches
     /// past `size` for the dark edge outside the shapes, unless that box would be too large.
     fn rim_layer(&mut self, optics: &Optics, size: Rect, shapes: &[Coverage], bridge: Option<f64>) {
         let margin = (optics.contour + 2.0).ceil();
@@ -633,7 +664,7 @@ impl Emitter<'_> {
             size.width + 2.0 * margin,
             size.height + 2.0 * margin,
         );
-        let (program, uniforms, inputs) = self.intern_shader(optics.rim(), outer, Some(0));
+        let (program, uniforms, inputs) = self.intern_shader(optics.rim(margin), outer, None);
         let shifted = margin > 0.0;
         if shifted {
             self.push(RecordCmd::BeginTransform {
@@ -893,34 +924,37 @@ fn check_layer_area(key: &str, bounds: Rect) -> Result<(), EmitError> {
     Ok(())
 }
 
-/// The light's direction as a unit vector in layer space, and its elevation. The screen direction
-/// maps back through the inverse of the layer's local-to-viewport Jacobian at `at`, so a turning
-/// glass keeps its highlights where the screen's light puts them.
-fn layer_light(material: &GlassMaterial, to_viewport: Homography, at: Point) -> [f32; 3] {
+/// Keep the authored light in screen space; the shaders transform normals into that space.
+fn screen_light(material: &GlassMaterial) -> [f32; 3] {
     let [x, y] = material.light;
+    let length = valle_draw::math::hypot(x, y);
+    [
+        (x / length) as f32,
+        (y / length) as f32,
+        material.elevation as f32,
+    ]
+}
+
+/// Inverse-transpose Jacobian, up to a positive common factor (the shader normalizes it).
+fn normal_map(to_viewport: Homography, at: Point) -> [f32; 4] {
     let [a, b, _, d, e, _, g, h, i] = to_viewport.0;
     let w = g * at.x + h * at.y + i;
-    let local = to_viewport.try_apply(at).and_then(|p| {
-        // Rows of the Jacobian: how the screen x and y move with the layer's x and y.
-        let j = [
-            (a - g * p.x) / w,
-            (b - h * p.x) / w,
-            (d - g * p.y) / w,
-            (e - h * p.y) / w,
-        ];
-        let determinant = j[0] * j[3] - j[1] * j[2];
-        let local = [
-            (j[3] * x - j[1] * y) / determinant,
-            (j[0] * y - j[2] * x) / determinant,
-        ];
-        let length = valle_draw::math::hypot(local[0], local[1]);
-        (length.is_finite() && length > 0.0).then(|| [local[0] / length, local[1] / length])
-    });
-    let [x, y] = local.unwrap_or_else(|| {
-        let length = valle_draw::math::hypot(x, y);
-        [x / length, y / length]
-    });
-    [x as f32, y as f32, material.elevation as f32]
+    let Some(p) = to_viewport.try_apply(at) else {
+        return [1.0, 0.0, 0.0, 1.0];
+    };
+    let j = [
+        (a - g * p.x) / w,
+        (b - h * p.x) / w,
+        (d - g * p.y) / w,
+        (e - h * p.y) / w,
+    ];
+    let det = j[0] * j[3] - j[1] * j[2];
+    let scale = j.iter().fold(0.0_f64, |s, v| s.max(v.abs()));
+    if !det.is_finite() || det == 0.0 || !scale.is_finite() || scale == 0.0 {
+        return [1.0, 0.0, 0.0, 1.0];
+    }
+    let factor = det.signum() / scale;
+    [j[3], -j[2], -j[1], j[0]].map(|v| (v * factor) as f32)
 }
 
 /// A Glass's shape in the plane its own projection maps it into, its curves flattened, and how
@@ -1144,4 +1178,40 @@ fn whole_pixels(rect: Rect) -> Rect {
         (rect.x + rect.width).ceil() - x0,
         (rect.y + rect.height).ceil() - y0,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn transformed_normal(map: Homography, normal: [f64; 2]) -> [f64; 2] {
+        let m = normal_map(map, Point::new(0.0, 0.0)).map(f64::from);
+        let v = [
+            m[0] * normal[0] + m[1] * normal[1],
+            m[2] * normal[0] + m[3] * normal[1],
+        ];
+        let length = v[0].hypot(v[1]);
+        [v[0] / length, v[1] / length]
+    }
+
+    #[test]
+    fn nonuniform_scale_keeps_the_light_peak_on_the_screen_normal() {
+        // Ellipse made by scaling a circle 2x horizontally. Its diagonal screen normal
+        // comes from local (2,-1), not from inverse-transforming the diagonal light.
+        let actual = transformed_normal(
+            Homography([2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            [2.0, -1.0],
+        );
+        let expected = 1.0 / 2.0_f64.sqrt();
+        assert!((actual[0] - expected).abs() < 1e-6);
+        assert!((actual[1] + expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mirrored_and_rotated_surfaces_keep_outward_normals() {
+        let mirror = Homography([-1.0, 0.0, 10.0, 0.0, 1.0, 20.0, 0.0, 0.0, 1.0]);
+        assert_eq!(transformed_normal(mirror, [1.0, 0.0]), [-1.0, 0.0]);
+        let rotation = Homography([0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(transformed_normal(rotation, [1.0, 0.0]), [0.0, 1.0]);
+    }
 }
