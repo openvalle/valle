@@ -99,6 +99,8 @@ valle-cli = { path = "crates/valle-cli" }
 # Pin the shared layout engine to preserve rendering behavior.
 # Keep pre-0.24 line breaking until upstream preserves explicit newlines with its Chromium override.
 takumi-core = { version = "=0.23.1", default-features = false }
+# Use Takumi's public tree traits to retain continuous Motion layout coordinates.
+taffy = { version = "=0.11.0", default-features = false }
 # Use the pinned RaTeX parser and layout core without renderer or font embedding.
 ratex-types = { version = "=0.1.14", default-features = false }
 ratex-font = { version = "=0.1.14", default-features = false }

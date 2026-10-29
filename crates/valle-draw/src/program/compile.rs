@@ -125,9 +125,15 @@ pub(super) fn instance_transform(
             f64::from(y),
         ]);
     }
-    let rotation = if geometry == recording::BatchGeometry::Path {
-        // CSS Path nodes resolve their Angle and affine composition in f32. Match that route
-        // before composing the per-row scale, including its positive modulo for negative angles.
+    let css_rotation = matches!(
+        geometry,
+        recording::BatchGeometry::Path
+            | recording::BatchGeometry::Rect
+            | recording::BatchGeometry::Image
+    );
+    let rotation = if css_rotation {
+        // CSS paths and boxes resolve angles in f32, including the degree-to-radian conversion.
+        // Computing radians in f64 first changes even quarter-turn edges after rasterization.
         instance.rotation.rem_euclid(360.0)
     } else {
         instance.rotation % 360.0
@@ -142,7 +148,7 @@ pub(super) fn instance_transform(
             f64::from(y),
         ]);
     }
-    let (sin, cos) = if geometry == recording::BatchGeometry::Path {
+    let (sin, cos) = if css_rotation {
         crate::math::sin_cos_f32(rotation.to_radians())
     } else {
         let (sin, cos) = crate::math::sin_cos(f64::from(rotation).to_radians());

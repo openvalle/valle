@@ -1560,21 +1560,30 @@ impl ProgramRuntime {
                 if let Some(fill) = node.fill {
                     let mut paint = self.paint(fill)?;
                     paint.set_style(PaintStyle::Fill);
+                    let fractional_rect = fractional_axis_rect(canvas, &path);
                     let drawn = match self.program.paints().get(fill.raw() as usize) {
                         Some(Paint::Solid(color)) => {
-                            fill_opaque_rect_inside(canvas, data, &path, &paint, *color)
+                            (fractional_rect.is_none()
+                                && fill_opaque_rect_inside(canvas, data, &path, &paint, *color))
                                 || (node.stroke.is_none()
                                     && draw_rounded_path_with_shared_coverage(
                                         canvas, data, &path, &paint,
                                     )?)
                         }
                         Some(gradient) => {
-                            gradient_fill::fill_rect_inside(canvas, data, &path, &paint, gradient)
+                            fractional_rect.is_none()
+                                && gradient_fill::fill_rect_inside(
+                                    canvas, data, &path, &paint, gradient,
+                                )
                         }
                         None => false,
                     };
                     if !drawn {
-                        canvas.draw_path(&path, &paint);
+                        if let Some(rect) = fractional_rect {
+                            canvas.draw_rect(rect, &paint);
+                        } else {
+                            canvas.draw_path(&path, &paint);
+                        }
                     }
                 }
                 if let Some(stroke) = &node.stroke {
@@ -2565,6 +2574,24 @@ fn fill_opaque_rect_inside(
     canvas.draw_path(path, paint);
     canvas.restore();
     true
+}
+
+/// Axis-aligned fractional rectangles need Skia's analytic rectangle coverage, matching native
+/// instances. Raster's generic path scan converter quantizes vertical coverage more coarsely.
+/// Do not punch a hole for the direct interior-fill optimizations here: a nonrectangular clip
+/// sends draw_rect back through that scan converter. Pixel-aligned and rotated fills retain
+/// their existing, byte-verified fast paths.
+fn fractional_axis_rect(canvas: &skia_safe::Canvas, path: &SkPath) -> Option<SkRect> {
+    let (rect, ..) = path.is_rect()?;
+    let matrix = canvas.local_to_device_as_3x3();
+    if !matrix.is_scale_translate() {
+        return None;
+    }
+    let device = matrix.map_rect(rect).0;
+    [device.left, device.top, device.right, device.bottom]
+        .iter()
+        .any(|edge| edge.fract() != 0.0)
+        .then_some(rect)
 }
 
 /// Whether every channel of these half-float pixels is finite.

@@ -248,8 +248,8 @@ fn measurement_uses_the_explicit_viewport_without_scaling_by_dpr() {
         )
         .unwrap()
     };
-    // Layout rounds glyph extents to device pixels, so DPR can change the CSS-pixel rounding by less
-    // than one pixel. It must not multiply either the result or maxWidth by the DPR.
+    // The inline shaper still rounds intrinsic extents to device pixels, independently of box
+    // layout. DPR may change those CSS extents by less than a pixel; it must not scale maxWidth.
     for max_width in [None, Some(200.0)] {
         let a = at(Viewport::new((640, 400)), max_width);
         let b = at(
@@ -266,4 +266,28 @@ fn measurement_uses_the_explicit_viewport_without_scaling_by_dpr() {
         at(Viewport::new((640, 400)), None),
         "measurement must not leave mutable state"
     );
+}
+
+#[test]
+fn fractional_wrapping_constraint_is_not_rounded_to_device_pixels() {
+    let fonts = fonts();
+    for width in [119.25, 119.5, 119.75] {
+        let measured = measure_text(
+            &TextMeasure {
+                text: "Fractional wrapping with several words",
+                font_size: 20.25,
+                line_height: Some(1.5),
+                max_width: Some(width),
+                ..Default::default()
+            },
+            &fonts,
+            viewport(),
+        )
+        .unwrap();
+        assert_eq!(measured.width, width);
+        assert!(
+            measured.height > 20.25 * 1.5,
+            "text must wrap: {measured:?}"
+        );
+    }
 }

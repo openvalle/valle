@@ -89,6 +89,7 @@ mod motion_stroke_budget;
 mod motion_style_admission;
 mod motion_style_diagnostics;
 mod motion_style_objects;
+mod motion_subpixel_layout;
 mod motion_text_line_height;
 mod motion_text_outline;
 mod motion_time_scope;

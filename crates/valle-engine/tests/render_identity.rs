@@ -3300,8 +3300,8 @@ export default function Main() {{ const time = useCurrentTime(); const comp = us
                     assert_eq!(
                         motion.boxes["bar"],
                         [
-                            ((source.as_f64() * 12.0).round()) as f32,
-                            ((frame as f64 / (frames - 1) as f64 * 20.0).round()) as f32,
+                            (source.as_f64() * 12.0) as f32,
+                            (frame as f64 / (frames - 1) as f64 * 20.0) as f32,
                             w / 2.0,
                             h
                         ]

@@ -4,6 +4,7 @@
 
 mod activation;
 pub(crate) mod bridge;
+pub(crate) mod continuous;
 mod dependencies;
 mod hit;
 mod instance_cache;
@@ -39,7 +40,7 @@ pub use scene::{LayoutTimings, build_tree_profiled};
 pub use takumi_core::viewport::Viewport;
 
 /// Layout implementation identity included in the Artifact build fingerprint.
-pub const LAYOUT_ENGINE_ID: &str = "takumi-core@0.23.1+fonts@4+css3d@3+media-box@1";
+pub const LAYOUT_ENGINE_ID: &str = "takumi-core@0.23.1+fonts@4+css3d@3+media-box@1+subpixel@1";
 
 /// Whether Motion admits an authored CSS property through the shared property specification.
 pub fn supports_css_property(name: &str) -> bool {

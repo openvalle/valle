@@ -277,6 +277,54 @@ fn assert_same_pixels(first: &RgbaFrame, second: &RgbaFrame, label: &str) {
     }
 }
 
+#[test]
+fn slow_layout_motion_matches_translate_pixels_at_every_sample() {
+    let dir = tempfile::tempdir().unwrap();
+    let layout = r##"
+export const composition = { width: 320, height: 240, fps: 30, duration: 1 };
+export default function Motion() {
+ const time = useCurrentTime();
+ return <Scene className="w-full h-full" style={{backgroundColor:"#182438"}}>
+  <View style={{position:"absolute",left:20,top:20+time.seconds*3,
+    width:280,height:180,backgroundColor:"#63d8ab"}} />
+ </Scene>;
+}"##;
+    let translate = layout.replace(
+        "left:20,top:20+time.seconds*3,",
+        "left:20,top:20,translate:point(0,time.seconds*3),",
+    );
+    for (source, name) in [(layout, "layout"), (translate.as_str(), "translate")] {
+        std::fs::write(dir.path().join(format!("{name}.motion.tsx")), source).unwrap();
+        success(run(
+            dir.path(),
+            &[
+                "motion",
+                "render",
+                &format!("{name}.motion.tsx"),
+                "--frames",
+                "0,1,2,3,4",
+                "--backend",
+                "raster",
+                "-o",
+                &format!("{name}/%05d.png"),
+                "--json",
+            ],
+        ));
+    }
+    let mut previous = None;
+    for frame in 0..5 {
+        let actual = png(&dir.path().join(format!("layout/{frame:05}.png")));
+        let reference = png(&dir.path().join(format!("translate/{frame:05}.png")));
+        assert_same_pixels(&actual, &reference, &format!("subpixel frame {frame}"));
+        assert_ne!(
+            previous.as_ref(),
+            Some(&actual.data),
+            "stalled frame {frame}"
+        );
+        previous = Some(actual.data);
+    }
+}
+
 fn assert_cell(sheet: &RgbaFrame, cell: &RgbaFrame, index: usize, columns: usize) {
     let x = (index % columns) * cell.width as usize;
     let y = (index / columns) * cell.height as usize;

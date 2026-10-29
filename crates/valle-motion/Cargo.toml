@@ -25,6 +25,7 @@ hex.workspace = true
 serde_json.workspace = true
 ts-rs = { workspace = true, optional = true }
 takumi-core.workspace = true
+taffy.workspace = true
 parley.workspace = true
 ratex-types.workspace = true
 ratex-font.workspace = true

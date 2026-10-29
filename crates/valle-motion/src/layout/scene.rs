@@ -990,7 +990,7 @@ pub(super) fn build_tree_inner(
         if let Some(timings) = timings.as_deref_mut() {
             timings.tree_ms = elapsed(&mut started);
         }
-        tree.compute_layout(render_context.sizing.viewport.into());
+        super::continuous::compute_layout(&mut tree, render_context.sizing.viewport.into());
         let layout = Arc::new(tree.into_results());
         if let Some(timings) = timings.as_deref_mut() {
             timings.layout_ms = elapsed(&mut started);
@@ -2767,14 +2767,14 @@ fn resolve_instance_batch(
                 None => 0.0,
                 _ => return Err(invalid("transform")),
             };
-            // Takumi snaps both absolute box edges in f32 layout coordinates. Snapping only the
-            // origin would keep B01's 4px cells correct but drift for fractional instance sizes.
-            let (raw_x, raw_y) = (left as f32, top as f32);
-            let x = raw_x.round();
-            let y = raw_y.round();
-            let snapped_width = (raw_x + width as f32).round() - x;
-            let snapped_height = (raw_y + height as f32).round() - y;
-            if snapped_width <= 0.0 || snapped_height <= 0.0 {
+            // Match ordinary layout's f32 coordinates without rounding positions or edges.
+            // Otherwise native batches would still jitter after the full layout path is smooth.
+            let (x, y) = (left as f32, top as f32);
+            let (width, height) = (width as f32, height as f32);
+            if ![x, y, width, height].into_iter().all(f32::is_finite) {
+                return Err(invalid("left/top/width/height"));
+            }
+            if width <= 0.0 || height <= 0.0 {
                 return Ok(());
             }
             semantic_keys.push(
@@ -2784,7 +2784,7 @@ fn resolve_instance_batch(
             );
             instances.push(valle_draw::program::recording::BatchInstance {
                 position: valle_draw::Point::new(f64::from(x), f64::from(y)),
-                size: valle_draw::Point::new(f64::from(snapped_width), f64::from(snapped_height)),
+                size: valle_draw::Point::new(f64::from(width), f64::from(height)),
                 color: fill.to_working(),
                 rotation: rotation as f32,
                 skew_x: 0.0,
@@ -6966,7 +6966,7 @@ fn layout_and_collect_boxes(
     let mut root = RenderNode::from_node(&render_context, node);
     super::transform::preserve_identity(&mut root);
     let mut tree = takumi_core::layout::tree::LayoutTree::from_render_node(&root);
-    tree.compute_layout(render_context.sizing.viewport.into());
+    super::continuous::compute_layout(&mut tree, render_context.sizing.viewport.into());
     let layout = tree.into_results();
     let mut boxes = BTreeMap::new();
     walk_pairs(artifact, &root, &layout, &[], &mut |_, key, id, origin| {

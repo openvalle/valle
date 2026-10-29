@@ -297,7 +297,7 @@ pub fn measure_text(
         width: available_width,
         height: AvailableSpace::MaxContent,
     };
-    tree.compute_layout(available);
+    crate::layout::continuous::compute_layout(&mut tree, available);
     let results = tree.into_results();
     let layout = results
         .layout(takumi_core::geometry::NodeId::ROOT)
@@ -362,10 +362,13 @@ pub fn text_outline(
         }
         None => AvailableSpace::MaxContent,
     };
-    tree.compute_layout(Size {
-        width: available_width,
-        height: AvailableSpace::MaxContent,
-    });
+    crate::layout::continuous::compute_layout(
+        &mut tree,
+        Size {
+            width: available_width,
+            height: AvailableSpace::MaxContent,
+        },
+    );
     let results = tree.into_results();
     let layout = results
         .layout(takumi_core::geometry::NodeId::ROOT)

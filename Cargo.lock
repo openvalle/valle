@@ -5419,6 +5419,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "taffy",
  "takumi-core",
  "thiserror 2.0.20",
  "ts-rs",
