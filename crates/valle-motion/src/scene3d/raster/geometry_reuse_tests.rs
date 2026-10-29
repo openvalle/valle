@@ -83,6 +83,7 @@ pub(super) fn fixture(bytes: &[u8], shadows: bool) -> (PreparedScene, Frame3DSta
             depth_of_field: None,
         },
         meshes: vec![MeshFrameState {
+            parents: Vec::new(),
             key: "subject".into(),
             material: MaterialFrameState {
                 color: Some(Color4([0.3, 0.6, 0.9, 1.0])),
@@ -124,6 +125,11 @@ fn indexed_deformation_and_projection_match_triangle_reference_bits() {
                 (1.0, false, false),
             ] {
                 frame.meshes[0].animation_time = Some(time);
+                frame.meshes[0].parents = vec![Transform3D {
+                    translation: Vec3::new(0.2, 0.1, 0.0),
+                    rotation_degrees: Vec3::new(5.0, 9.0, 13.0),
+                    scale: Vec3::new(0.8, 1.2, 1.0),
+                }];
                 frame.meshes[0].transform.rotation_degrees = Vec3::new(7.0, 19.0, -3.0);
                 frame.meshes[0].transform.scale.0[0] = if mirror { -1.0 } else { 1.0 };
                 frame.camera.position.0[2] = if close { 1.0 } else { 15.0 };
@@ -208,6 +214,11 @@ fn constant_unlit_matches_full_shading_and_visibility_bits() {
                     [(0.0, 0.2, false), (0.7, 1.0, true), (0.0, 2.0, false)]
                 {
                     frame.meshes[0].animation_time = Some(time);
+                    frame.meshes[0].parents = vec![Transform3D {
+                        translation: Vec3::new(0.2, 0.1, 0.0),
+                        rotation_degrees: Vec3::new(5.0, 9.0, 13.0),
+                        scale: Vec3::new(0.8, 1.2, 1.0),
+                    }];
                     frame.meshes[0].transform.rotation_degrees = Vec3::new(7.0, 19.0, -3.0);
                     frame.meshes[0].transform.scale.0[0] = if close { -1.0 } else { 1.0 };
                     frame.camera.position.0[2] = if close { 1.0 } else { 15.0 };

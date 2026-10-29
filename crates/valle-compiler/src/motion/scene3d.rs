@@ -2,7 +2,93 @@
 
 use super::*;
 
+struct Scene3DChild<'s> {
+    element: &'s JSXElement<'s>,
+    parents: Vec<Scene3DTransformBinding>,
+}
+
 impl<'s> Compiler<'s> {
+    fn scene3d_children(
+        &mut self,
+        children: &'s [JSXChild<'s>],
+        parents: &[Scene3DTransformBinding],
+        groups: &mut BTreeSet<String>,
+        result: &mut Vec<Scene3DChild<'s>>,
+    ) -> Option<()> {
+        for child in children {
+            let JSXChild::Element(element) = child else {
+                if matches!(child, JSXChild::Text(text) if text.value.trim().is_empty())
+                    || matches!(child, JSXChild::ExpressionContainer(c) if matches!(c.expression, JSXExpression::EmptyExpression(_)))
+                {
+                    continue;
+                }
+                self.illegal(
+                    DiagCode::GrammarForbidden,
+                    child.span(),
+                    "Scene3D and Group3D require explicit 3D elements",
+                );
+                return None;
+            };
+            let tag = match &element.opening_element.name {
+                JSXElementName::Identifier(id) => id.name.as_str(),
+                JSXElementName::IdentifierReference(id) => id.name.as_str(),
+                _ => "",
+            };
+            if tag == "Group3D" {
+                if parents.len() >= valle_motion::scene3d::MAX_NODE_DEPTH {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        element.span(),
+                        "Group3D nesting exceeds 32 levels",
+                    );
+                    return None;
+                }
+                let attrs = self.scene3d_attributes(
+                    element,
+                    "Group3D",
+                    &[
+                        "key",
+                        "position",
+                        "rotation",
+                        "scale",
+                        "translateX",
+                        "translateY",
+                        "translateZ",
+                        "rotateX",
+                        "rotateY",
+                        "rotateZ",
+                        "scaleX",
+                        "scaleY",
+                        "scaleZ",
+                    ],
+                )?;
+                let key = self.scene3d_required_attr_string(&attrs, "key", "Group3D")?;
+                if !groups.insert(key) {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        element.span(),
+                        "Group3D keys must be unique within a Scene3D",
+                    );
+                    return None;
+                }
+                let mut chain = parents.to_vec();
+                chain.push(self.scene3d_mesh_transform(&attrs, element.span())?);
+                self.scene3d_children(&element.children, &chain, groups, result)?;
+            } else {
+                if !parents.is_empty() && !matches!(tag, "Mesh" | "Anchor3D") {
+                    self.illegal(DiagCode::GrammarForbidden, element.span(),
+                        "Group3D contains Mesh, Anchor3D and nested Group3D; place lights at the Scene3D boundary");
+                    return None;
+                }
+                result.push(Scene3DChild {
+                    element,
+                    parents: parents.to_vec(),
+                });
+            }
+        }
+        Some(())
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "The JSX lowerer passes the shared node attributes and both Scene3D author objects explicitly."
@@ -241,20 +327,13 @@ impl<'s> Compiler<'s> {
             exposure =
                 self.scene3d_number(values.get("exposure").copied(), 1.0, "Scene3D exposure")?;
         }
-        for child in &element.children {
-            let JSXChild::Element(child) = child else {
-                if matches!(child, JSXChild::Text(text) if text.value.trim().is_empty())
-                    || matches!(child, JSXChild::ExpressionContainer(container) if matches!(container.expression, JSXExpression::EmptyExpression(_)))
-                {
-                    continue;
-                }
-                self.illegal(
-                    DiagCode::GrammarForbidden,
-                    child.span(),
-                    "Scene3D children must be explicit Mesh/Anchor3D/AmbientLight/DirectionalLight elements",
-                );
-                continue;
-            };
+        let mut children = Vec::new();
+        self.scene3d_children(&element.children, &[], &mut BTreeSet::new(), &mut children)?;
+        for Scene3DChild {
+            element: child,
+            parents,
+        } in children
+        {
             let child_tag = match &child.opening_element.name {
                 JSXElementName::Identifier(id) => id.name.as_str(),
                 JSXElementName::IdentifierReference(id) => id.name.as_str(),
@@ -377,6 +456,7 @@ impl<'s> Compiler<'s> {
                         (None, None)
                     };
                     mesh_frames.push(Scene3DMeshBinding {
+                        parents,
                         key: mesh_key.clone(),
                         material: material_frame,
                         material_overrides: material_frames,
@@ -562,7 +642,7 @@ impl<'s> Compiler<'s> {
     ) -> Option<BTreeMap<String, (&'s Option<JSXAttributeValue<'s>>, Span)>> {
         let mut values = BTreeMap::new();
         let (attributes, children) = self.jsx_attributes(element);
-        if children.is_some_and(|children| !children.is_empty()) {
+        if label != "Group3D" && children.is_some_and(|children| !children.is_empty()) {
             self.illegal(
                 DiagCode::GrammarForbidden,
                 element.opening_element.span(),

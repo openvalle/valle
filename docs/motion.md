@@ -3008,6 +3008,28 @@ combines these into one complete transform. Rotation uses degrees and `T * Rz * 
 Scale may be negative; its magnitude must remain between 0.000001 and 1000, with no
 zero crossing. No mutable pose state is retained between frames.
 
+Group authored meshes with `Group3D`. Each group uses the same `position`,
+`rotation`, `scale` and axis convenience props as Mesh, including frame expressions:
+
+```tsx
+<Group3D key="device" rotateY={seconds * 20} position={[0, 0.2, 0]}>
+  <Mesh key="body" src="asset://body" />
+  <Group3D key="lid" position={[0, 1, 0]} rotateX={-progress * 80}>
+    <Mesh key="screen" src="asset://screen" />
+  </Group3D>
+</Group3D>
+```
+
+Groups nest up to 32 levels. Parent transforms apply outside the child's local
+transform, preserving nonuniform scale, shear produced by nested rotations, and
+mirrored winding. Normals use inverse-transpose transforms. Geometry, shadows,
+depth, picking and `project3d` anchors use the same grouped pose. Group keys must
+be unique within a Scene3D; Mesh keys remain unique across the whole Scene3D.
+Group3D contains Mesh, nested Group3D and Anchor3D; lights stay at the Scene3D
+boundary. An Anchor3D's position remains local to its explicitly named parent
+mesh, so a containing group is not applied a second time. Group transform values
+count against the frame expression budget for each mesh that uses them.
+
 To animate model nodes, bind their original GLB indices:
 
 ```tsx

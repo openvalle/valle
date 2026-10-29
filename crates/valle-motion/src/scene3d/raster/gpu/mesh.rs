@@ -5,8 +5,8 @@
 //! Wire layout (u32 words): each draw vertex stores [source offset, instance, material, 0].
 //! Unique source vertices follow: [morph count, has normal, 0, 0], position/normal (six
 //! floats), four joint indices, four weights, then six floats per morph target. Frame
-//! shading appends four camera rows, an instance directory and twelve rows per instance
-//! (node affine/normal, mesh scale/sin/cos/translation, eight morph weights), then six rows
+//! shading appends four camera rows, an instance directory and eighteen rows per instance
+//! (node affine/normal, mesh scale/sin/cos/translation, eight morph weights, parent affine/normal), then six rows
 //! per joint. `mesh.wgsl` consumes the same layout on native GPUs and generated WebGL.
 use super::super::{FrameMesh, MeshTransform, V3};
 use super::*;
@@ -318,7 +318,7 @@ pub fn prepare_gpu_mesh_geometry(
                 .apply_values(&override_.material);
         }
         meshes.push(FrameMesh { mesh, materials });
-        transforms.push(MeshTransform::new(state.transform));
+        transforms.push(MeshTransform::from_state(state)?);
         instances.push(current);
     }
     let mut shading = GpuRasterShading::new(prepared, frame, &meshes, &camera);
@@ -362,7 +362,7 @@ pub fn prepare_gpu_mesh_geometry(
             };
             shading.values.extend(node.gpu_rows());
             shading.values.extend([
-                vector(transform.scale, 0.0),
+                vector(transform.scale, f32::from(transform.parent.is_some())),
                 vector(transform.rotation_sin, instance.joint_palette.len() as f32),
                 vector(transform.rotation_cos, instance.weights.len() as f32),
                 vector(transform.translation, 0.0),
@@ -372,6 +372,9 @@ pub fn prepare_gpu_mesh_geometry(
             shading
                 .values
                 .extend(weights.as_chunks::<4>().0.iter().copied());
+            shading
+                .values
+                .extend(transform.parent.unwrap_or_else(Affine::identity).gpu_rows());
             for joint in &instance.joint_palette {
                 shading.values.extend(joint.gpu_rows());
             }

@@ -17,6 +17,38 @@ export default function T(){ const time = useCurrentTime();return <Scene style={
 "##;
 
 #[test]
+fn nested_groups_preserve_local_transforms_and_time_bindings() {
+    let source = SOURCE.replace("<Mesh key=", "<Group3D key=\"outer\" translateX={time.seconds} scale={[2,1,1]}><Group3D key=\"inner\" rotateZ={30}><Mesh key=")
+        .replace("rotateY={time.seconds*30}/>", "rotateY={time.seconds*30}/></Group3D></Group3D>");
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let mesh = artifact
+        .nodes
+        .iter()
+        .find_map(|n| match &n.kind {
+            NodeKind::Scene3D { frame, .. } => Some(&frame.meshes[0]),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(mesh.parents.len(), 2);
+    assert!(mesh.parents[0].constant().is_none());
+    assert_eq!(
+        mesh.parents[1].constant().unwrap().rotation_degrees.0[2],
+        30.0
+    );
+    for bad in [
+        source.replace("scale={[2,1,1]}", "scale={[0,1,1]}"),
+        source.replace("key=\"inner\"", "key=\"outer\""),
+        source.replace(
+            "</Group3D></Group3D>",
+            "<AmbientLight/></Group3D></Group3D>",
+        ),
+    ] {
+        assert!(compile_motion(&bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn extrude_is_prepared_geometry_with_no_model_asset() {
     let artifact = compile_motion(SOURCE).unwrap().artifact;
     artifact.validate().unwrap();

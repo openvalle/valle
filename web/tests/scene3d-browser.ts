@@ -60,11 +60,13 @@ const BALL=lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"
 export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
 <Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[time.seconds*0.05,0,5],target:[0,0,0],fov:45,depthOfField:{focusDistance:5,maxBlurRadius:8}}}
  pbr={{shadows:true,toneMapping:"aces",exposure:0.6+time.seconds*0.3${resources ? ',environment:{src:"asset://sky",rotation:time.seconds*90,intensity:0.3,background:true}' : ""}}}>
+ <Group3D key="assembly" rotateZ={time.seconds*12} scale={[1.05,0.95,1]}><Group3D key="inner" rotateY={time.seconds*15}>
  <Mesh key="main" geometry={BALL} rotateY={time.seconds*90} position={[-0.4,0,0]}
   material={{type:"pbr",color:"#cf7338",metallic:0.1+time.seconds*0.4,roughness:0.1+time.seconds*0.3,ior:1.33+time.seconds*0.3,specularIntensity:0.7,specularColor:"#ffe4ce",clearcoat:0.25+time.seconds*0.3,clearcoatRoughness:0.15,normalScale:0.3,emissive:"#101a22",emissiveIntensity:0.2${textures}}}/>
  <Mesh key="glass" geometry={BALL} scale={[0.45,0.45,0.45]} position={[0.6,0,1.2]}
   material={{type:"pbr",alphaMode:"blend",color:"#45aadd66",roughness:0.2${textures}}}/>
  ${resources ? '<Mesh key="model" src="asset://model" position={[1.5,0,-0.8]} rotateY={time.seconds*20} scale={[-1,1,1]} material={{type:"lambert",doubleSided:true,alphaMode:"mask",alphaCutoff:0.4,textures:{baseColor:"asset://map"}}}/>' : ""}
+ </Group3D></Group3D>
  <AmbientLight intensity={0.2}/><HemisphereLight skyColor="#b0c0ff" groundColor="#231507" intensity={0.2}/>
  <DirectionalLight direction={[0.8,0.2,1]} intensity={1.6}/><DirectionalLight direction={[-1,0.2,1]} intensity={0.8}/>
 </Scene3D></Scene>;}`;

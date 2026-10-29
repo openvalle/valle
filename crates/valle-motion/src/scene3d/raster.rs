@@ -22,6 +22,8 @@ pub use gpu::{
 };
 #[cfg(test)]
 mod geometry_reuse_tests;
+#[cfg(test)]
+mod group_tests;
 mod lighting;
 mod pbr;
 mod shadow;
@@ -600,8 +602,8 @@ pub fn project_anchors(
         .meshes
         .iter()
         .zip(&frame.meshes)
-        .map(|(_, state)| MeshTransform::new(state.transform))
-        .collect::<Vec<_>>();
+        .map(|(_, state)| MeshTransform::from_state(state))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(anchor_projections(scene, &camera, &transforms))
 }
 
@@ -999,7 +1001,7 @@ fn collect_geometry_reusing<'a>(
     let shadows = prepared.scene.pbr.shadows;
     let mut casters = shadow::ShadowCasters::default();
     for (mesh_index, (mesh, state)) in prepared.meshes.iter().zip(&frame.meshes).enumerate() {
-        let transform = MeshTransform::new(state.transform);
+        let transform = MeshTransform::from_state(state)?;
         transforms.push(transform);
         let current_instances;
         let clip = prepared.scene.meshes[mesh_index].animation_clip;
@@ -2019,6 +2021,7 @@ impl Camera {
 
 #[derive(Clone, Copy)]
 struct MeshTransform {
+    parent: Option<super::asset::Affine>,
     translation: V3,
     rotation_sin: V3,
     rotation_cos: V3,
@@ -2026,6 +2029,18 @@ struct MeshTransform {
 }
 
 impl MeshTransform {
+    fn from_state(state: &super::MeshFrameState) -> Result<Self, ContractErrors> {
+        let mut transform = Self::new(state.transform);
+        if !state.parents.is_empty() {
+            let mut parent = super::asset::Affine::identity();
+            for group in &state.parents {
+                parent = parent.compose(super::asset::Affine::from_transform(*group)?)?;
+            }
+            transform.parent = Some(parent);
+        }
+        Ok(transform)
+    }
+
     fn new(frame: Transform3D) -> Self {
         let rotation = V3::from(frame.rotation_degrees);
         let radians = V3::new(
@@ -2034,6 +2049,7 @@ impl MeshTransform {
             degrees(rotation.z),
         );
         Self {
+            parent: None,
             translation: V3::from(frame.translation),
             rotation_sin: V3::new(
                 libm::sinf(radians.x),
@@ -2050,24 +2066,32 @@ impl MeshTransform {
     }
 
     fn mirrored(self) -> bool {
-        self.scale.x * self.scale.y * self.scale.z < 0.0
+        (self.scale.x * self.scale.y * self.scale.z < 0.0)
+            != self.parent.is_some_and(|parent| parent.mirrored)
     }
 
     fn point(self, point: V3) -> V3 {
-        self.rotate(V3::new(
+        let point = self.rotate(V3::new(
             point.x * self.scale.x,
             point.y * self.scale.y,
             point.z * self.scale.z,
-        )) + self.translation
+        )) + self.translation;
+        self.parent.map_or(point, |parent| {
+            V3::from(Vec3(parent.point([point.x, point.y, point.z])))
+        })
     }
 
     fn normal(self, normal: V3) -> V3 {
-        self.rotate(V3::new(
-            normal.x / self.scale.x,
-            normal.y / self.scale.y,
-            normal.z / self.scale.z,
-        ))
-        .normalized()
+        let normal = self
+            .rotate(V3::new(
+                normal.x / self.scale.x,
+                normal.y / self.scale.y,
+                normal.z / self.scale.z,
+            ))
+            .normalized();
+        self.parent.map_or(normal, |parent| {
+            V3::from(Vec3(parent.normal([normal.x, normal.y, normal.z])))
+        })
     }
 
     fn rotate(self, value: V3) -> V3 {

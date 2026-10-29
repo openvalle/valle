@@ -390,6 +390,7 @@ fn verify_model_geometry(lighting: Option<(MaterialKind, ToneMapping)>) {
                         .into_iter()
                         .enumerate()
                         .map(|(index, key)| MeshFrameState {
+                            parents: Vec::new(),
                             key: key.into(),
                             material: MaterialFrameState {
                                 metallic: Some(index as f32 * 0.25),

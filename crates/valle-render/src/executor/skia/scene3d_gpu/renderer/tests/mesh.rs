@@ -146,6 +146,21 @@ fn gpu_mesh_transforms_morph_skin_and_clipping() {
                 Vec3::new(13.0, sample as f32 * 13.0, -9.0);
             frame.meshes[0].transform.scale =
                 Vec3::new(if sample == 4 { -0.9 } else { 0.9 }, 1.1, 0.8);
+            frame.meshes[0].parents = if sample == 0 {
+                vec![]
+            } else {
+                vec![
+                    Transform3D {
+                        translation: Vec3::new(0.2, 0.1, 0.0),
+                        rotation_degrees: Vec3::new(7.0, 11.0, 19.0),
+                        scale: Vec3::new(if sample == 4 { -0.8 } else { 0.8 }, 1.1, 0.9),
+                    },
+                    Transform3D {
+                        rotation_degrees: Vec3::new(3.0, sample as f32 * 2.0, -7.0),
+                        ..Default::default()
+                    },
+                ]
+            };
             frame.camera.near = if sample == 6 { camera_z } else { 0.1 };
             frame.camera.far = if sample == 7 { camera_z } else { 100.0 };
             if sample == 8 {

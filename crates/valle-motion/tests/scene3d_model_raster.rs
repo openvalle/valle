@@ -237,6 +237,7 @@ fn frame() -> Frame3DState {
         .with_orbit(0.0, 0.0, Some(4.5))
         .unwrap(),
         meshes: vec![MeshFrameState {
+            parents: Vec::new(),
             key: "product".into(),
             material: MaterialFrameState {
                 color: Some(Color4([0.8, 0.95, 1.0, 1.0])),
@@ -2206,6 +2207,7 @@ fn opaque_shading_after_the_depth_tests_keeps_the_bits_of_shading_each_fragment_
     ];
     let mut frame = pbr_frame();
     let placed = |key: &str, translation: [f32; 3]| MeshFrameState {
+        parents: Vec::new(),
         key: key.into(),
         material: MaterialFrameState::default(),
         material_overrides: Vec::new(),

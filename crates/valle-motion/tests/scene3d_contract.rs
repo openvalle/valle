@@ -61,6 +61,7 @@ fn frame() -> Frame3DState {
         .with_orbit(26.0, 0.0, Some(4.5))
         .unwrap(),
         meshes: vec![MeshFrameState {
+            parents: Vec::new(),
             key: "product".into(),
             material: MaterialFrameState {
                 color: Some(Color4([0.8, 0.95, 1.0, 1.0])),
@@ -91,7 +92,7 @@ fn frame() -> Frame3DState {
 #[test]
 fn scene_contract_wire_is_exact_strict_and_wasm_clean() {
     let scene = spec();
-    assert_eq!(scene.frame_scalar_count(), 50);
+    assert_eq!(scene.frame_scalar_count(), 65);
     scene.validate().unwrap();
     let json = serde_json::to_value(&scene).unwrap();
     assert_eq!(
@@ -356,7 +357,7 @@ fn node_bindings_have_stable_distinct_ids_and_complete_bounded_frame_transforms(
         .to_vec();
     state.meshes[0].nodes[0].transform.scale.0[0] = -2.0;
     state.validate_for(&scene).unwrap();
-    assert_eq!(scene.frame_scalar_count(), 68);
+    assert_eq!(scene.frame_scalar_count(), 83);
     state.meshes[0].nodes.swap(0, 1);
     assert!(state.validate_for(&scene).is_err());
     state.meshes[0].nodes.swap(0, 1);

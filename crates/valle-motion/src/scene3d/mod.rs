@@ -352,6 +352,9 @@ pub struct DepthOfFieldState {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MeshFrameState {
+    /// Ordered outermost-to-innermost author groups.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<Transform3D>,
     pub key: String,
     pub material: MaterialFrameState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -676,6 +679,15 @@ impl Frame3DState {
             );
         }
 
+        let parent_scalars = self.meshes.iter().fold(0usize, |n, m| {
+            n.saturating_add(m.parents.len().saturating_mul(9))
+        });
+        if scene.frame_scalar_count().saturating_add(parent_scalars) > MAX_FRAME_SCALARS {
+            errors.push(
+                "/meshes/parents",
+                "group transforms exceed the frame scalar budget",
+            );
+        }
         validate_camera(&self.camera, &mut errors);
         if !self.exposure.is_finite() || !(0.0..=16.0).contains(&self.exposure) {
             errors.push("/exposure", "exposure must be finite in 0..=16");
@@ -719,6 +731,12 @@ impl Frame3DState {
                     format!("{path}/nodes"),
                     "frame node IDs must match the frozen node bindings in exact order",
                 );
+            }
+            if mesh.parents.len() > MAX_NODE_DEPTH {
+                errors.push(format!("{path}/parents"), "group nesting exceeds 32 levels");
+            }
+            for (at, parent) in mesh.parents.iter().enumerate() {
+                validate_transform(*parent, &format!("{path}/parents/{at}"), &mut errors);
             }
             mesh.material
                 .validate_at(&format!("{path}/material"), &mut errors);

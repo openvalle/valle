@@ -30,7 +30,7 @@ fn mesh_local(source:u32,instance:u32) -> MeshVertex {
         for(var i=0u;i<4u;i++) {
             let weight=vertex_float(source+14u+i);
             if weight!=0.0 {
-                let joint=instance+12u+rasterVertices[source+10u+i]*6u;
+                let joint=instance+18u+rasterVertices[source+10u+i]*6u;
                 sp=stable4(vec4(sp+stable4(vec4(mesh_affine(joint,p)*weight,0.0)).xyz,0.0)).xyz;
                 sn=stable4(vec4(sn+stable4(vec4(mesh_normal(joint+3u,n)*weight,0.0)).xyz,0.0)).xyz;
             }
@@ -62,8 +62,12 @@ fn mesh_local(source:u32,instance:u32) -> MeshVertex {
     }
     let scale=shading[instance+6u].xyz;
     let sine=shading[instance+7u].xyz;let cosine=shading[instance+8u].xyz;
-    let world=mesh_rotate(mesh_affine(instance,vertex.position)*scale,sine,cosine)+shading[instance+9u].xyz;
-    let normal=unit(mesh_rotate(unit(mesh_normal(instance+3u,local_normal))/scale,sine,cosine));
+    var world=mesh_rotate(mesh_affine(instance,vertex.position)*scale,sine,cosine)+shading[instance+9u].xyz;
+    var normal=unit(mesh_rotate(unit(mesh_normal(instance+3u,local_normal))/scale,sine,cosine));
+    if shading[instance+6u].w!=0.0 {
+        world=mesh_affine(instance+12u,world);
+        normal=unit(mesh_normal(instance+15u,normal));
+    }
     let relative=world-shading[camera+3u].xyz;
     let view=vec3(dot3(relative,shading[camera].xyz),dot3(relative,shading[camera+1u].xyz),dot3(relative,shading[camera+2u].xyz));
     let near=shading[camera+2u].w;let far=shading[camera+3u].w;

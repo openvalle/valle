@@ -996,6 +996,8 @@ impl Scene3DLightBinding {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DMeshBinding {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<Scene3DTransformBinding>,
     pub key: String,
     pub material: Scene3DMaterialBinding,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1024,6 +1026,20 @@ pub struct Scene3DTransformBinding {
     pub scale: [NumberValue; 3],
 }
 impl Scene3DTransformBinding {
+    /// Validate known components even when another axis is animated.
+    pub fn static_values(&self) -> crate::scene3d::Transform3D {
+        let vector = |values: &[NumberValue; 3], fallback| {
+            crate::scene3d::Vec3(values.each_ref().map(|n| match n {
+                NumberValue::Static { value } => *value as f32,
+                NumberValue::Expr { .. } => fallback,
+            }))
+        };
+        crate::scene3d::Transform3D {
+            translation: vector(&self.translation, 0.0),
+            rotation_degrees: vector(&self.rotation_degrees, 0.0),
+            scale: vector(&self.scale, 1.0),
+        }
+    }
     pub fn numbers(&self) -> Vec<(String, &NumberValue)> {
         [
             ("translation", &self.translation),
@@ -1513,6 +1529,15 @@ impl SceneNode {
                             time,
                             &mut refs,
                         );
+                    }
+                    for (parent_at, parent) in mesh.parents.iter().enumerate() {
+                        for (name, value) in parent.numbers() {
+                            number(
+                                format!("/kind/frame/meshes/{at}/parents/{parent_at}/{name}"),
+                                value,
+                                &mut refs,
+                            );
+                        }
                     }
                     for (name, value) in mesh.transform.numbers() {
                         number(
@@ -5477,7 +5502,13 @@ impl SceneArtifact {
                                 && !matches!(c,ColorValue::Static {value} if value.alpha != 1.0)
                         })
                 });
-                let mut meshes_valid = true;
+                let mut meshes_valid = frame
+                    .meshes
+                    .iter()
+                    .fold(scene.frame_scalar_count(), |n, m| {
+                        n.saturating_add(m.parents.len().saturating_mul(9))
+                    })
+                    <= crate::scene3d::MAX_FRAME_SCALARS;
                 for (at, mesh) in frame.meshes.iter().enumerate() {
                     if scene.meshes.get(at).is_some_and(|spec| {
                         spec.animation_clip.is_some() != mesh.animation_time.is_some()
@@ -5521,13 +5552,15 @@ impl SceneArtifact {
                             ));
                         }
                     }
+                    if mesh.parents.len() > crate::scene3d::MAX_NODE_DEPTH {
+                        meshes_valid = false;
+                    }
                     for transform in std::iter::once(&mesh.transform)
+                        .chain(mesh.parents.iter())
                         .chain(mesh.nodes.iter().map(|n| &n.transform))
                     {
                         meshes_valid &= transform.numbers().into_iter().all(|(_, n)| scalar(n));
-                        if let Some(value) = transform.constant()
-                            && let Err(error) = value.validate()
-                        {
+                        if let Err(error) = transform.static_values().validate() {
                             errors.push(ValidationError::new(
                                 format!("{path}/kind/frame/meshes/{at}"),
                                 error.to_string(),

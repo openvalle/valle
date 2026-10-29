@@ -108,6 +108,7 @@ fn fixture_spec(
             depth_of_field: None,
         },
         meshes: vec![MeshFrameState {
+            parents: Vec::new(),
             key: "mesh".into(),
             transform: Transform3D::default(),
             material: MaterialFrameState::default(),

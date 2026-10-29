@@ -2042,6 +2042,17 @@ fn resolve_scene3d_requests(
                 .iter()
                 .map(|mesh| {
                     Ok(valle_motion::scene3d::MeshFrameState {
+                        parents: mesh
+                            .parents
+                            .iter()
+                            .map(|p| {
+                                Ok(valle_motion::scene3d::Transform3D {
+                                    translation: vector(&p.translation)?,
+                                    rotation_degrees: vector(&p.rotation_degrees)?,
+                                    scale: vector(&p.scale)?,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, LayoutError>>()?,
                         key: mesh.key.clone(),
                         material: material(&mesh.material)?,
                         material_overrides: mesh
