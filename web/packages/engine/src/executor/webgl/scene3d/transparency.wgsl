@@ -57,7 +57,7 @@ fn web_unpack_depth(value:vec4<f32>)->f32 {
         let alpha_values=shading[material+2u];
         let coverage=alpha_values.y*texture_slot(material,0u,sample).a;
         if alpha_values.z>=0.0&&coverage<alpha_values.z {continue;}
-        let color=lit_radiance(sample);let alpha=color.a;
+        let color=transmitted_color(sample,lit_radiance(sample));let alpha=color.a;
         if alpha<=0.0 {continue;}
         let optical=web_optical(min(alpha,0.99999994))*1000000000.0;
         if alpha<1.0&&floor(optical+0.5)==0.0 {continue;}
@@ -79,3 +79,5 @@ fn web_unpack_depth(value:vec4<f32>)->f32 {
     }
     return Fragment(result,pack_depth(nearest));
 }
+
+fn transmission_depth(at:vec2<i32>)->f32 {return web_unpack_depth(textureLoad(opaqueDepth,at,0));}

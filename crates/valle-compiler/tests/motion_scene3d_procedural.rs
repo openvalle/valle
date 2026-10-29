@@ -158,3 +158,41 @@ fn lathe_and_tube_reject_dynamic_or_invalid_geometry() {
         assert!(compile_motion(&source).is_err(), "{geometry}");
     }
 }
+
+#[test]
+fn dielectric_material_parameters_are_typed_and_animated() {
+    let source=SOURCE.replace("type:\"lambert\",color:\"#ffffff\"", "type:\"pbr\",color:\"#ffffff\",transmission:0.9,thickness:0.2+time.seconds,attenuationColor:\"#ffaa88\",attenuationDistance:2");
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let frame = artifact
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Scene3D { frame, .. } => Some(frame),
+            _ => None,
+        })
+        .unwrap();
+    let material = &frame.meshes[0].material;
+    assert_eq!(material.static_values().transmission, Some(0.9));
+    assert!(material.static_values().thickness.is_none());
+    assert!(
+        material
+            .numbers()
+            .iter()
+            .any(|(key, _)| *key == "thickness")
+    );
+    assert_eq!(material.static_values().attenuation_distance, Some(2.0));
+    assert!(
+        material
+            .colors()
+            .iter()
+            .any(|(key, _)| *key == "attenuationColor")
+    );
+    for invalid in [
+        source.replace("transmission:0.9", "transmission:1.1"),
+        source.replace("attenuationDistance:2", "attenuationDistance:0"),
+        source.replace("thickness:0.2+time.seconds", "thickness:-1"),
+    ] {
+        assert!(compile_motion(&invalid).is_err());
+    }
+}

@@ -14,6 +14,12 @@ use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 pub struct ModelMaterial {
     /// Source glTF shading intent; explicit Motion material.kind may override it.
     pub unlit: bool,
+    pub transmission: f32,
+    /// Optical path thickness in world units. The dielectric interface uses IOR 1.5.
+    pub thickness: f32,
+    pub attenuation_color: [f32; 3],
+    /// None means no absorption.
+    pub attenuation_distance: Option<f32>,
     pub base_color: [f32; 4],
     pub metallic: f32,
     pub roughness: f32,
@@ -35,6 +41,10 @@ impl Default for ModelMaterial {
     fn default() -> Self {
         Self {
             unlit: false,
+            transmission: 0.0,
+            thickness: 0.0,
+            attenuation_color: [1.0; 3],
+            attenuation_distance: None,
             base_color: [1.0; 4],
             metallic: 1.0,
             roughness: 1.0,
@@ -55,6 +65,10 @@ impl Default for ModelMaterial {
 }
 
 impl ModelMaterial {
+    pub(crate) fn needs_blend(&self) -> bool {
+        self.alpha_mode == AlphaMode::Blend || self.transmission > 0.0
+    }
+
     pub(crate) fn uses_uv(&self) -> bool {
         self.base_color_texture.is_some()
             || self.metallic_roughness_texture.is_some()
@@ -544,6 +558,10 @@ pub(super) fn admit_materials(
         }
         let mut material = ModelMaterial {
             unlit: m.extensions.unlit.is_some(),
+            transmission: 0.0,
+            thickness: 0.0,
+            attenuation_color: [1.0; 3],
+            attenuation_distance: None,
             base_color: p.base_color_factor,
             metallic: p.metallic_factor,
             roughness: p.roughness_factor,
@@ -835,6 +853,19 @@ impl ModelMaterial {
         }
         if let Some(v) = value.occlusion_strength {
             self.occlusion_strength = v;
+        }
+        if let Some(v) = value.transmission {
+            self.transmission = v;
+        }
+        if let Some(v) = value.thickness {
+            self.thickness = v;
+        }
+        if let Some(v) = value.attenuation_distance {
+            self.attenuation_distance = Some(v);
+        }
+        if let Some(v) = value.attenuation_color {
+            self.attenuation_color = v.0[..3].try_into().unwrap();
+            self.attenuation_color = self.attenuation_color.map(srgb_to_linear);
         }
         if let Some(v) = value.alpha_cutoff
             && self.alpha_cutoff.is_some()

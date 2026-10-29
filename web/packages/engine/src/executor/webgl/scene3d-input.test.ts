@@ -5,7 +5,7 @@ function packet(blend = false, shadow = false) {
   const bytes = new Uint8Array(256 + 112 + 16 + 16 + 16 + (shadow ? 96 : 0));
   const h = new Uint32Array(bytes.buffer, 0, 64);
   const f = new Float32Array(bytes.buffer, 0, 64);
-  h.set([0x33534756, 16, 16, 3, blend ? 13 : 9, blend ? 3 : 0]);
+  h.set([0x34534756, 16, 16, 3, blend ? 13 : 9, blend ? 3 : 0]);
   f.set([1, 5, 0], 6);
   h.set([7, 1, 256, 1, 1, 368], 9);
   h.set([1, 1, 16, 1, 1, 384, 1, 1, 400], 15);

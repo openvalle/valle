@@ -1292,6 +1292,10 @@ impl<'s> Compiler<'s> {
             "normalScale",
             "occlusionStrength",
             "alphaCutoff",
+            "transmission",
+            "thickness",
+            "attenuationColor",
+            "attenuationDistance",
             "alphaMode",
             "doubleSided",
             "textures",
@@ -1439,6 +1443,7 @@ impl<'s> Compiler<'s> {
         for (name, binding) in [
             ("color", &mut frame.color),
             ("emissive", &mut frame.emissive),
+            ("attenuationColor", &mut frame.attenuation_color),
         ] {
             if let Some(value) = values.get(name) {
                 *binding = Some(self.color_binding(value, name)?);
@@ -1451,6 +1456,9 @@ impl<'s> Compiler<'s> {
             ("normalScale", &mut frame.normal_scale),
             ("occlusionStrength", &mut frame.occlusion_strength),
             ("alphaCutoff", &mut frame.alpha_cutoff),
+            ("transmission", &mut frame.transmission),
+            ("thickness", &mut frame.thickness),
+            ("attenuationDistance", &mut frame.attenuation_distance),
         ] {
             if let Some(value) = values.get(name) {
                 *binding = Some(self.number_binding(value, name, |_| true)?);

@@ -2008,6 +2008,10 @@ fn resolve_scene3d_requests(
         let material = |m: &crate::Scene3DMaterialBinding| -> Result<valle_motion::scene3d::MaterialFrameState, LayoutError> {
             Ok(valle_motion::scene3d::MaterialFrameState {
                 color: m.color.as_ref().map(color).transpose()?,
+                attenuation_color: m.attenuation_color.as_ref().map(color).transpose()?,
+                transmission: m.transmission.as_ref().map(|v| scalar(v, "material transmission")).transpose()?,
+                thickness: m.thickness.as_ref().map(|v| scalar(v, "material thickness")).transpose()?,
+                attenuation_distance: m.attenuation_distance.as_ref().map(|v| scalar(v, "material attenuationDistance")).transpose()?,
                 emissive: m.emissive.as_ref().map(color).transpose()?,
                 metallic: m.metallic.as_ref().map(|v| scalar(v, "material metallic")).transpose()?,
                 roughness: m.roughness.as_ref().map(|v| scalar(v, "material roughness")).transpose()?,

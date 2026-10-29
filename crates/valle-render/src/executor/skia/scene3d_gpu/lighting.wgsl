@@ -61,7 +61,7 @@ fn dfg_at(roughness: f32, nv: f32) -> vec2<f32> {
 const PI: f32 = 3.141592653589793;
 
 fn direct(base: vec3<f32>, metallic: f32, roughness: f32,
-    n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, fab: vec2<f32>) -> vec3<f32> {
+    n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, fab: vec2<f32>, transmission:f32) -> vec3<f32> {
     let nv = max(dot3(n, v), 0.0);
     let nl = max(dot3(n, l), 0.0);
     if nl == 0.0 || nv == 0.0 { return vec3(0.0); }
@@ -79,7 +79,7 @@ fn direct(base: vec3<f32>, metallic: f32, roughness: f32,
     let dielectric = 0.04 + 0.96 * power;
     let fresnel = f0 + (vec3(1.0) - f0) * power;
     let compensation = vec3(1.0) + f0 * (1.0 / max(fab.x + fab.y, 1e-6) - 1.0);
-    return nl * (base * (1.0 - metallic) * (1.0 - dielectric) / PI
+    return nl * (base * (1.0 - transmission) * (1.0 - metallic) * (1.0 - dielectric) / PI
         + fresnel * distribution * visibility * compensation);
 }
 
@@ -129,6 +129,15 @@ fn camera_ray(pixel:vec2<u32>) -> vec3<f32> {
     let rayStart=HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u;
     return shading[rayStart+pixel.x].xyz+shading[rayStart+u32(globals.extent.x)+pixel.y].xyz;
 }
+fn lit_normal(in: LitVertex, material:u32) -> vec3<f32> {
+    var n = unit(select(in.normalOverZ,in.normalOverZ / in.invZ,in.triangle==0xffffffffu));
+    if shading[material+6u].x >= 0.0 && dot(in.tangent,in.tangent)>0.0 {
+        let texel=texture_slot(material,2u,in);let t=unit(in.tangent-n*dot3(n,in.tangent));
+        let c=cross(n,t);let b=c*select(1.0,-1.0,dot3(c,in.bitangent)<0.0);
+        n=unit(t*((texel.r*2.0-1.0)*shading[material+3u].x)+b*((texel.g*2.0-1.0)*shading[material+3u].x)+n*(texel.b*2.0-1.0));
+    }
+    return n;
+}
 fn lit_radiance(in: LitVertex) -> vec4<f32> {
     let counts = vec3<u32>(shading[1].xyz);
     let material = HEADER + in.material * MATERIAL;
@@ -146,12 +155,7 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
     let hemiStart = lightStart + counts.y * 2u;
     let pixel = vec2<u32>(in.position.xy);
     let ray = camera_ray(pixel);
-    var n = unit(select(in.normalOverZ,in.normalOverZ / in.invZ,in.triangle==0xffffffffu));
-    if shading[material+6u].x >= 0.0 && dot(in.tangent,in.tangent)>0.0 {
-        let texel=texture_slot(material,2u,in);let t=unit(in.tangent-n*dot3(n,in.tangent));
-        let c=cross(n,t);let b=c*select(1.0,-1.0,dot3(c,in.bitangent)<0.0);
-        n=unit(t*((texel.r*2.0-1.0)*shading[material+3u].x)+b*((texel.g*2.0-1.0)*shading[material+3u].x)+n*(texel.b*2.0-1.0));
-    }
+    let n=lit_normal(in,material);
     let v = unit(-ray);
     var radiance = base;
     var fab = vec2(0.0);
@@ -181,27 +185,27 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
             let t = dot(n, shading[at].xyz) * 0.5 + 0.5;
             irradiance += (shading[at + 2u].rgb * (1.0 - t) + shading[at + 1u].rgb * t) / PI;
         }
-        radiance = base * (1.0 - metallic) * (1.0 - single - multi) * irradiance*ao;
+        radiance = base * (1.0 - shading[material+19u].x) * (1.0 - metallic) * (1.0 - single - multi) * irradiance*ao;
         if shading[3].z >= 0.0 {
             let reflection=n*(2.0*dot3(n,v))-v;let r4=roughness*roughness*roughness*roughness;
             let specular=env_specular(unit(reflection*(1.0-r4)+n*r4),roughness);let diffuse=env_diffuse(n);
             let specularAo=clamp(pow(clamp(dot3(n,v),0.0,1.0)+ao,exp2(-16.0*roughness-1.0))-1.0+ao,0.0,1.0);
             let metal=scattering(base,fab);let dielectric=scattering(vec3(0.04),fab);
             let s=dielectric[0]*(1.0-metallic)+metal[0]*metallic;let m=dielectric[1]*(1.0-metallic)+metal[1]*metallic;
-            radiance+=(specular*s+diffuse*m)*specularAo+base*(1.0-metallic)*(1.0-single-multi)*diffuse*ao;
+            radiance+=(specular*s+diffuse*m)*specularAo+base*(1.0-shading[material+19u].x)*(1.0-metallic)*(1.0-single-multi)*diffuse*ao;
         }
     }
     radiance += emission;
     if kind == 2u {
         for (var i = 0u; i < counts.y; i++) {
             let at = lightStart + i * 2u;
-            radiance += direct(base, metallic, roughness, n, v, shading[at].xyz, fab) * shading[at + 1u].rgb*shadow_visibility(i,camera_position(ray,in.invZ),n);
+            radiance += direct(base, metallic, roughness, n, v, shading[at].xyz, fab, shading[material+19u].x) * shading[at + 1u].rgb*shadow_visibility(i,camera_position(ray,in.invZ),n);
         }
     }
     var display = radiance * shading[0].a;
     if (u32(shading[1].a)&1u) != 0u { display = aces(radiance, shading[0].a); }
     display = clamp(display, vec3(0.0), vec3(1.0));
-    return vec4(display,select(1.0,coverage,shading[material+2u].w!=0.0));
+    return vec4(display,select(1.0,coverage,shading[material+19u].w!=0.0));
 }
 fn lit_color(in:LitVertex) -> vec4<f32> {
     let c=lit_radiance(in);

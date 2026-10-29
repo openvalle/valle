@@ -1,0 +1,40 @@
+{
+  "meshes": [
+    {
+      "key": "left",
+      "modelControl": "plane",
+      "material": {
+        "kind": "unlit"
+      }
+    },
+    {
+      "key": "right",
+      "modelControl": "plane",
+      "material": {
+        "kind": "unlit"
+      }
+    },
+    {
+      "key": "glass",
+      "modelControl": "plane",
+      "material": {
+        "kind": "pbr"
+      }
+    },
+    {
+      "key": "foreground",
+      "modelControl": "plane",
+      "material": {
+        "kind": "unlit"
+      }
+    }
+  ],
+  "lights": [
+    "ambient",
+    "directional"
+  ],
+  "pbr": {
+    "toneMapping": "none",
+    "shadows": false
+  }
+}

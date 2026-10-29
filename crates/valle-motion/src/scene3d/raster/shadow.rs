@@ -85,6 +85,7 @@ impl ShadowCasters {
                     u8::from(material.double_sided),
                 ]);
                 hash.update(material.base_color[3].to_le_bytes());
+                hash.update(material.transmission.to_le_bytes());
                 hash.update([u8::from(material.alpha_cutoff.is_some())]);
                 if let Some(cutoff) = material.alpha_cutoff {
                     hash.update(cutoff.to_le_bytes());
@@ -161,7 +162,7 @@ impl ShadowMap {
             for triangle in &casters.triangles {
                 let mesh = &meshes[triangle.mesh_index];
                 let material = &mesh.materials[triangle.material_index].values;
-                if material.alpha_mode != AlphaMode::Blend {
+                if !material.needs_blend() {
                     let corners = triangle.vertices.map(|index| index as usize);
                     Self::raster_triangle(
                         depth,
@@ -219,8 +220,7 @@ impl ShadowMap {
         for triangle in &casters.triangles {
             if meshes[triangle.mesh_index].materials[triangle.material_index]
                 .values
-                .alpha_mode
-                == AlphaMode::Blend
+                .needs_blend()
             {
                 continue;
             }
@@ -499,7 +499,7 @@ pub(super) fn gpu_maps(
             for triangle in &casters.triangles {
                 let material =
                     &meshes[triangle.mesh_index].materials[triangle.material_index].values;
-                if material.alpha_mode == AlphaMode::Blend {
+                if material.needs_blend() {
                     continue;
                 }
                 let corners = triangle.vertices.map(|i| i as usize);

@@ -2967,6 +2967,7 @@ fn material_index_overrides_merge_with_complete_frame_values_and_common_alpha_ru
                     normal_scale: Some(value),
                     occlusion_strength: Some(value),
                     alpha_cutoff: Some(0.5),
+                    ..Default::default()
                 },
             }];
             state
@@ -3085,7 +3086,7 @@ fn gpu_geometry_prepares_textures_blend_shadows_and_dof_without_pixel_planes() {
             .iter()
             .map(|word| u32::from_le_bytes(*word))
             .collect::<Vec<_>>();
-        assert_eq!(&header[..3], &[0x33534756, 64, 64]);
+        assert_eq!(&header[..3], &[0x34534756, 64, 64]);
         assert_eq!(header[3] as usize, geometry.vertices.len());
         assert_eq!(header[5] & 2 != 0, case == "blend");
         assert_eq!(header[5] & 4 != 0, case == "dof");
@@ -3164,7 +3165,7 @@ fn gpu_geometry_carries_frame_materials_lighting_and_camera_rays() {
         assert_eq!(shading.values[1], [1.0, 1.0, 0.0, 0.0]);
         assert_eq!(
             shading.values.len(),
-            5 + valle_motion::scene3d::GpuRasterShading::MATERIAL_STRIDE + 2 + 127 + 65
+            5 + valle_motion::scene3d::GpuRasterShading::MATERIAL_STRIDE + 2 + 127 + 65 + 3
         );
         assert_eq!(
             shading.values[5][3],
@@ -3380,4 +3381,66 @@ fn texture_transform_matches_baked_uvs_including_normals_mips_and_alpha() {
         });
         assert!(admit_glb(&invalid).is_err());
     }
+}
+
+#[test]
+fn dielectric_transmission_refracts_absorbs_and_keeps_shared_depth() {
+    let scene: Scene3DSpec =
+        serde_json::from_str(include_str!("fixtures/scene3d/transmission-scene.json")).unwrap();
+    let mut frame: Frame3DState =
+        serde_json::from_str(include_str!("fixtures/scene3d/transmission-frame.json")).unwrap();
+    let resources = SceneResources {
+        models: BTreeMap::from([(
+            "plane".into(),
+            Arc::new(admit_glb(include_bytes!("fixtures/scene3d/plane.glb")).unwrap()),
+        )]),
+        ..Default::default()
+    };
+    let prepared = prepare_scene(&scene, 384, 256, &resources).unwrap();
+    let thick = render_scene_with_workers(&prepared, &frame, 1).unwrap();
+    assert_frame_bits_eq(
+        &thick,
+        &render_scene_with_workers(&prepared, &frame, 8).unwrap(),
+    );
+    let pixel = |f: &RasterFrame, x: usize, y: usize| {
+        f.rgba8()[(y * 384 + x) * 4..(y * 384 + x) * 4 + 4].to_vec()
+    };
+    assert!(thick.object_ids.contains(&3));
+    assert!(thick.object_ids.contains(&4));
+    frame.meshes[2].material.thickness = Some(0.0);
+    let thin = render_scene(&prepared, &frame).unwrap();
+    let changed = thick
+        .rgba8()
+        .into_iter()
+        .zip(thin.rgba8())
+        .filter(|(a, b)| a.abs_diff(*b) > 20)
+        .count();
+    assert!(changed > 500, "thickness must shift backdrop: {changed}");
+    frame.meshes[2].material.thickness = Some(0.8);
+    frame.meshes[2].material.attenuation_color = Some(Color4([1.0, 0.1, 0.1, 1.0]));
+    frame.meshes[2].material.attenuation_distance = Some(0.5);
+    let absorbed = render_scene(&prepared, &frame).unwrap();
+    let before = pixel(&thick, 230, 128);
+    let after = pixel(&absorbed, 230, 128);
+    assert!(
+        after[2] + 20 < before[2],
+        "absorption must tint transmitted blue: {before:?} -> {after:?}"
+    );
+    for (index, &id) in thick.object_ids.iter().enumerate() {
+        if id == 4 {
+            assert_eq!(
+                &thick.premul_rgba16f[index * 4..index * 4 + 4],
+                &absorbed.premul_rgba16f[index * 4..index * 4 + 4],
+                "foreground depth wins"
+            );
+        }
+    }
+    frame.meshes[2].material.attenuation_color = None;
+    frame.meshes[2].material.attenuation_distance = None;
+    assert_frame_bits_eq(&thick, &render_scene(&prepared, &frame).unwrap());
+    frame.meshes[2].material.transmission = Some(0.0);
+    let opaque = render_scene(&prepared, &frame).unwrap();
+    assert_ne!(pixel(&opaque, 230, 128), before);
+    frame.meshes[2].material.transmission = Some(1.1);
+    assert!(render_scene(&prepared, &frame).is_err());
 }

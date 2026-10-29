@@ -1077,6 +1077,14 @@ pub struct Scene3DMaterialBinding {
     pub occlusion_strength: Option<NumberValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha_cutoff: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transmission: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attenuation_distance: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attenuation_color: Option<ColorValue>,
 }
 impl Scene3DMaterialBinding {
     pub fn numbers(&self) -> Vec<(&'static str, &NumberValue)> {
@@ -1087,16 +1095,23 @@ impl Scene3DMaterialBinding {
             ("normalScale", &self.normal_scale),
             ("occlusionStrength", &self.occlusion_strength),
             ("alphaCutoff", &self.alpha_cutoff),
+            ("transmission", &self.transmission),
+            ("thickness", &self.thickness),
+            ("attenuationDistance", &self.attenuation_distance),
         ]
         .into_iter()
         .filter_map(|(k, v)| v.as_ref().map(|v| (k, v)))
         .collect()
     }
     pub fn colors(&self) -> Vec<(&'static str, &ColorValue)> {
-        [("color", &self.color), ("emissive", &self.emissive)]
-            .into_iter()
-            .filter_map(|(k, v)| v.as_ref().map(|v| (k, v)))
-            .collect()
+        [
+            ("color", &self.color),
+            ("emissive", &self.emissive),
+            ("attenuationColor", &self.attenuation_color),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| v.as_ref().map(|v| (k, v)))
+        .collect()
     }
     pub fn static_values(&self) -> crate::scene3d::MaterialFrameState {
         let n = |value: &Option<NumberValue>| match value {
@@ -1118,6 +1133,10 @@ impl Scene3DMaterialBinding {
             normal_scale: n(&self.normal_scale),
             occlusion_strength: n(&self.occlusion_strength),
             alpha_cutoff: n(&self.alpha_cutoff),
+            transmission: n(&self.transmission),
+            thickness: n(&self.thickness),
+            attenuation_distance: n(&self.attenuation_distance),
+            attenuation_color: c(&self.attenuation_color),
         }
     }
 }

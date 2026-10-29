@@ -66,12 +66,13 @@ impl GpuRasterizer {
             label: Some("Scene3D raster"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
                     include_str!("common.wgsl"),
                     include_str!("assets.wgsl"),
                     include_str!("lighting.wgsl"),
                     include_str!("shadows.wgsl"),
                     include_str!("transparency.wgsl"),
+                    include_str!("transmission.wgsl"),
                     include_str!("raster.wgsl"),
                     include_str!("mesh.wgsl")
                 )

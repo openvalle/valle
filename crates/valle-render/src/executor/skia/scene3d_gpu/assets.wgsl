@@ -1,6 +1,6 @@
 @group(0) @binding(3) var atlas: texture_2d<f32>;
 const HEADER: u32 = 5u;
-const MATERIAL: u32 = 19u;
+const MATERIAL: u32 = 21u;
 
 fn atlas_at(index: u32) -> vec4<f32> {
     let width = textureDimensions(atlas).x;

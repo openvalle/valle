@@ -45,7 +45,7 @@ fn optical_depth(alpha:f32) -> f32 {
     if shading[material+2u].w==0.0 {discard;}
     let pixel=vec2<i32>(in.position.xy);let z=precise_divide(1.0,in.invZ);
     if input.position.z<=textureLoad(opaqueDepth,pixel,0) {discard;}
-    let c=lit_radiance(in);let alpha=c.a;
+    let c=transmitted_color(in,lit_radiance(in));let alpha=c.a;
     if alpha<=0.0 {discard;}
     let optical=optical_depth(min(alpha,0.99999994))*1000000000.0;
     if alpha<1.0 && floor(optical+0.5)==0.0 {discard;}
@@ -85,3 +85,5 @@ fn linear_srgb(v:f32) -> f32 {
     textureStore(resolvedColor,pixel,result);
     if all(id.xy<textureDimensions(resolvedDepth)) {textureStore(resolvedDepth,pixel,pack_depth(depth));}
 }
+
+fn transmission_depth(at:vec2<i32>)->f32 {let value=textureLoad(opaqueDepth,at,0);if value<=0.0{return bitcast<f32>(0x7f7fffffu);}return precise_divide(globals.depthScale,value);}

@@ -4,7 +4,7 @@ use crate::scene3d::Frame3DState;
 
 const HEADER_WORDS: usize = 64;
 const TILE: u32 = 16;
-pub const WEB_GPU_PACKET_MAGIC: u32 = 0x33534756;
+pub const WEB_GPU_PACKET_MAGIC: u32 = 0x34534756;
 
 fn texture(output: &mut Vec<u8>, data: &[u8]) -> Option<[u32; 3]> {
     let offset = u32::try_from(output.len()).ok()?;

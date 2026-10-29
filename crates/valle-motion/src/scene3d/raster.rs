@@ -25,6 +25,7 @@ mod geometry_reuse_tests;
 mod lighting;
 mod pbr;
 mod shadow;
+mod transmission;
 
 pub const BACKGROUND_OBJECT_ID: u32 = 0;
 pub const BACKGROUND_NODE_ID: u32 = u32::MAX;
@@ -179,7 +180,7 @@ struct RasterTile<'a> {
 
 struct TileJob<'a> {
     tile: RasterTile<'a>,
-    commands: Vec<usize>,
+    commands: &'a [usize],
 }
 
 /// Fixed-point sums make each pixel independent of transparent primitive submission order.
@@ -1020,6 +1021,17 @@ fn collect_geometry_reusing<'a>(
                 .values
                 .apply_values(&override_.material);
         }
+        if materials
+            .iter()
+            .any(|m| m.values.transmission > 0.0 && m.kind != MaterialKind::Pbr)
+        {
+            let mut errors = ContractErrors::default();
+            errors.push(
+                "/material/transmission",
+                "transmission requires a PBR material",
+            );
+            return Err(errors);
+        }
         frame_meshes.push(FrameMesh { mesh, materials });
         for instance in instances {
             let source = mesh.model.meshes[instance.mesh as usize];
@@ -1344,56 +1356,75 @@ fn render_scene_with_geometry_reuse(
             }
         }
     }
-    let tiles = raster_tiles(&mut output);
-    let worker_count = if cfg!(target_arch = "wasm32") {
-        1
-    } else {
-        workers.clamp(1, MAX_RASTER_WORKERS)
+    let transmitting = frame_meshes
+        .iter()
+        .any(|m| m.materials.iter().any(|m| m.values.transmission > 0.0));
+    let mut backdrop = None;
+    for phase in 0..if transmitting { 2 } else { 1 } {
+        let tiles = raster_tiles(&mut output);
+        let worker_count = if cfg!(target_arch = "wasm32") {
+            1
+        } else {
+            workers.clamp(1, MAX_RASTER_WORKERS)
+        }
+        .min(tiles.len());
+        let pixel_rays = PixelRays::new(&camera);
+        checkpoint("binning");
+        {
+            // Tiles are independent, so workers take the next one as they finish. Dealing them out
+            // in turn left the work where the geometry is: a 1920-pixel layer has eight tile
+            // columns, so eight workers each took one column.
+            let jobs = std::sync::Mutex::new(
+                tiles
+                    .into_iter()
+                    .zip(&bins)
+                    .map(|(tile, commands)| TileJob { tile, commands })
+                    .collect::<Vec<_>>()
+                    .into_iter(),
+            );
+            let render_tiles = || {
+                let mut winners = Winners::default();
+                loop {
+                    let Some(job) = jobs
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .next()
+                    else {
+                        break;
+                    };
+                    render_tile(
+                        job,
+                        &commands,
+                        &frame_meshes,
+                        &camera,
+                        &pixel_rays,
+                        &lights,
+                        environment_background,
+                        &mut winners,
+                        if !transmitting {
+                            transmission::Pass::All
+                        } else if phase == 0 {
+                            transmission::Pass::Opaque
+                        } else {
+                            transmission::Pass::Transparent(
+                                backdrop.as_ref().expect("opaque pass completed"),
+                            )
+                        },
+                    );
+                }
+            };
+            crate::cpu::parallel_scope(worker_count, |scope, worker_count| {
+                for _ in 1..worker_count {
+                    scope.spawn(render_tiles);
+                }
+                render_tiles();
+            });
+        }
+        if transmitting && phase == 0 {
+            backdrop = Some(transmission::Backdrop::new(&output));
+        }
     }
-    .min(tiles.len());
-    let pixel_rays = PixelRays::new(&camera);
-    checkpoint("binning");
-    {
-        // Tiles are independent, so workers take the next one as they finish. Dealing them out
-        // in turn left the work where the geometry is: a 1920-pixel layer has eight tile
-        // columns, so eight workers each took one column.
-        let jobs = std::sync::Mutex::new(
-            tiles
-                .into_iter()
-                .zip(bins)
-                .map(|(tile, commands)| TileJob { tile, commands })
-                .collect::<Vec<_>>()
-                .into_iter(),
-        );
-        let render_tiles = || {
-            let mut winners = Winners::default();
-            loop {
-                let Some(job) = jobs
-                    .lock()
-                    .unwrap_or_else(|error| error.into_inner())
-                    .next()
-                else {
-                    break;
-                };
-                render_tile(
-                    job,
-                    &commands,
-                    &frame_meshes,
-                    &camera,
-                    &pixel_rays,
-                    &lights,
-                    environment_background,
-                    &mut winners,
-                );
-            }
-        };
-        crate::cpu::parallel_scope(worker_count, |scope, worker_count| {
-            for _ in 1..worker_count {
-                scope.spawn(render_tiles);
-            }
-            render_tiles();
-        });
-    }
+    drop(backdrop); // DOF never overlaps the transmission snapshot allocation.
     checkpoint("raster");
     if apply_depth_of_field {
         dof::apply(&mut output, &frame.camera, workers);
@@ -1486,104 +1517,54 @@ fn render_tile(
     lights: &Lights,
     environment_background: bool,
     winners: &mut Winners,
+    pass: transmission::Pass<'_>,
 ) {
     let mut tile = job.tile;
-    for row in &mut tile.color {
-        row.fill(0);
-    }
-    for row in &mut tile.depth {
-        row.fill(CLEAR_DEPTH);
-    }
-    for row in &mut tile.object_ids {
-        row.fill(BACKGROUND_OBJECT_ID);
-    }
-    for row in &mut tile.node_ids {
-        row.fill(BACKGROUND_NODE_ID);
-    }
-    if environment_background {
-        let environment = lights
-            .environment
-            .as_ref()
-            .expect("environment admission precedes rendering");
-        for y in tile.start_y..tile.end_y {
-            let color_row = &mut tile.color[(y - tile.start_y) as usize];
-            for x in tile.start_x..tile.end_x {
-                let horizontal = ((x as f32 + 0.5) / tile.width as f32 * 2.0 - 1.0) * camera.aspect
-                    / camera.focal;
-                let vertical = (1.0 - (y as f32 + 0.5) / tile.height as f32 * 2.0) / camera.focal;
-                let ray = (camera.forward + camera.right * horizontal + camera.up * vertical)
-                    .normalized();
-                let rgb = environment
-                    .specular(lights.environment_direction(ray), 0.0)
-                    .map(|v| v * lights.environment_intensity);
-                let pixel = output_color(rgb, 1.0, lights.pbr.tone_mapping, lights.exposure);
-                let offset = (x - tile.start_x) as usize * 4;
-                color_row[offset..offset + 4].copy_from_slice(&pixel);
-            }
-        }
-    }
     let columns = (tile.end_x - tile.start_x) as usize;
     let rows = (tile.end_y - tile.start_y) as usize;
-    winners.reset(columns * rows, job.commands.len());
-    for (position, &index) in job.commands.iter().enumerate() {
-        let command = &commands[index];
-        let frame_mesh = &frame_meshes[command.mesh_index];
-        let material = &frame_mesh.materials[command.material_index];
-        if material.values.alpha_mode == AlphaMode::Blend {
-            continue;
+    if !matches!(pass, transmission::Pass::Transparent(_)) {
+        for row in &mut tile.color {
+            row.fill(0);
         }
-        let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
-        raster_projected_triangle(
-            &command.coverage,
-            frame_mesh.mesh,
-            &shading,
-            command.node_id,
-            camera,
-            pixel_rays,
-            lights,
-            &mut tile,
-            Fragments::Opaque {
-                winners,
-                command: position as u32,
-            },
-        );
-    }
-    for (position, &index) in job.commands.iter().enumerate() {
-        if winners.owned[position] == 0 {
-            continue;
+        for row in &mut tile.depth {
+            row.fill(CLEAR_DEPTH);
         }
-        let command = &commands[index];
-        let frame_mesh = &frame_meshes[command.mesh_index];
-        let material = &frame_mesh.materials[command.material_index];
-        let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
-        raster_projected_triangle(
-            &command.coverage,
-            frame_mesh.mesh,
-            &shading,
-            command.node_id,
-            camera,
-            pixel_rays,
-            lights,
-            &mut tile,
-            Fragments::Owned {
-                winners,
-                command: position as u32,
-            },
-        );
-    }
-    if job.commands.iter().any(|&index| {
-        let command = &commands[index];
-        frame_meshes[command.mesh_index].materials[command.material_index]
-            .values
-            .alpha_mode
-            == AlphaMode::Blend
-    }) {
-        let mut oit = vec![OitPixel::empty(); columns * rows];
-        for &index in &job.commands {
+        for row in &mut tile.object_ids {
+            row.fill(BACKGROUND_OBJECT_ID);
+        }
+        for row in &mut tile.node_ids {
+            row.fill(BACKGROUND_NODE_ID);
+        }
+        if environment_background {
+            let environment = lights
+                .environment
+                .as_ref()
+                .expect("environment admission precedes rendering");
+            for y in tile.start_y..tile.end_y {
+                let color_row = &mut tile.color[(y - tile.start_y) as usize];
+                for x in tile.start_x..tile.end_x {
+                    let horizontal = ((x as f32 + 0.5) / tile.width as f32 * 2.0 - 1.0)
+                        * camera.aspect
+                        / camera.focal;
+                    let vertical =
+                        (1.0 - (y as f32 + 0.5) / tile.height as f32 * 2.0) / camera.focal;
+                    let ray = (camera.forward + camera.right * horizontal + camera.up * vertical)
+                        .normalized();
+                    let rgb = environment
+                        .specular(lights.environment_direction(ray), 0.0)
+                        .map(|v| v * lights.environment_intensity);
+                    let pixel = output_color(rgb, 1.0, lights.pbr.tone_mapping, lights.exposure);
+                    let offset = (x - tile.start_x) as usize * 4;
+                    color_row[offset..offset + 4].copy_from_slice(&pixel);
+                }
+            }
+        }
+        winners.reset(columns * rows, job.commands.len());
+        for (position, &index) in job.commands.iter().enumerate() {
             let command = &commands[index];
             let frame_mesh = &frame_meshes[command.mesh_index];
             let material = &frame_mesh.materials[command.material_index];
-            if material.values.alpha_mode != AlphaMode::Blend {
+            if material.values.needs_blend() {
                 continue;
             }
             let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
@@ -1596,7 +1577,69 @@ fn render_tile(
                 pixel_rays,
                 lights,
                 &mut tile,
-                Fragments::Transparent(&mut oit),
+                Fragments::Opaque {
+                    winners,
+                    command: position as u32,
+                },
+            );
+        }
+        for (position, &index) in job.commands.iter().enumerate() {
+            if winners.owned[position] == 0 {
+                continue;
+            }
+            let command = &commands[index];
+            let frame_mesh = &frame_meshes[command.mesh_index];
+            let material = &frame_mesh.materials[command.material_index];
+            let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
+            raster_projected_triangle(
+                &command.coverage,
+                frame_mesh.mesh,
+                &shading,
+                command.node_id,
+                camera,
+                pixel_rays,
+                lights,
+                &mut tile,
+                Fragments::Owned {
+                    winners,
+                    command: position as u32,
+                },
+            );
+        }
+    }
+    if !matches!(pass, transmission::Pass::Opaque)
+        && job.commands.iter().any(|&index| {
+            let command = &commands[index];
+            frame_meshes[command.mesh_index].materials[command.material_index]
+                .values
+                .needs_blend()
+        })
+    {
+        let mut oit = vec![OitPixel::empty(); columns * rows];
+        for &index in job.commands {
+            let command = &commands[index];
+            let frame_mesh = &frame_meshes[command.mesh_index];
+            let material = &frame_mesh.materials[command.material_index];
+            if !material.values.needs_blend() {
+                continue;
+            }
+            let shading = pbr::Triangle::new(material.kind, &material.values, command.world);
+            raster_projected_triangle(
+                &command.coverage,
+                frame_mesh.mesh,
+                &shading,
+                command.node_id,
+                camera,
+                pixel_rays,
+                lights,
+                &mut tile,
+                Fragments::Transparent(
+                    &mut oit,
+                    match pass {
+                        transmission::Pass::Transparent(b) => Some(b),
+                        _ => None,
+                    },
+                ),
             );
         }
         for row in 0..rows {
@@ -2407,7 +2450,7 @@ enum Fragments<'a> {
     /// Shade and write the pixels the command owns after every opaque command was tested.
     Owned { winners: &'a Winners, command: u32 },
     /// Accumulate the fragments in front of the opaque depth.
-    Transparent(&'a mut [OitPixel]),
+    Transparent(&'a mut [OitPixel], Option<&'a transmission::Backdrop>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2551,7 +2594,7 @@ fn raster_projected_triangle(
                             && mesh.object_id >= output.object_ids[row][offset])
                 }
                 Fragments::Owned { .. } => false,
-                Fragments::Transparent(_) => depth >= previous,
+                Fragments::Transparent(_, _) => depth >= previous,
             };
             if hidden {
                 offset += 1;
@@ -2568,7 +2611,7 @@ fn raster_projected_triangle(
                 continue;
             }
             if let Some((color, display, alpha)) = constant {
-                if let Fragments::Transparent(accumulation) = &mut fragments {
+                if let Fragments::Transparent(accumulation, _) = &mut fragments {
                     accumulation[pixel].add(display, alpha, depth, mesh.object_id, node_id);
                 } else {
                     output.color[row][offset * 4..offset * 4 + 4].copy_from_slice(&color);
@@ -2596,7 +2639,7 @@ fn raster_projected_triangle(
             let ray = pixel_rays.at(x, y);
             let view = (ray * -1.0).normalized();
             let position = camera.eye + ray * view_z;
-            let Some((radiance, alpha)) = pbr::shade(
+            let Some((radiance, alpha, transmitted)) = pbr::shade(
                 mesh,
                 shading,
                 normal,
@@ -2609,8 +2652,14 @@ fn raster_projected_triangle(
                 offset += 1;
                 continue;
             };
-            if let Fragments::Transparent(accumulation) = &mut fragments {
+            if let Fragments::Transparent(accumulation, backdrop) = &mut fragments {
                 let display = display_linear(radiance, lights.pbr.tone_mapping, lights.exposure);
+                let (display, alpha) =
+                    if let (Some(sample), Some(backdrop)) = (transmitted, backdrop) {
+                        sample.resolve(display, alpha, position, depth, camera, backdrop)
+                    } else {
+                        (display, alpha)
+                    };
                 accumulation[pixel].add(display, alpha, depth, mesh.object_id, node_id);
             } else {
                 output.color[row][offset * 4..offset * 4 + 4].copy_from_slice(&output_color(

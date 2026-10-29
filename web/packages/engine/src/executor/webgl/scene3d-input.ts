@@ -54,7 +54,7 @@ export function decodeScene3dGpuPacket(bytes: Uint8Array): Scene3dGpuPacket {
     number,
   ];
   if (
-    magic !== 0x33534756 ||
+    magic !== 0x34534756 ||
     !width ||
     !height ||
     width > 4096 ||

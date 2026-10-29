@@ -260,7 +260,12 @@ pub fn prepare_gpu_mesh_geometry(
     prepared.scene.validate()?;
     frame.validate_for(&prepared.scene)?;
     prepared.budget.validate()?;
-    if prepared.scene.pbr.shadows
+    if frame.meshes.iter().any(|m| {
+        m.material.transmission.unwrap_or(0.0) > 0.0
+            || m.material_overrides
+                .iter()
+                .any(|m| m.material.transmission.unwrap_or(0.0) > 0.0)
+    }) || prepared.scene.pbr.shadows
         || prepared.meshes.iter().any(|m| {
             m.materials
                 .iter()

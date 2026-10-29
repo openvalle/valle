@@ -22,6 +22,8 @@ const MESH: &str =
     include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/mesh.wgsl");
 const TRANSPARENCY: &str =
     include_str!("../../web/packages/engine/src/executor/webgl/scene3d/transparency.wgsl");
+const TRANSMISSION: &str =
+    include_str!("../../crates/valle-render/src/executor/skia/scene3d_gpu/transmission.wgsl");
 const PRECISION: &str =
     include_str!("../../web/packages/engine/src/executor/webgl/scene3d/precision.wgsl");
 
@@ -68,7 +70,7 @@ fn source() -> Result<String> {
         "return web_divide(a,b,q);",
     );
     let source = format!(
-        "{COMMON}\n{ASSETS}\n{lighting}\n{SHADOWS}\n{RASTER}\n{MESH}\n{TRANSPARENCY}\n{PRECISION}"
+        "{COMMON}\n{ASSETS}\n{lighting}\n{SHADOWS}\n{RASTER}\n{MESH}\n{TRANSPARENCY}\n{TRANSMISSION}\n{PRECISION}"
     );
     let source = source.replace(
         "var<storage, read> shading: array<vec4<f32>>;",

@@ -3,7 +3,7 @@ use super::{Color4, ContractErrors, MaterialKind, validate_control};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const MATERIAL_FRAME_SCALARS: usize = 14;
+pub const MATERIAL_FRAME_SCALARS: usize = 21;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -147,6 +147,14 @@ pub struct MaterialFrameState {
     pub occlusion_strength: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alpha_cutoff: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transmission: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attenuation_distance: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attenuation_color: Option<Color4>,
 }
 impl MaterialFrameState {
     pub fn validate(&self) -> Result<(), ContractErrors> {
@@ -155,9 +163,13 @@ impl MaterialFrameState {
         errors.finish()
     }
     pub(super) fn validate_at(&self, path: &str, errors: &mut ContractErrors) {
-        for (name, color) in [("color", self.color), ("emissive", self.emissive)] {
-            let invalid_color = color
-                .is_some_and(|color| !color.valid() || (name == "emissive" && color.0[3] != 1.0));
+        for (name, color) in [
+            ("color", self.color),
+            ("emissive", self.emissive),
+            ("attenuationColor", self.attenuation_color),
+        ] {
+            let invalid_color =
+                color.is_some_and(|color| !color.valid() || (name != "color" && color.0[3] != 1.0));
             if invalid_color {
                 errors.push(
                     format!("{path}/{name}"),
@@ -172,6 +184,14 @@ impl MaterialFrameState {
             ("normalScale", self.normal_scale, -16.0, 16.0),
             ("occlusionStrength", self.occlusion_strength, 0.0, 1.0),
             ("alphaCutoff", self.alpha_cutoff, 0.0, 1.0),
+            ("transmission", self.transmission, 0.0, 1.0),
+            ("thickness", self.thickness, 0.0, 10000.0),
+            (
+                "attenuationDistance",
+                self.attenuation_distance,
+                0.0001,
+                10000.0,
+            ),
         ] {
             if value.is_some_and(|v| !v.is_finite() || !(min..=max).contains(&v)) {
                 errors.push(

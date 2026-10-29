@@ -122,6 +122,7 @@ struct DirectBrdf {
     diffuse: [f32; 3],
     f0: [f32; 3],
     compensation: [f32; 3],
+    transmission: f32,
 }
 
 impl DirectBrdf {
@@ -133,6 +134,7 @@ impl DirectBrdf {
         Self {
             nv,
             a2,
+            transmission: 0.0,
             view_visibility: libm::sqrtf(nv * nv * (1.0 - a2) + a2),
             diffuse: base.map(|base| base * (1.0 - metallic)),
             f0,
@@ -157,7 +159,8 @@ impl DirectBrdf {
         let (dielectric_fresnel, fresnel) = super::fresnel::coefficients(vh, self.f0);
         std::array::from_fn(|i| {
             let f = fresnel[i];
-            nl * (self.diffuse[i] * (1.0 - dielectric_fresnel) / core::f32::consts::PI
+            nl * (self.diffuse[i] * (1.0 - self.transmission) * (1.0 - dielectric_fresnel)
+                / core::f32::consts::PI
                 + f * distribution * visibility * self.compensation[i])
         })
     }
@@ -173,7 +176,7 @@ pub(super) fn shade(
     derivatives: [f32; 4],
     position: V3,
     lights: &Lights,
-) -> Option<([f32; 3], f32)> {
+) -> Option<([f32; 3], f32, Option<super::transmission::Sample>)> {
     let m = triangle.material;
     let tex = |binding| sample(mesh, binding, uv, derivatives);
     let base_tex = m.base_color_texture.map(tex).unwrap_or([1.0; 4]);
@@ -199,7 +202,17 @@ pub(super) fn shade(
         [0.0; 2]
     };
     let mut radiance = match triangle.kind {
-        MaterialKind::Pbr => indirect(base, metallic, roughness, n, v, ao, lights, fab),
+        MaterialKind::Pbr => indirect(
+            base,
+            metallic,
+            roughness,
+            n,
+            v,
+            ao,
+            lights,
+            fab,
+            m.transmission,
+        ),
         MaterialKind::Lambert => {
             let factor = lights.factor(n, ao, position);
             std::array::from_fn(|i| base[i] * factor[i])
@@ -210,7 +223,8 @@ pub(super) fn shade(
         radiance[i] += m.emissive[i] * m.emissive_intensity * emission[i];
     }
     if triangle.kind == MaterialKind::Pbr && !lights.directional.is_empty() {
-        let brdf = DirectBrdf::new(base, metallic, roughness, n.dot(v).max(0.0), fab);
+        let mut brdf = DirectBrdf::new(base, metallic, roughness, n.dot(v).max(0.0), fab);
+        brdf.transmission = m.transmission;
         for (index, &(direction, intensity)) in lights.directional.iter().enumerate() {
             let reflected = brdf.reflect(n, v, direction);
             // A back-facing light contributes zero regardless of its shadow map.
@@ -230,6 +244,8 @@ pub(super) fn shade(
         } else {
             1.0
         },
+        (m.transmission > 0.0)
+            .then(|| super::transmission::Sample::new(m, n, v, base, metallic, roughness)),
     ))
 }
 
@@ -253,6 +269,7 @@ fn indirect(
     ao: f32,
     lights: &Lights,
     fab: [f32; 2],
+    transmission: f32,
 ) -> [f32; 3] {
     let nv = n.dot(v).clamp(0.0, 1.0);
     let dielectric = scattering(0.04, fab);
@@ -264,8 +281,9 @@ fn indirect(
             irradiance[i] += (ground[i] * (1.0 - t) + sky[i] * t) / core::f32::consts::PI;
         }
     }
-    let mut result =
-        std::array::from_fn(|i| base[i] * (1.0 - metallic) * diffuse_energy * irradiance[i] * ao);
+    let mut result = std::array::from_fn(|i| {
+        base[i] * (1.0 - transmission) * (1.0 - metallic) * diffuse_energy * irradiance[i] * ao
+    });
     if let Some(environment) = &lights.environment {
         let reflection = n * (2.0 * n.dot(v)) - v;
         let r4 = roughness * roughness * roughness * roughness;
@@ -283,7 +301,12 @@ fn indirect(
             let single = dielectric[0] * (1.0 - metallic) + metal[0] * metallic;
             let multi = dielectric[1] * (1.0 - metallic) + metal[1] * metallic;
             result[i] += (radiance[i] * single + diffuse[i] * multi) * specular_ao
-                + base[i] * (1.0 - metallic) * diffuse_energy * diffuse[i] * ao;
+                + base[i]
+                    * (1.0 - transmission)
+                    * (1.0 - metallic)
+                    * diffuse_energy
+                    * diffuse[i]
+                    * ao;
         }
     }
     result

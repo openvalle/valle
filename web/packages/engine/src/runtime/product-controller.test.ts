@@ -900,7 +900,7 @@ test("reference/export Scene3D borrows before atlas uploads and retains CPU geom
   const bytes = new Uint8Array(320),
     h = new Uint32Array(bytes.buffer),
     f = new Float32Array(bytes.buffer);
-  h.set([0x33534756, 16, 16, 0, 13, 1]);
+  h.set([0x34534756, 16, 16, 0, 13, 1]);
   f.set([1, 1, 0], 6);
   h.set([1, 1, 256, 1, 1, 272, 1, 1, 16, 1, 1, 288, 1, 1, 304], 9);
   h[25] = bytes.length;

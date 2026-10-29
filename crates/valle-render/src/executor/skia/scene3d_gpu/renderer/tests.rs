@@ -837,3 +837,82 @@ fn transformed_material_textures_match_cpu_reference() {
     );
     assert!(reference.object_ids.contains(&1));
 }
+
+#[test]
+#[ignore = "requires a real GPU; verifies dielectric transmission and depth against CPU"]
+fn dielectric_transmission_matches_cpu_reference() {
+    let scene: Scene3DSpec = serde_json::from_str(include_str!(
+        "../../../../../../valle-motion/tests/fixtures/scene3d/transmission-scene.json"
+    ))
+    .unwrap();
+    let mut frame: Frame3DState = serde_json::from_str(include_str!(
+        "../../../../../../valle-motion/tests/fixtures/scene3d/transmission-frame.json"
+    ))
+    .unwrap();
+    let resources = SceneResources {
+        models: BTreeMap::from([(
+            "plane".into(),
+            Arc::new(
+                admit_glb(include_bytes!(
+                    "../../../../../../valle-motion/tests/fixtures/scene3d/plane.glb"
+                ))
+                .unwrap(),
+            ),
+        )]),
+        ..Default::default()
+    };
+    let prepared = Arc::new(prepare_scene(&scene, 384, 256, &resources).unwrap());
+    let (mut rasterizer, mut context) = renderer();
+    for thickness in [0.8, 0.0, 0.8] {
+        frame.meshes[2].material.thickness = Some(thickness);
+        frame.meshes[2].material.attenuation_color = Some(Color4([0.9, 0.6, 0.4, 1.0]));
+        frame.meshes[2].material.attenuation_distance = Some(1.5);
+        let reference = render_scene(&prepared, &frame).unwrap();
+        assert!(
+            prepare_gpu_mesh_geometry(&prepared, &frame)
+                .unwrap()
+                .is_none()
+        );
+        let geometry = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+        if let Ok(directory) = std::env::var("VALLE_TRANSMISSION_TEST_OUTPUT") {
+            let path = std::path::Path::new(&directory);
+            std::fs::write(
+                path.join("transmission-packet.bin"),
+                geometry.web_packet(&frame).unwrap(),
+            )
+            .unwrap();
+            let atlas =
+                GpuRasterAtlas::new(geometry.shading.as_ref().unwrap(), 4096, 256 * 1024 * 1024)
+                    .unwrap();
+            let mut bytes = Vec::new();
+            atlas.append_bytes(&mut bytes);
+            std::fs::write(path.join("transmission-atlas.bin"), bytes).unwrap();
+            std::fs::write(
+                path.join("transmission-reference.rgba"),
+                reference
+                    .premul_rgba16f
+                    .iter()
+                    .map(|&bits| (half(bits).clamp(0.0, 1.0) * 255.0).round() as u8)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        }
+        let input =
+            Scene3dGpuInput::new(geometry, Arc::clone(&prepared), Arc::new(frame.clone())).unwrap();
+        let output = rasterizer.render(&input, &mut context).unwrap().unwrap();
+        let actual = read_color(&mut context, &output.image, 384, 256, ColorType::RGBAF16);
+        let errors = actual
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(&reference.premul_rgba16f)
+            .map(|(a, &b)| (half(u16::from_le_bytes(*a)) - half(b)).abs())
+            .collect::<Vec<_>>();
+        let max = errors.iter().copied().fold(0.0_f32, f32::max);
+        let mean = errors.iter().sum::<f32>() / errors.len() as f32;
+        assert!(
+            max < 0.02 && mean < 0.0005,
+            "thickness={thickness}: max={max},mean={mean}"
+        );
+    }
+}

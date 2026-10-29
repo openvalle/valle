@@ -13,7 +13,7 @@ pub struct GpuRasterTextureVarying {
 
 impl GpuRasterShading {
     pub const HEADER_LEN: usize = 5;
-    pub const MATERIAL_STRIDE: usize = 19;
+    pub const MATERIAL_STRIDE: usize = 21;
 
     pub(super) fn new(
         prepared: &PreparedScene,
@@ -134,11 +134,7 @@ impl GpuRasterShading {
                         m.roughness,
                         m.base_color[3],
                         m.alpha_cutoff.unwrap_or(-1.0),
-                        if m.alpha_mode == AlphaMode::Blend {
-                            1.0
-                        } else {
-                            0.0
-                        },
+                        if m.needs_blend() { 1.0 } else { 0.0 },
                     ],
                     [m.normal_scale, m.occlusion_strength, 0.0, 0.0],
                 ]);
@@ -171,6 +167,24 @@ impl GpuRasterShading {
                     );
                     values.extend(matrix.map(|r| [r[0], r[1], r[2], 0.0]));
                 }
+                values.extend([
+                    [
+                        m.transmission,
+                        m.thickness,
+                        m.attenuation_distance.unwrap_or(0.0),
+                        if m.alpha_mode == AlphaMode::Blend {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    ],
+                    [
+                        m.attenuation_color[0],
+                        m.attenuation_color[1],
+                        m.attenuation_color[2],
+                        0.0,
+                    ],
+                ]);
             }
         }
         values[1][0] = ((values.len() - Self::HEADER_LEN) / Self::MATERIAL_STRIDE) as f32;
@@ -194,6 +208,21 @@ impl GpuRasterShading {
                 .chain(rays.rows)
                 .map(|v| [v.x, v.y, v.z, 0.0]),
         );
+        values.extend([
+            [
+                camera.right.x,
+                camera.right.y,
+                camera.right.z,
+                camera.focal / camera.aspect,
+            ],
+            [camera.up.x, camera.up.y, camera.up.z, camera.focal],
+            [
+                camera.forward.x,
+                camera.forward.y,
+                camera.forward.z,
+                camera.near,
+            ],
+        ]);
         Self {
             vertices: Vec::new(),
             texture_vertices: (!textures.is_empty()).then(Vec::new),

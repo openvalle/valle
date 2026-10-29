@@ -83,6 +83,18 @@ pub fn opened_motion_render(source: &str, width: u32, height: u32) -> EngineRend
         &bundle.resource_bytes,
     );
     let outer = canonical_fixed_package_manifest(&files).unwrap();
+    if let Ok(directory) = std::env::var("VALLE_MOTION_PACKAGE_TEST_OUTPUT") {
+        std::fs::write(
+            std::path::Path::new(&directory).join(format!("motion-package-{width}.json")),
+            serde_json::to_vec(
+                &json!({"fixedPackageManifestJson":outer,"timelineJson":timeline,
+                "resourceManifestJson":std::str::from_utf8(manifest.canonical_bytes()).unwrap(),
+                "verifiedBindingBundleJson":bundle.json,"resourceBytes":bundle.resource_bytes}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
     open_verified_fixed_package(&outer, &files)
         .unwrap()
         .engine_render()
