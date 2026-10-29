@@ -63,6 +63,7 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
  <Group3D key="assembly" rotateZ={time.seconds*12} scale={[1.05,0.95,1]}><Group3D key="inner" rotateY={time.seconds*15}>
  <Mesh key="main" geometry={BALL} rotateY={time.seconds*90} position={[-0.4,0,0]}
   material={{type:"pbr",color:"#cf7338",metallic:0.1+time.seconds*0.4,roughness:0.1+time.seconds*0.3,ior:1.33+time.seconds*0.3,specularIntensity:0.7,specularColor:"#ffe4ce",clearcoat:0.25+time.seconds*0.3,clearcoatRoughness:0.15,normalScale:0.3,emissive:"#101a22",emissiveIntensity:0.2${textures}}}/>
+ <Mesh key="rounded" geometry={extrude(path("M -0.4 -0.6 L 0.4 -0.6 L 0.4 0.6 L -0.4 0.6 Z"),{depth:0.4,bevel:0.12,bevelSegments:6})} position={[-1.5,0,-0.3]} rotateY={time.seconds*45} material={{type:"pbr",color:"#b2c8dc",metallic:0.7,roughness:0.3,clearcoat:0.5}}/>
  <Mesh key="glass" geometry={BALL} scale={[0.45,0.45,0.45]} position={[0.6,0,1.2]}
   material={{type:"pbr",alphaMode:"blend",color:"#45aadd66",roughness:0.2${textures}}}/>
  ${resources ? '<Mesh key="model" src="asset://model" position={[1.5,0,-0.8]} rotateY={time.seconds*20} scale={[-1,1,1]} material={{type:"lambert",doubleSided:true,alphaMode:"mask",alphaCutoff:0.4,textures:{baseColor:"asset://map"}}}/>' : ""}

@@ -821,7 +821,7 @@ impl<'s> Compiler<'s> {
             return None;
         };
         let allowed = match label {
-            "extrude" => &["depth", "bevel"][..],
+            "extrude" => &["depth", "bevel", "bevelSegments"][..],
             "lathe" => &["segments"][..],
             _ => &["radius", "sides"][..],
         };
@@ -856,10 +856,24 @@ impl<'s> Compiler<'s> {
                 } else {
                     0.0
                 };
+                let bevel_segments = if let Some(value) = options.get("bevelSegments") {
+                    let Some(segments) = value.as_u64().and_then(|v| u32::try_from(v).ok()) else {
+                        self.illegal(
+                            DiagCode::GrammarForbidden,
+                            span,
+                            "extrude bevelSegments must be a static integer",
+                        );
+                        return None;
+                    };
+                    segments
+                } else {
+                    1
+                };
                 valle_motion::scene3d::ProceduralGeometry::Extrude {
                     path,
                     depth: depth as f32,
                     bevel: bevel as f32,
+                    bevel_segments,
                 }
             }
             "lathe" => {

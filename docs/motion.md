@@ -2932,7 +2932,7 @@ Prepared paths can build meshes without a model asset:
 
 | Function | Prepared path and options |
 | --- | --- |
-| `extrude(path, { depth, bevel? })` | Closed, nonintersecting contours; nested contours form holes. `depth` is positive and `bevel` ranges from zero to half the depth. Front and back caps, walls, and bevel receive normals and UVs. |
+| `extrude(path, { depth, bevel?, bevelSegments? })` | Closed, nonintersecting contours; nested contours form holes. `depth` is positive and `bevel` ranges from zero to half the depth. `bevelSegments` is a static integer in 1–16 (default 1); 1 makes a flat chamfer, larger values tessellate a quarter-circle with smooth normals. Front and back caps, walls, and bevel receive normals and UVs. |
 | `lathe(profile, { segments? })` | One simple open or closed profile. Profile X is the radius from the world Y axis. Open profiles may reach zero only at endpoints and, together with their axis caps, must bound a simple region with nonzero Y extent; returning lips are allowed. Closed profiles stay at positive radii and receive no caps (for example, a torus). `segments` defaults to 64 and ranges from 3 to 256. Nonzero radius endpoints receive disk caps. |
 | `tube(path, { radius, sides? })` | One planar centerline. `radius` is positive; `sides` defaults to 16 and ranges from 3 to 128. An open path receives end caps; a closed path joins its last ring to its first without caps. Zero-length edges and reversing corners are rejected. |
 
@@ -2947,7 +2947,7 @@ source material indices, so use the whole-Mesh `material` override.
 
 ```tsx
 const glyph = textOutline("V", { fontSize: 220, fontWeight: 800, align: "center" });
-<Mesh key="letter" geometry={extrude(glyph.path, { depth: 60, bevel: 6 })}
+<Mesh key="letter" geometry={extrude(glyph.path, { depth: 60, bevel: 6, bevelSegments: 4 })}
   material={{ type: "pbr", color: "#8b7bff", metallic: 0, roughness: 0.4 }}
   position={[0, -80, 0]}
   rotateY={seconds * 40} />
@@ -3469,8 +3469,8 @@ Known limits of Scene3D, procedural geometry and filters:
   camera; layers do not occlude or shadow each other.
 - The 131,072-triangle layer budget counts procedural meshes (`extrude`, `lathe`, `tube`)
   as it counts loaded models.
-- An `extrude` bevel is one flat chamfer of at most half the depth; there is no rounded
-  bevel. On thin glyph strokes a large bevel fails with
+- An `extrude` bevel can be at most half the depth; increase `bevelSegments` for a rounded
+  profile. More segments consume the same triangle budget. On thin glyph strokes a large bevel fails with
   `bevel collapses or intersects the path contours`; lower it until it fits.
 - An `offsetPath` result can contain degenerate contours, which `extrude` rejects with
   `geometry contour is degenerate`.

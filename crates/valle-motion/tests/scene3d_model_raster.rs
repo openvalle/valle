@@ -1585,6 +1585,7 @@ fn procedural_extrude_renders_without_model_resource_and_rotates_as_a_real_mesh(
         path,
         depth: 0.5,
         bevel: 0.05,
+        bevel_segments: 1,
     });
     scene.meshes[0].material.kind = Some(MaterialKind::Lambert);
     let resources = SceneResources::default();

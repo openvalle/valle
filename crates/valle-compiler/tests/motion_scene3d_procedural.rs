@@ -63,10 +63,17 @@ fn extrude_is_prepared_geometry_with_no_model_asset() {
     assert_eq!(camera.constant().unwrap().unwrap().far, 1_000.0);
     assert_eq!(scene.meshes.len(), 1);
     assert!(scene.meshes[0].model_control.is_none());
-    let Some(ProceduralGeometry::Extrude { path, depth, bevel }) = &scene.meshes[0].geometry else {
+    let Some(ProceduralGeometry::Extrude {
+        path,
+        depth,
+        bevel,
+        bevel_segments,
+    }) = &scene.meshes[0].geometry
+    else {
         panic!("expected an extruded path")
     };
     assert_eq!((*depth, *bevel), (0.8, 0.1));
+    assert_eq!(*bevel_segments, 1);
     assert_eq!(path.points.len(), 4);
     assert!(
         scene.meshes[0]
@@ -88,6 +95,35 @@ fn extrude_is_prepared_geometry_with_no_model_asset() {
         SOURCE.replace("depth:0.8,bevel:0.1", "depth:time.seconds,bevel:0.1"),
     ] {
         assert!(compile_motion(&bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn rounded_bevel_compiles_with_static_segment_budget() {
+    let source = SOURCE.replace("bevel:0.1", "bevel:0.1,bevelSegments:6");
+    let compiled = compile_motion(&source).unwrap();
+    let geometry = compiled
+        .artifact
+        .nodes
+        .iter()
+        .find_map(|n| match &n.kind {
+            NodeKind::Scene3D { scene, .. } => scene.meshes[0].geometry.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    assert!(matches!(
+        geometry,
+        ProceduralGeometry::Extrude {
+            bevel_segments: 6,
+            ..
+        }
+    ));
+    geometry.admit_model().unwrap();
+    for value in ["0", "17", "1.5", "time.seconds", "\"4\""] {
+        assert!(
+            compile_motion(&source.replace("bevelSegments:6", &format!("bevelSegments:{value}")))
+                .is_err()
+        );
     }
 }
 

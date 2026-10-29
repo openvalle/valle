@@ -19,6 +19,8 @@ pub enum ProceduralGeometry {
         path: PathData,
         depth: f32,
         bevel: f32,
+        #[serde(default = "single_bevel_segment", rename = "bevelSegments")]
+        bevel_segments: u32,
     },
     Lathe {
         path: PathData,
@@ -29,6 +31,10 @@ pub enum ProceduralGeometry {
         radius: f32,
         sides: u32,
     },
+}
+
+fn single_bevel_segment() -> u32 {
+    1
 }
 
 impl ProceduralGeometry {
@@ -52,7 +58,12 @@ impl ProceduralGeometry {
             );
         }
         match self {
-            Self::Extrude { depth, bevel, .. } => {
+            Self::Extrude {
+                depth,
+                bevel,
+                bevel_segments,
+                ..
+            } => {
                 if !depth.is_finite() || *depth <= 0.0 || *depth > MAX_ABS_POSITION {
                     errors.push(
                         "/geometry/depth",
@@ -63,6 +74,12 @@ impl ProceduralGeometry {
                     errors.push(
                         "/geometry/bevel",
                         "extrude bevel must be finite in 0..=depth/2",
+                    );
+                }
+                if !(1..=16).contains(bevel_segments) {
+                    errors.push(
+                        "/geometry/bevelSegments",
+                        "extrude bevelSegments must be in 1..=16",
                     );
                 }
             }
@@ -90,7 +107,12 @@ impl ProceduralGeometry {
         self.validate()?;
         let mut triangles = Vec::new();
         match self {
-            Self::Extrude { path, depth, bevel } => extrude(path, *depth, *bevel, &mut triangles)?,
+            Self::Extrude {
+                path,
+                depth,
+                bevel,
+                bevel_segments,
+            } => extrude(path, *depth, *bevel, *bevel_segments, &mut triangles)?,
             Self::Lathe { path, segments } => lathe(path, *segments, &mut triangles)?,
             Self::Tube {
                 path,
@@ -310,6 +332,7 @@ fn extrude(
     path: &PathData,
     depth: f32,
     bevel: f32,
+    bevel_segments: u32,
     output: &mut Vec<Triangle>,
 ) -> Result<(), ContractErrors> {
     let contours = path
@@ -391,6 +414,7 @@ fn extrude(
                 "extrude cap triangulation is empty",
             ));
         }
+        mesh_budget(output.len() + triangles.triangle_indices.len() / 3 * 2)?;
         for indices in triangles.triangle_indices.as_chunks::<3>().0 {
             let mut xy = [
                 triangles.vertices[indices[0]],
@@ -417,6 +441,12 @@ fn extrude(
         }
     }
     for ring in &rings {
+        let bands = if bevel > 0.0 {
+            bevel_segments as usize * 2 + 1
+        } else {
+            1
+        };
+        mesh_budget(output.len() + ring.points.len() * bands * 2)?;
         let mut perimeter = 0.0;
         let lengths = (0..ring.points.len())
             .map(|at| {
@@ -431,24 +461,50 @@ fn extrude(
         for (at, length) in lengths.into_iter().enumerate() {
             let next = (at + 1) % ring.points.len();
             let profile = if bevel > 0.0 {
-                [
-                    (ring.inset[at], ring.inset[next], depth * 0.5),
-                    (ring.points[at], ring.points[next], depth * 0.5 - bevel),
-                    (ring.points[at], ring.points[next], -depth * 0.5 + bevel),
-                    (ring.inset[at], ring.inset[next], -depth * 0.5),
-                ]
+                let top = (0..=bevel_segments)
+                    .map(|segment| {
+                        // Exact endpoints keep cap, wall and UV-seam neighborhoods connected.
+                        let (sine, cosine) = if segment == 0 {
+                            (0.0, 1.0)
+                        } else if segment == bevel_segments {
+                            (1.0, 0.0)
+                        } else {
+                            let angle = f64::from(segment) / f64::from(bevel_segments)
+                                * std::f64::consts::FRAC_PI_2;
+                            (libm::sin(angle), libm::cos(angle))
+                        };
+                        let point = |i: usize| {
+                            if segment == 0 {
+                                ring.inset[i]
+                            } else if segment == bevel_segments {
+                                ring.points[i]
+                            } else {
+                                Point::new(
+                                    ring.inset[i].x + (ring.points[i].x - ring.inset[i].x) * sine,
+                                    ring.inset[i].y + (ring.points[i].y - ring.inset[i].y) * sine,
+                                )
+                            }
+                        };
+                        (
+                            point(at),
+                            point(next),
+                            depth * 0.5 - bevel * (1.0 - cosine as f32),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                top.iter()
+                    .copied()
+                    .chain(top.iter().rev().map(|&(a, b, z)| (a, b, -z)))
+                    .collect::<Vec<_>>()
             } else {
-                [
+                vec![
                     (ring.points[at], ring.points[next], depth * 0.5),
-                    (ring.points[at], ring.points[next], -depth * 0.5),
-                    (ring.points[at], ring.points[next], -depth * 0.5),
                     (ring.points[at], ring.points[next], -depth * 0.5),
                 ]
             };
-            let segments = if bevel > 0.0 { 3 } else { 1 };
-            for part in 0..segments {
-                let (top_a, top_b, top_z) = profile[part];
-                let (bottom_a, bottom_b, bottom_z) = profile[part + 1];
+            for pair in profile.windows(2) {
+                let (top_a, top_b, top_z) = pair[0];
+                let (bottom_a, bottom_b, bottom_z) = pair[1];
                 if top_z == bottom_z && top_a == bottom_a && top_b == bottom_b {
                     continue;
                 }
@@ -905,6 +961,7 @@ mod tests {
             path: path.clone(),
             depth: 2.0,
             bevel: 0.0,
+            bevel_segments: 1,
         }
         .admit_model()
         .unwrap();
@@ -912,6 +969,7 @@ mod tests {
             path,
             depth: 2.0,
             bevel: 0.2,
+            bevel_segments: 1,
         }
         .admit_model()
         .unwrap();
@@ -968,6 +1026,79 @@ mod tests {
     }
 
     #[test]
+    fn rounded_bevel_preserves_holes_and_follows_a_quarter_circle() {
+        for segments in [2, 4, 16] {
+            let model = ProceduralGeometry::Extrude {
+                path: square_with_hole(),
+                depth: 2.0,
+                bevel: 0.2,
+                bevel_segments: segments,
+            }
+            .admit_model()
+            .unwrap();
+            for step in 0..=segments {
+                let angle = f64::from(step) / f64::from(segments) * std::f64::consts::FRAC_PI_2;
+                let x = 1.8 + 0.2 * libm::sin(angle);
+                let z = 0.8 + 0.2 * libm::cos(angle);
+                let at = model
+                    .vertices()
+                    .iter()
+                    .filter(|v| {
+                        (f64::from(v.position[0]) - x).abs() < 1e-6
+                            && (f64::from(v.position[2]) - z).abs() < 1e-6
+                    })
+                    .collect::<Vec<_>>();
+                assert!(!at.is_empty(), "segments={segments} step={step}");
+                for vertex in at {
+                    let normal = vertex.normal;
+                    assert!((normal.iter().map(|v| v * v).sum::<f32>() - 1.0).abs() < 1e-5);
+                    assert!(normal[0] >= 0.0 && normal[2] >= 0.0);
+                }
+            }
+            for t in model.indices().as_chunks::<3>().0 {
+                let v = t.map(|i| &model.vertices()[i as usize]);
+                if v.iter().all(|v| v.position[2] == 1.0) {
+                    assert!(!point_in_triangle(
+                        [0.0, 0.0],
+                        v.map(|v| [v.position[0], v.position[1]])
+                    ));
+                }
+                let geometric = face_normal(v[0].position, v[1].position, v[2].position).unwrap();
+                assert!(v.iter().all(|v| {
+                    geometric
+                        .iter()
+                        .zip(v.normal)
+                        .map(|(a, b)| a * b)
+                        .sum::<f32>()
+                        > 0.0
+                }));
+            }
+        }
+        for segments in [0, 17, u32::MAX] {
+            assert!(
+                ProceduralGeometry::Extrude {
+                    path: square_with_hole(),
+                    depth: 2.0,
+                    bevel: 0.2,
+                    bevel_segments: segments
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            ProceduralGeometry::Extrude {
+                path: square_with_hole(),
+                depth: 2.0,
+                bevel: 0.9,
+                bevel_segments: 8
+            }
+            .admit_model()
+            .is_err()
+        );
+    }
+
+    #[test]
     fn maximum_bevel_omits_the_zero_height_wall_band() {
         let path = PathData::new(
             vec![
@@ -989,6 +1120,7 @@ mod tests {
             path,
             depth: 2.0,
             bevel: 1.0,
+            bevel_segments: 1,
         }
         .admit_model()
         .unwrap();
@@ -1021,6 +1153,7 @@ mod tests {
             path,
             depth: 1.0,
             bevel: 0.0,
+            bevel_segments: 1,
         }
         .admit_model()
         .unwrap();
