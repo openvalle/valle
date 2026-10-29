@@ -33,6 +33,7 @@ pub mod layout;
 pub mod lock;
 pub mod math_formula;
 pub mod memory;
+pub mod particles3d;
 pub mod scene3d;
 pub mod shader;
 pub mod spring;
