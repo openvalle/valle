@@ -74,6 +74,10 @@ name = "scene3d_fixed_package"
 required-features = ["native"]
 
 [[test]]
+name = "scene3d_texture"
+required-features = ["native"]
+
+[[test]]
 name = "glass_projection"
 required-features = ["native"]
 

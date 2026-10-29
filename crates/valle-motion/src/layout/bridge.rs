@@ -550,6 +550,9 @@ impl LayoutTree {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DRequest {
+    /// Capture the node children as the local input://source material texture.
+    #[serde(default)]
+    pub texture: bool,
     pub provider_key: String,
     pub scene: valle_motion::scene3d::Scene3DSpec,
     pub frame: valle_motion::scene3d::Frame3DState,

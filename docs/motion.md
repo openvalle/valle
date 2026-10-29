@@ -3213,6 +3213,48 @@ asset and renderer contract.
 
 #### Current UI frames on Scene3D materials
 
+A `Scene3D` may contain one `<Texture3D>` with ordinary Motion components,
+layout, text, images, filters and animations. Its children render into the Scene3D
+content-box canvas and become that scene's local `input://source`. They do not
+appear separately in the 2D output. Multiple meshes may use the same texture:
+
+```tsx
+<Scene3D key="card" style={{width:640,height:360}}
+  camera={{position:[0,0,5],target:[0,0,0]}}>
+  <Texture3D>
+    <View style={{width:"100%",height:"100%",backgroundColor:"#164a78",padding:24}}>
+      <Text style={{fontSize:32,color:"white"}}>Live UI</Text>
+      <View style={{width:64,height:32,backgroundColor:"#ffbb44",translate:point(seconds*80,0)}}/>
+    </View>
+  </Texture3D>
+  <Mesh key="panel" geometry={extrude(path("M -1 -0.6 L 1 -0.6 L 1 0.6 L -1 0.6 Z"),{depth:0.04})}
+    rotateY={seconds*20}
+    material={{type:"unlit",color:"white",textures:{baseColor:"input://source"}}}/>
+</Scene3D>
+```
+
+`Texture3D` takes no props, requires a nonempty subtree, and is a direct Scene3D
+child (outside `Group3D`). Bind it to `baseColor` or `emissive`; use `alphaMode:"blend"`
+when transparent UI pixels should reveal the scene behind the mesh. Its canvas has
+the Scene3D content-box size, not the final projected mesh size. Parent 2D transforms
+are removed before UV sampling; depth, lighting, occlusion and UV transforms apply
+normally afterward. The capture is recomputed for the current sample, including
+arbitrary seeking; it never reads the preceding frame. Nested scenes are allowed,
+but texture content cannot read the enclosing scene's rendered result. An
+`input://source` **inside** the UI subtree still means the effect's external input
+and requires `effect()`.
+
+Native CPU, native GPU and Web use the same capture stage. The current bridge
+reads the working-color capture into material image data and uploads it when GPU
+rendering: it is not a zero-copy GPU texture path. The ordinary per-image 4096-pixel
+side limit, texture storage budget and frame surface budgets apply. Local UI capture
+keeps its full float mip chain within 64 MiB, preserving aspect ratio and reducing
+its resolution when necessary (1080p stays unchanged). The Scene3D output remains
+at its requested resolution, including 4K; other material images still share the
+scene's total texture budget.
+
+Without `Texture3D`, the existing host-picture contract applies:
+
 An `effect()` may bind `input://source` to `material.textures.baseColor` or `emissive`;
 a `transition()` uses `input://from` / `input://to` instead. The input is the current
 host picture, captured after prior effects, not a static asset or the previous frame:

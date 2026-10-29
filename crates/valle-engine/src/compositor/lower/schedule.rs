@@ -299,11 +299,11 @@ impl<'a> Scheduler<'a> {
             ProgramPassKind::ApplyOpacity { .. } => Ok(StorageDraft::Materialized {
                 reason: ProgramAllocationReason::OpacityKernel,
             }),
-            ProgramPassKind::ApplyShader { .. } | ProgramPassKind::ApplyTransition { .. } => {
-                Ok(StorageDraft::Materialized {
-                    reason: ProgramAllocationReason::ShaderKernel,
-                })
-            }
+            ProgramPassKind::ApplyShader { .. }
+            | ProgramPassKind::ApplyScene3d { .. }
+            | ProgramPassKind::ApplyTransition { .. } => Ok(StorageDraft::Materialized {
+                reason: ProgramAllocationReason::ShaderKernel,
+            }),
             ProgramPassKind::ApplyTransform { .. } => Ok(StorageDraft::Materialized {
                 reason: ProgramAllocationReason::TransformKernel,
             }),

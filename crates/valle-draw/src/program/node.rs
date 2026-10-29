@@ -217,10 +217,56 @@ pub struct RuntimeShaderNode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scene3dNode {
+    /// Local subtree capture size; absent on ordinary pre-rendered scene leaves.
+    #[serde(
+        default,
+        rename = "textureSize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub texture_size: Option<[u32; 2]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub frames: Vec<crate::requirements::HostFrame>,
     pub scene: Scene3dKey,
     pub bounds: Rect,
+}
+
+impl Scene3dNode {
+    /// Keep a full mip chain within 64 MiB, leaving room for other material assets
+    /// in the Scene3D texture budget. This only sizes the UI capture, not 3D output.
+    pub fn bounded_texture_size(width: u32, height: u32) -> [u32; 2] {
+        let scaled = |scale: u64| {
+            [
+                ((u64::from(width) * scale / 65536).max(1)) as u32,
+                ((u64::from(height) * scale / 65536).max(1)) as u32,
+            ]
+        };
+        let (mut low, mut high) = (0_u64, 65536_u64);
+        while low < high {
+            let mid = (low + high).div_ceil(2);
+            if Self::valid_texture_size(scaled(mid)) {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        scaled(low)
+    }
+
+    pub(crate) fn valid_texture_size([mut width, mut height]: [u32; 2]) -> bool {
+        if width == 0 || height == 0 || width > 4096 || height > 4096 {
+            return false;
+        }
+        let mut bytes = 0;
+        loop {
+            bytes += u64::from(width) * u64::from(height) * 16;
+            if width == 1 && height == 1 {
+                break;
+            }
+            width = (width / 2).max(1);
+            height = (height / 2).max(1);
+        }
+        bytes <= 64 * 1024 * 1024
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,4 +302,31 @@ pub enum Node {
     Shadow(ShadowNode),
     RuntimeShader(RuntimeShaderNode),
     Scene3d(Scene3dNode),
+}
+
+#[cfg(test)]
+mod scene_texture_tests {
+    use super::Scene3dNode;
+    #[test]
+    fn texture_capture_preserves_small_sizes_and_bounds_large_mip_chains() {
+        assert_eq!(Scene3dNode::bounded_texture_size(1920, 1080), [1920, 1080]);
+        for (width, height) in [
+            (3840, 2160),
+            (4096, 4096),
+            (16384, 1),
+            (1, 16384),
+            (u32::MAX, u32::MAX),
+        ] {
+            let size = Scene3dNode::bounded_texture_size(width, height);
+            assert!(Scene3dNode::valid_texture_size(size));
+            assert!(size[0] <= width && size[1] <= height);
+            assert!(
+                (f64::from(size[0]) / f64::from(width) - f64::from(size[1]) / f64::from(height))
+                    .abs()
+                    <= 1.0 / f64::from(width.min(height))
+            );
+        }
+        assert!(!Scene3dNode::valid_texture_size([3840, 2160]));
+        assert!(!Scene3dNode::valid_texture_size([0, 100]));
+    }
 }

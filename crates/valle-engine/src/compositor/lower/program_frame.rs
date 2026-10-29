@@ -821,6 +821,9 @@ fn bind_program(
                     need(&mut beyond_root, path, *input, footprint)?;
                 }
             }
+            ProgramPassKind::ApplyScene3d { input, .. } => {
+                need(&mut beyond_root, path, *input, unclipped(*input)?)?
+            }
             ProgramPassKind::ApplyTransition { from, to, .. } => {
                 need(&mut beyond_root, path, *from, unclipped(*from)?)?;
                 need(&mut beyond_root, path, *to, unclipped(*to)?)?;

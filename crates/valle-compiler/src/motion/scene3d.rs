@@ -372,6 +372,8 @@ impl<'s> Compiler<'s> {
             exposure =
                 self.scene3d_number(values.get("exposure").copied(), 1.0, "Scene3D exposure")?;
         }
+        let mut texture_children = Vec::new();
+        let mut has_texture = false;
         let mut children = Vec::new();
         self.scene3d_children(&element.children, &[], &mut BTreeSet::new(), &mut children)?;
         for Scene3DChild {
@@ -391,6 +393,31 @@ impl<'s> Compiler<'s> {
                     continue;
                 }
             };
+            if child_tag == "Texture3D" {
+                self.scene3d_attributes(child, "Texture3D", &[])?;
+                if has_texture {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        child.span(),
+                        "Scene3D accepts one Texture3D subtree",
+                    );
+                    continue;
+                }
+                has_texture = true;
+                texture_children = self.lower_child_nodes(
+                    &child.children,
+                    &format!("{key}.texture."),
+                    "Texture3D children must be Motion JSX",
+                );
+                if texture_children.is_empty() {
+                    self.illegal(
+                        DiagCode::GrammarForbidden,
+                        child.span(),
+                        "Texture3D requires a nonempty Motion subtree",
+                    );
+                }
+                continue;
+            }
             if child.children.iter().any(
                 |nested| !matches!(nested, JSXChild::Text(text) if text.value.trim().is_empty()),
             ) {
@@ -551,7 +578,7 @@ impl<'s> Compiler<'s> {
                     DiagCode::GrammarForbidden,
                     child.span(),
                     format!(
-                        "unknown Scene3D child <{child_tag}>; use Mesh, Group3D, Anchor3D, AmbientLight, DirectionalLight, HemisphereLight, PointLight, SpotLight or RectAreaLight"
+                        "unknown Scene3D child <{child_tag}>; use Mesh, Group3D, Anchor3D, AmbientLight, DirectionalLight, HemisphereLight, PointLight, SpotLight, RectAreaLight or Texture3D"
                     ),
                 ),
             }
@@ -563,6 +590,17 @@ impl<'s> Compiler<'s> {
             anchors,
             pbr,
         };
+        if has_texture
+            && !scene
+                .input_frames()
+                .contains(&valle_draw::requirements::HostFrame::Source)
+        {
+            self.illegal(
+                DiagCode::GrammarForbidden,
+                element.span(),
+                "Texture3D requires a material texture bound to input://source",
+            );
+        }
         if let Err(errors) = scene.validate() {
             for error in errors.0 {
                 self.illegal(
@@ -596,7 +634,7 @@ impl<'s> Compiler<'s> {
             styles,
             visibility,
             semantic: None,
-            children: Vec::new(),
+            children: texture_children,
             is_mask_source: false,
             fragment: false,
             caption_row: None,

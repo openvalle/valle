@@ -132,6 +132,7 @@ fn fixture(reverse_arena_insertion: bool) -> DrawProgram {
         }],
     });
     let scene = Node::Scene3d(Scene3dNode {
+        texture_size: None,
         frames: Vec::new(),
         scene: Scene3dKey {
             content_hash: valle_draw::requirements::DigestBytes::from_bytes([0x44; 32]),
@@ -180,6 +181,7 @@ fn fixture(reverse_arena_insertion: bool) -> DrawProgram {
         }),
         shader: None,
         transition: None,
+        scene3d: None,
         layer_bounds: None,
     }));
     builder.add_root(root);

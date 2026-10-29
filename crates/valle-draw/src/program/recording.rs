@@ -1092,6 +1092,11 @@ pub enum RecordCmd {
     // Grouping and transform state.
     /// Logical group without an offscreen surface, used for hierarchy and location.
     BeginGroup,
+    /// Current child contribution becomes the source material of this generated Scene3D.
+    BeginScene3d {
+        texture: GeneratedTextureId,
+        bounds: Rect,
+    },
     /// Exactly two child groups: alpha mask first, then content. Lowers to an ordinary Group mask.
     BeginAlphaMask,
     /// Exactly two independent child groups, from then to, sampled on this local canvas.
@@ -1247,6 +1252,7 @@ impl RecordCmd {
     pub fn depth_delta(&self) -> i32 {
         match self {
             RecordCmd::BeginGroup
+            | RecordCmd::BeginScene3d { .. }
             | RecordCmd::BeginTransition { .. }
             | RecordCmd::BeginAlphaMask
             | RecordCmd::BeginMaskSource
@@ -1628,6 +1634,7 @@ mod finite {
             }
             RecordCmd::BeginBackdropFilter { bounds, .. } => bounds.as_ref().is_none_or(rect),
             RecordCmd::BeginShaderLayer { bounds, .. } => rect(bounds),
+            RecordCmd::BeginScene3d { bounds, .. } => rect(bounds),
             RecordCmd::BeginTransition {
                 kernel,
                 progress,
@@ -1860,7 +1867,11 @@ impl ProgramRecording {
                     }
                     stack.pop();
                 }
-                RecordCmd::Texture { texture, dst, .. } => {
+                RecordCmd::Texture { texture, dst, .. }
+                | RecordCmd::BeginScene3d {
+                    texture,
+                    bounds: dst,
+                } => {
                     let source = self.generated_textures.get(texture.index()).ok_or(
                         RecordingError::OutOfRange {
                             at,
@@ -1874,6 +1885,9 @@ impl ProgramRecording {
                         dst: *dst,
                         canvas_from_local: *stack.last().expect("root transform exists"),
                     });
+                    if command.depth_delta() == 1 {
+                        stack.push(*stack.last().expect("root transform exists"));
+                    }
                 }
                 other if other.depth_delta() == 1 => {
                     stack.push(*stack.last().expect("root transform exists"));
@@ -2301,6 +2315,21 @@ impl ProgramRecording {
             }
             RecordCmd::Image { image, .. } => {
                 self.check_id(at, "images", image.0, self.images.len())
+            }
+            RecordCmd::BeginScene3d { texture, bounds } => {
+                self.check_id(
+                    at,
+                    "generatedTextures",
+                    texture.0,
+                    self.generated_textures.len(),
+                )?;
+                if bounds.is_empty() {
+                    return Err(RecordingError::InvalidTextureCommand {
+                        at,
+                        reason: "texture canvas must be positive",
+                    });
+                }
+                Ok(())
             }
             RecordCmd::Texture {
                 texture,

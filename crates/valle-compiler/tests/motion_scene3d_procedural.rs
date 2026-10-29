@@ -416,3 +416,25 @@ fn rectangle_area_light_supports_animation_and_checks_pose_and_size() {
         assert!(compile_motion(&bad).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn local_ui_texture_is_a_subtree_not_an_external_effect_input() {
+    let source = include_str!("fixtures/motion/composition/ui-material.motion.tsx")
+        .replace("export const role = effect();", "")
+        .replace("</Scene3D>", "<Texture3D><View style={{width:240,height:160,backgroundColor:'#3366aa'}}><Text>UI</Text></View></Texture3D></Scene3D>");
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let node = artifact
+        .nodes
+        .iter()
+        .find(|n| matches!(n.kind, NodeKind::Scene3D { .. }))
+        .unwrap();
+    assert_ne!(node.children.start, node.children.end);
+    for invalid in [
+        source.replace("<Texture3D>", "<Texture3D width={240}>"),
+        source.replace("</Texture3D>", "</Texture3D><Texture3D><View/></Texture3D>"),
+        source.replace("input://source", "input://from"),
+        source.replace("<Text>UI</Text>", "<Image src=\"input://source\"/>"),
+        source.replace("<Texture3D><View style={{width:240,height:160,backgroundColor:'#3366aa'}}><Text>UI</Text></View></Texture3D>", "<Texture3D/>"),
+    ] { assert!(compile_motion(&invalid).is_err(), "{invalid}"); }
+}

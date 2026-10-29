@@ -1332,7 +1332,15 @@ async function runCanvasKitFrame(
                 [];
               try {
                 for (const [key, object] of program.scenes) {
-                  if (!object.renderSceneFrames) continue;
+                  if (
+                    !object.renderSceneFrames ||
+                    program.draw.nodes.some(
+                      (node) =>
+                        node.kind === "group" &&
+                        record(node.value, "Scene3D group").scene3d?.scene.contentHash === key,
+                    )
+                  )
+                    continue;
                   const frames = new Map<string, Image>();
                   for (const uri of object.sceneFrames ?? []) {
                     const source = [...program.textures.values()].find(
@@ -2034,7 +2042,11 @@ async function executeProgram(
   for (const raw of array(localPlan.passes, "local passes")) {
     const kind = record(record(raw, "local pass").kind, "local pass kind");
     if (kind.kind === "applyMask") wholeImageReads.add(positiveId(kind.mask, "mask source"));
-    else if (kind.kind === "applyTransition" || kind.kind === "applyShader")
+    else if (
+      kind.kind === "applyTransition" ||
+      kind.kind === "applyShader" ||
+      kind.kind === "applyScene3d"
+    )
       for (const input of programPassReads(kind)) wholeImageReads.add(input);
   }
   for (const step of [...bound.passes].reverse()) {
@@ -2379,6 +2391,7 @@ function directRasterPlan(draw: DrawProgramWire, localPlan: Wire): DirectRasterP
       (group.clip == null || record(group.clip, "direct raster clip").kind !== "path") &&
       group.shader == null &&
       group.transition == null &&
+      group.scene3d == null &&
       String(group.internalBlend) === "normal" &&
       opacity >= 0 &&
       opacity <= 1 &&
@@ -3215,6 +3228,72 @@ async function executeProgramPass(
       }
       return;
     }
+    case "applyScene3d": {
+      const scene = record(kind.scene, "Scene3D texture stage");
+      const key = String(record(scene.scene, "Scene3D key").contentHash);
+      const object = required(admitted.scenes, key, "Scene3D texture renderer");
+      if (!object.renderSceneFrames)
+        fail("scene_contract", "Scene3D texture renderer has no frame input");
+      const [width, height] = numberArray(scene.textureSize, 2, "Scene3D capture size") as [
+        number,
+        number,
+      ];
+      const bounds = rect(scene.bounds, "Scene3D texture bounds");
+      const matrix = programMatrix(admitted, localPlan, kind.output, device);
+      const pixelsToDevice = mul3(matrix, [
+        bounds.width / width,
+        0,
+        bounds.x,
+        0,
+        bounds.height / height,
+        bounds.y,
+        0,
+        0,
+        1,
+      ]);
+      const inverse = inverse3(pixelsToDevice);
+      if (!inverse) fail("scene_contract", "singular Scene3D texture transform");
+      const capture = arena.transient(width, height);
+      let captured: Image | null = null;
+      let rendered: Image | null = null;
+      try {
+        const textureCanvas = capture.getCanvas();
+        textureCanvas.clear(CanvasKit.TRANSPARENT);
+        textureCanvas.save();
+        try {
+          textureCanvas.concat(inverse);
+          drawImageValue(CanvasKit, textureCanvas, programValue(values, kind.input), 1, "src");
+        } finally {
+          textureCanvas.restore();
+        }
+        capture.flush();
+        captured = capture.makeImageSnapshot();
+        const frames = new Map<string, Image>([["input://source", captured]]);
+        for (const uri of object.sceneFrames ?? []) {
+          if (uri === "input://source") continue;
+          const texture = [...admitted.textures.values()].find(
+            (t) => t.key === uri && t.kind === "frame",
+          );
+          if (!texture?.image) fail("scene_contract", `missing current host picture ${uri}`);
+          frames.set(uri, texture.image);
+        }
+        rendered = await object.renderSceneFrames(frames, (bytes) => arena.borrowScene3d(bytes));
+        admitted.scenes.set(key, { ...object, image: rendered });
+        canvas.save();
+        try {
+          canvas.concat(matrix);
+          drawSceneNode(CanvasKit, builtins, canvas, admitted, scene);
+        } finally {
+          canvas.restore();
+        }
+      } finally {
+        admitted.scenes.set(key, object);
+        rendered?.delete();
+        captured?.delete();
+        arena.releaseTransient(capture);
+      }
+      return;
+    }
     case "applyShader":
       applyProgramShader(
         CanvasKit,
@@ -3389,6 +3468,7 @@ export function drawProgramNode(
           group.backdrop != null ||
           group.shader != null ||
           group.transition != null ||
+          group.scene3d != null ||
           array(group.filters, "RasterTree group filters").length !== 0 ||
           group.internalBlend !== "normal"
         ) {
@@ -6247,6 +6327,9 @@ class SurfaceArena {
   private envelope = 0n;
   private borrowed = 0n;
   private borrow: ((bytes: bigint) => boolean) | null = null;
+  borrowScene3d(bytes: number): boolean {
+    return this.borrow?.(BigInt(bytes)) ?? false;
+  }
   get gpu(): boolean {
     return this.context !== null;
   }
@@ -6984,7 +7067,7 @@ function admitBoundProgramSchedules(
         kind.kind === "applyFilter"
           ? String(record(kind.filter, "program filter").kind)
           : undefined;
-      if (kind.kind === "applyShader") {
+      if (kind.kind === "applyShader" || kind.kind === "applyScene3d") {
         for (const input of programPassReads(kind)) need(input, unclipped(input));
       } else if (
         ["lensDistortion", "glow", "bloom", "radialBlur", "chromaticAberration"].includes(
@@ -9328,6 +9411,7 @@ function programPassReads(kind: Wire): number[] {
     case "applyClip":
     case "applyFilter":
     case "applyOpacity":
+    case "applyScene3d":
     case "applyTransform":
       return [positiveId(kind.input, "program input")];
     case "applyShader":

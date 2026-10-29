@@ -1224,6 +1224,11 @@ enum ProgramPassStructure {
         backdrops: Vec<u32>,
         output: u32,
     },
+    ApplyScene3d {
+        node: u32,
+        input: u32,
+        output: u32,
+    },
     ApplyTransform {
         node: u32,
         input: u32,
@@ -1359,6 +1364,16 @@ impl From<&super::ProgramPass> for ProgramPassStructure {
                 node: node.raw(),
                 input: input.get(),
                 backdrops: backdrops.iter().map(|backdrop| backdrop.get()).collect(),
+                output: output.get(),
+            },
+            Kind::ApplyScene3d {
+                node,
+                input,
+                output,
+                ..
+            } => Self::ApplyScene3d {
+                node: node.raw(),
+                input: input.get(),
                 output: output.get(),
             },
             Kind::ApplyTransform {

@@ -553,6 +553,7 @@ fn program_pass_kind(kind: &ProgramPassKind) -> &'static str {
         ProgramPassKind::ApplyOpacity { .. } => "opacity",
         ProgramPassKind::ApplyTransition { .. } => "transition",
         ProgramPassKind::ApplyShader { .. } => "shader",
+        ProgramPassKind::ApplyScene3d { .. } => "scene3d",
         ProgramPassKind::ApplyTransform { .. } => "transform",
         ProgramPassKind::Blend { .. } => "blend",
         ProgramPassKind::ApplyFilter { filter, .. } => match filter {

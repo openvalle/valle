@@ -92,6 +92,12 @@ fn visit(
             resources.insert(SubtreeResource::Font(run.font.clone()));
         }
         Node::Group(group) => {
+            if let Some(scene) = &group.scene3d {
+                resources.insert(SubtreeResource::Scene(scene.scene.clone()));
+                for frame in &scene.frames {
+                    resources.insert(SubtreeResource::Texture(ExternalTexture::frame(*frame)));
+                }
+            }
             reads_destination =
                 group.backdrop.is_some() || group.internal_blend != BlendMode::Normal;
             for child in group

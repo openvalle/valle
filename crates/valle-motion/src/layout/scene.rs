@@ -2193,6 +2193,7 @@ fn resolve_scene3d_requests(
         requests.insert(
             node.key.clone(),
             crate::layout::bridge::Scene3DRequest {
+                texture: node.children.start != node.children.end,
                 provider_key: format!("scene3d://{}", node.key),
                 scene: scene.clone(),
                 frame: resolved,
@@ -5791,7 +5792,13 @@ fn projected_nodes_of(
         NodeKind::Image { source } => Node::image(source.clone()),
         // Scene3D is a replaced element just like image/video. The opaque generated URL is
         // resolved by the 3D host bridge; layout only owns its destination rectangle.
-        NodeKind::Scene3D { .. } => Node::image(format!("generated://scene3d/{}", template.key)),
+        NodeKind::Scene3D { .. } => {
+            if children.is_empty() {
+                Node::image(format!("generated://scene3d/{}", template.key))
+            } else {
+                Node::container(children)
+            }
+        }
         // Replaced leaf, same channel as Image/Scene3D. Emit resolves the
         // generated URL; Takumi only owns the destination rectangle.
         NodeKind::MathFormula { .. } => {
@@ -5870,6 +5877,11 @@ fn projected_nodes_of(
         NodeKind::Shutter { .. } | NodeKind::Echo { .. }
     ) {
         preset.push_str("width: 100%; height: 100%;");
+    }
+    if matches!(template.kind, NodeKind::Scene3D { .. })
+        && template.children.start != template.children.end
+    {
+        preset.push_str("position: relative; isolation: isolate;");
     }
     let is_mask_source = prepared.positioned_children[at] & 1 != 0;
     let is_transition_child = prepared.positioned_children[at] & 2 != 0;

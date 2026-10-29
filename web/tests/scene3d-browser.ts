@@ -113,6 +113,9 @@ const cases = process.argv
   "orthographic",
   "orthographic-morph",
   "quantized",
+  "ui",
+  "ui-transform",
+  "volume",
 ];
 if (
   cases.some(
@@ -127,6 +130,9 @@ if (
         "orthographic",
         "orthographic-morph",
         "quantized",
+        "ui",
+        "ui-transform",
+        "volume",
       ].includes(name),
   )
 )
@@ -140,15 +146,40 @@ for (const name of cases) {
   const input = join(directory, "scene.motion.tsx");
   await Bun.write(
     input,
-    name === "unlit"
-      ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+    name === "ui" || name === "ui-transform"
+      ? (
+          await Bun.file(
+            join(
+              root,
+              "crates/valle-compiler/tests/fixtures/motion/composition/ui-subtree-material.motion.tsx",
+            ),
+          ).text()
+        )
+          .replace("width:384,height:256", `width:${width},height:${height}`)
+          .replace(
+            "style={{width,height}}",
+            name === "ui-transform"
+              ? `style={{width,height,translate:point(-${width / 6},-${height / 15}),rotate:"12deg",scale:0.9}}`
+              : "style={{width,height}}",
+          )
+      : name === "volume"
+        ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+export const controls={assets:{model:asset({kind:"model3d"})}};
+export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
+<Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{type:"orthographic",height:4,position:[0,0,5],target:[0,0,0]}} pbr={{toneMapping:"none"}}>
+<Group3D key="scaled" scaleX={1+time.seconds*0.4}><Mesh key="glass" src="asset://model" material={{doubleSided:true}}/></Group3D>
+<Mesh key="back" geometry={extrude(path("M -2 -2 L 2 -2 L 2 2 L -2 2 Z"),{depth:0.1})} position={[0,0,-1.5]} material={{type:"unlit",color:"#eeeeaa"}}/>
+<AmbientLight intensity={0.4}/><DirectionalLight direction={[0.5,0.5,1]} intensity={1}/>
+</Scene3D></Scene>;}`
+        : name === "unlit"
+          ? `export const composition={width:${width},height:${height},fps:30,duration:2};
 const BALL=lathe(path("M 0 -1 C 0.5523 -1 1 -0.5523 1 0 C 1 0.5523 0.5523 1 0 1"),{segments:8});
 export default function Main(){const time=useCurrentTime();return <Scene>
 <Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,5],target:[0,0,0],fov:45}}>
 <Mesh key="ball" geometry={BALL} rotateY={time.seconds*90} material={{type:"unlit",color:"#cf7338"}}/>
 </Scene3D></Scene>;}`
-      : name === "clip"
-        ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+          : name === "clip"
+            ? `export const composition={width:${width},height:${height},fps:30,duration:2};
 export const controls={assets:{model:asset({kind:"model3d"})}};
 const textures={baseColor:null,metallicRoughness:null,normal:null,occlusion:null,emissive:null};
 export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
@@ -156,15 +187,15 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
 <Mesh key="first" src="asset://model" material={{type:"unlit",color:time.seconds<1?"#cc201066":"#cc2010ff",alphaMode:"mask",alphaCutoff:0.5,emissiveIntensity:0,textures}}/>
 <Mesh key="second" src="asset://model" material={{type:"unlit",color:"#1020cc",alphaMode:"mask",alphaCutoff:0.5,emissiveIntensity:0,textures}}/>
 </Scene3D></Scene>;}`
-        : animated
-          ? `export const composition={width:${width},height:${height},fps:30,duration:2};
+            : animated
+              ? `export const composition={width:${width},height:${height},fps:30,duration:2};
 export const controls={assets:{model:asset({kind:"model3d"})}};
 export default function Main(){const time=useCurrentTime();return <Scene style={{backgroundColor:"#102030"}}>
 <Scene3D key="gpu" style={{width:${width},height:${height}}} camera={{position:[0,0,${name === "skin" ? 15 : 5}],target:[0,0,0],${name === "orthographic-morph" ? 'type:"orthographic",height:5+time.seconds' : "fov:45"}}}>
 <Mesh key="model" src="asset://model" animation={{clip:0,time:time.seconds*2}} rotateY={time.seconds*45} scale={[-1,1,1]} material={{type:"pbr",color:"#cf7338",roughness:0.4}}/>
 <AmbientLight intensity={0.4}/><DirectionalLight direction={[0.4,0.8,1]} intensity={1.2}/>
 </Scene3D></Scene>;}`
-          : source(resources, name === "orthographic"),
+              : source(resources, name === "orthographic"),
   );
   const child = Bun.spawn(
     [
@@ -177,10 +208,10 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
       "0",
       "--web-assets-dir",
       runtime,
-      ...(animated || name === "clip"
+      ...(animated || name === "clip" || name === "volume"
         ? [
             "--asset",
-            `model=${join(root, `crates/valle-motion/tests/fixtures/scene3d/${name === "clip" ? "pbr" : name === "skin" ? "rigged-simple" : name === "quantized" ? "quantized-sparse" : "animated-morph-cube"}.glb`)}`,
+            `model=${join(root, `crates/valle-motion/tests/fixtures/scene3d/${name === "volume" ? "volume-plane" : name === "clip" ? "pbr" : name === "skin" ? "rigged-simple" : name === "quantized" ? "quantized-sparse" : "animated-morph-cube"}.glb`)}`,
           ]
         : []),
       ...(resources
@@ -237,7 +268,13 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
           return new Response("ok");
         }
         if (
-          ["/scene3d.mp4", "/scene3d-cpu.png", "/scene3d-gpu.png"].includes(url.pathname) &&
+          [
+            "/scene3d.mp4",
+            "/scene3d-cpu.png",
+            "/scene3d-gpu.png",
+            "/scene3d-expected.png",
+            "/scene3d-decoded.png",
+          ].includes(url.pathname) &&
           request.method === "POST"
         ) {
           await Bun.write(join(directory, url.pathname.slice(1)), await request.arrayBuffer());

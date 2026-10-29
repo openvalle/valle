@@ -274,6 +274,12 @@ pub enum ProgramPassKind {
         output: ProgramResourceId,
         shader: ShaderLayer,
     },
+    ApplyScene3d {
+        node: NodeId,
+        input: ProgramResourceId,
+        output: ProgramResourceId,
+        scene: valle_draw::program::Scene3dNode,
+    },
     ApplyTransform {
         node: NodeId,
         input: ProgramResourceId,
@@ -299,6 +305,7 @@ impl ProgramPassKind {
             | Self::ApplyClip { input, .. }
             | Self::ApplyFilter { input, .. }
             | Self::ApplyOpacity { input, .. }
+            | Self::ApplyScene3d { input, .. }
             | Self::ApplyTransform { input, .. } => vec![*input],
             Self::ApplyShader {
                 input, backdrops, ..
@@ -334,6 +341,7 @@ impl ProgramPassKind {
             | Self::ApplyOpacity { output, .. }
             | Self::ApplyTransition { output, .. }
             | Self::ApplyShader { output, .. }
+            | Self::ApplyScene3d { output, .. }
             | Self::ApplyTransform { output, .. }
             | Self::Blend { output, .. } => *output,
         }
@@ -704,10 +712,14 @@ impl<'a> Compiler<'a> {
                 format!("{node_path}.transition.composite"),
             )?;
         } else {
-            self.enclosing.push(Some(GroupEntry {
-                prefix: parent_prefix.to_vec(),
-                external: entry_is_external,
-            }));
+            self.enclosing.push(if group.scene3d.is_some() {
+                None
+            } else {
+                Some(GroupEntry {
+                    prefix: parent_prefix.to_vec(),
+                    external: entry_is_external,
+                })
+            });
             output = self.compose_nodes(
                 &group.children,
                 output,
@@ -812,6 +824,20 @@ impl<'a> Compiler<'a> {
                 },
             )?;
             output = shaded;
+        }
+
+        if let Some(scene) = &group.scene3d {
+            let rendered = self.resource(LocalBounds::from_rect(scene.bounds), local_to_program)?;
+            self.pass(
+                format!("{node_path}.scene3d"),
+                ProgramPassKind::ApplyScene3d {
+                    node: id,
+                    input: output,
+                    output: rendered,
+                    scene: scene.clone(),
+                },
+            )?;
+            output = rendered;
         }
 
         if group.transform != Transform2d::IDENTITY {

@@ -1936,6 +1936,16 @@ fn collect_scene3d_placements(
                 return Ok(());
             }
             let child_to_program = group.transform.then(local_to_program);
+            if let Some(scene) = &group.scene3d {
+                output.push(ProductScene3dPlacement {
+                    clip_id: clip_id.to_owned(),
+                    content_hash: ContentDigest::from_bytes(scene.scene.content_hash.into_bytes()),
+                    bounds: scene.bounds,
+                    device_from_local: child_to_program.then(normalize).then(device).0,
+                });
+                // Scene3D objects inside this texture are not independent on-screen hit targets.
+                return Ok(());
+            }
             for child in &group.children {
                 collect_scene3d_placements(
                     output,

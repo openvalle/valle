@@ -517,6 +517,12 @@ fn validate_raw(
                     .saturating_add(shader.textures.len());
             }
             Node::Scene3d(scene) => {
+                if scene.texture_size.is_some() {
+                    return invalid(
+                        format!("node[{index}].textureSize"),
+                        "a scene leaf has no UI texture subtree",
+                    );
+                }
                 validate_rect(scene.bounds, &format!("node[{index}].bounds"))?;
                 if scene.frames.len() > 3
                     || scene.frames.iter().collect::<BTreeSet<_>>().len() != scene.frames.len()
@@ -543,6 +549,31 @@ fn validate_group(
     node_count: usize,
     path_count: usize,
 ) -> Result<(), DrawProgramError> {
+    if let Some(scene) = &group.scene3d {
+        validate_rect(
+            scene.bounds,
+            &format!("node[{}].scene3d.bounds", owner.raw()),
+        )?;
+        if !scene
+            .texture_size
+            .is_some_and(super::Scene3dNode::valid_texture_size)
+            || !group.isolated
+            || scene.bounds.is_empty()
+            || group.shader.is_some()
+            || group.transition.is_some()
+            || group.backdrop.is_some()
+            || scene
+                .frames
+                .contains(&crate::requirements::HostFrame::Source)
+            || scene.frames.len() > 2
+            || scene.frames.iter().collect::<BTreeSet<_>>().len() != scene.frames.len()
+        {
+            return invalid(
+                format!("node[{}].scene3d", owner.raw()),
+                "Scene3D texture needs an isolated positive canvas; source is supplied by its children",
+            );
+        }
+    }
     validate_transform(group.transform, &format!("node[{}].transform", owner.raw()))?;
     for child in &group.children {
         check_node_id(Some(owner), *child, node_count)?;
@@ -1184,6 +1215,16 @@ fn derive_requirements(
                 if group.backdrop.is_some() {
                     capabilities.insert(crate::requirements::DrawCapability::BackdropRead);
                 }
+                if let Some(scene) = &group.scene3d {
+                    for frame in &scene.frames {
+                        let texture = crate::requirements::ExternalTexture::frame(*frame);
+                        insert_texture(&mut textures, &mut texture_formats, &texture)?;
+                        color_domains.insert(texture.color_domain);
+                        alpha_modes.insert(texture.alpha);
+                    }
+                    scenes.insert(scene.scene.clone());
+                    capabilities.insert(crate::requirements::DrawCapability::Scene3d);
+                }
                 if let Some(transition) = &group.transition {
                     capabilities.insert(crate::requirements::DrawCapability::Transition);
                     if let super::TransitionKernel::Shader {
@@ -1485,7 +1526,7 @@ fn derive_destination_uses(
         }
         enclosing.push(Enclosing {
             entry_is_external,
-            crossable: group.transition.is_none(),
+            crossable: group.transition.is_none() && group.scene3d.is_none(),
         });
         for child in &group.children {
             visit(
@@ -1748,6 +1789,10 @@ fn derive_node_geometry(
                 result.output_bounds = LocalBounds::from_rect(shader.output_bounds());
                 peak_local_pixels = peak_local_pixels.max(bounds_pixels(result.output_bounds)?);
             }
+            if let Some(scene) = &group.scene3d {
+                result.output_bounds = LocalBounds::from_rect(scene.bounds);
+                peak_local_pixels = peak_local_pixels.max(bounds_pixels(result.output_bounds)?);
+            }
             if group.transform != Transform2d::IDENTITY {
                 result.content_bounds = transform_bounds(result.content_bounds, group.transform)?;
                 result.output_bounds = transform_bounds(result.output_bounds, group.transform)?;
@@ -1760,7 +1805,8 @@ fn derive_node_geometry(
                 || group.mask.is_some()
                 || group.backdrop.is_some()
                 || group.transition.is_some()
-                || group.shader.is_some();
+                || group.shader.is_some()
+                || group.scene3d.is_some();
             if needs_intermediate {
                 result.max_intermediate_pixels = result
                     .max_intermediate_pixels

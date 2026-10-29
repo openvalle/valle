@@ -2828,7 +2828,10 @@ pub fn frame_reader(frame: HostFrame) -> (valle_timeline::MotionRole, &'static s
 fn node_reads_frame(node: &SceneNode, key: HostFrame) -> bool {
     let inputs = match &node.kind {
         NodeKind::Image { source } => return source == key.source(),
-        NodeKind::Scene3D { scene, .. } => return scene.input_frames().contains(&key),
+        NodeKind::Scene3D { scene, .. } => {
+            return scene.input_frames().contains(&key)
+                && !(key == HostFrame::Source && node.children.start != node.children.end);
+        }
         NodeKind::ShaderLayer { inputs, .. }
         | NodeKind::Transition {
             effect: TransitionEffect::Shader { inputs, .. },
@@ -4984,7 +4987,6 @@ impl SceneArtifact {
                     | NodeKind::InstanceLayout { .. }
                     | NodeKind::Image { .. }
                     | NodeKind::Video { .. }
-                    | NodeKind::Scene3D { .. }
                     | NodeKind::MathFormula { .. }
             ) && node.children.start != node.children.end
             {
@@ -5553,7 +5555,18 @@ impl SceneArtifact {
                 );
             }
             if let NodeKind::Scene3D { scene, frame } = &node.kind {
+                if node.children.start != node.children.end
+                    && !scene.input_frames().contains(&HostFrame::Source)
+                {
+                    errors.push(ValidationError::new(
+                        format!("{path}/kind/scene"),
+                        "a Scene3D texture subtree requires an input://source material binding",
+                    ));
+                }
                 for input in scene.input_frames() {
+                    if input == HostFrame::Source && node.children.start != node.children.end {
+                        continue;
+                    }
                     let (role, reader, pictured) = frame_reader(input);
                     if self.role != role {
                         errors.push(ValidationError::new(

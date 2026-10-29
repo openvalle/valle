@@ -284,6 +284,7 @@ export function programNodeBounds(
         node.backdrop != null ||
         node.shader != null ||
         node.transition != null ||
+        node.scene3d != null ||
         node.filters.length !== 0
       )
         return undefined;

@@ -463,6 +463,9 @@ pub struct Group {
     pub backdrop: Option<BackdropRead>,
     pub shader: Option<ShaderLayer>,
     pub transition: Option<TransitionLayer>,
+    /// Render the children into the Scene3D material's local input://source texture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene3d: Option<super::Scene3dNode>,
     /// Explicit author layer bounds. This is validation/cost metadata, never executor policy.
     pub layer_bounds: Option<Rect>,
 }
@@ -482,6 +485,7 @@ impl Group {
             backdrop: None,
             shader: None,
             transition: None,
+            scene3d: None,
             layer_bounds: None,
         }
     }
@@ -508,6 +512,7 @@ impl Group {
             && self.backdrop.is_none()
             && self.shader.is_none()
             && self.transition.is_none()
+            && self.scene3d.is_none()
     }
 
     /// Returns true only when replacing this group with its ordered children is pixel-equivalent.

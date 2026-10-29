@@ -450,7 +450,21 @@ impl ProgramRuntime {
         surfaces: &mut super::surface::SurfaceFrame<'_>,
     ) -> Result<(u64, u64, u64), DrawError> {
         let mut totals = (0, 0, 0);
-        for scene in self.scenes.values_mut() {
+        let local =
+            self.program
+                .nodes()
+                .iter()
+                .filter_map(|node| match node {
+                    Node::Group(group) => group.scene3d.as_ref().map(|scene| {
+                        ContentDigest::from_bytes(scene.scene.content_hash.into_bytes())
+                    }),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+        for (key, scene) in &mut self.scenes {
+            if local.contains(key) {
+                continue;
+            }
             if let SceneImage::Frames(input, resolved) = scene {
                 let frames = input
                     .frame
@@ -772,6 +786,84 @@ impl ProgramRuntime {
         }))
     }
 
+    #[cfg(feature = "native")]
+    fn render_local_scene3d(
+        &self,
+        surfaces: &mut ScratchSurfaces<'_, '_>,
+        scene: &valle_draw::program::Scene3dNode,
+        source: Option<&ProgramImage>,
+        matrix: Matrix,
+    ) -> Result<Image, DrawError> {
+        let key = ContentDigest::from_bytes(scene.scene.content_hash.into_bytes());
+        let Some(SceneImage::Frames(input, _)) = self.scenes.get(&key) else {
+            return Err(DrawError::MissingScene(scene.scene.content_hash.as_hex()));
+        };
+        let [width, height] = scene
+            .texture_size
+            .ok_or_else(|| DrawError::Internal("Scene3D texture has no capture size".into()))?;
+        let extent =
+            Extent2d::new(width, height).map_err(|e| DrawError::Internal(e.to_string()))?;
+        let captured = {
+            let mut capture = surfaces.frame_mut().scratch(&[extent])?;
+            let target = capture.surface_mut(0)?;
+            clear_surface(target)?;
+            if let Some(source) = source {
+                // Children were drawn in device coordinates. Undo that projection before UV sampling.
+                let mut pixels_to_device = matrix;
+                pixels_to_device.pre_translate((scene.bounds.x as f32, scene.bounds.y as f32));
+                pixels_to_device.pre_scale(
+                    (
+                        scene.bounds.width as f32 / width as f32,
+                        scene.bounds.height as f32 / height as f32,
+                    ),
+                    None,
+                );
+                let inverse = pixels_to_device.invert().ok_or_else(|| {
+                    DrawError::Internal("singular Scene3D texture transform".into())
+                })?;
+                let canvas = target.canvas();
+                let saved = canvas.save();
+                canvas.concat(&inverse);
+                canvas.draw_image_rect_with_sampling_options(
+                    &source.image,
+                    Some((
+                        &sk_rect(Rect::new(
+                            0.0,
+                            0.0,
+                            source.roi.width as f64,
+                            source.roi.height as f64,
+                        )),
+                        skia_safe::canvas::SrcRectConstraint::Strict,
+                    )),
+                    sk_rect(Rect::new(
+                        source.roi.x as f64,
+                        source.roi.y as f64,
+                        source.roi.width as f64,
+                        source.roi.height as f64,
+                    )),
+                    SamplingOptions::new(FilterMode::Linear, MipmapMode::None),
+                    &SkPaint::default(),
+                );
+                canvas.restore_to_count(saved);
+            }
+            target.image_snapshot()
+        };
+        let mut frames = BTreeMap::from([(HostFrame::Source, captured)]);
+        for frame in &scene.frames {
+            let image = self
+                .textures
+                .get(&ExternalTexture::frame(*frame))
+                .ok_or_else(|| DrawError::MissingTexture(frame.source().into()))?;
+            frames.insert(*frame, image.image.clone());
+        }
+        let frame = surfaces.frame_mut();
+        let (image, gpu, uploads) = input.render(&frames, frame)?;
+        frame.local_scene3d_totals.0 += u64::from(gpu);
+        frame.local_scene3d_totals.1 += u64::from(!gpu);
+        frame.local_scene3d_totals.2 += uploads;
+        Ok(image)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_program_pass_at(
         &self,
@@ -791,6 +883,23 @@ impl ProgramRuntime {
         clear_outside: bool,
         compact_snapshot: bool,
     ) -> Result<Image, DrawError> {
+        #[cfg(feature = "native")]
+        if let ProgramPassKind::ApplyScene3d { input, scene, .. } = pass {
+            let matrix = self.device_matrix(plan, output, transform)?;
+            let image =
+                self.render_local_scene3d(surfaces, scene, resource(resources, *input)?, matrix)?;
+            let target = program_target_mut(surfaces, target_location)?;
+            clear_surface(target)?;
+            let canvas = target.canvas();
+            let saved = canvas.save();
+            canvas.translate((-target_origin[0] as f32, -target_origin[1] as f32));
+            canvas.concat(&matrix);
+            let result = draw_scene3d_image(canvas, &image, scene.bounds);
+            canvas.restore_to_count(saved);
+            result?;
+            return snapshot_program_target(target, target_location, output_roi, compact_snapshot);
+        }
+
         if let ProgramPassKind::Backdrop {
             input,
             bounds,
@@ -916,6 +1025,9 @@ impl ProgramRuntime {
         cpu_filter_input: Option<&ProgramImage>,
     ) -> Result<(), DrawError> {
         match pass {
+            ProgramPassKind::ApplyScene3d { .. } => Err(DrawError::Internal(
+                "Scene3D input must be resolved before borrowing its output".into(),
+            )),
             ProgramPassKind::Clear { .. } => clear_surface(target),
             ProgramPassKind::RasterNode { node, .. } => self.raster_node_into(
                 target,
@@ -1669,30 +1781,7 @@ impl ProgramRuntime {
                     SceneImage::Frames(_, Some(image)) => image,
                     _ => return Err(DrawError::Internal("Scene3D was not materialized".into())),
                 };
-                // Prefilter all levels once for this draw. Trilinear sampling remains smooth
-                // through minification and quarter-octave raster-density changes.
-                let (mut width, mut height) = (image.width() as u64, image.height() as u64);
-                let mut mip_bytes = 0;
-                while width > 1 || height > 1 {
-                    width = (width / 2).max(1);
-                    height = (height / 2).max(1);
-                    mip_bytes += width * height * 8;
-                }
-                let _mip_memory = valle_engine::motion::memory::reserve(
-                    valle_engine::motion::memory::MemoryKind::Temporary,
-                    mip_bytes,
-                )
-                .map_err(|error| DrawError::Surface(error.to_string()))?;
-                let mipmapped = image
-                    .with_default_mipmaps()
-                    .ok_or_else(|| DrawError::Surface("Scene3D mipmap generation failed".into()))?;
-                canvas.draw_image_rect_with_sampling_options(
-                    &mipmapped,
-                    None,
-                    sk_rect(scene.bounds),
-                    SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear),
-                    &SkPaint::default(),
-                );
+                draw_scene3d_image(canvas, image, scene.bounds)?;
             }
             Node::Group(group) if group.is_raster_tree_group() => {
                 if group.opacity == 0.0 {
@@ -2431,6 +2520,9 @@ fn read_outside_roi(
         match &pass.kind {
             ProgramPassKind::ApplyMask { mask, .. } => {
                 read.insert(*mask);
+            }
+            ProgramPassKind::ApplyScene3d { input, .. } => {
+                read.insert(*input);
             }
             ProgramPassKind::ApplyTransition { from, to, .. } => {
                 read.extend([*from, *to]);
@@ -4897,6 +4989,38 @@ pub(super) fn tile_mode(mode: SpreadMode) -> TileMode {
         SpreadMode::Repeat => TileMode::Repeat,
         SpreadMode::Reflect => TileMode::Mirror,
     }
+}
+
+fn draw_scene3d_image(
+    canvas: &skia_safe::Canvas,
+    image: &Image,
+    bounds: Rect,
+) -> Result<(), DrawError> {
+    // Prefilter all levels once for this draw. Trilinear sampling remains smooth
+    // through minification and quarter-octave raster-density changes.
+    let (mut width, mut height) = (image.width() as u64, image.height() as u64);
+    let mut mip_bytes = 0;
+    while width > 1 || height > 1 {
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+        mip_bytes += width * height * 8;
+    }
+    let _mip_memory = valle_engine::motion::memory::reserve(
+        valle_engine::motion::memory::MemoryKind::Temporary,
+        mip_bytes,
+    )
+    .map_err(|error| DrawError::Surface(error.to_string()))?;
+    let mipmapped = image
+        .with_default_mipmaps()
+        .ok_or_else(|| DrawError::Surface("Scene3D mipmap generation failed".into()))?;
+    canvas.draw_image_rect_with_sampling_options(
+        &mipmapped,
+        None,
+        sk_rect(bounds),
+        SamplingOptions::new(FilterMode::Linear, MipmapMode::Linear),
+        &SkPaint::default(),
+    );
+    Ok(())
 }
 
 fn sk_matrix(matrix: [f64; 9]) -> Matrix {

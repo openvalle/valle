@@ -931,7 +931,9 @@ fn preflight_program(
                     _ => return Err(ReferenceExecuteError::UnsupportedPass { pass }),
                 }
             }
-            ProgramPassKind::ApplyShader { .. } | ProgramPassKind::ApplyTransition { .. } => {
+            ProgramPassKind::ApplyShader { .. }
+            | ProgramPassKind::ApplyScene3d { .. }
+            | ProgramPassKind::ApplyTransition { .. } => {
                 return Err(ReferenceExecuteError::UnsupportedPass { pass });
             }
             _ => {}
@@ -1352,6 +1354,7 @@ fn prepare_reference_program(
             | ProgramPassKind::ApplyOpacity { .. }
             | ProgramPassKind::ApplyTransition { .. }
             | ProgramPassKind::ApplyShader { .. }
+            | ProgramPassKind::ApplyScene3d { .. }
             | ProgramPassKind::ApplyTransform { .. }
             | ProgramPassKind::Blend { .. } => {}
         }
@@ -2990,7 +2993,9 @@ fn raster_program<'program, 'object>(
                 .write_resource(*output, |execution, x, y| {
                     execution.read_pixel(*input, x, y)
                 })?,
-            ProgramPassKind::ApplyShader { .. } | ProgramPassKind::ApplyTransition { .. } => {
+            ProgramPassKind::ApplyShader { .. }
+            | ProgramPassKind::ApplyScene3d { .. }
+            | ProgramPassKind::ApplyTransition { .. } => {
                 return Err(ReferenceExecuteError::UnsupportedPass { pass });
             }
             ProgramPassKind::Blend {

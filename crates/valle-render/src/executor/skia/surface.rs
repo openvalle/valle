@@ -1499,6 +1499,7 @@ impl SurfaceArena {
             pool_evictions: evictions,
         };
         Ok(SurfaceFrame {
+            local_scene3d_totals: (0, 0, 0),
             arena: self,
             assignments,
             report,
@@ -1614,6 +1615,7 @@ pub(crate) struct SurfaceFrameReport {
 }
 
 pub(crate) struct SurfaceFrame<'a> {
+    pub(crate) local_scene3d_totals: (u64, u64, u64),
     arena: &'a mut SurfaceArena,
     assignments: BTreeMap<SurfaceSlotId, usize>,
     report: SurfaceFrameReport,
@@ -2299,7 +2301,11 @@ pub(crate) struct ScratchSurfaces<'frame, 'arena> {
     painted: Vec<IRect>,
 }
 
-impl ScratchSurfaces<'_, '_> {
+impl<'arena> ScratchSurfaces<'_, 'arena> {
+    #[cfg(feature = "native")]
+    pub(crate) fn frame_mut(&mut self) -> &mut SurfaceFrame<'arena> {
+        &mut *self.frame
+    }
     pub(crate) fn backend_kind(&self) -> SkiaBackendKind {
         self.frame.backend_kind()
     }
@@ -2992,6 +2998,7 @@ mod capacity_tests {
 
     fn test_frame(arena: &mut SurfaceArena, max_bytes: u64) -> SurfaceFrame<'_> {
         SurfaceFrame {
+            local_scene3d_totals: (0, 0, 0),
             arena,
             assignments: BTreeMap::new(),
             report: SurfaceFrameReport {
@@ -3201,6 +3208,7 @@ mod capacity_tests {
     fn program_capacity_reuses_nearby_sizes_and_honors_exact_budget_fallback() {
         let mut arena = SurfaceArena::new();
         let mut frame = SurfaceFrame {
+            local_scene3d_totals: (0, 0, 0),
             arena: &mut arena,
             assignments: BTreeMap::new(),
             report: SurfaceFrameReport {

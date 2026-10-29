@@ -404,6 +404,42 @@ impl<'a> RecordingCompiler<'a> {
                 self.begin(Group::plain(Vec::new()));
                 self.stack.last_mut().unwrap().mask_source = true;
             }
+            RecordCmd::BeginScene3d { texture, bounds } => {
+                let source = self.source.generated_textures.get(texture.index()).ok_or(
+                    ProgramRecordingError::InvalidReference {
+                        command: command_index,
+                        table: "generatedTextures",
+                        index: texture.0,
+                    },
+                )?;
+                let scene = self
+                    .catalog
+                    .and_then(|c| c.scene3d_key(&source.provider_key))
+                    .ok_or_else(|| {
+                        ProgramRecordingError::InvalidRecording(
+                            "Scene3D texture needs a typed scene resource".into(),
+                        )
+                    })?;
+                let frames = self
+                    .catalog
+                    .map(|c| c.scene3d_frames(&source.provider_key))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|f| *f != crate::requirements::HostFrame::Source)
+                    .collect();
+                let mut group = Group::plain(Vec::new());
+                group.isolated = true;
+                group.scene3d = Some(Scene3dNode {
+                    texture_size: Some(Scene3dNode::bounded_texture_size(
+                        source.width,
+                        source.height,
+                    )),
+                    scene,
+                    frames,
+                    bounds: *bounds,
+                });
+                self.begin(group);
+            }
             RecordCmd::BeginTransform { transform } => {
                 let mut group = Group::plain(Vec::new());
                 group.transform = Transform2d::from_affine(Affine2d(transform.0));
@@ -756,6 +792,7 @@ impl<'a> RecordingCompiler<'a> {
                     .and_then(|catalog| catalog.scene3d_key(&source.provider_key))
                 {
                     let scene = self.builder.push_node(Node::Scene3d(Scene3dNode {
+                        texture_size: None,
                         frames: self
                             .catalog
                             .map(|c| c.scene3d_frames(&source.provider_key))

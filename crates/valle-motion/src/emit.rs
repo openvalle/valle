@@ -969,6 +969,84 @@ impl Emitter<'_> {
         (program, uniforms, inputs)
     }
 
+    fn scene3d_texture(
+        &mut self,
+        request: &crate::layout::bridge::Scene3DRequest,
+        dst: Rect,
+        node_key: &str,
+    ) -> valle_draw::program::recording::GeneratedTextureId {
+        let mut resource_bindings = BTreeMap::new();
+        let controls = request
+            .scene
+            .meshes
+            .iter()
+            .flat_map(|mesh| {
+                mesh.model_control
+                    .as_deref()
+                    .into_iter()
+                    .chain(mesh.texture_controls().map(|(control, _)| control))
+            })
+            .chain(
+                request
+                    .scene
+                    .pbr
+                    .environment
+                    .iter()
+                    .map(|environment| environment.control.as_str()),
+            );
+        for control in controls {
+            if let Some(digest) = self
+                .resources
+                .and_then(|resources| resources.scene3d_resource_digest(control))
+            {
+                resource_bindings
+                    .insert(control.to_owned(), crate::ContentDigest::from_bytes(digest));
+            }
+        }
+        let density = scene3d_projected_density(self.out.raster_scale.scale, self.world, dst);
+        let used: u64 = self
+            .out
+            .scene3d_frames
+            .iter()
+            .map(|frame| {
+                let request = frame.request();
+                u64::from(request.width) * u64::from(request.height)
+            })
+            .sum();
+        let remaining = crate::scene3d::MAX_TOTAL_FRAME_PIXELS.saturating_sub(used);
+        let selected = if self.out.upscale_scene3d {
+            density
+        } else {
+            1.0
+        };
+        let (width, height, limited) = scene3d_extent(dst, selected, remaining);
+        self.out.scene3d_sampling.push(Scene3DSampling {
+            node: node_key.to_owned(),
+            requested_density: density,
+            width,
+            height,
+            budget_limited: limited || selected < density,
+        });
+        let frame = crate::SealedScene3DFrame::new(crate::Scene3DFrameRequest {
+            provider_key: request.provider_key.clone(),
+            width,
+            height,
+            resource_bindings,
+            scene: request.scene.clone(),
+            frame: request.frame.clone(),
+        })
+        .expect("validated Scene3D layout state is canonically serializable");
+        let provider_key = format!("scene3d-frame://{}", frame.content_digest().as_hex());
+        self.out.scene3d_frames.push(frame);
+        self.out.recording.intern_generated_texture(
+            valle_draw::program::recording::GeneratedTextureSource {
+                provider_key,
+                width,
+                height,
+            },
+        )
+    }
+
     /// Paint a stacking context's root and ordered child buckets using upstream scene ordering.
     fn context(&mut self, index: usize) -> Result<(), EmitError> {
         let Some(cx) = self.contexts.get(index) else {
@@ -996,6 +1074,28 @@ impl Emitter<'_> {
         }
         if let Some(root) = cx.root() {
             self.node_content(root);
+        }
+        if let Some(root) = cx.root()
+            && let Some(key) = self.node_key(root).map(str::to_owned)
+            && let Some(request) = self.tree.scene3d.get(&key).filter(|r| r.texture).cloned()
+        {
+            let layout = self
+                .tree
+                .layout
+                .layout(root.node_id)
+                .map_err(|error| EmitError::Program(error.to_string()))?;
+            let bounds = content_box(&layout);
+            if !bounds.is_empty() {
+                let texture = self.scene3d_texture(&request, bounds, &key);
+                self.push(RecordCmd::BeginScene3d { texture, bounds });
+                self.paint_context_items(index)?;
+                self.push(RecordCmd::End);
+            }
+            self.end(open);
+            if mask_source {
+                self.push(RecordCmd::End);
+            }
+            return Ok(());
         }
         if let Some(root) = cx.root()
             && let Some(transition) = self
@@ -1944,81 +2044,12 @@ impl Emitter<'_> {
                     self.push(RecordCmd::BeginClipRect { rect: dst });
                 }
                 if let Some(request) = scene3d {
-                    let mut resource_bindings = BTreeMap::new();
-                    let controls = request
-                        .scene
-                        .meshes
-                        .iter()
-                        .flat_map(|mesh| {
-                            mesh.model_control
-                                .as_deref()
-                                .into_iter()
-                                .chain(mesh.texture_controls().map(|(control, _)| control))
-                        })
-                        .chain(
-                            request
-                                .scene
-                                .pbr
-                                .environment
-                                .iter()
-                                .map(|environment| environment.control.as_str()),
-                        );
-                    for control in controls {
-                        if let Some(digest) = self
-                            .resources
-                            .and_then(|resources| resources.scene3d_resource_digest(control))
-                        {
-                            resource_bindings.insert(
-                                control.to_owned(),
-                                crate::ContentDigest::from_bytes(digest),
-                            );
-                        }
-                    }
-                    let density =
-                        scene3d_projected_density(self.out.raster_scale.scale, self.world, dst);
-                    let used: u64 = self
-                        .out
-                        .scene3d_frames
-                        .iter()
-                        .map(|frame| {
-                            let request = frame.request();
-                            u64::from(request.width) * u64::from(request.height)
-                        })
-                        .sum();
-                    let remaining = crate::scene3d::MAX_TOTAL_FRAME_PIXELS.saturating_sub(used);
-                    let selected = if self.out.upscale_scene3d {
-                        density
-                    } else {
-                        1.0
-                    };
-                    let (width, height, limited) = scene3d_extent(dst, selected, remaining);
-                    self.out.scene3d_sampling.push(Scene3DSampling {
-                        node: formula_key
-                            .cloned()
-                            .unwrap_or_else(|| request.provider_key.clone()),
-                        requested_density: density,
-                        width,
-                        height,
-                        budget_limited: limited || selected < density,
-                    });
-                    let frame = crate::SealedScene3DFrame::new(crate::Scene3DFrameRequest {
-                        provider_key: request.provider_key.clone(),
-                        width,
-                        height,
-                        resource_bindings,
-                        scene: request.scene.clone(),
-                        frame: request.frame.clone(),
-                    })
-                    .expect("validated Scene3D layout state is canonically serializable");
-                    let provider_key =
-                        format!("scene3d-frame://{}", frame.content_digest().as_hex());
-                    self.out.scene3d_frames.push(frame);
-                    let texture = self.out.recording.intern_generated_texture(
-                        valle_draw::program::recording::GeneratedTextureSource {
-                            provider_key,
-                            width,
-                            height,
-                        },
+                    let texture = self.scene3d_texture(
+                        &request,
+                        dst,
+                        formula_key
+                            .map(String::as_str)
+                            .unwrap_or(&request.provider_key),
                     );
                     self.push(RecordCmd::Texture {
                         texture,

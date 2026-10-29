@@ -496,9 +496,7 @@ impl AdmittedSkiaFrame<'_> {
             self.max_frame_bytes,
         )?;
         let (layer_hits_before, layer_misses_before, _, _) = raster_layers.counters();
-        let external_images = materialize_external_visuals(&self.bound, &mut surface_frame)?;
-        #[cfg(feature = "native")]
-        let mut external_images = external_images;
+        let mut external_images = materialize_external_visuals(&self.bound, &mut surface_frame)?;
         for program in self.programs.values_mut() {
             program
                 .resolve_deferred_visuals(&external_images.images)
@@ -1124,6 +1122,11 @@ impl AdmittedSkiaFrame<'_> {
         if !target.is_direct_gpu() {
             surface_frame.release_completed_external_imports();
         }
+        let (gpu, cpu, uploads) = surface_frame.local_scene3d_totals;
+        external_images.scene3d_gpu_rasters += gpu;
+        external_images.scene3d_cpu_fallbacks += cpu;
+        external_images.cpu_upload_bytes += uploads;
+        external_images.gpu_imports += gpu;
         let mut surface_report: SkiaSurfaceReport = surface_frame.report().into();
         surface_report.total_surface_allocations = allocation_scope.finish();
         let pooled_allocations = surface_report

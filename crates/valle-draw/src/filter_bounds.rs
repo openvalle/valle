@@ -19,7 +19,7 @@ impl ProgramRecording {
                         // Validation rejects unbalanced groups; avoid panicking here.
                         return;
                     };
-                    let mut bbox = frame.bbox;
+                    let mut bbox = frame.output_bounds.or(frame.bbox);
                     if let Some(filter_at) = frame.filter_at {
                         let grown = bbox.map(|r| grow(r, frame.growth));
                         if let RecordCmd::BeginFilter { bounds, .. } = &mut self.cmds[filter_at] {
@@ -64,6 +64,7 @@ struct Frame {
     /// Conservative filter-chain outset, equal on all sides.
     growth: f64,
     bbox: Option<Rect>,
+    output_bounds: Option<Rect>,
 }
 
 impl Frame {
@@ -74,6 +75,7 @@ impl Frame {
             filter_at: None,
             growth: 0.0,
             bbox: None,
+            output_bounds: None,
         }
     }
 
@@ -88,6 +90,30 @@ impl Frame {
 /// Create a frame for a group opener; leaf commands return None.
 fn frame_for(cmd: &RecordCmd, list: &ProgramRecording) -> Option<Frame> {
     let frame = match cmd {
+        RecordCmd::BeginShaderLayer {
+            program, bounds, ..
+        } => {
+            let [left, top, right, bottom] = list
+                .shader_programs
+                .get(program.0 as usize)
+                .map_or([0; 4], |shader| shader.padding)
+                .map(f64::from);
+            Frame {
+                output_bounds: Some(Rect::new(
+                    bounds.x - left,
+                    bounds.y - top,
+                    bounds.width + left + right,
+                    bounds.height + top + bottom,
+                )),
+                ..Frame::root()
+            }
+        }
+        RecordCmd::BeginScene3d { bounds, .. } | RecordCmd::BeginTransition { bounds, .. } => {
+            Frame {
+                output_bounds: Some(*bounds),
+                ..Frame::root()
+            }
+        }
         RecordCmd::BeginTransform { transform } => Frame {
             transform: Some(*transform),
             ..Frame::root()
@@ -362,4 +388,50 @@ fn map_frame(frame: &Frame, r: Rect) -> Rect {
         y1 = y1.max(c.y);
     }
     Rect::new(x0, y0, x1 - x0, y1 - y0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        draw::Span,
+        program::recording::{GeneratedTextureId, ShaderProgramId},
+    };
+
+    #[test]
+    fn nested_shader_input_does_not_expand_the_scene_output_filter() {
+        let mut recording = ProgramRecording::default();
+        let filters = recording.intern_filters(&[FilterOp::Blur { sigma: 2.0 }]);
+        recording.push(RecordCmd::BeginFilter {
+            filters,
+            bounds: None,
+        });
+        recording.push(RecordCmd::BeginScene3d {
+            texture: GeneratedTextureId(0),
+            bounds: Rect::new(20., 30., 100., 80.),
+        });
+        recording.push(RecordCmd::BeginShaderLayer {
+            program: ShaderProgramId(0),
+            uniforms: Span::EMPTY,
+            inputs: Span::EMPTY,
+            bounds: Rect::new(0., 0., 200., 200.),
+        });
+        recording.push(RecordCmd::End);
+        recording.push(RecordCmd::Texture {
+            texture: GeneratedTextureId(0),
+            dst: Rect::new(500., 500., 100., 100.),
+            alpha: 1.0,
+        });
+        recording.push(RecordCmd::End);
+        recording.push(RecordCmd::End);
+        for _ in 0..2 {
+            recording.backfill_filter_bounds();
+            // Blur adds three sigma plus one pixel for conservative raster coverage.
+            assert!(
+                matches!(recording.cmds[0], RecordCmd::BeginFilter { bounds: Some(bounds), .. } if bounds == Rect::new(13.,23.,114.,94.)),
+                "{:?}",
+                recording.cmds[0]
+            );
+        }
+    }
 }
