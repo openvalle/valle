@@ -860,6 +860,7 @@ enum SurfaceBackend {
     #[cfg(all(target_os = "macos", feature = "native"))]
     Metal {
         context: gpu::DirectContext,
+        shader_errors: super::shader_errors::ShaderErrors,
         texture_cache: CoreFoundationHandle,
         device: objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLDevice>>,
         queue:
@@ -881,6 +882,19 @@ impl core::fmt::Debug for SurfaceBackend {
 }
 
 impl SurfaceBackend {
+    #[cfg(all(
+        feature = "native",
+        any(target_os = "macos", target_os = "linux", target_os = "windows")
+    ))]
+    fn check_shader_errors(&self) -> Result<(), SurfaceError> {
+        match self {
+            Self::Raster => Ok(()),
+            #[cfg(target_os = "macos")]
+            Self::Metal { shader_errors, .. } => shader_errors.check(),
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            Self::Vulkan(backend) => backend.shader_errors.check(),
+        }
+    }
     #[cfg(all(
         feature = "native",
         any(target_os = "macos", target_os = "linux", target_os = "windows")
@@ -991,9 +1005,11 @@ impl SurfaceArena {
         // SAFETY: BackendContext retains both Objective-C objects while Ganesh establishes its
         // own references. The resulting DirectContext remains executor-owned.
         let backend = unsafe { gpu::mtl::BackendContext::new(device_ptr, queue_ptr) };
-        let mut context = gpu::direct_contexts::make_metal(&backend, None).ok_or(
-            SurfaceError::MetalUnavailable("cannot create Ganesh Metal context"),
-        )?;
+        let shader_errors = super::shader_errors::ShaderErrors::new();
+        let mut context = gpu::direct_contexts::make_metal(&backend, &shader_errors.options())
+            .ok_or(SurfaceError::MetalUnavailable(
+                "cannot create Ganesh Metal context",
+            ))?;
         context.set_resource_cache_limit(512 * 1024 * 1024);
         let mut texture_cache = std::ptr::null_mut();
         let code = unsafe {
@@ -1020,6 +1036,7 @@ impl SurfaceArena {
             pool_byte_limit: MAX_REUSABLE_SURFACE_POOL_BYTES,
             backend: SurfaceBackend::Metal {
                 context,
+                shader_errors,
                 texture_cache: CoreFoundationHandle(texture_cache),
                 device,
                 queue,
@@ -1079,10 +1096,12 @@ impl SurfaceArena {
                 "output requires Vulkan".into(),
             ));
         };
-        output.submit(
+        let submitted = output.submit(
             &mut context.context,
             std::mem::take(&mut self.pending_scene3d_imports),
-        )
+        )?;
+        context.shader_errors.check()?;
+        Ok(submitted)
     }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
@@ -1163,7 +1182,12 @@ impl SurfaceArena {
         &mut self,
         mut target: SharedMetalFrame,
     ) -> Result<SubmittedSharedMetalFrame, SurfaceError> {
-        let SurfaceBackend::Metal { context, .. } = &mut self.backend else {
+        let SurfaceBackend::Metal {
+            context,
+            shader_errors,
+            ..
+        } = &mut self.backend
+        else {
             return Err(SurfaceError::SharedFrameRequiresMetal);
         };
         let completion = GpuCompletion::new();
@@ -1199,6 +1223,12 @@ impl SurfaceArena {
             return Err(SurfaceError::SharedFrame(
                 "Metal command-buffer submission failed".into(),
             ));
+        }
+        if let Err(error) = shader_errors.check() {
+            // Keep CoreVideo's buffer out of its reusable pool until all queued GPU work
+            // is done, including draws submitted before the failed shader in this frame.
+            context.flush_submit_and_sync_cpu();
+            return Err(error);
         }
         if std::env::var_os("VALLE_TRACE_F16_STAGES").is_some() {
             let usage = context.resource_cache_usage();
@@ -1803,9 +1833,11 @@ impl<'arena> SurfaceFrame<'arena> {
         ))]
         if let Some(context) = self.arena.backend.context_mut() {
             context.flush_submit_and_sync_cpu();
-            return image
+            let image = image
                 .make_raster_image(Some(context), skia_safe::image::CachingHint::Disallow)
                 .ok_or(SurfaceError::Readback);
+            self.arena.backend.check_shader_errors()?;
+            return image;
         }
         Ok(image.clone())
     }
@@ -1874,9 +1906,11 @@ impl<'arena> SurfaceFrame<'arena> {
                 .context_mut()
                 .ok_or(SurfaceError::Readback)?;
             context.flush_submit_and_sync_cpu();
-            image
+            let image = image
                 .make_raster_image(Some(context), skia_safe::image::CachingHint::Disallow)
-                .ok_or(SurfaceError::Readback)
+                .ok_or(SurfaceError::Readback);
+            self.arena.backend.check_shader_errors()?;
+            image
         })();
         self.scratch_checked_out_surfaces = self.scratch_checked_out_surfaces.saturating_sub(1);
         self.scratch_checked_out_bytes = self.scratch_checked_out_bytes.saturating_sub(bytes);
@@ -2381,6 +2415,8 @@ fn surface_bytes_for_rect(rect: valle_engine::prepare::DeviceRect) -> Result<u64
 
 #[derive(Debug, Error)]
 pub enum SurfaceError {
+    #[error("GPU shader compilation failed: {0}")]
+    ShaderCompilation(String),
     #[error(transparent)]
     Memory(#[from] valle_engine::motion::memory::MemoryError),
     #[error("render extent does not fit the Skia coordinate domain")]
@@ -2452,6 +2488,32 @@ pub enum SurfaceError {
 #[cfg(test)]
 mod capacity_tests {
     use super::*;
+
+    #[cfg(all(target_os = "macos", feature = "native"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn deferred_shader_compilation_failure_is_an_export_error() {
+        let mut arena = SurfaceArena::metal().unwrap();
+        // RuntimeEffect accepts this helper before Ganesh specializes the call with b=0.
+        // The old safe-divide lowering left a constant division by zero in a dead branch.
+        let effect = skia_safe::RuntimeEffect::make_for_shader(
+            "float divide(float a, float b) { return b == 0.0 ? 0.0 : a / b; }\n\
+             float ripple(float2 uv, float softness) { return divide(length(uv), softness); }\n\
+             half4 main(float2 xy) { return half4(ripple(xy, 0.0), 0.0, 0.0, 1.0); }",
+            None,
+        )
+        .unwrap();
+        let shader = effect
+            .make_shader(skia_safe::Data::new_empty(), &[], None)
+            .unwrap();
+        let info = working_info(Extent2d::new(4, 4).unwrap()).unwrap();
+        let mut frame = test_frame(&mut arena, 1024 * 1024);
+        let result = frame.render_output_shader_to_raster(shader, &info);
+        assert!(
+            matches!(result, Err(SurfaceError::ShaderCompilation(_))),
+            "{result:?}"
+        );
+    }
 
     #[cfg(all(target_os = "macos", feature = "native"))]
     #[test]

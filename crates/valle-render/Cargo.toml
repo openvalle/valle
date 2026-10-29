@@ -8,6 +8,9 @@ rust-version.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[build-dependencies]
+cc = "1"
+
 [dependencies]
 valle-engine.workspace = true
 valle-media.workspace = true
@@ -32,6 +35,7 @@ motion = ["dep:skia-safe", "dep:valle-draw", "dep:serde_json"]
 native = ["motion", "valle-media/libav", "valle-engine/text", "dep:crossbeam-channel", "dep:png", "dep:reqwest", "dep:fs2", "dep:sha2", "dep:hex", "dep:tempfile", "dep:ttf-parser", "dep:objc2", "dep:objc2-metal", "dep:skia-bindings", "dep:wgpu", "dep:pollster", "dep:ash"]
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+skia-bindings = { workspace = true, optional = true }
 skia-safe = { workspace = true, optional = true, features = ["vulkan", "ganesh"] }
 # Load the driver at runtime so the same binary also works without a Vulkan installation.
 ash = { version = "0.38.0", default-features = false, features = ["loaded", "std"], optional = true }

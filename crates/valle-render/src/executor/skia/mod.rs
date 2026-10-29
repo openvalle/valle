@@ -30,6 +30,11 @@ mod scene3d_dof;
 #[cfg(feature = "native")]
 mod scene3d_gpu;
 mod scene3d_region;
+#[cfg(all(
+    feature = "native",
+    any(target_os = "macos", target_os = "linux", target_os = "windows")
+))]
+mod shader_errors;
 mod surface;
 mod target;
 mod velocity;

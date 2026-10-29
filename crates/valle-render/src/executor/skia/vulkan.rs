@@ -12,6 +12,7 @@ const API_VERSION: u32 = vk::API_VERSION_1_1;
 // Field order is intentional: all Skia resources must die before the device and loader.
 pub(super) struct VulkanContext {
     pub context: gpu::DirectContext,
+    pub shader_errors: super::shader_errors::ShaderErrors,
     pub scene3d_gpu: Option<Result<Box<super::scene3d_gpu::GpuRasterizer>, String>>,
     owner: VulkanOwner,
 }
@@ -155,6 +156,7 @@ impl VulkanContext {
     }
 
     fn from_wgpu(device: wgpu::Device, queue: wgpu::Queue) -> Result<Self, SurfaceError> {
+        let shader_errors = super::shader_errors::ShaderErrors::new();
         let context = {
             // SAFETY: wgpu owns the loader, instance and device. They are retained in owner,
             // after Ganesh and every imported image. Only this executor submits to the queue.
@@ -201,11 +203,12 @@ impl VulkanContext {
                 .with_extensions(&instance_extensions, &device_extensions)
                 .build()
             };
-            gpu::direct_contexts::make_vulkan(&backend, None)
+            gpu::direct_contexts::make_vulkan(&backend, &shader_errors.options())
                 .ok_or_else(|| unavailable("cannot create Ganesh on wgpu Vulkan device"))?
         };
         let mut result = Self {
             context,
+            shader_errors,
             scene3d_gpu: None,
             owner: VulkanOwner::Shared { device, queue },
         };
@@ -338,11 +341,13 @@ impl VulkanContext {
             )
             .build()
         };
-        let context = gpu::direct_contexts::make_vulkan(&backend, None)
+        let shader_errors = super::shader_errors::ShaderErrors::new();
+        let context = gpu::direct_contexts::make_vulkan(&backend, &shader_errors.options())
             .ok_or_else(|| unavailable("cannot create Ganesh Vulkan context"))?;
         drop(backend);
         let mut result = Self {
             context,
+            shader_errors,
             scene3d_gpu: None,
             owner: VulkanOwner::RasterOnly { _device: owner },
         };
@@ -371,6 +376,7 @@ impl VulkanContext {
         if !surface.read_pixels(&info, &mut pixels, 8, (0, 0)) {
             return Err(unavailable("F16 render target readback failed"));
         }
+        self.shader_errors.check()?;
         Ok(())
     }
 }

@@ -5456,6 +5456,7 @@ version = "0.1.0-rc.2"
 dependencies = [
  "anyhow",
  "ash",
+ "cc",
  "cosmic-text",
  "crossbeam-channel",
  "fs2",
