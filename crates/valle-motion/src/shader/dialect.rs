@@ -409,6 +409,16 @@ impl Checker<'_> {
         let mut cost = Cost::default();
         let mut returns = false;
         let code = match &stmt.kind {
+            StatementKind::Declarations(statements) => {
+                let mut code = String::new();
+                for statement in statements {
+                    let body = self.statement(statement, scope, result)?;
+                    cost = cost.add(body.cost);
+                    code.push_str(&body.code);
+                    code.push('\n');
+                }
+                code
+            }
             StatementKind::Block(statements) => {
                 scope.push(BTreeMap::new());
                 let mut code = String::from("{\n");
@@ -970,6 +980,10 @@ fn binary(op: &str, left: Value, right: Value, pos: usize) -> Result<Value, Shad
 pub(super) fn builtin_names() -> &'static [&'static str] {
     &[
         "abs",
+        "acos",
+        "asin",
+        "atan",
+        "atan2",
         "ceil",
         "clamp",
         "cos",
@@ -1089,7 +1103,8 @@ fn builtin(
             }
             Type::Float(3)
         }
-        "min" | "max" | "pow" | "mod" | "step" => {
+        "atan" if types.len() == 1 && float(types[0]) => types[0],
+        "min" | "max" | "pow" | "mod" | "step" | "atan" | "atan2" => {
             if types.len() != 2 {
                 return Err(invalid());
             }
@@ -1121,7 +1136,7 @@ fn builtin(
     // Convert scalar arguments explicitly when a component-wise builtin receives vectors.
     let arg_code = if matches!(
         name,
-        "min" | "max" | "pow" | "mod" | "step" | "clamp" | "mix" | "smoothstep"
+        "min" | "max" | "pow" | "mod" | "step" | "clamp" | "mix" | "smoothstep" | "atan" | "atan2"
     ) {
         args.iter()
             .map(|a| format!("{}({})", ty.name(), a.code))
@@ -1131,6 +1146,10 @@ fn builtin(
         arg_code.to_owned()
     };
     let backend = match name {
+        "asin" => "valle_asin",
+        "acos" => "valle_acos",
+        "atan2" => "valle_atan2",
+        "atan" if args.len() == 2 => "valle_atan2",
         "normalize" => "valle_normalize",
         "sqrt" => "valle_sqrt",
         "inversesqrt" => "valle_inversesqrt",
@@ -1294,22 +1313,28 @@ fn prelude(manifest: &ShaderManifest) -> String {
 fn safe_math() -> String {
     let mut code = String::from(
         "float valle_finite(float x) { return (x >= -3.402823466e+38 && x <= 3.402823466e+38) ? x : 0.0; }\n\
-         int valle_idiv(int a, int b) { return b == 0 || (a == (-2147483647 - 1) && b == -1) ? 0 : a / b; }\n\
-         int valle_imod(int a, int b) { return b == 0 || (a == (-2147483647 - 1) && b == -1) ? 0 : a - (a / b) * b; }\n\
-         float valle_div(float a, float b) { return b == 0.0 ? 0.0 : a / b; }\n\
+         int valle_idiv(int a, int b) { bool bad = b == 0 || (a == (-2147483647 - 1) && b == -1); return (bad ? 0 : a) / (bad ? 1 : b); }\n\
+         int valle_imod(int a, int b) { bool bad = b == 0 || (a == (-2147483647 - 1) && b == -1); int n = bad ? 0 : a; int d = bad ? 1 : b; return n - (n / d) * d; }\n\
+         float valle_div(float a, float b) { return (b == 0.0 ? 0.0 : a) / (b == 0.0 ? 1.0 : b); }\n\
          float valle_sqrt(float x) { return x <= 0.0 ? 0.0 : sqrt(x); }\n\
          float valle_inversesqrt(float x) { return x <= 0.0 ? 0.0 : inversesqrt(x); }\n\
          float valle_pow(float a, float b) { return a < 0.0 || (a == 0.0 && b <= 0.0) ? 0.0 : pow(a, b); }\n\
-         float valle_mod(float a, float b) { return b == 0.0 ? 0.0 : a - b * floor(a / b); }\n\
+         float valle_mod(float a, float b) { return b == 0.0 ? 0.0 : a - b * floor(valle_div(a, b)); }\n\
+         float valle_asin(float x) { return asin(clamp(x, -1.0, 1.0)); }\n\
+         float valle_acos(float x) { return acos(clamp(x, -1.0, 1.0)); }\n\
+         float valle_atan2(float y, float x) { return atan(y, x == 0.0 && y == 0.0 ? 1.0 : x); }\n\
          float valle_log(float x) { return x <= 0.0 ? 0.0 : log(x); }\n\
          float valle_log2(float x) { return x <= 0.0 ? 0.0 : log2(x); }\n\
-         float valle_smoothstep(float a, float b, float x) { float t = clamp(valle_div(x-a, b-a), 0.0, 1.0); return t*t*(3.0-2.0*t); }\n\
+         float valle_smoothstep(float a, float b, float x) { float t = clamp(valle_div(x-a, b-a), 0.0, 1.0); return a == b ? step(a, x) : t*t*(3.0-2.0*t); }\n\
          float valle_normalize(float x) { return x == 0.0 ? 0.0 : sign(x); }\n",
     );
     for n in 2..=4 {
         let ty = format!("float{n}");
         for (name, arity) in [
             ("finite", 1),
+            ("asin", 1),
+            ("acos", 1),
+            ("atan2", 2),
             ("div", 2),
             ("sqrt", 1),
             ("inversesqrt", 1),

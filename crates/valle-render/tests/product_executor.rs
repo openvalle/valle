@@ -183,3 +183,61 @@ fn shader_language_executes_bounded_math_and_sanitizes_invalid_values() {
     }
     assert_eq!(&values[8..], &[0.0, 0.0, 0.0, 1.0]);
 }
+
+#[test]
+fn shader_polar_math_and_zero_width_edges_render_correctly() {
+    use skia_safe::{Data, Paint, RuntimeEffect, shaders};
+    use valle_motion::shader::{
+        BudgetClass, OutputContract, ShaderManifest, ShaderPackage, ShaderRole, UniformBindings,
+    };
+    let package = ShaderPackage::compile(
+        ShaderManifest {
+            name: "polar-edges".into(),
+            entry: "source.vsksl".into(),
+            role: ShaderRole::Layer,
+            inputs: vec![],
+            uniforms: vec![],
+            output: OutputContract::default(),
+            budget: BudgetClass::Local,
+        },
+        br#"
+float4 valle_main(float2 uv) {
+    float a = 0.5, b = a;
+    if (uv.x < 0.67) { return float4(float3(smoothstep(a, b, uv.x)), 1.0); }
+    float pi = acos(-1.0);
+    float value = atan2(1.0, -1.0) / pi + atan(float2(1.0), float2(1.0)).x / pi + asin(1.0) / pi;
+    value += atan2(0.0, 0.0) + acos(2.0);
+    return float4(float3(value), 1.0);
+}
+"#,
+    )
+    .unwrap();
+    let effect = RuntimeEffect::make_for_shader(&package.generated_sksl, None).unwrap();
+    let uniforms = package
+        .pack_uniforms(
+            [3.0, 1.0],
+            &std::collections::BTreeMap::new(),
+            &UniformBindings::empty(),
+        )
+        .unwrap();
+    let shader = effect
+        .make_shader(Data::new_copy(&uniforms), &[shaders::empty().into()], None)
+        .unwrap();
+    let info = ImageInfo::new((3, 1), ColorType::RGBAF32, AlphaType::Premul, None);
+    let mut surface = surfaces::raster(&info, None, None).unwrap();
+    let mut paint = Paint::default();
+    paint.set_shader(shader);
+    surface.canvas().draw_paint(&paint);
+    let mut bytes = [0u8; 48];
+    assert!(surface.read_pixels(&info, &mut bytes, 48, (0, 0)));
+    let values: Vec<_> = bytes
+        .chunks_exact(4)
+        .map(|word| f32::from_ne_bytes(word.try_into().unwrap()))
+        .collect();
+    for (pixel, gray) in values.chunks_exact(4).zip([0.0f32, 1.0, 1.5]) {
+        for channel in &pixel[..3] {
+            assert!((*channel - gray).abs() < 0.0002, "{values:?}");
+        }
+        assert_eq!(pixel[3], 1.0);
+    }
+}

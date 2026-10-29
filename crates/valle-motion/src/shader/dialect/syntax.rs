@@ -79,6 +79,8 @@ pub(super) struct Statement {
 #[derive(Debug, Clone)]
 pub(super) enum StatementKind {
     Block(Vec<Statement>),
+    /// Consecutive declarations in the enclosing scope (not a nested block).
+    Declarations(Vec<Statement>),
     Declare {
         constant: bool,
         ty: Type,
@@ -399,16 +401,27 @@ impl Parser {
         } else if self.peek() == "const" || Type::parse(self.peek()).is_some() {
             let constant = self.take("const");
             let ty = self.ty()?;
-            let name = self.ident()?;
-            self.expect("=")?;
-            let value = self.expression(0)?;
-            self.expect(";")?;
-            StatementKind::Declare {
-                constant,
-                ty,
-                name,
-                value,
+            let mut declarations = Vec::new();
+            loop {
+                let pos = self.pos();
+                let name = self.ident()?;
+                self.expect("=")?;
+                let value = self.expression(0)?;
+                declarations.push(Statement {
+                    pos,
+                    kind: StatementKind::Declare {
+                        constant,
+                        ty,
+                        name,
+                        value,
+                    },
+                });
+                if !self.take(",") {
+                    break;
+                }
             }
+            self.expect(";")?;
+            StatementKind::Declarations(declarations)
         } else {
             let target = self.expression(0)?;
             if ["=", "+=", "-=", "*=", "/="].contains(&self.peek()) {

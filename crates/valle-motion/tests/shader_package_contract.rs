@@ -46,6 +46,28 @@ const MANIFEST: &[u8] = include_bytes!(
 );
 
 #[test]
+fn polar_math_and_comma_declarations_are_typed_and_bounded() {
+    let source = br#"
+        float4 valle_main(float2 uv) {
+            const float pi = 3.14159265, halfPi = pi / 2.0;
+            float x = uv.x, y = uv.y + x;
+            float2 a = atan(float2(x, y)), b = atan(float2(y), float2(x));
+            float c = atan2(y, x) + asin(0.5) + acos(0.5);
+            return float4(a + b, c / halfPi, 1.0);
+        }
+    "#;
+    let package = ShaderPackage::compile(manifest(), source).unwrap();
+    assert!(package.generated_sksl.contains("valle_atan2"));
+    for source in [
+        "float4 valle_main(float2 uv) { float x=1.0,x=2.0; return float4(x); }",
+        "float4 valle_main(float2 uv) { float x=true,y=2.0; return float4(y); }",
+        "float4 valle_main(float2 uv) { return float4(atan2(uv, float3(1.0)), 0.0, 1.0); }",
+    ] {
+        assert!(ShaderPackage::compile(manifest(), source.as_bytes()).is_err());
+    }
+}
+
+#[test]
 fn package_uri_manifest_digests_and_abi_are_canonical() {
     let descriptor = manifest();
     let wire = serde_json::to_value(&descriptor).unwrap();
