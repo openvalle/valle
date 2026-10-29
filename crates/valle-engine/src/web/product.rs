@@ -1430,6 +1430,25 @@ impl ProductEngine {
         Ok(id)
     }
 
+    /// SVG geometry is resolved with the active render's frozen font set, never browser fonts.
+    pub fn svg_image_json(
+        &self,
+        render_id: &str,
+        digest: &str,
+        encoded: &[u8],
+    ) -> Result<String, JsError> {
+        verified_content_digest(digest, encoded, "svg_digest")?;
+        let render = self.active_render(render_id)?;
+        let resources = render.compiled().execution_resources();
+        let fonts: Vec<_> = resources
+            .iter()
+            .filter(|r| r.kind() == CompiledExecutionResourceKind::FontBytes)
+            .map(|r| r.bytes())
+            .collect();
+        let doc = valle_motion::svg::compile(encoded, &fonts).map_err(|e| js_error("svg", e))?;
+        serde_json::to_string(&doc).map_err(|e| js_error("svg", e))
+    }
+
     /// Shared raw-channel decoder; output is eight numeric byte planes in Alpha8 storage.
     pub fn decode_shader_data_texture(
         &self,

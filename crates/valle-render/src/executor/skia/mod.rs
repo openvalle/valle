@@ -36,6 +36,7 @@ mod scene3d_region;
 ))]
 mod shader_errors;
 mod surface;
+mod svg;
 mod target;
 mod velocity;
 mod working_capture;

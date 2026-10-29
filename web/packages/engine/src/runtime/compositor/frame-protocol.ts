@@ -159,6 +159,7 @@ interface WorkerMessageBase {
 
 /** The worker exposes explicit resource/kernel operations, never arbitrary property access. */
 export const PRODUCT_RUNTIME_METHODS = [
+  "svg_image_json",
   "decode_shader_data_texture",
   "scene3d_resource_needs_json",
   "register_scene3d_model",

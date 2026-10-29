@@ -90,15 +90,25 @@ pub fn opened_motion_render(source: &str, width: u32, height: u32) -> EngineRend
 
 #[allow(dead_code)] // Shared by integration test binaries.
 pub fn opened_image_render(digest: &str) -> EngineRender {
-    opened_image_render_with_gain(digest, None)
+    opened_image_render_with_gain(digest, None, 2, 2)
 }
 
 #[allow(dead_code)] // This support module is compiled independently by each integration test.
 pub fn opened_color_gain_render(digest: &str, gain: f64) -> EngineRender {
-    opened_image_render_with_gain(digest, Some(gain))
+    opened_image_render_with_gain(digest, Some(gain), 2, 2)
 }
 
-fn opened_image_render_with_gain(digest: &str, extension_gain: Option<f64>) -> EngineRender {
+#[allow(dead_code)]
+pub fn opened_image_render_sized(digest: &str, width: u32, height: u32) -> EngineRender {
+    opened_image_render_with_gain(digest, None, width, height)
+}
+
+fn opened_image_render_with_gain(
+    digest: &str,
+    extension_gain: Option<f64>,
+    width: u32,
+    height: u32,
+) -> EngineRender {
     let filters = extension_gain
         .map(|gain| {
             vec![json!({
@@ -112,8 +122,8 @@ fn opened_image_render_with_gain(digest: &str, extension_gain: Option<f64>) -> E
         &serde_json::to_string(&json!({
             "document": {
                 "canvas": {
-                    "width": 2,
-                    "height": 2,
+                    "width": width,
+                    "height": height,
                     "fps": "30/1",
                     "sampleRate": 48000,
                     "channelLayout": "stereo",
@@ -165,8 +175,8 @@ fn opened_image_render_with_gain(digest: &str, extension_gain: Option<f64>) -> E
                     "kind": "image",
                     "digest": digest,
                     "descriptor": {
-                        "width": 2,
-                        "height": 2,
+                        "width": width,
+                        "height": height,
                         "orientation": "identity",
                         "color": {
                             "primaries": "bt709",
@@ -207,6 +217,20 @@ fn opened_image_render_with_gain(digest: &str, extension_gain: Option<f64>) -> E
         &bundle_json.resource_bytes,
     );
     let package_manifest = canonical_fixed_package_manifest(&files).unwrap();
+    if let Ok(directory) = std::env::var("VALLE_IMAGE_PACKAGE_TEST_OUTPUT") {
+        std::fs::write(
+            format!("{directory}/image-package-{width}.json"),
+            serde_json::to_vec(&json!({
+                "fixedPackageManifestJson":package_manifest,
+                "timelineJson":timeline_json,
+                "resourceManifestJson":manifest_json,
+                "verifiedBindingBundleJson":bundle_json.json,
+                "resourceBytes":bundle_json.resource_bytes,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
     open_verified_fixed_package(&package_manifest, &files)
         .unwrap()
         .engine_render()

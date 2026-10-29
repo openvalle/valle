@@ -588,6 +588,7 @@ impl AdmittedSkiaFrame<'_> {
                             &mut scratch,
                             output_slot,
                             source,
+                            external_picture(self.template, &self.bound, *external),
                             *placement,
                             transform,
                             bounds,
@@ -1846,6 +1847,18 @@ fn materialize_external_visuals(
         scene3d_gpu_rasters,
         scene3d_cpu_fallbacks,
     })
+}
+
+fn external_picture<'a>(
+    template: &RenderPlanTemplate,
+    bound: &'a BoundExternalObjects<'_, SkiaExternalObject>,
+    resource: PlanResourceId,
+) -> Option<&'a skia_safe::Picture> {
+    let plan = template.resources().get(resource.get() as usize - 1)?;
+    let PlanResourceKind::External { slot } = plan.kind else {
+        return None;
+    };
+    bound.get(slot)?.svg_picture()
 }
 
 fn external_visual<'a>(

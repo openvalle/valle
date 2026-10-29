@@ -356,6 +356,7 @@ impl VideoWork {
 /// returned immutable images retain their own lifetime independently of this cache.
 pub struct NativeResourceProvider {
     catalog: Arc<NativeResourceCatalog>,
+    svg_fonts: Vec<Arc<[u8]>>,
     runtime_shaders: BTreeMap<(ContentDigest, ContentDigest), Arc<[u8]>>,
     objects: NativeResourceObjectCache,
     cache_generation: u64,
@@ -385,6 +386,7 @@ impl NativeResourceProvider {
     ) -> Self {
         Self {
             catalog,
+            svg_fonts: Vec::new(),
             runtime_shaders: BTreeMap::new(),
             objects: NativeResourceObjectCache::new(limits),
             cache_generation: 1,
@@ -414,6 +416,9 @@ impl NativeResourceProvider {
             self.models.insert(*digest, Arc::clone(model));
         }
         for resource in render.execution_resources() {
+            if resource.kind() == valle_engine::render::CompiledExecutionResourceKind::FontBytes {
+                self.svg_fonts.push(Arc::from(resource.bytes()));
+            }
             if resource.kind() == valle_engine::render::CompiledExecutionResourceKind::Model3dBytes
             {
                 self.bytes
@@ -525,6 +530,19 @@ impl NativeResourceProvider {
         match request.sample() {
             ResourceSample::Static => {
                 let bytes = self.source_bytes(&request.key().content, &source)?;
+                if valle_engine::motion::svg::is_svg(&bytes) {
+                    return Ok(SkiaExternalObject::visual_svg(
+                        request.key().clone(),
+                        layout,
+                        extent,
+                        &bytes,
+                        &self
+                            .svg_fonts
+                            .iter()
+                            .map(|b| b.as_ref())
+                            .collect::<Vec<_>>(),
+                    )?);
+                }
                 let object = SkiaExternalObject::visual_encoded(
                     request.key().clone(),
                     layout,
@@ -1107,6 +1125,14 @@ pub enum NativeResourceError {
 
 /// Probe the same encoded image decoder used by native resource fulfillment.
 pub fn probe_image_extent(bytes: &[u8]) -> Result<(u32, u32), NativeResourceError> {
+    if valle_engine::motion::svg::is_svg(bytes) {
+        return valle_engine::motion::svg::dimensions(bytes).map_err(|reason| {
+            NativeResourceError::Texture {
+                digest: ContentDigest::of_bytes(bytes).to_string(),
+                reason,
+            }
+        });
+    }
     let digest = ContentDigest::of_bytes(bytes);
     let image =
         images::deferred_from_encoded_data(Data::new_copy(bytes), None).ok_or_else(|| {

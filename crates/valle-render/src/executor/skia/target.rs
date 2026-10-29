@@ -53,6 +53,11 @@ pub struct SkiaExternalObject {
 #[derive(Clone)]
 enum SkiaObjectPayload {
     Visual(Image),
+    Svg {
+        image: Image,
+        picture: skia_safe::Picture,
+        retained_bytes: u64,
+    },
     DataTexture(Image),
     #[cfg(feature = "native")]
     DecodedVideo(Arc<valle_media::SourceFrame>),
@@ -68,6 +73,7 @@ impl core::fmt::Debug for SkiaExternalObject {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let payload = match &self.payload {
             SkiaObjectPayload::Visual(_) => "visual",
+            SkiaObjectPayload::Svg { .. } => "svg",
             SkiaObjectPayload::DataTexture(_) => "dataTexture",
             #[cfg(feature = "native")]
             SkiaObjectPayload::DecodedVideo(_) => "decodedVideo",
@@ -214,6 +220,52 @@ impl SkiaExternalObject {
             return Err(SkiaObjectError::InvalidEncodedPayload);
         }
         Self::visual_rgba8_as(key, declared_layout, extent, &rgba)
+    }
+
+    pub fn visual_svg(
+        key: ResourceKey,
+        layout: ExternalPixelLayout,
+        extent: Extent2d,
+        encoded: &[u8],
+        fonts: &[&[u8]],
+    ) -> Result<Self, SkiaObjectError> {
+        let doc =
+            valle_engine::motion::svg::compile(encoded, fonts).map_err(SkiaObjectError::Svg)?;
+        if (doc.width.ceil() as u32, doc.height.ceil() as u32) != (extent.width(), extent.height())
+        {
+            return Err(SkiaObjectError::Svg(
+                "SVG extent differs from admitted descriptor".into(),
+            ));
+        }
+        let picture = super::svg::picture(&doc).map_err(SkiaObjectError::Svg)?;
+        // The fallback image is only for consumers requiring discrete texels (e.g. atlases).
+        // Ordinary images and shader children retain the resolution-independent picture.
+        let image = images::deferred_from_picture(
+            picture.clone(),
+            (extent.width() as i32, extent.height() as i32),
+            None,
+            None,
+            skia_safe::image::BitDepth::F16,
+            working_color_space().ok(),
+            None,
+        )
+        .ok_or(SkiaObjectError::InvalidWorkingPayload)?;
+        let retained_bytes =
+            encoded.len() as u64 + picture.approximate_bytes_used() as u64 + doc.raster_bytes();
+        let mut object = Self::visual(key, layout, image.clone())?;
+        object.payload = SkiaObjectPayload::Svg {
+            image,
+            picture,
+            retained_bytes,
+        };
+        Ok(object)
+    }
+
+    pub(crate) fn svg_picture(&self) -> Option<&skia_safe::Picture> {
+        match &self.payload {
+            SkiaObjectPayload::Svg { picture, .. } => Some(picture),
+            _ => None,
+        }
     }
 
     pub fn visual(
@@ -545,7 +597,9 @@ impl SkiaExternalObject {
 
     pub(crate) fn visual_image(&self) -> Option<&Image> {
         match &self.payload {
-            SkiaObjectPayload::Visual(image) | SkiaObjectPayload::Scene3d(image) => Some(image),
+            SkiaObjectPayload::Visual(image)
+            | SkiaObjectPayload::Scene3d(image)
+            | SkiaObjectPayload::Svg { image, .. } => Some(image),
             #[cfg(feature = "native")]
             SkiaObjectPayload::DecodedVideo(_) => None,
             #[cfg(feature = "native")]
@@ -614,6 +668,11 @@ impl SkiaExternalObject {
             #[cfg(feature = "native")]
             SkiaObjectPayload::Scene3dGpu(input) => input.resident_bytes(),
             SkiaObjectPayload::Scene3dDof(input) => Some(input.resident_bytes()),
+            SkiaObjectPayload::Svg {
+                image,
+                retained_bytes,
+                ..
+            } => retained_bytes.checked_add(image.width() as u64 * image.height() as u64 * 8),
             SkiaObjectPayload::Visual(image)
             | SkiaObjectPayload::Scene3d(image)
             | SkiaObjectPayload::DataTexture(image) => {
@@ -746,6 +805,8 @@ impl<'a> SkiaTarget<'a> {
 
 #[derive(Debug, Error)]
 pub enum SkiaObjectError {
+    #[error("SVG resource: {0}")]
+    Svg(String),
     #[cfg(feature = "native")]
     #[error("Scene3D CPU fallback failed: {0}")]
     Scene3dFallback(String),

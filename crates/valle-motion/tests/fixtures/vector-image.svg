@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" color="#00ffff">
+  <defs>
+    <linearGradient id="gradient" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="32" y2="0"><stop stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient>
+    <mask id="mask" maskUnits="userSpaceOnUse" x="32" y="0" width="32" height="32"><rect x="32" width="16" height="32" fill="white"/><rect x="48" width="16" height="32" fill="black"/></mask>
+    <pattern id="pattern" patternUnits="userSpaceOnUse" width="8" height="8"><rect width="8" height="8" fill="#ffcc00"/><rect width="4" height="4" fill="#000000"/></pattern>
+    <clipPath id="clip"><circle cx="48" cy="48" r="14"/></clipPath>
+  </defs>
+  <rect width="32" height="32" fill="url(#gradient)"/>
+  <rect x="32" width="32" height="32" fill="#00ff00" mask="url(#mask)"/>
+  <g opacity="0.5"><rect y="32" width="32" height="32" fill="url(#pattern)"/></g>
+  <g clip-path="url(#clip)"><rect x="32" y="32" width="32" height="32" fill="currentColor"/></g>
+  <path d="M38 48H58" fill="none" stroke="white" stroke-width="2" stroke-dasharray="3 2" stroke-linecap="round"/>
+</svg>

@@ -40,6 +40,98 @@ fn project() -> NativeProject {
     NativeProject::from_render(render, Arc::new(catalog))
 }
 
+fn svg_project() -> NativeProject {
+    let svg=br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><path d="M0 0L2 0L0 2Z" fill="#ff0000"/></svg>"##;
+    let digest = ContentDigest::of_bytes(svg);
+    assert_eq!(valle_render::host::probe_image_extent(svg).unwrap(), (2, 2));
+    let render = support::opened_image_render(&digest.to_wire());
+    let mut catalog = NativeResourceCatalog::new();
+    catalog.insert_bytes(digest, Arc::<[u8]>::from(svg.as_slice()));
+    NativeProject::from_render(render, Arc::new(catalog))
+}
+
+fn verify_vector_image(backend: SkiaBackendKind) {
+    let project = svg_project();
+    let mut runner = project.frame_runner(backend).unwrap();
+    for size in [32, 256, 32] {
+        let spec = RenderSpec::new(
+            size,
+            size,
+            RenderQuality::Final,
+            OutputSpec::srgb_preview(OutputBackground::opaque_srgb([12, 34, 56])).unwrap(),
+        )
+        .unwrap();
+        let frame = runner.render_rgba8(FrameKey::new(0), spec).unwrap().0;
+        let pixel = |x: u32, y: u32| {
+            &frame.data[((y * size + x) * 4) as usize..((y * size + x) * 4 + 4) as usize]
+        };
+        assert!(pixel(size / 4, size / 4)[0] > 250);
+        assert!(
+            pixel(size / 2 - 4, size / 2)[0] > 250,
+            "vector edge must remain sharp when magnified"
+        );
+        assert!(
+            pixel(size / 2 + 4, size / 2)[0] < 20,
+            "rasterization must use destination resolution"
+        );
+    }
+    let source = include_bytes!("../../valle-motion/tests/fixtures/vector-image.svg");
+    let digest = ContentDigest::of_bytes(source);
+    let render = support::opened_image_render_sized(&digest.to_wire(), 64, 64);
+    let mut catalog = NativeResourceCatalog::new();
+    catalog.insert_bytes(digest, Arc::<[u8]>::from(source.as_slice()));
+    let project = NativeProject::from_render(render, Arc::new(catalog));
+    let spec = RenderSpec::new(
+        256,
+        256,
+        RenderQuality::Final,
+        OutputSpec::srgb_preview(OutputBackground::opaque_srgb([12, 34, 56])).unwrap(),
+    )
+    .unwrap();
+    let pixels = project
+        .frame_runner(backend)
+        .unwrap()
+        .render_rgba8(FrameKey::new(0), spec)
+        .unwrap()
+        .0
+        .data;
+    let pixel = |x: usize, y: usize| &pixels[(y * 256 + x) * 4..(y * 256 + x) * 4 + 4];
+    assert!(
+        pixel(140, 20)
+            .iter()
+            .zip([0u8, 255, 0, 255])
+            .all(|(a, b)| a.abs_diff(b) <= 2),
+        "green: {:?}",
+        pixel(140, 20)
+    );
+    assert_eq!(pixel(220, 20), [12, 34, 56, 255]);
+    assert!(
+        pixel(180, 180)
+            .iter()
+            .zip([0u8, 255, 255, 255])
+            .all(|(a, b)| a.abs_diff(b) <= 2),
+        "cyan: {:?}",
+        pixel(180, 180)
+    );
+    if backend == SkiaBackendKind::Raster
+        && let Ok(directory) = std::env::var("VALLE_IMAGE_PACKAGE_TEST_OUTPUT")
+    {
+        std::fs::write(format!("{directory}/svg-product-reference.rgba"), pixels).unwrap();
+    }
+}
+
+#[test]
+fn svg_images_remain_vectors_in_native_source_pipeline() {
+    verify_vector_image(SkiaBackendKind::Raster);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "requires a hardware Metal GPU"]
+fn svg_images_remain_vectors_on_metal() {
+    verify_vector_image(SkiaBackendKind::Metal);
+}
+
 #[test]
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[ignore = "requires a hardware Vulkan GPU"]

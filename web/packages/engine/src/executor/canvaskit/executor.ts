@@ -14,6 +14,7 @@ import type {
   Path,
   RuntimeEffect,
   Shader,
+  SkPicture,
   Surface,
   Typeface,
   MallocObj,
@@ -70,6 +71,7 @@ export interface CanvasKitExternalObject {
   readonly key: PackedValue;
   readonly kind: "visual" | "dataTexture" | "font" | "runtimeShader" | "scene3d" | "frame";
   readonly image?: Image;
+  readonly picture?: SkPicture;
   readonly bytes?: Uint8Array;
 }
 
@@ -3684,7 +3686,12 @@ function drawBatchNode(
           opacity: 1,
         };
   const atlas =
-    imageRegion === null
+    imageRegion === null ||
+    resolveProgramTexture(
+      admitted.textures,
+      record(imageRegion.texture, "atlas texture"),
+      "atlas texture",
+    ).picture
       ? null
       : normalizeAtlasImage(CanvasKit, builtins, admitted, imageRegion, arena);
   const fillPaint = new CanvasKit.Paint();
@@ -9045,6 +9052,15 @@ function normalizedExternalShader(
   wrap = "pad",
 ): Shader {
   if (!object.image) fail("external_type", "normalized external shader needs an image");
+  if (object.picture) {
+    const tile =
+      wrap === "repeat"
+        ? CanvasKit.TileMode.Repeat
+        : wrap === "mirror"
+          ? CanvasKit.TileMode.Mirror
+          : CanvasKit.TileMode.Clamp;
+    return object.picture.makeShader(tile, tile, CanvasKit.FilterMode.Linear);
+  }
   if (object.kind === "dataTexture") {
     // Generated sampling wraps logical coordinates before selecting each numeric plane.
     return imageShader(CanvasKit, object.image, "nearestClamp", "pad");

@@ -37,6 +37,7 @@ pub mod scene3d;
 pub mod shader;
 pub mod spring;
 pub mod style;
+pub mod svg;
 pub mod tailwind;
 pub mod text;
 pub mod time;

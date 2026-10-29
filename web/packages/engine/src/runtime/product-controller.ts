@@ -1,3 +1,4 @@
+import { isSvg, recordSvg, type SvgDocument } from "../executor/canvaskit/svg.ts";
 import {
   BrowserRuntimeBudget,
   sharedBrowserRuntimeBudget,
@@ -169,6 +170,7 @@ interface RenderOptions {
 }
 
 interface BrowserProductEngineWire extends ProductEngineWire {
+  svg_image_json(renderId: string, digest: string, encoded: Uint8Array): string;
   decode_shader_data_texture(
     digest: string,
     encoded: Uint8Array,
@@ -2193,7 +2195,47 @@ export class BrowserValleWebPlayer {
           videoTextureFrames: Number(result.texture),
         };
       }
-      const image = await this.staticImage(asset);
+      const encoded = await this.fetchAssetBytes(asset);
+      if (isSvg(encoded)) {
+        const json = await this.runtimeCall<string>(
+          "svg_image_json",
+          this.renderId,
+          contentWire,
+          encoded,
+        );
+        const doc = JSON.parse(json) as SvgDocument;
+        if (Math.ceil(doc.width) !== extent.width || Math.ceil(doc.height) !== extent.height)
+          throw new Error("SVG extent differs from admitted descriptor");
+        const picture = recordSvg(this.CanvasKit, doc, (source) =>
+          this.compositor.builtins.shader("normalizeInput", [1, 0, 100, 100], [source]),
+        );
+        const surface = this.CanvasKit.MakeSurface(Math.ceil(doc.width), Math.ceil(doc.height));
+        if (!surface) {
+          picture.delete();
+          throw new Error("SVG fallback surface allocation failed");
+        }
+        try {
+          surface.getCanvas().clear(this.CanvasKit.TRANSPARENT);
+          surface.getCanvas().drawPicture(picture);
+          const image = surface.makeImageSnapshot();
+          return {
+            object: { key, kind: "visual", image, picture },
+            bytes: bytes + encoded.byteLength + json.length * 2,
+            dispose: () => {
+              image.delete();
+              picture.delete();
+            },
+            ...empty,
+          };
+        } catch (error) {
+          picture.delete();
+          throw error;
+        } finally {
+          surface.delete();
+        }
+      }
+      const image = this.CanvasKit.MakeImageFromEncoded(encoded);
+      if (!image) throw new Error(`CanvasKit cannot decode image asset '${asset.id}'`);
       return {
         object: { key, kind: "visual", image },
         bytes,
@@ -2450,12 +2492,6 @@ export class BrowserValleWebPlayer {
       this.scene3dResourceTasks.delete(key);
       throw error;
     }
-  }
-
-  private async staticImage(asset: AdmittedBrowserAsset): Promise<Image> {
-    const image = this.CanvasKit.MakeImageFromEncoded(await this.fetchAssetBytes(asset));
-    if (!image) throw new Error(`CanvasKit cannot decode image asset '${asset.id}'`);
-    return image;
   }
 
   private async videoImage(

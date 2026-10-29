@@ -117,6 +117,7 @@ pub(crate) struct ProgramRuntime {
 #[derive(Debug, Clone)]
 pub(crate) struct ProgramTexture {
     image: Image,
+    picture: Option<skia_safe::Picture>,
     interpretation: Option<VisualInterpretation>,
     size: [u32; 2],
     deferred_slot: Option<ExternalSlotId>,
@@ -128,6 +129,7 @@ impl ProgramTexture {
         let size = [image.width() as u32, image.height() as u32];
         Self {
             image,
+            picture: None,
             deferred_slot: None,
             interpretation: Some(VisualInterpretation::new(
                 ColorDescription::LINEAR_REC2020,
@@ -226,6 +228,7 @@ impl ProgramRuntime {
                 .insert(
                     requirement.clone(),
                     ProgramTexture {
+                        picture: object.svg_picture().cloned(),
                         image,
                         interpretation,
                         size,
@@ -2044,20 +2047,23 @@ impl ProgramRuntime {
                     });
                 }
             };
-            let image = &self
+            let texture = self
                 .textures
                 .get(texture)
-                .ok_or_else(|| DrawError::MissingTexture(texture.key.clone()))?
-                .image;
+                .ok_or_else(|| DrawError::MissingTexture(texture.key.clone()))?;
             let wrap = tile_mode(binding.wrap);
-            // The shared shader code filters individual working-linear texels.
             let mode = SamplingOptions::new(FilterMode::Nearest, MipmapMode::None);
-            let shader = image.to_shader((wrap, wrap), mode, None).ok_or_else(|| {
-                DrawError::ShaderChild {
-                    uri: uri.to_owned(),
-                    child: child.name().to_owned(),
-                }
-            })?;
+            let shader = if let Some(picture) = &texture.picture {
+                picture.to_shader((wrap, wrap), FilterMode::Linear, None, None)
+            } else {
+                texture
+                    .image
+                    .to_shader((wrap, wrap), mode, None)
+                    .ok_or_else(|| DrawError::ShaderChild {
+                        uri: uri.to_owned(),
+                        child: child.name().to_owned(),
+                    })?
+            };
             children.push(ChildPtr::Shader(shader));
         }
         Ok(children)
@@ -2167,6 +2173,12 @@ fn draw_program_texture(
             0.0,
         ];
         paint.set_color_filter(color_filters::matrix_row_major(&matrix, None));
+    }
+    if let Some(picture) = &texture.picture {
+        canvas.clip_rect(src, ClipOp::Intersect, true);
+        canvas.draw_picture(picture, None, Some(&paint));
+        canvas.restore();
+        return Ok(());
     }
     if tint.is_some() {
         let shader = atlas_subset
@@ -4661,6 +4673,9 @@ fn draw_opaque_image_atlas(
     let texture = textures
         .get(&region.texture)
         .ok_or_else(|| DrawError::MissingTexture(region.texture.key.clone()))?;
+    if texture.picture.is_some() {
+        return Ok(false);
+    }
     let ExternalSample::Texture {
         texture_from_content,
         input_sample_bounds,
@@ -4761,6 +4776,9 @@ fn atlas_pixel_subset(
     texture: &ProgramTexture,
     region: &valle_draw::program::AtlasRegion,
 ) -> Result<Option<AtlasPixelSubset>, DrawError> {
+    if texture.picture.is_some() {
+        return Ok(None);
+    }
     let ExternalSample::Texture {
         input_sample_bounds,
         ..

@@ -23,6 +23,7 @@ pub(crate) fn render_import(
     surfaces: &mut ScratchSurfaces<'_, '_>,
     output_slot: SurfaceSlotId,
     source: &Image,
+    picture: Option<&skia_safe::Picture>,
     placement: ExternalPlacement,
     transform: DeviceTransform,
     bounds: DeviceRect,
@@ -69,6 +70,7 @@ pub(crate) fn render_import(
             render_sample_into(
                 surfaces.surface_mut(0)?,
                 source,
+                picture,
                 sample,
                 placement.clip_rect,
                 placement.clip_rect,
@@ -100,6 +102,7 @@ pub(crate) fn render_import(
         draw_sample(
             surfaces.output_mut(output_slot)?,
             source,
+            picture,
             placement.sample,
             placement.content_rect,
             placement.clip_rect,
@@ -113,6 +116,7 @@ pub(crate) fn render_import(
     render_sample_into(
         surfaces.surface_mut(0)?,
         source,
+        picture,
         placement.sample,
         placement.content_rect,
         placement.clip_rect,
@@ -177,6 +181,7 @@ fn draw_color_backdrop(
 fn render_sample_into(
     surface: &mut Surface,
     image: &Image,
+    picture: Option<&skia_safe::Picture>,
     sample: ExternalSample,
     destination: Rect,
     clip: Rect,
@@ -187,6 +192,7 @@ fn render_sample_into(
     draw_sample(
         surface,
         image,
+        picture,
         sample,
         destination,
         clip,
@@ -200,6 +206,7 @@ fn render_sample_into(
 fn draw_sample(
     surface: &mut Surface,
     image: &Image,
+    picture: Option<&skia_safe::Picture>,
     sample: ExternalSample,
     destination: Rect,
     clip: Rect,
@@ -249,13 +256,18 @@ fn draw_sample(
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
     paint.set_blend_mode(blend_mode);
-    canvas.draw_image_rect_with_sampling_options(
-        image,
-        Some((&src, SrcRectConstraint::Strict)),
-        src,
-        SamplingOptions::new(skia_safe::FilterMode::Linear, skia_safe::MipmapMode::None),
-        &paint,
-    );
+    if let Some(picture) = picture {
+        canvas.clip_rect(src, ClipOp::Intersect, true);
+        canvas.draw_picture(picture, None, Some(&paint));
+    } else {
+        canvas.draw_image_rect_with_sampling_options(
+            image,
+            Some((&src, SrcRectConstraint::Strict)),
+            src,
+            SamplingOptions::new(skia_safe::FilterMode::Linear, skia_safe::MipmapMode::None),
+            &paint,
+        );
+    }
     canvas.restore();
     Ok(())
 }
