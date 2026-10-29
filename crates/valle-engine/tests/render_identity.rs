@@ -2631,7 +2631,7 @@ fn caption_missing_glyph_is_closed_during_admission() {
 
 #[cfg(feature = "text")]
 #[test]
-fn common_profile_rejects_nonzero_collection_font_faces_during_admission() {
+fn common_profile_admits_verified_collection_font_faces() {
     let mut value = image_document("asset:hero");
     value["document"]["captions"]["tracks"] = json!([{
         "id": "caption:main",
@@ -2689,31 +2689,14 @@ fn common_profile_rejects_nonzero_collection_font_faces_during_admission() {
         )
         .unwrap();
 
-    let report = open(
+    open(
         &timeline(&value),
         &manifest,
         &bindings,
         &Capabilities::new(),
         &baseline_profile(),
     )
-    .unwrap_err();
-    let diagnostic = report
-        .diagnostics()
-        .iter()
-        .find(|diagnostic| diagnostic.code == EngineOpenDiagnosticCode::UnsupportedFontFaceIndex)
-        .expect("non-zero collection face must fail while opening the render");
-    assert_eq!(diagnostic.phase, EngineOpenPhase::Admission);
-    assert_eq!(diagnostic.resource_id.as_deref(), Some("font:collection"));
-    assert_eq!(
-        diagnostic.details.get("actual").map(String::as_str),
-        Some("1")
-    );
-    assert!(
-        report
-            .diagnostics()
-            .iter()
-            .all(|diagnostic| diagnostic.phase != EngineOpenPhase::Compile)
-    );
+    .expect("verified collection face is available on Native and Web");
 }
 
 #[cfg(feature = "text")]

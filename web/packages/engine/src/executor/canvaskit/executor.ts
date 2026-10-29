@@ -1,6 +1,7 @@
 import transitionParameterSpecs from "../../../../../../crates/valle-timeline/schema/transition-parameters.generated.json";
 import { drawSrgbPreviewCpu, srgbPreviewScratchBytes } from "./output-transform.ts";
 import canvasKitPackage from "canvaskit-wasm/package.json";
+import { fontFaceBytes } from "./font-face.ts";
 import type {
   Canvas,
   CanvasKit,
@@ -724,20 +725,20 @@ export class CanvasKitExecutor {
   }
 
   typeface(key: string, faceIndex: number, bytes: Uint8Array): Typeface {
-    // CanvasKit 0.41 does not expose SkFontArguments::CollectionIndex: this API always decodes
-    // face zero. Engine admission rejects non-zero collection faces for the Native/Web common
-    // profile; keep this trust boundary fail-closed for foreign or stale render-plan packets too.
-    if (faceIndex !== 0) {
-      fail("font_admission", `font '${key}' requests unsupported collection face ${faceIndex}`);
-    }
     const cached = this.typefaces.get(key);
     if (cached) {
       this.cacheCounters.fontHits += 1;
       touch(this.typefaces, key, cached);
       return cached;
     }
+    let data: Uint8Array<ArrayBuffer>;
+    try {
+      data = fontFaceBytes(bytes, faceIndex);
+    } catch {
+      return fail("font_admission", `font '${key}' has invalid collection face ${faceIndex}`);
+    }
     this.cacheCounters.fontMisses += 1;
-    const face = this.CanvasKit.Typeface.MakeFreeTypeFaceFromData(bytes.slice().buffer);
+    const face = this.CanvasKit.Typeface.MakeFreeTypeFaceFromData(data.buffer);
     if (!face) fail("font_admission", `font '${key}' cannot be decoded`);
     this.typefaces.set(key, face);
     return face;

@@ -35,7 +35,11 @@ use valle_timeline::internal::{
 };
 
 mod fonts;
-pub use fonts::{MotionFontBytes, MotionFontPackage, with_motion_fonts};
+#[cfg(test)]
+pub(crate) use fonts::tests::two_face_collection;
+pub use fonts::{
+    MotionFontBytes, MotionFontPackage, font_face_bytes, font_face_descriptors, with_motion_fonts,
+};
 
 use crate::{
     product::EngineRender,

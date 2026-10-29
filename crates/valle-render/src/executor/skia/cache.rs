@@ -533,13 +533,19 @@ impl BackendCaches {
             return Ok(face.as_ref().clone());
         }
         shared.retain(|_, face| face.strong_count() > 0);
-        let face = self
-            .font_manager
-            .new_from_bytes(bytes, key.1)
-            .ok_or_else(|| DrawError::InvalidFont {
+        let data = valle_engine::fixed_package::font_face_bytes(bytes, key.1).map_err(|_| {
+            DrawError::InvalidFont {
                 hash: key.0.to_string(),
                 index: key.1,
-            })?;
+            }
+        })?;
+        let face =
+            self.font_manager
+                .new_from_bytes(&data, 0)
+                .ok_or_else(|| DrawError::InvalidFont {
+                    hash: key.0.to_string(),
+                    index: key.1,
+                })?;
         let face = Arc::new(face);
         shared.insert(key, Arc::downgrade(&face));
         self.fonts.insert(key, face.clone());

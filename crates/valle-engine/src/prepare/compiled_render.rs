@@ -683,6 +683,9 @@ fn prepare_endpoint(
                     .and_then(|(_, index)| index.parse::<usize>().ok())
                     .unwrap_or(usize::MAX)
             });
+            // A collection has one frozen resource per face, but the layout font registry
+            // registers its shared bytes once. Keep the authored fallback order.
+            let mut registered_fonts = std::collections::BTreeSet::new();
             let font_dependencies: Vec<_> = font_resources
                 .into_iter()
                 .map(|resource| {
@@ -696,6 +699,7 @@ fn prepare_endpoint(
                         .is_some_and(|role| role.starts_with("font:"));
                     (*resource.digest(), bytes.clone(), generic)
                 })
+                .filter(|(digest, _, generic)| registered_fonts.insert((*digest, *generic)))
                 .collect();
             let fonts = state
                 .motion_fonts

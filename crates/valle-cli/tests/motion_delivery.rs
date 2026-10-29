@@ -92,6 +92,82 @@ fn success(result: Output) -> Value {
 }
 
 #[test]
+fn collection_fonts_freeze_the_face_selected_by_weight() {
+    let regular = include_bytes!("../../../assets/fonts/katex/KaTeX_Main-Regular.ttf");
+    let bold = include_bytes!("../../../assets/fonts/katex/KaTeX_Main-Bold.ttf");
+    // Build a portable two-face TTC from our redistributable fonts. SFNT table offsets
+    // are relative to the whole collection, not to the individual face header.
+    let mut collection = b"ttcf\0\x01\0\0\0\0\0\x02\0\0\0\0\0\0\0\0".to_vec();
+    for (index, font) in [regular.as_slice(), bold.as_slice()]
+        .into_iter()
+        .enumerate()
+    {
+        let start = collection.len();
+        collection[12 + index * 4..16 + index * 4].copy_from_slice(&(start as u32).to_be_bytes());
+        let mut face = font.to_vec();
+        let tables = u16::from_be_bytes(face[4..6].try_into().unwrap()) as usize;
+        for table in 0..tables {
+            let at = 12 + table * 16 + 8;
+            let offset = u32::from_be_bytes(face[at..at + 4].try_into().unwrap());
+            face[at..at + 4].copy_from_slice(&(offset + start as u32).to_be_bytes());
+        }
+        collection.extend_from_slice(&face);
+        collection.resize(collection.len().next_multiple_of(4), 0);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("family.ttc"), &collection).unwrap();
+    for (weight, face) in [(400, regular.as_slice()), (700, bold.as_slice())] {
+        std::fs::write(dir.path().join("face.ttf"), face).unwrap();
+        for (name, binding, family, schema) in [
+            ("reference", vec!["--font", "face.ttf"], "KaTeX_Main", ""),
+            ("collection", vec!["--font", "family.ttc"], "KaTeX_Main", ""),
+            (
+                "asset",
+                vec!["--asset", "family=family.ttc"],
+                "asset://family",
+                "export const controls={assets:{family:asset({kind:'font'})}};",
+            ),
+        ] {
+            let source = format!(
+                r#"{schema}
+export const composition={{width:160,height:64,fps:30,duration:1}};
+export default function Test(){{return <Scene style={{{{backgroundColor:'black'}}}}><Text style={{{{fontFamily:'{family}',fontSize:40,fontWeight:{weight},color:'white'}}}}>TTC</Text></Scene>;}}"#
+            );
+            std::fs::write(dir.path().join("font.motion.tsx"), source).unwrap();
+            let filename = format!("{name}-{weight}.png");
+            let mut args = vec![
+                "motion",
+                "render",
+                "font.motion.tsx",
+                "--frame",
+                "0",
+                "--backend",
+                "raster",
+                "--threads",
+                "1",
+                "-o",
+                &filename,
+                "--json",
+            ];
+            args.extend(binding);
+            success(run(dir.path(), &args));
+        }
+        let reference = std::fs::read(dir.path().join(format!("reference-{weight}.png"))).unwrap();
+        for name in ["collection", "asset"] {
+            assert_eq!(
+                std::fs::read(dir.path().join(format!("{name}-{weight}.png"))).unwrap(),
+                reference,
+                "{name} weight {weight}"
+            );
+        }
+    }
+    assert_ne!(
+        std::fs::read(dir.path().join("collection-400.png")).unwrap(),
+        std::fs::read(dir.path().join("collection-700.png")).unwrap()
+    );
+}
+
+#[test]
 fn motion_check_reports_tangent_contact_without_failing_and_respects_strict_policy() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("contact.motion.tsx"), CONTACT).unwrap();

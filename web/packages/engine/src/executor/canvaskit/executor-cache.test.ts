@@ -204,7 +204,7 @@ describe("long-lived CanvasKit executor caches", () => {
     try {
       expect(executor.typeface("font:0", 0, font)).toBe(executor.typeface("font:0", 0, font));
       expect(() => executor.typeface("font:1", 1, font)).toThrow(
-        "font 'font:1' requests unsupported collection face 1",
+        "font 'font:1' has invalid collection face 1",
       );
       expect(executor.runtimeShader("shader:1", shader)).toBe(
         executor.runtimeShader("shader:1", shader),

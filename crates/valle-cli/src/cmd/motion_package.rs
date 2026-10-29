@@ -26,10 +26,10 @@ use valle_timeline::internal::{
     wire::resource::{
         AudioChannelLayoutWire, AudioResourceDescriptorWire, ColorMatrixWire, ColorPrimariesWire,
         ColorTransferWire, ContinuousBoundarySamplingWire, FontResourceDescriptorWire,
-        FontVariationAxisWire, ImageResourceDescriptorWire, MediaColorDescriptorWire,
-        MediaOrientationWire, Model3dResourceDescriptorWire, MotionArtifactAbiWire,
-        MotionArtifactDescriptorWire, ResourceEntryWire, ResourceManifestEnvelopeWire,
-        ShaderArtifactAbiWire, ShaderResourceDescriptorWire,
+        ImageResourceDescriptorWire, MediaColorDescriptorWire, MediaOrientationWire,
+        Model3dResourceDescriptorWire, MotionArtifactAbiWire, MotionArtifactDescriptorWire,
+        ResourceEntryWire, ResourceManifestEnvelopeWire, ShaderArtifactAbiWire,
+        ShaderResourceDescriptorWire,
     },
 };
 use valle_timeline::{FrameRate, RationalTime, time::ExactRational};
@@ -104,12 +104,16 @@ pub(super) fn build_standalone_motion_package(
         });
     }
 
-    for (index, bytes) in input.font_blobs.iter().enumerate() {
+    let mut font_index = 0;
+    for bytes in input.font_blobs {
         let digest = resources.intern_shared_font(bytes.clone())?;
-        component_dependencies.push(FixedResourceDependency {
-            role: font_dependency_role(input.artifact, bytes, index),
-            resource_id: font_resource_id(&digest),
-        });
+        for resource_id in font_resource_ids(&digest, bytes)? {
+            component_dependencies.push(FixedResourceDependency {
+                role: font_dependency_role(input.artifact, bytes, font_index),
+                resource_id,
+            });
+            font_index += 1;
+        }
     }
 
     resources.add(
@@ -367,8 +371,12 @@ fn asset_resource_ids(
     Ok(ids)
 }
 
-pub(super) fn font_resource_id(digest: &ContentDigest) -> String {
-    format!("font:{}:0", digest.as_hex())
+pub(super) fn font_resource_ids(digest: &ContentDigest, bytes: &[u8]) -> Result<Vec<String>> {
+    Ok(valle_engine::fixed_package::font_face_descriptors(bytes)
+        .map_err(|e| anyhow!(e))?
+        .into_iter()
+        .map(|face| format!("font:{}:{}", digest.as_hex(), face.face_index))
+        .collect())
 }
 
 fn motion_digest(bytes: &[u8]) -> ContentDigest {
@@ -500,22 +508,20 @@ impl FixedResources {
     }
 
     /// Share dependency fonts across Motion components without changing each component's
-    /// ordered font roles, returning the font's digest. Font descriptors currently admit face
-    /// index zero only.
+    /// ordered font roles, returning the font file's digest.
     pub(super) fn intern_font(&mut self, bytes: &[u8]) -> Result<ContentDigest> {
-        let digest = motion_digest(bytes);
-        let resource_id = font_resource_id(&digest);
-        if !self.entries.contains_key(&resource_id) {
-            self.add_font_with_digest(&resource_id, digest, Arc::from(bytes))?;
-        }
-        Ok(digest)
+        self.intern_shared_font(Arc::from(bytes))
     }
 
     fn intern_shared_font(&mut self, bytes: Arc<[u8]>) -> Result<ContentDigest> {
         let digest = motion_digest(&bytes);
-        let resource_id = font_resource_id(&digest);
-        if !self.entries.contains_key(&resource_id) {
-            self.add_font_with_digest(&resource_id, digest, bytes)?;
+        for descriptor in
+            valle_engine::fixed_package::font_face_descriptors(&bytes).map_err(|e| anyhow!(e))?
+        {
+            let resource_id = format!("font:{}:{}", digest.as_hex(), descriptor.face_index);
+            if !self.entries.contains_key(&resource_id) {
+                self.add_font_face(&resource_id, digest, bytes.clone(), descriptor, Vec::new())?;
+            }
         }
         Ok(digest)
     }
@@ -526,7 +532,32 @@ impl FixedResources {
         digest: ContentDigest,
         bytes: Arc<[u8]>,
     ) -> Result<()> {
-        let descriptor = font_descriptor(&bytes)?;
+        // Asset-bound font collections need the same complete face closure as --font.
+        let mut descriptors =
+            valle_engine::fixed_package::font_face_descriptors(&bytes).map_err(|e| anyhow!(e))?;
+        let descriptor = descriptors.remove(0);
+        let mut dependencies = Vec::new();
+        for face in descriptors {
+            let resource_id = format!("font:{}:{}", digest.as_hex(), face.face_index);
+            dependencies.push(FixedResourceDependency {
+                role: format!("face:{}", face.face_index),
+                resource_id: resource_id.clone(),
+            });
+            if !self.entries.contains_key(&resource_id) {
+                self.add_font_face(&resource_id, digest, bytes.clone(), face, Vec::new())?;
+            }
+        }
+        self.add_font_face(resource_id, digest, bytes, descriptor, dependencies)
+    }
+
+    fn add_font_face(
+        &mut self,
+        resource_id: &str,
+        digest: ContentDigest,
+        bytes: Arc<[u8]>,
+        descriptor: FontResourceDescriptorWire,
+        dependencies: Vec<FixedResourceDependency>,
+    ) -> Result<()> {
         self.add(
             resource_id,
             ResourceEntryWire::Font {
@@ -537,7 +568,7 @@ impl FixedResources {
                 descriptor: descriptor.clone(),
                 bytes,
             },
-            Vec::new(),
+            dependencies,
         )
     }
 
@@ -615,28 +646,6 @@ fn image_descriptor(bytes: &[u8]) -> Result<ImageResourceDescriptorWire> {
             matrix: ColorMatrixWire::Identity,
             full_range: true,
         },
-    })
-}
-
-fn font_descriptor(bytes: &[u8]) -> Result<FontResourceDescriptorWire> {
-    let face = ttf_parser::Face::parse(bytes, 0).map_err(|_| anyhow!("invalid font face"))?;
-    let variation_axes = face
-        .variation_axes()
-        .into_iter()
-        .map(|axis| {
-            (
-                axis.tag.to_string(),
-                FontVariationAxisWire {
-                    minimum: f64::from(axis.min_value),
-                    default: f64::from(axis.def_value),
-                    maximum: f64::from(axis.max_value),
-                },
-            )
-        })
-        .collect();
-    Ok(FontResourceDescriptorWire {
-        face_index: 0,
-        variation_axes,
     })
 }
 

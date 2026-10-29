@@ -547,12 +547,18 @@ fn prepare_timeline_package_impl(
                     (!caption_text.is_empty()).then_some(caption_text.as_str()),
                     &motion_prop_bindings(&compiled_json, &id),
                 )?;
-                for (i, bytes) in font_blobs.iter().enumerate() {
+                let mut font_index = 0;
+                for bytes in &font_blobs {
                     let digest = resources.intern_font(bytes)?;
-                    deps.push(super::motion_package::FixedResourceDependency {
-                        role: super::motion_package::font_dependency_role(&artifact, bytes, i),
-                        resource_id: super::motion_package::font_resource_id(&digest),
-                    });
+                    for resource_id in super::motion_package::font_resource_ids(&digest, bytes)? {
+                        deps.push(super::motion_package::FixedResourceDependency {
+                            role: super::motion_package::font_dependency_role(
+                                &artifact, bytes, font_index,
+                            ),
+                            resource_id,
+                        });
+                        font_index += 1;
+                    }
                     catalog.insert_bytes(digest, bytes.to_vec());
                     let path = frozen.path().join(digest.as_hex());
                     std::fs::write(&path, bytes)?;

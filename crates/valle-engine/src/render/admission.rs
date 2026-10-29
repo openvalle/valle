@@ -185,7 +185,6 @@ pub(super) fn open_engine_render(
     if let Some(canvas) = canvas {
         validate_quantized_intervals(timeline, canvas, &mut diagnostics);
     }
-    validate_common_font_face_indices(&resolver.resources, &mut diagnostics);
     validate_resolved_admission(
         timeline.document(),
         &resolver.index_by_id,
@@ -318,42 +317,6 @@ fn render_projection_bytes(
     projection: &RenderProjection<'_>,
 ) -> Result<Vec<u8>, serde_json::Error> {
     serde_jcs::to_vec(projection)
-}
-
-/// The initial execution profile is shared by Native and CanvasKit. CanvasKit 0.41 exposes only
-/// `MakeFreeTypeFaceFromData(bytes)` and therefore cannot select a non-zero face from a TTC/OTC
-/// collection. Keep the common contract honest by rejecting such a resource before any compiled
-/// program can name it; silently decoding face zero would render a different concrete font on Web.
-fn validate_common_font_face_indices(
-    resources: &[ResolvedResource],
-    diagnostics: &mut Vec<EngineOpenDiagnostic>,
-) {
-    for resource in resources {
-        let VerifiedResourceFacts::Font { descriptor, .. } = &resource.facts else {
-            continue;
-        };
-        if descriptor.face_index == 0 {
-            continue;
-        }
-        diagnostics.push(diagnostic(
-            EngineOpenDiagnosticCode::UnsupportedFontFaceIndex,
-            format!(
-                "/resources/{}/descriptor/faceIndex",
-                json_pointer_segment(&resource.resource_id)
-            ),
-            EngineOpenPhase::Admission,
-            Some(&resource.resource_id),
-            details([
-                ("actual", descriptor.face_index.to_string()),
-                ("supported", "0".to_owned()),
-                ("reason", "native-web-common-profile".to_owned()),
-            ]),
-        ));
-    }
-}
-
-fn json_pointer_segment(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
 }
 
 /// Closes resource-dependent authoring checks before program admission. Once this function and
@@ -1905,7 +1868,7 @@ fn admit_motion_instance(
         compiled_resources.insert(name.clone(), target);
     }
 
-    let artifact_dependencies = resources
+    let mut artifact_dependencies: Vec<_> = resources
         .get(component_target as usize)
         .map(|resource| {
             resource
@@ -1918,6 +1881,31 @@ fn admit_motion_instance(
                 .collect()
         })
         .unwrap_or_default();
+
+    // A font collection binds one authored family, with the other selectable faces
+    // in its resource closure. Make those faces available to Motion's glyph requests
+    // as well; freezing the bytes alone does not install their semantic identities.
+    let collection_faces: Vec<_> = artifact_dependencies
+        .iter()
+        .filter_map(|dependency| {
+            resources
+                .get(dependency.target as usize)
+                .map(|resource| (dependency, resource))
+        })
+        .filter(|(_, resource)| resource.kind == ResourceKind::Font)
+        .flat_map(|(parent, resource)| {
+            resource.dependencies.iter().filter_map(|dependency| {
+                resources
+                    .get(dependency.target as usize)
+                    .filter(|resource| resource.kind == ResourceKind::Font)
+                    .map(|_| AdmittedMotionArtifactDependency {
+                        role: format!("{}/{}", parent.role, dependency.role),
+                        target: dependency.target,
+                    })
+            })
+        })
+        .collect();
+    artifact_dependencies.extend(collection_faces);
 
     let _ = admit_motion_frame_count(
         source.source_duration,

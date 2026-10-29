@@ -14,9 +14,8 @@ use valle_timeline::decode_timeline;
 use valle_timeline::internal::{
     ContentDigest, ResourceManifest, encode_canonical,
     wire::resource::{
-        ContinuousBoundarySamplingWire, FontResourceDescriptorWire, FontVariationAxisWire,
-        MotionArtifactAbiWire, MotionArtifactDescriptorWire, ResourceEntryWire,
-        ResourceManifestEnvelopeWire,
+        ContinuousBoundarySamplingWire, MotionArtifactAbiWire, MotionArtifactDescriptorWire,
+        ResourceEntryWire, ResourceManifestEnvelopeWire,
     },
 };
 
@@ -230,13 +229,43 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
 
     let mut resources = PackageResources::new();
     let mut external_resources = Vec::new();
-    for resource in input.resource_inputs {
+    for mut resource in input.resource_inputs {
         if resource.id.starts_with("resource:motion-") {
             return Err(format!("preview resource ID is reserved: {}", resource.id));
         }
         let digest = *resource_entry_digest(&resource.entry);
         let facts =
             prepared_resource_facts(&resource.entry, resource.facts, &input.resource_bytes)?;
+        if let VerifiedResourceFacts::Font {
+            descriptor: selected,
+            bytes,
+        } = &facts
+        {
+            for descriptor in crate::fixed_package::font_face_descriptors(bytes)? {
+                if descriptor.face_index == selected.face_index {
+                    continue;
+                }
+                let id = format!("font:{}:{}", digest.as_hex(), descriptor.face_index);
+                resource.dependencies.push(PreviewDependency {
+                    role: format!("face:{}", descriptor.face_index),
+                    resource_id: id.clone(),
+                });
+                if !resources.entries.contains_key(&id) {
+                    resources.add(
+                        id,
+                        ResourceEntryWire::Font {
+                            digest,
+                            descriptor: descriptor.clone(),
+                        },
+                        VerifiedResourceFacts::Font {
+                            descriptor,
+                            bytes: bytes.clone(),
+                        },
+                        Vec::new(),
+                    )?;
+                }
+            }
+        }
         external_resources.push(PreviewExternalResource {
             id: resource.id.clone(),
             digest,
@@ -270,7 +299,8 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
             .nodes
             .iter()
             .any(|node| matches!(node.kind, NodeKind::MathFormula { .. }));
-        for (index, font) in instance.fonts.into_iter().enumerate() {
+        let mut index = 0;
+        for font in instance.fonts {
             if !matches!(font.role.as_str(), "font" | "formula-font") {
                 return Err(format!("invalid font role {}", font.role));
             }
@@ -281,23 +311,28 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
             }
             let bytes = font.bytes.resolve(&input.resource_bytes)?;
             let digest = ContentDigest::of_bytes(&bytes);
-            let id = format!("font:{}:0", digest.as_hex());
-            if !resources.entries.contains_key(&id) {
-                let descriptor = font_descriptor(&bytes)?;
-                resources.add(
-                    id.clone(),
-                    ResourceEntryWire::Font {
-                        digest,
-                        descriptor: descriptor.clone(),
-                    },
-                    VerifiedResourceFacts::Font { descriptor, bytes },
-                    Vec::new(),
-                )?;
+            for descriptor in crate::fixed_package::font_face_descriptors(&bytes)? {
+                let id = format!("font:{}:{}", digest.as_hex(), descriptor.face_index);
+                if !resources.entries.contains_key(&id) {
+                    resources.add(
+                        id.clone(),
+                        ResourceEntryWire::Font {
+                            digest,
+                            descriptor: descriptor.clone(),
+                        },
+                        VerifiedResourceFacts::Font {
+                            descriptor,
+                            bytes: bytes.clone(),
+                        },
+                        Vec::new(),
+                    )?;
+                }
+                dependencies.push(PreviewDependency {
+                    role: format!("{}:{index}", font.role),
+                    resource_id: id,
+                });
+                index += 1;
             }
-            dependencies.push(PreviewDependency {
-                role: format!("{}:{index}", font.role),
-                resource_id: id,
-            });
         }
         let descriptor = MotionArtifactDescriptorWire {
             reads_destination: instance.artifact.reads_destination(),
@@ -361,29 +396,6 @@ pub fn prepare_preview_package(input: PreviewPackageInput) -> Result<PreparedPre
     })
 }
 
-fn font_descriptor(bytes: &[u8]) -> Result<FontResourceDescriptorWire, String> {
-    let face =
-        ttf_parser::Face::parse(bytes, 0).map_err(|_| "invalid preview font face".to_owned())?;
-    let variation_axes = face
-        .variation_axes()
-        .into_iter()
-        .map(|axis| {
-            (
-                axis.tag.to_string(),
-                FontVariationAxisWire {
-                    minimum: f64::from(axis.min_value),
-                    default: f64::from(axis.def_value),
-                    maximum: f64::from(axis.max_value),
-                },
-            )
-        })
-        .collect();
-    Ok(FontResourceDescriptorWire {
-        face_index: 0,
-        variation_axes,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +443,73 @@ mod tests {
         assert_eq!(opened.compiled().canvas().width(), 64);
         assert_eq!(opened.compiled().canvas().height(), 64);
         assert!(package.external_resources.is_empty());
+    }
+
+    #[test]
+    fn preview_freezes_every_generic_and_asset_bound_collection_face() {
+        let bytes = crate::fixed_package::two_face_collection();
+        for asset_bound in [false, true] {
+            let mut input = simple_input();
+            let range = ResourceByteRange {
+                offset: 0,
+                length: bytes.len(),
+            };
+            input.resource_bytes = bytes.clone();
+            if asset_bound {
+                let measure = valle_compiler::motion::MeasureEnv::new_with_aliases(
+                    &[],
+                    &[("asset://family".into(), bytes.clone())],
+                    (64, 64),
+                )
+                .unwrap();
+                let result = valle_compiler::motion::compile_motion_with_env(r#"
+export const composition = {width:64,height:64,fps:30,duration:1};
+export const controls = {assets:{family:asset({kind:"font"})}};
+export default function T(){return <Scene><Text style={{fontFamily:"asset://family",fontWeight:700}}>TTC</Text></Scene>;}
+"#, &[valle_motion::ResourceRef {
+    control: "family".into(), content_hash: valle_motion::ContentDigest::of_bytes(&bytes),
+}], Some(&measure)).unwrap();
+                input.motion_instances[0].artifact_digest = ContentDigest::of_bytes(
+                    &valle_motion::canonical_bytes(&result.artifact).unwrap(),
+                );
+                input.motion_instances[0].artifact = result.artifact;
+                input.author_timeline["resources"]["typeface"] = "family.ttc".into();
+                input.author_timeline["tracks"]["visual"][0]["clips"][0]["resources"] =
+                    json!({"family":"typeface"});
+                let descriptor = crate::fixed_package::font_face_descriptors(&bytes)
+                    .unwrap()
+                    .remove(0);
+                input.resource_inputs.push(PreviewResourceInput {
+                    id: "resource:typeface".into(),
+                    entry: ResourceEntryWire::Font {
+                        digest: ContentDigest::of_bytes(&bytes),
+                        descriptor: descriptor.clone(),
+                    },
+                    facts: json!({"kind":"font","descriptor":descriptor,"bytes":range}),
+                    dependencies: Vec::new(),
+                });
+            } else {
+                input.motion_instances[0].fonts.push(PreviewFont {
+                    bytes: range,
+                    role: "font".into(),
+                });
+            }
+            let package = prepare_preview_package(input).unwrap();
+            let files = fixed_package_files(
+                &package.timeline_json,
+                &package.resource_manifest_json,
+                &package.verified_binding_bundle_json,
+                &package.execution_profile_json,
+                &package.resource_bytes,
+            );
+            let opened =
+                open_verified_fixed_package(&package.fixed_package_manifest_json, &files).unwrap();
+            let source = opened.compiled().sources().source(0).unwrap();
+            let dependencies = source.motion().unwrap().artifact_dependencies();
+            assert_eq!(dependencies.len(), 2, "asset_bound={asset_bound}");
+            // Both identities share one copy of the original collection bytes.
+            assert_eq!(package.resource_bytes.len(), bytes.len());
+        }
     }
 
     #[test]
@@ -507,26 +586,21 @@ mod tests {
 
 #[cfg(test)]
 mod contract_tests {
-    use super::*;
-
     #[test]
     fn preview_font_descriptors_capture_variation_ranges_and_reject_invalid_faces() {
-        let descriptor = font_descriptor(include_bytes!(
+        let descriptor = crate::fixed_package::font_face_descriptors(include_bytes!(
             "../../../assets/fonts/noto/NotoSans-Variable.ttf"
         ))
         .unwrap();
-        assert_eq!(descriptor.face_index, 0);
-        let axis = descriptor.variation_axes.get("wght").unwrap();
+        assert_eq!(descriptor[0].face_index, 0);
+        let axis = descriptor[0].variation_axes.get("wght").unwrap();
         assert!(axis.minimum < axis.default && axis.default < axis.maximum);
         assert_eq!(axis.default, 400.0);
-        let fixed = font_descriptor(include_bytes!(
+        let fixed = crate::fixed_package::font_face_descriptors(include_bytes!(
             "../../../assets/fonts/noto/NotoSans-Regular.ttf"
         ))
         .unwrap();
-        assert!(fixed.variation_axes.is_empty());
-        assert_eq!(
-            font_descriptor(b"invalid").unwrap_err(),
-            "invalid preview font face"
-        );
+        assert!(fixed[0].variation_axes.is_empty());
+        assert!(crate::fixed_package::font_face_descriptors(b"invalid").is_err());
     }
 }
