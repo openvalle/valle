@@ -3186,3 +3186,129 @@ fn gpu_geometry_carries_frame_materials_lighting_and_camera_rays() {
         );
     }
 }
+
+#[test]
+fn extended_glb_materials_preserve_unlit_and_emissive_intent() {
+    let make = |material, extension: &str| {
+        edit_glb(&material_glb(material, &[]), |root, _| {
+            root["extensionsUsed"] = json!([extension]);
+            root["extensionsRequired"] = json!([extension]);
+        })
+    };
+    let unlit = make(
+        json!({
+            "pbrMetallicRoughness":{"baseColorFactor":[0.25,0.5,0.75,1]},
+            "emissiveFactor":[1,0,0],
+            "extensions":{"KHR_materials_unlit":{}}
+        }),
+        "KHR_materials_unlit",
+    );
+    let r = resources(&unlit);
+    assert!(r.models["productModel"].materials()[0].unlit);
+    let prepared = prepare_scene(&pbr_scene(), 64, 64, &r).unwrap();
+    let mut f = pbr_frame();
+    f.lights = test_lights(0.0, 0.0);
+    let dark = render_scene(&prepared, &f).unwrap();
+    f.lights = test_lights(3.0, 2.0);
+    assert_frame_bits_eq(&render_scene(&prepared, &f).unwrap(), &dark);
+    let center = (32 * 64 + 32) * 4;
+    let pixel = dark.premul_rgba16f[center..center + 4]
+        .iter()
+        .map(|&v| half_to_f32(v))
+        .collect::<Vec<_>>();
+    // glTF factors are linear sRGB, transformed into the working primaries by the renderer.
+    assert!(pixel[0] > 0.0 && pixel[2] > pixel[1] && pixel[1] > pixel[0]);
+    let gpu = prepare_gpu_geometry(&prepared, &f).unwrap().unwrap();
+    if let Some(shading) = gpu.shading.as_ref() {
+        assert_eq!(shading.values[5][3], 0.0);
+    }
+
+    let emissive = make(
+        json!({
+            "pbrMetallicRoughness":{"baseColorFactor":[0,0,0,1]},
+            "emissiveFactor":[1,1,1],
+            "extensions":{"KHR_materials_emissive_strength":{"emissiveStrength":4}}
+        }),
+        "KHR_materials_emissive_strength",
+    );
+    let r = resources(&emissive);
+    assert_eq!(
+        r.models["productModel"].materials()[0].emissive_intensity,
+        4.0
+    );
+    let prepared = prepare_scene(&pbr_scene(), 64, 64, &r).unwrap();
+    let mut emissive_frame = pbr_frame();
+    emissive_frame.exposure = 0.125;
+    emissive_frame.lights = test_lights(0.0, 0.0);
+    let image = render_scene(&prepared, &emissive_frame).unwrap();
+    // 4 * 0.125 = 0.5 linear, encoded at the producer's sRGB F16 boundary.
+    // Using sub-unit exposure avoids passing merely because both strengths clip to white.
+    for &value in &image.premul_rgba16f[center..center + 3] {
+        assert!((half_to_f32(value) - 0.735_357).abs() < 0.001);
+    }
+    let gpu = prepare_gpu_geometry(&prepared, &pbr_frame())
+        .unwrap()
+        .unwrap();
+    assert_eq!(&gpu.shading.as_ref().unwrap().values[6][..3], &[4.0; 3]);
+    for extension in [
+        json!({"KHR_materials_emissive_strength":{"emissiveStrength":-1}}),
+        json!({"KHR_materials_emissive_strength":{"emissiveStrength":70000}}),
+        json!({"KHR_materials_emissive_strength":{},"KHR_materials_unlit":{}}),
+        json!({"KHR_materials_unknown":{}}),
+    ] {
+        let invalid = edit_glb(&emissive, |root, _| {
+            root["materials"][0]["extensions"] = extension
+        });
+        assert!(admit_glb(&invalid).is_err());
+    }
+}
+
+#[test]
+fn extended_glb_counts_keep_byte_budgets_and_gpu_atlas_addressing() {
+    let pixels = (0..12)
+        .map(|i| [i * 20, 255 - i * 20, 128, 255])
+        .collect::<Vec<_>>();
+    let bytes = edit_glb(&material_glb(json!({}), &pixels), |root, _| {
+        root["materials"] = json!(
+            (0..12)
+                .map(|i| json!({
+                    "pbrMetallicRoughness":{"baseColorTexture":{"index":i}},
+                    "extensions":{"KHR_materials_unlit":{}}
+                }))
+                .collect::<Vec<_>>()
+        );
+        root["meshes"][0]["primitives"][0]["material"] = json!(11);
+    });
+    let r = resources(&bytes);
+    assert_eq!(r.models["productModel"].materials().len(), 12);
+    let mut s = pbr_scene();
+    s.anchors.clear();
+    let mut f = pbr_frame();
+    for i in 1..12 {
+        let mut mesh = s.meshes[0].clone();
+        mesh.key = format!("object{i}");
+        let mut state = f.meshes[0].clone();
+        state.key = mesh.key.clone();
+        s.meshes.push(mesh);
+        f.meshes.push(state);
+    }
+    let prepared = prepare_scene(&s, 64, 64, &r).unwrap();
+    assert_eq!(prepared.budget().meshes, 12);
+    assert_eq!(prepared.budget().textures, 12);
+    let image = render_scene(&prepared, &f).unwrap();
+    assert!(image.premul_rgba16f.iter().any(|&v| v != 0));
+    let gpu = prepare_gpu_geometry(&prepared, &f).unwrap().unwrap();
+    let shading = gpu.shading.as_ref().unwrap();
+    // Only live materials need to reach the GPU, but the last source texture must survive.
+    assert!(!shading.textures.is_empty());
+    let atlas =
+        valle_motion::scene3d::GpuRasterAtlas::new(shading, 4096, 128 * 1024 * 1024).unwrap();
+    let mut bytes = Vec::new();
+    atlas.append_bytes(&mut bytes);
+    assert_eq!(bytes.len() as u64, atlas.byte_len());
+    assert!(valle_motion::scene3d::GpuRasterAtlas::new(shading, 1, 16).is_none());
+    let invalid = edit_glb(&material_glb(json!({}), &[]), |root, _| {
+        root["materials"] = json!(vec![json!({}); valle_motion::scene3d::MAX_MATERIALS + 1]);
+    });
+    assert!(admit_glb(&invalid).is_err());
+}

@@ -655,3 +655,117 @@ fn material_maps_and_environment_match_cpu_reference() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a real GPU; verifies imported extensions and more than eight textures"]
+fn extended_glb_materials_match_cpu_on_gpu() {
+    use serde_json::json;
+    let original = include_bytes!("../../../../../../valle-motion/tests/fixtures/scene3d/pbr.glb");
+    let json_len = u32::from_le_bytes(original[12..16].try_into().unwrap()) as usize;
+    let mut root: serde_json::Value = serde_json::from_slice(&original[20..20 + json_len]).unwrap();
+    let mut bin = original[28 + json_len..].to_vec();
+    let primitive = root["meshes"][0]["primitives"][0].clone();
+    root["materials"] = json!([]);
+    root["images"] = json!([]);
+    root["textures"] = json!([]);
+    root["meshes"] = json!([]);
+    root["nodes"] = json!([]);
+    root["extensionsUsed"] = json!(["KHR_materials_unlit", "KHR_materials_emissive_strength"]);
+    for i in 0..12 {
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, 1, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&[20 + i * 18, 230 - i * 16, 60 + i * 10, 255])
+                .unwrap();
+        }
+        bin.resize(bin.len().next_multiple_of(4), 0);
+        let views = root["bufferViews"].as_array_mut().unwrap();
+        let view = views.len();
+        views.push(json!({"buffer":0,"byteOffset":bin.len(),"byteLength":png_bytes.len()}));
+        bin.extend(png_bytes);
+        root["images"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"bufferView":view,"mimeType":"image/png"}));
+        root["textures"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"source":i}));
+        let extensions = if i == 11 {
+            json!({"KHR_materials_emissive_strength":{"emissiveStrength":4}})
+        } else {
+            json!({"KHR_materials_unlit":{}})
+        };
+        root["materials"].as_array_mut().unwrap().push(json!({
+            "pbrMetallicRoughness":{"baseColorTexture":{"index":i},"metallicFactor":0},
+            "emissiveFactor":if i==11 {[1,1,1]} else {[0,0,0]},
+            "extensions":extensions
+        }));
+        let mut p = primitive.clone();
+        p["material"] = json!(i);
+        root["meshes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"primitives":[p]}));
+        root["nodes"].as_array_mut().unwrap().push(json!({
+            "mesh":i,"translation":[(i%4) as f32*0.65-0.975,(i/4) as f32*0.65-0.65,0],
+            "scale":[0.24,0.24,0.24]
+        }));
+    }
+    root["scene"] = json!(0);
+    root["scenes"] = json!([{"nodes":(0..12).collect::<Vec<_>>()}]);
+    root["buffers"][0]["byteLength"] = json!(bin.len());
+    let mut json_bytes = serde_json::to_vec(&root).unwrap();
+    json_bytes.resize(json_bytes.len().next_multiple_of(4), b' ');
+    bin.resize(bin.len().next_multiple_of(4), 0);
+    let mut bytes = Vec::new();
+    for value in [
+        0x46546c67u32,
+        2,
+        (28 + json_bytes.len() + bin.len()) as u32,
+        json_bytes.len() as u32,
+        0x4e4f534a,
+    ] {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend(json_bytes);
+    bytes.extend((bin.len() as u32).to_le_bytes());
+    bytes.extend(0x004e4942u32.to_le_bytes());
+    bytes.extend(bin);
+    let (mut scene, mut frame, mut resources) = fixture_spec(false, false, false);
+    scene.meshes[0].material = MaterialSpec::default();
+    scene.pbr.tone_mapping = ToneMapping::None;
+    frame.exposure = 0.125;
+    resources
+        .models
+        .insert("model".into(), Arc::new(admit_glb(&bytes).unwrap()));
+    let prepared = Arc::new(prepare_scene(&scene, 384, 256, &resources).unwrap());
+    let reference = render_scene(&prepared, &frame).unwrap();
+    let geometry = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+    assert_eq!(geometry.shading.as_ref().unwrap().textures.len(), 12);
+    let (mut rasterizer, mut context) = renderer();
+    let input = Scene3dGpuInput::new(geometry, prepared, Arc::new(frame)).unwrap();
+    let output = rasterizer.render(&input, &mut context).unwrap().unwrap();
+    let actual = read_color(&mut context, &output.image, 384, 256, ColorType::RGBAF16);
+    let mut maximum = 0.0f32;
+    let mut lit = 0usize;
+    let mut bright = false;
+    for (a, &b) in actual
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(&reference.premul_rgba16f)
+    {
+        let a = half(u16::from_le_bytes(*a));
+        let b = half(b);
+        maximum = maximum.max((a - b).abs());
+        lit += usize::from(a > 0.0);
+        bright |= a > 0.7;
+    }
+    assert!(lit > 100 && bright, "nonempty exposed emission output");
+    assert!(maximum < 0.01, "CPU/GPU max F16 difference {maximum}");
+}

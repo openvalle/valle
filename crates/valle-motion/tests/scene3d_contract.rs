@@ -308,12 +308,12 @@ fn constants_lock_the_bounded_pbr_product_budget() {
     assert_eq!(MAX_MODEL_BYTES, 67_108_864);
     assert_eq!(MAX_VERTICES, 262_144);
     assert_eq!(MAX_TRIANGLES, 131_072);
-    assert_eq!(MAX_MESHES, 8);
+    assert_eq!(MAX_MESHES, 64);
     assert_eq!(MAX_ANIMATIONS, 32);
     assert_eq!(MAX_ANIMATION_CHANNELS, 1_024);
     assert_eq!(MAX_ANIMATION_KEYS, 131_072);
-    assert_eq!(MAX_MATERIALS, 8);
-    assert_eq!(MAX_TEXTURES, 8);
+    assert_eq!(MAX_MATERIALS, 256);
+    assert_eq!(MAX_TEXTURES, 64);
     assert_eq!(MAX_TEXTURE_PIXELS, 25_165_824);
     assert_eq!(MAX_TEXTURE_STORAGE_BYTES, 134_217_728);
     assert_eq!(MAX_ANCHORS, 32);

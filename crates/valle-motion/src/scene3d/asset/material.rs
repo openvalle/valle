@@ -12,6 +12,8 @@ use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelMaterial {
+    /// Source glTF shading intent; explicit Motion material.kind may override it.
+    pub unlit: bool,
     pub base_color: [f32; 4],
     pub metallic: f32,
     pub roughness: f32,
@@ -32,6 +34,7 @@ pub struct ModelMaterial {
 impl Default for ModelMaterial {
     fn default() -> Self {
         Self {
+            unlit: false,
             base_color: [1.0; 4],
             metallic: 1.0,
             roughness: 1.0,
@@ -300,9 +303,30 @@ impl Default for Pbr {
         }
     }
 }
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaterialExtensions {
+    #[serde(default, rename = "KHR_materials_unlit")]
+    unlit: Option<UnlitExtension>,
+    #[serde(default, rename = "KHR_materials_emissive_strength")]
+    emissive_strength: Option<EmissiveStrength>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnlitExtension {}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EmissiveStrength {
+    #[serde(default = "one")]
+    emissive_strength: f32,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
 pub(super) struct GltfMaterial {
+    extensions: MaterialExtensions,
     name: Option<String>,
     pbr_metallic_roughness: Pbr,
     normal_texture: Option<NormalInfo>,
@@ -319,6 +343,7 @@ impl Default for GltfMaterial {
     fn default() -> Self {
         Self {
             _extras: None,
+            extensions: MaterialExtensions::default(),
             name: None,
             pbr_metallic_roughness: Pbr::default(),
             normal_texture: None,
@@ -404,6 +429,20 @@ pub(super) fn admit_materials(
     let mut materials = Vec::new();
     for (i, m) in root.materials.iter().enumerate() {
         let p = &m.pbr_metallic_roughness;
+        let emissive_strength = m
+            .extensions
+            .emissive_strength
+            .as_ref()
+            .map_or(1.0, |e| e.emissive_strength);
+        if !emissive_strength.is_finite()
+            || !(0.0..=65504.0).contains(&emissive_strength)
+            || (m.extensions.unlit.is_some() && m.extensions.emissive_strength.is_some())
+        {
+            return Err(failure(
+                format!("/glb/materials/{i}/extensions"),
+                "emissive strength must be finite in 0..=65504 and cannot accompany unlit",
+            ));
+        }
         let unit = |v: f32| v.is_finite() && (0.0..=1.0).contains(&v);
         if !matches!(m.alpha_mode.as_str(), "OPAQUE" | "MASK" | "BLEND")
             || !m.alpha_cutoff.is_finite()
@@ -424,12 +463,13 @@ pub(super) fn admit_materials(
                 "PBR factors must be finite and bounded; alpha mode must be OPAQUE, MASK or BLEND",
             ));
         }
-        let material = ModelMaterial {
+        let mut material = ModelMaterial {
+            unlit: m.extensions.unlit.is_some(),
             base_color: p.base_color_factor,
             metallic: p.metallic_factor,
             roughness: p.roughness_factor,
             emissive: m.emissive_factor,
-            emissive_intensity: 1.0,
+            emissive_intensity: emissive_strength,
             normal_scale: m.normal_texture.as_ref().map_or(1.0, |t| t.scale),
             occlusion_strength: m.occlusion_texture.as_ref().map_or(1.0, |t| t.strength),
             double_sided: m.double_sided,
@@ -481,6 +521,15 @@ pub(super) fn admit_materials(
                 .map(|t| bind(t, true))
                 .transpose()?,
         };
+        if material.unlit {
+            // KHR_materials_unlit keeps base color, alpha and sidedness only. Motion's
+            // general Unlit material can emit, so clear glTF's ignored fallback inputs.
+            material.emissive = [0.0; 3];
+            material.metallic_roughness_texture = None;
+            material.normal_texture = None;
+            material.occlusion_texture = None;
+            material.emissive_texture = None;
+        }
         materials.push(material);
     }
     let mut images = Vec::new();

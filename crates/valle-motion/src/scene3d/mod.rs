@@ -41,7 +41,8 @@ pub const MAX_TOTAL_FRAME_ASSET_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_MODEL_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_VERTICES: u32 = 262_144;
 pub const MAX_TRIANGLES: u32 = 131_072;
-pub const MAX_MESHES: usize = 8;
+// Counts bound metadata; geometry, frame scalars and decoded bytes are charged separately.
+pub const MAX_MESHES: usize = 64;
 pub const MAX_MODEL_NODES: usize = 256;
 pub const MAX_NODE_DEPTH: usize = 32;
 pub const MAX_ANIMATIONS: usize = 32;
@@ -51,18 +52,16 @@ pub const MAX_MORPH_TARGETS: usize = 8;
 pub const MAX_MORPH_STORAGE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_SKIN_JOINTS: usize = 128;
 pub const MAX_SKIN_STORAGE_BYTES: usize = 16 * 1024 * 1024;
-pub const MAX_MATERIALS: usize = MAX_MESHES;
+pub const MAX_MATERIALS: usize = 256;
 // Texture count, pixel count and decoded mip/environment storage are bounded independently.
-pub const MAX_TEXTURES: u32 = 8;
+pub const MAX_TEXTURES: u32 = 64;
 pub const MAX_TEXTURE_PIXELS: u64 = 24 * 1024 * 1024;
 pub const MAX_TEXTURE_STORAGE_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_ANCHORS: usize = 32;
 pub const MAX_DIRECTIONAL_LIGHTS: usize = 2;
-pub const MAX_FRAME_SCALARS: usize = 14
-    + MAX_MESHES * ((1 + MAX_MODEL_NODES) * 9 + (1 + MAX_MATERIALS) * MATERIAL_FRAME_SCALARS + 1)
-    + 5
-    + 12
-    + MAX_DIRECTIONAL_LIGHTS * 8;
+/// Independent animation-work allowance: larger static object/material tables do not
+/// multiply the maximum expression payload of one frame.
+pub const MAX_FRAME_SCALARS: usize = 19_567;
 pub const MAX_ABS_POSITION: f32 = 10_000.0;
 pub const MAX_SCALE: f32 = 1_000.0;
 pub const MAX_ABS_ROTATION_DEGREES: f32 = 1_000_000.0;

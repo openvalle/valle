@@ -749,7 +749,11 @@ pub fn prepare_scene(
             .cloned()
             .chain(std::iter::once(ModelMaterial::default()))
             .map(|values| PreparedMaterial {
-                kind: MaterialKind::Pbr,
+                kind: if values.unlit {
+                    MaterialKind::Unlit
+                } else {
+                    MaterialKind::Pbr
+                },
                 values,
             })
             .collect::<Vec<_>>();

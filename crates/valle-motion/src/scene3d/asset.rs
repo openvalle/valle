@@ -148,8 +148,8 @@ impl AdmittedModel {
 
 /// Admit closed glTF geometry, materials, skins, node instances and TRS/weight animations. Geometry stays in source
 /// coordinates; transforms are immutable hierarchy data, evaluated without a previous frame.
-/// Embedded images are decoded and mipmapped within fixed budgets. External URIs, extensions,
-/// unsupported extensions are outside the admitted profile.
+/// Embedded images are decoded and mipmapped within fixed budgets. Supported material extensions
+/// are interpreted before rendering; external URIs and unknown extensions remain explicit errors.
 pub fn admit_glb(bytes: &[u8]) -> Result<AdmittedModel, ContractErrors> {
     let mut errors = ContractErrors::default();
     if bytes.len() as u64 > MAX_MODEL_BYTES {
@@ -292,15 +292,6 @@ fn reject_forbidden_root_features(value: &serde_json::Value) -> Result<(), Contr
             "imported cameras are outside the admitted GLB profile",
         );
     }
-    for name in ["extensionsUsed", "extensionsRequired"] {
-        if object
-            .get(name)
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|items| !items.is_empty())
-        {
-            errors.push(format!("/glb/{name}"), "GLB extensions are not admitted");
-        }
-    }
     errors.finish()
 }
 
@@ -333,8 +324,24 @@ fn validate_root(root: &Root, bin: &[u8], errors: &mut ContractErrors) {
     if root.meshes.is_empty() {
         errors.push("/glb/meshes", "at least one mesh is required");
     }
-    if !root.extensions_used.is_empty() || !root.extensions_required.is_empty() {
-        errors.push("/glb/extensions", "GLB extensions are not admitted");
+    for name in root.extensions_used.iter().chain(&root.extensions_required) {
+        if !matches!(
+            name.as_str(),
+            "KHR_materials_unlit" | "KHR_materials_emissive_strength"
+        ) {
+            errors.push(
+                "/glb/extensions",
+                format!("unsupported GLB extension {name}"),
+            );
+        }
+    }
+    for name in &root.extensions_required {
+        if !root.extensions_used.contains(name) {
+            errors.push(
+                "/glb/extensionsRequired",
+                "required extensions must also occur in extensionsUsed",
+            );
+        }
     }
     if root.scene >= root.scenes.len() {
         errors.push("/glb/scene", "default scene index is out of range");
