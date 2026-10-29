@@ -198,6 +198,39 @@ fn dielectric_material_parameters_are_typed_and_animated() {
 }
 
 #[test]
+fn physical_material_parameters_support_animation_and_validate_ranges() {
+    let source = SOURCE.replace("type:\"lambert\",color:\"#ffffff\"",
+        "type:\"pbr\",color:\"#ffffff\",ior:1.33,specularIntensity:0.4,specularColor:\"#ffeecc\",clearcoat:time.seconds,clearcoatRoughness:0.15");
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let material = artifact
+        .nodes
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Scene3D { frame, .. } => Some(&frame.meshes[0].material),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(material.static_values().ior, Some(1.33));
+    assert_eq!(material.static_values().specular_intensity, Some(0.4));
+    assert!(material.static_values().clearcoat.is_none());
+    assert!(
+        material
+            .numbers()
+            .iter()
+            .any(|(name, _)| *name == "clearcoat")
+    );
+    for invalid in [
+        source.replace("ior:1.33", "ior:0.5"),
+        source.replace("specularIntensity:0.4", "specularIntensity:2"),
+        source.replace("clearcoatRoughness:0.15", "clearcoatRoughness:-1"),
+        source.replace("#ffeecc", "#ffeecc55"),
+    ] {
+        assert!(compile_motion(&invalid).is_err(), "{invalid}");
+    }
+}
+
+#[test]
 fn scene3d_material_host_frames_require_the_corresponding_template_and_color_slot() {
     let source = include_str!("fixtures/motion/composition/ui-material.motion.tsx");
     let artifact = compile_motion(source).unwrap().artifact;

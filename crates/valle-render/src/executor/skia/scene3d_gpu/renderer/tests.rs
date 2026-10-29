@@ -592,6 +592,11 @@ fn material_maps_and_environment_match_cpu_reference() {
             frame.meshes[0].transform.rotation_degrees =
                 Vec3::new(sample as f32 * 1.3, sample as f32 * 4.0, 0.0);
             frame.environment_rotation_degrees = sample as f32 * 17.0;
+            frame.meshes[0].material.ior = Some(1.0 + sample as f32 * 0.08);
+            frame.meshes[0].material.specular_intensity = Some(sample as f32 / 15.0);
+            frame.meshes[0].material.specular_color = Some(Color4([0.9, 0.6, 0.4, 1.0]));
+            frame.meshes[0].material.clearcoat = Some(sample as f32 / 15.0);
+            frame.meshes[0].material.clearcoat_roughness = Some(0.2);
             let geometry = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
             assert_eq!(geometry.vertex_stride(), 108);
             assert_eq!(geometry.shading.as_ref().unwrap().textures.len(), 5);
@@ -863,7 +868,16 @@ fn dielectric_transmission_matches_cpu_reference() {
     };
     let prepared = Arc::new(prepare_scene(&scene, 384, 256, &resources).unwrap());
     let (mut rasterizer, mut context) = renderer();
-    for thickness in [0.8, 0.0, 0.8] {
+    for (thickness, ior, coat) in [
+        (0.8, 1.5, 0.0),
+        (0.8, 2.2, 0.7),
+        (0.0, 1.0, 1.0),
+        (0.8, 1.5, 0.0),
+    ] {
+        frame.meshes[2].material.ior = Some(ior);
+        frame.meshes[2].material.clearcoat = Some(coat);
+        frame.meshes[2].material.clearcoat_roughness = Some(0.2);
+        frame.meshes[2].material.specular_intensity = Some(0.8);
         frame.meshes[2].material.thickness = Some(thickness);
         frame.meshes[2].material.attenuation_color = Some(Color4([0.9, 0.6, 0.4, 1.0]));
         frame.meshes[2].material.attenuation_distance = Some(1.5);

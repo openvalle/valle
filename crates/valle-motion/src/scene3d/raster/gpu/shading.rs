@@ -13,7 +13,7 @@ pub struct GpuRasterTextureVarying {
 
 impl GpuRasterShading {
     pub const HEADER_LEN: usize = 5;
-    pub const MATERIAL_STRIDE: usize = 21;
+    pub const MATERIAL_STRIDE: usize = 23;
 
     pub(super) fn new(
         prepared: &PreparedScene,
@@ -184,6 +184,11 @@ impl GpuRasterShading {
                         m.attenuation_color[2],
                         0.0,
                     ],
+                    {
+                        let (f0, f90) = m.dielectric();
+                        [f0[0], f0[1], f0[2], f90]
+                    },
+                    [m.ior, m.clearcoat, m.clearcoat_roughness, 0.0],
                 ]);
             }
         }

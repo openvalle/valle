@@ -61,7 +61,7 @@ fn dfg_at(roughness: f32, nv: f32) -> vec2<f32> {
 const PI: f32 = 3.141592653589793;
 
 fn direct(base: vec3<f32>, metallic: f32, roughness: f32,
-    n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, fab: vec2<f32>, transmission:f32) -> vec3<f32> {
+    n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, fab: vec2<f32>, transmission:f32, optics:vec4<f32>) -> vec3<f32> {
     let nv = max(dot3(n, v), 0.0);
     let nl = max(dot3(n, l), 0.0);
     if nl == 0.0 || nv == 0.0 { return vec3(0.0); }
@@ -74,10 +74,12 @@ fn direct(base: vec3<f32>, metallic: f32, roughness: f32,
     let distribution = a2 / stable(stable(PI * denom) * denom);
     let visibility = 0.5 / max(nl * sqrt(nv * nv * (1.0 - a2) + a2)
         + nv * sqrt(nl * nl * (1.0 - a2) + a2), 1e-8);
-    let f0 = vec3(0.04) * (1.0 - metallic) + base * metallic;
+    let f0 = optics.rgb * (1.0 - metallic) + base * metallic;
+    let f90 = optics.a * (1.0 - metallic) + metallic;
     let power = pow(1.0 - vh, 5.0);
-    let dielectric = 0.04 + 0.96 * power;
-    let fresnel = f0 + (vec3(1.0) - f0) * power;
+    let df0=max(max(optics.r,optics.g),optics.b);
+    let dielectric = df0 + (optics.a - df0) * power;
+    let fresnel = f0 + (vec3(f90) - f0) * power;
     let compensation = vec3(1.0) + f0 * (1.0 / max(fab.x + fab.y, 1e-6) - 1.0);
     return nl * (base * (1.0 - transmission) * (1.0 - metallic) * (1.0 - dielectric) / PI
         + fresnel * distribution * visibility * compensation);
@@ -120,8 +122,8 @@ fn half_even(v: f32) -> f32 {
     return unpack2x16float(halfBits).x;
 }
 
-fn scattering(f0:vec3<f32>,fab:vec2<f32>) -> mat2x3<f32> {
-    let single=f0*fab.x+fab.y;let missing=1.0-fab.x-fab.y;let average=f0+(vec3(1.0)-f0)/21.0;
+fn scattering(f0:vec3<f32>,f90:f32,fab:vec2<f32>) -> mat2x3<f32> {
+    let single=f0*fab.x+f90*fab.y;let missing=1.0-fab.x-fab.y;let average=f0+(vec3(f90)-f0)/21.0;
     return mat2x3(single,single*average/(vec3(1.0)-missing*average)*missing);
 }
 fn camera_ray(pixel:vec2<u32>) -> vec3<f32> {
@@ -156,6 +158,8 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
     let pixel = vec2<u32>(in.position.xy);
     let ray = camera_ray(pixel);
     let n=lit_normal(in,material);
+    let optics=shading[material+21u];
+    let coating=shading[material+22u];
     let v = unit(-ray);
     var radiance = base;
     var fab = vec2(0.0);
@@ -175,9 +179,10 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
     }
     if kind == 2u {
         fab = dfg_at(roughness, clamp(dot(n, v), 0.0, 1.0));
-        let single = 0.04 * fab.x + fab.y;
+        let df0=max(max(optics.r,optics.g),optics.b);
+        let single = df0 * fab.x + optics.a * fab.y;
         let missing = 1.0 - fab.x - fab.y;
-        let average = 0.04 + 0.96 / 21.0;
+        let average = df0 + (optics.a-df0) / 21.0;
         let multi = single * average / (1.0 - missing * average) * missing;
         var irradiance = shading[0].rgb / PI;
         for (var i = 0u; i < counts.z; i++) {
@@ -190,7 +195,7 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
             let reflection=n*(2.0*dot3(n,v))-v;let r4=roughness*roughness*roughness*roughness;
             let specular=env_specular(unit(reflection*(1.0-r4)+n*r4),roughness);let diffuse=env_diffuse(n);
             let specularAo=clamp(pow(clamp(dot3(n,v),0.0,1.0)+ao,exp2(-16.0*roughness-1.0))-1.0+ao,0.0,1.0);
-            let metal=scattering(base,fab);let dielectric=scattering(vec3(0.04),fab);
+            let metal=scattering(base,1.0,fab);let dielectric=scattering(optics.rgb,optics.a,fab);
             let s=dielectric[0]*(1.0-metallic)+metal[0]*metallic;let m=dielectric[1]*(1.0-metallic)+metal[1]*metallic;
             radiance+=(specular*s+diffuse*m)*specularAo+base*(1.0-shading[material+19u].x)*(1.0-metallic)*(1.0-single-multi)*diffuse*ao;
         }
@@ -199,7 +204,23 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
     if kind == 2u {
         for (var i = 0u; i < counts.y; i++) {
             let at = lightStart + i * 2u;
-            radiance += direct(base, metallic, roughness, n, v, shading[at].xyz, fab, shading[material+19u].x) * shading[at + 1u].rgb*shadow_visibility(i,camera_position(ray,in.invZ),n);
+            radiance += direct(base, metallic, roughness, n, v, shading[at].xyz, fab, shading[material+19u].x, optics) * shading[at + 1u].rgb*shadow_visibility(i,camera_position(ray,in.invZ),n);
+        }
+    }
+    if kind == 2u && coating.y > 0.0 {
+        let cn=unit(select(in.normalOverZ,in.normalOverZ/in.invZ,in.triangle==0xffffffffu));
+        let nv=clamp(dot3(cn,v),0.0,1.0);
+        radiance*=1.0-coating.y*(0.04+0.96*pow(1.0-nv,5.0));
+        let cr=max(coating.z,0.0525);let cfab=dfg_at(cr,nv);
+        for (var i=0u;i<counts.y;i++) {
+            let at=lightStart+i*2u;
+            radiance+=coating.y*direct(vec3(0.04),1.0,cr,cn,v,shading[at].xyz,cfab,0.0,vec4(0.04,0.04,0.04,1.0))
+                *shading[at+1u].rgb*shadow_visibility(i,camera_position(ray,in.invZ),cn);
+        }
+        if shading[3].z >= 0.0 {
+            let r=cn*(2.0*dot3(cn,v))-v;let r4=cr*cr*cr*cr;
+            let energy=scattering(vec3(0.04),1.0,cfab);
+            radiance+=coating.y*ao*(env_specular(unit(r*(1.0-r4)+cn*r4),cr)*energy[0]+env_diffuse(cn)*energy[1]);
         }
     }
     var display = radiance * shading[0].a;

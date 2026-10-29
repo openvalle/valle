@@ -123,18 +123,31 @@ struct DirectBrdf {
     f0: [f32; 3],
     compensation: [f32; 3],
     transmission: f32,
+    dielectric: f32,
+    dielectric_f90: f32,
+    f90: f32,
 }
 
 impl DirectBrdf {
-    fn new(base: [f32; 3], metallic: f32, roughness: f32, nv: f32, fab: [f32; 2]) -> Self {
+    fn new(
+        base: [f32; 3],
+        metallic: f32,
+        roughness: f32,
+        nv: f32,
+        fab: [f32; 2],
+        optics: ([f32; 3], f32),
+    ) -> Self {
         let alpha = roughness * roughness;
         let a2 = alpha * alpha;
         let energy = (fab[0] + fab[1]).max(1e-6);
-        let f0 = base.map(|base| 0.04 * (1.0 - metallic) + base * metallic);
+        let f0 = std::array::from_fn(|i| optics.0[i] * (1.0 - metallic) + base[i] * metallic);
         Self {
             nv,
             a2,
             transmission: 0.0,
+            dielectric: optics.0.into_iter().fold(0.0, f32::max),
+            dielectric_f90: optics.1,
+            f90: optics.1 * (1.0 - metallic) + metallic,
             view_visibility: libm::sqrtf(nv * nv * (1.0 - a2) + a2),
             diffuse: base.map(|base| base * (1.0 - metallic)),
             f0,
@@ -156,7 +169,16 @@ impl DirectBrdf {
             / (nl * self.view_visibility
                 + self.nv * libm::sqrtf(nl * nl * (1.0 - self.a2) + self.a2))
             .max(1.0e-8);
-        let (dielectric_fresnel, fresnel) = super::fresnel::coefficients(vh, self.f0);
+        let (dielectric_fresnel, fresnel) = if self.dielectric == 0.04 && self.dielectric_f90 == 1.0
+        {
+            super::fresnel::coefficients(vh, self.f0)
+        } else {
+            let power = libm::powf(1.0 - vh, 5.0);
+            (
+                self.dielectric + (self.dielectric_f90 - self.dielectric) * power,
+                self.f0.map(|f| f + (self.f90 - f) * power),
+            )
+        };
         std::array::from_fn(|i| {
             let f = fresnel[i];
             nl * (self.diffuse[i] * (1.0 - self.transmission) * (1.0 - dielectric_fresnel)
@@ -178,6 +200,8 @@ pub(super) fn shade(
     lights: &Lights,
 ) -> Option<([f32; 3], f32, Option<super::transmission::Sample>)> {
     let m = triangle.material;
+    let coat_normal = n;
+    let optics = m.dielectric();
     let tex = |binding| sample(mesh, binding, uv, derivatives);
     let base_tex = m.base_color_texture.map(tex).unwrap_or([1.0; 4]);
     let coverage = m.base_color[3] * base_tex[3];
@@ -212,6 +236,7 @@ pub(super) fn shade(
             lights,
             fab,
             m.transmission,
+            optics,
         ),
         MaterialKind::Lambert => {
             let factor = lights.factor(n, ao, position);
@@ -223,7 +248,7 @@ pub(super) fn shade(
         radiance[i] += m.emissive[i] * m.emissive_intensity * emission[i];
     }
     if triangle.kind == MaterialKind::Pbr && !lights.directional.is_empty() {
-        let mut brdf = DirectBrdf::new(base, metallic, roughness, n.dot(v).max(0.0), fab);
+        let mut brdf = DirectBrdf::new(base, metallic, roughness, n.dot(v).max(0.0), fab, optics);
         brdf.transmission = m.transmission;
         for (index, &(direction, intensity)) in lights.directional.iter().enumerate() {
             let reflected = brdf.reflect(n, v, direction);
@@ -237,6 +262,37 @@ pub(super) fn shade(
             }
         }
     }
+    let mut coat_attenuation = 1.0;
+    if triangle.kind == MaterialKind::Pbr && m.clearcoat > 0.0 {
+        let nv = coat_normal.dot(v).clamp(0.0, 1.0);
+        coat_attenuation = 1.0 - m.clearcoat * (0.04 + 0.96 * libm::powf(1.0 - nv, 5.0));
+        radiance = radiance.map(|c| c * coat_attenuation);
+        let roughness = m.clearcoat_roughness.max(0.0525);
+        let fab = super::lighting::dfg(roughness, nv);
+        let coat = DirectBrdf::new([0.04; 3], 1.0, roughness, nv, fab, ([0.04; 3], 1.0));
+        for (index, &(direction, intensity)) in lights.directional.iter().enumerate() {
+            let reflected = coat.reflect(coat_normal, v, direction);
+            let visibility = lights.shadow_visibility(index, position, coat_normal);
+            for i in 0..3 {
+                radiance[i] += m.clearcoat * reflected[i] * intensity[i] * visibility;
+            }
+        }
+        if let Some(environment) = &lights.environment {
+            let reflection = coat_normal * (2.0 * coat_normal.dot(v)) - v;
+            let r4 = roughness * roughness * roughness * roughness;
+            let reflection = (reflection * (1.0 - r4) + coat_normal * r4).normalized();
+            let reflected =
+                environment.specular(lights.environment_direction(reflection), roughness);
+            let energy = scattering(0.04, 1.0, fab);
+            let diffuse = environment.diffuse(lights.environment_direction(coat_normal));
+            for i in 0..3 {
+                radiance[i] += m.clearcoat
+                    * lights.environment_intensity
+                    * ao
+                    * (reflected[i] * energy[0] + diffuse[i] * energy[1]);
+            }
+        }
+    }
     Some((
         radiance,
         if m.alpha_mode == AlphaMode::Blend {
@@ -244,15 +300,16 @@ pub(super) fn shade(
         } else {
             1.0
         },
-        (m.transmission > 0.0)
-            .then(|| super::transmission::Sample::new(m, n, v, base, metallic, roughness)),
+        (m.transmission > 0.0).then(|| {
+            super::transmission::Sample::new(m, n, v, base, metallic, roughness, coat_attenuation)
+        }),
     ))
 }
 
-fn scattering(f0: f32, fab: [f32; 2]) -> [f32; 2] {
-    let single = f0 * fab[0] + fab[1];
+fn scattering(f0: f32, f90: f32, fab: [f32; 2]) -> [f32; 2] {
+    let single = f0 * fab[0] + f90 * fab[1];
     let missing = 1.0 - fab[0] - fab[1];
-    let average = f0 + (1.0 - f0) / 21.0;
+    let average = f0 + (f90 - f0) / 21.0;
     [
         single,
         single * average / (1.0 - missing * average) * missing,
@@ -270,9 +327,10 @@ fn indirect(
     lights: &Lights,
     fab: [f32; 2],
     transmission: f32,
+    optics: ([f32; 3], f32),
 ) -> [f32; 3] {
     let nv = n.dot(v).clamp(0.0, 1.0);
-    let dielectric = scattering(0.04, fab);
+    let dielectric = scattering(optics.0.into_iter().fold(0.0, f32::max), optics.1, fab);
     let diffuse_energy = 1.0 - dielectric[0] - dielectric[1];
     let mut irradiance = lights.ambient.map(|v| v / core::f32::consts::PI);
     for &(direction, sky, ground) in &lights.hemisphere {
@@ -297,7 +355,8 @@ fn indirect(
         let specular_ao =
             (libm::powf(nv + ao, libm::exp2f(-16.0 * roughness - 1.0)) - 1.0 + ao).clamp(0.0, 1.0);
         for i in 0..3 {
-            let metal = scattering(base[i], fab);
+            let metal = scattering(base[i], 1.0, fab);
+            let dielectric = scattering(optics.0[i], optics.1, fab);
             let single = dielectric[0] * (1.0 - metallic) + metal[0] * metallic;
             let multi = dielectric[1] * (1.0 - metallic) + metal[1] * metallic;
             result[i] += (radiance[i] * single + diffuse[i] * multi) * specular_ao
@@ -328,6 +387,7 @@ mod tests {
             roughness,
             nv,
             super::super::lighting::dfg(roughness, nv),
+            ([0.04; 3], 1.0),
         )
         .reflect(n, v, l)
     }

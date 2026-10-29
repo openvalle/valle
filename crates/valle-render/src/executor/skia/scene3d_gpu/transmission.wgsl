@@ -21,11 +21,14 @@ fn transmitted_color(in:LitVertex,reflected:vec4<f32>)->vec4<f32> {
     let material=HEADER+in.material*MATERIAL;
     let parameters=shading[material+19u];if parameters.x<=0.0 {return reflected;}
     let ray=camera_ray(vec2<u32>(in.position.xy));let v=unit(-ray);let n=lit_normal(in,material);
-    let cosine=clamp(dot3(n,v),0.0,1.0);let eta=1.0/1.5;
+    let cosine=clamp(dot3(n,v),0.0,1.0);let eta=1.0/shading[material+22u].x;
     let direction=unit(-v*eta+n*(eta*cosine-sqrt(max(1.0-eta*eta*(1.0-cosine*cosine),0.0))));
     let distance=parameters.y/max(-dot3(direction,n),0.05);
     let mr=texture_slot(material,1u,in);let metallic=shading[material+1u].a*mr.b;
-    let weight=parameters.x*(1.0-metallic)*(1.0-(0.04+0.96*pow(1.0-cosine,5.0)));
+    let optics=shading[material+21u];let f0=max(max(optics.r,optics.g),optics.b);
+    let cn=unit(select(in.normalOverZ,in.normalOverZ/in.invZ,in.triangle==0xffffffffu));
+    let coat=1.0-shading[material+22u].y*(0.04+0.96*pow(1.0-clamp(dot3(cn,v),0.0,1.0),5.0));
+    let weight=parameters.x*(1.0-metallic)*(1.0-(f0+(optics.a-f0)*pow(1.0-cosine,5.0)))*coat;
     let base=shading[material].rgb*texture_slot(material,0u,in).rgb;
     var tint=base;
     if parameters.z>0.0 && distance>0.0 {

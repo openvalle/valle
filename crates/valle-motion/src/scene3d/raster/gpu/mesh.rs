@@ -269,7 +269,7 @@ pub fn prepare_gpu_mesh_geometry(
         || prepared.meshes.iter().any(|m| {
             m.materials
                 .iter()
-                .any(|m| m.values.uses_uv() || m.values.alpha_mode == AlphaMode::Blend)
+                .any(|m| m.values.uses_uv() || m.values.needs_blend())
         })
     {
         return Ok(None);

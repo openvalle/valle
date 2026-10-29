@@ -73,6 +73,7 @@ pub(super) struct Sample {
     roughness: f32,
 }
 impl Sample {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         m: &ModelMaterial,
         n: V3,
@@ -80,15 +81,18 @@ impl Sample {
         base: [f32; 3],
         metallic: f32,
         roughness: f32,
+        coat_attenuation: f32,
     ) -> Self {
         let cosine = n.dot(v).clamp(0.0, 1.0);
-        let eta = 1.0 / 1.5;
+        let eta = 1.0 / m.ior;
         let direction = (v * -eta
             + n * (eta * cosine
                 - libm::sqrtf((1.0 - eta * eta * (1.0 - cosine * cosine)).max(0.0))))
         .normalized();
         let distance = m.thickness / (-direction.dot(n)).max(0.05);
-        let fresnel = 0.04 + 0.96 * libm::powf(1.0 - cosine, 5.0);
+        let (f0, f90) = m.dielectric();
+        let f0 = f0.into_iter().fold(0.0, f32::max);
+        let fresnel = f0 + (f90 - f0) * libm::powf(1.0 - cosine, 5.0);
         let tint = std::array::from_fn(|i| {
             base[i]
                 * m.attenuation_distance
@@ -98,7 +102,7 @@ impl Sample {
         Self {
             direction,
             distance,
-            weight: m.transmission * (1.0 - metallic) * (1.0 - fresnel),
+            weight: m.transmission * (1.0 - metallic) * (1.0 - fresnel) * coat_attenuation,
             tint,
             roughness,
         }

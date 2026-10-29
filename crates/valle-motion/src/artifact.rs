@@ -1062,6 +1062,16 @@ impl Scene3DTransformBinding {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Scene3DMaterialBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ior: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specular_intensity: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearcoat: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearcoat_roughness: Option<NumberValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specular_color: Option<ColorValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emissive: Option<ColorValue>,
@@ -1089,6 +1099,10 @@ pub struct Scene3DMaterialBinding {
 impl Scene3DMaterialBinding {
     pub fn numbers(&self) -> Vec<(&'static str, &NumberValue)> {
         [
+            ("ior", &self.ior),
+            ("specularIntensity", &self.specular_intensity),
+            ("clearcoat", &self.clearcoat),
+            ("clearcoatRoughness", &self.clearcoat_roughness),
             ("metallic", &self.metallic),
             ("roughness", &self.roughness),
             ("emissiveIntensity", &self.emissive_intensity),
@@ -1108,6 +1122,7 @@ impl Scene3DMaterialBinding {
             ("color", &self.color),
             ("emissive", &self.emissive),
             ("attenuationColor", &self.attenuation_color),
+            ("specularColor", &self.specular_color),
         ]
         .into_iter()
         .filter_map(|(k, v)| v.as_ref().map(|v| (k, v)))
@@ -1125,6 +1140,11 @@ impl Scene3DMaterialBinding {
             _ => None,
         };
         crate::scene3d::MaterialFrameState {
+            ior: n(&self.ior),
+            specular_intensity: n(&self.specular_intensity),
+            clearcoat: n(&self.clearcoat),
+            clearcoat_roughness: n(&self.clearcoat_roughness),
+            specular_color: c(&self.specular_color),
             color: c(&self.color),
             emissive: c(&self.emissive),
             metallic: n(&self.metallic),

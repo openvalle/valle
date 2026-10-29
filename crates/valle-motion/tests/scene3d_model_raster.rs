@@ -3505,3 +3505,6 @@ fn host_material_pixels_are_bounded_and_part_of_prepare_identity() {
         assert!(MaterialImage::from_working_rgba32f(w, h, &pixels).is_err());
     }
 }
+
+#[path = "scene3d_model_raster/physical.rs"]
+mod physical;

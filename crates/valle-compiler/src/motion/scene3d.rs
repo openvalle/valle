@@ -1292,6 +1292,11 @@ impl<'s> Compiler<'s> {
             "normalScale",
             "occlusionStrength",
             "alphaCutoff",
+            "ior",
+            "specularIntensity",
+            "clearcoat",
+            "clearcoatRoughness",
+            "specularColor",
             "transmission",
             "thickness",
             "attenuationColor",
@@ -1449,6 +1454,7 @@ impl<'s> Compiler<'s> {
             ("color", &mut frame.color),
             ("emissive", &mut frame.emissive),
             ("attenuationColor", &mut frame.attenuation_color),
+            ("specularColor", &mut frame.specular_color),
         ] {
             if let Some(value) = values.get(name) {
                 *binding = Some(self.color_binding(value, name)?);
@@ -1461,6 +1467,10 @@ impl<'s> Compiler<'s> {
             ("normalScale", &mut frame.normal_scale),
             ("occlusionStrength", &mut frame.occlusion_strength),
             ("alphaCutoff", &mut frame.alpha_cutoff),
+            ("ior", &mut frame.ior),
+            ("specularIntensity", &mut frame.specular_intensity),
+            ("clearcoat", &mut frame.clearcoat),
+            ("clearcoatRoughness", &mut frame.clearcoat_roughness),
             ("transmission", &mut frame.transmission),
             ("thickness", &mut frame.thickness),
             ("attenuationDistance", &mut frame.attenuation_distance),

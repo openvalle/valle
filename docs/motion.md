@@ -2962,6 +2962,15 @@ frame expressions: `color`, `metallic` (0–1), `roughness` (0–1), opaque `emi
 Every frame carries the complete set of authored overrides, evaluated before drawing;
 source materials and prepared images remain immutable.
 
+PBR also accepts animatable `ior` (1–3, default 1.5), `specularIntensity` (0–1,
+default 1), opaque `specularColor` (default white), `clearcoat` (0–1, default 0),
+and `clearcoatRoughness` (0–1, default 0). Specular intensity and color control the
+dielectric reflection, leaving metallic reflection unchanged. Clearcoat adds an
+independent dielectric highlight above the base material, including emission,
+and attenuates the underlying reflection and transmission. Its normal currently
+comes from the mesh surface, independently of the base normal map. Native CPU,
+Metal/Vulkan and browser GPU paths share these material semantics.
+
 Texture controls have kind `image` and accept PNG/JPEG. The `textures` map has five
 slots: `baseColor` (sRGB RGB + linear alpha), `metallicRoughness` (G roughness/B
 metallic), `normal` (tangent-space RGB), `occlusion` (R), and `emissive` (sRGB RGB).
@@ -3063,9 +3072,14 @@ The renderer recomputes flat normals after deformation when the source has no no
 Tangent accessors are validated but source and morphed tangents are not consumed by the
 current rasterizer. A mesh admits up to eight targets and 64 MiB of decoded morph data;
 weight magnitudes are limited to 16. External URIs, sparse accessors,
-additional joint/weight sets and extensions other than `KHR_materials_unlit`,
-`KHR_materials_emissive_strength` and `KHR_texture_transform` remain outside the
-admitted profile. Texture transforms support offset, rotation and scale on
+additional joint/weight sets and unrecognized extensions remain outside the
+admitted profile. Supported extensions are `KHR_materials_unlit`,
+`KHR_materials_emissive_strength`, `KHR_texture_transform`, and the scalar/color
+factors of `KHR_materials_ior`, `KHR_materials_specular`, `KHR_materials_clearcoat`,
+`KHR_materials_transmission` and `KHR_materials_volume`. Extension-specific texture
+slots are not admitted yet; unsupported fields report errors rather than being
+ignored. Imported physical factors retain glTF linear color semantics. IOR is
+bounded to 1–3 and thickness to 0–10000 world units. Texture transforms support offset, rotation and scale on
 `TEXCOORD_0`; other texture coordinate sets are not admitted.
 
 Environment lighting uses an explicitly bound `asset({kind: "environment"})` resource:
@@ -3140,7 +3154,7 @@ material image dimension and 128 MiB mip-storage limits still apply.
 
 PBR `transmission` (0..1), `thickness` (world units), `attenuationColor` and
 `attenuationDistance` are animatable. This is single-layer screen-space refraction
-of the current opaque scene, with fixed IOR 1.5. It does not include caustics,
+of the current opaque scene, using the material's `ior` (default 1.5). It does not include caustics,
 recursive transparent layers or colored transmission shadows.
 
 ### ShaderLayer
@@ -3385,7 +3399,7 @@ large repeated geometry.
 
 Known limits of Scene3D, procedural geometry and filters:
 
-- A Scene3D layer holds 1 to 8 meshes. Split a larger scene into layers that share one
+- A Scene3D layer holds 1 to 64 meshes. Split a larger scene into layers that share one
   camera; layers do not occlude or shadow each other.
 - The 131,072-triangle layer budget counts procedural meshes (`extrude`, `lathe`, `tube`)
   as it counts loaded models.

@@ -13,10 +13,15 @@ use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModelMaterial {
+    pub ior: f32,
+    pub specular_intensity: f32,
+    pub specular_color: [f32; 3],
+    pub clearcoat: f32,
+    pub clearcoat_roughness: f32,
     /// Source glTF shading intent; explicit Motion material.kind may override it.
     pub unlit: bool,
     pub transmission: f32,
-    /// Optical path thickness in world units. The dielectric interface uses IOR 1.5.
+    /// Optical path thickness in world units. The dielectric interface uses the material IOR.
     pub thickness: f32,
     pub attenuation_color: [f32; 3],
     /// None means no absorption.
@@ -41,6 +46,11 @@ pub struct ModelMaterial {
 impl Default for ModelMaterial {
     fn default() -> Self {
         Self {
+            ior: 1.5,
+            specular_intensity: 1.0,
+            specular_color: [1.0; 3],
+            clearcoat: 0.0,
+            clearcoat_roughness: 0.0,
             unlit: false,
             transmission: 0.0,
             thickness: 0.0,
@@ -66,6 +76,22 @@ impl Default for ModelMaterial {
 }
 
 impl ModelMaterial {
+    /// Dielectric F0 and F90 follow glTF's IOR/specular extensions. Keep the
+    /// existing 1.5-IOR constant exact so unchanged materials retain their bits.
+    pub(crate) fn dielectric(&self) -> ([f32; 3], f32) {
+        let f0 = if self.ior == 1.5 {
+            0.04
+        } else {
+            let ratio = (self.ior - 1.0) / (self.ior + 1.0);
+            ratio * ratio
+        };
+        (
+            self.specular_color
+                .map(|c| (f0 * c).min(1.0) * self.specular_intensity),
+            self.specular_intensity,
+        )
+    }
+
     pub(crate) fn needs_blend(&self) -> bool {
         self.alpha_mode == AlphaMode::Blend || self.transmission > 0.0
     }
@@ -391,10 +417,66 @@ impl Default for Pbr {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MaterialExtensions {
+    #[serde(default, rename = "KHR_materials_ior")]
+    ior: Option<Ior>,
+    #[serde(default, rename = "KHR_materials_specular")]
+    specular: Option<Specular>,
+    #[serde(default, rename = "KHR_materials_clearcoat")]
+    clearcoat: Option<Clearcoat>,
+    #[serde(default, rename = "KHR_materials_transmission")]
+    transmission: Option<Transmission>,
+    #[serde(default, rename = "KHR_materials_volume")]
+    volume: Option<Volume>,
     #[serde(default, rename = "KHR_materials_unlit")]
     unlit: Option<UnlitExtension>,
     #[serde(default, rename = "KHR_materials_emissive_strength")]
     emissive_strength: Option<EmissiveStrength>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Ior {
+    #[serde(default = "default_ior")]
+    ior: f32,
+}
+fn default_ior() -> f32 {
+    1.5
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Specular {
+    #[serde(default = "one")]
+    specular_factor: f32,
+    #[serde(default = "white")]
+    specular_color_factor: [f32; 3],
+}
+fn white() -> [f32; 3] {
+    [1.0; 3]
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+struct Clearcoat {
+    clearcoat_factor: f32,
+    clearcoat_roughness_factor: f32,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+struct Transmission {
+    transmission_factor: f32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Volume {
+    #[serde(default)]
+    thickness_factor: f32,
+    #[serde(default = "white")]
+    attenuation_color: [f32; 3],
+    #[serde(default)]
+    attenuation_distance: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -558,11 +640,48 @@ pub(super) fn admit_materials(
             ));
         }
         let mut material = ModelMaterial {
+            ior: m.extensions.ior.as_ref().map_or(1.5, |e| e.ior),
+            specular_intensity: m
+                .extensions
+                .specular
+                .as_ref()
+                .map_or(1.0, |e| e.specular_factor),
+            specular_color: m
+                .extensions
+                .specular
+                .as_ref()
+                .map_or([1.0; 3], |e| e.specular_color_factor),
+            clearcoat: m
+                .extensions
+                .clearcoat
+                .as_ref()
+                .map_or(0.0, |e| e.clearcoat_factor),
+            clearcoat_roughness: m
+                .extensions
+                .clearcoat
+                .as_ref()
+                .map_or(0.0, |e| e.clearcoat_roughness_factor),
             unlit: m.extensions.unlit.is_some(),
-            transmission: 0.0,
-            thickness: 0.0,
-            attenuation_color: [1.0; 3],
-            attenuation_distance: None,
+            transmission: m
+                .extensions
+                .transmission
+                .as_ref()
+                .map_or(0.0, |e| e.transmission_factor),
+            thickness: m
+                .extensions
+                .volume
+                .as_ref()
+                .map_or(0.0, |e| e.thickness_factor),
+            attenuation_color: m
+                .extensions
+                .volume
+                .as_ref()
+                .map_or([1.0; 3], |e| e.attenuation_color),
+            attenuation_distance: m
+                .extensions
+                .volume
+                .as_ref()
+                .and_then(|e| e.attenuation_distance),
             base_color: p.base_color_factor,
             metallic: p.metallic_factor,
             roughness: p.roughness_factor,
@@ -621,6 +740,32 @@ pub(super) fn admit_materials(
                 .map(|t| bind(t, true))
                 .transpose()?,
         };
+        if !(1.0..=3.0).contains(&material.ior)
+            || !unit(material.specular_intensity)
+            || !material
+                .specular_color
+                .into_iter()
+                .all(|v| v.is_finite() && (0.0..=65504.0).contains(&v))
+            || !unit(material.clearcoat)
+            || !unit(material.clearcoat_roughness)
+            || !unit(material.transmission)
+            || !(0.0..=10000.0).contains(&material.thickness)
+            || !material.attenuation_color.into_iter().all(unit)
+            || material
+                .attenuation_distance
+                .is_some_and(|v| !v.is_finite() || v <= 0.0)
+            || (material.unlit
+                && (m.extensions.ior.is_some()
+                    || m.extensions.specular.is_some()
+                    || m.extensions.clearcoat.is_some()
+                    || m.extensions.transmission.is_some()
+                    || m.extensions.volume.is_some()))
+        {
+            return Err(failure(
+                format!("/glb/materials/{i}/extensions"),
+                "physical material factors must be finite and within supported ranges; physical extensions cannot accompany unlit",
+            ));
+        }
         if material.unlit {
             // KHR_materials_unlit keeps base color, alpha and sidedness only. Motion's
             // general Unlit material can emit, so clear glTF's ignored fallback inputs.
@@ -906,6 +1051,21 @@ impl ModelMaterial {
         }
     }
     pub(crate) fn apply_values(&mut self, value: &MaterialFrameState) {
+        if let Some(v) = value.ior {
+            self.ior = v;
+        }
+        if let Some(v) = value.specular_intensity {
+            self.specular_intensity = v;
+        }
+        if let Some(v) = value.clearcoat {
+            self.clearcoat = v;
+        }
+        if let Some(v) = value.clearcoat_roughness {
+            self.clearcoat_roughness = v;
+        }
+        if let Some(v) = value.specular_color {
+            self.specular_color = [v.0[0], v.0[1], v.0[2]].map(srgb_to_linear);
+        }
         if let Some(c) = value.color {
             self.base_color = [
                 srgb_to_linear(c.0[0]),

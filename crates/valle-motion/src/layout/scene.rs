@@ -2007,6 +2007,11 @@ fn resolve_scene3d_requests(
         })?;
         let material = |m: &crate::Scene3DMaterialBinding| -> Result<valle_motion::scene3d::MaterialFrameState, LayoutError> {
             Ok(valle_motion::scene3d::MaterialFrameState {
+                ior: m.ior.as_ref().map(|v| scalar(v, "material ior")).transpose()?,
+                specular_intensity: m.specular_intensity.as_ref().map(|v| scalar(v, "material specularIntensity")).transpose()?,
+                clearcoat: m.clearcoat.as_ref().map(|v| scalar(v, "material clearcoat")).transpose()?,
+                clearcoat_roughness: m.clearcoat_roughness.as_ref().map(|v| scalar(v, "material clearcoatRoughness")).transpose()?,
+                specular_color: m.specular_color.as_ref().map(color).transpose()?,
                 color: m.color.as_ref().map(color).transpose()?,
                 attenuation_color: m.attenuation_color.as_ref().map(color).transpose()?,
                 transmission: m.transmission.as_ref().map(|v| scalar(v, "material transmission")).transpose()?,

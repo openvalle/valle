@@ -3,7 +3,7 @@ use super::{Color4, ContractErrors, MaterialKind, validate_control};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const MATERIAL_FRAME_SCALARS: usize = 21;
+pub const MATERIAL_FRAME_SCALARS: usize = 29;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -149,6 +149,16 @@ pub struct MaterialOverrideSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaterialFrameState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ior: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specular_intensity: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearcoat: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearcoat_roughness: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specular_color: Option<Color4>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Color4>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metallic: Option<f32>,
@@ -184,6 +194,7 @@ impl MaterialFrameState {
             ("color", self.color),
             ("emissive", self.emissive),
             ("attenuationColor", self.attenuation_color),
+            ("specularColor", self.specular_color),
         ] {
             let invalid_color =
                 color.is_some_and(|color| !color.valid() || (name != "color" && color.0[3] != 1.0));
@@ -195,6 +206,10 @@ impl MaterialFrameState {
             }
         }
         for (name, value, min, max) in [
+            ("ior", self.ior, 1.0, 3.0),
+            ("specularIntensity", self.specular_intensity, 0.0, 1.0),
+            ("clearcoat", self.clearcoat, 0.0, 1.0),
+            ("clearcoatRoughness", self.clearcoat_roughness, 0.0, 1.0),
             ("metallic", self.metallic, 0.0, 1.0),
             ("roughness", self.roughness, 0.0, 1.0),
             ("emissiveIntensity", self.emissive_intensity, 0.0, 16.0),
