@@ -557,11 +557,23 @@ impl BackendCaches {
         binding: &PlanStructureBinding,
         object: &SkiaExternalObject,
         uri: &str,
+        gpu: bool,
     ) -> Result<Rc<RuntimeEffect>, DrawError> {
         // A cache hit must not bypass the plan's declared structure binding. Physical cache
         // identity and logical admission identity are intentionally checked independently.
         if binding.key != uri {
             return Err(DrawError::MissingShader(uri.to_owned()));
+        }
+        let bytes = object
+            .shader_data()
+            .ok_or_else(|| DrawError::MissingShader(uri.to_owned()))?;
+        let source = core::str::from_utf8(bytes)
+            .map_err(|_| DrawError::InvalidShaderEncoding(uri.to_owned()))?;
+        if source.starts_with("#version 300\n") && !gpu {
+            return Err(DrawError::ShaderCompile {
+                uri: uri.to_owned(),
+                message: "uint, bitwise operators and screen derivatives require a GPU renderer (Metal/Vulkan); CPU rendering is unavailable for this shader".into(),
+            });
         }
         let key = object.key().clone();
         if let Some(cached) = self.shaders.get(&key) {
@@ -570,11 +582,6 @@ impl BackendCaches {
         }
 
         self.counters.shader_misses = self.counters.shader_misses.saturating_add(1);
-        let bytes = object
-            .shader_data()
-            .ok_or_else(|| DrawError::MissingShader(uri.to_owned()))?;
-        let source = core::str::from_utf8(bytes)
-            .map_err(|_| DrawError::InvalidShaderEncoding(uri.to_owned()))?;
         let effect = Rc::new(
             RuntimeEffect::make_for_shader(source, None).map_err(|message| {
                 DrawError::ShaderCompile {
@@ -591,6 +598,55 @@ impl BackendCaches {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advanced_shader_rejects_cpu_even_after_a_gpu_cache_hit() {
+        use valle_engine::resource::{
+            OperatorAlphaBehavior, OperatorColorDomain, ResourceInterpretation, ResourceKey,
+        };
+        let source = b"#version 300\nfloat4 main(float2 xy){return float4(float(uint(xy.x)^7u));}";
+        let content = ContentDigest::of_bytes(source);
+        let abi = ContentDigest::of_bytes(b"advanced-test");
+        let key = ResourceKey {
+            content,
+            interpretation: ResourceInterpretation::RuntimeShader {
+                abi_digest: abi,
+                color_domain: OperatorColorDomain::WorkingLinear,
+                alpha_behavior: OperatorAlphaBehavior::RewritesCoverage,
+            },
+        };
+        let object = SkiaExternalObject::runtime_shader(
+            key,
+            content,
+            abi,
+            Arc::<[u8]>::from(source.as_slice()),
+        )
+        .unwrap();
+        let binding = PlanStructureBinding {
+            key: "advanced".into(),
+            slot: serde_json::from_str("1").unwrap(),
+        };
+        let mut cache = BackendCaches::new();
+        assert!(
+            cache
+                .shader(&binding, &object, "advanced", false)
+                .unwrap_err()
+                .to_string()
+                .contains("require a GPU")
+        );
+        let effect = cache.shader(&binding, &object, "advanced", true).unwrap();
+        assert!(Rc::ptr_eq(
+            &effect,
+            &cache.shader(&binding, &object, "advanced", true).unwrap()
+        ));
+        assert!(
+            cache
+                .shader(&binding, &object, "advanced", false)
+                .unwrap_err()
+                .to_string()
+                .contains("require a GPU")
+        );
+    }
 
     #[test]
     fn local_snapshots_charge_backing_storage_and_hold_leases_across_eviction() {

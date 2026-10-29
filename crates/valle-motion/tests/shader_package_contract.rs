@@ -739,3 +739,44 @@ fn a_backdrop_input_belongs_to_a_layer_and_is_sampled_in_place() {
         assert!(error.message.contains(expected), "{error:?}");
     }
 }
+
+#[test]
+fn unsigned_vectors_bits_and_derivatives_select_gpu_without_relaxing_work_limits() {
+    let source = include_bytes!("fixtures/shader/unsigned-derivatives.vsksl");
+    let package = ShaderPackage::compile(manifest(), source).unwrap();
+    assert!(package.generated_sksl.starts_with("#version 300\n"));
+    assert!(package.generated_sksl.contains("4294967295u"));
+    for source in [
+        "float4 valle_main(float2 uv) { uint x=0xffffffffu; x<<=33u; x>>=1u; x%=3u; return float4(float(~x)); }",
+        "float4 valle_main(float2 uv) { uint3 x=uint3(7u)/uint3(0u,1u,2u); return float4(float3(x),1.0); }",
+        "float4 valle_main(float2 uv) { int x=3; x^=7; return float4(float(x<<32)); }",
+    ] {
+        let package = ShaderPackage::compile(manifest(), source.as_bytes()).unwrap();
+        assert!(package.generated_sksl.starts_with("#version 300\n"));
+    }
+    for source in [
+        "float4 valle_main(float2 uv) { uint x=4294967296u; return float4(0.0); }",
+        "float4 valle_main(float2 uv) { uint x=1.5u; return float4(0.0); }",
+        "float4 valle_main(float2 uv) { return float4(uv.x ^ uv.y); }",
+        "float4 valle_main(float2 uv) { return float4(~uv.x); }",
+        "float4 valle_main(float2 uv) { if(uv.x>0.5){return float4(dFdx(uv.x));} return float4(0.0); }",
+        "float slope(float x){return dFdx(x);} float4 valle_main(float2 uv){return uv.x>0.5?float4(slope(uv.x)):float4(0.0);}",
+        "float4 valle_main(float2 uv){uint x=1u;for(int i=0;i<257;i++){x^=2u;}return float4(float(x));}",
+        "float4 valle_main(float2 uv){const int n=~(-258);for(int i=0;i<n;i++){}return float4(1.0);}",
+        "bool slope(float x){return dFdx(x)>0.0;} float4 valle_main(float2 uv){return float4(uv.x>0.0 && slope(uv.x));}",
+    ] {
+        assert!(
+            ShaderPackage::compile(manifest(), source.as_bytes()).is_err(),
+            "{source}"
+        );
+    }
+    assert!(
+        !ShaderPackage::compile(
+            manifest(),
+            b"float4 valle_main(float2 uv){return float4(uv,0.0,1.0);}"
+        )
+        .unwrap()
+        .generated_sksl
+        .starts_with("#version")
+    );
+}

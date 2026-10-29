@@ -158,6 +158,7 @@ impl ProgramRuntime {
         plan: &PlanProgram,
         bound: &BoundExternalObjects<'_, SkiaExternalObject>,
         caches: &mut BackendCaches,
+        gpu: bool,
     ) -> Result<Self, DrawError> {
         let program = caches.program(plan)?;
         if program.viewport() != plan.viewport || program.requirements() != &plan.requirements {
@@ -280,7 +281,7 @@ impl ProgramRuntime {
                 .iter()
                 .find(|binding| binding.slot == slot)
                 .ok_or_else(|| DrawError::MissingShader(requirement.uri.clone()))?;
-            let effect = caches.shader(binding, object, &requirement.uri)?;
+            let effect = caches.shader(binding, object, &requirement.uri, gpu)?;
             validate_shader_abi(&effect, requirement)?;
             if shaders.insert(requirement.uri.clone(), effect).is_some() {
                 return Err(DrawError::DuplicateResource(requirement.uri.clone()));
@@ -4983,6 +4984,95 @@ impl From<SurfaceError> for DrawError {
 #[cfg(test)]
 mod tests {
     use super::{super::effect::draw_filters, *};
+
+    #[cfg(all(feature = "native", target_os = "macos"))]
+    #[test]
+    #[ignore = "requires a real Metal device"]
+    fn advanced_shader_gpu_pixels() {
+        use objc2_metal::MTLDevice;
+        use skia_safe::gpu;
+        let device = objc2_metal::MTLCreateSystemDefaultDevice().unwrap();
+        let queue = device.newCommandQueue().unwrap();
+        // SAFETY: the backend retains both live Metal objects.
+        let backend = unsafe {
+            gpu::mtl::BackendContext::new(
+                std::ptr::from_ref(&*device).cast(),
+                std::ptr::from_ref(&*queue).cast(),
+            )
+        };
+        let mut context = gpu::direct_contexts::make_metal(&backend, None).unwrap();
+        let info = ImageInfo::new((4, 4), ColorType::RGBA8888, AlphaType::Premul, None);
+        let mut surface = gpu::surfaces::render_target(
+            &mut context,
+            gpu::Budgeted::Yes,
+            &info,
+            None,
+            gpu::SurfaceOrigin::TopLeft,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let effect = RuntimeEffect::make_for_shader(
+            "#version 300\nfloat4 main(float2 xy) { uint h = (uint(xy.x) ^ 7u) << 1u; return float4(float(h)/255.0, abs(dFdx(xy.x)), abs(dFdy(xy.y)), 1.0); }", None,
+        ).unwrap();
+        let shader = effect.make_shader(Data::new_empty(), &[], None).unwrap();
+        let mut paint = SkPaint::default();
+        paint.set_shader(shader);
+        surface.canvas().draw_paint(&paint);
+        let mut pixels = [0u8; 64];
+        assert!(surface.read_pixels(&info, &mut pixels, 16, (0, 0)));
+        for row in pixels.as_chunks::<16>().0.iter() {
+            for (x, pixel) in row.as_chunks::<4>().0.iter().enumerate() {
+                assert_eq!(pixel, &[(x as u8 ^ 7) << 1, 255, 255, 255]);
+            }
+        }
+
+        use valle_motion::shader::{InlineCode, ShaderRole};
+        let source = include_str!(
+            "../../../../valle-motion/tests/fixtures/shader/unsigned-derivatives.vsksl"
+        );
+        let package = InlineCode::parse(source)
+            .unwrap()
+            .package(ShaderRole::Layer, |_| Default::default(), [0; 4])
+            .unwrap();
+        // Share exactly the native-tested lowering with the standalone browser pixel probe.
+        if let Some(path) = std::env::var_os("VALLE_SHADER_TEST_OUTPUT") {
+            std::fs::write(path, &package.generated_sksl).unwrap();
+        }
+        let effect = RuntimeEffect::make_for_shader(&package.generated_sksl, None).unwrap();
+        let uniforms: Vec<u8> = [4.0_f32, 4.0]
+            .into_iter()
+            .flat_map(f32::to_ne_bytes)
+            .collect();
+        let children = vec![
+            ChildPtr::Shader(skia_safe::shaders::color(Color::TRANSPARENT));
+            effect.children().len()
+        ];
+        paint.set_shader(
+            effect
+                .make_shader(Data::new_copy(&uniforms), &children, None)
+                .unwrap(),
+        );
+        surface.canvas().clear(Color::TRANSPARENT);
+        surface.canvas().draw_paint(&paint);
+        assert!(surface.read_pixels(&info, &mut pixels, 16, (0, 0)));
+        for row in pixels.as_chunks::<16>().0.iter() {
+            for (x, pixel) in row.as_chunks::<4>().0.iter().enumerate() {
+                let v = ((x as u32) ^ (u32::MAX << 7))
+                    .wrapping_mul(1_664_525)
+                    .wrapping_add(1_013_904_223);
+                let expected = ((v ^ (v >> 16)) & 255) as u8;
+                for channel in &pixel[..3] {
+                    assert!(
+                        channel.abs_diff(expected) <= 1,
+                        "{x}: {pixel:?}, expected {expected}"
+                    );
+                }
+                assert_eq!(pixel[3], 255);
+            }
+        }
+    }
 
     #[cfg(all(feature = "native", target_os = "macos"))]
     #[test]

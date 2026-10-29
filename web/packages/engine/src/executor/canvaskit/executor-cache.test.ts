@@ -561,3 +561,22 @@ test("RasterTree clips overlapping children once after composition", async () =>
     builtins.dispose();
   }
 });
+
+test("GPU-only shaders fail on CPU before compilation and after a GPU cache hit", async () => {
+  const ck = await CanvasKitInit({ locateFile: () => wasmPath });
+  const executor = new CanvasKitExecutor(ck);
+  const source = new TextEncoder().encode(
+    "#version 300\nfloat4 main(float2 p){uint v=uint(p.x)^7u;return float4(float(v)/255.0,abs(dFdx(p.x)),0.0,1.0);}",
+  );
+  try {
+    expect(() => executor.runtimeShader("advanced", source)).toThrow("requires GPU rendering");
+    // This tests admission/cache behavior. Actual GPU pixels are a separate browser gate.
+    const effect = executor.runtimeShader("advanced", source, true);
+    expect(executor.runtimeShader("advanced", source, true)).toBe(effect);
+    expect(() => executor.runtimeShader("advanced", source, false)).toThrow(
+      "requires GPU rendering",
+    );
+  } finally {
+    executor.dispose();
+  }
+});

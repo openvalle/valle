@@ -5,6 +5,7 @@ pub(super) enum Type {
     Float(u8),
     Matrix(u8),
     Int,
+    Uint(u8),
     Bool,
 }
 
@@ -19,6 +20,10 @@ impl Type {
             "float3x3" => Self::Matrix(3),
             "float4x4" => Self::Matrix(4),
             "int" => Self::Int,
+            "uint" => Self::Uint(1),
+            "uint2" => Self::Uint(2),
+            "uint3" => Self::Uint(3),
+            "uint4" => Self::Uint(4),
             "bool" => Self::Bool,
             _ => return None,
         })
@@ -34,6 +39,10 @@ impl Type {
             Self::Matrix(3) => "float3x3",
             Self::Matrix(4) => "float4x4",
             Self::Int => "int",
+            Self::Uint(1) => "uint",
+            Self::Uint(2) => "uint2",
+            Self::Uint(3) => "uint3",
+            Self::Uint(4) => "uint4",
             Self::Bool => "bool",
             _ => unreachable!(),
         }
@@ -41,7 +50,7 @@ impl Type {
 
     pub fn width(self) -> usize {
         match self {
-            Self::Float(n) => n as usize,
+            Self::Float(n) | Self::Uint(n) => n as usize,
             Self::Matrix(n) => (n * n) as usize,
             _ => 1,
         }
@@ -171,26 +180,40 @@ pub(super) fn parse(
         } else if bytes[i].is_ascii_digit()
             || (bytes[i] == b'.' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit))
         {
-            i += 1;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
-                i += 1;
-            }
-            if i < bytes.len() && matches!(bytes[i], b'e' | b'E') {
-                i += 1;
-                if i < bytes.len() && matches!(bytes[i], b'+' | b'-') {
+            if bytes[i..].starts_with(b"0x") || bytes[i..].starts_with(b"0X") {
+                i += 2;
+                let digits = i;
+                while i < bytes.len() && bytes[i].is_ascii_hexdigit() {
                     i += 1;
                 }
-                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                if i == digits {
+                    return Err(error(start, "hexadecimal literal requires digits"));
+                }
+            } else {
+                i += 1;
+                while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
                     i += 1;
                 }
+                if i < bytes.len() && matches!(bytes[i], b'e' | b'E') {
+                    i += 1;
+                    if i < bytes.len() && matches!(bytes[i], b'+' | b'-') {
+                        i += 1;
+                    }
+                    while i < bytes.len() && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
+                let value = source[start..i]
+                    .parse::<f32>()
+                    .map_err(|_| error(start, "invalid numeric literal"))?;
+                if !value.is_finite() {
+                    return Err(error(start, "numeric literal must be finite"));
+                }
             }
-            let value = source[start..i]
-                .parse::<f32>()
-                .map_err(|_| error(start, "invalid numeric literal"))?;
-            if !value.is_finite() {
-                return Err(error(start, "numeric literal must be finite"));
+            if i < bytes.len() && matches!(bytes[i], b'u' | b'U') {
+                i += 1;
             }
-        } else if b"(){}[];,.?:+-*/%=<>!&|".contains(&bytes[i]) {
+        } else if b"(){}[];,.?:+-*/%=<>!&|^~".contains(&bytes[i]) {
             if b"({[".contains(&bytes[i]) {
                 nesting += 1;
                 if nesting > max_depth {
@@ -202,11 +225,15 @@ pub(super) fn parse(
             i += 1;
             if i < bytes.len()
                 && [
-                    "++", "--", "+=", "-=", "*=", "/=", "<=", ">=", "==", "!=", "&&", "||",
+                    "++", "--", "+=", "-=", "*=", "/=", "%=", "<=", ">=", "==", "!=", "&&", "||",
+                    "<<", ">>", "&=", "|=", "^=",
                 ]
                 .contains(&&source[start..i + 1])
             {
                 i += 1;
+                if matches!(&source[start..i], "<<" | ">>") && bytes.get(i) == Some(&b'=') {
+                    i += 1;
+                }
             }
         } else {
             return Err(error(i, "character is outside the shader language"));
@@ -424,7 +451,11 @@ impl Parser {
             StatementKind::Declarations(declarations)
         } else {
             let target = self.expression(0)?;
-            if ["=", "+=", "-=", "*=", "/="].contains(&self.peek()) {
+            if [
+                "=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=",
+            ]
+            .contains(&self.peek())
+            {
                 let op = self.peek().to_owned();
                 self.cursor += 1;
                 let value = self.expression(0)?;
@@ -448,12 +479,12 @@ impl Parser {
     }
     fn expression_inner(&mut self, min: u8) -> Result<Expr, ShaderDiagnostic> {
         let pos = self.pos();
-        let mut value = if ["+", "-", "!"].contains(&self.peek()) {
+        let mut value = if ["+", "-", "!", "~"].contains(&self.peek()) {
             let op = self.peek().to_owned();
             self.cursor += 1;
             Expr {
                 pos,
-                kind: ExprKind::Unary(op, Box::new(self.expression(8)?)),
+                kind: ExprKind::Unary(op, Box::new(self.expression(11)?)),
             }
         } else if self.take("(") {
             let expr = self.expression(0)?;
@@ -522,10 +553,14 @@ impl Parser {
             let precedence = match self.peek() {
                 "||" => 1,
                 "&&" => 2,
-                "==" | "!=" => 3,
-                "<" | "<=" | ">" | ">=" => 4,
-                "+" | "-" => 5,
-                "*" | "/" | "%" => 6,
+                "|" => 3,
+                "^" => 4,
+                "&" => 5,
+                "==" | "!=" => 6,
+                "<" | "<=" | ">" | ">=" => 7,
+                "<<" | ">>" => 8,
+                "+" | "-" => 9,
+                "*" | "/" | "%" => 10,
                 _ => 0,
             };
             if precedence == 0 || precedence < min {

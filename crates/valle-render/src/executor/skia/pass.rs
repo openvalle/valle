@@ -158,6 +158,7 @@ impl SkiaExecutor {
             self.effects.clone(),
             &mut self.caches,
             self.effects.counters().since(effect_before),
+            self.surfaces.backend_kind() != super::surface::SkiaBackendKind::Raster,
         )
     }
 
@@ -303,6 +304,7 @@ pub fn admit_skia_frame<'a>(
         effects,
         &mut caches,
         effect_cache_counters,
+        false,
     )
 }
 
@@ -319,6 +321,7 @@ fn admit_skia_frame_with_effects<'a>(
     effects: EffectRuntime,
     caches: &mut BackendCaches,
     effect_cache_counters: EffectCacheCounters,
+    gpu: bool,
 ) -> Result<AdmittedSkiaFrame<'a>, SkiaExecuteError> {
     preflight_target(template, target)?;
     let schedules = template.bind_program_schedules(bindings, capabilities)?;
@@ -345,7 +348,7 @@ fn admit_skia_frame_with_effects<'a>(
     let mut programs = BTreeMap::new();
     let cache_before = caches.counters();
     for program in bindings.programs() {
-        let runtime = ProgramRuntime::admit(program, &bound, caches)?;
+        let runtime = ProgramRuntime::admit(program, &bound, caches, gpu)?;
         if programs.insert(program.id, runtime).is_some() {
             return Err(SkiaExecuteError::DuplicateProgram {
                 program: program.id.get(),

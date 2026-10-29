@@ -67,6 +67,9 @@ struct Cost {
     samples: usize,
     calls: usize,
     depth: usize,
+    gpu: bool,
+    derivatives: bool,
+    branches: bool,
 }
 impl Cost {
     fn work(operations: usize) -> Self {
@@ -81,6 +84,9 @@ impl Cost {
             samples: self.samples.saturating_add(rhs.samples),
             calls: self.calls.saturating_add(rhs.calls),
             depth: self.depth.max(rhs.depth),
+            gpu: self.gpu || rhs.gpu,
+            derivatives: self.derivatives || rhs.derivatives,
+            branches: self.branches || rhs.branches,
         }
     }
     fn max(self, rhs: Self) -> Self {
@@ -89,6 +95,9 @@ impl Cost {
             samples: self.samples.max(rhs.samples),
             calls: self.calls.max(rhs.calls),
             depth: self.depth.max(rhs.depth),
+            gpu: self.gpu || rhs.gpu,
+            derivatives: self.derivatives || rhs.derivatives,
+            branches: self.branches || rhs.branches,
         }
     }
     fn times(self, count: usize) -> Self {
@@ -97,6 +106,9 @@ impl Cost {
             samples: self.samples.saturating_mul(count),
             calls: self.calls.saturating_mul(count),
             depth: self.depth,
+            gpu: self.gpu,
+            derivatives: self.derivatives,
+            branches: self.branches,
         }
     }
     fn validate(self, pos: usize) -> Result<(), ShaderDiagnostic> {
@@ -250,7 +262,16 @@ fn compile_inner(
         checker.function(index)?;
     }
     let cost = checker.checked[&entry].cost;
-    let mut code = prelude(manifest);
+    let gpu = checker.checked.values().any(|f| f.cost.gpu);
+    let mut code = if gpu {
+        String::from("#version 300\n")
+    } else {
+        String::new()
+    };
+    code.push_str(&prelude(manifest));
+    if gpu {
+        code.push_str(&unsigned_math());
+    }
     for index in &checker.order {
         code.push_str(&checker.checked[index].code);
     }
@@ -342,7 +363,17 @@ impl Checker<'_> {
             )?;
             parameters.push(format!("{} {name}", ty.name()));
         }
-        let body = self.statement(&f.body, &mut scope, f.result)?;
+        let mut body = self.statement(&f.body, &mut scope, f.result)?;
+        body.cost.gpu |= matches!(f.result, Type::Uint(_))
+            || f.parameters
+                .iter()
+                .any(|(ty, _)| matches!(ty, Type::Uint(_)));
+        if body.cost.derivatives && body.cost.branches {
+            return Err(error(
+                f.pos,
+                "screen derivatives currently require shaders without conditional control flow",
+            ));
+        }
         if !body.returns {
             return Err(error(f.pos, "every execution path must return a value"));
         }
@@ -477,7 +508,7 @@ impl Checker<'_> {
                     right
                 } else {
                     binary(
-                        &op[..1],
+                        &op[..op.len() - 1],
                         Value {
                             ty: left.ty,
                             code: left.code.clone(),
@@ -518,6 +549,7 @@ impl Checker<'_> {
                             .max(no.as_ref().map_or(Cost::default(), |n| n.cost)),
                     )
                     .add(Cost::work(1));
+                cost.branches = true;
                 format!(
                     "if ({}) {}{}",
                     condition.code,
@@ -639,22 +671,57 @@ impl Checker<'_> {
     fn expr_inner(&mut self, expr: &Expr, scope: &Scope) -> Result<Value, ShaderDiagnostic> {
         let value = match &expr.kind {
             ExprKind::Number(number) => {
-                let integer = !number.contains(['.', 'e', 'E']);
-                let constant = if integer {
+                let unsigned = number.ends_with(['u', 'U']);
+                let digits = if unsigned {
+                    &number[..number.len() - 1]
+                } else {
+                    number
+                };
+                let hex = digits.starts_with("0x") || digits.starts_with("0X");
+                let integer = hex || !digits.contains(['.', 'e', 'E']);
+                let parsed = if integer {
                     Some(
-                        number
-                            .parse::<i32>()
-                            .map_err(|_| error(expr.pos, "integer literal exceeds int range"))?
-                            as i64,
+                        if hex {
+                            u32::from_str_radix(&digits[2..], 16)
+                        } else {
+                            digits.parse::<u32>()
+                        }
+                        .map_err(|_| error(expr.pos, "integer literal exceeds 32-bit range"))?,
                     )
                 } else {
                     None
                 };
+                if unsigned && !integer {
+                    return Err(error(expr.pos, "uint literal must be an integer"));
+                }
+                if !unsigned && parsed.is_some_and(|v| v > i32::MAX as u32) {
+                    return Err(error(
+                        expr.pos,
+                        "integer literal exceeds int range; use a u suffix for uint",
+                    ));
+                }
                 Value {
-                    ty: if integer { Type::Int } else { Type::Float(1) },
-                    code: number.clone(),
-                    cost: Cost::default(),
-                    constant,
+                    ty: if unsigned {
+                        Type::Uint(1)
+                    } else if integer {
+                        Type::Int
+                    } else {
+                        Type::Float(1)
+                    },
+                    code: if let Some(n) = parsed {
+                        format!("{n}{}", if unsigned { "u" } else { "" })
+                    } else {
+                        number.clone()
+                    },
+                    cost: Cost {
+                        gpu: unsigned,
+                        ..Cost::default()
+                    },
+                    constant: if unsigned {
+                        None
+                    } else {
+                        parsed.map(i64::from)
+                    },
                 }
             }
             ExprKind::Name(name) if name == "true" || name == "false" => Value {
@@ -759,16 +826,25 @@ impl Checker<'_> {
             }
             ExprKind::Unary(op, arg) => {
                 let arg = self.expr(arg, scope)?;
-                if (op == "!" && arg.ty != Type::Bool) || (op != "!" && arg.ty == Type::Bool) {
+                if (op == "!" && arg.ty != Type::Bool)
+                    || (op != "!" && arg.ty == Type::Bool)
+                    || (op == "~" && !matches!(arg.ty, Type::Int | Type::Uint(_)))
+                {
                     return Err(error(expr.pos, "unary operator has incompatible type"));
                 }
                 Value {
                     ty: arg.ty,
                     code: format!("({op}{})", arg.code),
-                    cost: arg.cost.add(Cost::work(arg.ty.width())),
+                    cost: arg.cost.add(Cost {
+                        operations: arg.ty.width(),
+                        gpu: op == "~",
+                        ..Cost::default()
+                    }),
                     constant: arg.constant.and_then(|n| {
                         if op == "-" {
                             n.checked_neg().filter(|n| i32::try_from(*n).is_ok())
+                        } else if op == "~" {
+                            Some(!n)
                         } else {
                             Some(n)
                         }
@@ -792,14 +868,18 @@ impl Checker<'_> {
                 Value {
                     ty,
                     code: format!("({} ? {} : {})", condition.code, yes.code, no.code),
-                    cost: condition.cost.add(yes.cost.max(no.cost)).add(Cost::work(1)),
+                    cost: condition.cost.add(yes.cost.max(no.cost)).add(Cost {
+                        operations: 1,
+                        branches: true,
+                        ..Cost::default()
+                    }),
                     constant: None,
                 }
             }
             ExprKind::Swizzle(base, fields) => {
                 let base = self.expr(base, scope)?;
-                let Type::Float(width) = base.ty else {
-                    return Err(error(expr.pos, "swizzle requires a float vector"));
+                let (Type::Float(width) | Type::Uint(width)) = base.ty else {
+                    return Err(error(expr.pos, "swizzle requires a vector"));
                 };
                 let alphabet = if fields.bytes().all(|b| b"xyzw".contains(&b)) {
                     b"xyzw"
@@ -821,7 +901,11 @@ impl Checker<'_> {
                     ));
                 }
                 Value {
-                    ty: Type::Float(fields.len() as u8),
+                    ty: if matches!(base.ty, Type::Uint(_)) {
+                        Type::Uint(fields.len() as u8)
+                    } else {
+                        Type::Float(fields.len() as u8)
+                    },
                     code: format!("({}).{fields}", base.code),
                     cost: base.cost,
                     constant: None,
@@ -832,6 +916,7 @@ impl Checker<'_> {
                 let index = self.constant_int(index, scope)?;
                 let (width, ty) = match base.ty {
                     Type::Float(n) => (n, Type::Float(1)),
+                    Type::Uint(n) => (n, Type::Uint(1)),
                     Type::Matrix(n) => (n, Type::Float(n)),
                     _ => return Err(error(expr.pos, "indexing requires a vector or matrix")),
                 };
@@ -877,6 +962,7 @@ fn arithmetic_type(a: Type, b: Type) -> Option<Type> {
     common_type(a, b).or(match (a, b) {
         (Type::Float(n), Type::Float(1) | Type::Int)
         | (Type::Float(1) | Type::Int, Type::Float(n)) => Some(Type::Float(n)),
+        (Type::Uint(n), Type::Uint(1)) | (Type::Uint(1), Type::Uint(n)) => Some(Type::Uint(n)),
         (Type::Matrix(n), Type::Float(1) | Type::Int)
         | (Type::Float(1) | Type::Int, Type::Matrix(n)) => Some(Type::Matrix(n)),
         _ => None,
@@ -905,7 +991,14 @@ fn binary(op: &str, left: Value, right: Value, pos: usize) -> Result<Value, Shad
         arithmetic_type(left.ty, right.ty)
             .ok_or_else(|| error(pos, "arithmetic operand types differ"))?
     };
-    if op == "%" && ty != Type::Int {
+    let bitwise = matches!(op, "&" | "|" | "^" | "<<" | ">>");
+    if bitwise && !matches!(ty, Type::Int | Type::Uint(_)) {
+        return Err(error(
+            pos,
+            "bitwise operators require matching integer types",
+        ));
+    }
+    if op == "%" && !matches!(ty, Type::Int | Type::Uint(_)) {
         return Err(error(
             pos,
             "% requires int operands; use mod for floating point",
@@ -918,7 +1011,13 @@ fn binary(op: &str, left: Value, right: Value, pos: usize) -> Result<Value, Shad
         ));
     }
     let code = if op == "/" || op == "%" {
-        let function = if op == "%" {
+        let function = if matches!(ty, Type::Uint(_)) {
+            if op == "%" {
+                "valle_umod"
+            } else {
+                "valle_udiv"
+            }
+        } else if op == "%" {
             "valle_imod"
         } else if ty == Type::Int {
             "valle_idiv"
@@ -931,6 +1030,14 @@ fn binary(op: &str, left: Value, right: Value, pos: usize) -> Result<Value, Shad
             left.code,
             ty.name(),
             right.code
+        )
+    } else if matches!(op, "<<" | ">>") {
+        // Explicit modulo-32 counts avoid backend-dependent out-of-range shifts.
+        format!(
+            "({} {op} ({} & {}(31)))",
+            left.code,
+            right.code,
+            right.ty.name()
         )
     } else {
         format!("({} {op} {})", left.code, right.code)
@@ -972,7 +1079,12 @@ fn binary(op: &str, left: Value, right: Value, pos: usize) -> Result<Value, Shad
     Ok(Value {
         ty,
         code,
-        cost: left.cost.add(right.cost).add(Cost::work(work)),
+        cost: left.cost.add(right.cost).add(Cost {
+            operations: work,
+            gpu: bitwise || matches!(ty, Type::Uint(_)),
+            branches: matches!(op, "&&" | "||"),
+            ..Cost::default()
+        }),
         constant,
     })
 }
@@ -1013,6 +1125,9 @@ pub(super) fn builtin_names() -> &'static [&'static str] {
         "srgbToLinear",
         "linearToSrgb",
         "transpose",
+        "dFdx",
+        "dFdy",
+        "fwidth",
     ]
 }
 
@@ -1027,11 +1142,11 @@ fn builtin(
     if let Some(ty) = Type::parse(name) {
         let valid = match ty {
             Type::Int | Type::Bool => args.len() == 1 && args[0].ty.width() == 1,
-            Type::Float(n) => {
+            Type::Float(n) | Type::Uint(n) => {
                 !args.is_empty()
                     && args
                         .iter()
-                        .all(|a| matches!(a.ty, Type::Float(_) | Type::Int))
+                        .all(|a| matches!(a.ty, Type::Float(_) | Type::Uint(_) | Type::Int))
                     && ((args.len() == 1 && args[0].ty.width() == 1)
                         || args.iter().map(|a| a.ty.width()).sum::<usize>() == n as usize)
             }
@@ -1057,7 +1172,11 @@ fn builtin(
         return Ok(Value {
             ty,
             code: format!("{}({arg_code})", ty.name()),
-            cost: cost.add(Cost::work(ty.width())),
+            cost: cost.add(Cost {
+                operations: ty.width(),
+                gpu: matches!(ty, Type::Uint(_)),
+                ..Cost::default()
+            }),
             constant,
         });
     }
@@ -1165,9 +1284,12 @@ fn builtin(
     Ok(Value {
         ty,
         code: format!("{backend}({arg_code})"),
-        cost: cost.add(Cost::work(
-            args.iter().map(|a| a.ty.width()).sum::<usize>() * 8,
-        )),
+        cost: cost.add(Cost {
+            operations: args.iter().map(|a| a.ty.width()).sum::<usize>() * 8,
+            gpu: matches!(name, "dFdx" | "dFdy" | "fwidth"),
+            derivatives: matches!(name, "dFdx" | "dFdy" | "fwidth"),
+            ..Cost::default()
+        }),
         constant: None,
     })
 }
@@ -1366,6 +1488,25 @@ fn safe_math() -> String {
             ));
         }
         code.push_str(&format!("{ty} valle_normalize({ty} x) {{ float m = max(abs(x.x), abs(x.y)); {} if (m == 0.0) return {ty}(0.0); {ty} u = x / m; return u / sqrt(dot(u,u)); }}\n", if n >= 3 { format!("m = max(m, abs(x.z)); {}", if n == 4 { "m = max(m, abs(x.w));" } else { "" }) } else { String::new() }));
+    }
+    code
+}
+
+/// ES 3 unsigned division keeps the same zero-denominator contract as portable int math.
+fn unsigned_math() -> String {
+    let mut code = String::from(
+        "uint valle_udiv(uint a,uint b){return b==0u?0u:a/b;}\nuint valle_umod(uint a,uint b){return b==0u?0u:a%b;}\n",
+    );
+    for n in 2..=4 {
+        for (name, operator) in [("valle_udiv", "/"), ("valle_umod", "%")] {
+            let components = (0..n)
+                .map(|i| format!("(b[{i}]==0u?0u:a[{i}]{operator}b[{i}])"))
+                .collect::<Vec<_>>()
+                .join(",");
+            code.push_str(&format!(
+                "uint{n} {name}(uint{n} a,uint{n} b){{return uint{n}({components});}}\n"
+            ));
+        }
     }
     code
 }

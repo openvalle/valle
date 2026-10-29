@@ -1,0 +1,15 @@
+uint3 hashBits(uint3 value) {
+    value ^= value.yzx << uint3(7u);
+    value = value * 1664525u + 1013904223u;
+    value ^= value >> uint3(16u);
+    return value;
+}
+float4 valle_main(float2 uv) {
+    uint3 hash = hashBits(uint3(uint(uv.x * resolution.x), 0xffffffffu, 7u));
+    uint channel = ((hash.x | 0x100u) & 255u) ^ 0u;
+    float dx = abs(dFdx(uv.x)) * resolution.x;
+    float dy = abs(dFdy(uv.y)) * resolution.y;
+    float width = fwidth(uv.x) * resolution.x;
+    float gray = float(channel) / 255.0 * dx * dy * width;
+    return float4(float3(gray), 1.0);
+}

@@ -744,7 +744,14 @@ export class CanvasKitExecutor {
     return face;
   }
 
-  runtimeShader(key: string, bytes: Uint8Array): RuntimeEffect {
+  runtimeShader(key: string, bytes: Uint8Array, gpu = false): RuntimeEffect {
+    const source = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    // Check before cache hits too: a previously GPU-compiled effect cannot run on a CPU surface.
+    if (source.startsWith("#version 300\n") && !gpu)
+      fail(
+        "shader_backend",
+        `shader '${key}' uses uint, bitwise operators or screen derivatives and requires GPU rendering`,
+      );
     const cached = this.runtimeShaders.get(key);
     if (cached) {
       this.cacheCounters.shaderHits += 1;
@@ -753,12 +760,9 @@ export class CanvasKitExecutor {
     }
     this.cacheCounters.shaderMisses += 1;
     let detail = "";
-    const effect = this.CanvasKit.RuntimeEffect.Make(
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-      (message) => {
-        detail = message;
-      },
-    );
+    const effect = this.CanvasKit.RuntimeEffect.Make(source, (message) => {
+      detail = message;
+    });
     if (!effect) fail("shader_admission", `shader '${key}' failed: ${detail}`);
     this.runtimeShaders.set(key, effect);
     return effect;
@@ -1164,6 +1168,7 @@ async function runCanvasKitFrame(
         executor,
         structure,
         externalBySlot,
+        options.gpu,
         options.onProgramAdmissionStageTiming,
       ),
     );
@@ -1891,6 +1896,7 @@ function bindProgramResources(
   executor: CanvasKitExecutor,
   program: ProgramStructure,
   objects: Map<number, CanvasKitExternalObject>,
+  gpu: boolean,
   onTiming?: (kind: string, milliseconds: number) => void,
 ): AdmittedProgram {
   const started = onTiming ? performance.now() : 0;
@@ -1918,7 +1924,7 @@ function bindProgramResources(
     if (object.kind !== "runtimeShader" || !object.bytes)
       fail("shader_contract", "shader slot has no source bytes");
     const key = `${String(binding.key)}:${JSON.stringify(object.key, bigintJson)}`;
-    shaders.set(String(binding.key), executor.runtimeShader(key, object.bytes));
+    shaders.set(String(binding.key), executor.runtimeShader(key, object.bytes, gpu));
   }
   const scenes = new Map<string, CanvasKitExternalObject>();
   for (const raw of array(resources.scenes, "program scenes")) {
