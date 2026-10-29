@@ -66,6 +66,47 @@ fn specular_controls_change_dielectrics_but_not_metals() {
 }
 
 #[test]
+fn imported_volume_thickness_follows_node_and_host_scale() {
+    let mut scene: Scene3DSpec =
+        serde_json::from_str(include_str!("../fixtures/scene3d/transmission-scene.json")).unwrap();
+    let mut frame: Frame3DState =
+        serde_json::from_str(include_str!("../fixtures/scene3d/transmission-frame.json")).unwrap();
+    scene.meshes[2].model_control = Some("volume".into());
+    let mut r = SceneResources::default();
+    for (key, bytes) in [
+        (
+            "plane",
+            include_bytes!("../fixtures/scene3d/plane.glb").as_slice(),
+        ),
+        (
+            "volume",
+            include_bytes!("../fixtures/scene3d/volume-plane.glb").as_slice(),
+        ),
+    ] {
+        r.models
+            .insert(key.into(), Arc::new(admit_glb(bytes).unwrap()));
+    }
+    let p = prepare_scene(&scene, 160, 120, &r).unwrap();
+    for scale in [1.0, 2.0, -2.0, 0.5] {
+        frame.meshes[2].transform.scale = Vec3::new(scale, 1.4, 1.0);
+        frame.meshes[2].material.thickness = None;
+        let imported = render_scene(&p, &frame).unwrap();
+        // A local Z normal rotated 45 degrees then scaled on world X has inverse-transpose
+        // length sqrt((0.5/sx^2+0.5)/1.5^2). Rotation after that preserves its length.
+        frame.meshes[2].material.thickness = Some(0.4 * 1.5 / (0.5 / (scale * scale) + 0.5).sqrt());
+        let explicit = render_scene(&p, &frame).unwrap();
+        let max = imported
+            .premul_rgba16f
+            .iter()
+            .zip(&explicit.premul_rgba16f)
+            .map(|(&a, &b)| (half_to_f32(a) - half_to_f32(b)).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(max < 0.002, "scale={scale},max={max}");
+        assert_eq!(imported.depth, explicit.depth);
+    }
+}
+
+#[test]
 fn imported_transmission_uses_the_transparent_gpu_path() {
     let bytes = model(
         json!({

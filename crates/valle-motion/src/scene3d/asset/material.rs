@@ -21,8 +21,11 @@ pub struct ModelMaterial {
     /// Source glTF shading intent; explicit Motion material.kind may override it.
     pub unlit: bool,
     pub transmission: f32,
-    /// Optical path thickness in world units. The dielectric interface uses the material IOR.
+    /// Imported thickness is in model units; a Motion override is in world units.
     pub thickness: f32,
+    pub(crate) thickness_is_local: bool,
+    /// Symmetric M*M^T of the current rigid instance: xx, yy, zz, xy, xz, yz.
+    pub(crate) thickness_metric: [f32; 6],
     pub attenuation_color: [f32; 3],
     /// None means no absorption.
     pub attenuation_distance: Option<f32>,
@@ -54,6 +57,8 @@ impl Default for ModelMaterial {
             unlit: false,
             transmission: 0.0,
             thickness: 0.0,
+            thickness_is_local: false,
+            thickness_metric: [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
             attenuation_color: [1.0; 3],
             attenuation_distance: None,
             base_color: [1.0; 4],
@@ -672,6 +677,8 @@ pub(super) fn admit_materials(
                 .volume
                 .as_ref()
                 .map_or(0.0, |e| e.thickness_factor),
+            thickness_is_local: m.extensions.volume.is_some(),
+            thickness_metric: [1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
             attenuation_color: m
                 .extensions
                 .volume
@@ -1101,6 +1108,7 @@ impl ModelMaterial {
         }
         if let Some(v) = value.thickness {
             self.thickness = v;
+            self.thickness_is_local = false;
         }
         if let Some(v) = value.attenuation_distance {
             self.attenuation_distance = Some(v);

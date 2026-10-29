@@ -23,7 +23,12 @@ fn transmitted_color(in:LitVertex,reflected:vec4<f32>)->vec4<f32> {
     let ray=camera_ray(vec2<u32>(in.position.xy));let v=unit(-ray);let n=lit_normal(in,material);
     let cosine=clamp(dot3(n,v),0.0,1.0);let eta=1.0/shading[material+22u].x;
     let direction=unit(-v*eta+n*(eta*cosine-sqrt(max(1.0-eta*eta*(1.0-cosine*cosine),0.0))));
-    let distance=parameters.y/max(-dot3(direction,n),0.05);
+    var thickness=parameters.y;
+    if shading[material+22u].w>0.0 {
+        let a=shading[material+4u].zw;let b=shading[material+5u].zw;let c=shading[material+6u].zw;
+        thickness*=sqrt(max(a.x*n.x*n.x+a.y*n.y*n.y+b.x*n.z*n.z+2.0*(b.y*n.x*n.y+c.x*n.x*n.z+c.y*n.y*n.z),0.0));
+    }
+    let distance=thickness/max(-dot3(direction,n),0.05);
     let mr=texture_slot(material,1u,in);let metallic=shading[material+1u].a*mr.b;
     let optics=shading[material+21u];let f0=max(max(optics.r,optics.g),optics.b);
     let cn=unit(select(in.normalOverZ,in.normalOverZ/in.invZ,in.triangle==0xffffffffu));

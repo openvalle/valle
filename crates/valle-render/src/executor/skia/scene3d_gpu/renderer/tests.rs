@@ -852,7 +852,7 @@ fn transformed_material_textures_match_cpu_reference() {
 #[test]
 #[ignore = "requires a real GPU; verifies dielectric transmission and depth against CPU"]
 fn dielectric_transmission_matches_cpu_reference() {
-    let scene: Scene3DSpec = serde_json::from_str(include_str!(
+    let mut scene: Scene3DSpec = serde_json::from_str(include_str!(
         "../../../../../../valle-motion/tests/fixtures/scene3d/transmission-scene.json"
     ))
     .unwrap();
@@ -860,7 +860,7 @@ fn dielectric_transmission_matches_cpu_reference() {
         "../../../../../../valle-motion/tests/fixtures/scene3d/transmission-frame.json"
     ))
     .unwrap();
-    let resources = SceneResources {
+    let mut resources = SceneResources {
         models: BTreeMap::from([(
             "plane".into(),
             Arc::new(
@@ -872,7 +872,18 @@ fn dielectric_transmission_matches_cpu_reference() {
         )]),
         ..Default::default()
     };
-    let prepared = Arc::new(prepare_scene(&scene, 384, 256, &resources).unwrap());
+    // The volume fixture has a rotated node and local Z scale; keep its optical thickness
+    // imported so this also exercises instance-space -> world-space transmission.
+    resources.models.insert(
+        "volume".into(),
+        Arc::new(
+            admit_glb(include_bytes!(
+                "../../../../../../valle-motion/tests/fixtures/scene3d/volume-plane.glb"
+            ))
+            .unwrap(),
+        ),
+    );
+    let mut prepared = Arc::new(prepare_scene(&scene, 384, 256, &resources).unwrap());
     let (mut rasterizer, mut context) = renderer();
     for (thickness, ior, coat, height) in [
         (0.8, 1.5, 0.0, None),
@@ -881,13 +892,22 @@ fn dielectric_transmission_matches_cpu_reference() {
         (0.8, 2.2, 0.7, Some(3.0)),
         (0.0, 1.0, 1.0, Some(3.0)),
         (0.8, 1.5, 0.0, None),
+        (-1.0, 1.5, 0.0, None),
+        (-1.0, 2.2, 0.7, Some(3.0)),
     ] {
         frame.camera.orthographic_height = height;
         frame.meshes[2].material.ior = Some(ior);
         frame.meshes[2].material.clearcoat = Some(coat);
         frame.meshes[2].material.clearcoat_roughness = Some(0.2);
         frame.meshes[2].material.specular_intensity = Some(0.8);
-        frame.meshes[2].material.thickness = Some(thickness);
+        if thickness < 0.0 {
+            scene.meshes[2].model_control = Some("volume".into());
+            frame.meshes[2].material.thickness = None;
+            frame.meshes[2].transform.scale = Vec3::new(2.0, 1.4, 1.0);
+            prepared = Arc::new(prepare_scene(&scene, 384, 256, &resources).unwrap());
+        } else {
+            frame.meshes[2].material.thickness = Some(thickness);
+        }
         frame.meshes[2].material.attenuation_color = Some(Color4([0.9, 0.6, 0.4, 1.0]));
         frame.meshes[2].material.attenuation_distance = Some(1.5);
         let reference = render_scene(&prepared, &frame).unwrap();

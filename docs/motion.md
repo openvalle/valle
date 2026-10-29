@@ -3123,7 +3123,12 @@ factors of `KHR_materials_ior`, `KHR_materials_specular`, `KHR_materials_clearco
 `KHR_materials_transmission` and `KHR_materials_volume`. Extension-specific texture
 slots are not admitted yet; unsupported fields report errors rather than being
 ignored. Imported physical factors retain glTF linear color semantics. IOR is
-bounded to 1–3 and thickness to 0–10000 world units. Texture transforms support offset, rotation and scale on
+bounded to 1–3 and thickness to 0–10000 in its authored units. Imported volume thickness
+uses model units and follows rigid node, Mesh and Group3D transforms, including nonuniform
+scale and shear. A Motion `thickness` override uses world units. Skinned imported volumes
+require that explicit override; the current approximation does not derive thickness from
+deforming bones. At most 256 distinct transformed volume-material variants are admitted
+per frame. Texture transforms support offset, rotation and scale on
 `TEXCOORD_0`; other texture coordinate sets are not admitted.
 
 Environment lighting uses an explicitly bound `asset({kind: "environment"})` resource:

@@ -6,6 +6,11 @@ buffer, and a two-second weight animation. It uses a non-indexed TRIANGLE_STRIP 
 requires KHR_mesh_quantization. The accessor integration test expands it to FLOAT data
 and compares complete rendered frames; Native and Web exercise its animated geometry.
 
+`volume-plane.glb` is an authored optical cross-section test derived from `plane.glb`:
+local thickness 0.4, a 45-degree Y rotation and Z scale 1.5. It tests the conversion of
+imported thickness to world distance under additional Mesh scaling. It is a planar
+numerical probe, not a closed production glass model.
+
 `triangle.glb` is a self-contained GLB 2.0 triangle with positions (-0.9,-0.7,0),
 (0.9,-0.7,0), (0,0.9,0), normals (0,0,1), UVs (0,1), (1,1), (0.5,0),
 and U16 indices 0,1,2. `narrow.glb` halves only the X positions. Both are authored

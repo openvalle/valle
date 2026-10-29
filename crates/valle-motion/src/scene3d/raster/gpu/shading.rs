@@ -126,6 +126,7 @@ impl GpuRasterShading {
                 .push(((values.len() - Self::HEADER_LEN) / Self::MATERIAL_STRIDE) as u32);
             for material in &mesh.materials {
                 let m = &material.values;
+                let start = values.len();
                 let kind = match material.kind {
                     MaterialKind::Unlit => 0.0,
                     MaterialKind::Lambert => 1.0,
@@ -197,8 +198,20 @@ impl GpuRasterShading {
                         let (f0, f90) = m.dielectric();
                         [f0[0], f0[1], f0[2], f90]
                     },
-                    [m.ior, m.clearcoat, m.clearcoat_roughness, 0.0],
+                    [
+                        m.ior,
+                        m.clearcoat,
+                        m.clearcoat_roughness,
+                        f32::from(m.thickness_is_local),
+                    ],
                 ]);
+                if m.thickness_is_local {
+                    // Texture binding Z/W lanes are reserved for the volume metric.
+                    for (i, pair) in m.thickness_metric.as_chunks::<2>().0.iter().enumerate() {
+                        values[start + 4 + i][2] = pair[0];
+                        values[start + 4 + i][3] = pair[1];
+                    }
+                }
             }
         }
         values[1][0] = ((values.len() - Self::HEADER_LEN) / Self::MATERIAL_STRIDE) as f32;

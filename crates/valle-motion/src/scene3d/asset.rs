@@ -465,7 +465,7 @@ fn accessor_error<T>(index: usize, message: &str) -> Result<T, ContractErrors> {
     Err(one_error(format!("/glb/accessors/{index}"), message))
 }
 
-fn one_error(path: impl Into<String>, message: impl Into<String>) -> ContractErrors {
+pub(super) fn one_error(path: impl Into<String>, message: impl Into<String>) -> ContractErrors {
     let mut errors = ContractErrors::default();
     errors.push(path, message);
     errors

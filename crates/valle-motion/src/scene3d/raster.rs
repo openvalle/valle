@@ -1004,6 +1004,7 @@ fn collect_geometry_reusing<'a>(
     let mut tile_references = 0u64;
     let shadows = prepared.scene.pbr.shadows;
     let mut casters = shadow::ShadowCasters::default();
+    let mut volume_variants = 0usize;
     for (mesh_index, (mesh, state)) in prepared.meshes.iter().zip(&frame.meshes).enumerate() {
         let transform = MeshTransform::from_state(state)?;
         transforms.push(transform);
@@ -1053,7 +1054,13 @@ fn collect_geometry_reusing<'a>(
             return Err(errors);
         }
         frame_meshes.push(FrameMesh { mesh, materials });
+        let mut volume_materials = BTreeMap::new();
         for instance in instances {
+            let node_transform = if instance.skin.is_some() {
+                super::asset::Affine::identity()
+            } else {
+                instance.transform
+            };
             let source = mesh.model.meshes[instance.mesh as usize];
             for (primitive_offset, primitive) in mesh.model.primitives[source.first_primitive
                 as usize
@@ -1062,20 +1069,70 @@ fn collect_geometry_reusing<'a>(
                 .enumerate()
             {
                 let primitive_index = source.first_primitive as usize + primitive_offset;
-                let material_index = primitive
+                let mut material_index = primitive
                     .material_index
                     .map_or(mesh.model.materials.len(), |i| i as usize);
+                let materials = &mut frame_meshes[mesh_index].materials;
+                let material = &materials[material_index].values;
+                if material.thickness_is_local
+                    && material.thickness > 0.0
+                    && material.transmission > 0.0
+                {
+                    if instance.skin.is_some() {
+                        return Err(super::asset::one_error(
+                            "/material/thickness",
+                            "skinned volume requires an explicit Motion thickness in world units",
+                        ));
+                    }
+                    let local = super::asset::Affine::from_transform(state.transform)?
+                        .compose(node_transform)?;
+                    let world = if let Some(parent) = transform.parent {
+                        parent.compose(local)?
+                    } else {
+                        local
+                    };
+                    let rows = world.gpu_rows();
+                    let dot =
+                        |a: usize, b: usize| (0..3).map(|i| rows[a][i] * rows[b][i]).sum::<f32>();
+                    let metric = [
+                        dot(0, 0),
+                        dot(1, 1),
+                        dot(2, 2),
+                        dot(0, 1),
+                        dot(0, 2),
+                        dot(1, 2),
+                    ];
+                    if metric.iter().any(|v| !v.is_finite()) {
+                        return Err(super::asset::one_error(
+                            "/material/thickness",
+                            "volume transform exceeds finite metric range",
+                        ));
+                    }
+                    let key = (material_index, metric.map(f32::to_bits));
+                    material_index = if let Some(&index) = volume_materials.get(&key) {
+                        index
+                    } else {
+                        volume_variants += 1;
+                        if volume_variants > super::MAX_MATERIALS {
+                            return Err(super::asset::one_error(
+                                "/material/thickness",
+                                "transformed volume materials exceed the per-frame material budget",
+                            ));
+                        }
+                        let mut material = materials[material_index].clone();
+                        material.values.thickness_metric = metric;
+                        let index = materials.len();
+                        materials.push(material);
+                        volume_materials.insert(key, index);
+                        index
+                    };
+                }
                 let double_sided = frame_meshes[mesh_index].materials[material_index]
                     .values
                     .double_sided;
                 let start = primitive.first_index as usize;
                 // Indexed smooth vertices share deformation, world transform and projection.
                 // Deformed face normals remain triangle-specific. The cache lasts one frame.
-                let node_transform = if instance.skin.is_some() {
-                    super::asset::Affine::identity()
-                } else {
-                    instance.transform
-                };
                 let reuse_projected = reuse_vertices
                     && primitive.index_count >= primitive.vertex_count.saturating_mul(2);
                 let mut transformed_vertices = ((instance.skin.is_none()

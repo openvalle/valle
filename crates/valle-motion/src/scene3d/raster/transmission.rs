@@ -89,7 +89,21 @@ impl Sample {
             + n * (eta * cosine
                 - libm::sqrtf((1.0 - eta * eta * (1.0 - cosine * cosine)).max(0.0))))
         .normalized();
-        let distance = m.thickness / (-direction.dot(n)).max(0.05);
+        let thickness = if m.thickness_is_local {
+            let [xx, yy, zz, xy, xz, yz] = m.thickness_metric;
+            // For local thickness along the normal, world thickness is t*|M^T n|.
+            m.thickness
+                * libm::sqrtf(
+                    (xx * n.x * n.x
+                        + yy * n.y * n.y
+                        + zz * n.z * n.z
+                        + 2.0 * (xy * n.x * n.y + xz * n.x * n.z + yz * n.y * n.z))
+                        .max(0.0),
+                )
+        } else {
+            m.thickness
+        };
+        let distance = thickness / (-direction.dot(n)).max(0.05);
         let (f0, f90) = m.dielectric();
         let f0 = f0.into_iter().fold(0.0, f32::max);
         let fresnel = f0 + (f90 - f0) * libm::powf(1.0 - cosine, 5.0);
