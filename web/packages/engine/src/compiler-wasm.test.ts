@@ -294,8 +294,9 @@ test("Wasm keeps host endpoints and geometry moving while the source holds", () 
         const inspection = JSON.parse(json).motion[0];
         expect(inspection.sourceFrame).toBe(Math.min(frame, 3));
         // From the source's last frame on, the scene shows its end.
+        // Layout positions retain their f32 subpixels; only the host viewport is rounded.
         expect(inspection.boxes.bar).toEqual([
-          Math.round((frame * 40) / 7),
+          Math.fround((frame * 40) / 7),
           frame >= 3 ? 8 : frame * 2,
           12,
           12,
@@ -421,8 +422,8 @@ test("Wasm maps overlay timing and rounds the host viewport through the shared e
                           : (t - 0.5) / (duration - 1));
             expect(inspection.sourceFrame).toBe(Math.min(Math.floor(source * 4), 7));
             expect(inspection.boxes.bar).toEqual([
-              Math.round(source * 12),
-              Math.round((frame / (frames - 1)) * 20),
+              Math.fround(source * 12),
+              Math.fround((frame / (frames - 1)) * 20),
               16,
               63,
             ]);
