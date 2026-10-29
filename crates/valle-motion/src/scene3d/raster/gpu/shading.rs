@@ -12,7 +12,7 @@ pub struct GpuRasterTextureVarying {
 }
 
 impl GpuRasterShading {
-    pub const HEADER_LEN: usize = 5;
+    pub const HEADER_LEN: usize = 6;
     pub const MATERIAL_STRIDE: usize = 23;
 
     pub(super) fn new(
@@ -114,6 +114,7 @@ impl GpuRasterShading {
                 0.0,
             ],
         ];
+        values.push([lights.punctual.len() as f32, 0.0, 0.0, 0.0]);
         let mut material_offsets = Vec::new();
         for mesh in meshes {
             material_offsets
@@ -207,6 +208,28 @@ impl GpuRasterShading {
                 [direction.x, direction.y, direction.z, 0.0],
                 [sky[0], sky[1], sky[2], 0.0],
                 [ground[0], ground[1], ground[2], 0.0],
+            ]);
+        }
+        for light in &lights.punctual {
+            let (axis, outer, inner) =
+                light
+                    .cone
+                    .unwrap_or((super::super::V3::new(0.0, 0.0, 0.0), -1.0, -1.0));
+            values.extend([
+                [
+                    light.position.x,
+                    light.position.y,
+                    light.position.z,
+                    light.range,
+                ],
+                [
+                    light.color[0],
+                    light.color[1],
+                    light.color[2],
+                    f32::from(light.cone.is_some()),
+                ],
+                [axis.x, axis.y, axis.z, outer],
+                [inner, 0.0, 0.0, 0.0],
             ]);
         }
         let rays = PixelRays::new(camera);

@@ -542,7 +542,7 @@ impl<'s> Compiler<'s> {
                         )?,
                     });
                 }
-                "AmbientLight" | "DirectionalLight" | "HemisphereLight" => {
+                "AmbientLight" | "DirectionalLight" | "HemisphereLight" | "PointLight" | "SpotLight" => {
                     let binding = self.scene3d_light_binding(child, child_tag)?;
                     lights.push(binding.kind());
                     light_frames.push(binding);
@@ -551,7 +551,7 @@ impl<'s> Compiler<'s> {
                     DiagCode::GrammarForbidden,
                     child.span(),
                     format!(
-                        "unknown Scene3D child <{child_tag}>; use Mesh, Anchor3D, AmbientLight, or DirectionalLight"
+                        "unknown Scene3D child <{child_tag}>; use Mesh, Group3D, Anchor3D, AmbientLight, DirectionalLight, HemisphereLight, PointLight or SpotLight"
                     ),
                 ),
             }
@@ -1161,6 +1161,17 @@ impl<'s> Compiler<'s> {
         tag: &str,
     ) -> Option<Scene3DLightBinding> {
         let allowed: &[&str] = match tag {
+            "PointLight" => &["key", "color", "intensity", "position", "range"],
+            "SpotLight" => &[
+                "key",
+                "color",
+                "intensity",
+                "position",
+                "target",
+                "range",
+                "angle",
+                "penumbra",
+            ],
             "AmbientLight" => &["key", "color", "intensity"],
             "DirectionalLight" => &["key", "color", "direction", "intensity"],
             _ => &["key", "skyColor", "groundColor", "direction", "intensity"],
@@ -1170,7 +1181,36 @@ impl<'s> Compiler<'s> {
             Some((value, span)) => self.scene3d_attr_number(value, *span, "light intensity")?,
             None => NumberValue::Static { value: 1.0 },
         };
+        let range = if matches!(tag, "PointLight" | "SpotLight") {
+            match attrs.get("range") {
+                Some((value, span)) => self.scene3d_attr_number(value, *span, "light range")?,
+                None => NumberValue::Static { value: 0.0 },
+            }
+        } else {
+            NumberValue::Static { value: 0.0 }
+        };
         let binding = match tag {
+            "PointLight" => Scene3DLightBinding::Point {
+                intensity,
+                range,
+                position: self.scene3d_frame_attr_vec3(&attrs, "position", None)?,
+                color: self.scene3d_light_color(&attrs, "color", Some("#ffffff"))?,
+            },
+            "SpotLight" => Scene3DLightBinding::Spot {
+                intensity,
+                range,
+                position: self.scene3d_frame_attr_vec3(&attrs, "position", None)?,
+                target: self.scene3d_frame_attr_vec3(&attrs, "target", Some([0.0; 3]))?,
+                color: self.scene3d_light_color(&attrs, "color", Some("#ffffff"))?,
+                angle: match attrs.get("angle") {
+                    Some((v, s)) => self.scene3d_attr_number(v, *s, "spotlight angle")?,
+                    None => NumberValue::Static { value: 30.0 },
+                },
+                penumbra: match attrs.get("penumbra") {
+                    Some((v, s)) => self.scene3d_attr_number(v, *s, "spotlight penumbra")?,
+                    None => NumberValue::Static { value: 0.2 },
+                },
+            },
             "AmbientLight" => Scene3DLightBinding::Ambient {
                 intensity,
                 color: self.scene3d_light_color(&attrs, "color", Some("#ffffff"))?,

@@ -2106,6 +2106,35 @@ fn resolve_scene3d_requests(
                         use crate::Scene3DLightBinding as Binding;
                         use valle_motion::scene3d::LightFrameState as Light;
                         Ok(match light {
+                            Binding::Point {
+                                color: c,
+                                intensity,
+                                position,
+                                range,
+                            } => Light::Point {
+                                color: color(c)?,
+                                intensity: scalar(intensity, "scene3d light intensity")?,
+                                position: vector(position)?,
+                                range: scalar(range, "scene3d light range")?,
+                            },
+                            Binding::Spot {
+                                color: c,
+                                intensity,
+                                position,
+                                target,
+                                range,
+                                angle,
+                                penumbra,
+                            } => Light::Spot {
+                                color: color(c)?,
+                                intensity: scalar(intensity, "scene3d light intensity")?,
+                                position: vector(position)?,
+                                target: vector(target)?,
+                                range: scalar(range, "scene3d light range")?,
+                                angle: scalar(angle, "scene3d light angle")?,
+                                penumbra: scalar(penumbra, "scene3d light penumbra")?,
+                            },
+
                             Binding::Ambient {
                                 color: c,
                                 intensity,

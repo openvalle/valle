@@ -316,3 +316,46 @@ fn orthographic_camera_height_is_animated_and_projection_fields_are_explicit() {
         assert!(compile_motion(&bad).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn punctual_lights_accept_time_bindings_and_reject_invalid_cones() {
+    let lights = r#"<PointLight position={[time.seconds,1,2]} intensity={4} range={8}/><SpotLight position={[-2,1,3]} target={[0,time.seconds,0]} angle={35} penumbra={0.4}/>"#;
+    let source = SOURCE.replace("<AmbientLight intensity={0.3}/>", lights);
+    let artifact = compile_motion(&source).unwrap().artifact;
+    artifact.validate().unwrap();
+    let scene = artifact
+        .nodes
+        .iter()
+        .find_map(|n| match &n.kind {
+            NodeKind::Scene3D { scene, .. } => Some(scene),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        scene.lights,
+        [
+            valle_motion::scene3d::LightKind::Point,
+            valle_motion::scene3d::LightKind::Spot
+        ]
+    );
+    let static_source = source.replace("time.seconds", "0");
+    for bad in [
+        static_source.replace("angle={35}", "angle={90}"),
+        source.replace("angle={35}", "angle={90}"),
+        source.replace("range={8}", "range={-1}"),
+        static_source.replace("penumbra={0.4}", "penumbra={-1}"),
+        static_source.replace("range={8}", "range={-1}"),
+        static_source.replace("position={[-2,1,3]}", "position={[0,0,0]}"),
+        SOURCE
+            .replace(
+                "<AmbientLight intensity={0.3}/>",
+                "<PointLight position={[0,1,2]}/>",
+            )
+            .replace(
+                "<PointLight position={[0,1,2]}/>",
+                &"<PointLight position={[0,1,2]}/>".repeat(9),
+            ),
+    ] {
+        assert!(compile_motion(&bad).is_err(), "{bad}");
+    }
+}

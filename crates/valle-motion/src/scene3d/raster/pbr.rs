@@ -247,9 +247,18 @@ pub(super) fn shade(
     for i in 0..3 {
         radiance[i] += m.emissive[i] * m.emissive_intensity * emission[i];
     }
-    if triangle.kind == MaterialKind::Pbr && !lights.directional.is_empty() {
+    if triangle.kind == MaterialKind::Pbr
+        && (!lights.directional.is_empty() || !lights.punctual.is_empty())
+    {
         let mut brdf = DirectBrdf::new(base, metallic, roughness, n.dot(v).max(0.0), fab, optics);
         brdf.transmission = m.transmission;
+        for light in &lights.punctual {
+            let (direction, intensity) = light.sample(position);
+            let reflected = brdf.reflect(n, v, direction);
+            for i in 0..3 {
+                radiance[i] += reflected[i] * intensity[i];
+            }
+        }
         for (index, &(direction, intensity)) in lights.directional.iter().enumerate() {
             let reflected = brdf.reflect(n, v, direction);
             // A back-facing light contributes zero regardless of its shadow map.
@@ -270,6 +279,13 @@ pub(super) fn shade(
         let roughness = m.clearcoat_roughness.max(0.0525);
         let fab = super::lighting::dfg(roughness, nv);
         let coat = DirectBrdf::new([0.04; 3], 1.0, roughness, nv, fab, ([0.04; 3], 1.0));
+        for light in &lights.punctual {
+            let (direction, intensity) = light.sample(position);
+            let reflected = coat.reflect(coat_normal, v, direction);
+            for i in 0..3 {
+                radiance[i] += m.clearcoat * reflected[i] * intensity[i];
+            }
+        }
         for (index, &(direction, intensity)) in lights.directional.iter().enumerate() {
             let reflected = coat.reflect(coat_normal, v, direction);
             let visibility = lights.shadow_visibility(index, position, coat_normal);

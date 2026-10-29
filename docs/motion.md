@@ -2917,6 +2917,8 @@ Its direct children are explicit leaves, not arbitrary React/Three.js content:
 | `AmbientLight` | Optional key, opaque `color` (default white), `intensity`; color and intensity may animate |
 | `DirectionalLight` | Animated nonzero `direction` triple, optional key, color (default white), intensity |
 | `HemisphereLight` | Opaque `skyColor` / `groundColor`, optional `direction` (default +Y), key/intensity; colors, direction and intensity may animate |
+| `PointLight` | Required `position`, optional key, opaque `color` (white), `intensity` (1), `range` (0); all numeric/color fields may animate |
+| `SpotLight` | Point-light fields plus `target` (origin), `angle` (30° half-angle), `penumbra` (0.2); all may animate |
 
 Models use a declared `model3d` asset and the admitted GLB format. With no material
 attributes, a Mesh uses the model's metallic/roughness materials. `material` supplies
@@ -3135,6 +3137,22 @@ visibility is independent of illumination. Tone mapping (`none` or `aces`) and
 exposure (0–16, default 1) are applied once in linear light before scene output.
 Tone mapping is static; exposure may animate. Ambient, directional and hemisphere
 light colors are converted from sRGB to linear values for both Lambert and PBR.
+Point and spot lights illuminate Lambert and PBR (including clearcoat); Unlit ignores
+them. Up to eight point/spot lights are allowed in total. Their intensity (0–100000) is
+the incident strength at one world unit, with inverse-square distance falloff; the
+singularity within 0.1 world units is capped. `range:0` has no cutoff; a positive
+range (up to 10000) fades smoothly to zero at that distance. Spotlights aim from
+`position` to `target`, which must differ. `angle` is the outer cone half-angle in
+degrees (0.1–89.9), and `penumbra` is the fraction of that cone with smooth edge
+falloff (0–1; zero produces a hard edge). Point and spot lights currently illuminate
+without shadow maps; `shadows:true` affects directional lights only.
+
+```tsx
+<PointLight position={[seconds, 2, 3]} intensity={4} range={8} color="#ffd6b3" />
+<SpotLight position={[-2, 3, 4]} target={[0, 0, 0]} intensity={8}
+  angle={35} penumbra={0.4} range={10} />
+```
+
 `shadows` is a static boolean, false by default. When enabled, each directional
 light gets a 1024×1024 orthographic depth map rebuilt from the complete current
 frame, including casters outside the camera view. Opaque and retained mask fragments

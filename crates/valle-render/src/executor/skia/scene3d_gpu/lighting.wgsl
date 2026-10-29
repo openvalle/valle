@@ -126,14 +126,28 @@ fn scattering(f0:vec3<f32>,f90:f32,fab:vec2<f32>) -> mat2x3<f32> {
     let single=f0*fab.x+f90*fab.y;let missing=1.0-fab.x-fab.y;let average=f0+(vec3(f90)-f0)/21.0;
     return mat2x3(single,single*average/(vec3(1.0)-missing*average)*missing);
 }
+struct PunctualSample { direction: vec3<f32>, color: vec3<f32> };
+fn punctual_sample(index:u32,position:vec3<f32>)->PunctualSample {
+    let counts=vec3<u32>(shading[1].xyz);
+    let at=HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u+index*4u;
+    let delta=shading[at].xyz-position;let squared=dot3(delta,delta);let direction=unit(delta);
+    var attenuation=1.0/max(squared,0.01);let range=shading[at].w;
+    if range>0.0 {let ratio=squared/(range*range);let fade=clamp(1.0-ratio*ratio,0.0,1.0);attenuation*=fade*fade;}
+    if shading[at+1u].w!=0.0 {
+        let cosine=-dot3(shading[at+2u].xyz,direction);let outer=shading[at+2u].w;let inner=shading[at+3u].x;
+        if inner==outer {attenuation*=select(0.0,1.0,cosine>=outer);}
+        else {let t=clamp((cosine-outer)/(inner-outer),0.0,1.0);attenuation*=t*t*(3.0-2.0*t);}
+    }
+    return PunctualSample(direction,shading[at+1u].rgb*attenuation);
+}
 fn orthographic() -> bool { return (u32(shading[1].w)&8u)!=0u; }
 fn camera_basis() -> u32 {
     let counts=vec3<u32>(shading[1].xyz);
-    return HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u+u32(globals.extent.x)+u32(globals.extent.y);
+    return HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u+u32(shading[5].x)*4u+u32(globals.extent.x)+u32(globals.extent.y);
 }
 fn camera_sample(pixel:vec2<u32>) -> vec3<f32> {
     let counts=vec3<u32>(shading[1].xyz);
-    let rayStart=HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u;
+    let rayStart=HEADER+counts.x*MATERIAL+counts.y*2u+counts.z*3u+u32(shading[5].x)*4u;
     return shading[rayStart+pixel.x].xyz+shading[rayStart+u32(globals.extent.x)+pixel.y].xyz;
 }
 fn camera_ray(pixel:vec2<u32>) -> vec3<f32> {
@@ -174,6 +188,10 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
     var fab = vec2(0.0);
     if kind == 1u {
         var factor = shading[0].rgb*ao;
+        for (var i=0u;i<u32(shading[5].x);i++) {
+            let light=punctual_sample(i,camera_position(pixel,in.invZ));
+            factor+=light.color*max(dot3(n,light.direction),0.0);
+        }
         for (var i = 0u; i < counts.y; i++) {
             let at = lightStart + i * 2u;
             factor += shading[at + 1u].rgb * max(dot(n, shading[at].xyz), 0.0)*shadow_visibility(i,camera_position(pixel,in.invZ),n);
@@ -211,6 +229,10 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
     }
     radiance += emission;
     if kind == 2u {
+        for(var i=0u;i<u32(shading[5].x);i++) {
+            let light=punctual_sample(i,camera_position(pixel,in.invZ));
+            radiance+=direct(base,metallic,roughness,n,v,light.direction,fab,shading[material+19u].x,optics)*light.color;
+        }
         for (var i = 0u; i < counts.y; i++) {
             let at = lightStart + i * 2u;
             radiance += direct(base, metallic, roughness, n, v, shading[at].xyz, fab, shading[material+19u].x, optics) * shading[at + 1u].rgb*shadow_visibility(i,camera_position(pixel,in.invZ),n);
@@ -221,6 +243,10 @@ fn lit_radiance(in: LitVertex) -> vec4<f32> {
         let nv=clamp(dot3(cn,v),0.0,1.0);
         radiance*=1.0-coating.y*(0.04+0.96*pow(1.0-nv,5.0));
         let cr=max(coating.z,0.0525);let cfab=dfg_at(cr,nv);
+        for(var i=0u;i<u32(shading[5].x);i++) {
+            let light=punctual_sample(i,camera_position(pixel,in.invZ));
+            radiance+=coating.y*direct(vec3(0.04),1.0,cr,cn,v,light.direction,cfab,0.0,vec4(0.04,0.04,0.04,1.0))*light.color;
+        }
         for (var i=0u;i<counts.y;i++) {
             let at=lightStart+i*2u;
             radiance+=coating.y*direct(vec3(0.04),1.0,cr,cn,v,shading[at].xyz,cfab,0.0,vec4(0.04,0.04,0.04,1.0))

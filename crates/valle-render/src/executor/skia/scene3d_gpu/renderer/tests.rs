@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use valle_engine::motion::scene3d::*;
 mod mesh;
 mod orthographic;
+mod punctual;
 mod raster_math;
 
 fn half(bits: u16) -> f32 {

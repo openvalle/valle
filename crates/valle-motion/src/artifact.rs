@@ -888,6 +888,22 @@ impl Scene3DCameraBinding {
     deny_unknown_fields
 )]
 pub enum Scene3DLightBinding {
+    Point {
+        color: ColorValue,
+        intensity: NumberValue,
+        position: [NumberValue; 3],
+        range: NumberValue,
+    },
+    Spot {
+        color: ColorValue,
+        intensity: NumberValue,
+        position: [NumberValue; 3],
+        target: [NumberValue; 3],
+        range: NumberValue,
+        angle: NumberValue,
+        penumbra: NumberValue,
+    },
+
     Ambient {
         color: ColorValue,
         intensity: NumberValue,
@@ -928,6 +944,35 @@ impl Scene3DLightBinding {
             ))
         };
         Some(match self {
+            Self::Point {
+                color: c,
+                intensity,
+                position,
+                range,
+            } => crate::scene3d::LightFrameState::Point {
+                color: color(c)?,
+                intensity: number(intensity)?,
+                position: vector(position)?,
+                range: number(range)?,
+            },
+            Self::Spot {
+                color: c,
+                intensity,
+                position,
+                target,
+                range,
+                angle,
+                penumbra,
+            } => crate::scene3d::LightFrameState::Spot {
+                color: color(c)?,
+                intensity: number(intensity)?,
+                position: vector(position)?,
+                target: vector(target)?,
+                range: number(range)?,
+                angle: number(angle)?,
+                penumbra: number(penumbra)?,
+            },
+
             Self::Ambient {
                 color: c,
                 intensity,
@@ -960,14 +1005,52 @@ impl Scene3DLightBinding {
     pub fn kind(&self) -> crate::scene3d::LightKind {
         use crate::scene3d::LightKind;
         match self {
+            Self::Point { .. } => LightKind::Point,
+            Self::Spot { .. } => LightKind::Spot,
             Self::Ambient { .. } => LightKind::Ambient,
             Self::Directional { .. } => LightKind::Directional,
             Self::Hemisphere { .. } => LightKind::Hemisphere,
         }
     }
     pub fn numbers(&self) -> Vec<(&'static str, &NumberValue)> {
-        let (intensity, direction) = match self {
-            Self::Ambient { intensity, .. } => (intensity, None),
+        match self {
+            Self::Point {
+                intensity,
+                position,
+                range,
+                ..
+            } => {
+                vec![
+                    ("intensity", intensity),
+                    ("position/0", &position[0]),
+                    ("position/1", &position[1]),
+                    ("position/2", &position[2]),
+                    ("range", range),
+                ]
+            }
+            Self::Spot {
+                intensity,
+                position,
+                target,
+                range,
+                angle,
+                penumbra,
+                ..
+            } => {
+                vec![
+                    ("intensity", intensity),
+                    ("position/0", &position[0]),
+                    ("position/1", &position[1]),
+                    ("position/2", &position[2]),
+                    ("target/0", &target[0]),
+                    ("target/1", &target[1]),
+                    ("target/2", &target[2]),
+                    ("range", range),
+                    ("angle", angle),
+                    ("penumbra", penumbra),
+                ]
+            }
+            Self::Ambient { intensity, .. } => vec![("intensity", intensity)],
             Self::Directional {
                 intensity,
                 direction,
@@ -977,21 +1060,20 @@ impl Scene3DLightBinding {
                 intensity,
                 direction,
                 ..
-            } => (intensity, Some(direction)),
-        };
-        let mut result = vec![("intensity", intensity)];
-        if let Some(v) = direction {
-            result.extend([
-                ("direction/0", &v[0]),
-                ("direction/1", &v[1]),
-                ("direction/2", &v[2]),
-            ]);
+            } => vec![
+                ("intensity", intensity),
+                ("direction/0", &direction[0]),
+                ("direction/1", &direction[1]),
+                ("direction/2", &direction[2]),
+            ],
         }
-        result
     }
     pub fn colors(&self) -> Vec<(&'static str, &ColorValue)> {
         match self {
-            Self::Ambient { color, .. } | Self::Directional { color, .. } => vec![("color", color)],
+            Self::Point { color, .. }
+            | Self::Spot { color, .. }
+            | Self::Ambient { color, .. }
+            | Self::Directional { color, .. } => vec![("color", color)],
             Self::Hemisphere {
                 sky_color,
                 ground_color,
@@ -5505,11 +5587,31 @@ impl SceneArtifact {
                     }
                 }
                 let lights_valid = frame.lights.iter().all(|light| {
-                    light.numbers().into_iter().all(|(_, n)| scalar(n))
-                        && light.colors().into_iter().all(|(_, c)| {
-                            color_value_valid(c, expr_types)
-                                && !matches!(c,ColorValue::Static {value} if value.alpha != 1.0)
-                        })
+                    light.numbers().into_iter().all(|(name, n)| {
+                        scalar(n)
+                            && match n {
+                                NumberValue::Expr { .. } => true,
+                                NumberValue::Static { value } => match name {
+                                    "intensity" => (0.0..=if matches!(
+                                        light,
+                                        Scene3DLightBinding::Point { .. }
+                                            | Scene3DLightBinding::Spot { .. }
+                                    ) {
+                                        100_000.0
+                                    } else {
+                                        4.0
+                                    })
+                                        .contains(value),
+                                    "range" => (0.0..=10_000.0).contains(value),
+                                    "angle" => (0.1..=89.9).contains(value),
+                                    "penumbra" => (0.0..=1.0).contains(value),
+                                    _ => value.abs() <= f64::from(crate::scene3d::MAX_ABS_POSITION),
+                                },
+                            }
+                    }) && light.colors().into_iter().all(|(_, c)| {
+                        color_value_valid(c, expr_types)
+                            && !matches!(c,ColorValue::Static {value} if value.alpha != 1.0)
+                    })
                 });
                 let mut meshes_valid = frame
                     .meshes

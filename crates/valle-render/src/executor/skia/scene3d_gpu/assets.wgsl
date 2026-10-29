@@ -1,5 +1,5 @@
 @group(0) @binding(3) var atlas: texture_2d<f32>;
-const HEADER: u32 = 5u;
+const HEADER: u32 = 6u;
 const MATERIAL: u32 = 23u;
 
 fn atlas_at(index: u32) -> vec4<f32> {

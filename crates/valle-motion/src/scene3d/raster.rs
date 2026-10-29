@@ -28,6 +28,7 @@ mod lighting;
 #[cfg(test)]
 mod orthographic_tests;
 mod pbr;
+mod punctual;
 mod shadow;
 mod transmission;
 
@@ -2253,6 +2254,7 @@ fn transformed_vertex(
 }
 
 struct Lights {
+    punctual: Vec<punctual::Punctual>,
     ambient: [f32; 3],
     directional: Vec<(V3, [f32; 3])>,
     shadow_maps: Arc<shadow::ShadowMaps>,
@@ -2272,12 +2274,42 @@ impl Lights {
     ) -> Self {
         let mut ambient = [0.0; 3];
         let mut directional = Vec::new();
+        let mut punctual = Vec::new();
         let mut hemisphere = Vec::new();
         let linear = |c: Color4, intensity: f32| {
             std::array::from_fn(|i| super::asset::srgb_to_linear(c.0[i]) * intensity)
         };
         for light in &frame.lights {
             match light {
+                LightFrameState::Point {
+                    color,
+                    intensity,
+                    position,
+                    range,
+                } => punctual.push(punctual::Punctual {
+                    position: V3::from(*position),
+                    color: linear(*color, *intensity),
+                    range: *range,
+                    cone: None,
+                }),
+                LightFrameState::Spot {
+                    color,
+                    intensity,
+                    position,
+                    target,
+                    range,
+                    angle,
+                    penumbra,
+                } => punctual.push(punctual::Punctual {
+                    position: V3::from(*position),
+                    color: linear(*color, *intensity),
+                    range: *range,
+                    cone: Some((
+                        (V3::from(*target) - V3::from(*position)).normalized(),
+                        libm::cosf(degrees(*angle)),
+                        libm::cosf(degrees(*angle * (1.0 - *penumbra))),
+                    )),
+                }),
                 LightFrameState::Ambient { color, intensity } => {
                     let c = linear(*color, *intensity);
                     for i in 0..3 {
@@ -2305,6 +2337,7 @@ impl Lights {
             }
         }
         Self {
+            punctual,
             ambient,
             directional,
             shadow_maps: Arc::default(),
@@ -2339,6 +2372,13 @@ impl Lights {
 
     fn factor(&self, normal: V3, occlusion: f32, position: V3) -> [f32; 3] {
         let mut factor = self.ambient.map(|v| v * occlusion);
+        for light in &self.punctual {
+            let (direction, color) = light.sample(position);
+            let cosine = normal.dot(direction).max(0.0);
+            for i in 0..3 {
+                factor[i] += color[i] * cosine;
+            }
+        }
         for (index, (direction, color)) in self.directional.iter().enumerate() {
             let cosine =
                 normal.dot(*direction).max(0.0) * self.shadow_visibility(index, position, normal);

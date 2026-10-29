@@ -156,6 +156,8 @@ pub enum MaterialKind {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub enum LightKind {
+    Point,
+    Spot,
     Ambient,
     Directional,
     Hemisphere,
@@ -163,6 +165,8 @@ pub enum LightKind {
 impl LightKind {
     pub fn scalar_count(self) -> usize {
         match self {
+            Self::Point => 9,
+            Self::Spot => 14,
             Self::Ambient => 5,
             Self::Directional => 8,
             Self::Hemisphere => 12,
@@ -179,6 +183,22 @@ impl LightKind {
     deny_unknown_fields
 )]
 pub enum LightFrameState {
+    Point {
+        color: Color4,
+        intensity: f32,
+        position: Vec3,
+        range: f32,
+    },
+    Spot {
+        color: Color4,
+        intensity: f32,
+        position: Vec3,
+        target: Vec3,
+        range: f32,
+        angle: f32,
+        penumbra: f32,
+    },
+
     Ambient {
         color: Color4,
         intensity: f32,
@@ -198,6 +218,8 @@ pub enum LightFrameState {
 impl LightFrameState {
     pub fn kind(&self) -> LightKind {
         match self {
+            Self::Point { .. } => LightKind::Point,
+            Self::Spot { .. } => LightKind::Spot,
             Self::Ambient { .. } => LightKind::Ambient,
             Self::Directional { .. } => LightKind::Directional,
             Self::Hemisphere { .. } => LightKind::Hemisphere,
@@ -210,11 +232,22 @@ impl LightFrameState {
     }
     fn validate_at(&self, path: &str, errors: &mut ContractErrors) {
         let intensity = match self {
-            Self::Ambient { intensity, .. }
+            Self::Point { intensity, .. }
+            | Self::Spot { intensity, .. }
+            | Self::Ambient { intensity, .. }
             | Self::Directional { intensity, .. }
             | Self::Hemisphere { intensity, .. } => *intensity,
         };
-        validate_intensity(intensity, &format!("{path}/intensity"), errors);
+        if matches!(self, Self::Point { .. } | Self::Spot { .. }) {
+            if !intensity.is_finite() || !(0.0..=100_000.0).contains(&intensity) {
+                errors.push(
+                    format!("{path}/intensity"),
+                    "point/spot intensity must be finite in 0..=100000",
+                );
+            }
+        } else {
+            validate_intensity(intensity, &format!("{path}/intensity"), errors);
+        }
         let mut color = |value: Color4, name: &str| {
             if !value.valid() || value.0[3] != 1.0 {
                 errors.push(
@@ -224,9 +257,10 @@ impl LightFrameState {
             }
         };
         match self {
-            Self::Ambient { color: c, .. } | Self::Directional { color: c, .. } => {
-                color(*c, "color")
-            }
+            Self::Point { color: c, .. }
+            | Self::Spot { color: c, .. }
+            | Self::Ambient { color: c, .. }
+            | Self::Directional { color: c, .. } => color(*c, "color"),
             Self::Hemisphere {
                 sky_color,
                 ground_color,
@@ -234,6 +268,60 @@ impl LightFrameState {
             } => {
                 color(*sky_color, "skyColor");
                 color(*ground_color, "groundColor");
+            }
+        }
+        if let Self::Point {
+            position, range, ..
+        }
+        | Self::Spot {
+            position, range, ..
+        } = self
+        {
+            if !position.finite() || position.0.iter().any(|v| v.abs() > MAX_ABS_POSITION) {
+                errors.push(
+                    format!("{path}/position"),
+                    "light position must be finite and bounded",
+                );
+            }
+            if !range.is_finite() || !(0.0..=MAX_ABS_POSITION).contains(range) {
+                errors.push(
+                    format!("{path}/range"),
+                    "light range must be in 0..=10000; zero means unlimited",
+                );
+            }
+        }
+        if let Self::Spot {
+            position,
+            target,
+            angle,
+            penumbra,
+            ..
+        } = self
+        {
+            let distance: f32 = position
+                .0
+                .iter()
+                .zip(target.0)
+                .map(|(a, b)| (a - b) * (a - b))
+                .sum();
+            if !target.finite()
+                || target.0.iter().any(|v| v.abs() > MAX_ABS_POSITION)
+                || distance <= 1e-12
+            {
+                errors.push(
+                    format!("{path}/target"),
+                    "spotlight target must be finite, bounded and different from position",
+                );
+            }
+            if !angle.is_finite()
+                || !(0.1..=89.9).contains(angle)
+                || !penumbra.is_finite()
+                || !(0.0..=1.0).contains(penumbra)
+            {
+                errors.push(
+                    format!("{path}/cone"),
+                    "spotlight angle must be 0.1..=89.9 degrees and penumbra 0..=1",
+                );
             }
         }
         if let Self::Directional { direction, .. } | Self::Hemisphere { direction, .. } = self
@@ -605,6 +693,18 @@ impl Scene3DSpec {
                     format!("Scene3D allows at most {limit} {label} lights"),
                 );
             }
+        }
+        if self
+            .lights
+            .iter()
+            .filter(|kind| matches!(kind, LightKind::Point | LightKind::Spot))
+            .count()
+            > 8
+        {
+            errors.push(
+                "/lights",
+                "Scene3D allows at most eight point and spot lights in total",
+            );
         }
         let mut anchor_keys = BTreeSet::new();
         for (index, anchor) in self.anchors.iter().enumerate() {
