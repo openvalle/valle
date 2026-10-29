@@ -1,8 +1,7 @@
 //! Decode strided accessors into shared source geometry; never apply instance transforms here.
 use super::{
-    ARRAY_BUFFER, ContractErrors, ELEMENT_ARRAY_BUFFER, FLOAT, ModelMaterial, ModelMesh,
-    ModelVertex, MorphTarget, PrimitiveRange, Root, SkinVertex, UNSIGNED_INT, UNSIGNED_SHORT,
-    accessor_error, one_error,
+    ContractErrors, FLOAT, ModelMaterial, ModelMesh, ModelVertex, MorphTarget, PrimitiveRange,
+    Root, SkinVertex, UNSIGNED_INT, UNSIGNED_SHORT, accessor_error, one_error,
 };
 use crate::scene3d::{
     MAX_ABS_POSITION, MAX_MORPH_STORAGE_BYTES, MAX_MORPH_TARGETS, MAX_SKIN_STORAGE_BYTES,
@@ -10,6 +9,7 @@ use crate::scene3d::{
 };
 
 const UNSIGNED_BYTE: u32 = 5121;
+pub(super) use super::accessor::accessor_bytes;
 
 type Geometry = (
     Vec<ModelVertex>,
@@ -63,7 +63,12 @@ pub(super) fn admit_geometry(
         let first_vertex = vertices.len();
         let first_index = indices.len();
         for (primitive_index, primitive) in mesh.primitives.iter().enumerate() {
-            let positions = read_vectors::<3>(root, bin, primitive.attributes.position, false)?;
+            let positions = read_vectors::<3>(
+                root,
+                bin,
+                primitive.attributes.position,
+                Attribute::Position,
+            )?;
             // Stop before reading later attributes or expanding a primitive that cannot fit.
             check_vertices(vertices.len() + positions.len())?;
             if positions
@@ -80,16 +85,17 @@ pub(super) fn admit_geometry(
                 Some(index) => read_indices(root, bin, index)?,
                 None => (0..positions.len() as u32).collect(),
             };
-            if local_indices.is_empty() || local_indices.len() % 3 != 0 {
-                return Err(one_error(
-                    "/glb/accessors/indices",
-                    "triangle index count must be positive and divisible by three",
-                ));
-            }
             if local_indices.iter().any(|&i| i as usize >= positions.len()) {
                 return Err(one_error(
                     "/glb/accessors/indices",
                     "index references a vertex outside this primitive",
+                ));
+            }
+            let local_indices = triangulate(local_indices, primitive.mode)?;
+            if local_indices.is_empty() || local_indices.len() % 3 != 0 {
+                return Err(one_error(
+                    "/glb/accessors/indices",
+                    "triangle index count must be positive and divisible by three",
                 ));
             }
             if (indices.len() + local_indices.len()) / 3 > MAX_TRIANGLES as usize {
@@ -101,7 +107,7 @@ pub(super) fn admit_geometry(
             let normals = primitive
                 .attributes
                 .normal
-                .map(|a| read_vectors::<3>(root, bin, a, false))
+                .map(|a| read_vectors::<3>(root, bin, a, Attribute::Direction))
                 .transpose()?;
             if let Some(normals) = &normals {
                 if normals.len() != positions.len() {
@@ -150,7 +156,7 @@ pub(super) fn admit_geometry(
                 }
             };
             if let Some(index) = primitive.attributes.tangent {
-                let tangents = read_vectors::<4>(root, bin, index, false)?;
+                let tangents = read_vectors::<4>(root, bin, index, Attribute::Direction)?;
                 if normals.is_none()
                     || tangents.len() != positions.len()
                     || tangents.iter().flatten().any(|v| !v.is_finite())
@@ -176,15 +182,15 @@ pub(super) fn admit_geometry(
                 }
                 let positions_delta = target
                     .position
-                    .map(|a| read_vectors::<3>(root, bin, a, false))
+                    .map(|a| read_vectors::<3>(root, bin, a, Attribute::MorphPosition))
                     .transpose()?;
                 let normals_delta = target
                     .normal
-                    .map(|a| read_vectors::<3>(root, bin, a, false))
+                    .map(|a| read_vectors::<3>(root, bin, a, Attribute::Direction))
                     .transpose()?;
                 let tangents_delta = target
                     .tangent
-                    .map(|a| read_vectors::<3>(root, bin, a, false))
+                    .map(|a| read_vectors::<3>(root, bin, a, Attribute::Direction))
                     .transpose()?;
                 if [&positions_delta, &normals_delta, &tangents_delta]
                     .iter()
@@ -233,7 +239,7 @@ pub(super) fn admit_geometry(
             let uvs = primitive
                 .attributes
                 .texcoord_0
-                .map(|a| read_vectors::<2>(root, bin, a, true))
+                .map(|a| read_vectors::<2>(root, bin, a, Attribute::Texcoord))
                 .transpose()?
                 .unwrap_or_else(|| vec![[0.0; 2]; positions.len()]);
             if uvs.len() != positions.len()
@@ -452,80 +458,19 @@ pub(super) fn normalize(v: [f32; 3]) -> [f32; 3] {
     }
 }
 
-pub(super) struct AccessorBytes<'a> {
-    bytes: &'a [u8],
-    stride: usize,
-    size: usize,
-    count: usize,
-}
-impl<'a> AccessorBytes<'a> {
-    pub(super) fn elements(&self) -> impl Iterator<Item = &'a [u8]> + '_ {
-        (0..self.count).map(|i| &self.bytes[i * self.stride..i * self.stride + self.size])
-    }
-}
-
-pub(super) fn accessor_bytes<'a>(
-    root: &Root,
-    bin: &'a [u8],
-    index: usize,
-    size: usize,
-    component_size: usize,
-    vertex: bool,
-) -> Result<AccessorBytes<'a>, ContractErrors> {
-    let accessor = &root.accessors[index];
-    let Some(view) = root.buffer_views.get(accessor.buffer_view) else {
-        return accessor_error(index, "bufferView index is out of range");
-    };
-    let limit = if vertex {
-        MAX_VERTICES as usize
-    } else {
-        MAX_TRIANGLES as usize * 3
-    };
-    if accessor.count == 0 || accessor.count > limit {
-        return accessor_error(
-            index,
-            "accessor count must be positive and within the geometry budget",
-        );
-    }
-    if view.target.is_some_and(|t| {
-        t != if vertex {
-            ARRAY_BUFFER
-        } else {
-            ELEMENT_ARRAY_BUFFER
-        }
-    }) || (!vertex && view.byte_stride.is_some())
-    {
-        return accessor_error(index, "buffer view target or stride does not match its use");
-    }
-    let stride = view.byte_stride.unwrap_or(size);
-    let start = view.byte_offset.checked_add(accessor.byte_offset);
-    let end = (accessor.count - 1)
-        .checked_mul(stride)
-        .and_then(|v| v.checked_add(size))
-        .and_then(|v| start?.checked_add(v));
-    let view_end = view.byte_offset.checked_add(view.byte_length);
-    if stride < size
-        || stride % component_size != 0
-        || !accessor.byte_offset.is_multiple_of(component_size)
-        || (vertex && (!accessor.byte_offset.is_multiple_of(4) || stride % 4 != 0))
-        || start.is_none_or(|s| s % component_size != 0)
-        || end.is_none_or(|e| e > view_end.unwrap_or(0) || e > bin.len())
-    {
-        return accessor_error(index, "accessor is misaligned or exceeds its buffer view");
-    }
-    Ok(AccessorBytes {
-        bytes: &bin[start.unwrap()..end.unwrap()],
-        stride,
-        size,
-        count: accessor.count,
-    })
+#[derive(Clone, Copy)]
+enum Attribute {
+    Position,
+    MorphPosition,
+    Direction,
+    Texcoord,
 }
 
 fn read_vectors<const N: usize>(
     root: &Root,
     bin: &[u8],
     index: usize,
-    uv: bool,
+    attribute: Attribute,
 ) -> Result<Vec<[f32; N]>, ContractErrors> {
     let accessor = &root.accessors[index];
     let expected = match N {
@@ -537,16 +482,32 @@ fn read_vectors<const N: usize>(
     if accessor.kind != expected {
         return accessor_error(index, "incorrect vector accessor type");
     }
-    let size = match (accessor.component_type, accessor.normalized, uv) {
-        (FLOAT, false, _) => 4,
-        (UNSIGNED_SHORT, true, true) => 2,
-        (UNSIGNED_BYTE, true, true) => 1,
-        _ => {
-            return accessor_error(
-                index,
-                "expected FLOAT vector or normalized unsigned UV vector",
-            );
-        }
+    let quantized = root
+        .extensions_required
+        .iter()
+        .any(|v| v == "KHR_mesh_quantization");
+    let component = accessor.component_type;
+    let normalized = accessor.normalized;
+    let allowed = match (component, normalized) {
+        (FLOAT, false) => true,
+        (UNSIGNED_BYTE | UNSIGNED_SHORT, true) if matches!(attribute, Attribute::Texcoord) => true,
+        (5120 | 5122 | UNSIGNED_BYTE | UNSIGNED_SHORT, _) if quantized => match attribute {
+            Attribute::Position | Attribute::Texcoord => true,
+            Attribute::MorphPosition => matches!(component, 5120 | 5122),
+            Attribute::Direction => normalized && matches!(component, 5120 | 5122),
+        },
+        _ => false,
+    };
+    if !allowed {
+        return accessor_error(
+            index,
+            "unsupported vector component type for this attribute; quantized attributes require KHR_mesh_quantization",
+        );
+    }
+    let size = match component {
+        FLOAT => 4,
+        5122 | UNSIGNED_SHORT => 2,
+        _ => 1,
     };
     let bytes = accessor_bytes(root, bin, index, N * size, size, true)?;
     Ok(bytes
@@ -554,14 +515,59 @@ fn read_vectors<const N: usize>(
         .map(|element| {
             std::array::from_fn(|i| {
                 let c = &element[i * size..(i + 1) * size];
-                match size {
-                    4 => f32::from_le_bytes(c.try_into().unwrap()),
-                    2 => u16::from_le_bytes(c.try_into().unwrap()) as f32 / 65535.0,
-                    _ => c[0] as f32 / 255.0,
+                match component {
+                    FLOAT => f32::from_le_bytes(c.try_into().unwrap()),
+                    5120 => {
+                        let v = (c[0] as i8) as f32;
+                        if normalized { (v / 127.0).max(-1.0) } else { v }
+                    }
+                    5122 => {
+                        let v = i16::from_le_bytes(c.try_into().unwrap()) as f32;
+                        if normalized {
+                            (v / 32767.0).max(-1.0)
+                        } else {
+                            v
+                        }
+                    }
+                    UNSIGNED_SHORT => {
+                        let v = u16::from_le_bytes(c.try_into().unwrap()) as f32;
+                        if normalized { v / 65535.0 } else { v }
+                    }
+                    _ => {
+                        let v = c[0] as f32;
+                        if normalized { v / 255.0 } else { v }
+                    }
                 }
             })
         })
         .collect())
+}
+
+fn triangulate(input: Vec<u32>, mode: u32) -> Result<Vec<u32>, ContractErrors> {
+    if mode == 4 {
+        return Ok(input);
+    }
+    if input.len() < 3 || input.len() - 2 > MAX_TRIANGLES as usize {
+        return Err(one_error(
+            "/glb/primitives/mode",
+            "strip/fan triangle count is empty or exceeds the budget",
+        ));
+    }
+    let mut result = Vec::with_capacity((input.len() - 2) * 3);
+    for i in 0..input.len() - 2 {
+        let t = if mode == 6 {
+            [input[0], input[i + 1], input[i + 2]]
+        } else if i % 2 == 0 {
+            [input[i], input[i + 1], input[i + 2]]
+        } else {
+            [input[i + 1], input[i], input[i + 2]]
+        };
+        // Degenerate strip connectors produce no face; parity still follows source indices.
+        if t[0] != t[1] && t[1] != t[2] && t[2] != t[0] {
+            result.extend_from_slice(&t);
+        }
+    }
+    Ok(result)
 }
 
 fn read_indices(root: &Root, bin: &[u8], index: usize) -> Result<Vec<u32>, ContractErrors> {

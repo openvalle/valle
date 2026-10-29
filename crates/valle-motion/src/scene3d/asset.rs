@@ -1,4 +1,5 @@
 use serde::Deserialize;
+mod accessor;
 mod animation;
 mod geometry;
 mod material;
@@ -335,6 +336,7 @@ fn validate_root(root: &Root, bin: &[u8], errors: &mut ContractErrors) {
                 | "KHR_materials_clearcoat"
                 | "KHR_materials_transmission"
                 | "KHR_materials_volume"
+                | "KHR_mesh_quantization"
         ) {
             errors.push(
                 "/glb/extensions",
@@ -349,6 +351,20 @@ fn validate_root(root: &Root, bin: &[u8], errors: &mut ContractErrors) {
                 "required extensions must also occur in extensionsUsed",
             );
         }
+    }
+    if root
+        .extensions_used
+        .iter()
+        .any(|v| v == "KHR_mesh_quantization")
+        && !root
+            .extensions_required
+            .iter()
+            .any(|v| v == "KHR_mesh_quantization")
+    {
+        errors.push(
+            "/glb/extensionsRequired",
+            "KHR_mesh_quantization must be required, not just used",
+        );
     }
     if root.scene >= root.scenes.len() {
         errors.push("/glb/scene", "default scene index is out of range");
@@ -415,10 +431,10 @@ fn validate_root(root: &Root, bin: &[u8], errors: &mut ContractErrors) {
                     "material index is out of range",
                 );
             }
-            if primitive.mode != TRIANGLES {
+            if !matches!(primitive.mode, 4..=6) {
                 errors.push(
                     format!("/glb/meshes/{mesh_index}/primitives/{primitive_index}/mode"),
-                    "only TRIANGLES mode is admitted",
+                    "only TRIANGLES, TRIANGLE_STRIP and TRIANGLE_FAN modes are admitted",
                 );
             }
             for accessor in std::iter::once(primitive.attributes.position)
@@ -550,7 +566,8 @@ struct BufferView {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Accessor {
-    buffer_view: usize,
+    #[serde(default)]
+    buffer_view: Option<usize>,
     #[serde(default)]
     byte_offset: usize,
     component_type: u32,
@@ -560,11 +577,42 @@ struct Accessor {
     #[serde(rename = "type")]
     kind: String,
     #[serde(default)]
+    sparse: Option<SparseAccessor>,
+    #[serde(default)]
     min: Option<Vec<f32>>,
     #[serde(default)]
     max: Option<Vec<f32>>,
     #[serde(default, rename = "name")]
     _name: Option<String>,
+    #[serde(default, rename = "extras")]
+    _extras: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SparseAccessor {
+    count: usize,
+    indices: SparseIndices,
+    values: SparseValues,
+    #[serde(default, rename = "extras")]
+    _extras: Option<serde_json::Value>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SparseIndices {
+    buffer_view: usize,
+    #[serde(default)]
+    byte_offset: usize,
+    component_type: u32,
+    #[serde(default, rename = "extras")]
+    _extras: Option<serde_json::Value>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SparseValues {
+    buffer_view: usize,
+    #[serde(default)]
+    byte_offset: usize,
     #[serde(default, rename = "extras")]
     _extras: Option<serde_json::Value>,
 }

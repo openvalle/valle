@@ -112,6 +112,7 @@ const cases = process.argv
   "assets",
   "orthographic",
   "orthographic-morph",
+  "quantized",
 ];
 if (
   cases.some(
@@ -125,12 +126,14 @@ if (
         "assets",
         "orthographic",
         "orthographic-morph",
+        "quantized",
       ].includes(name),
   )
 )
   throw new Error("Unknown Scene3D case");
 for (const name of cases) {
-  const animated = name === "morph" || name === "skin" || name === "orthographic-morph";
+  const animated =
+    name === "morph" || name === "skin" || name === "orthographic-morph" || name === "quantized";
   const resources = name === "assets" || name === "orthographic",
     directory = join(evidence, name);
   await mkdir(directory);
@@ -177,7 +180,7 @@ export default function Main(){const time=useCurrentTime();return <Scene style={
       ...(animated || name === "clip"
         ? [
             "--asset",
-            `model=${join(root, `crates/valle-motion/tests/fixtures/scene3d/${name === "clip" ? "pbr" : name === "skin" ? "rigged-simple" : "animated-morph-cube"}.glb`)}`,
+            `model=${join(root, `crates/valle-motion/tests/fixtures/scene3d/${name === "clip" ? "pbr" : name === "skin" ? "rigged-simple" : name === "quantized" ? "quantized-sparse" : "animated-morph-cube"}.glb`)}`,
           ]
         : []),
       ...(resources

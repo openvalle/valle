@@ -124,6 +124,15 @@ fn gpu_mesh_transforms_morph_skin_and_clipping() {
             [0.0, 1.5, 3.5],
         ),
         (
+            "quantized",
+            include_bytes!(
+                "../../../../../../../valle-motion/tests/fixtures/scene3d/quantized-sparse.glb"
+            )
+            .as_slice(),
+            5.0,
+            [0.0, 1.0, 2.0],
+        ),
+        (
             "skin",
             include_bytes!(
                 "../../../../../../../valle-motion/tests/fixtures/scene3d/rigged-simple.glb"

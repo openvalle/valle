@@ -308,6 +308,141 @@ fn u16_bytes(values: &[u16]) -> Vec<u8> {
 }
 
 #[test]
+fn sparse_animation_and_skin_matrices_match_dense_models() {
+    for (bytes, distance) in [
+        (
+            include_bytes!("fixtures/scene3d/animated-morph-cube.glb").as_slice(),
+            4.5,
+        ),
+        (
+            include_bytes!("fixtures/scene3d/rigged-simple.glb").as_slice(),
+            15.0,
+        ),
+    ] {
+        let sparse = edit_glb(bytes, |root, bin| {
+            let old = bin.clone();
+            let accessors = root["accessors"].as_array().unwrap().clone();
+            for (index, a) in accessors.iter().enumerate() {
+                if a["componentType"] != 5126 {
+                    continue;
+                }
+                let view = &root["bufferViews"][a["bufferView"].as_u64().unwrap() as usize];
+                let n = a["count"].as_u64().unwrap() as usize;
+                let components = match a["type"].as_str().unwrap() {
+                    "SCALAR" => 1,
+                    "VEC2" => 2,
+                    "VEC3" => 3,
+                    "VEC4" => 4,
+                    "MAT4" => 16,
+                    _ => panic!(),
+                };
+                let size = components * 4;
+                let stride = view["byteStride"].as_u64().map_or(size, |v| v as usize);
+                let start = (view["byteOffset"].as_u64().unwrap_or(0)
+                    + a["byteOffset"].as_u64().unwrap_or(0)) as usize;
+                bin.resize(bin.len().div_ceil(4) * 4, 0);
+                let iv = root["bufferViews"].as_array().unwrap().len();
+                root["bufferViews"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"buffer":0,"byteOffset":bin.len(),"byteLength":n*4}));
+                for i in 0..n {
+                    bin.extend((i as u32).to_le_bytes());
+                }
+                root["bufferViews"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"buffer":0,"byteOffset":bin.len(),"byteLength":n*size}));
+                for i in 0..n {
+                    bin.extend_from_slice(&old[start + i * stride..start + i * stride + size]);
+                }
+                let target = root["accessors"][index].as_object_mut().unwrap();
+                target.remove("bufferView");
+                target.remove("byteOffset");
+                target.insert("sparse".into(),json!({"count":n,"indices":{"bufferView":iv,"componentType":5125},"values":{"bufferView":iv+1}}));
+            }
+            root["buffers"][0]["byteLength"] = json!(bin.len());
+        });
+        let mut scene = pbr_scene();
+        scene.meshes[0].animation_clip = Some(0);
+        let a = prepare_scene(&scene, 64, 64, &resources(bytes)).unwrap();
+        let b = prepare_scene(&scene, 64, 64, &resources(&sparse)).unwrap();
+        let mut f = pbr_frame();
+        f.camera.position = Vec3::new(0.0, 0.0, distance);
+        for time in [0.0, 0.5, 1.5, 0.0] {
+            f.meshes[0].animation_time = Some(time);
+            assert_frame_bits_eq(
+                &render_scene(&a, &f).unwrap(),
+                &render_scene(&b, &f).unwrap(),
+            );
+        }
+    }
+}
+
+#[test]
+fn quantized_sparse_animation_matches_expanded_float_geometry() {
+    let compact = include_bytes!("fixtures/scene3d/quantized-sparse.glb");
+    let expanded = edit_glb(compact, |root, bin| {
+        for (id, values) in [
+            (
+                0,
+                vec![
+                    -1.0_f32, -1.0, 0.0, 1.0, -1.0, 0.0, -1.0, 1.0, 0.0, 1.0, 1.0, 0.0,
+                ],
+            ),
+            (
+                1,
+                vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+            ),
+            (
+                2,
+                vec![
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    64.0 / 127.0,
+                ],
+            ),
+        ] {
+            let view = root["bufferViews"].as_array().unwrap().len();
+            root["bufferViews"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"buffer":0,"byteOffset":bin.len(),"byteLength":values.len()*4}));
+            bin.extend(values.iter().flat_map(|v| v.to_le_bytes()));
+            root["accessors"][id] =
+                json!({"bufferView":view,"componentType":5126,"count":4,"type":"VEC3"});
+        }
+        root["extensionsUsed"] = json!([]);
+        root["extensionsRequired"] = json!([]);
+        root["buffers"][0]["byteLength"] = json!(bin.len());
+    });
+    let mut scene = pbr_scene();
+    scene.meshes[0].animation_clip = Some(0);
+    let a = prepare_scene(&scene, 96, 96, &resources(compact)).unwrap();
+    let b = prepare_scene(&scene, 96, 96, &resources(&expanded)).unwrap();
+    let mut frame = pbr_frame();
+    let mut seen = BTreeMap::new();
+    for sample in [0, 7, 15, 30, 7, 0] {
+        frame.meshes[0].animation_time = Some(sample as f32 / 15.0);
+        let actual = render_scene(&a, &frame).unwrap();
+        assert_frame_bits_eq(&actual, &render_scene(&b, &frame).unwrap());
+        if let Some(previous) = seen.insert(sample, actual.clone()) {
+            assert_frame_bits_eq(&previous, &actual);
+        }
+    }
+    assert_ne!(seen[&0].depth, seen[&30].depth);
+}
+
+#[test]
 fn exact_glb_subset_admits_to_content_addressed_geometry() {
     let bytes = glb(&[triangle(0.0, [0.0, 0.0, 1.0])]);
     let model = admit_glb(&bytes).expect("narrow GLB subset");

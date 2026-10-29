@@ -1,5 +1,11 @@
 # Scene3D binding fixtures
 
+`quantized-sparse.glb` is authored test data: four SHORT positions in an 8-byte stride,
+normalized BYTE normals, a two-entry sparse normalized BYTE morph target with no base
+buffer, and a two-second weight animation. It uses a non-indexed TRIANGLE_STRIP and
+requires KHR_mesh_quantization. The accessor integration test expands it to FLOAT data
+and compares complete rendered frames; Native and Web exercise its animated geometry.
+
 `triangle.glb` is a self-contained GLB 2.0 triangle with positions (-0.9,-0.7,0),
 (0.9,-0.7,0), (0,0.9,0), normals (0,0,1), UVs (0,1), (1,1), (0.5,0),
 and U16 indices 0,1,2. `narrow.glb` halves only the X positions. Both are authored

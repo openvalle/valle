@@ -3097,7 +3097,7 @@ scene object's semantic address plus `nodeId`, the original glTF node index.
 The raster keeps separate object/node planes, with 20 bytes per pixel for half-float
 color, 32-bit depth and both 32-bit identifiers; buffer reuse resets every plane.
 
-Triangle primitives accept packed or interleaved FLOAT positions/normals, FLOAT or
+Triangle, triangle-strip and triangle-fan primitives accept packed or interleaved FLOAT positions/normals, FLOAT or
 normalized U8/U16 UVs, U8/U16/U32 indices and non-indexed geometry. Missing normals
 produce flat face normals with split corners. UVs may be absent when no material
 texture needs them; binding a texture without UVs reports an error. Buffer-view targets
@@ -3106,7 +3106,16 @@ positions and normals; absent target attributes leave the source value unchanged
 The renderer recomputes flat normals after deformation when the source has no normals.
 Tangent accessors are validated but source and morphed tangents are not consumed by the
 current rasterizer. A mesh admits up to eight targets and 64 MiB of decoded morph data;
-weight magnitudes are limited to 16. External URIs, sparse accessors,
+weight magnitudes are limited to 16. Sparse accessors work for geometry, morph targets,
+animation and inverse bind matrices: omitted base data starts at zero, and sparse indices
+must strictly increase within the accessor count. Strip/fan primitives expand to ordinary
+triangles before the aggregate geometry budget is applied.
+With `KHR_mesh_quantization` in both `extensionsUsed` and `extensionsRequired`, positions
+and UVs may use signed/unsigned 8/16-bit components, normalized or not; normals/tangents
+use normalized signed components, and quantized morph deltas are signed. Dequantization
+uses the model's existing node/skin/texture transforms. Four-byte vertex alignment remains
+required. See the [Khronos extension](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_mesh_quantization).
+External URIs, Draco/meshopt compression,
 additional joint/weight sets and unrecognized extensions remain outside the
 admitted profile. Supported extensions are `KHR_materials_unlit`,
 `KHR_materials_emissive_strength`, `KHR_texture_transform`, and the scalar/color
