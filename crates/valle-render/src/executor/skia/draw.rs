@@ -304,6 +304,14 @@ impl ProgramRuntime {
                         .is_some_and(|object| object.key().content == digest)
                 })
                 .ok_or_else(|| DrawError::MissingScene(requirement.content_hash.as_hex()))?;
+            #[cfg(feature = "native")]
+            if let Some(input) = bound
+                .get(binding.slot)
+                .and_then(SkiaExternalObject::deferred_scene3d_frames)
+            {
+                scenes.insert(digest, SceneImage::Frames(Arc::clone(input), None));
+                continue;
+            }
             let image = match visual(bound, binding.slot) {
                 Some(image) => SceneImage::Ready(image.clone()),
                 None if bound
@@ -434,6 +442,37 @@ impl ProgramRuntime {
             self.textures
                 .insert(ExternalTexture::frame(frame), ProgramTexture::frame(image));
         }
+    }
+
+    #[cfg(feature = "native")]
+    pub(crate) fn resolve_scene3d_frames(
+        &mut self,
+        surfaces: &mut super::surface::SurfaceFrame<'_>,
+    ) -> Result<(u64, u64, u64), DrawError> {
+        let mut totals = (0, 0, 0);
+        for scene in self.scenes.values_mut() {
+            if let SceneImage::Frames(input, resolved) = scene {
+                let frames = input
+                    .frame
+                    .request()
+                    .scene
+                    .input_frames()
+                    .into_iter()
+                    .map(|frame| {
+                        self.textures
+                            .get(&ExternalTexture::frame(frame))
+                            .map(|t| (frame, t.image.clone()))
+                            .ok_or_else(|| DrawError::MissingTexture(frame.source().into()))
+                    })
+                    .collect::<Result<BTreeMap<_, _>, _>>()?;
+                let (image, gpu, uploads) = input.render(&frames, surfaces)?;
+                totals.0 += u64::from(gpu);
+                totals.1 += u64::from(!gpu);
+                totals.2 += uploads;
+                *resolved = Some(image);
+            }
+        }
+        Ok(totals)
     }
 
     pub(crate) fn resolve_deferred_visuals(
@@ -1624,10 +1663,11 @@ impl ProgramRuntime {
                     .scenes
                     .get(&digest)
                     .ok_or_else(|| DrawError::MissingScene(scene.scene.content_hash.as_hex()))?;
-                let SceneImage::Ready(image) = image else {
-                    return Err(DrawError::Internal(
-                        "Scene3D DOF was not materialized".into(),
-                    ));
+                let image = match image {
+                    SceneImage::Ready(image) => image,
+                    #[cfg(feature = "native")]
+                    SceneImage::Frames(_, Some(image)) => image,
+                    _ => return Err(DrawError::Internal("Scene3D was not materialized".into())),
                 };
                 // Prefilter all levels once for this draw. Trilinear sampling remains smooth
                 // through minification and quarter-octave raster-density changes.
@@ -2071,6 +2111,8 @@ impl ProgramRuntime {
 }
 
 enum SceneImage {
+    #[cfg(feature = "native")]
+    Frames(Arc<super::scene3d_frames::Scene3dFrames>, Option<Image>),
     Ready(Image),
     Deferred(ExternalSlotId),
 }

@@ -204,6 +204,10 @@ pub trait ProgramResourceCatalog {
 
     /// Resolve a construction-only generated texture into a typed Scene3D frame. Product Motion
     /// emission supplies this map; other generated keys remain untyped and are rejected later.
+    fn scene3d_frames(&self, _key: &str) -> Vec<crate::requirements::HostFrame> {
+        Vec::new()
+    }
+
     fn scene3d_key(&self, _key: &str) -> Option<Scene3dKey> {
         None
     }
@@ -752,6 +756,10 @@ impl<'a> RecordingCompiler<'a> {
                     .and_then(|catalog| catalog.scene3d_key(&source.provider_key))
                 {
                     let scene = self.builder.push_node(Node::Scene3d(Scene3dNode {
+                        frames: self
+                            .catalog
+                            .map(|c| c.scene3d_frames(&source.provider_key))
+                            .unwrap_or_default(),
                         scene,
                         bounds: *dst,
                     }));

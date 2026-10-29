@@ -2640,10 +2640,11 @@ pub fn frame_reader(frame: HostFrame) -> (valle_timeline::MotionRole, &'static s
     }
 }
 
-/// Whether `node` draws the host frame `key`, as an Image or a shader input.
+/// Whether `node` draws the host frame `key`, as an image, shader input or 3D material.
 fn node_reads_frame(node: &SceneNode, key: HostFrame) -> bool {
     let inputs = match &node.kind {
         NodeKind::Image { source } => return source == key.source(),
+        NodeKind::Scene3D { scene, .. } => return scene.input_frames().contains(&key),
         NodeKind::ShaderLayer { inputs, .. }
         | NodeKind::Transition {
             effect: TransitionEffect::Shader { inputs, .. },
@@ -5368,6 +5369,15 @@ impl SceneArtifact {
                 );
             }
             if let NodeKind::Scene3D { scene, frame } = &node.kind {
+                for input in scene.input_frames() {
+                    let (role, reader, pictured) = frame_reader(input);
+                    if self.role != role {
+                        errors.push(ValidationError::new(
+                            format!("{path}/kind/scene"),
+                            format!("only {reader} template reads {pictured} as a material"),
+                        ));
+                    }
+                }
                 if let Some(environment) = &scene.pbr.environment {
                     let has_asset = self
                         .controls

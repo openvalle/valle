@@ -667,6 +667,20 @@ pub fn prepare_cache_key(
             hasher.update(texture.content_digest().as_bytes());
         }
     }
+    for frame in scene.input_frames() {
+        let image = resources
+            .textures
+            .get(&(frame.source().into(), TextureRole::Color));
+        if let Some(image) = image {
+            hash_string(&mut hasher, frame.source());
+            hasher.update(image.content_digest().as_bytes());
+        } else {
+            errors.push(
+                "/resources/frames",
+                format!("missing current picture {}", frame.source()),
+            );
+        }
+    }
     errors.finish()?;
     Ok(ScenePrepareCacheKey(ContentDigest::from_bytes(
         hasher.finalize().into(),

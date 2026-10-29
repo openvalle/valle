@@ -75,6 +75,15 @@ fn verify(backend: SkiaBackendKind) {
             changes > 200,
             "visible frost/refraction required: {changes}"
         );
+        if backend == SkiaBackendKind::Raster
+            && let Ok(directory) = std::env::var("VALLE_MOTION_PACKAGE_TEST_OUTPUT")
+        {
+            std::fs::write(
+                std::path::Path::new(&directory).join("glass-projection-reference.rgba"),
+                &actual,
+            )
+            .unwrap();
+        }
     }
 }
 
@@ -142,4 +151,101 @@ fn dielectric_motion_renders_on_cpu() {
 #[ignore = "requires a hardware Metal GPU"]
 fn dielectric_motion_renders_on_metal() {
     verify_dielectric(SkiaBackendKind::Metal);
+}
+
+fn verify_ui_material(backend: SkiaBackendKind) {
+    let source = r##"
+export const composition={width:240,height:160,duration:1};
+export default function UI() { const t=useCurrentTime();return <Scene style={{width:240,height:160,backgroundColor:"#163a66"}}>
+  <View style={{position:"absolute",left:10,top:10,width:220,height:140,borderRadius:14,backgroundColor:"#327799"}} />
+  <View style={{position:"absolute",left:22,top:25,width:75,height:8,backgroundColor:"#ffffff"}} />
+  <View style={{position:"absolute",left:22,top:46,width:120,height:5,backgroundColor:"#aaccee"}} />
+  <View style={{position:"absolute",left:22,top:80,width:35,height:35,borderRadius:10,backgroundColor:"#ee5588",translate:point(t.seconds*145,0)}} />
+</Scene>}
+"##;
+    let effect = include_str!(
+        "../../valle-compiler/tests/fixtures/motion/composition/ui-material.motion.tsx"
+    );
+    let project = NativeProject::from_render(
+        support::opened_motion_effect_render(source, Some(effect), 240, 160),
+        Arc::new(NativeResourceCatalog::new()),
+    );
+    let spec = RenderSpec::new(
+        240,
+        160,
+        RenderQuality::Preview,
+        OutputSpec::srgb_preview(OutputBackground::opaque_srgb([0, 0, 0])).unwrap(),
+    )
+    .unwrap();
+    let mut runner = project.frame_runner(backend).unwrap();
+    let first = runner.render_rgba8(FrameKey::new(0), spec).unwrap().0.data;
+    let (output, evidence) = runner.render_rgba8(FrameKey::new(15), spec).unwrap();
+    if backend.supports_scene3d_gpu() {
+        assert_eq!(evidence.execution.scene3d_gpu_rasters, 1);
+        assert_eq!(evidence.execution.scene3d_cpu_fallbacks, 0);
+    }
+    let middle = output.data;
+    assert!(
+        first
+            .iter()
+            .zip(&middle)
+            .filter(|(a, b)| a.abs_diff(**b) > 20)
+            .count()
+            > 300,
+        "current UI must animate even when Scene3D request is constant"
+    );
+    for frame in [29, 3, 0] {
+        let actual = runner
+            .render_rgba8(FrameKey::new(frame), spec)
+            .unwrap()
+            .0
+            .data;
+        if frame == 0 {
+            assert_eq!(
+                first, actual,
+                "current materials must not retain the preceding host picture"
+            );
+        }
+    }
+    let white_rows = |range: std::ops::Range<usize>| {
+        range
+            .flat_map(|y| (20..210).map(move |x| (y * 240 + x) * 4))
+            .filter(|&i| middle[i..i + 3].iter().all(|&v| v > 230))
+            .count()
+    };
+    assert!(
+        white_rows(10..80) > 20 && white_rows(80..150) == 0,
+        "UI cap texture must stay upright"
+    );
+    let center = &middle[(80 * 240 + 120) * 4..][..3];
+    assert!(
+        center[0] > 240 && center[1] > 150 && center[2] < 70,
+        "foreground mesh occludes UI: {center:?}"
+    );
+    let pixel = &middle[(80 * 240 + 115) * 4..][..3];
+    assert!(
+        pixel[1] > 50 && pixel[2] > 80,
+        "UI occludes the rear red mesh: {pixel:?}"
+    );
+    if backend == SkiaBackendKind::Raster
+        && let Ok(directory) = std::env::var("VALLE_MOTION_PACKAGE_TEST_OUTPUT")
+    {
+        std::fs::write(
+            std::path::Path::new(&directory).join("ui-material-reference.rgba"),
+            middle,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn current_ui_material_shares_depth_on_cpu() {
+    verify_ui_material(SkiaBackendKind::Raster);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+#[ignore = "requires a hardware Metal GPU"]
+fn current_ui_material_shares_depth_on_metal() {
+    verify_ui_material(SkiaBackendKind::Metal);
 }

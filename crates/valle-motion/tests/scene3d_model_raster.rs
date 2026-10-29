@@ -3444,3 +3444,64 @@ fn dielectric_transmission_refracts_absorbs_and_keeps_shared_depth() {
     frame.meshes[2].material.transmission = Some(1.1);
     assert!(render_scene(&prepared, &frame).is_err());
 }
+
+#[test]
+fn host_material_pixels_are_bounded_and_part_of_prepare_identity() {
+    let mut scene = pbr_scene();
+    scene.meshes[0].material.textures.insert(
+        MaterialTextureSlot::BaseColor,
+        Some(MaterialTexture {
+            control: "input://source".into(),
+            wrap_u: TextureWrap::Clamp,
+            wrap_v: TextureWrap::Clamp,
+            min_filter: TextureFilter::Linear,
+            mag_filter: TextureFilter::Linear,
+            mipmap: MipmapFilter::Linear,
+        }),
+    );
+    let mut assets = resources(include_bytes!("fixtures/scene3d/plane.glb"));
+    assert!(prepare_cache_key(&scene, 64, 64, &assets).is_err());
+    let bytes = |rgba: [f32; 4]| {
+        rgba.into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<_>>()
+    };
+    let primary = bytes([0.6274039 * 0.5, 0.06909729 * 0.5, 0.016391439 * 0.5, 0.5]);
+    let decoded = MaterialImage::from_working_rgba32f(1, 1, &primary).unwrap();
+    let pixel = decoded.gpu_mips().next().unwrap().1;
+    assert!((pixel[0] - 1.0).abs() < 1e-6 && pixel[1] < 1e-6 && pixel[2] < 1e-6 && pixel[3] == 0.5);
+    let red = bytes([1.0, 0.0, 0.0, 1.0]);
+    let blue = bytes([0.0, 0.0, 1.0, 1.0]);
+    let frame_image =
+        |bytes: &[u8]| Arc::new(MaterialImage::from_working_rgba32f(1, 1, bytes).unwrap());
+    assets.textures.insert(
+        ("input://source".into(), TextureRole::Color),
+        frame_image(&red),
+    );
+    let first = prepare_cache_key(&scene, 64, 64, &assets).unwrap();
+    let a = render_scene(
+        &prepare_scene(&scene, 64, 64, &assets).unwrap(),
+        &pbr_frame(),
+    )
+    .unwrap();
+    assets.textures.insert(
+        ("input://source".into(), TextureRole::Color),
+        frame_image(&blue),
+    );
+    assert_ne!(first, prepare_cache_key(&scene, 64, 64, &assets).unwrap());
+    let b = render_scene(
+        &prepare_scene(&scene, 64, 64, &assets).unwrap(),
+        &pbr_frame(),
+    )
+    .unwrap();
+    assert_ne!(a.premul_rgba16f, b.premul_rgba16f);
+    for (w, h, pixels) in [
+        (0, 1, red.clone()),
+        (4097, 1, red.clone()),
+        (u32::MAX, u32::MAX, red.clone()),
+        (1, 1, vec![0; 15]),
+        (1, 1, bytes([f32::NAN, 0.0, 0.0, 1.0])),
+    ] {
+        assert!(MaterialImage::from_working_rgba32f(w, h, &pixels).is_err());
+    }
+}

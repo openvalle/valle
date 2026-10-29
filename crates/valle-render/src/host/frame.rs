@@ -1153,6 +1153,15 @@ fn frame_working_bytes<P: ResourceProvider>(
                     };
                     checked_add(scene3d_working, checked_add(pixels * 96, shadow_bytes)?)?
                 };
+                // Host material captures are at most one delivery viewport each. Charge their
+                // readback, straight float decode and mip storage in addition to 3D planes.
+                resources = checked_add(
+                    resources,
+                    u64::from(spec.width())
+                        * u64::from(spec.height())
+                        * 64
+                        * frame.scene.input_frames().len() as u64,
+                )?;
                 scene3d.push(Extent2d::new(frame.width, frame.height)?);
             }
             _ => resources = checked_add(resources, provider.source_resident_bytes(request))?,

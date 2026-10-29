@@ -1048,6 +1048,115 @@ impl ProductEngine {
         self.render_scene3d_request_impl(content_digest, topology_digest, canonical_request, true)
     }
 
+    /// An atomic current-frame material job. Inputs and outputs never enter the static raster
+    /// cache; equal Scene3D clocks can still receive different source pictures.
+    pub fn render_scene3d_with_frames(
+        &self,
+        content: &str,
+        topology: &str,
+        canonical: &str,
+        inputs: &[u8],
+        gpu: bool,
+    ) -> Result<Vec<u8>, JsError> {
+        use valle_draw::requirements::HostFrame;
+        use valle_motion::scene3d::{self, MaterialImage, TextureRole};
+        let sealed = open_scene3d_request(content, topology, canonical)?;
+        let frame = sealed.request();
+        let mut resources = self.scene3d_frame_resources(frame)?;
+        let mut cursor = 0;
+        let u32_at = |cursor: &mut usize| -> Result<u32, JsError> {
+            let part = inputs
+                .get(*cursor..*cursor + 4)
+                .ok_or_else(|| JsError::new("[scene3d_frames] truncated header"))?;
+            *cursor += 4;
+            Ok(u32::from_le_bytes(part.try_into().unwrap()))
+        };
+        if u32_at(&mut cursor)? != 0x31463353 {
+            return Err(JsError::new("[scene3d_frames] invalid input ABI"));
+        }
+        let required = frame.scene.input_frames();
+        if u32_at(&mut cursor)? as usize != required.len() || required.is_empty() {
+            return Err(JsError::new(
+                "[scene3d_frames] exact declared host frames required",
+            ));
+        }
+        let mut supplied = std::collections::BTreeSet::new();
+        for _ in 0..required.len() {
+            let input = match u32_at(&mut cursor)? {
+                0 => HostFrame::Source,
+                1 => HostFrame::From,
+                2 => HostFrame::To,
+                _ => return Err(JsError::new("[scene3d_frames] unknown input")),
+            };
+            if !required.contains(&input) || !supplied.insert(input) {
+                return Err(JsError::new(
+                    "[scene3d_frames] unexpected or duplicate input",
+                ));
+            }
+            let width = u32_at(&mut cursor)?;
+            let height = u32_at(&mut cursor)?;
+            let len = u32_at(&mut cursor)? as usize;
+            let pixels = inputs
+                .get(
+                    cursor
+                        ..cursor
+                            .checked_add(len)
+                            .ok_or_else(|| JsError::new("[scene3d_frames] length overflow"))?,
+                )
+                .ok_or_else(|| JsError::new("[scene3d_frames] truncated pixels"))?;
+            cursor += len;
+            let image = MaterialImage::from_working_rgba32f(width, height, pixels)
+                .map_err(|e| js_error("scene3d_frames", e))?;
+            resources
+                .textures
+                .insert((input.source().into(), TextureRole::Color), Arc::new(image));
+        }
+        if cursor != inputs.len() {
+            return Err(JsError::new("[scene3d_frames] trailing bytes"));
+        }
+        let prepared = scene3d::prepare_scene(&frame.scene, frame.width, frame.height, &resources)
+            .map_err(|e| js_error("scene3d_frames_prepare", e))?;
+        let (kind, pixels, atlas) = if gpu
+            && let Some(geometry) = scene3d::prepare_gpu_geometry(&prepared, &frame.frame)
+                .map_err(|e| js_error("scene3d_frames_gpu", e))?
+            && let Some(packet) = geometry.web_packet(&frame.frame)
+        {
+            let mut atlas_bytes = Vec::new();
+            if let Some(shading) = &geometry.shading {
+                let atlas = scene3d::GpuRasterAtlas::new(shading, 4096, 256 * 1024 * 1024)
+                    .ok_or_else(|| JsError::new("[scene3d_frames] GPU atlas budget exceeded"))?;
+                atlas.append_bytes(&mut atlas_bytes);
+            }
+            (1u32, packet, atlas_bytes)
+        } else {
+            let raster = scene3d::render_scene(&prepared, &frame.frame)
+                .map_err(|e| js_error("scene3d_frames_cpu", e))?;
+            (
+                0u32,
+                raster
+                    .premul_rgba16f
+                    .iter()
+                    .flat_map(|p| p.to_le_bytes())
+                    .collect(),
+                Vec::new(),
+            )
+        };
+        let mut output = Vec::with_capacity(24 + pixels.len() + atlas.len());
+        for word in [
+            0x314f3353u32,
+            kind,
+            frame.width,
+            frame.height,
+            pixels.len() as u32,
+            atlas.len() as u32,
+        ] {
+            output.extend_from_slice(&word.to_le_bytes());
+        }
+        output.extend_from_slice(&pixels);
+        output.extend_from_slice(&atlas);
+        Ok(output)
+    }
+
     pub fn has_scene3d_frame(&self, content_digest: &str) -> bool {
         ContentDigest::parse(content_digest)
             .is_ok_and(|digest| self.scene3d_frames.contains_key(&digest))
@@ -1126,10 +1235,10 @@ impl ProductEngine {
         Ok(geometry.mesh.expect("mesh packet").web_bytes())
     }
 
-    fn prepare_scene3d_frame(
-        &mut self,
+    fn scene3d_frame_resources(
+        &self,
         frame: &valle_motion::Scene3DFrameRequest,
-    ) -> Result<Arc<valle_motion::scene3d::PreparedScene>, JsError> {
+    ) -> Result<valle_motion::scene3d::SceneResources, JsError> {
         let mut resources = valle_motion::scene3d::SceneResources::default();
         if let Some(environment) = &frame.scene.pbr.environment {
             let digest = scene3d_binding_digest(frame, &environment.control)?;
@@ -1169,6 +1278,14 @@ impl ProductEngine {
             }
         }
 
+        Ok(resources)
+    }
+
+    fn prepare_scene3d_frame(
+        &mut self,
+        frame: &valle_motion::Scene3DFrameRequest,
+    ) -> Result<Arc<valle_motion::scene3d::PreparedScene>, JsError> {
+        let resources = self.scene3d_frame_resources(frame)?;
         let cache_key = valle_motion::scene3d::prepare_cache_key(
             &frame.scene,
             frame.width,

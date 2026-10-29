@@ -132,6 +132,7 @@ fn fixture(reverse_arena_insertion: bool) -> DrawProgram {
         }],
     });
     let scene = Node::Scene3d(Scene3dNode {
+        frames: Vec::new(),
         scene: Scene3dKey {
             content_hash: valle_draw::requirements::DigestBytes::from_bytes([0x44; 32]),
             topology_hash: valle_draw::requirements::DigestBytes::from_bytes([0x55; 32]),

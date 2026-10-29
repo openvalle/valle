@@ -169,6 +169,7 @@ export const PRODUCT_RUNTIME_METHODS = [
   "scene3d_gpu_atlas",
   "scene3d_gpu_mesh",
   "render_scene3d_request",
+  "render_scene3d_with_frames",
   "render_scene3d_request_deferred",
   "has_scene3d_frame",
   "scene3d_pick_json",

@@ -1403,21 +1403,26 @@ impl<'s> Compiler<'s> {
                 }
                 let Some(control) = texture.remove("src").and_then(|v| {
                     v.as_str()
-                        .and_then(|v| v.strip_prefix("asset://"))
+                        .and_then(|v| {
+                            valle_draw::requirements::HostFrame::from_source(v)
+                                .map(|_| v)
+                                .or_else(|| v.strip_prefix("asset://"))
+                        })
                         .map(str::to_owned)
                 }) else {
                     self.illegal(
                         DiagCode::GrammarForbidden,
                         value.span(),
-                        "material texture src must be asset://<image-control>",
+                        "material texture src must be asset://<image-control> or a template input:// frame",
                     );
                     return None;
                 };
-                if !self
-                    .controls
-                    .assets
-                    .get(&control)
-                    .is_some_and(|v| v.kind == AssetKind::Image)
+                if valle_draw::requirements::HostFrame::from_source(&control).is_none()
+                    && !self
+                        .controls
+                        .assets
+                        .get(&control)
+                        .is_some_and(|v| v.kind == AssetKind::Image)
                 {
                     self.illegal(
                         DiagCode::GrammarForbidden,

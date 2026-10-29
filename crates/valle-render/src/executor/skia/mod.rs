@@ -28,6 +28,8 @@ mod radial_gpu;
 mod raster_cache_placement;
 mod scene3d_dof;
 #[cfg(feature = "native")]
+mod scene3d_frames;
+#[cfg(feature = "native")]
 mod scene3d_gpu;
 mod scene3d_region;
 #[cfg(all(

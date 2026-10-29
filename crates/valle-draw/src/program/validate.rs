@@ -518,6 +518,14 @@ fn validate_raw(
             }
             Node::Scene3d(scene) => {
                 validate_rect(scene.bounds, &format!("node[{index}].bounds"))?;
+                if scene.frames.len() > 3
+                    || scene.frames.iter().collect::<BTreeSet<_>>().len() != scene.frames.len()
+                {
+                    return invalid(
+                        format!("node[{index}].frames"),
+                        "host frame declarations must be unique",
+                    );
+                }
             }
         }
     }
@@ -1257,6 +1265,12 @@ fn derive_requirements(
                 capabilities.insert(crate::requirements::DrawCapability::RuntimeShader);
             }
             Node::Scene3d(scene) => {
+                for frame in &scene.frames {
+                    let texture = crate::requirements::ExternalTexture::frame(*frame);
+                    insert_texture(&mut textures, &mut texture_formats, &texture)?;
+                    color_domains.insert(texture.color_domain);
+                    alpha_modes.insert(texture.alpha);
+                }
                 scenes.insert(scene.scene.clone());
                 capabilities.insert(crate::requirements::DrawCapability::Scene3d);
             }

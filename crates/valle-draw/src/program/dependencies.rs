@@ -132,6 +132,9 @@ fn visit(
         }
         Node::Scene3d(scene) => {
             resources.insert(SubtreeResource::Scene(scene.scene.clone()));
+            for frame in &scene.frames {
+                resources.insert(SubtreeResource::Texture(ExternalTexture::frame(*frame)));
+            }
         }
         Node::Shadow(_) => {}
     }

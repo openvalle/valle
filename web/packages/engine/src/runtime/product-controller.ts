@@ -185,6 +185,13 @@ interface BrowserProductEngineWire extends ProductEngineWire {
     canonicalRequest: string,
   ): string;
   register_scene3d_texture(digest: string, encodedBytes: Uint8Array, role: "color" | "data"): void;
+  render_scene3d_with_frames(
+    content: string,
+    topology: string,
+    request: string,
+    inputs: Uint8Array,
+    gpu: boolean,
+  ): Uint8Array;
   render_scene3d_request(
     contentDigest: string,
     topologyDigest: string,
@@ -945,7 +952,11 @@ export class BrowserValleWebPlayer {
       required += this.gpuGeometry?.stats.allocatedBytes ?? 0;
       const gpuScene3d = this.gpu && !forceCpu && typeof document !== "undefined";
       const sceneBytes = Math.max(
-        scene3dWorkingBytes(scene3d, gpuScene3d ? requestStage.gpuScene3d : undefined),
+        scene3dWorkingBytes(
+          scene3d,
+          gpuScene3d ? requestStage.gpuScene3d : undefined,
+          width * height,
+        ),
         this.scene3dGpu?.stats.allocatedBytes ?? 0,
       );
       required += sceneBytes;
@@ -2313,6 +2324,29 @@ export class BrowserValleWebPlayer {
       // admitted resource registry and are prepared after those resources are fulfilled.
       if (!projected?.[contentWire])
         await this.ensureScene3dResources(contentWire, topology, canonicalRequest);
+      const inputs = scene3dInputFrames(value);
+      if (inputs.length) {
+        return {
+          object: {
+            key,
+            kind: "scene3d",
+            sceneFrames: inputs,
+            renderSceneFrames: (frames, borrow) =>
+              this.renderScene3dFrames(
+                contentWire,
+                topology,
+                canonicalRequest,
+                value,
+                frames,
+                gpu,
+                borrow,
+              ),
+          },
+          bytes: canonicalRequest.length * 2,
+          dispose: noop,
+          ...empty,
+        };
+      }
       if (gpu && this.target?.context && this.target.canvas && this.planner) {
         const target = this.target,
           activeEngine = this.engine;
@@ -2423,6 +2457,144 @@ export class BrowserValleWebPlayer {
       };
     }
     throw new Error(`unsupported browser resource descriptor '${String(expected.kind)}'`);
+  }
+
+  private async renderScene3dFrames(
+    content: string,
+    topology: string,
+    canonical: string,
+    request: Scene3dGpuRequest,
+    frames: ReadonlyMap<string, Image>,
+    gpu: boolean,
+    borrow: (bytes: number) => boolean,
+  ): Promise<Image> {
+    const ck = this.CanvasKit!;
+    const inputs = scene3dInputFrames(request);
+    let length = 8;
+    for (const uri of inputs) {
+      const image = frames.get(uri);
+      if (
+        !image ||
+        image.width() > 4096 ||
+        image.height() > 4096 ||
+        image.width() * image.height() * 16 > 128 * 1024 ** 2
+      )
+        throw new Error(`invalid Scene3D host picture ${uri}`);
+      length += 16 + image.width() * image.height() * 16;
+    }
+    const bytes = new Uint8Array(length),
+      view = new DataView(bytes.buffer);
+    let at = 0;
+    const word = (v: number) => {
+      view.setUint32(at, v, true);
+      at += 4;
+    };
+    word(0x31463353);
+    word(inputs.length);
+    for (const uri of inputs) {
+      const image = frames.get(uri)!;
+      // Explicit storage avoids CanvasKit 0.42's default F32 byte-count/element-count bug.
+      const storage = ck.Malloc(Float32Array, image.width() * image.height() * 4);
+      try {
+        const pixels = image.readPixels(
+          0,
+          0,
+          {
+            width: image.width(),
+            height: image.height(),
+            colorType: ck.ColorType.RGBA_F32,
+            alphaType: ck.AlphaType.Premul,
+            colorSpace: ck.ColorSpace.SRGB,
+          },
+          storage,
+          image.width() * 16,
+        );
+        if (
+          !(pixels instanceof Float32Array) ||
+          pixels.length !== image.width() * image.height() * 4
+        )
+          throw new Error(`Scene3D host readback failed: ${uri}`);
+        word(uri === "input://source" ? 0 : uri === "input://from" ? 1 : 2);
+        word(image.width());
+        word(image.height());
+        word(pixels.byteLength);
+        for (const pixel of pixels) {
+          view.setFloat32(at, pixel, true);
+          at += 4;
+        }
+      } finally {
+        ck.Free(storage);
+      }
+    }
+    let renderer: GpuScene3D | null = null;
+    if (gpu && this.target?.context && this.target.canvas) {
+      const target = this.target,
+        engine = this.engine;
+      this.scene3dGpuInit ??= createScene3dGpu(
+        ck,
+        target.canvas!,
+        target.context!,
+        target.surface,
+        () => this.target === target && this.engine === engine && !this.closed,
+      ).then((r) => {
+        if (this.target !== target || this.engine !== engine || this.closed) {
+          r?.dispose();
+          return null;
+        }
+        this.scene3dGpu = r;
+        return r;
+      });
+      renderer = await this.scene3dGpuInit;
+    }
+    const data = await this.runtimeCall<Uint8Array>(
+      "render_scene3d_with_frames",
+      content,
+      topology,
+      canonical,
+      bytes,
+      !!renderer,
+    );
+    const header = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    if (data.byteLength < 24 || header.getUint32(0, true) !== 0x314f3353)
+      throw new Error("invalid Scene3D frame output ABI");
+    const kind = header.getUint32(4, true),
+      width = header.getUint32(8, true),
+      height = header.getUint32(12, true),
+      size = header.getUint32(16, true),
+      atlasSize = header.getUint32(20, true);
+    if (
+      width !== request.width ||
+      height !== request.height ||
+      data.byteLength !== 24 + size + atlasSize
+    )
+      throw new Error("invalid Scene3D frame output lengths");
+    const payload = data.subarray(24, 24 + size);
+    if (kind === 1 && renderer) {
+      const packet = decodeScene3dGpuPacket(payload);
+      if (!renderer.acceptsPacket(packet))
+        throw new Error("unsupported dynamic Scene3D GPU packet");
+      const admitted = request.width * request.height * 128 + (length - 8 - inputs.length * 16) * 8;
+      const additional = Math.max(0, renderer.workingBytes(packet) - admitted);
+      if (additional > 0 && !borrow(additional))
+        throw new Error("dynamic Scene3D exceeds the frame memory budget");
+      return renderer.render(packet, () => Promise.resolve(data.subarray(24 + size)));
+    }
+    if (kind !== 0 || size !== width * height * 8 || atlasSize)
+      throw new Error("invalid Scene3D CPU frame output");
+    if (gpu && renderer) renderer.stats.fallbacks++;
+    const image = ck.MakeImage(
+      {
+        width,
+        height,
+        colorType: ck.ColorType.RGBA_F16,
+        alphaType: ck.AlphaType.Premul,
+        colorSpace: ck.ColorSpace.SRGB,
+      },
+      payload,
+      width * 8,
+    );
+    if (!image) throw new Error("cannot wrap current-frame Scene3D output");
+    return image;
   }
 
   private runtimeCall<T>(method: ProductRuntimeMethod, ...args: unknown[]): Promise<T> {
@@ -3721,15 +3893,13 @@ function scene3dFrameRequests(requests: readonly PackedValue[]): Map<string, Sce
 function scene3dWorkingBytes(
   scenes: Map<string, Scene3dFrameRequest>,
   projected?: Record<string, Uint8Array>,
+  inputPixels = 0,
 ): number {
   let bytes = 0,
     shared = 0;
-  for (const [
-    content,
-    {
-      value: { width, height },
-    },
-  ] of scenes) {
+  for (const [content, { value }] of scenes) {
+    const { width, height } = value;
+    bytes += Math.max(inputPixels, width * height) * 128 * scene3dInputFrames(value).length;
     const packet = projected?.[content];
     if (!packet) {
       bytes += width * height * 128;
@@ -3947,4 +4117,18 @@ class AudioMasterClock {
 declare global {
   var CanvasKitInit: CanvasKitInitializer | undefined;
   var webkitAudioContext: typeof AudioContext | undefined;
+}
+
+/** These are declared picture dependencies; Rust validates slots and template roles. */
+function scene3dInputFrames(value: Scene3dGpuRequest): string[] {
+  const inputs = new Set<string>();
+  for (const mesh of value.scene.meshes) {
+    const specs = [mesh.material, ...(mesh.materialOverrides ?? []).map((v: any) => v.material)];
+    for (const spec of specs)
+      for (const texture of Object.values(spec?.textures ?? {}) as any[]) {
+        if (["input://source", "input://from", "input://to"].includes(texture?.control))
+          inputs.add(texture.control);
+      }
+  }
+  return [...inputs].sort();
 }

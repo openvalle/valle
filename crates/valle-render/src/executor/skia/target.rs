@@ -64,6 +64,8 @@ enum SkiaObjectPayload {
     FontBytes(Arc<[u8]>),
     RuntimeShader(Arc<[u8]>),
     Scene3d(Image),
+    #[cfg(feature = "native")]
+    Scene3dFrames(Arc<super::scene3d_frames::Scene3dFrames>),
     Scene3dDof(super::scene3d_dof::Scene3dDofInput),
     #[cfg(feature = "native")]
     Scene3dGpu(Arc<super::scene3d_gpu::Scene3dGpuInput>),
@@ -80,6 +82,8 @@ impl core::fmt::Debug for SkiaExternalObject {
             SkiaObjectPayload::FontBytes(_) => "fontBytes",
             SkiaObjectPayload::RuntimeShader(_) => "runtimeShader",
             SkiaObjectPayload::Scene3d(_) => "scene3d",
+            #[cfg(feature = "native")]
+            SkiaObjectPayload::Scene3dFrames(_) => "scene3dFrames",
             SkiaObjectPayload::Scene3dDof(_) => "scene3dDof",
             #[cfg(feature = "native")]
             SkiaObjectPayload::Scene3dGpu(_) => "scene3dGpu",
@@ -438,6 +442,36 @@ impl SkiaExternalObject {
         }
     }
 
+    #[cfg(feature = "native")]
+    pub(crate) fn scene3d_frames(
+        key: ResourceKey,
+        frame: valle_engine::motion::SealedScene3DFrame,
+        resources: valle_engine::motion::scene3d::SceneResources,
+    ) -> Self {
+        Self {
+            memory: None,
+            descriptor: ExternalResourceDesc::Scene3d,
+            payload: SkiaObjectPayload::Scene3dFrames(Arc::new(
+                super::scene3d_frames::Scene3dFrames {
+                    key: key.clone(),
+                    frame,
+                    resources,
+                },
+            )),
+            key,
+        }
+    }
+
+    #[cfg(feature = "native")]
+    pub(crate) fn deferred_scene3d_frames(
+        &self,
+    ) -> Option<&Arc<super::scene3d_frames::Scene3dFrames>> {
+        match &self.payload {
+            SkiaObjectPayload::Scene3dFrames(input) => Some(input),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_deferred_scene3d(&self) -> bool {
         match &self.payload {
             SkiaObjectPayload::Scene3dDof(_) => true,
@@ -603,7 +637,7 @@ impl SkiaExternalObject {
             #[cfg(feature = "native")]
             SkiaObjectPayload::DecodedVideo(_) => None,
             #[cfg(feature = "native")]
-            SkiaObjectPayload::Scene3dGpu(_) => None,
+            SkiaObjectPayload::Scene3dGpu(_) | SkiaObjectPayload::Scene3dFrames(_) => None,
             SkiaObjectPayload::Scene3dDof(_)
             | SkiaObjectPayload::DataTexture(_)
             | SkiaObjectPayload::FontBytes(_)
@@ -667,6 +701,8 @@ impl SkiaExternalObject {
         match &self.payload {
             #[cfg(feature = "native")]
             SkiaObjectPayload::Scene3dGpu(input) => input.resident_bytes(),
+            #[cfg(feature = "native")]
+            SkiaObjectPayload::Scene3dFrames(input) => Some(input.frame.canonical().len() as u64),
             SkiaObjectPayload::Scene3dDof(input) => Some(input.resident_bytes()),
             SkiaObjectPayload::Svg {
                 image,

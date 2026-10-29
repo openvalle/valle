@@ -875,7 +875,7 @@ test("Scene3D keeps canonical ContentDigest wires at every WASM boundary", async
     async ensureScene3dResources() {},
   });
 
-  const canonical = JSON.stringify({ width: 1, height: 1 });
+  const canonical = JSON.stringify({ width: 1, height: 1, scene: { meshes: [] } });
   const produced = await player.fulfillRequestUncached(
     {
       key: {
@@ -904,7 +904,7 @@ test("reference/export Scene3D borrows before atlas uploads and retains CPU geom
   f.set([1, 1, 0], 6);
   h.set([1, 1, 256, 1, 1, 272, 1, 1, 16, 1, 1, 288, 1, 1, 304], 9);
   h[25] = bytes.length;
-  const canonical = JSON.stringify({ width: 16, height: 16 });
+  const canonical = JSON.stringify({ width: 16, height: 16, scene: { meshes: [] } });
   const request = {
     key: {
       content: SCENE_DIGEST,
@@ -1246,4 +1246,89 @@ test("video source requests decode canonical rational time strings", async () =>
       player.fulfillRequestUncached({ ...request, sample: { ...request.sample, time } }, false),
     ).rejects.toThrow("RationalTime");
   }
+});
+
+test("host-frame Scene3D fulfillment defers rendering and binds each current float picture", async () => {
+  const player = playerFixture();
+  const image = { delete() {} };
+  let renders = 0,
+    frees = 0;
+  const sampled: number[] = [];
+  Object.assign(player, {
+    async ensureScene3dResources() {},
+    engine: {
+      render_scene3d_with_frames(
+        content: string,
+        topology: string,
+        _canonical: string,
+        bytes: Uint8Array,
+        gpu: boolean,
+      ) {
+        expect([content, topology, gpu]).toEqual([SCENE_DIGEST, TOPOLOGY_DIGEST, false]);
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        expect(Array.from(new Uint32Array(bytes.buffer, bytes.byteOffset, 6))).toEqual([
+          0x31463353, 1, 0, 1, 1, 16,
+        ]);
+        sampled.push(view.getFloat32(24, true));
+        renders++;
+        const output = new Uint8Array(32);
+        new Uint32Array(output.buffer, 0, 6).set([0x314f3353, 0, 1, 1, 8, 0]);
+        return output;
+      },
+    },
+    CanvasKit: {
+      ColorType: { RGBA_F32: 32, RGBA_F16: 16 },
+      AlphaType: { Premul: 1 },
+      ColorSpace: { SRGB: 1 },
+      Malloc(type: typeof Float32Array, count: number) {
+        expect(count).toBe(4);
+        return { data: new type(count) };
+      },
+      Free() {
+        frees++;
+      },
+      MakeImage() {
+        return image;
+      },
+    },
+  });
+  const value = {
+    width: 1,
+    height: 1,
+    scene: { meshes: [{ material: { textures: { baseColor: { control: "input://source" } } } }] },
+  };
+  const canonical = JSON.stringify(value);
+  const produced = await player.fulfillRequestUncached(
+    {
+      key: {
+        content: SCENE_DIGEST,
+        interpretation: { kind: "scene3d", topology_digest: TOPOLOGY_DIGEST },
+      },
+      expected: { kind: "scene3d" },
+    },
+    false,
+    new Map([[SCENE_DIGEST, { canonical, topology: TOPOLOGY_DIGEST, value }]]),
+  );
+  expect(renders).toBe(0);
+  expect(produced.object.sceneFrames).toEqual(["input://source"]);
+  for (const red of [0.125, 0.75, 0.125]) {
+    const source = {
+      width: () => 1,
+      height: () => 1,
+      readPixels(_x: number, _y: number, info: any, storage: any, row: number) {
+        expect(info.alphaType).toBe(1);
+        expect(row).toBe(16);
+        storage.data.set([red, 0.25, 0.5, 1]);
+        return storage.data;
+      },
+    };
+    expect(
+      await produced.object.renderSceneFrames(new Map([["input://source", source]]), () => false),
+    ).toBe(image);
+  }
+  expect(sampled).toEqual([0.125, 0.75, 0.125]);
+  expect(frees).toBe(3);
+  await expect(produced.object.renderSceneFrames(new Map(), () => false)).rejects.toThrow(
+    "invalid Scene3D host picture",
+  );
 });

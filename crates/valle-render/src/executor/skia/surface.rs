@@ -1629,6 +1629,43 @@ pub(crate) struct SurfaceFrame<'a> {
 }
 
 impl<'arena> SurfaceFrame<'arena> {
+    #[cfg(feature = "native")]
+    pub(crate) fn read_scene_frame(&mut self, image: &Image) -> Result<Vec<u8>, SurfaceError> {
+        let info = skia_safe::ImageInfo::new(
+            image.dimensions(),
+            skia_safe::ColorType::RGBAF32,
+            skia_safe::AlphaType::Premul,
+            Some(working_color_space()?),
+        );
+        let row = info.min_row_bytes();
+        let mut pixels = vec![0; row * image.height() as usize];
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+        let ok = image.read_pixels_with_context(
+            self.arena.backend.context_mut(),
+            &info,
+            &mut pixels,
+            row,
+            (0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        let ok = image.read_pixels(
+            &info,
+            &mut pixels,
+            row,
+            (0, 0),
+            skia_safe::image::CachingHint::Disallow,
+        );
+        if !ok {
+            return Err(SurfaceError::Readback);
+        }
+        #[cfg(target_endian = "big")]
+        for p in pixels.chunks_exact_mut(4) {
+            p.reverse();
+        }
+        Ok(pixels)
+    }
+
     pub(crate) const fn backend_kind(&self) -> SkiaBackendKind {
         self.arena.backend_kind()
     }

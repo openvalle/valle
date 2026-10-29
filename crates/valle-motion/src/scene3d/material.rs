@@ -103,6 +103,20 @@ impl MaterialSpec {
     pub(super) fn validate_at(&self, path: &str, errors: &mut ContractErrors) {
         for (slot, texture) in &self.textures {
             if let Some(texture) = texture {
+                if let Some(frame) =
+                    valle_draw::requirements::HostFrame::from_source(&texture.control)
+                {
+                    if slot.role() != TextureRole::Color {
+                        errors.push(
+                            format!("{path}/textures/{slot:?}"),
+                            format!(
+                                "{} is a color frame; use baseColor or emissive",
+                                frame.source()
+                            ),
+                        );
+                    }
+                    continue;
+                }
                 validate_control(
                     &texture.control,
                     &format!("{path}/textures/{slot:?}/control"),
@@ -113,7 +127,10 @@ impl MaterialSpec {
     }
     pub fn texture_controls(&self) -> impl Iterator<Item = (&str, TextureRole)> {
         self.textures.iter().filter_map(|(slot, texture)| {
-            texture.as_ref().map(|t| (t.control.as_str(), slot.role()))
+            texture
+                .as_ref()
+                .filter(|t| valle_draw::requirements::HostFrame::from_source(&t.control).is_none())
+                .map(|t| (t.control.as_str(), slot.role()))
         })
     }
 }

@@ -217,6 +217,8 @@ pub struct RuntimeShaderNode {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scene3dNode {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<crate::requirements::HostFrame>,
     pub scene: Scene3dKey,
     pub bounds: Rect,
 }

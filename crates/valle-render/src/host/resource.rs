@@ -591,6 +591,13 @@ impl NativeResourceProvider {
             }
         })?;
         let resources = self.scene_resources(frame)?;
+        if !frame.scene.input_frames().is_empty() {
+            return Ok(Scene3dWork::Dynamic(SkiaExternalObject::scene3d_frames(
+                request.key().clone(),
+                sealed,
+                resources,
+            )));
+        }
         let cache_key = prepare_cache_key(&frame.scene, frame.width, frame.height, &resources)
             .map_err(|error| NativeResourceError::ScenePrepare {
                 reason: error.to_string(),
@@ -619,14 +626,14 @@ impl NativeResourceProvider {
             &mut self.frame_scene3d.prepare_us,
             prepare_started.elapsed(),
         )?;
-        Ok(Scene3dWork {
+        Ok(Scene3dWork::Static(StaticScene3dWork {
             frame: sealed,
             prepared,
             extent,
             key: request.key().clone(),
             defer_dof: self.defer_scene3d_dof,
             defer_geometry: self.defer_scene3d_geometry,
-        })
+        }))
     }
 
     fn fulfill_scene3d(
@@ -825,7 +832,22 @@ impl NativeResourceProvider {
 }
 
 /// Immutable geometry and frame state leave the shared cache before CPU rasterization begins.
-pub(super) struct Scene3dWork {
+pub(super) enum Scene3dWork {
+    Static(StaticScene3dWork),
+    Dynamic(SkiaExternalObject),
+}
+impl Scene3dWork {
+    pub(super) fn render(
+        self,
+        report: &mut Scene3dFrameReport,
+    ) -> Result<SkiaExternalObject, NativeResourceError> {
+        match self {
+            Self::Static(work) => work.render(report),
+            Self::Dynamic(object) => Ok(object),
+        }
+    }
+}
+pub(super) struct StaticScene3dWork {
     frame: SealedScene3DFrame,
     prepared: Arc<PreparedScene>,
     extent: Extent2d,
@@ -833,7 +855,7 @@ pub(super) struct Scene3dWork {
     defer_dof: bool,
     defer_geometry: bool,
 }
-impl Scene3dWork {
+impl StaticScene3dWork {
     pub(super) fn render(
         self,
         report: &mut Scene3dFrameReport,

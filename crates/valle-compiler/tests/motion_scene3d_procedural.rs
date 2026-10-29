@@ -196,3 +196,26 @@ fn dielectric_material_parameters_are_typed_and_animated() {
         assert!(compile_motion(&invalid).is_err());
     }
 }
+
+#[test]
+fn scene3d_material_host_frames_require_the_corresponding_template_and_color_slot() {
+    let source = include_str!("fixtures/motion/composition/ui-material.motion.tsx");
+    let artifact = compile_motion(source).unwrap().artifact;
+    artifact.validate().unwrap();
+    for bad in [
+        source.replace("export const role = effect();", ""),
+        source.replace("input://source", "input://from"),
+        source.replace("baseColor:", "normal:"),
+        source.replace("input://source", "input://backdrop"),
+    ] {
+        assert!(compile_motion(&bad).is_err(), "{bad}");
+    }
+    let transition = source
+        .replace("effect()", "transition()")
+        .replace("input://source", "input://from");
+    compile_motion(&transition)
+        .unwrap()
+        .artifact
+        .validate()
+        .unwrap();
+}

@@ -491,6 +491,17 @@ impl MeshSpec {
 }
 
 impl Scene3DSpec {
+    /// Current host pictures sampled by material color slots. Never frozen asset controls.
+    pub fn input_frames(&self) -> std::collections::BTreeSet<valle_draw::requirements::HostFrame> {
+        self.meshes
+            .iter()
+            .flat_map(|m| {
+                std::iter::once(&m.material).chain(m.material_overrides.iter().map(|v| &v.material))
+            })
+            .flat_map(|m| m.textures.values().flatten())
+            .filter_map(|t| valle_draw::requirements::HostFrame::from_source(&t.control))
+            .collect()
+    }
     pub fn validate(&self) -> Result<(), ContractErrors> {
         let mut errors = ContractErrors::default();
         if let Some(environment) = &self.pbr.environment {

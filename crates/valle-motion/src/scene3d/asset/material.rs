@@ -8,6 +8,7 @@ use crate::{
     },
 };
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io::Cursor, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -781,6 +782,87 @@ impl MaterialImage {
     pub fn role(&self) -> TextureRole {
         self.role
     }
+    /// A current host frame, premultiplied linear Rec.2020 RGBA32F in little-endian order. The caller owns
+    /// readback admission; decoded pixels and mip levels remain subject to texture budgets.
+    pub fn from_working_rgba32f(
+        width: u32,
+        height: u32,
+        bytes: &[u8],
+    ) -> Result<Self, ContractErrors> {
+        if width == 0 || height == 0 || width > 4096 || height > 4096 {
+            return Err(failure(
+                "/texture/frame",
+                "host texture dimensions must be in 1..=4096",
+            ));
+        }
+        let pixels = u64::from(width) * u64::from(height);
+        let mut storage = 0_u64;
+        let (mut w, mut h) = (width, height);
+        loop {
+            storage += u64::from(w) * u64::from(h) * 16;
+            if w <= 1 && h <= 1 {
+                break;
+            }
+            w = (w / 2).max(1);
+            h = (h / 2).max(1);
+        }
+        if pixels > MAX_TEXTURE_PIXELS
+            || storage > MAX_TEXTURE_STORAGE_BYTES
+            || bytes.len() as u64 != pixels * 16
+        {
+            return Err(failure(
+                "/texture/frame",
+                "invalid or over-budget RGBA32F host frame",
+            ));
+        }
+        let mut rgba = Vec::with_capacity(bytes.len() / 4);
+        for pixel in bytes.as_chunks::<16>().0 {
+            let values: [f32; 4] = std::array::from_fn(|i| {
+                f32::from_le_bytes(pixel[i * 4..i * 4 + 4].try_into().unwrap())
+            });
+            if !values.into_iter().all(f32::is_finite) {
+                return Err(failure("/texture/frame", "non-finite host pixel"));
+            }
+            let alpha = values[3].clamp(0.0, 1.0);
+            let [r, g, b] = [values[0], values[1], values[2]].map(|c| {
+                if alpha > 0.0 {
+                    f64::from(c) / f64::from(alpha)
+                } else {
+                    0.0
+                }
+            });
+            // The same D65 transform as Shader's valle_working_to_linear_srgb. Material
+            // texels are straight linear sRGB; no transfer encoding or 8-bit round trip.
+            rgba.extend([
+                (1.660491002108435 * r - 0.587641138788550 * g - 0.072849863319885 * b)
+                    .clamp(0.0, 1.0) as f32,
+                (-0.124550474521591 * r + 1.13289989712596 * g - 0.008349422604370 * b)
+                    .clamp(0.0, 1.0) as f32,
+                (-0.018150763354905 * r - 0.100578898008007 * g + 1.118729661362913 * b)
+                    .clamp(0.0, 1.0) as f32,
+                alpha,
+            ]);
+        }
+        let mut identity = Sha256::new();
+        identity.update(b"host-working32f\0");
+        identity.update(width.to_le_bytes());
+        identity.update(height.to_le_bytes());
+        identity.update(bytes);
+        let mut levels = vec![MipLevel {
+            width,
+            height,
+            rgba: rgba.into(),
+        }];
+        while levels.last().is_some_and(|l| l.width > 1 || l.height > 1) {
+            levels.push(downsample(levels.last().unwrap()));
+        }
+        Ok(Self {
+            content_digest: ContentDigest::from_bytes(identity.finalize().into()),
+            role: TextureRole::Color,
+            levels,
+        })
+    }
+
     pub fn from_encoded(bytes: &[u8], role: TextureRole) -> Result<Self, ContractErrors> {
         let (width, height, _) = image_dimensions(bytes)?;
         let mut rgba = image_reader(bytes)?

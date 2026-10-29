@@ -497,6 +497,8 @@ impl AdmittedSkiaFrame<'_> {
         )?;
         let (layer_hits_before, layer_misses_before, _, _) = raster_layers.counters();
         let external_images = materialize_external_visuals(&self.bound, &mut surface_frame)?;
+        #[cfg(feature = "native")]
+        let mut external_images = external_images;
         for program in self.programs.values_mut() {
             program
                 .resolve_deferred_visuals(&external_images.images)
@@ -634,6 +636,21 @@ impl AdmittedSkiaFrame<'_> {
                                 program: program.get(),
                             })?
                             .bind_frames(frames);
+                    }
+                    #[cfg(feature = "native")]
+                    {
+                        let (gpu, cpu, uploads) = self
+                            .programs
+                            .get_mut(program)
+                            .ok_or(SkiaExecuteError::InvalidProgram {
+                                program: program.get(),
+                            })?
+                            .resolve_scene3d_frames(&mut surface_frame)
+                            .map_err(|e| SkiaExecuteError::Program(e.to_string()))?;
+                        external_images.scene3d_gpu_rasters += gpu;
+                        external_images.scene3d_cpu_fallbacks += cpu;
+                        external_images.cpu_upload_bytes += uploads;
+                        external_images.gpu_imports += gpu;
                     }
                     let cache_key = (external_inputs.is_empty()
                         && destination_inputs.is_empty()
@@ -1740,6 +1757,10 @@ fn materialize_external_visuals(
     let mut scene3d_cpu_fallbacks = 0_u64;
     for binding in bound.objects() {
         let object = binding.object();
+        #[cfg(feature = "native")]
+        if object.deferred_scene3d_frames().is_some() {
+            continue;
+        }
         #[cfg(feature = "native")]
         if object.deferred_scene3d_gpu().is_some() {
             #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]

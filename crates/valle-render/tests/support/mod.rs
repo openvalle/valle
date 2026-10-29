@@ -27,44 +27,66 @@ fn constant(value: Value) -> Value {
 
 #[allow(dead_code)] // Shared by integration test binaries.
 pub fn opened_motion_render(source: &str, width: u32, height: u32) -> EngineRender {
+    opened_motion_effect_render(source, None, width, height)
+}
+
+#[allow(dead_code)]
+pub fn opened_motion_effect_render(
+    source: &str,
+    effect: Option<&str>,
+    width: u32,
+    height: u32,
+) -> EngineRender {
     use std::sync::Arc;
     use valle_engine::resource::ContentDigest;
-    let artifact = Arc::new(
-        valle_compiler::motion::compile_motion(source)
-            .unwrap()
-            .artifact,
-    );
-    let digest = ContentDigest::of_bytes(&valle_motion::canonical_bytes(&artifact).unwrap());
-    let manifest = decode_resource_manifest(&serde_json::to_vec(&json!({"entries":{
-        "component:test":{"kind":"motion-artifact","digest":digest.to_wire(),
-        "abi":"valle.motion/artifact@1","descriptor":{"readsDestination":artifact.reads_destination(),"boundarySampling":"left-limit"}}
-    }})).unwrap()).unwrap();
-    let ResourceEntryWire::MotionArtifact {
-        abi, descriptor, ..
-    } = &manifest.entries()["component:test"]
-    else {
-        unreachable!()
-    };
-    let bindings = ResourceBindings::new()
-        .with_binding(
-            "component:test",
-            ResourceBinding::new(
-                digest,
-                VerifiedHandleId::new(1).unwrap(),
-                VerifiedResourceFacts::MotionArtifact {
-                    abi: *abi,
-                    descriptor: descriptor.clone(),
-                    artifact,
-                    temporal_footprint: VisualFootprint::default(),
-                },
-            ),
-        )
-        .unwrap();
+    let mut entries = serde_json::Map::new();
+    let mut artifacts = Vec::new();
+    for (name, code) in std::iter::once(("component:test", source))
+        .chain(effect.map(|code| ("component:effect", code)))
+    {
+        let artifact = Arc::new(
+            valle_compiler::motion::compile_motion(code)
+                .unwrap()
+                .artifact,
+        );
+        let digest = ContentDigest::of_bytes(&valle_motion::canonical_bytes(&artifact).unwrap());
+        entries.insert(name.into(), json!({"kind":"motion-artifact", "digest":digest.to_wire(),
+            "abi":"valle.motion/artifact@1", "descriptor":{"readsDestination":artifact.reads_destination(),"boundarySampling":"left-limit"}}));
+        artifacts.push((name, digest, artifact));
+    }
+    let manifest =
+        decode_resource_manifest(&serde_json::to_vec(&json!({"entries":entries})).unwrap())
+            .unwrap();
+    let mut bindings = ResourceBindings::new();
+    for (i, (name, digest, artifact)) in artifacts.into_iter().enumerate() {
+        let ResourceEntryWire::MotionArtifact {
+            abi, descriptor, ..
+        } = &manifest.entries()[name]
+        else {
+            unreachable!()
+        };
+        bindings = bindings
+            .with_binding(
+                name,
+                ResourceBinding::new(
+                    digest,
+                    VerifiedHandleId::new(i as u64 + 1).unwrap(),
+                    VerifiedResourceFacts::MotionArtifact {
+                        abi: *abi,
+                        descriptor: descriptor.clone(),
+                        artifact,
+                        temporal_footprint: VisualFootprint::default(),
+                    },
+                ),
+            )
+            .unwrap();
+    }
+    let effects = effect.map(|_| vec![json!({"component":"component:effect","role":{"type":"effect"},"sourceStart":"0/1","sourceDuration":"1/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{},"resources":{}})]).unwrap_or_default();
     let document = decode_canonical(&json!({"document":{
         "canvas":{"width":width,"height":height,"fps":"30/1","sampleRate":48000,"channelLayout":"stereo","colorSpace":"srgb","duration":"1/1"},
         "background":{"color":"#000000ff"},"visual":{"tracks":[{"id":"track:test","items":[{
             "type":"clip","id":"clip:test","duration":"1/1",
-            "layer":{"transform":{"position":constant(json!([0.5,0.5])),"scale":constant(json!([1,1])),"rotation":constant(json!(0)),"anchor":[0.5,0.5]},"opacity":constant(json!(1)),"mask":null,"filters":[],"blend":"normal"},
+            "layer":{"transform":{"position":constant(json!([0.5,0.5])),"scale":constant(json!([1,1])),"rotation":constant(json!(0)),"anchor":[0.5,0.5]},"opacity":constant(json!(1)),"mask":null,"filters":[],"effects":effects,"blend":"normal"},
             "source":{"type":"motion","component":"component:test","sourceStart":"0/1","role":{"type":"clip"},"sourceDuration":"1/1","rate":"1/1","endBehavior":"hold","fit":"contain","props":{},"resources":{}}
         }]}]},"audio":{"tracks":[]},"adjustments":[],"captions":{"tracks":[]},"camera":null,"metadata":{}
     }}).to_string()).unwrap();

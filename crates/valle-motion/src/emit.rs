@@ -832,6 +832,7 @@ fn validate_transform_matrices(
 struct EmissionResourceCatalog<'a> {
     textures: &'a dyn valle_draw::program::ProgramResourceCatalog,
     scenes: BTreeMap<String, valle_draw::requirements::Scene3dKey>,
+    frames: BTreeMap<String, Vec<valle_draw::requirements::HostFrame>>,
 }
 
 impl<'a> EmissionResourceCatalog<'a> {
@@ -840,9 +841,14 @@ impl<'a> EmissionResourceCatalog<'a> {
         scenes: &[crate::SealedScene3DFrame],
     ) -> Self {
         let mut scene_keys = BTreeMap::new();
+        let mut frames = BTreeMap::new();
         for scene in scenes {
             let content_digest = scene.content_digest();
             let uri = format!("scene3d-frame://{}", content_digest.as_hex());
+            frames.insert(
+                uri.clone(),
+                scene.request().scene.input_frames().into_iter().collect(),
+            );
             scene_keys.insert(
                 uri,
                 valle_draw::requirements::Scene3dKey {
@@ -858,6 +864,7 @@ impl<'a> EmissionResourceCatalog<'a> {
         Self {
             textures,
             scenes: scene_keys,
+            frames,
         }
     }
 }
@@ -865,6 +872,10 @@ impl<'a> EmissionResourceCatalog<'a> {
 impl valle_draw::program::ProgramResourceCatalog for EmissionResourceCatalog<'_> {
     fn texture_extent(&self, key: &str) -> Option<valle_draw::program::ProgramTextureExtent> {
         self.textures.texture_extent(key)
+    }
+
+    fn scene3d_frames(&self, key: &str) -> Vec<valle_draw::requirements::HostFrame> {
+        self.frames.get(key).cloned().unwrap_or_default()
     }
 
     fn scene3d_key(&self, key: &str) -> Option<valle_draw::requirements::Scene3dKey> {

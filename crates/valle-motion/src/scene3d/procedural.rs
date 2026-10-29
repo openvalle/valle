@@ -364,7 +364,8 @@ fn extrude(
     let cap_uv = |point: [f64; 2]| {
         [
             ((point[0] - bounds.0) / span_x) as f32,
-            ((point[1] - bounds.1) / span_y) as f32,
+            // Mesh +Y points up, while material images and glTF UVs start at the top.
+            ((bounds.3 - point[1]) / span_y) as f32,
         ]
     };
     for (index, ring) in rings.iter().enumerate() {

@@ -71,6 +71,12 @@ export interface CanvasKitExternalObject {
   readonly key: PackedValue;
   readonly kind: "visual" | "dataTexture" | "font" | "runtimeShader" | "scene3d" | "frame";
   readonly image?: Image;
+  /** Called only after this raster pass has bound its current host pictures. */
+  readonly sceneFrames?: readonly string[];
+  readonly renderSceneFrames?: (
+    frames: ReadonlyMap<string, Image>,
+    borrow: (bytes: number) => boolean,
+  ) => Promise<Image>;
   readonly picture?: SkPicture;
   readonly bytes?: Uint8Array;
 }
@@ -1322,9 +1328,33 @@ async function runCanvasKitFrame(
                 device,
                 extent,
               );
+              const frameScenes: { key: string; object: CanvasKitExternalObject; image: Image }[] =
+                [];
               try {
+                for (const [key, object] of program.scenes) {
+                  if (!object.renderSceneFrames) continue;
+                  const frames = new Map<string, Image>();
+                  for (const uri of object.sceneFrames ?? []) {
+                    const source = [...program.textures.values()].find(
+                      (t) => t.key === uri && t.kind === "frame",
+                    );
+                    if (!source?.image)
+                      fail("scene_contract", `missing current host picture ${uri}`);
+                    frames.set(uri, source.image);
+                  }
+                  const image = await object.renderSceneFrames(
+                    frames,
+                    (bytes) => target.borrowSurfaceBytes?.(BigInt(bytes)) ?? false,
+                  );
+                  frameScenes.push({ key, object, image });
+                  program.scenes.set(key, { ...object, image });
+                }
                 result = await runProgram(id, destinations, device);
               } finally {
+                for (const { key, object, image } of frameScenes) {
+                  program.scenes.set(key, object);
+                  image.delete();
+                }
                 releaseFrames();
               }
             }
@@ -1932,7 +1962,7 @@ function bindProgramResources(
   for (const raw of array(resources.scenes, "program scenes")) {
     const binding = record(raw, "scene binding");
     const object = required(objects, positiveId(binding.slot, "scene slot"), "scene slot");
-    if (object.kind !== "scene3d" || !object.image)
+    if (object.kind !== "scene3d" || (!object.image && !object.renderSceneFrames))
       fail("scene_contract", "Scene3D slot has no raster image");
     scenes.set(String(binding.key), object);
   }
