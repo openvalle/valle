@@ -98,6 +98,9 @@ impl ShadowCasters {
                         crate::scene3d::TextureRole::Data => 1,
                     }]);
                     hash.update(binding.gpu_sampler().to_le_bytes());
+                    for value in binding.uv_transform.into_iter().flatten() {
+                        hash.update(value.to_le_bytes());
+                    }
                 }
             }
         }

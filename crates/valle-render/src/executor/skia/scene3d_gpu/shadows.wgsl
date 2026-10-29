@@ -21,7 +21,7 @@ struct ShadowFragment { @location(0) depth:f32 };
     if alpha.z>=0.0 {
         let binding=shading[material+4u];
         var coverage=alpha.y;
-        if binding.x>=0.0 {coverage*=sample_image(u32(binding.x),u32(binding.y),uv,0.0).a;}
+        if binding.x>=0.0 {coverage*=sample_image(u32(binding.x),u32(binding.y),texture_uv(material,0u,uv),0.0).a;}
         if coverage<alpha.z {discard;}
     }
     return ShadowFragment(depth);

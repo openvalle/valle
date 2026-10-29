@@ -27,10 +27,14 @@ impl<'a> Triangle<'a> {
         }
         let e1 = vertices[1].position - vertices[0].position;
         let e2 = vertices[2].position - vertices[0].position;
-        let u1 = vertices[1].uv.x - vertices[0].uv.x;
-        let v1 = vertices[1].uv.y - vertices[0].uv.y;
-        let u2 = vertices[2].uv.x - vertices[0].uv.x;
-        let v2 = vertices[2].uv.y - vertices[0].uv.y;
+        let binding = material
+            .normal_texture
+            .expect("normal texture checked above");
+        let uv = vertices.map(|v| binding.map_uv([v.uv.x, v.uv.y]));
+        let u1 = uv[1][0] - uv[0][0];
+        let v1 = uv[1][1] - uv[0][1];
+        let u2 = uv[2][0] - uv[0][0];
+        let v2 = uv[2][1] - uv[0][1];
         let det = u1 * v2 - u2 * v1;
         let has_basis = det.abs() > 1.0e-12;
         let inverse = if has_basis { 1.0 / det } else { 0.0 };
@@ -101,6 +105,8 @@ impl Gradients {
 fn sample(mesh: &PreparedMesh, binding: ModelTextureBinding, uv: V2, d: [f32; 4]) -> [f32; 4] {
     let image = &mesh.images[binding.image];
     let [w, h] = image.size().map(|n| n as f32);
+    let [dx, dy] = [[d[0], d[1]], [d[2], d[3]]].map(|d| binding.map_derivative(d));
+    let d = [dx[0], dx[1], dy[0], dy[1]];
     let dx2 = (d[0] * w) * (d[0] * w) + (d[1] * h) * (d[1] * h);
     let dy2 = (d[2] * w) * (d[2] * w) + (d[3] * h) * (d[3] * h);
     let lod = 0.5 * libm::log2f(dx2.max(dy2).max(1.0e-16));

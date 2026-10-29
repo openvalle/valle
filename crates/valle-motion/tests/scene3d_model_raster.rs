@@ -3162,7 +3162,10 @@ fn gpu_geometry_carries_frame_materials_lighting_and_camera_rays() {
         assert_eq!(first.vertex_bytes().len(), first.vertices.len() * 52);
         assert_eq!(shading.vertices.len(), first.vertices.len());
         assert_eq!(shading.values[1], [1.0, 1.0, 0.0, 0.0]);
-        assert_eq!(shading.values.len(), 5 + 9 + 2 + 127 + 65);
+        assert_eq!(
+            shading.values.len(),
+            5 + valle_motion::scene3d::GpuRasterShading::MATERIAL_STRIDE + 2 + 127 + 65
+        );
         assert_eq!(
             shading.values[5][3],
             if kind == MaterialKind::Lambert {
@@ -3311,4 +3314,70 @@ fn extended_glb_counts_keep_byte_budgets_and_gpu_atlas_addressing() {
         root["materials"] = json!(vec![json!({}); valle_motion::scene3d::MAX_MATERIALS + 1]);
     });
     assert!(admit_glb(&invalid).is_err());
+}
+
+#[test]
+fn texture_transform_matches_baked_uvs_including_normals_mips_and_alpha() {
+    let source = include_bytes!("fixtures/scene3d/texture-transform.glb");
+    let baked = edit_glb(source, |root, bin| {
+        let material = &mut root["materials"][0];
+        for path in [
+            "/pbrMetallicRoughness/baseColorTexture",
+            "/pbrMetallicRoughness/metallicRoughnessTexture",
+            "/normalTexture",
+            "/occlusionTexture",
+            "/emissiveTexture",
+        ] {
+            let info = material.pointer_mut(path).unwrap().as_object_mut().unwrap();
+            info.remove("extensions");
+            info.insert("texCoord".into(), json!(0));
+        }
+        root.as_object_mut().unwrap().remove("extensionsUsed");
+        root.as_object_mut().unwrap().remove("extensionsRequired");
+        // Independent bake of scale, then rotation, then offset into each vertex.
+        let a = root["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_0"]
+            .as_u64()
+            .unwrap() as usize;
+        let accessor = &root["accessors"][a];
+        let v = accessor["bufferView"].as_u64().unwrap() as usize;
+        let offset = root["bufferViews"][v]["byteOffset"].as_u64().unwrap() as usize;
+        for i in 0..accessor["count"].as_u64().unwrap() as usize {
+            let at = offset + i * 8;
+            let u = f32::from_le_bytes(bin[at..at + 4].try_into().unwrap()) * -4.2;
+            let v = f32::from_le_bytes(bin[at + 4..at + 8].try_into().unwrap()) * 2.3;
+            let (c, s) = (libm::cosf(0.67), libm::sinf(0.67));
+            bin[at..at + 4].copy_from_slice(&(c * u - s * v + 0.312).to_le_bytes());
+            bin[at + 4..at + 8].copy_from_slice(&(s * u + c * v - 0.217).to_le_bytes());
+        }
+    });
+    for size in [32, 128, 256] {
+        let mut spec = pbr_scene();
+        spec.pbr.shadows = true;
+        let actual = prepare_scene(&spec, size, size, &resources(source)).unwrap();
+        let expected = prepare_scene(&spec, size, size, &resources(&baked)).unwrap();
+        let f = pbr_frame();
+        let a = render_scene(&actual, &f).unwrap();
+        let b = render_scene(&expected, &f).unwrap();
+        assert!(a.object_ids.contains(&1));
+        assert_eq!(a.object_ids, b.object_ids);
+        let maximum = a
+            .rgba8()
+            .into_iter()
+            .zip(b.rgba8())
+            .map(|(a, b)| a.abs_diff(b))
+            .max()
+            .unwrap();
+        assert!(maximum <= 1, "baked UV comparison at {size}: max={maximum}");
+    }
+    for change in [
+        json!({"texCoord":1}),
+        json!({"offset":[1e10,0]}),
+        json!({"scale":[1]}),
+        json!({"unknown":1}),
+    ] {
+        let invalid = edit_glb(source, |root, _| {
+            root["materials"][0]["normalTexture"]["extensions"]["KHR_texture_transform"] = change
+        });
+        assert!(admit_glb(&invalid).is_err());
+    }
 }

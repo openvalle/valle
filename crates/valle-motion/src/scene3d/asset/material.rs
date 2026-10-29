@@ -64,9 +64,11 @@ impl ModelMaterial {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ModelTextureBinding {
     pub image: usize,
+    /// Row-major affine UV mapping, before wrapping/filtering.
+    pub uv_transform: [[f32; 3]; 2],
     wrap_s: u32,
     wrap_t: u32,
     min_filter: u32,
@@ -74,6 +76,17 @@ pub(crate) struct ModelTextureBinding {
 }
 
 impl ModelTextureBinding {
+    pub(crate) const IDENTITY: [[f32; 3]; 2] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+
+    pub(crate) fn map_uv(self, uv: [f32; 2]) -> [f32; 2] {
+        self.uv_transform
+            .map(|r| r[0] * uv[0] + r[1] * uv[1] + r[2])
+    }
+
+    pub(crate) fn map_derivative(self, d: [f32; 2]) -> [f32; 2] {
+        self.uv_transform.map(|r| r[0] * d[0] + r[1] * d[1])
+    }
+
     pub(crate) fn gpu_sampler(self) -> u32 {
         let wrap = |v| match v {
             33071 => 0,
@@ -132,6 +145,7 @@ impl MaterialImage {
         (self.content_digest, self.role)
     }
     pub(crate) fn sample(&self, binding: ModelTextureBinding, uv: [f32; 2], lod: f32) -> [f32; 4] {
+        let uv = binding.map_uv(uv);
         let filter = if lod <= 0.0 {
             binding.mag_filter
         } else {
@@ -258,9 +272,61 @@ impl Default for GltfSampler {
         }
     }
 }
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextureExtensions {
+    #[serde(default, rename = "KHR_texture_transform")]
+    transform: Option<TextureTransform>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+struct TextureTransform {
+    offset: [f32; 2],
+    rotation: f32,
+    scale: [f32; 2],
+    tex_coord: Option<u32>,
+}
+impl Default for TextureTransform {
+    fn default() -> Self {
+        Self {
+            offset: [0.0; 2],
+            rotation: 0.0,
+            scale: [1.0; 2],
+            tex_coord: None,
+        }
+    }
+}
+impl TextureTransform {
+    fn matrix(&self) -> Result<[[f32; 3]; 2], ContractErrors> {
+        // Bound coordinates before float-to-integer sampler addressing. Negative and zero
+        // scales are valid (mirroring and constant sampling), including normal maps.
+        if !self
+            .offset
+            .into_iter()
+            .chain(self.scale)
+            .chain([self.rotation])
+            .all(|v| v.is_finite() && v.abs() <= 1_000_000.0)
+        {
+            return Err(failure(
+                "/glb/materials/texture/extensions/KHR_texture_transform",
+                "texture transform values must be finite and within +/-1000000",
+            ));
+        }
+        let c = libm::cosf(self.rotation);
+        let s = libm::sinf(self.rotation);
+        Ok([
+            [c * self.scale[0], -s * self.scale[1], self.offset[0]],
+            [s * self.scale[0], c * self.scale[1], self.offset[1]],
+        ])
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TextureInfo {
+    #[serde(default)]
+    extensions: TextureExtensions,
     index: usize,
     #[serde(default)]
     tex_coord: u32,
@@ -268,6 +334,8 @@ struct TextureInfo {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct NormalInfo {
+    #[serde(default)]
+    extensions: TextureExtensions,
     index: usize,
     #[serde(default)]
     tex_coord: u32,
@@ -277,6 +345,8 @@ struct NormalInfo {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct OcclusionInfo {
+    #[serde(default)]
+    extensions: TextureExtensions,
     index: usize,
     #[serde(default)]
     tex_coord: u32,
@@ -382,7 +452,12 @@ pub(super) fn admit_materials(
     let mut image_slots = BTreeMap::<(usize, bool), usize>::new();
     let mut bind =
         |info: &TextureInfo, srgb: bool| -> Result<ModelTextureBinding, ContractErrors> {
-            if info.tex_coord != 0 {
+            let transform = info.extensions.transform.as_ref();
+            if transform
+                .and_then(|t| t.tex_coord)
+                .unwrap_or(info.tex_coord)
+                != 0
+            {
                 return Err(failure(
                     "/glb/materials/texture/texCoord",
                     "only TEXCOORD_0 is admitted",
@@ -420,6 +495,10 @@ pub(super) fn admit_materials(
             }
             Ok(ModelTextureBinding {
                 image,
+                uv_transform: transform
+                    .map(TextureTransform::matrix)
+                    .transpose()?
+                    .unwrap_or(ModelTextureBinding::IDENTITY),
                 wrap_s: sampler.wrap_s,
                 wrap_t: sampler.wrap_t,
                 min_filter: sampler.min_filter,
@@ -495,6 +574,7 @@ pub(super) fn admit_materials(
                 .map(|t| {
                     bind(
                         &TextureInfo {
+                            extensions: t.extensions.clone(),
                             index: t.index,
                             tex_coord: t.tex_coord,
                         },
@@ -508,6 +588,7 @@ pub(super) fn admit_materials(
                 .map(|t| {
                     bind(
                         &TextureInfo {
+                            extensions: t.extensions.clone(),
                             index: t.index,
                             tex_coord: t.tex_coord,
                         },
@@ -783,6 +864,7 @@ impl ModelTextureBinding {
         };
         Self {
             image,
+            uv_transform: Self::IDENTITY,
             wrap_s: wrap(source.wrap_u),
             wrap_t: wrap(source.wrap_v),
             min_filter,
@@ -823,6 +905,7 @@ mod tests {
         let color = MaterialImage::from_encoded(&bytes, TextureRole::Color).unwrap();
         let binding = ModelTextureBinding {
             image: 0,
+            uv_transform: ModelTextureBinding::IDENTITY,
             wrap_s: 33071,
             wrap_t: 33071,
             min_filter: 9728,
@@ -857,6 +940,7 @@ mod tests {
         };
         let mut binding = ModelTextureBinding {
             image: 0,
+            uv_transform: ModelTextureBinding::IDENTITY,
             wrap_s: 10497,
             wrap_t: 10497,
             min_filter: 9728,

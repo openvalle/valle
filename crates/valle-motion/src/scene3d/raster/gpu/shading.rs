@@ -13,7 +13,7 @@ pub struct GpuRasterTextureVarying {
 
 impl GpuRasterShading {
     pub const HEADER_LEN: usize = 5;
-    pub const MATERIAL_STRIDE: usize = 9;
+    pub const MATERIAL_STRIDE: usize = 19;
 
     pub(super) fn new(
         prepared: &PreparedScene,
@@ -157,6 +157,19 @@ impl GpuRasterShading {
                             0.0,
                         ]
                     }));
+                }
+                for binding in [
+                    m.base_color_texture,
+                    m.metallic_roughness_texture,
+                    m.normal_texture,
+                    m.occlusion_texture,
+                    m.emissive_texture,
+                ] {
+                    let matrix = binding.map_or(
+                        super::super::super::asset::ModelTextureBinding::IDENTITY,
+                        |b| b.uv_transform,
+                    );
+                    values.extend(matrix.map(|r| [r[0], r[1], r[2], 0.0]));
                 }
             }
         }

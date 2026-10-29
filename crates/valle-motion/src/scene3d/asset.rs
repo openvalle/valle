@@ -327,7 +327,7 @@ fn validate_root(root: &Root, bin: &[u8], errors: &mut ContractErrors) {
     for name in root.extensions_used.iter().chain(&root.extensions_required) {
         if !matches!(
             name.as_str(),
-            "KHR_materials_unlit" | "KHR_materials_emissive_strength"
+            "KHR_materials_unlit" | "KHR_materials_emissive_strength" | "KHR_texture_transform"
         ) {
             errors.push(
                 "/glb/extensions",

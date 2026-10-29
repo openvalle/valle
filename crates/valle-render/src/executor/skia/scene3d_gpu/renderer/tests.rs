@@ -769,3 +769,71 @@ fn extended_glb_materials_match_cpu_on_gpu() {
     assert!(lit > 100 && bright, "nonempty exposed emission output");
     assert!(maximum < 0.01, "CPU/GPU max F16 difference {maximum}");
 }
+
+#[test]
+#[ignore = "requires a real GPU; checks transformed UVs, normal bases and alpha shadows"]
+fn transformed_material_textures_match_cpu_reference() {
+    let (mut rasterizer, mut context) = renderer();
+    let (mut scene, frame, mut resources) = fixture_spec(false, true, false);
+    resources.models.insert(
+        "model".into(),
+        Arc::new(
+            admit_glb(include_bytes!(
+                "../../../../../../valle-motion/tests/fixtures/scene3d/texture-transform.glb"
+            ))
+            .unwrap(),
+        ),
+    );
+    scene.meshes[0].material = MaterialSpec::default();
+    let prepared = Arc::new(prepare_scene(&scene, 384, 256, &resources).unwrap());
+    let reference = render_scene(&prepared, &frame).unwrap();
+    let geometry = prepare_gpu_geometry(&prepared, &frame).unwrap().unwrap();
+    if let Ok(directory) = std::env::var("VALLE_TEXTURE_TEST_OUTPUT") {
+        let path = std::path::Path::new(&directory);
+        std::fs::write(
+            path.join("texture-packet.bin"),
+            geometry.web_packet(&frame).unwrap(),
+        )
+        .unwrap();
+        let atlas =
+            GpuRasterAtlas::new(geometry.shading.as_ref().unwrap(), 4096, 256 * 1024 * 1024)
+                .unwrap();
+        let mut bytes = Vec::new();
+        atlas.append_bytes(&mut bytes);
+        std::fs::write(path.join("texture-atlas.bin"), bytes).unwrap();
+        std::fs::write(
+            path.join("texture-reference.rgba"),
+            reference
+                .premul_rgba16f
+                .iter()
+                .map(|&bits| (half(bits).clamp(0.0, 1.0) * 255.0).round() as u8)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        std::fs::write(
+            path.join("texture-request.json"),
+            serde_json::to_vec(
+                &serde_json::json!({"width":384,"height":256,"scene":scene,"frame":frame}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let input = Scene3dGpuInput::new(geometry, prepared, Arc::new(frame)).unwrap();
+    let output = rasterizer.render(&input, &mut context).unwrap().unwrap();
+    let actual = read_color(&mut context, &output.image, 384, 256, ColorType::RGBAF16);
+    let differences = actual
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .zip(&reference.premul_rgba16f)
+        .map(|(a, &b)| (half(u16::from_le_bytes(*a)) - half(b)).abs())
+        .collect::<Vec<_>>();
+    let maximum = differences.iter().copied().fold(0.0_f32, f32::max);
+    let mean = differences.iter().sum::<f32>() / differences.len() as f32;
+    assert!(
+        maximum < 0.015 && mean < 0.0001,
+        "transformed maps: max={maximum}, mean={mean}"
+    );
+    assert!(reference.object_ids.contains(&1));
+}

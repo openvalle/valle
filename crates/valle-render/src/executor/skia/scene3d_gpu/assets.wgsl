@@ -1,6 +1,6 @@
 @group(0) @binding(3) var atlas: texture_2d<f32>;
 const HEADER: u32 = 5u;
-const MATERIAL: u32 = 9u;
+const MATERIAL: u32 = 19u;
 
 fn atlas_at(index: u32) -> vec4<f32> {
     let width = textureDimensions(atlas).x;
@@ -43,6 +43,13 @@ fn sample_image(image: u32, sampling: u32, uv: vec2<f32>, lod: f32) -> vec4<f32>
     if filterMode < 4u || a+1u >= u32(levels) {return first;}
     return stable4(first+stable4(stable4(image_level(image,a+1u,uv,sampling,linearFilter)-first)*stable(level-f32(a))));
 }
+fn texture_uv(material: u32, slot: u32, uv: vec2<f32>) -> vec2<f32> {
+    let x=shading[material+9u+slot*2u];let y=shading[material+10u+slot*2u];
+    return vec2(dot(x.xy,uv)+x.z,dot(y.xy,uv)+y.z);
+}
+fn texture_gradient(material: u32, slot: u32, d: vec2<f32>) -> vec2<f32> {
+    return vec2(dot(shading[material+9u+slot*2u].xy,d),dot(shading[material+10u+slot*2u].xy,d));
+}
 fn texture_slot(material: u32, slot: u32, in: LitVertex) -> vec4<f32> {
     let binding = shading[material+4u+slot];
     if binding.x < 0.0 {return vec4(1.0);}
@@ -50,12 +57,12 @@ fn texture_slot(material: u32, slot: u32, in: LitVertex) -> vec4<f32> {
     var uv=in.uv;
     // Hardware triangle interpolation carries UV/Z; exact bbox fragments already carry UV.
     if in.triangle==0xffffffffu {uv=in.uv/in.invZ;}
-    let dx = (in.uvDx.xy-uv*in.uvDx.z)/in.invZ;
-    let dy = (in.uvDy.xy-uv*in.uvDy.z)/in.invZ;
+    let dx = texture_gradient(material,slot,(in.uvDx.xy-uv*in.uvDx.z)/in.invZ);
+    let dy = texture_gradient(material,slot,(in.uvDy.xy-uv*in.uvDy.z)/in.invZ);
     let size = mip_at(image,0u).zw;
     let x = dx*size; let y = dy*size;
     let lod = 0.5*log2(max(max(dot(x,x),dot(y,y)),1e-16));
-    return sample_image(image,u32(binding.y),uv,lod);
+    return sample_image(image,u32(binding.y),texture_uv(material,slot,uv),lod);
 }
 
 struct CubeUv { face: u32, uv: vec2<f32> };
