@@ -15,6 +15,7 @@ in `Cargo.lock` and `bun.lock`.
 | [kurbo](https://github.com/linebender/kurbo) | The outlines of SVG strokes | MIT or Apache-2.0 |
 | [wgpu](https://github.com/gfx-rs/wgpu), with naga | Drawing on the GPU through Metal, Vulkan and Direct3D 12 | MIT or Apache-2.0 |
 | [png](https://github.com/image-rs/image-png), [zune-jpeg](https://github.com/etemesi254/zune-image) and [image-webp](https://github.com/image-rs/image-webp) | Decoding PNG, JPEG and WebP images | MIT or Apache-2.0; zune-jpeg also Zlib |
+| [roxmltree](https://github.com/RazrFalcon/roxmltree) | Reading SVG files | MIT or Apache-2.0 |
 | [libm](https://github.com/rust-lang/compiler-builtins) | Math functions that agree on every platform | MIT or Apache-2.0 |
 | [Serde](https://github.com/serde-rs/serde) and [serde_json](https://github.com/serde-rs/json) | Reading what tracing records | MIT or Apache-2.0 |
 

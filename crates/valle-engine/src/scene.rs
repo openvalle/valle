@@ -5,10 +5,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::front::{Composition, Front, Slot};
-use crate::image::Image;
+use crate::image::{Image, Picture};
 use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
-use crate::style::{Sheet, Style};
+use crate::style::{Sheet, Style, gradient};
 use crate::template::{Error, Template, V};
 use crate::text::{Blob, Face, Text};
 use crate::time::Tick;
@@ -34,7 +34,9 @@ pub struct Frame {
 
 pub struct Scene {
     front: Front,
-    /// The image each of the scene's resources holds.
+    /// What each of the scene's resources shows.
+    pictures: Vec<Picture>,
+    /// The images they show, as display lists number them.
     images: Vec<Image>,
     text: Text,
     /// Most recently used first.
@@ -48,17 +50,19 @@ impl Scene {
     pub fn load(entry: &str, read: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<Scene, Error> {
         let text = |path: &str| read(path).and_then(|b| String::from_utf8(b).ok());
         let front = Front::load(entry, &text)?;
-        let images = (front.resources.iter())
+        let mut images = Vec::new();
+        let pictures = (front.resources.iter())
             .map(|slot| {
                 let fail = |e: String| format!("{entry}: resource {}: {e}", slot.name);
                 let path = (slot.default.as_ref())
                     .ok_or_else(|| fail("nothing is bound to it, and it has no default".into()))?;
                 let bytes = read(path).ok_or_else(|| fail(format!("{path}: not found")))?;
-                Image::decode(&bytes).map_err(|e| fail(format!("{path}: {e}")))
+                Picture::load(&bytes, &mut images).map_err(|e| fail(format!("{path}: {e}")))
             })
             .collect::<Result<_, _>>()?;
         Ok(Scene {
             front,
+            pictures,
             images,
             text: Text::new(Blob::new(Arc::new(SANS_SERIF)))?,
             sheets: Vec::new(),
@@ -70,7 +74,12 @@ impl Scene {
         &self.front.resources
     }
 
-    /// The image each resource holds.
+    /// What each resource shows.
+    pub fn pictures(&self) -> &[Picture] {
+        &self.pictures
+    }
+
+    /// The images display lists name.
     pub fn images(&self) -> &[Image] {
         &self.images
     }
@@ -105,16 +114,17 @@ impl Scene {
         let c = self.front.composition;
         let canvas = [c.width as f32, c.height as f32];
         let styles = (self.sheets[0].1).compute(&frame.values, canvas, &self.front.resources)?;
+        backgrounds(&frame.template, &styles, &self.pictures)?;
         let laid = layout(
             &frame.template,
             &frame.values,
             &styles,
             canvas,
             &mut self.text,
-            &self.images,
+            &self.pictures,
         )?;
         self.text.sweep();
-        let items = paint(&frame.template, &styles, &laid);
+        let items = paint(&frame.template, &styles, &laid, &self.pictures);
         let transforms = transforms(&frame.template, &styles, &laid);
         Ok(Frame {
             template: frame.template,
@@ -125,6 +135,25 @@ impl Scene {
             items,
         })
     }
+}
+
+/// Stops a frame that shows an SVG file as a background or mask image, which only an Image does
+/// yet.
+fn backgrounds(template: &Template, styles: &[Style], pictures: &[Picture]) -> Result<(), Error> {
+    for (i, s) in styles.iter().enumerate() {
+        for (layers, what) in [(&s.layers, "backgroundImage"), (&s.masks, "maskImage")] {
+            let svg = (layers.iter()).any(|l| {
+                matches!(l.image, gradient::Image::Url(r) if matches!(pictures[r as usize], Picture::Svg(_)))
+            });
+            if svg {
+                let at = template.nodes[i].place();
+                return Err(format!(
+                    "{at}: {what}: an SVG file shows in an <Image> only, not as an image of a box yet"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

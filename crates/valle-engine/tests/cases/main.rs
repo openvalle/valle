@@ -420,7 +420,7 @@ impl Runner {
                     if let Some(gpu) = gpu {
                         let renderer =
                             renderer.get_or_insert_with(|| Renderer::new(gpu, size[0], size[1]));
-                        let items = chrome::glyphless(&frame);
+                        let items = chrome::glyphless(&frame, scene.pictures());
                         let drawn = renderer.render(&items, scene.faces(), scene.images())?;
                         let name = format!("{stem}.{i}.png");
                         if let Some(p) = self.against_chrome(&name, size, &drawn, &png)? {

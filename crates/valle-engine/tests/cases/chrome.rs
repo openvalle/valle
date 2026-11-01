@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use valle_engine::image::Picture;
 use valle_engine::paint::{self, Item};
 use valle_engine::scene::Frame;
 use valle_engine::style::color;
@@ -120,14 +121,14 @@ fn shown([x, y, w, h]: [f64; 4]) -> String {
 /// The frame painted as Chrome draws its baselines: its glyphs unfilled
 /// (`-webkit-text-fill-color: transparent`), and without strokes or text shadows, which are
 /// glyphs too.
-pub fn glyphless(frame: &Frame) -> Vec<Item> {
+pub fn glyphless(frame: &Frame, pictures: &[Picture]) -> Vec<Item> {
     let mut styles = frame.styles.clone();
     for s in &mut styles {
         s.font.fill = Some(color::TRANSPARENT);
         s.font.stroke = 0.0;
         s.font.shadows = Rc::new([]);
     }
-    paint::paint(&frame.template, &styles, &frame.layout)
+    paint::paint(&frame.template, &styles, &frame.layout, pictures)
 }
 
 /// The pixels of `a` or `b`, both `size` and RGBA, with a channel more than `LEVELS` outside the

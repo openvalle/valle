@@ -195,3 +195,78 @@ export default function Scene() {
         );
     });
 }
+
+#[test]
+fn svg_files_show_in_images_only() {
+    big_stack(|| {
+        let source = "export const composition = { width: 200, height: 40, fps: 1, duration: 1 };
+export const controls = {
+  resources: {
+    dot: resource({ kind: 'image', default: './dot.png' }),
+    icon: resource({ kind: 'image', default: './icon.svg' }),
+  },
+};
+export default function Scene() {
+  return (
+    <View style={{ display: 'flex', alignItems: 'flex-start' }}>
+      <Image src='resource://icon' style={{ width: 20 }} />
+      <Image src='resource://dot' />
+      <View style={{ width: 40, height: 30, backgroundImage: 'url(resource://dot)' }} />
+    </View>
+  );
+}
+";
+        let icon = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 1'><rect width='2' height='1'/></svg>";
+        let image = png(2, &[[255, 0, 0, 255], [255, 255, 255, 128]]);
+        let files = |source: String| {
+            let image = image.clone();
+            move |path: &str| match path {
+                "scenes/s.tsx" => Some(source.clone().into_bytes()),
+                "scenes/dot.png" => Some(image.clone()),
+                "scenes/icon.svg" => Some(icon.as_bytes().to_vec()),
+                _ => None,
+            }
+        };
+        let mut scene = Scene::load("scenes/s.tsx", &files(source.into())).unwrap();
+        // The images display lists name are the files that are not SVG.
+        assert_eq!(scene.images().len(), 1);
+        assert!(matches!(
+            scene.pictures()[0],
+            Picture::Image { image: 0, .. }
+        ));
+        let frame = scene.frame(Tick(0)).unwrap();
+        // As tall as its viewBox's ratio makes it.
+        let border = frame.layout.boxes[1].border;
+        assert_eq!([border.width, border.height], [20.0, 10.0]);
+        assert!(matches!(
+            &frame.items[..],
+            [
+                Item::Clip { .. },
+                Item::Image { image: 0, .. },
+                Item::Image { image: 0, .. }
+            ]
+        ));
+
+        let source = source.replace("url(resource://dot)", "url(resource://icon)");
+        let e = Scene::load("scenes/s.tsx", &files(source.clone()))
+            .and_then(|mut s| s.frame(Tick(0)).map(drop))
+            .unwrap_err();
+        assert!(e.starts_with("scenes/s.tsx:13:"), "{e}");
+        assert!(
+            e.contains("backgroundImage: an SVG file shows in an <Image> only"),
+            "{e}"
+        );
+
+        let broken = |path: &str| match path {
+            "scenes/icon.svg" => {
+                Some(b"<svg xmlns='http://www.w3.org/2000/svg'><text/></svg>".to_vec())
+            }
+            _ => files(source.clone())(path),
+        };
+        let e = Scene::load("scenes/s.tsx", &broken).err().unwrap();
+        assert_eq!(
+            e,
+            "scenes/s.tsx: resource icon: scenes/icon.svg: 1:41: <text> is not supported yet"
+        );
+    });
+}

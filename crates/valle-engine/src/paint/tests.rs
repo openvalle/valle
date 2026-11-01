@@ -17,7 +17,7 @@ fn paint_of(nodes: Vec<Node>, roots: &[u32]) -> (Vec<Item>, Layout) {
         .compute(&[], canvas, &[])
         .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
-    (paint(&template, &styles, &laid), laid)
+    (paint(&template, &styles, &laid, &[]), laid)
 }
 
 /// Items by the named color they are painted in, with any opacity folded into it: `red`,

@@ -1,5 +1,6 @@
 //! Images: decoded from their PNG, JPEG or WebP files into colors as Chrome keeps them,
-//! sRGB-encoded and premultiplied in 8 bits.
+//! sRGB-encoded and premultiplied in 8 bits; and what a scene's resource shows, one of them or
+//! an SVG file.
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -10,6 +11,42 @@ use zune_jpeg::JpegDecoder;
 use zune_jpeg::zune_core::bytestream::ZCursor;
 use zune_jpeg::zune_core::colorspace::ColorSpace;
 use zune_jpeg::zune_core::options::DecoderOptions;
+
+use crate::layout::Natural;
+use crate::svg::file::{self, Document};
+
+/// What a resource shows: one of the scene's images, by its index there, or an SVG file.
+#[derive(Debug)]
+pub enum Picture {
+    Image { image: u32, size: [u32; 2] },
+    Svg(Box<Document>),
+}
+
+impl Picture {
+    /// What a resource's file shows, by the bytes it starts with: an SVG file, or an image, which
+    /// goes onto `images`.
+    pub fn load(bytes: &[u8], images: &mut Vec<Image>) -> Result<Picture, String> {
+        if file::looks(bytes) {
+            let text = std::str::from_utf8(bytes).map_err(|_| "an SVG file is UTF-8 text")?;
+            let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+            return Ok(Picture::Svg(Box::new(Document::parse(text)?)));
+        }
+        let image = Image::decode(bytes)?;
+        let size = image.size;
+        images.push(image);
+        Ok(Picture::Image {
+            image: (images.len() - 1) as u32,
+            size,
+        })
+    }
+
+    pub fn natural(&self) -> Natural {
+        match self {
+            Picture::Image { size, .. } => Natural::Size(size.map(|v| v as f32)),
+            Picture::Svg(document) => document.natural,
+        }
+    }
+}
 
 /// An image: 4 bytes a pixel, red, green, blue and alpha, rows top down.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,7 +67,7 @@ impl Image {
         } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
             webp(bytes)
         } else {
-            Err("not a PNG, JPEG or WebP image".into())
+            Err("not a PNG, JPEG, WebP or SVG image".into())
         }
     }
 
@@ -212,7 +249,7 @@ mod tests {
         );
         assert_eq!(
             Image::decode(b"GIF89a"),
-            Err("not a PNG, JPEG or WebP image".into())
+            Err("not a PNG, JPEG, WebP or SVG image".into())
         );
     }
 }

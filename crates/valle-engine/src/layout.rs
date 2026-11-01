@@ -17,7 +17,7 @@ use taffy::{
     compute_oof_layout, compute_root_layout,
 };
 
-use crate::image::Image;
+use crate::image::Picture;
 use crate::style::math::{self, Calc};
 use crate::style::{DecorationStyle, Style};
 use crate::svg::Element;
@@ -50,8 +50,6 @@ pub struct Layout {
     pub lines: Vec<Option<Lines>>,
     /// The canvas's size: the roots' containing block.
     pub canvas: [f32; 2],
-    /// The natural size of each resource's image.
-    pub images: Vec<[f32; 2]>,
 }
 
 /// A container's children in the order it lays them out and paints them: a flex or grid
@@ -72,14 +70,14 @@ pub fn ordered<'a>(
 }
 
 /// Lays out a frame: the template's nodes with their computed styles and the program's values,
-/// on a canvas of `canvas` px, its Images showing `images`.
+/// on a canvas of `canvas` px, its Images showing the resources' `pictures`.
 pub fn layout(
     template: &Template,
     values: &[V],
     styles: &[Style],
     canvas: [f32; 2],
     text: &mut Text,
-    images: &[Image],
+    pictures: &[Picture],
 ) -> Result<Layout, Error> {
     let n = template.nodes.len();
     let contents: Vec<Option<Content>> = (template.nodes.iter().enumerate())
@@ -134,10 +132,8 @@ pub fn layout(
     let mut replaced = vec![None; n];
     for (i, node) in template.nodes.iter().enumerate() {
         replaced[i] = match &node.kind {
-            Kind::Image { resource } => Some(Replaced::Image(
-                images[*resource as usize].size.map(|v| v as f32),
-            )),
-            Kind::Svg { tag: Tag::Svg, .. } => Some(Replaced::Svg(
+            Kind::Image { resource } => Some(pictures[*resource as usize].natural()),
+            Kind::Svg { tag: Tag::Svg, .. } => Some(Natural::Ratio(
                 styles[i].svg.as_deref().and_then(|c| match c.element {
                     Element::Svg {
                         view_box: Some([_, _, w, h]),
@@ -278,7 +274,6 @@ pub fn layout(
         boxes,
         lines,
         canvas,
-        images: (images.iter()).map(|m| m.size.map(|v| v as f32)).collect(),
     })
 }
 
@@ -512,7 +507,7 @@ struct Tree<'a> {
     /// sources', and each image's, as replaced content.
     roots: Vec<Option<taffy::Style>>,
     /// What each image or `<svg>` sizes its box by.
-    replaced: Vec<Option<Replaced>>,
+    replaced: Vec<Option<Natural>>,
     /// Each node's children in the order it lays them out, the canvas's last.
     children: Vec<Vec<NodeId>>,
     /// Each Text's paragraph.
@@ -634,9 +629,8 @@ impl Tree<'_> {
 impl Tree<'_> {
     /// An image's or an `<svg>`'s box: its content box the size given on an axis, by its
     /// container or its style, and on the other as its natural ratio has it, or its natural size.
-    /// An `<svg>` with a ratio but no size takes the width there is, and without a ratio 300 ×
-    /// 150 px.
-    fn replaced(&self, i: usize, inputs: LayoutInput, r: Replaced) -> LayoutOutput {
+    /// One with a ratio but no size takes the width there is, and without a ratio 300 × 150 px.
+    fn replaced(&self, i: usize, inputs: LayoutInput, r: Natural) -> LayoutOutput {
         let style = self.style(NodeId::from(i));
         let calc = |handle, basis| self.calc(handle, basis);
         let width = inputs.parent_size.width;
@@ -661,18 +655,18 @@ impl Tree<'_> {
                 given(known.height, sized.height, inset[1]),
             ];
             let [w, h] = match r {
-                Replaced::Image(natural) => natural,
-                Replaced::Svg(Some(ratio)) => {
+                Natural::Size(natural) => natural,
+                Natural::Ratio(Some(ratio)) => {
                     let w = match available.width {
                         AvailableSpace::Definite(w) => (w - inset[0]).max(0.0),
                         _ => 300.0,
                     };
                     [w, w / ratio]
                 }
-                Replaced::Svg(None) => [300.0, 150.0],
+                Natural::Ratio(None) => [300.0, 150.0],
             };
             let ratio = match r {
-                Replaced::Svg(None) => false,
+                Natural::Ratio(None) => false,
                 _ => w > 0.0 && h > 0.0,
             };
             let [width, height] = match given {
@@ -686,11 +680,12 @@ impl Tree<'_> {
     }
 }
 
-/// What sizes a box of replaced content: an image's natural size, or an `<svg>`'s ratio.
-#[derive(Clone, Copy, Debug)]
-enum Replaced {
-    Image([f32; 2]),
-    Svg(Option<f32>),
+/// What sizes a box of replaced content: its natural size, or without one its natural ratio, if
+/// it has one, as an `<svg>` has its viewBox's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Natural {
+    Size([f32; 2]),
+    Ratio(Option<f32>),
 }
 
 impl TraversePartialTree for Tree<'_> {

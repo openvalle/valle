@@ -1,6 +1,8 @@
 //! Inline SVG: what an element's attributes say it draws, in its user units, where an `<svg>`'s
 //! viewBox puts them in its box, and the outlines of strokes.
 
+pub mod file;
+
 use std::rc::Rc;
 
 use kurbo::{BezPath, ParamCurveArclen, PathEl, Shape as _, StrokeOpts};
@@ -189,8 +191,16 @@ const PRESENTATION: [&str; 23] = [
     "color",
 ];
 
-/// Attributes that change nothing drawn, as pasted SVG has them.
-const INERT: [&str; 5] = ["xmlns", "xmlnsXlink", "version", "role", "focusable"];
+/// Attributes that change nothing drawn, as pasted SVG and editors' files have them.
+const INERT: [&str; 7] = [
+    "xmlns",
+    "xmlnsXlink",
+    "version",
+    "baseProfile",
+    "enableBackground",
+    "role",
+    "focusable",
+];
 
 /// SVG elements that draw nothing.
 const SILENT: [&str; 3] = ["title", "desc", "metadata"];
@@ -268,6 +278,11 @@ fn own(tag: Tag) -> &'static [&'static str] {
             "orient",
         ],
     }
+}
+
+/// Whether an element takes an attribute: its own, `id`, `transform` or a presentation one.
+pub fn takes(tag: Tag, name: &str) -> bool {
+    own(tag).contains(&name) || matches!(name, "id" | "transform") || PRESENTATION.contains(&name)
 }
 
 /// The elements an element holds.

@@ -47,7 +47,8 @@ use taffy::{Display, Overflow, Position};
 pub use gradient::{Geometry, Ramp, Segment, Spread};
 pub use matrix::{Matrix, Matrix4};
 
-use crate::layout::{Boxes, Layout, Rect, ordered};
+use crate::image::Picture;
+use crate::layout::{Boxes, Layout, Natural, Rect, ordered};
 use crate::path::Path;
 use crate::style::background::{Area, ImageSize, Layer, Repeat};
 use crate::style::color::{self, Rgba};
@@ -254,16 +255,20 @@ fn spread(radii: Radii, by: f32) -> Radii {
 }
 
 /// A background image's tiles in `area`, if it has a size. A resource's image has a natural
-/// size, `images` giving each one's: `auto` on both axes is that size, on one the size the other
-/// gives in its proportions, and `contain` and `cover` scale it to fit the area or cover it.
+/// size, its picture in `pictures` giving it: `auto` on both axes is that size, on one the size
+/// the other gives in its proportions, and `contain` and `cover` scale it to fit the area or
+/// cover it.
 /// Gradients have no size of their own: `auto`, `contain` and `cover` are the area's. A rounded
 /// axis fits a whole number of tiles, and the other, if `auto`, keeps the tile's proportions; a
 /// spaced one fits as many whole tiles as it can from edge to edge, or a single one where the
 /// position puts it.
-fn tiles(layer: &Layer, area: Rect, images: &[[f32; 2]]) -> Option<Tiles> {
+fn tiles(layer: &Layer, area: Rect, pictures: &[Picture]) -> Option<Tiles> {
     let room = [area.width, area.height];
     let natural = match layer.image {
-        Image::Url(r) => Some(images[r as usize]),
+        Image::Url(r) => match pictures[r as usize].natural() {
+            Natural::Size(size) => Some(size),
+            Natural::Ratio(_) => None,
+        },
         _ => None,
     };
     let (asked, auto) = match (&layer.size, natural) {
@@ -330,7 +335,14 @@ fn tiles(layer: &Layer, area: Rect, images: &[[f32; 2]]) -> Option<Tiles> {
 }
 
 /// A layer's image in `rect`, its corners rounded by `radii`, in `tiles`; nothing for `none`.
-fn filled(image: &Image, rect: Rect, radii: Radii, tiles: Tiles) -> Option<Item> {
+/// An SVG file is no background yet: a frame with one fails before it paints.
+fn filled(
+    image: &Image,
+    rect: Rect,
+    radii: Radii,
+    tiles: Tiles,
+    pictures: &[Picture],
+) -> Option<Item> {
     Some(match image {
         Image::None => return None,
         Image::Gradient(g) => Item::Gradient {
@@ -339,11 +351,14 @@ fn filled(image: &Image, rect: Rect, radii: Radii, tiles: Tiles) -> Option<Item>
             tiles,
             ramp: gradient::ramp(g, [tiles.first.width, tiles.first.height]),
         },
-        Image::Url(r) => Item::Image {
-            rect,
-            radii,
-            tiles,
-            image: *r,
+        Image::Url(r) => match pictures[*r as usize] {
+            Picture::Image { image, .. } => Item::Image {
+                rect,
+                radii,
+                tiles,
+                image,
+            },
+            Picture::Svg(_) => return None,
         },
     })
 }
@@ -726,14 +741,21 @@ pub fn work(c: Rgba) -> [f32; 4] {
     [c[0] * a, c[1] * a, c[2] * a, a].map(|v| v as f32)
 }
 
-/// The frame's display list, from its template, computed styles and layout.
-pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item> {
+/// The frame's display list, from its template, computed styles and layout, its Images showing
+/// the resources' `pictures`.
+pub fn paint(
+    template: &Template,
+    styles: &[Style],
+    layout: &Layout,
+    pictures: &[Picture],
+) -> Vec<Item> {
     let n = template.nodes.len();
     let parents = parents(template);
     let mut painter = Painter {
         template,
         styles,
         layout,
+        pictures,
         spaces: spaces(template, styles, layout),
         parents,
         clips: Vec::with_capacity(n),
@@ -947,6 +969,7 @@ struct Painter<'a> {
     template: &'a Template,
     styles: &'a [Style],
     layout: &'a Layout,
+    pictures: &'a [Picture],
     /// As `spaces` has them.
     spaces: Vec<Matrix4>,
     parents: Vec<Option<usize>>,
@@ -1187,13 +1210,13 @@ impl Painter<'_> {
         for layer in s.masks.iter().rev() {
             let (rect, radii) = area(layer.clip);
             let rect = snap(rect);
-            let Some(tiles) = tiles(layer, area(layer.origin).0, &self.layout.images) else {
+            let Some(tiles) = tiles(layer, area(layer.origin).0, self.pictures) else {
                 continue;
             };
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 continue;
             }
-            let Some(image) = filled(&layer.image, rect, radii, tiles) else {
+            let Some(image) = filled(&layer.image, rect, radii, tiles, self.pictures) else {
                 continue;
             };
             mask.push(match layer.luminance {
@@ -1446,13 +1469,13 @@ impl Painter<'_> {
         // Images over the color, the first on top, repeated out to the area they show in.
         let mut blends = false;
         for layer in s.layers.iter().rev() {
-            let images = &self.layout.images;
+            let pictures = self.pictures;
             let Some(((rect, radii), tiles)) =
-                shown(layer.clip).zip(tiles(layer, placed(layer.origin), images))
+                shown(layer.clip).zip(tiles(layer, placed(layer.origin), pictures))
             else {
                 continue;
             };
-            let Some(image) = filled(&layer.image, rect, radii, tiles) else {
+            let Some(image) = filled(&layer.image, rect, radii, tiles, self.pictures) else {
                 continue;
             };
             let image = through(layer.clip, image);
@@ -1609,12 +1632,13 @@ impl Painter<'_> {
     }
 
     /// `i`'s image if it is an Image: in its content box as its object fit and position have
-    /// it, the box clipping it with its corners.
+    /// it, the box clipping it with its corners. An SVG file without a natural size is as big as
+    /// its ratio fits in the box, or the box without one, before it fits.
     fn image(&self, i: usize, out: &mut Drawn) {
         let Kind::Image { resource } = self.template.nodes[i].kind else {
             return;
         };
-        let [w, h] = &self.layout.images[resource as usize];
+        let picture = &self.pictures[resource as usize];
         let s = &self.styles[i];
         let (rect, radii) = area(s, &self.layout.boxes[i], Area::ContentBox);
         if !s.visible || rect.width <= 0.0 || rect.height <= 0.0 {
@@ -1625,8 +1649,14 @@ impl Painter<'_> {
             false => self.clips[i].last().copied(),
         };
         let [cw, ch] = [rect.width, rect.height];
+        let [w, h] = match picture.natural() {
+            Natural::Size(size) => size,
+            Natural::Ratio(Some(r)) if cw / ch > r => [ch * r, ch],
+            Natural::Ratio(Some(r)) => [cw, cw / r],
+            Natural::Ratio(None) => [cw, ch],
+        };
         let scaled = |k: f32| [w * k, h * k];
-        let ratio = *w > 0.0 && *h > 0.0;
+        let ratio = w > 0.0 && h > 0.0;
         let contain = match ratio {
             true => scaled((cw / w).min(ch / h)),
             false => [cw, ch],
@@ -1636,9 +1666,9 @@ impl Painter<'_> {
             Fit::Contain => contain,
             Fit::Cover if ratio => scaled((cw / w).max(ch / h)),
             Fit::Cover => [cw, ch],
-            Fit::None => [*w, *h],
-            Fit::ScaleDown if contain[0] < *w => contain,
-            Fit::ScaleDown => [*w, *h],
+            Fit::None => [w, h],
+            Fit::ScaleDown if contain[0] < w => contain,
+            Fit::ScaleDown => [w, h],
         };
         // Percentages of the room left.
         let room = [cw - ow, ch - oh];
@@ -1653,11 +1683,23 @@ impl Painter<'_> {
             first,
             step: [None; 2],
         };
-        let image = Item::Image {
-            rect,
-            radii,
-            tiles,
-            image: resource,
+        let image = match picture {
+            &Picture::Image { image, .. } => Item::Image {
+                rect,
+                radii,
+                tiles,
+                image,
+            },
+            Picture::Svg(document) => {
+                let Some(drawn) = svg::document(document, first) else {
+                    return;
+                };
+                Item::Clip {
+                    rect,
+                    radii,
+                    items: vec![drawn],
+                }
+            }
         };
         out.push((clip, image));
     }

@@ -7,13 +7,51 @@ use std::collections::HashMap;
 use taffy::Display;
 
 use super::{Blend, Filter, Item, Matrix, Ramp, SQUARE, Tiles, work};
-use crate::layout::Rect;
+use crate::layout::{Natural, Rect};
 use crate::path::Path;
 use crate::style::color;
 use crate::style::math::Calc;
 use crate::style::{Instance, Paint, Style};
+use crate::svg::file::Document;
 use crate::svg::{self, Element};
 use crate::template::Template;
+
+/// What SVG file `document` draws in `first`, the rect its Image shows it in, in px, as Chrome
+/// draws an SVG image: its root's elements through its viewBox into the rect, as its fit has it;
+/// without one, unscaled in a viewport its natural size if it has one, which then stretches to
+/// the rect as an image does, else the rect's. The rect clips them. `None` if it draws nothing,
+/// as with a viewBox without area.
+pub fn document(document: &Document, first: Rect) -> Option<Item> {
+    let root = document.styles.first()?.svg.as_deref()?;
+    let Element::Svg { view_box, fit } = root.element else {
+        return None;
+    };
+    let size = [first.width, first.height];
+    let viewport = match (view_box, document.natural) {
+        (None, Natural::Size(natural)) => natural,
+        _ => size,
+    };
+    if viewport.iter().any(|&v| v <= 0.0) {
+        return None;
+    }
+    let viewport = viewport.map(f64::from);
+    let (matrix, units) = match view_box {
+        Some([.., w, h]) if w <= 0.0 || h <= 0.0 => return None,
+        Some(b) => (svg::viewport(b, fit, viewport), [b[2], b[3]]),
+        None => (Matrix::IDENTITY, viewport),
+    };
+    let [kx, ky] = [0, 1].map(|k| f64::from(size[k]) / viewport[k]);
+    let scaled = Matrix::affine([kx, 0.0, 0.0, ky, first.x.into(), first.y.into()]);
+    let matrix = scaled.times(matrix);
+    let mut items = Vec::new();
+    let drawing = Drawing::new(&document.template, &document.styles);
+    drawing.element(0, units, matrix, &mut items, None);
+    (!items.is_empty()).then(|| Item::Clip {
+        rect: first,
+        radii: SQUARE,
+        items: vec![Item::Transform { matrix, items }],
+    })
+}
 
 /// The elements of a document of SVG, a frame's or a file's, by their styles at a frame.
 pub struct Drawing<'a> {
@@ -41,11 +79,11 @@ impl<'a> Drawing<'a> {
         }
     }
 
-    /// An element in an `<svg>` and its children, in user units of a viewport `size` units big,
-    /// which `matrix` takes to px, with its style in `copy` if that holds it: a shape filled,
-    /// then stroked, unless it is hidden, each opacity on its paint's alpha; a `<use>`'s copy;
-    /// then its mask, its clip path, and its opacity on all it draws as one layer, and its
-    /// transform.
+    /// An element in an `<svg>`, or an SVG file's root, and its children, in user units of a
+    /// viewport `size` units big, which `matrix` takes to px, with its style in `copy` if that
+    /// holds it: a shape filled, then stroked, unless it is hidden, each opacity on its paint's
+    /// alpha; a `<use>`'s copy; then its mask, its clip path, and its opacity on all it draws as
+    /// one layer, and its transform.
     pub fn element<'s>(
         &'s self,
         i: usize,
@@ -66,7 +104,7 @@ impl<'a> Drawing<'a> {
         let scale = matrix.radius_scale();
         let mut items = Vec::new();
         match &c.element {
-            Element::G => {
+            Element::G | Element::Svg { .. } => {
                 for &k in &self.template.nodes[i].children {
                     self.element(k as usize, size, matrix, &mut items, copy);
                 }
@@ -132,7 +170,6 @@ impl<'a> Drawing<'a> {
                 items.extend(markers);
             }
             Element::Shape(_)
-            | Element::Svg { .. }
             | Element::Defs
             | Element::Gradient(_)
             | Element::Stop(_)
