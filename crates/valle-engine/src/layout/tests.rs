@@ -81,6 +81,53 @@ fn flex_items_go_in_order_then_as_written() {
 }
 
 #[test]
+fn grids_place_items_on_tracks_and_lines() {
+    let grid = [
+        ("display", "grid"),
+        ("position", "relative"),
+        ("gridTemplateColumns", "[a] 50px [b] 1fr [c]"),
+        ("gridTemplateRows", "20px"),
+        ("gridAutoRows", "10px"),
+        ("columnGap", "10px"),
+    ];
+    let l = lay(
+        vec![
+            view(&grid, &[1, 2, 3, 4]),
+            view(&[("gridColumn", "span 2")], &[]),
+            view(&[], &[]),
+            view(&[("gridColumn", "b")], &[]),
+            view(
+                &[
+                    ("position", "absolute"),
+                    ("inset", "0"),
+                    ("gridColumn", "b / c"),
+                    ("gridRow", "1 / 2"),
+                ],
+                &[],
+            ),
+            view(&[("display", "flex")], &[6]),
+            view(
+                &[
+                    ("display", "grid"),
+                    ("gridTemplateColumns", "30px 20px"),
+                    ("gridTemplateRows", "15px"),
+                ],
+                &[],
+            ),
+        ],
+        &[0, 5],
+    )
+    .unwrap();
+    assert_eq!(l.boxes[1].border, rect(0.0, 0.0, 200.0, 20.0));
+    assert_eq!(l.boxes[2].border, rect(0.0, 20.0, 50.0, 10.0));
+    assert_eq!(l.boxes[3].border, rect(60.0, 20.0, 140.0, 10.0));
+    // An absolute box in a grid takes its grid area.
+    assert_eq!(l.boxes[4].border, rect(60.0, 0.0, 140.0, 20.0));
+    // A grid's tracks size it without items.
+    assert_eq!(l.boxes[6].border, rect(0.0, 30.0, 50.0, 15.0));
+}
+
+#[test]
 fn sizes_take_box_sizing_and_aspect_ratio() {
     let l = lay(
         vec![

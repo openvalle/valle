@@ -3,11 +3,11 @@
 //! composite).
 //!
 //! A stacking context paints its own background, then its in-flow content: the backgrounds of
-//! its blocks, then their text and their flex items, each flex item all at once, as an inline
-//! block. Its positioned descendants and the stacking contexts in it come last, in tree order;
-//! a positioned box paints all at once too, without the positioned boxes in it. Only opacity
-//! makes a stacking context so far, and nothing has a z-index. Tree order puts a flex
-//! container's children in the order it lays them out.
+//! its blocks, then their text and their flex and grid items, each item all at once, as an
+//! inline block. Its positioned descendants and the stacking contexts in it come last, in tree
+//! order; a positioned box paints all at once too, without the positioned boxes in it. Only
+//! opacity makes a stacking context so far, and nothing has a z-index. Tree order puts a flex or
+//! grid container's children in the order it lays them out.
 //!
 //! Boxes paint with their edges on whole pixels, as Chrome paints them, so a layout that lands
 //! between pixels still has crisp edges.
@@ -104,9 +104,10 @@ impl Painter<'_> {
         self.positioned(i) || self.stacking(i)
     }
 
-    /// An in-flow child that paints all at once: a flex item.
+    /// An in-flow child that paints all at once: a flex or grid item.
     fn atomic(&self, parent: Option<usize>, child: usize) -> bool {
-        parent.is_some_and(|p| self.styles[p].layout.display == taffy::Display::Flex)
+        let display = |p: usize| self.styles[p].layout.display;
+        parent.is_some_and(|p| matches!(display(p), taffy::Display::Flex | taffy::Display::Grid))
             && !self.layered(child)
     }
 

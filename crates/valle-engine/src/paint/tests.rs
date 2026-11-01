@@ -70,7 +70,7 @@ fn blocks_paint_backgrounds_then_text_then_positioned_boxes() {
 }
 
 #[test]
-fn flex_items_paint_all_at_once() {
+fn flex_and_grid_items_paint_all_at_once() {
     let children = |display| {
         painted(
             vec![
@@ -89,6 +89,7 @@ fn flex_items_paint_all_at_once() {
         )
     };
     assert_eq!(children("flex"), ["red", "green", "text black", "blue"]);
+    assert_eq!(children("grid"), ["red", "green", "text black", "blue"]);
     assert_eq!(children("block"), ["red", "green", "blue", "text black"]);
 }
 

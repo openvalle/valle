@@ -9,7 +9,7 @@ in `Cargo.lock` and `bun.lock`.
 | --- | --- | --- |
 | [OXC](https://github.com/oxc-project/oxc) | Parsing and rewriting scene modules | MIT |
 | [QuickJS-ng](https://github.com/quickjs-ng/quickjs) and [rquickjs](https://github.com/DelSkayn/rquickjs) | Running scene code in a sandbox | MIT |
-| [Taffy](https://github.com/DioxusLabs/taffy) | Block and flex layout | MIT |
+| [Taffy](https://github.com/DioxusLabs/taffy) | Block, flex and grid layout | MIT |
 | [Parley](https://github.com/linebender/parley) | Shaping text and breaking it into lines | MIT or Apache-2.0 |
 | [Skrifa](https://github.com/googlefonts/fontations) | Reading glyph outlines | MIT or Apache-2.0 |
 | [wgpu](https://github.com/gfx-rs/wgpu), with naga | Drawing on the GPU through Metal, Vulkan and Direct3D 12 | MIT or Apache-2.0 |

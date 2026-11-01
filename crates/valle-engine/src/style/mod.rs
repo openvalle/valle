@@ -1,22 +1,23 @@
 //! The style layer. A variant's inline styles parse once into declared values; each frame sets
 //! the declarations bound to expressions and computes every node top down, as CSS computes
 //! styles: text properties inherit, `em` resolves against the font size and `vw` against the
-//! canvas, which is the viewport, and `display` blockifies in flex containers. Layout reads a
-//! Taffy style; paint reads the rest.
+//! canvas, which is the viewport, and `display` blockifies in flex and grid containers. Layout
+//! reads a Taffy style; paint reads the rest.
 //!
 //! What the engine does not take is an error, never ignored. Properties Valle will never take say
 //! why and what to write instead.
 
 pub mod color;
 mod css;
+mod grid;
 pub mod math;
 
 use std::borrow::Cow;
 use std::rc::Rc;
 
 use taffy::{
-    AlignContent, AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap,
-    LengthPercentage, LengthPercentageAuto, Position,
+    AlignContent, AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap, GridAutoFlow,
+    GridPlacement, LengthPercentage, LengthPercentageAuto, Line, Position,
 };
 
 use color::Rgba;
@@ -31,7 +32,7 @@ const REM: f64 = 16.0;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
     pub layout: taffy::Style,
-    /// Where a flex item goes among its siblings, which `layout::ordered` sorts by.
+    /// Where a flex or grid item goes among its siblings, which `layout::ordered` sorts by.
     pub order: i32,
     pub background: Rgba,
     /// `border-radius`, px.
@@ -299,6 +300,14 @@ enum Sizing {
 
 const AUTO: Len = Len::Auto;
 const ZERO: Len = Len::Px(0.0);
+const AUTO_LINES: Line<GridPlacement<String>> = Line {
+    start: GridPlacement::Auto,
+    end: GridPlacement::Auto,
+};
+
+/// A grid's axes, as the arrays of its fields.
+const ROWS: usize = 0;
+const COLUMNS: usize = 1;
 
 /// What lengths resolve against besides their percentage base: the font size and the canvas, in
 /// px.
@@ -434,6 +443,8 @@ enum Shown {
     None,
     InlineBlock,
     InlineFlex,
+    Grid,
+    InlineGrid,
     Inline,
 }
 
@@ -480,6 +491,13 @@ struct Declared {
     align_content: AlignContent,
     /// Row, column; `normal` is `Auto`, 0.
     gap: [Len; 2],
+    /// Rows, columns, as the grid fields below.
+    grid_template: [grid::Tracks; 2],
+    grid_auto: [Vec<grid::Track>; 2],
+    grid_auto_flow: GridAutoFlow,
+    grid_lines: [Line<GridPlacement<String>>; 2],
+    justify_items: AlignItems,
+    justify_self: Option<AlignItems>,
     background: Rgba,
     radius: Len,
     opacity: f64,
@@ -517,6 +535,12 @@ impl Default for Declared {
             align_self: None,
             align_content: AlignContent::NORMAL,
             gap: [AUTO; 2],
+            grid_template: Default::default(),
+            grid_auto: Default::default(),
+            grid_auto_flow: GridAutoFlow::Row,
+            grid_lines: [AUTO_LINES; 2],
+            justify_items: AlignItems::NORMAL,
+            justify_self: None,
             background: color::TRANSPARENT,
             radius: ZERO,
             opacity: 1.0,
@@ -561,6 +585,16 @@ enum Field {
     Gap,
     RowGap,
     ColumnGap,
+    /// Of `ROWS` or `COLUMNS`.
+    GridTemplate(usize),
+    GridAuto(usize),
+    GridAutoFlow,
+    /// `grid-row` and `grid-column`.
+    GridLines(usize),
+    GridStart(usize),
+    GridEnd(usize),
+    JustifyItems,
+    JustifySelf,
     Background,
     BackgroundColor,
     BorderRadius,
@@ -594,7 +628,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 68] = [
+const FIELDS: [(&str, Field); 81] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -652,6 +686,19 @@ const FIELDS: [(&str, Field); 68] = [
     ("gap", Field::Gap),
     ("rowGap", Field::RowGap),
     ("columnGap", Field::ColumnGap),
+    ("gridTemplateRows", Field::GridTemplate(ROWS)),
+    ("gridTemplateColumns", Field::GridTemplate(COLUMNS)),
+    ("gridAutoRows", Field::GridAuto(ROWS)),
+    ("gridAutoColumns", Field::GridAuto(COLUMNS)),
+    ("gridAutoFlow", Field::GridAutoFlow),
+    ("gridRow", Field::GridLines(ROWS)),
+    ("gridColumn", Field::GridLines(COLUMNS)),
+    ("gridRowStart", Field::GridStart(ROWS)),
+    ("gridRowEnd", Field::GridEnd(ROWS)),
+    ("gridColumnStart", Field::GridStart(COLUMNS)),
+    ("gridColumnEnd", Field::GridEnd(COLUMNS)),
+    ("justifyItems", Field::JustifyItems),
+    ("justifySelf", Field::JustifySelf),
     ("background", Field::Background),
     ("backgroundColor", Field::BackgroundColor),
     ("borderRadius", Field::BorderRadius),
@@ -999,9 +1046,6 @@ fn display(v: &V) -> Result<Shown, String> {
     if s == "table" || s == "inline-table" || s.starts_with("table-") || s == "list-item" {
         return Err(format!("{s} is not supported: {NO_FLOW}; {USE_FLEX}"));
     }
-    if s == "grid" || s == "inline-grid" {
-        return Err(format!("{s} is not supported yet"));
-    }
     keyword(
         v,
         &[
@@ -1010,6 +1054,8 @@ fn display(v: &V) -> Result<Shown, String> {
             ("none", Shown::None),
             ("inline-block", Shown::InlineBlock),
             ("inline-flex", Shown::InlineFlex),
+            ("grid", Shown::Grid),
+            ("inline-grid", Shown::InlineGrid),
             ("inline", Shown::Inline),
         ],
     )
@@ -1057,6 +1103,14 @@ const CONTENT_ALIGN: [(&str, AlignContent); 10] = [
     ("space-around", AlignContent::SPACE_AROUND),
     ("space-evenly", AlignContent::SPACE_EVENLY),
 ];
+
+/// `align-self` and `justify-self`: `auto` takes the container's `-items`.
+fn self_align(v: &V) -> Result<Option<AlignItems>, String> {
+    Ok(match text(v)?.as_str() {
+        "auto" => None,
+        _ => Some(keyword(v, &SELF_ALIGN)?),
+    })
+}
 
 /// `flex`: grow, shrink and basis. A lone factor makes the basis `0%`, as browsers compute it.
 fn flex(v: &V) -> Result<(f64, f64, Len), String> {
@@ -1250,12 +1304,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::AspectRatio => d.aspect_ratio = ratio(v)?,
         F::JustifyContent => d.justify_content = keyword(v, &CONTENT_ALIGN)?,
         F::AlignItems => d.align_items = keyword(v, &SELF_ALIGN)?,
-        F::AlignSelf => {
-            d.align_self = match text(v)?.as_str() {
-                "auto" => None,
-                _ => Some(keyword(v, &SELF_ALIGN)?),
-            }
-        }
+        F::AlignSelf => d.align_self = self_align(v)?,
         F::AlignContent => d.align_content = keyword(v, &CONTENT_ALIGN)?,
         F::Gap => {
             d.gap = match &lengths(v, GAP, 2)?[..] {
@@ -1266,6 +1315,14 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         }
         F::RowGap => d.gap[0] = length(v, GAP)?,
         F::ColumnGap => d.gap[1] = length(v, GAP)?,
+        F::GridTemplate(axis) => d.grid_template[axis] = grid::template(v)?,
+        F::GridAuto(axis) => d.grid_auto[axis] = grid::auto(v)?,
+        F::GridAutoFlow => d.grid_auto_flow = grid::flow(v)?,
+        F::GridLines(axis) => d.grid_lines[axis] = grid::lines(v)?,
+        F::GridStart(axis) => d.grid_lines[axis].start = grid::line(v)?,
+        F::GridEnd(axis) => d.grid_lines[axis].end = grid::line(v)?,
+        F::JustifyItems => d.justify_items = keyword(v, &SELF_ALIGN)?,
+        F::JustifySelf => d.justify_self = self_align(v)?,
         F::Background => {
             let s = text(v)?;
             d.background = match s.as_str() {
@@ -1389,22 +1446,25 @@ fn compute(
     let display = match d.display {
         Shown::Block => Display::Block,
         Shown::Flex => Display::Flex,
+        Shown::Grid => Display::Grid,
         Shown::None => Display::None,
         inline => {
             let out_of_flow = matches!(d.position, Position::Absolute | Position::Fixed);
-            if !out_of_flow && container != Display::Flex {
+            if !out_of_flow && !matches!(container, Display::Flex | Display::Grid) {
                 let name = match inline {
                     Shown::InlineFlex => "inline-flex",
+                    Shown::InlineGrid => "inline-grid",
                     Shown::InlineBlock => "inline-block",
                     _ => "inline",
                 };
                 return Err(format!(
-                    "display: {name} needs a flex parent: {NO_INLINE}; {INLINE_INSTEAD}"
+                    "display: {name} needs a flex or grid parent: {NO_INLINE}; {INLINE_INSTEAD}"
                 ));
             }
-            // Blockified, as CSS does to flex items and out-of-flow boxes.
+            // Blockified, as CSS does to flex and grid items and out-of-flow boxes.
             match inline {
                 Shown::InlineFlex => Display::Flex,
+                Shown::InlineGrid => Display::Grid,
                 _ => Display::Block,
             }
         }
@@ -1415,6 +1475,10 @@ fn compute(
         first,
         calcs: Vec::new(),
     };
+    let (grid_template_rows, grid_template_row_names) = l.template(&d.grid_template[ROWS]);
+    let (grid_template_columns, grid_template_column_names) = l.template(&d.grid_template[COLUMNS]);
+    let [grid_auto_rows, grid_auto_columns]: [Vec<_>; 2] =
+        [ROWS, COLUMNS].map(|axis| d.grid_auto[axis].iter().map(|t| l.track(t)).collect());
     let layout: taffy::Style = taffy::Style {
         display,
         position: d.position,
@@ -1448,6 +1512,17 @@ fn compute(
             width: l.lp(&d.gap[1]),
             height: l.lp(&d.gap[0]),
         },
+        grid_template_rows,
+        grid_template_columns,
+        grid_template_row_names,
+        grid_template_column_names,
+        grid_auto_rows,
+        grid_auto_columns,
+        grid_auto_flow: d.grid_auto_flow,
+        grid_row: d.grid_lines[ROWS].clone(),
+        grid_column: d.grid_lines[COLUMNS].clone(),
+        justify_items: d.justify_items,
+        justify_self: d.justify_self,
         ..taffy::Style::DEFAULT
     };
     Ok(Style {

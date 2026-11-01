@@ -261,6 +261,171 @@ fn sizing_keywords_go_to_taffy() {
 }
 
 #[test]
+fn grid_tracks_and_lines_go_to_taffy() {
+    use taffy::{
+        GridTemplateComponent as C, GridTemplateRepetition, MaxTrackSizingFunction as Max, MinMax,
+        MinTrackSizingFunction as Min, RepetitionCount,
+    };
+    let s = one(&[
+        ("display", text("grid")),
+        ("fontSize", num(10.0)),
+        (
+            "gridTemplateColumns",
+            text("[Start] 2em repeat(2, [a] minmax(10%, 1FR)) fit-content(calc(50% - 5px)) [End]"),
+        ),
+        ("gridTemplateRows", text("repeat(auto-fill, 20px)")),
+        ("gridAutoRows", text("min-content 3fr")),
+        ("gridAutoFlow", text("column dense")),
+        ("gridRow", text("span 2 / Main")),
+        ("gridColumn", text("Main")),
+        ("gridColumnEnd", num(-1.0)),
+        ("justifyItems", text("center")),
+        ("justifySelf", text("auto")),
+    ]);
+    let l = &s.layout;
+    let both = |min, max| MinMax { min, max };
+    let names = |ns: &[&[&str]]| -> Vec<Vec<String>> {
+        ns.iter()
+            .map(|n| n.iter().map(|s| s.to_string()).collect())
+            .collect()
+    };
+    assert_eq!(l.display, Display::Grid);
+    assert_eq!(
+        l.grid_template_columns,
+        [
+            C::Single(both(Min::length(20.0), Max::length(20.0))),
+            C::Repeat(GridTemplateRepetition {
+                count: RepetitionCount::Count(2),
+                tracks: vec![both(Min::percent(0.1), Max::fr(1.0))],
+                line_names: names(&[&["a"], &[]]),
+            }),
+            C::Single(both(Min::auto(), Max::fit_content_calc(math::handle(0)))),
+        ]
+    );
+    // Names are as written; a set for each line around the parts.
+    assert_eq!(
+        l.grid_template_column_names,
+        names(&[&["Start"], &[], &[], &["End"]])
+    );
+    assert_eq!(s.calcs.len(), 1);
+    assert_eq!(
+        l.grid_template_rows,
+        [C::Repeat(GridTemplateRepetition {
+            count: RepetitionCount::AutoFill,
+            tracks: vec![both(Min::length(20.0), Max::length(20.0))],
+            line_names: names(&[&[], &[]]),
+        })]
+    );
+    assert_eq!(
+        l.grid_auto_rows,
+        [
+            both(Min::min_content(), Max::min_content()),
+            both(Min::auto(), Max::fr(3.0)),
+        ]
+    );
+    assert_eq!(l.grid_auto_flow, taffy::GridAutoFlow::ColumnDense);
+    let main = || GridPlacement::NamedLine("Main".to_string(), 0);
+    assert_eq!(l.grid_row.start, GridPlacement::Span(2));
+    assert_eq!(l.grid_row.end, main());
+    // A name alone ends where it starts, unless something sets the end.
+    assert_eq!(l.grid_column.start, main());
+    assert_eq!(l.grid_column.end, GridPlacement::Line((-1i16).into()));
+    assert_eq!(l.justify_items, AlignItems::CENTER);
+    assert_eq!(l.justify_self, None);
+
+    let line = |v: &str| one(&[("gridRowStart", text(v))]).layout.grid_row.start;
+    assert_eq!(line("2 a"), GridPlacement::NamedLine("a".into(), 2));
+    assert_eq!(line("a -1"), GridPlacement::NamedLine("a".into(), -1));
+    assert_eq!(line("span B 2"), GridPlacement::NamedSpan("B".into(), 2));
+    assert_eq!(line("SPAN b"), GridPlacement::NamedSpan("b".into(), 1));
+    assert_eq!(line("Auto"), GridPlacement::Auto);
+    let flow = |v: &str| one(&[("gridAutoFlow", text(v))]).layout.grid_auto_flow;
+    assert_eq!(flow("dense"), taffy::GridAutoFlow::RowDense);
+    assert_eq!(flow("COLUMN"), taffy::GridAutoFlow::Column);
+    let none = one(&[("gridTemplateColumns", text("none"))]);
+    assert!(none.layout.grid_template_columns.is_empty());
+    assert!(none.layout.grid_template_column_names.is_empty());
+}
+
+#[test]
+fn grid_values_out_of_css_are_errors() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("gridTemplateColumns", "1fr 2", "2 needs a unit: 2px"),
+        ("gridTemplateColumns", "", "\"\" has no tracks"),
+        (
+            "gridTemplateColumns",
+            "repeat(auto-fill, 1fr)",
+            "beside auto-fill or auto-fit, every track needs a length",
+        ),
+        (
+            "gridTemplateColumns",
+            "repeat(auto-fit, 10px) auto",
+            "beside auto-fill or auto-fit",
+        ),
+        (
+            "gridTemplateColumns",
+            "repeat(auto-fill, 10px) repeat(auto-fit, 10px)",
+            "only one repeat() may be auto-fill or auto-fit",
+        ),
+        ("gridTemplateColumns", "repeat(0, 10px)", "0 is not a count"),
+        (
+            "gridTemplateColumns",
+            "repeat(2, repeat(2, 10px))",
+            "repeat() does not nest",
+        ),
+        (
+            "gridTemplateColumns",
+            "minmax(1fr, 10px)",
+            "the minimum is not flexible",
+        ),
+        (
+            "gridTemplateColumns",
+            "fit-content",
+            "tracks take fit-content(limit)",
+        ),
+        (
+            "gridTemplateColumns",
+            "[a] [b] 10px",
+            "put names of one line in one [ ]",
+        ),
+        (
+            "gridTemplateColumns",
+            "[span] 10px",
+            "span is a keyword, not a line name",
+        ),
+        ("gridTemplateColumns", "[1a] 10px", "1a is not a line name"),
+        ("gridTemplateColumns", "[a 10px", "a [ is not closed"),
+        ("gridTemplateColumns", "-1fr", "-1fr is negative"),
+        ("gridTemplateRows", "subgrid", "subgrid is not supported"),
+        (
+            "gridAutoRows",
+            "repeat(2, 10px)",
+            "implicit tracks take sizes only",
+        ),
+        ("gridAutoFlow", "row column", "is not row or column"),
+        ("gridRow", "0", "there is no line 0"),
+        (
+            "gridRow",
+            "1 / 2 / 3",
+            "takes a start line, and an end line",
+        ),
+        ("gridRow", "span 0", "a span is at least 1"),
+        ("gridRow", "span", "is not a grid line"),
+        ("gridRowStart", "1.5", "1.5 is not a whole number"),
+        ("gridColumnStart", "a b", "is not a grid line"),
+        ("gridColumnEnd", "auto 2", "auto is a keyword"),
+        ("justifyItems", "left", "left is not one of normal, stretch"),
+    ];
+    for (key, value, message) in cases {
+        let e = error(&[(*key, text(value))]);
+        assert!(
+            e.starts_with(&format!("s.tsx:1:1: style {key}: ")) && e.contains(message),
+            "{key}: {value}: {e}"
+        );
+    }
+}
+
+#[test]
 fn the_flex_shorthand_follows_css() {
     let flex = |p: Prop| {
         let l = one(&[("flex", p)]).layout;
@@ -358,7 +523,7 @@ fn text_properties_inherit() {
 }
 
 #[test]
-fn inline_displays_blockify_in_flex_containers() {
+fn inline_displays_blockify_in_flex_and_grid_containers() {
     let tree = |parent: &str, child: &[(&str, Prop)]| {
         let tree = vec![view(&[("display", text(parent))], &[1]), view(child, &[])];
         styles(tree, &[]).map(|s| s[1].layout.display)
@@ -371,6 +536,10 @@ fn inline_displays_blockify_in_flex_containers() {
         tree("flex", &[("display", text("inline"))]),
         Ok(Display::Block)
     );
+    assert_eq!(
+        tree("grid", &[("display", text("inline-grid"))]),
+        Ok(Display::Grid)
+    );
     let absolute = [
         ("display", text("inline-block")),
         ("position", text("absolute")),
@@ -379,13 +548,13 @@ fn inline_displays_blockify_in_flex_containers() {
     assert_eq!(
         tree("block", &[("display", text("inline-flex"))]),
         Err(
-            "s.tsx:1:1: display: inline-flex needs a flex parent: there is no HTML inline \
-             flow; use flex layout, and Span for styled runs of text"
+            "s.tsx:1:1: display: inline-flex needs a flex or grid parent: there is no HTML \
+             inline flow; use flex layout, and Span for styled runs of text"
                 .into()
         )
     );
     // The canvas is a block container.
-    assert!(error(&[("display", text("inline-block"))]).contains("needs a flex parent"));
+    assert!(error(&[("display", text("inline-block"))]).contains("needs a flex or grid parent"));
 }
 
 #[test]
@@ -480,8 +649,8 @@ fn what_is_not_supported_is_an_error() {
         ),
         (
             "display",
-            text("grid"),
-            "style display: grid is not supported yet",
+            text("contents"),
+            "style display: contents is not one of block, flex",
         ),
         ("display", text("table-cell"), "there is no document flow"),
         ("display", num(1.0), "style display: 1 is not a string"),

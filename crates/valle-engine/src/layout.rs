@@ -7,10 +7,11 @@
 use std::borrow::Cow;
 
 use taffy::{
-    AvailableSpace, BlockContext, Cache, CacheTree, Dimension, Display, LayoutBlockContainer,
-    LayoutContainingBlock, LayoutFlexboxContainer, LayoutInput, LayoutOutput, LayoutPartialTree,
-    LengthPercentage, NodeId, Overflow, Point, Position, ResolveOrZero, RunMode, Size,
-    TraversePartialTree, compute_block_layout, compute_cached_layout, compute_flexbox_layout,
+    AvailableSpace, BlockContext, Cache, CacheTree, DetailedGridInfo, DetailedLayoutInfo,
+    Dimension, Display, LayoutBlockContainer, LayoutContainingBlock, LayoutFlexboxContainer,
+    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, LengthPercentage, NodeId,
+    Overflow, Point, Position, ResolveOrZero, RunMode, Size, TraversePartialTree,
+    compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
     compute_hidden_layout, compute_leaf_layout, compute_oof_layout, compute_root_layout,
 };
 
@@ -43,15 +44,15 @@ pub struct Layout {
     pub lines: Vec<Option<Lines>>,
 }
 
-/// A container's children in the order it lays them out and paints them: a flex container's by
-/// `order` (out-of-flow ones as 0), then as written; any other's as written.
+/// A container's children in the order it lays them out and paints them: a flex or grid
+/// container's by `order` (out-of-flow ones as 0), then as written; any other's as written.
 pub fn ordered<'a>(
     children: &'a [u32],
     container: &Style,
     styles: &'a [Style],
 ) -> impl Iterator<Item = usize> + 'a {
     let mut list: Vec<usize> = children.iter().map(|&c| c as usize).collect();
-    if container.layout.display == Display::Flex {
+    if matches!(container.layout.display, Display::Flex | Display::Grid) {
         list.sort_by_key(|&c| match styles[c].layout.position {
             Position::Absolute | Position::Fixed => 0,
             _ => styles[c].order,
@@ -120,6 +121,7 @@ pub fn layout(
         caches: vec![Cache::new(); n + 1],
         layouts: vec![taffy::Layout::with_order(0); n + 1],
         hoisted: vec![Vec::new(); n + 1],
+        grids: vec![DetailedLayoutInfo::None; n + 1],
         failed: None,
     };
     let available = Size {
@@ -208,6 +210,8 @@ struct Tree<'a> {
     layouts: Vec<taffy::Layout>,
     /// The out-of-flow boxes each node is the containing block of.
     hoisted: Vec<Vec<NodeId>>,
+    /// Each grid's tracks and lines, which place the out-of-flow boxes it contains.
+    grids: Vec<DetailedLayoutInfo<String>>,
     /// The first error measuring text met.
     failed: Option<Error>,
 }
@@ -235,12 +239,16 @@ impl Tree<'_> {
             return compute_hidden_layout(self, id);
         }
         compute_cached_layout(self, id, inputs, |tree, id, inputs| {
-            let parent = !tree.children[usize::from(id)].is_empty();
+            let i = usize::from(id);
+            let parent = !tree.children[i].is_empty();
+            let text = tree.strings.get(i).is_some_and(Option::is_some);
             let mut out = match (tree.style(id).display, parent) {
                 (Display::None, _) => compute_hidden_layout(tree, id),
                 (Display::Block, true) => compute_block_layout(tree, id, inputs, block),
                 (Display::Flex, true) => compute_flexbox_layout(tree, id, inputs),
-                _ => tree.leaf(usize::from(id), inputs),
+                // A grid's tracks size it even without items.
+                (Display::Grid, _) if !text => compute_grid_layout(tree, id, inputs),
+                _ => tree.leaf(i, inputs),
             };
             // The out-of-flow boxes it contains, once their static positions are known.
             if inputs.run_mode == RunMode::PerformLayout {
@@ -288,7 +296,7 @@ impl Tree<'_> {
                 }
             }
         });
-        // Flex items align on their first baselines, from the top of the border box; text has
+        // Flex and grid items align on their first baselines, from the top of the border box; text has
         // one where its first line has, and empty text none.
         if inputs.run_mode == RunMode::PerformLayout {
             let side = |l: LengthPercentage| l.resolve_or_zero(inputs.parent_size.width, calc);
@@ -366,6 +374,10 @@ impl LayoutContainingBlock for Tree<'_> {
     fn add_hoisted_children(&mut self, id: NodeId, hoisted: &[NodeId]) {
         self.hoisted[usize::from(id)].extend_from_slice(hoisted);
     }
+
+    fn get_detailed_layout_info(&self, id: NodeId) -> &DetailedLayoutInfo<String> {
+        &self.grids[usize::from(id)]
+    }
 }
 
 impl CacheTree for Tree<'_> {
@@ -407,6 +419,29 @@ impl LayoutBlockContainer for Tree<'_> {
         block: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
         self.compute(id, inputs, block)
+    }
+}
+
+impl LayoutGridContainer for Tree<'_> {
+    type GridContainerStyle<'a>
+        = &'a taffy::Style
+    where
+        Self: 'a;
+    type GridItemStyle<'a>
+        = &'a taffy::Style
+    where
+        Self: 'a;
+
+    fn get_grid_container_style(&self, id: NodeId) -> &taffy::Style {
+        self.style(id)
+    }
+
+    fn get_grid_child_style(&self, id: NodeId) -> &taffy::Style {
+        self.style(id)
+    }
+
+    fn set_detailed_grid_info(&mut self, id: NodeId, info: DetailedGridInfo<String>) {
+        self.grids[usize::from(id)] = DetailedLayoutInfo::Grid(Box::new(info));
     }
 }
 
