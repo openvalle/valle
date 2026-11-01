@@ -30,6 +30,7 @@ use taffy::{Display, Overflow, Position};
 pub use gradient::{Geometry, Ramp, Segment};
 
 use crate::layout::{Layout, Rect, ordered};
+use crate::style::background::{ImageSize, Layer, Repeat};
 use crate::style::color::Rgba;
 use crate::style::gradient::Image;
 use crate::style::{Shadow, Style};
@@ -54,12 +55,11 @@ pub enum Item {
         inner_radii: Radii,
         colors: [[f32; 4]; 4],
     },
-    /// A gradient filling a rectangle with its corners rounded by `radii`: its image the size of
-    /// `tile`, repeated from there.
+    /// A gradient filling a rectangle with its corners rounded by `radii`, in `tiles`.
     Gradient {
         rect: Rect,
         radii: Radii,
-        tile: Rect,
+        tiles: Tiles,
         ramp: Ramp,
     },
     /// Glyphs of `Text::faces()[face]` at `size` px: glyph ids at their baseline origins.
@@ -87,6 +87,14 @@ pub enum Item {
         inside: bool,
         items: Vec<Item>,
     },
+}
+
+/// Where a background image is: one tile, and on each axis how far it is to the next one, if it
+/// repeats.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tiles {
+    pub first: Rect,
+    pub step: [Option<f32>; 2],
 }
 
 /// Elliptical corners: their horizontal and vertical radii in px, from the top left clockwise.
@@ -118,6 +126,60 @@ fn spread(radii: Radii, by: f32) -> Radii {
             v => v + by * (1.0 + (v / by - 1.0).powi(3)),
         }))
     })
+}
+
+/// A background image's tiles in `area`, if it has a size. Gradients have no size of their own:
+/// `auto`, `contain` and `cover` are the area's. A rounded axis fits a whole number of tiles,
+/// and the other, if `auto`, keeps the tile's proportions; a spaced one fits as many whole
+/// tiles as it can from edge to edge, or a single one where the position puts it.
+fn tiles(layer: &Layer, area: Rect) -> Option<Tiles> {
+    let room = [area.width, area.height];
+    let (asked, auto) = match &layer.size {
+        ImageSize::Contain | ImageSize::Cover => (room, [false; 2]),
+        ImageSize::Sized(s) => (
+            [0, 1].map(|k| s[k].as_ref().map_or(room[k], |l| l.resolve(room[k]))),
+            [s[0].is_none(), s[1].is_none()],
+        ),
+    };
+    let round = layer.repeat.map(|r| r == Repeat::Round);
+    let mut size = asked;
+    for k in 0..2 {
+        if round[k] && asked[k] > 0.0 {
+            size[k] = room[k] / (room[k] / asked[k]).round().max(1.0);
+        }
+    }
+    for k in 0..2 {
+        let other = 1 - k;
+        if round[k] && !round[other] && auto[other] && asked[k] > 0.0 {
+            size[other] = asked[other] * size[k] / asked[k];
+        }
+    }
+    if size[0] <= 0.0 || size[1] <= 0.0 {
+        return None;
+    }
+    // Placed in the room the tile leaves before it is rounded, as Chrome and Safari place it.
+    let mut first = [0, 1].map(|k| layer.position[k].resolve(room[k] - asked[k]));
+    let mut step = [None; 2];
+    for k in 0..2 {
+        step[k] = match layer.repeat[k] {
+            Repeat::Repeat | Repeat::Round => Some(size[k]),
+            Repeat::NoRepeat => None,
+            Repeat::Space => {
+                let n = (room[k] / size[k]).floor();
+                (n >= 2.0).then(|| {
+                    first[k] = 0.0;
+                    size[k] + (room[k] - n * size[k]) / (n - 1.0)
+                })
+            }
+        };
+    }
+    let first = Rect {
+        x: area.x + first[0],
+        y: area.y + first[1],
+        width: size[0],
+        height: size[1],
+    };
+    Some(Tiles { first, step })
 }
 
 /// `rect` grown by `by` px on each side.
@@ -517,20 +579,23 @@ impl Painter<'_> {
                 },
             ));
         }
-        // Images over the color, the first on top, from the padding box's top left and repeated
-        // under the border.
-        if inside.width > 0.0 && inside.height > 0.0 {
-            for image in s.images.iter().rev() {
-                let Image::Gradient(g) = image else { continue };
-                let ramp = gradient::ramp(g, [inside.width, inside.height]);
-                let item = Item::Gradient {
-                    rect: area,
-                    radii: area_radii,
-                    tile: inside,
-                    ramp,
-                };
-                out.push((clip, item));
-            }
+        // Images over the color, the first on top, placed in the padding box and repeated under
+        // the border.
+        for layer in s.layers.iter().rev() {
+            let Image::Gradient(g) = &layer.image else {
+                continue;
+            };
+            let Some(tiles) = tiles(layer, inside) else {
+                continue;
+            };
+            let ramp = gradient::ramp(g, [tiles.first.width, tiles.first.height]);
+            let item = Item::Gradient {
+                rect: area,
+                radii: area_radii,
+                tiles,
+                ramp,
+            };
+            out.push((clip, item));
         }
         for shadow in inset {
             out.extend(inner_shadow(shadow, inside, inner_radii).map(|item| (clip, item)));

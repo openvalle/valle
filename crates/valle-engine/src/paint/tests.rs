@@ -709,11 +709,78 @@ fn ramps(background: &str) -> Vec<(Rect, Rect, Ramp)> {
     (items.into_iter())
         .filter_map(|item| match item {
             Item::Gradient {
-                rect, tile, ramp, ..
-            } => Some((rect, tile, ramp)),
+                rect, tiles, ramp, ..
+            } => Some((rect, tiles.first, ramp)),
             _ => None,
         })
         .collect()
+}
+
+/// The first tile and the steps of the gradients a box like `ramps`'s paints, rounded.
+fn tiled(background: &str) -> Vec<([f32; 4], [Option<f32>; 2])> {
+    let style = [
+        ("width", "100px"),
+        ("height", "50px"),
+        ("border", "10px solid transparent"),
+        ("boxSizing", "content-box"),
+        ("background", background),
+    ];
+    let (items, _) = paint_of(vec![view(&style, &[])], &[0]);
+    (items.into_iter())
+        .filter_map(|item| match item {
+            Item::Gradient { tiles, .. } => {
+                let r = tiles.first;
+                let first = [r.x, r.y, r.width, r.height].map(rounded);
+                Some((first, tiles.step.map(|s| s.map(rounded))))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn tiles_are_sized_placed_and_repeated_in_the_padding_box() {
+    let tiles = |b: &str| tiled(&format!("linear-gradient(red, blue) {b}"))[0];
+    // As big as the padding box, and repeated.
+    assert_eq!(
+        tiles(""),
+        ([10.0, 10.0, 100.0, 50.0], [Some(100.0), Some(50.0)])
+    );
+    assert_eq!(tiles("0 0 / cover"), tiles(""));
+    // Placed from a side, in the room the tile leaves.
+    assert_eq!(
+        tiles("right 10px bottom / 20px 50% no-repeat"),
+        ([80.0, 35.0, 20.0, 25.0], [None, None])
+    );
+    assert_eq!(
+        tiles("-5px 50% / 20px 10px repeat-y"),
+        ([5.0, 30.0, 20.0, 10.0], [None, Some(10.0)])
+    );
+    // Spaced out from edge to edge, or one where the position puts it.
+    assert_eq!(
+        tiles("center / 30px 20px space"),
+        ([10.0, 10.0, 30.0, 20.0], [Some(35.0), Some(30.0)])
+    );
+    assert_eq!(
+        tiles("center / 60px space"),
+        ([30.0, 10.0, 60.0, 50.0], [None, None])
+    );
+    // Rounded to whole tiles, an auto side kept in proportion.
+    assert_eq!(
+        tiles("0 0 / 30px 15px round"),
+        ([10.0, 10.0, 33.333, 16.667], [Some(33.333), Some(16.667)])
+    );
+    assert_eq!(
+        tiles("0 0 / 30px round no-repeat"),
+        ([10.0, 10.0, 33.333, 55.556], [Some(33.333), None])
+    );
+    // Placed as if it were not rounded.
+    assert_eq!(
+        tiles("center / 28px 10px round"),
+        ([46.0, 30.0, 25.0, 10.0], [Some(25.0), Some(10.0)])
+    );
+    // No tiles without a size.
+    assert!(tiled("linear-gradient(red, blue) 0 0 / 0 10px").is_empty());
 }
 
 fn rounded(v: f32) -> f32 {

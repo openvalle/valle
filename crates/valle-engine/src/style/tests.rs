@@ -41,6 +41,11 @@ fn one(style: &[(&str, Prop)]) -> Style {
     styles(vec![view(style, &[])], &[]).unwrap().remove(0)
 }
 
+/// The images of a style's background layers.
+fn images(style: &[(&str, Prop)]) -> Vec<gradient::Image> {
+    one(style).layers.into_iter().map(|l| l.image).collect()
+}
+
 fn error(style: &[(&str, Prop)]) -> String {
     styles(vec![view(style, &[])], &[]).unwrap_err()
 }
@@ -893,9 +898,9 @@ fn backgrounds_take_gradients_over_a_color() {
         ),
     ]);
     assert_eq!(s.background, c("green"));
-    assert_eq!(s.images[1], Image::None);
+    assert_eq!(s.layers[1].image, Image::None);
     assert_eq!(
-        stops(&s.images[0]),
+        stops(&s.layers[0].image),
         [
             (Some(c("red")), None),
             (None, Some(10.0)),
@@ -903,7 +908,7 @@ fn backgrounds_take_gradients_over_a_color() {
             (Some(c("blue")), Some(32.0)),
         ]
     );
-    let gradient = |v: &str| match &one(&[("backgroundImage", text(v))]).images[..] {
+    let gradient = |v: &str| match &images(&[("backgroundImage", text(v))])[..] {
         [Image::Gradient(g)] => match g.shape {
             Shape::Linear(line) => (line, g.repeating, g.space),
             _ => panic!("{g:?}"),
@@ -935,14 +940,92 @@ fn backgrounds_take_gradients_over_a_color() {
         gradient("linear-gradient(in oklch, red, blue)").2,
         Space::Oklch(Hue::Shorter)
     );
-    assert_eq!(one(&[("background", text("none"))]).images, [Image::None]);
+    assert_eq!(images(&[("background", text("none"))]), [Image::None]);
+}
+
+#[test]
+fn background_layers_take_sizes_positions_and_repeats() {
+    use background::{ImageSize, Repeat};
+    // Each layer's width and height, and position, in 100 px, and repeat.
+    let layers = |style: &[(&str, Prop)]| {
+        (one(style).layers.into_iter())
+            .map(|l| {
+                let size = match l.size {
+                    ImageSize::Sized(s) => s.map(|v| v.map(|v| v.resolve(100.0))),
+                    other => panic!("{other:?}"),
+                };
+                let at = l.position.each_ref().map(|o| o.resolve(100.0));
+                (size, at, l.repeat)
+            })
+            .collect::<Vec<_>>()
+    };
+    let three = text("linear-gradient(red), linear-gradient(blue), linear-gradient(green)");
+    let no = [Repeat::NoRepeat; 2];
+    // Lists repeat for the images.
+    assert_eq!(
+        layers(&[
+            ("backgroundImage", three.clone()),
+            ("backgroundSize", text("10px, 50% auto")),
+            ("backgroundPosition", text("right 10px top, center")),
+            ("backgroundRepeat", text("no-repeat")),
+        ]),
+        [
+            ([Some(10.0), None], [90.0, 0.0], no),
+            ([Some(50.0), None], [50.0, 50.0], no),
+            ([Some(10.0), None], [90.0, 0.0], no),
+        ]
+    );
+    // x and y are lists of their own.
+    assert_eq!(
+        layers(&[
+            ("backgroundImage", three),
+            ("backgroundPosition", text("left 10px top 20px")),
+            ("backgroundPositionX", text("right 5px, 30%")),
+        ])
+        .into_iter()
+        .map(|l| l.1)
+        .collect::<Vec<_>>(),
+        [[95.0, 20.0], [30.0, 20.0], [95.0, 20.0]]
+    );
+    // The shorthand sets each, and what it leaves out goes back to its initial value. The color
+    // goes with a last layer of its own.
+    let background = text(
+        "linear-gradient(red) center / 20px 30% repeat-x, \
+         linear-gradient(blue) space round bottom 5px right 10%, white",
+    );
+    let s = one(&[
+        ("backgroundSize", text("10px")),
+        ("background", background.clone()),
+    ]);
+    assert_eq!(s.background, [1.0; 4]);
+    assert_eq!(s.layers[1].size, ImageSize::Sized([None, None]));
+    assert_eq!(
+        layers(&[("background", background)]),
+        [
+            (
+                [Some(20.0), Some(30.0)],
+                [50.0, 50.0],
+                [Repeat::Repeat, Repeat::NoRepeat]
+            ),
+            ([None, None], [90.0, 95.0], [Repeat::Space, Repeat::Round]),
+            ([None, None], [0.0, 0.0], [Repeat::Repeat; 2]),
+        ]
+    );
+    let sizes = one(&[
+        ("backgroundImage", text("none, none")),
+        ("backgroundSize", text("cover, contain")),
+    ]);
+    assert_eq!(
+        sizes.layers.iter().map(|l| &l.size).collect::<Vec<_>>(),
+        [&ImageSize::Cover, &ImageSize::Contain]
+    );
 }
 
 #[test]
 fn radial_gradients_take_a_shape_a_size_and_a_center() {
     use gradient::{Image, Shape, Size, Space};
     // The shape, the size in px of 100 px, and the center from the top left of 100 × 100 px.
-    let radial = |v: &str| match &one(&[("backgroundImage", text(v))]).images[..] {
+    let radial = |v: &str| match &images(&[("backgroundImage", text(v))])[..] {
         [Image::Gradient(g)] => match &g.shape {
             Shape::Radial { circle, size, at } => {
                 let size = match size {
@@ -956,7 +1039,7 @@ fn radial_gradients_take_a_shape_a_size_and_a_center() {
         },
         other => panic!("{other:?}"),
     };
-    let size = |v: &str| match &one(&[("backgroundImage", text(v))]).images[..] {
+    let size = |v: &str| match &images(&[("backgroundImage", text(v))])[..] {
         [Image::Gradient(g)] => match &g.shape {
             Shape::Radial { size, .. } => size.clone(),
             _ => panic!("{g:?}"),
@@ -999,7 +1082,7 @@ fn radial_gradients_take_a_shape_a_size_and_a_center() {
 fn conic_gradients_take_an_angle_a_center_and_angles() {
     use gradient::{Image, Shape, Space, Stop};
     // From, the center in 100 × 100 px, and the stops in degrees.
-    let conic = |v: &str| match &one(&[("backgroundImage", text(v))]).images[..] {
+    let conic = |v: &str| match &images(&[("backgroundImage", text(v))])[..] {
         [Image::Gradient(g)] => match &g.shape {
             Shape::Conic { from, at } => {
                 let stops: Vec<Option<f32>> = (g.stops.iter())
@@ -1262,10 +1345,49 @@ fn what_is_not_supported_is_an_error() {
             "only the last layer takes a color, and only one",
         ),
         ("background", text("red blue"), "and only one"),
+        ("background", text("foo"), "foo is not a color or an image"),
+        (
+            "backgroundSize",
+            text("1px 2px 3px"),
+            "\"1px 2px 3px\" is not a size: cover, contain, or one or two lengths or auto",
+        ),
+        ("backgroundSize", text("-1px"), "-1px is negative"),
+        ("backgroundSize", text(""), "\"\" is not a size; use auto"),
+        (
+            "backgroundPosition",
+            text("center 10px top"),
+            "is not a position: one to four of left, center, right, top, bottom and lengths",
+        ),
+        (
+            "backgroundPositionX",
+            text("top"),
+            "\"top\" is not a position: center, left or right, a length, or a side and a length",
+        ),
+        (
+            "backgroundRepeat",
+            text("repeat-x repeat-y"),
+            "is not a repeat: repeat-x, repeat-y, or one or two of repeat, space, round and \
+             no-repeat",
+        ),
         (
             "background",
-            text("center"),
-            "center is not a color or an image",
+            text("linear-gradient(red) / 10px"),
+            "a slash goes between a position and a size",
+        ),
+        (
+            "background",
+            text("linear-gradient(red) fixed"),
+            "fixed: the canvas does not scroll",
+        ),
+        (
+            "background",
+            text("red padding-box"),
+            "background-origin and -clip are not supported yet",
+        ),
+        (
+            "background",
+            text("blue 1px 2px 3px 4px 5px"),
+            "is not a position",
         ),
         (
             "borderRadius",

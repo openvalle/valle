@@ -7,6 +7,7 @@
 //! What the engine does not take is an error, never ignored. Properties Valle will never take say
 //! why and what to write instead.
 
+pub mod background;
 pub mod color;
 mod css;
 pub mod gradient;
@@ -39,8 +40,8 @@ pub struct Style {
     /// `z-index`; `None` is `auto`.
     pub z_index: Option<i32>,
     pub background: Rgba,
-    /// `background-image`, the first on top.
-    pub images: Vec<gradient::Image>,
+    /// The background's images, the first on top, with their sizes, positions and repeats.
+    pub layers: Vec<background::Layer>,
     /// `border-radius`: each corner's horizontal and vertical radius, from the top left
     /// clockwise, as px and fractions of the border box's width and height.
     pub radii: [[Calc; 2]; 4],
@@ -543,7 +544,7 @@ struct Declared {
     justify_items: AlignItems,
     justify_self: Option<AlignItems>,
     background: Rgba,
-    images: Vec<gradient::Declared>,
+    layers: background::Declared,
     /// Horizontal and vertical, from the top left clockwise.
     radii: [[Len; 2]; 4],
     /// Top, right, bottom and left.
@@ -603,7 +604,7 @@ impl Default for Declared {
             justify_items: AlignItems::NORMAL,
             justify_self: None,
             background: color::TRANSPARENT,
-            images: Vec::new(),
+            layers: background::Declared::default(),
             radii: [const { [ZERO; 2] }; 4],
             border_width: [MEDIUM; 4],
             border_style: [BorderStyle::None; 4],
@@ -682,6 +683,11 @@ enum Field {
     Background,
     BackgroundColor,
     BackgroundImage,
+    BackgroundSize,
+    BackgroundPosition,
+    /// x or y.
+    BackgroundPositionAxis(usize),
+    BackgroundRepeat,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -747,7 +753,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 154] = [
+const FIELDS: [(&str, Field); 159] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -834,6 +840,11 @@ const FIELDS: [(&str, Field); 154] = [
     ("background", Field::Background),
     ("backgroundColor", Field::BackgroundColor),
     ("backgroundImage", Field::BackgroundImage),
+    ("backgroundSize", Field::BackgroundSize),
+    ("backgroundPosition", Field::BackgroundPosition),
+    ("backgroundPositionX", Field::BackgroundPositionAxis(0)),
+    ("backgroundPositionY", Field::BackgroundPositionAxis(1)),
+    ("backgroundRepeat", Field::BackgroundRepeat),
     ("borderRadius", Field::BorderRadius),
     ("borderTopLeftRadius", Field::CornerRadius(0)),
     ("borderTopRightRadius", Field::CornerRadius(1)),
@@ -1131,6 +1142,15 @@ fn text(v: &V) -> Result<String, String> {
     match v {
         V::Str(s) => Ok(s.trim().to_ascii_lowercase()),
         other => Err(format!("{} is not a string", shown(other))),
+    }
+}
+
+/// CSS text, or a number as a length in px.
+fn px_text(v: &V) -> Result<String, String> {
+    match v {
+        V::Num(x) if x.is_finite() => Ok(format!("{x}px")),
+        V::Num(x) => Err(format!("{x} is not a finite length")),
+        _ => text(v),
     }
 }
 
@@ -1883,9 +1903,15 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::PlaceContent => {
             (d.align_content, d.justify_content) = pair(v, |v| keyword(v, &CONTENT_ALIGN))?
         }
-        F::Background => (d.images, d.background) = gradient::background(&text(v)?)?,
+        F::Background => (d.layers, d.background) = background::background(&text(v)?)?,
         F::BackgroundColor => d.background = color_of(v)?,
-        F::BackgroundImage => d.images = gradient::images(&text(v)?)?,
+        F::BackgroundImage => d.layers.images = background::images(&text(v)?)?,
+        F::BackgroundSize => d.layers.sizes = background::sizes(&px_text(v)?)?,
+        F::BackgroundPosition => d.layers.positions = background::positions(&px_text(v)?)?,
+        F::BackgroundPositionAxis(axis) => {
+            d.layers.positions[axis] = background::axis_positions(&px_text(v)?, axis)?
+        }
+        F::BackgroundRepeat => d.layers.repeats = background::repeats(&text(v)?)?,
         F::BorderRadius => d.radii = radii(v)?,
         F::CornerRadius(c) => d.radii[c] = corner(v)?,
         F::Border(which, BorderPart::Line) => {
@@ -2119,7 +2145,7 @@ fn compute(
         order: d.order,
         z_index: d.z_index,
         background: d.background,
-        images: d.images.iter().map(|i| i.computed(u, color)).collect(),
+        layers: d.layers.computed(u, color),
         radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
         border,
         border_colors: d.border_color.map(|c| c.unwrap_or(color)),

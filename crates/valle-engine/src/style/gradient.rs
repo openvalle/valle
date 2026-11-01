@@ -2,7 +2,7 @@
 //! angles around a point in it, the color space its colors mix in, and color stops along the
 //! line, out from the point or around it, with hints between them.
 
-use super::color::{self, Rgba};
+use super::color::Rgba;
 use super::math::{self, Calc};
 use super::position::{Offset, position};
 use super::{Accept, Len, Units, css, current_color, length_text};
@@ -224,7 +224,7 @@ fn center(words: &[&str], i: usize) -> Result<([Offset<Len>; 2], usize), String>
     let end = (words[i + 1..].iter())
         .position(|w| *w == "in")
         .map_or(words.len(), |n| i + 1 + n);
-    Ok((position(&words[i + 1..end])?, end))
+    Ok((position(&words[i + 1..end], false)?, end))
 }
 
 /// A conic gradient's arguments: a color space, then the angle it starts from and its center,
@@ -498,45 +498,4 @@ impl Declared {
             }),
         }
     }
-}
-
-/// `background-image`: images separated by commas, the first on top.
-pub(super) fn images(s: &str) -> Result<Vec<Declared>, String> {
-    match s {
-        "" => Err("\"\" is not an image; use none".into()),
-        _ => css::commas(s).into_iter().map(image).collect(),
-    }
-}
-
-/// `background`: layers separated by commas, each an image, and the last one a color too.
-pub(super) fn background(s: &str) -> Result<(Vec<Declared>, Rgba), String> {
-    let layers = css::commas(s);
-    if layers.is_empty() {
-        return Err("\"\" is not a background; use none".into());
-    }
-    let mut images = Vec::new();
-    let mut color = None;
-    for (n, layer) in layers.iter().enumerate() {
-        let mut image = None;
-        for w in css::words(layer) {
-            if let Ok(c) = color::parse(w) {
-                if n + 1 < layers.len() || color.is_some() {
-                    return Err(format!(
-                        "{layer:?}: only the last layer takes a color, and only one"
-                    ));
-                }
-                color = Some(c);
-            } else if w != "none" && css::function(w).is_none() {
-                return Err(format!("{w} is not a color or an image"));
-            } else if image.is_none() {
-                image = Some(self::image(w)?);
-            } else {
-                return Err(format!(
-                    "{layer:?} is not a background layer: an image, and last a color, so far"
-                ));
-            }
-        }
-        images.push(image.unwrap_or(Image::None));
-    }
-    Ok((images, color.unwrap_or(color::TRANSPARENT)))
 }

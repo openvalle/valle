@@ -1,14 +1,16 @@
-// Gradients filling rounded rectangles: each pixel's place along the gradient line in its image,
-// out from its center to the ending shape, or around its center, the image repeated from its
-// tile, and the color there, mixed premultiplied in the gradient's color space between the two
-// stops around it, then as a premultiplied working color.
+// Gradients filling rounded rectangles in tiles: each pixel's place in the tile it is in, if any,
+// along the gradient line there, out from the center to the ending shape, or around the center,
+// and the color there, mixed premultiplied in the gradient's color space between the two stops
+// around it, then as a premultiplied working color.
 
 struct Gradient {
   // Where it shows: x, y, width, height, and corner radii as `coverage` takes them.
   rect: vec4f,
   radii: array<vec4f, 2>,
-  // The image: x, y, width and height.
+  // The first tile: x, y, width and height; and on each axis how far the next one is, 0 when it
+  // does not repeat.
   tile: vec4f,
+  step: vec4f,
   // From the image's top left: where the gradient line starts, and where it ends; the center,
   // and the ending shape's horizontal and vertical radii; or the center, and the fraction of a
   // turn clockwise from up the colors start at.
@@ -50,8 +52,15 @@ struct Out {
   let p = in.pos.xy;
   let cov = coverage(p, g.rect, g.radii);
   let size = g.tile.zw;
+  let step = g.step.xy;
   let q = p - g.tile.xy;
-  let image = q - size * floor(q / size);
+  let repeats = step > vec2f(0.0);
+  let image = select(q, q - step * floor(q / step), repeats);
+  // Outside a tile that does not repeat, or between tiles spaced apart.
+  let out = select((q < vec2f(0.0)) | (q >= size), (image >= size) & (step > size), repeats);
+  if (any(out)) {
+    return vec4f(0.0);
+  }
   let v = image - g.shape.xy;
   var t = 0.0;
   switch g.form.z {

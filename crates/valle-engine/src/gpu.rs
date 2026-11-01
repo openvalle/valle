@@ -30,7 +30,7 @@ const COMMON: &str = include_str!("../shaders/common.wgsl");
 /// u32 words per rectangle, gradient, glyph and layer instance, and per gradient segment; blur
 /// passes take a layer's words too.
 const RECT: usize = 40;
-const GRADIENT: usize = 28;
+const GRADIENT: usize = 32;
 const GLYPH: usize = 20;
 const LAYER: usize = 16;
 const SEGMENT: usize = 12;
@@ -535,7 +535,7 @@ impl<'a> Renderer<'a> {
                 Item::Gradient {
                     rect,
                     radii,
-                    tile,
+                    tiles,
                     ramp,
                 } => {
                     let i = (plan.gradients.len() / GRADIENT) as u32;
@@ -552,8 +552,9 @@ impl<'a> Renderer<'a> {
                     };
                     let words = (xywh(*rect).into_iter())
                         .chain(radii.iter().flatten().copied())
-                        .chain(xywh(*tile))
-                        .chain([a, b, c, d]);
+                        .chain(xywh(tiles.first))
+                        .chain(tiles.step.map(|s| s.unwrap_or(0.0)))
+                        .chain([0.0, 0.0, a, b, c, d]);
                     plan.gradients.extend(words.map(f32::to_bits));
                     let space = match ramp.space {
                         Space::Srgb => 0,

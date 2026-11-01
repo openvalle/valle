@@ -1,5 +1,5 @@
 //! CSS positions: a point in a box, on each axis a length from its start or from its end, as a
-//! gradient's `at` writes it.
+//! gradient's `at` and `background-position` write it.
 
 use super::math::Calc;
 use super::{Accept, Len, Units, css, length_text, math};
@@ -45,14 +45,18 @@ enum Word {
     Len(Len),
 }
 
-/// x and y from one, two or four words: a keyword or a length on either axis, a keyword or a
-/// length for x and then for y, keywords in either order, or two keywords each with a length
-/// from that side.
-pub(super) fn position(words: &[&str]) -> Result<[Offset<Len>; 2], String> {
+/// x and y from one, two or four words, or `three` too: a keyword or a length on either axis, a
+/// keyword or a length for x and then for y, keywords in either order, or two keywords, a side
+/// with a length from it or not and the other a side with a length or center.
+pub(super) fn position(words: &[&str], three: bool) -> Result<[Offset<Len>; 2], String> {
     let bad = || {
+        let counts = if three {
+            "one to four"
+        } else {
+            "one, two or four"
+        };
         format!(
-            "{:?} is not a position: one, two or four of left, center, right, top, bottom and \
-             lengths",
+            "{:?} is not a position: {counts} of left, center, right, top, bottom and lengths",
             words.join(" ")
         )
     };
@@ -101,23 +105,34 @@ pub(super) fn position(words: &[&str]) -> Result<[Offset<Len>; 2], String> {
             };
             x(a).zip(y(b)).map(|(x, y)| [x, y])
         }
-        [a, l, b, m] => {
-            let side = |w: &str, l: &str| -> Result<(Word, Len), String> {
-                match (word(w)?, word(l)?) {
-                    (w, Word::Len(l)) if horizontal(&w) || vertical(&w) => Ok((w, l)),
-                    _ => Err(bad()),
-                }
-            };
-            let (a, b) = (side(a, l)?, side(b, m)?);
-            let ((h, x), (v, y)) = match vertical(&a.0) {
+        _ if words.len() == 4 || (three && words.len() == 3) => {
+            // Two keywords, each a side with a length from it or not, or center.
+            let mut sides = Vec::new();
+            let mut i = 0;
+            while let Some(w) = words.get(i) {
+                let side = word(w)?;
+                let by = match words.get(i + 1).map(|w| word(w)).transpose()? {
+                    Some(Word::Len(l)) if horizontal(&side) || vertical(&side) => Some(l),
+                    Some(Word::Len(_)) => return Err(bad()),
+                    _ => None,
+                };
+                i += 1 + usize::from(by.is_some());
+                sides.push((side, by));
+            }
+            let [a, b] = <[_; 2]>::try_from(sides).map_err(|_| bad())?;
+            let ((h, x), (v, y)) = match vertical(&a.0) || horizontal(&b.0) {
                 true => (b, a),
                 false => (a, b),
             };
-            (horizontal(&h) && vertical(&v)).then(|| {
-                [
-                    from(matches!(h, Word::Right), x),
-                    from(matches!(v, Word::Bottom), y),
-                ]
+            let offset = |side: Word, by: Option<Len>, end| match (side, by) {
+                (Word::Center, _) => center(),
+                (_, Some(by)) => from(end, by),
+                (_, None) => from(end, Len::Percent(0.0)),
+            };
+            let fits = |w: &Word, axis: fn(&Word) -> bool| axis(w) || matches!(w, Word::Center);
+            (fits(&h, horizontal) && fits(&v, vertical)).then(|| {
+                let (right, bottom) = (matches!(h, Word::Right), matches!(v, Word::Bottom));
+                [offset(h, x, right), offset(v, y, bottom)]
             })
         }
         _ => None,
