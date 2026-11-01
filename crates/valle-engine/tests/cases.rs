@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,8 @@ struct Runner {
     gpu: OnceLock<Result<Gpu, String>>,
     /// Frames that went to review: name, what was wrong, whether there is a baseline.
     reviewed: Mutex<Vec<(String, String, bool)>>,
+    /// The most any channel of a frame differed from its baseline.
+    largest: AtomicU8,
 }
 
 enum Outcome {
@@ -64,6 +66,7 @@ fn main() -> ExitCode {
         gpu_layer: layers.split(',').any(|l| l == "gpu"),
         gpu: OnceLock::new(),
         reviewed: Mutex::new(Vec::new()),
+        largest: AtomicU8::new(0),
     };
     let filters: Vec<String> = std::env::args().skip(1).collect();
     let cases = match select(&runner.root, &filters) {
@@ -176,6 +179,14 @@ impl Runner {
         println!("\nslowest:");
         for (i, took, _) in done.iter().take(10) {
             println!("  {:>8.3} s  {}", took.as_secs_f64(), cases[*i]);
+        }
+        // Which GPU drew and how close it came: whether baselines hold on other GPUs.
+        if let Some(Ok(gpu)) = self.gpu.get() {
+            let largest = self.largest.load(Ordering::Relaxed);
+            println!(
+                "\ndrawn on {}, at most {largest} levels from the baselines",
+                gpu.name()
+            );
         }
         let skips = match skipped {
             0 => String::new(),
@@ -311,6 +322,7 @@ impl Runner {
                     off += usize::from(d > 1);
                     diff.extend(if d > 1 { [255, 0, 0, 255] } else { [255; 4] });
                 }
+                self.largest.fetch_max(most, Ordering::Relaxed);
                 let problem = (off > 0)
                     .then(|| format!("{off} pixels are off by more than 1 level, by up to {most}"));
                 (problem, Some(diff))
