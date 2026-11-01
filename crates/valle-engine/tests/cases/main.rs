@@ -1,6 +1,9 @@
 //! The case runner: every scene under `tests/cases` is a case, and cases run in parallel.
 //!
 //! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`.
+//! - A case in `css/` is standard CSS: each frame is printed as HTML, and its boxes and lines must
+//!   be where Chrome puts them, each box edge within 1/64 px. The Chrome baselines are drawn here
+//!   when missing or out of date (see `chrome.rs`), never on CI.
 //! - Any other case is drawn on the GPU, every frame, and each frame compared with its Valle
 //!   baseline, `tests/baselines/valle/<case>.<frame>.png`, within one level a channel. Frames that
 //!   differ or have no baseline go to `target/review` with a page to compare them, and
@@ -13,7 +16,7 @@
 use std::fmt::Write as _;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -22,6 +25,9 @@ use valle_engine::gpu::{Gpu, Renderer};
 use valle_engine::scene::Scene;
 use valle_engine::time::Tick;
 
+mod chrome;
+mod html;
+
 /// The largest canvas, px a side, and the most frames a case may have.
 const MAX_SIZE: u32 = 512;
 const MAX_FRAMES: i64 = 10;
@@ -29,8 +35,14 @@ const MAX_FRAMES: i64 = 10;
 const STACK: usize = 32 << 20;
 
 struct Runner {
+    repo: PathBuf,
     root: PathBuf,
     baselines: PathBuf,
+    chrome_baselines: PathBuf,
+    /// The Chrome version the Chrome baselines are drawn by.
+    chrome: Result<String, String>,
+    /// On CI, which never draws baselines.
+    ci: bool,
     review: PathBuf,
     gpu_layer: bool,
     gpu: OnceLock<Result<Gpu, String>>,
@@ -44,6 +56,8 @@ enum Outcome {
     Passed,
     Failed(String),
     Skipped,
+    /// Chrome baselines to draw before the case can run.
+    Stale(Vec<chrome::Job>),
 }
 
 /// Why a case's frames stopped: its scene failed, or the case breaks the runner's rules.
@@ -59,9 +73,16 @@ fn main() -> ExitCode {
         .nth(2)
         .expect("the crate is in crates/");
     let layers = std::env::var("VALLE_TEST_LAYERS").unwrap_or_default();
+    let version = repo.join("tests/baselines/chrome/version");
     let runner = Runner {
+        repo: repo.to_path_buf(),
         root: repo.join("tests/cases"),
         baselines: repo.join("tests/baselines/valle"),
+        chrome_baselines: repo.join("tests/baselines/chrome"),
+        chrome: std::fs::read_to_string(&version)
+            .map(|v| v.trim().to_string())
+            .map_err(|e| format!("{}: {e}", version.display())),
+        ci: std::env::var_os("CI").is_some(),
         review: repo.join("target/review"),
         gpu_layer: layers.split(',').any(|l| l == "gpu"),
         gpu: OnceLock::new(),
@@ -129,33 +150,41 @@ impl Runner {
     fn run_all(&self, cases: &[String]) -> ExitCode {
         println!("\nrunning {} cases", cases.len());
         let start = Instant::now();
-        let next = AtomicUsize::new(0);
-        let done: Mutex<Vec<(usize, Duration, Outcome)>> = Mutex::new(Vec::new());
-        let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
-        std::thread::scope(|s| {
-            for _ in 0..workers.min(cases.len()) {
-                std::thread::Builder::new()
-                    .stack_size(STACK)
-                    .spawn_scoped(s, || {
-                        loop {
-                            let i = next.fetch_add(1, Ordering::Relaxed);
-                            let Some(case) = cases.get(i) else { break };
-                            let began = Instant::now();
-                            let outcome = self.run(case);
-                            let took = began.elapsed();
-                            let mut done = done.lock().unwrap_or_else(|e| e.into_inner());
-                            match outcome {
-                                Outcome::Passed => println!("case {case} ... ok"),
-                                Outcome::Failed(_) => println!("case {case} ... FAILED"),
-                                Outcome::Skipped => {}
-                            }
-                            done.push((i, took, outcome));
-                        }
-                    })
-                    .expect("a worker thread");
+        let mut done = self.each(cases, &(0..cases.len()).collect::<Vec<_>>());
+        // Cases whose Chrome baselines are out of date run again once they are drawn.
+        let stale: Vec<usize> = (done.iter())
+            .filter(|(.., o)| matches!(o, Outcome::Stale(_)))
+            .map(|&(i, ..)| i)
+            .collect();
+        if !stale.is_empty() {
+            let mut jobs = Vec::new();
+            for (.., outcome) in &mut done {
+                if let Outcome::Stale(j) = outcome {
+                    jobs.append(j);
+                }
             }
-        });
-        let mut done = done.into_inner().unwrap_or_else(|e| e.into_inner());
+            done.retain(|(i, ..)| !stale.contains(i));
+            match self.draw_chrome(&jobs) {
+                Ok(()) => {
+                    for (i, took, outcome) in self.each(cases, &stale) {
+                        let outcome = match outcome {
+                            Outcome::Stale(_) => {
+                                println!("case {} ... FAILED", cases[i]);
+                                Outcome::Failed("its Chrome baseline is out of date again".into())
+                            }
+                            outcome => outcome,
+                        };
+                        done.push((i, took, outcome));
+                    }
+                }
+                Err(e) => {
+                    for &i in &stale {
+                        println!("case {} ... FAILED", cases[i]);
+                        done.push((i, Duration::ZERO, Outcome::Failed(e.clone())));
+                    }
+                }
+            }
+        }
         done.sort_by_key(|&(i, ..)| i);
         let failed = (done.iter())
             .filter(|(.., o)| matches!(o, Outcome::Failed(_)))
@@ -205,20 +234,54 @@ impl Runner {
         }
     }
 
+    /// Runs the cases at `todo`, in parallel, and reports each but those with baselines to draw.
+    fn each(&self, cases: &[String], todo: &[usize]) -> Vec<(usize, Duration, Outcome)> {
+        let next = AtomicUsize::new(0);
+        let done: Mutex<Vec<(usize, Duration, Outcome)>> = Mutex::new(Vec::new());
+        let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
+        std::thread::scope(|s| {
+            for _ in 0..workers.min(todo.len()) {
+                std::thread::Builder::new()
+                    .stack_size(STACK)
+                    .spawn_scoped(s, || {
+                        while let Some(&i) = todo.get(next.fetch_add(1, Ordering::Relaxed)) {
+                            let case = &cases[i];
+                            let began = Instant::now();
+                            let outcome = self.run(case);
+                            let took = began.elapsed();
+                            let mut done = done.lock().unwrap_or_else(|e| e.into_inner());
+                            match outcome {
+                                Outcome::Passed => println!("case {case} ... ok"),
+                                Outcome::Failed(_) => println!("case {case} ... FAILED"),
+                                Outcome::Skipped | Outcome::Stale(_) => {}
+                            }
+                            done.push((i, took, outcome));
+                        }
+                    })
+                    .expect("a worker thread");
+            }
+        });
+        done.into_inner().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn run(&self, case: &str) -> Outcome {
-        let drawn = !case.starts_with("errors/");
+        let css = case.starts_with("css/");
+        let drawn = !css && !case.starts_with("errors/");
         if drawn && !self.gpu_layer {
             return Outcome::Skipped;
         }
         let run = std::panic::AssertUnwindSafe(|| {
-            if drawn {
-                self.pixels(case)
+            if css {
+                self.chrome(case)
+            } else if drawn {
+                self.pixels(case).map(|()| Vec::new())
             } else {
-                self.error(case)
+                self.error(case).map(|()| Vec::new())
             }
         });
         match std::panic::catch_unwind(run) {
-            Ok(Ok(())) => Outcome::Passed,
+            Ok(Ok(jobs)) if jobs.is_empty() => Outcome::Passed,
+            Ok(Ok(jobs)) => Outcome::Stale(jobs),
             Ok(Err(why)) => Outcome::Failed(why),
             Err(panic) => {
                 let why = (panic.downcast_ref::<String>().cloned())
@@ -257,7 +320,7 @@ impl Runner {
         let drawn = self.frames(case, &mut |scene, i, at| {
             let c = scene.composition();
             let renderer = renderer.get_or_insert_with(|| Renderer::new(gpu, c.width, c.height));
-            let items = scene.frame(at)?;
+            let items = scene.frame(at)?.items;
             let pixels = renderer.render(&items, scene.faces())?;
             match self.compare(&format!("{stem}.{i}.png"), [c.width, c.height], &pixels) {
                 Ok(Some(problem)) => problems.push(format!("frame {i}: {problem}")),
@@ -274,6 +337,71 @@ impl Runner {
             Ok(())
         } else {
             Err(problems.join("\n"))
+        }
+    }
+
+    /// Compares the case's frames with their Chrome baselines, or gives the baselines to draw
+    /// when any is missing or was drawn from other HTML or by another Chrome.
+    fn chrome(&self, case: &str) -> Result<Vec<chrome::Job>, String> {
+        let version = self.chrome.as_ref().map_err(String::clone)?;
+        let stem = case.strip_suffix(".tsx").unwrap_or(case);
+        let mut jobs = Vec::new();
+        let mut problems = Vec::new();
+        let drawn = self.frames(case, &mut |scene, i, at| {
+            let frame = scene.frame(at)?;
+            let c = scene.composition();
+            let html = html::print(&frame, c);
+            let out = self.chrome_baselines.join(format!("{stem}.{i}"));
+            match chrome::read(&self.chrome_baselines.join(format!("{stem}.{i}.json")))? {
+                Some(b) if b.chrome == *version && b.html == html => {
+                    let off = chrome::compare(&frame, &b);
+                    problems.extend(off.into_iter().map(|p| format!("frame {i}: {p}")));
+                }
+                _ => jobs.push(chrome::Job {
+                    html,
+                    size: [c.width, c.height],
+                    out: out.to_string_lossy().into_owned(),
+                }),
+            }
+            Ok(())
+        });
+        if let Err(Failure::Scene(e) | Failure::Case(e)) = drawn {
+            return Err(e);
+        }
+        if !jobs.is_empty() {
+            Ok(jobs)
+        } else if problems.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err(problems.join("\n"))
+        }
+    }
+
+    /// Draws Chrome baselines with `web/tests/chrome.ts`, which CI never does.
+    fn draw_chrome(&self, jobs: &[chrome::Job]) -> Result<(), String> {
+        let version = self.chrome.as_ref().map_err(String::clone)?;
+        if self.ci {
+            return Err(format!(
+                "no Chrome {version} baseline for this HTML, and CI never draws them: \
+                 `cargo xtask test` draws them on a machine that can run Chrome"
+            ));
+        }
+        let dir = self.repo.join("target/chrome");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let list = dir.join("jobs.json");
+        let text = serde_json::to_string(jobs).map_err(|e| e.to_string())?;
+        std::fs::write(&list, text).map_err(|e| format!("{}: {e}", list.display()))?;
+        println!("\ndrawing {} Chrome baselines", jobs.len());
+        let status = Command::new("bun")
+            .arg("web/tests/chrome.ts")
+            .arg(&list)
+            .current_dir(&self.repo)
+            .status()
+            .map_err(|e| format!("cannot run bun, which draws the Chrome baselines: {e}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("`bun web/tests/chrome.ts` failed ({status})"))
         }
     }
 

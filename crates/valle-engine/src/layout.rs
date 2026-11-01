@@ -31,6 +31,7 @@ pub struct Boxes {
 }
 
 /// A frame's layout, in template order. Nodes in a `display: none` subtree have empty boxes.
+#[derive(Debug)]
 pub struct Layout {
     pub boxes: Vec<Boxes>,
     /// Each shown text node's lines, from the top left of its content box.

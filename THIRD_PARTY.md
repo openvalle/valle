@@ -30,3 +30,4 @@ in `Cargo.lock` and `bun.lock`.
 | [Prettier](https://github.com/prettier/prettier) | Formatting scripts | MIT |
 | [Oxlint](https://github.com/oxc-project/oxc) | Linting scripts | MIT |
 | [png](https://github.com/image-rs/image-png) | Reading and writing the test baselines | MIT or Apache-2.0 |
+| [Chrome for Testing](https://github.com/GoogleChromeLabs/chrome-for-testing), headless shell | Drawing the Chrome baselines; the tests download it, nothing ships it | BSD-3-Clause, with Chromium's third-party licenses |

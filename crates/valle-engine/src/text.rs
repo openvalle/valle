@@ -6,6 +6,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 
 pub use parley::fontique::Blob;
@@ -44,6 +45,8 @@ pub struct Lines {
     pub glyphs: Vec<Glyph>,
     /// Each line box's top and height.
     pub boxes: Vec<[f32; 2]>,
+    /// Each line's text: a byte range of the text as `collapse` leaves it.
+    pub text: Vec<Range<usize>>,
 }
 
 /// What shaping a paragraph depends on.
@@ -137,10 +140,12 @@ impl Text {
                 size: font.size as f32,
                 glyphs: Vec::new(),
                 boxes: Vec::new(),
+                text: Vec::new(),
             });
         }
         p.layout.align(alignment, AlignmentOptions::default());
         let boxes = stack(&p.layout, font);
+        let text = p.layout.lines().map(|line| line.text_range()).collect();
         let mut runs = Vec::new();
         for (line, [top, _]) in p.layout.lines().zip(&boxes) {
             let baseline = top + above(&line, font);
@@ -177,6 +182,7 @@ impl Text {
             size: font.size as f32,
             glyphs,
             boxes,
+            text,
         })
     }
 
@@ -250,7 +256,7 @@ impl Text {
 
 /// `white-space: normal`: each run of spaces, tabs and line breaks is one space, and none starts
 /// or ends the text. (Parley's own collapsing keeps a line feed as a forced break.)
-fn collapse(text: &str) -> Cow<'_, str> {
+pub fn collapse(text: &str) -> Cow<'_, str> {
     let white = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C');
     let text = text.trim_matches(white);
     if !text.contains(|c: char| white(c) && c != ' ') && !text.contains("  ") {

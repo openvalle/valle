@@ -38,7 +38,7 @@ fn frames_paint_from_source() {
         assert_eq!(scene.composition().width, 200);
         let at = |s: &str| Tick::parse_seconds(s).unwrap();
         let red = work(color::parse("red").unwrap());
-        let items = scene.frame(at("0.5")).unwrap();
+        let items = scene.frame(at("0.5")).unwrap().items;
         let [first, Item::Glyphs { face: 0, color, .. }] = &items[..] else {
             panic!("{items:?}")
         };
@@ -59,7 +59,7 @@ fn frames_paint_from_source() {
         );
         assert_eq!(scene.faces().len(), 1);
         // A second variant, then the first again: its sheet is kept.
-        let late = scene.frame(at("1.5")).unwrap();
+        let late = scene.frame(at("1.5")).unwrap().items;
         assert!(matches!(&late[..], [Item::Rect { rect, .. }] if rect.width == 75.0));
         scene.frame(at("0.25")).unwrap();
         assert_eq!(scene.sheets.len(), 2);

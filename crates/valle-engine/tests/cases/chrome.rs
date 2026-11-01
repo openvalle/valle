@@ -1,0 +1,92 @@
+//! Chrome baselines: what the pinned Chrome for Testing makes of a case's frames printed as HTML,
+//! `tests/baselines/chrome/<case>.<frame>.json`. `web/tests/chrome.ts` draws them when they are
+//! missing, or were drawn from other HTML or by another Chrome; the engine's boxes and lines are
+//! compared with them.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+use valle_engine::scene::Frame;
+use valle_engine::template::{Kind, Prop};
+use valle_engine::text::collapse;
+
+use crate::html::value;
+
+/// How far a box edge may be from Chrome's: its layout unit, 1/64 px.
+const EDGE: f64 = 1.0 / 64.0;
+
+#[derive(Deserialize)]
+pub struct Baseline {
+    /// The Chrome that drew it, and from what.
+    pub chrome: String,
+    pub html: String,
+    /// Each node's border box, x, y, width and height, by node index.
+    pub boxes: Vec<[f64; 4]>,
+    /// The text of each line of each text node, by node index.
+    pub lines: BTreeMap<u32, Vec<String>>,
+}
+
+/// A baseline to draw: the HTML, the canvas size, and its path without the extension.
+#[derive(Serialize)]
+pub struct Job {
+    pub html: String,
+    pub size: [u32; 2],
+    pub out: String,
+}
+
+pub fn read(path: &Path) -> Result<Option<Baseline>, String> {
+    let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| bad(&e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(bad(&e)),
+    }
+}
+
+/// Where the frame's boxes and lines differ from Chrome's.
+pub fn compare(frame: &Frame, chrome: &Baseline) -> Vec<String> {
+    let nodes = &frame.template.nodes;
+    if chrome.boxes.len() != nodes.len() {
+        let (theirs, ours) = (chrome.boxes.len(), nodes.len());
+        return vec![format!("Chrome has {theirs} boxes for {ours} nodes")];
+    }
+    let mut problems = Vec::new();
+    for (i, (node, theirs)) in nodes.iter().zip(&chrome.boxes).enumerate() {
+        let r = frame.layout.boxes[i].border;
+        let ours = [r.x, r.y, r.width, r.height].map(f64::from);
+        let edges = |[x, y, w, h]: [f64; 4]| [x, y, x + w, y + h];
+        let off = (edges(ours).iter().zip(edges(*theirs))).any(|(a, b)| (a - b).abs() > EDGE);
+        if off {
+            let (ours, theirs) = (shown(ours), shown(*theirs));
+            problems.push(format!("{}: box {ours}, Chrome's {theirs}", node.place()));
+        }
+        if let Kind::Text { text } = &node.kind {
+            let ours = lines(frame, i, text);
+            let theirs = chrome.lines.get(&(i as u32)).cloned().unwrap_or_default();
+            if ours != theirs {
+                problems.push(format!(
+                    "{}: lines {ours:?}, Chrome's {theirs:?}",
+                    node.place()
+                ));
+            }
+        }
+    }
+    problems
+}
+
+/// The text of each of the node's lines.
+fn lines(frame: &Frame, i: usize, text: &Prop) -> Vec<String> {
+    let Some(lines) = &frame.layout.lines[i] else {
+        return Vec::new();
+    };
+    let text = value(frame, text).text();
+    let text = collapse(&text);
+    (lines.text.iter())
+        .map(|r| text[r.clone()].trim_matches(' ').to_string())
+        .collect()
+}
+
+fn shown([x, y, w, h]: [f64; 4]) -> String {
+    format!("{w} × {h} at {x}, {y}")
+}

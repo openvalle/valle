@@ -5,10 +5,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::front::{Composition, Front};
-use crate::layout::layout;
+use crate::layout::{Layout, layout};
 use crate::paint::{Item, paint};
 use crate::style::Sheet;
-use crate::template::{Error, Template};
+use crate::template::{Error, Template, V};
 use crate::text::{Blob, Face, Text};
 use crate::time::Tick;
 
@@ -17,6 +17,15 @@ const SANS_SERIF: &[u8] = include_bytes!("../../../fonts/NotoSans-Variable.ttf")
 
 /// Variants whose sheets are kept, as many as the frontend keeps.
 const SHEETS: usize = 64;
+
+/// A frame: the variant and values the frontend gave, laid out and painted.
+#[derive(Debug)]
+pub struct Frame {
+    pub template: Rc<Template>,
+    pub values: Vec<V>,
+    pub layout: Layout,
+    pub items: Vec<Item>,
+}
 
 pub struct Scene {
     front: Front,
@@ -45,8 +54,8 @@ impl Scene {
         self.text.faces()
     }
 
-    /// The display list at `at`.
-    pub fn frame(&mut self, at: Tick) -> Result<Vec<Item>, Error> {
+    /// The frame at `at`.
+    pub fn frame(&mut self, at: Tick) -> Result<Frame, Error> {
         let frame = self.front.frame(at)?;
         match self
             .sheets
@@ -74,7 +83,13 @@ impl Scene {
             &mut self.text,
         )?;
         self.text.sweep();
-        Ok(paint(&frame.template, &styles, &laid))
+        let items = paint(&frame.template, &styles, &laid);
+        Ok(Frame {
+            template: frame.template,
+            values: frame.values,
+            layout: laid,
+            items,
+        })
     }
 }
 

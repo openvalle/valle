@@ -1,0 +1,22 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 8px; background: #eceff1;\"><div data-n=\"1\" style=\"height: 12px; background: #90a4ae;\"></div><div data-n=\"2\" style=\"width: 50%; height: 12px; margin-top: 6px; background: #78909c;\"></div><div data-n=\"3\" style=\"width: 100px; height: 12px; margin: 6px auto; background: #607d8b;\"></div><div data-n=\"4\" style=\"width: 80px; height: 12px; margin-left: auto; background: #546e7a;\"></div><div data-n=\"5\" style=\"margin-top: 10px; margin-bottom: 4px; padding: 4px 10% 6px 12px; background: #b0bec5;\"><div data-n=\"6\" style=\"height: 10px; margin-top: 8px; background: #455a64;\"></div><div data-n=\"7\" style=\"height: 10px; margin-top: 6px; margin-bottom: 12px; background: #37474f;\"></div></div><div data-n=\"8\" style=\"margin-top: 16px;\"><div data-n=\"9\" style=\"height: 10px; margin-top: 20px; background: #263238;\"></div></div><div data-n=\"10\" style=\"display: none; height: 40px; background: red;\"><div data-n=\"11\" style=\"height: 10px;\"></div></div><div data-n=\"12\" style=\"width: 300px; max-width: 75%; min-height: 8px; background: #ff7043;\"></div><div data-n=\"13\" style=\"width: 10px; min-width: 60px; height: 8px; max-height: 6px; margin-top: 4px; background: #f4511e;\"></div><div data-n=\"14\" style=\"height: 10%; margin-top: 4px; background: #bf360c;\"></div></div></div>\n",
+ "boxes": [
+  [0,0,256,200],
+  [8,8,240,12],
+  [8,26,120,12],
+  [78,44,100,12],
+  [168,62,80,12],
+  [8,84,240,56],
+  [20,96,204,10],
+  [20,112,204,10],
+  [8,160,240,10],
+  [8,160,240,10],
+  [0,0,0,0],
+  [0,0,0,0],
+  [8,170,180,8],
+  [8,182,60,6],
+  [8,192,240,0]
+ ],
+ "lines": {}
+}
