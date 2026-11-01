@@ -240,21 +240,24 @@ function measure(): Promise<Measured> {
       boxes[Number(element.dataset.n)] = [r.x, r.y, r.width, r.height];
     }
     // Lines as laid out, untransformed: a transform moves text but breaks no line. `will-change`
-    // keeps what a transform contains and stacks, so the layout stays.
-    const styles = elements.map((e) => e.style.cssText);
-    for (const e of elements) {
+    // keeps what a transform contains and stacks, so the layout stays. Their styles go back as
+    // written: Chrome's `cssText` can parse back to another style, as a background shorthand
+    // with one box for both its origin and its clip.
+    const moved = elements.filter((e) => {
       const s = getComputedStyle(e);
-      if ([s.transform, s.translate, s.rotate, s.scale].some((v) => v !== "none")) {
-        e.style.transform = e.style.translate = e.style.rotate = e.style.scale = "none";
-        e.style.willChange = "transform";
-      }
+      return [s.transform, s.translate, s.rotate, s.scale].some((v) => v !== "none");
+    });
+    const written = moved.map((e) => e.getAttribute("style") ?? "");
+    for (const e of moved) {
+      e.style.transform = e.style.translate = e.style.rotate = e.style.scale = "none";
+      e.style.willChange = "transform";
     }
     for (const element of elements) {
       if (element.hasAttribute("data-text")) {
         text[Number(element.dataset.n)] = lines(element);
       }
     }
-    elements.forEach((e, i) => (e.style.cssText = styles[i]));
+    moved.forEach((e, i) => e.setAttribute("style", written[i]));
     return { boxes, lines: text };
   });
 }
