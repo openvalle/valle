@@ -53,12 +53,19 @@ fn roots(c: [[f32; 2]; 3], cut: usize) -> [f32; 2] {
     let o = 1 - cut;
     let a = [0, 1].map(|k| c[0][k] - 2.0 * c[1][k] + c[2][k]);
     let b = [0, 1].map(|k| c[0][k] - c[1][k]);
-    let d = (b[cut] * b[cut] - a[cut] * c[0][cut]).max(0.0).sqrt();
-    let mut t = [(b[cut] - d) / a[cut], (b[cut] + d) / a[cut]];
-    if a[cut].abs() < 1.0 / 65536.0 {
-        t = [c[0][cut] * 0.5 / b[cut]; 2];
-    }
-    t.map(|t| (a[o] * t - 2.0 * b[o]) * t + c[0][o])
+    let [ay, by, cy] = [a[cut], b[cut], c[0][cut]];
+    let d = (by * by - ay * cy).max(0.0).sqrt();
+    let fall = if by > 0.0 {
+        cy / (by + d)
+    } else {
+        (by - d) / ay
+    };
+    let rise = if by < 0.0 {
+        cy / (by - d)
+    } else {
+        (by + d) / ay
+    };
+    [fall, rise].map(|t| (a[o] * t - 2.0 * b[o]) * t + c[0][o])
 }
 
 /// A pixel's coverage at `p`, `ppu` pixels per font unit: the shader's arithmetic.
@@ -152,6 +159,42 @@ fn edges_cover_what_lies_inside() {
     let o = of('o');
     let [x0, y0, x1, y1] = o.bounds;
     assert_eq!(coverage(&o, [(x0 + x1) / 2.0, (y0 + y1) / 2.0], 0.1), 0.0);
+}
+
+#[test]
+fn lines_cross_where_they_are_from_any_pixel() {
+    // Pixel centers land anywhere, and moving a line's points to one rounds them: its a is then
+    // a stray ulp rather than 0.
+    let o = of('V');
+    let texels: BTreeSet<u32> = (0..(o.bands[0] + o.bands[1]) as usize)
+        .flat_map(|b| list(&o, b).iter().copied())
+        .collect();
+    let mut lines = 0;
+    for texel in texels {
+        let c = curve(&o, texel, [0.0, 0.0]);
+        if (0..2).any(|k| c[0][k] - 2.0 * c[1][k] + c[2][k] != 0.0) {
+            continue;
+        }
+        lines += 1;
+        // The rays along the line never cross it.
+        for cut in [0, 1].into_iter().filter(|&k| c[0][k] != c[2][k]) {
+            let other = 1 - cut;
+            for i in 0..1000 {
+                let mut p = [-3.7, -3.7];
+                p[cut] = c[0][cut] + (c[2][cut] - c[0][cut]) * (i as f32 + 0.5) / 1000.0;
+                let moved = curve(&o, texel, p);
+                let code = crossings([moved[0][cut], moved[1][cut], moved[2][cut]]);
+                assert_ne!(code, 0, "curve {texel} at {p:?}");
+                let s = (p[cut] - c[0][cut]) / (c[2][cut] - c[0][cut]);
+                let want = c[0][other] + (c[2][other] - c[0][other]) * s - p[other];
+                let r = roots(moved, cut);
+                let got = if code & 1 != 0 { r[0] } else { r[1] };
+                assert!((got - want).abs() < 0.01, "curve {texel}: {got} vs {want}");
+            }
+        }
+    }
+    // Four slanted, three level.
+    assert_eq!(lines, 7);
 }
 
 #[test]

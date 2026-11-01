@@ -51,11 +51,12 @@ fn roots(p1: vec2f, p2: vec2f, p3: vec2f) -> vec2f {
   let a = p1 - 2.0 * p2 + p3;
   let b = p1 - p2;
   let d = sqrt(max(b.y * b.y - a.y * p1.y, 0.0));
-  var t = vec2f(b.y - d, b.y + d) / a.y;
-  // Nearly a line: -2b t + c = 0.
-  if (abs(a.y) < 1.0 / 65536.0) {
-    t = vec2f(p1.y * 0.5 / b.y);
-  }
+  // The roots of a t² - 2b t + c are (b ∓ d) / a, or c / (b ± d): each in the form that adds
+  // b and d of one sign. Moving the points to the pixel rounds them, so a line's a is a stray
+  // ulp rather than 0, and (b - d) / a would divide what is left of b - d by it.
+  let fall = select((b.y - d) / a.y, p1.y / (b.y + d), b.y > 0.0);
+  let rise = select((b.y + d) / a.y, p1.y / (b.y - d), b.y < 0.0);
+  let t = vec2f(fall, rise);
   return (a.x * t - 2.0 * b.x) * t + p1.x;
 }
 
