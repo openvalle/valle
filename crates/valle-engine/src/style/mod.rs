@@ -232,6 +232,8 @@ pub struct Font {
     /// `white-space-collapse`, and `text-wrap-mode: wrap`, which `white-space` sets together.
     pub collapse: Collapse,
     pub wrap: bool,
+    /// `text-wrap-style: balance`, which the text's own box takes, not a Span's.
+    pub balance: bool,
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
     pub transform: TextTransform,
@@ -274,6 +276,7 @@ impl Font {
             word_spacing: 0.0,
             collapse: Collapse::Collapse,
             wrap: true,
+            balance: false,
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             transform: TextTransform::None,
@@ -849,6 +852,7 @@ struct Declared {
     word_spacing: Option<Len>,
     collapse: Option<Collapse>,
     wrap: Option<bool>,
+    balance: Option<bool>,
     word_break: Option<WordBreak>,
     overflow_wrap: Option<OverflowWrap>,
     text_transform: Option<TextTransform>,
@@ -936,6 +940,7 @@ impl Default for Declared {
             word_spacing: None,
             collapse: None,
             wrap: None,
+            balance: None,
             word_break: None,
             overflow_wrap: None,
             text_transform: None,
@@ -1052,6 +1057,8 @@ enum Field {
     WhiteSpace,
     WhiteSpaceCollapse,
     TextWrapMode,
+    TextWrap,
+    TextWrapStyle,
     WordBreak,
     OverflowWrap,
     TextTransform,
@@ -1116,7 +1123,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 201] = [
+const FIELDS: [(&str, Field); 203] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1410,6 +1417,8 @@ const FIELDS: [(&str, Field); 201] = [
     ("whiteSpace", Field::WhiteSpace),
     ("whiteSpaceCollapse", Field::WhiteSpaceCollapse),
     ("textWrapMode", Field::TextWrapMode),
+    ("textWrap", Field::TextWrap),
+    ("textWrapStyle", Field::TextWrapStyle),
     ("wordBreak", Field::WordBreak),
     ("overflowWrap", Field::OverflowWrap),
     ("wordWrap", Field::OverflowWrap),
@@ -1452,6 +1461,8 @@ impl Field {
                 | Field::WhiteSpace
                 | Field::WhiteSpaceCollapse
                 | Field::TextWrapMode
+                | Field::TextWrap
+                | Field::TextWrapStyle
                 | Field::WordBreak
                 | Field::OverflowWrap
                 | Field::TextTransform
@@ -2489,6 +2500,10 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         }
         F::WhiteSpaceCollapse => d.collapse = Some(keyword(v, COLLAPSE)?),
         F::TextWrapMode => d.wrap = Some(keyword(v, WRAP)?),
+        F::TextWrap => {
+            (d.wrap, d.balance) = text_wrap(&text(v)?).map(|(w, b)| (Some(w), Some(b)))?
+        }
+        F::TextWrapStyle => d.balance = Some(wrap_style(&text(v)?)?),
         F::WordBreak => {
             d.word_break = Some(keyword(
                 v,
@@ -2681,6 +2696,38 @@ const COLLAPSE: &[(&str, Collapse)] = &[
 
 const WRAP: &[(&str, bool)] = &[("wrap", true), ("nowrap", false)];
 
+/// `text-wrap-style`: whether lines balance; `auto` and `stable`, which is `auto` without
+/// editing, do not.
+fn wrap_style(s: &str) -> Result<bool, String> {
+    match s {
+        "auto" | "stable" => Ok(false),
+        "balance" => Ok(true),
+        "pretty" => Err("text-wrap pretty is not supported yet; use balance or auto".into()),
+        s => Err(format!("{s:?} is not one of auto, balance, stable, pretty")),
+    }
+}
+
+/// `text-wrap`: a `text-wrap-mode` and a `text-wrap-style` in either order, each at most once,
+/// and the initial ones for those left out.
+fn text_wrap(s: &str) -> Result<(bool, bool), String> {
+    let (mut wrap, mut balance) = (None, None);
+    for word in s.split_ascii_whitespace() {
+        let twice = match WRAP.iter().find(|(k, _)| *k == word) {
+            Some(&(_, w)) => wrap.replace(w).is_some(),
+            None => balance.replace(wrap_style(word)?).is_some(),
+        };
+        if twice {
+            return Err(format!(
+                "{s:?} sets a text-wrap-mode or a text-wrap-style twice"
+            ));
+        }
+    }
+    match (wrap, balance) {
+        (None, None) => Err(format!("{s:?} is not a text-wrap")),
+        _ => Ok((wrap.unwrap_or(true), balance.unwrap_or(false))),
+    }
+}
+
 /// `white-space`: a keyword of CSS 2, or a `white-space-collapse` and a `text-wrap-mode`, either
 /// left out for its initial value.
 fn white_space(s: &str) -> Result<(Collapse, bool), String> {
@@ -2786,6 +2833,7 @@ fn compute(
         },
         collapse: d.collapse.unwrap_or(inherited.collapse),
         wrap: d.wrap.unwrap_or(inherited.wrap),
+        balance: d.balance.unwrap_or(inherited.balance),
         word_break: d.word_break.unwrap_or(inherited.word_break),
         overflow_wrap: d.overflow_wrap.unwrap_or(inherited.overflow_wrap),
         transform: d.text_transform.unwrap_or(inherited.transform),

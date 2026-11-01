@@ -1,0 +1,23 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><div data-n=\"2\" style=\"width: 100px; background: #e8eaf6;\"><div data-n=\"3\" data-text style=\"font-size: 10px; text-align: center; text-wrap: wrap;\">The quick brown fox jumps over the lazy dog</div></div></div><div data-n=\"4\" style=\"padding-bottom: 4px;\"><div data-n=\"5\" style=\"width: 100px; background: #e8eaf6;\"><div data-n=\"6\" data-text style=\"font-size: 10px; text-align: center; text-wrap: nowrap;\">The quick brown fox jumps over the lazy dog</div></div></div><div data-n=\"7\" style=\"padding-bottom: 4px;\"><div data-n=\"8\" style=\"width: 100px; background: #e8eaf6;\"><div data-n=\"9\" data-text style=\"font-size: 10px; text-align: center; text-wrap: balance;\">The quick brown fox jumps over the lazy dog</div></div></div><div data-n=\"10\" style=\"padding-bottom: 4px;\"><div data-n=\"11\" style=\"width: 100px; background: #e8eaf6;\"><div data-n=\"12\" data-text style=\"font-size: 10px; text-align: center; text-wrap: stable;\">The quick brown fox jumps over the lazy dog</div></div></div><div data-n=\"13\" style=\"padding-bottom: 4px;\"><div data-n=\"14\" style=\"width: 100px; background: #e8eaf6;\"><div data-n=\"15\" data-text style=\"font-size: 10px; text-align: center; text-wrap: balance wrap;\">The quick brown fox jumps over the lazy dog</div></div></div></div></div>\n",
+ "boxes": [
+  [0,0,256,210],
+  [4,4,248,46],
+  [4,4,100,42],
+  [4,4,100,42],
+  [4,50,248,18],
+  [4,50,100,14],
+  [4,50,100,14],
+  [4,68,248,46],
+  [4,68,100,42],
+  [4,68,100,42],
+  [4,114,248,46],
+  [4,114,100,42],
+  [4,114,100,42],
+  [4,160,248,46],
+  [4,160,100,42],
+  [4,160,100,42]
+ ],
+ "lines": {"3":["The quick brown fox","jumps over the lazy","dog"],"6":["The quick brown fox jumps over the lazy dog"],"9":["The quick brown","fox jumps over","the lazy dog"],"12":["The quick brown fox","jumps over the lazy","dog"],"15":["The quick brown","fox jumps over","the lazy dog"]}
+}

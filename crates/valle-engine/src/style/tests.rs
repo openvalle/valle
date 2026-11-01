@@ -780,6 +780,32 @@ fn text_decoration_sets_its_longhands_or_refuses() {
 }
 
 #[test]
+fn text_wrap_sets_its_mode_and_style_or_refuses() {
+    let wrap = |v: &str| {
+        let f = one(&[("textWrap", text(v))]).font;
+        (f.wrap, f.balance)
+    };
+    assert_eq!(wrap("balance"), (true, true));
+    assert_eq!(wrap("nowrap"), (false, false));
+    assert_eq!(wrap("Balance NoWrap"), (false, true));
+    assert_eq!(wrap("stable"), (true, false));
+    let kept = one(&[
+        ("textWrapStyle", text("balance")),
+        ("whiteSpace", text("nowrap")),
+    ]);
+    assert_eq!((kept.font.wrap, kept.font.balance), (false, true));
+    for (bad, message) in [
+        ("pretty", "pretty is not supported yet"),
+        ("wrap nowrap", "twice"),
+        ("balance auto", "twice"),
+        ("even", "is not one of auto, balance"),
+    ] {
+        let e = error(&[("textWrap", text(bad))]);
+        assert!(e.contains(message), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn text_stroke_sets_its_longhands_or_refuses() {
     let font = |style: &[(&str, Prop)]| one(style).font;
     // The keywords are in proportion to the font size, as in Chrome.
@@ -888,6 +914,7 @@ fn text_properties_inherit() {
                 ("textTransform", text("uppercase")),
                 ("wordBreak", text("break-all")),
                 ("wordWrap", text("break-word")),
+                ("textWrapStyle", text("balance")),
                 ("WebkitTextFillColor", text("blue")),
                 ("WebkitTextStroke", text("0.1em #0f0")),
             ],
@@ -918,6 +945,7 @@ fn text_properties_inherit() {
         word_spacing: 0.0,
         collapse: Collapse::Collapse,
         wrap: true,
+        balance: false,
         word_break: WordBreak::Normal,
         overflow_wrap: OverflowWrap::Normal,
         transform: TextTransform::None,
@@ -946,6 +974,7 @@ fn text_properties_inherit() {
         word_spacing: 5.0,
         collapse: Collapse::PreserveBreaks,
         wrap: true,
+        balance: true,
         word_break: WordBreak::BreakAll,
         overflow_wrap: OverflowWrap::BreakWord,
         transform: TextTransform::Uppercase,

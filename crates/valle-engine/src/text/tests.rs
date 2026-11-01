@@ -34,6 +34,7 @@ fn font(size: f64) -> Font {
         word_spacing: 0.0,
         collapse: Collapse::Collapse,
         wrap: true,
+        balance: false,
         word_break: WordBreak::Normal,
         overflow_wrap: OverflowWrap::Normal,
         transform: TextTransform::None,
@@ -309,4 +310,63 @@ fn words_break_where_word_break_and_overflow_wrap_let_them() {
     }
     let zero = t.measure(&plain("unbreakable go", &breaking[3]), Some(0.0));
     assert!(zero.unwrap()[0] < word / 4.0);
+}
+
+#[test]
+fn balanced_lines_are_as_narrow_as_they_go_up_to_the_first_forced_break() {
+    let mut t = text();
+    let (normal, balanced) = (
+        font(16.0),
+        Font {
+            balance: true,
+            align: TextAlign::Center,
+            ..font(16.0)
+        },
+    );
+    let words = "The quick brown fox jumps over the lazy dog";
+    let [wide, _] = t.measure(&plain(words, &normal), None).unwrap();
+    let width = wide * 0.7;
+    let line_widths = |lines: &Lines| -> Vec<f32> {
+        (0..lines.boxes.len() as u32)
+            .map(|i| {
+                let runs = lines.runs.iter().filter(|r| r.line == i);
+                runs.map(|r| r.x[1] - r.x[0]).sum()
+            })
+            .collect()
+    };
+    let greedy = line_widths(&t.lines(&plain(words, &normal), width).unwrap());
+    let lines = t.lines(&plain(words, &balanced), width).unwrap();
+    let even = line_widths(&lines);
+    assert_eq!((even.len(), greedy.len()), (2, 2));
+    assert!(
+        even[0].max(even[1]) < greedy[0] && (even[0] - even[1]).abs() < greedy[0] - greedy[1],
+        "{even:?} {greedy:?}"
+    );
+    // Still centered in the whole width.
+    let first = lines.runs[0].x;
+    assert!(
+        ((first[0] + first[1]) / 2.0 - width / 2.0).abs() < 1.0,
+        "{first:?}"
+    );
+    assert_eq!(
+        t.measure(&plain(words, &balanced), Some(width)).unwrap(),
+        t.measure(&plain(words, &normal), Some(width)).unwrap()
+    );
+    // Lines after a forced break, and text of more than 6 lines, break as usual.
+    let pre_line = |f: &Font| Font {
+        collapse: Collapse::PreserveBreaks,
+        ..f.clone()
+    };
+    let text = format!("{words}\n{words}");
+    let after = t.lines(&plain(&text, &pre_line(&balanced)), width).unwrap();
+    let usual = t.lines(&plain(&text, &pre_line(&normal)), width).unwrap();
+    assert_eq!(after.text[0], lines.text[0]);
+    assert_eq!(after.text[2..], usual.text[2..]);
+    let long = [words; 4].join(" ");
+    let many = t.lines(&plain(&long, &balanced), width).unwrap();
+    assert!(many.boxes.len() > 6);
+    assert_eq!(
+        many.text,
+        t.lines(&plain(&long, &normal), width).unwrap().text
+    );
 }

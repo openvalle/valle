@@ -1,0 +1,14 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 448px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px; color: #263238; font-size: 13px;\"><div data-n=\"1\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 200px; text-wrap: balance; font-size: 18px; text-align: center;\">The quick brown <span data-n=\"2\" style=\"color: #1e88e5;\">fox jumps</span> over the lazy dog and runs into the woods</div><div data-n=\"3\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 200px; text-wrap: balance; text-align: right;\">The quick brown fox jumps over the lazy dog and runs into the woods <span data-n=\"4\" style=\"font-size: 18px; color: #e53935;\">far away</span> from home</div><div data-n=\"5\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 200px; text-wrap: balance; white-space: pre-line;\">The quick brown fox jumps over the lazy dog and runs into the woods\nThe quick brown fox jumps over the lazy dog and runs into the woods</div><div data-n=\"6\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 120px; text-wrap: balance; font-size: 11px;\">The quick brown fox jumps over the lazy dog and runs into the woods The quick brown fox jumps over the lazy dog and runs into the woods The quick brown fox jumps over the lazy dog and runs into the woods</div></div></div>\n",
+ "boxes": [
+  [0,0,256,438],
+  [4,4,200,96],
+  [25.1875,28,83.21875,24],
+  [4,104,200,60],
+  [60.3125,140,71.9375,24],
+  [4,168,200,108],
+  [4,280,120,150]
+ ],
+ "lines": {"1":["The quick brown","fox jumps over the","lazy dog and runs","into the woods"],"3":["The quick brown fox jumps over","the lazy dog and runs into the","woods far away from home"],"5":["The quick brown fox","jumps over the lazy dog","and runs into the woods","The quick brown fox jumps over","the lazy dog and runs into the","woods"],"6":["The quick brown fox","jumps over the lazy","dog and runs into the","woods The quick","brown fox jumps over","the lazy dog and runs","into the woods The","quick brown fox jumps","over the lazy dog and","runs into the woods"]}
+}

@@ -15,8 +15,9 @@ use std::rc::Rc;
 pub use parley::fontique::Blob;
 use parley::fontique::{Collection, CollectionOptions, GenericFamily, SourceCache};
 use parley::{
-    Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, FontWeight,
+    Alignment, AlignmentOptions, BreakReason, FontContext, FontFamily, FontFamilyName, FontWeight,
     LayoutContext, PositionedLayoutItem, StyleProperty, TextWrapMode, WhiteSpaceCollapse,
+    YieldData,
 };
 
 use crate::path::{self, Curve};
@@ -144,8 +145,8 @@ struct Paragraph {
     /// Nothing is left once white space collapses: no line boxes, as in CSS (parley still makes
     /// one line).
     empty: bool,
-    /// The width its lines were last broken at.
-    broken: Option<Option<f32>>,
+    /// The width its lines were last broken at, and whether they balance.
+    broken: Option<(Option<f32>, bool)>,
     used: bool,
 }
 
@@ -486,12 +487,71 @@ impl Text {
             .get_mut(&key)
             .ok_or("engine bug: a paragraph went missing")?;
         p.used = true;
-        if p.broken != Some(width) {
+        let balanced = content.font.balance && !min;
+        if p.broken != Some((width, balanced)) {
             p.layout.break_all_lines(width);
-            p.broken = Some(width);
+            if let Some(width) = width.filter(|_| balanced && !p.empty) {
+                balance(&mut p.layout, width);
+            }
+            p.broken = Some((width, balanced));
         }
         Ok(p)
     }
+}
+
+/// `text-wrap: balance` as Chrome has it, on lines broken to fit `width`: those up to the first
+/// forced break, if there are 2 to 6 of them, broken as narrow as they go (to 1/64 px) without
+/// one more, and still aligned in `width`.
+fn balance(layout: &mut parley::Layout<u32>, width: f32) {
+    let n = leading(layout);
+    if !(2..=6).contains(&n) {
+        return;
+    }
+    // The narrowest width found that keeps them to `n`, and in 1/64 px what bounds it.
+    let mut narrowest = width;
+    let (mut lo, mut hi) = (0, (width * 64.0).floor() as u32);
+    while hi - lo > 1 {
+        let mid = (lo + hi) / 2;
+        balanced(layout, mid as f32 / 64.0, width);
+        match leading(layout) <= n {
+            true => (hi, narrowest) = (mid, mid as f32 / 64.0),
+            false => lo = mid,
+        }
+    }
+    balanced(layout, narrowest, width);
+}
+
+/// How many lines `layout` has up to its first forced break.
+fn leading(layout: &parley::Layout<u32>) -> usize {
+    let mut n = 0;
+    for line in layout.lines() {
+        n += 1;
+        if line.break_reason() == BreakReason::Explicit {
+            break;
+        }
+    }
+    n
+}
+
+/// `layout`'s lines broken to fit `width`, but those up to its first forced break to fit
+/// `narrow`, aligned in `width` all the same.
+fn balanced(layout: &mut parley::Layout<u32>, narrow: f32, width: f32) {
+    let mut lines = layout.break_lines();
+    lines.state_mut().set_layout_max_advance(width);
+    lines.state_mut().set_line_max_advance(narrow);
+    let mut first = true;
+    while let Some(line) = lines.break_next() {
+        if first {
+            lines.set_prior_line_width(width);
+        }
+        if let YieldData::LineBreak(data) = line
+            && data.reason == BreakReason::Explicit
+        {
+            first = false;
+            lines.state_mut().set_line_max_advance(width);
+        }
+    }
+    lines.finish();
 }
 
 /// The text of a paragraph's pieces as it is laid out, and each piece's byte range of it: its

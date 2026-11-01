@@ -1889,6 +1889,24 @@ const ROWS: &[Row] = &[
         refused: &["\"balance\"", "\"auto\"", "0"],
     },
     Row {
+        properties: &["textWrap"],
+        sample: r##"<View style={{ width: 100, background: "#e8eaf6" }}><Text style={{ fontSize: 10, textAlign: "center", PROPERTY: VALUE }}>The quick brown fox jumps over the lazy dog</Text></View>"##,
+        values: &[
+            "\"wrap\"",
+            "\"nowrap\"",
+            "\"balance\"",
+            "\"stable\"",
+            "\"balance wrap\"",
+        ],
+        refused: &["\"pretty\"", "\"wrap nowrap\"", "\"even\"", "0"],
+    },
+    Row {
+        properties: &["textWrapStyle"],
+        sample: r##"<View style={{ width: 100, background: "#e8eaf6" }}><Text style={{ fontSize: 10, textAlign: "right", PROPERTY: VALUE }}>The quick brown fox jumps over the lazy dog</Text></View>"##,
+        values: &["\"auto\"", "\"balance\"", "\"stable\""],
+        refused: &["\"pretty\"", "\"nowrap\"", "0"],
+    },
+    Row {
         properties: &["wordBreak"],
         sample: r##"<View style={{ width: 60, background: "#e8eaf6" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Unbreakableness of words</Text></View>"##,
         values: &[
