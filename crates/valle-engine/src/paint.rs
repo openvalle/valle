@@ -170,6 +170,15 @@ pub enum Filter {
     /// Each point of the box `frame` shows the one as much farther from its center as
     /// 1 + k1 r² + k2 r⁴, r its distance over the half diagonal's; nothing shows out of it.
     Lens { k: [f32; 2], frame: Rect },
+    /// Noise of a pattern `seed` picks, cells `size` px across from `origin`, added to the
+    /// colors' encoded values by up to `amount` of how far each is from 0 or 1, whichever is
+    /// nearer.
+    Grain {
+        seed: u32,
+        amount: f32,
+        size: f32,
+        origin: [f32; 2],
+    },
 }
 
 /// Where a background image is: one tile, and on each axis how far it is to the next one, if it
@@ -511,6 +520,12 @@ fn filters(functions: &[filter::Function], frame: Rect) -> Vec<Filter> {
                 k: k.map(|v| v as f32),
                 frame,
             },
+            filter::Function::FilmGrain { seed, amount, size } => Filter::Grain {
+                seed: *seed,
+                amount: *amount as f32,
+                size: *size as f32,
+                origin: [frame.x, frame.y],
+            },
             f => {
                 let Some(m) = colors(f) else { continue };
                 if let Some(Filter::Colors(list)) = out.last_mut() {
@@ -591,9 +606,11 @@ fn colors(f: &filter::Function) -> Option<[f32; 20]> {
                 0.0,
             )
         }
-        F::Blur(_) | F::DropShadow { .. } | F::ChromaticAberration(_) | F::LensDistortion(_) => {
-            return None;
-        }
+        F::Blur(_)
+        | F::DropShadow { .. }
+        | F::ChromaticAberration(_)
+        | F::LensDistortion(_)
+        | F::FilmGrain { .. } => return None,
     })
 }
 

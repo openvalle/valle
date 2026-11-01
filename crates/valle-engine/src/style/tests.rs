@@ -1755,6 +1755,14 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
         filter("lens-distortion(0.25 -0.5)"),
         [F::LensDistortion([0.25, -0.5])]
     );
+    assert_eq!(
+        filter("film-grain(4294967295 0.5 2.5px)"),
+        [F::FilmGrain {
+            seed: u32::MAX,
+            amount: 0.5,
+            size: 2.5
+        }]
+    );
     for (v, says) in [
         (
             "chromatic-aberration(300px)",
@@ -1770,6 +1778,15 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
         ),
         ("lens-distortion(0 1px)", "k2 1px is not a number"),
         ("lens-distortion(0.1)", "takes k1, k2"),
+        (
+            "film-grain(1.5 0.5 2px)",
+            "the seed 1.5 is not a whole number",
+        ),
+        ("film-grain(-1 0.5 2px)", "the seed -1 is not within"),
+        (
+            "film-grain(1 0.5 0.5px)",
+            "the size 0.5px is not within 1px and 64px",
+        ),
     ] {
         let e = error(&[("filter", text(v))]);
         assert!(e.contains(says), "{v}: {e}");

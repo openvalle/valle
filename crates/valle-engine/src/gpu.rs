@@ -47,6 +47,7 @@ const TOLERANCE: f32 = 0.02;
 /// Valle's effects, as `effects.wgsl` tells them apart.
 const ABERRATION: f32 = 0.0;
 const LENS: f32 = 1.0;
+const GRAIN: f32 = 2.0;
 
 /// Premultiplied colors to the luminance of their working values, Rec. 709's weights as Skia's,
 /// times their alpha, as the alpha of black.
@@ -499,6 +500,22 @@ impl Plan {
                     };
                     let [x0, y0, w, h] = [frame.x, frame.y, frame.width, frame.height];
                     self.effect(layer, LENS, &[t as f32, k[0], k[1], x0, y0, w, h])
+                }
+                Filter::Grain {
+                    seed,
+                    amount,
+                    size,
+                    origin,
+                } => {
+                    let Some(t) = self.transform(matrix) else {
+                        continue;
+                    };
+                    let seed = f32::from_bits(*seed);
+                    self.effect(
+                        layer,
+                        GRAIN,
+                        &[t as f32, seed, *amount, *size, origin[0], origin[1]],
+                    )
                 }
                 Filter::Shadow {
                     offset: [dx, dy],

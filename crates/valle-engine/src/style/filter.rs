@@ -35,6 +35,14 @@ pub enum Function<L = f64, C = Rgba> {
     /// farther from its center as 1 + k1 r² + k2 r⁴, r its distance over the half diagonal's;
     /// barrel for more than 0 and pincushion for less.
     LensDistortion([f64; 2]),
+    /// Valle's `film-grain(seed amount size)`: noise of a pattern the seed picks, cells `size`
+    /// px across from the border box's top left, added to the colors' encoded values by up to
+    /// `amount` of how far each is from 0 or 1, whichever is nearer.
+    FilmGrain {
+        seed: u32,
+        amount: f64,
+        size: f64,
+    },
 }
 
 impl Function<Len, Option<Rgba>> {
@@ -60,13 +68,18 @@ impl Function<Len, Option<Rgba>> {
             },
             Function::ChromaticAberration(offset) => Function::ChromaticAberration(*offset),
             Function::LensDistortion(k) => Function::LensDistortion(*k),
+            Function::FilmGrain { seed, amount, size } => Function::FilmGrain {
+                seed: *seed,
+                amount: *amount,
+                size: *size,
+            },
         }
     }
 }
 
 const NAMES: &str = "blur, brightness, contrast, drop-shadow, grayscale, hue-rotate, invert, \
-                     opacity, saturate or sepia, or Valle's chromatic-aberration or \
-                     lens-distortion";
+                     opacity, saturate or sepia, or Valle's chromatic-aberration, \
+                     film-grain or lens-distortion";
 
 /// `filter`: `none`, or functions separated by spaces.
 pub(super) fn filter(s: &str) -> Result<Vec<Function<Len, Option<Rgba>>>, String> {
@@ -170,6 +183,21 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
         "lens-distortion" => {
             let a = valle(&[("k1", false, [-0.5, 0.5]), ("k2", false, [-0.5, 0.5])])?;
             Function::LensDistortion([a[0], a[1]])
+        }
+        "film-grain" => {
+            let a = valle(&[
+                ("the seed", false, [0.0, f64::from(u32::MAX)]),
+                ("the amount", false, [0.0, 1.0]),
+                ("the size", true, [1.0, 64.0]),
+            ])?;
+            if a[0].fract() != 0.0 {
+                return Err(named(format!("the seed {} is not a whole number", a[0])));
+            }
+            Function::FilmGrain {
+                seed: a[0] as u32,
+                amount: a[1],
+                size: a[2],
+            }
         }
         _ => return Err(format!("{name}() is not a filter function: {NAMES}")),
     })
