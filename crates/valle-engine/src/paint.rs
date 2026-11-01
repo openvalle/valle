@@ -34,6 +34,7 @@
 //! Boxes paint with their edges on whole pixels, as Chrome paints them, so a layout that lands
 //! between pixels still has crisp edges.
 
+mod dash;
 mod gradient;
 mod matrix;
 mod scene;
@@ -375,7 +376,8 @@ struct Line {
 /// an outset line the other way round; a groove is an inset line outside an outset one, a ridge
 /// the other way round, the side split with the odd px at its top or left, or solid under 2 px.
 /// An opaque outer half goes on under the inner one, which leaves no seam where their antialiased
-/// edges meet; Chrome's translucent ones meet in a layer, which is left out.
+/// edges meet; Chrome's translucent ones meet in a layer, which is left out. Dots and dashes are
+/// no lines across a side, but marks along it.
 fn lines(widths: [f32; 4], styles: [BorderStyle; 4], colors: [Rgba; 4]) -> [Vec<Line>; 4] {
     std::array::from_fn(|k| {
         let (w, c) = (widths[k], colors[k]);
@@ -404,6 +406,7 @@ fn lines(widths: [f32; 4], styles: [BorderStyle; 4], colors: [Rgba; 4]) -> [Vec<
             }
             BorderStyle::Inset => vec![line(0.0, w, shade(true))],
             BorderStyle::Outset => vec![line(0.0, w, shade(false))],
+            BorderStyle::Dotted | BorderStyle::Dashed => Vec::new(),
             _ => vec![line(0.0, w, work(c))],
         }
     })
@@ -414,9 +417,14 @@ fn rings(rect: Rect, radii: Radii, widths: [f32; 4], lines: &[Vec<Line>; 4]) -> 
     let count = lines.iter().map(Vec::len).max().unwrap_or(0);
     (0..count)
         .map(|n| {
-            // A side with fewer lines has none here.
+            // A side with fewer lines has none here. One of dots or dashes has none at all, but
+            // keeps its part of the border, where the next sides' corners stop.
             let line = |k: usize| lines[k].get(n);
-            let depth = |k: usize| line(k).map_or([widths[k]; 2], |l| l.depth);
+            let none = |k: usize| match lines[k].is_empty() {
+                true => [0.0, widths[k]],
+                false => [widths[k]; 2],
+            };
+            let depth = |k: usize| line(k).map_or(none(k), |l| l.depth);
             let (outer, outer_radii) = inner(rect, radii, std::array::from_fn(|k| depth(k)[0]));
             let (inside, inner_radii) = inner(rect, radii, std::array::from_fn(|k| depth(k)[1]));
             Item::Ring {
@@ -1190,11 +1198,15 @@ impl Painter<'_> {
             std::array::from_fn(|k| widths[k] + paddings[k]),
         );
         // The background would show at the antialiased edge of a rounded border: under four
-        // opaque sides the border box it shows in shrinks by half the widths of their outer
-        // lines, as in Chrome, which shows it in the gap of a double line.
+        // opaque sides of lines the border box it shows in shrinks by half the widths of their
+        // outer lines, as in Chrome, which shows it in the gap of a double line; dots and dashes
+        // leave it whole.
         let lines = lines(widths, s.border_styles, s.border_colors);
-        let half = lines.each_ref().map(|l| l[0].depth[1] / 2.0);
-        let shrunk = match (0..4).all(|k| widths[k] > 0.0 && colors[k][3] >= 1.0) {
+        let half = lines
+            .each_ref()
+            .map(|l| l.first().map_or(0.0, |l| l.depth[1] / 2.0));
+        let covered = |k: usize| widths[k] > 0.0 && colors[k][3] >= 1.0 && !lines[k].is_empty();
+        let shrunk = match (0..4).all(covered) {
             true if radii != SQUARE => inner(rect, radii, half),
             _ => (rect, radii),
         };
@@ -1273,8 +1285,15 @@ impl Painter<'_> {
             out.extend(inner_shadow(shadow, inside, inner_radii).map(|item| (clip, item)));
         }
         if (0..4).any(|k| widths[k] > 0.0 && colors[k][3] > 0.0) {
-            let border = rings(rect, radii, widths, &lines);
-            out.extend(border.into_iter().map(|ring| (clip, ring)));
+            let mut border = rings(rect, radii, widths, &lines);
+            border.extend(dash::dashes(
+                rect,
+                radii,
+                widths,
+                s.border_styles,
+                s.border_colors,
+            ));
+            out.extend(border.into_iter().map(|item| (clip, item)));
         }
     }
 
@@ -1319,10 +1338,11 @@ impl Painter<'_> {
             return;
         }
         let radii = fit(grown(self.corners(i), by), rect);
-        let lines = lines([width; 4], [s.outline_style; 4], [s.outline_color; 4]);
-        let outline = rings(rect, radii, [width; 4], &lines);
+        let (styles, colors) = ([s.outline_style; 4], [s.outline_color; 4]);
+        let mut outline = rings(rect, radii, [width; 4], &lines([width; 4], styles, colors));
+        outline.extend(dash::dashes(rect, radii, [width; 4], styles, colors));
         let clip = self.clips[i].last().copied();
-        out.extend(outline.into_iter().map(|ring| (clip, ring)));
+        out.extend(outline.into_iter().map(|item| (clip, item)));
     }
 
     /// Text as Chrome paints each run of it, in the style of the Text or Span it is in: its

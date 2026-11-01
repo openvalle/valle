@@ -1227,6 +1227,9 @@ pub enum BorderStyle {
     Ridge,
     Inset,
     Outset,
+    /// Round dots, or square ones under 4 px, and dashes.
+    Dotted,
+    Dashed,
 }
 
 /// The sides a box-edge property sets: the four of a shorthand, one, or logical ones, which in
@@ -2038,8 +2041,7 @@ const LINE_STYLES: [&str; 10] = [
     "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
 ];
 
-/// `border-style`: so far all but `dotted` and `dashed`, with `none` and `hidden` the same without
-/// tables.
+/// `border-style`: any, with `none` and `hidden` the same without tables.
 fn border_style(v: &V) -> Result<BorderStyle, String> {
     let s = text(v)?;
     match s.as_str() {
@@ -2050,7 +2052,8 @@ fn border_style(v: &V) -> Result<BorderStyle, String> {
         "ridge" => Ok(BorderStyle::Ridge),
         "inset" => Ok(BorderStyle::Inset),
         "outset" => Ok(BorderStyle::Outset),
-        s if LINE_STYLES.contains(&s) => Err(format!("{s} lines are not supported yet; use solid")),
+        "dotted" => Ok(BorderStyle::Dotted),
+        "dashed" => Ok(BorderStyle::Dashed),
         s => Err(format!("{s} is not one of {}", LINE_STYLES.join(", "))),
     }
 }

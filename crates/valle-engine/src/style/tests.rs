@@ -1411,7 +1411,7 @@ fn borders_take_lines_widths_styles_and_colors() {
         )
     );
     // Their styles, for paint.
-    use BorderStyle::{Double, Groove, Inset, Outset, Ridge, Solid};
+    use BorderStyle::{Dashed, Dotted, Double, Groove, Inset, Outset, Ridge, Solid};
     let styles = |style: &[(&str, Prop)]| (one(style).border_styles, one(style).outline_style);
     assert_eq!(
         styles(&[
@@ -1427,6 +1427,13 @@ fn borders_take_lines_widths_styles_and_colors() {
             ("outlineStyle", text("ridge")),
         ]),
         ([Groove, Ridge, Inset, Outset], Ridge)
+    );
+    assert_eq!(
+        styles(&[
+            ("borderStyle", text("dotted dashed")),
+            ("outline", text("2px dashed"))
+        ]),
+        ([Dotted, Dashed, Dotted, Dashed], Dashed)
     );
 }
 
@@ -2723,19 +2730,14 @@ fn what_is_not_supported_is_an_error() {
         ("borderTop", text("1px solid nope"), "nope is not a color"),
         (
             "borderStyle",
-            text("dashed"),
-            "dashed lines are not supported yet",
+            text("wavy"),
+            "wavy is not one of none, hidden",
         ),
         ("outlineStyle", text("auto"), "focus ring; use solid"),
         (
             "outline",
             text("2px hidden"),
             "hidden is not an outline style",
-        ),
-        (
-            "outline",
-            text("dotted red"),
-            "dotted lines are not supported yet",
         ),
         (
             "outlineOffset",
