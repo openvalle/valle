@@ -162,6 +162,12 @@ impl Matrix4 {
         }))
     }
 
+    /// A point in space before it is divided through by its projective coordinate.
+    pub fn apply4(&self, p: [f64; 4]) -> [f64; 4] {
+        let m = &self.0;
+        std::array::from_fn(|r| (0..4).map(|c| m[c][r] * p[c]).sum())
+    }
+
     /// Onto the plane z = 0, seen from the front: z in and z out dropped.
     pub fn flatten(&self) -> Matrix {
         let m = &self.0;

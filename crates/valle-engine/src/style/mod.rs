@@ -70,6 +70,9 @@ pub struct Style {
     pub perspective_origin: [position::Offset; 2],
     /// `backface-visibility: visible`; a box that shows its back otherwise hides with all in it.
     pub backface_visible: bool,
+    /// `transform-style: preserve-3d`: its children with transforms stay in its space rather
+    /// than being flattened onto its plane, unless what is in it is grouped.
+    pub preserve_3d: bool,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
@@ -80,9 +83,19 @@ pub struct Style {
 
 impl Style {
     /// Whether the box is the containing block of every box in it, fixed ones too, and a
-    /// stacking context: it has a transform or a perspective, as CSS has it.
+    /// stacking context: it has a transform or a perspective, or preserves 3D, as CSS has it.
     pub fn contains_all(&self) -> bool {
-        !self.transform.is_empty() || self.perspective.is_some()
+        !self.transform.is_empty() || self.perspective.is_some() || self.preserve_3d
+    }
+
+    /// Whether its children with transforms stay in its space: it preserves 3D and nothing
+    /// groups what is in it into one flat layer, as an opacity or a clip does.
+    pub fn keeps_3d(&self) -> bool {
+        let o = self.layout.overflow;
+        self.preserve_3d
+            && self.opacity >= 1.0
+            && o.x == taffy::Overflow::Visible
+            && o.y == taffy::Overflow::Visible
     }
 }
 
@@ -591,6 +604,7 @@ struct Declared {
     perspective: Option<Len>,
     perspective_origin: [position::Offset<Len>; 2],
     backface_visible: bool,
+    preserve_3d: bool,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -657,6 +671,7 @@ impl Default for Declared {
             perspective: None,
             perspective_origin: [CENTER; 2],
             backface_visible: true,
+            preserve_3d: false,
             visible: None,
             color: None,
             font_size: None,
@@ -740,6 +755,7 @@ enum Field {
     Perspective,
     PerspectiveOrigin,
     BackfaceVisibility,
+    TransformStyle,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -805,7 +821,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 169] = [
+const FIELDS: [(&str, Field); 170] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1075,6 +1091,7 @@ const FIELDS: [(&str, Field); 169] = [
     ("perspective", Field::Perspective),
     ("perspectiveOrigin", Field::PerspectiveOrigin),
     ("backfaceVisibility", Field::BackfaceVisibility),
+    ("transformStyle", Field::TransformStyle),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
@@ -2026,6 +2043,9 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::BackfaceVisibility => {
             d.backface_visible = keyword(v, &[("visible", true), ("hidden", false)])?;
         }
+        F::TransformStyle => {
+            d.preserve_3d = keyword(v, &[("flat", false), ("preserve-3d", true)])?;
+        }
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -2260,6 +2280,7 @@ fn compute(
         perspective: d.perspective.as_ref().map(|l| l.px(u, 0.0)),
         perspective_origin: d.perspective_origin.each_ref().map(|o| o.computed(u)),
         backface_visible: d.backface_visible,
+        preserve_3d: d.preserve_3d,
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,

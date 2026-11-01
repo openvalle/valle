@@ -42,6 +42,7 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Group { opacity, items } => format!("group {opacity} {:?}", names(items)),
             Item::Clip { items, .. } => format!("clip {:?}", names(items)),
             Item::Transform { items, .. } => format!("transform {:?}", names(items)),
+            Item::Cut { items, .. } => format!("cut {:?}", names(items)),
             Item::Shadow { inside, items, .. } => {
                 let side = if *inside { "inner" } else { "outer" };
                 format!("{side} shadow {:?}", names(items))
@@ -449,6 +450,91 @@ fn a_box_showing_its_back_hides_with_all_in_it_when_asked() {
         turned("scaleX(-1)", "hidden"),
         [r#"transform ["blue", "green"]"#]
     );
+}
+
+#[test]
+fn a_3d_scene_paints_its_planes_back_to_front_cut_where_they_cross() {
+    let card = |color: &'static str, transform: &'static str| {
+        let style = [
+            ("position", "absolute"),
+            ("width", "20px"),
+            ("height", "20px"),
+            ("background", color),
+            ("transform", transform),
+        ];
+        view(&style, &[])
+    };
+    let scene = |style: &[(&'static str, &'static str)], cards| {
+        let mut nodes = vec![view(style, &[1, 2])];
+        nodes.extend(cards);
+        painted(nodes, &[0])
+    };
+    let keeps = [("height", "20px"), ("transformStyle", "preserve-3d")];
+    // The nearer one last, whatever the tree order.
+    let order = scene(
+        &keeps,
+        [
+            card("red", "translateZ(10px)"),
+            card("blue", "translateZ(-10px)"),
+        ],
+    );
+    assert_eq!(order, [r#"transform ["blue"]"#, r#"transform ["red"]"#]);
+    // Two that cross: the second cut in two, its far half before the first and its near half
+    // after.
+    let order = scene(
+        &keeps,
+        [
+            card("red", "rotateY(30deg)"),
+            card("blue", "rotateY(-30deg)"),
+        ],
+    );
+    assert_eq!(
+        order,
+        [
+            r#"transform ["cut [\"blue\"]"]"#,
+            r#"transform ["red"]"#,
+            r#"transform ["cut [\"blue\"]"]"#,
+        ]
+    );
+    // An opacity groups them, which flattens them in tree order.
+    let flat = [keeps[0], keeps[1], ("opacity", "0.5")];
+    let order = scene(
+        &flat,
+        [
+            card("red", "translateZ(10px)"),
+            card("blue", "translateZ(-10px)"),
+        ],
+    );
+    assert_eq!(
+        order,
+        [r#"group 0.5 ["transform [\"red\"]", "transform [\"blue\"]"]"#]
+    );
+}
+
+#[test]
+fn transforms_in_a_3d_scene_add_up_before_they_are_flattened() {
+    let template = Template {
+        nodes: vec![
+            view(
+                &[
+                    ("width", "20px"),
+                    ("height", "20px"),
+                    ("transform", "rotateY(45deg)"),
+                    ("transformStyle", "preserve-3d"),
+                ],
+                &[1],
+            ),
+            view(&[("height", "20px"), ("transform", "rotateY(45deg)")], &[]),
+        ],
+        roots: vec![0],
+        ..Default::default()
+    };
+    let canvas = [200.0, 100.0];
+    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
+    let transforms = transforms(&template, &styles, &laid);
+    // A quarter turn about y in all: edge on.
+    assert_eq!(transforms[1].inverse(), None);
 }
 
 #[test]

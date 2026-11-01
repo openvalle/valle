@@ -126,6 +126,11 @@ pub fn shapes(items: &[Item]) -> Vec<Item> {
                 let matrix = *matrix;
                 (!items.is_empty()).then_some(Item::Transform { matrix, items })
             }
+            Item::Cut { line, items } => {
+                let items = shapes(items);
+                let line = *line;
+                (!items.is_empty()).then_some(Item::Cut { line, items })
+            }
             item => Some(item.clone()),
         })
         .collect()

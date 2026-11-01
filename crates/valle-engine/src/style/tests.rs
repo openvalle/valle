@@ -1203,6 +1203,14 @@ fn transforms_take_3d_functions_and_an_origin_z() {
     assert_eq!(seen(&[("perspective", text("0"))]).0, Some(0.0));
     assert!(one(&[]).backface_visible);
     assert!(!one(&[("backfaceVisibility", text("Hidden"))]).backface_visible);
+    let keeps = |style: &[(&str, Prop)]| one(style).keeps_3d();
+    assert!(!keeps(&[]));
+    assert!(keeps(&[("transformStyle", text("preserve-3d"))]));
+    let grouped = [
+        ("transformStyle", text("preserve-3d")),
+        ("overflow", text("hidden")),
+    ];
+    assert!(!keeps(&grouped));
 }
 
 #[test]
@@ -1700,6 +1708,11 @@ fn what_is_not_supported_is_an_error() {
             "backfaceVisibility",
             text("collapse"),
             "collapse is not one of visible, hidden",
+        ),
+        (
+            "transformStyle",
+            text("3d"),
+            "3d is not one of flat, preserve-3d",
         ),
         (
             "perspective",

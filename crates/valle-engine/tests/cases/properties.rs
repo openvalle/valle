@@ -1234,6 +1234,12 @@ const ROWS: &[Row] = &[
         refused: &["\"collapse\"", "\"\"", "0"],
     },
     Row {
+        properties: &["transformStyle"],
+        sample: r##"<View style={{ width: 60, height: 24, margin: "8px 60px", background: "#c5cae9", transform: "rotateY(40deg)", PROPERTY: VALUE }}><View style={{ height: 24, background: "linear-gradient(to right, #3949ab, #e57373)", transform: "rotateY(40deg)" }} /></View>"##,
+        values: &["\"flat\"", "\"preserve-3d\"", "\" PRESERVE-3D \""],
+        refused: &["\"3d\"", "\"\"", "0"],
+    },
+    Row {
         properties: &["borderRadius"],
         sample: r##"<View style={{ width: 60, height: 16, background: "#3949ab", PROPERTY: VALUE }} />"##,
         values: &[

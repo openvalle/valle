@@ -29,6 +29,7 @@
 
 mod gradient;
 mod matrix;
+mod scene;
 
 use taffy::{Display, Overflow, Position};
 
@@ -80,6 +81,9 @@ pub enum Item {
     Group { opacity: f32, items: Vec<Item> },
     /// Items in px that `matrix` takes to the px around them.
     Transform { matrix: Matrix, items: Vec<Item> },
+    /// Items where a x + b y + c ≥ 0 for `line` [a, b, c], with a hard edge: the part of a
+    /// plane of a 3D scene on one side of another plane, so that two parts share each pixel.
+    Cut { line: [f32; 3], items: Vec<Item> },
     /// Items shown only inside a rectangle with its corners rounded by `radii`.
     Clip {
         rect: Rect,
@@ -354,6 +358,7 @@ pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item
         template,
         styles,
         layout,
+        spaces: spaces(template, styles, layout),
         parents,
         clips: Vec::with_capacity(n),
     };
@@ -376,20 +381,43 @@ pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item
 
 /// Each box's transform from its px to the canvas's: its ancestors' and its own.
 pub fn transforms(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix> {
-    let n = template.nodes.len();
-    let mut out = vec![Matrix::IDENTITY; n];
-    let mut seen = vec![None; n];
+    let spaces = spaces(template, styles, layout);
+    let mut out = vec![Matrix::IDENTITY; template.nodes.len()];
+    // What the plane each box is flattened onto goes to on the canvas.
+    let mut onto = out.clone();
     // In preorder, so a parent's comes first.
     for (i, node) in template.nodes.iter().enumerate() {
-        let m = match transform(&styles[i], layout.boxes[i].border, seen[i]) {
-            Some(own) => out[i].times(own.flatten()),
-            None => out[i],
-        };
-        out[i] = m;
-        let children = perspective(&styles[i], layout.boxes[i].border);
+        out[i] = onto[i].times(spaces[i].flatten());
         for &c in &node.children {
-            out[c as usize] = m;
-            seen[c as usize] = children;
+            onto[c as usize] = match styles[i].keeps_3d() {
+                true => onto[i],
+                false => out[i],
+            };
+        }
+    }
+    out
+}
+
+/// Each box's transform in space, in its parent's perspective, onto the plane it is flattened
+/// onto: its parent's, or in a 3D scene, the plane its root is flattened onto, through the
+/// transforms of the boxes between.
+fn spaces(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix4> {
+    let n = template.nodes.len();
+    let mut out = vec![Matrix4::IDENTITY; n];
+    // What its parent puts before its own: the parent's perspective, and in a 3D scene the
+    // parent's space.
+    let mut seen = vec![None; n];
+    let mut base = out.clone();
+    // In preorder, so a parent's comes first.
+    for (i, node) in template.nodes.iter().enumerate() {
+        let border = layout.boxes[i].border;
+        let own = transform(&styles[i], border, seen[i]);
+        out[i] = base[i].times(own.or(seen[i]).unwrap_or(Matrix4::IDENTITY));
+        let perspective = perspective(&styles[i], border);
+        let keeps = styles[i].keeps_3d();
+        for &c in &node.children {
+            seen[c as usize] = perspective;
+            base[c as usize] = if keeps { out[i] } else { Matrix4::IDENTITY };
         }
     }
     out
@@ -450,6 +478,8 @@ struct Painter<'a> {
     template: &'a Template,
     styles: &'a [Style],
     layout: &'a Layout,
+    /// As `spaces` has them.
+    spaces: Vec<Matrix4>,
     parents: Vec<Option<usize>>,
     /// The boxes whose clips each box is under, outermost first.
     clips: Vec<Vec<usize>>,
@@ -503,6 +533,7 @@ impl Painter<'_> {
         let s = &self.styles[i];
         s.opacity < 1.0
             || s.contains_all()
+            || self.in_scene(i)
             || s.layout.position == Position::Fixed
             || (s.z_index.is_some() && (self.positioned(i) || self.item(i)))
     }
@@ -549,16 +580,19 @@ impl Painter<'_> {
     /// context, in its transform if it has one and a layer if it has an opacity, or a positioned
     /// box.
     fn layer(&self, d: usize, out: &mut Drawn) {
-        let opacity = self.styles[d].opacity as f32;
-        let seen =
-            self.parents[d].and_then(|p| perspective(&self.styles[p], self.layout.boxes[p].border));
-        let transform = transform(&self.styles[d], self.layout.boxes[d].border, seen);
-        if !self.stacking(d) {
+        let s = &self.styles[d];
+        let opacity = s.opacity as f32;
+        if self.in_scene(d) {
+            // It paints with its scene.
+        } else if !self.stacking(d) {
             self.whole(Some(d), out);
-        } else if let Some(space) = transform {
+        } else if s.keeps_3d() {
+            self.scene(d, out);
+        } else if !s.transform.is_empty() {
+            let space = self.spaces[d];
             let matrix = space.flatten();
             // Its back hides it and all in it, as they are on its plane.
-            let back = !self.styles[d].backface_visible && space.shows_back();
+            let back = !s.backface_visible && space.shows_back();
             if matrix.inverse().is_none() || back {
                 return;
             }
@@ -580,6 +614,60 @@ impl Painter<'_> {
             out.extend(group(opacity, items).map(|g| (None, g)));
         } else {
             self.context(Some(d), out);
+        }
+    }
+
+    /// Whether `i` is a plane of a 3D scene: its parent keeps its children in its space, and it
+    /// has a transform, keeps its own children in its space too, or hides its back, which is
+    /// where it is in the scene. As in Chrome, any other child paints on its parent's plane.
+    fn in_scene(&self, i: usize) -> bool {
+        let s = &self.styles[i];
+        self.parents[i].is_some_and(|p| self.styles[p].keeps_3d())
+            && (!s.transform.is_empty() || s.keeps_3d() || !s.backface_visible)
+    }
+
+    /// A box that keeps its children in its space: the root of a 3D scene, whose planes paint
+    /// back to front, each cut where another crosses it.
+    fn scene(&self, d: usize, out: &mut Drawn) {
+        let mut planes = Vec::new();
+        self.planes(d, &mut planes);
+        let rects: Vec<(Matrix4, Rect)> = planes.iter().map(|(m, r, _)| (*m, *r)).collect();
+        for (i, cuts) in scene::order(&rects) {
+            let (space, _, items) = &planes[i];
+            let items = (cuts.into_iter())
+                .fold(items.clone(), |items, line| vec![Item::Cut { line, items }]);
+            let item = Item::Transform {
+                matrix: space.flatten(),
+                items,
+            };
+            out.push((self.clips[d].last().copied(), item));
+        }
+    }
+
+    /// The planes of a 3D scene from `e` on, each in space, with its border box and its items:
+    /// its own but where it is edge on or shows its back and hides it, which leaves the planes
+    /// in it, and those of its children in the scene.
+    fn planes(&self, e: usize, out: &mut Vec<(Matrix4, Rect, Vec<Item>)>) {
+        let s = &self.styles[e];
+        let space = self.spaces[e];
+        let back = !s.backface_visible && space.shows_back();
+        if space.flatten().inverse().is_some() && !back {
+            let mut drawn = Vec::new();
+            self.context(Some(e), &mut drawn);
+            let mut items = self.nest_from(self.chained(drawn), self.clips[e].len());
+            if s.opacity < 1.0 {
+                items = group(s.opacity as f32, items).into_iter().collect();
+            }
+            if !items.is_empty() {
+                out.push((space, self.layout.boxes[e].border, items));
+            }
+        }
+        if s.keeps_3d() {
+            for c in self.children(Some(e)) {
+                if self.in_scene(c) {
+                    self.planes(c, out);
+                }
+            }
         }
     }
 

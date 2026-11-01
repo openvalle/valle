@@ -648,13 +648,14 @@ impl<'a> Renderer<'a> {
                         self.draw(items, target, (i, m), faces, plan, atlas, runs)?;
                     }
                 }
-                Item::Group { .. } | Item::Clip { .. } | Item::Shadow { .. } => {
+                Item::Group { .. } | Item::Clip { .. } | Item::Cut { .. } | Item::Shadow { .. } => {
                     if !runs.is_empty() {
                         let runs = std::mem::take(runs);
                         plan.steps.push(Step::Draw { target, runs });
                     }
-                    // A group shows all of its layer, a clip the part in its rectangle, and a
-                    // shadow its layer blurred, inside its rectangle or outside it.
+                    // A group shows all of its layer, a clip the part in its rectangle, a cut the
+                    // part on one side of its line, and a shadow its layer blurred, inside its
+                    // rectangle or outside it.
                     // The group's is on the target, and the others in their transform's px, where a
                     // blur is as much larger as the transform makes it.
                     let [width, height] = self.size.map(|s| s as f32);
@@ -666,6 +667,10 @@ impl<'a> Renderer<'a> {
                         Item::Clip { rect, radii, items } => {
                             (items, 1.0, 0.0, xywh(*rect), *radii, false)
                         }
+                        Item::Cut {
+                            line: [a, b, c],
+                            items,
+                        } => (items, 1.0, 0.0, [*a, *b, *c, 0.0], SQUARE, false),
                         Item::Shadow {
                             sigma,
                             rect,
@@ -696,7 +701,8 @@ impl<'a> Renderer<'a> {
                         }
                     }
                     let index = (plan.layers.len() / LAYER) as u32;
-                    let words = [opacity, f32::from(u8::from(outside)), 0.0, 0.0]
+                    let cut = f32::from(u8::from(matches!(item, Item::Cut { .. })));
+                    let words = [opacity, f32::from(u8::from(outside)), cut, 0.0]
                         .into_iter()
                         .chain(clip)
                         .chain(radii.into_iter().flatten());
