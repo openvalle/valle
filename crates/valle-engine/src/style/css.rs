@@ -97,6 +97,10 @@ pub fn words(s: &str) -> Vec<&str> {
     split(s, None)
 }
 
+pub fn slashes(s: &str) -> Vec<&str> {
+    split(s, Some('/'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

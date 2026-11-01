@@ -260,6 +260,13 @@ fn sizing_keywords_go_to_taffy() {
     ));
 }
 
+/// Sets of line names.
+fn names(ns: &[&[&str]]) -> Vec<Vec<String>> {
+    ns.iter()
+        .map(|n| n.iter().map(|s| s.to_string()).collect())
+        .collect()
+}
+
 #[test]
 fn grid_tracks_and_lines_go_to_taffy() {
     use taffy::{
@@ -284,11 +291,6 @@ fn grid_tracks_and_lines_go_to_taffy() {
     ]);
     let l = &s.layout;
     let both = |min, max| MinMax { min, max };
-    let names = |ns: &[&[&str]]| -> Vec<Vec<String>> {
-        ns.iter()
-            .map(|n| n.iter().map(|s| s.to_string()).collect())
-            .collect()
-    };
     assert_eq!(l.display, Display::Grid);
     assert_eq!(
         l.grid_template_columns,
@@ -348,6 +350,91 @@ fn grid_tracks_and_lines_go_to_taffy() {
 }
 
 #[test]
+fn grid_areas_and_shorthands_go_to_taffy() {
+    use taffy::{GridAutoFlow, GridTemplateArea};
+    let area = |name: &str, rows: [u16; 2], columns: [u16; 2]| GridTemplateArea {
+        name: name.into(),
+        row_start: rows[0],
+        row_end: rows[1],
+        column_start: columns[0],
+        column_end: columns[1],
+    };
+    let s = one(&[(
+        "gridTemplateAreas",
+        text("'Head Head' \"side .\" 'side main'"),
+    )]);
+    let a = s.layout.grid_template_areas.unwrap();
+    assert_eq!(
+        a.areas,
+        [
+            area("Head", [1, 2], [1, 3]),
+            area("side", [2, 4], [1, 2]),
+            area("main", [3, 4], [2, 3]),
+        ]
+    );
+    assert_eq!((a.row_count, a.column_count), (3, 2));
+
+    // Rows of names, a string and a size; columns after the `/`.
+    let s = one(&[(
+        "gridTemplate",
+        text("[top] \"a a\" 20px [mid] \"b c\" / [l] 1fr 2fr"),
+    )]);
+    let l = &s.layout;
+    assert_eq!(l.grid_template_rows.len(), 2);
+    assert_eq!(l.grid_template_row_names, names(&[&["top"], &["mid"], &[]]));
+    assert_eq!(l.grid_template_column_names, names(&[&["l"], &[], &[]]));
+    assert_eq!(l.grid_template_areas.as_ref().unwrap().areas.len(), 3);
+
+    // `grid` sets what items flow into, and resets the rest.
+    let s = one(&[
+        ("gridAutoRows", text("5px")),
+        ("grid", text("auto-flow dense 10px / 1fr 1fr")),
+    ]);
+    assert_eq!(s.layout.grid_auto_flow, GridAutoFlow::RowDense);
+    assert_eq!(s.layout.grid_auto_rows.len(), 1);
+    assert_eq!(s.layout.grid_template_columns.len(), 2);
+    assert!(s.layout.grid_template_rows.is_empty());
+    let s = one(&[
+        ("gridAutoRows", text("5px")),
+        ("grid", text("20px / auto-flow")),
+    ]);
+    assert_eq!(s.layout.grid_auto_flow, GridAutoFlow::Column);
+    assert!(s.layout.grid_auto_rows.is_empty());
+
+    // Lines `grid-area` leaves out take the name of their start.
+    let s = one(&[("gridArea", text("main"))]);
+    let main = || GridPlacement::NamedLine("main".to_string(), 0);
+    let line = |start, end| Line { start, end };
+    assert_eq!(s.layout.grid_row, line(main(), main()));
+    assert_eq!(s.layout.grid_column, line(main(), main()));
+    let s = one(&[("gridArea", text("2 / a / span 2"))]);
+    let a = || GridPlacement::NamedLine("a".to_string(), 0);
+    let row = line(GridPlacement::Line(2i16.into()), GridPlacement::Span(2));
+    assert_eq!(s.layout.grid_row, row);
+    assert_eq!(s.layout.grid_column, line(a(), a()));
+
+    // One value of a `place-` shorthand is both.
+    let s = one(&[
+        ("placeItems", text("center")),
+        ("placeSelf", text("end start")),
+        ("placeContent", text("space-between center")),
+    ]);
+    let l = &s.layout;
+    assert_eq!(
+        (l.align_items, l.justify_items),
+        (AlignItems::CENTER, AlignItems::CENTER)
+    );
+    assert_eq!(
+        (l.align_self, l.justify_self),
+        (Some(AlignItems::END), Some(AlignItems::START))
+    );
+    assert_eq!(
+        (l.align_content, l.justify_content),
+        (AlignContent::SPACE_BETWEEN, AlignContent::CENTER)
+    );
+}
+
+#[test]
 fn grid_values_out_of_css_are_errors() {
     let cases: &[(&str, &str, &str)] = &[
         ("gridTemplateColumns", "1fr 2", "2 needs a unit: 2px"),
@@ -404,17 +491,54 @@ fn grid_values_out_of_css_are_errors() {
         ),
         ("gridAutoFlow", "row column", "is not row or column"),
         ("gridRow", "0", "there is no line 0"),
-        (
-            "gridRow",
-            "1 / 2 / 3",
-            "takes a start line, and an end line",
-        ),
+        ("gridRow", "1 / 2 / 3", "takes at most 2 lines"),
         ("gridRow", "span 0", "a span is at least 1"),
         ("gridRow", "span", "is not a grid line"),
         ("gridRowStart", "1.5", "1.5 is not a whole number"),
         ("gridColumnStart", "a b", "is not a grid line"),
         ("gridColumnEnd", "auto 2", "auto is a keyword"),
         ("justifyItems", "left", "left is not one of normal, stretch"),
+        (
+            "gridTemplateColumns",
+            "'a' 10px",
+            "strings of areas go in grid-template-areas",
+        ),
+        (
+            "gridTemplateAreas",
+            "'a b' 'a'",
+            "every row needs as many cells as the others",
+        ),
+        (
+            "gridTemplateAreas",
+            "'a b' 'b a'",
+            "area a is not a rectangle",
+        ),
+        ("gridTemplateAreas", "'a #'", "# is not in a name"),
+        ("gridTemplateAreas", "a b", "each row is a string"),
+        ("gridTemplateAreas", "'a", "a string is not closed"),
+        (
+            "gridTemplate",
+            "'a' / repeat(2, 1fr)",
+            "columns with areas take no repeat()",
+        ),
+        (
+            "gridTemplate",
+            "1fr",
+            "takes rows / columns, or rows with areas",
+        ),
+        (
+            "gridTemplate",
+            "'a' [x] [y] [z] 'b'",
+            "each row is names, a string of areas",
+        ),
+        (
+            "grid",
+            "10px auto-flow / 1fr",
+            "auto-flow and dense come before the sizes",
+        ),
+        ("gridArea", "1 / 2 / 3 / 4 / 5", "takes at most 4 lines"),
+        ("placeItems", "center end start", "takes one or two values"),
+        ("placeContent", "baseline", "baseline is not one of"),
     ];
     for (key, value, message) in cases {
         let e = error(&[(*key, text(value))]);

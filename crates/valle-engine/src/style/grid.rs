@@ -1,11 +1,11 @@
-//! CSS grid's own values: track lists with the names of the lines between their tracks, and the
-//! lines items go between. Line names are case-sensitive, so these read values as written;
-//! keywords, units and functions are not.
+//! CSS grid's own values: track lists with the names of the lines between their tracks, named
+//! areas, and the lines items go between. Names are case-sensitive, so these read values as
+//! written; keywords, units and functions are not.
 
 use taffy::{
-    GridAutoFlow, GridPlacement, GridTemplateComponent, GridTemplateRepetition, Line,
-    MaxTrackSizingFunction as Max, MinMax, MinTrackSizingFunction as Min, RepetitionCount,
-    TrackSizingFunction,
+    GridAutoFlow, GridPlacement, GridTemplateArea, GridTemplateAreas, GridTemplateComponent,
+    GridTemplateRepetition, Line, MaxTrackSizingFunction as Max, MinMax,
+    MinTrackSizingFunction as Min, RepetitionCount, TrackSizingFunction,
 };
 
 use super::{Accept, Len, Lengths, css, length, length_text, shown, text};
@@ -78,6 +78,12 @@ fn written(v: &V) -> Result<&str, String> {
     }
 }
 
+/// Named areas: each a name and its lines, from 1.
+pub(super) type Areas = GridTemplateAreas<String>;
+
+/// A line's placement.
+type Place = GridPlacement<String>;
+
 /// `grid-template-columns` and `-rows`: `none`, or a track list; a number is one track of px.
 pub(super) fn template(v: &V) -> Result<Tracks, String> {
     if let V::Num(_) = v {
@@ -86,7 +92,10 @@ pub(super) fn template(v: &V) -> Result<Tracks, String> {
             names: vec![Vec::new(); 2],
         });
     }
-    let s = written(v)?;
+    tracks(written(v)?)
+}
+
+fn tracks(s: &str) -> Result<Tracks, String> {
     let lower = s.to_ascii_lowercase();
     if lower == "none" {
         return Ok(Tracks::default());
@@ -177,32 +186,60 @@ pub(super) fn flow(v: &V) -> Result<GridAutoFlow, String> {
     })
 }
 
-/// `grid-row` and `grid-column`: the start line, and after `/` the end line. Without one the end
-/// is the start's name, if the start is a name alone, or `auto`.
-pub(super) fn lines(v: &V) -> Result<Line<GridPlacement<String>>, String> {
+/// `grid-row` and `grid-column`: the start line, and after `/` the end line.
+pub(super) fn lines(v: &V) -> Result<Line<Place>, String> {
+    let [start, end] = match &placements(v, 2)?[..] {
+        [start] => [start.clone(), named(start)],
+        [start, end] => [start.clone(), end.clone()],
+        _ => unreachable!("one or two"),
+    };
+    Ok(Line { start, end })
+}
+
+/// `grid-area`: the row start, the column start, the row end and the column end, between `/`.
+/// A start left out is the row start's name, and an end its start's.
+pub(super) fn area(v: &V) -> Result<[Line<Place>; 2], String> {
+    let lines = placements(v, 4)?;
+    let row_start = lines[0].clone();
+    let column_start = lines.get(1).cloned().unwrap_or_else(|| named(&row_start));
+    let row_end = lines.get(2).cloned().unwrap_or_else(|| named(&row_start));
+    let column_end = lines
+        .get(3)
+        .cloned()
+        .unwrap_or_else(|| named(&column_start));
+    Ok([
+        Line {
+            start: row_start,
+            end: row_end,
+        },
+        Line {
+            start: column_start,
+            end: column_end,
+        },
+    ])
+}
+
+/// One to `most` lines between `/`.
+fn placements(v: &V, most: usize) -> Result<Vec<Place>, String> {
     let s = match v {
         V::Str(_) => written(v)?,
-        _ => {
-            return Ok(Line {
-                start: line(v)?,
-                end: GridPlacement::Auto,
-            });
-        }
+        _ => return Ok(vec![line(v)?]),
     };
-    match s.split('/').collect::<Vec<_>>()[..] {
-        [start] => {
-            let start = placement(start.trim())?;
-            let end = match &start {
-                GridPlacement::NamedLine(name, 0) => GridPlacement::NamedLine(name.clone(), 0),
-                _ => GridPlacement::Auto,
-            };
-            Ok(Line { start, end })
-        }
-        [start, end] => Ok(Line {
-            start: placement(start.trim())?,
-            end: placement(end.trim())?,
-        }),
-        _ => Err(format!("{s} takes a start line, and an end line after /")),
+    let lines = css::slashes(s);
+    if lines.len() > most {
+        return Err(format!("{s} takes at most {most} lines, between /"));
+    }
+    match lines[..] {
+        [] => Ok(vec![placement(s)?]),
+        _ => lines.into_iter().map(placement).collect(),
+    }
+}
+
+/// What a line left out of a shorthand is: the name of `given` if it is a name alone, or `auto`.
+fn named(given: &Place) -> Place {
+    match given {
+        GridPlacement::NamedLine(name, 0) => GridPlacement::NamedLine(name.clone(), 0),
+        _ => GridPlacement::Auto,
     }
 }
 
@@ -284,25 +321,34 @@ fn name(s: &str) -> Result<String, String> {
     if KEYWORDS.iter().any(|k| s.eq_ignore_ascii_case(k)) {
         return Err(format!("{s} is a keyword, not a line name"));
     }
-    let char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_' || !c.is_ascii();
     let first = s.strip_prefix('-').unwrap_or(s).chars().next();
-    let starts = first.is_some_and(|c| c == '-' || (char(c) && !c.is_ascii_digit()));
-    if !starts || !s.chars().all(char) {
+    let starts = first.is_some_and(|c| c == '-' || (in_name(c) && !c.is_ascii_digit()));
+    if !starts || !s.chars().all(in_name) {
         return Err(format!("{s} is not a line name"));
     }
     Ok(s.to_string())
 }
 
-/// A track list's parts as written: `[names]`, and words, which keep functions whole.
+/// A track list's parts as written: `[names]`, strings, and words, which keep functions whole.
 enum Token<'a> {
     Names(Vec<&'a str>),
+    Str(&'a str),
     Word(&'a str),
 }
 
 fn tokens(s: &str) -> Result<Vec<Token<'_>>, String> {
     let mut out = Vec::new();
     let mut rest = s.trim_start();
-    while !rest.is_empty() {
+    while let Some(c) = rest.chars().next() {
+        if c == '"' || c == '\'' {
+            let inner = &rest[1..];
+            let end = inner
+                .find(c)
+                .ok_or_else(|| format!("{s}: a string is not closed"))?;
+            out.push(Token::Str(&inner[..end]));
+            rest = inner[end + 1..].trim_start();
+            continue;
+        }
         if let Some(inner) = rest.strip_prefix('[') {
             let end = inner
                 .find(']')
@@ -314,11 +360,11 @@ fn tokens(s: &str) -> Result<Vec<Token<'_>>, String> {
             rest = inner[end + 1..].trim_start();
             continue;
         }
-        // To white space or a `[` outside parentheses.
+        // To white space, a `[` or a quote outside parentheses.
         let mut depth = 0;
         let end = rest.char_indices().find(|&(_, c)| {
             depth += i32::from(c == '(') - i32::from(c == ')');
-            depth == 0 && (c.is_whitespace() || c == '[')
+            depth == 0 && (c.is_whitespace() || matches!(c, '[' | '"' | '\''))
         });
         let end = end.map_or(rest.len(), |(i, _)| i);
         out.push(Token::Word(&rest[..end]));
@@ -350,6 +396,11 @@ fn parts(s: &str, inside: bool) -> Result<(Vec<Part>, Vec<Vec<String>>), String>
                 };
                 names.push(before.take().unwrap_or_default());
                 parts.push(part);
+            }
+            Token::Str(_) => {
+                return Err(format!(
+                    "{s}: strings of areas go in grid-template-areas, or grid-template"
+                ));
             }
         }
     }
@@ -389,6 +440,234 @@ fn repeat(s: &str, args: &str) -> Result<Part, String> {
         tracks: tracks.collect(),
         names,
     })
+}
+
+/// `grid-template-areas`: `none`, or a string for each row, of the names of the areas its cells
+/// are in, and `.` for cells in none.
+pub(super) fn areas(v: &V) -> Result<Option<Areas>, String> {
+    let s = written(v)?;
+    if s.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    let mut rows = Vec::new();
+    for token in tokens(s)? {
+        match token {
+            Token::Str(row) => rows.push(row),
+            _ => return Err(format!("{s}: each row is a string")),
+        }
+    }
+    named_areas(s, &rows).map(Some)
+}
+
+/// The areas that `rows` name, which must each be a rectangle.
+fn named_areas(s: &str, rows: &[&str]) -> Result<Areas, String> {
+    let grid: Vec<Vec<Option<&str>>> = (rows.iter())
+        .map(|row| cells(s, row))
+        .collect::<Result<_, _>>()?;
+    let columns = grid.first().map_or(0, Vec::len);
+    if columns == 0 || grid.iter().any(|row| row.len() != columns) {
+        return Err(format!(
+            "{s}: every row needs as many cells as the others, and one at least"
+        ));
+    }
+    let mut areas: Vec<GridTemplateArea<String>> = Vec::new();
+    for (r, row) in (1..).zip(&grid) {
+        for (c, cell) in (1..).zip(row) {
+            let Some(name) = *cell else { continue };
+            match areas.iter_mut().find(|a| a.name == name) {
+                Some(a) => {
+                    a.row_end = a.row_end.max(r + 1);
+                    a.column_start = a.column_start.min(c);
+                    a.column_end = a.column_end.max(c + 1);
+                }
+                None => areas.push(GridTemplateArea {
+                    name: name.to_string(),
+                    row_start: r,
+                    row_end: r + 1,
+                    column_start: c,
+                    column_end: c + 1,
+                }),
+            }
+        }
+    }
+    for a in &areas {
+        let rows = &grid[usize::from(a.row_start) - 1..usize::from(a.row_end) - 1];
+        let span = usize::from(a.column_start) - 1..usize::from(a.column_end) - 1;
+        if rows.iter().any(|row| {
+            row[span.clone()]
+                .iter()
+                .any(|&c| c != Some(a.name.as_str()))
+        }) {
+            return Err(format!("{s}: area {} is not a rectangle", a.name));
+        }
+    }
+    Ok(Areas {
+        areas,
+        row_count: grid.len() as u16,
+        column_count: columns as u16,
+    })
+}
+
+/// Whether names, of lines or areas, may have `c` in them.
+fn in_name(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_' || !c.is_ascii()
+}
+
+/// A row's cells: names, and `None` for runs of `.`.
+fn cells<'a>(s: &str, row: &'a str) -> Result<Vec<Option<&'a str>>, String> {
+    let run = |rest: &str, f: &dyn Fn(char) -> bool| rest.find(|c| !f(c)).unwrap_or(rest.len());
+    let mut out = Vec::new();
+    let mut rest = row;
+    while let Some(c) = rest.chars().next() {
+        let n = if c.is_whitespace() {
+            run(rest, &char::is_whitespace)
+        } else if c == '.' {
+            out.push(None);
+            run(rest, &|c| c == '.')
+        } else if in_name(c) {
+            let n = run(rest, &in_name);
+            out.push(Some(&rest[..n]));
+            n
+        } else {
+            return Err(format!("{s}: {c} is not in a name"));
+        };
+        rest = &rest[n..];
+    }
+    Ok(out)
+}
+
+/// `grid-template`: `none`; rows and columns, between `/`; or rows each as names, a string of
+/// areas, a size and names, then columns after `/` without `repeat()`.
+pub(super) fn template_all(v: &V) -> Result<([Tracks; 2], Option<Areas>), String> {
+    let s = written(v)?;
+    if s.eq_ignore_ascii_case("none") {
+        return Ok(Default::default());
+    }
+    let halves = css::slashes(s);
+    if !s.contains(['"', '\'']) {
+        return match halves[..] {
+            [rows, columns] => Ok(([tracks(rows)?, tracks(columns)?], None)),
+            _ => Err(format!("{s} takes rows / columns, or rows with areas")),
+        };
+    }
+    let (rows, columns) = match halves[..] {
+        [rows] => (rows, None),
+        [rows, columns] => (rows, Some(columns)),
+        _ => return Err(format!("{s} takes rows with areas, then / and columns")),
+    };
+    let tokens = tokens(rows)?;
+    let mut at = 0;
+    let names_at = |at: &mut usize| -> Result<Vec<String>, String> {
+        let Some(Token::Names(ns)) = tokens.get(*at) else {
+            return Ok(Vec::new());
+        };
+        *at += 1;
+        ns.iter().map(|n| name(n)).collect()
+    };
+    let (mut parts, mut names, mut strings) = (Vec::new(), vec![Vec::new()], Vec::new());
+    while at < tokens.len() {
+        let before = names_at(&mut at)?;
+        names.last_mut().expect("a line before").extend(before);
+        let Some(Token::Str(row)) = tokens.get(at) else {
+            return Err(format!(
+                "{s}: each row is names, a string of areas, a size and names"
+            ));
+        };
+        strings.push(*row);
+        at += 1;
+        let size = match tokens.get(at) {
+            Some(Token::Word(w)) => {
+                at += 1;
+                track(w)?
+            }
+            _ => Track::MinMax(Breadth::Auto, Breadth::Auto),
+        };
+        parts.push(Part::Track(size));
+        names.push(names_at(&mut at)?);
+    }
+    let columns = match columns {
+        None => Tracks::default(),
+        Some(columns) => {
+            let (parts, names) = self::parts(columns, false)?;
+            if parts.iter().any(|p| matches!(p, Part::Repeat { .. })) {
+                return Err(format!("{s}: columns with areas take no repeat()"));
+            }
+            Tracks { parts, names }
+        }
+    };
+    let areas = named_areas(s, &strings)?;
+    Ok(([Tracks { parts, names }, columns], Some(areas)))
+}
+
+/// What the `grid` shorthand sets: a template, or tracks that items flow into.
+#[derive(Default)]
+pub(super) struct Grid {
+    pub template: [Tracks; 2],
+    pub areas: Option<Areas>,
+    pub auto: [Vec<Track>; 2],
+    pub flow: GridAutoFlow,
+}
+
+/// `grid`: a `grid-template`; or rows, then after `/` `auto-flow`, `dense` and the size of the
+/// columns items flow into; or the other way round.
+pub(super) fn grid(v: &V) -> Result<Grid, String> {
+    let s = written(v)?;
+    let flows = |half: &str| (css::words(half).iter()).any(|w| w.eq_ignore_ascii_case("auto-flow"));
+    Ok(match css::slashes(s)[..] {
+        [rows, columns] if flows(columns) => {
+            let (dense, sizes) = auto_flow(columns)?;
+            Grid {
+                template: [tracks(rows)?, Tracks::default()],
+                auto: [Vec::new(), sizes],
+                flow: match dense {
+                    true => GridAutoFlow::ColumnDense,
+                    false => GridAutoFlow::Column,
+                },
+                ..Grid::default()
+            }
+        }
+        [rows, columns] if flows(rows) => {
+            let (dense, sizes) = auto_flow(rows)?;
+            Grid {
+                template: [Tracks::default(), tracks(columns)?],
+                auto: [sizes, Vec::new()],
+                flow: match dense {
+                    true => GridAutoFlow::RowDense,
+                    false => GridAutoFlow::Row,
+                },
+                ..Grid::default()
+            }
+        }
+        _ => {
+            let (template, areas) = template_all(v)?;
+            Grid {
+                template,
+                areas,
+                ..Grid::default()
+            }
+        }
+    })
+}
+
+/// `auto-flow` and `dense`, then sizes; whether it is dense, and the sizes.
+fn auto_flow(s: &str) -> Result<(bool, Vec<Track>), String> {
+    let words = css::words(s);
+    let (mut flow, mut dense, mut at) = (false, false, 0);
+    for w in &words {
+        if w.eq_ignore_ascii_case("auto-flow") && !flow {
+            flow = true;
+        } else if w.eq_ignore_ascii_case("dense") && !dense {
+            dense = true;
+        } else {
+            break;
+        }
+        at += 1;
+    }
+    if !flow {
+        return Err(format!("{s}: auto-flow and dense come before the sizes"));
+    }
+    let sizes = words[at..].iter().map(|w| track(w));
+    Ok((dense, sizes.collect::<Result<_, _>>()?))
 }
 
 /// `<track-size>`: a breadth, `minmax(min, max)` or `fit-content(limit)`. A flexible breadth

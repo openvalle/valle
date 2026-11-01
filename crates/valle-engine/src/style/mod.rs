@@ -493,6 +493,7 @@ struct Declared {
     gap: [Len; 2],
     /// Rows, columns, as the grid fields below.
     grid_template: [grid::Tracks; 2],
+    grid_areas: Option<grid::Areas>,
     grid_auto: [Vec<grid::Track>; 2],
     grid_auto_flow: GridAutoFlow,
     grid_lines: [Line<GridPlacement<String>>; 2],
@@ -536,6 +537,7 @@ impl Default for Declared {
             align_content: AlignContent::NORMAL,
             gap: [AUTO; 2],
             grid_template: Default::default(),
+            grid_areas: None,
             grid_auto: Default::default(),
             grid_auto_flow: GridAutoFlow::Row,
             grid_lines: [AUTO_LINES; 2],
@@ -587,14 +589,22 @@ enum Field {
     ColumnGap,
     /// Of `ROWS` or `COLUMNS`.
     GridTemplate(usize),
+    GridTemplateAreas,
+    /// `grid-template`.
+    GridTemplateAll,
     GridAuto(usize),
     GridAutoFlow,
+    Grid,
     /// `grid-row` and `grid-column`.
     GridLines(usize),
     GridStart(usize),
     GridEnd(usize),
+    GridArea,
     JustifyItems,
     JustifySelf,
+    PlaceItems,
+    PlaceSelf,
+    PlaceContent,
     Background,
     BackgroundColor,
     BorderRadius,
@@ -628,7 +638,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 81] = [
+const FIELDS: [(&str, Field); 88] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -688,17 +698,24 @@ const FIELDS: [(&str, Field); 81] = [
     ("columnGap", Field::ColumnGap),
     ("gridTemplateRows", Field::GridTemplate(ROWS)),
     ("gridTemplateColumns", Field::GridTemplate(COLUMNS)),
+    ("gridTemplateAreas", Field::GridTemplateAreas),
+    ("gridTemplate", Field::GridTemplateAll),
     ("gridAutoRows", Field::GridAuto(ROWS)),
     ("gridAutoColumns", Field::GridAuto(COLUMNS)),
     ("gridAutoFlow", Field::GridAutoFlow),
+    ("grid", Field::Grid),
     ("gridRow", Field::GridLines(ROWS)),
     ("gridColumn", Field::GridLines(COLUMNS)),
     ("gridRowStart", Field::GridStart(ROWS)),
     ("gridRowEnd", Field::GridEnd(ROWS)),
     ("gridColumnStart", Field::GridStart(COLUMNS)),
     ("gridColumnEnd", Field::GridEnd(COLUMNS)),
+    ("gridArea", Field::GridArea),
     ("justifyItems", Field::JustifyItems),
     ("justifySelf", Field::JustifySelf),
+    ("placeItems", Field::PlaceItems),
+    ("placeSelf", Field::PlaceSelf),
+    ("placeContent", Field::PlaceContent),
     ("background", Field::Background),
     ("backgroundColor", Field::BackgroundColor),
     ("borderRadius", Field::BorderRadius),
@@ -1112,6 +1129,17 @@ fn self_align(v: &V) -> Result<Option<AlignItems>, String> {
     })
 }
 
+/// A `place-` shorthand: the alignment, then the justification, which one value is both.
+fn place<T: Clone>(v: &V, one: fn(&V) -> Result<T, String>) -> Result<(T, T), String> {
+    let s = text(v)?;
+    let word = |w: &str| one(&V::Str(w.into()));
+    match css::words(&s)[..] {
+        [both] => word(both).map(|t| (t.clone(), t)),
+        [align, justify] => Ok((word(align)?, word(justify)?)),
+        _ => Err(format!("{} takes one or two values", shown(v))),
+    }
+}
+
 /// `flex`: grow, shrink and basis. A lone factor makes the basis `0%`, as browsers compute it.
 fn flex(v: &V) -> Result<(f64, f64, Len), String> {
     if let V::Num(_) = v {
@@ -1316,13 +1344,26 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::RowGap => d.gap[0] = length(v, GAP)?,
         F::ColumnGap => d.gap[1] = length(v, GAP)?,
         F::GridTemplate(axis) => d.grid_template[axis] = grid::template(v)?,
+        F::GridTemplateAreas => d.grid_areas = grid::areas(v)?,
+        F::GridTemplateAll => (d.grid_template, d.grid_areas) = grid::template_all(v)?,
         F::GridAuto(axis) => d.grid_auto[axis] = grid::auto(v)?,
         F::GridAutoFlow => d.grid_auto_flow = grid::flow(v)?,
+        F::Grid => {
+            let g = grid::grid(v)?;
+            (d.grid_template, d.grid_areas) = (g.template, g.areas);
+            (d.grid_auto, d.grid_auto_flow) = (g.auto, g.flow);
+        }
         F::GridLines(axis) => d.grid_lines[axis] = grid::lines(v)?,
         F::GridStart(axis) => d.grid_lines[axis].start = grid::line(v)?,
         F::GridEnd(axis) => d.grid_lines[axis].end = grid::line(v)?,
+        F::GridArea => d.grid_lines = grid::area(v)?,
         F::JustifyItems => d.justify_items = keyword(v, &SELF_ALIGN)?,
         F::JustifySelf => d.justify_self = self_align(v)?,
+        F::PlaceItems => (d.align_items, d.justify_items) = place(v, |v| keyword(v, &SELF_ALIGN))?,
+        F::PlaceSelf => (d.align_self, d.justify_self) = place(v, self_align)?,
+        F::PlaceContent => {
+            (d.align_content, d.justify_content) = place(v, |v| keyword(v, &CONTENT_ALIGN))?
+        }
         F::Background => {
             let s = text(v)?;
             d.background = match s.as_str() {
@@ -1516,6 +1557,7 @@ fn compute(
         grid_template_columns,
         grid_template_row_names,
         grid_template_column_names,
+        grid_template_areas: d.grid_areas.clone(),
         grid_auto_rows,
         grid_auto_columns,
         grid_auto_flow: d.grid_auto_flow,

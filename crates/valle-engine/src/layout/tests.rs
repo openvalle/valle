@@ -128,6 +128,33 @@ fn grids_place_items_on_tracks_and_lines() {
 }
 
 #[test]
+fn grid_areas_place_items_by_name() {
+    let l = lay(
+        vec![
+            view(
+                &[
+                    ("display", "grid"),
+                    (
+                        "gridTemplate",
+                        "'head head' 10px 'side main' 30px / 40px 1fr",
+                    ),
+                ],
+                &[1, 2, 3],
+            ),
+            view(&[("gridArea", "main")], &[]),
+            view(&[("gridArea", "head")], &[]),
+            // An area names the lines around it too.
+            view(&[("gridColumn", "side")], &[]),
+        ],
+        &[0],
+    )
+    .unwrap();
+    assert_eq!(l.boxes[1].border, rect(40.0, 10.0, 160.0, 30.0));
+    assert_eq!(l.boxes[2].border, rect(0.0, 0.0, 200.0, 10.0));
+    assert_eq!(l.boxes[3].border, rect(0.0, 10.0, 40.0, 30.0));
+}
+
+#[test]
 fn sizes_take_box_sizing_and_aspect_ratio() {
     let l = lay(
         vec![

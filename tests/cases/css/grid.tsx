@@ -1,7 +1,7 @@
 export const composition = { width: 256, height: 256, fps: 1, duration: 1 };
 
 // Grid layout: named lines and spans, auto-fill tracks, item alignment in grid areas, dense
-// packing with order, and tracks sized by text with an absolute box in a grid area.
+// packing with order, tracks sized by text with an absolute box in a grid area, and named areas.
 export default function Scene() {
   const label = (text: string) => <Text style={{ fontSize: 10 }}>{text}</Text>;
   const cell = (background: string, style: object = {}) => (
@@ -92,6 +92,19 @@ export default function Scene() {
           bottom: 0,
           height: 3,
         })}
+      </View>
+      <View
+        style={{
+          display: "grid",
+          gridTemplate: "'head head' 8px 'side main' 18px / 40px 1fr",
+          gap: 2,
+          marginTop: 6,
+        }}
+      >
+        {cell("#4dd0e1", { gridArea: "head" })}
+        {cell("#0097a7", { gridColumn: "side" })}
+        {cell("#80deea", { gridArea: "main" })}
+        {cell("#006064", { gridArea: "main", placeSelf: "center end", width: 30, height: 8 })}
       </View>
     </View>
   );
