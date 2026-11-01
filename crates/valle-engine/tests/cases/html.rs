@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 use valle_engine::front::{Composition, Slot};
 use valle_engine::js;
 use valle_engine::scene::Frame;
+use valle_engine::svg;
 use valle_engine::template::{Kind, Piece, Prop, Tag, V};
 
 /// Style properties React DOM prints as bare numbers; it gives other numbers but 0 `px`.
@@ -90,10 +91,10 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
         _ => "div",
     };
     let _ = write!(html, "<{tag} data-n=\"{i}\"");
-    if let Kind::Svg { attributes, .. } = &n.kind {
+    if let Kind::Svg { tag, attributes } = &n.kind {
         for (name, prop) in attributes {
             let v = value(frame, prop).text();
-            let _ = write!(html, " {}=\"{}\"", attribute(name), escape(&v));
+            let _ = write!(html, " {}=\"{}\"", attribute(*tag, name), escape(&v));
         }
     }
     if matches!(n.kind, Kind::Text { .. }) {
@@ -199,12 +200,12 @@ fn declaration(key: &str, v: &V) -> Option<String> {
     Some(format!("{}: {value};", hyphenate(key)))
 }
 
-/// An SVG attribute's name as React DOM writes it: `fillOpacity` as `fill-opacity`, but
-/// `viewBox` and `preserveAspectRatio` as they are.
-fn attribute(name: &str) -> String {
-    match name {
-        "viewBox" | "preserveAspectRatio" => name.to_string(),
-        _ => hyphenate(name),
+/// An SVG attribute's name as React DOM writes it: a presentation attribute's as its property's,
+/// `fillOpacity` as `fill-opacity`, and others as they are, as `viewBox` and `pathLength`.
+fn attribute(tag: Tag, name: &str) -> String {
+    match svg::presentational(tag, name) {
+        true => hyphenate(name),
+        false => name.to_string(),
     }
 }
 

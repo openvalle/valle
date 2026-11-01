@@ -617,8 +617,8 @@ fn errors_point_at_the_source() {
                 "an <svg> inside an <svg> is not supported yet",
             ),
             (
-                "<svg><path strokeWidth={2} /></svg>",
-                "<path> strokeWidth is not supported yet",
+                "<svg><path markerEnd=\"url(#m)\" /></svg>",
+                "<path> markerEnd is not supported yet",
             ),
             (
                 "<svg><path fill-rule=\"evenodd\" /></svg>",

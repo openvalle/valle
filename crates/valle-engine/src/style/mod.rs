@@ -37,13 +37,58 @@ use crate::template::{Error, Kind, Node, Prop, Tag, Template, V};
 /// The root font size: `rem`.
 const REM: f64 = 16.0;
 
-/// What fills an SVG shape.
+/// What fills or strokes an SVG shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Paint {
     None,
     Color(Rgba),
-    /// The shape's own `color`, wherever it inherits the fill from.
+    /// The shape's own `color`, wherever it inherits the paint from.
     CurrentColor,
+}
+
+/// How an SVG shape is stroked (`stroke-*`): its paint and the opacity it strokes at; its width,
+/// its dashes and their offset, px and fractions of the viewport's normalized diagonal; how its
+/// open ends are capped and its corners joined, and how far a miter may reach, in widths.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stroke {
+    pub paint: Paint,
+    pub opacity: f64,
+    pub width: Calc,
+    pub cap: Cap,
+    pub join: Join,
+    pub miter_limit: f64,
+    /// Lengths of dashes and of the gaps between them in turn; none for a solid stroke.
+    pub dashes: Rc<[Calc]>,
+    pub dash_offset: Calc,
+}
+
+impl Stroke {
+    fn initial() -> Stroke {
+        Stroke {
+            paint: Paint::None,
+            opacity: 1.0,
+            width: Math::Sum([1.0, 0.0]),
+            cap: Cap::Butt,
+            join: Join::Miter,
+            miter_limit: 4.0,
+            dashes: Rc::new([]),
+            dash_offset: Math::Sum([0.0, 0.0]),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cap {
+    Butt,
+    Round,
+    Square,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Join {
+    Miter,
+    Round,
+    Bevel,
 }
 
 /// A node's computed style.
@@ -117,6 +162,7 @@ pub struct Style {
     pub fill: Paint,
     pub fill_opacity: f64,
     pub even_odd: bool,
+    pub stroke: Stroke,
     /// An SVG element's geometry, as its attributes have it at the frame.
     pub svg: Option<Rc<svg::Computed>>,
     pub color: Rgba,
@@ -1090,6 +1136,14 @@ struct Declared {
     svg_fill: Option<Paint>,
     fill_opacity: Option<f64>,
     even_odd: Option<bool>,
+    svg_stroke: Option<Paint>,
+    stroke_opacity: Option<f64>,
+    stroke_width: Option<Len>,
+    cap: Option<Cap>,
+    join: Option<Join>,
+    miter_limit: Option<f64>,
+    dashes: Option<Rc<[Len]>>,
+    dash_offset: Option<Len>,
     color: Option<Rgba>,
     font_size: Option<Len>,
     font_weight: Option<Weight>,
@@ -1198,6 +1252,14 @@ impl Default for Declared {
             svg_fill: None,
             fill_opacity: None,
             even_odd: None,
+            svg_stroke: None,
+            stroke_opacity: None,
+            stroke_width: None,
+            cap: None,
+            join: None,
+            miter_limit: None,
+            dashes: None,
+            dash_offset: None,
             color: None,
             font_size: None,
             font_weight: None,
@@ -1329,6 +1391,14 @@ enum Field {
     Fill,
     FillOpacity,
     FillRule,
+    Stroke,
+    StrokeOpacity,
+    StrokeWidth,
+    StrokeLinecap,
+    StrokeLinejoin,
+    StrokeMiterlimit,
+    StrokeDasharray,
+    StrokeDashoffset,
     Color,
     FontSize,
     FontWeight,
@@ -1425,7 +1495,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 228] = [
+const FIELDS: [(&str, Field); 236] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1718,6 +1788,14 @@ const FIELDS: [(&str, Field); 228] = [
     ("fill", Field::Fill),
     ("fillOpacity", Field::FillOpacity),
     ("fillRule", Field::FillRule),
+    ("stroke", Field::Stroke),
+    ("strokeOpacity", Field::StrokeOpacity),
+    ("strokeWidth", Field::StrokeWidth),
+    ("strokeLinecap", Field::StrokeLinecap),
+    ("strokeLinejoin", Field::StrokeLinejoin),
+    ("strokeMiterlimit", Field::StrokeMiterlimit),
+    ("strokeDasharray", Field::StrokeDasharray),
+    ("strokeDashoffset", Field::StrokeDashoffset),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
     ("fontWeight", Field::FontWeight),
@@ -1794,6 +1872,14 @@ impl Field {
             Field::Fill
                 | Field::FillOpacity
                 | Field::FillRule
+                | Field::Stroke
+                | Field::StrokeOpacity
+                | Field::StrokeWidth
+                | Field::StrokeLinecap
+                | Field::StrokeLinejoin
+                | Field::StrokeMiterlimit
+                | Field::StrokeDasharray
+                | Field::StrokeDashoffset
                 | Field::Opacity
                 | Field::Visibility
                 | Field::Display
@@ -1970,6 +2056,54 @@ fn presented(v: &V, attribute: bool) -> Cow<'_, V> {
         },
         _ => Cow::Borrowed(v),
     }
+}
+
+/// What fills or strokes an SVG shape: `none`, `currentcolor` or a color.
+fn paint(v: &V) -> Result<Paint, String> {
+    Ok(match text(v)?.as_str() {
+        "none" => Paint::None,
+        "currentcolor" => Paint::CurrentColor,
+        s if s.starts_with("url(") => return Err("url() paints are not supported yet".into()),
+        s => Paint::Color(color::parse(s)?),
+    })
+}
+
+/// An SVG length: a CSS length or percentage, or a number of px, as SVG 2 takes in its
+/// properties.
+fn svg_length(v: &V, negative: bool) -> Result<Len, String> {
+    let a = Accept {
+        keyword: None,
+        negative,
+        percent: true,
+        sizing: &[],
+    };
+    match v {
+        V::Str(_) => match css::num(&text(v)?) {
+            Some(n) if n.unit.is_empty() => length(&V::Num(n.value), a),
+            _ => length(v, a),
+        },
+        _ => length(v, a),
+    }
+}
+
+/// `stroke-dasharray`: `none`, or SVG lengths, apart by commas or spaces.
+fn dashes(v: &V) -> Result<Rc<[Len]>, String> {
+    if let V::Str(_) = v
+        && text(v)? == "none"
+    {
+        return Ok(Rc::new([]));
+    }
+    let list: Vec<Len> = match v {
+        V::Str(s) => (css::commas(s).into_iter())
+            .flat_map(css::words)
+            .map(|w| svg_length(&V::Str(w.into()), false))
+            .collect::<Result<_, _>>()?,
+        _ => vec![svg_length(v, false)?],
+    };
+    if list.is_empty() {
+        return Err("there are no dashes: write none".into());
+    }
+    Ok(list.into())
 }
 
 /// An opacity: a number or a percentage, clamped to [0, 1].
@@ -3152,18 +3286,34 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             let shown = [("visible", true), ("hidden", false), ("collapse", false)];
             d.visible = Some(keyword(v, &shown)?);
         }
-        F::Fill => {
-            d.svg_fill = Some(match text(v)?.as_str() {
-                "none" => Paint::None,
-                "currentcolor" => Paint::CurrentColor,
-                s if s.starts_with("url(") => {
-                    return Err("url() fills are not supported yet".into());
-                }
-                s => Paint::Color(color::parse(s)?),
-            });
-        }
+        F::Fill => d.svg_fill = Some(paint(v)?),
         F::FillOpacity => d.fill_opacity = Some(alpha(v)?),
         F::FillRule => d.even_odd = Some(keyword(v, &[("nonzero", false), ("evenodd", true)])?),
+        F::Stroke => d.svg_stroke = Some(paint(v)?),
+        F::StrokeOpacity => d.stroke_opacity = Some(alpha(v)?),
+        F::StrokeWidth => d.stroke_width = Some(svg_length(v, false)?),
+        F::StrokeLinecap => {
+            let caps = [
+                ("butt", Cap::Butt),
+                ("round", Cap::Round),
+                ("square", Cap::Square),
+            ];
+            d.cap = Some(keyword(v, &caps)?);
+        }
+        F::StrokeLinejoin => {
+            let joins = [
+                ("miter", Join::Miter),
+                ("round", Join::Round),
+                ("bevel", Join::Bevel),
+            ];
+            d.join = Some(keyword(v, &joins)?);
+        }
+        F::StrokeMiterlimit => match number(v)? {
+            x if x < 1.0 => return Err(format!("{x} is below 1")),
+            x => d.miter_limit = Some(x),
+        },
+        F::StrokeDasharray => d.dashes = Some(dashes(v)?),
+        F::StrokeDashoffset => d.dash_offset = Some(svg_length(v, true)?),
         F::Color => d.color = Some(color_of(v)?),
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
@@ -3520,6 +3670,7 @@ fn compute(
         Some(p) => (p.fill, p.fill_opacity, p.even_odd),
         None => (Paint::Color(color::BLACK), 1.0, false),
     };
+    let mut stroke = parent.map_or_else(Stroke::initial, |p| p.stroke.clone());
     let units = |em| Units { em, canvas };
     let size = match &d.font_size {
         None => inherited.size,
@@ -3623,6 +3774,20 @@ fn compute(
     };
     let u = units(size);
     let color = d.color.unwrap_or(inherited_color);
+    stroke.paint = d.svg_stroke.unwrap_or(stroke.paint);
+    stroke.opacity = d.stroke_opacity.unwrap_or(stroke.opacity);
+    if let Some(w) = &d.stroke_width {
+        stroke.width = w.calc(u);
+    }
+    stroke.cap = d.cap.unwrap_or(stroke.cap);
+    stroke.join = d.join.unwrap_or(stroke.join);
+    stroke.miter_limit = d.miter_limit.unwrap_or(stroke.miter_limit);
+    if let Some(dashes) = &d.dashes {
+        stroke.dashes = dashes.iter().map(|l| l.calc(u)).collect();
+    }
+    if let Some(o) = &d.dash_offset {
+        stroke.dash_offset = o.calc(u);
+    }
     let out_of_flow = matches!(d.position, Position::Absolute | Position::Fixed);
     let mut decorations = match parent {
         Some(p) if !out_of_flow => p.decorations.clone(),
@@ -3780,6 +3945,7 @@ fn compute(
         fill: d.svg_fill.unwrap_or(fill),
         fill_opacity: d.fill_opacity.unwrap_or(fill_opacity),
         even_odd: d.even_odd.unwrap_or(even_odd),
+        stroke,
         svg: None,
         color,
         font,

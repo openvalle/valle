@@ -9,6 +9,28 @@ fn text(s: &str) -> V {
     V::Str(s.into())
 }
 
+/// The smallest box around a path's points, control points too: left, top, right, bottom.
+fn bounds(p: Path) -> [f32; 4] {
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for s in &p.0 {
+        let points: &[Point] = match s {
+            Segment::Move(a) | Segment::Line(a) => std::slice::from_ref(a),
+            Segment::Cubic(a, b, c) => &[*a, *b, *c],
+            Segment::Quad(a, b) => &[*a, *b],
+            Segment::Close => &[],
+        };
+        for p in points {
+            b = [
+                b[0].min(p[0]),
+                b[1].min(p[1]),
+                b[2].max(p[0]),
+                b[3].max(p[1]),
+            ];
+        }
+    }
+    b
+}
+
 #[test]
 fn transform_lists_apply_right_to_left() {
     let m = |s: &str| {
@@ -76,26 +98,6 @@ fn shapes_are_paths_in_their_viewport() {
         Element::Shape(s) => s,
         e => panic!("{e:?}"),
     };
-    let bounds = |p: Path| {
-        let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
-        for s in &p.0 {
-            let points: &[Point] = match s {
-                Segment::Move(a) | Segment::Line(a) => std::slice::from_ref(a),
-                Segment::Cubic(a, b, c) => &[*a, *b, *c],
-                Segment::Quad(a, b) => &[*a, *b],
-                Segment::Close => &[],
-            };
-            for p in points {
-                b = [
-                    b[0].min(p[0]),
-                    b[1].min(p[1]),
-                    b[2].max(p[0]),
-                    b[3].max(p[1]),
-                ];
-            }
-        }
-        b
-    };
     let size = [200.0, 100.0];
     // r of a percentage of the normalized diagonal, √((200² + 100²) / 2) ≈ 158.1.
     let circle = shape(
@@ -151,4 +153,77 @@ fn shapes_are_paths_in_their_viewport() {
         let err = attributes(tag, &[(name, value)]).unwrap_err();
         assert!(err.contains(e), "{err}");
     }
+}
+
+#[test]
+fn strokes_are_outlines_with_caps_joins_and_dashes() {
+    let line = path::parse("M0 0 H10").unwrap();
+    let pen = |width: f64, cap: Cap| Pen {
+        width,
+        cap,
+        join: Join::Miter,
+        miter_limit: 4.0,
+        dashes: Vec::new(),
+        dash_offset: 0.0,
+        path_length: None,
+    };
+    let near =
+        |b: [f32; 4], want: [f32; 4]| (b.iter().zip(want)).all(|(a, w)| (a - w).abs() < 0.01);
+    let outline = |p: &Path, pen: &Pen| stroke(p, pen, 1.0).unwrap();
+    let b = bounds(outline(&line, &pen(2.0, Cap::Butt)));
+    assert!(near(b, [0.0, -1.0, 10.0, 1.0]), "{b:?}");
+    let b = bounds(outline(&line, &pen(2.0, Cap::Square)));
+    assert!(near(b, [-1.0, -1.0, 11.0, 1.0]), "{b:?}");
+    // The same in units 100 times smaller, 100 px each.
+    let small = path::parse("M0 0 H0.1").unwrap();
+    let b = bounds(stroke(&small, &pen(0.02, Cap::Square), 100.0).unwrap());
+    assert!(near(b.map(|v| v * 100.0), [-1.0, -1.0, 11.0, 1.0]), "{b:?}");
+    // A miter 1 / sin(θ / 2) widths long: past the limit at a sharp turn, a bevel.
+    let sharp = path::parse("M0 0 L10 1 L0 2").unwrap();
+    let b = bounds(outline(&sharp, &pen(2.0, Cap::Butt)));
+    assert!(b[2] < 11.1, "{b:?}");
+    let mitered = Pen {
+        miter_limit: 30.0,
+        ..pen(2.0, Cap::Butt)
+    };
+    assert!(bounds(outline(&sharp, &mitered))[2] > 19.0);
+    // A subpath of no length: a dot with round or square caps, nothing with butt ones.
+    let dot = path::parse("M5 5 Z").unwrap();
+    let b = bounds(outline(&dot, &pen(4.0, Cap::Square)));
+    assert!(near(b, [3.0, 3.0, 7.0, 7.0]), "{b:?}");
+    // A round one's curves' control points are a little outside it.
+    let b = bounds(outline(&dot, &pen(4.0, Cap::Round)));
+    assert!(
+        b[0] < 3.01 && b[0] > 2.7 && b[3] > 6.99 && b[3] < 7.3,
+        "{b:?}"
+    );
+    assert_eq!(stroke(&dot, &pen(4.0, Cap::Butt), 1.0), None);
+    // Dashes, each a subpath; one repeated; of no length, dots; by the path's own length.
+    let moves = |p: Path| p.0.iter().filter(|s| matches!(s, Segment::Move(_))).count();
+    let dashed = |dashes: &[f64], cap, path_length| Pen {
+        dashes: dashes.to_vec(),
+        path_length,
+        ..pen(1.0, cap)
+    };
+    assert_eq!(
+        moves(outline(&line, &dashed(&[2.0, 2.0], Cap::Butt, None))),
+        3
+    );
+    assert_eq!(moves(outline(&line, &dashed(&[2.0], Cap::Butt, None))), 3);
+    assert_eq!(
+        moves(outline(&line, &dashed(&[0.0, 4.0], Cap::Round, None))),
+        3
+    );
+    let by_length = dashed(&[4.0, 4.0], Cap::Butt, Some(20.0));
+    assert_eq!(moves(outline(&line, &by_length)), 3);
+    let solid = moves(outline(&line, &dashed(&[0.0, 0.0], Cap::Butt, None)));
+    assert_eq!(solid, 1);
+}
+
+#[test]
+fn path_lengths_are_above_0() {
+    let c = attributes(Tag::Circle, &[("pathLength", V::Num(100.0))]).unwrap();
+    assert_eq!(c.path_length, Some(100.0));
+    let e = attributes(Tag::Circle, &[("pathLength", text("0"))]).unwrap_err();
+    assert_eq!(e, "pathLength 0 is not a number above 0");
 }

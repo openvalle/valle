@@ -2381,6 +2381,77 @@ const ROWS: &[Row] = &[
         values: &["\"nonzero\"", "\"evenodd\"", "\" EVENODD \""],
         refused: &["\"even-odd\"", "\"\"", "0"],
     },
+    Row {
+        properties: &["stroke"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><path d="M3 8 L10 2 L17 8 L24 2" fill="none" style={{ strokeWidth: 2, PROPERTY: VALUE }} /></svg>"##,
+        values: &[
+            "\"#3949ab\"",
+            "\"none\"",
+            "\"currentColor\"",
+            "\"rgb(57 73 171 / 50%)\"",
+            "\" RED \"",
+        ],
+        refused: &["\"url(#paint)\"", "\"a\"", "\"\"", "0"],
+    },
+    Row {
+        properties: &["strokeOpacity"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><rect x={4} y={2} width={22} height={6} fill="#e53935" style={{ stroke: "#3949ab", strokeWidth: 3, PROPERTY: VALUE }} /></svg>"##,
+        values: &["0.5", "\"25%\"", "0", "1", "2", "-1"],
+        refused: &["\"a\"", "\"\"", "true"],
+    },
+    Row {
+        properties: &["strokeWidth"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><path d="M3 8 L10 2 L17 8 L24 2" fill="none" style={{ stroke: "#3949ab", PROPERTY: VALUE }} /></svg>"##,
+        values: &[
+            "0",
+            "1",
+            "3",
+            "\"2px\"",
+            "\"0.1em\"",
+            "\"10%\"",
+            "\"2.5\"",
+            "\"calc(1px + 5%)\"",
+        ],
+        refused: &["-1", "\"-2px\"", "\"a\"", "\"\"", "true"],
+    },
+    Row {
+        properties: &["strokeLinecap"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><path d="M4 3 H26 M15 7 Z" fill="none" style={{ stroke: "#3949ab", strokeWidth: 2.5, PROPERTY: VALUE }} /></svg>"##,
+        values: &["\"butt\"", "\"round\"", "\"square\"", "\" ROUND \""],
+        refused: &["\"flat\"", "\"\"", "0"],
+    },
+    Row {
+        properties: &["strokeLinejoin"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><path d="M3 8 L10 2 L17 8 L24 2" fill="none" style={{ stroke: "#3949ab", strokeWidth: 2, PROPERTY: VALUE }} /></svg>"##,
+        values: &["\"miter\"", "\"round\"", "\"bevel\"", "\" BEVEL \""],
+        refused: &["\"arcs\"", "\"miter-clip\"", "\"\"", "0"],
+    },
+    Row {
+        properties: &["strokeMiterlimit"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><path d="M2 9 L20 5 L2 1" fill="none" style={{ stroke: "#3949ab", strokeWidth: 1.5, PROPERTY: VALUE }} /></svg>"##,
+        values: &["1", "4", "10", "\"9.5\""],
+        refused: &["0.5", "\"a\"", "\"\"", "true"],
+    },
+    Row {
+        properties: &["strokeDasharray"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><path d="M3 8 L10 2 L17 8 L24 2" fill="none" style={{ stroke: "#3949ab", strokeWidth: 1.5, strokeLinecap: "round", PROPERTY: VALUE }} /></svg>"##,
+        values: &[
+            "\"none\"",
+            "4",
+            "\"4 2\"",
+            "\"4, 2, 1\"",
+            "\"0 3\"",
+            "\"10%\"",
+            "\"0 0\"",
+        ],
+        refused: &["\"1 -1\"", "\"a\"", "\"\"", "true"],
+    },
+    Row {
+        properties: &["strokeDashoffset"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><path d="M3 8 L10 2 L17 8 L24 2" fill="none" style={{ stroke: "#3949ab", strokeWidth: 1.5, strokeDasharray: "4 2", PROPERTY: VALUE }} /></svg>"##,
+        values: &["0", "2", "-3", "\"10%\"", "\"1px\""],
+        refused: &["\"a\"", "\"\"", "true"],
+    },
 ];
 
 /// The cases, by path from `tests/cases`, and their source; `chrome` is every CSS property the

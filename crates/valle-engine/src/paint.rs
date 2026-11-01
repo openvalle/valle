@@ -52,6 +52,7 @@ use crate::style::background::{Area, ImageSize, Layer, Repeat};
 use crate::style::color::{self, Rgba};
 use crate::style::filter;
 use crate::style::gradient::Image;
+use crate::style::math::Calc;
 use crate::style::transform::Function;
 use crate::style::{Blend, BorderStyle, DecorationStyle, Fit, Paint, Shadow, Style};
 use crate::svg::{self, Element};
@@ -1676,14 +1677,14 @@ impl Painter<'_> {
             Some(b) => (svg::viewport(b, *fit, size), [b[2], b[3]]),
             None => (Matrix::IDENTITY, size),
         };
+        let matrix = Matrix::translate(f64::from(rect.x), f64::from(rect.y)).times(matrix);
         let mut items = Vec::new();
         for &c in &self.template.nodes[i].children {
-            self.svg_element(c as usize, units, &mut items);
+            self.svg_element(c as usize, units, matrix, &mut items);
         }
         if items.is_empty() {
             return;
         }
-        let matrix = Matrix::translate(f64::from(rect.x), f64::from(rect.y)).times(matrix);
         let mut item = Item::Transform { matrix, items };
         if self.clipping(i) {
             item = Item::Clip {
@@ -1695,10 +1696,10 @@ impl Painter<'_> {
         out.push((self.clips[i].last().copied(), item));
     }
 
-    /// An element in an `<svg>` and its children, in user units of a viewport `size` units big:
-    /// a shape filled unless it is hidden, its fill opacity on its fill's alpha; its opacity on
-    /// all it draws as one layer, and its transform.
-    fn svg_element(&self, i: usize, size: [f64; 2], out: &mut Vec<Item>) {
+    /// An element in an `<svg>` and its children, in user units of a viewport `size` units big,
+    /// which `matrix` takes to px: a shape filled, then stroked, unless it is hidden, each
+    /// opacity on its paint's alpha; its opacity on all it draws as one layer, and its transform.
+    fn svg_element(&self, i: usize, size: [f64; 2], matrix: Matrix, out: &mut Vec<Item>) {
         let s = &self.styles[i];
         let Some(c) = s.svg.as_deref() else {
             return;
@@ -1706,33 +1707,60 @@ impl Painter<'_> {
         if s.layout.display == Display::None || s.opacity <= 0.0 {
             return;
         }
+        let matrix = c.transform.map_or(matrix, |t| matrix.times(t));
         let mut items = Vec::new();
         match &c.element {
             Element::G => {
                 for &k in &self.template.nodes[i].children {
-                    self.svg_element(k as usize, size, &mut items);
+                    self.svg_element(k as usize, size, matrix, &mut items);
                 }
             }
-            Element::Shape(shape) => {
-                let fill = match s.fill {
-                    Paint::None => None,
-                    Paint::Color(c) => Some(c),
-                    Paint::CurrentColor => Some(s.color),
+            Element::Shape(shape) if s.visible => {
+                let Some(path) = svg::path(shape, size) else {
+                    return;
                 };
-                if let (true, Some(mut color)) = (s.visible, fill) {
-                    color[3] *= s.fill_opacity;
-                    if color[3] > 0.0
-                        && let Some(path) = svg::path(shape, size)
-                    {
-                        items.push(Item::Path {
-                            path,
-                            even_odd: s.even_odd,
-                            color: work(color),
-                        });
-                    }
+                let color = |paint: Paint, opacity: f64| {
+                    let mut color = match paint {
+                        Paint::None => return None,
+                        Paint::Color(c) => c,
+                        Paint::CurrentColor => s.color,
+                    };
+                    color[3] *= opacity;
+                    (color[3] > 0.0).then(|| work(color))
+                };
+                let k = &s.stroke;
+                let stroke = color(k.paint, k.opacity).and_then(|color| {
+                    let [w, h] = size;
+                    let diagonal = ((w * w + h * h) / 2.0).sqrt() as f32;
+                    let length = |l: &Calc| f64::from(l.resolve(diagonal));
+                    let pen = svg::Pen {
+                        width: length(&k.width),
+                        cap: k.cap,
+                        join: k.join,
+                        miter_limit: k.miter_limit,
+                        dashes: k.dashes.iter().map(length).collect(),
+                        dash_offset: length(&k.dash_offset),
+                        path_length: c.path_length,
+                    };
+                    let outline = (pen.width > 0.0)
+                        .then(|| svg::stroke(&path, &pen, matrix.radius_scale()))
+                        .flatten()?;
+                    Some(Item::Path {
+                        path: outline,
+                        even_odd: false,
+                        color,
+                    })
+                });
+                if let Some(color) = color(s.fill, s.fill_opacity) {
+                    items.push(Item::Path {
+                        path,
+                        even_odd: s.even_odd,
+                        color,
+                    });
                 }
+                items.extend(stroke);
             }
-            Element::Svg { .. } => {}
+            Element::Shape(_) | Element::Svg { .. } => {}
         }
         if items.is_empty() {
             return;

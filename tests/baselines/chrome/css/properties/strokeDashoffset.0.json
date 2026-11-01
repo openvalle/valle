@@ -1,0 +1,23 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><svg data-n=\"2\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"3\" d=\"M3 8 L10 2 L17 8 L24 2\" fill=\"none\" style=\"stroke: #3949ab; stroke-width: 1.5; stroke-dasharray: 4 2; stroke-dashoffset: 0;\"></path></svg></div><div data-n=\"4\" style=\"padding-bottom: 4px;\"><svg data-n=\"5\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"6\" d=\"M3 8 L10 2 L17 8 L24 2\" fill=\"none\" style=\"stroke: #3949ab; stroke-width: 1.5; stroke-dasharray: 4 2; stroke-dashoffset: 2;\"></path></svg></div><div data-n=\"7\" style=\"padding-bottom: 4px;\"><svg data-n=\"8\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"9\" d=\"M3 8 L10 2 L17 8 L24 2\" fill=\"none\" style=\"stroke: #3949ab; stroke-width: 1.5; stroke-dasharray: 4 2; stroke-dashoffset: -3;\"></path></svg></div><div data-n=\"10\" style=\"padding-bottom: 4px;\"><svg data-n=\"11\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"12\" d=\"M3 8 L10 2 L17 8 L24 2\" fill=\"none\" style=\"stroke: #3949ab; stroke-width: 1.5; stroke-dasharray: 4 2; stroke-dashoffset: 10%;\"></path></svg></div><div data-n=\"13\" style=\"padding-bottom: 4px;\"><svg data-n=\"14\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"15\" d=\"M3 8 L10 2 L17 8 L24 2\" fill=\"none\" style=\"stroke: #3949ab; stroke-width: 1.5; stroke-dasharray: 4 2; stroke-dashoffset: 1px;\"></path></svg></div></div></div>\n",
+ "boxes": [
+  [0,0,256,178],
+  [4,4,248,34],
+  [4,4,90,30],
+  [13,10,63,18],
+  [4,38,248,34],
+  [4,38,90,30],
+  [13,44,63,18],
+  [4,72,248,34],
+  [4,72,90,30],
+  [13,78,63,18],
+  [4,106,248,34],
+  [4,106,90,30],
+  [13,112,63,18],
+  [4,140,248,34],
+  [4,140,90,30],
+  [13,146,63,18]
+ ],
+ "lines": {}
+}

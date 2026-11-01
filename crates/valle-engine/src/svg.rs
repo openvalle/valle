@@ -1,8 +1,11 @@
-//! Inline SVG: what an element's attributes say it draws, in its user units, and where an
-//! `<svg>`'s viewBox puts them in its box.
+//! Inline SVG: what an element's attributes say it draws, in its user units, where an `<svg>`'s
+//! viewBox puts them in its box, and the outlines of strokes.
+
+use kurbo::{BezPath, ParamCurveArclen, PathEl, StrokeOpts};
 
 use crate::paint::Matrix;
 use crate::path::{self, Path, Point, Segment};
+use crate::style::{Cap, Join};
 use crate::template::{Tag, V};
 
 /// An SVG length: user units, and a percentage of the viewport's width, height or normalized
@@ -72,6 +75,8 @@ pub struct Computed {
     pub element: Element,
     /// Its `transform` attribute: from its user units to its parent's.
     pub transform: Option<Matrix>,
+    /// A shape's `pathLength`: the length its dashes take its path to have.
+    pub path_length: Option<f64>,
 }
 
 /// Whether an attribute is a presentation attribute: a style property of the same name, which
@@ -79,7 +84,20 @@ pub struct Computed {
 pub fn presentational(tag: Tag, name: &str) -> bool {
     matches!(
         name,
-        "fill" | "fillOpacity" | "fillRule" | "opacity" | "visibility" | "color"
+        "fill"
+            | "fillOpacity"
+            | "fillRule"
+            | "stroke"
+            | "strokeOpacity"
+            | "strokeWidth"
+            | "strokeLinecap"
+            | "strokeLinejoin"
+            | "strokeMiterlimit"
+            | "strokeDasharray"
+            | "strokeDashoffset"
+            | "opacity"
+            | "visibility"
+            | "color"
     ) || (tag == Tag::Svg && matches!(name, "width" | "height"))
 }
 
@@ -158,7 +176,18 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
         }
         _ => {}
     }
-    Ok(Computed { element, transform })
+    let path_length = match get("pathLength") {
+        None => None,
+        Some(v) => match v.text().trim().parse::<f64>() {
+            Ok(l) if l > 0.0 && l.is_finite() => Some(l),
+            _ => return Err(format!("pathLength {} is not a number above 0", v.text())),
+        },
+    };
+    Ok(Computed {
+        element,
+        transform,
+        path_length,
+    })
 }
 
 /// An error in attribute `name`, which says so.
@@ -412,6 +441,129 @@ fn rect([x, y, w, h]: [f32; 4], [rx, ry]: [f32; 2]) -> Path {
         Segment::Cubic([x, y + ky], [x + kx, y], [x + rx, y]),
         Segment::Close,
     ])
+}
+
+/// A stroke as it is drawn, in user units.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pen {
+    pub width: f64,
+    pub cap: Cap,
+    pub join: Join,
+    pub miter_limit: f64,
+    /// Dashes and gaps in turn, an odd number of them repeated; none, or all 0, for a solid
+    /// stroke.
+    pub dashes: Vec<f64>,
+    pub dash_offset: f64,
+    /// The length the dashes take the path to have, if not its own.
+    pub path_length: Option<f64>,
+}
+
+/// How far a stroke's outline may be from where it should, px.
+const ACCURACY: f64 = 0.01;
+
+/// The length a dot is drawn as, px: a subpath of no length, which shows as its caps if they
+/// are round or square.
+const DOT: f64 = 1e-3;
+
+/// The outline of `path` stroked by `pen`, which fills it nonzero; `scale` is px a user unit,
+/// for its accuracy. Each subpath starts the dashes again. A subpath or a dash of no length
+/// shows as its caps, a square one along the x axis, as Chrome draws them. `None` for a stroke
+/// that draws nothing.
+pub fn stroke(path: &Path, pen: &Pen, scale: f64) -> Option<Path> {
+    let s = scale.max(1e-9);
+    let to = |p: Point| kurbo::Point::new(f64::from(p[0]) * s, f64::from(p[1]) * s);
+    let mut els: BezPath = (path.0.iter())
+        .map(|segment| match *segment {
+            Segment::Move(p) => PathEl::MoveTo(to(p)),
+            Segment::Line(p) => PathEl::LineTo(to(p)),
+            Segment::Quad(c, p) => PathEl::QuadTo(to(c), to(p)),
+            Segment::Cubic(c1, c2, p) => PathEl::CurveTo(to(c1), to(c2), to(p)),
+            Segment::Close => PathEl::ClosePath,
+        })
+        .collect();
+    // In px: user units, or those of the path length.
+    let k = match pen.path_length {
+        Some(l) if !pen.dashes.is_empty() => arclen(&els) / l,
+        _ => s,
+    };
+    let mut dashes: Vec<f64> = pen.dashes.iter().map(|d| d * k).collect();
+    if dashes.len() % 2 == 1 {
+        dashes.extend_from_within(..);
+    }
+    if dashes.iter().sum::<f64>() > 0.0 {
+        els = kurbo::dash(els.iter(), pen.dash_offset * k, &dashes).collect();
+    }
+    let els = dotted(&els, pen.cap != Cap::Butt);
+    let cap = match pen.cap {
+        Cap::Butt => kurbo::Cap::Butt,
+        Cap::Round => kurbo::Cap::Round,
+        Cap::Square => kurbo::Cap::Square,
+    };
+    let join = match pen.join {
+        Join::Miter => kurbo::Join::Miter,
+        Join::Round => kurbo::Join::Round,
+        Join::Bevel => kurbo::Join::Bevel,
+    };
+    let style = kurbo::Stroke::new(pen.width * s)
+        .with_caps(cap)
+        .with_join(join)
+        .with_miter_limit(pen.miter_limit);
+    let outline = kurbo::stroke(els, &style, &StrokeOpts::default(), ACCURACY);
+    let back = |p: kurbo::Point| [(p.x / s) as f32, (p.y / s) as f32];
+    let segments: Vec<Segment> = (outline.elements().iter())
+        .map(|e| match *e {
+            PathEl::MoveTo(p) => Segment::Move(back(p)),
+            PathEl::LineTo(p) => Segment::Line(back(p)),
+            PathEl::QuadTo(c, p) => Segment::Quad(back(c), back(p)),
+            PathEl::CurveTo(c1, c2, p) => Segment::Cubic(back(c1), back(c2), back(p)),
+            PathEl::ClosePath => Segment::Close,
+        })
+        .collect();
+    (!segments.is_empty()).then_some(Path(segments))
+}
+
+/// `path` with each subpath of no length a line `DOT` long along the x axis if `dots`, else
+/// left out.
+fn dotted(path: &BezPath, dots: bool) -> BezPath {
+    let mut out = BezPath::new();
+    let flush = |out: &mut BezPath, start: kurbo::Point, subpath: &mut Vec<PathEl>| {
+        let away = |e: &PathEl| match *e {
+            PathEl::LineTo(p) => p != start,
+            PathEl::QuadTo(c, p) => c != start || p != start,
+            PathEl::CurveTo(c1, c2, p) => c1 != start || c2 != start || p != start,
+            PathEl::MoveTo(_) | PathEl::ClosePath => false,
+        };
+        if subpath.iter().any(away) {
+            out.move_to(start);
+            subpath.iter().for_each(|&e| out.push(e));
+        } else if !subpath.is_empty() && dots {
+            out.move_to(start);
+            out.line_to(start + kurbo::Vec2::new(DOT, 0.0));
+        }
+        subpath.clear();
+    };
+    let (mut start, mut subpath) = (kurbo::Point::ORIGIN, Vec::new());
+    for el in path.iter() {
+        match el {
+            PathEl::MoveTo(p) => {
+                flush(&mut out, start, &mut subpath);
+                start = p;
+            }
+            // What follows a close starts a subpath where it started.
+            PathEl::ClosePath => {
+                subpath.push(el);
+                flush(&mut out, start, &mut subpath);
+            }
+            _ => subpath.push(el),
+        }
+    }
+    flush(&mut out, start, &mut subpath);
+    out
+}
+
+/// A path's length.
+fn arclen(path: &BezPath) -> f64 {
+    path.segments().map(|s| s.arclen(ACCURACY)).sum()
 }
 
 #[cfg(test)]

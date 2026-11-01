@@ -732,7 +732,7 @@ fn svg_elements_take_presentation_attributes_under_their_style() {
         (
             vec![("fill", text("url(#g)"))],
             vec![],
-            "attribute fill: url() fills are not supported yet",
+            "attribute fill: url() paints are not supported yet",
         ),
         (
             vec![("fillRule", text("even-odd"))],
@@ -743,6 +743,67 @@ fn svg_elements_take_presentation_attributes_under_their_style() {
         tree[1] = svg(Tag::Circle, &circle, &style, &[]);
         let e = styles(tree.clone(), &[V::Num(2.0)]).unwrap_err();
         assert!(e.starts_with("s.tsx:1:1: ") && e.contains(want), "{e}");
+    }
+}
+
+#[test]
+fn svg_strokes_inherit_with_their_lengths_in_px_and_percentages() {
+    let tree = vec![
+        view(
+            &[
+                ("fontSize", num(20.0)),
+                ("stroke", text("red")),
+                ("strokeWidth", text("0.5em")),
+                ("strokeDasharray", text("1, 2 5%")),
+            ],
+            &[1],
+        ),
+        view(
+            &[
+                ("strokeOpacity", text("50%")),
+                ("strokeLinecap", text("ROUND")),
+                ("strokeLinejoin", text("bevel")),
+                ("strokeMiterlimit", num(2.0)),
+                ("strokeDashoffset", num(-3.0)),
+            ],
+            &[],
+        ),
+    ];
+    let s = styles(tree, &[]).unwrap();
+    let k = &s[1].stroke;
+    let red = color::parse("red").unwrap();
+    assert_eq!((k.paint, k.opacity), (Paint::Color(red), 0.5));
+    // An em is the declaring element's.
+    assert_eq!(k.width, Math::Sum([10.0, 0.0]));
+    let dashes = [[1.0, 0.0], [2.0, 0.0], [0.0, 0.05]].map(Math::Sum);
+    assert_eq!(k.dashes[..], dashes);
+    assert_eq!(k.dash_offset, Math::Sum([-3.0, 0.0]));
+    assert_eq!(
+        (k.cap, k.join, k.miter_limit),
+        (Cap::Round, Join::Bevel, 2.0)
+    );
+    assert_eq!(one(&[]).stroke, Stroke::initial());
+    // SVG lengths take numbers, in px.
+    let width = one(&[("strokeWidth", text("2"))]).stroke.width;
+    assert_eq!(width, Math::Sum([2.0, 0.0]));
+    for (key, value, want) in [
+        ("strokeWidth", num(-1.0), "-1 is negative"),
+        ("strokeMiterlimit", num(0.5), "0.5 is below 1"),
+        (
+            "strokeLinejoin",
+            text("arcs"),
+            "arcs is not one of miter, round, bevel",
+        ),
+        ("strokeDasharray", text("1 -2"), "-2 is negative"),
+        ("strokeDasharray", text(","), "there are no dashes"),
+        (
+            "stroke",
+            text("url(#g)"),
+            "url() paints are not supported yet",
+        ),
+    ] {
+        let e = error(&[(key, value)]);
+        assert!(e.contains(want), "{e}");
     }
 }
 
