@@ -324,9 +324,13 @@ fn texture(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -
     })
 }
 
-/// A texture of `image` with its mipmap.
+/// A texture of `image` with its mipmap, from the first level the GPU's textures fit.
 fn mipmapped(gpu: &Gpu, image: &Image) -> wgpu::Texture {
-    let levels = image.mipmap();
+    let most = gpu.device.limits().max_texture_dimension_2d;
+    let mipmap = image.mipmap();
+    let levels: Vec<&Image> = (std::iter::once(image).chain(&mipmap))
+        .filter(|i| i.size.iter().all(|&n| n <= most))
+        .collect();
     let size = |i: &Image| wgpu::Extent3d {
         width: i.size[0],
         height: i.size[1],
@@ -334,15 +338,15 @@ fn mipmapped(gpu: &Gpu, image: &Image) -> wgpu::Texture {
     };
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: None,
-        size: size(image),
-        mip_level_count: 1 + levels.len() as u32,
+        size: size(levels[0]),
+        mip_level_count: levels.len() as u32,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
-    for (level, i) in std::iter::once(image).chain(&levels).enumerate() {
+    for (level, i) in levels.into_iter().enumerate() {
         gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
