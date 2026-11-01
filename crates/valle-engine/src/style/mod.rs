@@ -64,12 +64,24 @@ pub struct Style {
     pub transform: Vec<transform::Function>,
     pub transform_origin: [position::Offset; 2],
     pub transform_origin_z: f64,
+    /// `perspective` in px, `None` for `none`, which its children's transforms are seen in, from
+    /// `perspective-origin`.
+    pub perspective: Option<f64>,
+    pub perspective_origin: [position::Offset; 2],
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
     pub font: Font,
     /// The math functions with percentages in them that `layout` holds handles to.
     pub calcs: Vec<Calc>,
+}
+
+impl Style {
+    /// Whether the box is the containing block of every box in it, fixed ones too, and a
+    /// stacking context: it has a transform or a perspective, as CSS has it.
+    pub fn contains_all(&self) -> bool {
+        !self.transform.is_empty() || self.perspective.is_some()
+    }
 }
 
 /// A computed box shadow, px.
@@ -337,6 +349,10 @@ enum Sizing {
 
 const AUTO: Len = Len::Auto;
 const ZERO: Len = Len::Px(0.0);
+const CENTER: position::Offset<Len> = position::Offset {
+    end: false,
+    by: Len::Percent(50.0),
+};
 /// The initial border width.
 const MEDIUM: Len = Len::Px(3.0);
 const AUTO_LINES: Line<GridPlacement<String>> = Line {
@@ -570,6 +586,8 @@ struct Declared {
     transform: Vec<transform::Function<Len>>,
     transform_origin: [position::Offset<Len>; 2],
     transform_origin_z: Len,
+    perspective: Option<Len>,
+    perspective_origin: [position::Offset<Len>; 2],
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -631,13 +649,10 @@ impl Default for Declared {
             rotate: None,
             scale: None,
             transform: Vec::new(),
-            transform_origin: [const {
-                position::Offset {
-                    end: false,
-                    by: Len::Percent(50.0),
-                }
-            }; 2],
+            transform_origin: [CENTER; 2],
             transform_origin_z: ZERO,
+            perspective: None,
+            perspective_origin: [CENTER; 2],
             visible: None,
             color: None,
             font_size: None,
@@ -718,6 +733,8 @@ enum Field {
     Scale,
     Transform,
     TransformOrigin,
+    Perspective,
+    PerspectiveOrigin,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -783,7 +800,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 166] = [
+const FIELDS: [(&str, Field); 168] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1050,6 +1067,8 @@ const FIELDS: [(&str, Field); 166] = [
     ("scale", Field::Scale),
     ("transform", Field::Transform),
     ("transformOrigin", Field::TransformOrigin),
+    ("perspective", Field::Perspective),
+    ("perspectiveOrigin", Field::PerspectiveOrigin),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
@@ -1994,6 +2013,10 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::TransformOrigin => {
             (d.transform_origin, d.transform_origin_z) = transform::origin(&px_text(v)?)?;
         }
+        F::Perspective => d.perspective = transform::perspective(&px_text(v)?)?,
+        F::PerspectiveOrigin => {
+            d.perspective_origin = transform::perspective_origin(&px_text(v)?)?;
+        }
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -2225,6 +2248,8 @@ fn compute(
             .collect(),
         transform_origin: d.transform_origin.each_ref().map(|o| o.computed(u)),
         transform_origin_z: d.transform_origin_z.px(u, 0.0),
+        perspective: d.perspective.as_ref().map(|l| l.px(u, 0.0)),
+        perspective_origin: d.perspective_origin.each_ref().map(|o| o.computed(u)),
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,

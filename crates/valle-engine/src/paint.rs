@@ -376,24 +376,40 @@ pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item
 
 /// Each box's transform from its px to the canvas's: its ancestors' and its own.
 pub fn transforms(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix> {
-    let mut out = vec![Matrix::IDENTITY; template.nodes.len()];
+    let n = template.nodes.len();
+    let mut out = vec![Matrix::IDENTITY; n];
+    let mut seen = vec![None; n];
     // In preorder, so a parent's comes first.
     for (i, node) in template.nodes.iter().enumerate() {
-        let m = match transform(&styles[i], layout.boxes[i].border) {
+        let m = match transform(&styles[i], layout.boxes[i].border, seen[i]) {
             Some(own) => out[i].times(own),
             None => out[i],
         };
         out[i] = m;
+        let children = perspective(&styles[i], layout.boxes[i].border);
         for &c in &node.children {
             out[c as usize] = m;
+            seen[c as usize] = children;
         }
     }
     out
 }
 
-/// A box's transform with the border box `border`, in the px around it: its functions, the last
-/// first, around its origin. `None` for `none`.
-fn transform(s: &Style, border: Rect) -> Option<Matrix> {
+/// What a box's children are seen in: its perspective, from its origin, or `None` for `none`.
+/// It reaches only its children, and only one with a transform shows it.
+fn perspective(s: &Style, border: Rect) -> Option<Matrix4> {
+    let d = s.perspective?;
+    let b = snap(border);
+    let size = [b.width, b.height];
+    let [x, y] =
+        [0, 1].map(|k| f64::from([b.x, b.y][k] + s.perspective_origin[k].resolve(size[k])));
+    let m = Matrix4::translate(x, y, 0.0).times(Matrix4::perspective(d));
+    Some(m.times(Matrix4::translate(-x, -y, 0.0)))
+}
+
+/// A box's transform with the border box `border`, in the px around it, seen in its parent's
+/// perspective `seen`: its functions, the last first, around its origin. `None` for `none`.
+fn transform(s: &Style, border: Rect, seen: Option<Matrix4>) -> Option<Matrix> {
     if s.transform.is_empty() {
         return None;
     }
@@ -426,7 +442,7 @@ fn transform(s: &Style, border: Rect) -> Option<Matrix> {
     let m = Matrix4::translate(x, y, z)
         .times(m)
         .times(Matrix4::translate(-x, -y, -z));
-    Some(m.flatten())
+    Some(seen.unwrap_or(Matrix4::IDENTITY).times(m).flatten())
 }
 
 /// Boxes are template indices; `None` is the canvas, a block container without a background.
@@ -458,15 +474,15 @@ impl Painter<'_> {
     }
 
     /// The box whose clips `i` is under too: a fixed box's is its containing block, the nearest
-    /// transformed box around it or the canvas, an absolute box's the nearest positioned or
-    /// transformed one, and any other's its parent.
+    /// box around it with a transform or a perspective or the canvas, an absolute box's the
+    /// nearest such or positioned one, and any other's its parent.
     fn container(&self, i: usize) -> Option<usize> {
         let parents = &self.parents;
-        let transformed = |p: usize| !self.styles[p].transform.is_empty();
+        let all = |p: usize| self.styles[p].contains_all();
         let mut around = std::iter::successors(parents[i], |&p| parents[p]);
         match self.styles[i].layout.position {
-            Position::Fixed => around.find(|&p| transformed(p)),
-            Position::Absolute => around.find(|&p| self.positioned(p) || transformed(p)),
+            Position::Fixed => around.find(|&p| all(p)),
+            Position::Absolute => around.find(|&p| self.positioned(p) || all(p)),
             _ => parents[i],
         }
     }
@@ -486,7 +502,7 @@ impl Painter<'_> {
     fn stacking(&self, i: usize) -> bool {
         let s = &self.styles[i];
         s.opacity < 1.0
-            || !s.transform.is_empty()
+            || s.contains_all()
             || s.layout.position == Position::Fixed
             || (s.z_index.is_some() && (self.positioned(i) || self.item(i)))
     }
@@ -534,7 +550,9 @@ impl Painter<'_> {
     /// box.
     fn layer(&self, d: usize, out: &mut Drawn) {
         let opacity = self.styles[d].opacity as f32;
-        let transform = transform(&self.styles[d], self.layout.boxes[d].border);
+        let seen =
+            self.parents[d].and_then(|p| perspective(&self.styles[p], self.layout.boxes[p].border));
+        let transform = transform(&self.styles[d], self.layout.boxes[d].border, seen);
         if !self.stacking(d) {
             self.whole(Some(d), out);
         } else if let Some(matrix) = transform {

@@ -394,6 +394,34 @@ fn transforms_take_a_box_to_the_canvas_through_its_ancestors() {
 }
 
 #[test]
+fn a_perspective_reaches_only_the_boxs_children() {
+    let toward = [
+        ("width", "40px"),
+        ("height", "20px"),
+        ("transform", "translateZ(50px)"),
+    ];
+    let template = Template {
+        nodes: vec![
+            view(&[("height", "100px"), ("perspective", "100px")], &[1, 2]),
+            view(&toward, &[]),
+            view(&[("height", "20px")], &[3]),
+            view(&toward, &[]),
+        ],
+        roots: vec![0],
+        ..Default::default()
+    };
+    let canvas = [200.0, 100.0];
+    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
+    let transforms = transforms(&template, &styles, &laid);
+    let at = |i: usize, p| transforms[i].apply(p).map(rounded);
+    // Halfway to a viewer 100 px in front of the center: twice as far from it.
+    assert_eq!(at(1, [0.0, 0.0]), [-100.0, -50.0]);
+    // Its grandchild is flattened as if from infinitely far.
+    assert_eq!(at(3, [0.0, 20.0]), [0.0, 20.0]);
+}
+
+#[test]
 fn hidden_boxes_paint_only_what_is_visible_in_them() {
     let order = painted(
         vec![

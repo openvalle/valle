@@ -1200,6 +1200,34 @@ const ROWS: &[Row] = &[
         ],
     },
     Row {
+        properties: &["perspective"],
+        sample: r##"<View style={{ width: 120, height: 24, margin: "4px 60px", PROPERTY: VALUE }}><View style={{ height: 24, background: "linear-gradient(to right, #3949ab, #e57373)", transform: "rotateY(50deg)" }} /></View>"##,
+        values: &[
+            "\"none\"",
+            "\"100px\"",
+            "\"300px\"",
+            "\"0\"",
+            "60",
+            "\"10em\"",
+            "\"calc(50px + 2em)\"",
+        ],
+        refused: &["\"-1px\"", "\"10%\"", "\"a\"", "\"\"", "true"],
+    },
+    Row {
+        properties: &["perspectiveOrigin"],
+        sample: r##"<View style={{ width: 120, height: 24, margin: "4px 60px", perspective: 100, PROPERTY: VALUE }}><View style={{ height: 24, background: "linear-gradient(to right, #3949ab, #e57373)", transform: "rotateY(50deg)" }} /></View>"##,
+        values: &[
+            "\"center\"",
+            "\"left\"",
+            "\"right bottom\"",
+            "\"10px 20%\"",
+            "\"right 10px top 5px\"",
+            "\"-50px 0\"",
+            "30",
+        ],
+        refused: &["\"left top 10px\"", "\"a\"", "\"\"", "true"],
+    },
+    Row {
         properties: &["borderRadius"],
         sample: r##"<View style={{ width: 60, height: 16, background: "#3949ab", PROPERTY: VALUE }} />"##,
         values: &[

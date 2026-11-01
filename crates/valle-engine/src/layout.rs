@@ -2,8 +2,8 @@
 //! their computed styles; text measured as Taffy asks and aligned on its first baseline; and
 //! every node's boxes in canvas px. The canvas is a block container the size of the composition
 //! that clips what overflows it, and the containing block of fixed boxes and of what no
-//! positioned ancestor contains. A transformed box contains the absolute and fixed boxes in it,
-//! as CSS has it.
+//! positioned ancestor contains. A box with a transform or a perspective contains the absolute
+//! and fixed boxes in it, as CSS has it.
 
 use std::borrow::Cow;
 
@@ -352,11 +352,10 @@ impl LayoutPartialTree for Tree<'_> {
     type CustomIdent = String;
 
     fn get_core_container_style(&self, id: NodeId) -> Container<'_> {
-        let transformed =
-            (self.styles.get(usize::from(id))).is_some_and(|s| !s.transform.is_empty());
+        let all = (self.styles.get(usize::from(id))).is_some_and(Style::contains_all);
         Container {
             style: self.style(id),
-            transformed,
+            all,
         }
     }
 
@@ -373,18 +372,18 @@ impl LayoutPartialTree for Tree<'_> {
     }
 }
 
-/// A container's style as the boxes it lays out see it: a transformed one is the containing block
-/// of every absolute and fixed box in it.
+/// A container's style as the boxes it lays out see it: one with a transform or a perspective,
+/// `all`, is the containing block of every absolute and fixed box in it.
 struct Container<'a> {
     style: &'a taffy::Style,
-    transformed: bool,
+    all: bool,
 }
 
 impl CoreStyle for Container<'_> {
     type CustomIdent = String;
 
     fn is_containing_block(&self) -> ContainingBlockClaims {
-        match self.transformed {
+        match self.all {
             true => ContainingBlockClaims::ALL,
             false => self.style.is_containing_block(),
         }

@@ -1185,6 +1185,22 @@ fn transforms_take_3d_functions_and_an_origin_z() {
     assert_eq!(z("left"), 0.0);
     assert_eq!(z("left top 10px"), 10.0);
     assert_eq!(z("10px 20% -1em"), -16.0);
+    let seen = |style: &[(&str, Prop)]| {
+        let s = one(style);
+        (
+            s.perspective,
+            s.perspective_origin.map(|o| o.resolve(100.0)),
+        )
+    };
+    assert_eq!(seen(&[]), (None, [50.0, 50.0]));
+    assert_eq!(
+        seen(&[
+            ("perspective", num(200.0)),
+            ("perspectiveOrigin", text("left 10px bottom 5%"))
+        ]),
+        (Some(200.0), [10.0, 95.0])
+    );
+    assert_eq!(seen(&[("perspective", text("0"))]).0, Some(0.0));
 }
 
 #[test]
@@ -1677,6 +1693,18 @@ fn what_is_not_supported_is_an_error() {
         ),
         ("rotate", num(10.0), "10 is not a string"),
         ("scale", text("2px"), "2px is not a number"),
+        ("perspective", text("-10px"), "-10px is negative"),
+        (
+            "perspective",
+            text("10%"),
+            "10%: percentages are not supported here",
+        ),
+        (
+            "perspectiveOrigin",
+            text("left top 10px"),
+            "\"left top 10px\" is not a perspective origin: one or two of left, center, right, \
+             top, bottom and lengths, or keywords with lengths after them",
+        ),
         ("transform", num(0.0), "0 is not a string"),
         (
             "transformOrigin",

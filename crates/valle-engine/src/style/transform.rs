@@ -222,6 +222,24 @@ pub(super) fn scale(s: &str) -> Result<Option<Function<Len>>, String> {
     }
 }
 
+/// `perspective`: `none`, or the viewer's distance from the box's children.
+pub(super) fn perspective(s: &str) -> Result<Option<Len>, String> {
+    match s {
+        "none" => Ok(None),
+        _ => length_text(s, DEPTH).map(Some),
+    }
+}
+
+/// `perspective-origin`: a position of one, two or four words.
+pub(super) fn perspective_origin(s: &str) -> Result<[Offset<Len>; 2], String> {
+    position(&css::words(s), false).map_err(|_| {
+        format!(
+            "{s:?} is not a perspective origin: one or two of left, center, right, top, bottom \
+             and lengths, or keywords with lengths after them"
+        )
+    })
+}
+
 /// `transform-origin`: a point as one or two words of a position, and a z length, 0 when left
 /// out.
 pub(super) fn origin(s: &str) -> Result<([Offset<Len>; 2], Len), String> {
