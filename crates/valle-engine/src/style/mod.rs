@@ -20,6 +20,7 @@ pub mod shape;
 pub mod transform;
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use taffy::{
@@ -169,6 +170,12 @@ pub struct Style {
     /// A gradient stop's color, a color or `currentColor`, and its opacity.
     pub stop_color: Paint,
     pub stop_opacity: f64,
+    /// An SVG element's `clip-path: url(#id)` and `mask: url(#id)`, `clip-rule: evenodd` for a
+    /// shape in a clip path, and `mask-type: alpha` for a `<mask>`.
+    pub clip_ref: Option<Rc<str>>,
+    pub mask_ref: Option<Rc<str>>,
+    pub clip_even_odd: bool,
+    pub mask_alpha: bool,
     /// An SVG element's geometry, as its attributes have it at the frame.
     pub svg: Option<Rc<svg::Computed>>,
     pub color: Rgba,
@@ -656,6 +663,14 @@ impl Sheet {
             let mut style = compute(&declared, parent, canvas, calcs, i, b.text, resources)
                 .map_err(|e| format!("{}: {e}", b.place))?;
             style.source = b.source;
+            let boxed = (b.svg.as_ref()).is_none_or(|g| g.tag == Tag::Svg);
+            if boxed && (style.clip_ref.is_some() || style.mask_ref.is_some()) {
+                return Err(format!(
+                    "{}: clip-path: url() and mask: url() are supported in an <svg> only, not on \
+                     a box yet",
+                    b.place
+                ));
+            }
             if let Some(g) = &b.svg {
                 style.svg = Some(
                     g.computed(values)
@@ -665,7 +680,52 @@ impl Sheet {
             calcs += style.calcs.len();
             out.push(style);
         }
+        self.references(&out)?;
         Ok(out)
+    }
+
+    /// That each `clip-path: url(#id)` names a `<clipPath>`, and each `mask: url(#id)` a
+    /// `<mask>`, the first element of the id as Chrome finds them, from elements that are not
+    /// clip paths, in them or masks.
+    fn references(&self, styles: &[Style]) -> Result<(), Error> {
+        let refers = |s: &Style| s.clip_ref.is_some() || s.mask_ref.is_some();
+        if !styles.iter().any(refers) {
+            return Ok(());
+        }
+        let tag = |i: usize| self.nodes[i].svg.as_ref().map(|g| g.tag);
+        let mut ids = HashMap::new();
+        for (i, s) in styles.iter().enumerate() {
+            if let Some(id) = s.svg.as_deref().and_then(|c| c.id.as_deref()) {
+                ids.entry(id).or_insert(i);
+            }
+        }
+        for (i, s) in styles.iter().enumerate().filter(|(_, s)| refers(s)) {
+            let place = &self.nodes[i].place;
+            let parent = self.parents[i].and_then(|p| tag(p as usize));
+            for (id, want, name) in [
+                (&s.clip_ref, Tag::ClipPath, "clip-path"),
+                (&s.mask_ref, Tag::Mask, "mask"),
+            ] {
+                let Some(id) = id.as_deref() else {
+                    continue;
+                };
+                if matches!(tag(i), Some(Tag::ClipPath | Tag::Mask))
+                    || parent == Some(Tag::ClipPath)
+                {
+                    return Err(format!(
+                        "{place}: {name}: url() on a <clipPath> or a <mask>, or in a <clipPath>, \
+                         is not supported yet"
+                    ));
+                }
+                if ids.get(id).and_then(|&n| tag(n)) != Some(want) {
+                    return Err(format!(
+                        "{place}: {name}: url(#{id}) names no <{}>",
+                        want.name()
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1152,6 +1212,10 @@ struct Declared {
     dash_offset: Option<Len>,
     stop_color: Option<Paint>,
     stop_opacity: Option<f64>,
+    clip_ref: Option<Rc<str>>,
+    mask_ref: Option<Rc<str>>,
+    clip_even_odd: Option<bool>,
+    mask_alpha: Option<bool>,
     color: Option<Rgba>,
     font_size: Option<Len>,
     font_weight: Option<Weight>,
@@ -1270,6 +1334,10 @@ impl Default for Declared {
             dash_offset: None,
             stop_color: None,
             stop_opacity: None,
+            clip_ref: None,
+            mask_ref: None,
+            clip_even_odd: None,
+            mask_alpha: None,
             color: None,
             font_size: None,
             font_weight: None,
@@ -1411,6 +1479,9 @@ enum Field {
     StrokeDashoffset,
     StopColor,
     StopOpacity,
+    ClipRule,
+    Mask,
+    MaskType,
     Color,
     FontSize,
     FontWeight,
@@ -1507,7 +1578,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 238] = [
+const FIELDS: [(&str, Field); 241] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1810,6 +1881,9 @@ const FIELDS: [(&str, Field); 238] = [
     ("strokeDashoffset", Field::StrokeDashoffset),
     ("stopColor", Field::StopColor),
     ("stopOpacity", Field::StopOpacity),
+    ("clipRule", Field::ClipRule),
+    ("mask", Field::Mask),
+    ("maskType", Field::MaskType),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
     ("fontWeight", Field::FontWeight),
@@ -1896,6 +1970,10 @@ impl Field {
                 | Field::StrokeDashoffset
                 | Field::StopColor
                 | Field::StopOpacity
+                | Field::ClipPath
+                | Field::ClipRule
+                | Field::Mask
+                | Field::MaskType
                 | Field::Opacity
                 | Field::Visibility
                 | Field::Display
@@ -2078,22 +2156,29 @@ fn presented(v: &V, attribute: bool) -> Cow<'_, V> {
 /// as written.
 fn paint(v: &V) -> Result<Paint, String> {
     let s = text(v)?;
-    if s.starts_with("url(") {
-        let raw = v.text();
-        let inner = (raw.trim().get(4..).and_then(|r| r.strip_suffix(')')))
-            .ok_or_else(|| format!("{s}: a color after url() is not supported yet"))?;
-        let quoted = inner.trim().trim_matches(|c| c == '"' || c == '\'');
-        return match quoted.strip_prefix('#') {
-            Some(id) if !id.is_empty() => Ok(Paint::Url(id.into())),
-            _ => Err(format!(
-                "{s}: url() names an element in the <svg>, as url(#gradient)"
-            )),
-        };
+    if let Some(id) = reference(&v.text()) {
+        return id.map(Paint::Url);
     }
     Ok(match s.as_str() {
         "none" => Paint::None,
         "currentcolor" => Paint::CurrentColor,
         s => Paint::Color(color::parse(s)?),
+    })
+}
+
+/// The id `url(#id)` names, as written, if `s` is a `url()`.
+fn reference(s: &str) -> Option<Result<Rc<str>, String>> {
+    let s = s.trim();
+    if !s.get(..4)?.eq_ignore_ascii_case("url(") {
+        return None;
+    }
+    let Some(inner) = s[4..].strip_suffix(')') else {
+        return Some(Err(format!("{s}: what follows url() is not supported yet")));
+    };
+    let quoted = inner.trim().trim_matches(|c| c == '"' || c == '\'');
+    Some(match quoted.strip_prefix('#') {
+        Some(id) if !id.is_empty() => Ok(id.into()),
+        _ => Err(format!("{s}: url() names an SVG element, as url(#id)")),
     })
 }
 
@@ -3302,7 +3387,10 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Filter => d.filter = filter::filter(&text(v)?)?,
         F::BackdropFilter => d.backdrop = filter::filter(&text(v)?)?,
         F::ClipPath => match v {
-            V::Str(s) => d.clip = shape::clip(s)?,
+            V::Str(s) => match reference(s) {
+                Some(id) => (d.clip, d.clip_ref) = (None, Some(id?)),
+                None => (d.clip, d.clip_ref) = (shape::clip(s)?, None),
+            },
             other => return Err(format!("{} is not a string", shown(other))),
         },
         F::MaskImage => d.masks.images = background::images(&text(v)?)?,
@@ -3348,6 +3436,24 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             _ => return Err("a stop's color is a color or currentColor".into()),
         },
         F::StopOpacity => d.stop_opacity = Some(alpha(v)?),
+        F::ClipRule => {
+            d.clip_even_odd = Some(keyword(v, &[("nonzero", false), ("evenodd", true)])?);
+        }
+        F::Mask => {
+            let s = text(v)?;
+            d.mask_ref = match reference(&v.text()) {
+                Some(id) => Some(id?),
+                None if s == "none" => None,
+                None => {
+                    return Err(format!(
+                        "{s}: a mask is url(#id) of a <mask> in an <svg>, or none; a box takes maskImage"
+                    ));
+                }
+            };
+        }
+        F::MaskType => {
+            d.mask_alpha = Some(keyword(v, &[("luminance", false), ("alpha", true)])?);
+        }
         F::Color => d.color = Some(color_of(v)?),
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
@@ -3984,6 +4090,12 @@ fn compute(
         stroke,
         stop_color: d.stop_color.clone().unwrap_or(Paint::Color(color::BLACK)),
         stop_opacity: d.stop_opacity.unwrap_or(1.0),
+        clip_ref: d.clip_ref.clone(),
+        mask_ref: d.mask_ref.clone(),
+        clip_even_odd: d
+            .clip_even_odd
+            .unwrap_or(parent.is_some_and(|p| p.clip_even_odd)),
+        mask_alpha: d.mask_alpha.unwrap_or(false),
         svg: None,
         color,
         font,

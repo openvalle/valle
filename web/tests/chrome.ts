@@ -234,11 +234,12 @@ function measure(): Promise<Measured> {
     }
     return out.map((l) => l.replace(/[ \t\n\r\f]+/g, " ").trim());
   };
-  // The files of img elements, and of images in styles, which Chrome paints once they are in.
+  // The files of img elements, and of images in styles, which Chrome paints once they are in;
+  // url(#id) names an element of the page, not a file.
   const files = new Set<string>();
   for (const e of document.querySelectorAll<HTMLElement>("[data-n]")) {
     const s = getComputedStyle(e);
-    for (const m of `${s.backgroundImage} ${s.maskImage}`.matchAll(/url\("([^"]*)"\)/g)) {
+    for (const m of `${s.backgroundImage} ${s.maskImage}`.matchAll(/url\("([^"#]*)"\)/g)) {
       files.add(m[1]);
     }
   }

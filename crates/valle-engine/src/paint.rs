@@ -41,6 +41,7 @@ mod offset;
 mod scene;
 mod shape;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use taffy::{Display, Overflow, Position};
@@ -746,6 +747,7 @@ pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item
         parents,
         clips: Vec::with_capacity(n),
         ids,
+        masks: RefCell::new(Vec::new()),
     };
     // In preorder, so the box whose clips a box takes has its own.
     for i in 0..n {
@@ -962,6 +964,8 @@ struct Painter<'a> {
     clips: Vec<Vec<usize>>,
     /// SVG elements by id.
     ids: HashMap<&'a str, usize>,
+    /// The masks what is drawing is in, innermost last.
+    masks: RefCell<Vec<usize>>,
 }
 
 impl Painter<'_> {
@@ -1710,7 +1714,8 @@ impl Painter<'_> {
 
     /// An element in an `<svg>` and its children, in user units of a viewport `size` units big,
     /// which `matrix` takes to px: a shape filled, then stroked, unless it is hidden, each
-    /// opacity on its paint's alpha; its opacity on all it draws as one layer, and its transform.
+    /// opacity on its paint's alpha; then its mask, its clip path, and its opacity on all it
+    /// draws as one layer, and its transform.
     fn svg_element(&self, i: usize, size: [f64; 2], matrix: Matrix, out: &mut Vec<Item>) {
         let s = &self.styles[i];
         let Some(c) = s.svg.as_deref() else {
@@ -1763,10 +1768,28 @@ impl Painter<'_> {
             | Element::Svg { .. }
             | Element::Defs
             | Element::Gradient(_)
-            | Element::Stop(_) => {}
+            | Element::Stop(_)
+            | Element::ClipPath { .. }
+            | Element::Mask(_) => {}
         }
         if items.is_empty() {
             return;
+        }
+        for (id, clips) in [(&s.mask_ref, false), (&s.clip_ref, true)] {
+            let Some(id) = id.as_deref() else {
+                continue;
+            };
+            let shown = match clips {
+                true => self.svg_clip(id, i, size),
+                false => self.svg_mask(id, i, size, matrix),
+            };
+            let Some(mask) = shown else {
+                return;
+            };
+            items = vec![Item::Mask {
+                mask: vec![mask],
+                items,
+            }];
         }
         if s.opacity < 1.0 {
             items = vec![Item::Group {
@@ -1779,6 +1802,145 @@ impl Painter<'_> {
             Some(matrix) => out.push(Item::Transform { matrix, items }),
             None => out.extend(items),
         }
+    }
+
+    /// `i`'s bounding box in its user units, in a viewport `size` user units big: a shape's
+    /// path's, a group's around its children's; `None` where it has none.
+    fn svg_bbox(&self, i: usize, size: [f64; 2]) -> Option<[f64; 4]> {
+        let s = &self.styles[i];
+        let c = s.svg.as_deref()?;
+        if s.layout.display == Display::None {
+            return None;
+        }
+        match &c.element {
+            Element::Shape(shape) => svg::path(shape, size).map(|p| svg::bounds(&p)),
+            Element::G => {
+                let children = self.template.nodes[i].children.iter();
+                let boxes = children.filter_map(|&k| {
+                    let k = k as usize;
+                    let b = self.svg_bbox(k, size)?;
+                    let Some(t) = self.styles[k].svg.as_deref().and_then(|c| c.transform) else {
+                        return Some(b);
+                    };
+                    let r = t.bounds(rect(b));
+                    Some([r.x, r.y, r.width, r.height].map(f64::from))
+                });
+                boxes.reduce(|[x, y, w, h], [u, v, p, q]| {
+                    let lo = [x.min(u), y.min(v)];
+                    let hi = [(x + w).max(u + p), (y + h).max(v + q)];
+                    [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// What clip path `id` shows of `i`, in `i`'s user units in a viewport `size` user units
+    /// big, as the alpha of a mask: the shapes in it that are not hidden, opaque, each with its
+    /// clip rule. `None` where it shows nothing.
+    fn svg_clip(&self, id: &str, i: usize, size: [f64; 2]) -> Option<Item> {
+        let &n = self.ids.get(id)?;
+        let c = self.styles[n].svg.as_deref()?;
+        let Element::ClipPath { user_space } = c.element else {
+            return None;
+        };
+        let mut matrix = c.transform.unwrap_or(Matrix::IDENTITY);
+        if !user_space {
+            let bbox @ [.., w, h] = self.svg_bbox(i, size)?;
+            if w <= 0.0 || h <= 0.0 {
+                return None;
+            }
+            matrix = matrix.times(svg::fractions(bbox));
+        }
+        let mut items = Vec::new();
+        for &k in &self.template.nodes[n].children {
+            let s = &self.styles[k as usize];
+            let Some(c) = s.svg.as_deref() else {
+                continue;
+            };
+            let Element::Shape(shape) = &c.element else {
+                continue;
+            };
+            if s.layout.display == Display::None || !s.visible {
+                continue;
+            }
+            let Some(path) = svg::path(shape, size) else {
+                continue;
+            };
+            let path = Item::Path {
+                path,
+                even_odd: s.clip_even_odd,
+                color: [1.0; 4],
+            };
+            items.push(match c.transform {
+                Some(matrix) => Item::Transform {
+                    matrix,
+                    items: vec![path],
+                },
+                None => path,
+            });
+        }
+        (!items.is_empty()).then_some(Item::Transform { matrix, items })
+    }
+
+    /// What mask `id` shows of `i`, in `i`'s user units in a viewport `size` user units big,
+    /// which `matrix` takes to px, as the alpha of a mask: what its children draw, by their
+    /// luminance unless its type is alpha, inside its region. `None` where it shows nothing, as
+    /// a mask in itself does.
+    fn svg_mask(&self, id: &str, i: usize, size: [f64; 2], matrix: Matrix) -> Option<Item> {
+        let &n = self.ids.get(id)?;
+        let c = self.styles[n].svg.as_deref()?;
+        let Element::Mask(m) = c.element else {
+            return None;
+        };
+        let bbox = self
+            .svg_bbox(i, size)
+            .filter(|&[.., w, h]| w > 0.0 && h > 0.0);
+        let [x, y, w, h] = match m.user_space {
+            true => {
+                let [x, y, w, h] = m.region;
+                let [vw, vh] = size;
+                [x.resolve(vw), y.resolve(vh), w.resolve(vw), h.resolve(vh)]
+            }
+            false => {
+                let [x, y, w, h] = m.region.map(|l| l.units + l.percent / 100.0);
+                let [bx, by, bw, bh] = bbox?;
+                [bx + x * bw, by + y * bh, w * bw, h * bh]
+            }
+        };
+        if w <= 0.0 || h <= 0.0 || self.masks.borrow().contains(&n) {
+            return None;
+        }
+        let content = match m.content_user_space {
+            true => Matrix::IDENTITY,
+            false => svg::fractions(bbox?),
+        };
+        let mut items = Vec::new();
+        self.masks.borrow_mut().push(n);
+        for &k in &self.template.nodes[n].children {
+            self.svg_element(k as usize, size, matrix.times(content), &mut items);
+        }
+        self.masks.borrow_mut().pop();
+        if items.is_empty() {
+            return None;
+        }
+        if !m.content_user_space {
+            items = vec![Item::Transform {
+                matrix: content,
+                items,
+            }];
+        }
+        if !self.styles[n].mask_alpha {
+            items = vec![Item::Filter {
+                filters: vec![Filter::Luminance],
+                items,
+            }];
+        }
+        Some(Item::Clip {
+            rect: rect([x, y, w, h]),
+            radii: SQUARE,
+            items,
+        })
     }
 
     /// A shape's paint at `opacity`, in a viewport `size` user units big, over the shape's
@@ -1999,6 +2161,16 @@ impl Painter<'_> {
             }
         }
         out.push(Item::Clip { rect, radii, items });
+    }
+}
+
+/// A rectangle of x, y, width and height.
+fn rect([x, y, width, height]: [f64; 4]) -> Rect {
+    Rect {
+        x: x as f32,
+        y: y as f32,
+        width: width as f32,
+        height: height as f32,
     }
 }
 

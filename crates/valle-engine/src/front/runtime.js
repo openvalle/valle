@@ -570,14 +570,19 @@
     linearGradient: GRADIENT.concat(["x1", "y1", "x2", "y2"]),
     radialGradient: GRADIENT.concat(["cx", "cy", "r", "fx", "fy", "fr"]),
     stop: ["offset"],
+    clipPath: ["clipPathUnits"],
+    mask: ["maskUnits", "maskContentUnits", "x", "y", "width", "height"],
   };
+  const SHAPES = ["path", "circle", "ellipse", "rect", "line", "polyline", "polygon"];
   // The elements that hold others, and those they hold if not any.
   const SVG_HOLDS = {
     svg: null,
     g: null,
     defs: null,
-    linearGradient: ["stop"],
-    radialGradient: ["stop"],
+    mask: null,
+    linearGradient: { tags: ["stop"], what: "<stop>s" },
+    radialGradient: { tags: ["stop"], what: "<stop>s" },
+    clipPath: { tags: SHAPES, what: "shapes" },
   };
   // Attributes every SVG element takes: presentation attributes, which style overrides, and
   // `transform` and `id`.
@@ -597,6 +602,10 @@
     "strokeDashoffset",
     "stopColor",
     "stopOpacity",
+    "clipPath",
+    "clipRule",
+    "mask",
+    "maskType",
     "opacity",
     "visibility",
     "color",
@@ -777,8 +786,8 @@
       fail(at, "<" + type + "> holds no elements");
     }
     for (const c of node.children) {
-      if (holds && !holds.includes(c.tag)) {
-        fail(c.site, "<" + c.tag + "> cannot be inside <" + type + ">: it holds <stop>s");
+      if (holds && !holds.tags.includes(c.tag)) {
+        fail(c.site, "<" + c.tag + "> cannot be inside <" + type + ">: it holds " + holds.what);
       }
       if (c.tag === "stop" && !holds) {
         fail(c.site, "<stop> must be inside a <linearGradient> or <radialGradient>");

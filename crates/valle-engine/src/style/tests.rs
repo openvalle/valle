@@ -732,7 +732,7 @@ fn svg_elements_take_presentation_attributes_under_their_style() {
         (
             vec![("fill", text("url(g)"))],
             vec![],
-            "attribute fill: url(g): url() names an element in the <svg>, as url(#gradient)",
+            "attribute fill: url(g): url() names an SVG element, as url(#id)",
         ),
         (
             vec![("fillRule", text("even-odd"))],
@@ -744,6 +744,75 @@ fn svg_elements_take_presentation_attributes_under_their_style() {
         let e = styles(tree.clone(), &[V::Num(2.0)]).unwrap_err();
         assert!(e.starts_with("s.tsx:1:1: ") && e.contains(want), "{e}");
     }
+}
+
+#[test]
+fn svg_references_name_clip_paths_and_masks() {
+    let svg = |tag, attributes: &[(&str, Prop)], children: &[u32]| Node {
+        kind: Kind::Svg {
+            tag,
+            attributes: (attributes.iter())
+                .map(|(k, p)| (Rc::from(*k), p.clone()))
+                .collect(),
+        },
+        ..view(&[], children)
+    };
+    let tree = vec![
+        svg(Tag::Svg, &[], &[1, 2, 3]),
+        svg(
+            Tag::ClipPath,
+            &[("id", text("c")), ("clipRule", text("evenodd"))],
+            &[4],
+        ),
+        svg(
+            Tag::Mask,
+            &[("id", text("m")), ("maskType", text("alpha"))],
+            &[5],
+        ),
+        svg(
+            Tag::Rect,
+            &[
+                ("clipPath", text("url(#c)")),
+                ("mask", text(" URL( '#m' ) ")),
+            ],
+            &[],
+        ),
+        svg(Tag::Rect, &[], &[]),
+        svg(Tag::Circle, &[], &[]),
+    ];
+    let s = styles(tree.clone(), &[]).unwrap();
+    assert_eq!(s[3].clip_ref.as_deref(), Some("c"));
+    assert_eq!(s[3].mask_ref.as_deref(), Some("m"));
+    // The clip rule is inherited; the mask type is not.
+    assert!(s[4].clip_even_odd && s[2].mask_alpha && !s[5].mask_alpha);
+    for (n, attribute, want) in [
+        (
+            3,
+            ("clipPath", "url(#m)"),
+            "clip-path: url(#m) names no <clipPath>",
+        ),
+        (3, ("mask", "url(#n)"), "mask: url(#n) names no <mask>"),
+        (
+            4,
+            ("clipPath", "url(#c)"),
+            "in a <clipPath>, is not supported yet",
+        ),
+        (2, ("mask", "url(#m)"), "on a <clipPath> or a <mask>"),
+        (0, ("mask", "url(#m)"), "not on a box yet"),
+    ] {
+        let mut tree = tree.clone();
+        let Kind::Svg { tag, .. } = tree[n].kind else {
+            unreachable!()
+        };
+        let children = tree[n].children.clone();
+        tree[n] = svg(tag, &[(attribute.0, text(attribute.1))], &children);
+        let e = styles(tree, &[]).unwrap_err();
+        assert!(e.contains(want), "{e}");
+    }
+    let e = error(&[("clipPath", text("url(#c)"))]);
+    assert!(e.contains("not on a box yet"), "{e}");
+    let e = error(&[("mask", text("linear-gradient(#000, #fff)"))]);
+    assert!(e.contains("a box takes maskImage"), "{e}");
 }
 
 #[test]
@@ -799,7 +868,7 @@ fn svg_strokes_inherit_with_their_lengths_in_px_and_percentages() {
         (
             "stroke",
             text("url(#g) red"),
-            "url(#g) red: a color after url() is not supported yet",
+            "url(#g) red: what follows url() is not supported yet",
         ),
         (
             "stopColor",

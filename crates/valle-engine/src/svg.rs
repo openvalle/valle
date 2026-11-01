@@ -63,7 +63,7 @@ pub enum Shape {
 }
 
 /// What an element draws: an `<svg>` its viewBox through its fit, a group its children, a shape
-/// itself. Definitions, gradients and their stops draw nothing themselves.
+/// itself. Definitions, gradients and their stops, clip paths and masks draw nothing themselves.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Element {
     Svg {
@@ -76,6 +76,23 @@ pub enum Element {
     Gradient(Gradient),
     /// A gradient's stop, at an offset from 0 to 1.
     Stop(f64),
+    /// A clip path: the shapes in it, in user units of the element it clips, or without
+    /// `user_space` in fractions of that element's bounding box.
+    ClipPath {
+        user_space: bool,
+    },
+    Mask(Mask),
+}
+
+/// A mask: what its children draw, by their luminance or alpha, inside `region` (x, y, width and
+/// height), which is in user units of the element it masks or without `user_space` in fractions
+/// of that element's bounding box; its children are in those user units, or without
+/// `content_user_space` in those fractions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mask {
+    pub user_space: bool,
+    pub content_user_space: bool,
+    pub region: [Length; 4],
 }
 
 /// A gradient as its own attributes have it; those it leaves out come from the gradient its
@@ -121,6 +138,10 @@ pub fn presentational(tag: Tag, name: &str) -> bool {
             | "strokeDashoffset"
             | "stopColor"
             | "stopOpacity"
+            | "clipPath"
+            | "clipRule"
+            | "mask"
+            | "maskType"
             | "opacity"
             | "visibility"
             | "color"
@@ -203,13 +224,7 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
                 },
                 None => None,
             };
-            let user_space = text("gradientUnits").map(|u| match u.trim() {
-                "userSpaceOnUse" => Ok(true),
-                "objectBoundingBox" => Ok(false),
-                u => Err(format!(
-                    "gradientUnits: {u} is not userSpaceOnUse or objectBoundingBox"
-                )),
-            });
+            let user_space = text("gradientUnits").map(|u| units(&u).map_err(at("gradientUnits")));
             let spread = text("spreadMethod").map(|m| match m.trim() {
                 "pad" => Ok(Spread::Pad),
                 "repeat" => Ok(Spread::Repeat),
@@ -231,6 +246,36 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
             Some(v) => offset(v).map_err(at("offset"))?,
             None => 0.0,
         }),
+        Tag::ClipPath => Element::ClipPath {
+            user_space: text("clipPathUnits")
+                .map_or(Ok(true), |u| units(&u).map_err(at("clipPathUnits")))?,
+        },
+        Tag::Mask => {
+            let percent = |percent| Length {
+                units: 0.0,
+                percent,
+            };
+            let region = [
+                ("x", -10.0),
+                ("y", -10.0),
+                ("width", 120.0),
+                ("height", 120.0),
+            ];
+            let mut lengths = [Length::default(); 4];
+            for (l, (name, or)) in lengths.iter_mut().zip(region) {
+                *l = match get(name) {
+                    Some(v) => self::length(v).map_err(at(name))?,
+                    None => percent(or),
+                };
+            }
+            Element::Mask(Mask {
+                user_space: text("maskUnits")
+                    .map_or(Ok(false), |u| units(&u).map_err(at("maskUnits")))?,
+                content_user_space: text("maskContentUnits")
+                    .map_or(Ok(true), |u| units(&u).map_err(at("maskContentUnits")))?,
+                region: lengths,
+            })
+        }
     };
     if transform.is_some() && matches!(element, Element::Defs | Element::Stop(_)) {
         return Err(format!(
@@ -240,6 +285,9 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
     }
     if transform.is_some() && matches!(element, Element::Gradient(_)) {
         return Err("transform: a gradient takes gradientTransform".into());
+    }
+    if transform.is_some() && matches!(element, Element::Mask(_)) {
+        return Err("transform: a <mask> takes none, but what is in it may".into());
     }
     let negative = |name: &str, l: Option<Length>| match l {
         Some(l) if l.units < 0.0 || l.percent < 0.0 => Err(format!("{name} is negative")),
@@ -260,6 +308,10 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
         Element::Gradient(g) if g.radial => {
             negative("r", g.lengths[2])?;
             negative("fr", g.lengths[5])?;
+        }
+        Element::Mask(m) => {
+            negative("width", Some(m.region[2]))?;
+            negative("height", Some(m.region[3]))?;
         }
         _ => {}
     }
@@ -289,6 +341,15 @@ fn offset(v: &V) -> Result<f64, String> {
     match x {
         Ok(x) if x.is_finite() => Ok(x.clamp(0.0, 1.0)),
         _ => Err(format!("{s} is not a number or a percentage")),
+    }
+}
+
+/// Units of a gradient, a clip path or a mask: user units (true), or fractions of a bounding box.
+fn units(s: &str) -> Result<bool, String> {
+    match s.trim() {
+        "userSpaceOnUse" => Ok(true),
+        "objectBoundingBox" => Ok(false),
+        u => Err(format!("{u} is not userSpaceOnUse or objectBoundingBox")),
     }
 }
 
@@ -668,6 +729,11 @@ fn bez(path: &Path, s: f64) -> BezPath {
         .collect()
 }
 
+/// What takes fractions of a bounding box `[x, y, width, height]` to the units it is in.
+pub fn fractions([x, y, w, h]: [f64; 4]) -> Matrix {
+    Matrix::affine([w, 0.0, 0.0, h, x, y])
+}
+
 /// A path's bounding box, as its curves reach: x, y, width and height.
 pub fn bounds(path: &Path) -> [f64; 4] {
     let r = bez(path, 1.0).bounding_box();
@@ -695,7 +761,7 @@ pub fn gradient(
             (g.radial == radial).then_some(g.lengths[k]).flatten()
         })
     });
-    let [x, y, w, h] = bbox;
+    let [.., w, h] = bbox;
     let (units, basis) = match pick(chain, |g| g.user_space).unwrap_or(false) {
         true => {
             let [vw, vh] = viewport;
@@ -704,7 +770,7 @@ pub fn gradient(
                 [vw, vh, ((vw * vw + vh * vh) / 2.0).sqrt()],
             )
         }
-        false if w > 0.0 && h > 0.0 => (Matrix::affine([w, 0.0, 0.0, h, x, y]), [1.0; 3]),
+        false if w > 0.0 && h > 0.0 => (fractions(bbox), [1.0; 3]),
         false => return None,
     };
     let transform = pick(chain, |g| g.transform).unwrap_or(Matrix::IDENTITY);

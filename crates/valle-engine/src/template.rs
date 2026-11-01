@@ -167,9 +167,11 @@ pub enum Tag {
     LinearGradient,
     RadialGradient,
     Stop,
+    ClipPath,
+    Mask,
 }
 
-const TAGS: [(&str, Tag); 13] = [
+const TAGS: [(&str, Tag); 15] = [
     ("svg", Tag::Svg),
     ("g", Tag::G),
     ("path", Tag::Path),
@@ -183,6 +185,8 @@ const TAGS: [(&str, Tag); 13] = [
     ("linearGradient", Tag::LinearGradient),
     ("radialGradient", Tag::RadialGradient),
     ("stop", Tag::Stop),
+    ("clipPath", Tag::ClipPath),
+    ("mask", Tag::Mask),
 ];
 
 impl Tag {

@@ -302,6 +302,67 @@ fn gradients_take_their_attributes_along_their_hrefs() {
     assert!(stop(text("a")).is_err());
 }
 
+#[test]
+fn clip_paths_and_masks_take_their_units_and_regions() {
+    let element = |tag, list: &[(&str, V)]| attributes(tag, list).map(|c| c.element);
+    assert_eq!(
+        element(Tag::ClipPath, &[]),
+        Ok(Element::ClipPath { user_space: true })
+    );
+    let units = [("clipPathUnits", text("objectBoundingBox"))];
+    assert_eq!(
+        element(Tag::ClipPath, &units),
+        Ok(Element::ClipPath { user_space: false })
+    );
+    let clip = attributes(Tag::ClipPath, &[("transform", text("scale(2)"))]).unwrap();
+    assert!(clip.transform.is_some());
+    let percent = |percent| Length {
+        units: 0.0,
+        percent,
+    };
+    let Ok(Element::Mask(m)) = element(Tag::Mask, &[]) else {
+        panic!()
+    };
+    assert!(!m.user_space && m.content_user_space);
+    assert_eq!(
+        m.region,
+        [
+            percent(-10.0),
+            percent(-10.0),
+            percent(120.0),
+            percent(120.0)
+        ]
+    );
+    let list = [
+        ("maskUnits", text("userSpaceOnUse")),
+        ("maskContentUnits", text("objectBoundingBox")),
+        ("x", V::Num(5.0)),
+        ("height", text("50%")),
+    ];
+    let Ok(Element::Mask(m)) = element(Tag::Mask, &list) else {
+        panic!()
+    };
+    assert!(m.user_space && !m.content_user_space);
+    assert_eq!(
+        m.region[0],
+        Length {
+            units: 5.0,
+            percent: 0.0
+        }
+    );
+    assert_eq!(m.region[3], percent(50.0));
+    let e = element(Tag::Mask, &[("width", V::Num(-1.0))]).unwrap_err();
+    assert_eq!(e, "width is negative");
+    let e = element(Tag::Mask, &[("transform", text("scale(2)"))]).unwrap_err();
+    assert!(e.contains("<mask> takes none"), "{e}");
+    let e = element(Tag::ClipPath, &[("clipPathUnits", text("px"))]).unwrap_err();
+    assert_eq!(
+        e,
+        "clipPathUnits: px is not userSpaceOnUse or objectBoundingBox"
+    );
+    assert!(presentational(Tag::Rect, "clipPath") && presentational(Tag::Mask, "maskType"));
+}
+
 /// A gradient over `bbox` in a viewport 100 units a side.
 fn gradient_of(chain: &[&Gradient], stops: &[(f64, Rgba)], bbox: [f64; 4]) -> (Ramp, Matrix) {
     super::gradient(chain, stops, bbox, [100.0; 2]).unwrap()

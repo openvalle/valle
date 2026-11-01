@@ -644,6 +644,11 @@ fn errors_point_at_the_source() {
                 "<svg><linearGradient><rect /></linearGradient></svg>",
                 "<rect> cannot be inside <linearGradient>: it holds <stop>s",
             ),
+            (
+                "<svg><clipPath><g /></clipPath></svg>",
+                "<g> cannot be inside <clipPath>: it holds shapes",
+            ),
+            ("<mask />", "<mask> must be inside an <svg>"),
             ("<svg>hi</svg>", "text in an <svg> is not supported yet"),
             ("<svg><View /></svg>", "<View> cannot be inside an <svg>"),
             (

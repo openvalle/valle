@@ -1777,6 +1777,7 @@ const ROWS: &[Row] = &[
             "\"circle(-1px)\"",
             "\"polygon()\"",
             "\"path('M0 0 X')\"",
+            "\"url(#c)\"",
             "\"\"",
             "0",
         ],
@@ -2469,6 +2470,30 @@ const ROWS: &[Row] = &[
         sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><linearGradient id="UNIQUE"><stop offset={0.1} stopColor="#3949ab" /><stop offset={0.9} stopColor="#43a047" style={{ PROPERTY: VALUE }} /></linearGradient><rect x={1} y={1} width={28} height={8} fill="url(#UNIQUE)" /></svg>"##,
         values: &["0.5", "\"25%\"", "0", "1", "2", "-1"],
         refused: &["\"a\"", "\"\"", "true"],
+    },
+    Row {
+        properties: &["clipRule"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6" }}><clipPath id="UNIQUE"><path d="M2 1 H28 V9 H2 Z M8 3 H22 V7 H8 Z" style={{ PROPERTY: VALUE }} /></clipPath><rect width={30} height={10} fill="#3949ab" clipPath="url(#UNIQUE)" /></svg>"##,
+        values: &["\"nonzero\"", "\"evenodd\"", "\" EVENODD \""],
+        refused: &["\"even-odd\"", "\"\"", "0"],
+    },
+    Row {
+        properties: &["mask"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6" }}><mask id="UNIQUE"><rect width={30} height={10} fill="#fff" /><circle cx={15} cy={5} r={3} fill="#000" /></mask><rect x={1} y={1} width={28} height={8} fill="#e53935" style={{ PROPERTY: VALUE }} /></svg>"##,
+        values: &["\"none\"", "\"url(#UNIQUE)\"", "\" URL( '#UNIQUE' ) \""],
+        refused: &[
+            "\"url(#a)\"",
+            "\"url(#a) b\"",
+            "\"linear-gradient(#000, #fff)\"",
+            "\"\"",
+            "0",
+        ],
+    },
+    Row {
+        properties: &["maskType"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6" }}><mask id="UNIQUE" style={{ PROPERTY: VALUE }}><rect width={30} height={10} fill="#fff" fillOpacity={0.6} /><circle cx={15} cy={5} r={3} fill="#000" /></mask><rect x={1} y={1} width={28} height={8} fill="#e53935" mask="url(#UNIQUE)" /></svg>"##,
+        values: &["\"luminance\"", "\"alpha\""],
+        refused: &["\"luma\"", "\"\"", "0"],
     },
 ];
 
