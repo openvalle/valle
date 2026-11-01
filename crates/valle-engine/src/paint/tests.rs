@@ -37,6 +37,7 @@ fn names(items: &[Item]) -> Vec<String> {
         .map(|item| match item {
             Item::Rect { color, .. } => name(*color),
             Item::Ring { colors, .. } => format!("ring {}", name(colors[0])),
+            Item::Gradient { ramp, .. } => format!("gradient of {}", ramp.segments.len()),
             Item::Glyphs { color, .. } => format!("text {}", name(*color)),
             Item::Group { opacity, items } => format!("group {opacity} {:?}", names(items)),
             Item::Clip { items, .. } => format!("clip {:?}", names(items)),
@@ -693,6 +694,173 @@ fn a_border_rounds_its_inside_less_its_widths() {
     // Sides that overlap leave nothing inside, and no radii.
     let (inside, inner_radii) = inner(rect, radii, [12.0, 1.0, 12.0, 1.0]);
     assert_eq!((inside.height, inner_radii), (-4.0, SQUARE));
+}
+
+/// The gradients a box paints, 100 × 50 px and with a 10 px border, with its `background`.
+fn ramps(background: &str) -> Vec<(Rect, Rect, Ramp)> {
+    let style = [
+        ("width", "100px"),
+        ("height", "50px"),
+        ("border", "10px solid transparent"),
+        ("boxSizing", "content-box"),
+        ("background", background),
+    ];
+    let (items, _) = paint_of(vec![view(&style, &[])], &[0]);
+    (items.into_iter())
+        .filter_map(|item| match item {
+            Item::Gradient {
+                rect, tile, ramp, ..
+            } => Some((rect, tile, ramp)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn rounded(v: f32) -> f32 {
+    (v * 1000.0).round() / 1000.0
+}
+
+/// Where a ramp's segments start and end.
+fn spans(ramp: &Ramp) -> Vec<[f32; 2]> {
+    ramp.segments.iter().map(|s| s.at.map(rounded)).collect()
+}
+
+#[test]
+fn gradients_paint_over_the_color_from_the_padding_box() {
+    let (items, _) = paint_of(
+        vec![view(
+            &[
+                ("width", "40px"),
+                ("height", "20px"),
+                ("border", "2px solid black"),
+                (
+                    "background",
+                    "linear-gradient(red, blue), linear-gradient(red, green 50%, blue), gray",
+                ),
+            ],
+            &[],
+        )],
+        &[0],
+    );
+    assert_eq!(
+        names(&items),
+        ["gray", "gradient of 2", "gradient of 1", "ring black"]
+    );
+    let ramps = ramps("linear-gradient(red, blue)");
+    let [(rect, tile, ramp)] = &ramps[..] else {
+        panic!("{ramps:?}")
+    };
+    // Under the border too, the image the padding box.
+    assert_eq!((rect.width, rect.height), (120.0, 70.0));
+    assert_eq!(
+        (tile.x, tile.y, tile.width, tile.height),
+        (10.0, 10.0, 100.0, 50.0)
+    );
+    // Top to bottom through the middle.
+    assert_eq!(
+        ramp.line.map(|p| p.map(rounded)),
+        [[50.0, 0.0], [50.0, 50.0]]
+    );
+    assert_eq!(spans(ramp), [[0.0, 1.0]]);
+}
+
+#[test]
+fn gradient_lines_span_the_image_corner_to_corner() {
+    let line = |g: &str| ramps(g)[0].2.line.map(|p| p.map(rounded));
+    assert_eq!(
+        line("linear-gradient(45deg, red, blue)"),
+        [[12.5, 62.5], [87.5, -12.5]]
+    );
+    // Square to the diagonal from the top left to the bottom right, so both are halfway.
+    assert_eq!(
+        line("linear-gradient(to top right, red, blue)"),
+        [[30.0, 65.0], [70.0, -15.0]]
+    );
+    assert_eq!(
+        line("linear-gradient(to left, red, blue)"),
+        [[100.0, 25.0], [0.0, 25.0]]
+    );
+}
+
+#[test]
+fn stops_go_where_css_puts_them() {
+    let ramp = |g: &str| ramps(g).remove(0).2;
+    let (red, green, blue) = (
+        work(color::parse("red").unwrap()),
+        work(color::parse("green").unwrap()),
+        work(color::parse("blue").unwrap()),
+    );
+    // Black is no earlier than the hint before it, green halfway between blue and black, and
+    // the hint at black keeps the way to it green.
+    let stops = ramp("linear-gradient(to right, red, blue 30%, green, 60%, black 50px, gray)");
+    assert_eq!(
+        spans(&stops),
+        [[0.0, 0.3], [0.3, 0.45], [0.45, 0.6], [0.6, 0.6], [0.6, 1.0]]
+    );
+    assert_eq!(stops.segments[2].colors, [green; 2]);
+    // Half and half a quarter of the way along, lines between nine points on the curve.
+    let hinted = ramp("linear-gradient(to right, red, 25%, blue)");
+    assert_eq!(
+        spans(&hinted)[..4],
+        [[0.0, 0.083], [0.083, 0.167], [0.167, 0.25], [0.25, 0.308]]
+    );
+    assert_eq!(spans(&hinted)[9], [0.596, 1.0]);
+    assert_eq!(
+        hinted.segments[3].colors[0].map(rounded),
+        [0.5, 0.0, 0.5, 1.0]
+    );
+    // Points closer together toward the stop the hint is near.
+    let late = ramp("linear-gradient(to right, red, 75%, blue)");
+    assert_eq!(
+        spans(&late)[7..],
+        [[0.75, 0.833], [0.833, 0.917], [0.917, 1.0]]
+    );
+    // A hint at a stop changes colors there; one halfway changes nothing.
+    let sudden = ramp("linear-gradient(to right, red, 0%, blue)");
+    assert_eq!(spans(&sudden), [[0.0, 0.0], [0.0, 1.0]]);
+    assert_eq!(sudden.segments[1].colors, [blue; 2]);
+    let even = ramp("linear-gradient(to right, red, 50%, blue)");
+    assert_eq!(even.segments[0].colors, [red, blue]);
+    let one = ramp("linear-gradient(red 20%)");
+    assert_eq!((spans(&one), one.repeating), (vec![[0.2, 0.2]], false));
+    let repeating = ramp("repeating-linear-gradient(to right, red 10px, blue 30px)");
+    assert_eq!(spans(&repeating), [[0.1, 0.3]]);
+    assert!(repeating.repeating);
+    // Stops 0 px apart that repeat are the last color, as in Chrome.
+    let flat = ramp("repeating-linear-gradient(red 10px, blue 10px)");
+    assert_eq!(flat.segments[0].colors, [blue; 2]);
+    assert!(!flat.repeating);
+}
+
+#[test]
+fn gradient_colors_mix_premultiplied_in_their_space() {
+    let ends = |g: &str| ramps(g).remove(0).2.segments[0].colors;
+    let both = |c: [[f32; 4]; 2]| c.map(|c| c.map(rounded));
+    assert_eq!(
+        ends("linear-gradient(rgb(255 0 0 / 50%), transparent)"),
+        [[0.5, 0.0, 0.0, 0.5], [0.0; 4]]
+    );
+    assert_eq!(
+        both(ends("linear-gradient(in srgb-linear, #808080, red)")),
+        [[0.216, 0.216, 0.216, 1.0], [1.0, 0.0, 0.0, 1.0]]
+    );
+    // Oklab's red, as CSS Color 4 gives it.
+    assert_eq!(
+        both(ends("linear-gradient(in oklab, red, red)"))[0],
+        [0.628, 0.225, 0.126, 1.0]
+    );
+    // Oklch: lightness and chroma premultiplied, hue in degrees. White's hue is powerless, so it
+    // takes blue's; the shorter way from red to blue goes down through 0.
+    let [white, blue] = ends("linear-gradient(in oklch, white, blue)");
+    assert_eq!(white[2], blue[2]);
+    let [red, blue] = ends("linear-gradient(in oklch, red, rgb(0 0 255 / 50%))");
+    assert_eq!(
+        [red, blue].map(|c| (c[2] * 10.0).round() / 10.0),
+        [389.2, 264.1]
+    );
+    assert_eq!(rounded(blue[0]), 0.226);
+    let [red, blue] = ends("linear-gradient(in oklch longer hue, red, blue)");
+    assert_eq!([red, blue].map(|c| c[2].round()), [29.0, 264.0]);
 }
 
 #[test]

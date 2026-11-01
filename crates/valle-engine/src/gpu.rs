@@ -2,7 +2,8 @@
 //! sRGB-encoded values, composited as browsers composite them), then out as 8-bit sRGB with
 //! straight alpha.
 //!
-//! A frame is planned first: its rectangles, glyphs and layers become instance data, uploaded
+//! A frame is planned first: its rectangles, gradients, glyphs and layers become instance data,
+//! uploaded
 //! once, and steps, each a render pass that draws runs of instances into the frame or a layer,
 //! or composites a layer onto what is under it: a group's at its opacity, a clip's inside its
 //! rounded rectangle. A layer takes a texture from a pool when a step
@@ -17,6 +18,7 @@ use std::task::{Context, Poll, Waker};
 use crate::layout::Rect;
 use crate::paint::{Item, SQUARE};
 use crate::slug;
+use crate::style::gradient::Space;
 use crate::template::Error;
 use crate::text::Face;
 
@@ -25,10 +27,13 @@ const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 const COMMON: &str = include_str!("../shaders/common.wgsl");
 
-/// u32 words per rectangle, glyph and layer instance; blur passes take a layer's words too.
+/// u32 words per rectangle, gradient, glyph and layer instance, and per gradient segment; blur
+/// passes take a layer's words too.
 const RECT: usize = 40;
+const GRADIENT: usize = 28;
 const GLYPH: usize = 20;
 const LAYER: usize = 16;
+const SEGMENT: usize = 12;
 
 /// The result of a request wgpu completes at once, as it does on native backends.
 fn now<T>(request: impl Future<Output = T>) -> Result<T, Error> {
@@ -51,6 +56,7 @@ pub struct Gpu {
     draw: wgpu::BindGroupLayout,
     image: wgpu::BindGroupLayout,
     rects: wgpu::RenderPipeline,
+    gradients: wgpu::RenderPipeline,
     glyphs: wgpu::RenderPipeline,
     layers: wgpu::RenderPipeline,
     blurs: wgpu::RenderPipeline,
@@ -95,6 +101,8 @@ impl Gpu {
                 entry(3, storage),
                 entry(4, storage),
                 entry(5, storage),
+                entry(6, storage),
+                entry(7, storage),
             ],
         });
         let image = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -153,6 +161,7 @@ impl Gpu {
             })
         };
         let rect = include_str!("../shaders/rect.wgsl");
+        let gradient = include_str!("../shaders/gradient.wgsl");
         let glyph = include_str!("../shaders/slug.wgsl");
         let layer = include_str!("../shaders/layer.wgsl");
         let blur = include_str!("../shaders/blur.wgsl");
@@ -160,6 +169,7 @@ impl Gpu {
         Ok(Gpu {
             info: adapter.get_info(),
             rects: pipeline(&drawing, "rect", rect, WORK, over),
+            gradients: pipeline(&drawing, "gradient", gradient, WORK, over),
             glyphs: pipeline(&drawing, "slug", glyph, WORK, over),
             layers: pipeline(&imaging, "layer", layer, WORK, over),
             blurs: pipeline(&imaging, "blur", blur, WORK, None),
@@ -280,6 +290,7 @@ impl Surface {
 #[derive(Clone, Debug, PartialEq)]
 enum Run {
     Rects(Range<u32>),
+    Gradients(Range<u32>),
     Glyphs(Range<u32>),
 }
 
@@ -306,6 +317,8 @@ enum Step {
 #[derive(Default)]
 struct Plan {
     rects: Vec<u32>,
+    gradients: Vec<u32>,
+    segments: Vec<u32>,
     glyphs: Vec<u32>,
     layers: Vec<u32>,
     steps: Vec<Step>,
@@ -321,6 +334,8 @@ pub struct Renderer<'a> {
     readback: wgpu::Buffer,
     screen: wgpu::Buffer,
     rects: Store,
+    gradients: Store,
+    segments: Store,
     glyphs: Store,
     layers: Store,
     curves: Store,
@@ -362,6 +377,8 @@ impl<'a> Renderer<'a> {
             readback,
             screen,
             rects: Store::new(device, "rects"),
+            gradients: Store::new(device, "gradients"),
+            segments: Store::new(device, "segments"),
             glyphs: Store::new(device, "glyphs"),
             layers: Store::new(device, "layers"),
             curves: Store::new(device, "curves"),
@@ -409,6 +426,8 @@ impl<'a> Renderer<'a> {
         ];
         for (store, words) in [
             (&mut self.rects, &plan.rects),
+            (&mut self.gradients, &plan.gradients),
+            (&mut self.segments, &plan.segments),
             (&mut self.glyphs, &plan.glyphs),
             (&mut self.layers, &plan.layers),
         ] {
@@ -432,6 +451,8 @@ impl<'a> Renderer<'a> {
                     entry(3, &self.curves.buffer),
                     entry(4, &self.lists.buffer),
                     entry(5, &self.layers.buffer),
+                    entry(6, &self.gradients.buffer),
+                    entry(7, &self.segments.buffer),
                 ],
             }));
         }
@@ -510,6 +531,44 @@ impl<'a> Renderer<'a> {
                         .chain(colors.into_iter().flatten());
                     plan.rects.extend(words.map(f32::to_bits));
                     extend(&mut runs, Run::Rects(i..i + 1));
+                }
+                Item::Gradient {
+                    rect,
+                    radii,
+                    tile,
+                    ramp,
+                } => {
+                    let i = (plan.gradients.len() / GRADIENT) as u32;
+                    let first = (plan.segments.len() / SEGMENT) as u32;
+                    for s in &ramp.segments {
+                        let words = [s.at[0], s.at[1], 0.0, 0.0].into_iter();
+                        let words = words.chain(s.colors.into_iter().flatten());
+                        plan.segments.extend(words.map(f32::to_bits));
+                    }
+                    let [[x0, y0], [x1, y1]] = ramp.line;
+                    let words = (xywh(*rect).into_iter())
+                        .chain(radii.iter().flatten().copied())
+                        .chain(xywh(*tile))
+                        .chain([x0, y0, x1, y1]);
+                    plan.gradients.extend(words.map(f32::to_bits));
+                    let space = match ramp.space {
+                        Space::Srgb => 0,
+                        Space::SrgbLinear => 1,
+                        Space::Oklab => 2,
+                        Space::Oklch(_) => 3,
+                    };
+                    let count = ramp.segments.len() as u32;
+                    plan.gradients.extend([
+                        u32::from(ramp.repeating),
+                        space,
+                        0,
+                        0,
+                        first,
+                        count,
+                        0,
+                        0,
+                    ]);
+                    extend(&mut runs, Run::Gradients(i..i + 1));
                 }
                 Item::Glyphs {
                     face,
@@ -672,6 +731,7 @@ impl<'a> Renderer<'a> {
                     for run in runs {
                         let (pipeline, range) = match run {
                             Run::Rects(r) => (&gpu.rects, r),
+                            Run::Gradients(r) => (&gpu.gradients, r),
                             Run::Glyphs(r) => (&gpu.glyphs, r),
                         };
                         pass.set_pipeline(pipeline);
@@ -745,7 +805,9 @@ fn xywh(r: Rect) -> [f32; 4] {
 /// Appends instance `next` to the last run when it is of the same kind and follows it.
 fn extend(runs: &mut Vec<Run>, next: Run) {
     match (runs.last_mut(), &next) {
-        (Some(Run::Rects(r)), Run::Rects(n)) | (Some(Run::Glyphs(r)), Run::Glyphs(n))
+        (Some(Run::Rects(r)), Run::Rects(n))
+        | (Some(Run::Gradients(r)), Run::Gradients(n))
+        | (Some(Run::Glyphs(r)), Run::Glyphs(n))
             if r.end == n.start =>
         {
             r.end = n.end;

@@ -9,6 +9,7 @@
 
 pub mod color;
 mod css;
+pub mod gradient;
 mod grid;
 pub mod math;
 
@@ -37,6 +38,8 @@ pub struct Style {
     /// `z-index`; `None` is `auto`.
     pub z_index: Option<i32>,
     pub background: Rgba,
+    /// `background-image`, the first on top.
+    pub images: Vec<gradient::Image>,
     /// `border-radius`: each corner's horizontal and vertical radius, from the top left
     /// clockwise, as px and fractions of the border box's width and height.
     pub radii: [[Calc; 2]; 4],
@@ -539,6 +542,7 @@ struct Declared {
     justify_items: AlignItems,
     justify_self: Option<AlignItems>,
     background: Rgba,
+    images: Vec<gradient::Declared>,
     /// Horizontal and vertical, from the top left clockwise.
     radii: [[Len; 2]; 4],
     /// Top, right, bottom and left.
@@ -598,6 +602,7 @@ impl Default for Declared {
             justify_items: AlignItems::NORMAL,
             justify_self: None,
             background: color::TRANSPARENT,
+            images: Vec::new(),
             radii: [const { [ZERO; 2] }; 4],
             border_width: [MEDIUM; 4],
             border_style: [BorderStyle::None; 4],
@@ -675,6 +680,7 @@ enum Field {
     PlaceContent,
     Background,
     BackgroundColor,
+    BackgroundImage,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -740,7 +746,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 153] = [
+const FIELDS: [(&str, Field); 154] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -826,6 +832,7 @@ const FIELDS: [(&str, Field); 153] = [
     ("placeContent", Field::PlaceContent),
     ("background", Field::Background),
     ("backgroundColor", Field::BackgroundColor),
+    ("backgroundImage", Field::BackgroundImage),
     ("borderRadius", Field::BorderRadius),
     ("borderTopLeftRadius", Field::CornerRadius(0)),
     ("borderTopRightRadius", Field::CornerRadius(1)),
@@ -1875,18 +1882,9 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::PlaceContent => {
             (d.align_content, d.justify_content) = pair(v, |v| keyword(v, &CONTENT_ALIGN))?
         }
-        F::Background => {
-            let s = text(v)?;
-            d.background = match s.as_str() {
-                "none" => color::TRANSPARENT,
-                _ => color::parse(&s).map_err(|e| {
-                    format!(
-                        "{e}: background takes only a color so far; images are not supported yet"
-                    )
-                })?,
-            }
-        }
+        F::Background => (d.images, d.background) = gradient::background(&text(v)?)?,
         F::BackgroundColor => d.background = color_of(v)?,
+        F::BackgroundImage => d.images = gradient::images(&text(v)?)?,
         F::BorderRadius => d.radii = radii(v)?,
         F::CornerRadius(c) => d.radii[c] = corner(v)?,
         F::Border(which, BorderPart::Line) => {
@@ -2120,6 +2118,7 @@ fn compute(
         order: d.order,
         z_index: d.z_index,
         background: d.background,
+        images: d.images.iter().map(|i| i.computed(u, color)).collect(),
         radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
         border,
         border_colors: d.border_color.map(|c| c.unwrap_or(color)),

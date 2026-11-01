@@ -11,8 +11,9 @@
 //! in it. Opacity, a fixed position, and a z-index on a positioned box or a flex or grid item make
 //! a stacking context; only opacity makes it a layer. Tree order puts a flex or grid container's
 //! children in the order it lays them out. A hidden box (`visibility`) paints nothing of its
-//! own, but what it contains still paints if visible. A box's background paints over its outer
-//! shadows, and its inner shadows and border over the background.
+//! own, but what it contains still paints if visible. A box's background, its color and then its
+//! images, the first on top, paints over its outer shadows, and its inner shadows and border over
+//! the background.
 //!
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
@@ -22,10 +23,15 @@
 //! Boxes paint with their edges on whole pixels, as Chrome paints them, so a layout that lands
 //! between pixels still has crisp edges.
 
+mod gradient;
+
 use taffy::{Display, Overflow, Position};
+
+pub use gradient::{Ramp, Segment};
 
 use crate::layout::{Layout, Rect, ordered};
 use crate::style::color::Rgba;
+use crate::style::gradient::Image;
 use crate::style::{Shadow, Style};
 use crate::template::Template;
 
@@ -47,6 +53,14 @@ pub enum Item {
         inner: Rect,
         inner_radii: Radii,
         colors: [[f32; 4]; 4],
+    },
+    /// A gradient filling a rectangle with its corners rounded by `radii`: its image the size of
+    /// `tile`, repeated from there.
+    Gradient {
+        rect: Rect,
+        radii: Radii,
+        tile: Rect,
+        ramp: Ramp,
     },
     /// Glyphs of `Text::faces()[face]` at `size` px: glyph ids at their baseline origins.
     Glyphs {
@@ -485,22 +499,38 @@ impl Painter<'_> {
         for shadow in outer {
             out.extend(outer_shadow(shadow, rect, radii, opaque).map(|item| (clip, item)));
         }
+        // The background would show at the antialiased edge of a rounded border: under four
+        // opaque sides it shrinks by half their widths, as in Chrome.
+        let (area, area_radii) = match (0..4).all(|k| widths[k] > 0.0 && colors[k][3] >= 1.0) {
+            true if radii != SQUARE => inner(rect, radii, widths.map(|w| w / 2.0)),
+            _ => (rect, radii),
+        };
+        let area = snap(area);
         if s.background[3] > 0.0 {
-            // The background would show at the antialiased edge of a rounded border: under four
-            // opaque sides it shrinks by half their widths, as in Chrome.
-            let (rect, radii) = match (0..4).all(|k| widths[k] > 0.0 && colors[k][3] >= 1.0) {
-                true if radii != SQUARE => inner(rect, radii, widths.map(|w| w / 2.0)),
-                _ => (rect, radii),
-            };
             let color = work(s.background);
             out.push((
                 clip,
                 Item::Rect {
-                    rect: snap(rect),
-                    radii,
+                    rect: area,
+                    radii: area_radii,
                     color,
                 },
             ));
+        }
+        // Images over the color, the first on top, from the padding box's top left and repeated
+        // under the border.
+        if inside.width > 0.0 && inside.height > 0.0 {
+            for image in s.images.iter().rev() {
+                let Image::Gradient(g) = image else { continue };
+                let ramp = gradient::linear(g, [inside.width, inside.height]);
+                let item = Item::Gradient {
+                    rect: area,
+                    radii: area_radii,
+                    tile: inside,
+                    ramp,
+                };
+                out.push((clip, item));
+            }
         }
         for shadow in inset {
             out.extend(inner_shadow(shadow, inside, inner_radii).map(|item| (clip, item)));
@@ -640,7 +670,9 @@ impl Painter<'_> {
         };
         if radii == SQUARE {
             let inside = |item: &Item| match item {
-                Item::Rect { rect: r, .. } | Item::Ring { rect: r, .. } => within(*r, rect),
+                Item::Rect { rect: r, .. }
+                | Item::Ring { rect: r, .. }
+                | Item::Gradient { rect: r, .. } => within(*r, rect),
                 _ => false,
             };
             if items.iter().all(inside) {

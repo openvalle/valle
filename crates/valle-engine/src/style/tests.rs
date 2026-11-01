@@ -872,6 +872,70 @@ fn box_shadows_take_lengths_a_color_and_inset() {
 }
 
 #[test]
+fn backgrounds_take_gradients_over_a_color() {
+    use gradient::{Hue, Image, Line, Space, Stop};
+    let c = |name| color::parse(name).unwrap();
+    // Colors, `None` for a hint, at px of a 100 px line.
+    let stops = |image: &Image| match image {
+        Image::Gradient(g) => (g.stops.iter())
+            .map(|s| match s {
+                Stop::Color(c, at) => (Some(*c), at.as_ref().map(|a| a.resolve(100.0))),
+                Stop::Hint(at) => (None, Some(at.resolve(100.0))),
+            })
+            .collect(),
+        Image::None => Vec::new(),
+    };
+    let s = one(&[
+        ("color", text("blue")),
+        (
+            "background",
+            text("linear-gradient(red, 10px, currentColor 20% 2em), none, Green"),
+        ),
+    ]);
+    assert_eq!(s.background, c("green"));
+    assert_eq!(s.images[1], Image::None);
+    assert_eq!(
+        stops(&s.images[0]),
+        [
+            (Some(c("red")), None),
+            (None, Some(10.0)),
+            (Some(c("blue")), Some(20.0)),
+            (Some(c("blue")), Some(32.0)),
+        ]
+    );
+    let gradient = |v: &str| match &one(&[("backgroundImage", text(v))]).images[..] {
+        [Image::Gradient(g)] => (g.line, g.repeating, g.space),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        gradient("linear-gradient(red, blue)"),
+        (Line::Angle(180.0), false, Space::Srgb)
+    );
+    assert_eq!(
+        gradient("linear-gradient(to left, red)").0,
+        Line::Angle(270.0)
+    );
+    assert_eq!(gradient("linear-gradient(0, red)").0, Line::Angle(0.0));
+    assert_eq!(
+        gradient("repeating-linear-gradient(0.25turn in oklab, red, blue)"),
+        (Line::Angle(90.0), true, Space::Oklab)
+    );
+    assert_eq!(
+        gradient("linear-gradient(in oklch longer hue to top left, red, blue)"),
+        (Line::Corner([-1.0, -1.0]), false, Space::Oklch(Hue::Longer))
+    );
+    assert_eq!(
+        gradient("linear-gradient(to bottom right in srgb-linear, red, blue)"),
+        (Line::Corner([1.0, 1.0]), false, Space::SrgbLinear)
+    );
+    assert_eq!(
+        gradient("linear-gradient(in oklch, red, blue)").2,
+        Space::Oklch(Hue::Shorter)
+    );
+    assert_eq!(one(&[("background", text("none"))]).images, [Image::None]);
+}
+
+#[test]
 fn corner_radii_expand_as_sides_do() {
     // Each corner's radii, percentages of 100 px.
     let radii = |style: &[(&str, Prop)]| one(style).radii.map(|c| c.map(|r| r.resolve(100.0)));
@@ -973,6 +1037,69 @@ fn what_is_not_supported_is_an_error() {
             "background",
             text("url(a.png)"),
             "images are not supported yet",
+        ),
+        (
+            "background",
+            text("linear-gradient(10% red, blue)"),
+            "\"10% red\" is not a color stop: a color, then up to two positions",
+        ),
+        (
+            "background",
+            text("linear-gradient(red 1px 2px 3px)"),
+            "is not a color stop",
+        ),
+        (
+            "background",
+            text("linear-gradient(red, 10%, 20%, blue)"),
+            "linear-gradient(): 20% is a hint, which goes between two color stops",
+        ),
+        ("background", text("linear-gradient(10%, red)"), "is a hint"),
+        (
+            "background",
+            text("linear-gradient(to right)"),
+            "needs a color stop",
+        ),
+        (
+            "backgroundImage",
+            text("linear-gradient(in hsl, red, blue)"),
+            "in hsl is not supported yet; use srgb, srgb-linear, oklab or oklch",
+        ),
+        (
+            "backgroundImage",
+            text("linear-gradient(in oklch sideways hue, red)"),
+            "sideways hue is not a way around the hue circle",
+        ),
+        (
+            "backgroundImage",
+            text("linear-gradient(to top bottom, red)"),
+            "to top bottom is not a corner",
+        ),
+        (
+            "backgroundImage",
+            text("linear-gradient(45deg 90deg, red)"),
+            "90deg: a gradient starts with an angle or a side, and a color space",
+        ),
+        (
+            "backgroundImage",
+            text("radial-gradient(red, blue)"),
+            "radial-gradient() is not supported yet",
+        ),
+        ("backgroundImage", text("red"), "red is not an image"),
+        (
+            "backgroundImage",
+            text(""),
+            "\"\" is not an image; use none",
+        ),
+        (
+            "background",
+            text("red, blue"),
+            "only the last layer takes a color, and only one",
+        ),
+        ("background", text("red blue"), "and only one"),
+        (
+            "background",
+            text("center"),
+            "center is not a color or an image",
         ),
         (
             "borderRadius",
