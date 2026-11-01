@@ -27,20 +27,5 @@ struct Out {
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let r = rects[in.index];
-  let lo = r.box.xy;
-  let hi = r.box.xy + r.box.zw;
-  let p = in.pos.xy;
-  // The part of the pixel inside the box, exact for straight edges: a rectangle's box filter is
-  // the product of its two sides'.
-  let side = clamp(min(p + 0.5, hi) - max(p - 0.5, lo), vec2f(0.0), vec2f(1.0));
-  var cov = side.x * side.y;
-  // Past a corner's center on both axes, the part inside its circle, from the distance to it.
-  let radius = r.radius.x;
-  if (radius > 0.0) {
-    let off = p - clamp(p, lo + radius, hi - radius);
-    if (off.x != 0.0 && off.y != 0.0) {
-      cov = min(cov, clamp(radius + 0.5 - length(off), 0.0, 1.0));
-    }
-  }
-  return r.color * cov;
+  return r.color * coverage(in.pos.xy, r.box, r.radius.x);
 }

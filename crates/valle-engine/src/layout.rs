@@ -29,10 +29,11 @@ pub struct Rect {
     pub height: f32,
 }
 
-/// A node's border box and content box.
+/// A node's border box, padding box and content box.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Boxes {
     pub border: Rect,
+    pub padding: Rect,
     pub content: Rect,
 }
 
@@ -167,20 +168,17 @@ pub fn layout(
             continue;
         };
         let l = &layouts[i];
-        let (inset, pad) = (l.border, l.padding);
-        let content = Rect {
-            x: x + inset.left + pad.left,
-            y: y + inset.top + pad.top,
-            width: l.size.width - inset.left - inset.right - pad.left - pad.right,
-            height: l.size.height - inset.top - inset.bottom - pad.top - pad.bottom,
+        let border = Rect {
+            x,
+            y,
+            width: l.size.width,
+            height: l.size.height,
         };
+        let padding = inside(border, l.border);
+        let content = inside(padding, l.padding);
         boxes[i] = Boxes {
-            border: Rect {
-                x,
-                y,
-                width: l.size.width,
-                height: l.size.height,
-            },
+            border,
+            padding,
             content,
         };
         if let Some(s) = &strings[i] {
@@ -191,6 +189,16 @@ pub fn layout(
         }
     }
     Ok(Layout { boxes, lines })
+}
+
+/// `r` less `edges`.
+fn inside(r: Rect, edges: taffy::Rect<f32>) -> Rect {
+    Rect {
+        x: r.x + edges.left,
+        y: r.y + edges.top,
+        width: r.width - edges.left - edges.right,
+        height: r.height - edges.top - edges.bottom,
+    }
 }
 
 /// The frame as Taffy lays it out: a node's id is its template index, and the canvas's is the

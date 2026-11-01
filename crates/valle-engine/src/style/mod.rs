@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 use taffy::{
     AlignContent, AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap, GridAutoFlow,
-    GridPlacement, LengthPercentage, LengthPercentageAuto, Line, Position,
+    GridPlacement, LengthPercentage, LengthPercentageAuto, Line, Overflow, Position,
 };
 
 use color::Rgba;
@@ -477,6 +477,8 @@ struct Declared {
     box_sizing: BoxSizing,
     /// Width over height; `None` is `auto`.
     aspect_ratio: Option<f64>,
+    /// x, y.
+    overflow: [Overflow; 2],
     margin: [Len; 4],
     padding: [Len; 4],
     flex_direction: FlexDirection,
@@ -523,6 +525,7 @@ impl Default for Declared {
             max_size: [AUTO; 2],
             box_sizing: BoxSizing::BorderBox,
             aspect_ratio: None,
+            overflow: [Overflow::Visible; 2],
             margin: [ZERO; 4],
             padding: [ZERO; 4],
             flex_direction: FlexDirection::Row,
@@ -571,6 +574,10 @@ enum Field {
     MaxHeight,
     BoxSizing,
     AspectRatio,
+    /// Both axes, or x or y.
+    Overflow,
+    OverflowX,
+    OverflowY,
     Margin(Sides),
     Padding(Sides),
     FlexDirection,
@@ -638,7 +645,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 88] = [
+const FIELDS: [(&str, Field); 93] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -660,6 +667,11 @@ const FIELDS: [(&str, Field); 88] = [
     ("maxHeight", Field::MaxHeight),
     ("boxSizing", Field::BoxSizing),
     ("aspectRatio", Field::AspectRatio),
+    ("overflow", Field::Overflow),
+    ("overflowX", Field::OverflowX),
+    ("overflowY", Field::OverflowY),
+    ("overflowInline", Field::OverflowX),
+    ("overflowBlock", Field::OverflowY),
     ("margin", Field::Margin(Sides::All)),
     ("marginTop", Field::Margin(Sides::Top)),
     ("marginRight", Field::Margin(Sides::Right)),
@@ -1121,6 +1133,21 @@ const CONTENT_ALIGN: [(&str, AlignContent); 10] = [
     ("space-evenly", AlignContent::SPACE_EVENLY),
 ];
 
+/// `overflow-x` and the like: `visible`, `hidden` or `clip`.
+fn overflow(v: &V) -> Result<Overflow, String> {
+    match text(v)?.as_str() {
+        s @ ("auto" | "scroll") => Err(format!("{s} is not supported: {NO_SCROLL}; use hidden")),
+        _ => keyword(
+            v,
+            &[
+                ("visible", Overflow::Visible),
+                ("hidden", Overflow::Hidden),
+                ("clip", Overflow::Clip),
+            ],
+        ),
+    }
+}
+
 /// `align-self` and `justify-self`: `auto` takes the container's `-items`.
 fn self_align(v: &V) -> Result<Option<AlignItems>, String> {
     Ok(match text(v)?.as_str() {
@@ -1129,8 +1156,9 @@ fn self_align(v: &V) -> Result<Option<AlignItems>, String> {
     })
 }
 
-/// A `place-` shorthand: the alignment, then the justification, which one value is both.
-fn place<T: Clone>(v: &V, one: fn(&V) -> Result<T, String>) -> Result<(T, T), String> {
+/// A shorthand of two values, such as `place-items`' alignment and justification, where one value
+/// is both.
+fn pair<T: Clone>(v: &V, one: fn(&V) -> Result<T, String>) -> Result<(T, T), String> {
     let s = text(v)?;
     let word = |w: &str| one(&V::Str(w.into()));
     match css::words(&s)[..] {
@@ -1330,6 +1358,9 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             )?
         }
         F::AspectRatio => d.aspect_ratio = ratio(v)?,
+        F::Overflow => d.overflow = pair(v, overflow)?.into(),
+        F::OverflowX => d.overflow[0] = overflow(v)?,
+        F::OverflowY => d.overflow[1] = overflow(v)?,
         F::JustifyContent => d.justify_content = keyword(v, &CONTENT_ALIGN)?,
         F::AlignItems => d.align_items = keyword(v, &SELF_ALIGN)?,
         F::AlignSelf => d.align_self = self_align(v)?,
@@ -1359,10 +1390,10 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::GridArea => d.grid_lines = grid::area(v)?,
         F::JustifyItems => d.justify_items = keyword(v, &SELF_ALIGN)?,
         F::JustifySelf => d.justify_self = self_align(v)?,
-        F::PlaceItems => (d.align_items, d.justify_items) = place(v, |v| keyword(v, &SELF_ALIGN))?,
-        F::PlaceSelf => (d.align_self, d.justify_self) = place(v, self_align)?,
+        F::PlaceItems => (d.align_items, d.justify_items) = pair(v, |v| keyword(v, &SELF_ALIGN))?,
+        F::PlaceSelf => (d.align_self, d.justify_self) = pair(v, self_align)?,
         F::PlaceContent => {
-            (d.align_content, d.justify_content) = place(v, |v| keyword(v, &CONTENT_ALIGN))?
+            (d.align_content, d.justify_content) = pair(v, |v| keyword(v, &CONTENT_ALIGN))?
         }
         F::Background => {
             let s = text(v)?;
@@ -1520,9 +1551,16 @@ fn compute(
     let (grid_template_columns, grid_template_column_names) = l.template(&d.grid_template[COLUMNS]);
     let [grid_auto_rows, grid_auto_columns]: [Vec<_>; 2] =
         [ROWS, COLUMNS].map(|axis| d.grid_auto[axis].iter().map(|t| l.track(t)).collect());
+    // Hidden on one axis makes the other, visible or clip, hidden too: CSS computes it to auto or
+    // hidden, which clip alike when nothing scrolls.
+    let [x, y] = match d.overflow {
+        o if o.contains(&Overflow::Hidden) => [Overflow::Hidden; 2],
+        o => o,
+    };
     let layout: taffy::Style = taffy::Style {
         display,
         position: d.position,
+        overflow: taffy::Point { x, y },
         inset: l.rect(&d.inset, Lengths::lpa),
         size: taffy::Size {
             width: l.dim(&d.size[0]),

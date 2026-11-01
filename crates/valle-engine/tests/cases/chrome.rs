@@ -116,6 +116,19 @@ pub fn shapes(items: &[Item]) -> Vec<Item> {
                 let opacity = *opacity;
                 (!items.is_empty()).then_some(Item::Group { opacity, items })
             }
+            Item::Clip {
+                rect,
+                radius,
+                items,
+            } => {
+                let items = shapes(items);
+                let (rect, radius) = (*rect, *radius);
+                (!items.is_empty()).then_some(Item::Clip {
+                    rect,
+                    radius,
+                    items,
+                })
+            }
             item => Some(item.clone()),
         })
         .collect()

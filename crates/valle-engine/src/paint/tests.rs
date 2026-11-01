@@ -38,6 +38,7 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Rect { color, .. } => name(*color),
             Item::Glyphs { color, .. } => format!("text {}", name(*color)),
             Item::Group { opacity, items } => format!("group {opacity} {:?}", names(items)),
+            Item::Clip { items, .. } => format!("clip {:?}", names(items)),
         })
         .collect()
 }
@@ -180,6 +181,109 @@ fn positioned_boxes_leave_their_positioned_descendants_to_the_context() {
         &[0, 3],
     );
     assert_eq!(order, ["gray", "red", "blue", "green"]);
+}
+
+#[test]
+fn overflow_clips_what_the_box_contains() {
+    let hidden = [("overflow", "hidden"), ("height", "20px")];
+    let at = |position, top: &str, background| {
+        let style = [
+            ("position", position),
+            ("top", top),
+            ("width", "10px"),
+            ("height", "10px"),
+            ("background", background),
+        ];
+        view(&style, &[])
+    };
+    let (items, _) = paint_of(
+        vec![
+            view(&[hidden[0], hidden[1], ("background", "red")], &[1, 2, 3]),
+            view(&[("height", "30px"), ("background", "green")], &[]),
+            // Its containing block is the canvas, outside the clip.
+            at("absolute", "30px", "blue"),
+            at("relative", "-15px", "gray"),
+            view(&[hidden[0], hidden[1], ("position", "relative")], &[5, 6]),
+            at("absolute", "15px", "black"),
+            at("fixed", "50px", "red"),
+        ],
+        &[0, 4],
+    );
+    let rect = |x: f32, y: f32, width: f32, height: f32| Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let rects: Vec<Rect> = (items.iter())
+        .map(|item| match item {
+            Item::Rect { rect, .. } => *rect,
+            _ => panic!("{items:?}"),
+        })
+        .collect();
+    // A square clip cuts a lone rectangle, or leaves one inside it as it is.
+    assert_eq!(
+        rects,
+        [
+            rect(0.0, 0.0, 200.0, 20.0),
+            rect(0.0, 0.0, 200.0, 20.0),
+            rect(0.0, 30.0, 10.0, 10.0),
+            rect(0.0, 15.0, 10.0, 5.0),
+            rect(0.0, 35.0, 10.0, 5.0),
+            rect(0.0, 50.0, 10.0, 10.0),
+        ]
+    );
+}
+
+#[test]
+fn clips_round_and_go_on_each_item_in_a_layer() {
+    let (items, _) = paint_of(
+        vec![
+            view(
+                &[
+                    ("overflow", "clip"),
+                    ("height", "20px"),
+                    ("borderRadius", "4px"),
+                ],
+                &[1],
+            ),
+            view(
+                &[
+                    ("opacity", "0.5"),
+                    ("height", "30px"),
+                    ("background", "green"),
+                ],
+                &[2],
+            ),
+            view(
+                &[
+                    ("position", "absolute"),
+                    ("top", "40px"),
+                    ("width", "10px"),
+                    ("height", "10px"),
+                    ("background", "blue"),
+                ],
+                &[],
+            ),
+            view(&[("overflowX", "clip"), ("width", "10px")], &[4]),
+            text_node("Clipped across", &[("color", "black")]),
+        ],
+        &[0, 3],
+    );
+    assert_eq!(
+        names(&items),
+        [
+            r#"clip ["text black"]"#.to_string(),
+            r#"group 0.5 ["clip [\"green\"]", "blue"]"#.into(),
+        ]
+    );
+    let Item::Group { items: layer, .. } = &items[1] else {
+        panic!("{items:?}")
+    };
+    let Item::Clip { rect, radius, .. } = &layer[0] else {
+        panic!("{layer:?}")
+    };
+    assert_eq!((rect.height, *radius), (20.0, 4.0));
 }
 
 #[test]

@@ -4,7 +4,8 @@
 //!
 //! A frame is planned first: its rectangles, glyphs and layers become instance data, uploaded
 //! once, and steps, each a render pass that draws runs of instances into the frame or a layer,
-//! or composites a layer onto what is under it. A layer takes a texture from a pool when a step
+//! or composites a layer onto what is under it: a group's at its opacity, a clip's inside its
+//! rounded rectangle. A layer takes a texture from a pool when a step
 //! first draws into it and gives it back once composited. Glyph outlines are encoded once and
 //! kept in two buffers, the atlas, for the renderer's life.
 
@@ -26,7 +27,7 @@ const COMMON: &str = include_str!("../shaders/common.wgsl");
 /// u32 words per rectangle, glyph and layer instance.
 const RECT: usize = 12;
 const GLYPH: usize = 20;
-const LAYER: usize = 4;
+const LAYER: usize = 8;
 
 /// The result of a request wgpu completes at once, as it does on native backends.
 fn now<T>(request: impl Future<Output = T>) -> Result<T, Error> {
@@ -513,17 +514,38 @@ impl<'a> Renderer<'a> {
                         extend(&mut runs, Run::Glyphs(i..i + 1));
                     }
                 }
-                Item::Group { opacity, items } => {
+                Item::Group { .. } | Item::Clip { .. } => {
                     if !runs.is_empty() {
                         let runs = std::mem::take(&mut runs);
                         plan.steps.push(Step::Draw { target, runs });
                     }
+                    // A group shows all of its layer, a clip the part in its rectangle.
+                    let [width, height] = self.size.map(|s| s as f32);
+                    let (items, opacity, clip, radius) = match item {
+                        Item::Group { opacity, items } => (
+                            items,
+                            *opacity,
+                            [-1.0, -1.0, width + 2.0, height + 2.0],
+                            0.0,
+                        ),
+                        Item::Clip {
+                            rect,
+                            radius,
+                            items,
+                        } => (
+                            items,
+                            1.0,
+                            [rect.x, rect.y, rect.width, rect.height],
+                            *radius,
+                        ),
+                        _ => unreachable!("a group or a clip"),
+                    };
                     let layer = plan.targets;
                     plan.targets += 1;
                     self.plan(items, layer, faces, plan, atlas)?;
                     let at = (plan.layers.len() / LAYER) as u32;
-                    plan.layers
-                        .extend([*opacity, 0.0, 0.0, 0.0].map(f32::to_bits));
+                    let words = [opacity, radius, 0.0, 0.0].into_iter().chain(clip);
+                    plan.layers.extend(words.map(f32::to_bits));
                     plan.steps.push(Step::Composite { target, layer, at });
                 }
             }

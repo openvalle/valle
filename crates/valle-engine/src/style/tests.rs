@@ -268,6 +268,27 @@ fn names(ns: &[&[&str]]) -> Vec<Vec<String>> {
 }
 
 #[test]
+fn overflow_hidden_on_one_axis_hides_both() {
+    use taffy::Overflow::{Clip, Hidden, Visible};
+    let overflow = |style: &[(&str, Prop)]| {
+        let o = one(style).layout.overflow;
+        [o.x, o.y]
+    };
+    assert_eq!(overflow(&[]), [Visible, Visible]);
+    assert_eq!(overflow(&[("overflow", text("clip"))]), [Clip, Clip]);
+    assert_eq!(overflow(&[("overflowX", text("clip"))]), [Clip, Visible]);
+    assert_eq!(
+        overflow(&[("overflowBlock", text("HIDDEN"))]),
+        [Hidden, Hidden]
+    );
+    assert_eq!(
+        overflow(&[("overflow", text("clip hidden"))]),
+        [Hidden, Hidden]
+    );
+    assert!(error(&[("overflow", text("auto"))]).contains("the canvas does not scroll"));
+}
+
+#[test]
 fn grid_tracks_and_lines_go_to_taffy() {
     use taffy::{
         GridTemplateComponent as C, GridTemplateRepetition, MaxTrackSizingFunction as Max, MinMax,

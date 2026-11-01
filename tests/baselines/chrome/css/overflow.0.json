@@ -1,0 +1,30 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 8px;\"><div data-n=\"1\" style=\"display: flex; gap: 8px; margin-bottom: 8px;\"><div data-n=\"2\" style=\"overflow: hidden; width: 80px; height: 40px; border-radius: 12px; background: #e3f2fd;\"><div data-n=\"3\" style=\"background: #1565c0; height: 16px; margin-left: -10px; width: 120px;\"></div><div data-n=\"4\" data-text style=\"font-size: 10px;\">Rounded clip of text that runs on</div></div><div data-n=\"5\" style=\"overflow: clip; width: 60px; height: 40px; background: #e8f5e9;\"><div data-n=\"6\" style=\"background: #2e7d32; height: 30px; width: 90px; margin-top: 20px;\"></div></div><div data-n=\"7\" style=\"overflow-x: clip; width: 60px; height: 20px; background: #fff3e0;\"><div data-n=\"8\" style=\"background: #ef6c00; height: 36px; width: 90px;\"></div></div></div><div data-n=\"9\" style=\"position: relative; height: 50px; margin-bottom: 8px; background: #f3e5f5;\"><div data-n=\"10\" style=\"position: relative; overflow: hidden; width: 60px; height: 30px; background: #ce93d8;\"><div data-n=\"11\" style=\"background: #6a1b9a; position: absolute; left: 40px; top: 15px; width: 40px; height: 30px;\"></div></div><div data-n=\"12\" style=\"overflow: hidden; width: 60px; height: 16px; margin-left: 100px; margin-top: -30px; background: #ba68c8;\"><div data-n=\"13\" style=\"background: #4a148c; position: absolute; left: 140px; top: 20px; width: 40px; height: 26px;\"></div><div data-n=\"14\" style=\"background: #7b1fa2; position: fixed; right: 8px; bottom: 8px; width: 24px; height: 24px;\"></div></div></div><div data-n=\"15\" style=\"overflow: hidden; height: 24px; border-radius: 6px; margin-bottom: 8px; background: #fce4ec;\"><div data-n=\"16\" style=\"opacity: 0.6; height: 40px; background: #d81b60;\"><div data-n=\"17\" style=\"background: #880e4f; position: absolute; left: 120px; top: 150px; width: 30px; height: 30px;\"></div></div></div><div data-n=\"18\" style=\"display: flex; width: 120px; background: #e0f2f1;\"><div data-n=\"19\" style=\"overflow: hidden; height: 12px; background: #4db6ac;\"><div data-n=\"20\" style=\"background: #00695c; width: 150px; height: 6px;\"></div></div><div data-n=\"21\" style=\"height: 12px; background: #80cbc4;\"><div data-n=\"22\" style=\"background: #004d40; width: 150px; height: 6px;\"></div></div></div></div></div>\n",
+ "boxes": [
+  [0,0,256,166],
+  [8,8,240,40],
+  [8,8,80,40],
+  [-2,8,120,16],
+  [8,24,80,28],
+  [96,8,60,40],
+  [96,28,90,30],
+  [164,8,60,20],
+  [164,8,90,36],
+  [8,56,240,50],
+  [8,56,60,30],
+  [48,71,40,30],
+  [108,56,60,16],
+  [148,76,40,26],
+  [224,224,24,24],
+  [8,114,240,24],
+  [8,114,240,40],
+  [120,150,30,30],
+  [8,146,120,12],
+  [8,146,0,12],
+  [8,146,150,6],
+  [8,146,150,12],
+  [8,146,150,6]
+ ],
+ "lines": {"4":["Rounded clip of","text that runs on"]}
+}

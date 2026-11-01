@@ -309,6 +309,32 @@ const ROWS: &[Row] = &[
         refused: &["-1", "\"16:9\"", "\"1 / -2\"", "\"1 2\"", "true"],
     },
     Row {
+        properties: &["overflow"],
+        sample: r##"<View style={{ width: 60, height: 12, borderRadius: 4, background: "#e8eaf6", PROPERTY: VALUE }}><View style={{ width: 80, height: 8, marginLeft: -6, background: "#3949ab" }} /><View style={{ width: 20, height: 10, background: "#7986cb" }} /></View>"##,
+        values: &[
+            "\"visible\"",
+            "\"hidden\"",
+            "\"clip\"",
+            "\"hidden visible\"",
+            "\"clip visible\"",
+            "\"visible clip\"",
+            "\" HIDDEN \"",
+        ],
+        refused: &[
+            "\"auto\"",
+            "\"scroll\"",
+            "\"hidden hidden hidden\"",
+            "\"overlay\"",
+            "1",
+        ],
+    },
+    Row {
+        properties: &["overflowX", "overflowY", "overflowInline", "overflowBlock"],
+        sample: r##"<View style={{ width: 60, height: 12, borderRadius: 4, background: "#e8eaf6", PROPERTY: VALUE }}><View style={{ width: 80, height: 8, marginLeft: -6, background: "#3949ab" }} /><View style={{ width: 20, height: 10, background: "#7986cb" }} /></View>"##,
+        values: &["\"visible\"", "\"hidden\"", "\"clip\""],
+        refused: &["\"auto\"", "\"scroll\"", "\"hidden clip\""],
+    },
+    Row {
         properties: MARGINS,
         sample: r##"<View style={{ padding: 1, background: "#e8eaf6" }}><View style={{ width: 100, height: 6, background: "#3949ab", PROPERTY: VALUE }} /></View>"##,
         values: &[
