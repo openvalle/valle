@@ -976,6 +976,36 @@ fn font_features_are_quoted_tags_with_their_values() {
 }
 
 #[test]
+fn font_variations_are_quoted_axes_with_numbers() {
+    let variations = |v: &str| {
+        let f = one(&[("fontVariationSettings", text(v))]).font.variations;
+        (f.iter())
+            .map(|v| (std::str::from_utf8(&v.tag).unwrap().to_owned(), v.value))
+            .collect::<Vec<_>>()
+    };
+    let axis = |tag: &str, value| (tag.to_owned(), value);
+    assert_eq!(
+        variations("'wght' 650, \"wdth\" 75.5, 'XOPQ' -0"),
+        [axis("wght", 650.0), axis("wdth", 75.5), axis("XOPQ", 0.0)]
+    );
+    assert!(variations("'XOPQ' -0")[0].1.is_sign_positive());
+    assert_eq!(variations("normal"), []);
+    for (bad, message) in [
+        ("'wght'", "an axis takes a number after its tag"),
+        ("'wght' bold", "bold is not an axis value"),
+        ("'wght' 10px", "10px is not an axis value"),
+        (
+            "wght 400",
+            "does not start with a tag of 4 characters, quoted",
+        ),
+        ("'wght' 1 2", "is not a quoted tag and its value"),
+    ] {
+        let e = error(&[("fontVariationSettings", text(bad))]);
+        assert!(e.contains(message), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn font_variants_set_their_features_one_longhand_at_a_time() {
     let variants = |style: &[(&str, Prop)]| {
         let f = one(style).font;
@@ -1102,6 +1132,7 @@ fn text_properties_inherit() {
                 ("fontFeatureSettings", text("'smcp', \"tnum\" 1")),
                 ("fontKerning", text("none")),
                 ("fontVariant", text("small-caps slashed-zero")),
+                ("fontVariationSettings", text("'wdth' 80")),
             ],
             &[2],
         ),
@@ -1137,6 +1168,7 @@ fn text_properties_inherit() {
         transform: TextTransform::None,
         variants: Default::default(),
         features: Rc::new([]),
+        variations: Rc::new([]),
         fill: None,
         stroke: 0.0,
         stroke_color: None,
@@ -1185,6 +1217,10 @@ fn text_properties_inherit() {
                 value: 1,
             },
         ]),
+        variations: Rc::new([Variation {
+            tag: *b"wdth",
+            value: 80.0,
+        }]),
         fill: Some(color::parse("blue").unwrap()),
         stroke: 2.0,
         stroke_color: Some(color::parse("#0f0").unwrap()),

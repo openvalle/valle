@@ -41,6 +41,7 @@ fn font(size: f64) -> Font {
         transform: TextTransform::None,
         variants: Default::default(),
         features: Rc::new([]),
+        variations: Rc::new([]),
         fill: None,
         stroke: 0.0,
         stroke_color: None,
@@ -482,4 +483,27 @@ fn font_features_choose_glyphs_and_a_later_one_of_a_tag_wins() {
     let normal = ids(&font(16.0));
     assert_ne!(ids(&with(&[(b"smcp", 1)])), normal);
     assert_eq!(ids(&with(&[(b"smcp", 1), (b"smcp", 0)])), normal);
+}
+
+#[test]
+fn font_variations_set_axes_over_the_weight() {
+    let mut t = text();
+    let mut wide = |f: &Font| t.measure(&plain("Heavy words", f), None).unwrap()[0];
+    let axes = |axes: &[(&[u8; 4], f32)]| Font {
+        variations: (axes.iter())
+            .map(|&(tag, value)| Variation { tag: *tag, value })
+            .collect(),
+        ..font(16.0)
+    };
+    let bold = Font {
+        weight: 900.0,
+        ..font(16.0)
+    };
+    assert_eq!(wide(&axes(&[(b"wght", 900.0)])), wide(&bold));
+    assert_ne!(wide(&bold), wide(&font(16.0)));
+    let narrow = Font {
+        weight: 900.0,
+        ..axes(&[(b"wdth", 62.5), (b"wght", 400.0)])
+    };
+    assert!(wide(&narrow) < wide(&font(16.0)));
 }

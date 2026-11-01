@@ -145,6 +145,27 @@ impl Style {
     }
 }
 
+/// A variable font's axis, by its tag, set to a value, as `font-variation-settings` sets it.
+#[derive(Clone, Copy, Debug)]
+pub struct Variation {
+    pub tag: [u8; 4],
+    pub value: f32,
+}
+
+impl PartialEq for Variation {
+    fn eq(&self, other: &Variation) -> bool {
+        (self.tag, self.value.to_bits()) == (other.tag, other.value.to_bits())
+    }
+}
+
+impl Eq for Variation {}
+
+impl std::hash::Hash for Variation {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self.tag, self.value.to_bits()).hash(state);
+    }
+}
+
 /// How many of [`Variant`] there are.
 pub const VARIANTS: usize = 7;
 
@@ -272,6 +293,8 @@ pub struct Font {
     /// `font-feature-settings`: OpenType features, each a tag and its value, a later one over an
     /// earlier one of its tag, and over the variants'.
     pub features: Rc<[Feature]>,
+    /// `font-variation-settings`: values of a variable font's axes, over the weight's.
+    pub variations: Rc<[Variation]>,
     /// `-webkit-text-fill-color`, the color of glyphs; `None` is `currentcolor`, the color of
     /// each box that inherits it.
     pub fill: Option<Rgba>,
@@ -317,6 +340,7 @@ impl Font {
             transform: TextTransform::None,
             variants: Default::default(),
             features: Rc::new([]),
+            variations: Rc::new([]),
             fill: None,
             stroke: 0.0,
             stroke_color: None,
@@ -893,6 +917,7 @@ struct Declared {
     font_family: Option<Rc<[Family]>>,
     variants: [Option<Rc<[Feature]>>; VARIANTS],
     features: Option<Rc<[Feature]>>,
+    variations: Option<Rc<[Variation]>>,
     line_height: Option<Leading>,
     text_align: Option<TextAlign>,
     /// `normal` is `Auto`, 0.
@@ -987,6 +1012,7 @@ impl Default for Declared {
             font_family: None,
             variants: Default::default(),
             features: None,
+            variations: None,
             line_height: None,
             text_align: None,
             letter_spacing: None,
@@ -1105,6 +1131,7 @@ enum Field {
     FontFamily,
     FontFeatureSettings,
     FontVariant(Option<Variant>),
+    FontVariationSettings,
     LineHeight,
     TextAlign,
     LetterSpacing,
@@ -1181,7 +1208,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 215] = [
+const FIELDS: [(&str, Field); 216] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1492,6 +1519,7 @@ const FIELDS: [(&str, Field); 215] = [
         "fontVariantPosition",
         Field::FontVariant(Some(Variant::Position)),
     ),
+    ("fontVariationSettings", Field::FontVariationSettings),
     ("lineHeight", Field::LineHeight),
     ("textAlign", Field::TextAlign),
     ("letterSpacing", Field::LetterSpacing),
@@ -1541,6 +1569,7 @@ impl Field {
                 | Field::FontFamily
                 | Field::FontFeatureSettings
                 | Field::FontVariant(_)
+                | Field::FontVariationSettings
                 | Field::LineHeight
                 | Field::TextAlign
                 | Field::LetterSpacing
@@ -2477,20 +2506,60 @@ fn variants(v: &V, variant: Option<Variant>, d: &mut Declared) -> Result<(), Str
     Ok(())
 }
 
-/// `font-feature-settings`: `normal`, or OpenType features: each a tag of 4 characters, quoted,
-/// and `on` (as it is left out), `off` or a value.
+/// `font-feature-settings`: `normal`, or OpenType features, each `on` (as it is left out), `off`
+/// or a value.
 fn features(v: &V) -> Result<Rc<[Feature]>, String> {
+    let value = |word: Option<&str>| match word.map(str::to_ascii_lowercase).as_deref() {
+        None | Some("on") => Ok(1),
+        Some("off") => Ok(0),
+        Some(n) => match css::num(n) {
+            Some(css::Num { value, unit: "" }) if value.fract() == 0.0 && value >= 0.0 => {
+                u16::try_from(value as i64)
+                    .map_err(|_| format!("{n} is over 65535, the largest feature value"))
+            }
+            _ => Err(format!("{n} is not a feature value: on, off or 0 or more")),
+        },
+    };
+    let settings = settings(v, value)?;
+    Ok((settings.into_iter())
+        .map(|(tag, value)| Feature { tag, value })
+        .collect())
+}
+
+/// `font-variation-settings`: `normal`, or axes of variable fonts, each with a number.
+fn variations(v: &V) -> Result<Rc<[Variation]>, String> {
+    let value = |word: Option<&str>| match word.map(css::num) {
+        // Without -0, which would hash apart from 0.
+        Some(Some(css::Num { value, unit: "" })) => Ok(value as f32 + 0.0),
+        Some(_) => Err(format!(
+            "{} is not an axis value: a number",
+            word.unwrap_or("")
+        )),
+        None => Err("an axis takes a number after its tag".into()),
+    };
+    let settings = settings(v, value)?;
+    Ok((settings.into_iter())
+        .map(|(tag, value)| Variation { tag, value })
+        .collect())
+}
+
+/// `normal`, or settings of OpenType tags: each a tag of 4 characters, quoted, then what `value`
+/// reads from the word after it, if there is one.
+fn settings<T>(
+    v: &V,
+    value: impl Fn(Option<&str>) -> Result<T, String>,
+) -> Result<Vec<([u8; 4], T)>, String> {
     let V::Str(s) = v else {
         return Err(format!("{} is not a string", shown(v)));
     };
     if s.trim().eq_ignore_ascii_case("normal") {
-        return Ok(Rc::new([]));
+        return Ok(Vec::new());
     }
-    let feature = |part: &str| {
+    let setting = |part: &str| {
         let words = css::words(part);
-        let (tag, value) = match words[..] {
-            [tag] => (tag, "on"),
-            [tag, value] => (tag, value),
+        let (tag, word) = match words[..] {
+            [tag] => (tag, None),
+            [tag, word] => (tag, Some(word)),
             _ => return Err(format!("{part:?} is not a quoted tag and its value")),
         };
         let tag = ['"', '\''].iter().find_map(|&q| {
@@ -2501,23 +2570,12 @@ fn features(v: &V) -> Result<Rc<[Feature]>, String> {
         });
         let Some(tag) = tag else {
             return Err(format!(
-                "{part:?} is not a feature: a tag of 4 characters, quoted"
+                "{part:?} does not start with a tag of 4 characters, quoted"
             ));
         };
-        let value = match value.to_ascii_lowercase().as_str() {
-            "on" => 1,
-            "off" => 0,
-            n => match css::num(n) {
-                Some(css::Num { value, unit: "" }) if value.fract() == 0.0 && value >= 0.0 => {
-                    u16::try_from(value as i64)
-                        .map_err(|_| format!("{n} is over 65535, the largest feature value"))?
-                }
-                _ => return Err(format!("{n} is not a feature value: on, off or 0 or more")),
-            },
-        };
-        Ok(Feature { tag, value })
+        Ok((tag, value(word)?))
     };
-    css::commas(s).into_iter().map(feature).collect()
+    css::commas(s).into_iter().map(setting).collect()
 }
 
 fn families(v: &V) -> Result<Rc<[Family]>, String> {
@@ -2766,6 +2824,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::FontFamily => d.font_family = Some(families(v)?),
         F::FontFeatureSettings => d.features = Some(features(v)?),
         F::FontVariant(variant) => variants(v, variant, d)?,
+        F::FontVariationSettings => d.variations = Some(variations(v)?),
         F::LineHeight => d.line_height = Some(leading(v)?),
         F::TextAlign => {
             d.text_align = Some(keyword(
@@ -3147,6 +3206,7 @@ fn compute(
             (d.variants[i].clone()).unwrap_or_else(|| inherited.variants[i].clone())
         }),
         features: (d.features.clone()).unwrap_or_else(|| inherited.features.clone()),
+        variations: (d.variations.clone()).unwrap_or_else(|| inherited.variations.clone()),
         fill: d.fill.unwrap_or(inherited.fill),
         stroke: match &d.stroke {
             None => inherited.stroke,

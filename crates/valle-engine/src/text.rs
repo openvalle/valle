@@ -17,8 +17,8 @@ use parley::fontique::{Collection, CollectionOptions, GenericFamily, SourceCache
 use parley::setting::Tag;
 use parley::{
     Alignment, AlignmentOptions, BreakReason, FontContext, FontFamily, FontFamilyName, FontFeature,
-    FontFeatures, FontWeight, LayoutContext, PositionedLayoutItem, StyleProperty, TextWrapMode,
-    WhiteSpaceCollapse, YieldData,
+    FontFeatures, FontVariation, FontVariations, FontWeight, LayoutContext, PositionedLayoutItem,
+    StyleProperty, TextWrapMode, WhiteSpaceCollapse, YieldData,
 };
 
 use crate::path::{self, Curve};
@@ -26,7 +26,7 @@ use crate::slug;
 use crate::style::color::Rgba;
 use crate::style::{
     Collapse, Family, Feature, Font, LineHeight, OverflowWrap, TextAlign, TextTransform, VARIANTS,
-    WordBreak,
+    Variation, WordBreak,
 };
 use crate::template::Error;
 
@@ -133,6 +133,7 @@ struct Shaping {
     transform: TextTransform,
     variants: [Rc<[Feature]>; VARIANTS],
     features: Rc<[Feature]>,
+    variations: Rc<[Variation]>,
 }
 
 impl Shaping {
@@ -156,6 +157,7 @@ impl Shaping {
             transform: font.transform,
             variants: font.variants.clone(),
             features: font.features.clone(),
+            variations: font.variations.clone(),
         }
     }
 }
@@ -388,19 +390,7 @@ impl Text {
         if let Some(m) = self.metrics.get(&key) {
             return Ok(*m);
         }
-        let families = families(&font.family)?;
-        let mut builder = self
-            .layouts
-            .ranged_builder(&mut self.fonts, "0", 1.0, false);
-        builder.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Borrowed(
-            &families,
-        ))));
-        builder.push_default(StyleProperty::FontSize(font.size as f32));
-        builder.push_default(StyleProperty::FontWeight(FontWeight::new(
-            font.weight as f32,
-        )));
-        let mut layout = builder.build("0");
-        layout.break_all_lines(None);
+        let layout = self.alone("0", font)?;
         let m = (layout.lines())
             .find_map(|line| {
                 line.items().find_map(|item| match item {
@@ -513,17 +503,7 @@ impl Text {
         if let Some(e) = self.ellipses.get(&key) {
             return Ok(e.clone());
         }
-        let families = families(&font.family)?;
-        let mut builder = (self.layouts).ranged_builder(&mut self.fonts, "…", 1.0, false);
-        builder.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Borrowed(
-            &families,
-        ))));
-        builder.push_default(StyleProperty::FontSize(font.size as f32));
-        builder.push_default(StyleProperty::FontWeight(FontWeight::new(
-            font.weight as f32,
-        )));
-        let mut layout = builder.build("…");
-        layout.break_all_lines(None);
+        let layout = self.alone("…", font)?;
         let mut shaped = Vec::new();
         let mut x = 0.0;
         for line in layout.lines() {
@@ -544,6 +524,22 @@ impl Text {
         let e = Ellipsis { glyphs, advance: x };
         self.ellipses.insert(key, e.clone());
         Ok(e)
+    }
+
+    /// `text` shaped in `font` alone, on one line.
+    fn alone(&mut self, text: &str, font: &Font) -> Result<parley::Layout<u32>, Error> {
+        let families = families(&font.family)?;
+        let mut builder = (self.layouts).ranged_builder(&mut self.fonts, text, 1.0, false);
+        let family = FontFamily::List(Cow::Borrowed(&families));
+        builder.push_default(StyleProperty::FontFamily(family));
+        builder.push_default(StyleProperty::FontSize(font.size as f32));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(
+            font.weight as f32,
+        )));
+        builder.push_default(StyleProperty::FontVariations(variations(font)));
+        let mut layout = builder.build(text);
+        layout.break_all_lines(None);
+        Ok(layout)
     }
 
     /// Forgets the paragraphs not used since the last sweep.
@@ -631,6 +627,10 @@ impl Text {
                         .collect();
                     let features = FontFeatures::List(Cow::Owned(features));
                     builder.push(StyleProperty::FontFeatures(features), range.clone());
+                }
+                if !font.variations.is_empty() {
+                    let axes = StyleProperty::FontVariations(variations(font));
+                    builder.push(axes, range.clone());
                 }
                 builder.push(StyleProperty::Brush(k as u32), range);
             }
@@ -773,6 +773,12 @@ pub fn prepare<'a>(
         ranges[k].end = out.len();
     }
     Ok((out, ranges))
+}
+
+/// The axes `font` sets, as parley takes them.
+fn variations(font: &Font) -> FontVariations<'static> {
+    let axes = (font.variations.iter()).map(|v| FontVariation::new(Tag::new(&v.tag), v.value));
+    FontVariations::List(Cow::Owned(axes.collect()))
 }
 
 fn families(list: &[Family]) -> Result<Vec<FontFamilyName<'static>>, Error> {
