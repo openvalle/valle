@@ -49,3 +49,15 @@ jobs:
           name: review
           path: target/review
           if-no-files-found: ignore
+
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the Rust toolchain
+        run: rustup show
+      # No GPU here either.
+      - name: Test
+        run: cargo xtask test --skip gpu,browser
