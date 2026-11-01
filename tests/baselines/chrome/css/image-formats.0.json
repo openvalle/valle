@@ -1,0 +1,14 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 300px; height: 176px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; align-items: flex-start;\"><img data-n=\"1\" src=\"/cases/resources/photo.jpg\" style=\"display: block;\"><img data-n=\"2\" src=\"/cases/resources/photo.jpg\" style=\"display: block; width: 128px;\"><img data-n=\"3\" src=\"/cases/resources/photo.webp\" style=\"display: block;\"><img data-n=\"4\" src=\"/cases/resources/photo.webp\" style=\"display: block; width: 128px;\"><img data-n=\"5\" src=\"/cases/resources/tile.webp\" style=\"display: block; width: 32px;\"><div data-n=\"6\" style=\"width: 64px; height: 40px; background: url(/cases/resources/photo.jpg) center / 50%;\"></div></div></div>\n",
+ "boxes": [
+  [0,0,300,178],
+  [6,6,64,40],
+  [76,6,128,80],
+  [210,6,64,40],
+  [6,92,128,80],
+  [140,92,32,24],
+  [178,92,64,40]
+ ],
+ "lines": {}
+}

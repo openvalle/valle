@@ -11,6 +11,7 @@ repository = "https://github.com/openvalle/valle"
 publish = false
 
 [workspace.dependencies]
+image-webp = "0.2.4"
 libm = "0.2.16"
 oxc = { version = "=0.148.0", features = ["ast_visit", "codegen", "semantic", "transformer"] }
 # Without system fonts: every host shapes with the same bytes.
@@ -23,6 +24,8 @@ skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 taffy = { version = "0.15.1", default-features = false, features = ["std", "flexbox", "block_layout", "grid", "calc"] }
 # The native backends only; shaders are WGSL.
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "metal", "vulkan", "dx12"] }
+# Without SIMD: every host decodes the same pixels.
+zune-jpeg = { version = "0.5.15", default-features = false, features = ["std"] }
 
 # Dependencies are optimized in dev and test builds too: QuickJS at -O0 runs scenes several times
 # slower.
