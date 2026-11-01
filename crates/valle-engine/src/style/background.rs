@@ -241,7 +241,7 @@ pub(super) fn blends(s: &str) -> Result<Vec<Blend>, String> {
     })
 }
 
-fn area(w: &str) -> Option<Area> {
+pub(super) fn area(w: &str) -> Option<Area> {
     match w {
         "border-box" => Some(Area::BorderBox),
         "padding-box" => Some(Area::PaddingBox),

@@ -21,7 +21,7 @@ fn paint_of(nodes: Vec<Node>, roots: &[u32]) -> (Vec<Item>, Layout) {
 /// `red@0.5`, `text blue`, `group 0.5 [...]`.
 fn names(items: &[Item]) -> Vec<String> {
     let name = |c: [f32; 4]| {
-        for n in ["red", "green", "blue", "gray", "black"] {
+        for n in ["red", "green", "blue", "gray", "black", "white"] {
             let w = work(color::parse(n).unwrap());
             if w.map(|v| v * c[3]) == c {
                 return match c[3] {
@@ -39,6 +39,8 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Ring { colors, .. } => format!("ring {}", name(colors[0])),
             Item::Gradient { ramp, .. } => format!("gradient of {}", ramp.segments.len()),
             Item::Glyphs { color, .. } => format!("text {}", name(*color)),
+            Item::Path { color, .. } => format!("path {}", name(*color)),
+            Item::Mask { mask, items } => format!("mask {:?} {:?}", names(mask), names(items)),
             Item::Group {
                 opacity,
                 blend: Blend::Normal,
@@ -784,6 +786,156 @@ fn a_backdrop_filter_paints_under_its_box_in_a_layer() {
             r#"group 1 ["backdrop of 2", "group 1 [\"red\", \"blue\"]"]"#
         ]
     );
+}
+
+#[test]
+fn a_clip_path_masks_all_its_stacking_context_paints() {
+    let order = painted(
+        vec![
+            view(&[("background", "gray")], &[1]),
+            view(
+                &[
+                    ("clipPath", "inset(2px round 4px)"),
+                    ("opacity", "0.5"),
+                    ("margin", "10px"),
+                    ("height", "20px"),
+                    ("background", "red"),
+                ],
+                &[2],
+            ),
+            // Absolute, its containing block the canvas: in the box's stacking context all the
+            // same.
+            view(
+                &[
+                    ("position", "absolute"),
+                    ("width", "5px"),
+                    ("height", "5px"),
+                    ("background", "blue"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    assert_eq!(
+        order,
+        [
+            "gray",
+            r#"group 0.5 ["mask [\"white\"] [\"red\", \"blue\"]"]"#
+        ]
+    );
+    // Around its backdrop and filter, inside its transform.
+    let (items, _) = paint_of(
+        vec![
+            view(&[("background", "gray")], &[1]),
+            view(
+                &[
+                    ("clipPath", "circle()"),
+                    ("filter", "blur(1px)"),
+                    ("backdropFilter", "invert(1)"),
+                    ("transform", "rotate(10deg)"),
+                    ("height", "20px"),
+                    ("background", "red"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    let [_, Item::Group { items, .. }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    let [Item::Transform { items, .. }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    let [Item::Mask { mask, items }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    assert_eq!(names(mask), ["white"]);
+    assert_eq!(
+        names(items),
+        [
+            "backdrop of 1",
+            r#"group 1 ["filter [\"blur\"] [\"red\"]"]"#
+        ]
+    );
+}
+
+#[test]
+fn clip_path_shapes_are_in_the_box_they_name() {
+    use crate::path::Segment;
+    // A box at 10, 10, 100 × 40, its border 2 px, its padding 3 px, its corners rounded 10 px.
+    let mask = |clip: &str| {
+        let style = [
+            ("margin", "10px"),
+            ("width", "100px"),
+            ("height", "40px"),
+            ("border", "2px solid black"),
+            ("padding", "3px"),
+            ("borderRadius", "10px"),
+            ("background", "red"),
+            ("clipPath", clip),
+        ];
+        let (items, _) = paint_of(vec![view(&style, &[])], &[0]);
+        match <[Item; 1]>::try_from(items) {
+            Ok([Item::Mask { mask, .. }]) => Some(mask),
+            Ok(other) => panic!("{other:?}"),
+            Err(none) if none.is_empty() => None,
+            Err(items) => panic!("{items:?}"),
+        }
+    };
+    let rect = |x, y, width, height, radii: [f32; 2]| Item::Rect {
+        rect: Rect {
+            x,
+            y,
+            width,
+            height,
+        },
+        radii: [radii; 4],
+        color: [1.0; 4],
+    };
+    assert_eq!(
+        mask("padding-box"),
+        Some(vec![rect(12.0, 12.0, 96.0, 36.0, [8.0; 2])])
+    );
+    // Radii of the box, fitting the rectangle.
+    assert_eq!(
+        mask("inset(5px 10% round 50%)"),
+        Some(vec![rect(20.0, 15.0, 80.0, 30.0, [37.5, 15.0])])
+    );
+    assert_eq!(
+        mask("circle(at 20px 50%)"),
+        Some(vec![rect(10.0, 10.0, 40.0, 40.0, [20.0; 2])])
+    );
+    assert_eq!(
+        mask("ellipse(farthest-side 25% at left)"),
+        Some(vec![rect(-90.0, 20.0, 200.0, 20.0, [100.0, 10.0])])
+    );
+    assert_eq!(
+        mask("content-box polygon(evenodd, 0 0, 100% 0, 50% 100%)"),
+        Some(vec![Item::Path {
+            path: Path(vec![
+                Segment::Move([15.0, 15.0]),
+                Segment::Line([105.0, 15.0]),
+                Segment::Line([60.0, 45.0]),
+            ]),
+            even_odd: true,
+            color: [1.0; 4],
+        }])
+    );
+    assert_eq!(
+        mask("path('M0 0 h5')"),
+        Some(vec![Item::Path {
+            path: Path(vec![
+                Segment::Move([10.0, 10.0]),
+                Segment::Line([15.0, 10.0])
+            ]),
+            even_odd: false,
+            color: [1.0; 4],
+        }])
+    );
+    // Insets that meet leave nothing to show.
+    assert_eq!(mask("inset(20px 0)"), None);
 }
 
 #[test]

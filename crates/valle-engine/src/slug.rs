@@ -1,15 +1,16 @@
-//! Glyph outlines for Slug coverage (Eric Lengyel, "GPU-Centered Font Rendering Directly from
-//! Glyph Outlines", JCGT 2017). An outline becomes quadratic curves, and its bounds are cut into
-//! horizontal and vertical bands, each listing the curves that reach into it, so that a pixel
-//! reads only the curves near it. Its coverage comes from two rays from its center, right
-//! through its horizontal band and up through its vertical one: each curve a ray crosses counts
-//! by how much of the pixel lies before the crossing.
+//! Glyph outlines, and filled paths, for Slug coverage (Eric Lengyel, "GPU-Centered Font
+//! Rendering Directly from Glyph Outlines", JCGT 2017). An outline becomes quadratic curves, and
+//! its bounds are cut into horizontal and vertical bands, each listing the curves that reach into
+//! it, so that a pixel reads only the curves near it. Its coverage comes from two rays from its
+//! center, right through its horizontal band and up through its vertical one: each curve a ray
+//! crosses counts by how much of the pixel lies before the crossing.
 
 use skrifa::instance::{LocationRef, NormalizedCoord, Size};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::raw::TableProvider;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 
+use crate::path::Curve;
 use crate::template::Error;
 use crate::text::Face;
 
@@ -90,9 +91,6 @@ pub fn outline(face: &Face, glyph: u32) -> Result<Outline, Error> {
     Ok(encode(em, &pen.contours))
 }
 
-/// A quadratic curve: start, control and end point.
-type Curve = [[f32; 2]; 3];
-
 #[derive(Default)]
 struct Pen {
     contours: Vec<Vec<Curve>>,
@@ -149,7 +147,8 @@ impl OutlinePen for Pen {
     }
 }
 
-fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
+/// The outline of closed contours of quadratic curves, y up, `em` units per em.
+pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
     let mut out = Outline {
         em,
         ..Outline::default()

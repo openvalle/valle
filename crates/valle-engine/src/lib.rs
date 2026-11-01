@@ -7,6 +7,7 @@ pub mod gpu;
 pub mod js;
 pub mod layout;
 pub mod paint;
+pub mod path;
 pub mod scene;
 pub mod slug;
 pub mod style;

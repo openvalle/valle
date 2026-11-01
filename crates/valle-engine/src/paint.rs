@@ -8,14 +8,15 @@
 //! outlines of its blocks and its own. Its positioned descendants and the stacking contexts in it
 //! with a z-index of 0 or `auto` come next, in tree order, and last those with a positive
 //! z-index, lowest first. A positioned box paints all at once too, without the positioned boxes
-//! in it. Opacity, a blend, isolation, a transform, a filter, a fixed position, and a z-index on
-//! a positioned box or a flex or grid item make a stacking context. One with an opacity or a
-//! blend paints as a layer, and so does one with a box blending in it: CSS isolates every
-//! stacking context, so a box blends only with what its stacking context paints under it. A
-//! filtered one's items go in its filter, and a transformed one's in its transform, around the
-//! filter, which takes its px, those of the untransformed layout, to its parent's; a transform
-//! that flattens the plane hides it. Tree order puts a flex or grid container's
-//! children in the order it lays them out. A hidden box (`visibility`) paints nothing of its
+//! in it. Opacity, a blend, isolation, a transform, a filter, a clip path, a fixed position, and
+//! a z-index on a positioned box or a flex or grid item make a stacking context. One with an
+//! opacity or a blend paints as a layer, and so does one with a box blending in it: CSS isolates
+//! every stacking context, so a box blends only with what its stacking context paints under it.
+//! A filtered one's items go in its filter, then over its backdrop, then in its clip path's mask,
+//! which takes all it paints, and a transformed one's in its transform around them, which takes
+//! its px, those of the untransformed layout, to its parent's; a transform that flattens the
+//! plane hides it. Tree order puts a flex or grid container's children in the order it lays them
+//! out. A hidden box (`visibility`) paints nothing of its
 //! own, but what it contains still paints if visible. A box's background, its color and then its
 //! images, the first on top, paints over its outer shadows, and its inner shadows and border over
 //! the background; it is a layer of its own when an image blends, which blends with what is
@@ -34,6 +35,7 @@
 mod gradient;
 mod matrix;
 mod scene;
+mod shape;
 
 use taffy::{Display, Overflow, Position};
 
@@ -41,6 +43,7 @@ pub use gradient::{Geometry, Ramp, Segment};
 pub use matrix::{Matrix, Matrix4};
 
 use crate::layout::{Layout, Rect, ordered};
+use crate::path::Path;
 use crate::style::background::{Area, ImageSize, Layer, Repeat};
 use crate::style::color::Rgba;
 use crate::style::filter;
@@ -82,6 +85,13 @@ pub enum Item {
         color: [f32; 4],
         glyphs: Vec<(u32, [f32; 2])>,
     },
+    /// A path filled in a color where it winds around, or with `even_odd` where it winds an odd
+    /// number of times.
+    Path {
+        path: Path,
+        even_odd: bool,
+        color: [f32; 4],
+    },
     /// Items composited onto what is under them as one layer, at `opacity`, their colors mixed
     /// with those under them by `blend`.
     Group {
@@ -114,6 +124,9 @@ pub enum Item {
         radii: Radii,
         items: Vec<Item>,
     },
+    /// Items as one layer, each pixel of it as much as the alpha `mask` paints there: a box's
+    /// clip path. Like a group's, the layer starts empty for what is in it.
+    Mask { mask: Vec<Item>, items: Vec<Item> },
     /// Items blurred by a Gaussian of `sigma` px, then shown only outside a rectangle with its
     /// corners rounded by `radii`, or only `inside` it: a box's shadow, which its border box
     /// hides when it is outer, and its padding box keeps in when it is inner.
@@ -674,6 +687,7 @@ impl Painter<'_> {
         s.opacity < 1.0
             || s.blend != Blend::Normal
             || s.isolate
+            || s.clip.is_some()
             || s.contains_all()
             || self.in_scene(i)
             || s.layout.position == Position::Fixed
@@ -749,6 +763,7 @@ impl Painter<'_> {
                 items = vec![Item::Filter { filters, items }];
             }
             items = self.over_backdrop(d, items);
+            items = self.clipped(d, items);
             if !s.transform.is_empty() && !items.is_empty() {
                 items = vec![Item::Transform { matrix, items }];
             }
@@ -756,6 +771,11 @@ impl Painter<'_> {
             drawn.extend(items.into_iter().map(|item| (clip, item)));
         } else {
             self.context(Some(d), &mut drawn);
+            if s.clip.is_some() {
+                // With the clips in the mask, which takes all the box paints.
+                let items = self.clipped(d, self.nest(std::mem::take(&mut drawn)));
+                drawn = items.into_iter().map(|item| (None, item)).collect();
+            }
         }
         if self.grouped(d) {
             // With the clips in the layer, so that it blends with all under it.
@@ -798,6 +818,39 @@ impl Painter<'_> {
             items,
         });
         std::iter::once(backdrop).chain(inside).collect()
+    }
+
+    /// `items` inside `d`'s clip path, if it has one: a shape in one of its boxes, in the px it
+    /// paints in. Nothing shows where the shape has no area.
+    fn clipped(&self, d: usize, items: Vec<Item>) -> Vec<Item> {
+        let Some(clip) = &self.styles[d].clip else {
+            return items;
+        };
+        if items.is_empty() {
+            return items;
+        }
+        let border = snap(self.layout.boxes[d].border);
+        let radii = self.radii(d, border);
+        let widths = self.widths(d);
+        let (rect, radii) = match clip.area {
+            Area::BorderBox => (border, radii),
+            Area::PaddingBox => inner(border, radii, widths),
+            Area::ContentBox => {
+                let paddings = self.paddings(d);
+                inner(
+                    border,
+                    radii,
+                    std::array::from_fn(|k| widths[k] + paddings[k]),
+                )
+            }
+        };
+        let mask = shape::mask(clip.shape.as_ref(), rect, radii);
+        mask.map(|mask| Item::Mask {
+            mask: vec![mask],
+            items,
+        })
+        .into_iter()
+        .collect()
     }
 
     /// Whether `i` is a plane of a 3D scene: its parent keeps its children in its space, and it
@@ -843,6 +896,7 @@ impl Painter<'_> {
                 items = vec![Item::Filter { filters, items }];
             }
             items = self.over_backdrop(e, items);
+            items = self.clipped(e, items);
             if self.grouped(e) {
                 items = group(s.opacity as f32, s.blend, items)
                     .into_iter()

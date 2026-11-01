@@ -15,6 +15,7 @@ pub mod gradient;
 mod grid;
 pub mod math;
 pub mod position;
+pub mod shape;
 pub mod transform;
 
 use std::borrow::Cow;
@@ -81,6 +82,8 @@ pub struct Style {
     /// `filter` and `backdrop-filter`: empty for `none`.
     pub filter: Vec<filter::Function>,
     pub backdrop: Vec<filter::Function>,
+    /// `clip-path`; `None` for `none`.
+    pub clip: Option<shape::Clip>,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
@@ -102,8 +105,8 @@ impl Style {
     }
 
     /// Whether its children with transforms stay in its space: it preserves 3D and nothing
-    /// groups what is in it into one flat layer, as an opacity, a clip, a blend, isolation or a
-    /// filter of it or of its backdrop does.
+    /// groups what is in it into one flat layer, as an opacity, a clip, a clip path, a blend,
+    /// isolation or a filter of it or of its backdrop does.
     pub fn keeps_3d(&self) -> bool {
         let o = self.layout.overflow;
         self.preserve_3d
@@ -112,6 +115,7 @@ impl Style {
             && self.backdrop.is_empty()
             && self.blend == Blend::Normal
             && !self.isolate
+            && self.clip.is_none()
             && o.x == taffy::Overflow::Visible
             && o.y == taffy::Overflow::Visible
     }
@@ -671,6 +675,7 @@ struct Declared {
     isolate: bool,
     filter: Vec<filter::Function<Len, Option<Rgba>>>,
     backdrop: Vec<filter::Function<Len, Option<Rgba>>>,
+    clip: Option<shape::Clip<Len>>,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -742,6 +747,7 @@ impl Default for Declared {
             isolate: false,
             filter: Vec::new(),
             backdrop: Vec::new(),
+            clip: None,
             visible: None,
             color: None,
             font_size: None,
@@ -839,6 +845,7 @@ enum Field {
     Isolation,
     Filter,
     BackdropFilter,
+    ClipPath,
     Visibility,
     Color,
     FontSize,
@@ -896,7 +903,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 175] = [
+const FIELDS: [(&str, Field); 176] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1163,6 +1170,7 @@ const FIELDS: [(&str, Field); 175] = [
     ("isolation", Field::Isolation),
     ("filter", Field::Filter),
     ("backdropFilter", Field::BackdropFilter),
+    ("clipPath", Field::ClipPath),
     ("translate", Field::Translate),
     ("rotate", Field::Rotate),
     ("scale", Field::Scale),
@@ -2149,6 +2157,10 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Isolation => d.isolate = keyword(v, &[("auto", false), ("isolate", true)])?,
         F::Filter => d.filter = filter::filter(&text(v)?)?,
         F::BackdropFilter => d.backdrop = filter::filter(&text(v)?)?,
+        F::ClipPath => match v {
+            V::Str(s) => d.clip = shape::clip(s)?,
+            other => return Err(format!("{} is not a string", shown(other))),
+        },
         F::Visibility => {
             // Collapse is hidden but in tables, which there are none of.
             let shown = [("visible", true), ("hidden", false), ("collapse", false)];
@@ -2375,6 +2387,7 @@ fn compute(
         isolate: d.isolate,
         filter: d.filter.iter().map(|f| f.computed(u, color)).collect(),
         backdrop: d.backdrop.iter().map(|f| f.computed(u, color)).collect(),
+        clip: d.clip.as_ref().map(|c| c.computed(u)),
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,

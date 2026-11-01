@@ -144,6 +144,10 @@ pub fn shapes(items: &[Item]) -> Vec<Item> {
                 let filters = filters.clone();
                 (!items.is_empty()).then_some(Item::Filter { filters, items })
             }
+            Item::Mask { mask, items } => {
+                let (mask, items) = (shapes(mask), shapes(items));
+                (!items.is_empty()).then_some(Item::Mask { mask, items })
+            }
             item => Some(item.clone()),
         })
         .collect()

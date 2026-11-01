@@ -2,14 +2,16 @@
 //! sRGB-encoded values, composited as browsers composite them), then out as 8-bit sRGB with
 //! straight alpha.
 //!
-//! A frame is planned first: its rectangles, gradients, glyphs and layers become instance data,
-//! uploaded once, and steps, each a render pass that draws runs of instances into the frame or a
-//! layer, or composites a layer onto what is under it: a group's at its opacity, a clip's inside
-//! its rounded rectangle. A group that blends reads what is under it from a copy, as a pass
-//! cannot read its own target, and replaces it with the two blended. Each instance names the transform from its px to the target's, which
+//! A frame is planned first: its rectangles, gradients, glyphs, paths and layers become instance
+//! data, uploaded once, and steps, each a render pass that draws runs of instances into the frame
+//! or a layer, or composites a layer onto what is under it: a group's at its opacity, a clip's
+//! inside its rounded rectangle, a mask's through the alpha of the mask's layer. A group that
+//! blends reads what is under it from a copy, as a pass cannot read its own target, and replaces
+//! it with the two blended. Each instance names the transform from its px to the target's, which
 //! its shaders invert to find their pixels in its px; the first is the identity. A layer takes a
 //! texture from a pool when a step first draws into it and gives it back once composited. Glyph
-//! outlines are encoded once and kept in two buffers, the atlas, for the renderer's life.
+//! outlines are encoded once and kept in two buffers, the atlas, for the renderer's life; paths
+//! are encoded as they are, after the atlas, for their frame only.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -17,7 +19,8 @@ use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 
 use crate::layout::Rect;
-use crate::paint::{Filter, Geometry, Item, Matrix, SQUARE};
+use crate::paint::{Filter, Geometry, Item, Matrix, Radii, SQUARE};
+use crate::path::Curve;
 use crate::slug;
 use crate::style::Blend;
 use crate::style::gradient::Space;
@@ -37,6 +40,9 @@ const GLYPH: usize = 20;
 const LAYER: usize = 20;
 const SEGMENT: usize = 12;
 const TRANSFORM: usize = 24;
+
+/// How far a path's quadratic curves may be from its cubic ones and arcs, in target px.
+const TOLERANCE: f32 = 0.02;
 
 /// The result of a request wgpu completes at once, as it does on native backends.
 fn now<T>(request: impl Future<Output = T>) -> Result<T, Error> {
@@ -63,6 +69,7 @@ pub struct Gpu {
     glyphs: wgpu::RenderPipeline,
     layers: wgpu::RenderPipeline,
     blends: wgpu::RenderPipeline,
+    masks: wgpu::RenderPipeline,
     blurs: wgpu::RenderPipeline,
     colors: wgpu::RenderPipeline,
     output: wgpu::RenderPipeline,
@@ -172,6 +179,7 @@ impl Gpu {
         let glyph = include_str!("../shaders/slug.wgsl");
         let layer = include_str!("../shaders/layer.wgsl");
         let blend = include_str!("../shaders/blend.wgsl");
+        let mask = include_str!("../shaders/mask.wgsl");
         let blur = include_str!("../shaders/blur.wgsl");
         let colors = include_str!("../shaders/colors.wgsl");
         let output = include_str!("../shaders/output.wgsl");
@@ -182,6 +190,7 @@ impl Gpu {
             glyphs: pipeline(&drawing, "slug", glyph, WORK, over),
             layers: pipeline(&imaging, "layer", layer, WORK, over),
             blends: pipeline(&blending, "blend", blend, WORK, None),
+            masks: pipeline(&blending, "mask", mask, WORK, over),
             blurs: pipeline(&imaging, "blur", blur, WORK, None),
             colors: pipeline(&imaging, "colors", colors, WORK, None),
             output: pipeline(&imaging, "output", output, OUTPUT, None),
@@ -329,6 +338,12 @@ enum Step {
         layer: usize,
         at: u32,
     },
+    /// Composites `layer` onto `target` through the alpha of `mask`.
+    Mask {
+        target: usize,
+        layer: usize,
+        mask: usize,
+    },
     /// Draws `layer` blurred along one axis into `target`, a new layer.
     Blur {
         target: usize,
@@ -349,15 +364,16 @@ enum Step {
 }
 
 impl Step {
-    /// The layer the step reads.
-    fn read(&self) -> Option<usize> {
-        match self {
-            Step::Draw { .. } => None,
+    /// The layers the step reads.
+    fn reads(&self) -> [Option<usize>; 2] {
+        match *self {
+            Step::Draw { .. } => [None; 2],
+            Step::Mask { layer, mask, .. } => [Some(layer), Some(mask)],
             Step::Composite { layer, .. }
             | Step::Blend { layer, .. }
             | Step::Blur { layer, .. }
             | Step::Colors { layer, .. }
-            | Step::Copy { layer, .. } => Some(*layer),
+            | Step::Copy { layer, .. } => [Some(layer), None],
         }
     }
 }
@@ -366,7 +382,7 @@ impl Step {
 #[derive(Clone, Default)]
 struct Seen {
     here: Under,
-    /// Around the innermost group: the backdrop of the box it is of.
+    /// Around the innermost group, which a mask in it keeps: the backdrop of the box they are of.
     group: Under,
 }
 
@@ -389,6 +405,11 @@ struct Plan {
     steps: Vec<Step>,
     targets: usize,
     seen: Seen,
+    /// The frame's paths, encoded as glyph outlines are (curve words, list words), which go
+    /// after the atlas for this frame only; and where in `glyphs` each path instance has its
+    /// first curve texel and list word, which are from the start of these.
+    paths: (Vec<u32>, Vec<u32>),
+    placed: Vec<usize>,
 }
 
 impl Plan {
@@ -587,7 +608,18 @@ impl<'a> Renderer<'a> {
         let device = &gpu.device;
         let mut encoder = device.create_command_encoder(&Default::default());
 
+        // The frame's paths go after the atlas, where the next frame's glyphs may go.
         let [curves_len, lists_len] = self.atlas_len;
+        let kept = [
+            curves_len + atlas.0.len() as u64,
+            lists_len + atlas.1.len() as u64,
+        ];
+        for &i in &plan.placed {
+            plan.glyphs[i] += (kept[0] / 4) as u32;
+            plan.glyphs[i + 1] += kept[1] as u32;
+        }
+        atlas.0.extend(&plan.paths.0);
+        atlas.1.extend(&plan.paths.1);
         let mut changed = self.curves.reserve(
             device,
             &mut encoder,
@@ -603,10 +635,7 @@ impl<'a> Renderer<'a> {
         let queue = &gpu.queue;
         queue.write_buffer(&self.curves.buffer, curves_len * 4, &bytes(&atlas.0));
         queue.write_buffer(&self.lists.buffer, lists_len * 4, &bytes(&atlas.1));
-        self.atlas_len = [
-            curves_len + atlas.0.len() as u64,
-            lists_len + atlas.1.len() as u64,
-        ];
+        self.atlas_len = kept;
         for (store, words) in [
             (&mut self.transforms, &plan.transforms),
             (&mut self.rects, &plan.rects),
@@ -801,6 +830,36 @@ impl<'a> Renderer<'a> {
                         extend(runs, Run::Glyphs(i..i + 1));
                     }
                 }
+                Item::Path {
+                    path,
+                    even_odd,
+                    color,
+                } => {
+                    // An outline of 1 px a unit, y up, as glyph outlines are.
+                    let tolerance = TOLERANCE / (matrix.radius_scale() as f32).max(1e-6);
+                    let contours: Vec<Vec<Curve>> = (path.quads(tolerance).into_iter())
+                        .map(|c| c.into_iter().map(|q| q.map(|[x, y]| [x, -y])).collect())
+                        .collect();
+                    let o = slug::encode(1.0, &contours);
+                    if o.curves.is_empty() {
+                        continue;
+                    }
+                    let (curves, lists) = &mut plan.paths;
+                    let first = [(curves.len() / 4) as u32, lists.len() as u32];
+                    curves.extend(o.curves.iter().flatten().map(|v| v.to_bits()));
+                    lists.extend(&o.lists);
+                    let i = (plan.glyphs.len() / GLYPH) as u32;
+                    let [u, v] = o.band_scale();
+                    let fill = f32::from(u8::from(*even_odd));
+                    let floats = [0.0, 0.0, 1.0, fill].into_iter().chain(o.bounds);
+                    let floats = floats.chain([u, v, 0.0, 0.0]);
+                    plan.glyphs.extend(floats.map(f32::to_bits));
+                    plan.placed.push(plan.glyphs.len());
+                    let bands = o.bands[0] | o.bands[1] << 16;
+                    plan.glyphs.extend([first[0], first[1], bands, transform]);
+                    plan.glyphs.extend(color.map(f32::to_bits));
+                    extend(runs, Run::Glyphs(i..i + 1));
+                }
                 Item::Transform { matrix: m, items } => {
                     let m = matrix.times(*m);
                     // A transform that flattens the plane shows nothing.
@@ -884,14 +943,46 @@ impl<'a> Renderer<'a> {
                     let at = plan.words(words.into_iter().chain([0.0; 16]));
                     plan.steps.push(Step::Blend { target, layer, at });
                 }
-                Item::Group { .. } | Item::Clip { .. } | Item::Cut { .. } | Item::Shadow { .. } => {
+                Item::Mask { mask, items } if lone(mask).is_none() => {
                     if !runs.is_empty() {
                         let runs = std::mem::take(runs);
                         plan.steps.push(Step::Draw { target, runs });
                     }
-                    // A group shows all of its layer, a clip the part in its rectangle, a cut the
-                    // part on one side of its line, and a shadow its layer blurred, inside its
-                    // rectangle or outside it.
+                    // The items' layer and the mask's, each starting empty for what is in it, as
+                    // a group's does. The mask is the box's, so what is in it of the box sees the
+                    // backdrop the box's group does.
+                    let layer = plan.layer();
+                    let shape = plan.layer();
+                    for (into, items) in [(layer, items), (shape, mask)] {
+                        let inside = Seen {
+                            here: Under {
+                                root: into,
+                                open: Vec::new(),
+                            },
+                            group: plan.seen.group.clone(),
+                        };
+                        let around = std::mem::replace(&mut plan.seen, inside);
+                        self.plan(items, into, at, faces, plan, atlas)?;
+                        plan.seen = around;
+                    }
+                    plan.steps.push(Step::Mask {
+                        target,
+                        layer,
+                        mask: shape,
+                    });
+                }
+                Item::Group { .. }
+                | Item::Clip { .. }
+                | Item::Mask { .. }
+                | Item::Cut { .. }
+                | Item::Shadow { .. } => {
+                    if !runs.is_empty() {
+                        let runs = std::mem::take(runs);
+                        plan.steps.push(Step::Draw { target, runs });
+                    }
+                    // A group shows all of its layer, a clip the part in its rectangle, and so
+                    // does a mask that is one opaque rectangle, a cut the part on one side of its
+                    // line, and a shadow its layer blurred, inside its rectangle or outside it.
                     // The group's is on the target, and the others in their transform's px, where a
                     // blur is as much larger as the transform makes it.
                     let [width, height] = self.size.map(|s| s as f32);
@@ -902,6 +993,12 @@ impl<'a> Renderer<'a> {
                         }
                         Item::Clip { rect, radii, items } => {
                             (items, 1.0, 0.0, xywh(*rect), *radii, false)
+                        }
+                        Item::Mask { mask, items } => {
+                            let Some((rect, radii)) = lone(mask) else {
+                                unreachable!("a mask of one opaque rectangle")
+                            };
+                            (items, 1.0, 0.0, xywh(rect), radii, false)
                         }
                         Item::Cut {
                             line: [a, b, c],
@@ -929,8 +1026,8 @@ impl<'a> Renderer<'a> {
                     };
                     plan.layers.extend([on, 0, 0, 0]);
                     let layer = plan.layer();
-                    // A group's layer is under what is in it; a clip's or a cut's is drawn over
-                    // what is under it.
+                    // A group's layer, and a mask's, is under what is in it; a clip's or a cut's
+                    // is drawn over what is under it. A mask is its box's, as its group is.
                     let inside = match item {
                         Item::Group { .. } => Seen {
                             here: Under {
@@ -938,6 +1035,13 @@ impl<'a> Renderer<'a> {
                                 open: Vec::new(),
                             },
                             group: plan.seen.here.clone(),
+                        },
+                        Item::Mask { .. } => Seen {
+                            here: Under {
+                                root: layer,
+                                open: Vec::new(),
+                            },
+                            group: plan.seen.group.clone(),
                         },
                         Item::Shadow { .. } => plan.seen.clone(),
                         _ => {
@@ -1009,7 +1113,7 @@ impl<'a> Renderer<'a> {
         let mut started = vec![false; plan.targets];
         let mut last = vec![0; plan.targets];
         for (k, step) in plan.steps.iter().enumerate() {
-            if let Some(l) = step.read() {
+            for l in step.reads().into_iter().flatten() {
                 last[l] = k;
             }
         }
@@ -1034,20 +1138,24 @@ impl<'a> Renderer<'a> {
                 );
                 continue;
             }
-            let (target, read) = match step {
-                Step::Draw { target, .. } => (*target, None),
-                Step::Composite { target, layer, .. }
-                | Step::Blend { target, layer, .. }
-                | Step::Blur { target, layer, .. }
-                | Step::Colors { target, layer, .. } => (*target, Some(*layer)),
+            let target = match *step {
+                Step::Draw { target, .. }
+                | Step::Composite { target, .. }
+                | Step::Blend { target, .. }
+                | Step::Mask { target, .. }
+                | Step::Blur { target, .. }
+                | Step::Colors { target, .. } => target,
                 Step::Copy { .. } => unreachable!("copied above"),
             };
-            let layer = match read.map(|l| surfaces[l]) {
-                None => None,
-                Some(Some(s)) => Some(s),
-                // Nothing was drawn into the layer.
-                Some(None) => continue,
-            };
+            // The layers the step reads go back to the pool once it is their last; a layer
+            // nothing was drawn into shows nothing, nor does a mask let anything through.
+            let reads = step.reads();
+            let done = reads.map(|l| l.filter(|&l| last[l] == k).and_then(|l| surfaces[l]));
+            if reads.into_iter().flatten().any(|l| surfaces[l].is_none()) {
+                self.free.extend(done.into_iter().flatten());
+                continue;
+            }
+            let [layer, mask] = reads.map(|l| l.and_then(|l| surfaces[l]));
             let surface =
                 match target {
                     0 => None,
@@ -1078,6 +1186,15 @@ impl<'a> Renderer<'a> {
             pass.set_bind_group(0, draw, &[]);
             match step {
                 Step::Copy { .. } => {}
+                Step::Mask { .. } => {
+                    let [Some(s), Some(m)] = [layer, mask] else {
+                        unreachable!("a mask step reads two layers");
+                    };
+                    pass.set_pipeline(&gpu.masks);
+                    pass.set_bind_group(1, &self.pool[s].image, &[]);
+                    pass.set_bind_group(2, &self.pool[m].image, &[]);
+                    pass.draw(0..3, 0..1);
+                }
                 Step::Draw { runs, .. } => {
                     for run in runs {
                         let (pipeline, range) = match run {
@@ -1108,9 +1225,7 @@ impl<'a> Renderer<'a> {
                 }
             }
             drop(pass);
-            let done = read.is_some_and(|l| last[l] == k);
-            self.free
-                .extend(layer.filter(|_| done).into_iter().chain(under));
+            self.free.extend(done.into_iter().flatten().chain(under));
         }
         if !started[0] {
             drop(begin(encoder, &self.frame.view, false));
@@ -1164,6 +1279,15 @@ fn begin<'e>(
 /// Bytes per row of a readback: padded as copies need.
 fn row(width: u32) -> u32 {
     (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+}
+
+/// The rectangle a mask is, if it is one opaque rectangle: what it shows is what a clip to it
+/// shows.
+fn lone(mask: &[Item]) -> Option<(Rect, Radii)> {
+    match mask {
+        [Item::Rect { rect, radii, color }] if color[3] >= 1.0 => Some((*rect, *radii)),
+        _ => None,
+    }
 }
 
 /// A rectangle as shaders take it: x, y, width and height.

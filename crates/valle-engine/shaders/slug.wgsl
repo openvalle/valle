@@ -1,8 +1,9 @@
-// Glyphs by Slug coverage (see slug.rs): each instance an outline in font units, placed at an
-// origin in the px of a transform and scaled, in a premultiplied working color.
+// Glyphs and filled paths by Slug coverage (see slug.rs): each instance an outline in font units,
+// placed at an origin in the px of a transform and scaled, in a premultiplied working color.
 
 struct Glyph {
-  // The origin, px, on the baseline; px per font unit.
+  // The origin, px, on the baseline; px per font unit; 1 to fill where the outline winds an odd
+  // number of times rather than where it winds at all.
   place: vec4f,
   // The outline's bounds in font units, y up: min x, min y, max x, max y.
   bounds: vec4f,
@@ -104,6 +105,12 @@ fn ray(g: Glyph, em: vec2f, ppu: f32, head: u32, swap: bool) -> vec2f {
   return vec2f(cov, weight);
 }
 
+// Windings folded so that an even number is outside and an odd one inside, and a pixel partly
+// between the two is as much inside as it is in the odd one.
+fn odd(w: vec2f) -> vec2f {
+  return 1.0 - abs(1.0 - (w - 2.0 * floor(w * 0.5)));
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let g = glyphs[in.index];
   // Target pixels per font unit along x and along y: over how much of each axis a pixel spreads.
@@ -115,7 +122,10 @@ fn ray(g: Glyph, em: vec2f, ppu: f32, head: u32, swap: bool) -> vec2f {
   let h = ray(g, in.em, ppu.x, 2u * u32(band.y), false);
   let v = ray(g, in.em, ppu.y, 2u * (bands.y + u32(band.x)), true);
   // Swapping the axes reverses the winding.
-  let cov = vec2f(h.x, -v.x);
+  var cov = vec2f(h.x, -v.x);
+  if (g.place.w > 0.0) {
+    cov = odd(cov);
+  }
   let w = vec2f(h.y, v.y);
   let mixed = abs(cov.x * w.x + cov.y * w.y) / max(w.x + w.y, 1.0 / 65536.0);
   let c = saturate(max(mixed, min(abs(cov.x), abs(cov.y))));

@@ -1,0 +1,30 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px; display: flex; flex-wrap: wrap; gap: 6px;\"><div data-n=\"1\" style=\"position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; background: #eceff1;\"><div data-n=\"2\" style=\"width: 56px; height: 56px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); border: 4px solid #3949ab; box-shadow: 0 0 0 6px #00897b; clip-path: inset(-3px 4px 8px round 12px 4px);\"></div></div><div data-n=\"3\" style=\"position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; background: #eceff1;\"><div data-n=\"4\" style=\"width: 56px; height: 56px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); clip-path: circle(30px at 40% 50%);\"><div data-n=\"5\" style=\"position: absolute; left: 40px; top: 4px; width: 30px; height: 30px; background: #3949ab;\"></div><div data-n=\"6\" style=\"position: fixed; left: 90px; top: 50px; width: 60px; height: 20px; background: #8e24aa;\"></div></div></div><div data-n=\"7\" style=\"position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; background: #eceff1;\"><div data-n=\"8\" style=\"width: 56px; height: 56px; background: #3949ab; transform: rotate(15deg); clip-path: polygon(evenodd, 50% 0, 79% 90%, 2% 35%, 98% 35%, 21% 90%);\"></div></div><div data-n=\"9\" style=\"position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; background: #eceff1;\"><div data-n=\"10\" style=\"width: 56px; height: 56px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); clip-path: path('M28 50 C10 38 2 28 6 16 A11 11 0 0 1 28 12 A11 11 0 0 1 50 16 C54 28 46 38 28 50 Z');\"></div></div><div data-n=\"11\" style=\"position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b);\"><div data-n=\"12\" style=\"width: 56px; height: 56px; background: transparent; backdrop-filter: invert(1) blur(2px); clip-path: circle(40%);\"></div></div><div data-n=\"13\" style=\"position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b);\"><div data-n=\"14\" style=\"width: 56px; height: 56px; background: linear-gradient(to right, #3949ab 50%, transparent 50%); clip-path: inset(0);\"><div data-n=\"15\" style=\"margin: 8px; height: 40px; backdrop-filter: invert(1);\"></div></div></div><div data-n=\"16\" style=\"position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; background: #eceff1;\"><div data-n=\"17\" style=\"width: 40px; height: 40px; background: #ffca28; border-radius: 8px; filter: drop-shadow(6px 6px 2px #3949ab); clip-path: inset(-4px);\"></div></div><div data-n=\"18\" style=\"position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; background: #eceff1;\"><div data-n=\"19\" style=\"width: 56px; height: 56px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); border: 8px solid #e57373; padding: 4px; border-radius: 20px; clip-path: padding-box;\"><div data-n=\"20\" style=\"width: 60px; height: 60px; background: #00897b80;\"></div></div></div><div data-n=\"21\" style=\"position: relative; width: 76px; height: 76px; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b);\"><div data-n=\"22\" style=\"width: 56px; height: 56px; background: #90caf9; opacity: 0.8; mix-blend-mode: difference; clip-path: ellipse(45% 30% at 50% 50%);\"></div></div></div></div>\n",
+ "boxes": [
+  [0,0,256,248],
+  [4,4,76,76],
+  [14,14,56,56],
+  [86,4,76,76],
+  [96,14,56,56],
+  [126,8,30,30],
+  [90,50,60,20],
+  [168,4,76,76],
+  [171.70713806152344,7.707143783569336,68.58570861816406,68.58570861816406],
+  [4,86,76,76],
+  [14,96,56,56],
+  [86,86,76,76],
+  [96,96,56,56],
+  [168,86,76,76],
+  [178,96,56,56],
+  [186,104,40,40],
+  [4,168,76,76],
+  [22,186,40,40],
+  [86,168,76,76],
+  [96,178,56,56],
+  [108,190,60,60],
+  [168,168,76,76],
+  [178,178,56,56]
+ ],
+ "lines": {}
+}

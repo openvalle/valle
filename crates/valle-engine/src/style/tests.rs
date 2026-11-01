@@ -1095,6 +1095,94 @@ fn filters_take_css_functions_in_order() {
 }
 
 #[test]
+fn clip_paths_take_basic_shapes_in_a_box() {
+    use background::Area;
+    use shape::{Clip, Radius, Shape};
+    let clip = |v: &str| one(&[("clipPath", text(v))]).clip;
+    let px = |v: f64| Math::Sum([v, 0.0]);
+    let percent = |v: f64| Math::Sum([0.0, v / 100.0]);
+    let center = || position::Offset {
+        end: false,
+        by: percent(50.0),
+    };
+    assert_eq!(clip("none"), None);
+    assert_eq!(
+        clip("Padding-Box"),
+        Some(Clip {
+            shape: None,
+            area: Area::PaddingBox
+        })
+    );
+    let Some(Clip {
+        shape: Some(Shape::Inset { sides, radii }),
+        area: Area::BorderBox,
+    }) = clip("inset(1px 10% round 2px 50% / 1em)")
+    else {
+        panic!()
+    };
+    assert_eq!(sides, [px(1.0), percent(10.0), px(1.0), percent(10.0)]);
+    assert_eq!(radii[0], [px(2.0), px(16.0)]);
+    assert_eq!(radii[1], [percent(50.0), px(16.0)]);
+    assert_eq!(
+        clip("content-box CIRCLE(at right 5px top 0)"),
+        Some(Clip {
+            shape: Some(Shape::Circle {
+                radius: Radius::ClosestSide,
+                at: [
+                    position::Offset {
+                        end: true,
+                        by: px(5.0)
+                    },
+                    position::Offset {
+                        end: false,
+                        by: percent(0.0)
+                    }
+                ],
+            }),
+            area: Area::ContentBox,
+        })
+    );
+    assert_eq!(
+        clip("ellipse(farthest-side 20%)").unwrap().shape,
+        Some(Shape::Ellipse {
+            radii: [Radius::FarthestSide, Radius::Len(percent(20.0))],
+            at: [center(), center()],
+        })
+    );
+    assert_eq!(
+        clip("polygon(EVENODD, 0 0, 100% 0, 50% calc(100% - 2px))")
+            .unwrap()
+            .shape,
+        Some(Shape::Polygon {
+            even_odd: true,
+            points: vec![
+                [px(0.0), px(0.0)],
+                [percent(100.0), px(0.0)],
+                [percent(50.0), Math::Sum([-2.0, 1.0])],
+            ],
+        })
+    );
+    // Path data keeps its case: a lower case command is relative.
+    assert_eq!(
+        clip("path(\"M1 2 l3 0 Z\") padding-box"),
+        Some(Clip {
+            shape: Some(Shape::Path {
+                even_odd: false,
+                path: crate::path::parse("M1 2 L4 2 Z").unwrap(),
+            }),
+            area: Area::PaddingBox,
+        })
+    );
+    let s = one(&[("clipPath", text("circle()"))]);
+    assert!(!s.contains_all());
+    let flat = one(&[
+        ("transformStyle", text("preserve-3d")),
+        ("clipPath", text("circle()")),
+    ]);
+    assert!(!flat.keeps_3d());
+}
+
+#[test]
 fn background_layers_take_blend_modes_which_the_shorthand_leaves() {
     let blends = |style: &[(&str, Prop)]| {
         (one(style).layers.iter())
@@ -1819,6 +1907,69 @@ fn what_is_not_supported_is_an_error() {
             text("bloom(1)"),
             "bloom() is not a filter function: blur, brightness, contrast, drop-shadow, \
              grayscale, hue-rotate, invert, opacity, saturate or sepia",
+        ),
+        ("clipPath", text(""), "\"\" is not a clip path; use none"),
+        ("clipPath", num(0.0), "0 is not a string"),
+        (
+            "clipPath",
+            text("margin-box"),
+            "margin-box is not a basic shape, inset(), circle(), ellipse(), polygon() or path(), \
+             or a box, border-box, padding-box or content-box",
+        ),
+        (
+            "clipPath",
+            text("circle() ellipse()"),
+            "\"circle() ellipse()\" takes one shape",
+        ),
+        (
+            "clipPath",
+            text("rect(0 1px 1px 0)"),
+            "rect() is not a basic shape: inset(), circle(), ellipse(), polygon() or path()",
+        ),
+        (
+            "clipPath",
+            text("inset(1px 2px 3px 4px 5px)"),
+            "inset(): takes one to four lengths",
+        ),
+        (
+            "clipPath",
+            text("inset(1px round)"),
+            "inset(): round needs radii",
+        ),
+        (
+            "clipPath",
+            text("circle(-1px)"),
+            "circle(): -1px is negative",
+        ),
+        (
+            "clipPath",
+            text("circle(closest-corner)"),
+            "circle(): closest-corner is not a length",
+        ),
+        (
+            "clipPath",
+            text("ellipse(10px)"),
+            "ellipse(): takes two radii or none",
+        ),
+        (
+            "clipPath",
+            text("polygon()"),
+            "polygon(): takes points, each two lengths",
+        ),
+        (
+            "clipPath",
+            text("polygon(nonzero 0 0, 1px 1px)"),
+            "polygon(): \"nonzero 0 0\" is not a point: two lengths, x and y",
+        ),
+        (
+            "clipPath",
+            text("path(M0 0)"),
+            "path(): takes a fill rule or not, then path data in quotes",
+        ),
+        (
+            "clipPath",
+            text("path('M0 0 X')"),
+            "path(): \"M0 0 X\" is not path data: X is not a command",
         ),
         (
             "backgroundBlendMode",
