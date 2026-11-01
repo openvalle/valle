@@ -54,7 +54,8 @@ fn roots(c: [[f32; 2]; 3], cut: usize) -> [f32; 2] {
     let a = [0, 1].map(|k| c[0][k] - 2.0 * c[1][k] + c[2][k]);
     let b = [0, 1].map(|k| c[0][k] - c[1][k]);
     let [ay, by, cy] = [a[cut], b[cut], c[0][cut]];
-    let d = (by * by - ay * cy).max(0.0).sqrt();
+    let square = by * by - ay * cy;
+    let d = square.max(0.0).sqrt();
     let fall = if by > 0.0 {
         cy / (by + d)
     } else {
@@ -65,7 +66,12 @@ fn roots(c: [[f32; 2]; 3], cut: usize) -> [f32; 2] {
     } else {
         (by + d) / ay
     };
-    [fall, rise].map(|t| (a[o] * t - 2.0 * b[o]) * t + c[0][o])
+    let t = if square < 0.0 {
+        [by / ay; 2]
+    } else {
+        [fall, rise]
+    };
+    t.map(|t| (a[o] * t - 2.0 * b[o]) * t + c[0][o])
 }
 
 /// A pixel's coverage at `p`, `ppu` pixels per font unit: the shader's arithmetic.
@@ -195,6 +201,25 @@ fn lines_cross_where_they_are_from_any_pixel() {
     }
     // Four slanted, three level.
     assert_eq!(lines, 7);
+}
+
+#[test]
+fn rays_get_nothing_from_a_curve_that_turns_back_before_them() {
+    // Its control point is past the ray, so both crossings count, but it turns back first.
+    let c = [[-5.0, 2.5], [0.0, -1.5], [5.0, 2.5]];
+    assert_eq!(crossings([2.5, -1.5, 2.5]), 0x0101);
+    let [fall, rise] = roots(c, 1);
+    assert_eq!(fall, rise);
+    // A pixel just past its tip, outside, and one inside.
+    let o = encode(
+        1.0,
+        &[vec![
+            [[0.0, 0.0], [5.0, -4.0], [10.0, 0.0]],
+            [[10.0, 0.0], [5.0, 0.0], [0.0, 0.0]],
+        ]],
+    );
+    assert_eq!(coverage(&o, [5.0, -2.5], 1.0), 0.0);
+    assert_eq!(coverage(&o, [5.0, -1.0], 1.0), 1.0);
 }
 
 #[test]

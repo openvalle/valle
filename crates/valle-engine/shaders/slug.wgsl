@@ -51,13 +51,16 @@ fn crossings(y: vec3f) -> u32 {
 fn roots(p1: vec2f, p2: vec2f, p3: vec2f) -> vec2f {
   let a = p1 - 2.0 * p2 + p3;
   let b = p1 - p2;
-  let d = sqrt(max(b.y * b.y - a.y * p1.y, 0.0));
+  let square = b.y * b.y - a.y * p1.y;
+  let d = sqrt(max(square, 0.0));
   // The roots of a t² - 2b t + c are (b ∓ d) / a, or c / (b ± d): each in the form that adds
   // b and d of one sign. Moving the points to the pixel rounds them, so a line's a is a stray
   // ulp rather than 0, and (b - d) / a would divide what is left of b - d by it.
   let fall = select((b.y - d) / a.y, p1.y / (b.y + d), b.y > 0.0);
   let rise = select((b.y + d) / a.y, p1.y / (b.y - d), b.y < 0.0);
-  let t = vec2f(fall, rise);
+  // A curve that turns back before the ray has no roots, where the two forms differ: both
+  // crossings are at its tip, so that they cancel. A line always has them.
+  let t = select(vec2f(fall, rise), vec2f(b.y / a.y), square < 0.0);
   return (a.x * t - 2.0 * b.x) * t + p1.x;
 }
 
