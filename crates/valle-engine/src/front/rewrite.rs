@@ -1,0 +1,971 @@
+//! Rewriting for the tracing frontend. oxc strips TypeScript and turns JSX into
+//! `__h(type, props, ...children)`; the printed JavaScript is parsed again and every operation a
+//! traced value can reach becomes a runtime call, by inserting text at node spans (JavaScript has
+//! no operator overloading):
+//!
+//! | Source | Rewritten |
+//! |---|---|
+//! | `a op b`, `x op= v` | `__b("op", a, b)`, `x = __b("op", x, v)` |
+//! | `op a` | `__u("op", a)` |
+//! | `c ? a : b`, `a && b`, `a \|\| b`, `a ?? b` | `__sel(c, () => (a), () => (b), site)`, `__and(a, () => (b), site)`, … |
+//! | `` `s${x}` `` | `__tpl(["s", ""], x)` |
+//! | `o.p`, `o[k]` | `__get(o, "p")`, `__idx(o, k, site)` |
+//! | `o.m(...a)` | `__call(o, "m", site, ...a)` |
+//! | `__h(type, …)` (JSX) | `__hs(site, type, …)` |
+//! | `if (c)`, loop tests | `if (__if(c, site))` |
+//! | `switch (d)` | `switch (__sw(d, site))` |
+//! | `...x` | `...__spread(x)` |
+//!
+//! Assignment targets, optional chains and tagged templates are left alone.
+//!
+//! Imports of relative modules, `import D, { A, B as C } from "./x"`, become
+//! `const { default: D, A, B: C } = __import("dir/x")` on the same line: the module's path joined
+//! to the importer's directory, without its extension, which the loader resolves. A module
+//! evaluates to an object of its exports.
+//!
+//! `async` and `await` are the one syntax rule: a frame is computed synchronously, so there is
+//! nothing to wait for. Everything else a scene cannot do comes from what its environment lacks.
+
+use std::path::Path;
+
+use oxc::allocator::Allocator;
+use oxc::ast::ast::{
+    ArrowFunctionExpression, AssignmentExpression, AssignmentTarget, AwaitExpression,
+    BindingPattern, Declaration, DoWhileStatement, Expression, ForOfStatement, ForStatement,
+    Function, IfStatement, ObjectPropertyKind, Program, PropertyKey, SpreadElement, Statement,
+    SwitchStatement, WhileStatement,
+};
+use oxc::ast_visit::{Visit, walk};
+use oxc::codegen::{Codegen, CodegenOptions};
+use oxc::parser::Parser;
+use oxc::semantic::SemanticBuilder;
+use oxc::span::{GetSpan, SourceType};
+use oxc::syntax::scope::ScopeFlags;
+use oxc::transformer::{JsxRuntime, TransformOptions, Transformer};
+
+use super::Composition;
+use crate::time::{Rate, Tick};
+
+/// A place in the source where the runtime may record a guard or an element.
+pub struct Site {
+    /// 1-based line and column (UTF-16 units) in the original file; 0 where unknown.
+    pub line: u32,
+    pub col: u32,
+}
+
+pub struct Rewritten {
+    /// An expression that evaluates to the module's exports, `default` included.
+    pub code: String,
+    /// Sites numbered from `first_site`, as given to `rewrite`.
+    pub sites: Vec<Site>,
+    /// Relative modules this one imports, as module keys, in import order.
+    pub imports: Vec<String>,
+    /// Names the module reads without declaring: built-in components and functions.
+    pub free: Vec<String>,
+    /// Original line of each line of `code`, 0 where unknown.
+    pub lines: Vec<u32>,
+    /// The module's `composition` export, read without running it.
+    pub composition: Option<Composition>,
+}
+
+/// What `code` starts with before the first line of the module body.
+const PREFIX: &str = "(function () {\n";
+
+pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten, String> {
+    let path = Path::new(path);
+    // TypeScript and JSX → plain JavaScript, with a source map back to the file.
+    let allocator = Allocator::default();
+    let source_type = SourceType::from_path(path).map_err(|e| format!("{e:?}"))?;
+    let parsed = Parser::new(&allocator, source, source_type).parse();
+    if parsed.diagnostics.has_errors() {
+        return Err(diagnostics(&parsed.diagnostics, source));
+    }
+    let mut program = parsed.program;
+    let source_starts = line_starts(source);
+    let place = |offset: u32| -> (u32, u32) {
+        let line = source_starts.partition_point(|&s| s <= offset as usize) - 1;
+        let col = source[source_starts[line]..offset as usize]
+            .encode_utf16()
+            .count();
+        (line as u32 + 1, col as u32 + 1)
+    };
+    let mut asynchronous = Async(None);
+    asynchronous.visit_program(&program);
+    if let Some(offset) = asynchronous.0 {
+        let (line, col) = place(offset);
+        return Err(format!(
+            "{line}:{col}: async functions and await are not supported: a frame is computed \
+             synchronously, so there is nothing to wait for"
+        ));
+    }
+    let composition = composition(&program).map_err(|(offset, e)| {
+        let (line, col) = place(offset);
+        format!("{line}:{col}: {e}")
+    })?;
+    // Where each JSX element and fragment opens, in source order. The transform keeps their
+    // order, so the k-th `__h` call of the printed code is the k-th of them; the source map only
+    // places a call near some token of it.
+    let mut jsx = Jsx(Vec::new());
+    jsx.visit_program(&program);
+    jsx.0.sort_unstable();
+    let jsx_at: Vec<(u32, u32)> = jsx.0.iter().map(|&offset| place(offset)).collect();
+    let scoping = SemanticBuilder::new()
+        .build(&program)
+        .semantic
+        .into_scoping();
+    let mut options = TransformOptions::default();
+    options.jsx.runtime = JsxRuntime::Classic;
+    options.jsx.pragma = Some("__h".into());
+    options.jsx.pragma_frag = Some("__F".into());
+    options.jsx.display_name_plugin = false;
+    options.jsx.pure = false;
+    options.jsx.use_spread = Some(true);
+    // Only `import type` goes, as with `verbatimModuleSyntax`: an import the module does not use
+    // still names a file that must exist.
+    options.typescript.only_remove_type_imports = true;
+    let transformed =
+        Transformer::new(&allocator, path, &options).build_with_scoping(scoping, &mut program);
+    if transformed.diagnostics.has_errors() {
+        return Err(diagnostics(&transformed.diagnostics, source));
+    }
+    let printed = Codegen::new()
+        .with_options(CodegenOptions {
+            source_map_path: Some(path.to_path_buf()),
+            ..CodegenOptions::default()
+        })
+        .build(&program);
+    let map = printed.map.ok_or("codegen returned no source map")?;
+    let table = map.generate_lookup_table();
+    let dir = path
+        .parent()
+        .map_or(String::new(), |d| d.to_string_lossy().into_owned());
+    let (js, exports, imports) = strip_module(&printed.code, &dir)?;
+    let js_starts = line_starts(&js);
+    let original = |offset: u32| -> (u32, u32) {
+        let line = js_starts.partition_point(|&s| s <= offset as usize) - 1;
+        let col = js[js_starts[line]..offset as usize].encode_utf16().count() as u32;
+        map.lookup_token_approx(&table, line as u32, col)
+            .map_or((0, 0), |t| (t.get_src_line() + 1, t.get_src_col() + 1))
+    };
+
+    // Rewrite the printed JavaScript.
+    let allocator = Allocator::default();
+    let parsed = Parser::new(&allocator, &js, SourceType::mjs()).parse();
+    if parsed.diagnostics.has_errors() {
+        return Err(diagnostics(&parsed.diagnostics, &js));
+    }
+    let semantic = SemanticBuilder::new().build(&parsed.program).semantic;
+    let mut free: Vec<String> = semantic
+        .scoping()
+        .root_unresolved_references()
+        .keys()
+        .map(|name| name.to_string())
+        .collect();
+    free.sort();
+    let mut collector = Collector {
+        first_site,
+        ..Collector::default()
+    };
+    collector.visit_program(&parsed.program);
+    // Element sites by their call's rank in the printed code, when the counts agree.
+    let mut calls: Vec<(u32, usize)> = collector
+        .sites
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.1 == "element")
+        .map(|(i, s)| (s.0, i))
+        .collect();
+    calls.sort_unstable();
+    let mut exact = vec![None; collector.sites.len()];
+    if calls.len() == jsx_at.len() {
+        for (rank, &(_, i)) in calls.iter().enumerate() {
+            exact[i] = Some(jsx_at[rank]);
+        }
+    }
+    let sites = collector
+        .sites
+        .iter()
+        .zip(exact)
+        .map(|(&(offset, _), exact)| {
+            let (line, col) = exact.unwrap_or_else(|| original(offset));
+            Site { line, col }
+        })
+        .collect();
+    let (body, runs) = apply(&js, collector.edits);
+
+    let code = format!(
+        "{PREFIX}{body}\nreturn {{ {} }};\n}})()",
+        exports.join(", ")
+    );
+    // Original line of each output line, through the copied runs back into `js`.
+    let mut lines = vec![0];
+    for start in line_starts(&body) {
+        let at = runs.partition_point(|&(out, _)| out <= start);
+        let line = match at.checked_sub(1).map(|i| runs[i]) {
+            Some((out, input)) => original((input + (start - out)).min(js.len()) as u32).0,
+            None => 0,
+        };
+        lines.push(line);
+    }
+    Ok(Rewritten {
+        code,
+        sites,
+        imports,
+        free,
+        lines,
+        composition,
+    })
+}
+
+fn diagnostics(list: &[oxc::diagnostics::OxcDiagnostic], source: &str) -> String {
+    let mut out = String::new();
+    for d in list {
+        out.push_str(&d.clone().render_with_source_code(source.to_string()));
+        out.push('\n');
+    }
+    out
+}
+
+fn line_starts(text: &str) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(text.match_indices('\n').map(|(i, _)| i + 1))
+        .collect()
+}
+
+/// The earliest `async` function or `await`.
+struct Async(Option<u32>);
+
+impl Async {
+    fn found(&mut self, offset: u32) {
+        self.0 = Some(self.0.map_or(offset, |o| o.min(offset)));
+    }
+}
+
+impl<'a> Visit<'a> for Async {
+    fn visit_function(&mut self, f: &Function<'a>, flags: ScopeFlags) {
+        if f.r#async {
+            self.found(f.span.start);
+        }
+        walk::walk_function(self, f, flags);
+    }
+
+    fn visit_arrow_function_expression(&mut self, f: &ArrowFunctionExpression<'a>) {
+        if f.r#async {
+            self.found(f.span.start);
+        }
+        walk::walk_arrow_function_expression(self, f);
+    }
+
+    fn visit_await_expression(&mut self, e: &AwaitExpression<'a>) {
+        self.found(e.span.start);
+        walk::walk_await_expression(self, e);
+    }
+
+    fn visit_for_of_statement(&mut self, s: &ForOfStatement<'a>) {
+        if s.r#await {
+            self.found(s.span.start);
+        }
+        walk::walk_for_of_statement(self, s);
+    }
+}
+
+/// The `composition` export: an object literal of literals, which tools read without running the
+/// scene. Errors carry the source offset they point at.
+fn composition(program: &Program<'_>) -> Result<Option<Composition>, (u32, String)> {
+    for statement in &program.body {
+        let Statement::ExportDeclaration(export) = statement else {
+            continue;
+        };
+        let Declaration::VariableDeclaration(declaration) = &export.declaration else {
+            continue;
+        };
+        for d in &declaration.declarations {
+            let BindingPattern::BindingIdentifier(id) = &d.id else {
+                continue;
+            };
+            if id.name.as_str() != "composition" {
+                continue;
+            }
+            let not_static = || {
+                (
+                    d.span.start,
+                    "composition must be an object literal of numbers, strings and booleans: \
+                     tools read it without running the scene"
+                        .to_string(),
+                )
+            };
+            let mut init = d.init.as_ref().ok_or_else(not_static)?;
+            loop {
+                init = match init {
+                    Expression::TSAsExpression(e) => &e.expression,
+                    Expression::TSSatisfiesExpression(e) => &e.expression,
+                    Expression::ParenthesizedExpression(e) => &e.expression,
+                    _ => break,
+                };
+            }
+            let Expression::ObjectExpression(object) = init else {
+                return Err(not_static());
+            };
+            let mut fields = Vec::new();
+            for p in &object.properties {
+                let ObjectPropertyKind::ObjectProperty(p) = p else {
+                    return Err(not_static());
+                };
+                let key = match &p.key {
+                    PropertyKey::StaticIdentifier(n) if !p.computed => n.name.as_str(),
+                    PropertyKey::StringLiteral(s) => s.value.as_str(),
+                    _ => return Err(not_static()),
+                };
+                let value = match &p.value {
+                    Expression::NumericLiteral(n) => Literal::Number(n.value),
+                    Expression::StringLiteral(s) => Literal::Text(s.value.to_string()),
+                    Expression::BooleanLiteral(b) => Literal::Bool(b.value),
+                    _ => return Err(not_static()),
+                };
+                fields.push((key, value, p.span.start));
+            }
+            return composition_fields(&fields, d.span.start).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+enum Literal {
+    Number(f64),
+    Text(String),
+    Bool(bool),
+}
+
+fn composition_fields(
+    fields: &[(&str, Literal, u32)],
+    at: u32,
+) -> Result<Composition, (u32, String)> {
+    let (mut width, mut height, mut fps, mut duration, mut looped) =
+        (None, None, None, None, false);
+    for (key, value, offset) in fields {
+        let bad = |what: &str| (*offset, format!("composition {key} must be {what}"));
+        let size = |v: &Literal| match v {
+            Literal::Number(x) if x.fract() == 0.0 && (1.0..=16384.0).contains(x) => Ok(*x as u32),
+            _ => Err(bad("a whole number of pixels from 1 to 16384")),
+        };
+        match *key {
+            "width" => width = Some(size(value)?),
+            "height" => height = Some(size(value)?),
+            "fps" => {
+                let rate = match value {
+                    Literal::Number(x) => Rate::from_f64(*x),
+                    Literal::Text(t) => Rate::parse(t),
+                    Literal::Bool(_) => Err(String::new()),
+                };
+                let what = "a number such as 30, or a ratio such as \"30000/1001\"";
+                fps = Some(rate.map_err(|_| bad(what))?);
+            }
+            "duration" => {
+                let seconds = match value {
+                    Literal::Number(x) if *x > 0.0 => Tick::from_seconds(*x).ok(),
+                    _ => None,
+                };
+                duration = Some(seconds.ok_or_else(|| bad("a positive number of seconds"))?);
+            }
+            "loop" => match value {
+                Literal::Bool(b) => looped = *b,
+                _ => return Err(bad("true or false")),
+            },
+            other => {
+                return Err((
+                    *offset,
+                    format!(
+                        "composition has no field {other}; it takes width, height, fps, duration \
+                         and loop"
+                    ),
+                ));
+            }
+        }
+    }
+    let missing = |name: &str| (at, format!("composition needs {name}"));
+    Ok(Composition {
+        width: width.ok_or_else(|| missing("width"))?,
+        height: height.ok_or_else(|| missing("height"))?,
+        fps: fps.ok_or_else(|| missing("fps"))?,
+        duration: duration.ok_or_else(|| missing("duration"))?,
+        looped,
+    })
+}
+
+/// Turns the module into a function body: `export` keywords become spaces, so offsets and columns
+/// keep matching the source map, and each import becomes a `const` on its own line. Returns the
+/// body, the exported names (`default: Name` for the default export) and the imported modules.
+fn strip_module(code: &str, dir: &str) -> Result<(String, Vec<String>, Vec<String>), String> {
+    let ident = |rest: &str| -> String {
+        rest.chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '$')
+            .collect()
+    };
+    let mut out = String::with_capacity(code.len());
+    let mut exports = Vec::new();
+    let mut imports = Vec::new();
+    for line in code.split_inclusive('\n') {
+        if let Some(rest) = line.strip_prefix("export default function ") {
+            let name = ident(rest);
+            if name.is_empty() {
+                return Err("the default export must be a named function, such as \
+                     `export default function Scene()`"
+                    .into());
+            }
+            exports.push(format!("default: {name}"));
+            out.push_str(&" ".repeat("export default ".len()));
+            out.push_str("function ");
+            out.push_str(rest);
+        } else if let Some(name) = line
+            .strip_prefix("export default ")
+            .map(|rest| rest.trim_end().trim_end_matches(';'))
+            .filter(|name| !name.is_empty() && ident(name) == *name)
+        {
+            exports.push(format!("default: {name}"));
+            out.push('\n');
+        } else if let Some(rest) = line.strip_prefix("export ")
+            && let Some(keyword) = ["const ", "let ", "function "]
+                .iter()
+                .find(|k| rest.starts_with(**k))
+        {
+            exports.push(ident(&rest[keyword.len()..]));
+            out.push_str(&" ".repeat("export ".len()));
+            out.push_str(rest);
+        } else if line.starts_with("import ") {
+            let (names, key) = import(line.trim_end(), dir)?;
+            out.push_str(&format!(
+                "const {{ {names} }} = __import({});\n",
+                json(&key)
+            ));
+            imports.push(key);
+        } else if line.starts_with("export ") {
+            return Err(format!(
+                "unsupported export: {}; export declarations instead, such as `export const x = …`",
+                line.trim_end()
+            ));
+        } else {
+            out.push_str(line);
+        }
+    }
+    Ok((out, exports, imports))
+}
+
+/// `import D, { A, B as C } from "./x";` → (`default: D, A, B: C`, the module key of `./x`).
+fn import(line: &str, dir: &str) -> Result<(String, String), String> {
+    let unsupported = || {
+        format!(
+            "unsupported import: {line}; import names from a project file, such as \
+             `import Title, {{ COLORS }} from \"./title\"`"
+        )
+    };
+    let rest = line.strip_prefix("import ").ok_or_else(unsupported)?;
+    let (clause, spec) = rest.rsplit_once(" from ").ok_or_else(unsupported)?;
+    let spec = spec.trim().trim_end_matches(';').trim_matches(['"', '\'']);
+    if !(spec.starts_with("./") || spec.starts_with("../")) {
+        return Err(format!(
+            "cannot import {spec:?}: scenes import only project files (./ or ../), not packages, \
+             which may use randomness, time or I/O; the built-in functions cover d3's scales and \
+             shapes"
+        ));
+    }
+    let clause = clause.trim();
+    let (default, named) = match clause.split_once('{') {
+        Some((default, named)) => (
+            default.trim().trim_end_matches(',').trim(),
+            named.strip_suffix('}').ok_or_else(unsupported)?,
+        ),
+        None => (clause, ""),
+    };
+    let is_name = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+    };
+    let mut names = Vec::new();
+    if !default.is_empty() {
+        if !is_name(default) {
+            return Err(unsupported());
+        }
+        names.push(format!("default: {default}"));
+    }
+    for n in named.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        names.push(match n.split_once(" as ") {
+            Some((from, to)) => format!("{}: {}", from.trim(), to.trim()),
+            None => n.to_string(),
+        });
+    }
+    if names.is_empty() {
+        return Err(unsupported());
+    }
+    Ok((names.join(", "), join(dir, spec)))
+}
+
+/// `spec` relative to `dir`, with `.` and `..` segments resolved and `/` separators.
+pub fn join(dir: &str, spec: &str) -> String {
+    let mut parts: Vec<&str> = dir.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+    let absolute = dir.starts_with('/');
+    for part in spec.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
+    let joined = parts.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+/// Text inserted or replaced at a position of the printed JavaScript.
+struct Edit {
+    pos: u32,
+    /// Closings, then openings, then a replacement at the same position.
+    rank: u8,
+    /// Closings deepest first, openings outermost first.
+    depth: u32,
+    end: u32,
+    text: String,
+}
+
+const CLOSE: u8 = 0;
+const OPEN: u8 = 1;
+const REPLACE: u8 = 2;
+
+/// Applies the edits; also returns (output offset, input offset) at the start of each copied run.
+fn apply(src: &str, mut edits: Vec<Edit>) -> (String, Vec<(usize, usize)>) {
+    edits.sort_by_key(|e| {
+        let order = if e.rank == CLOSE {
+            u32::MAX - e.depth
+        } else {
+            e.depth
+        };
+        (e.pos, e.rank, order)
+    });
+    let mut out = String::with_capacity(src.len() * 2);
+    let mut runs = Vec::new();
+    let mut cur = 0usize;
+    for e in edits {
+        let pos = e.pos as usize;
+        if pos < cur {
+            // Inside a replaced gap: nothing of the source is left there to edit.
+            continue;
+        }
+        if pos > cur {
+            runs.push((out.len(), cur));
+            out.push_str(&src[cur..pos]);
+            cur = pos;
+        }
+        out.push_str(&e.text);
+        if e.rank == REPLACE {
+            cur = e.end as usize;
+        }
+    }
+    runs.push((out.len(), cur));
+    out.push_str(&src[cur..]);
+    (out, runs)
+}
+
+/// Opening offsets of JSX elements and fragments.
+struct Jsx(Vec<u32>);
+
+impl<'a> Visit<'a> for Jsx {
+    fn visit_jsx_element(&mut self, e: &oxc::ast::ast::JSXElement<'a>) {
+        self.0.push(e.span.start);
+        walk::walk_jsx_element(self, e);
+    }
+
+    fn visit_jsx_fragment(&mut self, f: &oxc::ast::ast::JSXFragment<'a>) {
+        self.0.push(f.span.start);
+        walk::walk_jsx_fragment(self, f);
+    }
+}
+
+#[derive(Default)]
+struct Collector {
+    edits: Vec<Edit>,
+    sites: Vec<(u32, &'static str)>,
+    first_site: usize,
+    depth: u32,
+}
+
+fn json(s: &str) -> String {
+    serde_json::to_string(s).expect("a string serializes")
+}
+
+impl Collector {
+    fn open(&mut self, pos: u32, text: impl Into<String>) {
+        self.edit(pos, OPEN, pos, text);
+    }
+
+    fn close(&mut self, pos: u32, text: impl Into<String>) {
+        self.edit(pos, CLOSE, pos, text);
+    }
+
+    fn replace(&mut self, start: u32, end: u32, text: impl Into<String>) {
+        self.edit(start, REPLACE, end, text);
+    }
+
+    fn edit(&mut self, pos: u32, rank: u8, end: u32, text: impl Into<String>) {
+        self.edits.push(Edit {
+            pos,
+            rank,
+            depth: self.depth,
+            end,
+            text: text.into(),
+        });
+    }
+
+    fn site(&mut self, offset: u32, kind: &'static str) -> usize {
+        self.sites.push((offset, kind));
+        self.first_site + self.sites.len() - 1
+    }
+
+    /// `__h(type, …)` → `__hs(site, type, …)`: the element's place in the source.
+    fn element_site(&mut self, callee: oxc::span::Span, c: &oxc::ast::ast::CallExpression<'_>) {
+        let site = self.site(c.span.start, "element");
+        self.replace(callee.start, callee.end, "__hs");
+        self.replace(
+            callee.end,
+            c.arguments[0].span().start,
+            format!("({site}, "),
+        );
+    }
+
+    fn nested(&mut self, f: impl FnOnce(&mut Self)) {
+        self.depth += 1;
+        f(self);
+        self.depth -= 1;
+    }
+
+    /// `__call(object, key, site, ...arguments)`, where `key` is the computed key's expression
+    /// or a property name.
+    fn call<'a>(
+        &mut self,
+        call: &oxc::ast::ast::CallExpression<'a>,
+        object: &Expression<'a>,
+        key: Result<&Expression<'a>, &str>,
+    ) {
+        let site = self.site(call.span.start, "call");
+        self.open(object.span().start, "__call(");
+        let after_key = match key {
+            Ok(computed) => {
+                self.replace(object.span().end, computed.span().start, ", ");
+                Some(computed.span().end)
+            }
+            Err(name) => {
+                let head = format!(", {}", json(name));
+                match call.arguments.first() {
+                    Some(first) => self.replace(
+                        object.span().end,
+                        first.span().start,
+                        format!("{head}, {site}, "),
+                    ),
+                    None => {
+                        self.replace(object.span().end, call.span.end, format!("{head}, {site})"))
+                    }
+                }
+                None
+            }
+        };
+        if let Some(after_key) = after_key {
+            match call.arguments.first() {
+                Some(first) => self.replace(after_key, first.span().start, format!(", {site}, ")),
+                None => self.replace(after_key, call.span.end, format!(", {site})")),
+            }
+        }
+        if let Some(last) = call.arguments.last() {
+            self.replace(last.span().end, call.span.end, ")");
+        }
+        self.nested(|s| {
+            s.visit_expression(object);
+            if let Ok(computed) = key {
+                s.visit_expression(computed);
+            }
+            s.visit_arguments(&call.arguments);
+        });
+    }
+
+    /// `prefix test, site)` around `test`.
+    fn wrap(&mut self, test: &Expression<'_>, prefix: &str, kind: &'static str) {
+        let site = self.site(test.span().start, kind);
+        self.open(test.span().start, prefix);
+        self.close(test.span().end, format!(", {site})"));
+    }
+}
+
+impl<'a> Visit<'a> for Collector {
+    fn visit_expression(&mut self, e: &Expression<'a>) {
+        match e {
+            Expression::BinaryExpression(b)
+                if !matches!(b.operator.as_str(), "in" | "instanceof") =>
+            {
+                self.open(
+                    b.left.span().start,
+                    format!("__b({}, ", json(b.operator.as_str())),
+                );
+                self.replace(b.left.span().end, b.right.span().start, ", ");
+                self.close(b.right.span().end, ")");
+                self.nested(|s| {
+                    s.visit_expression(&b.left);
+                    s.visit_expression(&b.right);
+                });
+            }
+            Expression::LogicalExpression(l) => {
+                let (f, kind) = match l.operator.as_str() {
+                    "&&" => ("__and", "and"),
+                    "||" => ("__or", "or"),
+                    _ => ("__nc", "nullish"),
+                };
+                let site = self.site(l.span.start, kind);
+                self.open(l.left.span().start, format!("{f}("));
+                self.replace(l.left.span().end, l.right.span().start, ", () => (");
+                self.close(l.right.span().end, format!("), {site})"));
+                self.nested(|s| {
+                    s.visit_expression(&l.left);
+                    s.visit_expression(&l.right);
+                });
+            }
+            Expression::ConditionalExpression(c) => {
+                let site = self.site(c.span.start, "select");
+                self.open(c.test.span().start, "__sel(");
+                self.replace(c.test.span().end, c.consequent.span().start, ", () => (");
+                self.replace(
+                    c.consequent.span().end,
+                    c.alternate.span().start,
+                    "), () => (",
+                );
+                self.close(c.alternate.span().end, format!("), {site})"));
+                self.nested(|s| {
+                    s.visit_expression(&c.test);
+                    s.visit_expression(&c.consequent);
+                    s.visit_expression(&c.alternate);
+                });
+            }
+            Expression::UnaryExpression(u) if !matches!(u.operator.as_str(), "void" | "delete") => {
+                self.replace(
+                    u.span.start,
+                    u.argument.span().start,
+                    format!("__u({}, ", json(u.operator.as_str())),
+                );
+                self.close(u.argument.span().end, ")");
+                self.nested(|s| s.visit_expression(&u.argument));
+            }
+            Expression::TemplateLiteral(t) if !t.expressions.is_empty() => {
+                let strings: Vec<&str> = t
+                    .quasis
+                    .iter()
+                    .map(|q| q.value.cooked.as_ref().unwrap_or(&q.value.raw).as_str())
+                    .collect();
+                let n = t.expressions.len();
+                self.replace(
+                    t.span.start,
+                    t.expressions[0].span().start,
+                    format!(
+                        "__tpl({}, ",
+                        serde_json::to_string(&strings).expect("strings serialize")
+                    ),
+                );
+                for i in 1..n {
+                    self.replace(
+                        t.expressions[i - 1].span().end,
+                        t.expressions[i].span().start,
+                        ", ",
+                    );
+                }
+                self.replace(t.expressions[n - 1].span().end, t.span.end, ")");
+                self.nested(|s| {
+                    for x in &t.expressions {
+                        s.visit_expression(x);
+                    }
+                });
+            }
+            Expression::StaticMemberExpression(m) if !m.optional => {
+                self.open(m.object.span().start, "__get(");
+                self.replace(
+                    m.object.span().end,
+                    m.span.end,
+                    format!(", {})", json(m.property.name.as_str())),
+                );
+                self.nested(|s| s.visit_expression(&m.object));
+            }
+            Expression::ComputedMemberExpression(m) if !m.optional => {
+                let site = self.site(m.span.start, "index");
+                self.open(m.object.span().start, "__idx(");
+                self.replace(m.object.span().end, m.expression.span().start, ", ");
+                self.replace(m.expression.span().end, m.span.end, format!(", {site})"));
+                self.nested(|s| {
+                    s.visit_expression(&m.object);
+                    s.visit_expression(&m.expression);
+                });
+            }
+            Expression::CallExpression(c) if !c.optional => match &c.callee {
+                Expression::StaticMemberExpression(m) if !m.optional => {
+                    self.call(c, &m.object, Err(m.property.name.as_str()));
+                }
+                Expression::ComputedMemberExpression(m) if !m.optional => {
+                    self.call(c, &m.object, Ok(&m.expression));
+                }
+                Expression::Identifier(h) if h.name == "__h" && !c.arguments.is_empty() => {
+                    self.element_site(h.span, c);
+                    walk::walk_expression(self, e);
+                }
+                _ => walk::walk_expression(self, e),
+            },
+            _ => walk::walk_expression(self, e),
+        }
+    }
+
+    fn visit_assignment_expression(&mut self, a: &AssignmentExpression<'a>) {
+        if let (Some(op), AssignmentTarget::AssignmentTargetIdentifier(id)) =
+            (a.operator.to_binary_operator(), &a.left)
+        {
+            self.replace(
+                a.left.span().end,
+                a.right.span().start,
+                format!(" = __b({}, {}, ", json(op.as_str()), id.name.as_str()),
+            );
+            self.close(a.right.span().end, ")");
+            self.nested(|s| s.visit_expression(&a.right));
+        } else {
+            walk::walk_assignment_expression(self, a);
+        }
+    }
+
+    fn visit_spread_element(&mut self, it: &SpreadElement<'a>) {
+        self.open(it.argument.span().start, "__spread(");
+        self.close(it.argument.span().end, ")");
+        self.nested(|s| s.visit_expression(&it.argument));
+    }
+
+    fn visit_if_statement(&mut self, it: &IfStatement<'a>) {
+        self.wrap(&it.test, "__if(", "if");
+        self.nested(|s| walk::walk_if_statement(s, it));
+    }
+
+    fn visit_while_statement(&mut self, it: &WhileStatement<'a>) {
+        self.wrap(&it.test, "__if(", "loop");
+        self.nested(|s| walk::walk_while_statement(s, it));
+    }
+
+    fn visit_do_while_statement(&mut self, it: &DoWhileStatement<'a>) {
+        self.wrap(&it.test, "__if(", "loop");
+        self.nested(|s| walk::walk_do_while_statement(s, it));
+    }
+
+    fn visit_for_statement(&mut self, it: &ForStatement<'a>) {
+        if let Some(test) = &it.test {
+            self.wrap(test, "__if(", "loop");
+        }
+        self.nested(|s| walk::walk_for_statement(s, it));
+    }
+
+    fn visit_switch_statement(&mut self, it: &SwitchStatement<'a>) {
+        self.wrap(&it.discriminant, "__sw(", "switch");
+        self.nested(|s| walk::walk_switch_statement(s, it));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn err(source: &str) -> String {
+        rewrite("scene.motion.tsx", source, 0)
+            .err()
+            .expect("an error")
+    }
+
+    #[test]
+    fn async_and_await_are_rejected_with_their_place() {
+        let e = err("const a = 1;\nasync function f() {}\n");
+        assert!(e.starts_with("2:1: async functions and await"), "{e}");
+        let e = err("function f() {\n  const g = async () => 1;\n}\n");
+        assert!(e.starts_with("2:13:"), "{e}");
+    }
+
+    #[test]
+    fn composition_is_read_statically() {
+        let r = rewrite(
+            "s.motion.tsx",
+            "export const composition = { width: 1920, height: 1080, fps: \"30000/1001\", \
+             duration: 4.5, loop: true } as const;\n",
+            0,
+        )
+        .unwrap();
+        let c = r.composition.unwrap();
+        assert_eq!((c.width, c.height), (1920, 1080));
+        assert_eq!(c.fps, Rate::new(30000, 1001).unwrap());
+        assert_eq!(c.duration, Tick::parse_seconds("4.5").unwrap());
+        assert!(c.looped);
+        let e = err("const W = 1920;\nexport const composition = { width: W };\n");
+        assert!(
+            e.starts_with("2:14: composition must be an object literal"),
+            "{e}"
+        );
+        let e = err("export const composition = { width: 10, height: 10, fps: 30 };\n");
+        assert!(e.contains("composition needs duration"), "{e}");
+        let e = err("export const composition = { width: 10.5 };\n");
+        assert!(
+            e.contains("composition width must be a whole number"),
+            "{e}"
+        );
+        let e = err("export const composition = { size: 1 };\n");
+        assert!(e.contains("no field size"), "{e}");
+    }
+
+    #[test]
+    fn imports_and_exports() {
+        let r = rewrite(
+            "dir/s.motion.tsx",
+            "import Title, { A, B as C } from \"../lib/title\";\nimport { D } from './d';\n\
+             export const x = A;\nexport default function Scene() { return null; }\n",
+            0,
+        )
+        .unwrap();
+        assert_eq!(r.imports, ["lib/title", "dir/d"]);
+        assert!(
+            r.code
+                .contains("const { default: Title, A, B: C } = __import(\"lib/title\");")
+        );
+        assert!(
+            r.code.contains("return { x, default: Scene };"),
+            "{}",
+            r.code
+        );
+        let r = rewrite(
+            "s.tsx",
+            "function Scene() { return null; }\nexport default Scene;\n",
+            0,
+        )
+        .unwrap();
+        assert!(r.code.contains("return { default: Scene };"), "{}", r.code);
+        assert!(err("import { scaleLinear } from \"d3\";\n").contains("not packages"));
+        assert!(err("import * as M from \"./m\";\n").contains("unsupported import"));
+        assert!(err("const a = 1;\nexport { a };\n").contains("unsupported export"));
+    }
+
+    #[test]
+    fn operations_become_runtime_calls() {
+        let r = rewrite(
+            "s.js",
+            "const f = (t) => t > 1 ? `x${t * 2}` : o.p[k];\nif (t) { m.n(1); }\n",
+            0,
+        )
+        .unwrap();
+        for part in [
+            "__sel(__b(\">\", t, 1)",
+            "__tpl([\"x\",\"\"], __b(\"*\", t, 2))",
+            "__idx(__get(o, \"p\"), k, ",
+            "__call(m, \"n\", ",
+            "if (__if(t, ",
+        ] {
+            assert!(r.code.contains(part), "{part} in\n{}", r.code);
+        }
+        assert_eq!(r.lines[1], 1);
+    }
+}

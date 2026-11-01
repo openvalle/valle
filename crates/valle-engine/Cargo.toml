@@ -6,3 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 publish.workspace = true
+
+[dependencies]
+libm.workspace = true
+oxc.workspace = true
+rquickjs.workspace = true
+serde.workspace = true
+serde_json.workspace = true

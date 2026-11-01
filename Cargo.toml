@@ -10,6 +10,18 @@ rust-version = "1.99"
 repository = "https://github.com/openvalle/valle"
 publish = false
 
+[workspace.dependencies]
+libm = "0.2.16"
+oxc = { version = "=0.148.0", features = ["ast_visit", "codegen", "semantic", "transformer"] }
+rquickjs = "=0.14.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+# Dependencies are optimized in dev and test builds too: QuickJS at -O0 runs scenes several times
+# slower.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 lto = "thin"
 strip = "symbols"
