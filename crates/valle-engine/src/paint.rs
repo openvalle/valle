@@ -53,6 +53,7 @@ use crate::style::gradient::Image;
 use crate::style::transform::Function;
 use crate::style::{Blend, Shadow, Style};
 use crate::template::{Kind, Template};
+use crate::text::{Glyph, Stripe};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
@@ -855,7 +856,7 @@ impl Painter<'_> {
         let radii = self.radii(d, border);
         let widths = self.widths(d);
         let (rect, radii) = match clip.area {
-            Area::BorderBox => (border, radii),
+            Area::BorderBox | Area::Text => (border, radii),
             Area::PaddingBox => inner(border, radii, widths),
             Area::ContentBox => {
                 let paddings = self.paddings(d);
@@ -890,7 +891,7 @@ impl Painter<'_> {
         let widths = self.widths(d);
         let paddings = self.paddings(d);
         let area = |a: Area| match a {
-            Area::BorderBox => (border, radii),
+            Area::BorderBox | Area::Text => (border, radii),
             Area::PaddingBox => inner(border, radii, widths),
             Area::ContentBox => inner(
                 border,
@@ -1128,7 +1129,7 @@ impl Painter<'_> {
         };
         let shown = |a: Area| {
             let (r, radii) = match a {
-                Area::BorderBox => shrunk,
+                Area::BorderBox | Area::Text => shrunk,
                 Area::PaddingBox => (inside, inner_radii),
                 Area::ContentBox => content,
             };
@@ -1136,16 +1137,25 @@ impl Painter<'_> {
             (r.width > 0.0 && r.height > 0.0).then_some((r, radii))
         };
         let placed = |a: Area| match a {
-            Area::BorderBox => rect,
+            Area::BorderBox | Area::Text => rect,
             Area::PaddingBox => inside,
             Area::ContentBox => content.0,
+        };
+        // A layer clipped to text shows through the box's text.
+        let mut mask = None;
+        let mut through = |area: Area, item: Item| match area {
+            Area::Text => Item::Mask {
+                mask: mask.get_or_insert_with(|| self.text_mask(i)).clone(),
+                items: vec![item],
+            },
+            _ => item,
         };
         // The color shows where the last layer does.
         let last = s.layers.last().map_or(Area::BorderBox, |l| l.clip);
         let mut fill = Vec::new();
         if let (true, Some((rect, radii))) = (s.background[3] > 0.0, shown(last)) {
             let color = work(s.background);
-            fill.push(Item::Rect { rect, radii, color });
+            fill.push(through(last, Item::Rect { rect, radii, color }));
         }
         // Images over the color, the first on top, repeated out to the area they show in.
         let mut blends = false;
@@ -1165,6 +1175,7 @@ impl Painter<'_> {
                 tiles,
                 ramp,
             };
+            let image = through(layer.clip, image);
             fill.push(match layer.blend {
                 Blend::Normal => image,
                 blend => {
@@ -1274,36 +1285,17 @@ impl Painter<'_> {
             }
             // Each part in its own colors, or all of it in a shadow's, moved by `by`.
             let stripes = |through: bool| {
-                move |color: Option<[f32; 4]>, [dx, dy]: [f32; 2]| -> Vec<Item> {
+                move |color: Option<[f32; 4]>, by: [f32; 2]| -> Vec<Item> {
                     (lines.decorations.iter())
                         .filter(|d| d.run == k as u32 && d.through == through)
-                        .map(|d| {
-                            let [x0, y0, x1, y1] = d.rect;
-                            Item::Rect {
-                                rect: Rect {
-                                    x: at.x + x0 + dx,
-                                    y: at.y + y0 + dy,
-                                    width: x1 - x0,
-                                    height: y1 - y0,
-                                },
-                                radii: SQUARE,
-                                color: color.unwrap_or(work(d.color)),
-                            }
-                        })
+                        .map(|d| stripe(d, at, color.unwrap_or(work(d.color)), by))
                         .collect()
                 }
             };
             let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
-            let drawn = |stroke: f32, color: [f32; 4], [dx, dy]: [f32; 2]| {
-                (glyphs.chunk_by(|a, b| a.face == b.face)).map(move |g| Item::Glyphs {
-                    face: g[0].face,
-                    size: s.font.size as f32,
-                    color,
-                    stroke,
-                    glyphs: (g.iter())
-                        .map(|g| (g.id, [at.x + g.x + dx, at.y + g.y + dy]))
-                        .collect(),
-                })
+            let size = s.font.size as f32;
+            let drawn = |stroke: f32, color: [f32; 4], by: [f32; 2]| {
+                faces(glyphs, at, size, color, stroke, by)
             };
             let fill = work(s.font.fill.unwrap_or(s.color));
             let stroke = match s.font.stroke > 0.0 && s.font.size > 0.0 {
@@ -1337,6 +1329,37 @@ impl Painter<'_> {
             self.shadowed(s, glyphs, clip, out);
             self.shadowed(s, stripes(true), clip, out);
         }
+    }
+
+    /// The glyphs and decorations of `i`'s text and its descendants', opaque, as Chrome clips a
+    /// background to text: their fills, without strokes or shadows. Descendants with transforms
+    /// of their own are left out.
+    fn text_mask(&self, i: usize) -> Vec<Item> {
+        const OPAQUE: [f32; 4] = [1.0; 4];
+        let mut items = Vec::new();
+        let mut nodes = vec![i];
+        while let Some(n) = nodes.pop() {
+            if n != i && !self.styles[n].transform.is_empty() {
+                continue;
+            }
+            nodes.extend(self.children(Some(n)));
+            let Some(lines) = &self.layout.lines[n] else {
+                continue;
+            };
+            let at = self.layout.boxes[n].content;
+            for (k, run) in lines.runs.iter().enumerate() {
+                let s = &self.styles[run.node as usize];
+                if !s.visible {
+                    continue;
+                }
+                let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
+                let size = s.font.size as f32;
+                items.extend(faces(glyphs, at, size, OPAQUE, 0.0, [0.0; 2]));
+                let decorations = lines.decorations.iter().filter(|d| d.run == k as u32);
+                items.extend(decorations.map(|d| stripe(d, at, OPAQUE, [0.0; 2])));
+            }
+        }
+        items
     }
 
     /// What `part` paints in its colors over its shadows in `s`, the last one first: what it
@@ -1465,6 +1488,42 @@ impl Painter<'_> {
 }
 
 /// Whether `inner` is inside `outer`.
+/// Items of `glyphs`, laid out in a box whose content box is `at`, moved by `by`: one for each
+/// run of glyphs in a face.
+fn faces(
+    glyphs: &[Glyph],
+    at: Rect,
+    size: f32,
+    color: [f32; 4],
+    stroke: f32,
+    [dx, dy]: [f32; 2],
+) -> impl Iterator<Item = Item> + '_ {
+    (glyphs.chunk_by(|a, b| a.face == b.face)).map(move |g| Item::Glyphs {
+        face: g[0].face,
+        size,
+        color,
+        stroke,
+        glyphs: (g.iter())
+            .map(|g| (g.id, [at.x + g.x + dx, at.y + g.y + dy]))
+            .collect(),
+    })
+}
+
+/// A decoration laid out in a box whose content box is `at`, in `color`, moved by `by`.
+fn stripe(d: &Stripe, at: Rect, color: [f32; 4], [dx, dy]: [f32; 2]) -> Item {
+    let [x0, y0, x1, y1] = d.rect;
+    Item::Rect {
+        rect: Rect {
+            x: at.x + x0 + dx,
+            y: at.y + y0 + dy,
+            width: x1 - x0,
+            height: y1 - y0,
+        },
+        radii: SQUARE,
+        color,
+    }
+}
+
 fn within(inner: Rect, outer: Rect) -> bool {
     inner.x >= outer.x
         && inner.y >= outer.y

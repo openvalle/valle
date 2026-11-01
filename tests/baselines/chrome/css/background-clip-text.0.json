@@ -1,0 +1,18 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 340px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 6px;\"><div data-n=\"1\" data-text style=\"margin-bottom: 6px; font-size: 32px; font-weight: 800; color: transparent; background: linear-gradient(90deg, #e53935, #8e24aa, #1e88e5); background-clip: text;\">Gradient</div><div data-n=\"2\" data-text style=\"margin-bottom: 6px; font-size: 32px; font-weight: 800; color: transparent; background: linear-gradient(90deg, #e53935, #8e24aa, #1e88e5) text; text-decoration: underline 4px; text-decoration-color: rgb(0 0 0 / 0);\">Underlined</div><div data-n=\"3\" data-text style=\"margin-bottom: 6px; font-size: 32px; font-weight: 800; color: transparent; background: linear-gradient(90deg, #e53935, #8e24aa, #1e88e5) text, #ffe082;\">Layered</div><div data-n=\"4\" data-text style=\"margin-bottom: 6px; font-size: 32px; font-weight: 800; color: transparent; background: #00897b text; -webkit-text-stroke: 1px #263238; text-shadow: 3px 3px rgb(0 0 0 / 30%);\">Stroked</div><div data-n=\"5\" style=\"margin-bottom: 6px; font-size: 32px; font-weight: 400; color: transparent; background: linear-gradient(90deg, #e53935, #8e24aa, #1e88e5) text;\"><div data-n=\"6\" data-text style=\"font-size: 24px;\"><span data-n=\"7\" style=\"font-size: 32px;\">Child</span> span</div><div data-n=\"8\" data-text style=\"font-size: 24px;\"><span data-n=\"9\" style=\"color: #263238;\">Own</span> color</div><div data-n=\"10\" data-text style=\"font-size: 24px; background: #eceff1;\">Covered</div></div></div></div>\n",
+ "boxes": [
+  [0,0,256,323],
+  [6,6,244,43],
+  [6,55,244,43],
+  [6,104,244,43],
+  [6,153,244,43],
+  [6,202,244,109],
+  [6,202,244,43],
+  [6,202,76.203125,43],
+  [6,245,244,33],
+  [6,245,52.453125,33],
+  [6,278,244,33]
+ ],
+ "lines": {"1":["Gradient"],"2":["Underlined"],"3":["Layered"],"4":["Stroked"],"6":["Child span"],"8":["Own color"],"10":["Covered"]}
+}

@@ -38,12 +38,15 @@ pub enum ImageSize<P = Calc> {
     Sized([Option<P>; 2]),
 }
 
-/// One of a box's areas, out to an edge of its border, its padding or its content.
+/// One of a box's areas, out to an edge of its border, its padding or its content; or, as a
+/// background's clip only, its text.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Area {
     BorderBox,
     PaddingBox,
     ContentBox,
+    /// The glyphs and decorations of the box's text and its descendants', in the border box.
+    Text,
 }
 
 /// How an image repeats on an axis.
@@ -227,14 +230,12 @@ fn repeat(words: &[&str]) -> Result<[Repeat; 2], String> {
 pub(super) fn areas(s: &str, clip: bool) -> Result<Vec<Area>, String> {
     list(s, "a box", |s| match area(s) {
         Some(a) => Ok(a),
-        None if clip && s == "text" => Err(TEXT.into()),
+        None if clip && s == "text" => Ok(Area::Text),
         None => Err(format!(
             "{s:?} is not a box: border-box, padding-box or content-box"
         )),
     })
 }
-
-const TEXT: &str = "background-clip: text is not supported yet";
 
 /// `background-blend-mode`: the modes of `mix-blend-mode` but plus-lighter.
 pub(super) fn blends(s: &str) -> Result<Vec<Blend>, String> {
@@ -352,16 +353,13 @@ pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
             if ["scroll", "fixed", "local"].contains(&w) {
                 return Err(format!("{w}: {NO_SCROLL}; {NO_SCROLL_INSTEAD}"));
             }
-            if let Some(a) = area(w) {
+            if let Some(a) = area(w).or((w == "text").then_some(Area::Text)) {
                 if boxes.len() == 2 {
                     return Err(not("it has more than two boxes"));
                 }
                 boxes.push(a);
                 i += 1;
                 continue;
-            }
-            if w == "text" {
-                return Err(TEXT.into());
             }
             if let Ok(c) = color::parse(w) {
                 if n + 1 < layers.len() || color.is_some() {
@@ -389,8 +387,13 @@ pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
         d.sizes
             .push(sized.unwrap_or(ImageSize::Sized([None, None])));
         d.repeats.push(repeated.unwrap_or([Repeat::Repeat; 2]));
-        d.origins
-            .push(boxes.first().copied().unwrap_or(Area::PaddingBox));
+        // Text is a clip alone: with a box before it, the box is the origin.
+        let origin = match boxes[..] {
+            [Area::Text, _] => return Err(not("text is a clip only, so it goes last")),
+            [Area::Text] | [] => Area::PaddingBox,
+            [a, ..] => a,
+        };
+        d.origins.push(origin);
         d.clips
             .push(boxes.last().copied().unwrap_or(Area::BorderBox));
     }

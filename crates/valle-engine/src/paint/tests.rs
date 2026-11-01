@@ -1033,6 +1033,36 @@ fn text_strokes_go_over_the_fill_and_cast_one_shadow_with_it() {
 }
 
 #[test]
+fn a_background_clipped_to_text_shows_through_the_text_in_the_box() {
+    let underlined = [("color", "black"), ("textDecoration", "underline red")];
+    let painted = painted(
+        vec![
+            view(
+                &[("background", "linear-gradient(red, blue) text green")],
+                &[1, 2],
+            ),
+            text_node("x", &underlined),
+            // Text in a transform of its own is not the box's.
+            view(&[("transform", "translate(1px)")], &[3]),
+            text_node("y", &[("color", "black")]),
+        ],
+        &[0],
+    );
+    // The glyphs and their decorations, opaque, for the color as for the image.
+    let mask = r#"["text white", "white"]"#;
+    assert_eq!(
+        painted,
+        [
+            format!(r#"mask {mask} ["green"]"#),
+            format!(r#"mask {mask} ["gradient of 1"]"#),
+            "red".into(),
+            "text black".into(),
+            r#"transform ["text black"]"#.into(),
+        ]
+    );
+}
+
+#[test]
 fn a_mask_element_shows_what_its_box_paints_through_its_source() {
     let masked = |source: (u32, bool, bool), shown: &[u32]| {
         paint_of(
