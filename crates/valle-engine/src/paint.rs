@@ -2,15 +2,16 @@
 //! in canvas px, colors premultiplied (the working space: sRGB-encoded values, which browsers
 //! composite).
 //!
-//! A stacking context paints its own background, the stacking contexts in it with a negative
-//! z-index, then its in-flow content: the backgrounds of its blocks, then their text and their
-//! flex and grid items, each item all at once, as an inline block. Its positioned descendants
-//! and the stacking contexts in it with a z-index of 0 or `auto` come next, in tree order, and
-//! last those with a positive z-index, lowest first. A positioned box paints all at once too,
-//! without the positioned boxes in it. Opacity, a fixed position, and a z-index on a positioned
-//! box or a flex or grid item make a stacking context; only opacity makes it a layer. Tree order
-//! puts a flex or grid container's children in the order it lays them out. A hidden box
-//! (`visibility`) paints nothing of its own, but what it contains still paints if visible.
+//! A stacking context paints its own background and border, the stacking contexts in it with a
+//! negative z-index, then its in-flow content: the backgrounds and borders of its blocks, then
+//! their text and their flex and grid items, each item all at once, as an inline block, then the
+//! outlines of its blocks and its own. Its positioned descendants and the stacking contexts in it
+//! with a z-index of 0 or `auto` come next, in tree order, and last those with a positive
+//! z-index, lowest first. A positioned box paints all at once too, without the positioned boxes
+//! in it. Opacity, a fixed position, and a z-index on a positioned box or a flex or grid item make
+//! a stacking context; only opacity makes it a layer. Tree order puts a flex or grid container's
+//! children in the order it lays them out. A hidden box (`visibility`) paints nothing of its
+//! own, but what it contains still paints if visible.
 //!
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
@@ -70,6 +71,11 @@ pub const SQUARE: Radii = [[0.0; 2]; 4];
 /// A corner's radii: square if either is 0.
 fn corner(r: [f32; 2]) -> [f32; 2] {
     if r.contains(&0.0) { [0.0; 2] } else { r }
+}
+
+/// `radii` grown by `by` px, or shrunk where it is negative; square corners stay square.
+fn grown(radii: Radii, by: f32) -> Radii {
+    radii.map(|r| corner(r.map(|v| if v > 0.0 { (v + by).max(0.0) } else { 0.0 })))
 }
 
 /// `radii` all shrunk by one factor until they fit in `rect`, as CSS has them. None fit in a
@@ -299,10 +305,15 @@ impl Painter<'_> {
         self.content(i, out);
     }
 
-    /// `i`'s in-flow content: the backgrounds of its blocks, then text and atomic items.
+    /// `i`'s in-flow content: the backgrounds of its blocks, then text and atomic items, then the
+    /// outlines of its blocks and its own.
     fn content(&self, i: Option<usize>, out: &mut Drawn) {
         self.backgrounds(i, out);
         self.foreground(i, out);
+        self.outlines(i, out);
+        if let Some(i) = i {
+            self.outline(i, out);
+        }
     }
 
     /// The backgrounds of the blocks in `i`.
@@ -311,6 +322,16 @@ impl Painter<'_> {
             if !self.layered(c) && !self.atomic(c) {
                 self.background(c, out);
                 self.backgrounds(Some(c), out);
+            }
+        }
+    }
+
+    /// The outlines of the blocks in `i`.
+    fn outlines(&self, i: Option<usize>, out: &mut Drawn) {
+        for c in self.children(i) {
+            if !self.layered(c) && !self.atomic(c) {
+                self.outline(c, out);
+                self.outlines(Some(c), out);
             }
         }
     }
@@ -371,13 +392,44 @@ impl Painter<'_> {
         self.styles[i].border.map(|w| w as f32)
     }
 
-    /// `i`'s corner radii in `rect`, their percentages of its border box. Radii that overlap in
-    /// `rect` all shrink by one factor until they fit, as CSS has them.
+    /// `i`'s corner radii in `rect`, fitting it.
     fn radii(&self, i: usize, rect: Rect) -> Radii {
+        fit(self.corners(i), rect)
+    }
+
+    /// `i`'s corner radii, their percentages of its border box.
+    fn corners(&self, i: usize) -> Radii {
         let b = self.layout.boxes[i].border;
-        let radii = (self.styles[i].radii.each_ref())
-            .map(|[x, y]| corner([x.resolve(b.width), y.resolve(b.height)]));
-        fit(radii, rect)
+        (self.styles[i].radii.each_ref())
+            .map(|[x, y]| corner([x.resolve(b.width), y.resolve(b.height)]))
+    }
+
+    /// `i`'s outline: a ring `outline-offset` outside its border box, with its corners rounded
+    /// as the border box's are, grown by as much.
+    fn outline(&self, i: usize, out: &mut Drawn) {
+        let s = &self.styles[i];
+        let (width, color) = (s.outline as f32, work(s.outline_color));
+        if !s.visible || width <= 0.0 || color[3] <= 0.0 {
+            return;
+        }
+        let b = snap(self.layout.boxes[i].border);
+        let by = s.outline_offset as f32 + width;
+        let rect = Rect {
+            x: b.x - by,
+            y: b.y - by,
+            width: b.width + 2.0 * by,
+            height: b.height + 2.0 * by,
+        };
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return;
+        }
+        let outline = Item::Border {
+            rect,
+            radii: fit(grown(self.corners(i), by), rect),
+            widths: [width; 4],
+            colors: [color; 4],
+        };
+        out.push((self.clips[i].last().copied(), outline));
     }
 
     fn text(&self, i: usize, out: &mut Drawn) {

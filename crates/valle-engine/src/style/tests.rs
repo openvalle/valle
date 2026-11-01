@@ -811,6 +811,38 @@ fn borders_take_lines_widths_styles_and_colors() {
 }
 
 #[test]
+fn outlines_take_a_line_and_an_offset() {
+    let c = |name| color::parse(name).unwrap();
+    let outline = |style: &[(&str, Prop)]| {
+        let s = one(style);
+        (s.outline, s.outline_color, s.outline_offset)
+    };
+    assert_eq!(outline(&[]), (0.0, color::BLACK, 0.0));
+    assert_eq!(
+        outline(&[("color", text("red")), ("outline", text("solid"))]),
+        (3.0, c("red"), 0.0)
+    );
+    assert_eq!(
+        outline(&[
+            ("outline", text("thick blue solid")),
+            ("outlineOffset", text("-0.5em")),
+        ]),
+        (5.0, c("blue"), -8.0)
+    );
+    assert_eq!(
+        outline(&[
+            ("outlineStyle", text("solid")),
+            ("outlineWidth", text("2.5px")),
+            ("outlineColor", text("green")),
+            ("outlineColor", text("currentcolor")),
+        ]),
+        (2.0, color::BLACK, 0.0)
+    );
+    let offset = |px: &str| one(&[("outlineOffset", text(px))]).outline_offset;
+    assert_eq!([offset("2.5px"), offset("-1.5px")], [2.0, -1.0]);
+}
+
+#[test]
 fn corner_radii_expand_as_sides_do() {
     // Each corner's radii, percentages of 100 px.
     let radii = |style: &[(&str, Prop)]| one(style).radii.map(|c| c.map(|r| r.resolve(100.0)));
@@ -934,13 +966,30 @@ fn what_is_not_supported_is_an_error() {
             text("1px 2px solid"),
             "sets a width, a style or a color twice",
         ),
-        ("border", text(" "), "is not a border"),
+        ("border", text(" "), "is not a line"),
         ("borderTop", text("1px solid nope"), "nope is not a color"),
         (
             "borderStyle",
             text("dashed"),
-            "dashed borders are not supported yet",
+            "dashed lines are not supported yet",
         ),
+        ("outlineStyle", text("auto"), "focus ring; use solid"),
+        (
+            "outline",
+            text("2px hidden"),
+            "hidden is not an outline style",
+        ),
+        (
+            "outline",
+            text("dotted red"),
+            "dotted lines are not supported yet",
+        ),
+        (
+            "outlineOffset",
+            text("10%"),
+            "percentages are not supported here",
+        ),
+        ("outlineWidth", text("-1px"), "-1px is negative"),
         (
             "borderStyle",
             text("wavy"),

@@ -1,0 +1,23 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 12px; display: flex; flex-direction: column; gap: 12px;\"><div data-n=\"1\"><div data-n=\"2\" style=\"width: 52px; height: 28px; background: #e3f2fd; outline: 4px solid #1565c0;\"></div><div data-n=\"3\" style=\"width: 52px; height: 28px; background: #90caf9; margin-left: 20px;\"></div></div><div data-n=\"4\" style=\"display: flex; gap: 16px; align-items: flex-start;\"><div data-n=\"5\" style=\"width: 52px; height: 28px; background: #fce4ec; border-radius: 10px; outline: 3px solid #ad1457; outline-offset: 4px;\"></div><div data-n=\"6\" style=\"width: 52px; height: 28px; background: #f3e5f5; border-radius: 50% / 30%; outline: 2px solid #6a1b9a; outline-offset: 2px;\"></div><div data-n=\"7\" style=\"width: 52px; height: 28px; background: #ede7f6; border: 3px solid #4527a0; outline: 2px solid #b39ddb; outline-offset: -8px;\"></div></div><div data-n=\"8\" style=\"overflow: hidden; height: 44px; padding: 6px; background: #e8f5e9; display: flex; gap: 10px;\"><div data-n=\"9\" style=\"width: 52px; height: 28px; background: #a5d6a7; outline: 5px solid #2e7d32; outline-offset: 2px;\"></div><div data-n=\"10\" style=\"overflow: hidden; width: 52px; height: 28px; outline: 2px solid #1b5e20;\"><div data-n=\"11\" style=\"width: 80px; height: 28px; background: #66bb6a;\"></div></div></div><div data-n=\"12\" style=\"position: relative; display: flex; gap: 12px;\"><div data-n=\"13\" style=\"width: 52px; height: 28px; background: #fff3e0; outline: 6px solid #ef6c00;\"></div><div data-n=\"14\" style=\"position: absolute; left: 40px; top: 10px; width: 30px; height: 30px; background: #ffcc80;\"></div><div data-n=\"15\" style=\"width: 52px; height: 28px; background: #ffe0b2; opacity: 0.6; outline: 4px solid #e65100; outline-offset: 1px;\"></div></div></div></div>\n",
+ "boxes": [
+  [0,0,256,216],
+  [12,12,232,56],
+  [12,12,52,28],
+  [32,40,52,28],
+  [12,80,232,28],
+  [12,80,52,28],
+  [80,80,52,28],
+  [148,80,52,28],
+  [12,120,232,44],
+  [18,126,52,28],
+  [80,126,52,28],
+  [80,126,80,28],
+  [12,176,232,28],
+  [12,176,52,28],
+  [52,186,30,30],
+  [76,176,52,28]
+ ],
+ "lines": {}
+}

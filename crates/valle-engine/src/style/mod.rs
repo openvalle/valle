@@ -44,6 +44,11 @@ pub struct Style {
     /// line, and their colors.
     pub border: [f64; 4],
     pub border_colors: [Rgba; 4],
+    /// The outline's width in whole px, 0 without a line, its color, and how far outside the
+    /// border box it is, in whole px toward 0, as Chrome draws it.
+    pub outline: f64,
+    pub outline_color: Rgba,
+    pub outline_offset: f64,
     /// Within [0, 1].
     pub opacity: f64,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
@@ -529,6 +534,10 @@ struct Declared {
     border_style: [BorderStyle; 4],
     /// `None` is `currentcolor`.
     border_color: [Option<Rgba>; 4],
+    outline_width: Len,
+    outline_style: BorderStyle,
+    outline_color: Option<Rgba>,
+    outline_offset: Len,
     opacity: f64,
     /// Inherited.
     visible: Option<bool>,
@@ -580,6 +589,10 @@ impl Default for Declared {
             border_width: [MEDIUM; 4],
             border_style: [BorderStyle::None; 4],
             border_color: [None; 4],
+            outline_width: MEDIUM,
+            outline_style: BorderStyle::None,
+            outline_color: None,
+            outline_offset: ZERO,
             opacity: 1.0,
             visible: None,
             color: None,
@@ -652,6 +665,8 @@ enum Field {
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
     Border(Sides, BorderPart),
+    Outline(BorderPart),
+    OutlineOffset,
     Opacity,
     Visibility,
     Color,
@@ -700,7 +715,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 147] = [
+const FIELDS: [(&str, Field); 152] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -947,6 +962,11 @@ const FIELDS: [(&str, Field); 147] = [
         "borderBlockEndColor",
         Field::Border(Sides::BlockEnd, BorderPart::Color),
     ),
+    ("outline", Field::Outline(BorderPart::Line)),
+    ("outlineWidth", Field::Outline(BorderPart::Width)),
+    ("outlineStyle", Field::Outline(BorderPart::Style)),
+    ("outlineColor", Field::Outline(BorderPart::Color)),
+    ("outlineOffset", Field::OutlineOffset),
     ("opacity", Field::Opacity),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
@@ -1039,6 +1059,13 @@ const RADIUS: Accept = Accept {
 const WIDTH: Accept = Accept {
     keyword: None,
     negative: false,
+    percent: false,
+    sizing: &[],
+};
+/// `outline-offset`.
+const OFFSET: Accept = Accept {
+    keyword: None,
+    negative: true,
     percent: false,
     sizing: &[],
 };
@@ -1270,22 +1297,25 @@ fn corner(v: &V) -> Result<[Len; 2], String> {
     })
 }
 
-/// A border shorthand's line: a width, a style and a color in any order, each at most once, and
-/// the initial ones for those left out.
-fn border_line(v: &V) -> Result<(Len, BorderStyle, Option<Rgba>), String> {
+/// A border or outline shorthand's line: a width, a style (as `styled` takes it) and a color in
+/// any order, each at most once, and the initial ones for those left out.
+fn line(
+    v: &V,
+    styled: fn(&V) -> Result<BorderStyle, String>,
+) -> Result<(Len, BorderStyle, Option<Rgba>), String> {
     if let V::Num(_) = v {
         return Ok((border_width(v)?, BorderStyle::None, None));
     }
     let s = text(v)?;
     let words = css::words(&s);
     if words.is_empty() {
-        return Err(format!("{} is not a border", shown(v)));
+        return Err(format!("{} is not a line", shown(v)));
     }
     let (mut width, mut style, mut color) = (None, None, None);
     for w in words {
         let word = &V::Str(w.into());
-        let twice = if LINE_STYLES.contains(&w) {
-            style.replace(border_style(word)?).is_some()
+        let twice = if LINE_STYLES.contains(&w) || w == "auto" {
+            style.replace(styled(word)?).is_some()
         } else if WIDTHS.contains(&w) || css::num(w).is_some() || math::is_math(w) {
             width.replace(border_width(word)?).is_some()
         } else {
@@ -1321,10 +1351,17 @@ fn border_style(v: &V) -> Result<BorderStyle, String> {
     match s.as_str() {
         "none" | "hidden" => Ok(BorderStyle::None),
         "solid" => Ok(BorderStyle::Solid),
-        s if LINE_STYLES.contains(&s) => {
-            Err(format!("{s} borders are not supported yet; use solid"))
-        }
+        s if LINE_STYLES.contains(&s) => Err(format!("{s} lines are not supported yet; use solid")),
         s => Err(format!("{s} is not one of {}", LINE_STYLES.join(", "))),
+    }
+}
+
+/// `outline-style`: so far `solid` and `none`.
+fn outline_style(v: &V) -> Result<BorderStyle, String> {
+    match text(v)?.as_str() {
+        "auto" => Err("auto is each browser's own focus ring; use solid".into()),
+        "hidden" => Err("hidden is not an outline style; use none".into()),
+        _ => border_style(v),
     }
 }
 
@@ -1769,7 +1806,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::BorderRadius => d.radii = radii(v)?,
         F::CornerRadius(c) => d.radii[c] = corner(v)?,
         F::Border(which, BorderPart::Line) => {
-            let (width, style, color) = border_line(v)?;
+            let (width, style, color) = line(v, border_style)?;
             for &i in named(which) {
                 d.border_width[i] = width.clone();
                 d.border_style[i] = style;
@@ -1785,6 +1822,13 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Border(which, BorderPart::Color) => {
             set_sides(&mut d.border_color, which, v, "colors", current_color)?
         }
+        F::Outline(BorderPart::Line) => {
+            (d.outline_width, d.outline_style, d.outline_color) = line(v, outline_style)?
+        }
+        F::Outline(BorderPart::Width) => d.outline_width = border_width(v)?,
+        F::Outline(BorderPart::Style) => d.outline_style = outline_style(v)?,
+        F::Outline(BorderPart::Color) => d.outline_color = current_color(v)?,
+        F::OutlineOffset => d.outline_offset = length(v, OFFSET)?,
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -1917,10 +1961,11 @@ fn compute(
     };
     let u = units(size);
     let color = d.color.unwrap_or(inherited_color);
-    let border: [f64; 4] = std::array::from_fn(|i| match d.border_style[i] {
+    let width = |style, width: &Len| match style {
         BorderStyle::None => 0.0,
-        BorderStyle::Solid => snapped(d.border_width[i].px(u, 0.0)),
-    });
+        BorderStyle::Solid => snapped(width.px(u, 0.0)),
+    };
+    let border: [f64; 4] = std::array::from_fn(|i| width(d.border_style[i], &d.border_width[i]));
     let mut l = Lengths {
         u,
         first,
@@ -1993,6 +2038,9 @@ fn compute(
         radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
         border,
         border_colors: d.border_color.map(|c| c.unwrap_or(color)),
+        outline: width(d.outline_style, &d.outline_width),
+        outline_color: d.outline_color.unwrap_or(color),
+        outline_offset: d.outline_offset.px(u, 0.0).trunc(),
         opacity: d.opacity,
         visible: d.visible.unwrap_or(inherited_visible),
         color,

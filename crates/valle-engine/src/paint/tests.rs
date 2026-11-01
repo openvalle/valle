@@ -509,6 +509,62 @@ fn borders_paint_over_backgrounds_and_clips_go_inside_them() {
 }
 
 #[test]
+fn outlines_paint_after_in_flow_content_around_the_border_box() {
+    let (items, _) = paint_of(
+        vec![
+            view(
+                &[
+                    ("width", "40px"),
+                    ("height", "20px"),
+                    ("outline", "2px solid red"),
+                    ("outlineOffset", "3px"),
+                    ("borderRadius", "4px"),
+                ],
+                &[1, 2],
+            ),
+            view(
+                &[
+                    ("height", "10px"),
+                    ("background", "green"),
+                    ("outline", "1px solid blue"),
+                ],
+                &[],
+            ),
+            view(
+                &[
+                    ("position", "relative"),
+                    ("height", "5px"),
+                    ("background", "gray"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    assert_eq!(
+        names(&items),
+        ["green", "border red", "border blue", "gray"]
+    );
+    let Item::Border {
+        rect,
+        radii,
+        widths,
+        ..
+    } = &items[1]
+    else {
+        panic!("{items:?}")
+    };
+    let around = Rect {
+        x: -5.0,
+        y: -5.0,
+        width: 50.0,
+        height: 30.0,
+    };
+    // The radii grow by the offset and the width.
+    assert_eq!((*rect, *radii, *widths), (around, [[9.0; 2]; 4], [2.0; 4]));
+}
+
+#[test]
 fn a_border_rounds_its_inside_less_its_widths() {
     let rect = Rect {
         x: 0.0,
