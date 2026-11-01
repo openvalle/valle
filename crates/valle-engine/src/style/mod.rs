@@ -178,6 +178,8 @@ pub struct Style {
     pub mask_alpha: bool,
     /// An SVG element's geometry, as its attributes have it at the frame.
     pub svg: Option<Rc<svg::Computed>>,
+    /// A `<use>`'s copy.
+    pub instance: Option<Rc<Instance>>,
     pub color: Rgba,
     pub font: Font,
     /// The text decorations its text takes: those of the boxes around it, outermost first, then
@@ -191,6 +193,21 @@ pub struct Style {
     pub clamp: Option<u32>,
     /// The math functions with percentages in them that `layout` holds handles to.
     pub calcs: Vec<Calc>,
+}
+
+/// The styles of the elements a `<use>` copies, which inherit from it: the one it names, `root`,
+/// and those in it, in template order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Instance {
+    pub root: usize,
+    pub styles: Vec<Style>,
+}
+
+impl Instance {
+    /// Node `i`'s style in the copy, if the copy holds it.
+    pub fn style(&self, i: usize) -> Option<&Style> {
+        self.styles.get(i.checked_sub(self.root)?)
+    }
 }
 
 /// `object-fit`: an image filling its box, as large as fits in it whole or as covers it, at its
@@ -568,6 +585,8 @@ pub struct Sheet {
     nodes: Vec<Bound>,
     /// Each node's parent, a mask's source's the mask. Parents come before their children.
     parents: Vec<Option<u32>>,
+    /// Where each node's descendants end, past the last.
+    ends: Vec<u32>,
 }
 
 /// A node's declarations: those before the first one bound to an expression, applied once, and
@@ -629,8 +648,19 @@ impl Sheet {
                 parents[c] = Some(i as u32);
             }
         }
+        // In preorder, a node's descendants follow it.
+        let mut ends: Vec<u32> = (1..=n as u32).collect();
+        for i in (0..n).rev() {
+            if let Some(p) = parents[i] {
+                ends[p as usize] = ends[p as usize].max(ends[i]);
+            }
+        }
         let nodes = template.nodes.iter().map(bind).collect::<Result<_, _>>()?;
-        Ok(Sheet { nodes, parents })
+        Ok(Sheet {
+            nodes,
+            parents,
+            ends,
+        })
     }
 
     /// Every node's computed style for the program's values at one frame on a canvas of `canvas`
@@ -641,64 +671,83 @@ impl Sheet {
         canvas: [f32; 2],
         resources: &[Slot],
     ) -> Result<Vec<Style>, Error> {
-        let canvas = canvas.map(f64::from);
+        let frame = Frame {
+            values,
+            canvas: canvas.map(f64::from),
+            resources,
+        };
         let mut out: Vec<Style> = Vec::with_capacity(self.nodes.len());
         let mut calcs = 0;
-        for (i, (b, parent)) in self.nodes.iter().zip(&self.parents).enumerate() {
-            let declared = if b.rest.is_empty() {
-                Cow::Borrowed(&b.declared)
-            } else {
-                let mut d = b.declared.clone();
-                for (field, prop, what, attribute) in &b.rest {
-                    let v = match prop {
-                        Prop::Const(v) => v,
-                        Prop::Expr(e) => &values[*e as usize],
-                    };
-                    set(&mut d, *field, &presented(v, *attribute))
-                        .map_err(|e| format!("{}: {what}: {e}", b.place))?;
-                }
-                Cow::Owned(d)
-            };
-            let parent = parent.map(|p| &out[p as usize]);
-            let mut style = compute(&declared, parent, canvas, calcs, i, b.text, resources)
-                .map_err(|e| format!("{}: {e}", b.place))?;
-            style.source = b.source;
-            let boxed = (b.svg.as_ref()).is_none_or(|g| g.tag == Tag::Svg);
-            if boxed && (style.clip_ref.is_some() || style.mask_ref.is_some()) {
-                return Err(format!(
-                    "{}: clip-path: url() and mask: url() are supported in an <svg> only, not on \
-                     a box yet",
-                    b.place
-                ));
-            }
-            if let Some(g) = &b.svg {
-                style.svg = Some(
-                    g.computed(values)
-                        .map_err(|e| format!("{}: {e}", b.place))?,
-                );
-            }
+        for i in 0..self.nodes.len() {
+            let parent = self.parents[i].map(|p| &out[p as usize]);
+            let style = self.style(i, parent, &frame, calcs)?;
             calcs += style.calcs.len();
             out.push(style);
         }
-        self.references(&out)?;
-        Ok(out)
-    }
-
-    /// That each `clip-path: url(#id)` names a `<clipPath>`, and each `mask: url(#id)` a
-    /// `<mask>`, the first element of the id as Chrome finds them, from elements that are not
-    /// clip paths, in them or masks.
-    fn references(&self, styles: &[Style]) -> Result<(), Error> {
-        let refers = |s: &Style| s.clip_ref.is_some() || s.mask_ref.is_some();
-        if !styles.iter().any(refers) {
-            return Ok(());
-        }
-        let tag = |i: usize| self.nodes[i].svg.as_ref().map(|g| g.tag);
+        // As Chrome finds them in its document: the first element of each id.
         let mut ids = HashMap::new();
-        for (i, s) in styles.iter().enumerate() {
-            if let Some(id) = s.svg.as_deref().and_then(|c| c.id.as_deref()) {
+        for (i, s) in out.iter().enumerate() {
+            if let Some(id) = s.svg.as_deref().and_then(|c| c.id.clone()) {
                 ids.entry(id).or_insert(i);
             }
         }
+        self.references(&out, &ids)?;
+        let mut copied = 0;
+        for (u, style) in out.iter_mut().enumerate() {
+            self.instantiate(u, style, &ids, &frame, 0, &mut copied)?;
+        }
+        Ok(out)
+    }
+
+    /// Node `i`'s computed style under `parent`, after `calcs` calcs in the frame.
+    fn style(
+        &self,
+        i: usize,
+        parent: Option<&Style>,
+        frame: &Frame,
+        calcs: usize,
+    ) -> Result<Style, Error> {
+        let b = &self.nodes[i];
+        let declared = if b.rest.is_empty() {
+            Cow::Borrowed(&b.declared)
+        } else {
+            let mut d = b.declared.clone();
+            for (field, prop, what, attribute) in &b.rest {
+                let v = match prop {
+                    Prop::Const(v) => v,
+                    Prop::Expr(e) => &frame.values[*e as usize],
+                };
+                set(&mut d, *field, &presented(v, *attribute))
+                    .map_err(|e| format!("{}: {what}: {e}", b.place))?;
+            }
+            Cow::Owned(d)
+        };
+        let (canvas, resources) = (frame.canvas, frame.resources);
+        let mut style = compute(&declared, parent, canvas, calcs, i, b.text, resources)
+            .map_err(|e| format!("{}: {e}", b.place))?;
+        style.source = b.source;
+        let boxed = (b.svg.as_ref()).is_none_or(|g| g.tag == Tag::Svg);
+        if boxed && (style.clip_ref.is_some() || style.mask_ref.is_some()) {
+            return Err(format!(
+                "{}: clip-path: url() and mask: url() are supported in an <svg> only, not on a \
+                 box yet",
+                b.place
+            ));
+        }
+        if let Some(g) = &b.svg {
+            style.svg = Some(
+                g.computed(frame.values)
+                    .map_err(|e| format!("{}: {e}", b.place))?,
+            );
+        }
+        Ok(style)
+    }
+
+    /// That each `clip-path: url(#id)` names a `<clipPath>`, and each `mask: url(#id)` a
+    /// `<mask>`, by the frame's `ids`, from elements that are not clip paths, in them or masks.
+    fn references(&self, styles: &[Style], ids: &HashMap<Rc<str>, usize>) -> Result<(), Error> {
+        let tag = |i: usize| self.nodes[i].svg.as_ref().map(|g| g.tag);
+        let refers = |s: &&Style| s.clip_ref.is_some() || s.mask_ref.is_some();
         for (i, s) in styles.iter().enumerate().filter(|(_, s)| refers(s)) {
             let place = &self.nodes[i].place;
             let parent = self.parents[i].and_then(|p| tag(p as usize));
@@ -727,6 +776,90 @@ impl Sheet {
         }
         Ok(())
     }
+
+    /// The copy that `<use>` `u` with `style` makes of the element its href names, by the
+    /// frame's `ids`, and the copies the `<use>`s in it make, `depth` copies deep; `copied`
+    /// counts the elements the frame's copies hold.
+    fn instantiate(
+        &self,
+        u: usize,
+        style: &mut Style,
+        ids: &HashMap<Rc<str>, usize>,
+        frame: &Frame,
+        depth: usize,
+        copied: &mut usize,
+    ) -> Result<(), Error> {
+        const DEEPEST: usize = 8;
+        const MOST: usize = 100_000;
+        let Some(svg::Element::Use { href, .. }) = style.svg.as_deref().map(|c| &c.element) else {
+            return Ok(());
+        };
+        let place = &self.nodes[u].place;
+        let tag = |i: usize| self.nodes[i].svg.as_ref().map(|g| g.tag);
+        let Some(&r) = ids.get(href) else {
+            return Err(format!("{place}: <use> href: #{href} names no element"));
+        };
+        let copies = matches!(
+            tag(r),
+            Some(
+                Tag::G
+                    | Tag::Path
+                    | Tag::Circle
+                    | Tag::Ellipse
+                    | Tag::Rect
+                    | Tag::Line
+                    | Tag::Polyline
+                    | Tag::Polygon
+                    | Tag::Use
+                    | Tag::Symbol
+            )
+        );
+        if !copies {
+            let name = tag(r).map_or("", Tag::name);
+            return Err(format!(
+                "{place}: <use> href: #{href} names a <{name}>, which a <use> does not copy"
+            ));
+        }
+        let end = self.ends[r] as usize;
+        if (r..end).contains(&u) {
+            return Err(format!(
+                "{place}: <use> href: #{href} holds the <use>, which would copy itself"
+            ));
+        }
+        if depth >= DEEPEST {
+            return Err(format!(
+                "{place}: <use>s copy <use>s more than {DEEPEST} deep"
+            ));
+        }
+        *copied += end - r;
+        if *copied > MOST {
+            return Err(format!(
+                "{place}: the frame's <use>s copy more than {MOST} elements"
+            ));
+        }
+        let mut styles: Vec<Style> = Vec::with_capacity(end - r);
+        for n in r..end {
+            let parent = match self.parents[n] {
+                Some(p) if n > r => &styles[p as usize - r],
+                _ => &*style,
+            };
+            let s = self.style(n, Some(parent), frame, 0)?;
+            styles.push(s);
+        }
+        for (k, s) in styles.iter_mut().enumerate() {
+            self.instantiate(r + k, s, ids, frame, depth + 1, copied)?;
+        }
+        style.instance = Some(Rc::new(Instance { root: r, styles }));
+        Ok(())
+    }
+}
+
+/// What a frame's styles are computed for: the program's values, the canvas's size in px, and
+/// the scene's resources.
+struct Frame<'a> {
+    values: &'a [V],
+    canvas: [f64; 2],
+    resources: &'a [Slot],
 }
 
 fn bind(node: &Node) -> Result<Bound, Error> {
@@ -4097,6 +4230,7 @@ fn compute(
             .unwrap_or(parent.is_some_and(|p| p.clip_even_odd)),
         mask_alpha: d.mask_alpha.unwrap_or(false),
         svg: None,
+        instance: None,
         color,
         font,
         decorations,

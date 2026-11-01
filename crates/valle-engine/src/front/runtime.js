@@ -572,6 +572,8 @@
     stop: ["offset"],
     clipPath: ["clipPathUnits"],
     mask: ["maskUnits", "maskContentUnits", "x", "y", "width", "height"],
+    use: ["href", "xlinkHref", "x", "y", "width", "height"],
+    symbol: ["viewBox", "preserveAspectRatio"],
   };
   const SHAPES = ["path", "circle", "ellipse", "rect", "line", "polyline", "polygon"];
   // The elements that hold others, and those they hold if not any.
@@ -580,6 +582,7 @@
     g: null,
     defs: null,
     mask: null,
+    symbol: null,
     linearGradient: { tags: ["stop"], what: "<stop>s" },
     radialGradient: { tags: ["stop"], what: "<stop>s" },
     clipPath: { tags: SHAPES, what: "shapes" },

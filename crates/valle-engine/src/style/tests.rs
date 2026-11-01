@@ -747,6 +747,47 @@ fn svg_elements_take_presentation_attributes_under_their_style() {
 }
 
 #[test]
+fn uses_copy_with_styles_inherited_from_them() {
+    let svg = |tag, attributes: &[(&str, Prop)], children: &[u32]| Node {
+        kind: Kind::Svg {
+            tag,
+            attributes: (attributes.iter())
+                .map(|(k, p)| (Rc::from(*k), p.clone()))
+                .collect(),
+        },
+        ..view(&[], children)
+    };
+    let tree = vec![
+        svg(Tag::Svg, &[("id", text("s"))], &[1, 4]),
+        svg(Tag::Symbol, &[("id", text("icon"))], &[2]),
+        svg(Tag::G, &[("id", text("g"))], &[3]),
+        svg(Tag::Circle, &[], &[]),
+        svg(
+            Tag::Use,
+            &[("href", text("#icon")), ("fill", text("red"))],
+            &[],
+        ),
+    ];
+    let s = styles(tree.clone(), &[]).unwrap();
+    let copy = s[4].instance.as_deref().unwrap();
+    assert_eq!((copy.root, copy.styles.len()), (1, 3));
+    let red = color::parse("red").unwrap();
+    assert_eq!(copy.style(3).map(|s| &s.fill), Some(&Paint::Color(red)));
+    assert_eq!(copy.style(4), None);
+    assert_eq!(s[3].fill, Paint::Color(color::BLACK));
+    for (n, href, want) in [
+        (4, "#nope", "<use> href: #nope names no element"),
+        (4, "#s", "names a <svg>, which a <use> does not copy"),
+        (3, "#g", "holds the <use>, which would copy itself"),
+    ] {
+        let mut tree = tree.clone();
+        tree[n] = svg(Tag::Use, &[("href", text(href))], &[]);
+        let e = styles(tree, &[]).unwrap_err();
+        assert!(e.contains(want), "{e}");
+    }
+}
+
+#[test]
 fn svg_references_name_clip_paths_and_masks() {
     let svg = |tag, attributes: &[(&str, Prop)], children: &[u32]| Node {
         kind: Kind::Svg {

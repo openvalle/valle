@@ -63,7 +63,8 @@ pub enum Shape {
 }
 
 /// What an element draws: an `<svg>` its viewBox through its fit, a group its children, a shape
-/// itself. Definitions, gradients and their stops, clip paths and masks draw nothing themselves.
+/// itself, a `<use>` a copy. Definitions, gradients and their stops, clip paths, masks and symbols
+/// draw nothing themselves.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Element {
     Svg {
@@ -82,6 +83,19 @@ pub enum Element {
         user_space: bool,
     },
     Mask(Mask),
+    /// A copy of the element `href` names, moved by `at`; a `<symbol>` in a viewport `size` big,
+    /// as big as the one it is in on an axis without a size.
+    Use {
+        href: Rc<str>,
+        at: [Length; 2],
+        size: [Option<Length>; 2],
+    },
+    /// What a `<use>` shows of it: its children, through its viewBox by its fit in the viewport
+    /// the `<use>` gives it, and clipped to it.
+    Symbol {
+        view_box: Option<[f64; 4]>,
+        fit: Fit,
+    },
 }
 
 /// A mask: what its children draw, by their luminance or alpha, inside `region` (x, y, width and
@@ -163,16 +177,28 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
         }
     };
     let text = |name: &str| get(name).map(|v| v.text().into_owned());
+    let href = || match text("href").or_else(|| text("xlinkHref")) {
+        Some(h) => match h.trim().strip_prefix('#') {
+            Some(id) if !id.is_empty() => Ok(Some(Rc::from(id))),
+            _ => Err(format!("href: {h} is not #id, an element in the <svg>")),
+        },
+        None => Ok(None),
+    };
+    let fitting = || -> Result<(Option<[f64; 4]>, Fit), String> {
+        let view_box = text("viewBox").map(|v| view_box(&v).map_err(at("viewBox")));
+        let fit = match text("preserveAspectRatio") {
+            Some(f) => fit(&f).map_err(at("preserveAspectRatio"))?,
+            None => MEET,
+        };
+        Ok((view_box.transpose()?, fit))
+    };
     let transform =
         (text("transform").map(|t| transform(&t).map_err(at("transform")))).transpose()?;
     let element = match tag {
-        Tag::Svg => Element::Svg {
-            view_box: (text("viewBox").map(|v| view_box(&v).map_err(at("viewBox")))).transpose()?,
-            fit: match text("preserveAspectRatio") {
-                Some(f) => fit(&f).map_err(at("preserveAspectRatio"))?,
-                None => MEET,
-            },
-        },
+        Tag::Svg => {
+            let (view_box, fit) = fitting()?;
+            Element::Svg { view_box, fit }
+        }
         Tag::G => Element::G,
         Tag::Path => Element::Shape(Shape::Path(match text("d") {
             Some(d) if !d.trim().is_empty() => path::parse(&d).map_err(at("d"))?,
@@ -217,13 +243,7 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
                     .map(|v| self::length(v).map_err(at(name)))
                     .transpose()?;
             }
-            let href = match text("href").or_else(|| text("xlinkHref")) {
-                Some(h) => match h.trim().strip_prefix('#') {
-                    Some(id) if !id.is_empty() => Some(id.into()),
-                    _ => return Err(format!("href: {h} is not #id, an element in the <svg>")),
-                },
-                None => None,
-            };
+            let href = href()?;
             let user_space = text("gradientUnits").map(|u| units(&u).map_err(at("gradientUnits")));
             let spread = text("spreadMethod").map(|m| match m.trim() {
                 "pad" => Ok(Spread::Pad),
@@ -276,6 +296,15 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
                 region: lengths,
             })
         }
+        Tag::Use => Element::Use {
+            href: href()?.ok_or("a <use> copies the element its href names: write href=\"#id\"")?,
+            at: [length("x")?, length("y")?],
+            size: [auto("width")?, auto("height")?],
+        },
+        Tag::Symbol => {
+            let (view_box, fit) = fitting()?;
+            Element::Symbol { view_box, fit }
+        }
     };
     if transform.is_some() && matches!(element, Element::Defs | Element::Stop(_)) {
         return Err(format!(
@@ -286,8 +315,11 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
     if transform.is_some() && matches!(element, Element::Gradient(_)) {
         return Err("transform: a gradient takes gradientTransform".into());
     }
-    if transform.is_some() && matches!(element, Element::Mask(_)) {
-        return Err("transform: a <mask> takes none, but what is in it may".into());
+    if transform.is_some() && matches!(element, Element::Mask(_) | Element::Symbol { .. }) {
+        return Err(format!(
+            "transform: a <{}> takes none, but what is in it may",
+            tag.name()
+        ));
     }
     let negative = |name: &str, l: Option<Length>| match l {
         Some(l) if l.units < 0.0 || l.percent < 0.0 => Err(format!("{name} is negative")),
@@ -312,6 +344,10 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
         Element::Mask(m) => {
             negative("width", Some(m.region[2]))?;
             negative("height", Some(m.region[3]))?;
+        }
+        Element::Use { size, .. } => {
+            negative("width", size[0])?;
+            negative("height", size[1])?;
         }
         _ => {}
     }

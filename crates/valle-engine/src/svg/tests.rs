@@ -363,6 +363,38 @@ fn clip_paths_and_masks_take_their_units_and_regions() {
     assert!(presentational(Tag::Rect, "clipPath") && presentational(Tag::Mask, "maskType"));
 }
 
+#[test]
+fn uses_name_what_they_copy_and_symbols_their_view_box() {
+    let element = |tag, list: &[(&str, V)]| attributes(tag, list).map(|c| c.element);
+    let list = [
+        ("href", text("#icon")),
+        ("x", V::Num(5.0)),
+        ("width", text("50%")),
+    ];
+    let Ok(Element::Use { href, at, size }) = element(Tag::Use, &list) else {
+        panic!()
+    };
+    assert_eq!(&*href, "icon");
+    assert_eq!(at[0].units, 5.0);
+    assert_eq!(size[0].map(|l| l.percent), Some(50.0));
+    assert_eq!(size[1], None);
+    let e = element(Tag::Use, &[]).unwrap_err();
+    assert!(e.contains("write href=\"#id\""), "{e}");
+    let e = element(Tag::Use, &[("href", text("#a")), ("height", V::Num(-1.0))]).unwrap_err();
+    assert_eq!(e, "height is negative");
+    let list = [
+        ("viewBox", text("0 0 10 20")),
+        ("preserveAspectRatio", text("none")),
+    ];
+    let Ok(Element::Symbol { view_box, fit }) = element(Tag::Symbol, &list) else {
+        panic!()
+    };
+    assert_eq!(view_box, Some([0.0, 0.0, 10.0, 20.0]));
+    assert_eq!(fit.align, None);
+    let e = element(Tag::Symbol, &[("transform", text("scale(2)"))]).unwrap_err();
+    assert!(e.contains("<symbol> takes none"), "{e}");
+}
+
 /// A gradient over `bbox` in a viewport 100 units a side.
 fn gradient_of(chain: &[&Gradient], stops: &[(f64, Rgba)], bbox: [f64; 4]) -> (Ramp, Matrix) {
     super::gradient(chain, stops, bbox, [100.0; 2]).unwrap()

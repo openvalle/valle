@@ -57,7 +57,7 @@ use crate::style::filter;
 use crate::style::gradient::Image;
 use crate::style::math::Calc;
 use crate::style::transform::Function;
-use crate::style::{Blend, BorderStyle, DecorationStyle, Fit, Paint, Shadow, Style};
+use crate::style::{Blend, BorderStyle, DecorationStyle, Fit, Instance, Paint, Shadow, Style};
 use crate::svg::{self, Element};
 use crate::template::{Kind, Template};
 use crate::text::{Glyph, Stripe};
@@ -1696,7 +1696,7 @@ impl Painter<'_> {
         let matrix = Matrix::translate(f64::from(rect.x), f64::from(rect.y)).times(matrix);
         let mut items = Vec::new();
         for &c in &self.template.nodes[i].children {
-            self.svg_element(c as usize, units, matrix, &mut items);
+            self.svg_element(c as usize, units, matrix, &mut items, None);
         }
         if items.is_empty() {
             return;
@@ -1713,24 +1713,59 @@ impl Painter<'_> {
     }
 
     /// An element in an `<svg>` and its children, in user units of a viewport `size` units big,
-    /// which `matrix` takes to px: a shape filled, then stroked, unless it is hidden, each
-    /// opacity on its paint's alpha; then its mask, its clip path, and its opacity on all it
-    /// draws as one layer, and its transform.
-    fn svg_element(&self, i: usize, size: [f64; 2], matrix: Matrix, out: &mut Vec<Item>) {
-        let s = &self.styles[i];
+    /// which `matrix` takes to px, with its style in `copy` if that holds it: a shape filled,
+    /// then stroked, unless it is hidden, each opacity on its paint's alpha; a `<use>`'s copy;
+    /// then its mask, its clip path, and its opacity on all it draws as one layer, and its
+    /// transform.
+    fn svg_element<'s>(
+        &'s self,
+        i: usize,
+        size: [f64; 2],
+        matrix: Matrix,
+        out: &mut Vec<Item>,
+        copy: Option<&'s Instance>,
+    ) {
+        let s = self.svg_style(i, copy);
         let Some(c) = s.svg.as_deref() else {
             return;
         };
         if s.layout.display == Display::None || s.opacity <= 0.0 {
             return;
         }
-        let matrix = c.transform.map_or(matrix, |t| matrix.times(t));
+        let local = svg_local(c, size);
+        let matrix = local.map_or(matrix, |t| matrix.times(t));
         let scale = matrix.radius_scale();
         let mut items = Vec::new();
         match &c.element {
             Element::G => {
                 for &k in &self.template.nodes[i].children {
-                    self.svg_element(k as usize, size, matrix, &mut items);
+                    self.svg_element(k as usize, size, matrix, &mut items, copy);
+                }
+            }
+            Element::Use { .. } => {
+                let Some(instance) = s.instance.as_deref() else {
+                    return;
+                };
+                let root = instance.root;
+                match self.symbol(i, size, copy) {
+                    Some((fitted, [w, h], units)) => {
+                        let mut drawn = Vec::new();
+                        for &k in &self.template.nodes[root].children {
+                            let m = matrix.times(fitted);
+                            self.svg_element(k as usize, units, m, &mut drawn, Some(instance));
+                        }
+                        if !drawn.is_empty() {
+                            items.push(Item::Clip {
+                                rect: rect([0.0, 0.0, w, h]),
+                                radii: SQUARE,
+                                items: vec![Item::Transform {
+                                    matrix: fitted,
+                                    items: drawn,
+                                }],
+                            });
+                        }
+                    }
+                    None => self.svg_element(root, size, matrix, &mut items, Some(instance)),
                 }
             }
             Element::Shape(shape) if s.visible => {
@@ -1770,7 +1805,8 @@ impl Painter<'_> {
             | Element::Gradient(_)
             | Element::Stop(_)
             | Element::ClipPath { .. }
-            | Element::Mask(_) => {}
+            | Element::Mask(_)
+            | Element::Symbol { .. } => {}
         }
         if items.is_empty() {
             return;
@@ -1780,8 +1816,8 @@ impl Painter<'_> {
                 continue;
             };
             let shown = match clips {
-                true => self.svg_clip(id, i, size),
-                false => self.svg_mask(id, i, size, matrix),
+                true => self.svg_clip(id, i, size, copy),
+                false => self.svg_mask(id, i, size, matrix, copy),
             };
             let Some(mask) = shown else {
                 return;
@@ -1798,47 +1834,102 @@ impl Painter<'_> {
                 items,
             }];
         }
-        match c.transform {
+        match local {
             Some(matrix) => out.push(Item::Transform { matrix, items }),
             None => out.extend(items),
         }
     }
 
-    /// `i`'s bounding box in its user units, in a viewport `size` user units big: a shape's
-    /// path's, a group's around its children's; `None` where it has none.
-    fn svg_bbox(&self, i: usize, size: [f64; 2]) -> Option<[f64; 4]> {
-        let s = &self.styles[i];
+    /// SVG element `i`'s style: its copy's in `copy` if that holds it, else the frame's.
+    fn svg_style<'s>(&'s self, i: usize, copy: Option<&'s Instance>) -> &'s Style {
+        copy.and_then(|c| c.style(i)).unwrap_or(&self.styles[i])
+    }
+
+    /// If `<use>` `i`, with its style in `copy` if that holds it, in a viewport `size` user units
+    /// big, copies a `<symbol>`: the transform its viewBox and fit make from the symbol's user
+    /// units to the viewport the `<use>` gives it, that viewport's size, and the size its
+    /// percentages measure. `None` too where a viewport or viewBox has no area.
+    fn symbol(
+        &self,
+        i: usize,
+        size: [f64; 2],
+        copy: Option<&Instance>,
+    ) -> Option<(Matrix, [f64; 2], [f64; 2])> {
+        let s = self.svg_style(i, copy);
+        let Element::Use { size: viewport, .. } = s.svg.as_deref()?.element else {
+            return None;
+        };
+        let root = s.instance.as_deref()?.styles.first()?;
+        let Element::Symbol { view_box, fit } = root.svg.as_deref()?.element else {
+            return None;
+        };
+        let [w, h] = [0, 1].map(|k| viewport[k].map_or(size[k], |l| l.resolve(size[k])));
+        match view_box {
+            _ if w <= 0.0 || h <= 0.0 => None,
+            Some([.., vw, vh]) if vw <= 0.0 || vh <= 0.0 => None,
+            Some(b) => Some((svg::viewport(b, fit, [w, h]), [w, h], [b[2], b[3]])),
+            None => Some((Matrix::IDENTITY, [w, h], [w, h])),
+        }
+    }
+
+    /// `i`'s bounding box in its user units, in a viewport `size` user units big, with its style
+    /// in `copy` if that holds it: a shape's path's, a group's around its children's, a
+    /// `<use>`'s around its copy's; `None` where it has none.
+    fn svg_bbox(&self, i: usize, size: [f64; 2], copy: Option<&Instance>) -> Option<[f64; 4]> {
+        let s = self.svg_style(i, copy);
         let c = s.svg.as_deref()?;
         if s.layout.display == Display::None {
             return None;
         }
         match &c.element {
             Element::Shape(shape) => svg::path(shape, size).map(|p| svg::bounds(&p)),
-            Element::G => {
-                let children = self.template.nodes[i].children.iter();
-                let boxes = children.filter_map(|&k| {
-                    let k = k as usize;
-                    let b = self.svg_bbox(k, size)?;
-                    let Some(t) = self.styles[k].svg.as_deref().and_then(|c| c.transform) else {
-                        return Some(b);
-                    };
-                    let r = t.bounds(rect(b));
-                    Some([r.x, r.y, r.width, r.height].map(f64::from))
-                });
-                boxes.reduce(|[x, y, w, h], [u, v, p, q]| {
-                    let lo = [x.min(u), y.min(v)];
-                    let hi = [(x + w).max(u + p), (y + h).max(v + q)];
-                    [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]
-                })
+            Element::G => self.svg_around(&self.template.nodes[i].children, size, copy),
+            Element::Use { .. } => {
+                let instance = s.instance.as_deref()?;
+                let root = instance.root;
+                match self.symbol(i, size, copy) {
+                    Some((fitted, _, units)) => {
+                        let children = &self.template.nodes[root].children;
+                        let b = self.svg_around(children, units, Some(instance))?;
+                        Some(mapped(fitted, b))
+                    }
+                    None => self.svg_around(&[root as u32], size, Some(instance)),
+                }
             }
             _ => None,
         }
     }
 
+    /// The box around the bounding boxes of `elements`, each through its transform.
+    fn svg_around(
+        &self,
+        elements: &[u32],
+        size: [f64; 2],
+        copy: Option<&Instance>,
+    ) -> Option<[f64; 4]> {
+        let boxes = elements.iter().filter_map(|&k| {
+            let k = k as usize;
+            let b = self.svg_bbox(k, size, copy)?;
+            let c = self.svg_style(k, copy).svg.as_deref()?;
+            Some(svg_local(c, size).map_or(b, |t| mapped(t, b)))
+        });
+        boxes.reduce(|[x, y, w, h], [u, v, p, q]| {
+            let lo = [x.min(u), y.min(v)];
+            let hi = [(x + w).max(u + p), (y + h).max(v + q)];
+            [lo[0], lo[1], hi[0] - lo[0], hi[1] - lo[1]]
+        })
+    }
+
     /// What clip path `id` shows of `i`, in `i`'s user units in a viewport `size` user units
     /// big, as the alpha of a mask: the shapes in it that are not hidden, opaque, each with its
     /// clip rule. `None` where it shows nothing.
-    fn svg_clip(&self, id: &str, i: usize, size: [f64; 2]) -> Option<Item> {
+    fn svg_clip(
+        &self,
+        id: &str,
+        i: usize,
+        size: [f64; 2],
+        copy: Option<&Instance>,
+    ) -> Option<Item> {
         let &n = self.ids.get(id)?;
         let c = self.styles[n].svg.as_deref()?;
         let Element::ClipPath { user_space } = c.element else {
@@ -1846,7 +1937,7 @@ impl Painter<'_> {
         };
         let mut matrix = c.transform.unwrap_or(Matrix::IDENTITY);
         if !user_space {
-            let bbox @ [.., w, h] = self.svg_bbox(i, size)?;
+            let bbox @ [.., w, h] = self.svg_bbox(i, size, copy)?;
             if w <= 0.0 || h <= 0.0 {
                 return None;
             }
@@ -1887,15 +1978,20 @@ impl Painter<'_> {
     /// which `matrix` takes to px, as the alpha of a mask: what its children draw, by their
     /// luminance unless its type is alpha, inside its region. `None` where it shows nothing, as
     /// a mask in itself does.
-    fn svg_mask(&self, id: &str, i: usize, size: [f64; 2], matrix: Matrix) -> Option<Item> {
+    fn svg_mask(
+        &self,
+        id: &str,
+        i: usize,
+        size: [f64; 2],
+        matrix: Matrix,
+        copy: Option<&Instance>,
+    ) -> Option<Item> {
         let &n = self.ids.get(id)?;
         let c = self.styles[n].svg.as_deref()?;
         let Element::Mask(m) = c.element else {
             return None;
         };
-        let bbox = self
-            .svg_bbox(i, size)
-            .filter(|&[.., w, h]| w > 0.0 && h > 0.0);
+        let bbox = (self.svg_bbox(i, size, copy)).filter(|&[.., w, h]| w > 0.0 && h > 0.0);
         let [x, y, w, h] = match m.user_space {
             true => {
                 let [x, y, w, h] = m.region;
@@ -1918,7 +2014,7 @@ impl Painter<'_> {
         let mut items = Vec::new();
         self.masks.borrow_mut().push(n);
         for &k in &self.template.nodes[n].children {
-            self.svg_element(k as usize, size, matrix.times(content), &mut items);
+            self.svg_element(k as usize, size, matrix.times(content), &mut items, None);
         }
         self.masks.borrow_mut().pop();
         if items.is_empty() {
@@ -2162,6 +2258,26 @@ impl Painter<'_> {
         }
         out.push(Item::Clip { rect, radii, items });
     }
+}
+
+/// An SVG element's transform from its user units to its parent's, in a viewport `size` user
+/// units big: its `transform`, then a `<use>`'s move by its x and y, as SVG appends it.
+fn svg_local(c: &svg::Computed, size: [f64; 2]) -> Option<Matrix> {
+    let Element::Use { at, .. } = c.element else {
+        return c.transform;
+    };
+    let [x, y] = [at[0].resolve(size[0]), at[1].resolve(size[1])];
+    let moved = (x != 0.0 || y != 0.0).then(|| Matrix::translate(x, y));
+    match (c.transform, moved) {
+        (Some(t), Some(m)) => Some(t.times(m)),
+        (t, m) => t.or(m),
+    }
+}
+
+/// The bounding box of `[x, y, width, height]` through `m`.
+fn mapped(m: Matrix, b: [f64; 4]) -> [f64; 4] {
+    let r = m.bounds(rect(b));
+    [r.x, r.y, r.width, r.height].map(f64::from)
 }
 
 /// A rectangle of x, y, width and height.
