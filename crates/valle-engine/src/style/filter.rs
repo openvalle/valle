@@ -62,6 +62,15 @@ pub enum Function<L = f64, C = Rgba> {
         octaves: u32,
         turbulence: bool,
     },
+    /// Valle's `bloom(radius intensity threshold [knee])`: the colors of what is brighter than
+    /// the threshold, eased in over the knee (0.1 when left out) either side of it, blurred by a
+    /// Gaussian of half the radius, px, and added `intensity` times.
+    Bloom {
+        radius: f64,
+        intensity: f64,
+        threshold: f64,
+        knee: f64,
+    },
 }
 
 impl Function<Len, Option<Rgba>> {
@@ -109,12 +118,23 @@ impl Function<Len, Option<Rgba>> {
                 octaves: *octaves,
                 turbulence: *turbulence,
             },
+            Function::Bloom {
+                radius,
+                intensity,
+                threshold,
+                knee,
+            } => Function::Bloom {
+                radius: *radius,
+                intensity: *intensity,
+                threshold: *threshold,
+                knee: *knee,
+            },
         }
     }
 }
 
 const NAMES: &str = "blur, brightness, contrast, drop-shadow, grayscale, hue-rotate, invert, \
-                     opacity, saturate or sepia, or Valle's chromatic-aberration, \
+                     opacity, saturate or sepia, or Valle's bloom, chromatic-aberration, \
                      displacement, film-grain, lens-distortion or radial-blur";
 
 /// A seed of Valle's noises: a whole u32.
@@ -243,6 +263,27 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
                 seed: whole(a[0], "the seed")?,
                 amount: a[1],
                 size: a[2],
+            }
+        }
+        "bloom" => {
+            let takes = [
+                ("the radius", true, [0.0, 128.0]),
+                ("the intensity", false, [0.0, 4.0]),
+                ("the threshold", false, [0.0, 1.0]),
+                ("the knee", false, [0.0, 1.0]),
+            ];
+            if !(3..=4).contains(&args.len()) {
+                return Err(named(
+                    "takes the radius, the intensity and the threshold, then the knee or not"
+                        .into(),
+                ));
+            }
+            let a = valle(&args, &takes[..args.len()])?;
+            Function::Bloom {
+                radius: a[0],
+                intensity: a[1],
+                threshold: a[2],
+                knee: a.get(3).copied().unwrap_or(0.1),
             }
         }
         "radial-blur" => {

@@ -1785,6 +1785,16 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
     assert_eq!(turbulent, noise([0.0, 1.0], 4, true));
     let fractal = filter("displacement(7 0 1 -6px 1 fractal)");
     assert_eq!(fractal, noise([0.0, 1.0], 1, false));
+    let bloom = |knee| {
+        [F::Bloom {
+            radius: 12.0,
+            intensity: 4.0,
+            threshold: 0.5,
+            knee,
+        }]
+    };
+    assert_eq!(filter("bloom(12px 4 0.5)"), bloom(0.1));
+    assert_eq!(filter("bloom(12px 4 0.5 0)"), bloom(0.0));
     for (v, says) in [
         (
             "chromatic-aberration(300px)",
@@ -1832,6 +1842,13 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
             "displacement(7 0.1 0.1 4px 2 wavy)",
             "the mode wavy is not fractal or turbulence",
         ),
+        (
+            "bloom(12px 1)",
+            "takes the radius, the intensity and the threshold",
+        ),
+        ("bloom(12 1 0.5)", "the radius 12 is not px"),
+        ("bloom(12px 5 0.5)", "the intensity 5 is not within 0 and 4"),
+        ("bloom(12px 1 0.5 2)", "the knee 2 is not within 0 and 1"),
         (
             "film-grain(1 0.5 0.5px)",
             "the size 0.5px is not within 1px and 64px",
@@ -2775,8 +2792,8 @@ fn what_is_not_supported_is_an_error() {
         ),
         (
             "filter",
-            text("bloom(1)"),
-            "bloom() is not a filter function: blur, brightness, contrast, drop-shadow, \
+            text("glow(1)"),
+            "glow() is not a filter function: blur, brightness, contrast, drop-shadow, \
              grayscale, hue-rotate, invert, opacity, saturate or sepia",
         ),
         (

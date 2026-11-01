@@ -50,6 +50,7 @@ const LENS: f32 = 1.0;
 const GRAIN: f32 = 2.0;
 const RADIAL: f32 = 3.0;
 const DISPLACEMENT: f32 = 4.0;
+const LIGHT: f32 = 5.0;
 
 /// Premultiplied colors to the luminance of their working values, Rec. 709's weights as Skia's,
 /// times their alpha, as the alpha of black.
@@ -82,6 +83,7 @@ pub struct Gpu {
     gradients: wgpu::RenderPipeline,
     glyphs: wgpu::RenderPipeline,
     layers: wgpu::RenderPipeline,
+    adds: wgpu::RenderPipeline,
     blends: wgpu::RenderPipeline,
     masks: wgpu::RenderPipeline,
     blurs: wgpu::RenderPipeline,
@@ -155,6 +157,19 @@ impl Gpu {
         let imaging = layout(&[Some(&draw), Some(&image)]);
         let blending = layout(&[Some(&draw), Some(&image), Some(&image)]);
         let over = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        // Colors added, and the most of the two alphas.
+        let add = Some(wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Max,
+            },
+        });
         let pipeline = |layout: &wgpu::PipelineLayout, name: &str, source: &str, format, blend| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(name),
@@ -205,6 +220,7 @@ impl Gpu {
             gradients: pipeline(&drawing, "gradient", gradient, WORK, over),
             glyphs: pipeline(&drawing, "slug", glyph, WORK, over),
             layers: pipeline(&imaging, "layer", layer, WORK, over),
+            adds: pipeline(&imaging, "layer", layer, WORK, add),
             blends: pipeline(&blending, "blend", blend, WORK, None),
             masks: pipeline(&blending, "mask", mask, WORK, over),
             blurs: pipeline(&imaging, "blur", blur, WORK, None),
@@ -349,6 +365,12 @@ enum Step {
         layer: usize,
         at: u32,
     },
+    /// Adds `layer`'s colors to `target`'s, the alpha the most of the two.
+    Add {
+        target: usize,
+        layer: usize,
+        at: u32,
+    },
     /// Blends `layer` with what is under it in `target`.
     Blend {
         target: usize,
@@ -393,6 +415,7 @@ impl Step {
             Step::Draw { .. } => [None; 2],
             Step::Mask { layer, mask, .. } => [Some(layer), Some(mask)],
             Step::Composite { layer, .. }
+            | Step::Add { layer, .. }
             | Step::Blend { layer, .. }
             | Step::Blur { layer, .. }
             | Step::Colors { layer, .. }
@@ -452,9 +475,20 @@ impl Plan {
 
     /// `layer` composited onto `target`, all of it.
     fn composite(&mut self, target: usize, layer: usize) {
-        let words = [1.0, 0.0, 0.0, 0.0, -1.0e7, -1.0e7, 2.0e7, 2.0e7];
-        let at = self.words(words.into_iter().chain([0.0; 12]));
+        let at = self.whole();
         self.steps.push(Step::Composite { target, layer, at });
+    }
+
+    /// Adds `layer`'s colors to `target`'s, the alpha the most of the two.
+    fn add(&mut self, target: usize, layer: usize) {
+        let at = self.whole();
+        self.steps.push(Step::Add { target, layer, at });
+    }
+
+    /// A layer's words for all of it at full opacity.
+    fn whole(&mut self) -> u32 {
+        let words = [1.0, 0.0, 0.0, 0.0, -1.0e7, -1.0e7, 2.0e7, 2.0e7];
+        self.words(words.into_iter().chain([0.0; 12]))
     }
 
     /// A new layer of `layer` blurred by a Gaussian of `sigma` px: along x, then along y. Within
@@ -541,6 +575,22 @@ impl Plan {
                         layer = self.effect(layer, RADIAL, &words);
                     }
                     layer
+                }
+                Filter::Bloom {
+                    radius,
+                    intensity,
+                    threshold,
+                    knee,
+                } => {
+                    if *radius <= 0.0 || *intensity <= 0.0 {
+                        continue;
+                    }
+                    let light = self.effect(layer, LIGHT, &[*threshold, *knee, *intensity]);
+                    let halo = self.blurred(light, radius * scale / 2.0, bounds);
+                    let both = self.layer();
+                    self.composite(both, layer);
+                    self.add(both, halo);
+                    both
                 }
                 Filter::Displacement {
                     seed,
@@ -1256,6 +1306,7 @@ impl<'a> Renderer<'a> {
             let target = match *step {
                 Step::Draw { target, .. }
                 | Step::Composite { target, .. }
+                | Step::Add { target, .. }
                 | Step::Blend { target, .. }
                 | Step::Mask { target, .. }
                 | Step::Blur { target, .. }
@@ -1323,12 +1374,14 @@ impl<'a> Renderer<'a> {
                     }
                 }
                 Step::Composite { at, .. }
+                | Step::Add { at, .. }
                 | Step::Blend { at, .. }
                 | Step::Blur { at, .. }
                 | Step::Colors { at, .. }
                 | Step::Effect { at, .. } => {
                     let s = layer.expect("a composited layer has a surface");
                     pass.set_pipeline(match step {
+                        Step::Add { .. } => &gpu.adds,
                         Step::Blend { .. } => &gpu.blends,
                         Step::Blur { .. } => &gpu.blurs,
                         Step::Colors { .. } => &gpu.colors,

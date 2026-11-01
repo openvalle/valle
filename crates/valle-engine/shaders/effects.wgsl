@@ -20,6 +20,9 @@
 //   green. Each noise is octaves of gradient noise, each at twice the frequency and half the
 //   weight of the last, their gradients a hash of each lattice point, the seed, the noise and
 //   the octave; summed and taken from -1…1 to 0…1, or for turbulence their sizes summed.
+// - 5, bloom's light: each pixel's colors as much as their luminance, unpremultiplied, is past a
+//   threshold, eased in over a knee either side of it, times an intensity; its alpha the most of
+//   those colors before the intensity.
 
 struct Effect {
   // x: which effect; then its parameters.
@@ -172,6 +175,20 @@ fn displacement(p: vec2f, t: u32, seed: u32, frequency: vec2f, more: vec4f, orig
   return sampled(h.xy / h.z);
 }
 
+fn light(p: vec2f, threshold: f32, knee: f32, intensity: f32) -> vec4f {
+  let c = texel(vec2<i32>(p));
+  if (c.a <= 0.0) {
+    return vec4f(0.0);
+  }
+  let l = dot(c.rgb / c.a, vec3f(0.2126, 0.7152, 0.0722));
+  var past = f32(l >= threshold);
+  if (knee > 0.0) {
+    past = smoothstep(threshold - knee, threshold + knee, l);
+  }
+  let lit = c.rgb * past;
+  return vec4f(lit * intensity, min(max(lit.r, max(lit.g, lit.b)), 1.0));
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let e = effects[in.index];
   let kind = u32(e.head.x);
@@ -184,6 +201,9 @@ fn displacement(p: vec2f, t: u32, seed: u32, frequency: vec2f, more: vec4f, orig
   }
   if (kind == 3u) {
     return radial(in.pos.xy, u32(e.head.y), e.head.zw, e.more[0].x, e.more[0].y);
+  }
+  if (kind == 5u) {
+    return light(in.pos.xy, e.head.y, e.head.z, e.head.w);
   }
   if (kind == 4u) {
     let seed = bitcast<u32>(e.head.z);

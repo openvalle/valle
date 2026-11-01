@@ -193,6 +193,14 @@ pub enum Filter {
         turbulence: bool,
         origin: [f32; 2],
     },
+    /// The colors of what is brighter than `threshold`, eased in over `knee` either side of it,
+    /// blurred by a Gaussian of half `radius` px, and added `intensity` times.
+    Bloom {
+        radius: f32,
+        intensity: f32,
+        threshold: f32,
+        knee: f32,
+    },
 }
 
 /// Where a background image is: one tile, and on each axis how far it is to the next one, if it
@@ -558,6 +566,17 @@ fn filters(functions: &[filter::Function], frame: Rect) -> Vec<Filter> {
                 turbulence: *turbulence,
                 origin: [frame.x, frame.y],
             },
+            filter::Function::Bloom {
+                radius,
+                intensity,
+                threshold,
+                knee,
+            } => Filter::Bloom {
+                radius: *radius as f32,
+                intensity: *intensity as f32,
+                threshold: *threshold as f32,
+                knee: *knee as f32,
+            },
             f => {
                 let Some(m) = colors(f) else { continue };
                 if let Some(Filter::Colors(list)) = out.last_mut() {
@@ -644,7 +663,8 @@ fn colors(f: &filter::Function) -> Option<[f32; 20]> {
         | F::LensDistortion(_)
         | F::FilmGrain { .. }
         | F::RadialBlur { .. }
-        | F::Displacement { .. } => return None,
+        | F::Displacement { .. }
+        | F::Bloom { .. } => return None,
     })
 }
 
