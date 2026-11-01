@@ -780,6 +780,19 @@ fn text_decoration_sets_its_longhands_or_refuses() {
 }
 
 #[test]
+fn text_overflow_is_clip_or_an_ellipsis_of_the_box_alone() {
+    let tree = vec![
+        view(&[("textOverflow", text("Ellipsis"))], &[1]),
+        view(&[], &[]),
+    ];
+    let s = styles(tree, &[]).unwrap();
+    assert!(s[0].ellipsis && !s[1].ellipsis);
+    assert!(!one(&[("textOverflow", text("clip"))]).ellipsis);
+    let e = error(&[("textOverflow", text("'…'"))]);
+    assert!(e.contains("is not one of clip, ellipsis"), "{e}");
+}
+
+#[test]
 fn text_wrap_sets_its_mode_and_style_or_refuses() {
     let wrap = |v: &str| {
         let f = one(&[("textWrap", text(v))]).font;

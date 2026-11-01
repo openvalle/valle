@@ -95,6 +95,9 @@ pub struct Style {
     /// The text decorations its text takes: those of the boxes around it, outermost first, then
     /// its own. A box out of flow takes none from around it.
     pub decorations: Vec<Decoration>,
+    /// `text-overflow: ellipsis`: a Text that clips what overflows it ends a line that overflows
+    /// with an ellipsis.
+    pub ellipsis: bool,
     /// The math functions with percentages in them that `layout` holds handles to.
     pub calcs: Vec<Calc>,
 }
@@ -839,6 +842,7 @@ struct Declared {
     decoration_lines: [bool; 3],
     decoration_color: Option<Rgba>,
     decoration_thickness: Len,
+    ellipsis: bool,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -929,6 +933,7 @@ impl Default for Declared {
             decoration_lines: [false; 3],
             decoration_color: None,
             decoration_thickness: AUTO,
+            ellipsis: false,
             visible: None,
             color: None,
             font_size: None,
@@ -1069,6 +1074,7 @@ enum Field {
     TextDecorationThickness,
     TextDecorationSkipInk,
     TextUnderlineOffset,
+    TextOverflow,
     WebkitTextFillColor,
     WebkitTextStroke,
     WebkitTextStrokeWidth,
@@ -1123,7 +1129,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 203] = [
+const FIELDS: [(&str, Field); 204] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1430,6 +1436,7 @@ const FIELDS: [(&str, Field); 203] = [
     ("textDecorationThickness", Field::TextDecorationThickness),
     ("textDecorationSkipInk", Field::TextDecorationSkipInk),
     ("textUnderlineOffset", Field::TextUnderlineOffset),
+    ("textOverflow", Field::TextOverflow),
     ("WebkitTextFillColor", Field::WebkitTextFillColor),
     ("WebkitTextStroke", Field::WebkitTextStroke),
     ("WebkitTextStrokeWidth", Field::WebkitTextStrokeWidth),
@@ -2560,6 +2567,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::WebkitTextStrokeWidth => d.stroke = Some(stroke_width(v)?),
         F::WebkitTextStrokeColor => d.stroke_color = Some(current_color(v)?),
         F::TextShadow => d.text_shadows = Some(shadows(v, true)?),
+        F::TextOverflow => d.ellipsis = keyword(v, &[("clip", false), ("ellipsis", true)])?,
     }
     Ok(())
 }
@@ -3027,6 +3035,7 @@ fn compute(
         color,
         font,
         decorations,
+        ellipsis: d.ellipsis,
         calcs: l.calcs,
     })
 }

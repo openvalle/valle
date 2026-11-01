@@ -2022,6 +2022,12 @@ const ROWS: &[Row] = &[
         refused: &["\"far\"", "true"],
     },
     Row {
+        properties: &["textOverflow"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ width: 60, fontSize: 10, whiteSpace: "nowrap", overflow: "hidden", textDecorationLine: "underline", PROPERTY: VALUE }}>Words cut short</Text></View>"##,
+        values: &["\"clip\"", "\"ellipsis\"", "\" Ellipsis \""],
+        refused: &["\"fade\"", "\"'…'\"", "\"clip ellipsis\"", "0"],
+    },
+    Row {
         properties: &["WebkitTextFillColor"],
         sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, color: "#1e88e5", textDecorationLine: "underline", PROPERTY: VALUE }}>Filled text</Text></View>"##,
         values: &[

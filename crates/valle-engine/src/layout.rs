@@ -226,6 +226,10 @@ pub fn layout(
                 &mut boxes,
             )
             .map_err(place)?;
+            let style = &styles[i];
+            if style.ellipsis && style.layout.overflow.x != Overflow::Visible {
+                (text.truncate(&mut laid, &style.font, i as u32, content.width)).map_err(place)?;
+            }
             lines[i] = Some(laid);
         }
     }

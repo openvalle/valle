@@ -370,3 +370,52 @@ fn balanced_lines_are_as_narrow_as_they_go_up_to_the_first_forced_break() {
         t.lines(&plain(&long, &normal), width).unwrap().text
     );
 }
+
+#[test]
+fn lines_that_overflow_end_in_an_ellipsis_after_the_glyphs_that_fit() {
+    let mut t = text();
+    let f = Font {
+        wrap: false,
+        ..font(16.0)
+    };
+    let words = "The quick brown fox";
+    let [wide, _] = t.measure(&plain(words, &f), None).unwrap();
+    let width = (wide / 2.0).round();
+    let mut lines = t.lines(&plain(words, &f), width).unwrap();
+    let whole = lines.clone();
+    lines.decorations.push(Stripe {
+        rect: [0.0, 18.0, whole.runs[0].x[1], 19.0],
+        color: [0.0, 0.0, 0.0, 1.0],
+        run: 0,
+        through: false,
+    });
+    t.truncate(&mut lines, &f, 9, width).unwrap();
+    // The run keeps its extent; the ellipsis is a run of its own, of the Text.
+    assert_eq!(
+        lines.runs[0],
+        Run {
+            glyphs: lines.runs[0].glyphs,
+            ..whole.runs[0]
+        }
+    );
+    let [_, ellipsis] = &lines.runs[..] else {
+        panic!("{:?}", lines.runs)
+    };
+    assert_eq!((ellipsis.node, ellipsis.line), (9, 0));
+    let cut = ellipsis.x[0];
+    assert!(
+        ellipsis.x[1] <= width && ellipsis.x[1] > width - 12.0,
+        "{ellipsis:?}"
+    );
+    let kept = lines.runs[0].glyphs[1] as usize;
+    assert!(kept > 2 && kept < whole.glyphs.len() - 2, "{kept}");
+    assert_eq!(lines.glyphs[..kept], whole.glyphs[..kept]);
+    assert_eq!(cut, whole.glyphs[kept].x);
+    // Its decorations end where the ellipsis starts.
+    assert_eq!(lines.decorations[0].rect[2], cut);
+    // A line that fits stays as it is.
+    let mut fits = t.lines(&plain(words, &f), wide).unwrap();
+    let before = fits.clone();
+    t.truncate(&mut fits, &f, 9, wide).unwrap();
+    assert_eq!(fits, before);
+}

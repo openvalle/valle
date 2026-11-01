@@ -37,6 +37,20 @@ pub struct Face {
     pub coords: Vec<i16>,
 }
 
+impl Face {
+    /// The face a run of glyphs is shaped in.
+    fn of(run: &parley::Run<'_, u32>) -> Face {
+        let font = run.font();
+        Face {
+            data: font.data.clone(),
+            index: font.index,
+            coords: (run.normalized_coords().iter())
+                .map(|c| c.to_bits())
+                .collect(),
+        }
+    }
+}
+
 /// A paragraph as written: the font of its box, which each line box starts from (CSS's strut)
 /// and which aligns its lines, and its pieces of text in order.
 pub struct Content<'a> {
@@ -138,6 +152,14 @@ impl Shaping {
     }
 }
 
+/// An ellipsis shaped in a font: its glyphs, each a face, an id and an x from its origin, and its
+/// advance.
+#[derive(Clone)]
+struct Ellipsis {
+    glyphs: Vec<(u32, u32, f32)>,
+    advance: f32,
+}
+
 /// A paragraph shaped: its glyph runs' brushes are the pieces they are in.
 struct Paragraph {
     layout: parley::Layout<u32>,
@@ -157,6 +179,7 @@ pub struct Text {
     paragraphs: HashMap<Vec<(Box<str>, Shaping)>, Paragraph>,
     /// The ascent, descent and line gap of each font's first face, px.
     metrics: HashMap<Shaping, [f32; 3]>,
+    ellipses: HashMap<Shaping, Ellipsis>,
     faces: Vec<Face>,
     /// Glyph outlines by face and glyph id, in font units y up, and their units per em.
     outlines: HashMap<(u32, u32), (f32, Vec<Curve>)>,
@@ -183,6 +206,7 @@ impl Text {
             layouts: LayoutContext::new(),
             paragraphs: HashMap::new(),
             metrics: HashMap::new(),
+            ellipses: HashMap::new(),
             faces: Vec::new(),
             outlines: HashMap::new(),
         })
@@ -280,17 +304,7 @@ impl Text {
                     continue;
                 };
                 let node = content.pieces[run.style().brush as usize].node;
-                let face = run.run().font();
-                let face = Face {
-                    data: face.data.clone(),
-                    index: face.index,
-                    coords: run
-                        .run()
-                        .normalized_coords()
-                        .iter()
-                        .map(|c| c.to_bits())
-                        .collect(),
-                };
+                let face = Face::of(run.run());
                 let mut x = run.offset();
                 let mut glyphs = Vec::new();
                 for g in run.glyphs() {
@@ -391,6 +405,126 @@ impl Text {
             .ok_or("engine bug: a font without metrics")?;
         self.metrics.insert(key, m);
         Ok(m)
+    }
+
+    /// `lines`, broken to fit `width`, with each line that overflows it cut short to end in an
+    /// ellipsis in `font`, the text box's, as Chrome ends it: the glyphs that end past where the
+    /// ellipsis starts go, and the decorations under them, but the runs keep their extents, and
+    /// so do the Spans they are in. The ellipsis follows the last glyph left, as a run of `node`,
+    /// the Text, with no decorations.
+    pub fn truncate(
+        &mut self,
+        lines: &mut Lines,
+        font: &Font,
+        node: u32,
+        width: f32,
+    ) -> Result<(), Error> {
+        let Ellipsis {
+            glyphs: ellipsis,
+            advance,
+        } = self.ellipsis(font)?;
+        // Each glyph's right edge: where the next one in its run starts, or the run ends.
+        let right = |lines: &Lines, run: &Run, g: usize| match g + 1 < run.glyphs[1] as usize {
+            true => lines.glyphs[g + 1].x,
+            false => run.x[1],
+        };
+        let mut cuts: Vec<Option<f32>> = vec![None; lines.boxes.len()];
+        for (l, cut) in cuts.iter_mut().enumerate() {
+            let runs: Vec<&Run> = (lines.runs.iter()).filter(|r| r.line == l as u32).collect();
+            if runs.iter().all(|r| r.x[1] <= width) {
+                continue;
+            }
+            let mut at = runs.first().map_or(0.0, |r| r.x[0]);
+            'fit: for run in runs {
+                for g in run.glyphs[0] as usize..run.glyphs[1] as usize {
+                    let end = right(lines, run, g);
+                    if end > width - advance {
+                        break 'fit;
+                    }
+                    at = end;
+                }
+            }
+            *cut = Some(at);
+        }
+        let mut glyphs = Vec::new();
+        for k in 0..lines.runs.len() {
+            let run = lines.runs[k];
+            let start = glyphs.len() as u32;
+            for g in run.glyphs[0] as usize..run.glyphs[1] as usize {
+                if cuts[run.line as usize].is_none_or(|c| right(lines, &run, g) <= c) {
+                    glyphs.push(lines.glyphs[g]);
+                }
+            }
+            lines.runs[k].glyphs = [start, glyphs.len() as u32];
+        }
+        lines.decorations.retain_mut(|d| {
+            let line = lines.runs[d.run as usize].line as usize;
+            let Some(c) = cuts[line] else {
+                return true;
+            };
+            d.rect[2] = d.rect[2].min(c);
+            d.rect[0] < d.rect[2]
+        });
+        for (l, cut) in cuts.into_iter().enumerate() {
+            let Some(c) = cut else {
+                continue;
+            };
+            let start = glyphs.len() as u32;
+            glyphs.extend(ellipsis.iter().map(|&(face, id, x)| Glyph {
+                face,
+                id,
+                x: c + x,
+                y: lines.baselines[l],
+                node,
+            }));
+            lines.runs.push(Run {
+                node,
+                line: l as u32,
+                x: [c, c + advance],
+                glyphs: [start, glyphs.len() as u32],
+            });
+        }
+        lines.glyphs = glyphs;
+        Ok(())
+    }
+
+    /// An ellipsis in `font`.
+    fn ellipsis(&mut self, font: &Font) -> Result<Ellipsis, Error> {
+        let key = Shaping::of(font, false);
+        if let Some(e) = self.ellipses.get(&key) {
+            return Ok(e.clone());
+        }
+        let families = families(&font.family)?;
+        let mut builder = (self.layouts).ranged_builder(&mut self.fonts, "…", 1.0, false);
+        builder.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Borrowed(
+            &families,
+        ))));
+        builder.push_default(StyleProperty::FontSize(font.size as f32));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(
+            font.weight as f32,
+        )));
+        let mut layout = builder.build("…");
+        layout.break_all_lines(None);
+        let mut shaped = Vec::new();
+        let mut x = 0.0;
+        for line in layout.lines() {
+            for item in line.items() {
+                let PositionedLayoutItem::GlyphRun(run) = item else {
+                    continue;
+                };
+                let face = Face::of(run.run());
+                for g in run.glyphs() {
+                    shaped.push((face.clone(), g.id, x + g.x));
+                    x += g.advance;
+                }
+            }
+        }
+        let glyphs = (shaped.into_iter())
+            .map(|(face, id, x)| (self.face(face), id, x))
+            .collect();
+        let e = Ellipsis { glyphs, advance: x };
+        self.ellipses.insert(key, e.clone());
+        Ok(e)
     }
 
     /// Forgets the paragraphs not used since the last sweep.

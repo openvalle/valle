@@ -1,0 +1,17 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 320px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px; color: #263238;\"><div data-n=\"1\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 120px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">The quick brown fox jumps</div><div data-n=\"2\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 120px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: underline #e53935; text-decoration-color: rgb(229 57 53 / 1);\">The quick brown fox jumps</div><div data-n=\"3\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 120px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">The quick <span data-n=\"4\" style=\"color: #1e88e5; font-size: 18px;\">brown fox</span> jumps</div><div data-n=\"5\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 120px; font-size: 14px; overflow: hidden; text-overflow: ellipsis;\">Incomprehensibilities of words that wrap</div><div data-n=\"6\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 120px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;\">The quick brown fox jumps</div><div data-n=\"7\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 120px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: 2px;\">The quick brown fox jumps</div><div data-n=\"8\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 120px; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">Short</div><div data-n=\"9\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 120px; font-size: 14px; overflow: visible; text-overflow: ellipsis; white-space: nowrap;\">The quick brown fox jumps</div></div></div>\n",
+ "boxes": [
+  [0,0,256,235],
+  [4,4,120,19],
+  [4,27,120,19],
+  [4,50,120,24],
+  [70.6875,50,84.875,24],
+  [4,78,120,57],
+  [4,139,120,19],
+  [4,162,120,19],
+  [4,185,120,19],
+  [4,208,120,19]
+ ],
+ "lines": {"1":["The quick brown fox jumps"],"2":["The quick brown fox jumps"],"3":["The quick brown fox jumps"],"5":["Incomprehensibilities","of words that","wrap"],"6":["The quick brown fox jumps"],"7":["The quick brown fox jumps"],"8":["Short"],"9":["The quick brown fox jumps"]}
+}
