@@ -268,6 +268,15 @@ fn names(ns: &[&[&str]]) -> Vec<Vec<String>> {
 }
 
 #[test]
+fn z_index_is_auto_or_an_integer() {
+    assert_eq!(one(&[]).z_index, None);
+    assert_eq!(one(&[("zIndex", num(-3.0))]).z_index, Some(-3));
+    assert_eq!(one(&[("zIndex", text(" 2 "))]).z_index, Some(2));
+    assert_eq!(one(&[("zIndex", text("AUTO"))]).z_index, None);
+    assert!(error(&[("zIndex", num(1.5))]).contains("1.5 is not an integer"));
+}
+
+#[test]
 fn overflow_hidden_on_one_axis_hides_both() {
     use taffy::Overflow::{Clip, Hidden, Visible};
     let overflow = |style: &[(&str, Prop)]| {

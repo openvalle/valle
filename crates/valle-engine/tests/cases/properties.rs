@@ -488,6 +488,12 @@ const ROWS: &[Row] = &[
         refused: &["1.5", "\"1px\"", "\"auto\"", "true"],
     },
     Row {
+        properties: &["zIndex"],
+        sample: r##"<View style={{ position: "relative", height: 16, background: "#e8eaf6" }}><View style={{ position: "relative", width: 30, height: 10, background: "#3949ab", PROPERTY: VALUE }} /><View style={{ position: "relative", width: 30, height: 10, marginTop: -6, marginLeft: 10, background: "#7986cb" }} /></View>"##,
+        values: &["0", "1", "-1", "\"auto\"", "\"2\"", "999"],
+        refused: &["1.5", "\"1px\"", "true", "\"top\""],
+    },
+    Row {
         properties: &["justifyContent"],
         sample: r##"<View style={{ display: "flex", height: 8, background: "#e8eaf6", PROPERTY: VALUE }}><View style={{ width: 20, background: "#3949ab" }} /><View style={{ width: 30, background: "#7986cb" }} /><View style={{ width: 10, background: "#3949ab" }} /></View>"##,
         values: CONTENT_ALIGN,

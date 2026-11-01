@@ -184,6 +184,69 @@ fn positioned_boxes_leave_their_positioned_descendants_to_the_context() {
 }
 
 #[test]
+fn z_index_orders_stacking_contexts() {
+    let at = |z: &str, background| {
+        let style = [
+            ("position", "relative"),
+            ("zIndex", z),
+            ("height", "5px"),
+            ("background", background),
+        ];
+        view(&style, &[])
+    };
+    let order = painted(
+        vec![
+            view(&[("height", "10px"), ("background", "red")], &[1, 2, 3, 4]),
+            at("2", "green"),
+            at("-1", "blue"),
+            at("auto", "gray"),
+            at("1", "black"),
+        ],
+        &[0],
+    );
+    // Below the in-flow content, then in tree order at 0, then up.
+    assert_eq!(order, ["blue", "red", "gray", "black", "green"]);
+
+    // A flex item with a z-index is a stacking context, painted after the in-flow content.
+    let item = |z: &[(&'static str, &'static str)], background| {
+        let mut style = vec![("width", "10px"), ("background", background)];
+        style.extend_from_slice(z);
+        view(&style, &[])
+    };
+    let flex = |z| {
+        painted(
+            vec![
+                view(&[("display", "flex"), ("height", "10px")], &[1, 2]),
+                item(z, "green"),
+                item(&[], "red"),
+            ],
+            &[0],
+        )
+    };
+    assert_eq!(flex(&[("zIndex", "0")]), ["red", "green"]);
+    assert_eq!(flex(&[]), ["green", "red"]);
+
+    // A fixed box is a stacking context: what it has below 0 stays in it.
+    let order = painted(
+        vec![
+            view(
+                &[
+                    ("position", "fixed"),
+                    ("width", "10px"),
+                    ("height", "10px"),
+                    ("background", "red"),
+                ],
+                &[1],
+            ),
+            at("-1", "blue"),
+            view(&[("height", "10px"), ("background", "green")], &[]),
+        ],
+        &[0, 2],
+    );
+    assert_eq!(order, ["green", "red", "blue"]);
+}
+
+#[test]
 fn overflow_clips_what_the_box_contains() {
     let hidden = [("overflow", "hidden"), ("height", "20px")];
     let at = |position, top: &str, background| {

@@ -34,6 +34,8 @@ pub struct Style {
     pub layout: taffy::Style,
     /// Where a flex or grid item goes among its siblings, which `layout::ordered` sorts by.
     pub order: i32,
+    /// `z-index`; `None` is `auto`.
+    pub z_index: Option<i32>,
     pub background: Rgba,
     /// `border-radius`, px.
     pub radius: f64,
@@ -487,6 +489,7 @@ struct Declared {
     flex_shrink: f64,
     flex_basis: Len,
     order: i32,
+    z_index: Option<i32>,
     justify_content: AlignContent,
     align_items: AlignItems,
     align_self: Option<AlignItems>,
@@ -534,6 +537,7 @@ impl Default for Declared {
             flex_shrink: 1.0,
             flex_basis: Len::Auto,
             order: 0,
+            z_index: None,
             justify_content: AlignContent::NORMAL,
             align_items: AlignItems::NORMAL,
             align_self: None,
@@ -587,6 +591,7 @@ enum Field {
     FlexBasis,
     Flex,
     Order,
+    ZIndex,
     JustifyContent,
     AlignItems,
     AlignSelf,
@@ -645,7 +650,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 93] = [
+const FIELDS: [(&str, Field); 94] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -701,6 +706,7 @@ const FIELDS: [(&str, Field); 93] = [
     ("flexBasis", Field::FlexBasis),
     ("flex", Field::Flex),
     ("order", Field::Order),
+    ("zIndex", Field::ZIndex),
     ("justifyContent", Field::JustifyContent),
     ("alignItems", Field::AlignItems),
     ("alignSelf", Field::AlignSelf),
@@ -1348,6 +1354,12 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::FlexBasis => d.flex_basis = length(v, BASIS)?,
         F::Flex => (d.flex_grow, d.flex_shrink, d.flex_basis) = flex(v)?,
         F::Order => d.order = integer(v)?,
+        F::ZIndex => {
+            d.z_index = match v {
+                V::Str(_) if text(v)? == "auto" => None,
+                _ => Some(integer(v)?),
+            }
+        }
         F::BoxSizing => {
             d.box_sizing = keyword(
                 v,
@@ -1608,6 +1620,7 @@ fn compute(
     Ok(Style {
         layout,
         order: d.order,
+        z_index: d.z_index,
         background: d.background,
         radius: d.radius.px(u, 0.0),
         opacity: d.opacity,

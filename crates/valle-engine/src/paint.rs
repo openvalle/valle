@@ -2,12 +2,14 @@
 //! in canvas px, colors premultiplied (the working space: sRGB-encoded values, which browsers
 //! composite).
 //!
-//! A stacking context paints its own background, then its in-flow content: the backgrounds of
-//! its blocks, then their text and their flex and grid items, each item all at once, as an
-//! inline block. Its positioned descendants and the stacking contexts in it come last, in tree
-//! order; a positioned box paints all at once too, without the positioned boxes in it. Only
-//! opacity makes a stacking context so far, and nothing has a z-index. Tree order puts a flex or
-//! grid container's children in the order it lays them out.
+//! A stacking context paints its own background, the stacking contexts in it with a negative
+//! z-index, then its in-flow content: the backgrounds of its blocks, then their text and their
+//! flex and grid items, each item all at once, as an inline block. Its positioned descendants
+//! and the stacking contexts in it with a z-index of 0 or `auto` come next, in tree order, and
+//! last those with a positive z-index, lowest first. A positioned box paints all at once too,
+//! without the positioned boxes in it. Opacity, a fixed position, and a z-index on a positioned
+//! box or a flex or grid item make a stacking context; only opacity makes it a layer. Tree order
+//! puts a flex or grid container's children in the order it lays them out.
 //!
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
@@ -90,11 +92,12 @@ pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item
         template,
         styles,
         layout,
+        parents,
         clips: Vec::with_capacity(n),
     };
     // In preorder, so the box whose clips a box takes has its own.
     for i in 0..n {
-        let clips = match painter.container(i, &parents) {
+        let clips = match painter.container(i) {
             None => Vec::new(),
             Some(c) => {
                 let mut clips = painter.clips[c].clone();
@@ -114,6 +117,7 @@ struct Painter<'a> {
     template: &'a Template,
     styles: &'a [Style],
     layout: &'a Layout,
+    parents: Vec<Option<usize>>,
     /// The boxes whose clips each box is under, outermost first.
     clips: Vec<Vec<usize>>,
 }
@@ -138,7 +142,8 @@ impl Painter<'_> {
 
     /// The box whose clips `i` is under too: a fixed box's is the canvas, an absolute box's its
     /// containing block, and any other's its parent.
-    fn container(&self, i: usize, parents: &[Option<usize>]) -> Option<usize> {
+    fn container(&self, i: usize) -> Option<usize> {
+        let parents = &self.parents;
         match self.styles[i].layout.position {
             Position::Fixed => None,
             Position::Absolute => {
@@ -154,35 +159,69 @@ impl Painter<'_> {
         o.x != Overflow::Visible || o.y != Overflow::Visible
     }
 
-    fn stacking(&self, i: usize) -> bool {
-        self.styles[i].opacity < 1.0
+    /// Whether `i` is a flex or grid item.
+    fn item(&self, i: usize) -> bool {
+        let display = |p: usize| self.styles[p].layout.display;
+        self.parents[i].is_some_and(|p| matches!(display(p), Display::Flex | Display::Grid))
     }
 
-    /// Paints after the in-flow content of its stacking context.
+    fn stacking(&self, i: usize) -> bool {
+        let s = &self.styles[i];
+        s.opacity < 1.0
+            || s.layout.position == Position::Fixed
+            || (s.z_index.is_some() && (self.positioned(i) || self.item(i)))
+    }
+
+    /// Where `i` paints among the layered boxes of its stacking context.
+    fn z(&self, i: usize) -> i32 {
+        match self.stacking(i) {
+            true => self.styles[i].z_index.unwrap_or(0),
+            false => 0,
+        }
+    }
+
+    /// Paints after the in-flow content of its stacking context, or before it with a negative
+    /// z-index.
     fn layered(&self, i: usize) -> bool {
         self.positioned(i) || self.stacking(i)
     }
 
     /// An in-flow child that paints all at once: a flex or grid item.
-    fn atomic(&self, parent: Option<usize>, child: usize) -> bool {
-        let display = |p: usize| self.styles[p].layout.display;
-        parent.is_some_and(|p| matches!(display(p), Display::Flex | Display::Grid))
-            && !self.layered(child)
+    fn atomic(&self, child: usize) -> bool {
+        self.item(child) && !self.layered(child)
     }
 
     fn context(&self, i: Option<usize>, out: &mut Drawn) {
-        self.whole(i, out);
         let mut layered = Vec::new();
         self.collect(i, &mut layered);
-        for d in layered {
-            if self.stacking(d) {
-                let mut drawn = Vec::new();
-                self.context(Some(d), &mut drawn);
-                let items = self.nest(drawn);
-                out.extend(group(self.styles[d].opacity as f32, items).map(|g| (None, g)));
-            } else {
-                self.whole(Some(d), out);
-            }
+        // A stable sort: ties stay in tree order.
+        layered.sort_by_key(|&d| self.z(d));
+        let below = layered.partition_point(|&d| self.z(d) < 0);
+        if let Some(i) = i {
+            self.background(i, out);
+        }
+        for &d in &layered[..below] {
+            self.layer(d, out);
+        }
+        self.content(i, out);
+        for &d in &layered[below..] {
+            self.layer(d, out);
+        }
+    }
+
+    /// A box that paints after its stacking context's in-flow content, or before it: a stacking
+    /// context, a layer if it has an opacity, or a positioned box.
+    fn layer(&self, d: usize, out: &mut Drawn) {
+        let opacity = self.styles[d].opacity as f32;
+        if !self.stacking(d) {
+            self.whole(Some(d), out);
+        } else if opacity < 1.0 {
+            let mut drawn = Vec::new();
+            self.context(Some(d), &mut drawn);
+            let items = self.nest(drawn);
+            out.extend(group(opacity, items).map(|g| (None, g)));
+        } else {
+            self.context(Some(d), out);
         }
     }
 
@@ -201,16 +240,23 @@ impl Painter<'_> {
 
     /// `i` and its in-flow content.
     fn whole(&self, i: Option<usize>, out: &mut Drawn) {
+        if let Some(i) = i {
+            self.background(i, out);
+        }
+        self.content(i, out);
+    }
+
+    /// `i`'s in-flow content: the backgrounds of its blocks, then text and atomic items.
+    fn content(&self, i: Option<usize>, out: &mut Drawn) {
         self.backgrounds(i, out);
         self.foreground(i, out);
     }
 
+    /// The backgrounds of the blocks in `i`.
     fn backgrounds(&self, i: Option<usize>, out: &mut Drawn) {
-        if let Some(i) = i {
-            self.background(i, out);
-        }
         for c in self.children(i) {
-            if !self.layered(c) && !self.atomic(i, c) {
+            if !self.layered(c) && !self.atomic(c) {
+                self.background(c, out);
                 self.backgrounds(Some(c), out);
             }
         }
@@ -221,7 +267,7 @@ impl Painter<'_> {
             self.text(i, out);
         }
         for c in self.children(i) {
-            if self.atomic(i, c) {
+            if self.atomic(c) {
                 self.whole(Some(c), out);
             } else if !self.layered(c) {
                 self.foreground(Some(c), out);
