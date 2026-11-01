@@ -28,6 +28,7 @@ fn font(size: f64) -> Font {
     Font {
         size,
         weight: 400.0,
+        stretch: 100.0,
         family: Rc::new([Family::SansSerif]),
         line_height: LineHeight::Normal,
         align: TextAlign::Start,
@@ -506,4 +507,19 @@ fn font_variations_set_axes_over_the_weight() {
         ..axes(&[(b"wdth", 62.5), (b"wght", 400.0)])
     };
     assert!(wide(&narrow) < wide(&font(16.0)));
+}
+
+#[test]
+fn font_stretch_sets_the_width_axis_up_to_its_ends() {
+    let mut t = text();
+    let mut wide = |stretch| {
+        let f = Font {
+            stretch,
+            ..font(16.0)
+        };
+        t.measure(&plain("Wide words", &f), None).unwrap()[0]
+    };
+    assert!(wide(75.0) < wide(100.0));
+    assert_eq!(wide(150.0), wide(100.0));
+    assert_eq!(wide(50.0), wide(62.5));
 }

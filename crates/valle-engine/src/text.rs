@@ -17,8 +17,8 @@ use parley::fontique::{Collection, CollectionOptions, GenericFamily, SourceCache
 use parley::setting::Tag;
 use parley::{
     Alignment, AlignmentOptions, BreakReason, FontContext, FontFamily, FontFamilyName, FontFeature,
-    FontFeatures, FontVariation, FontVariations, FontWeight, LayoutContext, PositionedLayoutItem,
-    StyleProperty, TextWrapMode, WhiteSpaceCollapse, YieldData,
+    FontFeatures, FontVariation, FontVariations, FontWeight, FontWidth, LayoutContext,
+    PositionedLayoutItem, StyleProperty, TextWrapMode, WhiteSpaceCollapse, YieldData,
 };
 
 use crate::path::{self, Curve};
@@ -123,6 +123,7 @@ struct Shaping {
     /// f32 bits.
     size: u32,
     weight: u32,
+    stretch: u32,
     spacing: u32,
     word_spacing: u32,
     collapse: Collapse,
@@ -144,6 +145,7 @@ impl Shaping {
             family: font.family.clone(),
             size: (font.size as f32).to_bits(),
             weight: (font.weight as f32).to_bits(),
+            stretch: (font.stretch as f32).to_bits(),
             spacing: (font.spacing as f32).to_bits(),
             word_spacing: (font.word_spacing as f32).to_bits(),
             collapse: font.collapse,
@@ -533,9 +535,10 @@ impl Text {
         let family = FontFamily::List(Cow::Borrowed(&families));
         builder.push_default(StyleProperty::FontFamily(family));
         builder.push_default(StyleProperty::FontSize(font.size as f32));
-        builder.push_default(StyleProperty::FontWeight(FontWeight::new(
-            font.weight as f32,
-        )));
+        let weight = FontWeight::new(font.weight as f32);
+        builder.push_default(StyleProperty::FontWeight(weight));
+        let width = FontWidth::from_percentage(font.stretch as f32);
+        builder.push_default(StyleProperty::FontWidth(width));
         builder.push_default(StyleProperty::FontVariations(variations(font)));
         let mut layout = builder.build(text);
         layout.break_all_lines(None);
@@ -595,6 +598,8 @@ impl Text {
                 builder.push(StyleProperty::FontSize(font.size as f32), range.clone());
                 let weight = FontWeight::new(font.weight as f32);
                 builder.push(StyleProperty::FontWeight(weight), range.clone());
+                let width = FontWidth::from_percentage(font.stretch as f32);
+                builder.push(StyleProperty::FontWidth(width), range.clone());
                 let spacing = font.spacing as f32;
                 builder.push(StyleProperty::LetterSpacing(spacing), range.clone());
                 let spacing = font.word_spacing as f32;

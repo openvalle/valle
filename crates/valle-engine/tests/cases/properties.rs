@@ -1937,6 +1937,20 @@ const ROWS: &[Row] = &[
         refused: &["\"smcp\"", "\"'smc'\"", "\"'liga' -1\"", "0"],
     },
     Row {
+        properties: &["fontStretch"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>Wide 12</Text></View>"##,
+        values: &[
+            "\"normal\"",
+            "\"condensed\"",
+            "\"extra-condensed\"",
+            "\"ultra-condensed\"",
+            "\"semi-condensed\"",
+            "\"80%\"",
+            "\"expanded\"",
+        ],
+        refused: &["\"-10%\"", "\"wide\"", "75"],
+    },
+    Row {
         properties: &["fontVariationSettings"],
         sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>Heavy 12</Text></View>"##,
         values: &[

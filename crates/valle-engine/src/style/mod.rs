@@ -273,6 +273,8 @@ pub struct Font {
     pub size: f64,
     /// 1–1000.
     pub weight: f64,
+    /// `font-stretch`, % of the normal width.
+    pub stretch: f64,
     pub family: Rc<[Family]>,
     pub line_height: LineHeight,
     pub align: TextAlign,
@@ -327,6 +329,7 @@ impl Font {
         Font {
             size: 16.0,
             weight: 400.0,
+            stretch: 100.0,
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
@@ -914,6 +917,7 @@ struct Declared {
     color: Option<Rgba>,
     font_size: Option<Len>,
     font_weight: Option<Weight>,
+    stretch: Option<f64>,
     font_family: Option<Rc<[Family]>>,
     variants: [Option<Rc<[Feature]>>; VARIANTS],
     features: Option<Rc<[Feature]>>,
@@ -1009,6 +1013,7 @@ impl Default for Declared {
             color: None,
             font_size: None,
             font_weight: None,
+            stretch: None,
             font_family: None,
             variants: Default::default(),
             features: None,
@@ -1128,6 +1133,7 @@ enum Field {
     Color,
     FontSize,
     FontWeight,
+    FontStretch,
     FontFamily,
     FontFeatureSettings,
     FontVariant(Option<Variant>),
@@ -1208,7 +1214,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 216] = [
+const FIELDS: [(&str, Field); 217] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1494,6 +1500,7 @@ const FIELDS: [(&str, Field); 216] = [
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
     ("fontWeight", Field::FontWeight),
+    ("fontStretch", Field::FontStretch),
     ("fontFamily", Field::FontFamily),
     ("fontFeatureSettings", Field::FontFeatureSettings),
     ("fontKerning", Field::FontVariant(Some(Variant::Kerning))),
@@ -1566,6 +1573,7 @@ impl Field {
                 | Field::Color
                 | Field::FontSize
                 | Field::FontWeight
+                | Field::FontStretch
                 | Field::FontFamily
                 | Field::FontFeatureSettings
                 | Field::FontVariant(_)
@@ -2325,6 +2333,35 @@ fn weight(v: &V) -> Result<Weight, String> {
     Ok(Weight::Absolute(w))
 }
 
+/// `font-stretch`: a keyword, or a percentage of the normal width, 0% or more.
+fn stretch(v: &V) -> Result<f64, String> {
+    let keywords = [
+        ("ultra-condensed", 50.0),
+        ("extra-condensed", 62.5),
+        ("condensed", 75.0),
+        ("semi-condensed", 87.5),
+        ("normal", 100.0),
+        ("semi-expanded", 112.5),
+        ("expanded", 125.0),
+        ("extra-expanded", 150.0),
+        ("ultra-expanded", 200.0),
+    ];
+    let s = text(v)?;
+    if let Some((_, p)) = keywords.iter().find(|(k, _)| *k == s) {
+        return Ok(*p);
+    }
+    match css::num(&s) {
+        Some(css::Num { value, unit: "%" }) if value >= 0.0 => Ok(value),
+        _ => {
+            let names: Vec<&str> = keywords.iter().map(|(k, _)| *k).collect();
+            Err(format!(
+                "{s} is not a percentage, 0% or more, or one of {}",
+                names.join(", ")
+            ))
+        }
+    }
+}
+
 fn leading(v: &V) -> Result<Leading, String> {
     if let V::Num(_) = v {
         return Ok(Leading::Factor(factor(v)?));
@@ -2821,6 +2858,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Color => d.color = Some(color_of(v)?),
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
+        F::FontStretch => d.stretch = Some(stretch(v)?),
         F::FontFamily => d.font_family = Some(families(v)?),
         F::FontFeatureSettings => d.features = Some(features(v)?),
         F::FontVariant(variant) => variants(v, variant, d)?,
@@ -3177,6 +3215,7 @@ fn compute(
             Some(Weight::Bolder) => bolder(inherited.weight),
             Some(Weight::Lighter) => lighter(inherited.weight),
         },
+        stretch: d.stretch.unwrap_or(inherited.stretch),
         family: match &d.font_family {
             None => inherited.family.clone(),
             Some(f) => f.clone(),

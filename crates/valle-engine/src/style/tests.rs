@@ -976,6 +976,19 @@ fn font_features_are_quoted_tags_with_their_values() {
 }
 
 #[test]
+fn font_stretch_is_a_keyword_or_a_percentage() {
+    let stretch = |v: &str| one(&[("fontStretch", text(v))]).font.stretch;
+    assert_eq!(stretch("Semi-Condensed"), 87.5);
+    assert_eq!(stretch("ultra-expanded"), 200.0);
+    assert_eq!(stretch("62.5%"), 62.5);
+    assert_eq!(stretch("0%"), 0.0);
+    for bad in ["-10%", "75", "wide"] {
+        let e = error(&[("fontStretch", text(bad))]);
+        assert!(e.contains("is not a percentage, 0% or more"), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn font_variations_are_quoted_axes_with_numbers() {
     let variations = |v: &str| {
         let f = one(&[("fontVariationSettings", text(v))]).font.variations;
@@ -1133,6 +1146,7 @@ fn text_properties_inherit() {
                 ("fontKerning", text("none")),
                 ("fontVariant", text("small-caps slashed-zero")),
                 ("fontVariationSettings", text("'wdth' 80")),
+                ("fontStretch", text("condensed")),
             ],
             &[2],
         ),
@@ -1155,6 +1169,7 @@ fn text_properties_inherit() {
     let initial = Font {
         size: 16.0,
         weight: 400.0,
+        stretch: 100.0,
         family: Rc::new([Family::SansSerif]),
         line_height: LineHeight::Normal,
         align: TextAlign::Start,
@@ -1183,6 +1198,7 @@ fn text_properties_inherit() {
     let brand = Font {
         size: 20.0,
         weight: 700.0,
+        stretch: 75.0,
         family: Rc::new([
             Family::Named("Brand Sans".into()),
             Family::Named("Noto Serif".into()),
