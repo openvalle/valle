@@ -60,9 +60,10 @@ pub struct Style {
     /// Within [0, 1].
     pub opacity: f64,
     /// `translate`, `rotate` and `scale`, then `transform`: one list, empty when all are `none`;
-    /// and `transform-origin`, from the border box's top left.
+    /// and `transform-origin`, from the border box's top left, and its z in px.
     pub transform: Vec<transform::Function>,
     pub transform_origin: [position::Offset; 2],
+    pub transform_origin_z: f64,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
@@ -568,6 +569,7 @@ struct Declared {
     scale: Option<transform::Function<Len>>,
     transform: Vec<transform::Function<Len>>,
     transform_origin: [position::Offset<Len>; 2],
+    transform_origin_z: Len,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -635,6 +637,7 @@ impl Default for Declared {
                     by: Len::Percent(50.0),
                 }
             }; 2],
+            transform_origin_z: ZERO,
             visible: None,
             color: None,
             font_size: None,
@@ -1988,7 +1991,9 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Rotate => d.rotate = transform::rotate(&text(v)?)?,
         F::Scale => d.scale = transform::scale(&number_text(v)?)?,
         F::Transform => d.transform = transform::transform(&text(v)?)?,
-        F::TransformOrigin => d.transform_origin = transform::origin(&px_text(v)?)?,
+        F::TransformOrigin => {
+            (d.transform_origin, d.transform_origin_z) = transform::origin(&px_text(v)?)?;
+        }
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -2219,6 +2224,7 @@ fn compute(
             .map(|f| f.computed(u))
             .collect(),
         transform_origin: d.transform_origin.each_ref().map(|o| o.computed(u)),
+        transform_origin_z: d.transform_origin_z.px(u, 0.0),
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,

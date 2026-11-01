@@ -33,7 +33,7 @@ mod matrix;
 use taffy::{Display, Overflow, Position};
 
 pub use gradient::{Geometry, Ramp, Segment};
-pub use matrix::Matrix;
+pub use matrix::{Matrix, Matrix4};
 
 use crate::layout::{Layout, Rect, ordered};
 use crate::style::background::{Area, ImageSize, Layer, Repeat};
@@ -400,28 +400,33 @@ fn transform(s: &Style, border: Rect) -> Option<Matrix> {
     let b = snap(border);
     let size = [b.width, b.height];
     let [x, y] = [0, 1].map(|k| f64::from([b.x, b.y][k] + s.transform_origin[k].resolve(size[k])));
-    let m = (s.transform.iter()).fold(Matrix::IDENTITY, |m, f| {
+    let z = s.transform_origin_z;
+    let m = (s.transform.iter()).fold(Matrix4::IDENTITY, |m, f| {
         m.times(match f {
-            Function::Translate([x, y]) => {
-                Matrix::translate(x.resolve(size[0]).into(), y.resolve(size[1]).into())
+            Function::Translate([x, y, z]) => {
+                let [x, y, z] = [(x, size[0]), (y, size[1]), (z, 0.0)].map(|(l, of)| l.resolve(of));
+                Matrix4::translate(x.into(), y.into(), z.into())
             }
-            Function::Scale([x, y]) => Matrix::affine([*x, 0.0, 0.0, *y, 0.0, 0.0]),
-            Function::Rotate(a) => {
-                let (sin, cos) = a.to_radians().sin_cos();
-                Matrix::affine([cos, sin, -sin, cos, 0.0, 0.0])
-            }
+            Function::Scale([x, y, z]) => Matrix4::scale(*x, *y, *z),
+            Function::Rotate(a) => Matrix4::rotate([0.0, 0.0, 1.0], *a),
+            Function::Rotate3d(axis, a) => Matrix4::rotate(*axis, *a),
             Function::Skew([x, y]) => {
                 let [x, y] = [x, y].map(|a| a.to_radians().tan());
-                Matrix::affine([1.0, y, x, 1.0, 0.0, 0.0])
+                Matrix4::affine([1.0, y, x, 1.0, 0.0, 0.0])
             }
-            Function::Matrix(m) => Matrix::affine(*m),
+            Function::Matrix(m) => Matrix4::affine(*m),
+            Function::Matrix3d(m) => Matrix4(std::array::from_fn(|c| {
+                std::array::from_fn(|r| m[c * 4 + r])
+            })),
+            Function::Perspective(None) => Matrix4::IDENTITY,
+            Function::Perspective(Some(d)) => Matrix4::perspective(d.resolve(0.0).into()),
         })
     });
-    Some(
-        Matrix::translate(x, y)
-            .times(m)
-            .times(Matrix::translate(-x, -y)),
-    )
+    // Flattened onto the plane of the box's parent.
+    let m = Matrix4::translate(x, y, z)
+        .times(m)
+        .times(Matrix4::translate(-x, -y, -z));
+    Some(m.flatten())
 }
 
 /// Boxes are template indices; `None` is the canvas, a block container without a background.

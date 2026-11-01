@@ -28,12 +28,11 @@ struct Out {
 @vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
   let g = glyphs[ii];
   let s = g.place.z;
-  // The bounds in px, grown by as much as a target pixel reaches for the antialiased edge.
-  let m = transforms[g.at.w].inverse;
-  let grow = abs(m[0].xy) + abs(m[1].xy);
-  let lo = g.place.xy + vec2f(g.bounds.x, -g.bounds.w) * s - grow;
-  let hi = g.place.xy + vec2f(g.bounds.z, -g.bounds.y) * s + grow;
-  let p = mix(lo, hi, corner(vi));
+  // The bounds in px, grown for the antialiased edge.
+  let lo = g.place.xy + vec2f(g.bounds.x, -g.bounds.w) * s;
+  let hi = g.place.xy + vec2f(g.bounds.z, -g.bounds.y) * s;
+  let c = corner(vi);
+  let p = grown(mix(lo, hi, c), c * 2.0 - 1.0, g.at.w);
   var out: Out;
   out.pos = place(p, g.at.w);
   out.em = vec2f(p.x - g.place.x, g.place.y - p.y) / s;

@@ -1,5 +1,6 @@
 //! Transforms of the plane: 3×3 matrices on points in px, y down. 2D transforms leave the last
-//! row (0, 0, 1); a flattened 3D one may not, and divides by it.
+//! row (0, 0, 1); a flattened 3D one may not, and divides by it. And of space: 4×4 matrices, z
+//! toward the viewer, which flatten onto the plane.
 
 use crate::layout::Rect;
 
@@ -52,7 +53,8 @@ impl Matrix {
         })))
     }
 
-    /// The smallest rectangle around `r` transformed.
+    /// The smallest rectangle around `r` transformed: its corners', as `getBoundingClientRect()`
+    /// has it, which takes one behind the viewer through it.
     pub fn bounds(&self, r: Rect) -> Rect {
         let corners = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
             .map(|[u, v]| self.apply([r.x + u * r.width, r.y + v * r.height]));
@@ -71,6 +73,94 @@ impl Matrix {
     pub fn radius_scale(&self) -> f64 {
         let m = &self.0;
         (m[0][0].hypot(m[0][1]) * m[1][0].hypot(m[1][1])).sqrt()
+    }
+}
+
+/// Columns: where x, y and z go, and the translation; each with its projective row last.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Matrix4(pub [[f64; 4]; 4]);
+
+impl Matrix4 {
+    pub const IDENTITY: Matrix4 = Matrix4([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]);
+
+    pub fn translate(x: f64, y: f64, z: f64) -> Matrix4 {
+        let mut m = Matrix4::IDENTITY;
+        m.0[3] = [x, y, z, 1.0];
+        m
+    }
+
+    pub fn scale(x: f64, y: f64, z: f64) -> Matrix4 {
+        let mut m = Matrix4::IDENTITY;
+        (m.0[0][0], m.0[1][1], m.0[2][2]) = (x, y, z);
+        m
+    }
+
+    /// A 2D transform, which keeps z.
+    pub fn affine([a, b, c, d, e, f]: [f64; 6]) -> Matrix4 {
+        Matrix4([
+            [a, b, 0.0, 0.0],
+            [c, d, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [e, f, 0.0, 1.0],
+        ])
+    }
+
+    /// `degrees` about an axis, as CSS `rotate3d()` has it; about none for an axis of length 0.
+    pub fn rotate(axis: [f64; 3], degrees: f64) -> Matrix4 {
+        let length = axis.iter().map(|a| a * a).sum::<f64>().sqrt();
+        if length == 0.0 || !length.is_finite() {
+            return Matrix4::IDENTITY;
+        }
+        let [x, y, z] = axis.map(|a| a / length);
+        let (sin, cos) = (degrees.to_radians() / 2.0).sin_cos();
+        let (sc, sq) = (sin * cos, sin * sin);
+        Matrix4([
+            [
+                1.0 - 2.0 * (y * y + z * z) * sq,
+                2.0 * (x * y * sq + z * sc),
+                2.0 * (x * z * sq - y * sc),
+                0.0,
+            ],
+            [
+                2.0 * (x * y * sq - z * sc),
+                1.0 - 2.0 * (x * x + z * z) * sq,
+                2.0 * (y * z * sq + x * sc),
+                0.0,
+            ],
+            [
+                2.0 * (x * z * sq + y * sc),
+                2.0 * (y * z * sq - x * sc),
+                1.0 - 2.0 * (x * x + y * y) * sq,
+                0.0,
+            ],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+    }
+
+    /// A viewer `d` px in front of z = 0; at least 1 px, as CSS has it.
+    pub fn perspective(d: f64) -> Matrix4 {
+        let mut m = Matrix4::IDENTITY;
+        m.0[2][3] = -1.0 / d.max(1.0);
+        m
+    }
+
+    /// The product: `other` applied first, then `self`.
+    pub fn times(self, other: Matrix4) -> Matrix4 {
+        let (a, b) = (self.0, other.0);
+        Matrix4(std::array::from_fn(|c| {
+            std::array::from_fn(|r| (0..4).map(|k| a[k][r] * b[c][k]).sum())
+        }))
+    }
+
+    /// Onto the plane z = 0, seen from the front: z in and z out dropped.
+    pub fn flatten(&self) -> Matrix {
+        let m = &self.0;
+        Matrix([0, 1, 3].map(|c| [0, 1, 3].map(|r| m[c][r])))
     }
 }
 
@@ -103,5 +193,22 @@ mod tests {
             Matrix::affine([1.0, 2.0, 2.0, 4.0, 0.0, 0.0]).inverse(),
             None
         );
+    }
+
+    #[test]
+    fn matrices_in_space_turn_and_flatten_in_perspective() {
+        let near =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4;
+        // About z as in the plane; about y, x goes away from the viewer.
+        let quarter = Matrix4::rotate([0.0, 0.0, 1.0], 90.0).flatten();
+        assert!(near(quarter.apply([1.0, 0.0]), [0.0, 1.0]));
+        let turned = Matrix4::rotate([0.0, 2.0, 0.0], 90.0);
+        assert!(turned.0[0][2] < -0.999);
+        assert_eq!(turned.flatten().inverse(), None);
+        // 100 px back from a viewer 200 px away: two thirds the size.
+        let m = Matrix4::perspective(200.0).times(Matrix4::translate(0.0, 0.0, -100.0));
+        assert!(near(m.flatten().apply([30.0, -60.0]), [20.0, -40.0]));
+        assert_eq!(Matrix4::perspective(0.0), Matrix4::perspective(1.0));
+        assert_eq!(Matrix4::rotate([0.0; 3], 30.0), Matrix4::IDENTITY);
     }
 }

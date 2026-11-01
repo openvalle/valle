@@ -35,12 +35,23 @@ fn place(p: vec2f, t: u32) -> vec4f {
   return vec4f(h.x / s.x * 2.0 - h.z, h.z - h.y / s.y * 2.0, 0.0, h.z);
 }
 
-// Corner `vi` of a rectangle (x, y, width, height) in the px of transform `t`, grown on each side
-// by as much as a target pixel reaches, for an antialiased edge, in clip space.
+// Corner `vi` of a rectangle (x, y, width, height) in the px of transform `t`, grown for an
+// antialiased edge, in clip space.
 fn quad(vi: u32, b: vec4f, t: u32) -> vec4f {
-  let m = transforms[t].inverse;
-  let grow = abs(m[0].xy) + abs(m[1].xy);
-  return place(b.xy - grow + corner(vi) * (b.zw + 2.0 * grow), t);
+  let c = corner(vi);
+  return place(grown(b.xy + c * b.zw, c * 2.0 - 1.0, t), t);
+}
+
+// A corner `p` in the px of transform `t` moved `out`, each axis -1 or 1, by as much as a target
+// pixel reaches there. In perspective that differs from corner to corner, and in between it is no
+// more than the corners' mix. A corner behind the viewer is not seen, and stays.
+fn grown(p: vec2f, out: vec2f, t: u32) -> vec2f {
+  let h = transforms[t].forward * vec3f(p, 1.0);
+  if (h.z <= 0.0) {
+    return p;
+  }
+  let j = steps(h.xy / h.z, t);
+  return p + out * (abs(j[0]) + abs(j[1]));
 }
 
 // The target pixel centered at `p` in the px of transform `t`.

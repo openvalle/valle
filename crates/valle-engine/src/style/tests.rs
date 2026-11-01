@@ -1057,38 +1057,44 @@ fn background_layers_take_origins_and_clips() {
     );
 }
 
+/// The transform functions of a style, translations resolved against a 100 px box.
+fn functions(style: &[(&str, Prop)]) -> Vec<transform::Function<f32>> {
+    use transform::Function as F;
+    (one(style).transform.into_iter())
+        .map(|f| match f {
+            F::Translate(t) => F::Translate(t.map(|l| l.resolve(100.0))),
+            F::Scale(s) => F::Scale(s),
+            F::Rotate(a) => F::Rotate(a),
+            F::Rotate3d(axis, a) => F::Rotate3d(axis, a),
+            F::Skew(a) => F::Skew(a),
+            F::Matrix(m) => F::Matrix(m),
+            F::Matrix3d(m) => F::Matrix3d(m),
+            F::Perspective(d) => F::Perspective(d.map(|l| l.resolve(0.0))),
+        })
+        .collect()
+}
+
 #[test]
 fn transforms_take_2d_functions_around_an_origin() {
     use transform::Function as F;
-    // Translations resolved against a 100 px box.
-    let functions = |v: &str| {
-        (one(&[("transform", text(v))]).transform.into_iter())
-            .map(|f| match f {
-                F::Translate(t) => F::Translate(t.map(|l| l.resolve(100.0))),
-                F::Scale(s) => F::Scale(s),
-                F::Rotate(a) => F::Rotate(a),
-                F::Skew(a) => F::Skew(a),
-                F::Matrix(m) => F::Matrix(m),
-            })
-            .collect::<Vec<F<f32>>>()
-    };
+    let functions = |v: &str| functions(&[("transform", text(v))]);
     assert_eq!(functions("none"), []);
     assert_eq!(
         functions("translate(10px, 50%) translateX(1em) translateY(-2px) translate(5%)"),
         [
-            F::Translate([10.0, 50.0]),
-            F::Translate([16.0, 0.0]),
-            F::Translate([0.0, -2.0]),
-            F::Translate([5.0, 0.0]),
+            F::Translate([10.0, 50.0, 0.0]),
+            F::Translate([16.0, 0.0, 0.0]),
+            F::Translate([0.0, -2.0, 0.0]),
+            F::Translate([5.0, 0.0, 0.0]),
         ]
     );
     assert_eq!(
         functions("scale(2) scale(50%, 3) scaleX(-1) scaleY(0.5)"),
         [
-            F::Scale([2.0, 2.0]),
-            F::Scale([0.5, 3.0]),
-            F::Scale([-1.0, 1.0]),
-            F::Scale([1.0, 0.5]),
+            F::Scale([2.0, 2.0, 1.0]),
+            F::Scale([0.5, 3.0, 1.0]),
+            F::Scale([-1.0, 1.0, 1.0]),
+            F::Scale([1.0, 0.5, 1.0]),
         ]
     );
     assert_eq!(
@@ -1118,19 +1124,72 @@ fn transforms_take_2d_functions_around_an_origin() {
 }
 
 #[test]
+fn transforms_take_3d_functions_and_an_origin_z() {
+    use transform::Function as F;
+    assert_eq!(
+        functions(&[(
+            "transform",
+            text("translateZ(2em) translate3d(10%, 1px, -5px) scaleZ(2) scale3d(1, 50%, 3)")
+        )]),
+        [
+            F::Translate([0.0, 0.0, 32.0]),
+            F::Translate([10.0, 1.0, -5.0]),
+            F::Scale([1.0, 1.0, 2.0]),
+            F::Scale([1.0, 0.5, 3.0]),
+        ]
+    );
+    assert_eq!(
+        functions(&[(
+            "transform",
+            text(
+                "rotateX(90deg) rotateY(-0.5turn) rotate3d(1, 1, 0, 0) perspective(0) perspective(none)"
+            )
+        )]),
+        [
+            F::Rotate3d([1.0, 0.0, 0.0], 90.0),
+            F::Rotate3d([0.0, 1.0, 0.0], -180.0),
+            F::Rotate3d([1.0, 1.0, 0.0], 0.0),
+            F::Perspective(Some(0.0)),
+            F::Perspective(None),
+        ]
+    );
+    let identity = "1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 6, 7, 1";
+    assert_eq!(
+        functions(&[("transform", text(&format!("matrix3d({identity})")))]),
+        [F::Matrix3d([
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 6.0, 7.0, 1.0
+        ])]
+    );
+    // Each property's z and axes.
+    assert_eq!(
+        functions(&[
+            ("translate", text("1px 2px 3px")),
+            ("rotate", text("10deg y")),
+            ("scale", text("1 2 3")),
+        ]),
+        [
+            F::Translate([1.0, 2.0, 3.0]),
+            F::Rotate3d([0.0, 1.0, 0.0], 10.0),
+            F::Scale([1.0, 2.0, 3.0]),
+        ]
+    );
+    assert_eq!(
+        functions(&[("rotate", text("1 0 0 10deg"))]),
+        [F::Rotate3d([1.0, 0.0, 0.0], 10.0)]
+    );
+    assert_eq!(
+        functions(&[("rotate", text("20deg 0 0 1"))]),
+        [F::Rotate(20.0)]
+    );
+    let z = |v: &str| one(&[("transformOrigin", text(v))]).transform_origin_z;
+    assert_eq!(z("left"), 0.0);
+    assert_eq!(z("left top 10px"), 10.0);
+    assert_eq!(z("10px 20% -1em"), -16.0);
+}
+
+#[test]
 fn translate_rotate_and_scale_come_before_transform() {
     use transform::Function as F;
-    let functions = |style: &[(&str, Prop)]| {
-        (one(style).transform.into_iter())
-            .map(|f| match f {
-                F::Translate(t) => F::Translate(t.map(|l| l.resolve(100.0))),
-                F::Scale(s) => F::Scale(s),
-                F::Rotate(a) => F::Rotate(a),
-                F::Skew(a) => F::Skew(a),
-                F::Matrix(m) => F::Matrix(m),
-            })
-            .collect::<Vec<F<f32>>>()
-    };
     assert_eq!(
         functions(&[
             ("transform", text("skew(10deg)")),
@@ -1139,9 +1198,9 @@ fn translate_rotate_and_scale_come_before_transform() {
             ("translate", text("10px 5%")),
         ]),
         [
-            F::Translate([10.0, 5.0]),
+            F::Translate([10.0, 5.0, 0.0]),
             F::Rotate(90.0),
-            F::Scale([2.0, 0.5]),
+            F::Scale([2.0, 0.5, 1.0]),
             F::Skew([10.0, 0.0]),
         ]
     );
@@ -1152,9 +1211,9 @@ fn translate_rotate_and_scale_come_before_transform() {
             ("scale", num(3.0))
         ]),
         [
-            F::Translate([4.0, 0.0]),
+            F::Translate([4.0, 0.0, 0.0]),
             F::Rotate(-90.0),
-            F::Scale([3.0, 3.0]),
+            F::Scale([3.0, 3.0, 1.0]),
         ]
     );
     let none = [
@@ -1540,8 +1599,18 @@ fn what_is_not_supported_is_an_error() {
         ),
         (
             "transform",
-            text("rotateX(10deg)"),
-            "rotatex(): 3D transforms are not supported yet",
+            text("translateZ(10%)"),
+            "translatez(): 10%: percentages are not supported here",
+        ),
+        (
+            "transform",
+            text("perspective(-1px)"),
+            "perspective(): -1px is negative",
+        ),
+        (
+            "transform",
+            text("matrix3d(1, 0)"),
+            "matrix3d() takes 16 numbers, separated by commas",
         ),
         (
             "transform",
@@ -1591,49 +1660,35 @@ fn what_is_not_supported_is_an_error() {
         ("transform", text(""), "\"\" is not a transform; use none"),
         (
             "translate",
-            text("1px 2px 0"),
-            "a z length: 3D transforms are not supported yet",
+            text("1px 2px 10%"),
+            "10%: percentages are not supported here",
         ),
         ("translate", text("10"), "10 needs a unit: 10px"),
         (
             "translate",
             text(""),
-            "\"\" is not a translation: none, or one or two lengths",
-        ),
-        (
-            "rotate",
-            text("x 10deg"),
-            "an axis but z: 3D transforms are not supported yet",
-        ),
-        (
-            "rotate",
-            text("0 0 1 10deg"),
-            "an axis but z: 3D transforms are not supported yet",
+            "\"\" is not a translation: none, or one to three lengths",
         ),
         ("rotate", text("0"), "0 needs a unit: 0deg"),
         (
             "rotate",
             text("10deg 20deg"),
-            "\"10deg 20deg\" is not a rotation: none, or an angle",
+            "\"10deg 20deg\" is not a rotation: none, or an angle about x, y, z or three numbers",
         ),
         ("rotate", num(10.0), "10 is not a string"),
-        (
-            "scale",
-            text("2 2 1"),
-            "a z factor: 3D transforms are not supported yet",
-        ),
         ("scale", text("2px"), "2px is not a number"),
         ("transform", num(0.0), "0 is not a string"),
         (
             "transformOrigin",
             text("top 10px"),
             "\"top 10px\" is not a transform origin: one or two of left, center, right, top, \
-             bottom and lengths",
+             bottom and lengths, and a length",
         ),
         (
             "transformOrigin",
-            text("left top 10px"),
-            "a z offset: 3D transforms are not supported yet",
+            text("left top 10%"),
+            "\"left top 10%\" is not a transform origin: one or two of left, center, right, top, \
+             bottom and lengths, and a length",
         ),
         (
             "backgroundOrigin",
