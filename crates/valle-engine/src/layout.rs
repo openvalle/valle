@@ -1,13 +1,14 @@
 //! Layout: a frame's computed styles as a Taffy tree under the canvas, text measured as Taffy
-//! asks, and every node's boxes in canvas px. The canvas is a block container the size of the
-//! composition that clips what overflows it, and the containing block of what no positioned
-//! ancestor contains.
+//! asks and aligned on its first baseline, and every node's boxes in canvas px. The canvas is a
+//! block container the size of the composition that clips what overflows it, and the containing
+//! block of what no positioned ancestor contains.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 
 use taffy::{
-    AvailableSpace, Dimension, Display, NodeId, Overflow, Point, Position, Size, TaffyTree,
+    AvailableSpace, Dimension, Display, LengthPercentage, NodeId, Overflow, Point, Position,
+    ResolveOrZero, RunMode, Size, TaffyTree,
 };
 
 use crate::style::Style;
@@ -105,33 +106,51 @@ pub fn layout(
         height: AvailableSpace::Definite(canvas[1]),
     };
     tree.compute_layout_with_measure(root, available, |inputs, _, context, style| {
-        taffy::compute_leaf_layout(
+        let Some(i) = context.map(|&mut i| i as usize) else {
+            return taffy::compute_leaf_layout(inputs, style, |_, _| 0.0, |_, _| Size::ZERO);
+        };
+        let (s, font) = (strings[i].as_deref().unwrap_or_default(), &styles[i].font);
+        let mut fail = |e: Error| {
+            failed.get_or_insert_with(|| format!("{}: {e}", template.nodes[i].place()));
+        };
+        let mut out = taffy::compute_leaf_layout(
             inputs,
             style,
             |_, _| 0.0,
             |known, available| {
-                let Some(&mut i) = context else {
-                    return Size::ZERO;
-                };
-                let i = i as usize;
                 let width = known.width.or(match available.width {
                     AvailableSpace::Definite(w) => Some(w),
                     AvailableSpace::MinContent => Some(0.0),
                     AvailableSpace::MaxContent => None,
                 });
-                let s = strings[i].as_deref().unwrap_or_default();
-                match text.measure(s, &styles[i].font, width) {
+                match text.measure(s, font, width) {
                     Ok([w, h]) => Size {
                         width: known.width.unwrap_or(w),
                         height: known.height.unwrap_or(h),
                     },
                     Err(e) => {
-                        failed.get_or_insert_with(|| format!("{}: {e}", template.nodes[i].place()));
+                        fail(e);
                         Size::ZERO
                     }
                 }
             },
-        )
+        );
+        // Flex items align on their first baselines, from the top of the border box; text has
+        // one where its first line has, and empty text none.
+        if inputs.run_mode == RunMode::PerformLayout {
+            let side =
+                |l: LengthPercentage| l.resolve_or_zero(inputs.parent_size.width, |_, _| 0.0);
+            let (pad, border) = (style.padding, style.border);
+            let inset = side(pad.left) + side(pad.right) + side(border.left) + side(border.right);
+            match text.baseline(s, font, out.size.width - inset) {
+                Ok(b) => {
+                    let top = side(pad.top) + side(border.top);
+                    out.baselines.first = b.map(|b| top + b);
+                }
+                Err(e) => fail(e),
+            }
+        }
+        out
     })
     .map_err(bug)?;
     if let Some(e) = failed {

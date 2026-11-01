@@ -135,6 +135,28 @@ fn text_is_measured_and_set_in_its_box() {
 }
 
 #[test]
+fn flex_items_align_on_the_first_baseline_of_text() {
+    let l = lay(
+        vec![
+            view(
+                &[("display", "flex"), ("alignItems", "baseline")],
+                &[1, 2, 3],
+            ),
+            view(&[("width", "20px"), ("height", "6px")], &[]),
+            text_node("Ag", &[("paddingTop", "3px")]),
+            view(&[("width", "20px")], &[]),
+        ],
+        &[0],
+    )
+    .unwrap();
+    let baseline = l.boxes[2].content.y + l.lines[2].as_ref().unwrap().glyphs[0].y;
+    assert_eq!(l.boxes[2].border.y, 0.0);
+    // A box without text aligns its bottom edge, an empty one its top.
+    assert_eq!(l.boxes[1].border.y + 6.0, baseline);
+    assert_eq!(l.boxes[3].border.y, baseline);
+}
+
+#[test]
 fn hidden_subtrees_take_no_room() {
     let l = lay(
         vec![

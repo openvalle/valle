@@ -125,6 +125,16 @@ impl Text {
         Ok([(widest * 64.0).ceil() / 64.0, height])
     }
 
+    /// The baseline of `text`'s first line from the top of its box, its lines broken to fit
+    /// `width` px; empty text has no lines, and no baseline.
+    pub fn baseline(&mut self, text: &str, font: &Font, width: f32) -> Result<Option<f32>, Error> {
+        let p = self.paragraph(text, font, Some(width))?;
+        if p.empty {
+            return Ok(None);
+        }
+        Ok(p.layout.lines().next().map(|line| above(&line, font)))
+    }
+
     /// `text` in `font`, broken to fit `width` px and aligned in it.
     pub fn lines(&mut self, text: &str, font: &Font, width: f32) -> Result<Lines, Error> {
         let alignment = match font.align {
