@@ -976,6 +976,109 @@ fn font_features_are_quoted_tags_with_their_values() {
 }
 
 #[test]
+fn font_variants_set_their_features_one_longhand_at_a_time() {
+    let variants = |style: &[(&str, Prop)]| {
+        let f = one(style).font;
+        (f.variants.iter())
+            .map(|v| {
+                (v.iter())
+                    .map(|f| format!("{}={}", std::str::from_utf8(&f.tag).unwrap(), f.value))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        variants(&[("fontVariant", text("Small-Caps tabular-nums ordinal sub"))]),
+        ["", "", "smcp=1", "tnum=1 ordn=1", "", "", "subs=1"]
+    );
+    assert_eq!(
+        variants(&[
+            (
+                "fontVariantNumeric",
+                text("oldstyle-nums diagonal-fractions")
+            ),
+            (
+                "fontVariantLigatures",
+                text("no-common-ligatures contextual")
+            ),
+            ("fontVariantCaps", text("all-small-caps")),
+            ("fontVariantEastAsian", text("jis04 full-width ruby")),
+            ("fontVariantAlternates", text("historical-forms")),
+            ("fontVariantPosition", text("super")),
+            ("fontKerning", text("none")),
+        ]),
+        [
+            "kern=0",
+            "liga=0 clig=0 calt=1",
+            "c2sc=1 smcp=1",
+            "onum=1 frac=1",
+            "jp04=1 fwid=1 ruby=1",
+            "hist=1",
+            "sups=1",
+        ]
+    );
+    // The shorthand sets every longhand but kerning; none turns ligatures off.
+    assert_eq!(
+        variants(&[
+            ("fontKerning", text("none")),
+            ("fontVariantCaps", text("small-caps")),
+            ("fontVariant", text("none")),
+        ]),
+        [
+            "kern=0",
+            "liga=0 clig=0 dlig=0 hlig=0 calt=0",
+            "",
+            "",
+            "",
+            "",
+            ""
+        ]
+    );
+    assert_eq!(
+        variants(&[("fontKerning", text("normal"))]),
+        variants(&[("fontKerning", text("auto"))])
+    );
+    for (key, bad, message) in [
+        (
+            "fontVariantCaps",
+            "petite-caps",
+            "petite-caps is not supported yet",
+        ),
+        ("fontVariant", "unicase", "unicase is not supported yet"),
+        (
+            "fontVariantAlternates",
+            "swash(fancy)",
+            "needs @font-feature-values",
+        ),
+        (
+            "fontVariantNumeric",
+            "lining-nums oldstyle-nums",
+            "set the same: give one",
+        ),
+        (
+            "fontVariantNumeric",
+            "ordinal ordinal",
+            "set the same: give one",
+        ),
+        (
+            "fontVariantCaps",
+            "none",
+            "none is not one of normal, small-caps",
+        ),
+        (
+            "fontVariant",
+            "none small-caps",
+            "none is not a keyword of a font-variant",
+        ),
+        ("fontKerning", "on", "on is not one of normal, auto, none"),
+    ] {
+        let e = error(&[(key, text(bad))]);
+        assert!(e.contains(message), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn text_properties_inherit() {
     let tree = vec![
         view(&[], &[1, 4]),
@@ -997,6 +1100,8 @@ fn text_properties_inherit() {
                 ("WebkitTextFillColor", text("blue")),
                 ("WebkitTextStroke", text("0.1em #0f0")),
                 ("fontFeatureSettings", text("'smcp', \"tnum\" 1")),
+                ("fontKerning", text("none")),
+                ("fontVariant", text("small-caps slashed-zero")),
             ],
             &[2],
         ),
@@ -1015,6 +1120,7 @@ fn text_properties_inherit() {
         view(&[], &[]),
     ];
     let s = styles(tree, &[]).unwrap();
+    let feature = |tag: &[u8; 4], value| Feature { tag: *tag, value };
     let initial = Font {
         size: 16.0,
         weight: 400.0,
@@ -1029,6 +1135,7 @@ fn text_properties_inherit() {
         word_break: WordBreak::Normal,
         overflow_wrap: OverflowWrap::Normal,
         transform: TextTransform::None,
+        variants: Default::default(),
         features: Rc::new([]),
         fill: None,
         stroke: 0.0,
@@ -1059,6 +1166,15 @@ fn text_properties_inherit() {
         word_break: WordBreak::BreakAll,
         overflow_wrap: OverflowWrap::BreakWord,
         transform: TextTransform::Uppercase,
+        variants: [
+            Rc::new([feature(b"kern", 0)]),
+            Rc::new([]),
+            Rc::new([feature(b"smcp", 1)]),
+            Rc::new([feature(b"zero", 1)]),
+            Rc::new([]),
+            Rc::new([]),
+            Rc::new([]),
+        ],
         features: Rc::new([
             Feature {
                 tag: *b"smcp",

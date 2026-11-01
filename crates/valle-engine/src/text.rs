@@ -25,7 +25,8 @@ use crate::path::{self, Curve};
 use crate::slug;
 use crate::style::color::Rgba;
 use crate::style::{
-    Collapse, Family, Feature, Font, LineHeight, OverflowWrap, TextAlign, TextTransform, WordBreak,
+    Collapse, Family, Feature, Font, LineHeight, OverflowWrap, TextAlign, TextTransform, VARIANTS,
+    WordBreak,
 };
 use crate::template::Error;
 
@@ -130,6 +131,7 @@ struct Shaping {
     /// `word-break: break-word` is `anywhere` here.
     overflow_wrap: OverflowWrap,
     transform: TextTransform,
+    variants: [Rc<[Feature]>; VARIANTS],
     features: Rc<[Feature]>,
 }
 
@@ -152,6 +154,7 @@ impl Shaping {
                 (_, wrap) => wrap,
             },
             transform: font.transform,
+            variants: font.variants.clone(),
             features: font.features.clone(),
         }
     }
@@ -620,8 +623,10 @@ impl Text {
                     OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
                 };
                 builder.push(StyleProperty::OverflowWrap(wrap), range.clone());
-                if !font.features.is_empty() {
-                    let features = (font.features.iter())
+                let features = font.variants.iter().flat_map(|v| v.iter());
+                let mut features = features.chain(font.features.iter()).peekable();
+                if features.peek().is_some() {
+                    let features = (features)
                         .map(|f| FontFeature::new(Tag::new(&f.tag), f.value))
                         .collect();
                     let features = FontFeatures::List(Cow::Owned(features));

@@ -1937,6 +1937,81 @@ const ROWS: &[Row] = &[
         refused: &["\"smcp\"", "\"'smc'\"", "\"'liga' -1\"", "0"],
     },
     Row {
+        properties: &["fontKerning"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>AVATAR To</Text></View>"##,
+        values: &["\"auto\"", "\"normal\"", "\"none\""],
+        refused: &["\"off\"", "0"],
+    },
+    Row {
+        properties: &["fontVariant"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Office 1/2 AV 10</Text></View>"##,
+        values: &[
+            "\"normal\"",
+            "\"none\"",
+            "\"small-caps\"",
+            "\"all-small-caps diagonal-fractions\"",
+            "\"oldstyle-nums proportional-nums no-common-ligatures super\"",
+        ],
+        refused: &["\"none small-caps\"", "\"unicase\"", "\"bold\"", "0"],
+    },
+    Row {
+        properties: &["fontVariantLigatures"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>office fit</Text></View>"##,
+        values: &[
+            "\"normal\"",
+            "\"none\"",
+            "\"no-common-ligatures\"",
+            "\"common-ligatures discretionary-ligatures\"",
+            "\"no-historical-ligatures no-contextual\"",
+        ],
+        refused: &[
+            "\"none common-ligatures\"",
+            "\"contextual no-contextual\"",
+            "0",
+        ],
+    },
+    Row {
+        properties: &["fontVariantCaps"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>Caps 12</Text></View>"##,
+        values: &[
+            "\"normal\"",
+            "\"small-caps\"",
+            "\"all-small-caps\"",
+            "\"titling-caps\"",
+        ],
+        refused: &["\"petite-caps\"", "\"unicase\"", "\"none\"", "0"],
+    },
+    Row {
+        properties: &["fontVariantNumeric"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>1/2 10 1st</Text></View>"##,
+        values: &[
+            "\"normal\"",
+            "\"oldstyle-nums\"",
+            "\"tabular-nums lining-nums\"",
+            "\"diagonal-fractions slashed-zero\"",
+            "\"stacked-fractions ordinal\"",
+        ],
+        refused: &["\"tabular-nums proportional-nums\"", "\"none\"", "0"],
+    },
+    Row {
+        properties: &["fontVariantEastAsian"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>Wide 12</Text></View>"##,
+        values: &["\"normal\"", "\"jis78\"", "\"traditional full-width ruby\""],
+        refused: &["\"jis78 simplified\"", "\"none\"", "0"],
+    },
+    Row {
+        properties: &["fontVariantAlternates"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>Alternates</Text></View>"##,
+        values: &["\"normal\"", "\"historical-forms\""],
+        refused: &["\"stylistic(alt)\"", "\"swash\"", "0"],
+    },
+    Row {
+        properties: &["fontVariantPosition"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>x2 H2O</Text></View>"##,
+        values: &["\"normal\"", "\"sub\"", "\"super\""],
+        refused: &["\"sub super\"", "\"baseline\"", "0"],
+    },
+    Row {
         properties: &["textTransform"],
         sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>don't stop-me 3d Straße ÉCOLE</Text></View>"##,
         values: &[

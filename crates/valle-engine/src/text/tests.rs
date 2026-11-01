@@ -39,6 +39,7 @@ fn font(size: f64) -> Font {
         word_break: WordBreak::Normal,
         overflow_wrap: OverflowWrap::Normal,
         transform: TextTransform::None,
+        variants: Default::default(),
         features: Rc::new([]),
         fill: None,
         stroke: 0.0,

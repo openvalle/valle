@@ -145,6 +145,21 @@ impl Style {
     }
 }
 
+/// How many of [`Variant`] there are.
+pub const VARIANTS: usize = 7;
+
+/// `font-kerning` and the `font-variant-*` longhands, which `Font::variants` holds in this order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Variant {
+    Kerning,
+    Ligatures,
+    Caps,
+    Numeric,
+    EastAsian,
+    Alternates,
+    Position,
+}
+
 /// An OpenType feature shaping turns on, by its tag, with its value: 1 on, 0 off, or which of a
 /// set of alternates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -251,8 +266,11 @@ pub struct Font {
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
     pub transform: TextTransform,
+    /// `font-kerning` and the `font-variant-*` longhands, by [`Variant`], each as the features it
+    /// sets: they inherit one by one.
+    pub variants: [Rc<[Feature]>; VARIANTS],
     /// `font-feature-settings`: OpenType features, each a tag and its value, a later one over an
-    /// earlier one of its tag.
+    /// earlier one of its tag, and over the variants'.
     pub features: Rc<[Feature]>,
     /// `-webkit-text-fill-color`, the color of glyphs; `None` is `currentcolor`, the color of
     /// each box that inherits it.
@@ -297,6 +315,7 @@ impl Font {
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             transform: TextTransform::None,
+            variants: Default::default(),
             features: Rc::new([]),
             fill: None,
             stroke: 0.0,
@@ -872,6 +891,7 @@ struct Declared {
     font_size: Option<Len>,
     font_weight: Option<Weight>,
     font_family: Option<Rc<[Family]>>,
+    variants: [Option<Rc<[Feature]>>; VARIANTS],
     features: Option<Rc<[Feature]>>,
     line_height: Option<Leading>,
     text_align: Option<TextAlign>,
@@ -965,6 +985,7 @@ impl Default for Declared {
             font_size: None,
             font_weight: None,
             font_family: None,
+            variants: Default::default(),
             features: None,
             line_height: None,
             text_align: None,
@@ -1083,6 +1104,7 @@ enum Field {
     FontWeight,
     FontFamily,
     FontFeatureSettings,
+    FontVariant(Option<Variant>),
     LineHeight,
     TextAlign,
     LetterSpacing,
@@ -1159,7 +1181,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 207] = [
+const FIELDS: [(&str, Field); 215] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1447,6 +1469,29 @@ const FIELDS: [(&str, Field); 207] = [
     ("fontWeight", Field::FontWeight),
     ("fontFamily", Field::FontFamily),
     ("fontFeatureSettings", Field::FontFeatureSettings),
+    ("fontKerning", Field::FontVariant(Some(Variant::Kerning))),
+    ("fontVariant", Field::FontVariant(None)),
+    (
+        "fontVariantLigatures",
+        Field::FontVariant(Some(Variant::Ligatures)),
+    ),
+    ("fontVariantCaps", Field::FontVariant(Some(Variant::Caps))),
+    (
+        "fontVariantNumeric",
+        Field::FontVariant(Some(Variant::Numeric)),
+    ),
+    (
+        "fontVariantEastAsian",
+        Field::FontVariant(Some(Variant::EastAsian)),
+    ),
+    (
+        "fontVariantAlternates",
+        Field::FontVariant(Some(Variant::Alternates)),
+    ),
+    (
+        "fontVariantPosition",
+        Field::FontVariant(Some(Variant::Position)),
+    ),
     ("lineHeight", Field::LineHeight),
     ("textAlign", Field::TextAlign),
     ("letterSpacing", Field::LetterSpacing),
@@ -1495,6 +1540,7 @@ impl Field {
                 | Field::FontWeight
                 | Field::FontFamily
                 | Field::FontFeatureSettings
+                | Field::FontVariant(_)
                 | Field::LineHeight
                 | Field::TextAlign
                 | Field::LetterSpacing
@@ -2278,6 +2324,159 @@ const OTHER_GENERICS: [&str; 10] = [
     "fangsong",
 ];
 
+/// The keywords of each `font-variant-*` longhand, or `font-kerning`, in groups, each keyword
+/// with the features it sets; a value takes at most one of a group.
+type Groups = &'static [&'static [(&'static str, &'static [(&'static [u8; 4], u16)])]];
+
+const KERNING: Groups = &[&[("auto", &[]), ("none", &[(b"kern", 0)])]];
+const LIGATURES: Groups = &[
+    &[
+        ("common-ligatures", &[(b"liga", 1), (b"clig", 1)]),
+        ("no-common-ligatures", &[(b"liga", 0), (b"clig", 0)]),
+    ],
+    &[
+        ("discretionary-ligatures", &[(b"dlig", 1)]),
+        ("no-discretionary-ligatures", &[(b"dlig", 0)]),
+    ],
+    &[
+        ("historical-ligatures", &[(b"hlig", 1)]),
+        ("no-historical-ligatures", &[(b"hlig", 0)]),
+    ],
+    &[
+        ("contextual", &[(b"calt", 1)]),
+        ("no-contextual", &[(b"calt", 0)]),
+    ],
+];
+const CAPS: Groups = &[&[
+    ("small-caps", &[(b"smcp", 1)]),
+    ("all-small-caps", &[(b"c2sc", 1), (b"smcp", 1)]),
+    ("titling-caps", &[(b"titl", 1)]),
+]];
+const NUMERIC: Groups = &[
+    &[
+        ("lining-nums", &[(b"lnum", 1)]),
+        ("oldstyle-nums", &[(b"onum", 1)]),
+    ],
+    &[
+        ("proportional-nums", &[(b"pnum", 1)]),
+        ("tabular-nums", &[(b"tnum", 1)]),
+    ],
+    &[
+        ("diagonal-fractions", &[(b"frac", 1)]),
+        ("stacked-fractions", &[(b"afrc", 1)]),
+    ],
+    &[("ordinal", &[(b"ordn", 1)])],
+    &[("slashed-zero", &[(b"zero", 1)])],
+];
+const EAST_ASIAN: Groups = &[
+    &[
+        ("jis78", &[(b"jp78", 1)]),
+        ("jis83", &[(b"jp83", 1)]),
+        ("jis90", &[(b"jp90", 1)]),
+        ("jis04", &[(b"jp04", 1)]),
+        ("simplified", &[(b"smpl", 1)]),
+        ("traditional", &[(b"trad", 1)]),
+    ],
+    &[
+        ("full-width", &[(b"fwid", 1)]),
+        ("proportional-width", &[(b"pwid", 1)]),
+    ],
+    &[("ruby", &[(b"ruby", 1)])],
+];
+const ALTERNATES: Groups = &[&[("historical-forms", &[(b"hist", 1)])]];
+const POSITION: Groups = &[&[("sub", &[(b"subs", 1)]), ("super", &[(b"sups", 1)])]];
+const NO_LIGATURES: [(&[u8; 4], u16); 5] = [
+    (b"liga", 0),
+    (b"clig", 0),
+    (b"dlig", 0),
+    (b"hlig", 0),
+    (b"calt", 0),
+];
+
+impl Variant {
+    const ALL: [Variant; VARIANTS] = [
+        Variant::Kerning,
+        Variant::Ligatures,
+        Variant::Caps,
+        Variant::Numeric,
+        Variant::EastAsian,
+        Variant::Alternates,
+        Variant::Position,
+    ];
+
+    fn groups(self) -> Groups {
+        match self {
+            Variant::Kerning => KERNING,
+            Variant::Ligatures => LIGATURES,
+            Variant::Caps => CAPS,
+            Variant::Numeric => NUMERIC,
+            Variant::EastAsian => EAST_ASIAN,
+            Variant::Alternates => ALTERNATES,
+            Variant::Position => POSITION,
+        }
+    }
+}
+
+/// `font-kerning`, a `font-variant-*` longhand, or with no `variant` the `font-variant`
+/// shorthand, which sets all of those but kerning: `normal`, `none` for ligatures, or keywords,
+/// at most one of each group, as the features each longhand sets.
+fn variants(v: &V, variant: Option<Variant>, d: &mut Declared) -> Result<(), String> {
+    let s = text(v)?;
+    let longhands = match variant {
+        Some(variant) => vec![variant],
+        None => Variant::ALL[1..].to_vec(),
+    };
+    let mut set: Vec<(Variant, Vec<Feature>)> = longhands.iter().map(|&l| (l, vec![])).collect();
+    let feature = |&(tag, value): &(&[u8; 4], u16)| Feature { tag: *tag, value };
+    match s.as_str() {
+        "normal" => {}
+        "none" if longhands.contains(&Variant::Ligatures) => {
+            let ligatures = set.iter_mut().find(|(l, _)| *l == Variant::Ligatures);
+            ligatures.unwrap().1 = NO_LIGATURES.iter().map(feature).collect();
+        }
+        _ => {
+            let mut taken: Vec<(Variant, usize, &str)> = Vec::new();
+            for word in css::words(&s) {
+                let found = longhands.iter().find_map(|&l| {
+                    let mut entries = l.groups().iter().enumerate();
+                    entries.find_map(|(g, group)| {
+                        let entry = group.iter().find(|(k, _)| *k == word)?;
+                        Some((l, g, entry))
+                    })
+                });
+                let Some((l, g, (_, features))) = found else {
+                    return Err(match (word, variant) {
+                        ("petite-caps" | "all-petite-caps" | "unicase", _) => format!(
+                            "{word} is not supported yet: Chrome falls back to small capitals in \
+                             fonts without its own; use small-caps or all-small-caps"
+                        ),
+                        (w, _) if css::function(w).is_some() => format!(
+                            "{w} needs @font-feature-values, which a style cannot declare; use \
+                             font-feature-settings"
+                        ),
+                        (_, Some(l)) => {
+                            let names = l.groups().iter().flat_map(|g| g.iter().map(|(k, _)| *k));
+                            let names: Vec<&str> = names.collect();
+                            format!("{word} is not one of normal, {}", names.join(", "))
+                        }
+                        (_, None) => format!("{word} is not a keyword of a font-variant longhand"),
+                    });
+                };
+                if let Some((_, _, other)) = taken.iter().find(|t| (t.0, t.1) == (l, g)) {
+                    return Err(format!("{other} and {word} set the same: give one"));
+                }
+                taken.push((l, g, word));
+                let into = set.iter_mut().find(|(k, _)| *k == l).unwrap();
+                into.1.extend(features.iter().map(feature));
+            }
+        }
+    }
+    for (l, features) in set {
+        d.variants[l as usize] = Some(features.into());
+    }
+    Ok(())
+}
+
 /// `font-feature-settings`: `normal`, or OpenType features: each a tag of 4 characters, quoted,
 /// and `on` (as it is left out), `off` or a value.
 fn features(v: &V) -> Result<Rc<[Feature]>, String> {
@@ -2566,6 +2765,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::FontWeight => d.font_weight = Some(weight(v)?),
         F::FontFamily => d.font_family = Some(families(v)?),
         F::FontFeatureSettings => d.features = Some(features(v)?),
+        F::FontVariant(variant) => variants(v, variant, d)?,
         F::LineHeight => d.line_height = Some(leading(v)?),
         F::TextAlign => {
             d.text_align = Some(keyword(
@@ -2943,10 +3143,10 @@ fn compute(
         word_break: d.word_break.unwrap_or(inherited.word_break),
         overflow_wrap: d.overflow_wrap.unwrap_or(inherited.overflow_wrap),
         transform: d.text_transform.unwrap_or(inherited.transform),
-        features: d
-            .features
-            .clone()
-            .unwrap_or_else(|| inherited.features.clone()),
+        variants: std::array::from_fn(|i| {
+            (d.variants[i].clone()).unwrap_or_else(|| inherited.variants[i].clone())
+        }),
+        features: (d.features.clone()).unwrap_or_else(|| inherited.features.clone()),
         fill: d.fill.unwrap_or(inherited.fill),
         stroke: match &d.stroke {
             None => inherited.stroke,
