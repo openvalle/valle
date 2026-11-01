@@ -10,10 +10,12 @@ export default function Scene() {
         <Text>{text}</Text>
       </View>
       <View style={{ width: 150, marginTop: 4, background: "#e0e0e0" }}>
-        <Text style={{ textAlign: "center", fontSize: 14, lineHeight: 1.5 }}>{text}</Text>
+        <Text style={{ textAlign: "center", fontSize: 14, lineHeight: 1.425 }}>{text}</Text>
       </View>
       <View style={{ width: 140, marginTop: 4, background: "#eeeeee" }}>
-        <Text style={{ textAlign: "right", fontWeight: 700, lineHeight: "20px", letterSpacing: 1 }}>
+        <Text
+          style={{ textAlign: "right", fontWeight: 700, lineHeight: "16.9px", letterSpacing: 1 }}
+        >
           {text}
         </Text>
       </View>

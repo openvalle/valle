@@ -297,10 +297,12 @@ fn families(list: &[Family]) -> Result<Vec<FontFamilyName<'static>>, Error> {
 fn run_extent(run: &parley::GlyphRun<'_, ()>, font: &Font) -> [f32; 2] {
     let m = run.run().font_metrics();
     let (ascent, descent) = (m.ascent.round(), m.descent.round());
+    // Chrome keeps a line height in its layout unit, 1/64 px: a factor of the font size floors to
+    // it, a length rounds.
     let height = match font.line_height {
         LineHeight::Normal => ascent + descent + m.leading.round(),
-        LineHeight::Factor(f) => (f * font.size) as f32,
-        LineHeight::Px(px) => px as f32,
+        LineHeight::Factor(f) => (f as f32 * font.size as f32 * 64.0).floor() / 64.0,
+        LineHeight::Px(px) => (px as f32 * 64.0).round() / 64.0,
     };
     let above = ascent + ((height - (ascent + descent)) * 0.5).floor();
     [above, height - above]
