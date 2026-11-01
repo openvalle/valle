@@ -2,8 +2,8 @@ export const composition = { width: 256, height: 256, fps: 1, duration: 1 };
 
 // Conic gradients: a color wheel, from an angle, quadrants around a center elsewhere, repeating
 // rays, a full turn of hues in Oklch, a hint, pie slices with stops at 0, a shadow from a corner
-// over a color, a round pie, in a layer, repeated under a transparent border, and rays from a
-// corner of a wide box.
+// over a color, a round pie, in a layer, repeated under a transparent border, rays from a
+// corner of a wide box, and a color wheel centered on a pixel's center.
 export default function Scene() {
   const tile = (background: string, style: object = {}) => (
     <View style={{ width: 52, height: 36, background, ...style }} />
@@ -33,6 +33,10 @@ export default function Scene() {
       })}
       {tile("repeating-conic-gradient(from 0deg at 0 0, #1e88e5 0 5deg, #bbdefb 5deg 10deg)", {
         width: 112,
+      })}
+      {tile("conic-gradient(#e53935, #fdd835, #43a047, #1e88e5, #8e24aa, #e53935)", {
+        width: 53,
+        height: 37,
       })}
     </View>
   );

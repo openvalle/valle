@@ -73,7 +73,9 @@ struct Out {
       t = length(v / g.shape.zw);
     }
     default: {
-      t = fract(atan2(v.x, -v.y) / 6.283185307 - g.shape.z);
+      // Half a turn from (-x, y)'s angle: atan2(x, -y) would take -0 on the center's row,
+      // which Metal divides by as if it were +0, swapping the row's halves.
+      t = fract(0.5 + atan2(-v.x, v.y) / 6.283185307 - g.shape.z);
     }
   }
   let first = g.segments.x;
