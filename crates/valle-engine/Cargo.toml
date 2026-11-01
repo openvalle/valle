@@ -14,4 +14,5 @@ parley.workspace = true
 rquickjs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+skrifa.workspace = true
 taffy.workspace = true

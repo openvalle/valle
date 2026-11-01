@@ -6,6 +6,7 @@ pub mod front;
 pub mod js;
 pub mod layout;
 pub mod paint;
+pub mod slug;
 pub mod style;
 pub mod template;
 #[cfg(test)]

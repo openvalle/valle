@@ -1384,6 +1384,7 @@ dependencies = [
  "rquickjs",
  "serde",
  "serde_json",
+ "skrifa",
  "taffy",
 ]
 
