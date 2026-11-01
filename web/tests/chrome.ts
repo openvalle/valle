@@ -196,7 +196,7 @@ function measure(): Promise<Measured> {
   const lines = (element: Element): string[] => {
     const out: string[] = [];
     let line = "";
-    let top: number | undefined;
+    let last: DOMRect | undefined;
     const range = document.createRange();
     const walk = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
     for (let node = walk.nextNode() as Text | null; node; node = walk.nextNode() as Text | null) {
@@ -206,18 +206,21 @@ function measure(): Promise<Measured> {
         range.setEnd(node, i + size);
         const rects = range.getClientRects();
         // White space that collapsed away has no box.
+        // A line goes right, and its characters overlap, however big: the next one starts back
+        // at the left, or below.
         if (rects.length > 0) {
-          if (top !== undefined && Math.abs(rects[0].top - top) > 1) {
+          const r = rects[0];
+          if (last !== undefined && (r.left < last.left - 1 || r.top >= last.bottom - 1)) {
             out.push(line);
             line = "";
           }
-          top = rects[0].top;
+          last = r;
           line += node.data.slice(i, i + size);
         }
         i += size;
       }
     }
-    if (top !== undefined) {
+    if (last !== undefined) {
       out.push(line);
     }
     return out.map((l) => l.replace(/[ \t\n\r\f]+/g, " ").trim());

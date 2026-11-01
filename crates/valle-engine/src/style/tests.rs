@@ -647,6 +647,28 @@ fn a_mask_source_inherits_from_the_mask() {
 }
 
 #[test]
+fn a_span_takes_only_text_properties() {
+    let mut tree = vec![view(&[("fontSize", num(20.0))], &[1]), view(&[], &[])];
+    let span = |style: &[(&str, Prop)]| Node {
+        kind: Kind::Span {
+            content: Vec::new(),
+        },
+        ..view(style, &[])
+    };
+    tree[1] = span(&[("color", text("red")), ("letterSpacing", num(1.0))]);
+    let s = styles(tree.clone(), &[]).unwrap();
+    assert_eq!((s[1].font.size, s[1].font.spacing), (20.0, 1.0));
+    tree[1] = span(&[("padding", num(1.0))]);
+    let e = styles(tree, &[]).unwrap_err();
+    assert!(
+        e.ends_with(
+            "style padding: a <Span> is part of a text, not a box, so it takes only text properties"
+        ),
+        "{e}"
+    );
+}
+
+#[test]
 fn text_properties_inherit() {
     let tree = vec![
         view(&[], &[1, 4]),

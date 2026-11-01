@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use crate::template::{Kind, Node, Prop, V};
+use crate::template::{Kind, Node, Piece, Prop, V};
 use crate::text::{Blob, Text};
 
 /// A node with constant inline styles, at `s.tsx:1:1`.
@@ -39,8 +39,8 @@ pub fn mask(
 }
 
 pub fn text_node(s: &str, style: &[(&str, &str)]) -> Node {
-    let text = Prop::Const(V::Str(s.into()));
-    node(Kind::Text { text }, style, &[])
+    let content = vec![Piece::Text(Prop::Const(V::Str(s.into())))];
+    node(Kind::Text { content }, style, &[])
 }
 
 /// Text in the built-in fonts.

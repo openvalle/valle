@@ -508,7 +508,7 @@
     throw e;
   }
 
-  const INTRINSIC = { View: "view", Text: "text", Mask: "mask" };
+  const INTRINSIC = { View: "view", Text: "text", Span: "span", Mask: "mask" };
 
   // Tags that are gone, with what replaces them.
   const REMOVED = {
@@ -548,7 +548,7 @@
   };
 
   // Props each element takes besides key, className and style.
-  const PROPS = { view: [], text: [], mask: ["source", "mode", "invert"] };
+  const PROPS = { view: [], text: [], span: [], mask: ["source", "mode", "invert"] };
 
   const fixed = (x, kind, at) => (x instanceof T ? exact(x, kind, at) : x);
 
@@ -576,24 +576,37 @@
     return out;
   }
 
-  // The text of a <Text>'s children: strings, numbers and traced values, joined.
-  function textOf(children, tag, at) {
-    const parts = [];
-    const add = (c) => {
+  // What a <Text> or a <Span> holds, into `node`: runs of strings, numbers and traced values,
+  // each joined, and <Span>s, which are its children too.
+  function contentOf(node, children, tag, at) {
+    const content = [];
+    let parts = [];
+    const flush = () => {
+      if (parts.length === 0) return;
+      content.push({ text: parts.some(isT) ? template(parts) : parts.map(String).join("") });
+      parts = [];
+    };
+    const add = (c, at) => {
       if (c === null || c === undefined || typeof c === "boolean") return;
-      if (isArray(c)) return c.forEach(add);
+      if (isArray(c)) return c.forEach((x) => add(x, at));
       if (c.__el) {
-        const name = typeof c.type === "string" ? c.type : c.type.name || "a component";
-        fail(
-          c.site >= 0 ? c.site : at,
-          "<" + name + "> cannot be inside <" + tag + ">: it holds only text",
-        );
+        const here = c.site >= 0 ? c.site : at;
+        if (c.type === __F) return c.children.forEach((x) => add(x, here));
+        if (typeof c.type === "function") return expand(c, here, (x) => add(x, here));
+        if (INTRINSIC[c.type] && c.type !== "Span") {
+          fail(here, "<" + c.type + "> cannot be inside <" + tag + ">: it holds text and <Span>s");
+        }
+        flush();
+        element(c.type, c.props, c.children, node.children, here, true);
+        content.push({ span: node.children[node.children.length - 1] });
+        return;
       }
       if (typeof c === "object" && !isT(c)) fail(at, "<" + tag + "> holds text, not an object");
       parts.push(c);
     };
-    children.forEach(add);
-    return parts.some(isT) ? template(parts) : parts.map(String).join("");
+    children.forEach((c) => add(c, at));
+    flush();
+    node.content = content;
   }
 
   // A <Mask>'s mode and inversion, and the root its source renders into, which is laid out in
@@ -613,7 +626,7 @@
     node.source = { type: "view", path: null, classes: [], style: [], children: [], site: at };
   }
 
-  function element(type, props, children, out, at) {
+  function element(type, props, children, out, at, inText) {
     if (typeof type !== "string") fail(at, "an element type must be a tag or a component function");
     const kind = INTRINSIC[type];
     if (!kind) {
@@ -623,6 +636,7 @@
       }
       fail(at, "<" + type + "> is not a Valle element");
     }
+    if (kind === "span" && !inText) fail(at, "<Span> must be inside <Text>");
     if (++G.nodes > MAX_NODES) fail(at, "a frame has more than " + MAX_NODES + " elements");
     for (const k of keys(props)) {
       if (k === "key" || k === "className" || k === "style" || PROPS[kind].includes(k)) continue;
@@ -646,16 +660,16 @@
       site: at,
     };
     if (kind === "mask") maskOf(node, props, at);
-    if (kind === "text") {
-      node.text = textOf(children, type, at);
-    } else {
-      if (key !== null) G.keys.push(key);
-      try {
+    if (key !== null) G.keys.push(key);
+    try {
+      if (kind === "text" || kind === "span") {
+        contentOf(node, children, type, at);
+      } else {
         if (kind === "mask") render(props.source, node.source.children, at);
         for (const c of children) render(c, node.children, at);
-      } finally {
-        if (key !== null) G.keys.pop();
       }
+    } finally {
+      if (key !== null) G.keys.pop();
     }
     out.push(node);
   }
@@ -671,21 +685,24 @@
     const { type, props, children } = x;
     const here = x.site >= 0 ? x.site : at;
     if (type === __F) return children.forEach((c) => render(c, out, here));
-    if (typeof type === "function") {
-      const kids =
-        children.length === 0 ? undefined : children.length === 1 ? children[0] : children;
-      // A keyed component is a segment of its nodes' key paths.
-      const key = props.key === undefined ? null : String(fixed(props.key, "key", here));
-      const rest = { ...props };
-      delete rest.key;
-      if (key !== null) G.keys.push(key);
-      try {
-        return render(type(kids === undefined ? rest : { ...rest, children: kids }), out, here);
-      } finally {
-        if (key !== null) G.keys.pop();
-      }
-    }
+    if (typeof type === "function") return expand(x, here, (y) => render(y, out, here));
     element(type, props, children, out, here);
+  }
+
+  // What component element `x` renders, given to `f`. A keyed component is a segment of its
+  // nodes' key paths.
+  function expand(x, here, f) {
+    const { type, props, children } = x;
+    const kids = children.length === 0 ? undefined : children.length === 1 ? children[0] : children;
+    const key = props.key === undefined ? null : String(fixed(props.key, "key", here));
+    const rest = { ...props };
+    delete rest.key;
+    if (key !== null) G.keys.push(key);
+    try {
+      return f(type(kids === undefined ? rest : { ...rest, children: kids }));
+    } finally {
+      if (key !== null) G.keys.pop();
+    }
   }
 
   // ------------------------------------------------------------------------------ output
@@ -736,13 +753,19 @@
         children: [],
         site: n.site >= 0 ? n.site : null,
       };
-      if ("text" in n) out.text = ref(n.text);
       nodes.push(out);
       const index = nodes.length - 1;
       if ("source" in n) {
         out.mask = { source: node(n.source), luminance: n.luminance, invert: n.invert };
       }
       out.children = n.children.map(node);
+      if ("content" in n) {
+        // Its children are its Spans, in the order its content has them.
+        let k = 0;
+        out.content = n.content.map((p) =>
+          "span" in p ? { span: out.children[k++] } : { text: ref(p.text) },
+        );
+      }
       return index;
     }
     const top = roots.map(node);
@@ -967,6 +990,7 @@
     interpolate,
     View: "View",
     Text: "Text",
+    Span: "Span",
     Mask: "Mask",
   });
 })();

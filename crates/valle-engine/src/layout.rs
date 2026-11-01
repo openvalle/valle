@@ -6,8 +6,6 @@
 //! and fixed boxes in it, as CSS has it. A mask's source is laid out after the mask, as the canvas
 //! is but in the mask's border box.
 
-use std::borrow::Cow;
-
 use taffy::{
     AvailableSpace, BlockContext, BoxGenerationMode, BoxSizing, Cache, CacheTree, Contain,
     ContainingBlockClaims, CoreStyle, DetailedGridInfo, DetailedLayoutInfo, Dimension, Direction,
@@ -21,8 +19,8 @@ use taffy::{
 
 use crate::style::Style;
 use crate::style::math::{self, Calc};
-use crate::template::{Error, Kind, Prop, Template, V};
-use crate::text::{Lines, Text};
+use crate::template::{self, Error, Kind, Prop, Template, V};
+use crate::text::{Content, Lines, Piece, Text};
 
 /// A rectangle in canvas px, y down.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -41,11 +39,12 @@ pub struct Boxes {
     pub content: Rect,
 }
 
-/// A frame's layout, in template order. Nodes in a `display: none` subtree have empty boxes.
+/// A frame's layout, in template order. Nodes in a `display: none` subtree have empty boxes. A
+/// Span's boxes are all the border box of its text, as Chrome measures an inline box's.
 #[derive(Debug)]
 pub struct Layout {
     pub boxes: Vec<Boxes>,
-    /// Each shown text node's lines, from the top left of its content box.
+    /// Each shown Text's lines, from the top left of its content box.
     pub lines: Vec<Option<Lines>>,
 }
 
@@ -76,24 +75,24 @@ pub fn layout(
     text: &mut Text,
 ) -> Result<Layout, Error> {
     let n = template.nodes.len();
-    let strings: Vec<Option<Cow<str>>> = template
-        .nodes
-        .iter()
-        .map(|node| match &node.kind {
-            Kind::View | Kind::Mask { .. } => None,
-            Kind::Text {
-                text: Prop::Const(v),
-            } => Some(v.text()),
-            Kind::Text {
-                text: Prop::Expr(e),
-            } => Some(values[*e as usize].text()),
+    let contents: Vec<Option<Content>> = (template.nodes.iter().enumerate())
+        .map(|(i, node)| match node.kind {
+            Kind::Text { .. } => {
+                let mut pieces = Vec::new();
+                pieces_of(template, values, styles, i, &mut pieces);
+                let font = &styles[i].font;
+                Some(Content { font, pieces })
+            }
+            _ => None,
         })
         .collect();
     let mut children: Vec<Vec<NodeId>> = (template.nodes.iter().zip(styles))
-        .map(|(node, style)| {
-            ordered(&node.children, style, styles)
+        .map(|(node, style)| match node.kind {
+            // Its Spans are in its text, not boxes.
+            Kind::Text { .. } => Vec::new(),
+            _ => (ordered(&node.children, style, styles))
                 .map(NodeId::from)
-                .collect()
+                .collect(),
         })
         .collect();
     children.push(
@@ -125,7 +124,7 @@ pub fn layout(
         calcs: styles.iter().flat_map(|s| &s.calcs).collect(),
         roots,
         children,
-        strings: &strings,
+        contents: &contents,
         text,
         caches: vec![Cache::new(); n + 1],
         layouts: vec![taffy::Layout::with_order(0); n + 1],
@@ -156,6 +155,18 @@ pub fn layout(
     } = tree;
     if let Some(e) = failed {
         return Err(e);
+    }
+
+    // The Text or Span each Span is in.
+    let mut parents = vec![None; n];
+    for (i, node) in template.nodes.iter().enumerate() {
+        if let Kind::Text { content } | Kind::Span { content } = &node.kind {
+            for piece in content {
+                if let template::Piece::Span(s) = piece {
+                    parents[*s as usize] = Some(i);
+                }
+            }
+        }
     }
 
     // Each container places its in-flow children and the out-of-flow boxes it is the containing
@@ -201,14 +212,102 @@ pub fn layout(
             padding,
             content,
         };
-        if let Some(s) = &strings[i] {
-            let laid = text
-                .lines(s, &styles[i].font, content.width)
-                .map_err(|e| format!("{}: {e}", template.nodes[i].place()))?;
+        if let Some(c) = &contents[i] {
+            let place = |e| format!("{}: {e}", template.nodes[i].place());
+            let laid = text.lines(c, content.width).map_err(place)?;
+            spans(
+                &laid,
+                [content.x, content.y],
+                styles,
+                &parents,
+                text,
+                &mut boxes,
+            )
+            .map_err(place)?;
             lines[i] = Some(laid);
         }
     }
     Ok(Layout { boxes, lines })
+}
+
+/// The pieces of text of node `i`, a Text or a Span, and of the Spans in it, in order.
+fn pieces_of<'a>(
+    template: &'a Template,
+    values: &'a [V],
+    styles: &'a [Style],
+    i: usize,
+    out: &mut Vec<Piece<'a>>,
+) {
+    let (Kind::Text { content } | Kind::Span { content }) = &template.nodes[i].kind else {
+        return;
+    };
+    for piece in content {
+        match piece {
+            template::Piece::Text(prop) => out.push(Piece {
+                text: match prop {
+                    Prop::Const(v) => v.text(),
+                    Prop::Expr(e) => values[*e as usize].text(),
+                },
+                node: i as u32,
+                font: &styles[i].font,
+            }),
+            template::Piece::Span(s) => pieces_of(template, values, styles, *s as usize, out),
+        }
+    }
+}
+
+/// The boxes of the Spans in a Text laid out in `lines` from `at`, as Chrome has an inline box's:
+/// on each line, from the left of its first run of glyphs to the right of its last, and from its
+/// font's ascent above the baseline to its descent below, rounded; its lines together.
+fn spans(
+    lines: &Lines,
+    at: [f32; 2],
+    styles: &[Style],
+    parents: &[Option<usize>],
+    text: &mut Text,
+    boxes: &mut [Boxes],
+) -> Result<(), Error> {
+    let mut extents: Vec<(usize, [f32; 4])> = Vec::new();
+    for run in &lines.runs {
+        let baseline = at[1] + lines.baselines[run.line as usize];
+        // The run's own Span and those around it, up to the Text.
+        let mut span = Some(run.node as usize);
+        while let Some(s) = span.filter(|&s| parents[s].is_some()) {
+            let [ascent, descent, _] = text.metrics(&styles[s].font)?;
+            let r = [
+                at[0] + run.x[0],
+                baseline - ascent.round(),
+                at[0] + run.x[1],
+                baseline + descent.round(),
+            ];
+            match extents.iter_mut().find(|(e, _)| *e == s) {
+                Some((_, e)) => {
+                    *e = [
+                        e[0].min(r[0]),
+                        e[1].min(r[1]),
+                        e[2].max(r[2]),
+                        e[3].max(r[3]),
+                    ]
+                }
+                None => extents.push((s, r)),
+            }
+            span = parents[s];
+        }
+    }
+    for (s, [x0, y0, x1, y1]) in extents {
+        let r = Rect {
+            x: x0,
+            y: y0,
+            width: x1 - x0,
+            height: y1 - y0,
+        };
+        boxes[s] = Boxes {
+            border: r,
+            padding: r,
+            content: r,
+        };
+    }
+    Ok(())
 }
 
 /// `r` less `edges`.
@@ -233,8 +332,8 @@ struct Tree<'a> {
     roots: Vec<Option<taffy::Style>>,
     /// Each node's children in the order it lays them out, the canvas's last.
     children: Vec<Vec<NodeId>>,
-    /// Each text node's text.
-    strings: &'a [Option<Cow<'a, str>>],
+    /// Each Text's paragraph.
+    contents: &'a [Option<Content<'a>>],
     text: &'a mut Text,
     caches: Vec<Cache>,
     layouts: Vec<taffy::Layout>,
@@ -272,7 +371,7 @@ impl Tree<'_> {
         compute_cached_layout(self, id, inputs, |tree, id, inputs| {
             let i = usize::from(id);
             let parent = !tree.children[i].is_empty();
-            let text = tree.strings.get(i).is_some_and(Option::is_some);
+            let text = tree.contents.get(i).is_some_and(Option::is_some);
             let mut out = match (tree.style(id).display, parent) {
                 (Display::None, _) => compute_hidden_layout(tree, id),
                 (Display::Block, true) => compute_block_layout(tree, id, inputs, block),
@@ -292,13 +391,13 @@ impl Tree<'_> {
     /// A box without children: text measured as Taffy asks and aligned on its first baseline, or
     /// an empty box.
     fn leaf(&mut self, i: usize, inputs: LayoutInput) -> LayoutOutput {
-        let (styles, strings) = (self.styles, self.strings);
-        let (Some(style), Some(Some(s))) = (styles.get(i), strings.get(i)) else {
+        let (styles, contents) = (self.styles, self.contents);
+        let (Some(style), Some(Some(c))) = (styles.get(i), contents.get(i)) else {
             let style = self.style(NodeId::from(i));
             let calc = |h, basis| self.calc(h, basis);
             return compute_leaf_layout(inputs, style, calc, |_, _| Size::ZERO);
         };
-        let (layout, font) = (&style.layout, &style.font);
+        let layout = &style.layout;
         let Tree {
             template,
             calcs,
@@ -316,7 +415,7 @@ impl Tree<'_> {
                 AvailableSpace::MinContent => Some(0.0),
                 AvailableSpace::MaxContent => None,
             });
-            match text.measure(s, font, width) {
+            match text.measure(c, width) {
                 Ok([w, h]) => Size {
                     width: known.width.unwrap_or(w),
                     height: known.height.unwrap_or(h),
@@ -333,7 +432,7 @@ impl Tree<'_> {
             let side = |l: LengthPercentage| l.resolve_or_zero(inputs.parent_size.width, calc);
             let (pad, border) = (layout.padding, layout.border);
             let inset = side(pad.left) + side(pad.right) + side(border.left) + side(border.right);
-            match text.baseline(s, font, out.size.width - inset) {
+            match text.baseline(c, out.size.width - inset) {
                 Ok(b) => {
                     let top = side(pad.top) + side(border.top);
                     out.baselines.first = b.map(|b| top + b);

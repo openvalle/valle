@@ -122,8 +122,13 @@ pub enum Prop {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     View,
+    /// A paragraph: a box of the text and the Spans in it.
     Text {
-        text: Prop,
+        content: Vec<Piece>,
+    },
+    /// Part of a Text styled on its own, not a box: its text and the Spans in it.
+    Span {
+        content: Vec<Piece>,
     },
     /// A box whose source masks all it paints: the root node `source` (not a child), which is
     /// laid out in its border box as the canvas is, shown by its alpha or its luminance, and
@@ -133,6 +138,13 @@ pub enum Kind {
         luminance: bool,
         invert: bool,
     },
+}
+
+/// What a Text or a Span holds, in order: text, or a Span, which is also one of its children.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Piece {
+    Text(Prop),
+    Span(u32),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -155,6 +167,7 @@ impl Node {
             (Some(site), _) => site.clone(),
             (None, Kind::View) => "<View>".into(),
             (None, Kind::Text { .. }) => "<Text>".into(),
+            (None, Kind::Span { .. }) => "<Span>".into(),
             (None, Kind::Mask { .. }) => "<Mask>".into(),
         }
     }

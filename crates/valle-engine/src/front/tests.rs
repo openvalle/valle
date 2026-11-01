@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::template::{Kind, Prop};
+use crate::template::{Kind, Piece, Prop};
 
 const HEAD: &str =
     "export const composition = { width: 320, height: 180, fps: 30, duration: 4 };\n";
@@ -67,15 +67,25 @@ fn text(v: V) -> String {
     }
 }
 
-/// The text of each Text node, in node order.
+/// The text of each Text node, its Spans' too, in node order.
 fn texts(frame: &Frame) -> Vec<String> {
-    frame
-        .template
-        .nodes
-        .iter()
-        .filter_map(|n| match &n.kind {
-            Kind::Text { text: t } => Some(text(value(frame, t))),
-            _ => None,
+    fn of(frame: &Frame, i: usize, out: &mut String) {
+        if let Kind::Text { content } | Kind::Span { content } = &frame.template.nodes[i].kind {
+            for piece in content {
+                match piece {
+                    Piece::Text(t) => out.push_str(&text(value(frame, t))),
+                    Piece::Span(s) => of(frame, *s as usize, out),
+                }
+            }
+        }
+    }
+    let nodes = &frame.template.nodes;
+    (0..nodes.len())
+        .filter(|&i| matches!(nodes[i].kind, Kind::Text { .. }))
+        .map(|i| {
+            let mut s = String::new();
+            of(frame, i, &mut s);
+            s
         })
         .collect()
 }
@@ -161,6 +171,44 @@ fn a_mask_traces_its_source_as_a_root_after_it() {
         // Its source is keyed under it.
         assert_eq!(t.nodes[2].path.as_deref(), Some("m/s"));
         assert_eq!(texts(&frame), ["V"]);
+    });
+}
+
+#[test]
+fn spans_trace_into_their_text_with_time_next_to_them() {
+    big_stack(|| {
+        let mut f = scene(
+            "const Strong = (props) => <Span style={{ fontWeight: 700 }}>{props.children}</Span>;
+export default function Scene() {
+  const { seconds } = useCurrentTime();
+  return (
+    <Text>
+      Time <Span key=\"t\">{seconds} s <Strong>now</Strong></Span>!
+    </Text>
+  );
+}
+",
+        );
+        let frame = at(&mut f, "2");
+        let t = &frame.template;
+        let Kind::Text { content } = &t.nodes[0].kind else {
+            panic!("{:?}", t.nodes[0])
+        };
+        assert_eq!(content[1], Piece::Span(1));
+        assert!(matches!(content[..], [Piece::Text(_), _, Piece::Text(_)]));
+        assert_eq!(t.nodes[0].children, [1]);
+        let Kind::Span { content } = &t.nodes[1].kind else {
+            panic!("{:?}", t.nodes[1])
+        };
+        assert!(matches!(
+            content[..],
+            [Piece::Text(Prop::Expr(_)), Piece::Span(2)]
+        ));
+        assert_eq!(t.nodes[1].path.as_deref(), Some("t"));
+        assert!(matches!(t.nodes[2].kind, Kind::Span { .. }));
+        assert_eq!(texts(&frame), ["Time 2 s now!"]);
+        at(&mut f, "3");
+        assert_eq!(f.traces(), 1);
     });
 }
 
@@ -496,6 +544,12 @@ fn errors_point_at_the_source() {
                 "text must be inside <Text>: \"hello\"",
             ),
             ("<Text><View /></Text>", "<View> cannot be inside <Text>"),
+            ("<Span>a</Span>", "<Span> must be inside <Text>"),
+            (
+                "<Text><Span><View /></Span></Text>",
+                "<View> cannot be inside <Span>",
+            ),
+            ("<Text><span /></Text>", "use <Span> instead of <span>"),
             ("<Mask />", "<Mask> needs a source"),
             (
                 "<Mask source={<View />} mode=\"luma\" />",

@@ -323,6 +323,12 @@ fn bind(node: &Node) -> Result<Bound, Error> {
     let mut rest = Vec::new();
     for (key, prop) in &node.style {
         let field = Field::by_name(key).ok_or_else(|| format!("{place}: {}", unsupported(key)))?;
+        if matches!(node.kind, Kind::Span { .. }) && !field.textual() {
+            return Err(format!(
+                "{place}: style {key}: a <Span> is part of a text, not a box, so it takes only \
+                 text properties"
+            ));
+        }
         let at = |e: String| format!("{place}: style {key}: {e}");
         match prop {
             Prop::Const(v) if rest.is_empty() => set(&mut declared, field, v).map_err(at)?,
@@ -1242,6 +1248,21 @@ impl Field {
             .iter()
             .find(|(name, _)| *name == key)
             .map(|&(_, f)| f)
+    }
+
+    /// Whether it styles text, as a Span takes it.
+    fn textual(self) -> bool {
+        matches!(
+            self,
+            Field::Visibility
+                | Field::Color
+                | Field::FontSize
+                | Field::FontWeight
+                | Field::FontFamily
+                | Field::LineHeight
+                | Field::TextAlign
+                | Field::LetterSpacing
+        )
     }
 }
 

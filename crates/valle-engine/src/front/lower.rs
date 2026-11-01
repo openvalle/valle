@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::js::MathFn;
 use crate::template::{
-    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Program, Prop, Template, V, Want,
+    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Template, V, Want,
 };
 
 /// An operand of an op by name: an earlier expression, or literal text of a template.
@@ -159,8 +159,15 @@ struct TracedNode {
     style: Vec<(String, Ref)>,
     children: Vec<u32>,
     site: Option<u32>,
-    text: Option<Ref>,
+    content: Option<Vec<TracedPiece>>,
     mask: Option<TracedMask>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TracedPiece {
+    Span { span: u32 },
+    Text { text: Ref },
 }
 
 #[derive(Deserialize)]
@@ -221,12 +228,23 @@ pub fn variant(json: &str, place: &dyn Fn(&At) -> Rc<str>) -> Result<Template, E
             .then_some(i)
             .ok_or_else(|| format!("node {i} does not exist"))
     };
+    let content = |pieces: Option<Vec<TracedPiece>>| -> Result<Vec<Piece>, Error> {
+        (pieces.ok_or("a text node without content")?.into_iter())
+            .map(|p| match p {
+                TracedPiece::Span { span } => Ok(Piece::Span(node_id(span)?)),
+                TracedPiece::Text { text } => Ok(Piece::Text(prop(text)?)),
+            })
+            .collect()
+    };
     let mut nodes = Vec::with_capacity(traced.nodes.len());
     for n in traced.nodes {
         let kind = match &*n.kind {
             "view" => Kind::View,
             "text" => Kind::Text {
-                text: prop(n.text.ok_or("a text node without text")?)?,
+                content: content(n.content)?,
+            },
+            "span" => Kind::Span {
+                content: content(n.content)?,
             },
             "mask" => {
                 let m = n.mask.ok_or("a mask node without a source")?;
@@ -327,7 +345,7 @@ mod tests {
                 {"type": "view", "path": "a", "classes": ["flex"], "style": [["opacity", {"e": 1}],
                  ["width", {"c": {"nf": "Infinity"}}]], "children": [1], "site": 4},
                 {"type": "text", "path": null, "classes": [], "style": [], "children": [],
-                 "site": null, "text": {"e": 3}}
+                 "site": null, "content": [{"text": {"e": 3}}]}
             ],
             "roots": [0],
             "guards": [{"e": 2, "truthy": false, "when": [], "kind": "if", "at": 7},
@@ -354,7 +372,7 @@ mod tests {
         assert_eq!(
             t.nodes[1].kind,
             Kind::Text {
-                text: Prop::Expr(5)
+                content: vec![Piece::Text(Prop::Expr(5))]
             }
         );
         assert_eq!(t.guards[0].expr, 4);

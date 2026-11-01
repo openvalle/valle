@@ -411,6 +411,28 @@ fn text_is_measured_and_set_in_its_box() {
 }
 
 #[test]
+fn spans_are_boxes_of_their_text_on_its_lines() {
+    let piece = |s: &str| template::Piece::Text(Prop::Const(V::Str(s.into())));
+    let mut text = text_node("", &[("padding", "2px")]);
+    text.kind = Kind::Text {
+        content: vec![piece("Hi "), template::Piece::Span(1), piece(" there")],
+    };
+    text.children = vec![1];
+    let mut span = view(&[("fontSize", "32px")], &[]);
+    span.kind = Kind::Span {
+        content: vec![piece("big")],
+    };
+    let l = lay(vec![text, span], &[0]).unwrap();
+    let lines = l.lines[0].as_ref().unwrap();
+    // As high as the big text: at 32px its ascent is 34 and its descent 9.
+    assert_eq!(lines.boxes, [[0.0, 43.0]]);
+    let big = lines.runs[1];
+    assert_eq!(big.node, 1);
+    let width = big.x[1] - big.x[0];
+    assert_eq!(l.boxes[1].border, rect(2.0 + big.x[0], 2.0, width, 43.0));
+}
+
+#[test]
 fn flex_items_align_on_the_first_baseline_of_text() {
     let l = lay(
         vec![

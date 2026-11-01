@@ -51,7 +51,8 @@ use crate::style::filter;
 use crate::style::gradient::Image;
 use crate::style::transform::Function;
 use crate::style::{Blend, Shadow, Style};
-use crate::template::Template;
+use crate::template::{Kind, Template};
+use crate::text::Glyph;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
@@ -656,6 +657,8 @@ impl Painter<'_> {
     fn children(&self, i: Option<usize>) -> impl Iterator<Item = usize> {
         let list: Vec<usize> = match i {
             None => (self.template.roots.iter()).map(|&c| c as usize).collect(),
+            // Its Spans paint with its text.
+            Some(i) if matches!(self.template.nodes[i].kind, Kind::Text { .. }) => Vec::new(),
             Some(i) => ordered(
                 &self.template.nodes[i].children,
                 &self.styles[i],
@@ -1253,20 +1256,23 @@ impl Painter<'_> {
         let Some(lines) = &self.layout.lines[i] else {
             return;
         };
-        let color = work(self.styles[i].color);
-        if !self.styles[i].visible || color[3] <= 0.0 {
-            return;
-        }
         let at = self.layout.boxes[i].content;
         // Text is content, which its own box clips.
         let clip = match self.clipping(i) {
             true => Some(i),
             false => self.clips[i].last().copied(),
         };
-        for run in lines.glyphs.chunk_by(|a, b| a.face == b.face) {
+        // Each run in the style of the Text or Span it is in.
+        let same = |a: &Glyph, b: &Glyph| a.face == b.face && a.node == b.node;
+        for run in lines.glyphs.chunk_by(same) {
+            let s = &self.styles[run[0].node as usize];
+            let color = work(s.color);
+            if !s.visible || color[3] <= 0.0 {
+                continue;
+            }
             let item = Item::Glyphs {
                 face: run[0].face,
-                size: lines.size,
+                size: s.font.size as f32,
                 color,
                 glyphs: run
                     .iter()

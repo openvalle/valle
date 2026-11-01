@@ -922,6 +922,35 @@ fn a_mask_shows_what_its_box_paints_through_its_layers() {
 }
 
 #[test]
+fn spans_paint_their_text_in_their_own_style() {
+    use crate::template::{Kind, Piece, Prop, V};
+    let piece = |s: &str| Piece::Text(Prop::Const(V::Str(s.into())));
+    let mut text = text_node("", &[("color", "black")]);
+    text.kind = Kind::Text {
+        content: vec![piece("a "), Piece::Span(1), piece(" c")],
+    };
+    text.children = vec![1];
+    let mut span = view(&[("color", "red"), ("fontSize", "20px")], &[]);
+    span.kind = Kind::Span {
+        content: vec![piece("b"), Piece::Span(2)],
+    };
+    span.children = vec![2];
+    let mut hidden = view(&[("visibility", "hidden")], &[]);
+    hidden.kind = Kind::Span {
+        content: vec![piece("d")],
+    };
+    let (items, _) = paint_of(vec![text, span, hidden], &[0]);
+    assert_eq!(names(&items), ["text black", "text red", "text black"]);
+    let sizes: Vec<f32> = (items.iter())
+        .map(|i| match i {
+            Item::Glyphs { size, .. } => *size,
+            _ => 0.0,
+        })
+        .collect();
+    assert_eq!(sizes, [16.0, 20.0, 16.0]);
+}
+
+#[test]
 fn a_mask_element_shows_what_its_box_paints_through_its_source() {
     let masked = |source: (u32, bool, bool), shown: &[u32]| {
         paint_of(

@@ -1,13 +1,13 @@
 //! A frame as HTML for Chrome: every node an element with its style as written, printed as React
-//! DOM prints a style object, on a canvas like the engine's. Elements carry their node's index,
-//! `data-n`, and text nodes `data-text`.
+//! DOM prints a style object, on a canvas like the engine's: a Span as a `span`, every other node
+//! as a `div`. Elements carry their node's index, `data-n`, and Texts `data-text`.
 
 use std::fmt::Write as _;
 
 use valle_engine::front::Composition;
 use valle_engine::js;
 use valle_engine::scene::Frame;
-use valle_engine::template::{Kind, Prop, V};
+use valle_engine::template::{Kind, Piece, Prop, V};
 
 /// Style properties React DOM prints as bare numbers; it gives other numbers but 0 `px`.
 const UNITLESS: &[&str] = &[
@@ -78,7 +78,12 @@ fn node(html: &mut String, frame: &Frame, i: u32) -> Result<(), String> {
             n.place()
         ));
     }
-    let _ = write!(html, "<div data-n=\"{i}\"");
+    // A Span is an inline box.
+    let tag = match n.kind {
+        Kind::Span { .. } => "span",
+        _ => "div",
+    };
+    let _ = write!(html, "<{tag} data-n=\"{i}\"");
     if matches!(n.kind, Kind::Text { .. }) {
         html.push_str(" data-text");
     }
@@ -90,19 +95,26 @@ fn node(html: &mut String, frame: &Frame, i: u32) -> Result<(), String> {
     }
     html.push('>');
     match &n.kind {
-        Kind::Text { text } => html.push_str(&escape(&value(frame, text).text())),
+        Kind::Text { content } | Kind::Span { content } => {
+            for piece in content {
+                match piece {
+                    Piece::Text(text) => html.push_str(&escape(&value(frame, text).text())),
+                    Piece::Span(span) => node(html, frame, *span)?,
+                }
+            }
+        }
         _ => {
             for &child in &n.children {
                 node(html, frame, child)?;
             }
         }
     }
-    html.push_str("</div>");
+    let _ = write!(html, "</{tag}>");
     Ok(())
 }
 
 /// A prop's value at the frame.
-pub fn value<'a>(frame: &'a Frame, prop: &'a Prop) -> &'a V {
+fn value<'a>(frame: &'a Frame, prop: &'a Prop) -> &'a V {
     match prop {
         Prop::Const(v) => v,
         Prop::Expr(e) => &frame.values[*e as usize],

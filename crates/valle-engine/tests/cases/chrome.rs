@@ -12,10 +12,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use valle_engine::paint::Item;
 use valle_engine::scene::Frame;
-use valle_engine::template::{Kind, Prop};
-use valle_engine::text::collapse;
-
-use crate::html::value;
+use valle_engine::template::Kind;
 
 /// How far a box edge may be from Chrome's: two of its 1/64 px layout units. Chrome truncates
 /// each length it resolves, a percentage say, to a unit, which the engine does not, and an edge
@@ -76,8 +73,8 @@ pub fn compare(frame: &Frame, chrome: &Baseline) -> Vec<String> {
             let (ours, theirs) = (shown(ours), shown(*theirs));
             problems.push(format!("{}: box {ours}, Chrome's {theirs}", node.place()));
         }
-        if let Kind::Text { text } = &node.kind {
-            let ours = lines(frame, i, text);
+        if let Kind::Text { .. } = &node.kind {
+            let ours = lines(frame, i);
             let theirs = chrome.lines.get(&(i as u32)).cloned().unwrap_or_default();
             if ours != theirs {
                 problems.push(format!(
@@ -91,14 +88,12 @@ pub fn compare(frame: &Frame, chrome: &Baseline) -> Vec<String> {
 }
 
 /// The text of each of the node's lines.
-fn lines(frame: &Frame, i: usize, text: &Prop) -> Vec<String> {
+fn lines(frame: &Frame, i: usize) -> Vec<String> {
     let Some(lines) = &frame.layout.lines[i] else {
         return Vec::new();
     };
-    let text = value(frame, text).text();
-    let text = collapse(&text);
     (lines.text.iter())
-        .map(|r| text[r.clone()].trim_matches(' ').to_string())
+        .map(|r| lines.string[r.clone()].trim_matches(' ').to_string())
         .collect()
 }
 

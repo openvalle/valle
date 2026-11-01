@@ -1,8 +1,10 @@
 //! Text: paragraphs shaped by parley in the built-in fonts, broken into lines and stacked as
 //! Chrome stacks them. No system font is read, so every host shapes with the same bytes.
 //!
-//! A paragraph is shaped once per text and font and kept while it is in use; measuring it at a
-//! width only breaks its lines again.
+//! A paragraph is pieces of text, each in the font of the Text or Span it is in. It is shaped
+//! once per text and fonts and kept while it is in use; measuring it at a width only breaks its
+//! lines again. Its line boxes stack as Chrome stacks them, each from the paragraph's own font
+//! (CSS's strut) and the runs of glyphs on it.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -28,31 +30,56 @@ pub struct Face {
     pub coords: Vec<i16>,
 }
 
-/// A glyph of `Text::faces()[face]`, in px from the text box's top left, `y` on its baseline.
+/// A paragraph as written: the font of its box, which each line box starts from (CSS's strut)
+/// and which aligns its lines, and its pieces of text in order.
+pub struct Content<'a> {
+    pub font: &'a Font,
+    pub pieces: Vec<Piece<'a>>,
+}
+
+/// Text in the font of the node it is in, which its glyphs name.
+pub struct Piece<'a> {
+    pub text: Cow<'a, str>,
+    pub node: u32,
+    pub font: &'a Font,
+}
+
+/// A glyph of `Text::faces()[face]` in the text of `node`, in px from the text box's top left,
+/// `y` on its baseline.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Glyph {
     pub face: u32,
     pub id: u32,
     pub x: f32,
     pub y: f32,
+    pub node: u32,
+}
+
+/// A run of glyphs of one node on a line, with its left and right edges, less the white space
+/// that hangs at the end of the line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Run {
+    pub node: u32,
+    pub line: u32,
+    pub x: [f32; 2],
 }
 
 /// A paragraph broken into lines at a width and aligned in it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lines {
-    /// The font size, px.
-    pub size: f32,
     pub glyphs: Vec<Glyph>,
-    /// Each line box's top and height.
+    pub runs: Vec<Run>,
+    /// Each line box's top and height, and each line's baseline, from the top.
     pub boxes: Vec<[f32; 2]>,
-    /// Each line's text: a byte range of the text as `collapse` leaves it.
+    pub baselines: Vec<f32>,
+    /// The text as white space collapses it, and each line's byte range of it.
+    pub string: Rc<str>,
     pub text: Vec<Range<usize>>,
 }
 
-/// What shaping a paragraph depends on.
+/// What shaping a piece depends on.
 #[derive(Clone, PartialEq, Eq, Hash)]
-struct Key {
-    text: Box<str>,
+struct Shaping {
     family: Rc<[Family]>,
     /// f32 bits.
     size: u32,
@@ -60,8 +87,21 @@ struct Key {
     spacing: u32,
 }
 
+impl Shaping {
+    fn of(font: &Font) -> Shaping {
+        Shaping {
+            family: font.family.clone(),
+            size: (font.size as f32).to_bits(),
+            weight: (font.weight as f32).to_bits(),
+            spacing: (font.spacing as f32).to_bits(),
+        }
+    }
+}
+
+/// A paragraph shaped: its glyph runs' brushes are the pieces they are in.
 struct Paragraph {
-    layout: parley::Layout<()>,
+    layout: parley::Layout<u32>,
+    string: Rc<str>,
     /// Nothing is left once white space collapses: no line boxes, as in CSS (parley still makes
     /// one line).
     empty: bool,
@@ -72,8 +112,11 @@ struct Paragraph {
 
 pub struct Text {
     fonts: FontContext,
-    layouts: LayoutContext<()>,
-    paragraphs: HashMap<Key, Paragraph>,
+    layouts: LayoutContext<u32>,
+    /// By each piece's text and shaping.
+    paragraphs: HashMap<Vec<(Box<str>, Shaping)>, Paragraph>,
+    /// The ascent, descent and line gap of each font's first face, px.
+    metrics: HashMap<Shaping, [f32; 3]>,
     faces: Vec<Face>,
 }
 
@@ -97,6 +140,7 @@ impl Text {
             },
             layouts: LayoutContext::new(),
             paragraphs: HashMap::new(),
+            metrics: HashMap::new(),
             faces: Vec::new(),
         })
     }
@@ -106,23 +150,19 @@ impl Text {
         &self.faces
     }
 
-    /// The box `text` takes in `font` with its lines broken to fit `width` px (`None`: only at
-    /// forced breaks; 0: at every opportunity, the min-content width). Widths round up to 1/64
-    /// px, as Chrome's layout units do, so the text fits again in the width it measures.
+    /// The box `content` takes with its lines broken to fit `width` px (`None`: only at forced
+    /// breaks; 0: at every opportunity, the min-content width). Widths round up to 1/64 px, as
+    /// Chrome's layout units do, so the text fits again in the width it measures.
     ///
     /// Text that breaks takes all of the width, unless a word is wider: a box sized to its
     /// content is as wide as it may be once the content is wider (CSS's fit-content).
-    pub fn measure(
-        &mut self,
-        text: &str,
-        font: &Font,
-        width: Option<f32>,
-    ) -> Result<[f32; 2], Error> {
-        let p = self.paragraph(text, font, width)?;
+    pub fn measure(&mut self, content: &Content, width: Option<f32>) -> Result<[f32; 2], Error> {
+        let strut = self.strut(content.font)?;
+        let p = self.paragraph(content, width)?;
         if p.empty {
             return Ok([0.0, 0.0]);
         }
-        let boxes = stack(&p.layout, font);
+        let boxes = stack(&p.layout, content, strut);
         let height = boxes.last().map_or(0.0, |[top, h]| top + h);
         let widest = (p.layout.width() * 64.0).ceil() / 64.0;
         match width {
@@ -131,44 +171,56 @@ impl Text {
         }
     }
 
-    /// The baseline of `text`'s first line from the top of its box, its lines broken to fit
+    /// The baseline of `content`'s first line from the top of its box, its lines broken to fit
     /// `width` px; empty text has no lines, and no baseline.
-    pub fn baseline(&mut self, text: &str, font: &Font, width: f32) -> Result<Option<f32>, Error> {
-        let p = self.paragraph(text, font, Some(width))?;
+    pub fn baseline(&mut self, content: &Content, width: f32) -> Result<Option<f32>, Error> {
+        let strut = self.strut(content.font)?;
+        let p = self.paragraph(content, Some(width))?;
         if p.empty {
             return Ok(None);
         }
-        Ok(p.layout.lines().next().map(|line| above(&line, font)))
+        Ok(p.layout
+            .lines()
+            .next()
+            .map(|line| extent(&line, content, strut)[0]))
     }
 
-    /// `text` in `font`, broken to fit `width` px and aligned in it.
-    pub fn lines(&mut self, text: &str, font: &Font, width: f32) -> Result<Lines, Error> {
-        let alignment = match font.align {
+    /// `content` broken to fit `width` px and aligned in it.
+    pub fn lines(&mut self, content: &Content, width: f32) -> Result<Lines, Error> {
+        let alignment = match content.font.align {
             TextAlign::Start => Alignment::Start,
             TextAlign::End => Alignment::End,
             TextAlign::Left => Alignment::Left,
             TextAlign::Right => Alignment::Right,
             TextAlign::Center => Alignment::Center,
         };
-        let p = self.paragraph(text, font, Some(width))?;
+        let strut = self.strut(content.font)?;
+        let p = self.paragraph(content, Some(width))?;
+        let string = p.string.clone();
         if p.empty {
             return Ok(Lines {
-                size: font.size as f32,
                 glyphs: Vec::new(),
+                runs: Vec::new(),
                 boxes: Vec::new(),
+                baselines: Vec::new(),
+                string,
                 text: Vec::new(),
             });
         }
         p.layout.align(alignment, AlignmentOptions::default());
-        let boxes = stack(&p.layout, font);
+        let boxes = stack(&p.layout, content, strut);
         let text = p.layout.lines().map(|line| line.text_range()).collect();
+        let mut baselines = Vec::new();
         let mut runs = Vec::new();
-        for (line, [top, _]) in p.layout.lines().zip(&boxes) {
-            let baseline = top + above(&line, font);
+        let mut shaped = Vec::new();
+        for (i, (line, [top, _])) in p.layout.lines().zip(&boxes).enumerate() {
+            let baseline = top + extent(&line, content, strut)[0];
+            baselines.push(baseline);
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(run) = item else {
                     continue;
                 };
+                let node = content.pieces[run.style().brush as usize].node;
                 let face = run.run().font();
                 let face = Face {
                     data: face.data.clone(),
@@ -186,20 +238,75 @@ impl Text {
                     glyphs.push((g.id, x + g.x, baseline + g.y));
                     x += g.advance;
                 }
-                runs.push((face, glyphs));
+                runs.push(Run {
+                    node,
+                    line: i as u32,
+                    x: [run.offset(), x],
+                });
+                shaped.push((face, node, glyphs));
+            }
+            // White space that hangs past the end of the line is not in its runs' boxes.
+            let mut hanging = line.metrics().hanging_advance;
+            for run in runs.iter_mut().rev().take_while(|r| r.line == i as u32) {
+                let cut = hanging.min(run.x[1] - run.x[0]);
+                run.x[1] -= cut;
+                hanging -= cut;
             }
         }
         let mut glyphs = Vec::new();
-        for (face, list) in runs {
+        for (face, node, list) in shaped {
             let face = self.face(face);
-            glyphs.extend(list.into_iter().map(|(id, x, y)| Glyph { face, id, x, y }));
+            glyphs.extend((list.into_iter()).map(|(id, x, y)| Glyph {
+                face,
+                id,
+                x,
+                y,
+                node,
+            }));
         }
         Ok(Lines {
-            size: font.size as f32,
             glyphs,
+            runs,
             boxes,
+            baselines,
+            string,
             text,
         })
+    }
+
+    /// The ascent, descent and line gap, px, of the first face of `font`, at its size and
+    /// weight, as runs in it have them.
+    pub fn metrics(&mut self, font: &Font) -> Result<[f32; 3], Error> {
+        let key = Shaping::of(font);
+        if let Some(m) = self.metrics.get(&key) {
+            return Ok(*m);
+        }
+        let families = families(&font.family)?;
+        let mut builder = self
+            .layouts
+            .ranged_builder(&mut self.fonts, "0", 1.0, false);
+        builder.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Borrowed(
+            &families,
+        ))));
+        builder.push_default(StyleProperty::FontSize(font.size as f32));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(
+            font.weight as f32,
+        )));
+        let mut layout = builder.build("0");
+        layout.break_all_lines(None);
+        let m = (layout.lines())
+            .find_map(|line| {
+                line.items().find_map(|item| match item {
+                    PositionedLayoutItem::GlyphRun(run) => {
+                        let m = run.run().font_metrics();
+                        Some([m.ascent, m.descent, m.leading])
+                    }
+                    _ => None,
+                })
+            })
+            .ok_or("engine bug: a font without metrics")?;
+        self.metrics.insert(key, m);
+        Ok(m)
     }
 
     /// Forgets the paragraphs not used since the last sweep.
@@ -220,38 +327,46 @@ impl Text {
         i as u32
     }
 
-    /// The paragraph of `text` in `font`, shaped if it is new, its lines broken at `width`.
+    /// What the line box of a paragraph in `font` takes above and below its baseline, with no
+    /// text in it.
+    fn strut(&mut self, font: &Font) -> Result<[f32; 2], Error> {
+        Ok(placed(self.metrics(font)?, font))
+    }
+
+    /// The paragraph of `content`, shaped if it is new, its lines broken at `width`.
     fn paragraph(
         &mut self,
-        text: &str,
-        font: &Font,
+        content: &Content,
         width: Option<f32>,
     ) -> Result<&mut Paragraph, Error> {
-        let key = Key {
-            text: text.into(),
-            family: font.family.clone(),
-            size: (font.size as f32).to_bits(),
-            weight: (font.weight as f32).to_bits(),
-            spacing: (font.spacing as f32).to_bits(),
-        };
+        let key: Vec<(Box<str>, Shaping)> = (content.pieces.iter())
+            .map(|p| (p.text.as_ref().into(), Shaping::of(p.font)))
+            .collect();
         if !self.paragraphs.contains_key(&key) {
-            let families = families(&font.family)?;
-            let text = collapse(text);
-            let mut builder = self
-                .layouts
-                .ranged_builder(&mut self.fonts, &text, 1.0, false);
-            builder.push_default(StyleProperty::FontFamily(FontFamily::List(Cow::Borrowed(
-                &families,
-            ))));
-            builder.push_default(StyleProperty::FontSize(font.size as f32));
-            builder.push_default(StyleProperty::FontWeight(FontWeight::new(
-                font.weight as f32,
-            )));
-            builder.push_default(StyleProperty::LetterSpacing(font.spacing as f32));
-            let layout = builder.build(&*text);
+            let (string, ranges) = collapse(content.pieces.iter().map(|p| p.text.as_ref()));
+            let families = (content.pieces.iter())
+                .map(|p| families(&p.font.family))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut builder = (self.layouts).ranged_builder(&mut self.fonts, &string, 1.0, false);
+            for (k, (piece, range)) in content.pieces.iter().zip(ranges).enumerate() {
+                if range.is_empty() {
+                    continue;
+                }
+                let font = piece.font;
+                let family = FontFamily::List(Cow::Borrowed(&families[k]));
+                builder.push(StyleProperty::FontFamily(family), range.clone());
+                builder.push(StyleProperty::FontSize(font.size as f32), range.clone());
+                let weight = FontWeight::new(font.weight as f32);
+                builder.push(StyleProperty::FontWeight(weight), range.clone());
+                let spacing = font.spacing as f32;
+                builder.push(StyleProperty::LetterSpacing(spacing), range.clone());
+                builder.push(StyleProperty::Brush(k as u32), range);
+            }
+            let layout = builder.build(&string);
             let paragraph = Paragraph {
                 layout,
-                empty: text.is_empty(),
+                empty: string.is_empty(),
+                string: string.into(),
                 broken: None,
                 used: false,
             };
@@ -270,28 +385,35 @@ impl Text {
     }
 }
 
-/// `white-space: normal`: each run of spaces, tabs and line breaks is one space, and none starts
-/// or ends the text. (Parley's own collapsing keeps a line feed as a forced break.)
-pub fn collapse(text: &str) -> Cow<'_, str> {
+/// `white-space: normal` over the pieces of a paragraph: each run of spaces, tabs and line breaks
+/// is one space, in the piece it starts in, and none starts or ends the text. The text, and each
+/// piece's byte range of it. (Parley's own collapsing keeps a line feed as a forced break.)
+pub fn collapse<'a>(pieces: impl Iterator<Item = &'a str>) -> (String, Vec<Range<usize>>) {
     let white = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C');
-    let text = text.trim_matches(white);
-    if !text.contains(|c: char| white(c) && c != ' ') && !text.contains("  ") {
-        return Cow::Borrowed(text);
-    }
-    let mut out = String::with_capacity(text.len());
-    let mut space = false;
-    for c in text.chars() {
-        if white(c) {
-            space = true;
-        } else {
-            if space {
-                out.push(' ');
-                space = false;
+    let mut out = String::new();
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    // The piece a run of white space after some text started in, until text follows it.
+    let mut space: Option<usize> = None;
+    for (k, text) in pieces.enumerate() {
+        ranges.push(out.len()..out.len());
+        for c in text.chars() {
+            if !white(c) {
+                if let Some(j) = space.take() {
+                    out.push(' ');
+                    // The pieces after its own start after it.
+                    ranges[j].end = out.len();
+                    for r in &mut ranges[j + 1..] {
+                        *r = out.len()..out.len();
+                    }
+                }
+                out.push(c);
+            } else if !out.is_empty() && space.is_none() {
+                space = Some(k);
             }
-            out.push(c);
         }
+        ranges[k].end = out.len();
     }
-    Cow::Owned(out)
+    (out, ranges)
 }
 
 fn families(list: &[Family]) -> Result<Vec<FontFamilyName<'static>>, Error> {
@@ -307,16 +429,15 @@ fn families(list: &[Family]) -> Result<Vec<FontFamilyName<'static>>, Error> {
         .collect()
 }
 
-/// A run's ascent above its baseline and descent below it in a line box of `font`'s line
-/// height, as Chrome places them: ascent and descent rounded to whole px, then half the leading
-/// left (floored) above, the rest below.
-fn run_extent(run: &parley::GlyphRun<'_, ()>, font: &Font) -> [f32; 2] {
-    let m = run.run().font_metrics();
-    let (ascent, descent) = (m.ascent.round(), m.descent.round());
+/// What a box in `font`, with ascent, descent and line gap `m`, takes above and below its
+/// baseline in a line box of its line height, as Chrome places it: ascent and descent rounded to
+/// whole px, then half the leading left (floored) above, the rest below.
+fn placed(m: [f32; 3], font: &Font) -> [f32; 2] {
+    let (ascent, descent) = (m[0].round(), m[1].round());
     // Chrome keeps a line height in its layout unit, 1/64 px: a factor of the font size floors to
     // it, a length rounds.
     let height = match font.line_height {
-        LineHeight::Normal => ascent + descent + m.leading.round(),
+        LineHeight::Normal => ascent + descent + m[2].round(),
         LineHeight::Factor(f) => (f as f32 * font.size as f32 * 64.0).floor() / 64.0,
         LineHeight::Px(px) => (px as f32 * 64.0).round() / 64.0,
     };
@@ -324,34 +445,28 @@ fn run_extent(run: &parley::GlyphRun<'_, ()>, font: &Font) -> [f32; 2] {
     [above, height - above]
 }
 
-/// How far the line's baseline sits below its top.
-fn above(line: &parley::Line<'_, ()>, font: &Font) -> f32 {
-    extent(line, font)[0]
-}
-
-fn extent(line: &parley::Line<'_, ()>, font: &Font) -> [f32; 2] {
-    let mut out: Option<[f32; 2]> = None;
+/// What the line takes above and below its baseline: its strut, and each run of glyphs in the
+/// font of its piece.
+fn extent(line: &parley::Line<'_, u32>, content: &Content, strut: [f32; 2]) -> [f32; 2] {
+    let mut out = strut;
     for item in line.items() {
         if let PositionedLayoutItem::GlyphRun(run) = item {
-            let [a, b] = run_extent(&run, font);
-            out = Some(out.map_or([a, b], |[x, y]| [x.max(a), y.max(b)]));
+            let m = run.run().font_metrics();
+            let font = content.pieces[run.style().brush as usize].font;
+            let [a, b] = placed([m.ascent, m.descent, m.leading], font);
+            out = [out[0].max(a), out[1].max(b)];
         }
     }
-    // A line without glyphs keeps parley's own metrics.
-    out.unwrap_or_else(|| {
-        let m = line.metrics();
-        let above = m.baseline - m.block_min_coord;
-        [above, m.line_height - above]
-    })
+    out
 }
 
 /// Each line box's top and height, stacked from 0.
-fn stack(layout: &parley::Layout<()>, font: &Font) -> Vec<[f32; 2]> {
+fn stack(layout: &parley::Layout<u32>, content: &Content, strut: [f32; 2]) -> Vec<[f32; 2]> {
     let mut top = 0.0;
     layout
         .lines()
         .map(|line| {
-            let [a, b] = extent(&line, font);
+            let [a, b] = extent(&line, content, strut);
             let line_box = [top, a + b];
             top += a + b;
             line_box
