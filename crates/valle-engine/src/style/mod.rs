@@ -225,6 +225,7 @@ pub struct TextShadow {
 pub struct Decoration {
     /// Underline, overline and line-through.
     pub lines: [bool; 3],
+    pub style: DecorationStyle,
     pub color: Rgba,
     /// `text-decoration-thickness` and `text-underline-offset`, px and fractions of the font
     /// size of the decorating box, which percentages are of; `None` is `auto`.
@@ -232,6 +233,17 @@ pub struct Decoration {
     pub offset: Option<Calc>,
     /// The node that declares it.
     pub by: usize,
+}
+
+/// `text-decoration-style`: a decoration's lines solid, two lines, dots, dashes or a wave.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecorationStyle {
+    #[default]
+    Solid,
+    Double,
+    Dotted,
+    Dashed,
+    Wavy,
 }
 
 /// `mix-blend-mode`: how a box's colors mix with those under it, numbered as shaders take them.
@@ -927,9 +939,10 @@ struct Declared {
     backdrop: Vec<filter::Function<Len, Option<Rgba>>>,
     clip: Option<shape::Clip<Len>>,
     masks: background::Declared,
-    /// `text-decoration-*`: its lines (under, over, through), its color (`None` is
+    /// `text-decoration-*`: its lines (under, over, through), its style, its color (`None` is
     /// `currentcolor`) and its thickness.
     decoration_lines: [bool; 3],
+    decoration_style: DecorationStyle,
     decoration_color: Option<Rgba>,
     decoration_thickness: Len,
     ellipsis: bool,
@@ -1029,6 +1042,7 @@ impl Default for Declared {
             clip: None,
             masks: background::Declared::default(),
             decoration_lines: [false; 3],
+            decoration_style: DecorationStyle::Solid,
             decoration_color: None,
             decoration_thickness: AUTO,
             ellipsis: false,
@@ -2987,13 +3001,14 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::TextDecoration => {
             (
                 d.decoration_lines,
+                d.decoration_style,
                 d.decoration_color,
                 d.decoration_thickness,
             ) = decoration(v)?
         }
         F::TextDecorationLine => d.decoration_lines = decoration_lines(&text(v)?)?,
         F::TextDecorationColor => d.decoration_color = current_color(v)?,
-        F::TextDecorationStyle => decoration_style(&text(v)?)?,
+        F::TextDecorationStyle => d.decoration_style = decoration_style(&text(v)?)?,
         F::TextDecorationThickness => d.decoration_thickness = thickness_of(v)?,
         F::TextDecorationSkipInk => {
             let skips = [("auto", true), ("all", true), ("none", false)];
@@ -3036,7 +3051,7 @@ const DECORATION_STYLES: [&str; 5] = ["solid", "double", "dotted", "dashed", "wa
 
 /// `text-decoration`: `none`, or lines, a style, a color and a thickness in any order, each at
 /// most once, and the initial ones for those left out.
-fn decoration(v: &V) -> Result<([bool; 3], Option<Rgba>, Len), String> {
+fn decoration(v: &V) -> Result<([bool; 3], DecorationStyle, Option<Rgba>, Len), String> {
     let s = text(v)?;
     let words = css::words(&s);
     if words.is_empty() {
@@ -3069,7 +3084,8 @@ fn decoration(v: &V) -> Result<([bool; 3], Option<Rgba>, Len), String> {
         true => [false; 3],
         false => decoration_lines(&lines.join(" "))?,
     };
-    Ok((lines, color.flatten(), thickness.unwrap_or(AUTO)))
+    let style = style.unwrap_or(DecorationStyle::Solid);
+    Ok((lines, style, color.flatten(), thickness.unwrap_or(AUTO)))
 }
 
 /// `text-decoration-line`: `none`, or any of `underline`, `overline` and `line-through`.
@@ -3095,13 +3111,14 @@ fn decoration_lines(s: &str) -> Result<[bool; 3], String> {
     }
 }
 
-/// `text-decoration-style`: so far `solid`.
-fn decoration_style(s: &str) -> Result<(), String> {
+/// `text-decoration-style`.
+fn decoration_style(s: &str) -> Result<DecorationStyle, String> {
     match s {
-        "solid" => Ok(()),
-        s if DECORATION_STYLES.contains(&s) => {
-            Err(format!("{s} decorations are not supported yet; use solid"))
-        }
+        "solid" => Ok(DecorationStyle::Solid),
+        "double" => Ok(DecorationStyle::Double),
+        "dotted" => Ok(DecorationStyle::Dotted),
+        "dashed" => Ok(DecorationStyle::Dashed),
+        "wavy" => Ok(DecorationStyle::Wavy),
         s => Err(format!(
             "{s:?} is not one of {}",
             DECORATION_STYLES.join(", ")
@@ -3378,6 +3395,7 @@ fn compute(
     if d.decoration_lines.contains(&true) {
         decorations.push(Decoration {
             lines: d.decoration_lines,
+            style: d.decoration_style,
             color: d.decoration_color.unwrap_or(font.decoration_color(color)),
             thickness: match &d.decoration_thickness {
                 Len::Auto => None,

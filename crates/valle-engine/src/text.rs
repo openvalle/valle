@@ -25,8 +25,8 @@ use crate::path::{self, Curve};
 use crate::slug;
 use crate::style::color::Rgba;
 use crate::style::{
-    Collapse, Family, Feature, Font, FontStyle, LineHeight, OverflowWrap, TextAlign, TextTransform,
-    VARIANTS, Variation, WordBreak,
+    Collapse, DecorationStyle, Family, Feature, Font, FontStyle, LineHeight, OverflowWrap,
+    TextAlign, TextTransform, VARIANTS, Variation, WordBreak,
 };
 use crate::template::Error;
 
@@ -99,9 +99,21 @@ pub struct Run {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stripe {
     pub rect: [f32; 4],
+    /// Its line's left and right, which its dots, dashes or wave are spaced along; its style,
+    /// solid but for those, as a double decoration is two solid lines; and how thick it is.
+    pub along: [f32; 2],
+    pub style: DecorationStyle,
+    pub thickness: f32,
     pub color: Rgba,
     pub run: u32,
     pub through: bool,
+}
+
+/// A wavy decoration `thickness` thick as Chrome draws it: a cubic curve each wave, two steps
+/// long, whose control points are both a step along, the control distance either side of its axis,
+/// which takes it 0.29 of that distance off the axis. Both are whole px and a half.
+pub fn wave(thickness: f32) -> [f32; 2] {
+    [2.0, 3.0].map(|k| 0.5 + (k * thickness + 0.5).round())
 }
 
 /// A paragraph broken into lines at a width and aligned in it.

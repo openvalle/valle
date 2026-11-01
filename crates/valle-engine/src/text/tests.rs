@@ -393,6 +393,9 @@ fn lines_that_overflow_end_in_an_ellipsis_after_the_glyphs_that_fit() {
     let whole = lines.clone();
     lines.decorations.push(Stripe {
         rect: [0.0, 18.0, whole.runs[0].x[1], 19.0],
+        along: [0.0, whole.runs[0].x[1]],
+        style: DecorationStyle::Solid,
+        thickness: 1.0,
         color: [0.0, 0.0, 0.0, 1.0],
         run: 0,
         through: false,

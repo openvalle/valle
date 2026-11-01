@@ -2089,9 +2089,11 @@ const ROWS: &[Row] = &[
             "\"underline 3px #e53935\"",
             "\"line-through solid 0.2em\"",
             "\" Underline Overline currentColor auto \"",
+            "\"wavy underline\"",
+            "\"underline double #1e88e5\"",
         ],
         refused: &[
-            "\"wavy underline\"",
+            "\"wavy dotted underline\"",
             "\"underline red blue\"",
             "\"underline line-through underline\"",
             "\"blink\"",
@@ -2130,14 +2132,15 @@ const ROWS: &[Row] = &[
     Row {
         properties: &["textDecorationStyle"],
         sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, textDecorationLine: "underline", PROPERTY: VALUE }}>gyp jumpy</Text></View>"##,
-        values: &["\"solid\"", "\" SOLID \""],
-        refused: &[
-            "\"wavy\"",
+        values: &[
+            "\"solid\"",
+            "\" SOLID \"",
             "\"double\"",
             "\"dotted\"",
             "\"dashed\"",
-            "\"zigzag\"",
+            "\"wavy\"",
         ],
+        refused: &["\"zigzag\"", "\"solid dotted\""],
     },
     Row {
         properties: &["textDecorationThickness"],

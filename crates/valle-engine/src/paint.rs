@@ -52,7 +52,7 @@ use crate::style::color::{self, Rgba};
 use crate::style::filter;
 use crate::style::gradient::Image;
 use crate::style::transform::Function;
-use crate::style::{Blend, BorderStyle, Shadow, Style};
+use crate::style::{Blend, BorderStyle, DecorationStyle, Shadow, Style};
 use crate::template::{Kind, Template};
 use crate::text::{Glyph, Stripe};
 
@@ -1368,7 +1368,7 @@ impl Painter<'_> {
                 move |color: Option<[f32; 4]>, by: [f32; 2]| -> Vec<Item> {
                     (lines.decorations.iter())
                         .filter(|d| d.run == k as u32 && d.through == through)
-                        .map(|d| stripe(d, at, color.unwrap_or(work(d.color)), by))
+                        .flat_map(|d| stripe(d, at, color.unwrap_or(work(d.color)), by))
                         .collect()
                 }
             };
@@ -1436,7 +1436,7 @@ impl Painter<'_> {
                 let size = s.font.size as f32;
                 items.extend(faces(glyphs, at, size, OPAQUE, 0.0, [0.0; 2]));
                 let decorations = lines.decorations.iter().filter(|d| d.run == k as u32);
-                items.extend(decorations.map(|d| stripe(d, at, OPAQUE, [0.0; 2])));
+                items.extend(decorations.flat_map(|d| stripe(d, at, OPAQUE, [0.0; 2])));
             }
         }
         items
@@ -1589,18 +1589,25 @@ fn faces(
     })
 }
 
-/// A decoration laid out in a box whose content box is `at`, in `color`, moved by `by`.
-fn stripe(d: &Stripe, at: Rect, color: [f32; 4], [dx, dy]: [f32; 2]) -> Item {
+/// A decoration laid out in a box whose content box is `at`, in `color`, moved by `by`: its
+/// piece of line, or of the dots, dashes or wave along its whole line.
+fn stripe(d: &Stripe, at: Rect, color: [f32; 4], [dx, dy]: [f32; 2]) -> Vec<Item> {
     let [x0, y0, x1, y1] = d.rect;
-    Item::Rect {
-        rect: Rect {
-            x: at.x + x0 + dx,
-            y: at.y + y0 + dy,
-            width: x1 - x0,
-            height: y1 - y0,
-        },
-        radii: SQUARE,
-        color,
+    let rect = Rect {
+        x: at.x + x0 + dx,
+        y: at.y + y0 + dy,
+        width: x1 - x0,
+        height: y1 - y0,
+    };
+    let (start, length) = (at.x + d.along[0] + dx, d.along[1] - d.along[0]);
+    match d.style {
+        DecorationStyle::Solid | DecorationStyle::Double => vec![Item::Rect {
+            rect,
+            radii: SQUARE,
+            color,
+        }],
+        DecorationStyle::Wavy => dash::wave(rect, start, d.thickness, color),
+        style => dash::text(rect, start, length, d.thickness, style, color),
     }
 }
 

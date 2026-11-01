@@ -1,13 +1,14 @@
 //! Dashed and dotted borders and outlines, as Chrome draws them: with square corners each side a
 //! line of dashes or dots along its middle from corner to corner, and with rounded ones a loop of
-//! them around the middle of the border, from the end of the top left corner clockwise.
+//! them around the middle of the border, from the end of the top left corner clockwise. And dotted,
+//! dashed and wavy text decorations.
 
 use super::shape::SHOWN;
 use super::{Item, Radii, SQUARE, inner, work};
 use crate::layout::Rect;
 use crate::path::{Path, Point, Segment};
 use crate::style::color::Rgba;
-use crate::style::{Blend, BorderStyle};
+use crate::style::{Blend, BorderStyle, DecorationStyle};
 
 /// A dash along a line or a loop, from and to how far along it, or a dot centered that far along.
 #[derive(Debug, PartialEq)]
@@ -63,28 +64,13 @@ pub(super) fn dashes(
             ),
             _ => ([rect.x + w / 2.0, rect.y], [0.0, 1.0], rect.height),
         };
-        let marks: Vec<Item> = (marks(length, w, styles[k], false).into_iter())
-            .map(|mark| {
-                let at = |s: f32| [start[0] + along[0] * s, start[1] + along[1] * s];
-                let ([from, to], radii) = match mark {
-                    Mark::Dash([a, b]) => ([at(a), at(b)], SQUARE),
-                    Mark::Dot(s) => ([at(s - w / 2.0), at(s + w / 2.0)], [[w / 2.0; 2]; 4]),
-                };
-                // Across the side, half the width each way.
-                let [x0, y0] = [from[0] - along[1] * w / 2.0, from[1] - along[0] * w / 2.0];
-                let [x1, y1] = [to[0] + along[1] * w / 2.0, to[1] + along[0] * w / 2.0];
-                Item::Rect {
-                    rect: Rect {
-                        x: x0,
-                        y: y0,
-                        width: x1 - x0,
-                        height: y1 - y0,
-                    },
-                    radii,
-                    color,
-                }
-            })
-            .collect();
+        let marks = placed(
+            marks(length, w, styles[k], Line::Side),
+            start,
+            along,
+            w,
+            color,
+        );
         // Chrome cuts a side at its corners only where the next side is unlike it.
         let unlike = [(k + 1) % 4, (k + 3) % 4]
             .into_iter()
@@ -114,14 +100,144 @@ pub(super) fn dashes(
         .collect()
 }
 
-/// The marks along a line, or with `closed` a loop, `length` long of a side `w` wide in `style`.
+/// What marks go along: a side of a border, a loop around one, or a text decoration's line.
+#[derive(Clone, Copy, PartialEq)]
+enum Line {
+    Side,
+    Loop,
+    Text,
+}
+
+/// Marks along a line `w` wide from `start` going `along`, as rects: dashes, and dots round, as
+/// wide as the line.
+fn placed(marks: Vec<Mark>, start: Point, along: [f32; 2], w: f32, color: [f32; 4]) -> Vec<Item> {
+    (marks.into_iter())
+        .map(|mark| {
+            let at = |s: f32| [start[0] + along[0] * s, start[1] + along[1] * s];
+            let ([from, to], radii) = match mark {
+                Mark::Dash([a, b]) => ([at(a), at(b)], SQUARE),
+                Mark::Dot(s) => ([at(s - w / 2.0), at(s + w / 2.0)], [[w / 2.0; 2]; 4]),
+            };
+            // Across the line, half its width each way.
+            let [x0, y0] = [from[0] - along[1] * w / 2.0, from[1] - along[0] * w / 2.0];
+            let [x1, y1] = [to[0] + along[1] * w / 2.0, to[1] + along[0] * w / 2.0];
+            Item::Rect {
+                rect: Rect {
+                    x: x0,
+                    y: y0,
+                    width: x1 - x0,
+                    height: y1 - y0,
+                },
+                radii,
+                color,
+            }
+        })
+        .collect()
+}
+
+/// The dots or dashes of a piece of a text decoration `w` thick in `style`, whose line runs
+/// `length` from `start`, as Chrome spaces them along it in whole px, the width rounded to whole
+/// px: those in `piece`, cut to it.
+pub(super) fn text(
+    piece: Rect,
+    start: f32,
+    length: f32,
+    w: f32,
+    style: DecorationStyle,
+    color: [f32; 4],
+) -> Vec<Item> {
+    let style = match style {
+        DecorationStyle::Dotted => BorderStyle::Dotted,
+        _ => BorderStyle::Dashed,
+    };
+    let [lo, hi] = [piece.x - start, piece.x + piece.width - start];
+    let (mut kept, mut cut) = (Vec::new(), Vec::new());
+    for mark in marks(length.round(), w.round().max(1.0), style, Line::Text) {
+        match mark {
+            Mark::Dash([a, b]) if a.max(lo) < b.min(hi).min(length) => {
+                kept.push(Mark::Dash([a.max(lo), b.min(hi).min(length)]))
+            }
+            Mark::Dot(s) if lo <= s - w / 2.0 && s + w / 2.0 <= hi => kept.push(mark),
+            Mark::Dot(s) if lo < s + w / 2.0 && s - w / 2.0 < hi => cut.push(mark),
+            _ => {}
+        }
+    }
+    let at = [start, piece.y + piece.height / 2.0];
+    let mut items = placed(kept, at, [1.0, 0.0], w, color);
+    if !cut.is_empty() {
+        items.push(Item::Mask {
+            mask: vec![Item::Rect {
+                rect: piece,
+                radii: SQUARE,
+                color: SHOWN,
+            }],
+            items: placed(cut, at, [1.0, 0.0], w, color),
+        });
+    }
+    items
+}
+
+/// A piece of a wavy text decoration `w` thick whose line starts at `start`, as Chrome draws it:
+/// its waves from the start, around the middle of `piece`, cut to it.
+pub(super) fn wave(piece: Rect, start: f32, w: f32, color: [f32; 4]) -> Vec<Item> {
+    let [step, control] = crate::text::wave(w);
+    let axis = piece.y + piece.height / 2.0;
+    let first = ((piece.x - start) / (2.0 * step)).floor() as i32;
+    let last = ((piece.x + piece.width - start) / (2.0 * step)).ceil() as i32;
+    // Each wave a curve down then up, as the control points take it, y down.
+    let mut middle: Vec<Point> = Vec::new();
+    for k in first..last {
+        let x0 = start + k as f32 * 2.0 * step;
+        let n = if middle.is_empty() { 0 } else { 1 };
+        middle.extend((n..=24).map(|n| {
+            let u = n as f32 / 24.0;
+            let x = x0 + step * 3.0 * u * (1.0 - u) + 2.0 * step * u * u * u;
+            [x, axis + control * 3.0 * u * (1.0 - u) * (1.0 - 2.0 * u)]
+        }));
+    }
+    // Stroked: half the width either side of it.
+    let normal = |i: usize| {
+        let [a, b] = [
+            middle[i.saturating_sub(1)],
+            middle[(i + 1).min(middle.len() - 1)],
+        ];
+        let d = (b[0] - a[0]).hypot(b[1] - a[1]);
+        [(a[1] - b[1]) / d, (b[0] - a[0]) / d]
+    };
+    let off = |i: usize, by: f32| {
+        let n = normal(i);
+        [middle[i][0] + n[0] * by, middle[i][1] + n[1] * by]
+    };
+    let outline: Vec<Point> = (0..middle.len())
+        .map(|i| off(i, w / 2.0))
+        .chain((0..middle.len()).rev().map(|i| off(i, -w / 2.0)))
+        .collect();
+    let mut path = vec![Segment::Move(outline[0])];
+    path.extend(outline[1..].iter().map(|&p| Segment::Line(p)));
+    vec![Item::Mask {
+        mask: vec![Item::Rect {
+            rect: piece,
+            radii: SQUARE,
+            color: SHOWN,
+        }],
+        items: vec![Item::Path {
+            path: Path(path),
+            even_odd: false,
+            color,
+        }],
+    }]
+}
+
+/// The marks along a side, a loop or a text decoration's line `length` long, `w` wide in `style`.
 /// Dashes are three times as long as the width under 3 px and twice as long from 3 px, with gaps
-/// two widths and one, as near as a whole number of them fits, or the side is solid; a line
-/// starts and ends with a dash. Dots from 4 px are round, as wide as the side, a width apart as
+/// two widths and one, as near as a whole number of them fits, or the line is solid; a line
+/// starts and ends with a dash. Dots from 4 px are round, as wide as the line, a width apart as
 /// near as fits, and from the line's ends, or one where it is too short for two. Under that they
-/// are square: a line has them at both ends, and between them a width apart from its end, half a
-/// width further on, in whole px, where the first would touch the one at its start.
-fn marks(length: f32, w: f32, style: BorderStyle, closed: bool) -> Vec<Mark> {
+/// are square: a side has them at both ends, and between them a width apart from its end, half a
+/// width further on, in whole px, where the first would touch the one at its start; a text line,
+/// a width apart from its start.
+fn marks(length: f32, w: f32, style: BorderStyle, line: Line) -> Vec<Mark> {
+    let closed = line == Line::Loop;
     let round = style == BorderStyle::Dotted && w > 3.0;
     if round {
         if length <= 2.0 * w {
@@ -141,7 +257,13 @@ fn marks(length: f32, w: f32, style: BorderStyle, closed: bool) -> Vec<Mark> {
     if length <= 2.0 * dash {
         return vec![Mark::Dash([0.0, length])];
     }
-    if style == BorderStyle::Dotted && !closed {
+    if style == BorderStyle::Dotted && line == Line::Text {
+        let starts = (0..)
+            .map(|n| n as f32 * 2.0 * w)
+            .take_while(|&s| s < length);
+        return starts.map(|s| Mark::Dash([s, s + w])).collect();
+    }
+    if style == BorderStyle::Dotted && line == Line::Side {
         let mut between: Vec<f32> = (1..)
             .map(|n| length - w - n as f32 * 2.0 * w)
             .take_while(|&s| s >= w)
@@ -263,7 +385,7 @@ fn around(
     let mut path = Vec::new();
     let mut marked = Vec::new();
     // Chrome spaces them along the loop's length in whole px.
-    for mark in marks(length.floor(), w, style, true) {
+    for mark in marks(length.floor(), w, style, Line::Loop) {
         match mark {
             Mark::Dot(s) => {
                 let ([x, y], _) = at(s);
@@ -352,7 +474,8 @@ mod tests {
     use super::*;
 
     fn dashes(length: f32, w: f32, style: BorderStyle, closed: bool) -> Vec<[f32; 2]> {
-        (marks(length, w, style, closed).into_iter())
+        let line = if closed { Line::Loop } else { Line::Side };
+        (marks(length, w, style, line).into_iter())
             .map(|m| match m {
                 Mark::Dash(d) => d,
                 Mark::Dot(s) => [s, s],

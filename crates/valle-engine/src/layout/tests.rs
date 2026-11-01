@@ -470,6 +470,52 @@ fn decorations_are_lines_on_runs_with_gaps_at_ink() {
 }
 
 #[test]
+fn decoration_styles_draw_two_lines_or_a_wave_or_marks_along_the_run() {
+    let lines = |decoration: &str| {
+        let style = [
+            ("fontSize", "20px"),
+            ("lineHeight", "30px"),
+            ("textDecoration", decoration),
+            ("textDecorationSkipInk", "none"),
+        ];
+        let l = lay(vec![text_node("mmm", &style)], &[0]).unwrap();
+        l.lines[0].clone().unwrap()
+    };
+    let rows = |l: &Lines| -> Vec<[f32; 2]> {
+        l.decorations
+            .iter()
+            .map(|d| [d.rect[1], d.rect[3]])
+            .collect()
+    };
+    // A double line is two solid ones, a px past the thickness apart: under, and over upward.
+    let solid = lines("underline 3px");
+    let [top, bottom] = [solid.decorations[0].rect[1], solid.decorations[0].rect[3]];
+    let double = lines("underline double 3px");
+    assert_eq!(rows(&double), [[top, bottom], [top + 4.0, bottom + 4.0]]);
+    assert!(
+        double
+            .decorations
+            .iter()
+            .all(|d| d.style == DecorationStyle::Solid)
+    );
+    let over = lines("overline double 3px");
+    let [first, second] = [over.decorations[0].rect[1], over.decorations[1].rect[1]];
+    assert_eq!(second, first - 4.0);
+    // A wave is around an axis half a px under the line's top and as far again further out, in
+    // a band its curve stays in; dots are spaced along the whole run.
+    let wavy = lines("underline wavy 3px");
+    let [y0, y1] = [wavy.decorations[0].rect[1], wavy.decorations[0].rect[3]];
+    assert_eq!((y0 + y1) / 2.0, top + 0.5 + 4.0);
+    assert!(y1 - y0 > 2.0 * 10.5);
+    let dotted = lines("underline dotted");
+    let d = dotted.decorations[0];
+    assert_eq!(
+        (d.style, d.along),
+        (DecorationStyle::Dotted, dotted.runs[0].x)
+    );
+}
+
+#[test]
 fn a_decoration_takes_the_font_of_its_decorating_box() {
     let piece = |s: &str| template::Piece::Text(Prop::Const(V::Str(s.into())));
     let mut text = text_node("", &[("textDecoration", "line-through")]);

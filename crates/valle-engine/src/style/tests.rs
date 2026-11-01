@@ -750,7 +750,15 @@ fn text_decoration_sets_its_longhands_or_refuses() {
     let d = |v: &str| one(&[("textDecoration", text(v))]).decorations;
     assert!(d("none").is_empty());
     let all = &d("Line-Through underline solid 2px #00f")[0];
-    assert_eq!(all.lines, [true, false, true]);
+    assert_eq!(
+        (all.lines, all.style),
+        ([true, false, true], DecorationStyle::Solid)
+    );
+    let wavy = one(&[
+        ("textDecoration", text("underline wavy")),
+        ("textDecorationStyle", text("dotted")),
+    ]);
+    assert_eq!(wavy.decorations[0].style, DecorationStyle::Dotted);
     assert_eq!(all.color, color::parse("#00f").unwrap());
     assert_eq!(all.thickness.as_ref().map(|t| t.resolve(16.0)), Some(2.0));
     let reset = one(&[
@@ -767,7 +775,7 @@ fn text_decoration_sets_its_longhands_or_refuses() {
     for (bad, message) in [
         ("underline red overline", "twice"),
         ("none underline", "is not a text-decoration-line"),
-        ("underline wavy", "wavy decorations are not supported yet"),
+        ("underline wavy dashed", "twice"),
         ("underline from-font", "from-font is not supported yet"),
         ("underline 2", "needs a unit"),
         ("blink", "is not a color"),

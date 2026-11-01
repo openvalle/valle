@@ -17,10 +17,10 @@ use taffy::{
     compute_root_layout,
 };
 
-use crate::style::Style;
 use crate::style::math::{self, Calc};
+use crate::style::{DecorationStyle, Style};
 use crate::template::{self, Error, Kind, Prop, Template, V};
-use crate::text::{Content, Lines, Piece, Stripe, Text};
+use crate::text::{Content, Lines, Piece, Stripe, Text, wave};
 
 /// A rectangle in canvas px, y down.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -331,9 +331,11 @@ fn spans(
 /// to whole px; it is drawn whole px thick, at least 1, its top on a whole px of the canvas. An
 /// underline is under the baseline by its offset, or by half its thickness rounded up to whole
 /// px, at least 1; an overline is on the run's ascent; a line-through is centered two thirds of
-/// the decorating box's ascent under the run's ascent. Underlines and overlines leave gaps where
-/// the run's glyphs have ink across them but for their outer half px, wider by their thickness on
-/// each side, up to 13 px, with edges rounded to whole px.
+/// the decorating box's ascent under the run's ascent. A double line has a second line a px past
+/// its thickness further out, under a line-through; a wavy one's wave is half a px under its top,
+/// that much further out. Underlines and overlines leave gaps where the run's glyphs have ink
+/// across them, all lines of them, but for their outer half px, wider by their thickness on each
+/// side, up to 13 px, with edges rounded to whole px.
 fn decorations(
     lines: &Lines,
     at: [f32; 2],
@@ -362,30 +364,61 @@ fn decorations(
                 Some(t) => t.resolve(size).round().max(1.0),
             };
             let height = thickness.trunc().max(1.0);
+            // Each line's top, and which way from it a second line or a wave goes.
             let mut tops = Vec::new();
             if d.lines[0] {
                 let offset = match &d.offset {
                     None => (thickness / 2.0).ceil().max(1.0),
                     Some(o) => o.resolve(size),
                 };
-                tops.push((baseline + offset, false));
+                tops.push((baseline + offset, 1.0));
             }
             if d.lines[1] {
-                tops.push((baseline - ascent - height, false));
+                tops.push((baseline - ascent - height, -1.0));
             }
             if d.lines[2] {
                 let decorating = text.metrics(font)?[0].round();
                 let top = baseline - ascent + decorating * 2.0 / 3.0 - thickness / 2.0;
-                tops.push((top, true));
+                tops.push((top, 0.0));
             }
-            for (top, through) in tops {
-                let y = top.round();
+            for (top, way) in tops {
+                let (y, through) = (top.round(), way == 0.0);
+                // The rows it is drawn in, and the band of them its gaps are for.
+                let (rows, band) = match d.style {
+                    DecorationStyle::Double => {
+                        let apart = match through {
+                            true => (thickness + 1.0).floor(),
+                            false => way * (thickness + 1.0),
+                        };
+                        let second = (top + apart).round();
+                        let rows = vec![[y, y + height], [second, second + height]];
+                        let band = [top.min(top + apart), top.max(top + apart) + thickness];
+                        (rows, band)
+                    }
+                    DecorationStyle::Wavy => {
+                        let axis = y + 0.5 + way * (thickness + 1.0);
+                        let [_, control] = wave(thickness);
+                        let (reach, ink) = (control + thickness, control * 0.29 + thickness / 2.0);
+                        (vec![[axis - reach, axis + reach]], [axis - ink, axis + ink])
+                    }
+                    // Stroked as thick as it is, its dots and dashes as wide as that in whole px,
+                    // centered on a whole px, or a half one for an odd width, whose stroke's band
+                    // its gaps are for.
+                    DecorationStyle::Dotted | DecorationStyle::Dashed => {
+                        let w = thickness.round().max(1.0);
+                        let odd = if w % 2.0 == 1.0 { 0.5 } else { 0.0 };
+                        let middle = (top + (thickness / 2.0).max(0.5)).floor() + odd;
+                        let rows = vec![[middle - thickness / 2.0, middle + thickness / 2.0]];
+                        (rows, [middle - w / 2.0, middle + w / 2.0])
+                    }
+                    _ => (vec![[y, y + height]], [top, top + thickness]),
+                };
                 let mut gaps = Vec::new();
                 if !through && style.font.skip_ink {
                     let dilation = thickness.min(13.0);
                     for g in glyphs {
-                        let below = top - at[1] - g.y;
-                        let band = [below + 0.5, below + thickness - 0.5];
+                        let below = |y: f32| y - at[1] - g.y;
+                        let band = [below(band[0]) + 0.5, below(band[1]) - 0.5];
                         let size = style.font.size as f32;
                         if let Some([x0, x1]) = text.ink(g.face, g.id, size, band)? {
                             let x = at[0] + g.x;
@@ -396,19 +429,21 @@ fn decorations(
                 }
                 let mut x = at[0] + run.x[0];
                 let end = at[0] + run.x[1];
+                let style = match d.style {
+                    DecorationStyle::Double => DecorationStyle::Solid,
+                    style => style,
+                };
                 for [g0, g1] in gaps.into_iter().chain([[end, end]]) {
                     if g0.min(end) > x {
-                        out.push(Stripe {
-                            rect: [
-                                x - at[0],
-                                y - at[1],
-                                g0.min(end) - at[0],
-                                y + height - at[1],
-                            ],
+                        out.extend(rows.iter().map(|&[y0, y1]| Stripe {
+                            rect: [x - at[0], y0 - at[1], g0.min(end) - at[0], y1 - at[1]],
+                            along: run.x,
+                            style,
+                            thickness,
                             color: d.color,
                             run: k as u32,
                             through,
-                        });
+                        }));
                     }
                     x = x.max(g1);
                 }
