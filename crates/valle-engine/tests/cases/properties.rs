@@ -1618,6 +1618,20 @@ const ROWS: &[Row] = &[
         ],
     },
     Row {
+        properties: &["backdropFilter"],
+        sample: r##"<View style={{ height: 8, background: "linear-gradient(to right, #e53935, #fdd835, #43a047, #1e88e5, #8e24aa)" }}><View style={{ height: 8, margin: "0 40px", PROPERTY: VALUE }} /></View>"##,
+        values: &[
+            "\"none\"",
+            "\"blur(3px)\"",
+            "\"grayscale(1)\"",
+            "\"invert(1)\"",
+            "\"hue-rotate(90deg) saturate(2)\"",
+            "\"opacity(0.3)\"",
+            "\" SEPIA(1) \"",
+        ],
+        refused: &["\"blur(-1px)\"", "\"\"", "0"],
+    },
+    Row {
         properties: &["visibility"],
         sample: r##"<View style={{ padding: 2, background: "#e8eaf6", PROPERTY: VALUE }}><View style={{ height: 6, background: "#3949ab" }} /><View style={{ height: 6, visibility: "visible", background: "#7986cb" }} /><Text style={{ fontSize: 8 }}>Ag</Text></View>"##,
         values: &["\"visible\"", "\"hidden\"", "\"collapse\"", "\" HIDDEN \""],

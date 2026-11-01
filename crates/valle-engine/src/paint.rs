@@ -96,6 +96,15 @@ pub enum Item {
         filters: Vec<Filter>,
         items: Vec<Item>,
     },
+    /// What is under a box's layer, in its border box `rect`, its edges mirrored, through
+    /// `filters`, drawn inside the rectangle with its corners rounded by `radii`. Under it is all
+    /// drawn since the nearest layer that starts empty for what is in it, and those are the
+    /// layers of a box with an opacity, a blend or a filter of it or of what is under it.
+    Backdrop {
+        filters: Vec<Filter>,
+        rect: Rect,
+        radii: Radii,
+    },
     /// Items where a x + b y + c ≥ 0 for `line` [a, b, c], with a hard edge: the part of a
     /// plane of a 3D scene on one side of another plane, so that two parts share each pixel.
     Cut { line: [f32; 3], items: Vec<Item> },
@@ -371,10 +380,10 @@ fn snap(r: Rect) -> Rect {
     }
 }
 
-/// A box's filter functions as filters, those of colors one after another in one.
-fn filters(s: &Style) -> Vec<Filter> {
+/// Filter functions as filters, those of colors one after another in one.
+fn filters(functions: &[filter::Function]) -> Vec<Filter> {
     let mut out = Vec::new();
-    for f in &s.filter {
+    for f in functions {
         let next = match f {
             filter::Function::Blur(sigma) => Filter::Blur(*sigma as f32),
             filter::Function::DropShadow {
@@ -723,7 +732,7 @@ impl Painter<'_> {
             return self.scene(d, out);
         }
         let mut drawn = Vec::new();
-        if !s.transform.is_empty() || !s.filter.is_empty() {
+        if s.contains_all() {
             let space = self.spaces[d];
             let matrix = space.flatten();
             // Its back hides it and all in it, as they are on its plane.
@@ -733,12 +742,13 @@ impl Painter<'_> {
             }
             let mut inside = Vec::new();
             self.context(Some(d), &mut inside);
-            // It contains all in it, so the clips around it go around its filter and transform.
+            // It contains all in it, so the clips around it go around all it paints.
             let mut items = self.nest_from(self.chained(inside), self.clips[d].len());
             if !s.filter.is_empty() && !items.is_empty() {
-                let filters = filters(s);
+                let filters = filters(&s.filter);
                 items = vec![Item::Filter { filters, items }];
             }
+            items = self.over_backdrop(d, items);
             if !s.transform.is_empty() && !items.is_empty() {
                 items = vec![Item::Transform { matrix, items }];
             }
@@ -756,16 +766,38 @@ impl Painter<'_> {
         }
     }
 
-    /// Whether stacking context `d` paints as one layer: it has an opacity or blends, or a box in
-    /// it blends, which blends with what the context paints alone, as CSS isolates a stacking
-    /// context.
+    /// Whether stacking context `d` paints as one layer: it has an opacity, blends or filters its
+    /// backdrop, or a box in it blends, which blends with what the context paints alone, as CSS
+    /// isolates a stacking context.
     fn grouped(&self, d: usize) -> bool {
         let s = &self.styles[d];
-        s.opacity < 1.0 || s.blend != Blend::Normal || {
+        s.opacity < 1.0 || s.blend != Blend::Normal || !s.backdrop.is_empty() || {
             let mut layered = Vec::new();
             self.collect(Some(d), &mut layered);
             (layered.iter()).any(|&b| self.styles[b].blend != Blend::Normal)
         }
+    }
+
+    /// `items` over what is under `d` through its backdrop filter, in its border box, if it has
+    /// one. They are a layer of their own, so what is in the box sees what it paints, not its
+    /// backdrop, as in Chrome.
+    fn over_backdrop(&self, d: usize, items: Vec<Item>) -> Vec<Item> {
+        let s = &self.styles[d];
+        let rect = snap(self.layout.boxes[d].border);
+        if s.backdrop.is_empty() || rect.width <= 0.0 || rect.height <= 0.0 {
+            return items;
+        }
+        let backdrop = Item::Backdrop {
+            filters: filters(&s.backdrop),
+            rect,
+            radii: self.radii(d, rect),
+        };
+        let inside = (!items.is_empty()).then_some(Item::Group {
+            opacity: 1.0,
+            blend: Blend::Normal,
+            items,
+        });
+        std::iter::once(backdrop).chain(inside).collect()
     }
 
     /// Whether `i` is a plane of a 3D scene: its parent keeps its children in its space, and it
@@ -807,9 +839,10 @@ impl Painter<'_> {
             self.context(Some(e), &mut drawn);
             let mut items = self.nest_from(self.chained(drawn), self.clips[e].len());
             if !s.filter.is_empty() && !items.is_empty() {
-                let filters = filters(s);
+                let filters = filters(&s.filter);
                 items = vec![Item::Filter { filters, items }];
             }
+            items = self.over_backdrop(e, items);
             if self.grouped(e) {
                 items = group(s.opacity as f32, s.blend, items)
                     .into_iter()

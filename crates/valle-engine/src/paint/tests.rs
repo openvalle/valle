@@ -52,6 +52,7 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Clip { items, .. } => format!("clip {:?}", names(items)),
             Item::Transform { items, .. } => format!("transform {:?}", names(items)),
             Item::Cut { items, .. } => format!("cut {:?}", names(items)),
+            Item::Backdrop { filters, .. } => format!("backdrop of {}", filters.len()),
             Item::Filter { filters, items } => {
                 let filters: Vec<&str> = (filters.iter())
                     .map(|f| match f {
@@ -746,6 +747,43 @@ fn a_filter_takes_all_a_box_paints_inside_its_transform_and_clips() {
     assert_eq!(m[0][..3], [0.2126, 0.7152, 0.0722]);
     assert_eq!(m[1][..4], [0.0; 4]);
     assert_eq!(m[1][16..], [0.5, 0.5, 0.5, 0.0]);
+}
+
+#[test]
+fn a_backdrop_filter_paints_under_its_box_in_a_layer() {
+    let order = painted(
+        vec![
+            view(&[("background", "gray")], &[1]),
+            view(
+                &[
+                    ("backdropFilter", "blur(4px) grayscale(1)"),
+                    ("margin", "10px"),
+                    ("height", "20px"),
+                    ("borderRadius", "5px"),
+                    ("background", "red"),
+                ],
+                &[2],
+            ),
+            // Fixed, in it.
+            view(
+                &[
+                    ("position", "fixed"),
+                    ("width", "5px"),
+                    ("height", "5px"),
+                    ("background", "blue"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    assert_eq!(
+        order,
+        [
+            "gray",
+            r#"group 1 ["backdrop of 2", "group 1 [\"red\", \"blue\"]"]"#
+        ]
+    );
 }
 
 #[test]

@@ -341,6 +341,11 @@ enum Step {
         layer: usize,
         at: u32,
     },
+    /// Copies `layer`, or the frame, into `target`, a new layer.
+    Copy {
+        target: usize,
+        layer: usize,
+    },
 }
 
 impl Step {
@@ -351,9 +356,26 @@ impl Step {
             Step::Composite { layer, .. }
             | Step::Blend { layer, .. }
             | Step::Blur { layer, .. }
-            | Step::Colors { layer, .. } => Some(*layer),
+            | Step::Colors { layer, .. }
+            | Step::Copy { layer, .. } => Some(*layer),
         }
     }
+}
+
+/// What is under what a plan is at, as a backdrop reads it.
+#[derive(Clone, Default)]
+struct Seen {
+    here: Under,
+    /// Around the innermost group: the backdrop of the box it is of.
+    group: Under,
+}
+
+/// The nearest target that started empty for what is drawn in it, a group's or a filter's layer,
+/// or the frame, and the layers begun since, each with the instance compositing it.
+#[derive(Clone, Default)]
+struct Under {
+    root: usize,
+    open: Vec<(usize, u32)>,
 }
 
 #[derive(Default)]
@@ -366,6 +388,7 @@ struct Plan {
     layers: Vec<u32>,
     steps: Vec<Step>,
     targets: usize,
+    seen: Seen,
 }
 
 impl Plan {
@@ -389,15 +412,63 @@ impl Plan {
         self.steps.push(Step::Composite { target, layer, at });
     }
 
-    /// A new layer of `layer` blurred by a Gaussian of `sigma` px: along x, then along y.
-    fn blurred(&mut self, mut layer: usize, sigma: f32) -> usize {
+    /// A new layer of `layer` blurred by a Gaussian of `sigma` px: along x, then along y. Within
+    /// `bounds` (x, y, width and height, whole px) if they are given, which it reads as if
+    /// mirrored at their edges.
+    fn blurred(&mut self, mut layer: usize, sigma: f32, bounds: Option<[f32; 4]>) -> usize {
         if sigma > 0.0 {
             for [x, y] in [[1.0, 0.0], [0.0, 1.0]] {
-                let at = self.words([sigma, x, y, 0.0].into_iter().chain([0.0; 16]));
+                let words = [sigma, x, y, 0.0].into_iter();
+                let words = words.chain(bounds.unwrap_or([0.0; 4])).chain([0.0; 12]);
+                let at = self.words(words);
                 let target = self.layer();
                 self.steps.push(Step::Blur { target, layer, at });
                 layer = target;
             }
+        }
+        layer
+    }
+
+    /// A new layer of `layer` through `filters`, in the px `matrix` takes to the target's, where
+    /// a blur is as much larger as the transform makes it and an offset turns with it. Blurs are
+    /// within `bounds` if they are given.
+    fn filtered(
+        &mut self,
+        mut layer: usize,
+        filters: &[Filter],
+        matrix: Matrix,
+        bounds: Option<[f32; 4]>,
+    ) -> usize {
+        let scale = matrix.radius_scale() as f32;
+        let [x, y, _] = matrix.0;
+        for filter in filters {
+            layer = match filter {
+                Filter::Blur(sigma) => self.blurred(layer, sigma * scale, bounds),
+                Filter::Colors(matrices) => self.colored(layer, [0.0; 2], matrices),
+                Filter::Shadow {
+                    offset: [dx, dy],
+                    sigma,
+                    color,
+                } => {
+                    let a = color[3];
+                    if a <= 0.0 {
+                        continue;
+                    }
+                    // The alpha in the color, moved and blurred, under the layer.
+                    let [r, g, b] = [0, 1, 2].map(|k| color[k] / a);
+                    let mut tint = [0.0; 20];
+                    tint[15] = a;
+                    tint[16..19].copy_from_slice(&[r, g, b]);
+                    let (dx, dy) = (f64::from(*dx), f64::from(*dy));
+                    let offset = [0, 1].map(|k| (x[k] * dx + y[k] * dy) as f32);
+                    let shadow = self.colored(layer, offset, &[tint]);
+                    let shadow = self.blurred(shadow, sigma * scale, bounds);
+                    let both = self.layer();
+                    self.composite(both, shadow);
+                    self.composite(both, layer);
+                    both
+                }
+            };
         }
         layer
     }
@@ -742,42 +813,52 @@ impl<'a> Renderer<'a> {
                         let runs = std::mem::take(runs);
                         plan.steps.push(Step::Draw { target, runs });
                     }
-                    // In the target's px, where a blur is as much larger as the transform makes
-                    // it, and an offset turns with it.
-                    let scale = matrix.radius_scale() as f32;
-                    let [x, y, _] = matrix.0;
-                    let mut layer = plan.layer();
+                    let layer = plan.layer();
+                    let mut inside = plan.seen.clone();
+                    inside.here = Under {
+                        root: layer,
+                        open: Vec::new(),
+                    };
+                    let around = std::mem::replace(&mut plan.seen, inside);
                     self.plan(items, layer, at, faces, plan, atlas)?;
-                    for filter in filters {
-                        layer = match filter {
-                            Filter::Blur(sigma) => plan.blurred(layer, sigma * scale),
-                            Filter::Colors(matrices) => plan.colored(layer, [0.0; 2], matrices),
-                            Filter::Shadow {
-                                offset: [dx, dy],
-                                sigma,
-                                color,
-                            } => {
-                                let a = color[3];
-                                if a <= 0.0 {
-                                    continue;
-                                }
-                                // The alpha in the color, moved and blurred, under the layer.
-                                let [r, g, b] = [0, 1, 2].map(|k| color[k] / a);
-                                let mut tint = [0.0; 20];
-                                tint[15] = a;
-                                tint[16..19].copy_from_slice(&[r, g, b]);
-                                let (dx, dy) = (f64::from(*dx), f64::from(*dy));
-                                let offset = [0, 1].map(|k| (x[k] * dx + y[k] * dy) as f32);
-                                let shadow = plan.colored(layer, offset, &[tint]);
-                                let shadow = plan.blurred(shadow, sigma * scale);
-                                let both = plan.layer();
-                                plan.composite(both, shadow);
-                                plan.composite(both, layer);
-                                both
-                            }
-                        };
-                    }
+                    plan.seen = around;
+                    let layer = plan.filtered(layer, filters, matrix, None);
                     plan.composite(target, layer);
+                }
+                Item::Backdrop {
+                    filters,
+                    rect,
+                    radii,
+                } => {
+                    if !runs.is_empty() {
+                        let runs = std::mem::take(runs);
+                        plan.steps.push(Step::Draw { target, runs });
+                    }
+                    // What is under the box's group: where it began, and the layers begun since,
+                    // as they are, in the box's border box, its edges mirrored.
+                    let Under { root, open } = plan.seen.group.clone();
+                    let copy = plan.layer();
+                    plan.steps.push(Step::Copy {
+                        target: copy,
+                        layer: root,
+                    });
+                    for (layer, at) in open {
+                        plan.steps.push(Step::Composite {
+                            target: copy,
+                            layer,
+                            at,
+                        });
+                    }
+                    let b = matrix.bounds(*rect);
+                    let [x0, y0] = [b.x, b.y].map(f32::floor);
+                    let [x1, y1] = [b.x + b.width, b.y + b.height].map(f32::ceil);
+                    let bounds = [x0, y0, x1 - x0, y1 - y0];
+                    let layer = plan.filtered(copy, filters, matrix, Some(bounds));
+                    let at = plan.words([1.0, 0.0, 0.0, 0.0].into_iter().chain(xywh(*rect)));
+                    plan.layers
+                        .extend(radii.iter().flatten().map(|v| v.to_bits()));
+                    plan.layers.extend([transform, 0, 0, 0]);
+                    plan.steps.push(Step::Composite { target, layer, at });
                 }
                 Item::Group {
                     opacity,
@@ -789,7 +870,16 @@ impl<'a> Renderer<'a> {
                         plan.steps.push(Step::Draw { target, runs });
                     }
                     let layer = plan.layer();
+                    let inside = Seen {
+                        here: Under {
+                            root: layer,
+                            open: Vec::new(),
+                        },
+                        group: plan.seen.here.clone(),
+                    };
+                    let around = std::mem::replace(&mut plan.seen, inside);
                     self.plan(items, layer, at, faces, plan, atlas)?;
+                    plan.seen = around;
                     let words = [*opacity, *blend as u32 as f32, 0.0, 0.0];
                     let at = plan.words(words.into_iter().chain([0.0; 16]));
                     plan.steps.push(Step::Blend { target, layer, at });
@@ -826,9 +916,6 @@ impl<'a> Renderer<'a> {
                         } => (items, 1.0, *sigma, xywh(*rect), *radii, !inside),
                         _ => unreachable!("a group, a clip or a shadow"),
                     };
-                    let layer = plan.layer();
-                    self.plan(items, layer, at, faces, plan, atlas)?;
-                    let layer = plan.blurred(layer, sigma * matrix.radius_scale() as f32);
                     let index = (plan.layers.len() / LAYER) as u32;
                     let cut = f32::from(u8::from(matches!(item, Item::Cut { .. })));
                     let words = [opacity, f32::from(u8::from(outside)), cut, 0.0]
@@ -841,6 +928,28 @@ impl<'a> Renderer<'a> {
                         _ => transform,
                     };
                     plan.layers.extend([on, 0, 0, 0]);
+                    let layer = plan.layer();
+                    // A group's layer is under what is in it; a clip's or a cut's is drawn over
+                    // what is under it.
+                    let inside = match item {
+                        Item::Group { .. } => Seen {
+                            here: Under {
+                                root: layer,
+                                open: Vec::new(),
+                            },
+                            group: plan.seen.here.clone(),
+                        },
+                        Item::Shadow { .. } => plan.seen.clone(),
+                        _ => {
+                            let mut seen = plan.seen.clone();
+                            seen.here.open.push((layer, index));
+                            seen
+                        }
+                    };
+                    let around = std::mem::replace(&mut plan.seen, inside);
+                    self.plan(items, layer, at, faces, plan, atlas)?;
+                    plan.seen = around;
+                    let layer = plan.blurred(layer, sigma * matrix.radius_scale() as f32, None);
                     plan.steps.push(Step::Composite {
                         target,
                         layer,
@@ -905,12 +1014,33 @@ impl<'a> Renderer<'a> {
             }
         }
         for (k, step) in plan.steps.iter().enumerate() {
+            if let Step::Copy { target, layer } = *step {
+                // Nothing to copy from a layer nothing was drawn into, and the frame is cleared
+                // first if nothing was.
+                if layer != 0 && surfaces[layer].is_none() {
+                    continue;
+                }
+                let to = take(gpu, &mut self.pool, &mut self.free, self.size);
+                surfaces[target] = Some(to);
+                started[target] = true;
+                let from = surfaces[layer].map_or(&self.frame, |s| &self.pool[s]);
+                if !std::mem::replace(&mut started[layer], true) {
+                    drop(begin(encoder, &from.view, false));
+                }
+                encoder.copy_texture_to_texture(
+                    from.texture.as_image_copy(),
+                    self.pool[to].texture.as_image_copy(),
+                    from.texture.size(),
+                );
+                continue;
+            }
             let (target, read) = match step {
                 Step::Draw { target, .. } => (*target, None),
                 Step::Composite { target, layer, .. }
                 | Step::Blend { target, layer, .. }
                 | Step::Blur { target, layer, .. }
                 | Step::Colors { target, layer, .. } => (*target, Some(*layer)),
+                Step::Copy { .. } => unreachable!("copied above"),
             };
             let layer = match read.map(|l| surfaces[l]) {
                 None => None,
@@ -947,6 +1077,7 @@ impl<'a> Renderer<'a> {
             let mut pass = begin(encoder, view, std::mem::replace(&mut started[target], true));
             pass.set_bind_group(0, draw, &[]);
             match step {
+                Step::Copy { .. } => {}
                 Step::Draw { runs, .. } => {
                     for run in runs {
                         let (pipeline, range) = match run {

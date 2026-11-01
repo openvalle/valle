@@ -78,8 +78,9 @@ pub struct Style {
     /// with what is under it.
     pub blend: Blend,
     pub isolate: bool,
-    /// `filter`: empty for `none`.
+    /// `filter` and `backdrop-filter`: empty for `none`.
     pub filter: Vec<filter::Function>,
+    pub backdrop: Vec<filter::Function>,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
@@ -90,23 +91,25 @@ pub struct Style {
 
 impl Style {
     /// Whether the box is the containing block of every box in it, fixed ones too, and a
-    /// stacking context: it has a transform, a perspective or a filter, or preserves 3D, as CSS
-    /// has it.
+    /// stacking context: it has a transform, a perspective, a filter or a backdrop filter, or
+    /// preserves 3D, as CSS has it.
     pub fn contains_all(&self) -> bool {
         !self.transform.is_empty()
             || self.perspective.is_some()
             || self.preserve_3d
             || !self.filter.is_empty()
+            || !self.backdrop.is_empty()
     }
 
     /// Whether its children with transforms stay in its space: it preserves 3D and nothing
     /// groups what is in it into one flat layer, as an opacity, a clip, a blend, isolation or a
-    /// filter does.
+    /// filter of it or of its backdrop does.
     pub fn keeps_3d(&self) -> bool {
         let o = self.layout.overflow;
         self.preserve_3d
             && self.opacity >= 1.0
             && self.filter.is_empty()
+            && self.backdrop.is_empty()
             && self.blend == Blend::Normal
             && !self.isolate
             && o.x == taffy::Overflow::Visible
@@ -667,6 +670,7 @@ struct Declared {
     blend: Blend,
     isolate: bool,
     filter: Vec<filter::Function<Len, Option<Rgba>>>,
+    backdrop: Vec<filter::Function<Len, Option<Rgba>>>,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -737,6 +741,7 @@ impl Default for Declared {
             blend: Blend::Normal,
             isolate: false,
             filter: Vec::new(),
+            backdrop: Vec::new(),
             visible: None,
             color: None,
             font_size: None,
@@ -833,6 +838,7 @@ enum Field {
     MixBlendMode,
     Isolation,
     Filter,
+    BackdropFilter,
     Visibility,
     Color,
     FontSize,
@@ -890,7 +896,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 174] = [
+const FIELDS: [(&str, Field); 175] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1156,6 +1162,7 @@ const FIELDS: [(&str, Field); 174] = [
     ("mixBlendMode", Field::MixBlendMode),
     ("isolation", Field::Isolation),
     ("filter", Field::Filter),
+    ("backdropFilter", Field::BackdropFilter),
     ("translate", Field::Translate),
     ("rotate", Field::Rotate),
     ("scale", Field::Scale),
@@ -2141,6 +2148,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::MixBlendMode => d.blend = keyword(v, &BLENDS)?,
         F::Isolation => d.isolate = keyword(v, &[("auto", false), ("isolate", true)])?,
         F::Filter => d.filter = filter::filter(&text(v)?)?,
+        F::BackdropFilter => d.backdrop = filter::filter(&text(v)?)?,
         F::Visibility => {
             // Collapse is hidden but in tables, which there are none of.
             let shown = [("visible", true), ("hidden", false), ("collapse", false)];
@@ -2366,6 +2374,7 @@ fn compute(
         blend: d.blend,
         isolate: d.isolate,
         filter: d.filter.iter().map(|f| f.computed(u, color)).collect(),
+        backdrop: d.backdrop.iter().map(|f| f.computed(u, color)).collect(),
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,
