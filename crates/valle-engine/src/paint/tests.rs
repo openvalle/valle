@@ -92,6 +92,34 @@ fn flex_items_paint_all_at_once() {
 }
 
 #[test]
+fn flex_items_paint_in_order() {
+    let item = |color, order| {
+        let style = [("width", "10px"), ("background", color), ("order", order)];
+        view(&style, &[])
+    };
+    let order = painted(
+        vec![
+            view(&[("display", "flex"), ("height", "10px")], &[1, 2, 3]),
+            item("red", "1"),
+            item("green", "0"),
+            view(
+                &[
+                    ("position", "absolute"),
+                    ("width", "10px"),
+                    ("height", "10px"),
+                    ("order", "-1"),
+                    ("background", "blue"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    // The absolute box paints later, with the positioned boxes.
+    assert_eq!(order, ["green", "red", "blue"]);
+}
+
+#[test]
 fn opacity_makes_a_layer_painted_with_the_positioned_boxes() {
     let half = [("opacity", "0.5"), ("height", "10px")];
     let order = painted(

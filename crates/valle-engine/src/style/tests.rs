@@ -125,6 +125,33 @@ fn logical_sides_are_the_physical_ones_in_declaration_order() {
 }
 
 #[test]
+fn box_sizing_aspect_ratio_and_order() {
+    let initial = one(&[]);
+    assert_eq!(initial.layout.box_sizing, BoxSizing::BorderBox);
+    assert_eq!((initial.layout.aspect_ratio, initial.order), (None, 0));
+    let content = one(&[("boxSizing", text(" Content-Box "))]);
+    assert_eq!(content.layout.box_sizing, BoxSizing::ContentBox);
+    let ratio = |p: Prop| one(&[("aspectRatio", p)]).layout.aspect_ratio;
+    assert_eq!(ratio(num(2.0)), Some(2.0));
+    assert_eq!(ratio(text("16/10")), Some(1.6));
+    assert_eq!(ratio(text("auto 3 / 2")), Some(1.5));
+    assert_eq!(ratio(text("1 auto")), Some(1.0));
+    for none in [text("auto"), text("0"), text("2 / 0"), num(0.0)] {
+        assert_eq!(ratio(none), None);
+    }
+    for bad in ["16:9", "1 / -2", "1 2", "auto auto", "1px", ""] {
+        let e = error(&[("aspectRatio", text(bad))]);
+        assert!(
+            e.starts_with("s.tsx:1:1: style aspectRatio: "),
+            "{bad}: {e}"
+        );
+    }
+    assert!(error(&[("aspectRatio", num(-1.0))]).ends_with("-1 is negative"));
+    assert_eq!(one(&[("order", text("-3"))]).order, -3);
+    assert!(error(&[("order", num(1.5))]).ends_with("1.5 is not an integer"));
+}
+
+#[test]
 fn the_flex_shorthand_follows_css() {
     let flex = |p: Prop| {
         let l = one(&[("flex", p)]).layout;

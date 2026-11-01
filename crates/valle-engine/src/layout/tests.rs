@@ -64,6 +64,46 @@ fn flex_rows_place_and_grow() {
 }
 
 #[test]
+fn flex_items_go_in_order_then_as_written() {
+    let l = lay(
+        vec![
+            view(&[("display", "flex")], &[1, 2, 3, 4]),
+            view(&[("width", "10px"), ("order", "1")], &[]),
+            view(&[("width", "20px")], &[]),
+            view(&[("width", "30px"), ("order", "-1")], &[]),
+            view(&[("width", "40px")], &[]),
+        ],
+        &[0],
+    )
+    .unwrap();
+    let x: Vec<f32> = (1..5).map(|i| l.boxes[i].border.x).collect();
+    assert_eq!(x, [90.0, 30.0, 0.0, 50.0]);
+}
+
+#[test]
+fn sizes_take_box_sizing_and_aspect_ratio() {
+    let l = lay(
+        vec![
+            view(&[("width", "50px"), ("padding", "5px")], &[]),
+            view(
+                &[
+                    ("width", "50px"),
+                    ("padding", "5px"),
+                    ("boxSizing", "content-box"),
+                ],
+                &[],
+            ),
+            view(&[("width", "50px"), ("aspectRatio", "5 / 2")], &[]),
+        ],
+        &[0, 1, 2],
+    )
+    .unwrap();
+    assert_eq!(l.boxes[0].border, rect(0.0, 0.0, 50.0, 10.0));
+    assert_eq!(l.boxes[1].border, rect(0.0, 10.0, 60.0, 10.0));
+    assert_eq!(l.boxes[2].border, rect(0.0, 20.0, 50.0, 20.0));
+}
+
+#[test]
 fn absolute_boxes_take_the_nearest_positioned_ancestor() {
     let l = lay(
         vec![

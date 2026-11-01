@@ -1,0 +1,33 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><div data-n=\"2\" style=\"display: flex; height: 10px; background: #e8eaf6;\"><div data-n=\"3\" style=\"width: 20px; background: #3949ab;\"></div><div data-n=\"4\" style=\"width: 20px; margin-left: -10px; background: #e53935; order: 0;\"></div><div data-n=\"5\" style=\"width: 20px; margin-left: -10px; background: #7986cb;\"></div></div></div><div data-n=\"6\" style=\"padding-bottom: 4px;\"><div data-n=\"7\" style=\"display: flex; height: 10px; background: #e8eaf6;\"><div data-n=\"8\" style=\"width: 20px; background: #3949ab;\"></div><div data-n=\"9\" style=\"width: 20px; margin-left: -10px; background: #e53935; order: 1;\"></div><div data-n=\"10\" style=\"width: 20px; margin-left: -10px; background: #7986cb;\"></div></div></div><div data-n=\"11\" style=\"padding-bottom: 4px;\"><div data-n=\"12\" style=\"display: flex; height: 10px; background: #e8eaf6;\"><div data-n=\"13\" style=\"width: 20px; background: #3949ab;\"></div><div data-n=\"14\" style=\"width: 20px; margin-left: -10px; background: #e53935; order: -1;\"></div><div data-n=\"15\" style=\"width: 20px; margin-left: -10px; background: #7986cb;\"></div></div></div><div data-n=\"16\" style=\"padding-bottom: 4px;\"><div data-n=\"17\" style=\"display: flex; height: 10px; background: #e8eaf6;\"><div data-n=\"18\" style=\"width: 20px; background: #3949ab;\"></div><div data-n=\"19\" style=\"width: 20px; margin-left: -10px; background: #e53935; order: 2;\"></div><div data-n=\"20\" style=\"width: 20px; margin-left: -10px; background: #7986cb;\"></div></div></div><div data-n=\"21\" style=\"padding-bottom: 4px;\"><div data-n=\"22\" style=\"display: flex; height: 10px; background: #e8eaf6;\"><div data-n=\"23\" style=\"width: 20px; background: #3949ab;\"></div><div data-n=\"24\" style=\"width: 20px; margin-left: -10px; background: #e53935; order: 3;\"></div><div data-n=\"25\" style=\"width: 20px; margin-left: -10px; background: #7986cb;\"></div></div></div></div></div>\n",
+ "boxes": [
+  [0,0,256,78],
+  [4,4,248,14],
+  [4,4,248,10],
+  [4,4,20,10],
+  [14,4,20,10],
+  [24,4,20,10],
+  [4,18,248,14],
+  [4,18,248,10],
+  [4,18,20,10],
+  [24,18,20,10],
+  [14,18,20,10],
+  [4,32,248,14],
+  [4,32,248,10],
+  [14,32,20,10],
+  [-6,32,20,10],
+  [24,32,20,10],
+  [4,46,248,14],
+  [4,46,248,10],
+  [4,46,20,10],
+  [24,46,20,10],
+  [14,46,20,10],
+  [4,60,248,14],
+  [4,60,248,10],
+  [4,60,20,10],
+  [24,60,20,10],
+  [14,60,20,10]
+ ],
+ "lines": {}
+}

@@ -13,8 +13,8 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use taffy::{
-    AlignContent, AlignItems, Dimension, Display, FlexDirection, FlexWrap, LengthPercentage,
-    LengthPercentageAuto, Position,
+    AlignContent, AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap,
+    LengthPercentage, LengthPercentageAuto, Position,
 };
 
 use color::Rgba;
@@ -28,6 +28,8 @@ const REM: f64 = 16.0;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
     pub layout: taffy::Style,
+    /// Where a flex item goes among its siblings, which `layout::ordered` sorts by.
+    pub order: i32,
     pub background: Rgba,
     /// `border-radius`, px.
     pub radius: f64,
@@ -352,6 +354,9 @@ struct Declared {
     min_size: [Len; 2],
     /// `none` is `Auto`.
     max_size: [Len; 2],
+    box_sizing: BoxSizing,
+    /// Width over height; `None` is `auto`.
+    aspect_ratio: Option<f64>,
     margin: [Len; 4],
     padding: [Len; 4],
     flex_direction: FlexDirection,
@@ -359,6 +364,7 @@ struct Declared {
     flex_grow: f64,
     flex_shrink: f64,
     flex_basis: Len,
+    order: i32,
     justify_content: AlignContent,
     align_items: AlignItems,
     align_self: Option<AlignItems>,
@@ -388,6 +394,8 @@ impl Default for Declared {
             size: [Len::Auto; 2],
             min_size: [Len::Auto; 2],
             max_size: [Len::Auto; 2],
+            box_sizing: BoxSizing::BorderBox,
+            aspect_ratio: None,
             margin: [zero; 4],
             padding: [zero; 4],
             flex_direction: FlexDirection::Row,
@@ -395,6 +403,7 @@ impl Default for Declared {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: Len::Auto,
+            order: 0,
             justify_content: AlignContent::NORMAL,
             align_items: AlignItems::NORMAL,
             align_self: None,
@@ -426,6 +435,8 @@ enum Field {
     MinHeight,
     MaxWidth,
     MaxHeight,
+    BoxSizing,
+    AspectRatio,
     Margin(Sides),
     Padding(Sides),
     FlexDirection,
@@ -434,6 +445,7 @@ enum Field {
     FlexShrink,
     FlexBasis,
     Flex,
+    Order,
     JustifyContent,
     AlignItems,
     AlignSelf,
@@ -474,7 +486,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 65] = [
+const FIELDS: [(&str, Field); 68] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -494,6 +506,8 @@ const FIELDS: [(&str, Field); 65] = [
     ("minHeight", Field::MinHeight),
     ("maxWidth", Field::MaxWidth),
     ("maxHeight", Field::MaxHeight),
+    ("boxSizing", Field::BoxSizing),
+    ("aspectRatio", Field::AspectRatio),
     ("margin", Field::Margin(Sides::All)),
     ("marginTop", Field::Margin(Sides::Top)),
     ("marginRight", Field::Margin(Sides::Right)),
@@ -522,6 +536,7 @@ const FIELDS: [(&str, Field); 65] = [
     ("flexShrink", Field::FlexShrink),
     ("flexBasis", Field::FlexBasis),
     ("flex", Field::Flex),
+    ("order", Field::Order),
     ("justifyContent", Field::JustifyContent),
     ("alignItems", Field::AlignItems),
     ("alignSelf", Field::AlignSelf),
@@ -731,6 +746,50 @@ fn factor(v: &V) -> Result<f64, String> {
         return Err(format!("{x} is negative"));
     }
     Ok(x)
+}
+
+fn integer(v: &V) -> Result<i32, String> {
+    let x = number(v)?;
+    if x.fract() != 0.0 || x.abs() > f64::from(i32::MAX) {
+        return Err(format!("{x} is not an integer"));
+    }
+    Ok(x as i32)
+}
+
+/// `aspect-ratio`: `auto`, a ratio `w / h` or `w`, or both, which for a box without a natural
+/// ratio is the ratio. A ratio with a 0 in it is degenerate, and `auto`.
+fn ratio(v: &V) -> Result<Option<f64>, String> {
+    let r = match v {
+        V::Str(_) => {
+            let s = text(v)?;
+            let spaced = s.replace('/', " / ");
+            let mut words = css::words(&spaced);
+            let auto = (words.first() == Some(&"auto")) || (words.last() == Some(&"auto"));
+            if words.first() == Some(&"auto") {
+                words.remove(0);
+            } else if words.last() == Some(&"auto") {
+                words.pop();
+            }
+            let part = |w: &str| {
+                css::num(w)
+                    .filter(|n| n.unit.is_empty() && n.value >= 0.0)
+                    .map(|n| n.value)
+            };
+            let bad = || format!("{s} is not an aspect ratio");
+            match words[..] {
+                [] if auto => return Ok(None),
+                [w] => part(w).ok_or_else(bad)?,
+                [w, "/", h] => match (part(w), part(h)) {
+                    (Some(_), Some(0.0)) => 0.0,
+                    (Some(w), Some(h)) => w / h,
+                    _ => return Err(bad()),
+                },
+                _ => return Err(bad()),
+            }
+        }
+        _ => factor(v)?,
+    };
+    Ok((r > 0.0 && r.is_finite()).then_some(r))
 }
 
 fn keyword<T: Copy>(v: &V, table: &[(&str, T)]) -> Result<T, String> {
@@ -986,6 +1045,17 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::FlexShrink => d.flex_shrink = factor(v)?,
         F::FlexBasis => d.flex_basis = length(v, SIZE)?,
         F::Flex => (d.flex_grow, d.flex_shrink, d.flex_basis) = flex(v)?,
+        F::Order => d.order = integer(v)?,
+        F::BoxSizing => {
+            d.box_sizing = keyword(
+                v,
+                &[
+                    ("border-box", BoxSizing::BorderBox),
+                    ("content-box", BoxSizing::ContentBox),
+                ],
+            )?
+        }
+        F::AspectRatio => d.aspect_ratio = ratio(v)?,
         F::JustifyContent => d.justify_content = keyword(v, &CONTENT_ALIGN)?,
         F::AlignItems => d.align_items = keyword(v, &SELF_ALIGN)?,
         F::AlignSelf => {
@@ -1158,6 +1228,8 @@ fn compute(d: &Declared, parent: Option<&Style>) -> Result<Style, String> {
             width: lpa(d.max_size[0], em),
             height: lpa(d.max_size[1], em),
         },
+        box_sizing: d.box_sizing,
+        aspect_ratio: d.aspect_ratio.map(|r| r as f32),
         margin: rect(d.margin, em, lpa),
         padding: rect(d.padding, em, lp),
         flex_direction: d.flex_direction,
@@ -1177,6 +1249,7 @@ fn compute(d: &Declared, parent: Option<&Style>) -> Result<Style, String> {
     };
     Ok(Style {
         layout,
+        order: d.order,
         background: d.background,
         radius: d.radius.px(em, 0.0),
         opacity: d.opacity,

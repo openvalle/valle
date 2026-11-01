@@ -226,6 +226,27 @@ const ROWS: &[Row] = &[
         refused: &["-1", "\"auto\""],
     },
     Row {
+        properties: &["boxSizing"],
+        sample: r##"<View style={{ width: 60, height: 10, padding: 4, background: "#3949ab", PROPERTY: VALUE }} />"##,
+        values: &["\"border-box\"", "\"content-box\"", "\" CONTENT-BOX \""],
+        refused: &["\"padding-box\"", "\"margin-box\"", "1"],
+    },
+    Row {
+        properties: &["aspectRatio"],
+        sample: r##"<View style={{ width: 30, background: "#3949ab", PROPERTY: VALUE }} />"##,
+        values: &[
+            "1",
+            "2",
+            "0.5",
+            "\"16 / 9\"",
+            "\"3/2\"",
+            "\"auto\"",
+            "\"auto 2\"",
+            "\"0\"",
+        ],
+        refused: &["-1", "\"16:9\"", "\"1 / -2\"", "\"1 2\"", "true"],
+    },
+    Row {
         properties: MARGINS,
         sample: r##"<View style={{ padding: 1, background: "#e8eaf6" }}><View style={{ width: 100, height: 6, background: "#3949ab", PROPERTY: VALUE }} /></View>"##,
         values: &[
@@ -353,6 +374,12 @@ const ROWS: &[Row] = &[
             "\"0 0 auto\"",
         ],
         refused: &["\"1 2 3\"", "\"1px 2px\"", "-1", "\"initial\""],
+    },
+    Row {
+        properties: &["order"],
+        sample: r##"<View style={{ display: "flex", height: 10, background: "#e8eaf6" }}><View style={{ width: 20, background: "#3949ab" }} /><View style={{ width: 20, marginLeft: -10, background: "#e53935", PROPERTY: VALUE }} /><View style={{ width: 20, marginLeft: -10, background: "#7986cb" }} /></View>"##,
+        values: &["0", "1", "-1", "2", "\"3\""],
+        refused: &["1.5", "\"1px\"", "\"auto\"", "true"],
     },
     Row {
         properties: &["justifyContent"],

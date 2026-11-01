@@ -6,12 +6,13 @@
 //! its blocks, then their text and their flex items, each flex item all at once, as an inline
 //! block. Its positioned descendants and the stacking contexts in it come last, in tree order;
 //! a positioned box paints all at once too, without the positioned boxes in it. Only opacity
-//! makes a stacking context so far, and nothing has a z-index.
+//! makes a stacking context so far, and nothing has a z-index. Tree order puts a flex
+//! container's children in the order it lays them out.
 //!
 //! Boxes paint with their edges on whole pixels, as Chrome paints them, so a layout that lands
 //! between pixels still has crisp edges.
 
-use crate::layout::{Layout, Rect};
+use crate::layout::{Layout, Rect, ordered};
 use crate::style::Style;
 use crate::style::color::Rgba;
 use crate::template::Template;
@@ -78,13 +79,16 @@ struct Painter<'a> {
 
 impl Painter<'_> {
     fn children(&self, i: Option<usize>) -> impl Iterator<Item = usize> {
-        let list = match i {
-            None => &self.template.roots,
-            Some(i) => &self.template.nodes[i].children,
+        let list: Vec<usize> = match i {
+            None => (self.template.roots.iter()).map(|&c| c as usize).collect(),
+            Some(i) => ordered(
+                &self.template.nodes[i].children,
+                &self.styles[i],
+                self.styles,
+            )
+            .collect(),
         };
-        list.iter()
-            .map(|&c| c as usize)
-            .filter(|&c| self.styles[c].layout.display != taffy::Display::None)
+        (list.into_iter()).filter(|&c| self.styles[c].layout.display != taffy::Display::None)
     }
 
     fn positioned(&self, i: usize) -> bool {

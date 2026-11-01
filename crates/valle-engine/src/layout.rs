@@ -39,6 +39,23 @@ pub struct Layout {
     pub lines: Vec<Option<Lines>>,
 }
 
+/// A container's children in the order it lays them out and paints them: a flex container's by
+/// `order` (out-of-flow ones as 0), then as written; any other's as written.
+pub fn ordered<'a>(
+    children: &'a [u32],
+    container: &Style,
+    styles: &'a [Style],
+) -> impl Iterator<Item = usize> + 'a {
+    let mut list: Vec<usize> = children.iter().map(|&c| c as usize).collect();
+    if container.layout.display == Display::Flex {
+        list.sort_by_key(|&c| match styles[c].layout.position {
+            Position::Absolute | Position::Fixed => 0,
+            _ => styles[c].order,
+        });
+    }
+    list.into_iter()
+}
+
 fn bug(e: taffy::TaffyError) -> Error {
     format!("engine bug: layout: {e}")
 }
@@ -78,9 +95,11 @@ pub fn layout(
         };
         ids.push(id.map_err(bug)?);
     }
-    for (node, &id) in template.nodes.iter().zip(&ids) {
+    for ((node, style), &id) in template.nodes.iter().zip(styles).zip(&ids) {
         if !node.children.is_empty() {
-            let children: Vec<NodeId> = node.children.iter().map(|&c| ids[c as usize]).collect();
+            let children: Vec<NodeId> = ordered(&node.children, style, styles)
+                .map(|c| ids[c])
+                .collect();
             tree.set_children(id, &children).map_err(bug)?;
         }
     }
