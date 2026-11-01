@@ -66,7 +66,7 @@ impl Font {
 }
 
 /// A `font-family` entry: a built-in generic family, or a name for a font resource.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Family {
     SansSerif,
     Serif,
