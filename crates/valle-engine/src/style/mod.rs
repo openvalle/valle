@@ -29,7 +29,7 @@ use taffy::{
 use color::Rgba;
 use math::{Calc, Math};
 
-use crate::template::{Error, Node, Prop, Template, V};
+use crate::template::{Error, Kind, Node, Prop, Template, V};
 
 /// The root font size: `rem`.
 const REM: f64 = 16.0;
@@ -86,12 +86,23 @@ pub struct Style {
     pub clip: Option<shape::Clip>,
     /// `mask-*`: its layers, the first on top; none when every image is `none`.
     pub masks: Vec<background::Layer>,
+    /// A `<Mask>`'s source, which masks all the box paints after its `mask-*` do.
+    pub source: Option<Source>,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
     pub font: Font,
     /// The math functions with percentages in them that `layout` holds handles to.
     pub calcs: Vec<Calc>,
+}
+
+/// A `<Mask>`'s source: the root node whose painting masks the box, by its alpha or its
+/// luminance, inverted or not.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Source {
+    pub root: usize,
+    pub luminance: bool,
+    pub invert: bool,
 }
 
 impl Style {
@@ -107,8 +118,8 @@ impl Style {
     }
 
     /// Whether its children with transforms stay in its space: it preserves 3D and nothing
-    /// groups what is in it into one flat layer, as an opacity, a clip, a clip path, a mask, a
-    /// blend, isolation or a filter of it or of its backdrop does.
+    /// groups what is in it into one flat layer, as an opacity, a clip, a clip path, a mask or a
+    /// `<Mask>` source, a blend, isolation or a filter of it or of its backdrop does.
     pub fn keeps_3d(&self) -> bool {
         let o = self.layout.overflow;
         self.preserve_3d
@@ -119,6 +130,7 @@ impl Style {
             && !self.isolate
             && self.clip.is_none()
             && self.masks.is_empty()
+            && self.source.is_none()
             && o.x == taffy::Overflow::Visible
             && o.y == taffy::Overflow::Visible
     }
@@ -235,7 +247,7 @@ pub enum TextAlign {
 /// A variant's styles, bound once; `compute` gives each frame's.
 pub struct Sheet {
     nodes: Vec<Bound>,
-    /// Each node's parent. Parents come before their children.
+    /// Each node's parent, a mask's source's the mask. Parents come before their children.
     parents: Vec<Option<u32>>,
 }
 
@@ -247,6 +259,7 @@ struct Bound {
     rest: Vec<(Field, Prop, Rc<str>)>,
     /// Where errors point.
     place: Rc<str>,
+    source: Option<Source>,
 }
 
 impl Sheet {
@@ -254,7 +267,11 @@ impl Sheet {
         let n = template.nodes.len();
         let mut parents = vec![None; n];
         for (i, node) in template.nodes.iter().enumerate() {
-            for &c in &node.children {
+            let source = match node.kind {
+                Kind::Mask { source, .. } => Some(source),
+                _ => None,
+            };
+            for &c in node.children.iter().chain(&source) {
                 let c = c as usize;
                 if c <= i || c >= n || parents[c].is_some() {
                     return Err("engine bug: template nodes are not in preorder".into());
@@ -287,8 +304,9 @@ impl Sheet {
                 Cow::Owned(d)
             };
             let parent = parent.map(|p| &out[p as usize]);
-            let style = compute(&declared, parent, canvas, calcs)
+            let mut style = compute(&declared, parent, canvas, calcs)
                 .map_err(|e| format!("{}: {e}", b.place))?;
+            style.source = b.source;
             calcs += style.calcs.len();
             out.push(style);
         }
@@ -316,10 +334,23 @@ fn bind(node: &Node) -> Result<Bound, Error> {
             Prop::Expr(_) => rest.push((field, prop.clone(), key.clone())),
         }
     }
+    let source = match node.kind {
+        Kind::Mask {
+            source,
+            luminance,
+            invert,
+        } => Some(Source {
+            root: source as usize,
+            luminance,
+            invert,
+        }),
+        _ => None,
+    };
     Ok(Bound {
         declared,
         rest,
         place,
+        source,
     })
 }
 
@@ -2419,6 +2450,7 @@ fn compute(
             true => Vec::new(),
             false => d.masks.computed(u, color, background::Area::BorderBox),
         },
+        source: None,
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,

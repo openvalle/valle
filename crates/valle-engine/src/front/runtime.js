@@ -508,7 +508,7 @@
     throw e;
   }
 
-  const INTRINSIC = { View: "view", Text: "text" };
+  const INTRINSIC = { View: "view", Text: "text", Mask: "mask" };
 
   // Tags that are gone, with what replaces them.
   const REMOVED = {
@@ -548,7 +548,7 @@
   };
 
   // Props each element takes besides key, className and style.
-  const PROPS = { view: [], text: [] };
+  const PROPS = { view: [], text: [], mask: ["source", "mode", "invert"] };
 
   const fixed = (x, kind, at) => (x instanceof T ? exact(x, kind, at) : x);
 
@@ -596,6 +596,23 @@
     return parts.some(isT) ? template(parts) : parts.map(String).join("");
   }
 
+  // A <Mask>'s mode and inversion, and the root its source renders into, which is laid out in
+  // its border box as the canvas is.
+  function maskOf(node, props, at) {
+    if (props.source === undefined) {
+      fail(at, "<Mask> needs a source: the element whose painting masks its children");
+    }
+    const mode = fixed(props.mode ?? "alpha", "mode", at);
+    if (mode !== "alpha" && mode !== "luminance") {
+      fail(at, '<Mask> mode is "alpha" or "luminance", not ' + stringify(mode));
+    }
+    const invert = fixed(props.invert ?? false, "invert", at);
+    if (typeof invert !== "boolean") fail(at, "<Mask> invert is true or false");
+    node.luminance = mode === "luminance";
+    node.invert = invert;
+    node.source = { type: "view", path: null, classes: [], style: [], children: [], site: at };
+  }
+
   function element(type, props, children, out, at) {
     if (typeof type !== "string") fail(at, "an element type must be a tag or a component function");
     const kind = INTRINSIC[type];
@@ -628,11 +645,13 @@
       children: [],
       site: at,
     };
+    if (kind === "mask") maskOf(node, props, at);
     if (kind === "text") {
       node.text = textOf(children, type, at);
     } else {
       if (key !== null) G.keys.push(key);
       try {
+        if (kind === "mask") render(props.source, node.source.children, at);
         for (const c of children) render(c, node.children, at);
       } finally {
         if (key !== null) G.keys.pop();
@@ -720,6 +739,9 @@
       if ("text" in n) out.text = ref(n.text);
       nodes.push(out);
       const index = nodes.length - 1;
+      if ("source" in n) {
+        out.mask = { source: node(n.source), luminance: n.luminance, invert: n.invert };
+      }
       out.children = n.children.map(node);
       return index;
     }
@@ -945,5 +967,6 @@
     interpolate,
     View: "View",
     Text: "Text",
+    Mask: "Mask",
   });
 })();

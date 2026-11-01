@@ -624,6 +624,29 @@ fn visibility_inherits() {
 }
 
 #[test]
+fn a_mask_source_inherits_from_the_mask() {
+    let mut tree = vec![
+        view(&[("color", text("red"))], &[2]),
+        view(&[], &[]),
+        view(&[], &[]),
+    ];
+    tree[0].kind = Kind::Mask {
+        source: 1,
+        luminance: true,
+        invert: false,
+    };
+    let s = styles(tree, &[]).unwrap();
+    let source = Source {
+        root: 1,
+        luminance: true,
+        invert: false,
+    };
+    assert_eq!(s[0].source, Some(source));
+    assert_eq!((s[1].source, s[1].color), (None, s[0].color));
+    assert!(!s[0].keeps_3d());
+}
+
+#[test]
 fn text_properties_inherit() {
     let tree = vec![
         view(&[], &[1, 4]),

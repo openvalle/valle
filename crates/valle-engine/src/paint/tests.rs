@@ -2,7 +2,7 @@ use super::*;
 use crate::layout::layout;
 use crate::style::{Sheet, color};
 use crate::template::Node;
-use crate::testing::{text, text_node, view};
+use crate::testing::{mask, text, text_node, view};
 
 /// The display list on a 200 × 100 canvas, and the layout it paints.
 fn paint_of(nodes: Vec<Node>, roots: &[u32]) -> (Vec<Item>, Layout) {
@@ -919,6 +919,64 @@ fn a_mask_shows_what_its_box_paints_through_its_layers() {
             [[5.0; 2]; 4]
         )
     );
+}
+
+#[test]
+fn a_mask_element_shows_what_its_box_paints_through_its_source() {
+    let masked = |source: (u32, bool, bool), shown: &[u32]| {
+        paint_of(
+            vec![
+                mask(
+                    source,
+                    &[
+                        ("margin", "10px"),
+                        ("height", "20px"),
+                        ("borderRadius", "5px"),
+                        ("background", "red"),
+                        ("color", "green"),
+                    ],
+                    &[1],
+                ),
+                view(&[("height", "10px"), ("background", "blue")], &[]),
+                view(&[], shown),
+                view(&[("height", "10px"), ("background", "green")], &[]),
+            ],
+            &[0],
+        )
+        .0
+    };
+    // What the source paints, inheriting from the mask, in the border box rounded.
+    let items = masked((2, false, false), &[3]);
+    let [Item::Mask { mask, items }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    assert_eq!(names(items), ["red", "blue"]);
+    assert_eq!(names(mask), [r#"mask ["white"] ["green"]"#]);
+    let [Item::Mask { mask: area, .. }] = &mask[..] else {
+        panic!("{mask:?}")
+    };
+    let [Item::Rect { rect, radii, .. }] = &area[..] else {
+        panic!("{area:?}")
+    };
+    assert_eq!((rect.y, rect.height, *radii), (10.0, 20.0, [[5.0; 2]; 4]));
+    // Inverted, by luminance: inside the box, where the source's luminance is not.
+    let items = masked((2, true, true), &[3]);
+    let [Item::Mask { mask, .. }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    let [Item::Mask { mask: area, items }] = &mask[..] else {
+        panic!("{mask:?}")
+    };
+    assert_eq!(names(area), ["white"]);
+    let [Item::Filter { filters, items }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    assert_eq!(filters, &[Filter::Colors(vec![INVERTED])]);
+    assert_eq!(names(items), [r#"filter ["luminance"] ["green"]"#]);
+    // A source that paints nothing shows nothing, or inverted, all of the box.
+    assert!(masked((2, false, false), &[]).is_empty());
+    let items = masked((2, false, true), &[]);
+    assert_eq!(names(&items), [r#"mask ["white"] ["red", "blue"]"#]);
 }
 
 #[test]

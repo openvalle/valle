@@ -8,16 +8,16 @@
 //! outlines of its blocks and its own. Its positioned descendants and the stacking contexts in it
 //! with a z-index of 0 or `auto` come next, in tree order, and last those with a positive
 //! z-index, lowest first. A positioned box paints all at once too, without the positioned boxes
-//! in it. Opacity, a blend, isolation, a transform, a filter, a clip path, a fixed position, and
-//! a z-index on a positioned box or a flex or grid item make a stacking context. One with an
-//! opacity or a blend paints as a layer, and so does one with a box blending in it: CSS isolates
-//! every stacking context, so a box blends only with what its stacking context paints under it.
-//! A filtered one's items go in its filter, then over its backdrop, then through its clip path
-//! and its mask, which take all it paints, and a transformed one's in its transform around them,
-//! which takes
-//! its px, those of the untransformed layout, to its parent's; a transform that flattens the
-//! plane hides it. Tree order puts a flex or grid container's children in the order it lays them
-//! out. A hidden box (`visibility`) paints nothing of its
+//! in it. Opacity, a blend, isolation, a transform, a filter, a clip path, a mask, a `<Mask>`, a
+//! fixed position, and a z-index on a positioned box or a flex or grid item make a stacking
+//! context. One with an opacity or a blend paints as a layer, and so does one with a box
+//! blending in it: CSS isolates every stacking context, so a box blends only with what its
+//! stacking context paints under it. A filtered one's items go in its filter, then over its
+//! backdrop, then through its clip path, its mask and its `<Mask>` source, which take all it
+//! paints, and a transformed one's in its transform around them, which takes its px, those of
+//! the untransformed layout, to its parent's; a transform that flattens the plane hides it. A
+//! `<Mask>` source paints alone, as the canvas does. Tree order puts a flex or grid container's
+//! children in the order it lays them out. A hidden box (`visibility`) paints nothing of its
 //! own, but what it contains still paints if visible. A box's background, its color and then its
 //! images, the first on top, paints over its outer shadows, and its inner shadows and border over
 //! the background; it is a layer of its own when an image blends, which blends with what is
@@ -378,6 +378,12 @@ fn inner(rect: Rect, radii: Radii, widths: [f32; 4]) -> (Rect, Radii) {
 /// Items, each with the innermost box whose clip it is under.
 type Drawn = Vec<(Option<usize>, Item)>;
 
+/// A mask inverted: its alpha from 1, as the alpha of black.
+const INVERTED: [f32; 20] = [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0,
+    1.0,
+];
+
 /// Far past any canvas: the extent of a clip on an axis it leaves open.
 const OPEN: f32 = 1.0e7;
 
@@ -551,6 +557,10 @@ pub fn transforms(template: &Template, styles: &[Style], layout: &Layout) -> Vec
                 false => out[i],
             };
         }
+        // A mask's source is on its plane.
+        if let Some(source) = styles[i].source {
+            onto[source.root] = out[i];
+        }
     }
     out
 }
@@ -693,6 +703,7 @@ impl Painter<'_> {
             || s.isolate
             || s.clip.is_some()
             || !s.masks.is_empty()
+            || s.source.is_some()
             || s.contains_all()
             || self.in_scene(i)
             || s.layout.position == Position::Fixed
@@ -776,7 +787,7 @@ impl Painter<'_> {
             drawn.extend(items.into_iter().map(|item| (clip, item)));
         } else {
             self.context(Some(d), &mut drawn);
-            if s.clip.is_some() || !s.masks.is_empty() {
+            if s.clip.is_some() || !s.masks.is_empty() || s.source.is_some() {
                 // With the clips in the mask, which takes all the box paints.
                 let items = self.clipped(d, self.nest(std::mem::take(&mut drawn)));
                 let items = self.masked(d, items);
@@ -861,10 +872,12 @@ impl Painter<'_> {
 
     /// `items` through `d`'s mask, if it has one: its layers' images, sized, placed and repeated
     /// as a background's are, each in its area rounded by the box's corners, and the first on
-    /// top. Each shows `items` by its alpha, or its luminance.
+    /// top. Each shows `items` by its alpha, or its luminance. Then through its `<Mask>` source,
+    /// if it has one: what the source paints, by its alpha or its luminance, inverted or not, in
+    /// the border box rounded by its corners.
     fn masked(&self, d: usize, items: Vec<Item>) -> Vec<Item> {
         let s = &self.styles[d];
-        if s.masks.is_empty() || items.is_empty() {
+        if (s.masks.is_empty() && s.source.is_none()) || items.is_empty() {
             return items;
         }
         let border = snap(self.layout.boxes[d].border);
@@ -908,10 +921,47 @@ impl Painter<'_> {
                 false => image,
             });
         }
-        match mask.is_empty() {
-            true => Vec::new(),
-            false => vec![Item::Mask { mask, items }],
+        let items = match (s.masks.is_empty(), mask.is_empty()) {
+            (true, _) => items,
+            (false, true) => return Vec::new(),
+            (false, false) => vec![Item::Mask { mask, items }],
+        };
+        let Some(source) = s.source else {
+            return items;
+        };
+        let mut drawn = Vec::new();
+        self.context(Some(source.root), &mut drawn);
+        let mut shown = self.nest(drawn);
+        if source.luminance && !shown.is_empty() {
+            shown = vec![Item::Filter {
+                filters: vec![Filter::Luminance],
+                items: shown,
+            }];
         }
+        let area = Item::Rect {
+            rect: border,
+            radii,
+            color: shape::SHOWN,
+        };
+        let mask = match (source.invert, shown.is_empty()) {
+            (false, true) => return Vec::new(),
+            (false, false) => Item::Mask {
+                mask: vec![area],
+                items: shown,
+            },
+            (true, true) => area,
+            (true, false) => Item::Mask {
+                mask: vec![area],
+                items: vec![Item::Filter {
+                    filters: vec![Filter::Colors(vec![INVERTED])],
+                    items: shown,
+                }],
+            },
+        };
+        vec![Item::Mask {
+            mask: vec![mask],
+            items,
+        }]
     }
 
     /// Whether `i` is a plane of a 3D scene: its parent keeps its children in its space, and it

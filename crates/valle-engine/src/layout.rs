@@ -3,7 +3,8 @@
 //! every node's boxes in canvas px. The canvas is a block container the size of the composition
 //! that clips what overflows it, and the containing block of fixed boxes and of what no
 //! positioned ancestor contains. A box with a transform or a perspective contains the absolute
-//! and fixed boxes in it, as CSS has it.
+//! and fixed boxes in it, as CSS has it. A mask's source is laid out after the mask, as the canvas
+//! is but in the mask's border box.
 
 use std::borrow::Cow;
 
@@ -79,7 +80,7 @@ pub fn layout(
         .nodes
         .iter()
         .map(|node| match &node.kind {
-            Kind::View => None,
+            Kind::View | Kind::Mask { .. } => None,
             Kind::Text {
                 text: Prop::Const(v),
             } => Some(v.text()),
@@ -102,23 +103,27 @@ pub fn layout(
             .map(|&r| NodeId::from(r as usize))
             .collect(),
     );
+    // A root's style: a block container of this size.
+    let root = |[width, height]: [f32; 2]| taffy::Style {
+        display: Display::Block,
+        position: Position::Relative,
+        overflow: Point {
+            x: Overflow::Hidden,
+            y: Overflow::Hidden,
+        },
+        size: Size {
+            width: Dimension::length(width),
+            height: Dimension::length(height),
+        },
+        ..taffy::Style::DEFAULT
+    };
+    let mut roots = vec![None; n + 1];
+    roots[n] = Some(root(canvas));
     let mut tree = Tree {
         template,
         styles,
         calcs: styles.iter().flat_map(|s| &s.calcs).collect(),
-        canvas: taffy::Style {
-            display: Display::Block,
-            position: Position::Relative,
-            overflow: Point {
-                x: Overflow::Hidden,
-                y: Overflow::Hidden,
-            },
-            size: Size {
-                width: Dimension::length(canvas[0]),
-                height: Dimension::length(canvas[1]),
-            },
-            ..taffy::Style::DEFAULT
-        },
+        roots,
         children,
         strings: &strings,
         text,
@@ -128,11 +133,20 @@ pub fn layout(
         grids: vec![DetailedLayoutInfo::None; n + 1],
         failed: None,
     };
-    let available = Size {
-        width: AvailableSpace::Definite(canvas[0]),
-        height: AvailableSpace::Definite(canvas[1]),
+    let available = |[width, height]: [f32; 2]| Size {
+        width: AvailableSpace::Definite(width),
+        height: AvailableSpace::Definite(height),
     };
-    compute_root_layout(&mut tree, NodeId::from(n), available);
+    compute_root_layout(&mut tree, NodeId::from(n), available(canvas));
+    // Each source once its mask is laid out: masks come before their sources, so in order.
+    for (m, style) in styles.iter().enumerate() {
+        if let Some(source) = style.source {
+            let size = tree.layouts[m].size;
+            let size = [size.width, size.height];
+            tree.roots[source.root] = Some(root(size));
+            compute_root_layout(&mut tree, NodeId::from(source.root), available(size));
+        }
+    }
     let Tree {
         children,
         layouts,
@@ -145,8 +159,8 @@ pub fn layout(
     }
 
     // Each container places its in-flow children and the out-of-flow boxes it is the containing
-    // block of: their locations are from its border box. Containers come in preorder, the canvas
-    // first, so a box's container is placed before it.
+    // block of: their locations are from its border box; a mask places its source on itself.
+    // Containers come in preorder, the canvas first, so a box's container is placed before it.
     let mut origins: Vec<Option<[f32; 2]>> = vec![None; n + 1];
     origins[n] = Some([0.0, 0.0]);
     let shown = |i: usize| styles[i].layout.display != Display::None;
@@ -155,6 +169,9 @@ pub fn layout(
         let Some(at) = origins[id] else {
             continue;
         };
+        if let Some(source) = styles.get(id).and_then(|s| s.source) {
+            origins[source.root] = Some(at);
+        }
         let flow = children[id].iter().map(|&c| usize::from(c)).filter(in_flow);
         for c in flow.chain(hoisted[id].iter().map(|&h| usize::from(h))) {
             if shown(c) {
@@ -211,7 +228,9 @@ struct Tree<'a> {
     styles: &'a [Style],
     /// The styles' calcs, which handles number in order.
     calcs: Vec<&'a Calc>,
-    canvas: taffy::Style,
+    /// The style of each root, the canvas and the masks' sources, which takes the place of its
+    /// own.
+    roots: Vec<Option<taffy::Style>>,
     /// Each node's children in the order it lays them out, the canvas's last.
     children: Vec<Vec<NodeId>>,
     /// Each text node's text.
@@ -229,9 +248,10 @@ struct Tree<'a> {
 
 impl Tree<'_> {
     fn style(&self, id: NodeId) -> &taffy::Style {
-        match self.styles.get(usize::from(id)) {
-            Some(s) => &s.layout,
-            None => &self.canvas,
+        let i = usize::from(id);
+        match &self.roots[i] {
+            Some(root) => root,
+            None => &self.styles[i].layout,
         }
     }
 

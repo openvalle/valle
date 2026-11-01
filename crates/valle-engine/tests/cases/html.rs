@@ -50,7 +50,8 @@ const UNITLESS: &[&str] = &[
 /// The built-in sans-serif as Chrome loads it, from the server `web/tests/chrome.ts` runs.
 const SANS_SERIF: &str = "\"Valle Sans\"";
 
-pub fn print(frame: &Frame, c: Composition) -> String {
+/// The frame's HTML, or what in it has none.
+pub fn print(frame: &Frame, c: Composition) -> Result<String, String> {
     let mut html = format!(
         "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n\
          @font-face {{ font-family: {SANS_SERIF}; src: url(\"/fonts/NotoSans-Variable.ttf\"); \
@@ -63,14 +64,20 @@ pub fn print(frame: &Frame, c: Composition) -> String {
         c.width, c.height
     );
     for &root in &frame.template.roots {
-        node(&mut html, frame, root);
+        node(&mut html, frame, root)?;
     }
     html += "</div>\n";
-    html
+    Ok(html)
 }
 
-fn node(html: &mut String, frame: &Frame, i: u32) {
+fn node(html: &mut String, frame: &Frame, i: u32) -> Result<(), String> {
     let n = &frame.template.nodes[i as usize];
+    if let Kind::Mask { .. } = n.kind {
+        return Err(format!(
+            "{}: <Mask> is not CSS, so Chrome cannot draw it; its cases go outside css/",
+            n.place()
+        ));
+    }
     let _ = write!(html, "<div data-n=\"{i}\"");
     if matches!(n.kind, Kind::Text { .. }) {
         html.push_str(" data-text");
@@ -83,14 +90,15 @@ fn node(html: &mut String, frame: &Frame, i: u32) {
     }
     html.push('>');
     match &n.kind {
-        Kind::View => {
+        Kind::Text { text } => html.push_str(&escape(&value(frame, text).text())),
+        _ => {
             for &child in &n.children {
-                node(html, frame, child);
+                node(html, frame, child)?;
             }
         }
-        Kind::Text { text } => html.push_str(&escape(&value(frame, text).text())),
     }
     html.push_str("</div>");
+    Ok(())
 }
 
 /// A prop's value at the frame.

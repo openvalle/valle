@@ -10,7 +10,7 @@ use crate::style::position::Offset;
 use crate::style::shape::{Radius, Shape};
 
 /// What a clip path shows all of.
-const SHOWN: [f32; 4] = [1.0; 4];
+pub(super) const SHOWN: [f32; 4] = [1.0; 4];
 
 /// `shape` in the box `r`, or without one the box with its corners rounded by `radii`, as the
 /// item that masks what the box paints; `None` where it shows nothing.

@@ -1,7 +1,7 @@
 use super::*;
 use crate::style::Sheet;
 use crate::template::Node;
-use crate::testing::{text, text_node, view};
+use crate::testing::{mask, text, text_node, view};
 
 /// Laid out on a 200 × 100 canvas.
 fn lay(nodes: Vec<Node>, roots: &[u32]) -> Result<Layout, Error> {
@@ -345,6 +345,45 @@ fn transformed_boxes_contain_absolute_and_fixed_boxes() {
     // From its padding box, as laid out before it is transformed.
     assert_eq!(l.boxes[1].border, rect(110.0, 50.0, 10.0, 10.0));
     assert_eq!(l.boxes[2].border, rect(25.0, 15.0, 10.0, 10.0));
+}
+
+#[test]
+fn a_mask_lays_out_its_source_in_its_border_box_as_the_canvas_is() {
+    let l = lay(
+        vec![
+            mask(
+                (2, false, false),
+                &[
+                    ("margin", "10px"),
+                    ("width", "100px"),
+                    ("height", "40px"),
+                    ("border", "5px solid red"),
+                    ("padding", "5px"),
+                ],
+                &[1],
+            ),
+            view(&[("height", "10px")], &[]),
+            view(&[], &[3, 4]),
+            view(&[("height", "50%")], &[]),
+            view(
+                &[
+                    ("position", "absolute"),
+                    ("right", "0"),
+                    ("bottom", "0"),
+                    ("width", "10px"),
+                    ("height", "10px"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    )
+    .unwrap();
+    assert_eq!(l.boxes[1].border, rect(20.0, 20.0, 80.0, 10.0));
+    // Its root is the mask's border box, which holds what is absolute in it.
+    assert_eq!(l.boxes[2].border, rect(10.0, 10.0, 100.0, 40.0));
+    assert_eq!(l.boxes[3].border, rect(10.0, 10.0, 100.0, 20.0));
+    assert_eq!(l.boxes[4].border, rect(100.0, 40.0, 10.0, 10.0));
 }
 
 #[test]

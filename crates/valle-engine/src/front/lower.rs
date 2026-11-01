@@ -160,6 +160,14 @@ struct TracedNode {
     children: Vec<u32>,
     site: Option<u32>,
     text: Option<Ref>,
+    mask: Option<TracedMask>,
+}
+
+#[derive(Deserialize)]
+struct TracedMask {
+    source: u32,
+    luminance: bool,
+    invert: bool,
 }
 
 #[derive(Deserialize)]
@@ -220,6 +228,14 @@ pub fn variant(json: &str, place: &dyn Fn(&At) -> Rc<str>) -> Result<Template, E
             "text" => Kind::Text {
                 text: prop(n.text.ok_or("a text node without text")?)?,
             },
+            "mask" => {
+                let m = n.mask.ok_or("a mask node without a source")?;
+                Kind::Mask {
+                    source: node_id(m.source)?,
+                    luminance: m.luminance,
+                    invert: m.invert,
+                }
+            }
             other => return Err(format!("node type {other}")),
         };
         nodes.push(Node {

@@ -401,7 +401,7 @@ impl Runner {
             let frame = scene.frame(at)?;
             let c = scene.composition();
             let size = [c.width, c.height];
-            let html = html::print(&frame, c);
+            let html = html::print(&frame, c)?;
             let out = self.chrome_baselines.join(format!("{stem}.{i}"));
             let png = self.chrome_baselines.join(format!("{stem}.{i}.png"));
             let json = self.chrome_baselines.join(format!("{stem}.{i}.json"));

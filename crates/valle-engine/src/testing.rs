@@ -24,6 +24,20 @@ pub fn view(style: &[(&str, &str)], children: &[u32]) -> Node {
     node(Kind::View, style, children)
 }
 
+/// A `<Mask>` whose source is node `source`.
+pub fn mask(
+    (source, luminance, invert): (u32, bool, bool),
+    style: &[(&str, &str)],
+    children: &[u32],
+) -> Node {
+    let kind = Kind::Mask {
+        source,
+        luminance,
+        invert,
+    };
+    node(kind, style, children)
+}
+
 pub fn text_node(s: &str, style: &[(&str, &str)]) -> Node {
     let text = Prop::Const(V::Str(s.into()));
     node(Kind::Text { text }, style, &[])

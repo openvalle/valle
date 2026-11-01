@@ -122,7 +122,17 @@ pub enum Prop {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     View,
-    Text { text: Prop },
+    Text {
+        text: Prop,
+    },
+    /// A box whose source masks all it paints: the root node `source` (not a child), which is
+    /// laid out in its border box as the canvas is, shown by its alpha or its luminance, and
+    /// inverted or not.
+    Mask {
+        source: u32,
+        luminance: bool,
+        invert: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -145,6 +155,7 @@ impl Node {
             (Some(site), _) => site.clone(),
             (None, Kind::View) => "<View>".into(),
             (None, Kind::Text { .. }) => "<Text>".into(),
+            (None, Kind::Mask { .. }) => "<Mask>".into(),
         }
     }
 }
@@ -171,7 +182,7 @@ pub enum Want {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Template {
     pub program: Program,
-    /// In preorder: a parent comes before its children.
+    /// In preorder: a parent comes before its children, and a mask before its source.
     pub nodes: Vec<Node>,
     /// What the scene's root component returned, in order; the canvas holds them.
     pub roots: Vec<u32>,

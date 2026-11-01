@@ -75,7 +75,7 @@ fn texts(frame: &Frame) -> Vec<String> {
         .iter()
         .filter_map(|n| match &n.kind {
             Kind::Text { text: t } => Some(text(value(frame, t))),
-            Kind::View => None,
+            _ => None,
         })
         .collect()
 }
@@ -126,6 +126,41 @@ fn static_scenes_trace_once() {
             at(&mut f, s);
         }
         assert_eq!(f.traces(), 1);
+    });
+}
+
+#[test]
+fn a_mask_traces_its_source_as_a_root_after_it() {
+    big_stack(|| {
+        let mut f = scene(
+            "export default function Scene() {
+  return (
+    <Mask key=\"m\" source={<Text key=\"s\">V</Text>} mode=\"luminance\" invert>
+      <View />
+    </Mask>
+  );
+}
+",
+        );
+        let frame = at(&mut f, "0");
+        let t = &frame.template;
+        assert_eq!(t.roots, [0]);
+        assert_eq!(
+            t.nodes[0].kind,
+            Kind::Mask {
+                source: 1,
+                luminance: true,
+                invert: true
+            }
+        );
+        assert_eq!(t.nodes[0].children, [3]);
+        assert_eq!(
+            (&t.nodes[1].kind, &t.nodes[1].children),
+            (&Kind::View, &vec![2])
+        );
+        // Its source is keyed under it.
+        assert_eq!(t.nodes[2].path.as_deref(), Some("m/s"));
+        assert_eq!(texts(&frame), ["V"]);
     });
 }
 
@@ -461,6 +496,16 @@ fn errors_point_at_the_source() {
                 "text must be inside <Text>: \"hello\"",
             ),
             ("<Text><View /></Text>", "<View> cannot be inside <Text>"),
+            ("<Mask />", "<Mask> needs a source"),
+            (
+                "<Mask source={<View />} mode=\"luma\" />",
+                "<Mask> mode is \"alpha\" or \"luminance\", not \"luma\"",
+            ),
+            (
+                "<Mask source={<View />} invert={1} />",
+                "<Mask> invert is true or false",
+            ),
+            ("<Mask source={\"red\"} />", "text must be inside <Text>"),
         ] {
             let e = element(jsx);
             assert!(e.starts_with("scene.motion.tsx:3:"), "{jsx}: {e}");
