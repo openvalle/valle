@@ -153,6 +153,38 @@ fn positioned_boxes_leave_their_positioned_descendants_to_the_context() {
 }
 
 #[test]
+fn boxes_paint_on_whole_pixels() {
+    let at = |left: &str, top: &str, width: &str, height: &str| {
+        let style = [
+            ("position", "absolute"),
+            ("left", left),
+            ("top", top),
+            ("width", width),
+            ("height", height),
+            ("background", "red"),
+        ];
+        view(&style, &[])
+    };
+    let (items, _) = paint_of(
+        vec![
+            at("10.5px", "3.4px", "20.25px", "0.5px"),
+            at("1.25px", "3.7px", "0.75px", "0.5px"),
+            at("0px", "0px", "8px", "0.05px"),
+        ],
+        &[0, 1, 2],
+    );
+    let rects: Vec<[f32; 4]> = (items.iter())
+        .map(|item| match item {
+            Item::Rect { rect: r, .. } => [r.x, r.y, r.width, r.height],
+            _ => panic!("{items:?}"),
+        })
+        .collect();
+    // Edges round, halves up; a side that rounds away keeps a pixel unless it is thinner than
+    // 4/64 px, which then paints nothing.
+    assert_eq!(rects, [[11.0, 3.0, 20.0, 1.0], [1.0, 4.0, 1.0, 1.0]]);
+}
+
+#[test]
 fn rectangles_round_within_their_box() {
     let (items, _) = paint_of(
         vec![view(

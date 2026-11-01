@@ -7,6 +7,9 @@
 //! block. Its positioned descendants and the stacking contexts in it come last, in tree order;
 //! a positioned box paints all at once too, without the positioned boxes in it. Only opacity
 //! makes a stacking context so far, and nothing has a z-index.
+//!
+//! Boxes paint with their edges on whole pixels, as Chrome paints them, so a layout that lands
+//! between pixels still has crisp edges.
 
 use crate::layout::{Layout, Rect};
 use crate::style::Style;
@@ -30,6 +33,22 @@ pub enum Item {
     },
     /// Items composited onto what is under them as one layer, at `opacity`.
     Group { opacity: f32, items: Vec<Item> },
+}
+
+/// A box as Chrome paints it (Blink's pixel snapping): each edge on the nearest pixel boundary,
+/// halves rounding up, and a side longer than 4/64 px at least a pixel long.
+fn snap(r: Rect) -> Rect {
+    let round = |v: f32| (v + 0.5).floor();
+    let side = |at: f32, size: f32| match round(at + size) - round(at) {
+        0.0 if size.abs() > 4.0 / 64.0 => size.signum(),
+        snapped => snapped,
+    };
+    Rect {
+        x: round(r.x),
+        y: round(r.y),
+        width: side(r.x, r.width),
+        height: side(r.y, r.height),
+    }
 }
 
 /// A computed color as a working color.
@@ -147,7 +166,7 @@ impl Painter<'_> {
 
     fn background(&self, i: usize, out: &mut Vec<Item>) {
         let s = &self.styles[i];
-        let rect = self.layout.boxes[i].border;
+        let rect = snap(self.layout.boxes[i].border);
         if s.background[3] <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
