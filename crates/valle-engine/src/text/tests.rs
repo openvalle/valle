@@ -31,6 +31,10 @@ fn font(size: f64) -> Font {
         line_height: LineHeight::Normal,
         align: TextAlign::Start,
         spacing: 0.0,
+        word_spacing: 0.0,
+        collapse: Collapse::Collapse,
+        wrap: true,
+        transform: TextTransform::None,
     }
 }
 
@@ -178,11 +182,36 @@ fn paragraphs_are_kept_while_used() {
 
 #[test]
 fn white_space_collapses_across_pieces_into_the_piece_it_starts_in() {
-    let pieces = [" a ", " ", "b  ", ""];
+    let normal = |text| (text, Collapse::Collapse, TextTransform::None);
+    let pieces = [" a ", " ", "b  ", ""].map(normal);
     assert_eq!(
-        collapse(pieces.into_iter()),
-        ("a b".to_string(), vec![0..2, 2..2, 2..3, 3..3])
+        prepare(pieces.into_iter()),
+        Ok(("a b".to_string(), vec![0..2, 2..2, 2..3, 3..3]))
     );
+    // Kept white space keeps what follows it, but not the spaces a line break takes.
+    let pieces = [
+        normal("a  "),
+        ("  b \n c  ", Collapse::PreserveBreaks, TextTransform::None),
+        (" d  e ", Collapse::Preserve, TextTransform::None),
+        normal("\n f"),
+    ];
+    let (text, _) = prepare(pieces.into_iter()).unwrap();
+    assert_eq!(text, "a b\nc  d  e  f");
+    let tab = [("a\tb", Collapse::Preserve, TextTransform::None)];
+    assert!(prepare(tab.into_iter()).is_err());
+}
+
+#[test]
+fn text_transforms_case_letters_across_pieces() {
+    let piece = |text, transform| (text, Collapse::Collapse, transform);
+    let pieces = [
+        piece("don't stop-", TextTransform::Capitalize),
+        piece("me 3d", TextTransform::Capitalize),
+        piece(" Straße", TextTransform::Uppercase),
+        piece(" ÉCOLE", TextTransform::Lowercase),
+    ];
+    let (text, _) = prepare(pieces.into_iter()).unwrap();
+    assert_eq!(text, "Don't Stop-Me 3d STRASSE école");
 }
 
 #[test]

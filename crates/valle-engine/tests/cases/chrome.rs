@@ -76,6 +76,7 @@ pub fn compare(frame: &Frame, chrome: &Baseline) -> Vec<String> {
         if let Kind::Text { .. } = &node.kind {
             let ours = lines(frame, i);
             let theirs = chrome.lines.get(&(i as u32)).cloned().unwrap_or_default();
+            let theirs: Vec<String> = theirs.iter().map(|l| canonical(l)).collect();
             if ours != theirs {
                 problems.push(format!(
                     "{}: lines {ours:?}, Chrome's {theirs:?}",
@@ -87,14 +88,23 @@ pub fn compare(frame: &Frame, chrome: &Baseline) -> Vec<String> {
     problems
 }
 
-/// The text of each of the node's lines.
+/// The text of each of the node's lines, as `canonical` has it.
 fn lines(frame: &Frame, i: usize) -> Vec<String> {
     let Some(lines) = &frame.layout.lines[i] else {
         return Vec::new();
     };
     (lines.text.iter())
-        .map(|r| lines.string[r.clone()].trim_matches(' ').to_string())
+        .map(|r| canonical(&lines.string[r.clone()]))
         .collect()
+}
+
+/// A line's text as both sides can give it: Chrome's reader takes the text as written, before
+/// white space processing and `text-transform`, so runs of white space are one space, none at
+/// the ends, and letters are upper case.
+fn canonical(line: &str) -> String {
+    let white = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C');
+    let words: Vec<&str> = line.split(white).filter(|w| !w.is_empty()).collect();
+    words.join(" ").to_uppercase()
 }
 
 fn shown([x, y, w, h]: [f64; 4]) -> String {

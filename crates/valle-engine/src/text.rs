@@ -15,10 +15,10 @@ pub use parley::fontique::Blob;
 use parley::fontique::{Collection, CollectionOptions, GenericFamily, SourceCache};
 use parley::{
     Alignment, AlignmentOptions, FontContext, FontFamily, FontFamilyName, FontWeight,
-    LayoutContext, PositionedLayoutItem, StyleProperty,
+    LayoutContext, PositionedLayoutItem, StyleProperty, TextWrapMode, WhiteSpaceCollapse,
 };
 
-use crate::style::{Family, Font, LineHeight, TextAlign};
+use crate::style::{Collapse, Family, Font, LineHeight, TextAlign, TextTransform};
 use crate::template::Error;
 
 /// A font face as shaping chose it: a font file, the face's index in it, and its variation
@@ -77,7 +77,7 @@ pub struct Lines {
     pub text: Vec<Range<usize>>,
 }
 
-/// What shaping a piece depends on.
+/// What shaping a piece and breaking it into lines depend on.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Shaping {
     family: Rc<[Family]>,
@@ -85,6 +85,10 @@ struct Shaping {
     size: u32,
     weight: u32,
     spacing: u32,
+    word_spacing: u32,
+    collapse: Collapse,
+    wrap: bool,
+    transform: TextTransform,
 }
 
 impl Shaping {
@@ -94,6 +98,10 @@ impl Shaping {
             size: (font.size as f32).to_bits(),
             weight: (font.weight as f32).to_bits(),
             spacing: (font.spacing as f32).to_bits(),
+            word_spacing: (font.word_spacing as f32).to_bits(),
+            collapse: font.collapse,
+            wrap: font.wrap,
+            transform: font.transform,
         }
     }
 }
@@ -343,7 +351,9 @@ impl Text {
             .map(|p| (p.text.as_ref().into(), Shaping::of(p.font)))
             .collect();
         if !self.paragraphs.contains_key(&key) {
-            let (string, ranges) = collapse(content.pieces.iter().map(|p| p.text.as_ref()));
+            let pieces = (content.pieces.iter())
+                .map(|p| (p.text.as_ref(), p.font.collapse, p.font.transform));
+            let (string, ranges) = prepare(pieces)?;
             let families = (content.pieces.iter())
                 .map(|p| families(&p.font.family))
                 .collect::<Result<Vec<_>, _>>()?;
@@ -360,6 +370,16 @@ impl Text {
                 builder.push(StyleProperty::FontWeight(weight), range.clone());
                 let spacing = font.spacing as f32;
                 builder.push(StyleProperty::LetterSpacing(spacing), range.clone());
+                let spacing = font.word_spacing as f32;
+                builder.push(StyleProperty::WordSpacing(spacing), range.clone());
+                if !font.wrap {
+                    let mode = StyleProperty::TextWrapMode(TextWrapMode::NoWrap);
+                    builder.push(mode, range.clone());
+                }
+                if font.collapse == Collapse::BreakSpaces {
+                    let spaces = WhiteSpaceCollapse::BreakSpaces;
+                    builder.push(StyleProperty::WhiteSpaceCollapse(spaces), range.clone());
+                }
                 builder.push(StyleProperty::Brush(k as u32), range);
             }
             let layout = builder.build(&string);
@@ -385,20 +405,42 @@ impl Text {
     }
 }
 
-/// `white-space: normal` over the pieces of a paragraph: each run of spaces, tabs and line breaks
-/// is one space, in the piece it starts in, and none starts or ends the text. The text, and each
-/// piece's byte range of it. (Parley's own collapsing keeps a line feed as a forced break.)
-pub fn collapse<'a>(pieces: impl Iterator<Item = &'a str>) -> (String, Vec<Range<usize>>) {
-    let white = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C');
+/// The text of a paragraph's pieces as it is laid out, and each piece's byte range of it: its
+/// white space as each piece's `white-space-collapse` has it, by CSS's rules across piece edges,
+/// and its letters as its `text-transform` has them. A collapsible space after another one, or at
+/// the start or end of the text or of a line, goes; a run of them is one space, in the piece it
+/// starts in. (Parley's own collapsing keeps a line feed as a forced break.)
+pub fn prepare<'a>(
+    pieces: impl Iterator<Item = (&'a str, Collapse, TextTransform)>,
+) -> Result<(String, Vec<Range<usize>>), Error> {
     let mut out = String::new();
     let mut ranges: Vec<Range<usize>> = Vec::new();
-    // The piece a run of white space after some text started in, until text follows it.
+    // The piece a run of collapsible white space started in, until something follows it.
     let mut space: Option<usize> = None;
-    for (k, text) in pieces.enumerate() {
+    // Whether the last character is in a word, so capitalizing leaves the next one.
+    let mut word = false;
+    for (k, (text, collapse, transform)) in pieces.enumerate() {
         ranges.push(out.len()..out.len());
         for c in text.chars() {
-            if !white(c) {
-                if let Some(j) = space.take() {
+            let collapsible = match collapse {
+                Collapse::Collapse => matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C'),
+                Collapse::PreserveBreaks => matches!(c, ' ' | '\t' | '\r' | '\x0C'),
+                Collapse::Preserve | Collapse::BreakSpaces => false,
+            };
+            if collapsible {
+                if space.is_none() && !(out.is_empty() || out.ends_with('\n')) {
+                    space = Some(k);
+                }
+                word = false;
+                continue;
+            }
+            if c == '\t' {
+                return Err("tabs in white space that stays are not supported yet".into());
+            }
+            match space.take() {
+                // A line break takes the spaces before it.
+                Some(_) if c == '\n' => {}
+                Some(j) => {
                     out.push(' ');
                     // The pieces after its own start after it.
                     ranges[j].end = out.len();
@@ -406,14 +448,20 @@ pub fn collapse<'a>(pieces: impl Iterator<Item = &'a str>) -> (String, Vec<Range
                         *r = out.len()..out.len();
                     }
                 }
-                out.push(c);
-            } else if !out.is_empty() && space.is_none() {
-                space = Some(k);
+                None => {}
             }
+            match transform {
+                TextTransform::Uppercase => out.extend(c.to_uppercase()),
+                TextTransform::Lowercase => out.extend(c.to_lowercase()),
+                TextTransform::Capitalize if !word => out.extend(c.to_uppercase()),
+                _ => out.push(c),
+            }
+            // An apostrophe in a word keeps it going: "don't".
+            word = c.is_alphanumeric() || (word && matches!(c, '\'' | '\u{2019}'));
         }
         ranges[k].end = out.len();
     }
-    (out, ranges)
+    Ok((out, ranges))
 }
 
 fn families(list: &[Family]) -> Result<Vec<FontFamilyName<'static>>, Error> {

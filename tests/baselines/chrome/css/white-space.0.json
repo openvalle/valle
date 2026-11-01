@@ -1,0 +1,17 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px; color: #263238;\"><div data-n=\"1\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 180px;\">collapse   <span data-n=\"2\" style=\"white-space: pre; color: #e53935;\">  kept\n  spaces  </span>   then collapse</div><div data-n=\"3\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 180px;\">Words wrap here but <span data-n=\"4\" style=\"white-space: nowrap; color: #1e88e5;\">these words stay together</span> always</div><div data-n=\"5\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 180px; white-space: pre-wrap;\">kept  spaces <span data-n=\"6\" style=\"white-space: normal; color: #8e24aa;\">  collapsed   here  </span> kept  again</div><div data-n=\"7\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 180px; text-transform: capitalize;\">every word <span data-n=\"8\" style=\"text-transform: uppercase; word-spacing: 6px; color: #00897b;\">loud and spaced</span> <span data-n=\"9\" style=\"text-transform: none;\">left as is</span></div></div></div>\n",
+ "boxes": [
+  [0,0,256,222],
+  [4,4,180,44],
+  [4,4,106.796875,44],
+  [4,52,180,66],
+  [4,74,196.109375,22],
+  [4,122,180,44],
+  [4,122,171.640625,44],
+  [4,170,180,44],
+  [4,170,177.6875,44],
+  [66.4375,192,61.1875,22]
+ ],
+ "lines": {"1":["collapse kept","spaces then collapse"],"3":["Words wrap here but","these words stay together","always"],"5":["kept spaces collapsed","here kept again"],"7":["every word loud and","spaced left as is"]}
+}

@@ -1844,6 +1844,62 @@ const ROWS: &[Row] = &[
         ],
         refused: &["\"10%\"", "\"1pt\"", "true", "\"wide\""],
     },
+    Row {
+        properties: &["wordSpacing"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Spaced out words</Text></View>"##,
+        values: &[
+            "0",
+            "4",
+            "-2",
+            "\"0.5em\"",
+            "\"normal\"",
+            "\"calc(0.2em + 1px)\"",
+        ],
+        refused: &["\"10%\"", "true", "\"wide\""],
+    },
+    Row {
+        properties: &["whiteSpace"],
+        sample: r##"<View style={{ width: 100, background: "#e8eaf6" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>{"a  b\n  c   words  that wrap"}</Text></View>"##,
+        values: &[
+            "\"normal\"",
+            "\"nowrap\"",
+            "\"pre\"",
+            "\"pre-wrap\"",
+            "\"pre-line\"",
+            "\"break-spaces\"",
+            "\"Preserve NOWRAP\"",
+        ],
+        refused: &["\"pre pre\"", "\"wrap nowrap\"", "\"auto\"", "1"],
+    },
+    Row {
+        properties: &["whiteSpaceCollapse"],
+        sample: r##"<View style={{ width: 100, background: "#e8eaf6" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>{"a  b\n  c   words  that wrap"}</Text></View>"##,
+        values: &[
+            "\"collapse\"",
+            "\"preserve\"",
+            "\"preserve-breaks\"",
+            "\"break-spaces\"",
+        ],
+        refused: &["\"pre\"", "\"nowrap\"", "\"\""],
+    },
+    Row {
+        properties: &["textWrapMode"],
+        sample: r##"<View style={{ width: 60, background: "#e8eaf6" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Words that wrap</Text></View>"##,
+        values: &["\"wrap\"", "\"nowrap\"", "\" NoWrap \""],
+        refused: &["\"balance\"", "\"auto\"", "0"],
+    },
+    Row {
+        properties: &["textTransform"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>don't stop-me 3d Straße ÉCOLE</Text></View>"##,
+        values: &[
+            "\"none\"",
+            "\"uppercase\"",
+            "\"lowercase\"",
+            "\"capitalize\"",
+            "\" UPPERCASE \"",
+        ],
+        refused: &["\"full-width\"", "\"small-caps\"", "1"],
+    },
 ];
 
 /// The cases, by path from `tests/cases`, and their source; `chrome` is every CSS property the

@@ -669,6 +669,32 @@ fn a_span_takes_only_text_properties() {
 }
 
 #[test]
+fn white_space_sets_its_collapsing_and_wrapping() {
+    let font = |v: &str| one(&[("whiteSpace", text(v))]).font;
+    for (v, collapse, wrap) in [
+        ("pre", Collapse::Preserve, false),
+        ("nowrap", Collapse::Collapse, false),
+        ("break-spaces", Collapse::BreakSpaces, true),
+        ("Preserve-Breaks NOWRAP", Collapse::PreserveBreaks, false),
+        ("nowrap preserve", Collapse::Preserve, false),
+        ("wrap", Collapse::Collapse, true),
+    ] {
+        let f = font(v);
+        assert_eq!((f.collapse, f.wrap), (collapse, wrap), "{v}");
+    }
+    let f = one(&[
+        ("whiteSpace", text("nowrap")),
+        ("whiteSpaceCollapse", text("preserve")),
+    ])
+    .font;
+    assert_eq!((f.collapse, f.wrap), (Collapse::Preserve, false));
+    for bad in ["pre pre", "wrap nowrap", "auto"] {
+        let e = error(&[("whiteSpace", text(bad))]);
+        assert!(e.contains("is not a white-space"), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn text_properties_inherit() {
     let tree = vec![
         view(&[], &[1, 4]),
@@ -681,6 +707,9 @@ fn text_properties_inherit() {
                 ("letterSpacing", text("0.1em")),
                 ("fontWeight", text("bold")),
                 ("textAlign", text("center")),
+                ("wordSpacing", text("0.25em")),
+                ("whiteSpace", text("pre-line")),
+                ("textTransform", text("uppercase")),
             ],
             &[2],
         ),
@@ -706,6 +735,10 @@ fn text_properties_inherit() {
         line_height: LineHeight::Normal,
         align: TextAlign::Start,
         spacing: 0.0,
+        word_spacing: 0.0,
+        collapse: Collapse::Collapse,
+        wrap: true,
+        transform: TextTransform::None,
     };
     assert_eq!(s[0].font, initial);
     assert_eq!(s[0].color, color::BLACK);
@@ -722,10 +755,14 @@ fn text_properties_inherit() {
         line_height: LineHeight::Factor(1.5),
         align: TextAlign::Center,
         spacing: 2.0,
+        word_spacing: 5.0,
+        collapse: Collapse::PreserveBreaks,
+        wrap: true,
+        transform: TextTransform::Uppercase,
     };
     assert_eq!(s[1].font, brand);
     assert_eq!(s[1].color, [1.0, 0.0, 0.0, 1.0]);
-    // Letter spacing inherits as px; a factor line height inherits as the factor.
+    // Spacing inherits as px; a factor line height inherits as the factor.
     let bigger = Font {
         size: 40.0,
         weight: 900.0,

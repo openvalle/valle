@@ -200,8 +200,13 @@ pub struct Font {
     pub family: Rc<[Family]>,
     pub line_height: LineHeight,
     pub align: TextAlign,
-    /// `letter-spacing`, px.
+    /// `letter-spacing` and `word-spacing`, px.
     pub spacing: f64,
+    pub word_spacing: f64,
+    /// `white-space-collapse`, and `text-wrap-mode: wrap`, which `white-space` sets together.
+    pub collapse: Collapse,
+    pub wrap: bool,
+    pub transform: TextTransform,
 }
 
 impl Font {
@@ -214,6 +219,10 @@ impl Font {
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
             spacing: 0.0,
+            word_spacing: 0.0,
+            collapse: Collapse::Collapse,
+            wrap: true,
+            transform: TextTransform::None,
         }
     }
 }
@@ -242,6 +251,29 @@ pub enum TextAlign {
     Left,
     Right,
     Center,
+}
+
+/// `white-space-collapse`: which white space stays as written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Collapse {
+    /// Runs of spaces, tabs and line breaks are one space.
+    Collapse,
+    /// All of it stays; line breaks break lines.
+    Preserve,
+    /// Line breaks stay and break lines; runs of spaces and tabs are one space.
+    PreserveBreaks,
+    /// All of it stays, and spaces take room at the ends of lines rather than hanging.
+    BreakSpaces,
+}
+
+/// `text-transform`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextTransform {
+    None,
+    Uppercase,
+    Lowercase,
+    /// The first letter of each word upper case.
+    Capitalize,
 }
 
 /// A variant's styles, bound once; `compute` gives each frame's.
@@ -727,6 +759,10 @@ struct Declared {
     text_align: Option<TextAlign>,
     /// `normal` is `Auto`, 0.
     letter_spacing: Option<Len>,
+    word_spacing: Option<Len>,
+    collapse: Option<Collapse>,
+    wrap: Option<bool>,
+    text_transform: Option<TextTransform>,
 }
 
 impl Default for Declared {
@@ -798,6 +834,10 @@ impl Default for Declared {
             line_height: None,
             text_align: None,
             letter_spacing: None,
+            word_spacing: None,
+            collapse: None,
+            wrap: None,
+            text_transform: None,
         }
     }
 }
@@ -901,6 +941,11 @@ enum Field {
     LineHeight,
     TextAlign,
     LetterSpacing,
+    WordSpacing,
+    WhiteSpace,
+    WhiteSpaceCollapse,
+    TextWrapMode,
+    TextTransform,
 }
 
 /// A declared box shadow; its color `None` is `currentcolor`.
@@ -950,7 +995,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 181] = [
+const FIELDS: [(&str, Field); 186] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1240,6 +1285,11 @@ const FIELDS: [(&str, Field); 181] = [
     ("lineHeight", Field::LineHeight),
     ("textAlign", Field::TextAlign),
     ("letterSpacing", Field::LetterSpacing),
+    ("wordSpacing", Field::WordSpacing),
+    ("whiteSpace", Field::WhiteSpace),
+    ("whiteSpaceCollapse", Field::WhiteSpaceCollapse),
+    ("textWrapMode", Field::TextWrapMode),
+    ("textTransform", Field::TextTransform),
 ];
 
 impl Field {
@@ -1262,6 +1312,11 @@ impl Field {
                 | Field::LineHeight
                 | Field::TextAlign
                 | Field::LetterSpacing
+                | Field::WordSpacing
+                | Field::WhiteSpace
+                | Field::WhiteSpaceCollapse
+                | Field::TextWrapMode
+                | Field::TextTransform
         )
     }
 }
@@ -2258,8 +2313,69 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             )?)
         }
         F::LetterSpacing => d.letter_spacing = Some(length(v, SPACING)?),
+        F::WordSpacing => d.word_spacing = Some(length(v, SPACING)?),
+        F::WhiteSpace => {
+            (d.collapse, d.wrap) = white_space(&text(v)?).map(|(c, w)| (Some(c), Some(w)))?
+        }
+        F::WhiteSpaceCollapse => d.collapse = Some(keyword(v, COLLAPSE)?),
+        F::TextWrapMode => d.wrap = Some(keyword(v, WRAP)?),
+        F::TextTransform => {
+            d.text_transform = Some(keyword(
+                v,
+                &[
+                    ("none", TextTransform::None),
+                    ("uppercase", TextTransform::Uppercase),
+                    ("lowercase", TextTransform::Lowercase),
+                    ("capitalize", TextTransform::Capitalize),
+                ],
+            )?)
+        }
     }
     Ok(())
+}
+
+const COLLAPSE: &[(&str, Collapse)] = &[
+    ("collapse", Collapse::Collapse),
+    ("preserve", Collapse::Preserve),
+    ("preserve-breaks", Collapse::PreserveBreaks),
+    ("break-spaces", Collapse::BreakSpaces),
+];
+
+const WRAP: &[(&str, bool)] = &[("wrap", true), ("nowrap", false)];
+
+/// `white-space`: a keyword of CSS 2, or a `white-space-collapse` and a `text-wrap-mode`, either
+/// left out for its initial value.
+fn white_space(s: &str) -> Result<(Collapse, bool), String> {
+    let legacy = match s {
+        "normal" => Some((Collapse::Collapse, true)),
+        "nowrap" => Some((Collapse::Collapse, false)),
+        "pre" => Some((Collapse::Preserve, false)),
+        "pre-wrap" => Some((Collapse::Preserve, true)),
+        "pre-line" => Some((Collapse::PreserveBreaks, true)),
+        _ => None,
+    };
+    if let Some(both) = legacy {
+        return Ok(both);
+    }
+    let (mut collapse, mut wrap) = (None, None);
+    for word in s.split_ascii_whitespace() {
+        let c = COLLAPSE.iter().find(|(k, _)| *k == word);
+        let w = WRAP.iter().find(|(k, _)| *k == word);
+        match (c, w) {
+            (Some(&(_, c)), _) if collapse.is_none() => collapse = Some(c),
+            (_, Some(&(_, w))) if wrap.is_none() => wrap = Some(w),
+            _ => {
+                return Err(format!(
+                    "{s:?} is not a white-space: normal, nowrap, pre, pre-wrap, pre-line, or a \
+                     white-space-collapse and a text-wrap-mode"
+                ));
+            }
+        }
+    }
+    match (collapse, wrap) {
+        (None, None) => Err(format!("{s:?} is not a white-space")),
+        _ => Ok((collapse.unwrap_or(Collapse::Collapse), wrap.unwrap_or(true))),
+    }
 }
 
 /// CSS Fonts' relative weights.
@@ -2325,6 +2441,13 @@ fn compute(
             None => inherited.spacing,
             Some(l) => l.px(units(size), 0.0),
         },
+        word_spacing: match &d.word_spacing {
+            None => inherited.word_spacing,
+            Some(l) => l.px(units(size), 0.0),
+        },
+        collapse: d.collapse.unwrap_or(inherited.collapse),
+        wrap: d.wrap.unwrap_or(inherited.wrap),
+        transform: d.text_transform.unwrap_or(inherited.transform),
     };
     let display = match d.display {
         Shown::Block => Display::Block,
