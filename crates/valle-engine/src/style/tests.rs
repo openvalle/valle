@@ -793,6 +793,39 @@ fn text_overflow_is_clip_or_an_ellipsis_of_the_box_alone() {
 }
 
 #[test]
+fn line_clamp_needs_a_vertical_webkit_box_of_a_text() {
+    let clamp = |style: &[(&str, Prop)]| {
+        let node = Node {
+            kind: Kind::Text {
+                content: Vec::new(),
+            },
+            ..view(style, &[])
+        };
+        styles(vec![node], &[]).map(|s| s[0].clamp)
+    };
+    let boxed = [
+        ("display", text("-webkit-box")),
+        ("WebkitBoxOrient", text("vertical")),
+    ];
+    let lines = |v| [&boxed[..], &[("WebkitLineClamp", v)]].concat();
+    assert_eq!(clamp(&lines(num(2.0))), Ok(Some(2)));
+    assert_eq!(clamp(&lines(text("3"))), Ok(Some(3)));
+    assert_eq!(clamp(&lines(text("none"))), Ok(None));
+    assert_eq!(clamp(&[("WebkitLineClamp", num(2.0))]), Ok(None));
+    let row = [boxed[0].clone(), ("WebkitLineClamp", num(2.0))];
+    assert_eq!(clamp(&row), Ok(None));
+    for (bad, message) in [
+        (num(0.0), "0 is not a number of lines"),
+        (num(1.5), "1.5 is not an integer"),
+    ] {
+        let e = clamp(&lines(bad)).unwrap_err();
+        assert!(e.contains(message), "{e}");
+    }
+    let e = error(&boxed);
+    assert!(e.contains("display: -webkit-box is only for a Text"), "{e}");
+}
+
+#[test]
 fn text_wrap_sets_its_mode_and_style_or_refuses() {
     let wrap = |v: &str| {
         let f = one(&[("textWrap", text(v))]).font;

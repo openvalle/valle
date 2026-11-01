@@ -52,10 +52,12 @@ impl Face {
 }
 
 /// A paragraph as written: the font of its box, which each line box starts from (CSS's strut)
-/// and which aligns its lines, and its pieces of text in order.
+/// and which aligns its lines, its pieces of text in order, and how many lines it shows, if it
+/// is clamped.
 pub struct Content<'a> {
     pub font: &'a Font,
     pub pieces: Vec<Piece<'a>>,
+    pub clamp: Option<usize>,
 }
 
 /// Text in the font of the node it is in, which its glyphs name.
@@ -245,7 +247,8 @@ impl Text {
             return Ok([0.0, 0.0]);
         }
         let boxes = stack(&p.layout, content, strut);
-        let height = boxes.last().map_or(0.0, |[top, h]| top + h);
+        let shown = &boxes[..content.clamp.unwrap_or(usize::MAX).min(boxes.len())];
+        let height = shown.last().map_or(0.0, |[top, h]| top + h);
         let widest = (p.layout.width() * 64.0).ceil() / 64.0;
         match width {
             Some(w) if boxes.len() > 1 => Ok([widest.max(w), height]),
@@ -407,17 +410,20 @@ impl Text {
         Ok(m)
     }
 
-    /// `lines`, broken to fit `width`, with each line that overflows it cut short to end in an
-    /// ellipsis in `font`, the text box's, as Chrome ends it: the glyphs that end past where the
-    /// ellipsis starts go, and the decorations under them, but the runs keep their extents, and
-    /// so do the Spans they are in. The ellipsis follows the last glyph left, as a run of `node`,
-    /// the Text, with no decorations.
+    /// `lines`, broken to fit `width`, ending in an ellipsis in `font`, the text box's, as Chrome
+    /// ends them: each line that overflows if `overflow`, and line `clamp` if more follow it. The
+    /// glyphs that end past where the ellipsis starts go, and the decorations under them, but the
+    /// runs keep their extents, and so do the Spans they are in; a clamped line with room keeps
+    /// them all. The ellipsis follows the last glyph left, as a run of `node`, the Text, with no
+    /// decorations.
     pub fn truncate(
         &mut self,
         lines: &mut Lines,
         font: &Font,
         node: u32,
         width: f32,
+        overflow: bool,
+        clamp: Option<usize>,
     ) -> Result<(), Error> {
         let Ellipsis {
             glyphs: ellipsis,
@@ -431,10 +437,17 @@ impl Text {
         let mut cuts: Vec<Option<f32>> = vec![None; lines.boxes.len()];
         for (l, cut) in cuts.iter_mut().enumerate() {
             let runs: Vec<&Run> = (lines.runs.iter()).filter(|r| r.line == l as u32).collect();
-            if runs.iter().all(|r| r.x[1] <= width) {
+            let over = overflow && runs.iter().any(|r| r.x[1] > width);
+            let clamped = clamp.is_some_and(|n| l + 1 == n && lines.boxes.len() > n);
+            if !over && !clamped {
                 continue;
             }
             let mut at = runs.first().map_or(0.0, |r| r.x[0]);
+            let end = runs.iter().map(|r| r.x[1]).fold(at, f32::max);
+            if !over && end - at + advance <= width {
+                *cut = Some(end);
+                continue;
+            }
             'fit: for run in runs {
                 for g in run.glyphs[0] as usize..run.glyphs[1] as usize {
                     let end = right(lines, run, g);

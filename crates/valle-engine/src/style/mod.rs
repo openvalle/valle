@@ -98,6 +98,9 @@ pub struct Style {
     /// `text-overflow: ellipsis`: a Text that clips what overflows it ends a line that overflows
     /// with an ellipsis.
     pub ellipsis: bool,
+    /// How many lines a Text shows before an ellipsis, its height theirs: its
+    /// `-webkit-line-clamp`, with `display: -webkit-box` and `-webkit-box-orient: vertical`.
+    pub clamp: Option<u32>,
     /// The math functions with percentages in them that `layout` holds handles to.
     pub calcs: Vec<Calc>,
 }
@@ -376,6 +379,8 @@ pub struct Sheet {
 /// traced `paddingTop` overrides it).
 struct Bound {
     declared: Declared,
+    /// Whether it is a Text.
+    text: bool,
     rest: Vec<(Field, Prop, Rc<str>)>,
     /// Where errors point.
     place: Rc<str>,
@@ -424,7 +429,7 @@ impl Sheet {
                 Cow::Owned(d)
             };
             let parent = parent.map(|p| &out[p as usize]);
-            let mut style = compute(&declared, parent, canvas, calcs, i)
+            let mut style = compute(&declared, parent, canvas, calcs, i, b.text)
                 .map_err(|e| format!("{}: {e}", b.place))?;
             style.source = b.source;
             calcs += style.calcs.len();
@@ -474,6 +479,7 @@ fn bind(node: &Node) -> Result<Bound, Error> {
     };
     Ok(Bound {
         declared,
+        text: matches!(node.kind, Kind::Text { .. }),
         rest,
         place,
         source,
@@ -743,6 +749,8 @@ impl Lengths {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shown {
     Block,
+    /// `-webkit-box`, for a Text that `-webkit-line-clamp` clamps, a block.
+    WebkitBox,
     Flex,
     None,
     InlineBlock,
@@ -843,6 +851,9 @@ struct Declared {
     decoration_color: Option<Rgba>,
     decoration_thickness: Len,
     ellipsis: bool,
+    /// `-webkit-box-orient: vertical` (or `block-axis`), and `-webkit-line-clamp`.
+    box_vertical: bool,
+    line_clamp: Option<u32>,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -934,6 +945,8 @@ impl Default for Declared {
             decoration_color: None,
             decoration_thickness: AUTO,
             ellipsis: false,
+            box_vertical: false,
+            line_clamp: None,
             visible: None,
             color: None,
             font_size: None,
@@ -1075,6 +1088,8 @@ enum Field {
     TextDecorationSkipInk,
     TextUnderlineOffset,
     TextOverflow,
+    WebkitBoxOrient,
+    WebkitLineClamp,
     WebkitTextFillColor,
     WebkitTextStroke,
     WebkitTextStrokeWidth,
@@ -1129,7 +1144,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 204] = [
+const FIELDS: [(&str, Field); 206] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1437,6 +1452,8 @@ const FIELDS: [(&str, Field); 204] = [
     ("textDecorationSkipInk", Field::TextDecorationSkipInk),
     ("textUnderlineOffset", Field::TextUnderlineOffset),
     ("textOverflow", Field::TextOverflow),
+    ("WebkitBoxOrient", Field::WebkitBoxOrient),
+    ("WebkitLineClamp", Field::WebkitLineClamp),
     ("WebkitTextFillColor", Field::WebkitTextFillColor),
     ("WebkitTextStroke", Field::WebkitTextStroke),
     ("WebkitTextStrokeWidth", Field::WebkitTextStrokeWidth),
@@ -2074,6 +2091,7 @@ fn display(v: &V) -> Result<Shown, String> {
             ("grid", Shown::Grid),
             ("inline-grid", Shown::InlineGrid),
             ("inline", Shown::Inline),
+            ("-webkit-box", Shown::WebkitBox),
         ],
     )
 }
@@ -2568,6 +2586,24 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::WebkitTextStrokeColor => d.stroke_color = Some(current_color(v)?),
         F::TextShadow => d.text_shadows = Some(shadows(v, true)?),
         F::TextOverflow => d.ellipsis = keyword(v, &[("clip", false), ("ellipsis", true)])?,
+        F::WebkitBoxOrient => {
+            let orients = [
+                ("horizontal", false),
+                ("vertical", true),
+                ("inline-axis", false),
+                ("block-axis", true),
+            ];
+            d.box_vertical = keyword(v, &orients)?;
+        }
+        F::WebkitLineClamp => {
+            d.line_clamp = match v {
+                V::Str(_) if text(v)? == "none" => None,
+                _ => match integer(v)? {
+                    n if n >= 1 => Some(n as u32),
+                    n => return Err(format!("{n} is not a number of lines: none, or 1 or more")),
+                },
+            }
+        }
     }
     Ok(())
 }
@@ -2798,6 +2834,7 @@ fn compute(
     canvas: [f64; 2],
     first: usize,
     node: usize,
+    text: bool,
 ) -> Result<Style, String> {
     let initial;
     let (inherited, inherited_color, inherited_visible, container) = match parent {
@@ -2870,6 +2907,13 @@ fn compute(
     };
     let display = match d.display {
         Shown::Block => Display::Block,
+        Shown::WebkitBox if text => Display::Block,
+        Shown::WebkitBox => {
+            return Err(format!(
+                "display: -webkit-box is only for a Text, which -webkit-line-clamp clamps: other \
+                 boxes would lay out their children in a row, as old flexbox did; {USE_FLEX}"
+            ));
+        }
         Shown::Flex => Display::Flex,
         Shown::Grid => Display::Grid,
         Shown::None => Display::None,
@@ -3036,6 +3080,10 @@ fn compute(
         font,
         decorations,
         ellipsis: d.ellipsis,
+        clamp: match (d.display, d.box_vertical) {
+            (Shown::WebkitBox, true) => d.line_clamp,
+            _ => None,
+        },
         calcs: l.calcs,
     })
 }

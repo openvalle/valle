@@ -30,6 +30,7 @@ const UNITLESS: &[&str] = &[
     "gridRowEnd",
     "gridRowStart",
     "lineClamp",
+    "WebkitLineClamp",
     "lineHeight",
     "opacity",
     "order",

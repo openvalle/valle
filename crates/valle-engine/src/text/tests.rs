@@ -20,6 +20,7 @@ fn plain<'a>(text: &'a str, font: &'a Font) -> Content<'a> {
             node: 0,
             font,
         }],
+        clamp: None,
     }
 }
 
@@ -239,6 +240,7 @@ fn pieces_shape_in_their_own_fonts_on_shared_lines() {
             piece(" big ", 1, &big),
             piece(" end", 0, &normal),
         ],
+        clamp: None,
     };
     let lines = t.lines(&content, 1000.0).unwrap();
     assert_eq!(&*lines.string, "Hi big end");
@@ -256,6 +258,7 @@ fn pieces_shape_in_their_own_fonts_on_shared_lines() {
     let small = Content {
         font: &big,
         pieces: vec![piece("small", 1, &normal)],
+        clamp: None,
     };
     assert_eq!(t.measure(&small, None).unwrap()[1], 43.0);
     assert_eq!(t.metrics(&normal).unwrap()[0].round(), 17.0);
@@ -389,7 +392,7 @@ fn lines_that_overflow_end_in_an_ellipsis_after_the_glyphs_that_fit() {
         run: 0,
         through: false,
     });
-    t.truncate(&mut lines, &f, 9, width).unwrap();
+    t.truncate(&mut lines, &f, 9, width, true, None).unwrap();
     // The run keeps its extent; the ellipsis is a run of its own, of the Text.
     assert_eq!(
         lines.runs[0],
@@ -416,6 +419,47 @@ fn lines_that_overflow_end_in_an_ellipsis_after_the_glyphs_that_fit() {
     // A line that fits stays as it is.
     let mut fits = t.lines(&plain(words, &f), wide).unwrap();
     let before = fits.clone();
-    t.truncate(&mut fits, &f, 9, wide).unwrap();
+    t.truncate(&mut fits, &f, 9, wide, true, None).unwrap();
     assert_eq!(fits, before);
+}
+
+#[test]
+fn clamped_text_is_as_tall_as_its_lines_and_ends_the_last_in_an_ellipsis() {
+    let mut t = text();
+    let f = font(16.0);
+    let words = "aaaa aaaa aaaa";
+    let [word, _] = t.measure(&plain("aaaa", &f), None).unwrap();
+    let advance = t.ellipsis(&f).unwrap().advance;
+    let clamped = |n| Content {
+        clamp: Some(n),
+        ..plain(words, &f)
+    };
+    // With room for the ellipsis, it follows line 2's glyphs, all kept.
+    let roomy = word + advance + 1.0;
+    let whole = t.lines(&plain(words, &f), roomy).unwrap();
+    assert_eq!(whole.boxes.len(), 3);
+    let [top, height] = whole.boxes[1];
+    assert_eq!(
+        t.measure(&clamped(2), Some(roomy)).unwrap()[1],
+        top + height
+    );
+    let mut lines = whole.clone();
+    t.truncate(&mut lines, &f, 9, roomy, false, Some(2))
+        .unwrap();
+    assert_eq!(lines.glyphs.len(), whole.glyphs.len() + 1);
+    let ellipsis = lines.runs.last().unwrap();
+    assert_eq!((ellipsis.node, ellipsis.line), (9, 1));
+    assert_eq!(ellipsis.x[0], whole.runs[1].x[1]);
+    // Without it, the glyphs past where it starts go.
+    let tight = word + advance - 2.0;
+    let mut lines = t.lines(&plain(words, &f), tight).unwrap();
+    let before = lines.glyphs.len();
+    t.truncate(&mut lines, &f, 9, tight, false, Some(2))
+        .unwrap();
+    assert!(lines.glyphs.len() < before, "{lines:?}");
+    assert!(lines.runs.last().unwrap().x[1] <= tight);
+    // The last line shown, with none after it, stays as it is.
+    let mut last = whole.clone();
+    t.truncate(&mut last, &f, 9, roomy, false, Some(3)).unwrap();
+    assert_eq!(last, whole);
 }

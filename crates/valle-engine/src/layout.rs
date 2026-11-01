@@ -81,7 +81,12 @@ pub fn layout(
                 let mut pieces = Vec::new();
                 pieces_of(template, values, styles, i, &mut pieces);
                 let font = &styles[i].font;
-                Some(Content { font, pieces })
+                let clamp = styles[i].clamp.map(|n| n as usize);
+                Some(Content {
+                    font,
+                    pieces,
+                    clamp,
+                })
             }
             _ => None,
         })
@@ -227,8 +232,11 @@ pub fn layout(
             )
             .map_err(place)?;
             let style = &styles[i];
-            if style.ellipsis && style.layout.overflow.x != Overflow::Visible {
-                (text.truncate(&mut laid, &style.font, i as u32, content.width)).map_err(place)?;
+            let overflow = style.ellipsis && style.layout.overflow.x != Overflow::Visible;
+            if overflow || c.clamp.is_some_and(|n| laid.boxes.len() > n) {
+                let (font, node) = (&style.font, i as u32);
+                (text.truncate(&mut laid, font, node, content.width, overflow, c.clamp))
+                    .map_err(place)?;
             }
             lines[i] = Some(laid);
         }

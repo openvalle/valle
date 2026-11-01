@@ -144,6 +144,7 @@ const ROWS: &[Row] = &[
             "\"list-item\"",
             "\"contents\"",
             "\"flow-root\"",
+            "\"-webkit-box\"",
             "1",
         ],
     },
@@ -2026,6 +2027,23 @@ const ROWS: &[Row] = &[
         sample: r##"<View style={{ display: "flex" }}><Text style={{ width: 60, fontSize: 10, whiteSpace: "nowrap", overflow: "hidden", textDecorationLine: "underline", PROPERTY: VALUE }}>Words cut short</Text></View>"##,
         values: &["\"clip\"", "\"ellipsis\"", "\" Ellipsis \""],
         refused: &["\"fade\"", "\"'…'\"", "\"clip ellipsis\"", "0"],
+    },
+    Row {
+        properties: &["WebkitLineClamp"],
+        sample: r##"<View style={{ width: 60, background: "#e8eaf6" }}><Text style={{ fontSize: 10, display: "-webkit-box", WebkitBoxOrient: "vertical", overflow: "hidden", PROPERTY: VALUE }}>The quick brown fox jumps over the lazy dog</Text></View>"##,
+        values: &["\"none\"", "1", "2", "\"3\""],
+        refused: &["0", "-1", "1.5", "\"two\""],
+    },
+    Row {
+        properties: &["WebkitBoxOrient"],
+        sample: r##"<View style={{ width: 60, background: "#e8eaf6" }}><Text style={{ fontSize: 10, display: "-webkit-box", WebkitLineClamp: 2, overflow: "hidden", PROPERTY: VALUE }}>The quick brown fox jumps over the lazy dog</Text></View>"##,
+        values: &[
+            "\"horizontal\"",
+            "\"vertical\"",
+            "\"inline-axis\"",
+            "\"block-axis\"",
+        ],
+        refused: &["\"column\"", "0"],
     },
     Row {
         properties: &["WebkitTextFillColor"],
