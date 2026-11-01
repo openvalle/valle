@@ -176,6 +176,8 @@ pub struct Style {
     pub mask_ref: Option<Rc<str>>,
     pub clip_even_odd: bool,
     pub mask_alpha: bool,
+    /// The `<marker>`s at a path's start, middle and end vertices, by id.
+    pub markers: [Option<Rc<str>>; 3],
     /// An SVG element's geometry, as its attributes have it at the frame.
     pub svg: Option<Rc<svg::Computed>>,
     /// A `<use>`'s copy.
@@ -744,9 +746,24 @@ impl Sheet {
     }
 
     /// That each `clip-path: url(#id)` names a `<clipPath>`, and each `mask: url(#id)` a
-    /// `<mask>`, by the frame's `ids`, from elements that are not clip paths, in them or masks.
+    /// `<mask>`, by the frame's `ids`, from elements that are not clip paths, in them or masks;
+    /// and that the markers of each path, line, polyline and polygon name `<marker>`s.
     fn references(&self, styles: &[Style], ids: &HashMap<Rc<str>, usize>) -> Result<(), Error> {
+        const MARKERS: [&str; 3] = ["marker-start", "marker-mid", "marker-end"];
         let tag = |i: usize| self.nodes[i].svg.as_ref().map(|g| g.tag);
+        for (i, s) in styles.iter().enumerate() {
+            let markable = matches!(
+                tag(i),
+                Some(Tag::Path | Tag::Line | Tag::Polyline | Tag::Polygon)
+            );
+            let markers = s.markers.iter().zip(MARKERS);
+            for (id, name) in markers.filter_map(|(m, n)| Some((m.as_deref()?, n))) {
+                if markable && ids.get(id).and_then(|&n| tag(n)) != Some(Tag::Marker) {
+                    let place = &self.nodes[i].place;
+                    return Err(format!("{place}: {name}: url(#{id}) names no <marker>"));
+                }
+            }
+        }
         let refers = |s: &&Style| s.clip_ref.is_some() || s.mask_ref.is_some();
         for (i, s) in styles.iter().enumerate().filter(|(_, s)| refers(s)) {
             let place = &self.nodes[i].place;
@@ -1349,6 +1366,8 @@ struct Declared {
     mask_ref: Option<Rc<str>>,
     clip_even_odd: Option<bool>,
     mask_alpha: Option<bool>,
+    /// Each declared or not, `none` or an id.
+    markers: [Option<Option<Rc<str>>>; 3],
     color: Option<Rgba>,
     font_size: Option<Len>,
     font_weight: Option<Weight>,
@@ -1471,6 +1490,7 @@ impl Default for Declared {
             mask_ref: None,
             clip_even_odd: None,
             mask_alpha: None,
+            markers: [None, None, None],
             color: None,
             font_size: None,
             font_weight: None,
@@ -1613,6 +1633,8 @@ enum Field {
     StopColor,
     StopOpacity,
     ClipRule,
+    /// `marker-start`, `marker-mid` or `marker-end`; `None` for `marker`, all three.
+    Marker(Option<usize>),
     Mask,
     MaskType,
     Color,
@@ -1711,7 +1733,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 241] = [
+const FIELDS: [(&str, Field); 245] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -2015,6 +2037,10 @@ const FIELDS: [(&str, Field); 241] = [
     ("stopColor", Field::StopColor),
     ("stopOpacity", Field::StopOpacity),
     ("clipRule", Field::ClipRule),
+    ("markerStart", Field::Marker(Some(0))),
+    ("markerMid", Field::Marker(Some(1))),
+    ("markerEnd", Field::Marker(Some(2))),
+    ("marker", Field::Marker(None)),
     ("mask", Field::Mask),
     ("maskType", Field::MaskType),
     ("color", Field::Color),
@@ -2105,6 +2131,7 @@ impl Field {
                 | Field::StopOpacity
                 | Field::ClipPath
                 | Field::ClipRule
+                | Field::Marker(_)
                 | Field::Mask
                 | Field::MaskType
                 | Field::Opacity
@@ -3587,6 +3614,18 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::MaskType => {
             d.mask_alpha = Some(keyword(v, &[("luminance", false), ("alpha", true)])?);
         }
+        F::Marker(which) => {
+            let s = text(v)?;
+            let marker = match reference(&v.text()) {
+                Some(id) => Some(id?),
+                None if s == "none" => None,
+                None => return Err(format!("{s}: a marker is url(#id) of a <marker>, or none")),
+            };
+            match which {
+                Some(k) => d.markers[k] = Some(marker),
+                None => d.markers = [(); 3].map(|_| Some(marker.clone())),
+            }
+        }
         F::Color => d.color = Some(color_of(v)?),
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
@@ -4229,6 +4268,10 @@ fn compute(
             .clip_even_odd
             .unwrap_or(parent.is_some_and(|p| p.clip_even_odd)),
         mask_alpha: d.mask_alpha.unwrap_or(false),
+        markers: std::array::from_fn(|k| match &d.markers[k] {
+            Some(m) => m.clone(),
+            None => parent.and_then(|p| p.markers[k].clone()),
+        }),
         svg: None,
         instance: None,
         color,

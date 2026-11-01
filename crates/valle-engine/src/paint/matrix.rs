@@ -20,6 +20,16 @@ impl Matrix {
         Matrix::affine([1.0, 0.0, 0.0, 1.0, x, y])
     }
 
+    /// A turn of `degrees` clockwise, y down.
+    pub fn rotate(degrees: f64) -> Matrix {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        Matrix::affine([cos, sin, -sin, cos, 0.0, 0.0])
+    }
+
+    pub fn scale(k: f64) -> Matrix {
+        Matrix::affine([k, 0.0, 0.0, k, 0.0, 0.0])
+    }
+
     /// The product: `other` applied first, then `self`.
     pub fn times(self, other: Matrix) -> Matrix {
         let (a, b) = (self.0, other.0);

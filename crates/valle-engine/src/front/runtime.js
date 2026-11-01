@@ -574,6 +574,16 @@
     mask: ["maskUnits", "maskContentUnits", "x", "y", "width", "height"],
     use: ["href", "xlinkHref", "x", "y", "width", "height"],
     symbol: ["viewBox", "preserveAspectRatio"],
+    marker: [
+      "viewBox",
+      "preserveAspectRatio",
+      "refX",
+      "refY",
+      "markerWidth",
+      "markerHeight",
+      "markerUnits",
+      "orient",
+    ],
   };
   const SHAPES = ["path", "circle", "ellipse", "rect", "line", "polyline", "polygon"];
   // The elements that hold others, and those they hold if not any.
@@ -583,6 +593,7 @@
     defs: null,
     mask: null,
     symbol: null,
+    marker: null,
     linearGradient: { tags: ["stop"], what: "<stop>s" },
     radialGradient: { tags: ["stop"], what: "<stop>s" },
     clipPath: { tags: SHAPES, what: "shapes" },
@@ -605,6 +616,9 @@
     "strokeDashoffset",
     "stopColor",
     "stopOpacity",
+    "markerStart",
+    "markerMid",
+    "markerEnd",
     "clipPath",
     "clipRule",
     "mask",

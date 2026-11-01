@@ -395,6 +395,61 @@ fn uses_name_what_they_copy_and_symbols_their_view_box() {
     assert!(e.contains("<symbol> takes none"), "{e}");
 }
 
+#[test]
+fn markers_go_at_vertices_turned_along_the_path() {
+    let at = |tag, list: &[(&str, V)]| {
+        let Element::Shape(shape) = attributes(tag, list).unwrap().element else {
+            panic!()
+        };
+        let p = path(&shape, [100.0; 2]).unwrap();
+        vertices(&shape, &p)
+    };
+    let turns = |v: Vec<(Point, f64)>| -> Vec<f64> {
+        v.iter().map(|&(_, a)| (a + 360.0) % 360.0).collect()
+    };
+    // Open: the ends along their segments, a corner between the two.
+    let open = at(Tag::Path, &[("d", text("M0 0 L10 0 L10 10"))]);
+    let points: Vec<Point> = open.iter().map(|&(p, _)| p).collect();
+    assert_eq!(points, [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]);
+    assert_eq!(turns(open), [0.0, 45.0, 90.0]);
+    // An arc is one command, so one vertex, though it is curves.
+    let arc = turns(at(Tag::Path, &[("d", text("M0 0 A10 10 0 0 1 0 20"))]));
+    assert_eq!(arc.len(), 2);
+    let near = |a: f64, b: f64| ((a - b + 540.0) % 360.0 - 180.0).abs() < 1e-3;
+    assert!(near(arc[0], 0.0) && near(arc[1], 180.0), "{arc:?}");
+    // Closed: the close is a vertex at the start, and the start comes in from it.
+    let closed = at(Tag::Polygon, &[("points", text("0,0 10,0 10,10"))]);
+    assert_eq!(closed.len(), 4);
+    assert_eq!(turns(closed), [292.5, 45.0, 157.5, 292.5]);
+    let none = at(
+        Tag::Rect,
+        &[("width", V::Num(4.0)), ("height", V::Num(4.0))],
+    );
+    assert!(none.is_empty());
+    let marker = |list: &[(&str, V)]| match attributes(Tag::Marker, list).map(|c| c.element) {
+        Ok(Element::Marker(m)) => Ok(m),
+        Ok(e) => panic!("{e:?}"),
+        Err(e) => Err(e),
+    };
+    let m = marker(&[]).unwrap();
+    assert_eq!(
+        (m.size[0].units, m.orient, m.user_space),
+        (3.0, Orient::Angle(0.0), false)
+    );
+    for (orient, want) in [
+        ("auto", Orient::Auto),
+        ("auto-start-reverse", Orient::AutoStartReverse),
+        ("0.25turn", Orient::Angle(90.0)),
+        ("-30", Orient::Angle(-30.0)),
+    ] {
+        assert_eq!(marker(&[("orient", text(orient))]).unwrap().orient, want);
+    }
+    let e = marker(&[("orient", text("up"))]).unwrap_err();
+    assert_eq!(e, "orient: up is not auto, auto-start-reverse or an angle");
+    let e = marker(&[("markerUnits", text("px"))]).unwrap_err();
+    assert!(e.contains("is not strokeWidth or userSpaceOnUse"), "{e}");
+}
+
 /// A gradient over `bbox` in a viewport 100 units a side.
 fn gradient_of(chain: &[&Gradient], stops: &[(f64, Rgba)], bbox: [f64; 4]) -> (Ramp, Matrix) {
     super::gradient(chain, stops, bbox, [100.0; 2]).unwrap()

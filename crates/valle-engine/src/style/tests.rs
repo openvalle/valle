@@ -747,6 +747,49 @@ fn svg_elements_take_presentation_attributes_under_their_style() {
 }
 
 #[test]
+fn markers_inherit_and_name_marker_elements() {
+    let svg = |tag, attributes: &[(&str, Prop)], children: &[u32]| Node {
+        kind: Kind::Svg {
+            tag,
+            attributes: (attributes.iter())
+                .map(|(k, p)| (Rc::from(*k), p.clone()))
+                .collect(),
+        },
+        ..view(&[], children)
+    };
+    let tree = |g: &[(&str, Prop)]| {
+        vec![
+            svg(Tag::Svg, &[], &[1, 4]),
+            svg(Tag::G, g, &[2, 3]),
+            svg(Tag::Path, &[("markerStart", text("none"))], &[]),
+            svg(Tag::Circle, &[], &[]),
+            svg(Tag::Marker, &[("id", text("m"))], &[]),
+        ]
+    };
+    let s = styles(tree(&[("markerEnd", text("url(#m)"))]), &[]).unwrap();
+    assert_eq!(s[2].markers, [None, None, Some("m".into())]);
+    let all = Node {
+        style: vec![("marker".into(), text("url(#m)"))],
+        ..svg(Tag::G, &[("markerMid", text("none"))], &[2, 3])
+    };
+    let mut nodes = tree(&[]);
+    nodes[1] = all;
+    let s = styles(nodes, &[]).unwrap();
+    // The shorthand sets all three; the path's own start beats what it inherits.
+    let m = Some(Rc::from("m"));
+    assert_eq!(s[1].markers, [m.clone(), m.clone(), m.clone()]);
+    assert_eq!(s[2].markers, [None, m.clone(), m]);
+    // A shape that takes no markers inherits the name of none unchecked.
+    let e = styles(tree(&[("markerMid", text("url(#x)"))]), &[]).unwrap_err();
+    assert!(e.ends_with("marker-mid: url(#x) names no <marker>"), "{e}");
+    let e = error(&[("markerEnd", text("red"))]);
+    assert!(
+        e.contains("a marker is url(#id) of a <marker>, or none"),
+        "{e}"
+    );
+}
+
+#[test]
 fn uses_copy_with_styles_inherited_from_them() {
     let svg = |tag, attributes: &[(&str, Prop)], children: &[u32]| Node {
         kind: Kind::Svg {

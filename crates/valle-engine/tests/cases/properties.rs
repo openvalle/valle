@@ -2495,6 +2495,12 @@ const ROWS: &[Row] = &[
         values: &["\"luminance\"", "\"alpha\""],
         refused: &["\"luma\"", "\"\"", "0"],
     },
+    Row {
+        properties: &["markerStart", "markerMid", "markerEnd", "marker"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6" }}><marker id="UNIQUE" viewBox="0 0 4 4" refX={2} refY={2} markerWidth={4} markerHeight={4} orient="auto"><path d="M0 0 L4 2 L0 4 Z" fill="#e53935" /></marker><polyline points="3,8 10,2 17,8 24,2" fill="none" stroke="#3949ab" strokeWidth={0.75} style={{ PROPERTY: VALUE }} /></svg>"##,
+        values: &["\"none\"", "\"url(#UNIQUE)\"", "\" URL( '#UNIQUE' ) \""],
+        refused: &["\"url(#a)\"", "\"red\"", "\"\"", "0"],
+    },
 ];
 
 /// The cases, by path from `tests/cases`, and their source; `chrome` is every CSS property the

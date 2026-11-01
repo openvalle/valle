@@ -327,12 +327,19 @@ pub fn across(curves: &[Curve], lo: f32, hi: f32) -> Option<[f32; 2]> {
 /// lower case for points relative to where the path is, and their numbers, which may repeat for
 /// the command again; a subpath starts with a move.
 pub fn parse(d: &str) -> Result<Path, String> {
+    commands(d).map(|(path, _)| path)
+}
+
+/// As `parse`, with whether each segment ends a command, which puts a vertex there for markers:
+/// an arc's quarter turns but its last do not, nor a move a command after a close makes.
+pub fn commands(d: &str) -> Result<(Path, Vec<bool>), String> {
     let mut r = Reader {
         b: d.as_bytes(),
         i: 0,
     };
     let bad = |what: &str| format!("{d:?} is not path data: {what}");
     let mut out = Vec::new();
+    let mut ends = Vec::new();
     let (mut start, mut at) = ([0.0f32; 2], [0.0f32; 2]);
     // The command before, and the control point a smooth curve after it reflects.
     let mut command = None;
@@ -437,8 +444,12 @@ pub fn parse(d: &str) -> Result<Path, String> {
         }
         command = Some(c);
         control = next;
+        ends.resize(out.len(), false);
+        if let Some(end) = ends.last_mut() {
+            *end = true;
+        }
     }
-    Ok(Path(out))
+    Ok((Path(out), ends))
 }
 
 /// Numbers separated by white space or a comma, as SVG's `points` and `viewBox` list them; `None`

@@ -35,10 +35,13 @@ pub struct Fit {
     pub slice: bool,
 }
 
-/// A basic shape, or a path.
+/// A basic shape, or a path, and whether each of its segments ends a command.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
-    Path(Path),
+    Path {
+        path: Path,
+        ends: Vec<bool>,
+    },
     Circle {
         center: [Length; 2],
         r: Length,
@@ -63,8 +66,8 @@ pub enum Shape {
 }
 
 /// What an element draws: an `<svg>` its viewBox through its fit, a group its children, a shape
-/// itself, a `<use>` a copy. Definitions, gradients and their stops, clip paths, masks and symbols
-/// draw nothing themselves.
+/// itself, a `<use>` a copy. Definitions, gradients and their stops, clip paths, masks, symbols
+/// and markers draw nothing themselves.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Element {
     Svg {
@@ -96,6 +99,30 @@ pub enum Element {
         view_box: Option<[f64; 4]>,
         fit: Fit,
     },
+    Marker(Marker),
+}
+
+/// A marker: what its children draw, through its viewBox by its fit in a viewport `size` big,
+/// clipped to it, at each vertex of a path, line, polyline or polygon that names it: the point
+/// `reference` (in viewBox units) on the vertex, turned as `orient` says, and scaled by the
+/// shape's stroke width unless in `user_space`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Marker {
+    pub view_box: Option<[f64; 4]>,
+    pub fit: Fit,
+    pub reference: [Length; 2],
+    pub size: [Length; 2],
+    pub user_space: bool,
+    pub orient: Orient,
+}
+
+/// How a marker turns: along the path's direction at its vertex, and at the start turned back
+/// with `auto-start-reverse`, or by an angle in degrees.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Orient {
+    Auto,
+    AutoStartReverse,
+    Angle(f64),
 }
 
 /// A mask: what its children draw, by their luminance or alpha, inside `region` (x, y, width and
@@ -152,6 +179,9 @@ pub fn presentational(tag: Tag, name: &str) -> bool {
             | "strokeDashoffset"
             | "stopColor"
             | "stopOpacity"
+            | "markerStart"
+            | "markerMid"
+            | "markerEnd"
             | "clipPath"
             | "clipRule"
             | "mask"
@@ -200,10 +230,13 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
             Element::Svg { view_box, fit }
         }
         Tag::G => Element::G,
-        Tag::Path => Element::Shape(Shape::Path(match text("d") {
-            Some(d) if !d.trim().is_empty() => path::parse(&d).map_err(at("d"))?,
-            _ => Path::default(),
-        })),
+        Tag::Path => {
+            let (path, ends) = match text("d") {
+                Some(d) if !d.trim().is_empty() => path::commands(&d).map_err(at("d"))?,
+                _ => (Path::default(), Vec::new()),
+            };
+            Element::Shape(Shape::Path { path, ends })
+        }
         Tag::Circle => Element::Shape(Shape::Circle {
             center: [length("cx")?, length("cy")?],
             r: length("r")?,
@@ -305,6 +338,34 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
             let (view_box, fit) = fitting()?;
             Element::Symbol { view_box, fit }
         }
+        Tag::Marker => {
+            let (view_box, fit) = fitting()?;
+            let three = Length {
+                units: 3.0,
+                percent: 0.0,
+            };
+            let size = |name| get(name).map_or(Ok(three), |v| self::length(v).map_err(at(name)));
+            Element::Marker(Marker {
+                view_box,
+                fit,
+                reference: [length("refX")?, length("refY")?],
+                size: [size("markerWidth")?, size("markerHeight")?],
+                user_space: match text("markerUnits") {
+                    None => false,
+                    Some(u) => match u.trim() {
+                        "userSpaceOnUse" => true,
+                        "strokeWidth" => false,
+                        u => {
+                            return Err(format!(
+                                "markerUnits: {u} is not strokeWidth or userSpaceOnUse"
+                            ));
+                        }
+                    },
+                },
+                orient: text("orient")
+                    .map_or(Ok(Orient::Angle(0.0)), |o| orient(&o).map_err(at("orient")))?,
+            })
+        }
     };
     if transform.is_some() && matches!(element, Element::Defs | Element::Stop(_)) {
         return Err(format!(
@@ -315,7 +376,11 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
     if transform.is_some() && matches!(element, Element::Gradient(_)) {
         return Err("transform: a gradient takes gradientTransform".into());
     }
-    if transform.is_some() && matches!(element, Element::Mask(_) | Element::Symbol { .. }) {
+    let untransformed = matches!(
+        element,
+        Element::Mask(_) | Element::Symbol { .. } | Element::Marker(_)
+    );
+    if transform.is_some() && untransformed {
         return Err(format!(
             "transform: a <{}> takes none, but what is in it may",
             tag.name()
@@ -349,6 +414,10 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
             negative("width", size[0])?;
             negative("height", size[1])?;
         }
+        Element::Marker(m) => {
+            negative("markerWidth", Some(m.size[0]))?;
+            negative("markerHeight", Some(m.size[1]))?;
+        }
         _ => {}
     }
     let path_length = match get("pathLength") {
@@ -377,6 +446,28 @@ fn offset(v: &V) -> Result<f64, String> {
     match x {
         Ok(x) if x.is_finite() => Ok(x.clamp(0.0, 1.0)),
         _ => Err(format!("{s} is not a number or a percentage")),
+    }
+}
+
+/// A marker's `orient`: `auto`, `auto-start-reverse`, or an angle, in degrees without a unit.
+fn orient(s: &str) -> Result<Orient, String> {
+    let s = s.trim();
+    let angle = [
+        ("deg", 1.0),
+        ("grad", 0.9),
+        ("rad", 180.0 / std::f64::consts::PI),
+        ("turn", 360.0),
+    ]
+    .iter()
+    .find_map(|&(unit, k)| Some((s.strip_suffix(unit)?, k)))
+    .unwrap_or((s, 1.0));
+    match s {
+        "auto" => Ok(Orient::Auto),
+        "auto-start-reverse" => Ok(Orient::AutoStartReverse),
+        _ => match angle.0.parse::<f64>() {
+            Ok(a) if a.is_finite() => Ok(Orient::Angle(a * angle.1)),
+            _ => Err(format!("{s} is not auto, auto-start-reverse or an angle")),
+        },
     }
 }
 
@@ -502,15 +593,12 @@ fn transform(s: &str) -> Result<Matrix, String> {
             .map(f64::from)
             .collect::<Vec<_>>();
         let tan = |a: f64| a.to_radians().tan();
-        let rotate = |a: f64| {
-            let (sin, cos) = a.to_radians().sin_cos();
-            Matrix::affine([cos, sin, -sin, cos, 0.0, 0.0])
-        };
+        let rotate = Matrix::rotate;
         let f = match (name, &n[..]) {
             ("matrix", &[a, b, c, d, e, f]) => Matrix::affine([a, b, c, d, e, f]),
             ("translate", &[x]) => Matrix::translate(x, 0.0),
             ("translate", &[x, y]) => Matrix::translate(x, y),
-            ("scale", &[k]) => Matrix::affine([k, 0.0, 0.0, k, 0.0, 0.0]),
+            ("scale", &[k]) => Matrix::scale(k),
             ("scale", &[x, y]) => Matrix::affine([x, 0.0, 0.0, y, 0.0, 0.0]),
             ("rotate", &[a]) => rotate(a),
             ("rotate", &[a, x, y]) => Matrix::translate(x, y)
@@ -556,7 +644,7 @@ pub fn path(shape: &Shape, size: [f64; 2]) -> Option<Path> {
     let diagonal = ((w * w + h * h) / 2.0).sqrt();
     let point = |x: Length, y: Length| [x.resolve(w) as f32, y.resolve(h) as f32];
     let path = match shape {
-        Shape::Path(p) => p.clone(),
+        Shape::Path { path, .. } => path.clone(),
         Shape::Circle { center, r } => {
             let r = r.resolve(diagonal) as f32;
             ellipse(point(center[0], center[1]), [r, r])?
@@ -591,6 +679,97 @@ pub fn path(shape: &Shape, size: [f64; 2]) -> Option<Path> {
         }
     };
     (!path.0.is_empty()).then_some(path)
+}
+
+/// Where a shape's markers go: each vertex of a path, a line, a polyline or a polygon (`path` its
+/// path), and the path's direction there in degrees, the one between the directions in and out of
+/// it, or the one it has; a closed subpath's start comes in from its close, and its close goes
+/// out as its start does. Other shapes have none.
+pub fn vertices(shape: &Shape, path: &Path) -> Vec<(Point, f64)> {
+    struct Vertex {
+        at: Point,
+        inward: Option<Point>,
+        outward: Option<Point>,
+    }
+    let all;
+    let ends = match shape {
+        Shape::Path { ends, .. } => &ends[..],
+        Shape::Line(_) | Shape::Points { .. } => {
+            all = vec![true; path.0.len()];
+            &all[..]
+        }
+        _ => return Vec::new(),
+    };
+    // A direction, if it has one.
+    let way = |from: Point, to: Point| {
+        let d = [to[0] - from[0], to[1] - from[1]];
+        (d != [0.0; 2]).then_some(d)
+    };
+    let mut list: Vec<Vertex> = Vec::new();
+    let (mut at, mut start) = ([0.0f32; 2], [0.0f32; 2]);
+    // The subpath's first vertex.
+    let mut first = None;
+    for (k, segment) in path.0.iter().enumerate() {
+        let (to, out, inward) = match *segment {
+            Segment::Move(p) => {
+                (at, start) = (p, p);
+                if ends[k] {
+                    first = Some(list.len());
+                    list.push(Vertex {
+                        at: p,
+                        inward: None,
+                        outward: None,
+                    });
+                }
+                continue;
+            }
+            Segment::Line(p) => (p, way(at, p), way(at, p)),
+            Segment::Quad(c, p) => (p, way(at, c).or(way(at, p)), way(c, p).or(way(at, p))),
+            Segment::Cubic(c1, c2, p) => (
+                p,
+                way(at, c1).or(way(at, c2)).or(way(at, p)),
+                way(c2, p).or(way(c1, p)).or(way(at, p)),
+            ),
+            Segment::Close => (start, way(at, start), way(at, start)),
+        };
+        if let Some(v) = list.last_mut()
+            && v.outward.is_none()
+        {
+            v.outward = out;
+        }
+        at = to;
+        if !ends[k] {
+            continue;
+        }
+        let mut vertex = Vertex {
+            at: to,
+            inward,
+            outward: None,
+        };
+        if matches!(segment, Segment::Close)
+            && let Some(f) = first.and_then(|f| list.get_mut(f))
+        {
+            f.inward = inward;
+            vertex.outward = f.outward;
+        }
+        list.push(vertex);
+    }
+    let angle = |d: Point| f64::from(d[1]).atan2(f64::from(d[0])).to_degrees();
+    (list.iter())
+        .map(|v| {
+            let turn = match (v.inward.map(angle), v.outward.map(angle)) {
+                (Some(mut a), Some(b)) => {
+                    if (a - b).abs() > 180.0 {
+                        a += 360.0;
+                    }
+                    (a + b) / 2.0
+                }
+                (Some(a), None) | (None, Some(a)) => a,
+                (None, None) => 0.0,
+            };
+            (v.at, turn)
+        })
+        .collect()
 }
 
 /// How far a cubic curve's control points are from its ends, in radii, for a quarter of a circle.

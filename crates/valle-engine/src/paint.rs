@@ -747,7 +747,7 @@ pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item
         parents,
         clips: Vec::with_capacity(n),
         ids,
-        masks: RefCell::new(Vec::new()),
+        resources: RefCell::new(Vec::new()),
     };
     // In preorder, so the box whose clips a box takes has its own.
     for i in 0..n {
@@ -964,8 +964,8 @@ struct Painter<'a> {
     clips: Vec<Vec<usize>>,
     /// SVG elements by id.
     ids: HashMap<&'a str, usize>,
-    /// The masks what is drawing is in, innermost last.
-    masks: RefCell<Vec<usize>>,
+    /// The masks and markers what is drawing is in, innermost last.
+    resources: RefCell<Vec<usize>>,
 }
 
 impl Painter<'_> {
@@ -1774,14 +1774,15 @@ impl Painter<'_> {
                 };
                 let bbox = svg::bounds(&path);
                 let k = &s.stroke;
+                let [w, h] = size;
+                let diagonal = ((w * w + h * h) / 2.0).sqrt() as f32;
+                let length = |l: &Calc| f64::from(l.resolve(diagonal));
+                let width = length(&k.width);
                 let stroke = self
                     .svg_paint(&k.paint, k.opacity, s, size, bbox)
                     .and_then(|paint| {
-                        let [w, h] = size;
-                        let diagonal = ((w * w + h * h) / 2.0).sqrt() as f32;
-                        let length = |l: &Calc| f64::from(l.resolve(diagonal));
                         let pen = svg::Pen {
-                            width: length(&k.width),
+                            width,
                             cap: k.cap,
                             join: k.join,
                             miter_limit: k.miter_limit,
@@ -1795,9 +1796,11 @@ impl Painter<'_> {
                         let cover = svg::bounds(&outline);
                         painted(outline, false, paint, cover, scale)
                     });
+                let markers = self.svg_markers(s, shape, &path, width, size, matrix);
                 let fill = self.svg_paint(&s.fill, s.fill_opacity, s, size, bbox);
                 items.extend(fill.and_then(|f| painted(path, s.even_odd, f, bbox, scale)));
                 items.extend(stroke);
+                items.extend(markers);
             }
             Element::Shape(_)
             | Element::Svg { .. }
@@ -1806,7 +1809,8 @@ impl Painter<'_> {
             | Element::Stop(_)
             | Element::ClipPath { .. }
             | Element::Mask(_)
-            | Element::Symbol { .. } => {}
+            | Element::Symbol { .. }
+            | Element::Marker(_) => {}
         }
         if items.is_empty() {
             return;
@@ -2004,7 +2008,7 @@ impl Painter<'_> {
                 [bx + x * bw, by + y * bh, w * bw, h * bh]
             }
         };
-        if w <= 0.0 || h <= 0.0 || self.masks.borrow().contains(&n) {
+        if w <= 0.0 || h <= 0.0 || self.resources.borrow().contains(&n) {
             return None;
         }
         let content = match m.content_user_space {
@@ -2012,11 +2016,11 @@ impl Painter<'_> {
             false => svg::fractions(bbox?),
         };
         let mut items = Vec::new();
-        self.masks.borrow_mut().push(n);
+        self.resources.borrow_mut().push(n);
         for &k in &self.template.nodes[n].children {
             self.svg_element(k as usize, size, matrix.times(content), &mut items, None);
         }
-        self.masks.borrow_mut().pop();
+        self.resources.borrow_mut().pop();
         if items.is_empty() {
             return None;
         }
@@ -2037,6 +2041,106 @@ impl Painter<'_> {
             radii: SQUARE,
             items,
         })
+    }
+
+    /// The markers of `shape`, with style `s`, at the vertices of its `path`, for a stroke `width`
+    /// wide, in a viewport `size` user units big, which `matrix` takes to px: at each its start's,
+    /// middle's or end's, and at a lone vertex its start's, then its end's.
+    fn svg_markers(
+        &self,
+        s: &Style,
+        shape: &svg::Shape,
+        path: &Path,
+        width: f64,
+        size: [f64; 2],
+        matrix: Matrix,
+    ) -> Vec<Item> {
+        let mut out = Vec::new();
+        if s.markers.iter().all(Option::is_none) {
+            return out;
+        }
+        let vertices = svg::vertices(shape, path);
+        let last = vertices.len().saturating_sub(1);
+        // Each marker as drawn once.
+        let mut drawn: [Option<Option<(svg::Orient, Matrix, Item)>>; 3] = Default::default();
+        for (n, &([x, y], angle)) in vertices.iter().enumerate() {
+            let which: &[usize] = match (n == 0, n == last) {
+                (true, true) => &[0, 2],
+                (true, false) => &[0],
+                (false, true) => &[2],
+                (false, false) => &[1],
+            };
+            for &k in which {
+                let Some(id) = s.markers[k].as_deref() else {
+                    continue;
+                };
+                let made = drawn[k].get_or_insert_with(|| self.svg_marker(id, width, size, matrix));
+                let Some((orient, base, item)) = made else {
+                    continue;
+                };
+                let turn = match *orient {
+                    svg::Orient::Auto => angle,
+                    svg::Orient::AutoStartReverse if k == 0 => angle + 180.0,
+                    svg::Orient::AutoStartReverse => angle,
+                    svg::Orient::Angle(a) => a,
+                };
+                let at = Matrix::translate(f64::from(x), f64::from(y));
+                out.push(Item::Transform {
+                    matrix: at.times(Matrix::rotate(turn)).times(*base),
+                    items: vec![item.clone()],
+                });
+            }
+        }
+        out
+    }
+
+    /// Marker `id` for a shape whose stroke is `width` wide, in a viewport `size` user units big,
+    /// which `matrix` takes to px: how it turns, the transform from its viewport to a vertex at
+    /// the origin along x, and what it draws in its viewport, clipped to it. `None` where it draws
+    /// nothing, as a marker in itself does.
+    fn svg_marker(
+        &self,
+        id: &str,
+        width: f64,
+        size: [f64; 2],
+        matrix: Matrix,
+    ) -> Option<(svg::Orient, Matrix, Item)> {
+        let &n = self.ids.get(id)?;
+        let Element::Marker(m) = self.styles[n].svg.as_deref()?.element else {
+            return None;
+        };
+        let [w, h] = [m.size[0].resolve(size[0]), m.size[1].resolve(size[1])];
+        let scale = if m.user_space { 1.0 } else { width };
+        if w <= 0.0 || h <= 0.0 || scale <= 0.0 || self.resources.borrow().contains(&n) {
+            return None;
+        }
+        let (fitted, units) = match m.view_box {
+            Some([.., vw, vh]) if vw <= 0.0 || vh <= 0.0 => return None,
+            Some(b) => (svg::viewport(b, m.fit, [w, h]), [b[2], b[3]]),
+            None => (Matrix::IDENTITY, [w, h]),
+        };
+        let [rx, ry] = [0, 1].map(|k| m.reference[k].resolve(units[k]) as f32);
+        let [rx, ry] = fitted.apply([rx, ry]).map(f64::from);
+        let base = Matrix::scale(scale).times(Matrix::translate(-rx, -ry));
+        let mut items = Vec::new();
+        self.resources.borrow_mut().push(n);
+        for &c in &self.template.nodes[n].children {
+            let m = matrix.times(base).times(fitted);
+            self.svg_element(c as usize, units, m, &mut items, None);
+        }
+        self.resources.borrow_mut().pop();
+        if items.is_empty() {
+            return None;
+        }
+        let item = Item::Clip {
+            rect: rect([0.0, 0.0, w, h]),
+            radii: SQUARE,
+            items: vec![Item::Transform {
+                matrix: fitted,
+                items,
+            }],
+        };
+        Some((m.orient, base, item))
     }
 
     /// A shape's paint at `opacity`, in a viewport `size` user units big, over the shape's
