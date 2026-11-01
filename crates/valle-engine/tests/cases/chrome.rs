@@ -15,8 +15,10 @@ use valle_engine::text::collapse;
 
 use crate::html::value;
 
-/// How far a box edge may be from Chrome's: its layout unit, 1/64 px.
-const EDGE: f64 = 1.0 / 64.0;
+/// How far a box edge may be from Chrome's: two of its 1/64 px layout units. Chrome truncates
+/// each length it resolves, a percentage say, to a unit, which the engine does not, and an edge
+/// adds up several.
+const EDGE: f64 = 2.0 / 64.0;
 /// How far a pixel may be from Chrome's, in levels of each premultiplied channel.
 const LEVELS: i32 = 8;
 
@@ -110,9 +112,10 @@ pub fn shapes(items: &[Item]) -> Vec<Item> {
         .collect()
 }
 
-/// The pixels of `a` or `b`, both `size` and RGBA, that are more than `LEVELS` from every pixel
-/// of the other in the 3 × 3 around them, which absorbs antialiasing that differs; and an image
-/// marking them.
+/// The pixels of `a` or `b`, both `size` and RGBA, with a channel more than `LEVELS` outside the
+/// values it takes in the 3 × 3 around them in the other; and an image marking them. An edge's
+/// pixels range from inside to outside, so antialiasing that differs passes, and Chrome's CPU
+/// raster is not exact on curves.
 pub fn far(a: &[u8], b: &[u8], size: [u32; 2]) -> (usize, Vec<u8>) {
     let [w, h] = size.map(|n| n as usize);
     let at = |image: &[u8], x: usize, y: usize| {
@@ -122,13 +125,16 @@ pub fn far(a: &[u8], b: &[u8], size: [u32; 2]) -> (usize, Vec<u8>) {
         [pre(p[0]), pre(p[1]), pre(p[2]), alpha]
     };
     let near = |from: &[u8], to: &[u8], x: usize, y: usize| {
+        let (mut low, mut high) = ([i32::MAX; 4], [i32::MIN; 4]);
+        for ny in y.saturating_sub(1)..=(y + 1).min(h - 1) {
+            for nx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+                for (c, v) in at(to, nx, ny).into_iter().enumerate() {
+                    (low[c], high[c]) = (low[c].min(v), high[c].max(v));
+                }
+            }
+        }
         let p = at(from, x, y);
-        (y.saturating_sub(1)..=(y + 1).min(h - 1)).any(|ny| {
-            (x.saturating_sub(1)..=(x + 1).min(w - 1)).any(|nx| {
-                let q = at(to, nx, ny);
-                p.iter().zip(&q).all(|(c, d)| (c - d).abs() <= LEVELS)
-            })
-        })
+        (0..4).all(|c| low[c] - LEVELS <= p[c] && p[c] <= high[c] + LEVELS)
     };
     let mut count = 0;
     let mut marked = Vec::with_capacity(w * h * 4);

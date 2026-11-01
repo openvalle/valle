@@ -2,7 +2,7 @@
 //!
 //! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`.
 //! - A case in `css/` is standard CSS: each frame is printed as HTML, and its boxes and lines must
-//!   be where Chrome puts them, each box edge within 1/64 px. The Chrome baselines are drawn here
+//!   be where Chrome puts them, each box edge within 1/32 px. The Chrome baselines are drawn here
 //!   when missing or out of date (see `chrome.rs`), never on CI.
 //! - Any other case is drawn on the GPU, every frame, and each frame compared with its Valle
 //!   baseline, `tests/baselines/valle/<case>.<frame>.png`, within one level a channel. Frames that
@@ -527,7 +527,7 @@ impl Runner {
             return Ok(None);
         }
         let problem = format!(
-            "{far} pixels are more than 8 levels from all of Chrome's around them; at most \
+            "{far} pixels are more than 8 levels outside what Chrome has around them; at most \
              {most} may be"
         );
         let against = Against {
