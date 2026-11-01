@@ -1,7 +1,8 @@
 // Draws Chrome baselines for the case runner: each job's HTML in the Chrome for Testing that
 // tests/baselines/chrome/version pins, with the border box of every element that has a node
 // index and the lines of every text node, written to `<out>.json`, and the frame without its text
-// on a transparent canvas, `<out>.png`.
+// on a transparent canvas, `<out>.png`. It also lists the CSS properties that Chrome knows,
+// tests/baselines/chrome/properties.json, which the cases the engine must refuse are made from.
 //
 //   bun web/tests/chrome.ts <jobs.json>
 //
@@ -120,6 +121,15 @@ async function draw() {
       });
       await Bun.write(`${job.out}.png`, Buffer.from(data, "base64"));
     }
+    const { result } = await page("Runtime.evaluate", {
+      expression: `(${known})()`,
+      returnByValue: true,
+    });
+    const properties = (result.value as string[]).map((p) => `  ${JSON.stringify(p)}`).join(",\n");
+    await Bun.write(
+      join(root, "tests/baselines/chrome/properties.json"),
+      `{\n "chrome": ${JSON.stringify(version)},\n "properties": [\n${properties}\n ]\n}\n`,
+    );
     await cdp.send("Browser.close").catch(() => {});
   } finally {
     browser.kill();
@@ -230,6 +240,23 @@ function measure(): Promise<Measured> {
     }
     return { boxes, lines: text };
   });
+}
+
+/** Runs in the page: the CSS properties Chrome knows, by their CSS names, sorted. */
+function known(): string[] {
+  const names = new Set<string>();
+  for (const key in document.documentElement.style) {
+    // `webkitTextStroke` is `-webkit-text-stroke`. Methods, and descriptors such as `src`, are not
+    // properties.
+    let name = key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+    if (name.startsWith("webkit-")) {
+      name = `-${name}`;
+    }
+    if (CSS.supports(name, "initial")) {
+      names.add(name);
+    }
+  }
+  return [...names].sort();
 }
 
 /** A Chrome DevTools Protocol connection: commands with their replies, and events awaited. */

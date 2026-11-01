@@ -1,0 +1,29 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><div data-n=\"2\" style=\"display: flex;\"><div data-n=\"3\" data-text style=\"font-size: 10px; letter-spacing: 0;\">Spaced</div></div></div><div data-n=\"4\" style=\"padding-bottom: 4px;\"><div data-n=\"5\" style=\"display: flex;\"><div data-n=\"6\" data-text style=\"font-size: 10px; letter-spacing: 1px;\">Spaced</div></div></div><div data-n=\"7\" style=\"padding-bottom: 4px;\"><div data-n=\"8\" style=\"display: flex;\"><div data-n=\"9\" data-text style=\"font-size: 10px; letter-spacing: -0.5px;\">Spaced</div></div></div><div data-n=\"10\" style=\"padding-bottom: 4px;\"><div data-n=\"11\" style=\"display: flex;\"><div data-n=\"12\" data-text style=\"font-size: 10px; letter-spacing: 1.5px;\">Spaced</div></div></div><div data-n=\"13\" style=\"padding-bottom: 4px;\"><div data-n=\"14\" style=\"display: flex;\"><div data-n=\"15\" data-text style=\"font-size: 10px; letter-spacing: 0.2em;\">Spaced</div></div></div><div data-n=\"16\" style=\"padding-bottom: 4px;\"><div data-n=\"17\" style=\"display: flex;\"><div data-n=\"18\" data-text style=\"font-size: 10px; letter-spacing: 0.1rem;\">Spaced</div></div></div><div data-n=\"19\" style=\"padding-bottom: 4px;\"><div data-n=\"20\" style=\"display: flex;\"><div data-n=\"21\" data-text style=\"font-size: 10px; letter-spacing: normal;\">Spaced</div></div></div></div></div>\n",
+ "boxes": [
+  [0,0,256,134],
+  [4,4,248,18],
+  [4,4,248,14],
+  [4,4,33.84375,14],
+  [4,22,248,18],
+  [4,22,248,14],
+  [4,22,39.84375,14],
+  [4,40,248,18],
+  [4,40,248,14],
+  [4,40,30.84375,14],
+  [4,58,248,18],
+  [4,58,248,14],
+  [4,58,42.84375,14],
+  [4,76,248,18],
+  [4,76,248,14],
+  [4,76,45.84375,14],
+  [4,94,248,18],
+  [4,94,248,14],
+  [4,94,43.453125,14],
+  [4,112,248,18],
+  [4,112,248,14],
+  [4,112,33.84375,14]
+ ],
+ "lines": {"3":["Spaced"],"6":["Spaced"],"9":["Spaced"],"12":["Spaced"],"15":["Spaced"],"18":["Spaced"],"21":["Spaced"]}
+}

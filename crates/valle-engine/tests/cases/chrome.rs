@@ -2,11 +2,13 @@
 //! `tests/baselines/chrome/<case>.<frame>.json` and `.png`. `web/tests/chrome.ts` draws them when
 //! they are missing, or were drawn from other HTML or by another Chrome. The engine's boxes and
 //! lines are compared with them, and on the GPU its pixels, without the glyphs: Chrome's own text
-//! rendering is not what the engine draws.
+//! rendering is not what the engine draws. Whenever it draws, it also lists the CSS properties
+//! Chrome knows, `tests/baselines/chrome/properties.json`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use valle_engine::paint::Item;
 use valle_engine::scene::Frame;
@@ -33,6 +35,13 @@ pub struct Baseline {
     pub lines: BTreeMap<u32, Vec<String>>,
 }
 
+/// The CSS properties a Chrome knows, by their CSS names.
+#[derive(Deserialize)]
+pub struct Properties {
+    pub chrome: String,
+    pub properties: Vec<String>,
+}
+
 /// A baseline to draw: the HTML, the canvas size, and its path without the extension.
 #[derive(Serialize)]
 pub struct Job {
@@ -41,7 +50,7 @@ pub struct Job {
     pub out: String,
 }
 
-pub fn read(path: &Path) -> Result<Option<Baseline>, String> {
+pub fn read<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
     let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
     match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text).map(Some).map_err(|e| bad(&e)),

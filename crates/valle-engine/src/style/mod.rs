@@ -466,60 +466,71 @@ enum Field {
     LetterSpacing,
 }
 
+/// The support table: the style properties the engine takes, by their React names. The case
+/// runner compares each with Chrome, and makes each other property Chrome knows a case that must
+/// fail.
+const FIELDS: [(&str, Field); 47] = [
+    ("display", Field::Display),
+    ("position", Field::Position),
+    ("top", Field::Top),
+    ("right", Field::Right),
+    ("bottom", Field::Bottom),
+    ("left", Field::Left),
+    ("inset", Field::Inset),
+    ("width", Field::Width),
+    ("height", Field::Height),
+    ("minWidth", Field::MinWidth),
+    ("minHeight", Field::MinHeight),
+    ("maxWidth", Field::MaxWidth),
+    ("maxHeight", Field::MaxHeight),
+    ("margin", Field::Margin),
+    ("marginTop", Field::MarginTop),
+    ("marginRight", Field::MarginRight),
+    ("marginBottom", Field::MarginBottom),
+    ("marginLeft", Field::MarginLeft),
+    ("padding", Field::Padding),
+    ("paddingTop", Field::PaddingTop),
+    ("paddingRight", Field::PaddingRight),
+    ("paddingBottom", Field::PaddingBottom),
+    ("paddingLeft", Field::PaddingLeft),
+    ("flexDirection", Field::FlexDirection),
+    ("flexWrap", Field::FlexWrap),
+    ("flexGrow", Field::FlexGrow),
+    ("flexShrink", Field::FlexShrink),
+    ("flexBasis", Field::FlexBasis),
+    ("flex", Field::Flex),
+    ("justifyContent", Field::JustifyContent),
+    ("alignItems", Field::AlignItems),
+    ("alignSelf", Field::AlignSelf),
+    ("alignContent", Field::AlignContent),
+    ("gap", Field::Gap),
+    ("rowGap", Field::RowGap),
+    ("columnGap", Field::ColumnGap),
+    ("background", Field::Background),
+    ("backgroundColor", Field::BackgroundColor),
+    ("borderRadius", Field::BorderRadius),
+    ("opacity", Field::Opacity),
+    ("color", Field::Color),
+    ("fontSize", Field::FontSize),
+    ("fontWeight", Field::FontWeight),
+    ("fontFamily", Field::FontFamily),
+    ("lineHeight", Field::LineHeight),
+    ("textAlign", Field::TextAlign),
+    ("letterSpacing", Field::LetterSpacing),
+];
+
 impl Field {
     fn by_name(key: &str) -> Option<Field> {
-        use Field as F;
-        Some(match key {
-            "display" => F::Display,
-            "position" => F::Position,
-            "top" => F::Top,
-            "right" => F::Right,
-            "bottom" => F::Bottom,
-            "left" => F::Left,
-            "inset" => F::Inset,
-            "width" => F::Width,
-            "height" => F::Height,
-            "minWidth" => F::MinWidth,
-            "minHeight" => F::MinHeight,
-            "maxWidth" => F::MaxWidth,
-            "maxHeight" => F::MaxHeight,
-            "margin" => F::Margin,
-            "marginTop" => F::MarginTop,
-            "marginRight" => F::MarginRight,
-            "marginBottom" => F::MarginBottom,
-            "marginLeft" => F::MarginLeft,
-            "padding" => F::Padding,
-            "paddingTop" => F::PaddingTop,
-            "paddingRight" => F::PaddingRight,
-            "paddingBottom" => F::PaddingBottom,
-            "paddingLeft" => F::PaddingLeft,
-            "flexDirection" => F::FlexDirection,
-            "flexWrap" => F::FlexWrap,
-            "flexGrow" => F::FlexGrow,
-            "flexShrink" => F::FlexShrink,
-            "flexBasis" => F::FlexBasis,
-            "flex" => F::Flex,
-            "justifyContent" => F::JustifyContent,
-            "alignItems" => F::AlignItems,
-            "alignSelf" => F::AlignSelf,
-            "alignContent" => F::AlignContent,
-            "gap" => F::Gap,
-            "rowGap" => F::RowGap,
-            "columnGap" => F::ColumnGap,
-            "background" => F::Background,
-            "backgroundColor" => F::BackgroundColor,
-            "borderRadius" => F::BorderRadius,
-            "opacity" => F::Opacity,
-            "color" => F::Color,
-            "fontSize" => F::FontSize,
-            "fontWeight" => F::FontWeight,
-            "fontFamily" => F::FontFamily,
-            "lineHeight" => F::LineHeight,
-            "textAlign" => F::TextAlign,
-            "letterSpacing" => F::LetterSpacing,
-            _ => return None,
-        })
+        FIELDS
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|&(_, f)| f)
     }
+}
+
+/// The style properties the engine takes.
+pub fn properties() -> impl Iterator<Item = &'static str> {
+    FIELDS.iter().map(|&(name, _)| name)
 }
 
 /// What a length may be.

@@ -1,6 +1,8 @@
-//! The case runner: every scene under `tests/cases` is a case, and cases run in parallel.
+//! The case runner: every scene under `tests/cases` is a case, and so is each scene the support
+//! table makes (see `properties.rs`). Cases run in parallel.
 //!
-//! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`.
+//! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`;
+//!   a `…` in it stands for any text.
 //! - A case in `css/` is standard CSS: each frame is printed as HTML, and its boxes and lines must
 //!   be where Chrome puts them, each box edge within 1/32 px. The Chrome baselines are drawn here
 //!   when missing or out of date (see `chrome.rs`), never on CI.
@@ -13,6 +15,7 @@
 //! given paths (`errors`, `errors/style.tsx`). The GPU cases run only when `VALLE_TEST_LAYERS`
 //! names `gpu`, as `cargo xtask test` does unless told to skip them.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -27,6 +30,7 @@ use valle_engine::time::Tick;
 
 mod chrome;
 mod html;
+mod properties;
 
 /// The largest canvas, px a side, and the most frames a case may have.
 const MAX_SIZE: u32 = 512;
@@ -37,6 +41,8 @@ const STACK: usize = 32 << 20;
 struct Runner {
     repo: PathBuf,
     root: PathBuf,
+    /// The cases made from the support table, by path, and their source.
+    made: BTreeMap<String, String>,
     baselines: PathBuf,
     chrome_baselines: PathBuf,
     /// The Chrome version the Chrome baselines are drawn by.
@@ -85,9 +91,10 @@ fn main() -> ExitCode {
         .expect("the crate is in crates/");
     let layers = std::env::var("VALLE_TEST_LAYERS").unwrap_or_default();
     let version = repo.join("tests/baselines/chrome/version");
-    let runner = Runner {
+    let mut runner = Runner {
         repo: repo.to_path_buf(),
         root: repo.join("tests/cases"),
+        made: BTreeMap::new(),
         baselines: repo.join("tests/baselines/valle"),
         chrome_baselines: repo.join("tests/baselines/chrome"),
         chrome: std::fs::read_to_string(&version)
@@ -100,8 +107,16 @@ fn main() -> ExitCode {
         reviewed: Mutex::new(Vec::new()),
         largest: AtomicU8::new(0),
     };
+    let made = (runner.chrome_properties()).and_then(|known| properties::cases(&known));
+    runner.made = match made {
+        Ok(made) => made,
+        Err(e) => {
+            eprintln!("cases: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let filters: Vec<String> = std::env::args().skip(1).collect();
-    let cases = match select(&runner.root, &filters) {
+    let cases = match select(&runner.root, runner.made.keys(), &filters) {
         Ok(cases) => cases,
         Err(e) => {
             eprintln!("cases: {e}");
@@ -118,14 +133,19 @@ fn main() -> ExitCode {
     code
 }
 
-/// The cases under `root`, as `/`-separated paths from it, sorted; only those the filters name
-/// when there are any.
-fn select(root: &Path, filters: &[String]) -> Result<Vec<String>, String> {
+/// The cases under `root` and those made, as `/`-separated paths from it, sorted; only those the
+/// filters name when there are any.
+fn select<'a>(
+    root: &Path,
+    made: impl Iterator<Item = &'a String>,
+    filters: &[String],
+) -> Result<Vec<String>, String> {
     if let Some(flag) = filters.iter().find(|f| f.starts_with('-')) {
         return Err(format!("unknown flag {flag}"));
     }
     let mut cases = Vec::new();
     walk(root, "", &mut cases)?;
+    cases.extend(made.cloned());
     cases.sort();
     let named = |case: &str, filter: &str| {
         let f = filter.trim_end_matches('/');
@@ -303,8 +323,16 @@ impl Runner {
         }
     }
 
+    /// A case's source, or that of a file it reads.
+    fn source(&self, path: &str) -> Option<String> {
+        match self.made.get(path) {
+            Some(source) => Some(source.clone()),
+            None => std::fs::read_to_string(self.root.join(path)).ok(),
+        }
+    }
+
     fn error(&self, case: &str) -> Result<(), String> {
-        let source = std::fs::read_to_string(self.root.join(case)).map_err(|e| e.to_string())?;
+        let source = self.source(case).ok_or("cannot read the case")?;
         let expected = (source.lines().next())
             .and_then(|l| l.strip_prefix("// error: "))
             .ok_or("an errors/ case names its error on its first line: // error: …")?;
@@ -315,7 +343,7 @@ impl Runner {
         };
         match failed {
             None => Err(format!("no error; expected: {expected}")),
-            Some(e) if e == expected => Ok(()),
+            Some(e) if fits(&e, expected) => Ok(()),
             Some(e) => Err(format!("error:    {e}\nexpected: {expected}")),
         }
     }
@@ -376,7 +404,8 @@ impl Runner {
             let html = html::print(&frame, c);
             let out = self.chrome_baselines.join(format!("{stem}.{i}"));
             let png = self.chrome_baselines.join(format!("{stem}.{i}.png"));
-            match chrome::read(&self.chrome_baselines.join(format!("{stem}.{i}.json")))? {
+            let json = self.chrome_baselines.join(format!("{stem}.{i}.json"));
+            match chrome::read::<chrome::Baseline>(&json)? {
                 Some(b) if b.chrome == *version && b.html == html && png.exists() => {
                     let off = chrome::compare(&frame, &b);
                     problems.extend(off.into_iter().map(|p| format!("frame {i}: {p}")));
@@ -416,8 +445,8 @@ impl Runner {
         let version = self.chrome.as_ref().map_err(String::clone)?;
         if self.ci {
             return Err(format!(
-                "no Chrome {version} baseline for this HTML, and CI never draws them: \
-                 `cargo xtask test` draws them on a machine that can run Chrome"
+                "the Chrome {version} baselines are missing or out of date, and CI never draws \
+                 them: `cargo xtask test` draws them on a machine that can run Chrome"
             ));
         }
         let dir = self.repo.join("target/chrome");
@@ -425,7 +454,10 @@ impl Runner {
         let list = dir.join("jobs.json");
         let text = serde_json::to_string(jobs).map_err(|e| e.to_string())?;
         std::fs::write(&list, text).map_err(|e| format!("{}: {e}", list.display()))?;
-        println!("\ndrawing {} Chrome baselines", jobs.len());
+        match jobs.len() {
+            0 => println!("\nlisting the CSS properties Chrome knows"),
+            n => println!("\ndrawing {n} Chrome baselines"),
+        }
         let status = Command::new("bun")
             .arg("web/tests/chrome.ts")
             .arg(&list)
@@ -439,13 +471,29 @@ impl Runner {
         }
     }
 
+    /// The CSS properties the pinned Chrome knows, which `web/tests/chrome.ts` lists whenever it
+    /// draws.
+    fn chrome_properties(&self) -> Result<Vec<String>, String> {
+        let version = self.chrome.as_ref().map_err(String::clone)?;
+        let path = self.chrome_baselines.join("properties.json");
+        let listed = || {
+            let list = chrome::read::<chrome::Properties>(&path)?;
+            Ok::<_, String>(list.filter(|l| l.chrome == *version).map(|l| l.properties))
+        };
+        if let Some(known) = listed()? {
+            return Ok(known);
+        }
+        self.draw_chrome(&[])?;
+        listed()?.ok_or_else(|| format!("{}: Chrome {version} listed nothing", path.display()))
+    }
+
     /// Runs `each` on the case's frames in order, with the scene, the frame and its time.
     fn frames(
         &self,
         case: &str,
         each: &mut dyn FnMut(&mut Scene, i64, Tick) -> Result<(), String>,
     ) -> Result<(), Failure> {
-        let read = |path: &str| std::fs::read_to_string(self.root.join(path)).ok();
+        let read = |path: &str| self.source(path);
         let mut scene = Scene::load(case, &read).map_err(Failure::Scene)?;
         let c = scene.composition();
         if c.width > MAX_SIZE || c.height > MAX_SIZE {
@@ -603,6 +651,25 @@ impl Runner {
         let page = self.review.join("index.html");
         std::fs::write(&page, html).map_err(|e| format!("{}: {e}", page.display()))
     }
+}
+
+/// Whether `error` fits `expected`, where each `…` stands for any text.
+fn fits(error: &str, expected: &str) -> bool {
+    let mut parts = expected.split('…');
+    let Some(mut rest) = error.strip_prefix(parts.next().unwrap_or_default()) else {
+        return false;
+    };
+    let parts: Vec<&str> = parts.collect();
+    let Some((last, middle)) = parts.split_last() else {
+        return rest.is_empty();
+    };
+    for part in middle {
+        match rest.find(part) {
+            Some(i) => rest = &rest[i + part.len()..],
+            None => return false,
+        }
+    }
+    rest.ends_with(last)
 }
 
 fn read_png(path: &Path) -> Result<([u32; 2], Vec<u8>), String> {

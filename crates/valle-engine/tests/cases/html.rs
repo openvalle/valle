@@ -108,7 +108,7 @@ fn declaration(key: &str, v: &V) -> Option<String> {
         V::Num(x) => format!("{}px", js::number_to_string(*x)),
         V::Str(s) if key == "fontFamily" => (s.split(','))
             .map(|f| match f.trim() {
-                "sans-serif" => SANS_SERIF,
+                name if name.eq_ignore_ascii_case("sans-serif") => SANS_SERIF,
                 name => name,
             })
             .collect::<Vec<_>>()
