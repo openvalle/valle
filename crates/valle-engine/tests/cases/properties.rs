@@ -112,8 +112,9 @@ const ROWS: &[Row] = &[
             "\"relative\"",
             "\"absolute\"",
             "\" Absolute \"",
+            "\"fixed\"",
         ],
-        refused: &["\"fixed\"", "\"sticky\"", "\"float\"", "0"],
+        refused: &["\"sticky\"", "\"float\"", "0"],
     },
     Row {
         properties: SIDES,

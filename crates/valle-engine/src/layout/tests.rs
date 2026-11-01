@@ -151,6 +151,52 @@ fn absolute_boxes_take_the_nearest_positioned_ancestor() {
 }
 
 #[test]
+fn fixed_boxes_take_the_canvas() {
+    let fixed = [("position", "fixed"), ("width", "10px"), ("height", "10px")];
+    let l = lay(
+        vec![
+            view(
+                &[
+                    ("position", "relative"),
+                    ("left", "50px"),
+                    ("top", "20px"),
+                    ("padding", "10px"),
+                    ("height", "50px"),
+                ],
+                &[1, 2],
+            ),
+            view(
+                &[
+                    ("right", "0"),
+                    ("bottom", "0"),
+                    fixed[0],
+                    fixed[1],
+                    fixed[2],
+                ],
+                &[],
+            ),
+            view(&fixed, &[3]),
+            view(
+                &[
+                    ("position", "absolute"),
+                    ("left", "50%"),
+                    ("width", "10px"),
+                    ("height", "10px"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    )
+    .unwrap();
+    assert_eq!(l.boxes[1].border, rect(190.0, 90.0, 10.0, 10.0));
+    // Without insets, where it would be in flow.
+    assert_eq!(l.boxes[2].border, rect(60.0, 30.0, 10.0, 10.0));
+    // A fixed box is positioned, and contains absolute boxes.
+    assert_eq!(l.boxes[3].border, rect(65.0, 30.0, 10.0, 10.0));
+}
+
+#[test]
 fn text_is_measured_and_set_in_its_box() {
     let l = lay(
         vec![

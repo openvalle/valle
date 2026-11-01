@@ -836,6 +836,7 @@ fn position(v: &V) -> Result<Position, String> {
             ("static", Position::Static),
             ("relative", Position::Relative),
             ("absolute", Position::Absolute),
+            ("fixed", Position::Fixed),
         ],
     )
 }

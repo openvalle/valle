@@ -1,7 +1,7 @@
 //! Layout: a frame's computed styles as a Taffy tree under the canvas, text measured as Taffy
 //! asks and aligned on its first baseline, and every node's boxes in canvas px. The canvas is a
 //! block container the size of the composition that clips what overflows it, and the containing
-//! block of what no positioned ancestor contains.
+//! block of fixed boxes and of what no positioned ancestor contains.
 
 use std::borrow::Cow;
 use std::collections::HashMap;

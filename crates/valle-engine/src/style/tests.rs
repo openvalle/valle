@@ -381,8 +381,8 @@ fn what_is_not_supported_is_an_error() {
         ("position", text("sticky"), "the canvas does not scroll"),
         (
             "position",
-            text("fixed"),
-            "fixed is not one of static, relative, absolute",
+            text("float"),
+            "float is not one of static, relative, absolute, fixed",
         ),
         (
             "justifyContent",
