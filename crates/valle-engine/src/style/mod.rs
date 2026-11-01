@@ -688,6 +688,8 @@ enum Field {
     /// x or y.
     BackgroundPositionAxis(usize),
     BackgroundRepeat,
+    BackgroundOrigin,
+    BackgroundClip,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -753,7 +755,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 159] = [
+const FIELDS: [(&str, Field); 161] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -845,6 +847,8 @@ const FIELDS: [(&str, Field); 159] = [
     ("backgroundPositionX", Field::BackgroundPositionAxis(0)),
     ("backgroundPositionY", Field::BackgroundPositionAxis(1)),
     ("backgroundRepeat", Field::BackgroundRepeat),
+    ("backgroundOrigin", Field::BackgroundOrigin),
+    ("backgroundClip", Field::BackgroundClip),
     ("borderRadius", Field::BorderRadius),
     ("borderTopLeftRadius", Field::CornerRadius(0)),
     ("borderTopRightRadius", Field::CornerRadius(1)),
@@ -1912,6 +1916,8 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             d.layers.positions[axis] = background::axis_positions(&px_text(v)?, axis)?
         }
         F::BackgroundRepeat => d.layers.repeats = background::repeats(&text(v)?)?,
+        F::BackgroundOrigin => d.layers.origins = background::areas(&text(v)?, false)?,
+        F::BackgroundClip => d.layers.clips = background::areas(&text(v)?, true)?,
         F::BorderRadius => d.radii = radii(v)?,
         F::CornerRadius(c) => d.radii[c] = corner(v)?,
         F::Border(which, BorderPart::Line) => {

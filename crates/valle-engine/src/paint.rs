@@ -30,7 +30,7 @@ use taffy::{Display, Overflow, Position};
 pub use gradient::{Geometry, Ramp, Segment};
 
 use crate::layout::{Layout, Rect, ordered};
-use crate::style::background::{ImageSize, Layer, Repeat};
+use crate::style::background::{Area, ImageSize, Layer, Repeat};
 use crate::style::color::Rgba;
 use crate::style::gradient::Image;
 use crate::style::{Shadow, Style};
@@ -561,41 +561,58 @@ impl Painter<'_> {
         for shadow in outer {
             out.extend(outer_shadow(shadow, rect, radii, opaque).map(|item| (clip, item)));
         }
+        let paddings = self.paddings(i);
+        let content = inner(
+            rect,
+            radii,
+            std::array::from_fn(|k| widths[k] + paddings[k]),
+        );
         // The background would show at the antialiased edge of a rounded border: under four
-        // opaque sides it shrinks by half their widths, as in Chrome.
-        let (area, area_radii) = match (0..4).all(|k| widths[k] > 0.0 && colors[k][3] >= 1.0) {
+        // opaque sides the border box it shows in shrinks by half their widths, as in Chrome.
+        let shrunk = match (0..4).all(|k| widths[k] > 0.0 && colors[k][3] >= 1.0) {
             true if radii != SQUARE => inner(rect, radii, widths.map(|w| w / 2.0)),
             _ => (rect, radii),
         };
-        let area = snap(area);
-        if s.background[3] > 0.0 {
+        let shown = |a: Area| {
+            let (r, radii) = match a {
+                Area::BorderBox => shrunk,
+                Area::PaddingBox => (inside, inner_radii),
+                Area::ContentBox => content,
+            };
+            let r = snap(r);
+            (r.width > 0.0 && r.height > 0.0).then_some((r, radii))
+        };
+        let placed = |a: Area| match a {
+            Area::BorderBox => rect,
+            Area::PaddingBox => inside,
+            Area::ContentBox => content.0,
+        };
+        // The color shows where the last layer does.
+        let last = s.layers.last().map_or(Area::BorderBox, |l| l.clip);
+        if let (true, Some((rect, radii))) = (s.background[3] > 0.0, shown(last)) {
             let color = work(s.background);
-            out.push((
-                clip,
-                Item::Rect {
-                    rect: area,
-                    radii: area_radii,
-                    color,
-                },
-            ));
+            out.push((clip, Item::Rect { rect, radii, color }));
         }
-        // Images over the color, the first on top, placed in the padding box and repeated under
-        // the border.
+        // Images over the color, the first on top, repeated out to the area they show in.
         for layer in s.layers.iter().rev() {
             let Image::Gradient(g) = &layer.image else {
                 continue;
             };
-            let Some(tiles) = tiles(layer, inside) else {
+            let Some(((rect, radii), tiles)) =
+                shown(layer.clip).zip(tiles(layer, placed(layer.origin)))
+            else {
                 continue;
             };
             let ramp = gradient::ramp(g, [tiles.first.width, tiles.first.height]);
-            let item = Item::Gradient {
-                rect: area,
-                radii: area_radii,
-                tiles,
-                ramp,
-            };
-            out.push((clip, item));
+            out.push((
+                clip,
+                Item::Gradient {
+                    rect,
+                    radii,
+                    tiles,
+                    ramp,
+                },
+            ));
         }
         for shadow in inset {
             out.extend(inner_shadow(shadow, inside, inner_radii).map(|item| (clip, item)));
@@ -614,6 +631,17 @@ impl Painter<'_> {
 
     fn widths(&self, i: usize) -> [f32; 4] {
         self.styles[i].border.map(|w| w as f32)
+    }
+
+    /// `i`'s padding: top, right, bottom and left.
+    fn paddings(&self, i: usize) -> [f32; 4] {
+        let (p, c) = (self.layout.boxes[i].padding, self.layout.boxes[i].content);
+        [
+            c.y - p.y,
+            p.x + p.width - c.x - c.width,
+            p.y + p.height - c.y - c.height,
+            c.x - p.x,
+        ]
     }
 
     /// `i`'s corner radii in `rect`, fitting it.

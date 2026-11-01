@@ -1,5 +1,6 @@
-//! Backgrounds: a color under layers of images, each sized, placed and repeated in its box. The
-//! properties of the layers are lists, each repeated for as many images as there are.
+//! Backgrounds: a color under layers of images, each sized, placed and repeated in one of its
+//! boxes and clipped to one. The properties of the layers are lists, each repeated for as many
+//! images as there are.
 
 use super::color::{self, Rgba};
 use super::gradient::{self, Image, image};
@@ -7,13 +8,16 @@ use super::math::Calc;
 use super::position::{Offset, position};
 use super::{Accept, Len, NO_SCROLL, NO_SCROLL_INSTEAD, Units, css, length_text, math};
 
-/// A background image, how big it is, where it is, and how it repeats.
+/// A background image, how big it is, where it is, how it repeats, the box it is placed in and
+/// the one it shows in. The last layer's `clip` is the color's too.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layer {
     pub image: Image,
     pub size: ImageSize,
     pub position: [Offset; 2],
     pub repeat: [Repeat; 2],
+    pub origin: Area,
+    pub clip: Area,
 }
 
 /// `background-size`.
@@ -25,6 +29,14 @@ pub enum ImageSize<P = Calc> {
     Cover,
     /// Width and height; `None` is `auto`.
     Sized([Option<P>; 2]),
+}
+
+/// One of a box's areas, out to an edge of its border, its padding or its content.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Area {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
 }
 
 /// How an image repeats on an axis.
@@ -45,18 +57,21 @@ pub(super) struct Declared {
     pub sizes: Vec<ImageSize<Len>>,
     pub positions: [Vec<Offset<Len>>; 2],
     pub repeats: Vec<[Repeat; 2]>,
+    pub origins: Vec<Area>,
+    pub clips: Vec<Area>,
 }
 
 impl Declared {
-    /// A layer for each image, its other properties from their lists, repeated as needed.
+    /// A layer for each image, at least one, its other properties from their lists, repeated as
+    /// needed.
     pub(super) fn computed(&self, u: Units, current: Rgba) -> Vec<Layer> {
         let start = || Offset {
             end: false,
             by: Len::Percent(0.0),
         };
-        (self.images.iter().enumerate())
-            .map(|(i, image)| Layer {
-                image: image.computed(u, current),
+        (0..self.images.len().max(1))
+            .map(|i| Layer {
+                image: nth(&self.images, i).map_or(Image::None, |m| m.computed(u, current)),
                 size: match nth(&self.sizes, i).unwrap_or(ImageSize::Sized([None, None])) {
                     ImageSize::Contain => ImageSize::Contain,
                     ImageSize::Cover => ImageSize::Cover,
@@ -67,6 +82,8 @@ impl Declared {
                 position: (self.positions.each_ref())
                     .map(|list| nth(list, i).unwrap_or_else(start).computed(u)),
                 repeat: nth(&self.repeats, i).unwrap_or([Repeat::Repeat; 2]),
+                origin: nth(&self.origins, i).unwrap_or(Area::PaddingBox),
+                clip: nth(&self.clips, i).unwrap_or(Area::BorderBox),
             })
             .collect()
     }
@@ -191,6 +208,28 @@ fn repeat(words: &[&str]) -> Result<[Repeat; 2], String> {
     })
 }
 
+/// `background-origin`, or `background-clip` if `clip`.
+pub(super) fn areas(s: &str, clip: bool) -> Result<Vec<Area>, String> {
+    list(s, "a box", |s| match area(s) {
+        Some(a) => Ok(a),
+        None if clip && s == "text" => Err(TEXT.into()),
+        None => Err(format!(
+            "{s:?} is not a box: border-box, padding-box or content-box"
+        )),
+    })
+}
+
+const TEXT: &str = "background-clip: text is not supported yet";
+
+fn area(w: &str) -> Option<Area> {
+    match w {
+        "border-box" => Some(Area::BorderBox),
+        "padding-box" => Some(Area::PaddingBox),
+        "content-box" => Some(Area::ContentBox),
+        _ => None,
+    }
+}
+
 /// The words of a position, as the `background` shorthand finds them.
 fn positional(w: &str) -> bool {
     ["left", "right", "top", "bottom", "center"].contains(&w)
@@ -211,7 +250,8 @@ fn repeating(w: &str) -> bool {
 }
 
 /// `background`: layers separated by commas, each an image, a position with a size after a
-/// slash, and a repeat, in any order, and the last a color too. What it leaves out is initial.
+/// slash, a repeat, and a box for its origin and clip or two boxes, the origin's first, in any
+/// order, and the last a color too. What it leaves out is initial.
 pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
     let layers = css::commas(s);
     if layers.is_empty() {
@@ -233,6 +273,7 @@ pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
             .chain(after.iter().map(|w| Some(*w)))
             .collect();
         let (mut image, mut at, mut sized, mut repeated) = (None, None, None, None);
+        let mut boxes = Vec::new();
         let mut i = 0;
         while i < words.len() {
             let run = |i: usize, test: fn(&str) -> bool| {
@@ -271,10 +312,16 @@ pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
             if ["scroll", "fixed", "local"].contains(&w) {
                 return Err(format!("{w}: {NO_SCROLL}; {NO_SCROLL_INSTEAD}"));
             }
-            if w.ends_with("-box") || w == "text" {
-                return Err(format!(
-                    "{w}: background-origin and -clip are not supported yet"
-                ));
+            if let Some(a) = area(w) {
+                if boxes.len() == 2 {
+                    return Err(not("it has more than two boxes"));
+                }
+                boxes.push(a);
+                i += 1;
+                continue;
+            }
+            if w == "text" {
+                return Err(TEXT.into());
             }
             if let Ok(c) = color::parse(w) {
                 if n + 1 < layers.len() || color.is_some() {
@@ -302,6 +349,10 @@ pub(super) fn background(s: &str) -> Result<(Declared, Rgba), String> {
         d.sizes
             .push(sized.unwrap_or(ImageSize::Sized([None, None])));
         d.repeats.push(repeated.unwrap_or([Repeat::Repeat; 2]));
+        d.origins
+            .push(boxes.first().copied().unwrap_or(Area::PaddingBox));
+        d.clips
+            .push(boxes.last().copied().unwrap_or(Area::BorderBox));
     }
     Ok((d, color.unwrap_or(color::TRANSPARENT)))
 }

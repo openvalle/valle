@@ -739,6 +739,47 @@ fn tiled(background: &str) -> Vec<([f32; 4], [Option<f32>; 2])> {
 }
 
 #[test]
+fn layers_are_placed_in_and_clipped_to_their_boxes() {
+    // The color's rect, or a gradient's and its first tile.
+    let shown = |background: &str| {
+        let style = [
+            ("width", "100px"),
+            ("height", "50px"),
+            ("border", "10px solid transparent"),
+            ("padding", "5px 10px"),
+            ("boxSizing", "content-box"),
+            ("background", background),
+        ];
+        let (items, _) = paint_of(vec![view(&style, &[])], &[0]);
+        let xywh = |r: Rect| [r.x, r.y, r.width, r.height];
+        (items.into_iter())
+            .filter_map(|item| match item {
+                Item::Rect { rect, .. } => Some((xywh(rect), None)),
+                Item::Gradient { rect, tiles, .. } => Some((xywh(rect), Some(xywh(tiles.first)))),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let border = [0.0, 0.0, 140.0, 80.0];
+    let padding = [10.0, 10.0, 120.0, 60.0];
+    let content = [20.0, 15.0, 100.0, 50.0];
+    // Placed in the padding box and shown under the border.
+    assert_eq!(
+        shown("linear-gradient(red, blue), gray"),
+        [(border, None), (border, Some(padding))]
+    );
+    assert_eq!(
+        shown("linear-gradient(red, blue) content-box"),
+        [(content, Some(content))]
+    );
+    // The color shows where the last layer does.
+    assert_eq!(
+        shown("linear-gradient(red, blue) border-box content-box, gray padding-box"),
+        [(padding, None), (content, Some(border))]
+    );
+}
+
+#[test]
 fn tiles_are_sized_placed_and_repeated_in_the_padding_box() {
     let tiles = |b: &str| tiled(&format!("linear-gradient(red, blue) {b}"))[0];
     // As big as the padding box, and repeated.

@@ -1022,6 +1022,42 @@ fn background_layers_take_sizes_positions_and_repeats() {
 }
 
 #[test]
+fn background_layers_take_origins_and_clips() {
+    use background::Area::{BorderBox, ContentBox, PaddingBox};
+    let areas = |style: &[(&str, Prop)]| {
+        (one(style).layers.iter())
+            .map(|l| (l.origin, l.clip))
+            .collect::<Vec<_>>()
+    };
+    // A layer with no image by default.
+    assert_eq!(areas(&[]), [(PaddingBox, BorderBox)]);
+    assert_eq!(
+        areas(&[
+            ("backgroundImage", text("none, none, none")),
+            ("backgroundOrigin", text("content-box, border-box")),
+            ("backgroundClip", text("padding-box")),
+        ]),
+        [
+            (ContentBox, PaddingBox),
+            (BorderBox, PaddingBox),
+            (ContentBox, PaddingBox)
+        ]
+    );
+    // In the shorthand one box is both, and of two the first is the origin.
+    assert_eq!(
+        areas(&[(
+            "background",
+            text("none content-box, border-box none padding-box, red")
+        )]),
+        [
+            (ContentBox, ContentBox),
+            (BorderBox, PaddingBox),
+            (PaddingBox, BorderBox)
+        ]
+    );
+}
+
+#[test]
 fn radial_gradients_take_a_shape_a_size_and_a_center() {
     use gradient::{Image, Shape, Size, Space};
     // The shape, the size in px of 100 px, and the center from the top left of 100 × 100 px.
@@ -1381,8 +1417,23 @@ fn what_is_not_supported_is_an_error() {
         ),
         (
             "background",
-            text("red padding-box"),
-            "background-origin and -clip are not supported yet",
+            text("red text"),
+            "background-clip: text is not supported yet",
+        ),
+        (
+            "background",
+            text("border-box padding-box content-box"),
+            "it has more than two boxes",
+        ),
+        (
+            "backgroundClip",
+            text("text"),
+            "background-clip: text is not supported yet",
+        ),
+        (
+            "backgroundOrigin",
+            text("text"),
+            "\"text\" is not a box: border-box, padding-box or content-box",
         ),
         (
             "background",
