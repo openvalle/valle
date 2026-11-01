@@ -1,40 +1,7 @@
-use std::rc::Rc;
-
 use super::*;
 use crate::style::Sheet;
-use crate::template::{Node, V};
-use crate::text::Blob;
-
-fn node(kind: Kind, style: &[(&str, &str)], children: &[u32]) -> Node {
-    Node {
-        kind,
-        path: None,
-        classes: Vec::new(),
-        style: style
-            .iter()
-            .map(|(k, v)| (Rc::from(*k), Prop::Const(V::Str((*v).into()))))
-            .collect(),
-        children: children.to_vec(),
-        site: Some("s.tsx:1:1".into()),
-    }
-}
-
-fn view(style: &[(&str, &str)], children: &[u32]) -> Node {
-    node(Kind::View, style, children)
-}
-
-fn text_node(s: &str, style: &[(&str, &str)]) -> Node {
-    let text = Prop::Const(V::Str(s.into()));
-    node(Kind::Text { text }, style, &[])
-}
-
-fn text() -> Text {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../fonts/NotoSans-Variable.ttf"
-    );
-    Text::new(Blob::from(std::fs::read(path).unwrap())).unwrap()
-}
+use crate::template::Node;
+use crate::testing::{text, text_node, view};
 
 /// Laid out on a 200 × 100 canvas.
 fn lay(nodes: Vec<Node>, roots: &[u32]) -> Result<Layout, Error> {

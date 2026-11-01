@@ -1,0 +1,39 @@
+//! Builders the unit tests share.
+
+use std::rc::Rc;
+
+use crate::template::{Kind, Node, Prop, V};
+use crate::text::{Blob, Text};
+
+/// A node with constant inline styles, at `s.tsx:1:1`.
+pub fn node(kind: Kind, style: &[(&str, &str)], children: &[u32]) -> Node {
+    Node {
+        kind,
+        path: None,
+        classes: Vec::new(),
+        style: style
+            .iter()
+            .map(|(k, v)| (Rc::from(*k), Prop::Const(V::Str((*v).into()))))
+            .collect(),
+        children: children.to_vec(),
+        site: Some("s.tsx:1:1".into()),
+    }
+}
+
+pub fn view(style: &[(&str, &str)], children: &[u32]) -> Node {
+    node(Kind::View, style, children)
+}
+
+pub fn text_node(s: &str, style: &[(&str, &str)]) -> Node {
+    let text = Prop::Const(V::Str(s.into()));
+    node(Kind::Text { text }, style, &[])
+}
+
+/// Text in the built-in fonts.
+pub fn text() -> Text {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fonts/NotoSans-Variable.ttf"
+    );
+    Text::new(Blob::from(std::fs::read(path).unwrap())).unwrap()
+}
