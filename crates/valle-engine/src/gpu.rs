@@ -5,7 +5,8 @@
 //! A frame is planned first: its rectangles, gradients, glyphs and layers become instance data,
 //! uploaded once, and steps, each a render pass that draws runs of instances into the frame or a
 //! layer, or composites a layer onto what is under it: a group's at its opacity, a clip's inside
-//! its rounded rectangle. Each instance names the transform from its px to the target's, which
+//! its rounded rectangle. A group that blends reads what is under it from a copy, as a pass
+//! cannot read its own target, and replaces it with the two blended. Each instance names the transform from its px to the target's, which
 //! its shaders invert to find their pixels in its px; the first is the identity. A layer takes a
 //! texture from a pool when a step first draws into it and gives it back once composited. Glyph
 //! outlines are encoded once and kept in two buffers, the atlas, for the renderer's life.
@@ -18,6 +19,7 @@ use std::task::{Context, Poll, Waker};
 use crate::layout::Rect;
 use crate::paint::{Geometry, Item, Matrix, SQUARE};
 use crate::slug;
+use crate::style::Blend;
 use crate::style::gradient::Space;
 use crate::template::Error;
 use crate::text::Face;
@@ -60,6 +62,7 @@ pub struct Gpu {
     gradients: wgpu::RenderPipeline,
     glyphs: wgpu::RenderPipeline,
     layers: wgpu::RenderPipeline,
+    blends: wgpu::RenderPipeline,
     blurs: wgpu::RenderPipeline,
     output: wgpu::RenderPipeline,
 }
@@ -127,6 +130,7 @@ impl Gpu {
         };
         let drawing = layout(&[Some(&draw)]);
         let imaging = layout(&[Some(&draw), Some(&image)]);
+        let blending = layout(&[Some(&draw), Some(&image), Some(&image)]);
         let over = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
         let pipeline = |layout: &wgpu::PipelineLayout, name: &str, source: &str, format, blend| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -166,6 +170,7 @@ impl Gpu {
         let gradient = include_str!("../shaders/gradient.wgsl");
         let glyph = include_str!("../shaders/slug.wgsl");
         let layer = include_str!("../shaders/layer.wgsl");
+        let blend = include_str!("../shaders/blend.wgsl");
         let blur = include_str!("../shaders/blur.wgsl");
         let output = include_str!("../shaders/output.wgsl");
         Ok(Gpu {
@@ -174,6 +179,7 @@ impl Gpu {
             gradients: pipeline(&drawing, "gradient", gradient, WORK, over),
             glyphs: pipeline(&drawing, "slug", glyph, WORK, over),
             layers: pipeline(&imaging, "layer", layer, WORK, over),
+            blends: pipeline(&blending, "blend", blend, WORK, None),
             blurs: pipeline(&imaging, "blur", blur, WORK, None),
             output: pipeline(&imaging, "output", output, OUTPUT, None),
             device,
@@ -263,19 +269,21 @@ fn texture(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -
         format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     })
 }
 
 /// A texture to draw into, and its bind group for reading it as an image.
 struct Surface {
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     image: wgpu::BindGroup,
 }
 
 impl Surface {
-    fn new(gpu: &Gpu, texture: &wgpu::Texture) -> Surface {
+    fn new(gpu: &Gpu, texture: wgpu::Texture) -> Surface {
         let view = texture.create_view(&Default::default());
         let image = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -285,7 +293,11 @@ impl Surface {
                 resource: wgpu::BindingResource::TextureView(&view),
             }],
         });
-        Surface { view, image }
+        Surface {
+            texture,
+            view,
+            image,
+        }
     }
 }
 
@@ -304,6 +316,12 @@ enum Step {
         runs: Vec<Run>,
     },
     Composite {
+        target: usize,
+        layer: usize,
+        at: u32,
+    },
+    /// Blends `layer` with what is under it in `target`.
+    Blend {
         target: usize,
         layer: usize,
         at: u32,
@@ -374,7 +392,7 @@ impl<'a> Renderer<'a> {
     pub fn new(gpu: &'a Gpu, width: u32, height: u32) -> Renderer<'a> {
         let device = &gpu.device;
         let size = [width, height];
-        let frame = Surface::new(gpu, &texture(device, size, WORK));
+        let frame = Surface::new(gpu, texture(device, size, WORK));
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
             size: u64::from(row(width) * height),
@@ -648,6 +666,28 @@ impl<'a> Renderer<'a> {
                         self.draw(items, target, (i, m), faces, plan, atlas, runs)?;
                     }
                 }
+                Item::Group {
+                    opacity,
+                    blend,
+                    items,
+                } if *blend != Blend::Normal => {
+                    if !runs.is_empty() {
+                        let runs = std::mem::take(runs);
+                        plan.steps.push(Step::Draw { target, runs });
+                    }
+                    let layer = plan.targets;
+                    plan.targets += 1;
+                    self.plan(items, layer, at, faces, plan, atlas)?;
+                    let index = (plan.layers.len() / LAYER) as u32;
+                    let words = [*opacity, *blend as u32 as f32, 0.0, 0.0];
+                    let words = words.into_iter().chain([0.0; 16]);
+                    plan.layers.extend(words.map(f32::to_bits));
+                    plan.steps.push(Step::Blend {
+                        target,
+                        layer,
+                        at: index,
+                    });
+                }
                 Item::Group { .. } | Item::Clip { .. } | Item::Cut { .. } | Item::Shadow { .. } => {
                     if !runs.is_empty() {
                         let runs = std::mem::take(runs);
@@ -661,7 +701,7 @@ impl<'a> Renderer<'a> {
                     let [width, height] = self.size.map(|s| s as f32);
                     let whole = [-1.0, -1.0, width + 2.0, height + 2.0];
                     let (items, opacity, sigma, clip, radii, outside) = match item {
-                        Item::Group { opacity, items } => {
+                        Item::Group { opacity, items, .. } => {
                             (items, *opacity, 0.0, whole, SQUARE, false)
                         }
                         Item::Clip { rect, radii, items } => {
@@ -771,28 +811,40 @@ impl<'a> Renderer<'a> {
         for step in &plan.steps {
             let (target, layer) = match step {
                 Step::Draw { target, .. } => (*target, None),
-                Step::Composite { target, layer, .. } | Step::Blur { target, layer, .. } => {
-                    match surfaces[*layer] {
-                        Some(s) => (*target, Some(s)),
-                        // Nothing was drawn into the layer.
-                        None => continue,
+                Step::Composite { target, layer, .. }
+                | Step::Blend { target, layer, .. }
+                | Step::Blur { target, layer, .. } => match surfaces[*layer] {
+                    Some(s) => (*target, Some(s)),
+                    // Nothing was drawn into the layer.
+                    None => continue,
+                },
+            };
+            let surface =
+                match target {
+                    0 => None,
+                    t => Some(*surfaces[t].get_or_insert_with(|| {
+                        take(gpu, &mut self.pool, &mut self.free, self.size)
+                    })),
+                };
+            // What a blend is under, copied: a target nothing was drawn into yet is cleared
+            // first, as the pool's textures hold what they last did.
+            let under = match step {
+                Step::Blend { .. } => {
+                    let copy = take(gpu, &mut self.pool, &mut self.free, self.size);
+                    let from = surface.map_or(&self.frame, |s| &self.pool[s]);
+                    if !std::mem::replace(&mut started[target], true) {
+                        drop(begin(encoder, &from.view, false));
                     }
+                    encoder.copy_texture_to_texture(
+                        from.texture.as_image_copy(),
+                        self.pool[copy].texture.as_image_copy(),
+                        from.texture.size(),
+                    );
+                    Some(copy)
                 }
+                _ => None,
             };
-            let view = match target {
-                0 => &self.frame.view,
-                t => {
-                    let s = *surfaces[t].get_or_insert_with(|| match self.free.pop() {
-                        Some(s) => s,
-                        None => {
-                            let t = texture(&gpu.device, self.size, WORK);
-                            self.pool.push(Surface::new(gpu, &t));
-                            self.pool.len() - 1
-                        }
-                    });
-                    &self.pool[s].view
-                }
-            };
+            let view = &surface.map_or(&self.frame, |s| &self.pool[s]).view;
             let mut pass = begin(encoder, view, std::mem::replace(&mut started[target], true));
             pass.set_bind_group(0, draw, &[]);
             match step {
@@ -807,18 +859,22 @@ impl<'a> Renderer<'a> {
                         pass.draw(0..4, range.clone());
                     }
                 }
-                Step::Composite { at, .. } | Step::Blur { at, .. } => {
+                Step::Composite { at, .. } | Step::Blend { at, .. } | Step::Blur { at, .. } => {
                     let s = layer.expect("a composited layer has a surface");
-                    let blurs = matches!(step, Step::Blur { .. });
-                    pass.set_pipeline(if blurs { &gpu.blurs } else { &gpu.layers });
+                    pass.set_pipeline(match step {
+                        Step::Blend { .. } => &gpu.blends,
+                        Step::Blur { .. } => &gpu.blurs,
+                        _ => &gpu.layers,
+                    });
                     pass.set_bind_group(1, &self.pool[s].image, &[]);
+                    if let Some(u) = under {
+                        pass.set_bind_group(2, &self.pool[u].image, &[]);
+                    }
                     pass.draw(0..3, *at..*at + 1);
                 }
             }
             drop(pass);
-            if let Some(s) = layer {
-                self.free.push(s);
-            }
+            self.free.extend(layer.into_iter().chain(under));
         }
         if !started[0] {
             drop(begin(encoder, &self.frame.view, false));
@@ -830,6 +886,14 @@ impl<'a> Renderer<'a> {
         pass.set_bind_group(1, &self.frame.image, &[]);
         pass.draw(0..3, 0..1);
     }
+}
+
+/// A free texture from the pool of layer textures, or a new one.
+fn take(gpu: &Gpu, pool: &mut Vec<Surface>, free: &mut Vec<usize>, size: [u32; 2]) -> usize {
+    free.pop().unwrap_or_else(|| {
+        pool.push(Surface::new(gpu, texture(&gpu.device, size, WORK)));
+        pool.len() - 1
+    })
 }
 
 /// A pass drawing into `view`: over what it holds once `started`, else from transparent.

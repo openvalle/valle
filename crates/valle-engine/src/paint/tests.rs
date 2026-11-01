@@ -39,7 +39,16 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Ring { colors, .. } => format!("ring {}", name(colors[0])),
             Item::Gradient { ramp, .. } => format!("gradient of {}", ramp.segments.len()),
             Item::Glyphs { color, .. } => format!("text {}", name(*color)),
-            Item::Group { opacity, items } => format!("group {opacity} {:?}", names(items)),
+            Item::Group {
+                opacity,
+                blend: Blend::Normal,
+                items,
+            } => format!("group {opacity} {:?}", names(items)),
+            Item::Group {
+                opacity,
+                blend,
+                items,
+            } => format!("group {opacity} {blend:?} {:?}", names(items)),
             Item::Clip { items, .. } => format!("clip {:?}", names(items)),
             Item::Transform { items, .. } => format!("transform {:?}", names(items)),
             Item::Cut { items, .. } => format!("cut {:?}", names(items)),
@@ -662,6 +671,82 @@ fn clips_round_and_go_on_each_item_in_a_layer() {
         panic!("{layer:?}")
     };
     assert_eq!((rect.height, *radii), (20.0, [[4.0; 2]; 4]));
+}
+
+#[test]
+fn a_box_that_blends_is_a_layer_and_its_stacking_context_one_too() {
+    let order = painted(
+        vec![
+            view(&[("background", "gray")], &[1, 3, 6]),
+            view(&[("overflow", "hidden"), ("height", "20px")], &[2]),
+            view(
+                &[
+                    ("mixBlendMode", "multiply"),
+                    ("height", "30px"),
+                    ("background", "red"),
+                ],
+                &[],
+            ),
+            // A stacking context that is no layer of its own groups a box blending in it.
+            view(
+                &[
+                    ("position", "relative"),
+                    ("zIndex", "1"),
+                    ("background", "green"),
+                ],
+                &[4, 5],
+            ),
+            view(&[("height", "10px"), ("background", "blue")], &[]),
+            view(
+                &[
+                    ("mixBlendMode", "screen"),
+                    ("height", "10px"),
+                    ("background", "black"),
+                ],
+                &[],
+            ),
+            // Isolation alone groups nothing.
+            view(
+                &[
+                    ("isolation", "isolate"),
+                    ("height", "5px"),
+                    ("background", "red"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    assert_eq!(
+        order,
+        [
+            "gray",
+            r#"group 1 Multiply ["red"]"#,
+            "red",
+            r#"group 1 ["green", "blue", "group 1 Screen [\"black\"]"]"#,
+        ]
+    );
+    // The clips around a box that blends go in its layer, so it blends with all under them.
+    let (items, _) = paint_of(
+        vec![
+            view(&[("background", "gray")], &[1]),
+            view(&[("overflow", "hidden"), ("height", "20px")], &[2]),
+            view(
+                &[
+                    ("mixBlendMode", "difference"),
+                    ("transform", "rotate(10deg)"),
+                    ("height", "30px"),
+                    ("background", "red"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    let Item::Group { items: layer, .. } = &items[1] else {
+        panic!("{items:?}")
+    };
+    assert!(matches!(&layer[..], [Item::Clip { .. }]), "{layer:?}");
 }
 
 #[test]

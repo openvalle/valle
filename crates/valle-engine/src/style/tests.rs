@@ -1399,6 +1399,30 @@ fn paint_values() {
 }
 
 #[test]
+fn blends_and_isolation_group_what_is_in_a_3d_box() {
+    assert_eq!(one(&[]).blend, Blend::Normal);
+    let s = one(&[("mixBlendMode", text(" Color-Dodge "))]);
+    assert_eq!(s.blend, Blend::ColorDodge);
+    assert_eq!(
+        one(&[("mixBlendMode", text("plus-lighter"))]).blend,
+        Blend::PlusLighter
+    );
+    assert!(!one(&[]).isolate);
+    assert!(one(&[("isolation", text("isolate"))]).isolate);
+    let keeps = |style: &[(&str, Prop)]| one(style).keeps_3d();
+    let flat = [
+        ("transformStyle", text("preserve-3d")),
+        ("mixBlendMode", text("screen")),
+    ];
+    assert!(!keeps(&flat));
+    let flat = [
+        ("transformStyle", text("preserve-3d")),
+        ("isolation", text("isolate")),
+    ];
+    assert!(!keeps(&flat));
+}
+
+#[test]
 fn what_is_not_supported_is_an_error() {
     let cases: &[(&str, Prop, &str)] = &[
         (
@@ -1713,6 +1737,18 @@ fn what_is_not_supported_is_an_error() {
             "transformStyle",
             text("3d"),
             "3d is not one of flat, preserve-3d",
+        ),
+        (
+            "isolation",
+            text("none"),
+            "none is not one of auto, isolate",
+        ),
+        (
+            "mixBlendMode",
+            text("add"),
+            "add is not one of normal, multiply, screen, overlay, darken, lighten, color-dodge, \
+             color-burn, hard-light, soft-light, difference, exclusion, hue, saturation, color, \
+             luminosity, plus-lighter",
         ),
         (
             "perspective",

@@ -73,6 +73,10 @@ pub struct Style {
     /// `transform-style: preserve-3d`: its children with transforms stay in its space rather
     /// than being flattened onto its plane, unless what is in it is grouped.
     pub preserve_3d: bool,
+    /// `mix-blend-mode`, and `isolation: isolate`, which keeps the boxes in it from blending
+    /// with what is under it.
+    pub blend: Blend,
+    pub isolate: bool,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
@@ -89,15 +93,61 @@ impl Style {
     }
 
     /// Whether its children with transforms stay in its space: it preserves 3D and nothing
-    /// groups what is in it into one flat layer, as an opacity or a clip does.
+    /// groups what is in it into one flat layer, as an opacity, a clip, a blend or isolation
+    /// does.
     pub fn keeps_3d(&self) -> bool {
         let o = self.layout.overflow;
         self.preserve_3d
             && self.opacity >= 1.0
+            && self.blend == Blend::Normal
+            && !self.isolate
             && o.x == taffy::Overflow::Visible
             && o.y == taffy::Overflow::Visible
     }
 }
+
+/// `mix-blend-mode`: how a box's colors mix with those under it, numbered as shaders take them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Blend {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+    PlusLighter,
+}
+
+const BLENDS: [(&str, Blend); 17] = [
+    ("normal", Blend::Normal),
+    ("multiply", Blend::Multiply),
+    ("screen", Blend::Screen),
+    ("overlay", Blend::Overlay),
+    ("darken", Blend::Darken),
+    ("lighten", Blend::Lighten),
+    ("color-dodge", Blend::ColorDodge),
+    ("color-burn", Blend::ColorBurn),
+    ("hard-light", Blend::HardLight),
+    ("soft-light", Blend::SoftLight),
+    ("difference", Blend::Difference),
+    ("exclusion", Blend::Exclusion),
+    ("hue", Blend::Hue),
+    ("saturation", Blend::Saturation),
+    ("color", Blend::Color),
+    ("luminosity", Blend::Luminosity),
+    ("plus-lighter", Blend::PlusLighter),
+];
 
 /// A computed box shadow, px.
 #[derive(Clone, Debug, PartialEq)]
@@ -605,6 +655,8 @@ struct Declared {
     perspective_origin: [position::Offset<Len>; 2],
     backface_visible: bool,
     preserve_3d: bool,
+    blend: Blend,
+    isolate: bool,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -672,6 +724,8 @@ impl Default for Declared {
             perspective_origin: [CENTER; 2],
             backface_visible: true,
             preserve_3d: false,
+            blend: Blend::Normal,
+            isolate: false,
             visible: None,
             color: None,
             font_size: None,
@@ -764,6 +818,8 @@ enum Field {
     OutlineOffset,
     BoxShadow,
     Opacity,
+    MixBlendMode,
+    Isolation,
     Visibility,
     Color,
     FontSize,
@@ -821,7 +877,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 170] = [
+const FIELDS: [(&str, Field); 172] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1083,6 +1139,8 @@ const FIELDS: [(&str, Field); 170] = [
     ("outlineOffset", Field::OutlineOffset),
     ("boxShadow", Field::BoxShadow),
     ("opacity", Field::Opacity),
+    ("mixBlendMode", Field::MixBlendMode),
+    ("isolation", Field::Isolation),
     ("translate", Field::Translate),
     ("rotate", Field::Rotate),
     ("scale", Field::Scale),
@@ -2059,6 +2117,8 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             };
             d.opacity = o.clamp(0.0, 1.0);
         }
+        F::MixBlendMode => d.blend = keyword(v, &BLENDS)?,
+        F::Isolation => d.isolate = keyword(v, &[("auto", false), ("isolate", true)])?,
         F::Visibility => {
             // Collapse is hidden but in tables, which there are none of.
             let shown = [("visible", true), ("hidden", false), ("collapse", false)];
@@ -2281,6 +2341,8 @@ fn compute(
         perspective_origin: d.perspective_origin.each_ref().map(|o| o.computed(u)),
         backface_visible: d.backface_visible,
         preserve_3d: d.preserve_3d,
+        blend: d.blend,
+        isolate: d.isolate,
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,

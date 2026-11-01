@@ -8,10 +8,12 @@
 //! outlines of its blocks and its own. Its positioned descendants and the stacking contexts in it
 //! with a z-index of 0 or `auto` come next, in tree order, and last those with a positive
 //! z-index, lowest first. A positioned box paints all at once too, without the positioned boxes
-//! in it. Opacity, a transform, a fixed position, and a z-index on a positioned box or a flex or
-//! grid item make a stacking context; only opacity makes it a layer. A transformed one's items go
-//! in its transform, which takes its px, those of the untransformed layout, to its parent's, and
-//! a transform that flattens the plane hides it. Tree order puts a flex or grid container's
+//! in it. Opacity, a blend, isolation, a transform, a fixed position, and a z-index on a
+//! positioned box or a flex or grid item make a stacking context. One with an opacity or a blend
+//! paints as a layer, and so does one with a box blending in it: CSS isolates every stacking
+//! context, so a box blends only with what its stacking context paints under it. A transformed
+//! one's items go in its transform, which takes its px, those of the untransformed layout, to its
+//! parent's, and a transform that flattens the plane hides it. Tree order puts a flex or grid container's
 //! children in the order it lays them out. A hidden box (`visibility`) paints nothing of its
 //! own, but what it contains still paints if visible. A box's background, its color and then its
 //! images, the first on top, paints over its outer shadows, and its inner shadows and border over
@@ -41,7 +43,7 @@ use crate::style::background::{Area, ImageSize, Layer, Repeat};
 use crate::style::color::Rgba;
 use crate::style::gradient::Image;
 use crate::style::transform::Function;
-use crate::style::{Shadow, Style};
+use crate::style::{Blend, Shadow, Style};
 use crate::template::Template;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,8 +79,13 @@ pub enum Item {
         color: [f32; 4],
         glyphs: Vec<(u32, [f32; 2])>,
     },
-    /// Items composited onto what is under them as one layer, at `opacity`.
-    Group { opacity: f32, items: Vec<Item> },
+    /// Items composited onto what is under them as one layer, at `opacity`, their colors mixed
+    /// with those under them by `blend`.
+    Group {
+        opacity: f32,
+        blend: Blend,
+        items: Vec<Item>,
+    },
     /// Items in px that `matrix` takes to the px around them.
     Transform { matrix: Matrix, items: Vec<Item> },
     /// Items where a x + b y + c ≥ 0 for `line` [a, b, c], with a hard edge: the part of a
@@ -532,6 +539,8 @@ impl Painter<'_> {
     fn stacking(&self, i: usize) -> bool {
         let s = &self.styles[i];
         s.opacity < 1.0
+            || s.blend != Blend::Normal
+            || s.isolate
             || s.contains_all()
             || self.in_scene(i)
             || s.layout.position == Position::Fixed
@@ -577,18 +586,20 @@ impl Painter<'_> {
     }
 
     /// A box that paints after its stacking context's in-flow content, or before it: a stacking
-    /// context, in its transform if it has one and a layer if it has an opacity, or a positioned
-    /// box.
+    /// context, in its transform if it has one and a layer if `grouped`, or a positioned box.
     fn layer(&self, d: usize, out: &mut Drawn) {
         let s = &self.styles[d];
-        let opacity = s.opacity as f32;
         if self.in_scene(d) {
             // It paints with its scene.
+            return;
         } else if !self.stacking(d) {
-            self.whole(Some(d), out);
+            return self.whole(Some(d), out);
         } else if s.keeps_3d() {
-            self.scene(d, out);
-        } else if !s.transform.is_empty() {
+            // Its planes group what they paint.
+            return self.scene(d, out);
+        }
+        let mut drawn = Vec::new();
+        if !s.transform.is_empty() {
             let space = self.spaces[d];
             let matrix = space.flatten();
             // Its back hides it and all in it, as they are on its plane.
@@ -596,24 +607,35 @@ impl Painter<'_> {
             if matrix.inverse().is_none() || back {
                 return;
             }
-            let mut drawn = Vec::new();
-            self.context(Some(d), &mut drawn);
+            let mut inside = Vec::new();
+            self.context(Some(d), &mut inside);
             // The clips around it go around its transform.
-            let mut items = self.nest_from(self.chained(drawn), self.clips[d].len());
-            if opacity < 1.0 {
-                items = group(opacity, items).into_iter().collect();
-            }
+            let items = self.nest_from(self.chained(inside), self.clips[d].len());
             if !items.is_empty() {
                 let item = Item::Transform { matrix, items };
-                out.push((self.clips[d].last().copied(), item));
+                drawn.push((self.clips[d].last().copied(), item));
             }
-        } else if opacity < 1.0 {
-            let mut drawn = Vec::new();
-            self.context(Some(d), &mut drawn);
-            let items = self.nest(drawn);
-            out.extend(group(opacity, items).map(|g| (None, g)));
         } else {
-            self.context(Some(d), out);
+            self.context(Some(d), &mut drawn);
+        }
+        if self.grouped(d) {
+            // With the clips in the layer, so that it blends with all under it.
+            let items = self.nest(drawn);
+            out.extend(group(s.opacity as f32, s.blend, items).map(|g| (None, g)));
+        } else {
+            out.extend(drawn);
+        }
+    }
+
+    /// Whether stacking context `d` paints as one layer: it has an opacity or blends, or a box in
+    /// it blends, which blends with what the context paints alone, as CSS isolates a stacking
+    /// context.
+    fn grouped(&self, d: usize) -> bool {
+        let s = &self.styles[d];
+        s.opacity < 1.0 || s.blend != Blend::Normal || {
+            let mut layered = Vec::new();
+            self.collect(Some(d), &mut layered);
+            (layered.iter()).any(|&b| self.styles[b].blend != Blend::Normal)
         }
     }
 
@@ -655,8 +677,10 @@ impl Painter<'_> {
             let mut drawn = Vec::new();
             self.context(Some(e), &mut drawn);
             let mut items = self.nest_from(self.chained(drawn), self.clips[e].len());
-            if s.opacity < 1.0 {
-                items = group(s.opacity as f32, items).into_iter().collect();
+            if self.grouped(e) {
+                items = group(s.opacity as f32, s.blend, items)
+                    .into_iter()
+                    .collect();
             }
             if !items.is_empty() {
                 out.push((space, self.layout.boxes[e].border, items));
@@ -1012,14 +1036,16 @@ fn overlap(a: Rect, b: Rect) -> Option<Rect> {
     })
 }
 
-/// `items` as one layer at `opacity`. A layer of one rectangle or ring is it at the opacity,
-/// and a layer of one layer is that layer at both opacities.
-fn group(opacity: f32, items: Vec<Item>) -> Option<Item> {
+/// `items` as one layer at `opacity`, blended by `blend`. Unblended, a layer of one rectangle or
+/// ring is it at the opacity; and a layer of one unblended layer is that layer at both
+/// opacities.
+fn group(opacity: f32, blend: Blend, items: Vec<Item>) -> Option<Item> {
     if opacity <= 0.0 || items.is_empty() {
         return None;
     }
+    let normal = blend == Blend::Normal;
     Some(match <[Item; 1]>::try_from(items) {
-        Ok([Item::Rect { rect, radii, color }]) => Item::Rect {
+        Ok([Item::Rect { rect, radii, color }]) if normal => Item::Rect {
             rect,
             radii,
             color: color.map(|c| c * opacity),
@@ -1034,22 +1060,36 @@ fn group(opacity: f32, items: Vec<Item>) -> Option<Item> {
                     colors,
                 },
             ],
-        ) => Item::Ring {
+        ) if normal => Item::Ring {
             rect,
             radii,
             inner,
             inner_radii,
             colors: colors.map(|c| c.map(|v| v * opacity)),
         },
-        Ok([Item::Group { opacity: o, items }]) => Item::Group {
+        Ok(
+            [
+                Item::Group {
+                    opacity: o,
+                    blend: Blend::Normal,
+                    items,
+                },
+            ],
+        ) => Item::Group {
             opacity: o * opacity,
+            blend,
             items,
         },
         Ok([item]) => Item::Group {
             opacity,
+            blend,
             items: vec![item],
         },
-        Err(items) => Item::Group { opacity, items },
+        Err(items) => Item::Group {
+            opacity,
+            blend,
+            items,
+        },
     })
 }
 

@@ -111,10 +111,18 @@ pub fn shapes(items: &[Item]) -> Vec<Item> {
     (items.iter())
         .filter_map(|item| match item {
             Item::Glyphs { .. } => None,
-            Item::Group { opacity, items } => {
+            Item::Group {
+                opacity,
+                blend,
+                items,
+            } => {
                 let items = shapes(items);
-                let opacity = *opacity;
-                (!items.is_empty()).then_some(Item::Group { opacity, items })
+                let (opacity, blend) = (*opacity, *blend);
+                (!items.is_empty()).then_some(Item::Group {
+                    opacity,
+                    blend,
+                    items,
+                })
             }
             Item::Clip { rect, radii, items } => {
                 let items = shapes(items);
