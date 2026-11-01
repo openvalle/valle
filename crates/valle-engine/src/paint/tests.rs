@@ -418,6 +418,79 @@ fn transforms_take_a_box_to_the_canvas_through_its_ancestors() {
 }
 
 #[test]
+fn motion_paths_move_a_box_along_and_turn_it_after_its_own_transforms() {
+    let moving = |more: &[(&'static str, &'static str)]| {
+        let place = [
+            ("position", "absolute"),
+            ("left", "50px"),
+            ("top", "20px"),
+            ("width", "40px"),
+            ("height", "20px"),
+        ];
+        view(&[&place[..], more].concat(), &[])
+    };
+    let container = [
+        ("position", "relative"),
+        ("height", "100px"),
+        ("padding", "10px"),
+        ("border", "5px solid black"),
+    ];
+    let template = Template {
+        nodes: vec![
+            view(&container, &[1, 2, 3, 4, 5]),
+            moving(&[
+                ("offsetPath", "path('M0 0 L100 0')"),
+                ("offsetDistance", "50%"),
+            ]),
+            moving(&[
+                ("offsetPath", "path('M0 0 H100 V100 Z')"),
+                ("offsetDistance", "150%"),
+            ]),
+            moving(&[
+                ("offsetPath", "ray(90deg)"),
+                ("offsetDistance", "30px"),
+                ("offsetAnchor", "0 0"),
+            ]),
+            moving(&[
+                ("offsetPath", "circle(20px at 100px 50px) content-box"),
+                ("offsetDistance", "25%"),
+            ]),
+            moving(&[
+                ("offsetPath", "path('M0 0')"),
+                ("translate", "10px 0"),
+                ("transform", "rotate(90deg)"),
+            ]),
+        ],
+        roots: vec![0],
+        ..Default::default()
+    };
+    let canvas = [200.0, 100.0];
+    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
+    let transforms = transforms(&template, &styles, &laid);
+    // Each box's center and the point 20 px right of it, from its border box at 55, 25.
+    let at = |i: usize| [[75.0, 35.0], [95.0, 35.0]].map(|p| transforms[i].apply(p));
+    let near = |i: usize, want: [[f32; 2]; 2]| {
+        let got = at(i);
+        let off = (0..4).map(|k| (got[k / 2][k % 2] - want[k / 2][k % 2]).abs());
+        assert!(
+            off.fold(0.0, f32::max) < 0.1,
+            "box {i}: {got:?}, not {want:?}"
+        );
+    };
+    // A path is from the box's own top left, its center on it.
+    near(1, [[105.0, 25.0], [125.0, 25.0]]);
+    // Closed, it goes on around, and the box turns down with it.
+    near(2, [[155.0, 25.0 + 70.711], [155.0, 45.0 + 70.711]]);
+    // A ray from the containing block's center, its anchor the box's top left on it.
+    near(3, [[150.0, 60.0], [170.0, 60.0]]);
+    // A circle in the containing block's content box, a quarter around, turned left.
+    near(4, [[115.0, 85.0], [95.0, 85.0]]);
+    // After `translate` and before `transform`.
+    near(5, [[65.0, 25.0], [65.0, 45.0]]);
+}
+
+#[test]
 fn a_perspective_reaches_only_the_boxs_children() {
     let toward = [
         ("width", "40px"),

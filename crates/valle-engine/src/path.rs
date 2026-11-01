@@ -15,6 +15,8 @@ pub enum Segment {
     /// A quadratic curve through its control point to its end, and a cubic one through two.
     Quad(Point, Point),
     Cubic(Point, Point, Point),
+    /// Closes the subpath, back to where it started: a path along it goes on around.
+    Close,
 }
 
 /// Segments from where the one before ends, or from the origin.
@@ -32,6 +34,7 @@ impl Path {
                     Segment::Line(a) => Segment::Line(p(a)),
                     Segment::Quad(a, b) => Segment::Quad(p(a), p(b)),
                     Segment::Cubic(a, b, c) => Segment::Cubic(p(a), p(b), p(c)),
+                    Segment::Close => Segment::Close,
                 })
                 .collect(),
         )
@@ -60,12 +63,14 @@ impl Path {
                 Segment::Quad(c, p) if at != c || c != p => open.push([at, c, p]),
                 Segment::Quad(..) => {}
                 Segment::Cubic(c1, c2, p) => cubic([at, c1, c2, p], tolerance, &mut open),
+                Segment::Close => close(&mut open, at, start, &mut contours),
             }
             at = match *s {
                 Segment::Move(p)
                 | Segment::Line(p)
                 | Segment::Quad(_, p)
                 | Segment::Cubic(_, _, p) => p,
+                Segment::Close => start,
             };
         }
         close(&mut open, at, start, &mut contours);
@@ -420,6 +425,7 @@ pub fn parse(d: &str) -> Result<Path, String> {
                 at = to;
             }
             b'Z' => {
+                out.push(Segment::Close);
                 at = start;
                 closed = true;
             }

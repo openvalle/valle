@@ -1956,6 +1956,93 @@ fn transforms_take_2d_functions_around_an_origin() {
 }
 
 #[test]
+fn motion_paths_take_paths_rays_and_shapes_with_their_longhands() {
+    use background::Area;
+    use offset::{Route, Size, Start};
+    let motion = |style: &[(&str, Prop)]| one(style).motion;
+    assert_eq!(motion(&[]), None);
+    assert_eq!(motion(&[("offsetDistance", text("10px"))]), None);
+    assert_eq!(motion(&[("offsetPath", text("none"))]), None);
+    // Path data as written; its longhands as they start: auto, no angle, the origin, normal.
+    let m = motion(&[("offsetPath", text("path('M0 0 L10 0 Z')"))]).unwrap();
+    assert_eq!(
+        m.path,
+        Route::Path(crate::path::parse("M0 0 L10 0 Z").unwrap())
+    );
+    assert_eq!(
+        (m.area, m.along, m.angle, &m.anchor, &m.position),
+        (Area::BorderBox, true, 0.0, &None, &Start::Normal)
+    );
+    assert_eq!(m.distance.resolve(100.0), 0.0);
+    let m = motion(&[
+        (
+            "offsetPath",
+            text("Ray(45DEG sides at 10px 20%) padding-box"),
+        ),
+        ("offsetDistance", text("calc(50% + 1em)")),
+        ("offsetRotate", text("30deg reverse")),
+        ("offsetAnchor", text("left top")),
+        ("offsetPosition", text("auto")),
+    ])
+    .unwrap();
+    let Route::Ray { angle, size, at } = &m.path else {
+        panic!("{:?} is not a ray", m.path);
+    };
+    let at = at.as_ref().map(|a| a.each_ref().map(|o| o.resolve(100.0)));
+    assert_eq!((*angle, *size, at), (45.0, Size::Sides, Some([10.0, 20.0])));
+    assert_eq!(m.area, Area::PaddingBox);
+    assert_eq!(m.distance.resolve(100.0), 66.0);
+    assert_eq!((m.along, m.angle), (true, 210.0));
+    let anchor = m.anchor.map(|a| a.map(|o| o.resolve(100.0)));
+    assert_eq!((anchor, m.position), (Some([0.0, 0.0]), Start::Auto));
+    let m = motion(&[
+        ("offsetPath", text("ray(0deg)")),
+        ("offsetRotate", text("-10deg")),
+    ]);
+    assert_eq!(m.map(|m| (m.along, m.angle)), Some((false, -10.0)));
+    // A circle or an ellipse with no `at` is around the offset position; a box alone is a path.
+    let shape = |v: &str| match motion(&[("offsetPath", text(v))]).unwrap().path {
+        Route::Shape { shape, at } => (shape.is_some(), at),
+        other => panic!("{other:?} is not a shape"),
+    };
+    assert_eq!(shape("circle(10px)"), (true, false));
+    assert_eq!(shape("ellipse(1px 2px at center)"), (true, true));
+    assert_eq!(shape("inset(1px round 2px)"), (true, true));
+    assert_eq!(shape("content-box"), (false, true));
+    let m = motion(&[("offsetPath", text("content-box polygon(0 0, 1px 0)"))]);
+    assert_eq!(m.map(|m| m.area), Some(Area::ContentBox));
+    // It is a transform, so it contains all.
+    assert!(one(&[("offsetPath", text("ray(0deg)"))]).contains_all());
+    for (property, v, says) in [
+        (
+            "offsetPath",
+            "ray(0deg contain)",
+            "contain is not supported",
+        ),
+        (
+            "offsetPath",
+            "ray(0deg 10px)",
+            "10px is not an angle or a size",
+        ),
+        ("offsetPath", "ray(closest-side)", "takes an angle"),
+        ("offsetPath", "path('M0 0') content-box", "takes no box"),
+        ("offsetPath", "url(#a)", "url() is not an offset path"),
+        ("offsetPath", "circle() ray(0deg)", "takes one path"),
+        ("offsetRotate", "auto reverse", "is not an offset rotate"),
+        ("offsetAnchor", "normal", "is not an offset anchor"),
+        (
+            "offsetPosition",
+            "left top 10px",
+            "is not an offset position",
+        ),
+        ("offsetDistance", "auto", "auto is not a length"),
+    ] {
+        let e = error(&[(property, text(v))]);
+        assert!(e.contains(says), "{property}: {v}: {e}");
+    }
+}
+
+#[test]
 fn transforms_take_3d_functions_and_an_origin_z() {
     use transform::Function as F;
     assert_eq!(

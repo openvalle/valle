@@ -242,17 +242,18 @@ function measure(): Promise<Measured> {
       const r = element.getBoundingClientRect();
       boxes[Number(element.dataset.n)] = [r.x, r.y, r.width, r.height];
     }
-    // Lines as laid out, untransformed: a transform moves text but breaks no line. `will-change`
-    // keeps what a transform contains and stacks, so the layout stays. Their styles go back as
-    // written: Chrome's `cssText` can parse back to another style, as a background shorthand
-    // with one box for both its origin and its clip.
+    // Lines as laid out, untransformed: a transform or a motion path moves text but breaks no
+    // line. `will-change` keeps what a transform contains and stacks, so the layout stays. Their
+    // styles go back as written: Chrome's `cssText` can parse back to another style, as a
+    // background shorthand with one box for both its origin and its clip.
     const moved = elements.filter((e) => {
       const s = getComputedStyle(e);
-      return [s.transform, s.translate, s.rotate, s.scale].some((v) => v !== "none");
+      return [s.transform, s.translate, s.rotate, s.scale, s.offsetPath].some((v) => v !== "none");
     });
     const written = moved.map((e) => e.getAttribute("style") ?? "");
     for (const e of moved) {
       e.style.transform = e.style.translate = e.style.rotate = e.style.scale = "none";
+      e.style.offsetPath = "none";
       e.style.willChange = "transform";
     }
     for (const element of elements) {

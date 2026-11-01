@@ -37,6 +37,7 @@
 mod dash;
 mod gradient;
 mod matrix;
+mod offset;
 mod scene;
 mod shape;
 
@@ -45,7 +46,7 @@ use taffy::{Display, Overflow, Position};
 pub use gradient::{Geometry, Ramp, Segment};
 pub use matrix::{Matrix, Matrix4};
 
-use crate::layout::{Layout, Rect, ordered};
+use crate::layout::{Boxes, Layout, Rect, ordered};
 use crate::path::Path;
 use crate::style::background::{Area, ImageSize, Layer, Repeat};
 use crate::style::color::{self, Rgba};
@@ -591,12 +592,7 @@ pub fn work(c: Rgba) -> [f32; 4] {
 /// The frame's display list, from its template, computed styles and layout.
 pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item> {
     let n = template.nodes.len();
-    let mut parents = vec![None; n];
-    for (i, node) in template.nodes.iter().enumerate() {
-        for &c in &node.children {
-            parents[c as usize] = Some(i);
-        }
-    }
+    let parents = parents(template);
     let mut painter = Painter {
         template,
         styles,
@@ -645,11 +641,65 @@ pub fn transforms(template: &Template, styles: &[Style], layout: &Layout) -> Vec
     out
 }
 
+/// Each box's parent; `None` for a root.
+fn parents(template: &Template) -> Vec<Option<usize>> {
+    let mut parents = vec![None; template.nodes.len()];
+    for (i, node) in template.nodes.iter().enumerate() {
+        for &c in &node.children {
+            parents[c as usize] = Some(i);
+        }
+    }
+    parents
+}
+
+/// `i`'s containing block: a fixed box's is the nearest box around it that contains all, or the
+/// canvas, an absolute box's the nearest such or positioned one, and any other's its parent.
+/// `None` is the canvas.
+fn container(parents: &[Option<usize>], styles: &[Style], i: usize) -> Option<usize> {
+    let all = |p: usize| styles[p].contains_all();
+    let positioned = |p: usize| styles[p].layout.position != Position::Static;
+    let mut around = std::iter::successors(parents[i], |&p| parents[p]);
+    match styles[i].layout.position {
+        Position::Fixed => around.find(|&p| all(p)),
+        Position::Absolute => around.find(|&p| positioned(p) || all(p)),
+        _ => parents[i],
+    }
+}
+
+/// The box `a` of a box with the style `s` and the boxes `b`, its border box snapped, and its
+/// corners' radii.
+fn area(s: &Style, b: &Boxes, a: Area) -> (Rect, Radii) {
+    let border = snap(b.border);
+    let corners = (s.radii.each_ref())
+        .map(|[x, y]| corner([x.resolve(b.border.width), y.resolve(b.border.height)]));
+    let radii = fit(corners, border);
+    let widths = s.border.map(|w| w as f32);
+    match a {
+        Area::BorderBox | Area::Text => (border, radii),
+        Area::PaddingBox => inner(border, radii, widths),
+        Area::ContentBox => {
+            let (p, c) = (b.padding, b.content);
+            let paddings = [
+                c.y - p.y,
+                p.x + p.width - c.x - c.width,
+                p.y + p.height - c.y - c.height,
+                c.x - p.x,
+            ];
+            inner(
+                border,
+                radii,
+                std::array::from_fn(|k| widths[k] + paddings[k]),
+            )
+        }
+    }
+}
+
 /// Each box's transform in space, in its parent's perspective, onto the plane it is flattened
 /// onto: its parent's, or in a 3D scene, the plane its root is flattened onto, through the
 /// transforms of the boxes between.
 fn spaces(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix4> {
     let n = template.nodes.len();
+    let parents = parents(template);
     let mut out = vec![Matrix4::IDENTITY; n];
     // What its parent puts before its own: the parent's perspective, and in a 3D scene the
     // parent's space.
@@ -658,7 +708,21 @@ fn spaces(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix4
     // In preorder, so a parent's comes first.
     for (i, node) in template.nodes.iter().enumerate() {
         let border = layout.boxes[i].border;
-        let own = transform(&styles[i], border, seen[i]);
+        // The box of its containing block a motion path is in.
+        let within = (styles[i].motion.as_ref()).map(|m| match container(&parents, styles, i) {
+            Some(c) => area(&styles[c], &layout.boxes[c], m.area),
+            None => {
+                let [width, height] = layout.canvas;
+                let canvas = Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width,
+                    height,
+                };
+                (canvas, SQUARE)
+            }
+        });
+        let own = transform(&styles[i], border, seen[i], within);
         out[i] = base[i].times(own.or(seen[i]).unwrap_or(Matrix4::IDENTITY));
         let perspective = perspective(&styles[i], border);
         let keeps = styles[i].keeps_3d();
@@ -683,17 +747,27 @@ fn perspective(s: &Style, border: Rect) -> Option<Matrix4> {
 }
 
 /// A box's transform with the border box `border`, in the px around it, seen in its parent's
-/// perspective `seen`: its functions, the last first, around its origin. In space: flattened, it
+/// perspective `seen`: its functions, the last first, around its origin, with its motion path's
+/// move, in the box `within`, after `translate`, `rotate` and `scale`. In space: flattened, it
 /// is the transform onto its parent's plane. `None` for `none`.
-fn transform(s: &Style, border: Rect, seen: Option<Matrix4>) -> Option<Matrix4> {
-    if s.transform.is_empty() {
+fn transform(
+    s: &Style,
+    border: Rect,
+    seen: Option<Matrix4>,
+    within: Option<(Rect, Radii)>,
+) -> Option<Matrix4> {
+    if !s.transformed() {
         return None;
     }
     let b = snap(border);
     let size = [b.width, b.height];
-    let [x, y] = [0, 1].map(|k| f64::from([b.x, b.y][k] + s.transform_origin[k].resolve(size[k])));
+    let origin = |r: Rect| {
+        let size = [r.width, r.height];
+        [0, 1].map(|k| [r.x, r.y][k] + s.transform_origin[k].resolve(size[k]))
+    };
+    let [x, y] = origin(b).map(f64::from);
     let z = s.transform_origin_z;
-    let m = (s.transform.iter()).fold(Matrix4::IDENTITY, |m, f| {
+    let function = |m: Matrix4, f: &Function| {
         m.times(match f {
             Function::Translate([x, y, z]) => {
                 let [x, y, z] = [(x, size[0]), (y, size[1]), (z, 0.0)].map(|(l, of)| l.resolve(of));
@@ -713,7 +787,17 @@ fn transform(s: &Style, border: Rect, seen: Option<Matrix4>) -> Option<Matrix4> 
             Function::Perspective(None) => Matrix4::IDENTITY,
             Function::Perspective(Some(d)) => Matrix4::perspective(d.resolve(0.0).into()),
         })
-    });
+    };
+    let (individual, functions) = s.transform.split_at(s.individual);
+    let mut m = individual.iter().fold(Matrix4::IDENTITY, function);
+    // As Chrome moves it: from its border box as laid out, not snapped.
+    if let (Some(motion), Some(within)) = (&s.motion, within) {
+        let moved = offset::moved(motion, border, origin(border), within);
+        m = (m.times(Matrix4::translate(-x, -y, 0.0)))
+            .times(moved)
+            .times(Matrix4::translate(x, y, 0.0));
+    }
+    let m = functions.iter().fold(m, function);
     let m = Matrix4::translate(x, y, z)
         .times(m)
         .times(Matrix4::translate(-x, -y, -z));
@@ -752,18 +836,9 @@ impl Painter<'_> {
         self.styles[i].layout.position != Position::Static
     }
 
-    /// The box whose clips `i` is under too: a fixed box's is its containing block, the nearest
-    /// box around it with a transform or a perspective or the canvas, an absolute box's the
-    /// nearest such or positioned one, and any other's its parent.
+    /// The box whose clips `i` is under too: its containing block.
     fn container(&self, i: usize) -> Option<usize> {
-        let parents = &self.parents;
-        let all = |p: usize| self.styles[p].contains_all();
-        let mut around = std::iter::successors(parents[i], |&p| parents[p]);
-        match self.styles[i].layout.position {
-            Position::Fixed => around.find(|&p| all(p)),
-            Position::Absolute => around.find(|&p| self.positioned(p) || all(p)),
-            _ => parents[i],
-        }
+        container(&self.parents, self.styles, i)
     }
 
     /// Whether `i` clips what overflows it.
@@ -849,7 +924,7 @@ impl Painter<'_> {
             let matrix = space.flatten();
             // Its back hides it and all in it, as they are on its plane.
             let back = !s.backface_visible && space.shows_back();
-            if !s.transform.is_empty() && (matrix.inverse().is_none() || back) {
+            if s.transformed() && (matrix.inverse().is_none() || back) {
                 return;
             }
             let mut inside = Vec::new();
@@ -862,7 +937,7 @@ impl Painter<'_> {
             }
             items = self.over_backdrop(d, items);
             items = self.masked(d, self.clipped(d, items));
-            if !s.transform.is_empty() && !items.is_empty() {
+            if s.transformed() && !items.is_empty() {
                 items = vec![Item::Transform { matrix, items }];
             }
             let clip = self.clips[d].last().copied();
@@ -928,21 +1003,7 @@ impl Painter<'_> {
         if items.is_empty() {
             return items;
         }
-        let border = snap(self.layout.boxes[d].border);
-        let radii = self.radii(d, border);
-        let widths = self.widths(d);
-        let (rect, radii) = match clip.area {
-            Area::BorderBox | Area::Text => (border, radii),
-            Area::PaddingBox => inner(border, radii, widths),
-            Area::ContentBox => {
-                let paddings = self.paddings(d);
-                inner(
-                    border,
-                    radii,
-                    std::array::from_fn(|k| widths[k] + paddings[k]),
-                )
-            }
-        };
+        let (rect, radii) = area(&self.styles[d], &self.layout.boxes[d], clip.area);
         let mask = shape::mask(clip.shape.as_ref(), rect, radii);
         mask.map(|mask| Item::Mask {
             mask: vec![mask],
@@ -1052,7 +1113,7 @@ impl Painter<'_> {
     fn in_scene(&self, i: usize) -> bool {
         let s = &self.styles[i];
         self.parents[i].is_some_and(|p| self.styles[p].keeps_3d())
-            && (!s.transform.is_empty() || s.keeps_3d() || !s.backface_visible)
+            && (s.transformed() || s.keeps_3d() || !s.backface_visible)
     }
 
     /// A box that keeps its children in its space: the root of a 3D scene, whose planes paint
@@ -1419,7 +1480,7 @@ impl Painter<'_> {
         let mut items = Vec::new();
         let mut nodes = vec![i];
         while let Some(n) = nodes.pop() {
-            if n != i && !self.styles[n].transform.is_empty() {
+            if n != i && self.styles[n].transformed() {
                 continue;
             }
             nodes.extend(self.children(Some(n)));

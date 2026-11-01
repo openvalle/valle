@@ -48,6 +48,15 @@ pub enum Radius<P = Calc> {
 
 impl Clip<Len> {
     pub(super) fn computed(&self, u: Units) -> Clip {
+        Clip {
+            shape: self.shape.as_ref().map(|s| s.computed(u)),
+            area: self.area,
+        }
+    }
+}
+
+impl Shape<Len> {
+    pub(super) fn computed(&self, u: Units) -> Shape {
         let calc = |l: &Len| l.calc(u);
         let radius = |r: &Radius<Len>| match r {
             Radius::ClosestSide => Radius::ClosestSide,
@@ -55,7 +64,7 @@ impl Clip<Len> {
             Radius::Len(l) => Radius::Len(calc(l)),
         };
         let at = |at: &[Offset<Len>; 2]| at.each_ref().map(|o| o.computed(u));
-        let shape = self.shape.as_ref().map(|s| match s {
+        match self {
             Shape::Inset { sides, radii } => Shape::Inset {
                 sides: sides.each_ref().map(calc),
                 radii: radii.each_ref().map(|r| r.each_ref().map(calc)),
@@ -76,10 +85,6 @@ impl Clip<Len> {
                 even_odd: *even_odd,
                 path: path.clone(),
             },
-        });
-        Clip {
-            shape,
-            area: self.area,
         }
     }
 }
@@ -125,7 +130,7 @@ pub(super) fn clip(s: &str) -> Result<Option<Clip<Len>>, String> {
             "circle" => round(&lower, false),
             "ellipse" => round(&lower, true),
             "polygon" => polygon(&lower),
-            "path" => path_of(args),
+            "path" => path_of(args).map(|(even_odd, path)| Shape::Path { even_odd, path }),
             _ => return Err(format!("{name}() is not a basic shape: {SHAPES}")),
         };
         if shape
@@ -143,7 +148,7 @@ pub(super) fn clip(s: &str) -> Result<Option<Clip<Len>>, String> {
 
 /// `inset()`: one to four lengths for the sides as `margin` takes them, then `round` and radii as
 /// `border-radius` takes them, if its corners are rounded.
-fn inset(s: &str) -> Result<Shape<Len>, String> {
+pub(super) fn inset(s: &str) -> Result<Shape<Len>, String> {
     let words = css::words(s);
     let (sides, corners) = match words.iter().position(|w| *w == "round") {
         Some(i) => (&words[..i], Some(words[i + 1..].join(" "))),
@@ -168,7 +173,7 @@ fn inset(s: &str) -> Result<Shape<Len>, String> {
 
 /// `circle()` and `ellipse()`: a radius, or two, then `at` and a position, the box's center if
 /// it says none.
-fn round(s: &str, ellipse: bool) -> Result<Shape<Len>, String> {
+pub(super) fn round(s: &str, ellipse: bool) -> Result<Shape<Len>, String> {
     let words = css::words(s);
     let (radii, at) = match words.iter().position(|w| *w == "at") {
         Some(i) => (&words[..i], position(&words[i + 1..], false)?),
@@ -213,7 +218,7 @@ fn round(s: &str, ellipse: bool) -> Result<Shape<Len>, String> {
 }
 
 /// `polygon()`: a fill rule or not, then points, each two lengths, all after commas.
-fn polygon(s: &str) -> Result<Shape<Len>, String> {
+pub(super) fn polygon(s: &str) -> Result<Shape<Len>, String> {
     let mut parts = css::commas(s);
     let even_odd = rule(&mut parts);
     if parts.is_empty() {
@@ -228,8 +233,9 @@ fn polygon(s: &str) -> Result<Shape<Len>, String> {
     Ok(Shape::Polygon { even_odd, points })
 }
 
-/// `path()`: a fill rule or not, then a comma and path data in quotes.
-fn path_of(s: &str) -> Result<Shape<Len>, String> {
+/// `path()`: a fill rule or not, then a comma and path data in quotes; whether the rule is
+/// `evenodd`, and the path.
+pub(super) fn path_of(s: &str) -> Result<(bool, Path), String> {
     let mut parts = css::commas(s);
     let even_odd = rule(&mut parts);
     let data = match parts[..] {
@@ -241,10 +247,7 @@ fn path_of(s: &str) -> Result<Shape<Len>, String> {
     let Some(data) = data else {
         return Err("takes a fill rule or not, then path data in quotes".into());
     };
-    Ok(Shape::Path {
-        even_odd,
-        path: path::parse(data)?,
-    })
+    Ok((even_odd, path::parse(data)?))
 }
 
 /// Whether the fill rule that comes first, if one does, is `evenodd` rather than `nonzero`.

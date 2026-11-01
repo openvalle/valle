@@ -46,6 +46,8 @@ pub struct Layout {
     pub boxes: Vec<Boxes>,
     /// Each shown Text's lines, from the top left of its content box.
     pub lines: Vec<Option<Lines>>,
+    /// The canvas's size: the roots' containing block.
+    pub canvas: [f32; 2],
 }
 
 /// A container's children in the order it lays them out and paints them: a flex or grid
@@ -241,7 +243,11 @@ pub fn layout(
             lines[i] = Some(laid);
         }
     }
-    Ok(Layout { boxes, lines })
+    Ok(Layout {
+        boxes,
+        lines,
+        canvas,
+    })
 }
 
 /// The pieces of text of node `i`, a Text or a Span, and of the Spans in it, in order.

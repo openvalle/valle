@@ -14,6 +14,7 @@ pub mod filter;
 pub mod gradient;
 mod grid;
 pub mod math;
+pub mod offset;
 pub mod position;
 pub mod shape;
 pub mod transform;
@@ -64,10 +65,14 @@ pub struct Style {
     /// Within [0, 1].
     pub opacity: f64,
     /// `translate`, `rotate` and `scale`, then `transform`: one list, empty when all are `none`;
-    /// and `transform-origin`, from the border box's top left, and its z in px.
+    /// how many of it are the first three's, which go before the motion path's move; and
+    /// `transform-origin`, from the border box's top left, and its z in px.
     pub transform: Vec<transform::Function>,
+    pub individual: usize,
     pub transform_origin: [position::Offset; 2],
     pub transform_origin_z: f64,
+    /// `offset-*`: the motion path the box moves along, `None` for `offset-path: none`.
+    pub motion: Option<offset::Motion>,
     /// `perspective` in px, `None` for `none`, which its children's transforms are seen in, from
     /// `perspective-origin`.
     pub perspective: Option<f64>,
@@ -121,11 +126,16 @@ impl Style {
     /// stacking context: it has a transform, a perspective, a filter or a backdrop filter, or
     /// preserves 3D, as CSS has it.
     pub fn contains_all(&self) -> bool {
-        !self.transform.is_empty()
+        self.transformed()
             || self.perspective.is_some()
             || self.preserve_3d
             || !self.filter.is_empty()
             || !self.backdrop.is_empty()
+    }
+
+    /// Whether it has a transform: functions, or a motion path.
+    pub fn transformed(&self) -> bool {
+        !self.transform.is_empty() || self.motion.is_some()
     }
 
     /// Whether its children with transforms stay in its space: it preserves 3D and nothing
@@ -929,6 +939,11 @@ struct Declared {
     transform: Vec<transform::Function<Len>>,
     transform_origin: [position::Offset<Len>; 2],
     transform_origin_z: Len,
+    offset_path: Option<(offset::Route<Len>, background::Area)>,
+    offset_distance: Len,
+    offset_rotate: (bool, f64),
+    offset_anchor: Option<[position::Offset<Len>; 2]>,
+    offset_position: offset::Start<Len>,
     perspective: Option<Len>,
     perspective_origin: [position::Offset<Len>; 2],
     backface_visible: bool,
@@ -1031,6 +1046,11 @@ impl Default for Declared {
             transform: Vec::new(),
             transform_origin: [CENTER; 2],
             transform_origin_z: ZERO,
+            offset_path: None,
+            offset_distance: ZERO,
+            offset_rotate: (true, 0.0),
+            offset_anchor: None,
+            offset_position: offset::Start::Normal,
             perspective: None,
             perspective_origin: [CENTER; 2],
             backface_visible: true,
@@ -1151,6 +1171,11 @@ enum Field {
     PerspectiveOrigin,
     BackfaceVisibility,
     TransformStyle,
+    OffsetPath,
+    OffsetDistance,
+    OffsetRotate,
+    OffsetAnchor,
+    OffsetPosition,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -1266,7 +1291,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 218] = [
+const FIELDS: [(&str, Field); 223] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1548,6 +1573,11 @@ const FIELDS: [(&str, Field); 218] = [
     ("perspectiveOrigin", Field::PerspectiveOrigin),
     ("backfaceVisibility", Field::BackfaceVisibility),
     ("transformStyle", Field::TransformStyle),
+    ("offsetPath", Field::OffsetPath),
+    ("offsetDistance", Field::OffsetDistance),
+    ("offsetRotate", Field::OffsetRotate),
+    ("offsetAnchor", Field::OffsetAnchor),
+    ("offsetPosition", Field::OffsetPosition),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
@@ -2902,6 +2932,14 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::TransformStyle => {
             d.preserve_3d = keyword(v, &[("flat", false), ("preserve-3d", true)])?;
         }
+        F::OffsetPath => match v {
+            V::Str(s) => d.offset_path = offset::path(s)?,
+            other => return Err(format!("{} is not a string", shown(other))),
+        },
+        F::OffsetDistance => d.offset_distance = offset::distance(&px_text(v)?)?,
+        F::OffsetRotate => d.offset_rotate = offset::rotate(&text(v)?)?,
+        F::OffsetAnchor => d.offset_anchor = offset::anchor(&px_text(v)?)?,
+        F::OffsetPosition => d.offset_position = offset::start(&px_text(v)?)?,
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -3504,8 +3542,21 @@ fn compute(
             .chain(&d.transform)
             .map(|f| f.computed(u))
             .collect(),
+        individual: [&d.translate, &d.rotate, &d.scale]
+            .into_iter()
+            .flatten()
+            .count(),
         transform_origin: d.transform_origin.each_ref().map(|o| o.computed(u)),
         transform_origin_z: d.transform_origin_z.px(u, 0.0),
+        motion: d.offset_path.as_ref().map(|(path, area)| offset::Motion {
+            path: path.computed(u),
+            area: *area,
+            distance: d.offset_distance.calc(u),
+            along: d.offset_rotate.0,
+            angle: d.offset_rotate.1,
+            anchor: (d.offset_anchor.as_ref()).map(|a| a.each_ref().map(|o| o.computed(u))),
+            position: d.offset_position.computed(u),
+        }),
         perspective: d.perspective.as_ref().map(|l| l.px(u, 0.0)),
         perspective_origin: d.perspective_origin.each_ref().map(|o| o.computed(u)),
         backface_visible: d.backface_visible,

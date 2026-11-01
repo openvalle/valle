@@ -1,6 +1,6 @@
 use super::*;
 
-use Segment::{Cubic, Line, Move, Quad};
+use Segment::{Close, Cubic, Line, Move, Quad};
 
 #[test]
 fn path_data_takes_absolute_and_relative_commands() {
@@ -14,6 +14,7 @@ fn path_data_takes_absolute_and_relative_commands() {
             Line([30.0, 10.0]),
             Line([25.0, 10.0]),
             Line([25.0, 0.0]),
+            Close,
         ]
     );
     // Numbers repeat the command, lines after a move; they need no separator where one is
@@ -36,6 +37,7 @@ fn path_data_takes_absolute_and_relative_commands() {
         [
             Move([1.0, 1.0]),
             Line([5.0, 1.0]),
+            Close,
             Move([1.0, 1.0]),
             Line([1.0, 5.0])
         ]
