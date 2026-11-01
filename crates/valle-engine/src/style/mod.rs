@@ -68,6 +68,8 @@ pub struct Style {
     /// `perspective-origin`.
     pub perspective: Option<f64>,
     pub perspective_origin: [position::Offset; 2],
+    /// `backface-visibility: visible`; a box that shows its back otherwise hides with all in it.
+    pub backface_visible: bool,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
@@ -588,6 +590,7 @@ struct Declared {
     transform_origin_z: Len,
     perspective: Option<Len>,
     perspective_origin: [position::Offset<Len>; 2],
+    backface_visible: bool,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -653,6 +656,7 @@ impl Default for Declared {
             transform_origin_z: ZERO,
             perspective: None,
             perspective_origin: [CENTER; 2],
+            backface_visible: true,
             visible: None,
             color: None,
             font_size: None,
@@ -735,6 +739,7 @@ enum Field {
     TransformOrigin,
     Perspective,
     PerspectiveOrigin,
+    BackfaceVisibility,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -800,7 +805,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 168] = [
+const FIELDS: [(&str, Field); 169] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1069,6 +1074,7 @@ const FIELDS: [(&str, Field); 168] = [
     ("transformOrigin", Field::TransformOrigin),
     ("perspective", Field::Perspective),
     ("perspectiveOrigin", Field::PerspectiveOrigin),
+    ("backfaceVisibility", Field::BackfaceVisibility),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
@@ -2017,6 +2023,9 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::PerspectiveOrigin => {
             d.perspective_origin = transform::perspective_origin(&px_text(v)?)?;
         }
+        F::BackfaceVisibility => {
+            d.backface_visible = keyword(v, &[("visible", true), ("hidden", false)])?;
+        }
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -2250,6 +2259,7 @@ fn compute(
         transform_origin_z: d.transform_origin_z.px(u, 0.0),
         perspective: d.perspective.as_ref().map(|l| l.px(u, 0.0)),
         perspective_origin: d.perspective_origin.each_ref().map(|o| o.computed(u)),
+        backface_visible: d.backface_visible,
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,

@@ -37,20 +37,25 @@ impl Matrix {
 
     /// `None` when it flattens the plane, which leaves nothing to see.
     pub fn inverse(&self) -> Option<Matrix> {
-        let m = &self.0;
-        // The cofactors, transposed: the adjugate.
-        let cof = |c: usize, r: usize| {
-            let (c1, c2) = ((c + 1) % 3, (c + 2) % 3);
-            let (r1, r2) = ((r + 1) % 3, (r + 2) % 3);
-            m[c1][r1] * m[c2][r2] - m[c2][r1] * m[c1][r2]
-        };
-        let det = (0..3).map(|c| m[c][0] * cof(c, 0)).sum::<f64>();
+        let cof = |c, r| self.cofactor(c, r);
+        let det = self.determinant();
         if det.abs() < 1e-12 || !det.is_finite() {
             return None;
         }
         Some(Matrix(std::array::from_fn(|c| {
             std::array::from_fn(|r| cof(r, c) / det)
         })))
+    }
+
+    fn cofactor(&self, c: usize, r: usize) -> f64 {
+        let m = &self.0;
+        let (c1, c2) = ((c + 1) % 3, (c + 2) % 3);
+        let (r1, r2) = ((r + 1) % 3, (r + 2) % 3);
+        m[c1][r1] * m[c2][r2] - m[c2][r1] * m[c1][r2]
+    }
+
+    pub fn determinant(&self) -> f64 {
+        (0..3).map(|c| self.0[c][0] * self.cofactor(c, 0)).sum()
     }
 
     /// The smallest rectangle around `r` transformed: its corners', as `getBoundingClientRect()`
@@ -162,6 +167,26 @@ impl Matrix4 {
         let m = &self.0;
         Matrix([0, 1, 3].map(|c| [0, 1, 3].map(|r| m[c][r])))
     }
+
+    pub fn determinant(&self) -> f64 {
+        let m = &self.0;
+        // Along the first column, each minor with the other three.
+        (0..4)
+            .map(|r| {
+                let rows: Vec<usize> = (0..4).filter(|&k| k != r).collect();
+                let minor = Matrix([1, 2, 3].map(|c| [0, 1, 2].map(|k| m[c][rows[k]])));
+                let sign = if r % 2 == 0 { 1.0 } else { -1.0 };
+                sign * m[0][r] * minor.determinant()
+            })
+            .sum()
+    }
+
+    /// Whether the plane z = 0 shows its back to the viewer: whether the z of its normal, which
+    /// is the flattened determinant over the whole one, is below 0, as Chrome has it. A mirror
+    /// in the plane does not show it.
+    pub fn shows_back(&self) -> bool {
+        self.flatten().determinant() * self.determinant() < -1e-12
+    }
 }
 
 #[cfg(test)]
@@ -210,5 +235,16 @@ mod tests {
         assert!(near(m.flatten().apply([30.0, -60.0]), [20.0, -40.0]));
         assert_eq!(Matrix4::perspective(0.0), Matrix4::perspective(1.0));
         assert_eq!(Matrix4::rotate([0.0; 3], 30.0), Matrix4::IDENTITY);
+        // Turned past its edge it shows its back; mirrored it does not, and from the side a
+        // viewer may see the front of one turned past its edge from the front.
+        assert!(Matrix4::rotate([0.0, 1.0, 0.0], 180.0).shows_back());
+        assert!(Matrix4::rotate([1.0, 0.0, 0.0], 100.0).shows_back());
+        assert!(!Matrix4::scale(-1.0, 1.0, 1.0).shows_back());
+        let turned = Matrix4::rotate([0.0, 1.0, 0.0], 100.0);
+        assert!(turned.shows_back());
+        let aside = Matrix4::perspective(100.0)
+            .times(Matrix4::translate(-190.0, 0.0, 0.0))
+            .times(turned);
+        assert!(!aside.shows_back());
     }
 }

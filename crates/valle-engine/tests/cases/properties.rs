@@ -1228,6 +1228,12 @@ const ROWS: &[Row] = &[
         refused: &["\"left top 10px\"", "\"a\"", "\"\"", "true"],
     },
     Row {
+        properties: &["backfaceVisibility"],
+        sample: r##"<View style={{ width: 40, height: 16, margin: "8px 60px", background: "linear-gradient(to right, #3949ab, #e57373)", transform: "rotateY(150deg)", PROPERTY: VALUE }} />"##,
+        values: &["\"visible\"", "\"hidden\"", "\" HIDDEN \""],
+        refused: &["\"collapse\"", "\"\"", "0"],
+    },
+    Row {
         properties: &["borderRadius"],
         sample: r##"<View style={{ width: 60, height: 16, background: "#3949ab", PROPERTY: VALUE }} />"##,
         values: &[

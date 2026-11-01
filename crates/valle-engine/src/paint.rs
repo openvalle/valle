@@ -382,7 +382,7 @@ pub fn transforms(template: &Template, styles: &[Style], layout: &Layout) -> Vec
     // In preorder, so a parent's comes first.
     for (i, node) in template.nodes.iter().enumerate() {
         let m = match transform(&styles[i], layout.boxes[i].border, seen[i]) {
-            Some(own) => out[i].times(own),
+            Some(own) => out[i].times(own.flatten()),
             None => out[i],
         };
         out[i] = m;
@@ -408,8 +408,9 @@ fn perspective(s: &Style, border: Rect) -> Option<Matrix4> {
 }
 
 /// A box's transform with the border box `border`, in the px around it, seen in its parent's
-/// perspective `seen`: its functions, the last first, around its origin. `None` for `none`.
-fn transform(s: &Style, border: Rect, seen: Option<Matrix4>) -> Option<Matrix> {
+/// perspective `seen`: its functions, the last first, around its origin. In space: flattened, it
+/// is the transform onto its parent's plane. `None` for `none`.
+fn transform(s: &Style, border: Rect, seen: Option<Matrix4>) -> Option<Matrix4> {
     if s.transform.is_empty() {
         return None;
     }
@@ -438,11 +439,10 @@ fn transform(s: &Style, border: Rect, seen: Option<Matrix4>) -> Option<Matrix> {
             Function::Perspective(Some(d)) => Matrix4::perspective(d.resolve(0.0).into()),
         })
     });
-    // Flattened onto the plane of the box's parent.
     let m = Matrix4::translate(x, y, z)
         .times(m)
         .times(Matrix4::translate(-x, -y, -z));
-    Some(seen.unwrap_or(Matrix4::IDENTITY).times(m).flatten())
+    Some(seen.unwrap_or(Matrix4::IDENTITY).times(m))
 }
 
 /// Boxes are template indices; `None` is the canvas, a block container without a background.
@@ -555,8 +555,11 @@ impl Painter<'_> {
         let transform = transform(&self.styles[d], self.layout.boxes[d].border, seen);
         if !self.stacking(d) {
             self.whole(Some(d), out);
-        } else if let Some(matrix) = transform {
-            if matrix.inverse().is_none() {
+        } else if let Some(space) = transform {
+            let matrix = space.flatten();
+            // Its back hides it and all in it, as they are on its plane.
+            let back = !self.styles[d].backface_visible && space.shows_back();
+            if matrix.inverse().is_none() || back {
                 return;
             }
             let mut drawn = Vec::new();

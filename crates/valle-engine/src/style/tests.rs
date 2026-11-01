@@ -1201,6 +1201,8 @@ fn transforms_take_3d_functions_and_an_origin_z() {
         (Some(200.0), [10.0, 95.0])
     );
     assert_eq!(seen(&[("perspective", text("0"))]).0, Some(0.0));
+    assert!(one(&[]).backface_visible);
+    assert!(!one(&[("backfaceVisibility", text("Hidden"))]).backface_visible);
 }
 
 #[test]
@@ -1694,6 +1696,11 @@ fn what_is_not_supported_is_an_error() {
         ("rotate", num(10.0), "10 is not a string"),
         ("scale", text("2px"), "2px is not a number"),
         ("perspective", text("-10px"), "-10px is negative"),
+        (
+            "backfaceVisibility",
+            text("collapse"),
+            "collapse is not one of visible, hidden",
+        ),
         (
             "perspective",
             text("10%"),

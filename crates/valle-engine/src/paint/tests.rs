@@ -422,6 +422,36 @@ fn a_perspective_reaches_only_the_boxs_children() {
 }
 
 #[test]
+fn a_box_showing_its_back_hides_with_all_in_it_when_asked() {
+    let turned = |transform: &'static str, backface: &'static str| {
+        let style = [
+            ("height", "10px"),
+            ("background", "blue"),
+            ("transform", transform),
+            ("backfaceVisibility", backface),
+        ];
+        painted(
+            vec![
+                view(&style, &[1]),
+                view(&[("height", "5px"), ("background", "green")], &[]),
+            ],
+            &[0],
+        )
+    };
+    assert_eq!(
+        turned("rotateY(180deg)", "visible"),
+        [r#"transform ["blue", "green"]"#]
+    );
+    assert_eq!(turned("rotateY(180deg)", "hidden"), [] as [&str; 0]);
+    assert_eq!(turned("rotateX(-120deg)", "hidden"), [] as [&str; 0]);
+    // A mirror does not show the back.
+    assert_eq!(
+        turned("scaleX(-1)", "hidden"),
+        [r#"transform ["blue", "green"]"#]
+    );
+}
+
+#[test]
 fn hidden_boxes_paint_only_what_is_visible_in_them() {
     let order = painted(
         vec![
