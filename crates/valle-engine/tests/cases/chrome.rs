@@ -139,6 +139,11 @@ pub fn shapes(items: &[Item]) -> Vec<Item> {
                 let line = *line;
                 (!items.is_empty()).then_some(Item::Cut { line, items })
             }
+            Item::Filter { filters, items } => {
+                let items = shapes(items);
+                let filters = filters.clone();
+                (!items.is_empty()).then_some(Item::Filter { filters, items })
+            }
             item => Some(item.clone()),
         })
         .collect()

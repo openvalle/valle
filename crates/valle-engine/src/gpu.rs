@@ -17,7 +17,7 @@ use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 
 use crate::layout::Rect;
-use crate::paint::{Geometry, Item, Matrix, SQUARE};
+use crate::paint::{Filter, Geometry, Item, Matrix, SQUARE};
 use crate::slug;
 use crate::style::Blend;
 use crate::style::gradient::Space;
@@ -64,6 +64,7 @@ pub struct Gpu {
     layers: wgpu::RenderPipeline,
     blends: wgpu::RenderPipeline,
     blurs: wgpu::RenderPipeline,
+    colors: wgpu::RenderPipeline,
     output: wgpu::RenderPipeline,
 }
 
@@ -172,6 +173,7 @@ impl Gpu {
         let layer = include_str!("../shaders/layer.wgsl");
         let blend = include_str!("../shaders/blend.wgsl");
         let blur = include_str!("../shaders/blur.wgsl");
+        let colors = include_str!("../shaders/colors.wgsl");
         let output = include_str!("../shaders/output.wgsl");
         Ok(Gpu {
             info: adapter.get_info(),
@@ -181,6 +183,7 @@ impl Gpu {
             layers: pipeline(&imaging, "layer", layer, WORK, over),
             blends: pipeline(&blending, "blend", blend, WORK, None),
             blurs: pipeline(&imaging, "blur", blur, WORK, None),
+            colors: pipeline(&imaging, "colors", colors, WORK, None),
             output: pipeline(&imaging, "output", output, OUTPUT, None),
             device,
             queue,
@@ -332,6 +335,25 @@ enum Step {
         layer: usize,
         at: u32,
     },
+    /// Draws `layer` with its colors through matrices into `target`, a new layer.
+    Colors {
+        target: usize,
+        layer: usize,
+        at: u32,
+    },
+}
+
+impl Step {
+    /// The layer the step reads.
+    fn read(&self) -> Option<usize> {
+        match self {
+            Step::Draw { .. } => None,
+            Step::Composite { layer, .. }
+            | Step::Blend { layer, .. }
+            | Step::Blur { layer, .. }
+            | Step::Colors { layer, .. } => Some(*layer),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -347,6 +369,55 @@ struct Plan {
 }
 
 impl Plan {
+    /// A new layer.
+    fn layer(&mut self) -> usize {
+        self.targets += 1;
+        self.targets - 1
+    }
+
+    /// Adds the words of a layer instance, or of a pass that takes their place: its index.
+    fn words(&mut self, words: impl IntoIterator<Item = f32>) -> u32 {
+        let at = (self.layers.len() / LAYER) as u32;
+        self.layers.extend(words.into_iter().map(f32::to_bits));
+        at
+    }
+
+    /// `layer` composited onto `target`, all of it.
+    fn composite(&mut self, target: usize, layer: usize) {
+        let words = [1.0, 0.0, 0.0, 0.0, -1.0e7, -1.0e7, 2.0e7, 2.0e7];
+        let at = self.words(words.into_iter().chain([0.0; 12]));
+        self.steps.push(Step::Composite { target, layer, at });
+    }
+
+    /// A new layer of `layer` blurred by a Gaussian of `sigma` px: along x, then along y.
+    fn blurred(&mut self, mut layer: usize, sigma: f32) -> usize {
+        if sigma > 0.0 {
+            for [x, y] in [[1.0, 0.0], [0.0, 1.0]] {
+                let at = self.words([sigma, x, y, 0.0].into_iter().chain([0.0; 16]));
+                let target = self.layer();
+                self.steps.push(Step::Blur { target, layer, at });
+                layer = target;
+            }
+        }
+        layer
+    }
+
+    /// A new layer of `layer` moved by `offset` px, its colors through `matrices`.
+    fn colored(&mut self, layer: usize, offset: [f32; 2], matrices: &[[f32; 20]]) -> usize {
+        let count = matrices.len() as f32;
+        let at = self.words(
+            [count, offset[0], offset[1], 0.0]
+                .into_iter()
+                .chain([0.0; 16]),
+        );
+        for m in matrices {
+            self.words(*m);
+        }
+        let target = self.layer();
+        self.steps.push(Step::Colors { target, layer, at });
+        target
+    }
+
     /// Adds `m` and its inverse to the transforms: its index, or `None` if it has no inverse.
     fn transform(&mut self, m: Matrix) -> Option<u32> {
         let inverse = m.inverse()?;
@@ -666,6 +737,48 @@ impl<'a> Renderer<'a> {
                         self.draw(items, target, (i, m), faces, plan, atlas, runs)?;
                     }
                 }
+                Item::Filter { filters, items } => {
+                    if !runs.is_empty() {
+                        let runs = std::mem::take(runs);
+                        plan.steps.push(Step::Draw { target, runs });
+                    }
+                    // In the target's px, where a blur is as much larger as the transform makes
+                    // it, and an offset turns with it.
+                    let scale = matrix.radius_scale() as f32;
+                    let [x, y, _] = matrix.0;
+                    let mut layer = plan.layer();
+                    self.plan(items, layer, at, faces, plan, atlas)?;
+                    for filter in filters {
+                        layer = match filter {
+                            Filter::Blur(sigma) => plan.blurred(layer, sigma * scale),
+                            Filter::Colors(matrices) => plan.colored(layer, [0.0; 2], matrices),
+                            Filter::Shadow {
+                                offset: [dx, dy],
+                                sigma,
+                                color,
+                            } => {
+                                let a = color[3];
+                                if a <= 0.0 {
+                                    continue;
+                                }
+                                // The alpha in the color, moved and blurred, under the layer.
+                                let [r, g, b] = [0, 1, 2].map(|k| color[k] / a);
+                                let mut tint = [0.0; 20];
+                                tint[15] = a;
+                                tint[16..19].copy_from_slice(&[r, g, b]);
+                                let (dx, dy) = (f64::from(*dx), f64::from(*dy));
+                                let offset = [0, 1].map(|k| (x[k] * dx + y[k] * dy) as f32);
+                                let shadow = plan.colored(layer, offset, &[tint]);
+                                let shadow = plan.blurred(shadow, sigma * scale);
+                                let both = plan.layer();
+                                plan.composite(both, shadow);
+                                plan.composite(both, layer);
+                                both
+                            }
+                        };
+                    }
+                    plan.composite(target, layer);
+                }
                 Item::Group {
                     opacity,
                     blend,
@@ -675,18 +788,11 @@ impl<'a> Renderer<'a> {
                         let runs = std::mem::take(runs);
                         plan.steps.push(Step::Draw { target, runs });
                     }
-                    let layer = plan.targets;
-                    plan.targets += 1;
+                    let layer = plan.layer();
                     self.plan(items, layer, at, faces, plan, atlas)?;
-                    let index = (plan.layers.len() / LAYER) as u32;
                     let words = [*opacity, *blend as u32 as f32, 0.0, 0.0];
-                    let words = words.into_iter().chain([0.0; 16]);
-                    plan.layers.extend(words.map(f32::to_bits));
-                    plan.steps.push(Step::Blend {
-                        target,
-                        layer,
-                        at: index,
-                    });
+                    let at = plan.words(words.into_iter().chain([0.0; 16]));
+                    plan.steps.push(Step::Blend { target, layer, at });
                 }
                 Item::Group { .. } | Item::Clip { .. } | Item::Cut { .. } | Item::Shadow { .. } => {
                     if !runs.is_empty() {
@@ -720,26 +826,9 @@ impl<'a> Renderer<'a> {
                         } => (items, 1.0, *sigma, xywh(*rect), *radii, !inside),
                         _ => unreachable!("a group, a clip or a shadow"),
                     };
-                    let mut layer = plan.targets;
-                    plan.targets += 1;
+                    let layer = plan.layer();
                     self.plan(items, layer, at, faces, plan, atlas)?;
-                    let sigma = sigma * matrix.radius_scale() as f32;
-                    if sigma > 0.0 {
-                        // Along x into a new layer, then along y into another.
-                        for [x, y] in [[1.0, 0.0], [0.0, 1.0]] {
-                            let at = (plan.layers.len() / LAYER) as u32;
-                            let words = [sigma, x, y, 0.0].into_iter().chain([0.0; 16]);
-                            plan.layers.extend(words.map(f32::to_bits));
-                            let blurred = plan.targets;
-                            plan.targets += 1;
-                            plan.steps.push(Step::Blur {
-                                target: blurred,
-                                layer,
-                                at,
-                            });
-                            layer = blurred;
-                        }
-                    }
+                    let layer = plan.blurred(layer, sigma * matrix.radius_scale() as f32);
                     let index = (plan.layers.len() / LAYER) as u32;
                     let cut = f32::from(u8::from(matches!(item, Item::Cut { .. })));
                     let words = [opacity, f32::from(u8::from(outside)), cut, 0.0]
@@ -805,19 +894,29 @@ impl<'a> Renderer<'a> {
         let Some(draw) = &self.draw else {
             return;
         };
-        // Each layer's pool texture once it has one, and whether a pass drew into each target.
+        // Each layer's pool texture once it has one, whether a pass drew into each target, and
+        // the last step that reads each layer, after which its texture goes back to the pool.
         let mut surfaces: Vec<Option<usize>> = vec![None; plan.targets];
         let mut started = vec![false; plan.targets];
-        for step in &plan.steps {
-            let (target, layer) = match step {
+        let mut last = vec![0; plan.targets];
+        for (k, step) in plan.steps.iter().enumerate() {
+            if let Some(l) = step.read() {
+                last[l] = k;
+            }
+        }
+        for (k, step) in plan.steps.iter().enumerate() {
+            let (target, read) = match step {
                 Step::Draw { target, .. } => (*target, None),
                 Step::Composite { target, layer, .. }
                 | Step::Blend { target, layer, .. }
-                | Step::Blur { target, layer, .. } => match surfaces[*layer] {
-                    Some(s) => (*target, Some(s)),
-                    // Nothing was drawn into the layer.
-                    None => continue,
-                },
+                | Step::Blur { target, layer, .. }
+                | Step::Colors { target, layer, .. } => (*target, Some(*layer)),
+            };
+            let layer = match read.map(|l| surfaces[l]) {
+                None => None,
+                Some(Some(s)) => Some(s),
+                // Nothing was drawn into the layer.
+                Some(None) => continue,
             };
             let surface =
                 match target {
@@ -859,11 +958,15 @@ impl<'a> Renderer<'a> {
                         pass.draw(0..4, range.clone());
                     }
                 }
-                Step::Composite { at, .. } | Step::Blend { at, .. } | Step::Blur { at, .. } => {
+                Step::Composite { at, .. }
+                | Step::Blend { at, .. }
+                | Step::Blur { at, .. }
+                | Step::Colors { at, .. } => {
                     let s = layer.expect("a composited layer has a surface");
                     pass.set_pipeline(match step {
                         Step::Blend { .. } => &gpu.blends,
                         Step::Blur { .. } => &gpu.blurs,
+                        Step::Colors { .. } => &gpu.colors,
                         _ => &gpu.layers,
                     });
                     pass.set_bind_group(1, &self.pool[s].image, &[]);
@@ -874,7 +977,9 @@ impl<'a> Renderer<'a> {
                 }
             }
             drop(pass);
-            self.free.extend(layer.into_iter().chain(under));
+            let done = read.is_some_and(|l| last[l] == k);
+            self.free
+                .extend(layer.filter(|_| done).into_iter().chain(under));
         }
         if !started[0] {
             drop(begin(encoder, &self.frame.view, false));

@@ -52,6 +52,16 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Clip { items, .. } => format!("clip {:?}", names(items)),
             Item::Transform { items, .. } => format!("transform {:?}", names(items)),
             Item::Cut { items, .. } => format!("cut {:?}", names(items)),
+            Item::Filter { filters, items } => {
+                let filters: Vec<&str> = (filters.iter())
+                    .map(|f| match f {
+                        Filter::Blur(_) => "blur",
+                        Filter::Colors(_) => "colors",
+                        Filter::Shadow { .. } => "shadow",
+                    })
+                    .collect();
+                format!("filter {filters:?} {:?}", names(items))
+            }
             Item::Shadow { inside, items, .. } => {
                 let side = if *inside { "inner" } else { "outer" };
                 format!("{side} shadow {:?}", names(items))
@@ -671,6 +681,94 @@ fn clips_round_and_go_on_each_item_in_a_layer() {
         panic!("{layer:?}")
     };
     assert_eq!((rect.height, *radii), (20.0, [[4.0; 2]; 4]));
+}
+
+#[test]
+fn a_filter_takes_all_a_box_paints_inside_its_transform_and_clips() {
+    let (items, _) = paint_of(
+        vec![
+            view(&[("overflow", "hidden"), ("height", "50px")], &[1]),
+            view(
+                &[
+                    (
+                        "filter",
+                        "blur(2px) grayscale(1) invert(0.5) drop-shadow(1px 2px red)",
+                    ),
+                    ("transform", "rotate(10deg)"),
+                    ("opacity", "0.5"),
+                    ("height", "20px"),
+                    ("background", "blue"),
+                ],
+                &[2],
+            ),
+            // A fixed box in a filtered one is in its filter.
+            view(
+                &[
+                    ("position", "fixed"),
+                    ("width", "10px"),
+                    ("height", "10px"),
+                    ("background", "green"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    let [Item::Group { items, .. }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    let [Item::Clip { items, .. }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    let [Item::Transform { items, .. }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    let [Item::Filter { filters, items }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    assert_eq!(names(items), ["blue", "green"]);
+    let [
+        Filter::Blur(2.0),
+        Filter::Colors(m),
+        Filter::Shadow {
+            offset,
+            sigma,
+            color,
+        },
+    ] = &filters[..]
+    else {
+        panic!("{filters:?}")
+    };
+    assert_eq!(
+        (m.len(), *offset, *sigma, *color),
+        (2, [1.0, 2.0], 0.0, [1.0, 0.0, 0.0, 1.0])
+    );
+    assert_eq!(m[0][..3], [0.2126, 0.7152, 0.0722]);
+    assert_eq!(m[1][..4], [0.0; 4]);
+    assert_eq!(m[1][16..], [0.5, 0.5, 0.5, 0.0]);
+}
+
+#[test]
+fn color_filters_at_no_effect_are_the_identity() {
+    use crate::style::filter::Function as F;
+    let none = [
+        F::Brightness(1.0),
+        F::Contrast(1.0),
+        F::Grayscale(0.0),
+        F::HueRotate(360.0),
+        F::Invert(0.0),
+        F::Opacity(1.0),
+        F::Saturate(1.0),
+        F::Sepia(0.0),
+    ];
+    for f in none {
+        let m = colors(&f).unwrap();
+        for (k, v) in m.iter().enumerate() {
+            let one = f32::from(u8::from(k < 16 && k % 4 == k / 4));
+            assert!((v - one).abs() < 1e-6, "{f:?}: {m:?}");
+        }
+    }
+    assert_eq!(colors(&F::Blur(1.0)), None);
 }
 
 #[test]

@@ -1058,6 +1058,43 @@ fn background_layers_take_origins_and_clips() {
 }
 
 #[test]
+fn filters_take_css_functions_in_order() {
+    use filter::Function as F;
+    let s = one(&[
+        ("color", text("blue")),
+        (
+            "filter",
+            text(
+                "blur(0.5em) brightness(150%) GRAYSCALE(2) hue-rotate(0.5turn) \
+                 drop-shadow(red 1px 2px 3px) drop-shadow(0 1px) opacity()",
+            ),
+        ),
+    ]);
+    assert_eq!(
+        s.filter,
+        [
+            F::Blur(8.0),
+            F::Brightness(1.5),
+            F::Grayscale(1.0),
+            F::HueRotate(180.0),
+            F::DropShadow {
+                offset: [1.0, 2.0],
+                blur: 3.0,
+                color: [1.0, 0.0, 0.0, 1.0]
+            },
+            F::DropShadow {
+                offset: [0.0, 1.0],
+                blur: 0.0,
+                color: [0.0, 0.0, 1.0, 1.0]
+            },
+            F::Opacity(1.0),
+        ]
+    );
+    assert!(s.contains_all());
+    assert!(one(&[("filter", text("none"))]).filter.is_empty());
+}
+
+#[test]
 fn background_layers_take_blend_modes_which_the_shorthand_leaves() {
     let blends = |style: &[(&str, Prop)]| {
         (one(style).layers.iter())
@@ -1765,6 +1802,23 @@ fn what_is_not_supported_is_an_error() {
             "isolation",
             text("none"),
             "none is not one of auto, isolate",
+        ),
+        (
+            "filter",
+            text("brightness(-1)"),
+            "brightness(): -1 is negative",
+        ),
+        (
+            "filter",
+            text("drop-shadow(1px)"),
+            "drop-shadow(): takes a color and two or three lengths: x, y and a standard \
+             deviation",
+        ),
+        (
+            "filter",
+            text("bloom(1)"),
+            "bloom() is not a filter function: blur, brightness, contrast, drop-shadow, \
+             grayscale, hue-rotate, invert, opacity, saturate or sepia",
         ),
         (
             "backgroundBlendMode",

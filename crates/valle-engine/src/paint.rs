@@ -8,12 +8,13 @@
 //! outlines of its blocks and its own. Its positioned descendants and the stacking contexts in it
 //! with a z-index of 0 or `auto` come next, in tree order, and last those with a positive
 //! z-index, lowest first. A positioned box paints all at once too, without the positioned boxes
-//! in it. Opacity, a blend, isolation, a transform, a fixed position, and a z-index on a
-//! positioned box or a flex or grid item make a stacking context. One with an opacity or a blend
-//! paints as a layer, and so does one with a box blending in it: CSS isolates every stacking
-//! context, so a box blends only with what its stacking context paints under it. A transformed
-//! one's items go in its transform, which takes its px, those of the untransformed layout, to its
-//! parent's, and a transform that flattens the plane hides it. Tree order puts a flex or grid container's
+//! in it. Opacity, a blend, isolation, a transform, a filter, a fixed position, and a z-index on
+//! a positioned box or a flex or grid item make a stacking context. One with an opacity or a
+//! blend paints as a layer, and so does one with a box blending in it: CSS isolates every
+//! stacking context, so a box blends only with what its stacking context paints under it. A
+//! filtered one's items go in its filter, and a transformed one's in its transform, around the
+//! filter, which takes its px, those of the untransformed layout, to its parent's; a transform
+//! that flattens the plane hides it. Tree order puts a flex or grid container's
 //! children in the order it lays them out. A hidden box (`visibility`) paints nothing of its
 //! own, but what it contains still paints if visible. A box's background, its color and then its
 //! images, the first on top, paints over its outer shadows, and its inner shadows and border over
@@ -24,8 +25,8 @@
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
 //! containing block is it or inside it. Layers group what they paint, but clips go on each item,
 //! so a positioned box in a layer under a clip that does not contain it shows outside the clip. A
-//! transformed box contains its positioned descendants, so the clips around it are the same for
-//! all it paints, and go around its transform.
+//! transformed or filtered box contains its positioned descendants, so the clips around it are
+//! the same for all it paints, and go around its transform and filter.
 //!
 //! Boxes paint with their edges on whole pixels, as Chrome paints them, so a layout that lands
 //! between pixels still has crisp edges.
@@ -42,6 +43,7 @@ pub use matrix::{Matrix, Matrix4};
 use crate::layout::{Layout, Rect, ordered};
 use crate::style::background::{Area, ImageSize, Layer, Repeat};
 use crate::style::color::Rgba;
+use crate::style::filter;
 use crate::style::gradient::Image;
 use crate::style::transform::Function;
 use crate::style::{Blend, Shadow, Style};
@@ -89,6 +91,11 @@ pub enum Item {
     },
     /// Items in px that `matrix` takes to the px around them.
     Transform { matrix: Matrix, items: Vec<Item> },
+    /// Items drawn as one image through `filters`, one after another, onto what is under them.
+    Filter {
+        filters: Vec<Filter>,
+        items: Vec<Item>,
+    },
     /// Items where a x + b y + c ≥ 0 for `line` [a, b, c], with a hard edge: the part of a
     /// plane of a 3D scene on one side of another plane, so that two parts share each pixel.
     Cut { line: [f32; 3], items: Vec<Item> },
@@ -107,6 +114,23 @@ pub enum Item {
         radii: Radii,
         inside: bool,
         items: Vec<Item>,
+    },
+}
+
+/// A filter on an image.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Filter {
+    /// A Gaussian blur of this standard deviation, px.
+    Blur(f32),
+    /// Unpremultiplied colors through 4 × 5 matrices, one after another, each result clamped to
+    /// [0, 1]: the factors of red, green, blue and alpha in each of them, then their offsets.
+    Colors(Vec<[f32; 20]>),
+    /// The image's alpha in a working color, moved by `offset` px, blurred by a standard
+    /// deviation of `sigma` px, under the image.
+    Shadow {
+        offset: [f32; 2],
+        sigma: f32,
+        color: [f32; 4],
     },
 }
 
@@ -345,6 +369,105 @@ fn snap(r: Rect) -> Rect {
         width: side(r.x, r.width),
         height: side(r.y, r.height),
     }
+}
+
+/// A box's filter functions as filters, those of colors one after another in one.
+fn filters(s: &Style) -> Vec<Filter> {
+    let mut out = Vec::new();
+    for f in &s.filter {
+        let next = match f {
+            filter::Function::Blur(sigma) => Filter::Blur(*sigma as f32),
+            filter::Function::DropShadow {
+                offset,
+                blur,
+                color,
+            } => Filter::Shadow {
+                offset: offset.map(|v| v as f32),
+                sigma: *blur as f32,
+                color: work(*color),
+            },
+            f => {
+                let Some(m) = colors(f) else { continue };
+                if let Some(Filter::Colors(list)) = out.last_mut() {
+                    list.push(m);
+                    continue;
+                }
+                Filter::Colors(vec![m])
+            }
+        };
+        out.push(next);
+    }
+    out
+}
+
+/// A filter function of colors as its matrix, as `Filter::Colors` has them (Filter Effects
+/// Level 1); `None` for any other.
+fn colors(f: &filter::Function) -> Option<[f32; 20]> {
+    use filter::Function as F;
+    // Factors of red, green and blue for each, then an offset added to each.
+    let rgb = |m: [[f64; 3]; 3], add: f64| {
+        let mut out = [0.0; 20];
+        for (r, row) in m.iter().enumerate() {
+            out[r * 4..r * 4 + 3].copy_from_slice(&row.map(|v| v as f32));
+            out[16 + r] = add as f32;
+        }
+        out[15] = 1.0;
+        out
+    };
+    let scaled = |k: f64| [[k, 0.0, 0.0], [0.0, k, 0.0], [0.0, 0.0, k]];
+    // Toward gray by `k`, from the weights at `k` = 1 and those of each channel.
+    let toward = |w: [[f64; 3]; 3], k: f64| -> [[f64; 3]; 3] {
+        std::array::from_fn(|r| {
+            std::array::from_fn(|c| w[r][c] + (f64::from(u8::from(r == c)) - w[r][c]) * (1.0 - k))
+        })
+    };
+    let luma = [0.2126, 0.7152, 0.0722];
+    let lum = [0.213, 0.715, 0.072];
+    Some(match *f {
+        F::Brightness(a) => rgb(scaled(a), 0.0),
+        F::Contrast(a) => rgb(scaled(a), 0.5 - 0.5 * a),
+        F::Invert(a) => rgb(scaled(1.0 - 2.0 * a), a),
+        F::Opacity(a) => {
+            let mut m = rgb(scaled(1.0), 0.0);
+            m[15] = a as f32;
+            m
+        }
+        F::Grayscale(a) => rgb(toward([luma; 3], a), 0.0),
+        F::Sepia(a) => {
+            let sepia = [
+                [0.393, 0.769, 0.189],
+                [0.349, 0.686, 0.168],
+                [0.272, 0.534, 0.131],
+            ];
+            rgb(toward(sepia, a), 0.0)
+        }
+        F::Saturate(a) => rgb(toward([lum; 3], 1.0 - a), 0.0),
+        F::HueRotate(degrees) => {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let turned = [
+                [
+                    0.787 * cos - 0.213 * sin,
+                    -0.715 * cos - 0.715 * sin,
+                    -0.072 * cos + 0.928 * sin,
+                ],
+                [
+                    -0.213 * cos + 0.143 * sin,
+                    0.285 * cos + 0.140 * sin,
+                    -0.072 * cos - 0.283 * sin,
+                ],
+                [
+                    -0.213 * cos - 0.787 * sin,
+                    -0.715 * cos + 0.715 * sin,
+                    0.928 * cos + 0.072 * sin,
+                ],
+            ];
+            rgb(
+                std::array::from_fn(|r| std::array::from_fn(|c| lum[c] + turned[r][c])),
+                0.0,
+            )
+        }
+        F::Blur(_) | F::DropShadow { .. } => return None,
+    })
 }
 
 /// A computed color as a working color.
@@ -600,22 +723,27 @@ impl Painter<'_> {
             return self.scene(d, out);
         }
         let mut drawn = Vec::new();
-        if !s.transform.is_empty() {
+        if !s.transform.is_empty() || !s.filter.is_empty() {
             let space = self.spaces[d];
             let matrix = space.flatten();
             // Its back hides it and all in it, as they are on its plane.
             let back = !s.backface_visible && space.shows_back();
-            if matrix.inverse().is_none() || back {
+            if !s.transform.is_empty() && (matrix.inverse().is_none() || back) {
                 return;
             }
             let mut inside = Vec::new();
             self.context(Some(d), &mut inside);
-            // The clips around it go around its transform.
-            let items = self.nest_from(self.chained(inside), self.clips[d].len());
-            if !items.is_empty() {
-                let item = Item::Transform { matrix, items };
-                drawn.push((self.clips[d].last().copied(), item));
+            // It contains all in it, so the clips around it go around its filter and transform.
+            let mut items = self.nest_from(self.chained(inside), self.clips[d].len());
+            if !s.filter.is_empty() && !items.is_empty() {
+                let filters = filters(s);
+                items = vec![Item::Filter { filters, items }];
             }
+            if !s.transform.is_empty() && !items.is_empty() {
+                items = vec![Item::Transform { matrix, items }];
+            }
+            let clip = self.clips[d].last().copied();
+            drawn.extend(items.into_iter().map(|item| (clip, item)));
         } else {
             self.context(Some(d), &mut drawn);
         }
@@ -678,6 +806,10 @@ impl Painter<'_> {
             let mut drawn = Vec::new();
             self.context(Some(e), &mut drawn);
             let mut items = self.nest_from(self.chained(drawn), self.clips[e].len());
+            if !s.filter.is_empty() && !items.is_empty() {
+                let filters = filters(s);
+                items = vec![Item::Filter { filters, items }];
+            }
             if self.grouped(e) {
                 items = group(s.opacity as f32, s.blend, items)
                     .into_iter()
