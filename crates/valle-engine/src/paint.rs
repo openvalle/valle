@@ -182,6 +182,17 @@ pub enum Filter {
     /// Blurred along each ray from `center` by up to `amount` px either way, and never more
     /// than half of the way to it.
     Radial { center: [f32; 2], amount: f32 },
+    /// Each point shows the one `scale` px times two noises less a half away along x and y:
+    /// noises of a pattern `seed` picks, `frequency` cycles a px along x and y from `origin`, of
+    /// `octaves`, fractal or `turbulence`, as SVG's feTurbulence makes them.
+    Displacement {
+        seed: u32,
+        frequency: [f32; 2],
+        scale: f32,
+        octaves: u32,
+        turbulence: bool,
+        origin: [f32; 2],
+    },
 }
 
 /// Where a background image is: one tile, and on each axis how far it is to the next one, if it
@@ -533,6 +544,20 @@ fn filters(functions: &[filter::Function], frame: Rect) -> Vec<Filter> {
                 center: [frame.x + center[0] as f32, frame.y + center[1] as f32],
                 amount: *amount as f32,
             },
+            filter::Function::Displacement {
+                seed,
+                frequency,
+                scale,
+                octaves,
+                turbulence,
+            } => Filter::Displacement {
+                seed: *seed,
+                frequency: frequency.map(|v| v as f32),
+                scale: *scale as f32,
+                octaves: *octaves,
+                turbulence: *turbulence,
+                origin: [frame.x, frame.y],
+            },
             f => {
                 let Some(m) = colors(f) else { continue };
                 if let Some(Filter::Colors(list)) = out.last_mut() {
@@ -618,7 +643,8 @@ fn colors(f: &filter::Function) -> Option<[f32; 20]> {
         | F::ChromaticAberration(_)
         | F::LensDistortion(_)
         | F::FilmGrain { .. }
-        | F::RadialBlur { .. } => return None,
+        | F::RadialBlur { .. }
+        | F::Displacement { .. } => return None,
     })
 }
 

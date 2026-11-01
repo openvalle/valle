@@ -49,6 +49,7 @@ const ABERRATION: f32 = 0.0;
 const LENS: f32 = 1.0;
 const GRAIN: f32 = 2.0;
 const RADIAL: f32 = 3.0;
+const DISPLACEMENT: f32 = 4.0;
 
 /// Premultiplied colors to the luminance of their working values, Rec. 709's weights as Skia's,
 /// times their alpha, as the alpha of black.
@@ -540,6 +541,24 @@ impl Plan {
                         layer = self.effect(layer, RADIAL, &words);
                     }
                     layer
+                }
+                Filter::Displacement {
+                    seed,
+                    frequency: [fx, fy],
+                    scale,
+                    octaves,
+                    turbulence,
+                    origin: [ox, oy],
+                } => {
+                    let Some(t) = self.transform(matrix) else {
+                        continue;
+                    };
+                    let [seed, octaves] = [f32::from_bits(*seed), *octaves as f32];
+                    let turbulence = f32::from(u8::from(*turbulence));
+                    let words = [
+                        t as f32, seed, *fx, *fy, *scale, octaves, turbulence, *ox, *oy,
+                    ];
+                    self.effect(layer, DISPLACEMENT, &words)
                 }
                 Filter::Shadow {
                     offset: [dx, dy],

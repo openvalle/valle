@@ -1770,6 +1770,21 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
             amount: 128.0
         }]
     );
+    let noise = |frequency, octaves, turbulence| {
+        [F::Displacement {
+            seed: 7,
+            frequency,
+            scale: -6.0,
+            octaves,
+            turbulence,
+        }]
+    };
+    let both = filter("displacement(7 0.01 0.5 -6px)");
+    assert_eq!(both, noise([0.01, 0.5], 2, false));
+    let turbulent = filter("displacement(7 0 1 -6px 4 Turbulence)");
+    assert_eq!(turbulent, noise([0.0, 1.0], 4, true));
+    let fractal = filter("displacement(7 0 1 -6px 1 fractal)");
+    assert_eq!(fractal, noise([0.0, 1.0], 1, false));
     for (v, says) in [
         (
             "chromatic-aberration(300px)",
@@ -1795,6 +1810,27 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
         (
             "radial-blur(1px 1px 129px)",
             "the amount 129px is not within 0px and 128px",
+        ),
+        (
+            "displacement(7 0.1 0.1)",
+            "takes the seed, fx, fy and the scale",
+        ),
+        ("displacement(7 0.1 0.1 4)", "the scale 4 is not px"),
+        (
+            "displacement(7 0.1 1.5 4px)",
+            "fy 1.5 is not within 0 and 1",
+        ),
+        (
+            "displacement(7 0.1 0.1 4px 2.5)",
+            "the octaves 2.5 is not a whole number",
+        ),
+        (
+            "displacement(7 0.1 0.1 4px 5)",
+            "the octaves 5 is not within 1 and 4",
+        ),
+        (
+            "displacement(7 0.1 0.1 4px 2 wavy)",
+            "the mode wavy is not fractal or turbulence",
         ),
         (
             "film-grain(1 0.5 0.5px)",

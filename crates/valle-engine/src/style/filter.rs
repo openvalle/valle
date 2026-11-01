@@ -50,6 +50,18 @@ pub enum Function<L = f64, C = Rgba> {
         center: [f64; 2],
         amount: f64,
     },
+    /// Valle's `displacement(seed fx fy scale [octaves [mode]])`: each point shows the one
+    /// `scale` px times two noises less a half away along x and y, as SVG's feDisplacementMap
+    /// moves by feTurbulence's red and green; the noises of a pattern the seed picks, `frequency`
+    /// cycles a px along x and y from the border box's top left, of `octaves` (2 when left out),
+    /// fractal or `turbulence`.
+    Displacement {
+        seed: u32,
+        frequency: [f64; 2],
+        scale: f64,
+        octaves: u32,
+        turbulence: bool,
+    },
 }
 
 impl Function<Len, Option<Rgba>> {
@@ -84,13 +96,29 @@ impl Function<Len, Option<Rgba>> {
                 center: *center,
                 amount: *amount,
             },
+            Function::Displacement {
+                seed,
+                frequency,
+                scale,
+                octaves,
+                turbulence,
+            } => Function::Displacement {
+                seed: *seed,
+                frequency: *frequency,
+                scale: *scale,
+                octaves: *octaves,
+                turbulence: *turbulence,
+            },
         }
     }
 }
 
 const NAMES: &str = "blur, brightness, contrast, drop-shadow, grayscale, hue-rotate, invert, \
                      opacity, saturate or sepia, or Valle's chromatic-aberration, \
-                     film-grain, lens-distortion or radial-blur";
+                     displacement, film-grain, lens-distortion or radial-blur";
+
+/// A seed of Valle's noises: a whole u32.
+const SEED: (&str, bool, [f64; 2]) = ("the seed", false, [0.0, u32::MAX as f64]);
 
 /// `filter`: `none`, or functions separated by spaces.
 pub(super) fn filter(s: &str) -> Result<Vec<Function<Len, Option<Rgba>>>, String> {
@@ -108,7 +136,7 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
     let named = |e: String| format!("{name}(): {e}");
     let args = css::words(inner);
     // Valle's parameters, each a number, or px where `px`, within a range.
-    let valle = |takes: &[(&str, bool, [f64; 2])]| -> Result<Vec<f64>, String> {
+    let valle = |args: &[&str], takes: &[(&str, bool, [f64; 2])]| -> Result<Vec<f64>, String> {
         if args.len() != takes.len() {
             let names: Vec<&str> = takes.iter().map(|t| t.0).collect();
             return Err(named(format!("takes {}", names.join(", "))));
@@ -130,6 +158,10 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
                 }
             })
             .collect()
+    };
+    let whole = |v: f64, what: &str| match v.fract() == 0.0 {
+        true => Ok(v as u32),
+        false => Err(named(format!("{what} {v} is not a whole number"))),
     };
     // A number or a percentage, not negative, 1 when left out; at most 1 where `most`.
     let amount = |most: bool| -> Result<f64, String> {
@@ -188,37 +220,75 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
             }
         }
         "chromatic-aberration" => {
-            let a = valle(&[("the offset", true, [-256.0, 256.0])])?;
+            let a = valle(&args, &[("the offset", true, [-256.0, 256.0])])?;
             Function::ChromaticAberration(a[0])
         }
         "lens-distortion" => {
-            let a = valle(&[("k1", false, [-0.5, 0.5]), ("k2", false, [-0.5, 0.5])])?;
+            let a = valle(
+                &args,
+                &[("k1", false, [-0.5, 0.5]), ("k2", false, [-0.5, 0.5])],
+            )?;
             Function::LensDistortion([a[0], a[1]])
         }
         "film-grain" => {
-            let a = valle(&[
-                ("the seed", false, [0.0, f64::from(u32::MAX)]),
-                ("the amount", false, [0.0, 1.0]),
-                ("the size", true, [1.0, 64.0]),
-            ])?;
-            if a[0].fract() != 0.0 {
-                return Err(named(format!("the seed {} is not a whole number", a[0])));
-            }
+            let a = valle(
+                &args,
+                &[
+                    SEED,
+                    ("the amount", false, [0.0, 1.0]),
+                    ("the size", true, [1.0, 64.0]),
+                ],
+            )?;
             Function::FilmGrain {
-                seed: a[0] as u32,
+                seed: whole(a[0], "the seed")?,
                 amount: a[1],
                 size: a[2],
             }
         }
         "radial-blur" => {
-            let a = valle(&[
-                ("x", true, [-1e6, 1e6]),
-                ("y", true, [-1e6, 1e6]),
-                ("the amount", true, [0.0, 128.0]),
-            ])?;
+            let a = valle(
+                &args,
+                &[
+                    ("x", true, [-1e6, 1e6]),
+                    ("y", true, [-1e6, 1e6]),
+                    ("the amount", true, [0.0, 128.0]),
+                ],
+            )?;
             Function::RadialBlur {
                 center: [a[0], a[1]],
                 amount: a[2],
+            }
+        }
+        "displacement" => {
+            if !(4..=6).contains(&args.len()) {
+                return Err(named(
+                    "takes the seed, fx, fy and the scale, then the octaves and the mode or not"
+                        .into(),
+                ));
+            }
+            let takes = [
+                SEED,
+                ("fx", false, [0.0, 1.0]),
+                ("fy", false, [0.0, 1.0]),
+                ("the scale", true, [-256.0, 256.0]),
+                ("the octaves", false, [1.0, 4.0]),
+            ];
+            let n = args.len().min(takes.len());
+            let a = valle(&args[..n], &takes[..n])?;
+            let turbulence = match args.get(5) {
+                None => false,
+                Some(m) if m.eq_ignore_ascii_case("fractal") => false,
+                Some(m) if m.eq_ignore_ascii_case("turbulence") => true,
+                Some(m) => {
+                    return Err(named(format!("the mode {m} is not fractal or turbulence")));
+                }
+            };
+            Function::Displacement {
+                seed: whole(a[0], "the seed")?,
+                frequency: [a[1], a[2]],
+                scale: a[3],
+                octaves: whole(a.get(4).copied().unwrap_or(2.0), "the octaves")?,
+                turbulence,
             }
         }
         _ => return Err(format!("{name}() is not a filter function: {NAMES}")),

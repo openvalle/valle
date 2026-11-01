@@ -15,6 +15,11 @@
 //   the points a part of the reach before each pixel, at it and after it, the reach an amount
 //   but at most half of the way to the center. Passes a part 1, 2, 4… of 2ⁿ − 1 apart weigh a
 //   triangle across the reach.
+// - 4, displacement: in the px of a transform, each point shows the one a scale times two noises
+//   less a half away along x and y, as SVG's feDisplacementMap moves by feTurbulence's red and
+//   green. Each noise is octaves of gradient noise, each at twice the frequency and half the
+//   weight of the last, their gradients a hash of each lattice point, the seed, the noise and
+//   the octave; summed and taken from -1…1 to 0…1, or for turbulence their sizes summed.
 
 struct Effect {
   // x: which effect; then its parameters.
@@ -124,6 +129,49 @@ fn radial(p: vec2f, t: u32, c: vec2f, amount: f32, part: f32) -> vec4f {
   return (sampled(before.xy / before.z) + 2.0 * here + sampled(after.xy / after.z)) * 0.25;
 }
 
+// The dot of a lattice point's gradient, from `key` and its hash, with `f`, the way to a point.
+fn gradient(key: u32, i: vec2<i32>, f: vec2f) -> f32 {
+  let h = hash(key ^ hash(bitcast<u32>(i.x) ^ hash(bitcast<u32>(i.y))));
+  let g = normalize(vec2f(f32(h & 0xffffu), f32(h >> 16u)) - 32767.5);
+  return dot(g, f);
+}
+
+// Gradient noise at `q`, a lattice point at each whole one, in [-√½, √½].
+fn perlin(key: u32, q: vec2f) -> f32 {
+  let f = floor(q);
+  let w = q - f;
+  let i = vec2<i32>(f);
+  let a = gradient(key, i, w);
+  let b = gradient(key, i + vec2<i32>(1, 0), w - vec2f(1.0, 0.0));
+  let c = gradient(key, i + vec2<i32>(0, 1), w - vec2f(0.0, 1.0));
+  let d = gradient(key, i + vec2<i32>(1, 1), w - 1.0);
+  let s = w * w * (3.0 - 2.0 * w);
+  return mix(mix(a, b, s.x), mix(c, d, s.x), s.y);
+}
+
+fn noise(seed: u32, which: u32, q: vec2f, octaves: u32, turbulence: bool) -> f32 {
+  var sum = 0.0;
+  var weight = 1.0;
+  var at = q;
+  for (var k = 0u; k < octaves; k++) {
+    let n = perlin(hash(seed ^ hash(which * 4u + k)), at);
+    sum += select(n, abs(n), turbulence) * weight;
+    weight *= 0.5;
+    at *= 2.0;
+  }
+  return select((sum + 1.0) * 0.5, sum, turbulence);
+}
+
+fn displacement(p: vec2f, t: u32, seed: u32, frequency: vec2f, more: vec4f, origin: vec2f) -> vec4f {
+  let q = local(p, t);
+  let at = (q - origin) * frequency;
+  let octaves = u32(more.z);
+  let turbulence = more.w > 0.0;
+  let n = vec2f(noise(seed, 0u, at, octaves, turbulence), noise(seed, 1u, at, octaves, turbulence));
+  let h = transforms[t].forward * vec3f(q + more.y * (n - 0.5), 1.0);
+  return sampled(h.xy / h.z);
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let e = effects[in.index];
   let kind = u32(e.head.x);
@@ -136,6 +184,11 @@ fn radial(p: vec2f, t: u32, c: vec2f, amount: f32, part: f32) -> vec4f {
   }
   if (kind == 3u) {
     return radial(in.pos.xy, u32(e.head.y), e.head.zw, e.more[0].x, e.more[0].y);
+  }
+  if (kind == 4u) {
+    let seed = bitcast<u32>(e.head.z);
+    let frequency = vec2f(e.head.w, e.more[0].x);
+    return displacement(in.pos.xy, u32(e.head.y), seed, frequency, e.more[0], e.more[1].xy);
   }
   return aberration(in.pos.xy, e.head.yz);
 }
