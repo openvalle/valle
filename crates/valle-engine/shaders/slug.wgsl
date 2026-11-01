@@ -1,5 +1,5 @@
 // Glyphs by Slug coverage (see slug.rs): each instance an outline in font units, placed at an
-// origin in px and scaled, in a premultiplied working color.
+// origin in the px of a transform and scaled, in a premultiplied working color.
 
 struct Glyph {
   // The origin, px, on the baseline; px per font unit.
@@ -8,8 +8,8 @@ struct Glyph {
   bounds: vec4f,
   // Vertical and horizontal bands per font unit.
   bands: vec4f,
-  // The outline's first curve texel and first list word; how many horizontal and vertical
-  // bands it has.
+  // The outline's first curve texel and first list word; how many horizontal bands it has, and
+  // vertical ones above 16 bits; the transform.
   at: vec4<u32>,
   color: vec4f,
 }
@@ -28,12 +28,14 @@ struct Out {
 @vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
   let g = glyphs[ii];
   let s = g.place.z;
-  // The bounds in px, a pixel more around them for the antialiased edge.
-  let lo = g.place.xy + vec2f(g.bounds.x, -g.bounds.w) * s - 1.0;
-  let hi = g.place.xy + vec2f(g.bounds.z, -g.bounds.y) * s + 1.0;
+  // The bounds in px, grown by as much as a target pixel reaches for the antialiased edge.
+  let m = transforms[g.at.w].inverse;
+  let grow = abs(m[0].xy) + abs(m[1].xy);
+  let lo = g.place.xy + vec2f(g.bounds.x, -g.bounds.w) * s - grow;
+  let hi = g.place.xy + vec2f(g.bounds.z, -g.bounds.y) * s + grow;
   let p = mix(lo, hi, corner(vi));
   var out: Out;
-  out.pos = clip(p);
+  out.pos = place(p, g.at.w);
   out.em = vec2f(p.x - g.place.x, g.place.y - p.y) / s;
   out.index = ii;
   return out;
@@ -102,11 +104,14 @@ fn ray(g: Glyph, em: vec2f, ppu: f32, head: u32, swap: bool) -> vec2f {
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let g = glyphs[in.index];
-  let ppu = g.place.z;
-  let last = vec2f(f32(g.at.w), f32(g.at.z)) - 1.0;
+  // Target pixels per font unit along x and along y: over how much of each axis a pixel spreads.
+  let j = steps(in.pos.xy, g.at.w);
+  let ppu = g.place.z / vec2f(abs(j[0].x) + abs(j[1].x), abs(j[0].y) + abs(j[1].y));
+  let bands = vec2u(g.at.z >> 16u, g.at.z & 0xffffu);
+  let last = vec2f(bands) - 1.0;
   let band = clamp(floor((in.em - g.bounds.xy) * g.bands.xy), vec2f(0.0), last);
-  let h = ray(g, in.em, ppu, 2u * u32(band.y), false);
-  let v = ray(g, in.em, ppu, 2u * (g.at.z + u32(band.x)), true);
+  let h = ray(g, in.em, ppu.x, 2u * u32(band.y), false);
+  let v = ray(g, in.em, ppu.y, 2u * (bands.y + u32(band.x)), true);
   // Swapping the axes reverses the winding.
   let cov = vec2f(h.x, -v.x);
   let w = vec2f(h.y, v.y);

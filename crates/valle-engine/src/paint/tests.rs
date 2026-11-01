@@ -41,6 +41,7 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Glyphs { color, .. } => format!("text {}", name(*color)),
             Item::Group { opacity, items } => format!("group {opacity} {:?}", names(items)),
             Item::Clip { items, .. } => format!("clip {:?}", names(items)),
+            Item::Transform { items, .. } => format!("transform {:?}", names(items)),
             Item::Shadow { inside, items, .. } => {
                 let side = if *inside { "inner" } else { "outer" };
                 format!("{side} shadow {:?}", names(items))
@@ -270,6 +271,126 @@ fn z_index_orders_stacking_contexts() {
         &[0],
     );
     assert_eq!(order, ["red", "green", "blue@0.5"]);
+}
+
+#[test]
+fn transformed_boxes_paint_in_their_transform_as_stacking_contexts() {
+    // After the in-flow content, its items in its transform.
+    let order = painted(
+        vec![
+            view(&[("height", "30px"), ("background", "red")], &[1, 2]),
+            view(
+                &[
+                    ("transform", "rotate(90deg)"),
+                    ("height", "10px"),
+                    ("background", "blue"),
+                ],
+                &[],
+            ),
+            view(&[("height", "10px"), ("background", "green")], &[]),
+        ],
+        &[0],
+    );
+    assert_eq!(order, ["red", "green", r#"transform ["blue"]"#]);
+
+    // Around its origin, the functions last first.
+    let matrix = |origin: &str| {
+        let style = [
+            ("position", "absolute"),
+            ("left", "10px"),
+            ("top", "20px"),
+            ("width", "40px"),
+            ("height", "20px"),
+            ("background", "blue"),
+            ("transform", "translate(5px, 10%) scale(2)"),
+            ("transformOrigin", origin),
+        ];
+        match &paint_of(vec![view(&style, &[])], &[0]).0[..] {
+            [Item::Transform { matrix, .. }] => *matrix,
+            items => panic!("{items:?}"),
+        }
+    };
+    assert_eq!(matrix("center").apply([10.0, 20.0]), [-5.0, 12.0]);
+    assert_eq!(matrix("left top").apply([10.0, 20.0]), [15.0, 22.0]);
+    assert_eq!(matrix("left top").apply([30.0, 30.0]), [55.0, 42.0]);
+
+    // One that flattens the plane shows nothing.
+    let flat = [
+        ("transform", "scale(0, 1)"),
+        ("height", "10px"),
+        ("background", "blue"),
+    ];
+    assert_eq!(painted(vec![view(&flat, &[])], &[0]), Vec::<String>::new());
+}
+
+#[test]
+fn clips_around_a_transformed_box_go_around_its_transform() {
+    let clipping = [("overflow", "hidden"), ("height", "40px")];
+    let transformed = [
+        ("transform", "rotate(10deg)"),
+        ("height", "20px"),
+        ("background", "blue"),
+    ];
+    let absolute = [
+        ("position", "absolute"),
+        ("width", "5px"),
+        ("height", "5px"),
+        ("background", "green"),
+    ];
+    let (items, _) = paint_of(
+        vec![
+            view(&[("position", "relative")], &[1]),
+            view(&clipping, &[2]),
+            view(&transformed, &[3]),
+            view(&absolute, &[]),
+        ],
+        &[0],
+    );
+    // The positioned box's containing block is the transformed one, so the clip holds it too.
+    let [Item::Clip { items, .. }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    assert_eq!(names(items), [r#"transform ["blue", "green"]"#]);
+
+    // Its own clip is inside its transform.
+    let clipped = [transformed.as_slice(), &[("overflow", "hidden")]].concat();
+    let overflowing = [
+        ("height", "50px"),
+        ("borderRadius", "4px"),
+        ("background", "green"),
+    ];
+    let (items, _) = paint_of(vec![view(&clipped, &[1]), view(&overflowing, &[])], &[0]);
+    assert_eq!(names(&items), [r#"transform ["blue", "clip [\"green\"]"]"#]);
+}
+
+#[test]
+fn transforms_take_a_box_to_the_canvas_through_its_ancestors() {
+    let template = Template {
+        nodes: vec![
+            view(&[("transform", "translate(10px, 0)")], &[1]),
+            view(
+                &[
+                    ("width", "20px"),
+                    ("height", "20px"),
+                    ("transform", "rotate(90deg)"),
+                    ("transformOrigin", "0 0"),
+                ],
+                &[2],
+            ),
+            view(&[("height", "5px")], &[]),
+        ],
+        roots: vec![0],
+        ..Default::default()
+    };
+    let canvas = [200.0, 100.0];
+    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
+    let transforms = transforms(&template, &styles, &laid);
+    let at = |i: usize, p| transforms[i].apply(p).map(rounded);
+    assert_eq!(at(0, [0.0, 0.0]), [10.0, 0.0]);
+    // A quarter turn clockwise about its top left, then moved by its parent.
+    assert_eq!(at(1, [20.0, 0.0]), [10.0, 20.0]);
+    assert_eq!(at(2, [0.0, 5.0]), [5.0, 0.0]);
 }
 
 #[test]

@@ -9,6 +9,8 @@ struct Rect {
   inner_radii: array<vec4f, 2>,
   // Top, right, bottom, left.
   colors: array<vec4f, 4>,
+  // x: the transform.
+  form: vec4u,
 }
 
 @group(0) @binding(1) var<storage, read> rects: array<Rect>;
@@ -19,24 +21,27 @@ struct Out {
 }
 
 @vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
-  let b = rects[ii].outer;
+  let r = rects[ii];
   var out: Out;
-  // A pixel more around the box, for its antialiased edge.
-  out.pos = clip(b.xy - 1.0 + corner(vi) * (b.zw + 2.0));
+  out.pos = quad(vi, r.outer, r.form.x);
   out.index = ii;
   return out;
 }
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let r = rects[in.index];
-  let p = in.pos.xy;
-  let ring = coverage(p, r.outer, r.outer_radii) - coverage(p, r.inner, r.inner_radii);
-  return side(p, r.outer, r.inner, r.colors) * max(ring, 0.0);
+  let p = local(in.pos.xy, r.form.x);
+  let j = steps(in.pos.xy, r.form.x);
+  let ring = coverage(p, j, r.outer, r.outer_radii) - coverage(p, j, r.inner, r.inner_radii);
+  // Px of the box per target pixel.
+  let px = sqrt(abs(determinant(j)));
+  return side(p, px, r.outer, r.inner, r.colors) * max(ring, 0.0);
 }
 
 // The color at `p` of a ring's sides: of the side it is nearest in units of the side's width,
-// so sides meet on the lines from the outer corners to the inner ones, antialiased there.
-fn side(p: vec2f, outer: vec4f, inner: vec4f, colors: array<vec4f, 4>) -> vec4f {
+// so sides meet on the lines from the outer corners to the inner ones, antialiased there over
+// `px`.
+fn side(p: vec2f, px: f32, outer: vec4f, inner: vec4f, colors: array<vec4f, 4>) -> vec4f {
   // To each side's outer edge, and each side's width: top, right, bottom, left.
   let d = vec4f(p.y - outer.y, outer.x + outer.z - p.x, outer.y + outer.w - p.y, p.x - outer.x);
   let w = vec4f(
@@ -66,7 +71,7 @@ fn side(p: vec2f, outer: vec4f, inner: vec4f, colors: array<vec4f, 4>) -> vec4f 
   } else if (wh <= 0.0) {
     t = 0.0;
   } else {
-    t = clamp(0.5 + (dv * wh - dh * wv) / length(vec2f(wv, wh)), 0.0, 1.0);
+    t = clamp(0.5 + (dv * wh - dh * wv) / length(vec2f(wv, wh)) / px, 0.0, 1.0);
   }
   var c = colors;
   return mix(c[v], c[h], t);

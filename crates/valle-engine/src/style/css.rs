@@ -58,6 +58,19 @@ pub fn function(s: &str) -> Option<(&str, &str)> {
         .then_some((name, inner))
 }
 
+/// Degrees, from `deg`, `rad`, `grad` or `turn`, or a 0.
+pub fn angle(s: &str) -> Option<f64> {
+    let n = num(s)?;
+    Some(match n.unit {
+        "deg" => n.value,
+        "rad" => n.value.to_degrees(),
+        "grad" => n.value * 0.9,
+        "turn" => n.value * 360.0,
+        "" if n.value == 0.0 => 0.0,
+        _ => return None,
+    })
+}
+
 /// The parts of `s` between separators outside parentheses and quotes; `sep` of `None` splits at
 /// whitespace and drops empty parts.
 fn split(s: &str, sep: Option<char>) -> Vec<&str> {

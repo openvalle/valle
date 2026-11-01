@@ -1058,6 +1058,66 @@ fn background_layers_take_origins_and_clips() {
 }
 
 #[test]
+fn transforms_take_2d_functions_around_an_origin() {
+    use transform::Function as F;
+    // Translations resolved against a 100 px box.
+    let functions = |v: &str| {
+        (one(&[("transform", text(v))]).transform.into_iter())
+            .map(|f| match f {
+                F::Translate(t) => F::Translate(t.map(|l| l.resolve(100.0))),
+                F::Scale(s) => F::Scale(s),
+                F::Rotate(a) => F::Rotate(a),
+                F::Skew(a) => F::Skew(a),
+                F::Matrix(m) => F::Matrix(m),
+            })
+            .collect::<Vec<F<f32>>>()
+    };
+    assert_eq!(functions("none"), []);
+    assert_eq!(
+        functions("translate(10px, 50%) translateX(1em) translateY(-2px) translate(5%)"),
+        [
+            F::Translate([10.0, 50.0]),
+            F::Translate([16.0, 0.0]),
+            F::Translate([0.0, -2.0]),
+            F::Translate([5.0, 0.0]),
+        ]
+    );
+    assert_eq!(
+        functions("scale(2) scale(50%, 3) scaleX(-1) scaleY(0.5)"),
+        [
+            F::Scale([2.0, 2.0]),
+            F::Scale([0.5, 3.0]),
+            F::Scale([-1.0, 1.0]),
+            F::Scale([1.0, 0.5]),
+        ]
+    );
+    assert_eq!(
+        functions("rotate(0.25turn) rotateZ(-10deg) rotate(0) skew(10deg) skewY(100grad)"),
+        [
+            F::Rotate(90.0),
+            F::Rotate(-10.0),
+            F::Rotate(0.0),
+            F::Skew([10.0, 0.0]),
+            F::Skew([0.0, 90.0]),
+        ]
+    );
+    assert_eq!(
+        functions(" MATRIX(1, 0, 0.5, 1, 10, -5) "),
+        [F::Matrix([1.0, 0.0, 0.5, 1.0, 10.0, -5.0])]
+    );
+    // From the border box's top left, the center by default.
+    let origin = |v: Option<Prop>| {
+        let style: Vec<_> = v.into_iter().map(|v| ("transformOrigin", v)).collect();
+        one(&style).transform_origin.map(|o| o.resolve(100.0))
+    };
+    assert_eq!(origin(None), [50.0, 50.0]);
+    assert_eq!(origin(Some(text("left"))), [0.0, 50.0]);
+    assert_eq!(origin(Some(text("bottom right"))), [100.0, 100.0]);
+    assert_eq!(origin(Some(text("10px 20%"))), [10.0, 20.0]);
+    assert_eq!(origin(Some(num(5.0))), [5.0, 50.0]);
+}
+
+#[test]
 fn radial_gradients_take_a_shape_a_size_and_a_center() {
     use gradient::{Image, Shape, Size, Space};
     // The shape, the size in px of 100 px, and the center from the top left of 100 × 100 px.
@@ -1429,6 +1489,69 @@ fn what_is_not_supported_is_an_error() {
             "backgroundClip",
             text("text"),
             "background-clip: text is not supported yet",
+        ),
+        (
+            "transform",
+            text("rotateX(10deg)"),
+            "rotatex(): 3D transforms are not supported yet",
+        ),
+        (
+            "transform",
+            text("translate(1px, 2px, 3px)"),
+            "translate() takes one or two lengths, separated by commas",
+        ),
+        (
+            "transform",
+            text("translate(1px 2px)"),
+            "translate(): 1px 2px is not a length",
+        ),
+        (
+            "transform",
+            text("translateX(10)"),
+            "translatex(): 10 needs a unit: 10px",
+        ),
+        (
+            "transform",
+            text("scale(2px)"),
+            "scale(): 2px is not a number",
+        ),
+        (
+            "transform",
+            text("matrix(1, 0, 0, 1, 0)"),
+            "matrix() takes six numbers, separated by commas",
+        ),
+        (
+            "transform",
+            text("rotate(10)"),
+            "rotate(): 10 is not an angle",
+        ),
+        (
+            "transform",
+            text("rotate(calc(10deg + 5deg))"),
+            "rotate(): math functions of angles are not supported yet",
+        ),
+        (
+            "transform",
+            text("spin(1turn)"),
+            "spin() is not a transform function",
+        ),
+        (
+            "transform",
+            text("translate"),
+            "translate is not a transform function",
+        ),
+        ("transform", text(""), "\"\" is not a transform; use none"),
+        ("transform", num(0.0), "0 is not a string"),
+        (
+            "transformOrigin",
+            text("top 10px"),
+            "\"top 10px\" is not a transform origin: one or two of left, center, right, top, \
+             bottom and lengths",
+        ),
+        (
+            "transformOrigin",
+            text("left top 10px"),
+            "a z offset: 3D transforms are not supported yet",
         ),
         (
             "backgroundOrigin",

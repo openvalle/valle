@@ -29,7 +29,7 @@ pub struct Baseline {
     /// The Chrome that drew it, and from what.
     pub chrome: String,
     pub html: String,
-    /// Each node's border box, x, y, width and height, by node index.
+    /// Each node's border box, x, y, width and height, by node index: around it as transformed.
     pub boxes: Vec<[f64; 4]>,
     /// The text of each line of each text node, by node index.
     pub lines: BTreeMap<u32, Vec<String>>,
@@ -68,7 +68,7 @@ pub fn compare(frame: &Frame, chrome: &Baseline) -> Vec<String> {
     }
     let mut problems = Vec::new();
     for (i, (node, theirs)) in nodes.iter().zip(&chrome.boxes).enumerate() {
-        let r = frame.layout.boxes[i].border;
+        let r = frame.transforms[i].bounds(frame.layout.boxes[i].border);
         let ours = [r.x, r.y, r.width, r.height].map(f64::from);
         let edges = |[x, y, w, h]: [f64; 4]| [x, y, x + w, y + h];
         let off = (edges(ours).iter().zip(edges(*theirs))).any(|(a, b)| (a - b).abs() > EDGE);
@@ -120,6 +120,11 @@ pub fn shapes(items: &[Item]) -> Vec<Item> {
                 let items = shapes(items);
                 let (rect, radii) = (*rect, *radii);
                 (!items.is_empty()).then_some(Item::Clip { rect, radii, items })
+            }
+            Item::Transform { matrix, items } => {
+                let items = shapes(items);
+                let matrix = *matrix;
+                (!items.is_empty()).then_some(Item::Transform { matrix, items })
             }
             item => Some(item.clone()),
         })

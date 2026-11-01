@@ -230,14 +230,27 @@ function measure(): Promise<Measured> {
     }
     const boxes: number[][] = [];
     const text: Record<string, string[]> = {};
-    for (const element of document.querySelectorAll<HTMLElement>("[data-n]")) {
-      const n = Number(element.dataset.n);
+    const elements = [...document.querySelectorAll<HTMLElement>("[data-n]")];
+    for (const element of elements) {
       const r = element.getBoundingClientRect();
-      boxes[n] = [r.x, r.y, r.width, r.height];
-      if (element.hasAttribute("data-text")) {
-        text[n] = lines(element);
+      boxes[Number(element.dataset.n)] = [r.x, r.y, r.width, r.height];
+    }
+    // Lines as laid out, untransformed: a transform moves text but breaks no line. `will-change`
+    // keeps what a transform contains and stacks, so the layout stays.
+    const styles = elements.map((e) => e.style.cssText);
+    for (const e of elements) {
+      const s = getComputedStyle(e);
+      if ([s.transform, s.translate, s.rotate, s.scale].some((v) => v !== "none")) {
+        e.style.transform = e.style.translate = e.style.rotate = e.style.scale = "none";
+        e.style.willChange = "transform";
       }
     }
+    for (const element of elements) {
+      if (element.hasAttribute("data-text")) {
+        text[Number(element.dataset.n)] = lines(element);
+      }
+    }
+    elements.forEach((e, i) => (e.style.cssText = styles[i]));
     return { boxes, lines: text };
   });
 }

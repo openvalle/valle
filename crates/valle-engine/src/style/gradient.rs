@@ -3,9 +3,10 @@
 //! line, out from the point or around it, with hints between them.
 
 use super::color::Rgba;
+use super::css::{self, angle};
 use super::math::{self, Calc};
 use super::position::{Offset, position};
-use super::{Accept, Len, Units, css, current_color, length_text};
+use super::{Accept, Len, Units, current_color, length_text};
 use crate::template::V;
 
 /// A `background-image` layer, its stop positions `P` (declared lengths, then px and fractions
@@ -325,19 +326,6 @@ fn radial(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, St
     };
     let shape = Shape::Radial { circle, size, at };
     gradient(shape, repeating, space, color_stops(stops, along)?)
-}
-
-/// Degrees, from `deg`, `rad`, `grad` or `turn`, or a 0.
-fn angle(s: &str) -> Option<f64> {
-    let n = css::num(s)?;
-    Some(match n.unit {
-        "deg" => n.value,
-        "rad" => n.value.to_degrees(),
-        "grad" => n.value * 0.9,
-        "turn" => n.value * 360.0,
-        "" if n.value == 0.0 => 0.0,
-        _ => return None,
-    })
 }
 
 /// The side or corner after `to`, into `line`; how many words it takes.

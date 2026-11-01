@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::front::{Composition, Front};
 use crate::layout::{Layout, layout};
-use crate::paint::{Item, paint};
+use crate::paint::{Item, Matrix, paint, transforms};
 use crate::style::Sheet;
 use crate::template::{Error, Template, V};
 use crate::text::{Blob, Face, Text};
@@ -24,6 +24,8 @@ pub struct Frame {
     pub template: Rc<Template>,
     pub values: Vec<V>,
     pub layout: Layout,
+    /// Each node's transform from its px, those of `layout`, to the canvas's.
+    pub transforms: Vec<Matrix>,
     pub items: Vec<Item>,
 }
 
@@ -84,10 +86,12 @@ impl Scene {
         )?;
         self.text.sweep();
         let items = paint(&frame.template, &styles, &laid);
+        let transforms = transforms(&frame.template, &styles, &laid);
         Ok(Frame {
             template: frame.template,
             values: frame.values,
             layout: laid,
+            transforms,
             items,
         })
     }

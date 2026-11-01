@@ -5,7 +5,7 @@
 struct Blur {
   // x: the standard deviation, px; yz: the axis.
   blur: vec4f,
-  unused: array<vec4f, 3>,
+  unused: array<vec4f, 4>,
 }
 
 @group(0) @binding(5) var<storage, read> blurs: array<Blur>;

@@ -3,12 +3,12 @@
 //! straight alpha.
 //!
 //! A frame is planned first: its rectangles, gradients, glyphs and layers become instance data,
-//! uploaded
-//! once, and steps, each a render pass that draws runs of instances into the frame or a layer,
-//! or composites a layer onto what is under it: a group's at its opacity, a clip's inside its
-//! rounded rectangle. A layer takes a texture from a pool when a step
-//! first draws into it and gives it back once composited. Glyph outlines are encoded once and
-//! kept in two buffers, the atlas, for the renderer's life.
+//! uploaded once, and steps, each a render pass that draws runs of instances into the frame or a
+//! layer, or composites a layer onto what is under it: a group's at its opacity, a clip's inside
+//! its rounded rectangle. Each instance names the transform from its px to the target's, which
+//! its shaders invert to find their pixels in its px; the first is the identity. A layer takes a
+//! texture from a pool when a step first draws into it and gives it back once composited. Glyph
+//! outlines are encoded once and kept in two buffers, the atlas, for the renderer's life.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 
 use crate::layout::Rect;
-use crate::paint::{Geometry, Item, SQUARE};
+use crate::paint::{Geometry, Item, Matrix, SQUARE};
 use crate::slug;
 use crate::style::gradient::Space;
 use crate::template::Error;
@@ -27,13 +27,14 @@ const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 const COMMON: &str = include_str!("../shaders/common.wgsl");
 
-/// u32 words per rectangle, gradient, glyph and layer instance, and per gradient segment; blur
-/// passes take a layer's words too.
-const RECT: usize = 40;
+/// u32 words per rectangle, gradient, glyph and layer instance, per gradient segment and per
+/// transform; blur passes take a layer's words too.
+const RECT: usize = 44;
 const GRADIENT: usize = 32;
 const GLYPH: usize = 20;
-const LAYER: usize = 16;
+const LAYER: usize = 20;
 const SEGMENT: usize = 12;
+const TRANSFORM: usize = 24;
 
 /// The result of a request wgpu completes at once, as it does on native backends.
 fn now<T>(request: impl Future<Output = T>) -> Result<T, Error> {
@@ -103,6 +104,7 @@ impl Gpu {
                 entry(5, storage),
                 entry(6, storage),
                 entry(7, storage),
+                entry(8, storage),
             ],
         });
         let image = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -316,6 +318,7 @@ enum Step {
 
 #[derive(Default)]
 struct Plan {
+    transforms: Vec<u32>,
     rects: Vec<u32>,
     gradients: Vec<u32>,
     segments: Vec<u32>,
@@ -325,6 +328,22 @@ struct Plan {
     targets: usize,
 }
 
+impl Plan {
+    /// Adds `m` and its inverse to the transforms: its index, or `None` if it has no inverse.
+    fn transform(&mut self, m: Matrix) -> Option<u32> {
+        let inverse = m.inverse()?;
+        let i = (self.transforms.len() / TRANSFORM) as u32;
+        for c in m.0.into_iter().chain(inverse.0) {
+            let column = [c[0], c[1], c[2], 0.0];
+            self.transforms.extend(column.map(|v| (v as f32).to_bits()));
+        }
+        Some(i)
+    }
+}
+
+/// Where instances are: a transform's index and the transform.
+type At = (u32, Matrix);
+
 /// Draws display lists of one size, and keeps the outlines of the glyphs they show.
 pub struct Renderer<'a> {
     gpu: &'a Gpu,
@@ -333,6 +352,7 @@ pub struct Renderer<'a> {
     output: wgpu::Texture,
     readback: wgpu::Buffer,
     screen: wgpu::Buffer,
+    transforms: Store,
     rects: Store,
     gradients: Store,
     segments: Store,
@@ -376,6 +396,7 @@ impl<'a> Renderer<'a> {
             output: texture(device, size, OUTPUT),
             readback,
             screen,
+            transforms: Store::new(device, "transforms"),
             rects: Store::new(device, "rects"),
             gradients: Store::new(device, "gradients"),
             segments: Store::new(device, "segments"),
@@ -398,8 +419,10 @@ impl<'a> Renderer<'a> {
             targets: 1,
             ..Plan::default()
         };
+        let identity = plan.transform(Matrix::IDENTITY);
+        let at = (identity.ok_or("engine bug: no identity")?, Matrix::IDENTITY);
         let mut atlas = (Vec::new(), Vec::new());
-        self.plan(items, 0, faces, &mut plan, &mut atlas)?;
+        self.plan(items, 0, at, faces, &mut plan, &mut atlas)?;
         let gpu = self.gpu;
         let device = &gpu.device;
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -425,6 +448,7 @@ impl<'a> Renderer<'a> {
             lists_len + atlas.1.len() as u64,
         ];
         for (store, words) in [
+            (&mut self.transforms, &plan.transforms),
             (&mut self.rects, &plan.rects),
             (&mut self.gradients, &plan.gradients),
             (&mut self.segments, &plan.segments),
@@ -453,6 +477,7 @@ impl<'a> Renderer<'a> {
                     entry(5, &self.layers.buffer),
                     entry(6, &self.gradients.buffer),
                     entry(7, &self.segments.buffer),
+                    entry(8, &self.transforms.buffer),
                 ],
             }));
         }
@@ -497,15 +522,38 @@ impl<'a> Renderer<'a> {
         Ok(pixels)
     }
 
+    /// Plans drawing `items` into `target`, at `at`.
     fn plan(
         &mut self,
         items: &[Item],
         target: usize,
+        at: At,
         faces: &[Face],
         plan: &mut Plan,
         atlas: &mut (Vec<u32>, Vec<u32>),
     ) -> Result<(), Error> {
-        let mut runs: Vec<Run> = Vec::new();
+        let mut runs = Vec::new();
+        self.draw(items, target, at, faces, plan, atlas, &mut runs)?;
+        if !runs.is_empty() {
+            plan.steps.push(Step::Draw { target, runs });
+        }
+        Ok(())
+    }
+
+    /// Plans `items` into `target` at `at`, adding their instances to `runs`, which a layer's
+    /// steps come after.
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
+        &mut self,
+        items: &[Item],
+        target: usize,
+        at: At,
+        faces: &[Face],
+        plan: &mut Plan,
+        atlas: &mut (Vec<u32>, Vec<u32>),
+        runs: &mut Vec<Run>,
+    ) -> Result<(), Error> {
+        let (transform, matrix) = at;
         for item in items {
             match item {
                 Item::Rect { .. } | Item::Ring { .. } => {
@@ -530,7 +578,8 @@ impl<'a> Renderer<'a> {
                         .chain(inner_radii.iter().flatten().copied())
                         .chain(colors.into_iter().flatten());
                     plan.rects.extend(words.map(f32::to_bits));
-                    extend(&mut runs, Run::Rects(i..i + 1));
+                    plan.rects.extend([transform, 0, 0, 0]);
+                    extend(runs, Run::Rects(i..i + 1));
                 }
                 Item::Gradient {
                     rect,
@@ -565,8 +614,8 @@ impl<'a> Renderer<'a> {
                     let count = ramp.segments.len() as u32;
                     let repeating = u32::from(ramp.repeating);
                     plan.gradients
-                        .extend([repeating, space, shape, 0, first, count, 0, 0]);
-                    extend(&mut runs, Run::Gradients(i..i + 1));
+                        .extend([repeating, space, shape, transform, first, count, 0, 0]);
+                    extend(runs, Run::Gradients(i..i + 1));
                 }
                 Item::Glyphs {
                     face,
@@ -586,19 +635,28 @@ impl<'a> Renderer<'a> {
                             0.0,
                         ]);
                         plan.glyphs.extend(floats.map(f32::to_bits));
-                        plan.glyphs
-                            .extend([o.at[0], o.at[1], o.bands[0], o.bands[1]]);
+                        let bands = o.bands[0] | o.bands[1] << 16;
+                        plan.glyphs.extend([o.at[0], o.at[1], bands, transform]);
                         plan.glyphs.extend(color.map(f32::to_bits));
-                        extend(&mut runs, Run::Glyphs(i..i + 1));
+                        extend(runs, Run::Glyphs(i..i + 1));
+                    }
+                }
+                Item::Transform { matrix: m, items } => {
+                    let m = matrix.times(*m);
+                    // A transform that flattens the plane shows nothing.
+                    if let Some(i) = plan.transform(m) {
+                        self.draw(items, target, (i, m), faces, plan, atlas, runs)?;
                     }
                 }
                 Item::Group { .. } | Item::Clip { .. } | Item::Shadow { .. } => {
                     if !runs.is_empty() {
-                        let runs = std::mem::take(&mut runs);
+                        let runs = std::mem::take(runs);
                         plan.steps.push(Step::Draw { target, runs });
                     }
                     // A group shows all of its layer, a clip the part in its rectangle, and a
                     // shadow its layer blurred, inside its rectangle or outside it.
+                    // The group's is on the target, and the others in their transform's px, where a
+                    // blur is as much larger as the transform makes it.
                     let [width, height] = self.size.map(|s| s as f32);
                     let whole = [-1.0, -1.0, width + 2.0, height + 2.0];
                     let (items, opacity, sigma, clip, radii, outside) = match item {
@@ -619,12 +677,13 @@ impl<'a> Renderer<'a> {
                     };
                     let mut layer = plan.targets;
                     plan.targets += 1;
-                    self.plan(items, layer, faces, plan, atlas)?;
+                    self.plan(items, layer, at, faces, plan, atlas)?;
+                    let sigma = sigma * matrix.radius_scale() as f32;
                     if sigma > 0.0 {
                         // Along x into a new layer, then along y into another.
                         for [x, y] in [[1.0, 0.0], [0.0, 1.0]] {
                             let at = (plan.layers.len() / LAYER) as u32;
-                            let words = [sigma, x, y, 0.0].into_iter().chain([0.0; 12]);
+                            let words = [sigma, x, y, 0.0].into_iter().chain([0.0; 16]);
                             plan.layers.extend(words.map(f32::to_bits));
                             let blurred = plan.targets;
                             plan.targets += 1;
@@ -636,18 +695,24 @@ impl<'a> Renderer<'a> {
                             layer = blurred;
                         }
                     }
-                    let at = (plan.layers.len() / LAYER) as u32;
+                    let index = (plan.layers.len() / LAYER) as u32;
                     let words = [opacity, f32::from(u8::from(outside)), 0.0, 0.0]
                         .into_iter()
                         .chain(clip)
                         .chain(radii.into_iter().flatten());
                     plan.layers.extend(words.map(f32::to_bits));
-                    plan.steps.push(Step::Composite { target, layer, at });
+                    let on = match item {
+                        Item::Group { .. } => 0,
+                        _ => transform,
+                    };
+                    plan.layers.extend([on, 0, 0, 0]);
+                    plan.steps.push(Step::Composite {
+                        target,
+                        layer,
+                        at: index,
+                    });
                 }
             }
-        }
-        if !runs.is_empty() {
-            plan.steps.push(Step::Draw { target, runs });
         }
         Ok(())
     }

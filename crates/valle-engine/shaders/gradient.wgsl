@@ -16,7 +16,7 @@ struct Gradient {
   // turn clockwise from up the colors start at.
   shape: vec4f,
   // x: 1 when the stops repeat; y: the color space, 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch;
-  // z: 0 along a line, 1 out to an ellipse, 2 around a turn.
+  // z: 0 along a line, 1 out to an ellipse, 2 around a turn; w: the transform.
   form: vec4u,
   // The first segment, and how many there are.
   segments: vec4u,
@@ -39,21 +39,22 @@ struct Out {
 }
 
 @vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
-  let b = gradients[ii].rect;
+  let g = gradients[ii];
   var out: Out;
-  // A pixel more around the box, for its antialiased edge.
-  out.pos = clip(b.xy - 1.0 + corner(vi) * (b.zw + 2.0));
+  out.pos = quad(vi, g.rect, g.form.w);
   out.index = ii;
   return out;
 }
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let g = gradients[in.index];
-  let p = in.pos.xy;
-  let cov = coverage(p, g.rect, g.radii);
+  let p = local(in.pos.xy, g.form.w);
+  let cov = coverage(p, steps(in.pos.xy, g.form.w), g.rect, g.radii);
   let size = g.tile.zw;
   let step = g.step.xy;
-  let q = p - g.tile.xy;
+  // A pixel at the edge, its center outside, takes the color just inside, not the next tile's.
+  let lo = g.rect.xy;
+  let q = clamp(p, lo, max(lo, lo + g.rect.zw - 1e-3)) - g.tile.xy;
   let repeats = step > vec2f(0.0);
   let image = select(q, q - step * floor(q / step), repeats);
   // Outside a tile that does not repeat, or between tiles spaced apart.

@@ -14,6 +14,7 @@ pub mod gradient;
 mod grid;
 pub mod math;
 pub mod position;
+pub mod transform;
 
 use std::borrow::Cow;
 use std::rc::Rc;
@@ -58,6 +59,9 @@ pub struct Style {
     pub shadows: Vec<Shadow>,
     /// Within [0, 1].
     pub opacity: f64,
+    /// `transform`, empty for `none`, and `transform-origin`, from the border box's top left.
+    pub transform: Vec<transform::Function>,
+    pub transform_origin: [position::Offset; 2],
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
@@ -558,6 +562,8 @@ struct Declared {
     outline_offset: Len,
     shadows: Vec<Shadowed>,
     opacity: f64,
+    transform: Vec<transform::Function<Len>>,
+    transform_origin: [position::Offset<Len>; 2],
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -615,6 +621,13 @@ impl Default for Declared {
             outline_offset: ZERO,
             shadows: Vec::new(),
             opacity: 1.0,
+            transform: Vec::new(),
+            transform_origin: [const {
+                position::Offset {
+                    end: false,
+                    by: Len::Percent(50.0),
+                }
+            }; 2],
             visible: None,
             color: None,
             font_size: None,
@@ -690,6 +703,8 @@ enum Field {
     BackgroundRepeat,
     BackgroundOrigin,
     BackgroundClip,
+    Transform,
+    TransformOrigin,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -755,7 +770,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 161] = [
+const FIELDS: [(&str, Field); 163] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1017,6 +1032,8 @@ const FIELDS: [(&str, Field); 161] = [
     ("outlineOffset", Field::OutlineOffset),
     ("boxShadow", Field::BoxShadow),
     ("opacity", Field::Opacity),
+    ("transform", Field::Transform),
+    ("transformOrigin", Field::TransformOrigin),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
@@ -1945,6 +1962,8 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Outline(BorderPart::Color) => d.outline_color = current_color(v)?,
         F::OutlineOffset => d.outline_offset = length(v, OFFSET)?,
         F::BoxShadow => d.shadows = shadows(v)?,
+        F::Transform => d.transform = transform::transform(&text(v)?)?,
+        F::TransformOrigin => d.transform_origin = transform::origin(&px_text(v)?)?,
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -2168,6 +2187,8 @@ fn compute(
             })
             .collect(),
         opacity: d.opacity,
+        transform: d.transform.iter().map(|f| f.computed(u)).collect(),
+        transform_origin: d.transform_origin.each_ref().map(|o| o.computed(u)),
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,

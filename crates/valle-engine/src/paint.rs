@@ -8,8 +8,10 @@
 //! outlines of its blocks and its own. Its positioned descendants and the stacking contexts in it
 //! with a z-index of 0 or `auto` come next, in tree order, and last those with a positive
 //! z-index, lowest first. A positioned box paints all at once too, without the positioned boxes
-//! in it. Opacity, a fixed position, and a z-index on a positioned box or a flex or grid item make
-//! a stacking context; only opacity makes it a layer. Tree order puts a flex or grid container's
+//! in it. Opacity, a transform, a fixed position, and a z-index on a positioned box or a flex or
+//! grid item make a stacking context; only opacity makes it a layer. A transformed one's items go
+//! in its transform, which takes its px, those of the untransformed layout, to its parent's, and
+//! a transform that flattens the plane hides it. Tree order puts a flex or grid container's
 //! children in the order it lays them out. A hidden box (`visibility`) paints nothing of its
 //! own, but what it contains still paints if visible. A box's background, its color and then its
 //! images, the first on top, paints over its outer shadows, and its inner shadows and border over
@@ -18,21 +20,26 @@
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
 //! containing block is it or inside it. Layers group what they paint, but clips go on each item,
-//! so a positioned box in a layer under a clip that does not contain it shows outside the clip.
+//! so a positioned box in a layer under a clip that does not contain it shows outside the clip. A
+//! transformed box contains its positioned descendants, so the clips around it are the same for
+//! all it paints, and go around its transform.
 //!
 //! Boxes paint with their edges on whole pixels, as Chrome paints them, so a layout that lands
 //! between pixels still has crisp edges.
 
 mod gradient;
+mod matrix;
 
 use taffy::{Display, Overflow, Position};
 
 pub use gradient::{Geometry, Ramp, Segment};
+pub use matrix::Matrix;
 
 use crate::layout::{Layout, Rect, ordered};
 use crate::style::background::{Area, ImageSize, Layer, Repeat};
 use crate::style::color::Rgba;
 use crate::style::gradient::Image;
+use crate::style::transform::Function;
 use crate::style::{Shadow, Style};
 use crate::template::Template;
 
@@ -71,6 +78,8 @@ pub enum Item {
     },
     /// Items composited onto what is under them as one layer, at `opacity`.
     Group { opacity: f32, items: Vec<Item> },
+    /// Items in px that `matrix` takes to the px around them.
+    Transform { matrix: Matrix, items: Vec<Item> },
     /// Items shown only inside a rectangle with its corners rounded by `radii`.
     Clip {
         rect: Rect,
@@ -365,6 +374,56 @@ pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item
     painter.nest(out)
 }
 
+/// Each box's transform from its px to the canvas's: its ancestors' and its own.
+pub fn transforms(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix> {
+    let mut out = vec![Matrix::IDENTITY; template.nodes.len()];
+    // In preorder, so a parent's comes first.
+    for (i, node) in template.nodes.iter().enumerate() {
+        let m = match transform(&styles[i], layout.boxes[i].border) {
+            Some(own) => out[i].times(own),
+            None => out[i],
+        };
+        out[i] = m;
+        for &c in &node.children {
+            out[c as usize] = m;
+        }
+    }
+    out
+}
+
+/// A box's transform with the border box `border`, in the px around it: its functions, the last
+/// first, around its origin. `None` for `none`.
+fn transform(s: &Style, border: Rect) -> Option<Matrix> {
+    if s.transform.is_empty() {
+        return None;
+    }
+    let b = snap(border);
+    let size = [b.width, b.height];
+    let [x, y] = [0, 1].map(|k| f64::from([b.x, b.y][k] + s.transform_origin[k].resolve(size[k])));
+    let m = (s.transform.iter()).fold(Matrix::IDENTITY, |m, f| {
+        m.times(match f {
+            Function::Translate([x, y]) => {
+                Matrix::translate(x.resolve(size[0]).into(), y.resolve(size[1]).into())
+            }
+            Function::Scale([x, y]) => Matrix::affine([*x, 0.0, 0.0, *y, 0.0, 0.0]),
+            Function::Rotate(a) => {
+                let (sin, cos) = a.to_radians().sin_cos();
+                Matrix::affine([cos, sin, -sin, cos, 0.0, 0.0])
+            }
+            Function::Skew([x, y]) => {
+                let [x, y] = [x, y].map(|a| a.to_radians().tan());
+                Matrix::affine([1.0, y, x, 1.0, 0.0, 0.0])
+            }
+            Function::Matrix(m) => Matrix::affine(*m),
+        })
+    });
+    Some(
+        Matrix::translate(x, y)
+            .times(m)
+            .times(Matrix::translate(-x, -y)),
+    )
+}
+
 /// Boxes are template indices; `None` is the canvas, a block container without a background.
 struct Painter<'a> {
     template: &'a Template,
@@ -393,15 +452,16 @@ impl Painter<'_> {
         self.styles[i].layout.position != Position::Static
     }
 
-    /// The box whose clips `i` is under too: a fixed box's is the canvas, an absolute box's its
-    /// containing block, and any other's its parent.
+    /// The box whose clips `i` is under too: a fixed box's is its containing block, the nearest
+    /// transformed box around it or the canvas, an absolute box's the nearest positioned or
+    /// transformed one, and any other's its parent.
     fn container(&self, i: usize) -> Option<usize> {
         let parents = &self.parents;
+        let transformed = |p: usize| !self.styles[p].transform.is_empty();
+        let mut around = std::iter::successors(parents[i], |&p| parents[p]);
         match self.styles[i].layout.position {
-            Position::Fixed => None,
-            Position::Absolute => {
-                std::iter::successors(parents[i], |&p| parents[p]).find(|&p| self.positioned(p))
-            }
+            Position::Fixed => around.find(|&p| transformed(p)),
+            Position::Absolute => around.find(|&p| self.positioned(p) || transformed(p)),
             _ => parents[i],
         }
     }
@@ -421,6 +481,7 @@ impl Painter<'_> {
     fn stacking(&self, i: usize) -> bool {
         let s = &self.styles[i];
         s.opacity < 1.0
+            || !s.transform.is_empty()
             || s.layout.position == Position::Fixed
             || (s.z_index.is_some() && (self.positioned(i) || self.item(i)))
     }
@@ -464,11 +525,28 @@ impl Painter<'_> {
     }
 
     /// A box that paints after its stacking context's in-flow content, or before it: a stacking
-    /// context, a layer if it has an opacity, or a positioned box.
+    /// context, in its transform if it has one and a layer if it has an opacity, or a positioned
+    /// box.
     fn layer(&self, d: usize, out: &mut Drawn) {
         let opacity = self.styles[d].opacity as f32;
+        let transform = transform(&self.styles[d], self.layout.boxes[d].border);
         if !self.stacking(d) {
             self.whole(Some(d), out);
+        } else if let Some(matrix) = transform {
+            if matrix.inverse().is_none() {
+                return;
+            }
+            let mut drawn = Vec::new();
+            self.context(Some(d), &mut drawn);
+            // The clips around it go around its transform.
+            let mut items = self.nest_from(self.chained(drawn), self.clips[d].len());
+            if opacity < 1.0 {
+                items = group(opacity, items).into_iter().collect();
+            }
+            if !items.is_empty() {
+                let item = Item::Transform { matrix, items };
+                out.push((self.clips[d].last().copied(), item));
+            }
         } else if opacity < 1.0 {
             let mut drawn = Vec::new();
             self.context(Some(d), &mut drawn);
@@ -712,11 +790,17 @@ impl Painter<'_> {
 
     /// The items inside the clips they are under: runs of items under a clip share it.
     fn nest(&self, drawn: Drawn) -> Vec<Item> {
-        let chained = drawn.into_iter().map(|(clip, item)| match clip {
-            None => (Vec::new(), item),
-            Some(c) => ([&self.clips[c][..], &[c]].concat(), item),
-        });
-        self.nest_from(chained.collect(), 0)
+        self.nest_from(self.chained(drawn), 0)
+    }
+
+    /// Items with all the boxes they are clipped by, outermost first.
+    fn chained(&self, drawn: Drawn) -> Vec<(Vec<usize>, Item)> {
+        (drawn.into_iter())
+            .map(|(clip, item)| match clip {
+                None => (Vec::new(), item),
+                Some(c) => ([&self.clips[c][..], &[c]].concat(), item),
+            })
+            .collect()
     }
 
     /// Items with the boxes they are clipped by, the first `depth` of which clip them already.
