@@ -22,7 +22,9 @@ use parley::{
 use crate::path::{self, Curve};
 use crate::slug;
 use crate::style::color::Rgba;
-use crate::style::{Collapse, Family, Font, LineHeight, TextAlign, TextTransform};
+use crate::style::{
+    Collapse, Family, Font, LineHeight, OverflowWrap, TextAlign, TextTransform, WordBreak,
+};
 use crate::template::Error;
 
 /// A font face as shaping chose it: a font file, the face's index in it, and its variation
@@ -106,11 +108,16 @@ struct Shaping {
     word_spacing: u32,
     collapse: Collapse,
     wrap: bool,
+    word_break: WordBreak,
+    /// `word-break: break-word` is `anywhere` here.
+    overflow_wrap: OverflowWrap,
     transform: TextTransform,
 }
 
 impl Shaping {
-    fn of(font: &Font) -> Shaping {
+    /// How `font` shapes and breaks text; for its min-content width when `min`, which
+    /// `overflow-wrap: break-word` breaks no words for (CSS Text 3, 5.5).
+    fn of(font: &Font, min: bool) -> Shaping {
         Shaping {
             family: font.family.clone(),
             size: (font.size as f32).to_bits(),
@@ -119,6 +126,12 @@ impl Shaping {
             word_spacing: (font.word_spacing as f32).to_bits(),
             collapse: font.collapse,
             wrap: font.wrap,
+            word_break: font.word_break,
+            overflow_wrap: match (font.word_break, font.overflow_wrap) {
+                (WordBreak::BreakWord, _) => OverflowWrap::Anywhere,
+                (_, OverflowWrap::BreakWord) if min => OverflowWrap::Normal,
+                (_, wrap) => wrap,
+            },
             transform: font.transform,
         }
     }
@@ -180,14 +193,29 @@ impl Text {
     }
 
     /// The box `content` takes with its lines broken to fit `width` px (`None`: only at forced
-    /// breaks; 0: at every opportunity, the min-content width). Widths round up to 1/64 px, as
-    /// Chrome's layout units do, so the text fits again in the width it measures.
+    /// breaks). Widths round up to 1/64 px, as Chrome's layout units do, so the text fits again
+    /// in the width it measures.
     ///
     /// Text that breaks takes all of the width, unless a word is wider: a box sized to its
     /// content is as wide as it may be once the content is wider (CSS's fit-content).
     pub fn measure(&mut self, content: &Content, width: Option<f32>) -> Result<[f32; 2], Error> {
+        self.measured(content, width, false)
+    }
+
+    /// The box `content` takes at its min-content width: its lines broken at every soft wrap
+    /// opportunity, and in words where `overflow-wrap: anywhere` breaks them.
+    pub fn min_content(&mut self, content: &Content) -> Result<[f32; 2], Error> {
+        self.measured(content, Some(0.0), true)
+    }
+
+    fn measured(
+        &mut self,
+        content: &Content,
+        width: Option<f32>,
+        min: bool,
+    ) -> Result<[f32; 2], Error> {
         let strut = self.strut(content.font)?;
-        let p = self.paragraph(content, width)?;
+        let p = self.paragraph(content, width, min)?;
         if p.empty {
             return Ok([0.0, 0.0]);
         }
@@ -204,7 +232,7 @@ impl Text {
     /// `width` px; empty text has no lines, and no baseline.
     pub fn baseline(&mut self, content: &Content, width: f32) -> Result<Option<f32>, Error> {
         let strut = self.strut(content.font)?;
-        let p = self.paragraph(content, Some(width))?;
+        let p = self.paragraph(content, Some(width), false)?;
         if p.empty {
             return Ok(None);
         }
@@ -224,7 +252,7 @@ impl Text {
             TextAlign::Center => Alignment::Center,
         };
         let strut = self.strut(content.font)?;
-        let p = self.paragraph(content, Some(width))?;
+        let p = self.paragraph(content, Some(width), false)?;
         let string = p.string.clone();
         if p.empty {
             return Ok(Lines {
@@ -332,7 +360,7 @@ impl Text {
     /// The ascent, descent and line gap, px, of the first face of `font`, at its size and
     /// weight, as runs in it have them.
     pub fn metrics(&mut self, font: &Font) -> Result<[f32; 3], Error> {
-        let key = Shaping::of(font);
+        let key = Shaping::of(font, false);
         if let Some(m) = self.metrics.get(&key) {
             return Ok(*m);
         }
@@ -388,14 +416,16 @@ impl Text {
         Ok(placed(self.metrics(font)?, font))
     }
 
-    /// The paragraph of `content`, shaped if it is new, its lines broken at `width`.
+    /// The paragraph of `content`, shaped if it is new, its lines broken at `width`, and as at
+    /// its min-content width when `min`.
     fn paragraph(
         &mut self,
         content: &Content,
         width: Option<f32>,
+        min: bool,
     ) -> Result<&mut Paragraph, Error> {
         let key: Vec<(Box<str>, Shaping)> = (content.pieces.iter())
-            .map(|p| (p.text.as_ref().into(), Shaping::of(p.font)))
+            .map(|p| (p.text.as_ref().into(), Shaping::of(p.font, min)))
             .collect();
         if !self.paragraphs.contains_key(&key) {
             let pieces = (content.pieces.iter())
@@ -427,6 +457,18 @@ impl Text {
                     let spaces = WhiteSpaceCollapse::BreakSpaces;
                     builder.push(StyleProperty::WhiteSpaceCollapse(spaces), range.clone());
                 }
+                let breaks = match font.word_break {
+                    WordBreak::Normal | WordBreak::BreakWord => parley::WordBreak::Normal,
+                    WordBreak::BreakAll => parley::WordBreak::BreakAll,
+                    WordBreak::KeepAll => parley::WordBreak::KeepAll,
+                };
+                builder.push(StyleProperty::WordBreak(breaks), range.clone());
+                let wrap = match key[k].1.overflow_wrap {
+                    OverflowWrap::Normal => parley::OverflowWrap::Normal,
+                    OverflowWrap::Anywhere => parley::OverflowWrap::Anywhere,
+                    OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
+                };
+                builder.push(StyleProperty::OverflowWrap(wrap), range.clone());
                 builder.push(StyleProperty::Brush(k as u32), range);
             }
             let layout = builder.build(&string);

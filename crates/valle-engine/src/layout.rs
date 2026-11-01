@@ -506,12 +506,12 @@ impl Tree<'_> {
             failed.get_or_insert_with(|| format!("{}: {e}", template.nodes[i].place()));
         };
         let mut out = compute_leaf_layout(inputs, layout, calc, |known, available| {
-            let width = known.width.or(match available.width {
-                AvailableSpace::Definite(w) => Some(w),
-                AvailableSpace::MinContent => Some(0.0),
-                AvailableSpace::MaxContent => None,
-            });
-            match text.measure(c, width) {
+            let measured = match (known.width, available.width) {
+                (Some(w), _) | (None, AvailableSpace::Definite(w)) => text.measure(c, Some(w)),
+                (None, AvailableSpace::MinContent) => text.min_content(c),
+                (None, AvailableSpace::MaxContent) => text.measure(c, None),
+            };
+            match measured {
                 Ok([w, h]) => Size {
                     width: known.width.unwrap_or(w),
                     height: known.height.unwrap_or(h),

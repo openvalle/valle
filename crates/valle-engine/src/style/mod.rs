@@ -232,6 +232,8 @@ pub struct Font {
     /// `white-space-collapse`, and `text-wrap-mode: wrap`, which `white-space` sets together.
     pub collapse: Collapse,
     pub wrap: bool,
+    pub word_break: WordBreak,
+    pub overflow_wrap: OverflowWrap,
     pub transform: TextTransform,
     /// `-webkit-text-fill-color`, the color of glyphs; `None` is `currentcolor`, the color of
     /// each box that inherits it.
@@ -272,6 +274,8 @@ impl Font {
             word_spacing: 0.0,
             collapse: Collapse::Collapse,
             wrap: true,
+            word_break: WordBreak::Normal,
+            overflow_wrap: OverflowWrap::Normal,
             transform: TextTransform::None,
             fill: None,
             stroke: 0.0,
@@ -320,6 +324,28 @@ pub enum Collapse {
     PreserveBreaks,
     /// All of it stays, and spaces take room at the ends of lines rather than hanging.
     BreakSpaces,
+}
+
+/// `word-break`: where lines may break besides between words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WordBreak {
+    Normal,
+    /// Between any two letters.
+    BreakAll,
+    /// Not between CJK letters either.
+    KeepAll,
+    /// As `normal` with `overflow-wrap: anywhere`, whatever `overflow-wrap` is.
+    BreakWord,
+}
+
+/// `overflow-wrap` (and its old name `word-wrap`): whether a word too wide for its line breaks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OverflowWrap {
+    Normal,
+    /// Anywhere, which the min-content width takes into account.
+    Anywhere,
+    /// Anywhere, which the min-content width does not take into account.
+    BreakWord,
 }
 
 /// `text-transform`.
@@ -823,6 +849,8 @@ struct Declared {
     word_spacing: Option<Len>,
     collapse: Option<Collapse>,
     wrap: Option<bool>,
+    word_break: Option<WordBreak>,
+    overflow_wrap: Option<OverflowWrap>,
     text_transform: Option<TextTransform>,
     /// `Some(None)` is `currentcolor`.
     fill: Option<Option<Rgba>>,
@@ -908,6 +936,8 @@ impl Default for Declared {
             word_spacing: None,
             collapse: None,
             wrap: None,
+            word_break: None,
+            overflow_wrap: None,
             text_transform: None,
             fill: None,
             stroke: None,
@@ -1022,6 +1052,8 @@ enum Field {
     WhiteSpace,
     WhiteSpaceCollapse,
     TextWrapMode,
+    WordBreak,
+    OverflowWrap,
     TextTransform,
     TextDecoration,
     TextDecorationLine,
@@ -1084,7 +1116,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 198] = [
+const FIELDS: [(&str, Field); 201] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1378,6 +1410,9 @@ const FIELDS: [(&str, Field); 198] = [
     ("whiteSpace", Field::WhiteSpace),
     ("whiteSpaceCollapse", Field::WhiteSpaceCollapse),
     ("textWrapMode", Field::TextWrapMode),
+    ("wordBreak", Field::WordBreak),
+    ("overflowWrap", Field::OverflowWrap),
+    ("wordWrap", Field::OverflowWrap),
     ("textTransform", Field::TextTransform),
     ("textDecoration", Field::TextDecoration),
     ("textDecorationLine", Field::TextDecorationLine),
@@ -1417,6 +1452,8 @@ impl Field {
                 | Field::WhiteSpace
                 | Field::WhiteSpaceCollapse
                 | Field::TextWrapMode
+                | Field::WordBreak
+                | Field::OverflowWrap
                 | Field::TextTransform
                 | Field::TextDecoration
                 | Field::TextDecorationLine
@@ -2452,6 +2489,27 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         }
         F::WhiteSpaceCollapse => d.collapse = Some(keyword(v, COLLAPSE)?),
         F::TextWrapMode => d.wrap = Some(keyword(v, WRAP)?),
+        F::WordBreak => {
+            d.word_break = Some(keyword(
+                v,
+                &[
+                    ("normal", WordBreak::Normal),
+                    ("break-all", WordBreak::BreakAll),
+                    ("keep-all", WordBreak::KeepAll),
+                    ("break-word", WordBreak::BreakWord),
+                ],
+            )?)
+        }
+        F::OverflowWrap => {
+            d.overflow_wrap = Some(keyword(
+                v,
+                &[
+                    ("normal", OverflowWrap::Normal),
+                    ("anywhere", OverflowWrap::Anywhere),
+                    ("break-word", OverflowWrap::BreakWord),
+                ],
+            )?)
+        }
         F::TextTransform => {
             d.text_transform = Some(keyword(
                 v,
@@ -2728,6 +2786,8 @@ fn compute(
         },
         collapse: d.collapse.unwrap_or(inherited.collapse),
         wrap: d.wrap.unwrap_or(inherited.wrap),
+        word_break: d.word_break.unwrap_or(inherited.word_break),
+        overflow_wrap: d.overflow_wrap.unwrap_or(inherited.overflow_wrap),
         transform: d.text_transform.unwrap_or(inherited.transform),
         fill: d.fill.unwrap_or(inherited.fill),
         stroke: match &d.stroke {

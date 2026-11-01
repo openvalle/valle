@@ -1,0 +1,20 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><div data-n=\"2\" style=\"width: 60px; background: #e8eaf6;\"><div data-n=\"3\" data-text style=\"font-size: 10px; word-break: normal;\">Unbreakableness of words</div></div></div><div data-n=\"4\" style=\"padding-bottom: 4px;\"><div data-n=\"5\" style=\"width: 60px; background: #e8eaf6;\"><div data-n=\"6\" data-text style=\"font-size: 10px; word-break: break-all;\">Unbreakableness of words</div></div></div><div data-n=\"7\" style=\"padding-bottom: 4px;\"><div data-n=\"8\" style=\"width: 60px; background: #e8eaf6;\"><div data-n=\"9\" data-text style=\"font-size: 10px; word-break: keep-all;\">Unbreakableness of words</div></div></div><div data-n=\"10\" style=\"padding-bottom: 4px;\"><div data-n=\"11\" style=\"width: 60px; background: #e8eaf6;\"><div data-n=\"12\" data-text style=\"font-size: 10px; word-break: break-word;\">Unbreakableness of words</div></div></div></div></div>\n",
+ "boxes": [
+  [0,0,256,164],
+  [4,4,248,32],
+  [4,4,60,28],
+  [4,4,60,28],
+  [4,36,248,46],
+  [4,36,60,42],
+  [4,36,60,42],
+  [4,82,248,32],
+  [4,82,60,28],
+  [4,82,60,28],
+  [4,114,248,46],
+  [4,114,60,42],
+  [4,114,60,42]
+ ],
+ "lines": {"3":["Unbreakableness","of words"],"6":["Unbreakabl","eness of wor","ds"],"9":["Unbreakableness","of words"],"12":["Unbreakabl","eness of","words"]}
+}

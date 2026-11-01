@@ -1889,6 +1889,23 @@ const ROWS: &[Row] = &[
         refused: &["\"balance\"", "\"auto\"", "0"],
     },
     Row {
+        properties: &["wordBreak"],
+        sample: r##"<View style={{ width: 60, background: "#e8eaf6" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Unbreakableness of words</Text></View>"##,
+        values: &[
+            "\"normal\"",
+            "\"break-all\"",
+            "\"keep-all\"",
+            "\"break-word\"",
+        ],
+        refused: &["\"anywhere\"", "\"auto-phrase\"", "0"],
+    },
+    Row {
+        properties: &["overflowWrap", "wordWrap"],
+        sample: r##"<View style={{ width: 60, background: "#e8eaf6" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Unbreakableness of words</Text></View>"##,
+        values: &["\"normal\"", "\"anywhere\"", "\"break-word\""],
+        refused: &["\"break-all\"", "0"],
+    },
+    Row {
         properties: &["textTransform"],
         sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>don't stop-me 3d Straße ÉCOLE</Text></View>"##,
         values: &[

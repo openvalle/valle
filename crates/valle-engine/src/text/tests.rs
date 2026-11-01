@@ -34,6 +34,8 @@ fn font(size: f64) -> Font {
         word_spacing: 0.0,
         collapse: Collapse::Collapse,
         wrap: true,
+        word_break: WordBreak::Normal,
+        overflow_wrap: OverflowWrap::Normal,
         transform: TextTransform::None,
         fill: None,
         stroke: 0.0,
@@ -99,7 +101,7 @@ fn lines_break_to_fit() {
     // The min-content width: the widest word.
     let [three, _] = t.measure(&plain("three", &f), None).unwrap();
     assert_eq!(
-        t.measure(&plain("one two three", &f), Some(0.0)).unwrap(),
+        t.min_content(&plain("one two three", &f)).unwrap(),
         [three, 66.0]
     );
     // `white-space: normal` collapses spaces and line breaks, and trims them.
@@ -273,4 +275,38 @@ fn ink_is_where_a_glyph_crosses_a_band() {
         0.0 < left && left < right && right < g.x - x.x,
         "{left} {right}"
     );
+}
+
+#[test]
+fn words_break_where_word_break_and_overflow_wrap_let_them() {
+    let mut t = text();
+    let with = |word_break, overflow_wrap| Font {
+        word_break,
+        overflow_wrap,
+        ..font(16.0)
+    };
+    let normal = font(16.0);
+    let [word, _] = t.measure(&plain("unbreakable", &normal), None).unwrap();
+    let lines = |t: &mut Text, f: &Font| t.lines(&plain("unbreakable go", f), word / 2.0).unwrap();
+    // A word too wide for its line overflows it, unless a word may break.
+    assert_eq!(lines(&mut t, &normal).text.len(), 2);
+    let breaking = [
+        with(WordBreak::BreakAll, OverflowWrap::Normal),
+        with(WordBreak::BreakWord, OverflowWrap::Normal),
+        with(WordBreak::Normal, OverflowWrap::Anywhere),
+        with(WordBreak::Normal, OverflowWrap::BreakWord),
+    ];
+    for f in &breaking {
+        assert!(lines(&mut t, f).text.len() > 2, "{f:?}");
+    }
+    // The min-content width is the widest word's, or a letter's where words break, except that
+    // overflow-wrap: break-word only breaks words that do not fit.
+    let min = |t: &mut Text, f: &Font| t.min_content(&plain("unbreakable go", f)).unwrap()[0];
+    assert_eq!(min(&mut t, &normal), word);
+    assert_eq!(min(&mut t, &breaking[3]), word);
+    for f in &breaking[..3] {
+        assert!(min(&mut t, f) < word / 4.0, "{f:?}");
+    }
+    let zero = t.measure(&plain("unbreakable go", &breaking[3]), Some(0.0));
+    assert!(zero.unwrap()[0] < word / 4.0);
 }
