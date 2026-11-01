@@ -3,10 +3,12 @@
 // pipeline blends).
 
 struct Layer {
-  // x: the opacity; y: the corner radius.
+  // x: the opacity.
   opacity: vec4f,
   // x, y, width, height.
   clip: vec4f,
+  // As `coverage` takes them.
+  radii: array<vec4f, 2>,
 }
 
 @group(0) @binding(5) var<storage, read> layers: array<Layer>;
@@ -26,6 +28,6 @@ struct Out {
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let l = layers[in.index];
-  let cov = coverage(in.pos.xy, l.clip, l.opacity.y);
+  let cov = coverage(in.pos.xy, l.clip, l.radii);
   return textureLoad(image, vec2<i32>(in.pos.xy), 0) * (l.opacity.x * cov);
 }

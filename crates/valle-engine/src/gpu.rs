@@ -14,7 +14,7 @@ use std::ops::Range;
 use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 
-use crate::paint::Item;
+use crate::paint::{Item, SQUARE};
 use crate::slug;
 use crate::template::Error;
 use crate::text::Face;
@@ -25,9 +25,9 @@ const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const COMMON: &str = include_str!("../shaders/common.wgsl");
 
 /// u32 words per rectangle, glyph and layer instance.
-const RECT: usize = 12;
+const RECT: usize = 16;
 const GLYPH: usize = 20;
-const LAYER: usize = 8;
+const LAYER: usize = 16;
 
 /// The result of a request wgpu completes at once, as it does on native backends.
 fn now<T>(request: impl Future<Output = T>) -> Result<T, Error> {
@@ -477,16 +477,12 @@ impl<'a> Renderer<'a> {
         let mut runs: Vec<Run> = Vec::new();
         for item in items {
             match item {
-                Item::Rect {
-                    rect,
-                    radius,
-                    color,
-                } => {
+                Item::Rect { rect, radii, color } => {
                     let i = (plan.rects.len() / RECT) as u32;
                     let words = [rect.x, rect.y, rect.width, rect.height]
                         .into_iter()
                         .chain(*color)
-                        .chain([*radius, 0.0, 0.0, 0.0]);
+                        .chain(radii.iter().flatten().copied());
                     plan.rects.extend(words.map(f32::to_bits));
                     extend(&mut runs, Run::Rects(i..i + 1));
                 }
@@ -521,22 +517,18 @@ impl<'a> Renderer<'a> {
                     }
                     // A group shows all of its layer, a clip the part in its rectangle.
                     let [width, height] = self.size.map(|s| s as f32);
-                    let (items, opacity, clip, radius) = match item {
+                    let (items, opacity, clip, radii) = match item {
                         Item::Group { opacity, items } => (
                             items,
                             *opacity,
                             [-1.0, -1.0, width + 2.0, height + 2.0],
-                            0.0,
+                            SQUARE,
                         ),
-                        Item::Clip {
-                            rect,
-                            radius,
-                            items,
-                        } => (
+                        Item::Clip { rect, radii, items } => (
                             items,
                             1.0,
                             [rect.x, rect.y, rect.width, rect.height],
-                            *radius,
+                            *radii,
                         ),
                         _ => unreachable!("a group or a clip"),
                     };
@@ -544,7 +536,10 @@ impl<'a> Renderer<'a> {
                     plan.targets += 1;
                     self.plan(items, layer, faces, plan, atlas)?;
                     let at = (plan.layers.len() / LAYER) as u32;
-                    let words = [opacity, radius, 0.0, 0.0].into_iter().chain(clip);
+                    let words = [opacity, 0.0, 0.0, 0.0]
+                        .into_iter()
+                        .chain(clip)
+                        .chain(radii.into_iter().flatten());
                     plan.layers.extend(words.map(f32::to_bits));
                     plan.steps.push(Step::Composite { target, layer, at });
                 }

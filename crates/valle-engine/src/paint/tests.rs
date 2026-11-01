@@ -367,10 +367,10 @@ fn clips_round_and_go_on_each_item_in_a_layer() {
     let Item::Group { items: layer, .. } = &items[1] else {
         panic!("{items:?}")
     };
-    let Item::Clip { rect, radius, .. } = &layer[0] else {
+    let Item::Clip { rect, radii, .. } = &layer[0] else {
         panic!("{layer:?}")
     };
-    assert_eq!((rect.height, *radius), (20.0, 4.0));
+    assert_eq!((rect.height, *radii), (20.0, [[4.0; 2]; 4]));
 }
 
 #[test]
@@ -419,12 +419,7 @@ fn rectangles_round_within_their_box() {
         )],
         &[0],
     );
-    let Item::Rect {
-        rect,
-        radius,
-        color,
-    } = items[0]
-    else {
+    let Item::Rect { rect, radii, color } = items[0] else {
         panic!("{items:?}")
     };
     assert_eq!(
@@ -436,9 +431,33 @@ fn rectangles_round_within_their_box() {
             height: 20.0
         }
     );
-    assert_eq!(radius, 10.0);
+    assert_eq!(radii, [[10.0; 2]; 4]);
     // Premultiplied.
     assert_eq!(color, [0.5, 0.0, 0.0, 0.5]);
+}
+
+#[test]
+fn corners_take_percentages_of_the_box_and_shrink_together() {
+    let radii = |style: &[(&str, &str)]| {
+        let style = [&[("width", "40px"), ("height", "20px")][..], style].concat();
+        let (items, _) = paint_of(vec![view(&style, &[])], &[0]);
+        match items[..] {
+            [Item::Rect { radii, .. }] => radii,
+            _ => panic!("{items:?}"),
+        }
+    };
+    let bg = ("background", "red");
+    assert_eq!(
+        radii(&[bg, ("borderRadius", "50% / 25%")]),
+        [[20.0, 5.0]; 4]
+    );
+    // The top's radii are twice its width, the left's twice its height: all halve.
+    assert_eq!(
+        radii(&[bg, ("borderRadius", "60px 20px / 20px")]),
+        [[30.0, 10.0], [10.0, 10.0], [30.0, 10.0], [10.0, 10.0]]
+    );
+    // A corner with a radius of 0 is square.
+    assert_eq!(radii(&[bg, ("borderTopLeftRadius", "8px 0px")]), SQUARE);
 }
 
 #[test]

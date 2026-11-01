@@ -37,8 +37,9 @@ pub struct Style {
     /// `z-index`; `None` is `auto`.
     pub z_index: Option<i32>,
     pub background: Rgba,
-    /// `border-radius`, px.
-    pub radius: f64,
+    /// `border-radius`: each corner's horizontal and vertical radius, from the top left
+    /// clockwise, as px and fractions of the border box's width and height.
+    pub radii: [[Calc; 2]; 4],
     /// Within [0, 1].
     pub opacity: f64,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
@@ -347,6 +348,20 @@ impl Len {
         }
     }
 
+    /// px and a fraction of what percentages are of.
+    fn calc(&self, u: Units) -> Calc {
+        match self {
+            Len::Percent(p) => Math::Sum([0.0, p / 100.0]),
+            Len::Calc(m) => m.map(&|ls: &Vec<Len>| {
+                ls.iter().fold([0.0, 0.0], |[px, of], l| match l {
+                    Len::Percent(p) => [px, of + p / 100.0],
+                    l => [px + l.px(u, 0.0), of],
+                })
+            }),
+            l => Math::Sum([l.px(u, 0.0), 0.0]),
+        }
+    }
+
     /// The length `k` times; a math function's sums take only the units.
     fn scaled(&self, k: f64) -> Len {
         match *self {
@@ -383,14 +398,8 @@ impl Lengths {
         let u = self.u;
         match l {
             Len::Percent(p) => percent((p / 100.0) as f32),
-            Len::Calc(m) => {
-                // Each sum as px and a fraction of the basis.
-                let c = m.map(&|ls: &Vec<Len>| {
-                    ls.iter().fold([0.0, 0.0], |[px, of], l| match l {
-                        Len::Percent(p) => [px, of + p / 100.0],
-                        l => [px + l.px(u, 0.0), of],
-                    })
-                });
+            Len::Calc(_) => {
+                let c = l.calc(u);
                 if !c.any(&|&[_, of]| of != 0.0) {
                     return length(c.value(&|&[px, _]| px) as f32);
                 }
@@ -507,7 +516,8 @@ struct Declared {
     justify_items: AlignItems,
     justify_self: Option<AlignItems>,
     background: Rgba,
-    radius: Len,
+    /// Horizontal and vertical, from the top left clockwise.
+    radii: [[Len; 2]; 4],
     opacity: f64,
     /// Inherited.
     visible: Option<bool>,
@@ -555,7 +565,7 @@ impl Default for Declared {
             justify_items: AlignItems::NORMAL,
             justify_self: None,
             background: color::TRANSPARENT,
-            radius: ZERO,
+            radii: [const { [ZERO; 2] }; 4],
             opacity: 1.0,
             visible: None,
             color: None,
@@ -625,6 +635,8 @@ enum Field {
     Background,
     BackgroundColor,
     BorderRadius,
+    /// Of the corners from the top left clockwise.
+    CornerRadius(usize),
     Opacity,
     Visibility,
     Color,
@@ -656,7 +668,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 95] = [
+const FIELDS: [(&str, Field); 103] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -743,6 +755,14 @@ const FIELDS: [(&str, Field); 95] = [
     ("background", Field::Background),
     ("backgroundColor", Field::BackgroundColor),
     ("borderRadius", Field::BorderRadius),
+    ("borderTopLeftRadius", Field::CornerRadius(0)),
+    ("borderTopRightRadius", Field::CornerRadius(1)),
+    ("borderBottomRightRadius", Field::CornerRadius(2)),
+    ("borderBottomLeftRadius", Field::CornerRadius(3)),
+    ("borderStartStartRadius", Field::CornerRadius(0)),
+    ("borderStartEndRadius", Field::CornerRadius(1)),
+    ("borderEndEndRadius", Field::CornerRadius(2)),
+    ("borderEndStartRadius", Field::CornerRadius(3)),
     ("opacity", Field::Opacity),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
@@ -828,7 +848,7 @@ const GAP: Accept = Accept {
 const RADIUS: Accept = Accept {
     keyword: None,
     negative: false,
-    percent: false,
+    percent: true,
     sizing: &[],
 };
 const SPACING: Accept = Accept {
@@ -1003,6 +1023,31 @@ fn set_sides(sides: &mut [Len; 4], which: Sides, v: &V, a: Accept) -> Result<(),
         S::Block => [sides[0], sides[2]] = pair(v)?,
     }
     Ok(())
+}
+
+/// `border-radius`: the corners' horizontal radii, from the top left clockwise as the sides of a
+/// box take lengths, then after a slash their vertical radii, which are the same without one.
+fn radii(v: &V) -> Result<[[Len; 2]; 4], String> {
+    let halves = match v {
+        V::Str(_) => text(v)?,
+        _ => return Ok(sides(v, RADIUS)?.map(|r| [r.clone(), r])),
+    };
+    let half = |h: &str| sides(&V::Str(h.into()), RADIUS);
+    let [x, y] = match css::slashes(&halves)[..] {
+        [both] => half(both).map(|x| [x.clone(), x])?,
+        [x, y] => [half(x)?, half(y)?],
+        _ => return Err(format!("{} takes one slash at most", shown(v))),
+    };
+    Ok(std::array::from_fn(|c| [x[c].clone(), y[c].clone()]))
+}
+
+/// A corner's radius: horizontal, then vertical if it differs.
+fn corner(v: &V) -> Result<[Len; 2], String> {
+    Ok(match &lengths(v, RADIUS, 2)?[..] {
+        [x, y, ..] => [x, y].map(Len::clone),
+        [both] => [both; 2].map(Len::clone),
+        [] => [ZERO; 2],
+    })
 }
 
 fn number(v: &V) -> Result<f64, String> {
@@ -1426,15 +1471,8 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             }
         }
         F::BackgroundColor => d.background = color_of(v)?,
-        F::BorderRadius => {
-            if matches!(v, V::Str(s) if css::words(s).len() > 1) {
-                return Err(format!(
-                    "{}: one radius for every corner is supported so far",
-                    shown(v)
-                ));
-            }
-            d.radius = length(v, RADIUS)?
-        }
+        F::BorderRadius => d.radii = radii(v)?,
+        F::CornerRadius(c) => d.radii[c] = corner(v)?,
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -1634,7 +1672,7 @@ fn compute(
         order: d.order,
         z_index: d.z_index,
         background: d.background,
-        radius: d.radius.px(u, 0.0),
+        radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
         opacity: d.opacity,
         visible: d.visible.unwrap_or(inherited_visible),
         color: d.color.unwrap_or(inherited_color),

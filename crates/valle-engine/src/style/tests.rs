@@ -232,8 +232,8 @@ fn math_functions_are_px_or_calcs_for_layout() {
             "{got}"
         );
     }
-    let radius = error(&[("borderRadius", text("calc(1% + 1px)"))]);
-    assert!(radius.ends_with("percentages are not supported here"));
+    let spacing = error(&[("letterSpacing", text("calc(1% + 1px)"))]);
+    assert!(spacing.ends_with("percentages are not supported here"));
 }
 
 #[test]
@@ -761,6 +761,28 @@ fn expressions_are_set_in_declaration_order() {
 }
 
 #[test]
+fn corner_radii_expand_as_sides_do() {
+    // Each corner's radii, percentages of 100 px.
+    let radii = |style: &[(&str, Prop)]| one(style).radii.map(|c| c.map(|r| r.resolve(100.0)));
+    assert_eq!(
+        radii(&[("borderRadius", text("1px 2px 3px / 4px 5%"))]),
+        [[1.0, 4.0], [2.0, 5.0], [3.0, 4.0], [2.0, 5.0]]
+    );
+    assert_eq!(radii(&[("borderRadius", num(6.0))]), [[6.0; 2]; 4]);
+    assert_eq!(
+        radii(&[
+            ("fontSize", num(20.0)),
+            ("borderRadius", text("8px")),
+            ("borderTopLeftRadius", text("0.5em")),
+            ("borderStartEndRadius", text("calc(10% + 1px)")),
+            ("borderEndEndRadius", text("max(-5%, 2px) 3px")),
+            ("borderEndStartRadius", text("2px 3px")),
+        ]),
+        [[10.0, 10.0], [11.0, 11.0], [2.0, 3.0], [2.0, 3.0]]
+    );
+}
+
+#[test]
 fn paint_values() {
     let s = one(&[
         ("fontSize", num(20.0)),
@@ -769,7 +791,7 @@ fn paint_values() {
         ("opacity", text("50%")),
     ]);
     assert_eq!(s.background, [1.0, 0.0, 0.0, 128.0 / 255.0]);
-    assert_eq!(s.radius, 10.0);
+    assert_eq!(s.radii[2][1].resolve(0.0), 10.0);
     assert_eq!(s.opacity, 0.5);
     assert_eq!(
         one(&[("background", text("none"))]).background,
@@ -843,14 +865,20 @@ fn what_is_not_supported_is_an_error() {
         ),
         (
             "borderRadius",
-            text("1px 2px"),
-            "one radius for every corner is supported so far",
+            text("1px / 2px / 3px"),
+            "takes one slash at most",
         ),
         (
             "borderRadius",
-            text("50%"),
-            "percentages are not supported here",
+            text("1px 2px 3px 4px 5px / 1px"),
+            "takes one to four lengths",
         ),
+        (
+            "borderTopLeftRadius",
+            text("1px 2px 3px"),
+            "takes one or two lengths",
+        ),
+        ("borderEndStartRadius", text("-1px"), "-1px is negative"),
         ("fontWeight", num(0.0), "0 is not a weight from 1 to 1000"),
         (
             "fontFamily",

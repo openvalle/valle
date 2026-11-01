@@ -29,10 +29,10 @@ use crate::template::Template;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
-    /// A rectangle with its corners rounded by `radius` px, which fits in it.
+    /// A rectangle with its corners rounded by `radii`, which fit in it.
     Rect {
         rect: Rect,
-        radius: f32,
+        radii: Radii,
         color: [f32; 4],
     },
     /// Glyphs of `Text::faces()[face]` at `size` px: glyph ids at their baseline origins.
@@ -44,13 +44,19 @@ pub enum Item {
     },
     /// Items composited onto what is under them as one layer, at `opacity`.
     Group { opacity: f32, items: Vec<Item> },
-    /// Items shown only inside a rectangle with its corners rounded by `radius` px.
+    /// Items shown only inside a rectangle with its corners rounded by `radii`.
     Clip {
         rect: Rect,
-        radius: f32,
+        radii: Radii,
         items: Vec<Item>,
     },
 }
+
+/// Elliptical corners: their horizontal and vertical radii in px, from the top left clockwise.
+/// A corner with a radius of 0 is square.
+pub type Radii = [[f32; 2]; 4];
+
+pub const SQUARE: Radii = [[0.0; 2]; 4];
 
 /// Items, each with the innermost box whose clip it is under.
 type Drawn = Vec<(Option<usize>, Item)>;
@@ -284,17 +290,30 @@ impl Painter<'_> {
         }
         let item = Item::Rect {
             rect,
-            radius: self.radius(i, rect),
+            radii: self.radii(i, rect),
             color: work(s.background),
         };
         out.push((self.clips[i].last().copied(), item));
     }
 
-    /// `i`'s corner radius in `rect`: radii too large for it shrink to fit.
-    fn radius(&self, i: usize, rect: Rect) -> f32 {
-        (self.styles[i].radius as f32)
-            .min(rect.width / 2.0)
-            .min(rect.height / 2.0)
+    /// `i`'s corner radii in `rect`, their percentages of its border box. Radii that overlap in
+    /// `rect` all shrink by one factor until they fit, as CSS has them.
+    fn radii(&self, i: usize, rect: Rect) -> Radii {
+        let b = self.layout.boxes[i].border;
+        let radii = self.styles[i].radii.each_ref().map(|[x, y]| {
+            let r = [x.resolve(b.width), y.resolve(b.height)];
+            if r.contains(&0.0) { [0.0; 2] } else { r }
+        });
+        let [tl, tr, br, bl] = radii;
+        // NaN where a side and its radii are 0, which `min` passes over.
+        let fit = [
+            rect.width / (tl[0] + tr[0]),
+            rect.width / (bl[0] + br[0]),
+            rect.height / (tl[1] + bl[1]),
+            rect.height / (tr[1] + br[1]),
+        ];
+        let k = fit.into_iter().fold(1.0, f32::min);
+        radii.map(|r| r.map(|v| v * k))
     }
 
     fn text(&self, i: usize, out: &mut Drawn) {
@@ -372,11 +391,11 @@ impl Painter<'_> {
             width,
             height,
         };
-        let radius = match o.x != Overflow::Visible && o.y != Overflow::Visible {
-            true => self.radius(i, b),
-            false => 0.0,
+        let radii = match o.x != Overflow::Visible && o.y != Overflow::Visible {
+            true => self.radii(i, b),
+            false => SQUARE,
         };
-        if radius == 0.0 {
+        if radii == SQUARE {
             let inside =
                 |item: &Item| matches!(item, Item::Rect { rect: r, .. } if within(*r, rect));
             if items.iter().all(inside) {
@@ -386,24 +405,20 @@ impl Painter<'_> {
             if let [
                 Item::Rect {
                     rect: r,
-                    radius: 0.0,
+                    radii: SQUARE,
                     color,
                 },
             ] = items[..]
             {
                 out.extend(overlap(r, rect).map(|rect| Item::Rect {
                     rect,
-                    radius: 0.0,
+                    radii: SQUARE,
                     color,
                 }));
                 return;
             }
         }
-        out.push(Item::Clip {
-            rect,
-            radius,
-            items,
-        });
+        out.push(Item::Clip { rect, radii, items });
     }
 }
 
@@ -435,17 +450,9 @@ fn group(opacity: f32, items: Vec<Item>) -> Option<Item> {
         return None;
     }
     Some(match <[Item; 1]>::try_from(items) {
-        Ok(
-            [
-                Item::Rect {
-                    rect,
-                    radius,
-                    color,
-                },
-            ],
-        ) => Item::Rect {
+        Ok([Item::Rect { rect, radii, color }]) => Item::Rect {
             rect,
-            radius,
+            radii,
             color: color.map(|c| c * opacity),
         },
         Ok([Item::Group { opacity: o, items }]) => Item::Group {

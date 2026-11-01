@@ -1,6 +1,6 @@
 use super::*;
 use crate::layout::Rect;
-use crate::paint::work;
+use crate::paint::{SQUARE, work};
 use crate::style::color;
 
 const SOURCE: &str = "export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
@@ -53,7 +53,7 @@ fn frames_paint_from_source() {
             *first,
             Item::Rect {
                 rect,
-                radius: 0.0,
+                radii: SQUARE,
                 color: red
             }
         );

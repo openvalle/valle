@@ -1,12 +1,12 @@
-// Rounded rectangles: a box in px, a premultiplied working color and a corner radius that fits
-// in the box.
+// Rounded rectangles: a box in px, a premultiplied working color and corner radii that fit in the
+// box.
 
 struct Rect {
   // x, y, width, height.
   box: vec4f,
   color: vec4f,
-  // x: the corner radius.
-  radius: vec4f,
+  // As `coverage` takes them.
+  radii: array<vec4f, 2>,
 }
 
 @group(0) @binding(1) var<storage, read> rects: array<Rect>;
@@ -27,5 +27,5 @@ struct Out {
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let r = rects[in.index];
-  return r.color * coverage(in.pos.xy, r.box, r.radius.x);
+  return r.color * coverage(in.pos.xy, r.box, r.radii);
 }
