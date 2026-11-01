@@ -843,6 +843,35 @@ fn outlines_take_a_line_and_an_offset() {
 }
 
 #[test]
+fn box_shadows_take_lengths_a_color_and_inset() {
+    let c = |name| color::parse(name).unwrap();
+    let shadows = |v: &str| one(&[("color", text("blue")), ("boxShadow", text(v))]).shadows;
+    let shadow = |offset, blur, spread, color, inset| Shadow {
+        offset,
+        blur,
+        spread,
+        color,
+        inset,
+    };
+    assert_eq!(shadows("none"), []);
+    assert_eq!(
+        shadows("1px 2px"),
+        [shadow([1.0, 2.0], 0.0, 0.0, c("blue"), false)]
+    );
+    assert_eq!(
+        shadows("inset -1px 0 3px -2px red, 0.5em 0 GREEN"),
+        [
+            shadow([-1.0, 0.0], 3.0, -2.0, c("red"), true),
+            shadow([8.0, 0.0], 0.0, 0.0, c("green"), false),
+        ]
+    );
+    assert_eq!(
+        shadows("rgb(0 0 0 / 50%) 1px 1px calc(1px + 1px) inset"),
+        [shadow([1.0, 1.0], 2.0, 0.0, [0.0, 0.0, 0.0, 0.5], true)]
+    );
+}
+
+#[test]
 fn corner_radii_expand_as_sides_do() {
     // Each corner's radii, percentages of 100 px.
     let radii = |style: &[(&str, Prop)]| one(style).radii.map(|c| c.map(|r| r.resolve(100.0)));
@@ -899,9 +928,9 @@ fn what_is_not_supported_is_an_error() {
         ),
         ("zoom", num(2.0), "style zoom is not supported: use scale"),
         (
-            "boxShadow",
+            "textShadow",
             text("none"),
-            "style boxShadow is not supported",
+            "style textShadow is not supported",
         ),
         ("width", text("10"), "style width: 10 needs a unit: 10px"),
         (
@@ -990,6 +1019,26 @@ fn what_is_not_supported_is_an_error() {
             "percentages are not supported here",
         ),
         ("outlineWidth", text("-1px"), "-1px is negative"),
+        ("boxShadow", text("1px"), "needs two to four lengths"),
+        (
+            "boxShadow",
+            text("1px 1px 1px 1px 1px"),
+            "needs two to four lengths",
+        ),
+        (
+            "boxShadow",
+            text("1px 1px red,"),
+            "needs two to four lengths",
+        ),
+        ("boxShadow", text("1px 1px -2px"), "-2px is negative"),
+        (
+            "boxShadow",
+            text("1px 1px 10%"),
+            "percentages are not supported here",
+        ),
+        ("boxShadow", text("1px red 1px"), "is not a shadow"),
+        ("boxShadow", text("inset inset 1px 1px"), "is not a shadow"),
+        ("boxShadow", text(""), "is not a shadow; use none"),
         (
             "borderStyle",
             text("wavy"),

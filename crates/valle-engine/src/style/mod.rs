@@ -49,6 +49,8 @@ pub struct Style {
     pub outline: f64,
     pub outline_color: Rgba,
     pub outline_offset: f64,
+    /// `box-shadow`, the first on top.
+    pub shadows: Vec<Shadow>,
     /// Within [0, 1].
     pub opacity: f64,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
@@ -57,6 +59,16 @@ pub struct Style {
     pub font: Font,
     /// The math functions with percentages in them that `layout` holds handles to.
     pub calcs: Vec<Calc>,
+}
+
+/// A computed box shadow, px.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shadow {
+    pub offset: [f64; 2],
+    pub blur: f64,
+    pub spread: f64,
+    pub color: Rgba,
+    pub inset: bool,
 }
 
 /// The inherited text properties, computed.
@@ -538,6 +550,7 @@ struct Declared {
     outline_style: BorderStyle,
     outline_color: Option<Rgba>,
     outline_offset: Len,
+    shadows: Vec<Shadowed>,
     opacity: f64,
     /// Inherited.
     visible: Option<bool>,
@@ -593,6 +606,7 @@ impl Default for Declared {
             outline_style: BorderStyle::None,
             outline_color: None,
             outline_offset: ZERO,
+            shadows: Vec::new(),
             opacity: 1.0,
             visible: None,
             color: None,
@@ -667,6 +681,7 @@ enum Field {
     Border(Sides, BorderPart),
     Outline(BorderPart),
     OutlineOffset,
+    BoxShadow,
     Opacity,
     Visibility,
     Color,
@@ -676,6 +691,16 @@ enum Field {
     LineHeight,
     TextAlign,
     LetterSpacing,
+}
+
+/// A declared box shadow; its color `None` is `currentcolor`.
+#[derive(Clone, Debug)]
+struct Shadowed {
+    offset: [Len; 2],
+    blur: Len,
+    spread: Len,
+    color: Option<Rgba>,
+    inset: bool,
 }
 
 /// What a border property sets on its sides: the line, its width, style and color at once, or one
@@ -715,7 +740,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 152] = [
+const FIELDS: [(&str, Field); 153] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -967,6 +992,7 @@ const FIELDS: [(&str, Field); 152] = [
     ("outlineStyle", Field::Outline(BorderPart::Style)),
     ("outlineColor", Field::Outline(BorderPart::Color)),
     ("outlineOffset", Field::OutlineOffset),
+    ("boxShadow", Field::BoxShadow),
     ("opacity", Field::Opacity),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
@@ -1062,7 +1088,14 @@ const WIDTH: Accept = Accept {
     percent: false,
     sizing: &[],
 };
-/// `outline-offset`.
+/// `box-shadow` blurs.
+const BLUR: Accept = Accept {
+    keyword: None,
+    negative: false,
+    percent: false,
+    sizing: &[],
+};
+/// `outline-offset`, and `box-shadow` offsets and spreads.
 const OFFSET: Accept = Accept {
     keyword: None,
     negative: true,
@@ -1363,6 +1396,57 @@ fn outline_style(v: &V) -> Result<BorderStyle, String> {
         "hidden" => Err("hidden is not an outline style; use none".into()),
         _ => border_style(v),
     }
+}
+
+/// `box-shadow`: `none`, or shadows separated by commas, each two offsets, a blur and a spread
+/// (the last two may be left out), a color and `inset` in any order around them.
+fn shadows(v: &V) -> Result<Vec<Shadowed>, String> {
+    let s = text(v)?;
+    match s.as_str() {
+        "none" => Ok(Vec::new()),
+        "" => Err("\"\" is not a shadow; use none".into()),
+        _ => css::commas(&s).into_iter().map(shadow).collect(),
+    }
+}
+
+fn shadow(s: &str) -> Result<Shadowed, String> {
+    let (mut lengths, mut color, mut inset) = (Vec::new(), None, false);
+    let mut words = css::words(s).into_iter().peekable();
+    let length_like = |w: &str| css::num(w).is_some() || math::is_math(w);
+    while let Some(w) = words.next() {
+        if w == "inset" && !inset {
+            inset = true;
+        } else if length_like(w) && lengths.is_empty() {
+            lengths.push(w);
+            while let Some(w) = words.next_if(|w| length_like(w)) {
+                lengths.push(w);
+            }
+        } else if color.is_none() && !length_like(w) && w != "inset" {
+            color = Some(current_color(&V::Str(w.into()))?);
+        } else {
+            return Err(format!(
+                "{s:?} is not a shadow: two to four lengths, a color and inset"
+            ));
+        }
+    }
+    let [x, y, blur, spread] = match lengths[..] {
+        [x, y] => [x, y, "0", "0"],
+        [x, y, blur] => [x, y, blur, "0"],
+        [x, y, blur, spread] => [x, y, blur, spread],
+        _ => {
+            return Err(format!(
+                "{s:?} needs two to four lengths: x, y, blur and spread"
+            ));
+        }
+    };
+    let at = |w: &str, a| length_text(w, a);
+    Ok(Shadowed {
+        offset: [at(x, OFFSET)?, at(y, OFFSET)?],
+        blur: at(blur, BLUR)?,
+        spread: at(spread, OFFSET)?,
+        color: color.flatten(),
+        inset,
+    })
 }
 
 /// A border width as browsers compute it: whole px, and 1 px for one between 0 and 1.
@@ -1829,6 +1913,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Outline(BorderPart::Style) => d.outline_style = outline_style(v)?,
         F::Outline(BorderPart::Color) => d.outline_color = current_color(v)?,
         F::OutlineOffset => d.outline_offset = length(v, OFFSET)?,
+        F::BoxShadow => d.shadows = shadows(v)?,
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -2041,6 +2126,15 @@ fn compute(
         outline: width(d.outline_style, &d.outline_width),
         outline_color: d.outline_color.unwrap_or(color),
         outline_offset: d.outline_offset.px(u, 0.0).trunc(),
+        shadows: (d.shadows.iter())
+            .map(|s| Shadow {
+                offset: s.offset.each_ref().map(|l| l.px(u, 0.0)),
+                blur: s.blur.px(u, 0.0),
+                spread: s.spread.px(u, 0.0),
+                color: s.color.unwrap_or(color),
+                inset: s.inset,
+            })
+            .collect(),
         opacity: d.opacity,
         visible: d.visible.unwrap_or(inherited_visible),
         color,

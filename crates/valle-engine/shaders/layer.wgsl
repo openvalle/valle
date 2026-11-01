@@ -1,9 +1,9 @@
-// A layer composited onto its target at an opacity, inside a rounded rectangle: its premultiplied
-// pixels times the opacity and the part of each pixel in the rectangle, over what is there (the
-// pipeline blends).
+// A layer composited onto its target at an opacity, inside a rounded rectangle or outside it: its
+// premultiplied pixels times the opacity and the part of each pixel in the rectangle, or out of
+// it, over what is there (the pipeline blends).
 
 struct Layer {
-  // x: the opacity.
+  // x: the opacity; y: 1 to show the layer outside the rectangle.
   opacity: vec4f,
   // x, y, width, height.
   clip: vec4f,
@@ -28,6 +28,9 @@ struct Out {
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let l = layers[in.index];
-  let cov = coverage(in.pos.xy, l.clip, l.radii);
+  var cov = coverage(in.pos.xy, l.clip, l.radii);
+  if (l.opacity.y > 0.0) {
+    cov = 1.0 - cov;
+  }
   return textureLoad(image, vec2<i32>(in.pos.xy), 0) * (l.opacity.x * cov);
 }

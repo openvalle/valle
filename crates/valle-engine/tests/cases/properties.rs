@@ -1190,6 +1190,30 @@ const ROWS: &[Row] = &[
         refused: &["\"10%\"", "\"auto\"", "\"1px 2px\""],
     },
     Row {
+        properties: &["boxShadow"],
+        sample: r##"<View style={{ width: 40, height: 8, margin: "6px 10px", background: "#e8eaf6", color: "#c62828", PROPERTY: VALUE }} />"##,
+        values: &[
+            "\"none\"",
+            "\"2px 3px\"",
+            "\"0 0 6px #3949ab\"",
+            "\"4px 4px 0 2px rgb(0 0 255 / 50%)\"",
+            "\"inset 0 0 4px #3949ab\"",
+            "\"inset 3px 3px 0 -1px #3949ab, 0 0 0 3px #7986cb\"",
+            "\"-2px -2px 8px 1px\"",
+            "\" 0.25EM 0 6PX -2PX GREEN INSET \"",
+        ],
+        refused: &[
+            "\"1px\"",
+            "\"1px 1px -2px\"",
+            "\"1px red 1px\"",
+            "\"inset inset 1px 1px\"",
+            "\"1px 1px 1px 1px 1px\"",
+            "\"1px 1px 10%\"",
+            "\"\"",
+            "0",
+        ],
+    },
+    Row {
         properties: &["opacity"],
         sample: r##"<View style={{ height: 8, background: "#3949ab", PROPERTY: VALUE }} />"##,
         values: &[

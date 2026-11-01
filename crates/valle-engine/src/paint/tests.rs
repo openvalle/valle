@@ -36,10 +36,14 @@ fn names(items: &[Item]) -> Vec<String> {
         .iter()
         .map(|item| match item {
             Item::Rect { color, .. } => name(*color),
-            Item::Border { colors, .. } => format!("border {}", name(colors[0])),
+            Item::Ring { colors, .. } => format!("ring {}", name(colors[0])),
             Item::Glyphs { color, .. } => format!("text {}", name(*color)),
             Item::Group { opacity, items } => format!("group {opacity} {:?}", names(items)),
             Item::Clip { items, .. } => format!("clip {:?}", names(items)),
+            Item::Shadow { inside, items, .. } => {
+                let side = if *inside { "inner" } else { "outer" };
+                format!("{side} shadow {:?}", names(items))
+            }
         })
         .collect()
 }
@@ -481,31 +485,30 @@ fn borders_paint_over_backgrounds_and_clips_go_inside_them() {
         ],
         &[0],
     );
-    assert_eq!(names(&items), ["red", "border blue", r#"clip ["gray"]"#]);
-    let Item::Border {
+    assert_eq!(names(&items), ["red", "ring blue", r#"clip ["gray"]"#]);
+    let Item::Ring {
         rect,
         radii,
-        widths,
+        inner,
+        inner_radii,
         colors,
     } = &items[1]
     else {
         panic!("{items:?}")
     };
-    assert_eq!(
-        (rect.width, *radii, *widths),
-        (40.0, [[6.0; 2]; 4], [2.0; 4])
-    );
-    assert_eq!(colors[3], work(color::parse("green").unwrap()));
-    let Item::Clip { rect, radii, .. } = &items[2] else {
-        panic!("{items:?}")
-    };
-    let inside = Rect {
+    let padding = Rect {
         x: 2.0,
         y: 2.0,
         width: 36.0,
         height: 16.0,
     };
-    assert_eq!((*rect, *radii), (inside, [[4.0; 2]; 4]));
+    assert_eq!((rect.width, *radii), (40.0, [[6.0; 2]; 4]));
+    assert_eq!((*inner, *inner_radii), (padding, [[4.0; 2]; 4]));
+    assert_eq!(colors[3], work(color::parse("green").unwrap()));
+    let Item::Clip { rect, radii, .. } = &items[2] else {
+        panic!("{items:?}")
+    };
+    assert_eq!((*rect, *radii), (padding, [[4.0; 2]; 4]));
 }
 
 #[test]
@@ -541,15 +544,9 @@ fn outlines_paint_after_in_flow_content_around_the_border_box() {
         ],
         &[0],
     );
-    assert_eq!(
-        names(&items),
-        ["green", "border red", "border blue", "gray"]
-    );
-    let Item::Border {
-        rect,
-        radii,
-        widths,
-        ..
+    assert_eq!(names(&items), ["green", "ring red", "ring blue", "gray"]);
+    let Item::Ring {
+        rect, radii, inner, ..
     } = &items[1]
     else {
         panic!("{items:?}")
@@ -561,7 +558,115 @@ fn outlines_paint_after_in_flow_content_around_the_border_box() {
         height: 30.0,
     };
     // The radii grow by the offset and the width.
-    assert_eq!((*rect, *radii, *widths), (around, [[9.0; 2]; 4], [2.0; 4]));
+    assert_eq!((*rect, *radii, inner.x), (around, [[9.0; 2]; 4], -3.0));
+}
+
+#[test]
+fn shadows_paint_outer_under_the_background_and_inner_over_it() {
+    let (items, _) = paint_of(
+        vec![view(
+            &[
+                ("width", "40px"),
+                ("height", "20px"),
+                ("background", "gray"),
+                ("border", "2px solid black"),
+                ("borderRadius", "6px"),
+                (
+                    "boxShadow",
+                    "inset 1px 1px blue, 0 0 4px red, 3px 4px 0 2px green, inset 0 0 2px -1px red",
+                ),
+            ],
+            &[],
+        )],
+        &[0],
+    );
+    assert_eq!(
+        names(&items),
+        [
+            r#"outer shadow ["green"]"#,
+            r#"outer shadow ["red"]"#,
+            "gray",
+            r#"inner shadow ["ring red"]"#,
+            r#"inner shadow ["ring blue"]"#,
+            "ring black",
+        ]
+    );
+    let shadow = |item: &Item| match item {
+        Item::Shadow {
+            sigma,
+            rect,
+            inside,
+            items,
+            ..
+        } => (*sigma, *rect, *inside, items[0].clone()),
+        _ => panic!("{items:?}"),
+    };
+    // Moved and spread, with the radii grown by the spread, outside the border box less a px
+    // under its opaque background.
+    let (sigma, rect, inside, shape) = shadow(&items[0]);
+    let less = Rect {
+        x: 1.0,
+        y: 1.0,
+        width: 38.0,
+        height: 18.0,
+    };
+    assert_eq!((sigma, rect, inside), (0.0, less, false));
+    let Item::Shadow { radii, .. } = &items[0] else {
+        panic!("{items:?}")
+    };
+    assert_eq!(*radii, [[6.0 * 0.9; 2]; 4]);
+    let Item::Rect { rect, radii, .. } = shape else {
+        panic!("{shape:?}")
+    };
+    let moved = Rect {
+        x: 1.0,
+        y: 2.0,
+        width: 44.0,
+        height: 24.0,
+    };
+    assert_eq!((rect, radii), (moved, [[8.0; 2]; 4]));
+    // Half the blur is the standard deviation.
+    assert_eq!(shadow(&items[1]).0, 2.0);
+    // All but a hole shrunk by the spread, inside the padding box, out past the blur.
+    let (sigma, rect, inside, shape) = shadow(&items[3]);
+    let padding = Rect {
+        x: 2.0,
+        y: 2.0,
+        width: 36.0,
+        height: 16.0,
+    };
+    assert_eq!((sigma, rect, inside), (1.0, padding, true));
+    let Item::Ring {
+        rect,
+        inner,
+        inner_radii,
+        ..
+    } = shape
+    else {
+        panic!("{shape:?}")
+    };
+    assert_eq!(rect.x, -2.0);
+    let hole = Rect {
+        x: 1.0,
+        y: 1.0,
+        width: 38.0,
+        height: 18.0,
+    };
+    assert_eq!((inner, inner_radii), (hole, [[5.0; 2]; 4]));
+}
+
+#[test]
+fn spread_grows_small_radii_less() {
+    let radii = [[0.0; 2], [2.0; 2], [4.0, 8.0], [10.0; 2]];
+    // 2 is half the spread: it grows by 4 × (1 + (0.5 − 1)³).
+    assert_eq!(
+        spread(radii, 4.0),
+        [[0.0; 2], [5.5; 2], [8.0, 12.0], [14.0; 2]]
+    );
+    assert_eq!(
+        spread(radii, -3.0),
+        [[0.0; 2], [0.0; 2], [1.0, 5.0], [7.0; 2]]
+    );
 }
 
 #[test]

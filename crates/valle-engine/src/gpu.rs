@@ -15,7 +15,7 @@ use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 
 use crate::layout::Rect;
-use crate::paint::{Item, SQUARE, inner};
+use crate::paint::{Item, SQUARE};
 use crate::slug;
 use crate::template::Error;
 use crate::text::Face;
@@ -25,7 +25,7 @@ const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 const COMMON: &str = include_str!("../shaders/common.wgsl");
 
-/// u32 words per rectangle, glyph and layer instance.
+/// u32 words per rectangle, glyph and layer instance; blur passes take a layer's words too.
 const RECT: usize = 40;
 const GLYPH: usize = 20;
 const LAYER: usize = 16;
@@ -53,6 +53,7 @@ pub struct Gpu {
     rects: wgpu::RenderPipeline,
     glyphs: wgpu::RenderPipeline,
     layers: wgpu::RenderPipeline,
+    blurs: wgpu::RenderPipeline,
     output: wgpu::RenderPipeline,
 }
 
@@ -154,12 +155,14 @@ impl Gpu {
         let rect = include_str!("../shaders/rect.wgsl");
         let glyph = include_str!("../shaders/slug.wgsl");
         let layer = include_str!("../shaders/layer.wgsl");
+        let blur = include_str!("../shaders/blur.wgsl");
         let output = include_str!("../shaders/output.wgsl");
         Ok(Gpu {
             info: adapter.get_info(),
             rects: pipeline(&drawing, "rect", rect, WORK, over),
             glyphs: pipeline(&drawing, "slug", glyph, WORK, over),
             layers: pipeline(&imaging, "layer", layer, WORK, over),
+            blurs: pipeline(&imaging, "blur", blur, WORK, None),
             output: pipeline(&imaging, "output", output, OUTPUT, None),
             device,
             queue,
@@ -288,6 +291,12 @@ enum Step {
         runs: Vec<Run>,
     },
     Composite {
+        target: usize,
+        layer: usize,
+        at: u32,
+    },
+    /// Draws `layer` blurred along one axis into `target`, a new layer.
+    Blur {
         target: usize,
         layer: usize,
         at: u32,
@@ -478,27 +487,25 @@ impl<'a> Renderer<'a> {
         let mut runs: Vec<Run> = Vec::new();
         for item in items {
             match item {
-                Item::Rect { .. } | Item::Border { .. } => {
+                Item::Rect { .. } | Item::Ring { .. } => {
                     // A fill is a ring whose inside has no size.
                     let (rect, radii, inside, inner_radii, colors) = match item {
                         Item::Rect { rect, radii, color } => {
-                            (rect, radii, Rect::default(), SQUARE, [*color; 4])
+                            (rect, radii, &Rect::default(), &SQUARE, [*color; 4])
                         }
-                        Item::Border {
+                        Item::Ring {
                             rect,
                             radii,
-                            widths,
+                            inner,
+                            inner_radii,
                             colors,
-                        } => {
-                            let (inside, inner_radii) = inner(*rect, *radii, *widths);
-                            (rect, radii, inside, inner_radii, *colors)
-                        }
-                        _ => unreachable!("a rectangle or a border"),
+                        } => (rect, radii, inner, inner_radii, *colors),
+                        _ => unreachable!("a rectangle or a ring"),
                     };
                     let i = (plan.rects.len() / RECT) as u32;
                     let words = (xywh(*rect).into_iter())
                         .chain(radii.iter().flatten().copied())
-                        .chain(xywh(inside))
+                        .chain(xywh(*inside))
                         .chain(inner_radii.iter().flatten().copied())
                         .chain(colors.into_iter().flatten());
                     plan.rects.extend(words.map(f32::to_bits));
@@ -528,28 +535,52 @@ impl<'a> Renderer<'a> {
                         extend(&mut runs, Run::Glyphs(i..i + 1));
                     }
                 }
-                Item::Group { .. } | Item::Clip { .. } => {
+                Item::Group { .. } | Item::Clip { .. } | Item::Shadow { .. } => {
                     if !runs.is_empty() {
                         let runs = std::mem::take(&mut runs);
                         plan.steps.push(Step::Draw { target, runs });
                     }
-                    // A group shows all of its layer, a clip the part in its rectangle.
+                    // A group shows all of its layer, a clip the part in its rectangle, and a
+                    // shadow its layer blurred, inside its rectangle or outside it.
                     let [width, height] = self.size.map(|s| s as f32);
-                    let (items, opacity, clip, radii) = match item {
-                        Item::Group { opacity, items } => (
+                    let whole = [-1.0, -1.0, width + 2.0, height + 2.0];
+                    let (items, opacity, sigma, clip, radii, outside) = match item {
+                        Item::Group { opacity, items } => {
+                            (items, *opacity, 0.0, whole, SQUARE, false)
+                        }
+                        Item::Clip { rect, radii, items } => {
+                            (items, 1.0, 0.0, xywh(*rect), *radii, false)
+                        }
+                        Item::Shadow {
+                            sigma,
+                            rect,
+                            radii,
+                            inside,
                             items,
-                            *opacity,
-                            [-1.0, -1.0, width + 2.0, height + 2.0],
-                            SQUARE,
-                        ),
-                        Item::Clip { rect, radii, items } => (items, 1.0, xywh(*rect), *radii),
-                        _ => unreachable!("a group or a clip"),
+                        } => (items, 1.0, *sigma, xywh(*rect), *radii, !inside),
+                        _ => unreachable!("a group, a clip or a shadow"),
                     };
-                    let layer = plan.targets;
+                    let mut layer = plan.targets;
                     plan.targets += 1;
                     self.plan(items, layer, faces, plan, atlas)?;
+                    if sigma > 0.0 {
+                        // Along x into a new layer, then along y into another.
+                        for [x, y] in [[1.0, 0.0], [0.0, 1.0]] {
+                            let at = (plan.layers.len() / LAYER) as u32;
+                            let words = [sigma, x, y, 0.0].into_iter().chain([0.0; 12]);
+                            plan.layers.extend(words.map(f32::to_bits));
+                            let blurred = plan.targets;
+                            plan.targets += 1;
+                            plan.steps.push(Step::Blur {
+                                target: blurred,
+                                layer,
+                                at,
+                            });
+                            layer = blurred;
+                        }
+                    }
                     let at = (plan.layers.len() / LAYER) as u32;
-                    let words = [opacity, 0.0, 0.0, 0.0]
+                    let words = [opacity, f32::from(u8::from(outside)), 0.0, 0.0]
                         .into_iter()
                         .chain(clip)
                         .chain(radii.into_iter().flatten());
@@ -612,11 +643,13 @@ impl<'a> Renderer<'a> {
         for step in &plan.steps {
             let (target, layer) = match step {
                 Step::Draw { target, .. } => (*target, None),
-                Step::Composite { target, layer, .. } => match surfaces[*layer] {
-                    Some(s) => (*target, Some(s)),
-                    // Nothing was drawn into the layer.
-                    None => continue,
-                },
+                Step::Composite { target, layer, .. } | Step::Blur { target, layer, .. } => {
+                    match surfaces[*layer] {
+                        Some(s) => (*target, Some(s)),
+                        // Nothing was drawn into the layer.
+                        None => continue,
+                    }
+                }
             };
             let view = match target {
                 0 => &self.frame.view,
@@ -645,9 +678,10 @@ impl<'a> Renderer<'a> {
                         pass.draw(0..4, range.clone());
                     }
                 }
-                Step::Composite { at, .. } => {
+                Step::Composite { at, .. } | Step::Blur { at, .. } => {
                     let s = layer.expect("a composited layer has a surface");
-                    pass.set_pipeline(&gpu.layers);
+                    let blurs = matches!(step, Step::Blur { .. });
+                    pass.set_pipeline(if blurs { &gpu.blurs } else { &gpu.layers });
                     pass.set_bind_group(1, &self.pool[s].image, &[]);
                     pass.draw(0..3, *at..*at + 1);
                 }

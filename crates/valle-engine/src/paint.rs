@@ -11,7 +11,8 @@
 //! in it. Opacity, a fixed position, and a z-index on a positioned box or a flex or grid item make
 //! a stacking context; only opacity makes it a layer. Tree order puts a flex or grid container's
 //! children in the order it lays them out. A hidden box (`visibility`) paints nothing of its
-//! own, but what it contains still paints if visible.
+//! own, but what it contains still paints if visible. A box's background paints over its outer
+//! shadows, and its inner shadows and border over the background.
 //!
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
@@ -24,8 +25,8 @@
 use taffy::{Display, Overflow, Position};
 
 use crate::layout::{Layout, Rect, ordered};
-use crate::style::Style;
 use crate::style::color::Rgba;
+use crate::style::{Shadow, Style};
 use crate::template::Template;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -36,13 +37,15 @@ pub enum Item {
         radii: Radii,
         color: [f32; 4],
     },
-    /// The border of a rectangle with its corners rounded by `radii`: the part of it outside its
-    /// [`inner`] rectangle, `widths` in from its sides (top, right, bottom and left). Each side
-    /// is in its color, and sides meet on the lines from the outer corners to the inner ones.
-    Border {
+    /// The part of a rectangle with its corners rounded by `radii` outside a rectangle `inner`
+    /// with its own: a border, an outline, or the shape of an inner shadow. Each side (top,
+    /// right, bottom and left) is in its color, and sides meet on the lines from the outer
+    /// corners to the inner ones.
+    Ring {
         rect: Rect,
         radii: Radii,
-        widths: [f32; 4],
+        inner: Rect,
+        inner_radii: Radii,
         colors: [[f32; 4]; 4],
     },
     /// Glyphs of `Text::faces()[face]` at `size` px: glyph ids at their baseline origins.
@@ -58,6 +61,16 @@ pub enum Item {
     Clip {
         rect: Rect,
         radii: Radii,
+        items: Vec<Item>,
+    },
+    /// Items blurred by a Gaussian of `sigma` px, then shown only outside a rectangle with its
+    /// corners rounded by `radii`, or only `inside` it: a box's shadow, which its border box
+    /// hides when it is outer, and its padding box keeps in when it is inner.
+    Shadow {
+        sigma: f32,
+        rect: Rect,
+        radii: Radii,
+        inside: bool,
         items: Vec<Item>,
     },
 }
@@ -78,6 +91,111 @@ fn grown(radii: Radii, by: f32) -> Radii {
     radii.map(|r| corner(r.map(|v| if v > 0.0 { (v + by).max(0.0) } else { 0.0 })))
 }
 
+/// `radii` grown by a shadow's spread, or shrunk where it is negative. A radius smaller than the
+/// spread grows less, as CSS has it, so a small one stays nearly square.
+fn spread(radii: Radii, by: f32) -> Radii {
+    if by <= 0.0 {
+        return grown(radii, by);
+    }
+    radii.map(|r| {
+        corner(r.map(|v| match v {
+            v if v <= 0.0 => 0.0,
+            v if v >= by => v + by,
+            v => v + by * (1.0 + (v / by - 1.0).powi(3)),
+        }))
+    })
+}
+
+/// `rect` grown by `by` px on each side.
+fn outset(rect: Rect, by: f32) -> Rect {
+    Rect {
+        x: rect.x - by,
+        y: rect.y - by,
+        width: rect.width + 2.0 * by,
+        height: rect.height + 2.0 * by,
+    }
+}
+
+/// An outer shadow of a box whose border box is `rect` with its corners rounded by `radii`: its
+/// shape moved by the offset and grown by the spread, blurred, outside the box. Under an
+/// `opaque` background it goes a px into the box, as in Chrome, so that no gap shows at the
+/// box's antialiased edge: the box shrinks by a px, its radii by as much as its shorter side.
+fn outer_shadow(s: &Shadow, rect: Rect, radii: Radii, opaque: bool) -> Option<Item> {
+    let [x, y] = s.offset.map(|v| v as f32);
+    let by = s.spread as f32;
+    let shape = outset(
+        Rect {
+            x: rect.x + x,
+            y: rect.y + y,
+            ..rect
+        },
+        by,
+    );
+    let color = work(s.color);
+    if color[3] <= 0.0 || shape.width <= 0.0 || shape.height <= 0.0 {
+        return None;
+    }
+    let radii_out = fit(spread(radii, by), shape);
+    let (rect, radii) = match opaque {
+        true => {
+            let less = outset(rect, -1.0);
+            let k = match less.width < less.height {
+                true => less.width / rect.width,
+                false => less.height / rect.height,
+            };
+            (less, radii.map(|r| r.map(|v| v * k.max(0.0))))
+        }
+        false => (rect, radii),
+    };
+    Some(Item::Shadow {
+        sigma: s.blur as f32 / 2.0,
+        rect,
+        radii,
+        inside: false,
+        items: vec![Item::Rect {
+            rect: shape,
+            radii: radii_out,
+            color,
+        }],
+    })
+}
+
+/// An inner shadow of a box whose padding box is `rect` with its corners rounded by `radii`: all
+/// but the padding box's shape moved by the offset and shrunk by the spread, blurred, inside the
+/// padding box.
+fn inner_shadow(s: &Shadow, rect: Rect, radii: Radii) -> Option<Item> {
+    let [x, y] = s.offset.map(|v| v as f32);
+    let by = s.spread as f32;
+    let hole = outset(
+        Rect {
+            x: rect.x + x,
+            y: rect.y + y,
+            ..rect
+        },
+        -by,
+    );
+    let color = work(s.color);
+    if color[3] <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
+        return None;
+    }
+    let sigma = s.blur as f32 / 2.0;
+    // Out past what the blur reaches from the padding box, which sees only shadow there.
+    let around = outset(rect, (3.0 * sigma).ceil() + 1.0);
+    Some(Item::Shadow {
+        sigma,
+        rect,
+        radii,
+        inside: true,
+        items: vec![Item::Ring {
+            rect: around,
+            radii: SQUARE,
+            inner: hole,
+            inner_radii: fit(spread(radii, -by), hole),
+            colors: [color; 4],
+        }],
+    })
+}
+
 /// `radii` all shrunk by one factor until they fit in `rect`, as CSS has them. None fit in a
 /// rectangle of no size.
 fn fit(radii: Radii, rect: Rect) -> Radii {
@@ -96,7 +214,7 @@ fn fit(radii: Radii, rect: Rect) -> Radii {
 /// The inside of a border `widths` wide (top, right, bottom and left) on `rect` with its corners
 /// rounded by `radii`: a rectangle, of a negative size where the border fills `rect`, and its
 /// corners' radii, the outer ones less the widths.
-pub fn inner(rect: Rect, radii: Radii, widths: [f32; 4]) -> (Rect, Radii) {
+fn inner(rect: Rect, radii: Radii, widths: [f32; 4]) -> (Rect, Radii) {
     let [t, r, b, l] = widths;
     let inside = Rect {
         x: rect.x + l,
@@ -349,7 +467,7 @@ impl Painter<'_> {
         }
     }
 
-    /// `i`'s background, then its border over it.
+    /// `i`'s outer shadows, background, inner shadows and border, each over the one before.
     fn background(&self, i: usize, out: &mut Drawn) {
         let s = &self.styles[i];
         let rect = snap(self.layout.boxes[i].border);
@@ -360,6 +478,13 @@ impl Painter<'_> {
         let clip = self.clips[i].last().copied();
         let widths = self.widths(i);
         let colors = s.border_colors.map(work);
+        let (inside, inner_radii) = inner(rect, radii, widths);
+        // The first shadow is on top.
+        let (inset, outer): (Vec<&Shadow>, _) = s.shadows.iter().rev().partition(|s| s.inset);
+        let opaque = s.background[3] >= 1.0;
+        for shadow in outer {
+            out.extend(outer_shadow(shadow, rect, radii, opaque).map(|item| (clip, item)));
+        }
         if s.background[3] > 0.0 {
             // The background would show at the antialiased edge of a rounded border: under four
             // opaque sides it shrinks by half their widths, as in Chrome.
@@ -377,11 +502,15 @@ impl Painter<'_> {
                 },
             ));
         }
+        for shadow in inset {
+            out.extend(inner_shadow(shadow, inside, inner_radii).map(|item| (clip, item)));
+        }
         if (0..4).any(|k| widths[k] > 0.0 && colors[k][3] > 0.0) {
-            let border = Item::Border {
+            let border = Item::Ring {
                 rect,
                 radii,
-                widths,
+                inner: inside,
+                inner_radii,
                 colors,
             };
             out.push((clip, border));
@@ -412,21 +541,18 @@ impl Painter<'_> {
         if !s.visible || width <= 0.0 || color[3] <= 0.0 {
             return;
         }
-        let b = snap(self.layout.boxes[i].border);
         let by = s.outline_offset as f32 + width;
-        let rect = Rect {
-            x: b.x - by,
-            y: b.y - by,
-            width: b.width + 2.0 * by,
-            height: b.height + 2.0 * by,
-        };
+        let rect = outset(snap(self.layout.boxes[i].border), by);
         if rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
-        let outline = Item::Border {
+        let radii = fit(grown(self.corners(i), by), rect);
+        let (inside, inner_radii) = inner(rect, radii, [width; 4]);
+        let outline = Item::Ring {
             rect,
-            radii: fit(grown(self.corners(i), by), rect),
-            widths: [width; 4],
+            radii,
+            inner: inside,
+            inner_radii,
             colors: [color; 4],
         };
         out.push((self.clips[i].last().copied(), outline));
@@ -514,7 +640,7 @@ impl Painter<'_> {
         };
         if radii == SQUARE {
             let inside = |item: &Item| match item {
-                Item::Rect { rect: r, .. } | Item::Border { rect: r, .. } => within(*r, rect),
+                Item::Rect { rect: r, .. } | Item::Ring { rect: r, .. } => within(*r, rect),
                 _ => false,
             };
             if items.iter().all(inside) {
@@ -562,7 +688,7 @@ fn overlap(a: Rect, b: Rect) -> Option<Rect> {
     })
 }
 
-/// `items` as one layer at `opacity`. A layer of one rectangle or border is it at the opacity,
+/// `items` as one layer at `opacity`. A layer of one rectangle or ring is it at the opacity,
 /// and a layer of one layer is that layer at both opacities.
 fn group(opacity: f32, items: Vec<Item>) -> Option<Item> {
     if opacity <= 0.0 || items.is_empty() {
@@ -576,17 +702,19 @@ fn group(opacity: f32, items: Vec<Item>) -> Option<Item> {
         },
         Ok(
             [
-                Item::Border {
+                Item::Ring {
                     rect,
                     radii,
-                    widths,
+                    inner,
+                    inner_radii,
                     colors,
                 },
             ],
-        ) => Item::Border {
+        ) => Item::Ring {
             rect,
             radii,
-            widths,
+            inner,
+            inner_radii,
             colors: colors.map(|c| c.map(|v| v * opacity)),
         },
         Ok([Item::Group { opacity: o, items }]) => Item::Group {
