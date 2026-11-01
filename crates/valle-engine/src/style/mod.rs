@@ -281,6 +281,20 @@ enum Len {
     Vmax(f64),
     /// A math function's sums of the lengths above.
     Calc(Rc<math::Expr>),
+    /// A size from the box's content, of `width`, `height` and `flex-basis`.
+    Sizing(Sizing),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Sizing {
+    MinContent,
+    MaxContent,
+    /// `fit-content`: the max-content size, but no wider than the box would stretch, and no
+    /// narrower than the min-content size.
+    FitContent,
+    Stretch,
+    /// `flex-basis: content`.
+    Content,
 }
 
 const AUTO: Len = Len::Auto;
@@ -298,17 +312,17 @@ impl Len {
     /// Whether it is below 0; a math function is not, and clamps to 0 where it has to.
     fn negative(&self) -> bool {
         match *self {
-            Len::Auto | Len::Calc(_) => false,
+            Len::Auto | Len::Calc(_) | Len::Sizing(_) => false,
             Len::Px(v) | Len::Percent(v) | Len::Em(v) => v < 0.0,
             Len::Vw(v) | Len::Vh(v) | Len::Vmin(v) | Len::Vmax(v) => v < 0.0,
         }
     }
 
-    /// px, against `base` for percentages; the keyword is 0.
+    /// px, against `base` for percentages; the keywords are 0.
     fn px(&self, u: Units, base: f64) -> f64 {
         let [w, h] = u.canvas;
         match self {
-            Len::Auto => 0.0,
+            Len::Auto | Len::Sizing(_) => 0.0,
             Len::Px(v) => *v,
             Len::Percent(p) => p / 100.0 * base,
             Len::Em(e) => e * u.em,
@@ -330,7 +344,7 @@ impl Len {
             Len::Vh(v) => Len::Vh(v * k),
             Len::Vmin(v) => Len::Vmin(v * k),
             Len::Vmax(v) => Len::Vmax(v * k),
-            Len::Auto | Len::Calc(_) => self.clone(),
+            Len::Auto | Len::Calc(_) | Len::Sizing(_) => self.clone(),
         }
     }
 }
@@ -391,6 +405,13 @@ impl Lengths {
         type T = Dimension;
         match l {
             Len::Auto => T::auto(),
+            Len::Sizing(s) => match s {
+                Sizing::MinContent => T::min_content(),
+                Sizing::MaxContent => T::max_content(),
+                Sizing::FitContent => T::fit_content(),
+                Sizing::Stretch => T::stretch(),
+                Sizing::Content => T::content(),
+            },
             l => self.taffy(l, T::length, T::percent, T::calc),
         }
     }
@@ -665,42 +686,67 @@ struct Accept {
     keyword: Option<&'static str>,
     negative: bool,
     percent: bool,
+    /// The sizing keywords it takes.
+    sizing: &'static [&'static str],
 }
+
+/// The sizing keywords of `width` and `height`.
+const SIZING: &[&str] = &["min-content", "max-content", "fit-content", "stretch"];
 
 const INSET: Accept = Accept {
     keyword: Some("auto"),
     negative: true,
     percent: true,
+    sizing: &[],
 };
 const SIZE: Accept = Accept {
     keyword: Some("auto"),
     negative: false,
     percent: true,
+    sizing: SIZING,
+};
+/// Taffy's minimum and maximum sizes are lengths only.
+const MIN_SIZE: Accept = Accept {
+    sizing: &[],
+    ..SIZE
+};
+const BASIS: Accept = Accept {
+    sizing: &[
+        "min-content",
+        "max-content",
+        "fit-content",
+        "stretch",
+        "content",
+    ],
+    ..SIZE
 };
 const MAX_SIZE: Accept = Accept {
     keyword: Some("none"),
-    negative: false,
-    percent: true,
+    ..MIN_SIZE
 };
 const PADDING: Accept = Accept {
     keyword: None,
     negative: false,
     percent: true,
+    sizing: &[],
 };
 const GAP: Accept = Accept {
     keyword: Some("normal"),
     negative: false,
     percent: true,
+    sizing: &[],
 };
 const RADIUS: Accept = Accept {
     keyword: None,
     negative: false,
     percent: false,
+    sizing: &[],
 };
 const SPACING: Accept = Accept {
     keyword: Some("normal"),
     negative: true,
     percent: false,
+    sizing: &[],
 };
 
 /// A value as written in a type error.
@@ -724,6 +770,9 @@ fn length_text(s: &str, a: Accept) -> Result<Len, String> {
     if Some(s) == a.keyword {
         return Ok(Len::Auto);
     }
+    if let Some(sizing) = sizing(s, a)? {
+        return Ok(Len::Sizing(sizing));
+    }
     if math::is_math(s) {
         let m = math::length(s, |n| unit(n, a))?;
         // Out of the property's range, a math function clamps to it.
@@ -743,6 +792,30 @@ fn length_text(s: &str, a: Accept) -> Result<Len, String> {
         return Err(format!("{s} is negative"));
     }
     Ok(l)
+}
+
+/// A sizing keyword, if `s` is one.
+fn sizing(s: &str, a: Accept) -> Result<Option<Sizing>, String> {
+    if css::function(s).is_some_and(|(name, _)| name == "fit-content") {
+        return Err(format!(
+            "{s}: browsers take fit-content() only for grid tracks; use fit-content and max-width"
+        ));
+    }
+    if !SIZING.contains(&s) && !a.sizing.contains(&s) {
+        return Ok(None);
+    }
+    if !a.sizing.contains(&s) {
+        return Err(format!(
+            "{s}: only width, height and flex-basis take sizing keywords so far"
+        ));
+    }
+    Ok(Some(match s {
+        "min-content" => Sizing::MinContent,
+        "max-content" => Sizing::MaxContent,
+        "fit-content" => Sizing::FitContent,
+        "stretch" => Sizing::Stretch,
+        _ => Sizing::Content,
+    }))
 }
 
 /// A number with a unit as a length.
@@ -1007,7 +1080,7 @@ fn flex(v: &V) -> Result<(f64, f64, Len), String> {
                 order.push('f');
             }
             _ if basis.is_none() => {
-                basis = Some(length_text(w, SIZE)?);
+                basis = Some(length_text(w, BASIS)?);
                 order.push('b');
             }
             _ => return Err(format!("{s} is not a flex value")),
@@ -1133,8 +1206,8 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Inset(s) => set_sides(&mut d.inset, s, v, INSET)?,
         F::Width => d.size[0] = length(v, SIZE)?,
         F::Height => d.size[1] = length(v, SIZE)?,
-        F::MinWidth => d.min_size[0] = length(v, SIZE)?,
-        F::MinHeight => d.min_size[1] = length(v, SIZE)?,
+        F::MinWidth => d.min_size[0] = length(v, MIN_SIZE)?,
+        F::MinHeight => d.min_size[1] = length(v, MIN_SIZE)?,
         F::MaxWidth => d.max_size[0] = length(v, MAX_SIZE)?,
         F::MaxHeight => d.max_size[1] = length(v, MAX_SIZE)?,
         F::Margin(s) => set_sides(&mut d.margin, s, v, INSET)?,
@@ -1162,7 +1235,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         }
         F::FlexGrow => d.flex_grow = factor(v)?,
         F::FlexShrink => d.flex_shrink = factor(v)?,
-        F::FlexBasis => d.flex_basis = length(v, SIZE)?,
+        F::FlexBasis => d.flex_basis = length(v, BASIS)?,
         F::Flex => (d.flex_grow, d.flex_shrink, d.flex_basis) = flex(v)?,
         F::Order => d.order = integer(v)?,
         F::BoxSizing => {

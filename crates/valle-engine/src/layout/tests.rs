@@ -133,6 +133,24 @@ fn math_functions_resolve_against_what_their_percentages_are_of() {
 }
 
 #[test]
+fn widths_from_content_break_text_or_not() {
+    let l = lay(
+        vec![
+            view(&[("width", "min-content")], &[1]),
+            text_node("Hi there", &[]),
+            view(&[("width", "max-content")], &[3]),
+            text_node("Hi there", &[]),
+        ],
+        &[0, 2],
+    )
+    .unwrap();
+    let lines = |i: usize| l.lines[i].as_ref().map_or(0, |lines| lines.text.len());
+    assert_eq!((lines(1), lines(3)), (2, 1));
+    assert!(l.boxes[0].border.width < l.boxes[2].border.width);
+    assert!(l.boxes[2].border.width < 100.0);
+}
+
+#[test]
 fn absolute_boxes_take_the_nearest_positioned_ancestor() {
     let l = lay(
         vec![

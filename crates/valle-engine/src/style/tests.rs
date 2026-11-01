@@ -237,6 +237,30 @@ fn math_functions_are_px_or_calcs_for_layout() {
 }
 
 #[test]
+fn sizing_keywords_go_to_taffy() {
+    let l = one(&[
+        ("width", text("fit-content")),
+        ("height", text("max-content")),
+        ("flexBasis", text("content")),
+    ])
+    .layout;
+    assert_eq!(l.size.width, Dimension::fit_content());
+    assert_eq!(l.size.height, Dimension::max_content());
+    assert_eq!(l.flex_basis, Dimension::content());
+    let stretch = one(&[("width", text("Stretch"))]).layout.size.width;
+    assert_eq!(stretch, Dimension::stretch());
+    let e = error(&[("minWidth", text("min-content"))]);
+    assert!(
+        e.ends_with("min-content: only width, height and flex-basis take sizing keywords so far")
+    );
+    assert!(error(&[("width", text("content"))]).ends_with("content is not a length"));
+    let e = error(&[("width", text("fit-content(30%)"))]);
+    assert!(e.ends_with(
+        "browsers take fit-content() only for grid tracks; use fit-content and max-width"
+    ));
+}
+
+#[test]
 fn the_flex_shorthand_follows_css() {
     let flex = |p: Prop| {
         let l = one(&[("flex", p)]).layout;
