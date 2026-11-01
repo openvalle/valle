@@ -15,7 +15,7 @@ usage: cargo xtask <command>
 commands:
   fmt [--check]   format the code with rustfmt and Prettier, or only check it
   lint [--fix]    run clippy and Oxlint with warnings as errors, optionally applying fixes
-  test            run the tests
+  test [case...]  run the tests, or only the cases under tests/cases at these paths
 ";
 
 fn main() -> ExitCode {
@@ -73,11 +73,24 @@ fn lint(flags: &[String]) -> Result<(), String> {
     bun("oxlint", &args, &scripts)
 }
 
-fn test(flags: &[String]) -> Result<(), String> {
-    if !flags.is_empty() {
-        return Err(unexpected(flags));
+fn test(args: &[String]) -> Result<(), String> {
+    if let Some(flag) = args.iter().find(|a| a.starts_with('-')) {
+        return Err(format!("unexpected flag {flag}"));
     }
-    cargo(&["test", "--locked", "--workspace"])
+    if args.is_empty() {
+        return cargo(&["test", "--locked", "--workspace"]);
+    }
+    let mut command = vec![
+        "test",
+        "--locked",
+        "-p",
+        "valle-engine",
+        "--test",
+        "cases",
+        "--",
+    ];
+    command.extend(args.iter().map(String::as_str));
+    cargo(&command)
 }
 
 /// Accepts either no flags or exactly `name`, and reports which.
