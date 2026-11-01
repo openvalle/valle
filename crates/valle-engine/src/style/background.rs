@@ -1,15 +1,18 @@
 //! Backgrounds: a color under layers of images, each sized, placed and repeated in one of its
-//! boxes and clipped to one. The properties of the layers are lists, each repeated for as many
-//! images as there are.
+//! boxes, clipped to one, and blended with what is under it. The properties of the layers are
+//! lists, each repeated for as many images as there are.
 
 use super::color::{self, Rgba};
 use super::gradient::{self, Image, image};
 use super::math::Calc;
 use super::position::{Offset, position};
-use super::{Accept, Len, NO_SCROLL, NO_SCROLL_INSTEAD, Units, css, length_text, math};
+use super::{
+    Accept, BLENDS, Blend, Len, NO_SCROLL, NO_SCROLL_INSTEAD, Units, css, length_text, math,
+};
 
-/// A background image, how big it is, where it is, how it repeats, the box it is placed in and
-/// the one it shows in. The last layer's `clip` is the color's too.
+/// A background image, how big it is, where it is, how it repeats, the box it is placed in, the
+/// one it shows in, and how it blends with the images under it and the color. The last layer's
+/// `clip` is the color's too.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layer {
     pub image: Image,
@@ -18,6 +21,7 @@ pub struct Layer {
     pub repeat: [Repeat; 2],
     pub origin: Area,
     pub clip: Area,
+    pub blend: Blend,
 }
 
 /// `background-size`.
@@ -59,6 +63,7 @@ pub(super) struct Declared {
     pub repeats: Vec<[Repeat; 2]>,
     pub origins: Vec<Area>,
     pub clips: Vec<Area>,
+    pub blends: Vec<Blend>,
 }
 
 impl Declared {
@@ -84,6 +89,7 @@ impl Declared {
                 repeat: nth(&self.repeats, i).unwrap_or([Repeat::Repeat; 2]),
                 origin: nth(&self.origins, i).unwrap_or(Area::PaddingBox),
                 clip: nth(&self.clips, i).unwrap_or(Area::BorderBox),
+                blend: nth(&self.blends, i).unwrap_or(Blend::Normal),
             })
             .collect()
     }
@@ -220,6 +226,20 @@ pub(super) fn areas(s: &str, clip: bool) -> Result<Vec<Area>, String> {
 }
 
 const TEXT: &str = "background-clip: text is not supported yet";
+
+/// `background-blend-mode`: the modes of `mix-blend-mode` but plus-lighter.
+pub(super) fn blends(s: &str) -> Result<Vec<Blend>, String> {
+    let modes = &BLENDS[..BLENDS.len() - 1];
+    list(s, "a blend mode", |s| {
+        match modes.iter().find(|(k, _)| *k == s) {
+            Some((_, b)) => Ok(*b),
+            None => {
+                let names: Vec<&str> = modes.iter().map(|(k, _)| *k).collect();
+                Err(format!("{s} is not one of {}", names.join(", ")))
+            }
+        }
+    })
+}
 
 fn area(w: &str) -> Option<Area> {
     match w {

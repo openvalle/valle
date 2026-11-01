@@ -17,7 +17,8 @@
 //! children in the order it lays them out. A hidden box (`visibility`) paints nothing of its
 //! own, but what it contains still paints if visible. A box's background, its color and then its
 //! images, the first on top, paints over its outer shadows, and its inner shadows and border over
-//! the background.
+//! the background; it is a layer of its own when an image blends, which blends with what is
+//! under it in the background alone.
 //!
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
@@ -806,11 +807,13 @@ impl Painter<'_> {
         };
         // The color shows where the last layer does.
         let last = s.layers.last().map_or(Area::BorderBox, |l| l.clip);
+        let mut fill = Vec::new();
         if let (true, Some((rect, radii))) = (s.background[3] > 0.0, shown(last)) {
             let color = work(s.background);
-            out.push((clip, Item::Rect { rect, radii, color }));
+            fill.push(Item::Rect { rect, radii, color });
         }
         // Images over the color, the first on top, repeated out to the area they show in.
+        let mut blends = false;
         for layer in s.layers.iter().rev() {
             let Image::Gradient(g) = &layer.image else {
                 continue;
@@ -821,16 +824,34 @@ impl Painter<'_> {
                 continue;
             };
             let ramp = gradient::ramp(g, [tiles.first.width, tiles.first.height]);
-            out.push((
-                clip,
-                Item::Gradient {
-                    rect,
-                    radii,
-                    tiles,
-                    ramp,
-                },
-            ));
+            let image = Item::Gradient {
+                rect,
+                radii,
+                tiles,
+                ramp,
+            };
+            fill.push(match layer.blend {
+                Blend::Normal => image,
+                blend => {
+                    blends = true;
+                    Item::Group {
+                        opacity: 1.0,
+                        blend,
+                        items: vec![image],
+                    }
+                }
+            });
         }
+        // An image that blends blends with the color and the images under it alone.
+        if blends {
+            let items = std::mem::take(&mut fill);
+            fill.push(Item::Group {
+                opacity: 1.0,
+                blend: Blend::Normal,
+                items,
+            });
+        }
+        out.extend(fill.into_iter().map(|item| (clip, item)));
         for shadow in inset {
             out.extend(inner_shadow(shadow, inside, inner_radii).map(|item| (clip, item)));
         }

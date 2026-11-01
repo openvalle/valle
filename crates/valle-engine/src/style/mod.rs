@@ -129,6 +129,7 @@ pub enum Blend {
     PlusLighter,
 }
 
+/// The last is plus-lighter, which only `mix-blend-mode` takes.
 const BLENDS: [(&str, Blend); 17] = [
     ("normal", Blend::Normal),
     ("multiply", Blend::Multiply),
@@ -801,6 +802,7 @@ enum Field {
     BackgroundRepeat,
     BackgroundOrigin,
     BackgroundClip,
+    BackgroundBlendMode,
     Translate,
     Rotate,
     Scale,
@@ -877,7 +879,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 172] = [
+const FIELDS: [(&str, Field); 173] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -971,6 +973,7 @@ const FIELDS: [(&str, Field); 172] = [
     ("backgroundRepeat", Field::BackgroundRepeat),
     ("backgroundOrigin", Field::BackgroundOrigin),
     ("backgroundClip", Field::BackgroundClip),
+    ("backgroundBlendMode", Field::BackgroundBlendMode),
     ("borderRadius", Field::BorderRadius),
     ("borderTopLeftRadius", Field::CornerRadius(0)),
     ("borderTopRightRadius", Field::CornerRadius(1)),
@@ -2049,7 +2052,12 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::PlaceContent => {
             (d.align_content, d.justify_content) = pair(v, |v| keyword(v, &CONTENT_ALIGN))?
         }
-        F::Background => (d.layers, d.background) = background::background(&text(v)?)?,
+        F::Background => {
+            // The shorthand leaves the blend modes as they are.
+            let blends = std::mem::take(&mut d.layers.blends);
+            (d.layers, d.background) = background::background(&text(v)?)?;
+            d.layers.blends = blends;
+        }
         F::BackgroundColor => d.background = color_of(v)?,
         F::BackgroundImage => d.layers.images = background::images(&text(v)?)?,
         F::BackgroundSize => d.layers.sizes = background::sizes(&px_text(v)?)?,
@@ -2060,6 +2068,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::BackgroundRepeat => d.layers.repeats = background::repeats(&text(v)?)?,
         F::BackgroundOrigin => d.layers.origins = background::areas(&text(v)?, false)?,
         F::BackgroundClip => d.layers.clips = background::areas(&text(v)?, true)?,
+        F::BackgroundBlendMode => d.layers.blends = background::blends(&text(v)?)?,
         F::BorderRadius => d.radii = radii(v)?,
         F::CornerRadius(c) => d.radii[c] = corner(v)?,
         F::Border(which, BorderPart::Line) => {

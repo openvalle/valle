@@ -1057,6 +1057,29 @@ fn background_layers_take_origins_and_clips() {
     );
 }
 
+#[test]
+fn background_layers_take_blend_modes_which_the_shorthand_leaves() {
+    let blends = |style: &[(&str, Prop)]| {
+        (one(style).layers.iter())
+            .map(|l| l.blend)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(blends(&[]), [Blend::Normal]);
+    let style = [
+        ("backgroundBlendMode", text("multiply, Screen")),
+        ("background", text("none, none, none, red")),
+    ];
+    assert_eq!(
+        blends(&style),
+        [
+            Blend::Multiply,
+            Blend::Screen,
+            Blend::Multiply,
+            Blend::Screen
+        ]
+    );
+}
+
 /// The transform functions of a style, translations resolved against a 100 px box.
 fn functions(style: &[(&str, Prop)]) -> Vec<transform::Function<f32>> {
     use transform::Function as F;
@@ -1742,6 +1765,13 @@ fn what_is_not_supported_is_an_error() {
             "isolation",
             text("none"),
             "none is not one of auto, isolate",
+        ),
+        (
+            "backgroundBlendMode",
+            text("normal, plus-lighter"),
+            "plus-lighter is not one of normal, multiply, screen, overlay, darken, lighten, \
+             color-dodge, color-burn, hard-light, soft-light, difference, exclusion, hue, \
+             saturation, color, luminosity",
         ),
         (
             "mixBlendMode",

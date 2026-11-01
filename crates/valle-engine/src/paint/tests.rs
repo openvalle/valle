@@ -1232,6 +1232,25 @@ fn gradients_paint_over_the_color_from_the_padding_box() {
         names(&items),
         ["gray", "gradient of 2", "gradient of 1", "ring black"]
     );
+    // An image that blends makes the background a layer of its own.
+    let (items, _) = paint_of(
+        vec![view(
+            &[
+                ("height", "20px"),
+                (
+                    "background",
+                    "linear-gradient(red, blue), linear-gradient(red, green 50%, blue), gray",
+                ),
+                ("backgroundBlendMode", "multiply, normal"),
+            ],
+            &[],
+        )],
+        &[0],
+    );
+    assert_eq!(
+        names(&items),
+        [r#"group 1 ["gray", "gradient of 2", "group 1 Multiply [\"gradient of 1\"]"]"#]
+    );
     let ramps = ramps("linear-gradient(red, blue)");
     let [(rect, tile, ramp)] = &ramps[..] else {
         panic!("{ramps:?}")
