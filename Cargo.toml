@@ -20,7 +20,7 @@ rquickjs = "=0.14.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
-taffy = { version = "0.15.1", default-features = false, features = ["std", "taffy_tree", "flexbox", "block_layout"] }
+taffy = { version = "0.15.1", default-features = false, features = ["std", "flexbox", "block_layout"] }
 # The native backends only; shaders are WGSL.
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "metal", "vulkan", "dx12"] }
 
