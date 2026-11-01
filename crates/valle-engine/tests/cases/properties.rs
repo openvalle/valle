@@ -913,6 +913,12 @@ const ROWS: &[Row] = &[
         refused: &["true", "\"half\"", "\"1px\""],
     },
     Row {
+        properties: &["visibility"],
+        sample: r##"<View style={{ padding: 2, background: "#e8eaf6", PROPERTY: VALUE }}><View style={{ height: 6, background: "#3949ab" }} /><View style={{ height: 6, visibility: "visible", background: "#7986cb" }} /><Text style={{ fontSize: 8 }}>Ag</Text></View>"##,
+        values: &["\"visible\"", "\"hidden\"", "\"collapse\"", "\" HIDDEN \""],
+        refused: &["\"none\"", "true", "0"],
+    },
+    Row {
         properties: &["color"],
         sample: r##"<Text style={{ fontSize: 10, PROPERTY: VALUE }}>Color</Text>"##,
         values: &[

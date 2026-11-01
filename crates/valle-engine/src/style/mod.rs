@@ -41,6 +41,8 @@ pub struct Style {
     pub radius: f64,
     /// Within [0, 1].
     pub opacity: f64,
+    /// `visibility: visible`; hidden boxes paint nothing of their own.
+    pub visible: bool,
     pub color: Rgba,
     pub font: Font,
     /// The math functions with percentages in them that `layout` holds handles to.
@@ -507,6 +509,8 @@ struct Declared {
     background: Rgba,
     radius: Len,
     opacity: f64,
+    /// Inherited.
+    visible: Option<bool>,
     color: Option<Rgba>,
     font_size: Option<Len>,
     font_weight: Option<Weight>,
@@ -553,6 +557,7 @@ impl Default for Declared {
             background: color::TRANSPARENT,
             radius: ZERO,
             opacity: 1.0,
+            visible: None,
             color: None,
             font_size: None,
             font_weight: None,
@@ -621,6 +626,7 @@ enum Field {
     BackgroundColor,
     BorderRadius,
     Opacity,
+    Visibility,
     Color,
     FontSize,
     FontWeight,
@@ -650,7 +656,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 94] = [
+const FIELDS: [(&str, Field); 95] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -738,6 +744,7 @@ const FIELDS: [(&str, Field); 94] = [
     ("backgroundColor", Field::BackgroundColor),
     ("borderRadius", Field::BorderRadius),
     ("opacity", Field::Opacity),
+    ("visibility", Field::Visibility),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
     ("fontWeight", Field::FontWeight),
@@ -1441,6 +1448,11 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             };
             d.opacity = o.clamp(0.0, 1.0);
         }
+        F::Visibility => {
+            // Collapse is hidden but in tables, which there are none of.
+            let shown = [("visible", true), ("hidden", false), ("collapse", false)];
+            d.visible = Some(keyword(v, &shown)?);
+        }
         F::Color => d.color = Some(color_of(v)?),
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
@@ -1491,11 +1503,11 @@ fn compute(
     first: usize,
 ) -> Result<Style, String> {
     let initial;
-    let (inherited, inherited_color, container) = match parent {
-        Some(p) => (&p.font, p.color, p.layout.display),
+    let (inherited, inherited_color, inherited_visible, container) = match parent {
+        Some(p) => (&p.font, p.color, p.visible, p.layout.display),
         None => {
             initial = Font::initial();
-            (&initial, color::BLACK, Display::Block)
+            (&initial, color::BLACK, true, Display::Block)
         }
     };
     let units = |em| Units { em, canvas };
@@ -1624,6 +1636,7 @@ fn compute(
         background: d.background,
         radius: d.radius.px(u, 0.0),
         opacity: d.opacity,
+        visible: d.visible.unwrap_or(inherited_visible),
         color: d.color.unwrap_or(inherited_color),
         font,
         calcs: l.calcs,

@@ -9,7 +9,8 @@
 //! last those with a positive z-index, lowest first. A positioned box paints all at once too,
 //! without the positioned boxes in it. Opacity, a fixed position, and a z-index on a positioned
 //! box or a flex or grid item make a stacking context; only opacity makes it a layer. Tree order
-//! puts a flex or grid container's children in the order it lays them out.
+//! puts a flex or grid container's children in the order it lays them out. A hidden box
+//! (`visibility`) paints nothing of its own, but what it contains still paints if visible.
 //!
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
@@ -278,7 +279,7 @@ impl Painter<'_> {
     fn background(&self, i: usize, out: &mut Drawn) {
         let s = &self.styles[i];
         let rect = snap(self.layout.boxes[i].border);
-        if s.background[3] <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
+        if !s.visible || s.background[3] <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
         let item = Item::Rect {
@@ -301,7 +302,7 @@ impl Painter<'_> {
             return;
         };
         let color = work(self.styles[i].color);
-        if color[3] <= 0.0 {
+        if !self.styles[i].visible || color[3] <= 0.0 {
             return;
         }
         let at = self.layout.boxes[i].content;

@@ -247,6 +247,30 @@ fn z_index_orders_stacking_contexts() {
 }
 
 #[test]
+fn hidden_boxes_paint_only_what_is_visible_in_them() {
+    let order = painted(
+        vec![
+            view(
+                &[("visibility", "hidden"), ("background", "red")],
+                &[1, 2, 3],
+            ),
+            view(&[("height", "5px"), ("background", "green")], &[]),
+            text_node("Hi", &[("color", "black")]),
+            view(
+                &[
+                    ("visibility", "visible"),
+                    ("height", "5px"),
+                    ("background", "blue"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    assert_eq!(order, ["blue"]);
+}
+
+#[test]
 fn overflow_clips_what_the_box_contains() {
     let hidden = [("overflow", "hidden"), ("height", "20px")];
     let at = |position, top: &str, background| {

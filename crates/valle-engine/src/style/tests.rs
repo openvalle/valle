@@ -603,6 +603,22 @@ fn the_flex_shorthand_follows_css() {
 }
 
 #[test]
+fn visibility_inherits() {
+    let tree = vec![
+        view(&[("visibility", text("hidden"))], &[1, 2]),
+        view(&[], &[]),
+        view(&[("visibility", text("Visible"))], &[]),
+    ];
+    let s = styles(tree, &[]).unwrap();
+    assert_eq!(
+        s.iter().map(|s| s.visible).collect::<Vec<_>>(),
+        [false, false, true]
+    );
+    assert!(!one(&[("visibility", text("collapse"))]).visible);
+    assert!(error(&[("visibility", text("none"))]).contains("none is not one of visible"));
+}
+
+#[test]
 fn text_properties_inherit() {
     let tree = vec![
         view(&[], &[1, 4]),
