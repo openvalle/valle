@@ -36,6 +36,7 @@ fn names(items: &[Item]) -> Vec<String> {
         .iter()
         .map(|item| match item {
             Item::Rect { color, .. } => name(*color),
+            Item::Border { colors, .. } => format!("border {}", name(colors[0])),
             Item::Glyphs { color, .. } => format!("text {}", name(*color)),
             Item::Group { opacity, items } => format!("group {opacity} {:?}", names(items)),
             Item::Clip { items, .. } => format!("clip {:?}", names(items)),
@@ -458,6 +459,79 @@ fn corners_take_percentages_of_the_box_and_shrink_together() {
     );
     // A corner with a radius of 0 is square.
     assert_eq!(radii(&[bg, ("borderTopLeftRadius", "8px 0px")]), SQUARE);
+}
+
+#[test]
+fn borders_paint_over_backgrounds_and_clips_go_inside_them() {
+    let (items, _) = paint_of(
+        vec![
+            view(
+                &[
+                    ("width", "40px"),
+                    ("height", "20px"),
+                    ("background", "red"),
+                    ("border", "2px solid blue"),
+                    ("borderLeftColor", "green"),
+                    ("borderRadius", "6px"),
+                    ("overflow", "hidden"),
+                ],
+                &[1],
+            ),
+            view(&[("height", "30px"), ("background", "gray")], &[]),
+        ],
+        &[0],
+    );
+    assert_eq!(names(&items), ["red", "border blue", r#"clip ["gray"]"#]);
+    let Item::Border {
+        rect,
+        radii,
+        widths,
+        colors,
+    } = &items[1]
+    else {
+        panic!("{items:?}")
+    };
+    assert_eq!(
+        (rect.width, *radii, *widths),
+        (40.0, [[6.0; 2]; 4], [2.0; 4])
+    );
+    assert_eq!(colors[3], work(color::parse("green").unwrap()));
+    let Item::Clip { rect, radii, .. } = &items[2] else {
+        panic!("{items:?}")
+    };
+    let inside = Rect {
+        x: 2.0,
+        y: 2.0,
+        width: 36.0,
+        height: 16.0,
+    };
+    assert_eq!((*rect, *radii), (inside, [[4.0; 2]; 4]));
+}
+
+#[test]
+fn a_border_rounds_its_inside_less_its_widths() {
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 40.0,
+        height: 20.0,
+    };
+    let radii = [[10.0, 4.0], [3.0; 2], [3.0; 2], [3.0; 2]];
+    let (inside, inner_radii) = inner(rect, radii, [2.0, 3.0, 4.0, 6.0]);
+    assert_eq!(
+        inside,
+        Rect {
+            x: 6.0,
+            y: 2.0,
+            width: 31.0,
+            height: 14.0
+        }
+    );
+    // Corners whose radius a width takes up are square.
+    assert_eq!(inner_radii, [[4.0, 2.0], [0.0; 2], [0.0; 2], [0.0; 2]]);
+    // Sides that overlap leave nothing inside, and no radii.
+    let (inside, inner_radii) = inner(rect, radii, [12.0, 1.0, 12.0, 1.0]);
+    assert_eq!((inside.height, inner_radii), (-4.0, SQUARE));
 }
 
 #[test]

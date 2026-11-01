@@ -40,6 +40,10 @@ pub struct Style {
     /// `border-radius`: each corner's horizontal and vertical radius, from the top left
     /// clockwise, as px and fractions of the border box's width and height.
     pub radii: [[Calc; 2]; 4],
+    /// The border's sides, top, right, bottom and left: their widths in whole px, 0 without a
+    /// line, and their colors.
+    pub border: [f64; 4],
+    pub border_colors: [Rgba; 4],
     /// Within [0, 1].
     pub opacity: f64,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
@@ -305,6 +309,8 @@ enum Sizing {
 
 const AUTO: Len = Len::Auto;
 const ZERO: Len = Len::Px(0.0);
+/// The initial border width.
+const MEDIUM: Len = Len::Px(3.0);
 const AUTO_LINES: Line<GridPlacement<String>> = Line {
     start: GridPlacement::Auto,
     end: GridPlacement::Auto,
@@ -518,6 +524,11 @@ struct Declared {
     background: Rgba,
     /// Horizontal and vertical, from the top left clockwise.
     radii: [[Len; 2]; 4],
+    /// Top, right, bottom and left.
+    border_width: [Len; 4],
+    border_style: [BorderStyle; 4],
+    /// `None` is `currentcolor`.
+    border_color: [Option<Rgba>; 4],
     opacity: f64,
     /// Inherited.
     visible: Option<bool>,
@@ -566,6 +577,9 @@ impl Default for Declared {
             justify_self: None,
             background: color::TRANSPARENT,
             radii: [const { [ZERO; 2] }; 4],
+            border_width: [MEDIUM; 4],
+            border_style: [BorderStyle::None; 4],
+            border_color: [None; 4],
             opacity: 1.0,
             visible: None,
             color: None,
@@ -637,6 +651,7 @@ enum Field {
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
+    Border(Sides, BorderPart),
     Opacity,
     Visibility,
     Color,
@@ -646,6 +661,23 @@ enum Field {
     LineHeight,
     TextAlign,
     LetterSpacing,
+}
+
+/// What a border property sets on its sides: the line, its width, style and color at once, or one
+/// of those.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BorderPart {
+    Line,
+    Width,
+    Style,
+    Color,
+}
+
+/// A border's line style.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BorderStyle {
+    None,
+    Solid,
 }
 
 /// The sides a box-edge property sets: the four of a shorthand, one, or logical ones, which in
@@ -668,7 +700,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 103] = [
+const FIELDS: [(&str, Field); 147] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -763,6 +795,158 @@ const FIELDS: [(&str, Field); 103] = [
     ("borderStartEndRadius", Field::CornerRadius(1)),
     ("borderEndEndRadius", Field::CornerRadius(2)),
     ("borderEndStartRadius", Field::CornerRadius(3)),
+    ("border", Field::Border(Sides::All, BorderPart::Line)),
+    ("borderWidth", Field::Border(Sides::All, BorderPart::Width)),
+    ("borderStyle", Field::Border(Sides::All, BorderPart::Style)),
+    ("borderColor", Field::Border(Sides::All, BorderPart::Color)),
+    ("borderTop", Field::Border(Sides::Top, BorderPart::Line)),
+    (
+        "borderTopWidth",
+        Field::Border(Sides::Top, BorderPart::Width),
+    ),
+    (
+        "borderTopStyle",
+        Field::Border(Sides::Top, BorderPart::Style),
+    ),
+    (
+        "borderTopColor",
+        Field::Border(Sides::Top, BorderPart::Color),
+    ),
+    ("borderRight", Field::Border(Sides::Right, BorderPart::Line)),
+    (
+        "borderRightWidth",
+        Field::Border(Sides::Right, BorderPart::Width),
+    ),
+    (
+        "borderRightStyle",
+        Field::Border(Sides::Right, BorderPart::Style),
+    ),
+    (
+        "borderRightColor",
+        Field::Border(Sides::Right, BorderPart::Color),
+    ),
+    (
+        "borderBottom",
+        Field::Border(Sides::Bottom, BorderPart::Line),
+    ),
+    (
+        "borderBottomWidth",
+        Field::Border(Sides::Bottom, BorderPart::Width),
+    ),
+    (
+        "borderBottomStyle",
+        Field::Border(Sides::Bottom, BorderPart::Style),
+    ),
+    (
+        "borderBottomColor",
+        Field::Border(Sides::Bottom, BorderPart::Color),
+    ),
+    ("borderLeft", Field::Border(Sides::Left, BorderPart::Line)),
+    (
+        "borderLeftWidth",
+        Field::Border(Sides::Left, BorderPart::Width),
+    ),
+    (
+        "borderLeftStyle",
+        Field::Border(Sides::Left, BorderPart::Style),
+    ),
+    (
+        "borderLeftColor",
+        Field::Border(Sides::Left, BorderPart::Color),
+    ),
+    (
+        "borderInline",
+        Field::Border(Sides::Inline, BorderPart::Line),
+    ),
+    (
+        "borderInlineWidth",
+        Field::Border(Sides::Inline, BorderPart::Width),
+    ),
+    (
+        "borderInlineStyle",
+        Field::Border(Sides::Inline, BorderPart::Style),
+    ),
+    (
+        "borderInlineColor",
+        Field::Border(Sides::Inline, BorderPart::Color),
+    ),
+    ("borderBlock", Field::Border(Sides::Block, BorderPart::Line)),
+    (
+        "borderBlockWidth",
+        Field::Border(Sides::Block, BorderPart::Width),
+    ),
+    (
+        "borderBlockStyle",
+        Field::Border(Sides::Block, BorderPart::Style),
+    ),
+    (
+        "borderBlockColor",
+        Field::Border(Sides::Block, BorderPart::Color),
+    ),
+    (
+        "borderInlineStart",
+        Field::Border(Sides::InlineStart, BorderPart::Line),
+    ),
+    (
+        "borderInlineStartWidth",
+        Field::Border(Sides::InlineStart, BorderPart::Width),
+    ),
+    (
+        "borderInlineStartStyle",
+        Field::Border(Sides::InlineStart, BorderPart::Style),
+    ),
+    (
+        "borderInlineStartColor",
+        Field::Border(Sides::InlineStart, BorderPart::Color),
+    ),
+    (
+        "borderInlineEnd",
+        Field::Border(Sides::InlineEnd, BorderPart::Line),
+    ),
+    (
+        "borderInlineEndWidth",
+        Field::Border(Sides::InlineEnd, BorderPart::Width),
+    ),
+    (
+        "borderInlineEndStyle",
+        Field::Border(Sides::InlineEnd, BorderPart::Style),
+    ),
+    (
+        "borderInlineEndColor",
+        Field::Border(Sides::InlineEnd, BorderPart::Color),
+    ),
+    (
+        "borderBlockStart",
+        Field::Border(Sides::BlockStart, BorderPart::Line),
+    ),
+    (
+        "borderBlockStartWidth",
+        Field::Border(Sides::BlockStart, BorderPart::Width),
+    ),
+    (
+        "borderBlockStartStyle",
+        Field::Border(Sides::BlockStart, BorderPart::Style),
+    ),
+    (
+        "borderBlockStartColor",
+        Field::Border(Sides::BlockStart, BorderPart::Color),
+    ),
+    (
+        "borderBlockEnd",
+        Field::Border(Sides::BlockEnd, BorderPart::Line),
+    ),
+    (
+        "borderBlockEndWidth",
+        Field::Border(Sides::BlockEnd, BorderPart::Width),
+    ),
+    (
+        "borderBlockEndStyle",
+        Field::Border(Sides::BlockEnd, BorderPart::Style),
+    ),
+    (
+        "borderBlockEndColor",
+        Field::Border(Sides::BlockEnd, BorderPart::Color),
+    ),
     ("opacity", Field::Opacity),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
@@ -849,6 +1033,13 @@ const RADIUS: Accept = Accept {
     keyword: None,
     negative: false,
     percent: true,
+    sizing: &[],
+};
+/// `border-width`.
+const WIDTH: Accept = Accept {
+    keyword: None,
+    negative: false,
+    percent: false,
     sizing: &[],
 };
 const SPACING: Accept = Accept {
@@ -968,59 +1159,84 @@ fn length(v: &V, a: Accept) -> Result<Len, String> {
     }
 }
 
-/// The lengths of a shorthand: one to four for the sides of a box, one or two for gaps.
-fn lengths(v: &V, a: Accept, most: usize) -> Result<Vec<Len>, String> {
-    let ls = match v {
-        V::Str(_) => {
-            let s = text(v)?;
-            css::words(&s)
-                .into_iter()
-                .map(|w| length_text(w, a))
-                .collect::<Result<Vec<_>, _>>()?
-        }
-        _ => vec![length(v, a)?],
+/// The values of a shorthand, `what` they are: one to `most`, each a word or the one number.
+fn values<T>(
+    v: &V,
+    most: usize,
+    what: &str,
+    one: impl Fn(&V) -> Result<T, String>,
+) -> Result<Vec<T>, String> {
+    let ts = match v {
+        V::Str(_) => (css::words(&text(v)?).into_iter())
+            .map(|w| one(&V::Str(w.into())))
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => vec![one(v)?],
     };
-    if ls.is_empty() || ls.len() > most {
+    if ts.is_empty() || ts.len() > most {
         let many = if most == 2 {
             "one or two"
         } else {
             "one to four"
         };
-        return Err(format!("{} takes {many} lengths", shown(v)));
+        return Err(format!("{} takes {many} {what}", shown(v)));
     }
-    Ok(ls)
+    Ok(ts)
 }
 
-/// The four sides of a box as CSS shorthands give them.
-fn sides(v: &V, a: Accept) -> Result<[Len; 4], String> {
-    Ok(match &lengths(v, a, 4)?[..] {
-        [x] => [x; 4].map(Len::clone),
-        [y, x] => [y, x, y, x].map(Len::clone),
-        [t, x, b] => [t, x, b, x].map(Len::clone),
-        [t, r, b, l, ..] => [t, r, b, l].map(Len::clone),
-        [] => [ZERO; 4],
-    })
+/// The lengths of a shorthand: one to four for the sides of a box, one or two for gaps.
+fn lengths(v: &V, a: Accept, most: usize) -> Result<Vec<Len>, String> {
+    values(v, most, "lengths", |v| length(v, a))
 }
 
-/// Sets the sides `which` names of `sides`, which are top, right, bottom and left. A logical pair
-/// takes one length for both, or the start's and the end's.
-fn set_sides(sides: &mut [Len; 4], which: Sides, v: &V, a: Accept) -> Result<(), String> {
+/// Which of one to four values each side of a box takes, top, right, bottom and left, as CSS
+/// shorthands spread them.
+const SPREAD: [[usize; 4]; 4] = [[0, 0, 0, 0], [0, 1, 0, 1], [0, 1, 2, 1], [0, 1, 2, 3]];
+
+/// The four sides of a box from one to four values.
+fn sides<T: Clone>(
+    v: &V,
+    what: &str,
+    one: impl Fn(&V) -> Result<T, String>,
+) -> Result<[T; 4], String> {
+    let ts = values(v, 4, what, one)?;
+    Ok(SPREAD[ts.len() - 1].map(|i| ts[i].clone()))
+}
+
+/// The sides `which` names, of top, right, bottom and left; a logical pair's start, then its end.
+fn named(which: Sides) -> &'static [usize] {
     use Sides as S;
-    let pair = |v: &V| -> Result<[Len; 2], String> {
-        Ok(match &lengths(v, a, 2)?[..] {
-            [start, end, ..] => [start, end].map(Len::clone),
-            [both] => [both; 2].map(Len::clone),
-            [] => [ZERO; 2],
-        })
-    };
     match which {
-        S::All => *sides = self::sides(v, a)?,
-        S::Top | S::BlockStart => sides[0] = length(v, a)?,
-        S::Right | S::InlineEnd => sides[1] = length(v, a)?,
-        S::Bottom | S::BlockEnd => sides[2] = length(v, a)?,
-        S::Left | S::InlineStart => sides[3] = length(v, a)?,
-        S::Inline => [sides[3], sides[1]] = pair(v)?,
-        S::Block => [sides[0], sides[2]] = pair(v)?,
+        S::All => &[0, 1, 2, 3],
+        S::Top | S::BlockStart => &[0],
+        S::Right | S::InlineEnd => &[1],
+        S::Bottom | S::BlockEnd => &[2],
+        S::Left | S::InlineStart => &[3],
+        S::Inline => &[3, 1],
+        S::Block => &[0, 2],
+    }
+}
+
+/// Sets the sides `which` names of `sides`, which are top, right, bottom and left: all four from
+/// one to four values, a logical pair from one for both or the start's and the end's, a side from
+/// one.
+fn set_sides<T: Clone>(
+    sides: &mut [T; 4],
+    which: Sides,
+    v: &V,
+    what: &str,
+    one: impl Fn(&V) -> Result<T, String>,
+) -> Result<(), String> {
+    let at = named(which);
+    let ts = match at.len() {
+        1 => vec![one(v)?],
+        n => values(v, n, what, one)?,
+    };
+    for (k, &side) in at.iter().enumerate() {
+        let i = match at.len() {
+            4 => SPREAD[ts.len() - 1][k],
+            _ => k.min(ts.len() - 1),
+        };
+        sides[side] = ts[i].clone();
     }
     Ok(())
 }
@@ -1030,15 +1246,19 @@ fn set_sides(sides: &mut [Len; 4], which: Sides, v: &V, a: Accept) -> Result<(),
 fn radii(v: &V) -> Result<[[Len; 2]; 4], String> {
     let halves = match v {
         V::Str(_) => text(v)?,
-        _ => return Ok(sides(v, RADIUS)?.map(|r| [r.clone(), r])),
+        _ => return Ok(sides(v, "lengths", radius)?.map(|r| [r.clone(), r])),
     };
-    let half = |h: &str| sides(&V::Str(h.into()), RADIUS);
+    let half = |h: &str| sides(&V::Str(h.into()), "lengths", radius);
     let [x, y] = match css::slashes(&halves)[..] {
         [both] => half(both).map(|x| [x.clone(), x])?,
         [x, y] => [half(x)?, half(y)?],
         _ => return Err(format!("{} takes one slash at most", shown(v))),
     };
     Ok(std::array::from_fn(|c| [x[c].clone(), y[c].clone()]))
+}
+
+fn radius(v: &V) -> Result<Len, String> {
+    length(v, RADIUS)
 }
 
 /// A corner's radius: horizontal, then vertical if it differs.
@@ -1048,6 +1268,81 @@ fn corner(v: &V) -> Result<[Len; 2], String> {
         [both] => [both; 2].map(Len::clone),
         [] => [ZERO; 2],
     })
+}
+
+/// A border shorthand's line: a width, a style and a color in any order, each at most once, and
+/// the initial ones for those left out.
+fn border_line(v: &V) -> Result<(Len, BorderStyle, Option<Rgba>), String> {
+    if let V::Num(_) = v {
+        return Ok((border_width(v)?, BorderStyle::None, None));
+    }
+    let s = text(v)?;
+    let words = css::words(&s);
+    if words.is_empty() {
+        return Err(format!("{} is not a border", shown(v)));
+    }
+    let (mut width, mut style, mut color) = (None, None, None);
+    for w in words {
+        let word = &V::Str(w.into());
+        let twice = if LINE_STYLES.contains(&w) {
+            style.replace(border_style(word)?).is_some()
+        } else if WIDTHS.contains(&w) || css::num(w).is_some() || math::is_math(w) {
+            width.replace(border_width(word)?).is_some()
+        } else {
+            color.replace(current_color(word)?).is_some()
+        };
+        if twice {
+            return Err(format!("{s} sets a width, a style or a color twice"));
+        }
+    }
+    let style = style.unwrap_or(BorderStyle::None);
+    Ok((width.unwrap_or(MEDIUM), style, color.flatten()))
+}
+
+const WIDTHS: [&str; 3] = ["thin", "medium", "thick"];
+
+/// `border-width`: a length, or `thin`, `medium` or `thick`.
+fn border_width(v: &V) -> Result<Len, String> {
+    match text(v).as_deref() {
+        Ok("thin") => Ok(Len::Px(1.0)),
+        Ok("medium") => Ok(MEDIUM),
+        Ok("thick") => Ok(Len::Px(5.0)),
+        _ => length(v, WIDTH),
+    }
+}
+
+const LINE_STYLES: [&str; 10] = [
+    "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
+];
+
+/// `border-style`: so far `solid`, and `none` or `hidden`, which are the same without tables.
+fn border_style(v: &V) -> Result<BorderStyle, String> {
+    let s = text(v)?;
+    match s.as_str() {
+        "none" | "hidden" => Ok(BorderStyle::None),
+        "solid" => Ok(BorderStyle::Solid),
+        s if LINE_STYLES.contains(&s) => {
+            Err(format!("{s} borders are not supported yet; use solid"))
+        }
+        s => Err(format!("{s} is not one of {}", LINE_STYLES.join(", "))),
+    }
+}
+
+/// A border width as browsers compute it: whole px, and 1 px for one between 0 and 1.
+fn snapped(width: f64) -> f64 {
+    if width > 0.0 && width < 1.0 {
+        1.0
+    } else {
+        width.floor()
+    }
+}
+
+/// A color, or `currentcolor`, which is `None`.
+fn current_color(v: &V) -> Result<Option<Rgba>, String> {
+    match text(v)?.as_str() {
+        "currentcolor" => Ok(None),
+        s => color::parse(s).map(Some),
+    }
 }
 
 fn number(v: &V) -> Result<f64, String> {
@@ -1371,15 +1666,15 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
     match field {
         F::Display => d.display = display(v)?,
         F::Position => d.position = position(v)?,
-        F::Inset(s) => set_sides(&mut d.inset, s, v, INSET)?,
+        F::Inset(s) => set_sides(&mut d.inset, s, v, "lengths", |v| length(v, INSET))?,
         F::Width => d.size[0] = length(v, SIZE)?,
         F::Height => d.size[1] = length(v, SIZE)?,
         F::MinWidth => d.min_size[0] = length(v, MIN_SIZE)?,
         F::MinHeight => d.min_size[1] = length(v, MIN_SIZE)?,
         F::MaxWidth => d.max_size[0] = length(v, MAX_SIZE)?,
         F::MaxHeight => d.max_size[1] = length(v, MAX_SIZE)?,
-        F::Margin(s) => set_sides(&mut d.margin, s, v, INSET)?,
-        F::Padding(s) => set_sides(&mut d.padding, s, v, PADDING)?,
+        F::Margin(s) => set_sides(&mut d.margin, s, v, "lengths", |v| length(v, INSET))?,
+        F::Padding(s) => set_sides(&mut d.padding, s, v, "lengths", |v| length(v, PADDING))?,
         F::FlexDirection => {
             d.flex_direction = keyword(
                 v,
@@ -1473,6 +1768,23 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::BackgroundColor => d.background = color_of(v)?,
         F::BorderRadius => d.radii = radii(v)?,
         F::CornerRadius(c) => d.radii[c] = corner(v)?,
+        F::Border(which, BorderPart::Line) => {
+            let (width, style, color) = border_line(v)?;
+            for &i in named(which) {
+                d.border_width[i] = width.clone();
+                d.border_style[i] = style;
+                d.border_color[i] = color;
+            }
+        }
+        F::Border(which, BorderPart::Width) => {
+            set_sides(&mut d.border_width, which, v, "widths", border_width)?
+        }
+        F::Border(which, BorderPart::Style) => {
+            set_sides(&mut d.border_style, which, v, "styles", border_style)?
+        }
+        F::Border(which, BorderPart::Color) => {
+            set_sides(&mut d.border_color, which, v, "colors", current_color)?
+        }
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -1604,6 +1916,11 @@ fn compute(
         }
     };
     let u = units(size);
+    let color = d.color.unwrap_or(inherited_color);
+    let border: [f64; 4] = std::array::from_fn(|i| match d.border_style[i] {
+        BorderStyle::None => 0.0,
+        BorderStyle::Solid => snapped(d.border_width[i].px(u, 0.0)),
+    });
     let mut l = Lengths {
         u,
         first,
@@ -1640,6 +1957,7 @@ fn compute(
         aspect_ratio: d.aspect_ratio.map(|r| r as f32),
         margin: l.rect(&d.margin, Lengths::lpa),
         padding: l.rect(&d.padding, Lengths::lp),
+        border: l.rect(&border.map(Len::Px), Lengths::lp),
         flex_direction: d.flex_direction,
         flex_wrap: d.flex_wrap,
         flex_grow: d.flex_grow as f32,
@@ -1673,9 +1991,11 @@ fn compute(
         z_index: d.z_index,
         background: d.background,
         radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
+        border,
+        border_colors: d.border_color.map(|c| c.unwrap_or(color)),
         opacity: d.opacity,
         visible: d.visible.unwrap_or(inherited_visible),
-        color: d.color.unwrap_or(inherited_color),
+        color,
         font,
         calcs: l.calcs,
     })

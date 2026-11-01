@@ -35,6 +35,15 @@ pub enum Item {
         radii: Radii,
         color: [f32; 4],
     },
+    /// The border of a rectangle with its corners rounded by `radii`: the part of it outside its
+    /// [`inner`] rectangle, `widths` in from its sides (top, right, bottom and left). Each side
+    /// is in its color, and sides meet on the lines from the outer corners to the inner ones.
+    Border {
+        rect: Rect,
+        radii: Radii,
+        widths: [f32; 4],
+        colors: [[f32; 4]; 4],
+    },
     /// Glyphs of `Text::faces()[face]` at `size` px: glyph ids at their baseline origins.
     Glyphs {
         face: u32,
@@ -57,6 +66,43 @@ pub enum Item {
 pub type Radii = [[f32; 2]; 4];
 
 pub const SQUARE: Radii = [[0.0; 2]; 4];
+
+/// A corner's radii: square if either is 0.
+fn corner(r: [f32; 2]) -> [f32; 2] {
+    if r.contains(&0.0) { [0.0; 2] } else { r }
+}
+
+/// `radii` all shrunk by one factor until they fit in `rect`, as CSS has them. None fit in a
+/// rectangle of no size.
+fn fit(radii: Radii, rect: Rect) -> Radii {
+    let [tl, tr, br, bl] = radii;
+    // NaN where a side and its radii are 0, which `min` passes over.
+    let fit = [
+        rect.width / (tl[0] + tr[0]),
+        rect.width / (bl[0] + br[0]),
+        rect.height / (tl[1] + bl[1]),
+        rect.height / (tr[1] + br[1]),
+    ];
+    let k = fit.into_iter().fold(1.0, f32::min).max(0.0);
+    radii.map(|r| r.map(|v| v * k))
+}
+
+/// The inside of a border `widths` wide (top, right, bottom and left) on `rect` with its corners
+/// rounded by `radii`: a rectangle, of a negative size where the border fills `rect`, and its
+/// corners' radii, the outer ones less the widths.
+pub fn inner(rect: Rect, radii: Radii, widths: [f32; 4]) -> (Rect, Radii) {
+    let [t, r, b, l] = widths;
+    let inside = Rect {
+        x: rect.x + l,
+        y: rect.y + t,
+        width: rect.width - l - r,
+        height: rect.height - t - b,
+    };
+    let less = [[l, t], [r, t], [r, b], [l, b]];
+    let radii =
+        std::array::from_fn(|c| corner([0, 1].map(|k| (radii[c][k] - less[c][k]).max(0.0))));
+    (inside, fit(radii, inside))
+}
 
 /// Items, each with the innermost box whose clip it is under.
 type Drawn = Vec<(Option<usize>, Item)>;
@@ -282,38 +328,56 @@ impl Painter<'_> {
         }
     }
 
+    /// `i`'s background, then its border over it.
     fn background(&self, i: usize, out: &mut Drawn) {
         let s = &self.styles[i];
         let rect = snap(self.layout.boxes[i].border);
-        if !s.visible || s.background[3] <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
+        if !s.visible || rect.width <= 0.0 || rect.height <= 0.0 {
             return;
         }
-        let item = Item::Rect {
-            rect,
-            radii: self.radii(i, rect),
-            color: work(s.background),
-        };
-        out.push((self.clips[i].last().copied(), item));
+        let radii = self.radii(i, rect);
+        let clip = self.clips[i].last().copied();
+        let widths = self.widths(i);
+        let colors = s.border_colors.map(work);
+        if s.background[3] > 0.0 {
+            // The background would show at the antialiased edge of a rounded border: under four
+            // opaque sides it shrinks by half their widths, as in Chrome.
+            let (rect, radii) = match (0..4).all(|k| widths[k] > 0.0 && colors[k][3] >= 1.0) {
+                true if radii != SQUARE => inner(rect, radii, widths.map(|w| w / 2.0)),
+                _ => (rect, radii),
+            };
+            let color = work(s.background);
+            out.push((
+                clip,
+                Item::Rect {
+                    rect: snap(rect),
+                    radii,
+                    color,
+                },
+            ));
+        }
+        if (0..4).any(|k| widths[k] > 0.0 && colors[k][3] > 0.0) {
+            let border = Item::Border {
+                rect,
+                radii,
+                widths,
+                colors,
+            };
+            out.push((clip, border));
+        }
+    }
+
+    fn widths(&self, i: usize) -> [f32; 4] {
+        self.styles[i].border.map(|w| w as f32)
     }
 
     /// `i`'s corner radii in `rect`, their percentages of its border box. Radii that overlap in
     /// `rect` all shrink by one factor until they fit, as CSS has them.
     fn radii(&self, i: usize, rect: Rect) -> Radii {
         let b = self.layout.boxes[i].border;
-        let radii = self.styles[i].radii.each_ref().map(|[x, y]| {
-            let r = [x.resolve(b.width), y.resolve(b.height)];
-            if r.contains(&0.0) { [0.0; 2] } else { r }
-        });
-        let [tl, tr, br, bl] = radii;
-        // NaN where a side and its radii are 0, which `min` passes over.
-        let fit = [
-            rect.width / (tl[0] + tr[0]),
-            rect.width / (bl[0] + br[0]),
-            rect.height / (tl[1] + bl[1]),
-            rect.height / (tr[1] + br[1]),
-        ];
-        let k = fit.into_iter().fold(1.0, f32::min);
-        radii.map(|r| r.map(|v| v * k))
+        let radii = (self.styles[i].radii.each_ref())
+            .map(|[x, y]| corner([x.resolve(b.width), y.resolve(b.height)]));
+        fit(radii, rect)
     }
 
     fn text(&self, i: usize, out: &mut Drawn) {
@@ -378,7 +442,8 @@ impl Painter<'_> {
     /// both. Rectangles inside it need no clip, and a lone square one is cut to it.
     fn clip(&self, i: usize, items: Vec<Item>, out: &mut Vec<Item>) {
         let o = self.styles[i].layout.overflow;
-        let b = snap(self.layout.boxes[i].padding);
+        let border = snap(self.layout.boxes[i].border);
+        let (b, inner_radii) = inner(border, self.radii(i, border), self.widths(i));
         let axis = |clips: bool, at: f32, size: f32| match clips {
             true => (at, size),
             false => (-OPEN, 2.0 * OPEN),
@@ -392,12 +457,14 @@ impl Painter<'_> {
             height,
         };
         let radii = match o.x != Overflow::Visible && o.y != Overflow::Visible {
-            true => self.radii(i, b),
+            true => inner_radii,
             false => SQUARE,
         };
         if radii == SQUARE {
-            let inside =
-                |item: &Item| matches!(item, Item::Rect { rect: r, .. } if within(*r, rect));
+            let inside = |item: &Item| match item {
+                Item::Rect { rect: r, .. } | Item::Border { rect: r, .. } => within(*r, rect),
+                _ => false,
+            };
             if items.iter().all(inside) {
                 out.extend(items);
                 return;
@@ -443,7 +510,7 @@ fn overlap(a: Rect, b: Rect) -> Option<Rect> {
     })
 }
 
-/// `items` as one layer at `opacity`. A layer of one rectangle is that rectangle at the opacity,
+/// `items` as one layer at `opacity`. A layer of one rectangle or border is it at the opacity,
 /// and a layer of one layer is that layer at both opacities.
 fn group(opacity: f32, items: Vec<Item>) -> Option<Item> {
     if opacity <= 0.0 || items.is_empty() {
@@ -454,6 +521,21 @@ fn group(opacity: f32, items: Vec<Item>) -> Option<Item> {
             rect,
             radii,
             color: color.map(|c| c * opacity),
+        },
+        Ok(
+            [
+                Item::Border {
+                    rect,
+                    radii,
+                    widths,
+                    colors,
+                },
+            ],
+        ) => Item::Border {
+            rect,
+            radii,
+            widths,
+            colors: colors.map(|c| c.map(|v| v * opacity)),
         },
         Ok([Item::Group { opacity: o, items }]) => Item::Group {
             opacity: o * opacity,

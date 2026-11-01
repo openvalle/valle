@@ -761,6 +761,56 @@ fn expressions_are_set_in_declaration_order() {
 }
 
 #[test]
+fn borders_take_lines_widths_styles_and_colors() {
+    let c = |name| color::parse(name).unwrap();
+    let border = |style: &[(&str, Prop)]| {
+        let s = one(style);
+        let b = s.layout.border;
+        assert_eq!(
+            [b.top, b.right, b.bottom, b.left],
+            s.border.map(|w| px(w as f32))
+        );
+        (s.border, s.border_colors)
+    };
+    // No line until a style gives one; then `medium`, in `currentcolor`.
+    assert_eq!(border(&[]), ([0.0; 4], [color::BLACK; 4]));
+    assert_eq!(
+        border(&[("color", text("blue")), ("border", text("solid"))]),
+        ([3.0; 4], [c("blue"); 4])
+    );
+    assert_eq!(
+        border(&[("border", text("red 2px solid"))]),
+        ([2.0; 4], [c("red"); 4])
+    );
+    assert_eq!(
+        border(&[
+            ("borderStyle", text("solid none")),
+            ("borderWidth", text("thin medium thick")),
+            ("borderLeftStyle", text("solid")),
+            ("borderLeftWidth", text("2.75px")),
+            ("borderColor", text("red green")),
+            ("borderBlockEndColor", text("currentcolor")),
+        ]),
+        (
+            [1.0, 0.0, 5.0, 2.0],
+            [c("red"), c("green"), color::BLACK, c("green")]
+        )
+    );
+    // Logical sides, and widths between 0 and 1 px.
+    assert_eq!(
+        border(&[
+            ("borderInline", text("0.25px solid blue")),
+            ("borderBlockStyle", text("hidden solid")),
+            ("borderBlockWidth", num(4.0)),
+        ]),
+        (
+            [0.0, 1.0, 4.0, 1.0],
+            [color::BLACK, c("blue"), color::BLACK, c("blue")]
+        )
+    );
+}
+
+#[test]
 fn corner_radii_expand_as_sides_do() {
     // Each corner's radii, percentages of 100 px.
     let radii = |style: &[(&str, Prop)]| one(style).radii.map(|c| c.map(|r| r.resolve(100.0)));
@@ -879,6 +929,39 @@ fn what_is_not_supported_is_an_error() {
             "takes one or two lengths",
         ),
         ("borderEndStartRadius", text("-1px"), "-1px is negative"),
+        (
+            "border",
+            text("1px 2px solid"),
+            "sets a width, a style or a color twice",
+        ),
+        ("border", text(" "), "is not a border"),
+        ("borderTop", text("1px solid nope"), "nope is not a color"),
+        (
+            "borderStyle",
+            text("dashed"),
+            "dashed borders are not supported yet",
+        ),
+        (
+            "borderStyle",
+            text("wavy"),
+            "wavy is not one of none, hidden, dotted",
+        ),
+        (
+            "borderWidth",
+            text("10%"),
+            "percentages are not supported here",
+        ),
+        ("borderTopWidth", text("1px 2px"), "1px 2px is not a length"),
+        (
+            "borderInlineColor",
+            text("red green blue"),
+            "takes one or two colors",
+        ),
+        (
+            "borderColor",
+            text("red red red red red"),
+            "takes one to four colors",
+        ),
         ("fontWeight", num(0.0), "0 is not a weight from 1 to 1000"),
         (
             "fontFamily",

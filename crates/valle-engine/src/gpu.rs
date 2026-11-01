@@ -14,7 +14,8 @@ use std::ops::Range;
 use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 
-use crate::paint::{Item, SQUARE};
+use crate::layout::Rect;
+use crate::paint::{Item, SQUARE, inner};
 use crate::slug;
 use crate::template::Error;
 use crate::text::Face;
@@ -25,7 +26,7 @@ const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const COMMON: &str = include_str!("../shaders/common.wgsl");
 
 /// u32 words per rectangle, glyph and layer instance.
-const RECT: usize = 16;
+const RECT: usize = 40;
 const GLYPH: usize = 20;
 const LAYER: usize = 16;
 
@@ -477,12 +478,29 @@ impl<'a> Renderer<'a> {
         let mut runs: Vec<Run> = Vec::new();
         for item in items {
             match item {
-                Item::Rect { rect, radii, color } => {
+                Item::Rect { .. } | Item::Border { .. } => {
+                    // A fill is a ring whose inside has no size.
+                    let (rect, radii, inside, inner_radii, colors) = match item {
+                        Item::Rect { rect, radii, color } => {
+                            (rect, radii, Rect::default(), SQUARE, [*color; 4])
+                        }
+                        Item::Border {
+                            rect,
+                            radii,
+                            widths,
+                            colors,
+                        } => {
+                            let (inside, inner_radii) = inner(*rect, *radii, *widths);
+                            (rect, radii, inside, inner_radii, *colors)
+                        }
+                        _ => unreachable!("a rectangle or a border"),
+                    };
                     let i = (plan.rects.len() / RECT) as u32;
-                    let words = [rect.x, rect.y, rect.width, rect.height]
-                        .into_iter()
-                        .chain(*color)
-                        .chain(radii.iter().flatten().copied());
+                    let words = (xywh(*rect).into_iter())
+                        .chain(radii.iter().flatten().copied())
+                        .chain(xywh(inside))
+                        .chain(inner_radii.iter().flatten().copied())
+                        .chain(colors.into_iter().flatten());
                     plan.rects.extend(words.map(f32::to_bits));
                     extend(&mut runs, Run::Rects(i..i + 1));
                 }
@@ -524,12 +542,7 @@ impl<'a> Renderer<'a> {
                             [-1.0, -1.0, width + 2.0, height + 2.0],
                             SQUARE,
                         ),
-                        Item::Clip { rect, radii, items } => (
-                            items,
-                            1.0,
-                            [rect.x, rect.y, rect.width, rect.height],
-                            *radii,
-                        ),
+                        Item::Clip { rect, radii, items } => (items, 1.0, xywh(*rect), *radii),
                         _ => unreachable!("a group or a clip"),
                     };
                     let layer = plan.targets;
@@ -688,6 +701,11 @@ fn begin<'e>(
 /// Bytes per row of a readback: padded as copies need.
 fn row(width: u32) -> u32 {
     (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+}
+
+/// A rectangle as shaders take it: x, y, width and height.
+fn xywh(r: Rect) -> [f32; 4] {
+    [r.x, r.y, r.width, r.height]
 }
 
 /// Appends instance `next` to the last run when it is of the same kind and follows it.
