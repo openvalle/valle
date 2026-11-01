@@ -1,5 +1,6 @@
 //! The GPU: display lists drawn with wgpu into a frame of f16 working colors (premultiplied
-//! linear Rec.2020), then through the output transform into 8-bit sRGB with straight alpha.
+//! sRGB-encoded values, composited as browsers composite them), then out as 8-bit sRGB with
+//! straight alpha.
 //!
 //! A frame is planned first: its rectangles, glyphs and layers become instance data, uploaded
 //! once, and steps, each a render pass that draws runs of instances into the frame or a layer,

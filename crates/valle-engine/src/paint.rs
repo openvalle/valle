@@ -1,5 +1,6 @@
 //! Paint: a frame's boxes and text as a display list in CSS painting order (CSS 2.1 Appendix E),
-//! in canvas px, colors premultiplied linear Rec.2020 (the working space).
+//! in canvas px, colors premultiplied (the working space: sRGB-encoded values, which browsers
+//! composite).
 //!
 //! A stacking context paints its own background, then its in-flow content: the backgrounds of
 //! its blocks, then their text and their flex items, each flex item all at once, as an inline
@@ -31,34 +32,10 @@ pub enum Item {
     Group { opacity: f32, items: Vec<Item> },
 }
 
-/// Linear sRGB → linear Rec.2020 (ITU-R BT.2087).
-const TO_REC2020: [[f64; 3]; 3] = [
-    [
-        0.627_403_895_934_699,
-        0.329_283_038_377_884,
-        0.043_313_065_687_417,
-    ],
-    [
-        0.069_097_289_358_232,
-        0.919_540_395_075_459,
-        0.011_362_315_566_309,
-    ],
-    [
-        0.016_391_438_875_150,
-        0.088_013_307_877_226,
-        0.895_595_253_247_624,
-    ],
-];
-
-/// A computed color (straight linear sRGB) as a working color.
+/// A computed color as a working color.
 pub fn work(c: Rgba) -> [f32; 4] {
-    let row = |r: [f64; 3]| ((r[0] * c[0] + r[1] * c[1] + r[2] * c[2]) * c[3]) as f32;
-    [
-        row(TO_REC2020[0]),
-        row(TO_REC2020[1]),
-        row(TO_REC2020[2]),
-        c[3] as f32,
-    ]
+    let a = c[3];
+    [c[0] * a, c[1] * a, c[2] * a, a].map(|v| v as f32)
 }
 
 /// The frame's display list, from its template, computed styles and layout.

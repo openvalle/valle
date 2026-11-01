@@ -1,30 +1,13 @@
-//! CSS colors. A color value is linear-light sRGB with straight alpha: the space CSS defines its
-//! colors in, from which paint converts into the working space.
+//! CSS colors. A color value is sRGB as CSS writes it, encoded, with straight alpha: browsers
+//! composite these values, and so does the working space.
 
 use super::css::{self, Num};
 
-/// Linear sRGB, straight alpha in [0, 1].
+/// Encoded sRGB and straight alpha, each in [0, 1].
 pub type Rgba = [f64; 4];
 
 pub const TRANSPARENT: Rgba = [0.0; 4];
 pub const BLACK: Rgba = [0.0, 0.0, 0.0, 1.0];
-
-/// The sRGB transfer function, encoded to linear.
-pub fn srgb_to_linear(c: f64) -> f64 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        libm::pow((c + 0.055) / 1.055, 2.4)
-    }
-}
-
-pub fn linear_to_srgb(c: f64) -> f64 {
-    if c <= 0.003_130_8 {
-        c * 12.92
-    } else {
-        1.055 * libm::pow(c, 1.0 / 2.4) - 0.055
-    }
-}
 
 /// A color as CSS writes it, lowercased.
 pub fn parse(s: &str) -> Result<Rgba, String> {
@@ -48,7 +31,7 @@ pub fn parse(s: &str) -> Result<Rgba, String> {
 }
 
 fn encoded(rgb: [f64; 3], alpha: f64) -> Rgba {
-    let [r, g, b] = rgb.map(|c| srgb_to_linear(c.clamp(0.0, 1.0)));
+    let [r, g, b] = rgb.map(|c| c.clamp(0.0, 1.0));
     [r, g, b, alpha.clamp(0.0, 1.0)]
 }
 
@@ -308,11 +291,9 @@ const NAMED: [(&str, [u8; 3]); 148] = [
 mod tests {
     use super::*;
 
-    /// Encoded sRGB bytes and alpha, rounded.
+    /// The color as bytes, rounded.
     fn bytes(s: &str) -> [u32; 4] {
-        let c = parse(s).unwrap();
-        let e = |v: f64| (linear_to_srgb(v) * 255.0).round() as u32;
-        [e(c[0]), e(c[1]), e(c[2]), (c[3] * 255.0).round() as u32]
+        parse(s).unwrap().map(|v| (v * 255.0).round() as u32)
     }
 
     #[test]
@@ -352,14 +333,6 @@ mod tests {
             "lab(50 0 0)",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn transfer_round_trips() {
-        for i in 0..=255 {
-            let c = f64::from(i) / 255.0;
-            assert!((linear_to_srgb(srgb_to_linear(c)) - c).abs() < 1e-12);
         }
     }
 }

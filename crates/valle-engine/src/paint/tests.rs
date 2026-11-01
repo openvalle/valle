@@ -184,16 +184,8 @@ fn rectangles_round_within_their_box() {
         }
     );
     assert_eq!(radius, 10.0);
-    // Premultiplied linear Rec.2020.
-    assert_eq!(color[3], 0.5);
-    let red = [0.627_403_9, 0.069_097_29, 0.016_391_44].map(|v| v * 0.5);
-    for (c, r) in color.iter().zip(red) {
-        assert!((c - r).abs() < 1e-6, "{color:?}");
-    }
-    // White stays white.
-    for c in work(color::parse("white").unwrap()) {
-        assert!((c - 1.0).abs() < 1e-6);
-    }
+    // Premultiplied.
+    assert_eq!(color, [0.5, 0.0, 0.0, 0.5]);
 }
 
 #[test]

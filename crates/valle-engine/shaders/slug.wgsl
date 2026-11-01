@@ -99,35 +99,6 @@ fn ray(g: Glyph, em: vec2f, ppu: f32, head: u32, swap: bool) -> vec2f {
   return vec2f(cov, weight);
 }
 
-fn srgb_encode(v: f32) -> f32 {
-  return select(1.055 * pow(v, 1.0 / 2.4) - 0.055, v * 12.92, v <= 0.0031308);
-}
-
-fn srgb_decode(v: f32) -> f32 {
-  return select(pow((v + 0.055) / 1.055, 2.4), v / 12.92, v <= 0.04045);
-}
-
-// Coverage as browsers show text. They blend sRGB-encoded values, so a partly covered pixel of
-// dark text on a light ground comes out darker than in linear light, and of light text on a dark
-// ground lighter: linear blending alone draws text thin and pale. The ground is not known here,
-// so take the text's perceptual opposite for it, as Skia's mask gamma does, and pick the
-// coverage whose linear blend shows what the sRGB blend would.
-fn text_coverage(cov: f32, color: vec4f) -> f32 {
-  if (color.a <= 0.0 || cov <= 0.0 || cov >= 1.0) {
-    return cov;
-  }
-  let lin = clamp(dot(color.rgb / color.a, vec3f(0.2627, 0.6780, 0.0593)), 0.0, 1.0);
-  let s = srgb_encode(lin);
-  let d = 1.0 - s;
-  // Text near middle gray is its own ground: nothing to make up for, and the ratio is unstable.
-  if (abs(s - d) < 1.0 / 256.0) {
-    return cov;
-  }
-  let ground = srgb_decode(d);
-  let shown = srgb_decode(mix(d, s, cov));
-  return clamp((shown - ground) / (lin - ground), 0.0, 1.0);
-}
-
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let g = glyphs[in.index];
   let ppu = g.place.z;
@@ -140,5 +111,5 @@ fn text_coverage(cov: f32, color: vec4f) -> f32 {
   let w = vec2f(h.y, v.y);
   let mixed = abs(cov.x * w.x + cov.y * w.y) / max(w.x + w.y, 1.0 / 65536.0);
   let c = saturate(max(mixed, min(abs(cov.x), abs(cov.y))));
-  return g.color * text_coverage(c, g.color);
+  return g.color * c;
 }
