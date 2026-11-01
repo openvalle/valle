@@ -21,8 +21,8 @@
 //! own, but what it contains still paints if visible. A box's background, its color and then its
 //! images, the first on top, paints over its outer shadows, and its inner shadows and border over
 //! the background; it is a layer of its own when an image blends, which blends with what is
-//! under it in the background alone. Text paints its underlines and overlines, its glyphs, then
-//! its line-throughs.
+//! under it in the background alone. Text paints run by run its underlines and overlines, its
+//! glyphs, then its line-throughs, each over its shadows.
 //!
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
@@ -53,7 +53,6 @@ use crate::style::gradient::Image;
 use crate::style::transform::Function;
 use crate::style::{Blend, Shadow, Style};
 use crate::template::{Kind, Template};
-use crate::text::{Glyph, Stripe};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
@@ -1253,6 +1252,8 @@ impl Painter<'_> {
         out.push((self.clips[i].last().copied(), outline));
     }
 
+    /// Text as Chrome paints each run of it, in the style of the Text or Span it is in: its
+    /// underlines and overlines, its glyphs and its line-throughs, each over its shadows.
     fn text(&self, i: usize, out: &mut Drawn) {
         let Some(lines) = &self.layout.lines[i] else {
             return;
@@ -1263,54 +1264,83 @@ impl Painter<'_> {
             true => Some(i),
             false => self.clips[i].last().copied(),
         };
-        // Underlines and overlines go under the glyphs, and line-throughs over them.
-        let stripes = |through: bool, out: &mut Drawn| {
-            for d in lines.decorations.iter().filter(|d| d.through == through) {
-                if let Some(item) = self.stripe(d, at) {
-                    out.push((clip, item));
-                }
-            }
-        };
-        stripes(false, out);
-        // Each run in the style of the Text or Span it is in.
-        let same = |a: &Glyph, b: &Glyph| a.face == b.face && a.node == b.node;
-        for run in lines.glyphs.chunk_by(same) {
-            let s = &self.styles[run[0].node as usize];
-            let color = work(s.font.fill.unwrap_or(s.color));
-            if !s.visible || color[3] <= 0.0 {
+        for (k, run) in lines.runs.iter().enumerate() {
+            let s = &self.styles[run.node as usize];
+            if !s.visible {
                 continue;
             }
-            let item = Item::Glyphs {
-                face: run[0].face,
-                size: s.font.size as f32,
-                color,
-                glyphs: run
-                    .iter()
-                    .map(|g| (g.id, [at.x + g.x, at.y + g.y]))
-                    .collect(),
+            // Each part in its own colors, or all of it in a shadow's, moved by `by`.
+            let stripes = |through: bool| {
+                move |color: Option<[f32; 4]>, [dx, dy]: [f32; 2]| -> Vec<Item> {
+                    (lines.decorations.iter())
+                        .filter(|d| d.run == k as u32 && d.through == through)
+                        .map(|d| {
+                            let [x0, y0, x1, y1] = d.rect;
+                            Item::Rect {
+                                rect: Rect {
+                                    x: at.x + x0 + dx,
+                                    y: at.y + y0 + dy,
+                                    width: x1 - x0,
+                                    height: y1 - y0,
+                                },
+                                radii: SQUARE,
+                                color: color.unwrap_or(work(d.color)),
+                            }
+                        })
+                        .collect()
+                }
             };
-            out.push((clip, item));
+            let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
+            let fill = work(s.font.fill.unwrap_or(s.color));
+            let glyphs = |color: Option<[f32; 4]>, [dx, dy]: [f32; 2]| -> Vec<Item> {
+                (glyphs.chunk_by(|a, b| a.face == b.face))
+                    .map(|g| Item::Glyphs {
+                        face: g[0].face,
+                        size: s.font.size as f32,
+                        color: color.unwrap_or(fill),
+                        glyphs: (g.iter())
+                            .map(|g| (g.id, [at.x + g.x + dx, at.y + g.y + dy]))
+                            .collect(),
+                    })
+                    .collect()
+            };
+            self.shadowed(s, stripes(false), clip, out);
+            self.shadowed(s, glyphs, clip, out);
+            self.shadowed(s, stripes(true), clip, out);
         }
-        stripes(true, out);
     }
 
-    /// A decoration's line from `at`, where its run shows.
-    fn stripe(&self, d: &Stripe, at: Rect) -> Option<Item> {
-        let color = work(d.color);
-        if !self.styles[d.node as usize].visible || color[3] <= 0.0 {
-            return None;
+    /// What `part` paints in its colors over its shadows in `s`, the last one first: what it
+    /// paints in a shadow's color, moved by its offset and blurred by half its blur, as Chrome
+    /// blurs it. A shadow shows whatever alpha the text has.
+    fn shadowed(
+        &self,
+        s: &Style,
+        part: impl Fn(Option<[f32; 4]>, [f32; 2]) -> Vec<Item>,
+        clip: Option<usize>,
+        out: &mut Drawn,
+    ) {
+        let shown = |item: &Item| match item {
+            Item::Rect { color, .. } | Item::Glyphs { color, .. } => color[3] > 0.0,
+            _ => true,
+        };
+        for shadow in s.font.shadows.iter().rev() {
+            let color = work(shadow.color.unwrap_or(s.color));
+            let by = shadow.offset.map(|v| v as f32);
+            let items: Vec<Item> = part(Some(color), by).into_iter().filter(shown).collect();
+            match shadow.blur > 0.0 && !items.is_empty() {
+                true => out.push((
+                    clip,
+                    Item::Filter {
+                        filters: vec![Filter::Blur(shadow.blur as f32 / 2.0)],
+                        items,
+                    },
+                )),
+                false => out.extend(items.into_iter().map(|item| (clip, item))),
+            }
         }
-        let [x0, y0, x1, y1] = d.rect;
-        Some(Item::Rect {
-            rect: Rect {
-                x: at.x + x0,
-                y: at.y + y0,
-                width: x1 - x0,
-                height: y1 - y0,
-            },
-            radii: SQUARE,
-            color,
-        })
+        let items = part(None, [0.0, 0.0]).into_iter().filter(shown);
+        out.extend(items.map(|item| (clip, item)));
     }
 
     /// The items inside the clips they are under: runs of items under a clip share it.

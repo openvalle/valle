@@ -1,12 +1,13 @@
 //! Chrome baselines: what the pinned Chrome for Testing makes of a case's frames printed as HTML,
 //! `tests/baselines/chrome/<case>.<frame>.json` and `.png`. `web/tests/chrome.ts` draws them when
 //! they are missing, or were drawn from other HTML or by another Chrome. The engine's boxes and
-//! lines are compared with them, and on the GPU its pixels, with glyphs unfilled: Chrome's own
-//! text rendering is not what the engine draws. Whenever it draws, it also lists the CSS properties
+//! lines are compared with them, and on the GPU its pixels, without glyphs or their shadows:
+//! Chrome's own text rendering is not what the engine draws. Whenever it draws, it also lists the CSS properties
 //! Chrome knows, `tests/baselines/chrome/properties.json`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::rc::Rc;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -113,11 +114,12 @@ fn shown([x, y, w, h]: [f64; 4]) -> String {
 }
 
 /// The frame painted as Chrome draws its baselines: its glyphs unfilled
-/// (`-webkit-text-fill-color: transparent`), so text differs only where shaping does.
-pub fn unfilled(frame: &Frame) -> Vec<Item> {
+/// (`-webkit-text-fill-color: transparent`) and without text shadows, which are glyphs too.
+pub fn glyphless(frame: &Frame) -> Vec<Item> {
     let mut styles = frame.styles.clone();
     for s in &mut styles {
         s.font.fill = Some(color::TRANSPARENT);
+        s.font.shadows = Rc::new([]);
     }
     paint::paint(&frame.template, &styles, &frame.layout)
 }

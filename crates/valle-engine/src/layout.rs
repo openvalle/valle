@@ -331,7 +331,7 @@ fn decorations(
     text: &mut Text,
 ) -> Result<Vec<Stripe>, Error> {
     let mut out = Vec::new();
-    for run in &lines.runs {
+    for (k, run) in lines.runs.iter().enumerate() {
         let style = &styles[run.node as usize];
         if style.decorations.is_empty() {
             continue;
@@ -394,7 +394,7 @@ fn decorations(
                                 y + height - at[1],
                             ],
                             color: d.color,
-                            node: run.node,
+                            run: k as u32,
                             through,
                         });
                     }

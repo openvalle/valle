@@ -412,7 +412,7 @@ impl Runner {
                     if let Some(gpu) = gpu {
                         let renderer =
                             renderer.get_or_insert_with(|| Renderer::new(gpu, size[0], size[1]));
-                        let items = chrome::unfilled(&frame);
+                        let items = chrome::glyphless(&frame);
                         let drawn = renderer.render(&items, scene.faces())?;
                         let name = format!("{stem}.{i}.png");
                         if let Some(p) = self.against_chrome(&name, size, &drawn, &png)? {
@@ -552,8 +552,8 @@ impl Runner {
         Ok(Some(problem))
     }
 
-    /// What is wrong with a frame drawn with its glyphs unfilled against Chrome's, if anything; a
-    /// frame that is wrong goes to review.
+    /// What is wrong with a frame drawn without its glyphs against Chrome's, if anything; a frame
+    /// that is wrong goes to review.
     fn against_chrome(
         &self,
         name: &str,

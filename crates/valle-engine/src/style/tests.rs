@@ -780,6 +780,46 @@ fn text_decoration_sets_its_longhands_or_refuses() {
 }
 
 #[test]
+fn text_shadows_inherit_in_px_with_currentcolor_kept() {
+    let tree = vec![
+        view(
+            &[
+                ("fontSize", num(20.0)),
+                ("textShadow", text("0.1em 2px, -1px 0 3px blue")),
+            ],
+            &[1],
+        ),
+        view(&[("color", text("red"))], &[]),
+    ];
+    let s = styles(tree, &[]).unwrap();
+    let blue = color::parse("blue").unwrap();
+    let shadows = [
+        TextShadow {
+            offset: [2.0, 2.0],
+            blur: 0.0,
+            color: None,
+        },
+        TextShadow {
+            offset: [-1.0, 0.0],
+            blur: 3.0,
+            color: Some(blue),
+        },
+    ];
+    assert_eq!(&s[0].font.shadows[..], shadows);
+    assert_eq!(s[1].font.shadows, s[0].font.shadows);
+    for (bad, message) in [
+        ("1px 1px 1px 1px", "is not a text shadow"),
+        ("inset 1px 1px", "is not a text shadow"),
+        ("1px", "needs two to four lengths"),
+        ("1px 1px -2px", "is negative"),
+    ] {
+        let e = error(&[("textShadow", text(bad))]);
+        assert!(e.contains(message), "{bad}: {e}");
+    }
+    assert!(one(&[("textShadow", text("none"))]).font.shadows.is_empty());
+}
+
+#[test]
 fn text_properties_inherit() {
     let tree = vec![
         view(&[], &[1, 4]),
@@ -826,6 +866,7 @@ fn text_properties_inherit() {
         wrap: true,
         transform: TextTransform::None,
         fill: None,
+        shadows: Rc::new([]),
         skip_ink: true,
         underline_offset: None,
     };
@@ -849,6 +890,7 @@ fn text_properties_inherit() {
         wrap: true,
         transform: TextTransform::Uppercase,
         fill: Some(color::parse("blue").unwrap()),
+        shadows: Rc::new([]),
         skip_ink: true,
         underline_offset: None,
     };
@@ -1801,9 +1843,9 @@ fn what_is_not_supported_is_an_error() {
         ),
         ("zoom", num(2.0), "style zoom is not supported: use scale"),
         (
-            "textShadow",
-            text("none"),
-            "style textShadow is not supported",
+            "textIndent",
+            text("1em"),
+            "style textIndent is not supported",
         ),
         ("width", text("10"), "style width: 10 needs a unit: 10px"),
         (

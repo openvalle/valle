@@ -69,14 +69,14 @@ pub struct Run {
     pub glyphs: [u32; 2],
 }
 
-/// A line of a text decoration over a run, or a piece of one between the gaps it leaves for
-/// glyphs: left, top, right and bottom, px from the text box's top left. It shows where the run's
-/// `node` does, and goes over the glyphs if it is a line-through.
+/// A line of a text decoration over run `run`, or a piece of one between the gaps it leaves for
+/// glyphs: left, top, right and bottom, px from the text box's top left. It goes over the glyphs
+/// if it is a line-through.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stripe {
     pub rect: [f32; 4],
     pub color: Rgba,
-    pub node: u32,
+    pub run: u32,
     pub through: bool,
 }
 

@@ -1997,6 +1997,25 @@ const ROWS: &[Row] = &[
         ],
         refused: &["\"banana\"", "1"],
     },
+    Row {
+        properties: &["textShadow"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 16, color: "#1e88e5", PROPERTY: VALUE }}>Shadow</Text></View>"##,
+        values: &[
+            "\"none\"",
+            "\"2px 2px\"",
+            "\"2px 3px 4px #e53935\"",
+            "\"#e53935 -1px 0 2px\"",
+            "\"0 0 0.2em currentcolor, 3px 3px green\"",
+            "\"calc(1px + 0.1em) 2px 1px\"",
+        ],
+        refused: &[
+            "\"1px 1px 1px 1px\"",
+            "\"inset 1px 1px\"",
+            "\"1px\"",
+            "\"1px 1px -1px\"",
+            "1",
+        ],
+    },
 ];
 
 /// The cases, by path from `tests/cases`, and their source; `chrome` is every CSS property the

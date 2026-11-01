@@ -111,9 +111,9 @@ async function draw() {
         "}",
       ];
       await Bun.write(`${job.out}.json`, `${baseline.join("\n")}\n`);
-      // Glyphs are not compared: Chrome's text rendering is not the engine's.
+      // Glyphs and their shadows are not compared: Chrome's text rendering is not the engine's.
       await page("Runtime.evaluate", {
-        expression: `document.head.insertAdjacentHTML("beforeend", "<style>* { -webkit-text-fill-color: transparent !important; }</style>")`,
+        expression: `document.head.insertAdjacentHTML("beforeend", "<style>* { -webkit-text-fill-color: transparent !important; text-shadow: none !important; }</style>")`,
       });
       const { data } = await page("Page.captureScreenshot", {
         format: "png",

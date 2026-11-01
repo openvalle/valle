@@ -139,6 +139,15 @@ impl Style {
     }
 }
 
+/// A `text-shadow`: its offset and blur, px, and its color, `None` for `currentcolor`, the color
+/// of each box that inherits it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextShadow {
+    pub offset: [f64; 2],
+    pub blur: f64,
+    pub color: Option<Rgba>,
+}
+
 /// A text decoration as the box that declares it gives it to the text in it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decoration {
@@ -227,6 +236,8 @@ pub struct Font {
     /// `-webkit-text-fill-color`, the color of glyphs; `None` is `currentcolor`, the color of
     /// each box that inherits it.
     pub fill: Option<Rgba>,
+    /// `text-shadow`, the first on top.
+    pub shadows: Rc<[TextShadow]>,
     /// `text-decoration-skip-ink: auto` (or `all`): underlines and overlines leave gaps where
     /// glyphs cross them.
     pub skip_ink: bool,
@@ -249,6 +260,7 @@ impl Font {
             wrap: true,
             transform: TextTransform::None,
             fill: None,
+            shadows: Rc::new([]),
             skip_ink: true,
             underline_offset: None,
         }
@@ -798,6 +810,7 @@ struct Declared {
     text_transform: Option<TextTransform>,
     /// `Some(None)` is `currentcolor`.
     fill: Option<Option<Rgba>>,
+    text_shadows: Option<Vec<Shadowed>>,
     skip_ink: Option<bool>,
     underline_offset: Option<Len>,
 }
@@ -879,6 +892,7 @@ impl Default for Declared {
             wrap: None,
             text_transform: None,
             fill: None,
+            text_shadows: None,
             skip_ink: None,
             underline_offset: None,
         }
@@ -997,6 +1011,7 @@ enum Field {
     TextDecorationSkipInk,
     TextUnderlineOffset,
     WebkitTextFillColor,
+    TextShadow,
 }
 
 /// A declared box shadow; its color `None` is `currentcolor`.
@@ -1046,7 +1061,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 194] = [
+const FIELDS: [(&str, Field); 195] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1349,6 +1364,7 @@ const FIELDS: [(&str, Field); 194] = [
     ("textDecorationSkipInk", Field::TextDecorationSkipInk),
     ("textUnderlineOffset", Field::TextUnderlineOffset),
     ("WebkitTextFillColor", Field::WebkitTextFillColor),
+    ("textShadow", Field::TextShadow),
 ];
 
 impl Field {
@@ -1384,6 +1400,7 @@ impl Field {
                 | Field::TextDecorationSkipInk
                 | Field::TextUnderlineOffset
                 | Field::WebkitTextFillColor
+                | Field::TextShadow
         )
     }
 }
@@ -1804,17 +1821,20 @@ fn outline_style(v: &V) -> Result<BorderStyle, String> {
 }
 
 /// `box-shadow`: `none`, or shadows separated by commas, each two offsets, a blur and a spread
-/// (the last two may be left out), a color and `inset` in any order around them.
-fn shadows(v: &V) -> Result<Vec<Shadowed>, String> {
+/// (the last two may be left out), a color and `inset` in any order around them. A `text-shadow`
+/// has no spread and no `inset`.
+fn shadows(v: &V, text_shadow: bool) -> Result<Vec<Shadowed>, String> {
     let s = text(v)?;
     match s.as_str() {
         "none" => Ok(Vec::new()),
         "" => Err("\"\" is not a shadow; use none".into()),
-        _ => css::commas(&s).into_iter().map(shadow).collect(),
+        _ => (css::commas(&s).into_iter())
+            .map(|s| shadow(s, text_shadow))
+            .collect(),
     }
 }
 
-fn shadow(s: &str) -> Result<Shadowed, String> {
+fn shadow(s: &str, text_shadow: bool) -> Result<Shadowed, String> {
     let (mut lengths, mut color, mut inset) = (Vec::new(), None, false);
     let mut words = css::words(s).into_iter().peekable();
     let length_like = |w: &str| css::num(w).is_some() || math::is_math(w);
@@ -1835,6 +1855,11 @@ fn shadow(s: &str) -> Result<Shadowed, String> {
         }
     }
     let [x, y, blur, spread] = match lengths[..] {
+        _ if text_shadow && (inset || lengths.len() == 4) => {
+            return Err(format!(
+                "{s:?} is not a text shadow: two or three lengths (x, y and blur) and a color"
+            ));
+        }
         [x, y] => [x, y, "0", "0"],
         [x, y, blur] => [x, y, blur, "0"],
         [x, y, blur, spread] => [x, y, blur, spread],
@@ -2325,7 +2350,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Outline(BorderPart::Style) => d.outline_style = outline_style(v)?,
         F::Outline(BorderPart::Color) => d.outline_color = current_color(v)?,
         F::OutlineOffset => d.outline_offset = length(v, OFFSET)?,
-        F::BoxShadow => d.shadows = shadows(v)?,
+        F::BoxShadow => d.shadows = shadows(v, false)?,
         F::Translate => d.translate = transform::translate(&px_text(v)?)?,
         F::Rotate => d.rotate = transform::rotate(&text(v)?)?,
         F::Scale => d.scale = transform::scale(&number_text(v)?)?,
@@ -2426,6 +2451,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         }
         F::TextUnderlineOffset => d.underline_offset = Some(length(v, UNDERLINE_OFFSET)?),
         F::WebkitTextFillColor => d.fill = Some(current_color(v)?),
+        F::TextShadow => d.text_shadows = Some(shadows(v, true)?),
     }
     Ok(())
 }
@@ -2632,6 +2658,16 @@ fn compute(
         wrap: d.wrap.unwrap_or(inherited.wrap),
         transform: d.text_transform.unwrap_or(inherited.transform),
         fill: d.fill.unwrap_or(inherited.fill),
+        shadows: match &d.text_shadows {
+            None => inherited.shadows.clone(),
+            Some(list) => (list.iter())
+                .map(|s| TextShadow {
+                    offset: s.offset.each_ref().map(|l| l.px(units(size), 0.0)),
+                    blur: s.blur.px(units(size), 0.0),
+                    color: s.color,
+                })
+                .collect(),
+        },
         skip_ink: d.skip_ink.unwrap_or(inherited.skip_ink),
         underline_offset: match &d.underline_offset {
             None => inherited.underline_offset.clone(),

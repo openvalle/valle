@@ -674,7 +674,7 @@ fn clips_round_and_go_on_each_item_in_a_layer() {
     assert_eq!(
         names(&items),
         [
-            r#"clip ["text black"]"#.to_string(),
+            r#"clip ["text black", "text black"]"#.to_string(),
             r#"group 0.5 ["clip [\"green\"]", "blue"]"#.into(),
         ]
     );
@@ -960,6 +960,39 @@ fn text_paints_line_throughs_over_its_glyphs_and_other_lines_under() {
     assert_eq!(names(&items), ["red", "red", "text black", "red"]);
     let hidden = [("visibility", "hidden"), ("textDecoration", "underline")];
     assert!(paint_of(vec![text_node("x", &hidden)], &[0]).0.is_empty());
+}
+
+#[test]
+fn text_shadows_go_under_each_part_of_a_run_the_last_lowest() {
+    let style = [
+        ("color", "black"),
+        ("textDecoration", "underline white"),
+        ("textShadow", "1px 1px red, 2px 2px 4px blue"),
+    ];
+    let (items, _) = paint_of(vec![text_node("x", &style)], &[0]);
+    let blurred = |what: &str| format!("filter [\"blur\"] [\"{what}\"]");
+    assert_eq!(
+        names(&items),
+        [
+            blurred("blue"),
+            "red".into(),
+            "white".into(),
+            blurred("text blue"),
+            "text red".into(),
+            "text black".into(),
+        ]
+    );
+    let Item::Filter { filters, .. } = &items[3] else {
+        unreachable!()
+    };
+    assert!(matches!(filters[..], [Filter::Blur(2.0)]));
+    // Text with no fill still casts its shadows.
+    let unfilled = [
+        ("WebkitTextFillColor", "transparent"),
+        ("textShadow", "1px 1px red"),
+    ];
+    let (items, _) = paint_of(vec![text_node("x", &unfilled)], &[0]);
+    assert_eq!(names(&items), ["text red"]);
 }
 
 #[test]

@@ -486,7 +486,7 @@ fn a_decoration_takes_the_font_of_its_decorating_box() {
     let b = lines.baselines[0];
     let on = |node: u32| -> Vec<[f32; 2]> {
         (lines.decorations.iter())
-            .filter(|d| d.node == node)
+            .filter(|d| lines.runs[d.run as usize].node == node)
             .map(|d| [d.rect[1], d.rect[3]])
             .collect()
     };

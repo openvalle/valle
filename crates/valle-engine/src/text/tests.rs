@@ -36,6 +36,7 @@ fn font(size: f64) -> Font {
         wrap: true,
         transform: TextTransform::None,
         fill: None,
+        shadows: Rc::new([]),
         skip_ink: true,
         underline_offset: None,
     }

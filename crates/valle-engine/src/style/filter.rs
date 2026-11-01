@@ -121,7 +121,7 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
                 blur,
                 color,
                 ..
-            } = shadow(inner).map_err(named)?;
+            } = shadow(inner, false).map_err(named)?;
             Function::DropShadow {
                 offset,
                 blur,
