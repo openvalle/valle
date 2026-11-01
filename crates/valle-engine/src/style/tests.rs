@@ -943,6 +943,39 @@ fn text_shadows_inherit_in_px_with_currentcolor_kept() {
 }
 
 #[test]
+fn font_features_are_quoted_tags_with_their_values() {
+    let features = |v: &str| {
+        let f = one(&[("fontFeatureSettings", text(v))]).font.features;
+        (f.iter())
+            .map(|f| (std::str::from_utf8(&f.tag).unwrap().to_owned(), f.value))
+            .collect::<Vec<_>>()
+    };
+    let feature = |tag: &str, value| (tag.to_owned(), value);
+    assert_eq!(
+        features("'liga' OFF, \"ss03\", 'salt' 2, 'Kern' on"),
+        [
+            feature("liga", 0),
+            feature("ss03", 1),
+            feature("salt", 2),
+            feature("Kern", 1),
+        ]
+    );
+    assert_eq!(features("Normal"), []);
+    for (bad, message) in [
+        ("liga", "a tag of 4 characters, quoted"),
+        ("'lig'", "a tag of 4 characters, quoted"),
+        ("'liga' -1", "-1 is not a feature value"),
+        ("'liga' 1.5", "1.5 is not a feature value"),
+        ("'liga' 70000", "70000 is over 65535"),
+        ("'liga' 1 2", "is not a quoted tag and its value"),
+        ("'liga',", "is not a quoted tag and its value"),
+    ] {
+        let e = error(&[("fontFeatureSettings", text(bad))]);
+        assert!(e.contains(message), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn text_properties_inherit() {
     let tree = vec![
         view(&[], &[1, 4]),
@@ -963,6 +996,7 @@ fn text_properties_inherit() {
                 ("textWrapStyle", text("balance")),
                 ("WebkitTextFillColor", text("blue")),
                 ("WebkitTextStroke", text("0.1em #0f0")),
+                ("fontFeatureSettings", text("'smcp', \"tnum\" 1")),
             ],
             &[2],
         ),
@@ -995,6 +1029,7 @@ fn text_properties_inherit() {
         word_break: WordBreak::Normal,
         overflow_wrap: OverflowWrap::Normal,
         transform: TextTransform::None,
+        features: Rc::new([]),
         fill: None,
         stroke: 0.0,
         stroke_color: None,
@@ -1024,6 +1059,16 @@ fn text_properties_inherit() {
         word_break: WordBreak::BreakAll,
         overflow_wrap: OverflowWrap::BreakWord,
         transform: TextTransform::Uppercase,
+        features: Rc::new([
+            Feature {
+                tag: *b"smcp",
+                value: 1,
+            },
+            Feature {
+                tag: *b"tnum",
+                value: 1,
+            },
+        ]),
         fill: Some(color::parse("blue").unwrap()),
         stroke: 2.0,
         stroke_color: Some(color::parse("#0f0").unwrap()),

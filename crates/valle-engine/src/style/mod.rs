@@ -145,6 +145,14 @@ impl Style {
     }
 }
 
+/// An OpenType feature shaping turns on, by its tag, with its value: 1 on, 0 off, or which of a
+/// set of alternates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Feature {
+    pub tag: [u8; 4],
+    pub value: u16,
+}
+
 /// A `text-shadow`: its offset and blur, px, and its color, `None` for `currentcolor`, the color
 /// of each box that inherits it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -243,6 +251,9 @@ pub struct Font {
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
     pub transform: TextTransform,
+    /// `font-feature-settings`: OpenType features, each a tag and its value, a later one over an
+    /// earlier one of its tag.
+    pub features: Rc<[Feature]>,
     /// `-webkit-text-fill-color`, the color of glyphs; `None` is `currentcolor`, the color of
     /// each box that inherits it.
     pub fill: Option<Rgba>,
@@ -286,6 +297,7 @@ impl Font {
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
             transform: TextTransform::None,
+            features: Rc::new([]),
             fill: None,
             stroke: 0.0,
             stroke_color: None,
@@ -860,6 +872,7 @@ struct Declared {
     font_size: Option<Len>,
     font_weight: Option<Weight>,
     font_family: Option<Rc<[Family]>>,
+    features: Option<Rc<[Feature]>>,
     line_height: Option<Leading>,
     text_align: Option<TextAlign>,
     /// `normal` is `Auto`, 0.
@@ -952,6 +965,7 @@ impl Default for Declared {
             font_size: None,
             font_weight: None,
             font_family: None,
+            features: None,
             line_height: None,
             text_align: None,
             letter_spacing: None,
@@ -1068,6 +1082,7 @@ enum Field {
     FontSize,
     FontWeight,
     FontFamily,
+    FontFeatureSettings,
     LineHeight,
     TextAlign,
     LetterSpacing,
@@ -1144,7 +1159,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 206] = [
+const FIELDS: [(&str, Field); 207] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1431,6 +1446,7 @@ const FIELDS: [(&str, Field); 206] = [
     ("fontSize", Field::FontSize),
     ("fontWeight", Field::FontWeight),
     ("fontFamily", Field::FontFamily),
+    ("fontFeatureSettings", Field::FontFeatureSettings),
     ("lineHeight", Field::LineHeight),
     ("textAlign", Field::TextAlign),
     ("letterSpacing", Field::LetterSpacing),
@@ -1478,6 +1494,7 @@ impl Field {
                 | Field::FontSize
                 | Field::FontWeight
                 | Field::FontFamily
+                | Field::FontFeatureSettings
                 | Field::LineHeight
                 | Field::TextAlign
                 | Field::LetterSpacing
@@ -2261,6 +2278,49 @@ const OTHER_GENERICS: [&str; 10] = [
     "fangsong",
 ];
 
+/// `font-feature-settings`: `normal`, or OpenType features: each a tag of 4 characters, quoted,
+/// and `on` (as it is left out), `off` or a value.
+fn features(v: &V) -> Result<Rc<[Feature]>, String> {
+    let V::Str(s) = v else {
+        return Err(format!("{} is not a string", shown(v)));
+    };
+    if s.trim().eq_ignore_ascii_case("normal") {
+        return Ok(Rc::new([]));
+    }
+    let feature = |part: &str| {
+        let words = css::words(part);
+        let (tag, value) = match words[..] {
+            [tag] => (tag, "on"),
+            [tag, value] => (tag, value),
+            _ => return Err(format!("{part:?} is not a quoted tag and its value")),
+        };
+        let tag = ['"', '\''].iter().find_map(|&q| {
+            (tag.strip_prefix(q))
+                .and_then(|t| t.strip_suffix(q))
+                .and_then(|t| <[u8; 4]>::try_from(t.as_bytes()).ok())
+                .filter(|t| t.iter().all(|b| (b' '..=b'~').contains(b)))
+        });
+        let Some(tag) = tag else {
+            return Err(format!(
+                "{part:?} is not a feature: a tag of 4 characters, quoted"
+            ));
+        };
+        let value = match value.to_ascii_lowercase().as_str() {
+            "on" => 1,
+            "off" => 0,
+            n => match css::num(n) {
+                Some(css::Num { value, unit: "" }) if value.fract() == 0.0 && value >= 0.0 => {
+                    u16::try_from(value as i64)
+                        .map_err(|_| format!("{n} is over 65535, the largest feature value"))?
+                }
+                _ => return Err(format!("{n} is not a feature value: on, off or 0 or more")),
+            },
+        };
+        Ok(Feature { tag, value })
+    };
+    css::commas(s).into_iter().map(feature).collect()
+}
+
 fn families(v: &V) -> Result<Rc<[Family]>, String> {
     let V::Str(s) = v else {
         return Err(format!("{} is not a string", shown(v)));
@@ -2505,6 +2565,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
         F::FontFamily => d.font_family = Some(families(v)?),
+        F::FontFeatureSettings => d.features = Some(features(v)?),
         F::LineHeight => d.line_height = Some(leading(v)?),
         F::TextAlign => {
             d.text_align = Some(keyword(
@@ -2882,6 +2943,10 @@ fn compute(
         word_break: d.word_break.unwrap_or(inherited.word_break),
         overflow_wrap: d.overflow_wrap.unwrap_or(inherited.overflow_wrap),
         transform: d.text_transform.unwrap_or(inherited.transform),
+        features: d
+            .features
+            .clone()
+            .unwrap_or_else(|| inherited.features.clone()),
         fill: d.fill.unwrap_or(inherited.fill),
         stroke: match &d.stroke {
             None => inherited.stroke,

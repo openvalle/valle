@@ -39,6 +39,7 @@ fn font(size: f64) -> Font {
         word_break: WordBreak::Normal,
         overflow_wrap: OverflowWrap::Normal,
         transform: TextTransform::None,
+        features: Rc::new([]),
         fill: None,
         stroke: 0.0,
         stroke_color: None,
@@ -462,4 +463,22 @@ fn clamped_text_is_as_tall_as_its_lines_and_ends_the_last_in_an_ellipsis() {
     let mut last = whole.clone();
     t.truncate(&mut last, &f, 9, roomy, false, Some(3)).unwrap();
     assert_eq!(last, whole);
+}
+
+#[test]
+fn font_features_choose_glyphs_and_a_later_one_of_a_tag_wins() {
+    let mut t = text();
+    let mut ids = |f: &Font| {
+        let lines = t.lines(&plain("abc", f), 1000.0).unwrap();
+        lines.glyphs.iter().map(|g| g.id).collect::<Vec<_>>()
+    };
+    let with = |features: &[(&[u8; 4], u16)]| Font {
+        features: (features.iter())
+            .map(|&(tag, value)| Feature { tag: *tag, value })
+            .collect(),
+        ..font(16.0)
+    };
+    let normal = ids(&font(16.0));
+    assert_ne!(ids(&with(&[(b"smcp", 1)])), normal);
+    assert_eq!(ids(&with(&[(b"smcp", 1), (b"smcp", 0)])), normal);
 }

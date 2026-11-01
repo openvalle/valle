@@ -1925,6 +1925,18 @@ const ROWS: &[Row] = &[
         refused: &["\"break-all\"", "0"],
     },
     Row {
+        properties: &["fontFeatureSettings"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Office 1/2 AV 10</Text></View>"##,
+        values: &[
+            "\"normal\"",
+            "\"'smcp'\"",
+            "\"'frac' 1, 'zero'\"",
+            "\"'liga' off, 'kern' 0\"",
+            "\"'onum', 'pnum' on\"",
+        ],
+        refused: &["\"smcp\"", "\"'smc'\"", "\"'liga' -1\"", "0"],
+    },
+    Row {
         properties: &["textTransform"],
         sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>don't stop-me 3d Straße ÉCOLE</Text></View>"##,
         values: &[

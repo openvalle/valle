@@ -14,17 +14,18 @@ use std::rc::Rc;
 
 pub use parley::fontique::Blob;
 use parley::fontique::{Collection, CollectionOptions, GenericFamily, SourceCache};
+use parley::setting::Tag;
 use parley::{
-    Alignment, AlignmentOptions, BreakReason, FontContext, FontFamily, FontFamilyName, FontWeight,
-    LayoutContext, PositionedLayoutItem, StyleProperty, TextWrapMode, WhiteSpaceCollapse,
-    YieldData,
+    Alignment, AlignmentOptions, BreakReason, FontContext, FontFamily, FontFamilyName, FontFeature,
+    FontFeatures, FontWeight, LayoutContext, PositionedLayoutItem, StyleProperty, TextWrapMode,
+    WhiteSpaceCollapse, YieldData,
 };
 
 use crate::path::{self, Curve};
 use crate::slug;
 use crate::style::color::Rgba;
 use crate::style::{
-    Collapse, Family, Font, LineHeight, OverflowWrap, TextAlign, TextTransform, WordBreak,
+    Collapse, Family, Feature, Font, LineHeight, OverflowWrap, TextAlign, TextTransform, WordBreak,
 };
 use crate::template::Error;
 
@@ -129,6 +130,7 @@ struct Shaping {
     /// `word-break: break-word` is `anywhere` here.
     overflow_wrap: OverflowWrap,
     transform: TextTransform,
+    features: Rc<[Feature]>,
 }
 
 impl Shaping {
@@ -150,6 +152,7 @@ impl Shaping {
                 (_, wrap) => wrap,
             },
             transform: font.transform,
+            features: font.features.clone(),
         }
     }
 }
@@ -617,6 +620,13 @@ impl Text {
                     OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
                 };
                 builder.push(StyleProperty::OverflowWrap(wrap), range.clone());
+                if !font.features.is_empty() {
+                    let features = (font.features.iter())
+                        .map(|f| FontFeature::new(Tag::new(&f.tag), f.value))
+                        .collect();
+                    let features = FontFeatures::List(Cow::Owned(features));
+                    builder.push(StyleProperty::FontFeatures(features), range.clone());
+                }
                 builder.push(StyleProperty::Brush(k as u32), range);
             }
             let layout = builder.build(&string);
