@@ -29,6 +29,7 @@ fn font(size: f64) -> Font {
         size,
         weight: 400.0,
         stretch: 100.0,
+        style: FontStyle::Normal,
         family: Rc::new([Family::SansSerif]),
         line_height: LineHeight::Normal,
         align: TextAlign::Start,
@@ -522,4 +523,24 @@ fn font_stretch_sets_the_width_axis_up_to_its_ends() {
     assert!(wide(75.0) < wide(100.0));
     assert_eq!(wide(150.0), wide(100.0));
     assert_eq!(wide(50.0), wide(62.5));
+}
+
+#[test]
+fn italic_text_has_a_slanted_face_where_its_font_has_no_italic() {
+    let mut t = text();
+    let mut slanted = |style| {
+        let f = Font {
+            style,
+            ..font(16.0)
+        };
+        let lines = t.lines(&plain("Lean", &f), 1000.0).unwrap();
+        let face = lines.glyphs[0].face;
+        (t.faces()[face as usize].slanted, lines.runs[0].x)
+    };
+    let (upright, x) = slanted(FontStyle::Normal);
+    assert!(!upright);
+    // Slanting moves no glyph.
+    assert_eq!(slanted(FontStyle::Italic), (true, x));
+    assert_eq!(slanted(FontStyle::Oblique(14.0)), (true, x));
+    assert_eq!(slanted(FontStyle::Oblique(10.0)), (false, x));
 }

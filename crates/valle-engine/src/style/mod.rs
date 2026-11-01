@@ -145,6 +145,26 @@ impl Style {
     }
 }
 
+/// `font-style`: upright, italic, or oblique by an angle, degrees, clockwise.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FontStyle {
+    Normal,
+    Italic,
+    Oblique(f64),
+}
+
+impl FontStyle {
+    /// Whether Chrome slants a face with no italic of its own for it: for italic, and for
+    /// oblique by 14deg or more, by a quarter of the height whatever the angle.
+    pub fn slants(self) -> bool {
+        match self {
+            FontStyle::Normal => false,
+            FontStyle::Italic => true,
+            FontStyle::Oblique(angle) => angle >= 14.0,
+        }
+    }
+}
+
 /// A variable font's axis, by its tag, set to a value, as `font-variation-settings` sets it.
 #[derive(Clone, Copy, Debug)]
 pub struct Variation {
@@ -275,6 +295,7 @@ pub struct Font {
     pub weight: f64,
     /// `font-stretch`, % of the normal width.
     pub stretch: f64,
+    pub style: FontStyle,
     pub family: Rc<[Family]>,
     pub line_height: LineHeight,
     pub align: TextAlign,
@@ -330,6 +351,7 @@ impl Font {
             size: 16.0,
             weight: 400.0,
             stretch: 100.0,
+            style: FontStyle::Normal,
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
@@ -918,6 +940,7 @@ struct Declared {
     font_size: Option<Len>,
     font_weight: Option<Weight>,
     stretch: Option<f64>,
+    font_style: Option<FontStyle>,
     font_family: Option<Rc<[Family]>>,
     variants: [Option<Rc<[Feature]>>; VARIANTS],
     features: Option<Rc<[Feature]>>,
@@ -1014,6 +1037,7 @@ impl Default for Declared {
             font_size: None,
             font_weight: None,
             stretch: None,
+            font_style: None,
             font_family: None,
             variants: Default::default(),
             features: None,
@@ -1134,6 +1158,7 @@ enum Field {
     FontSize,
     FontWeight,
     FontStretch,
+    FontStyle,
     FontFamily,
     FontFeatureSettings,
     FontVariant(Option<Variant>),
@@ -1214,7 +1239,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 217] = [
+const FIELDS: [(&str, Field); 218] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1501,6 +1526,7 @@ const FIELDS: [(&str, Field); 217] = [
     ("fontSize", Field::FontSize),
     ("fontWeight", Field::FontWeight),
     ("fontStretch", Field::FontStretch),
+    ("fontStyle", Field::FontStyle),
     ("fontFamily", Field::FontFamily),
     ("fontFeatureSettings", Field::FontFeatureSettings),
     ("fontKerning", Field::FontVariant(Some(Variant::Kerning))),
@@ -1574,6 +1600,7 @@ impl Field {
                 | Field::FontSize
                 | Field::FontWeight
                 | Field::FontStretch
+                | Field::FontStyle
                 | Field::FontFamily
                 | Field::FontFeatureSettings
                 | Field::FontVariant(_)
@@ -2362,6 +2389,24 @@ fn stretch(v: &V) -> Result<f64, String> {
     }
 }
 
+/// `font-style`: `normal`, `italic`, or `oblique` and an angle from -90deg to 90deg, 14deg if
+/// left out.
+fn font_style(v: &V) -> Result<FontStyle, String> {
+    let s = text(v)?;
+    match css::words(&s)[..] {
+        ["normal"] => Ok(FontStyle::Normal),
+        ["italic"] => Ok(FontStyle::Italic),
+        ["oblique"] => Ok(FontStyle::Oblique(14.0)),
+        ["oblique", a] => match css::angle(a) {
+            Some(d) if (-90.0..=90.0).contains(&d) => Ok(FontStyle::Oblique(d)),
+            _ => Err(format!("{a} is not an angle from -90deg to 90deg")),
+        },
+        _ => Err(format!(
+            "{s} is not normal, italic, or oblique and an angle"
+        )),
+    }
+}
+
 fn leading(v: &V) -> Result<Leading, String> {
     if let V::Num(_) = v {
         return Ok(Leading::Factor(factor(v)?));
@@ -2859,6 +2904,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
         F::FontStretch => d.stretch = Some(stretch(v)?),
+        F::FontStyle => d.font_style = Some(font_style(v)?),
         F::FontFamily => d.font_family = Some(families(v)?),
         F::FontFeatureSettings => d.features = Some(features(v)?),
         F::FontVariant(variant) => variants(v, variant, d)?,
@@ -3216,6 +3262,7 @@ fn compute(
             Some(Weight::Lighter) => lighter(inherited.weight),
         },
         stretch: d.stretch.unwrap_or(inherited.stretch),
+        style: d.font_style.unwrap_or(inherited.style),
         family: match &d.font_family {
             None => inherited.family.clone(),
             Some(f) => f.clone(),

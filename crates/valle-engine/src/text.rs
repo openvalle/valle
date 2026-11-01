@@ -25,23 +25,25 @@ use crate::path::{self, Curve};
 use crate::slug;
 use crate::style::color::Rgba;
 use crate::style::{
-    Collapse, Family, Feature, Font, LineHeight, OverflowWrap, TextAlign, TextTransform, VARIANTS,
-    Variation, WordBreak,
+    Collapse, Family, Feature, Font, FontStyle, LineHeight, OverflowWrap, TextAlign, TextTransform,
+    VARIANTS, Variation, WordBreak,
 };
 use crate::template::Error;
 
-/// A font face as shaping chose it: a font file, the face's index in it, and its variation
-/// coordinates (normalized, 2.14 fixed point).
+/// A font face as shaping chose it: a font file, the face's index in it, its variation
+/// coordinates (normalized, 2.14 fixed point), and whether it is slanted for an italic it does
+/// not have.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Face {
     pub data: Blob<u8>,
     pub index: u32,
     pub coords: Vec<i16>,
+    pub slanted: bool,
 }
 
 impl Face {
-    /// The face a run of glyphs is shaped in.
-    fn of(run: &parley::Run<'_, u32>) -> Face {
+    /// The face a run of glyphs in `style` is shaped in.
+    fn of(run: &parley::Run<'_, u32>, style: FontStyle) -> Face {
         let font = run.font();
         Face {
             data: font.data.clone(),
@@ -49,6 +51,7 @@ impl Face {
             coords: (run.normalized_coords().iter())
                 .map(|c| c.to_bits())
                 .collect(),
+            slanted: run.synthesis().skew().is_some() && style.slants(),
         }
     }
 }
@@ -124,6 +127,8 @@ struct Shaping {
     size: u32,
     weight: u32,
     stretch: u32,
+    /// Normal, italic or oblique, and the angle's f32 bits.
+    style: [u32; 2],
     spacing: u32,
     word_spacing: u32,
     collapse: Collapse,
@@ -146,6 +151,11 @@ impl Shaping {
             size: (font.size as f32).to_bits(),
             weight: (font.weight as f32).to_bits(),
             stretch: (font.stretch as f32).to_bits(),
+            style: match font.style {
+                FontStyle::Normal => [0, 0],
+                FontStyle::Italic => [1, 0],
+                FontStyle::Oblique(angle) => [2, (angle as f32).to_bits()],
+            },
             spacing: (font.spacing as f32).to_bits(),
             word_spacing: (font.word_spacing as f32).to_bits(),
             collapse: font.collapse,
@@ -316,8 +326,8 @@ impl Text {
                 let PositionedLayoutItem::GlyphRun(run) = item else {
                     continue;
                 };
-                let node = content.pieces[run.style().brush as usize].node;
-                let face = Face::of(run.run());
+                let piece = &content.pieces[run.style().brush as usize];
+                let (node, face) = (piece.node, Face::of(run.run(), piece.font.style));
                 let mut x = run.offset();
                 let mut glyphs = Vec::new();
                 for g in run.glyphs() {
@@ -513,7 +523,7 @@ impl Text {
                 let PositionedLayoutItem::GlyphRun(run) = item else {
                     continue;
                 };
-                let face = Face::of(run.run());
+                let face = Face::of(run.run(), font.style);
                 for g in run.glyphs() {
                     shaped.push((face.clone(), g.id, x + g.x));
                     x += g.advance;
@@ -539,6 +549,7 @@ impl Text {
         builder.push_default(StyleProperty::FontWeight(weight));
         let width = FontWidth::from_percentage(font.stretch as f32);
         builder.push_default(StyleProperty::FontWidth(width));
+        builder.push_default(StyleProperty::FontStyle(style(font)));
         builder.push_default(StyleProperty::FontVariations(variations(font)));
         let mut layout = builder.build(text);
         layout.break_all_lines(None);
@@ -552,7 +563,8 @@ impl Text {
 
     fn face(&mut self, face: Face) -> u32 {
         let i = match self.faces.iter().position(|f| {
-            f.data.id() == face.data.id() && f.index == face.index && f.coords == face.coords
+            f.data.id() == face.data.id()
+                && (f.index, &f.coords, f.slanted) == (face.index, &face.coords, face.slanted)
         }) {
             Some(i) => i,
             None => {
@@ -600,6 +612,7 @@ impl Text {
                 builder.push(StyleProperty::FontWeight(weight), range.clone());
                 let width = FontWidth::from_percentage(font.stretch as f32);
                 builder.push(StyleProperty::FontWidth(width), range.clone());
+                builder.push(StyleProperty::FontStyle(style(font)), range.clone());
                 let spacing = font.spacing as f32;
                 builder.push(StyleProperty::LetterSpacing(spacing), range.clone());
                 let spacing = font.word_spacing as f32;
@@ -778,6 +791,15 @@ pub fn prepare<'a>(
         ranges[k].end = out.len();
     }
     Ok((out, ranges))
+}
+
+/// The style of `font`, as parley takes it.
+fn style(font: &Font) -> parley::FontStyle {
+    match font.style {
+        FontStyle::Normal => parley::FontStyle::Normal,
+        FontStyle::Italic => parley::FontStyle::Italic,
+        FontStyle::Oblique(angle) => parley::FontStyle::Oblique(Some(angle as f32)),
+    }
 }
 
 /// The axes `font` sets, as parley takes them.

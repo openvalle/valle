@@ -976,6 +976,34 @@ fn font_features_are_quoted_tags_with_their_values() {
 }
 
 #[test]
+fn font_style_is_italic_or_oblique_by_an_angle() {
+    let style = |v: &str| one(&[("fontStyle", text(v))]).font.style;
+    assert_eq!(style("Italic"), FontStyle::Italic);
+    assert_eq!(style("oblique"), FontStyle::Oblique(14.0));
+    assert_eq!(style("oblique -0.25turn"), FontStyle::Oblique(-90.0));
+    assert_eq!(style("normal"), FontStyle::Normal);
+    // Chrome slants a face for italic, and for oblique by 14deg or more.
+    let slants = |v: &str| style(v).slants();
+    assert!(slants("italic") && slants("oblique") && slants("oblique 90deg"));
+    assert!(!slants("oblique 13deg") && !slants("oblique -20deg") && !slants("normal"));
+    for (bad, message) in [
+        (
+            "oblique 91deg",
+            "91deg is not an angle from -90deg to 90deg",
+        ),
+        ("oblique 10", "10 is not an angle"),
+        (
+            "italic 10deg",
+            "is not normal, italic, or oblique and an angle",
+        ),
+        ("slanted", "is not normal, italic, or oblique and an angle"),
+    ] {
+        let e = error(&[("fontStyle", text(bad))]);
+        assert!(e.contains(message), "{bad}: {e}");
+    }
+}
+
+#[test]
 fn font_stretch_is_a_keyword_or_a_percentage() {
     let stretch = |v: &str| one(&[("fontStretch", text(v))]).font.stretch;
     assert_eq!(stretch("Semi-Condensed"), 87.5);
@@ -1147,6 +1175,7 @@ fn text_properties_inherit() {
                 ("fontVariant", text("small-caps slashed-zero")),
                 ("fontVariationSettings", text("'wdth' 80")),
                 ("fontStretch", text("condensed")),
+                ("fontStyle", text("oblique 20deg")),
             ],
             &[2],
         ),
@@ -1170,6 +1199,7 @@ fn text_properties_inherit() {
         size: 16.0,
         weight: 400.0,
         stretch: 100.0,
+        style: FontStyle::Normal,
         family: Rc::new([Family::SansSerif]),
         line_height: LineHeight::Normal,
         align: TextAlign::Start,
@@ -1199,6 +1229,7 @@ fn text_properties_inherit() {
         size: 20.0,
         weight: 700.0,
         stretch: 75.0,
+        style: FontStyle::Oblique(20.0),
         family: Rc::new([
             Family::Named("Brand Sans".into()),
             Family::Named("Noto Serif".into()),

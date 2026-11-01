@@ -12,6 +12,7 @@ fn face(coords: Vec<i16>) -> Face {
         data: Blob::from(std::fs::read(path).unwrap()),
         index: 0,
         coords,
+        slanted: false,
     }
 }
 
@@ -268,6 +269,25 @@ fn spaces_have_no_curves_and_weights_change_the_outline() {
     let bold = outline(&f, glyph(&f, 'l'), 0.0).unwrap();
     let regular = of('l');
     assert!(bold.bounds[2] - bold.bounds[0] > regular.bounds[2] - regular.bounds[0]);
+}
+
+#[test]
+fn slanted_faces_lean_by_a_quarter_of_the_height() {
+    let upright = face(Vec::new());
+    let slanted = Face {
+        slanted: true,
+        ..upright.clone()
+    };
+    let id = glyph(&upright, 'l');
+    let points = |f: &Face| {
+        let (_, contours) = contours(f, id).unwrap();
+        contours.into_iter().flatten().flatten().collect::<Vec<_>>()
+    };
+    let leaning: Vec<[f32; 2]> = (points(&upright).into_iter())
+        .map(|[x, y]| [x + y / 4.0, y])
+        .collect();
+    assert_eq!(points(&slanted), leaning);
+    assert!(leaning.iter().any(|p| p[1] > 500.0));
 }
 
 #[test]

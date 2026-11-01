@@ -97,6 +97,12 @@ pub fn contours(face: &Face, glyph: u32) -> Result<(f32, Vec<Vec<Curve>>), Error
             "glyph {glyph}: cubic outlines are not supported yet"
         ));
     }
+    // Slanted as Skia slants a face for an italic it does not have, by a quarter of the height.
+    if face.slanted {
+        for p in pen.contours.iter_mut().flatten().flatten() {
+            p[0] += p[1] / 4.0;
+        }
+    }
     Ok((em, pen.contours))
 }
 
