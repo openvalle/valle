@@ -164,6 +164,9 @@ pub enum Filter {
     /// The image's luminance, of its working values with Rec. 709's weights as Chrome takes it,
     /// times its alpha, as the alpha of black: what a mask layer shows by its luminance.
     Luminance,
+    /// Its red moved on by half this many px along x and its blue back by half, its alpha the
+    /// most of the three's.
+    Aberration(f32),
 }
 
 /// Where a background image is: one tile, and on each axis how far it is to the next one, if it
@@ -499,6 +502,7 @@ fn filters(functions: &[filter::Function]) -> Vec<Filter> {
                 sigma: *blur as f32,
                 color: work(*color),
             },
+            filter::Function::ChromaticAberration(offset) => Filter::Aberration(*offset as f32),
             f => {
                 let Some(m) = colors(f) else { continue };
                 if let Some(Filter::Colors(list)) = out.last_mut() {
@@ -579,7 +583,7 @@ fn colors(f: &filter::Function) -> Option<[f32; 20]> {
                 0.0,
             )
         }
-        F::Blur(_) | F::DropShadow { .. } => return None,
+        F::Blur(_) | F::DropShadow { .. } | F::ChromaticAberration(_) => return None,
     })
 }
 

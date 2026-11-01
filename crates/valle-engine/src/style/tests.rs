@@ -1738,6 +1738,35 @@ fn filters_take_css_functions_in_order() {
 }
 
 #[test]
+fn filters_take_valles_functions_in_px_within_their_ranges() {
+    use filter::Function as F;
+    let filter = |v: &str| one(&[("filter", text(v))]).filter;
+    assert_eq!(
+        filter("chromatic-aberration(-4.5px) blur(1px) chromatic-aberration(0)"),
+        [
+            F::ChromaticAberration(-4.5),
+            F::Blur(1.0),
+            F::ChromaticAberration(0.0)
+        ]
+    );
+    let backdrop = one(&[("backdropFilter", text("chromatic-aberration(256px)"))]);
+    assert_eq!(backdrop.backdrop, [F::ChromaticAberration(256.0)]);
+    for (v, says) in [
+        (
+            "chromatic-aberration(300px)",
+            "the offset 300px is not within -256px and 256px",
+        ),
+        ("chromatic-aberration(1em)", "the offset 1em is not px"),
+        ("chromatic-aberration(4)", "the offset 4 is not px"),
+        ("chromatic-aberration()", "takes the offset"),
+        ("chromatic-aberration(1px 2px)", "takes the offset"),
+    ] {
+        let e = error(&[("filter", text(v))]);
+        assert!(e.contains(says), "{v}: {e}");
+    }
+}
+
+#[test]
 fn clip_paths_take_basic_shapes_in_a_box() {
     use background::Area;
     use shape::{Clip, Radius, Shape};

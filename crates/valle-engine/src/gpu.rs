@@ -44,6 +44,9 @@ const TRANSFORM: usize = 24;
 /// How far a path's quadratic curves may be from its cubic ones and arcs, in target px.
 const TOLERANCE: f32 = 0.02;
 
+/// Valle's effects, as `effects.wgsl` tells them apart.
+const ABERRATION: f32 = 0.0;
+
 /// Premultiplied colors to the luminance of their working values, Rec. 709's weights as Skia's,
 /// times their alpha, as the alpha of black.
 const LUMINANCE: [f32; 20] = [
@@ -79,6 +82,7 @@ pub struct Gpu {
     masks: wgpu::RenderPipeline,
     blurs: wgpu::RenderPipeline,
     colors: wgpu::RenderPipeline,
+    effects: wgpu::RenderPipeline,
     output: wgpu::RenderPipeline,
 }
 
@@ -189,6 +193,7 @@ impl Gpu {
         let mask = include_str!("../shaders/mask.wgsl");
         let blur = include_str!("../shaders/blur.wgsl");
         let colors = include_str!("../shaders/colors.wgsl");
+        let effects = include_str!("../shaders/effects.wgsl");
         let output = include_str!("../shaders/output.wgsl");
         Ok(Gpu {
             info: adapter.get_info(),
@@ -200,6 +205,7 @@ impl Gpu {
             masks: pipeline(&blending, "mask", mask, WORK, over),
             blurs: pipeline(&imaging, "blur", blur, WORK, None),
             colors: pipeline(&imaging, "colors", colors, WORK, None),
+            effects: pipeline(&imaging, "effects", effects, WORK, None),
             output: pipeline(&imaging, "output", output, OUTPUT, None),
             device,
             queue,
@@ -363,6 +369,12 @@ enum Step {
         layer: usize,
         at: u32,
     },
+    /// Draws `layer` through one of Valle's effects into `target`, a new layer.
+    Effect {
+        target: usize,
+        layer: usize,
+        at: u32,
+    },
     /// Copies `layer`, or the frame, into `target`, a new layer.
     Copy {
         target: usize,
@@ -380,6 +392,7 @@ impl Step {
             | Step::Blend { layer, .. }
             | Step::Blur { layer, .. }
             | Step::Colors { layer, .. }
+            | Step::Effect { layer, .. }
             | Step::Copy { layer, .. } => [Some(layer), None],
         }
     }
@@ -474,6 +487,11 @@ impl Plan {
                 Filter::Blur(sigma) => self.blurred(layer, sigma * scale, bounds),
                 Filter::Colors(matrices) => self.colored(layer, [0.0; 2], matrices, false),
                 Filter::Luminance => self.colored(layer, [0.0; 2], &[LUMINANCE], true),
+                Filter::Aberration(offset) => {
+                    let d = f64::from(*offset);
+                    let [dx, dy] = [0, 1].map(|k| (x[k] * d) as f32);
+                    self.effect(layer, ABERRATION, &[dx, dy])
+                }
                 Filter::Shadow {
                     offset: [dx, dy],
                     sigma,
@@ -500,6 +518,15 @@ impl Plan {
             };
         }
         layer
+    }
+
+    /// A new layer of `layer` through one of Valle's effects, `kind`, with its parameters.
+    fn effect(&mut self, layer: usize, kind: f32, parameters: &[f32]) -> usize {
+        let words = std::iter::once(kind).chain(parameters.iter().copied());
+        let at = self.words(words.chain(std::iter::repeat(0.0)).take(LAYER));
+        let target = self.layer();
+        self.steps.push(Step::Effect { target, layer, at });
+        target
     }
 
     /// A new layer of `layer` moved by `offset` px, its colors through `matrices`, its
@@ -1164,7 +1191,8 @@ impl<'a> Renderer<'a> {
                 | Step::Blend { target, .. }
                 | Step::Mask { target, .. }
                 | Step::Blur { target, .. }
-                | Step::Colors { target, .. } => target,
+                | Step::Colors { target, .. }
+                | Step::Effect { target, .. } => target,
                 Step::Copy { .. } => unreachable!("copied above"),
             };
             // The layers the step reads go back to the pool once it is their last; a layer
@@ -1229,12 +1257,14 @@ impl<'a> Renderer<'a> {
                 Step::Composite { at, .. }
                 | Step::Blend { at, .. }
                 | Step::Blur { at, .. }
-                | Step::Colors { at, .. } => {
+                | Step::Colors { at, .. }
+                | Step::Effect { at, .. } => {
                     let s = layer.expect("a composited layer has a surface");
                     pass.set_pipeline(match step {
                         Step::Blend { .. } => &gpu.blends,
                         Step::Blur { .. } => &gpu.blurs,
                         Step::Colors { .. } => &gpu.colors,
+                        Step::Effect { .. } => &gpu.effects,
                         _ => &gpu.layers,
                     });
                     pass.set_bind_group(1, &self.pool[s].image, &[]);

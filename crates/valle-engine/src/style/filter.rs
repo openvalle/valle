@@ -1,4 +1,5 @@
-//! Filters: `filter`, functions applied one after another to all a box paints, as one image.
+//! Filters: `filter`, functions applied one after another to all a box paints, as one image:
+//! CSS's, and Valle's for video, whose lengths are px in the box's own px.
 
 use super::color::Rgba;
 use super::css::{self, angle};
@@ -27,6 +28,9 @@ pub enum Function<L = f64, C = Rgba> {
         blur: L,
         color: C,
     },
+    /// Valle's `chromatic-aberration()`: red moved on along x by half this many px and blue
+    /// back by half, as a lens splits colors.
+    ChromaticAberration(f64),
 }
 
 impl Function<Len, Option<Rgba>> {
@@ -50,12 +54,13 @@ impl Function<Len, Option<Rgba>> {
                 blur: blur.px(u, 0.0),
                 color: color.unwrap_or(current),
             },
+            Function::ChromaticAberration(offset) => Function::ChromaticAberration(*offset),
         }
     }
 }
 
 const NAMES: &str = "blur, brightness, contrast, drop-shadow, grayscale, hue-rotate, invert, \
-                     opacity, saturate or sepia";
+                     opacity, saturate or sepia, or Valle's chromatic-aberration";
 
 /// `filter`: `none`, or functions separated by spaces.
 pub(super) fn filter(s: &str) -> Result<Vec<Function<Len, Option<Rgba>>>, String> {
@@ -72,6 +77,30 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
     };
     let named = |e: String| format!("{name}(): {e}");
     let args = css::words(inner);
+    // Valle's parameters, each a number, or px where `px`, within a range.
+    let valle = |takes: &[(&str, bool, [f64; 2])]| -> Result<Vec<f64>, String> {
+        if args.len() != takes.len() {
+            let names: Vec<&str> = takes.iter().map(|t| t.0).collect();
+            return Err(named(format!("takes {}", names.join(", "))));
+        }
+        (args.iter().zip(takes))
+            .map(|(a, &(what, px, [low, high]))| {
+                let n = css::num(a).filter(|n| match px {
+                    true => n.unit == "px" || (n.unit.is_empty() && n.value == 0.0),
+                    false => n.unit.is_empty(),
+                });
+                let unit = if px { "px" } else { "" };
+                match n {
+                    Some(n) if (low..=high).contains(&n.value) => Ok(n.value),
+                    Some(_) => Err(named(format!(
+                        "{what} {a} is not within {low}{unit} and {high}{unit}"
+                    ))),
+                    None if px => Err(named(format!("{what} {a} is not px"))),
+                    None => Err(named(format!("{what} {a} is not a number"))),
+                }
+            })
+            .collect()
+    };
     // A number or a percentage, not negative, 1 when left out; at most 1 where `most`.
     let amount = |most: bool| -> Result<f64, String> {
         let a = match args[..] {
@@ -127,6 +156,10 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
                 blur,
                 color,
             }
+        }
+        "chromatic-aberration" => {
+            let a = valle(&[("the offset", true, [-256.0, 256.0])])?;
+            Function::ChromaticAberration(a[0])
         }
         _ => return Err(format!("{name}() is not a filter function: {NAMES}")),
     })
