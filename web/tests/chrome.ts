@@ -208,10 +208,13 @@ function measure(): Promise<Measured> {
         const rects = range.getClientRects();
         // White space that collapsed away has no box.
         // A line goes right, and its characters overlap, however big: the next one starts back
-        // at the left, or below.
+        // at the left, or below, which for characters of no size is lower.
         if (rects.length > 0) {
           const r = rects[0];
-          if (last !== undefined && (r.left < last.left - 1 || r.top >= last.bottom - 1)) {
+          if (
+            last !== undefined &&
+            (r.left < last.left - 1 || r.top >= Math.max(last.bottom - 1, last.top + 1))
+          ) {
             out.push(line);
             line = "";
           }
