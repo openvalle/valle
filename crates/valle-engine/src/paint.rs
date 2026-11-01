@@ -53,7 +53,7 @@ use crate::style::color::{self, Rgba};
 use crate::style::filter;
 use crate::style::gradient::Image;
 use crate::style::transform::Function;
-use crate::style::{Blend, BorderStyle, DecorationStyle, Shadow, Style};
+use crate::style::{Blend, BorderStyle, DecorationStyle, Fit, Shadow, Style};
 use crate::template::{Kind, Template};
 use crate::text::{Glyph, Stripe};
 
@@ -1566,9 +1566,12 @@ impl Painter<'_> {
         }
     }
 
-    /// `i`'s image if it is an Image: filling its content box, which clips it with its corners.
+    /// `i`'s image if it is an Image: in its content box as its object fit and position have
+    /// it, the box clipping it with its corners.
     fn image(&self, i: usize, out: &mut Drawn) {
-        let Kind::Image { resource } = self.template.nodes[i].kind else {
+        let (Kind::Image { resource }, Some(Some([w, h]))) =
+            (&self.template.nodes[i].kind, self.layout.naturals.get(i))
+        else {
             return;
         };
         let s = &self.styles[i];
@@ -1580,15 +1583,40 @@ impl Painter<'_> {
             true => Some(i),
             false => self.clips[i].last().copied(),
         };
+        let [cw, ch] = [rect.width, rect.height];
+        let scaled = |k: f32| [w * k, h * k];
+        let ratio = *w > 0.0 && *h > 0.0;
+        let contain = match ratio {
+            true => scaled((cw / w).min(ch / h)),
+            false => [cw, ch],
+        };
+        let [ow, oh] = match s.object_fit {
+            Fit::Fill => [cw, ch],
+            Fit::Contain => contain,
+            Fit::Cover if ratio => scaled((cw / w).max(ch / h)),
+            Fit::Cover => [cw, ch],
+            Fit::None => [*w, *h],
+            Fit::ScaleDown if contain[0] < *w => contain,
+            Fit::ScaleDown => [*w, *h],
+        };
+        // Percentages of the room left.
+        let room = [cw - ow, ch - oh];
+        let [x, y] = [0, 1].map(|k| s.object_position[k].resolve(room[k]));
+        let first = Rect {
+            x: rect.x + x,
+            y: rect.y + y,
+            width: ow,
+            height: oh,
+        };
         let tiles = Tiles {
-            first: rect,
+            first,
             step: [None; 2],
         };
         let image = Item::Image {
             rect,
             radii,
             tiles,
-            image: resource,
+            image: *resource,
         };
         out.push((clip, image));
     }

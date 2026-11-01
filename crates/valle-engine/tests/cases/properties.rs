@@ -24,6 +24,10 @@ struct Row {
 const COMPOSITION: &str =
     "export const composition = { width: 256, height: 256, fps: 1, duration: 1 };";
 
+/// The resources of samples with Images.
+const CONTROLS: &str = "export const controls = {\n  resources: { photo: resource({ kind: \"image\", \
+                        default: \"../../resources/photo.png\" }) },\n};\n";
+
 const SIDES: &[&str] = &[
     "top",
     "right",
@@ -1256,6 +1260,33 @@ const ROWS: &[Row] = &[
         refused: &["\"left top 10px\"", "\"a\"", "\"\"", "true"],
     },
     Row {
+        properties: &["objectFit"],
+        sample: r##"<Image src="resource://photo" style={{ width: 120, height: 30, marginLeft: 60, background: "#e8eaf6", PROPERTY: VALUE }} />"##,
+        values: &[
+            "\"fill\"",
+            "\"contain\"",
+            "\"cover\"",
+            "\"none\"",
+            "\"scale-down\"",
+            "\" COVER \"",
+        ],
+        refused: &["\"stretch\"", "\"\"", "0"],
+    },
+    Row {
+        properties: &["objectPosition"],
+        sample: r##"<Image src="resource://photo" style={{ width: 120, height: 30, marginLeft: 60, objectFit: "none", background: "#e8eaf6", PROPERTY: VALUE }} />"##,
+        values: &[
+            "\"center\"",
+            "\"left top\"",
+            "\"right 10px bottom 5px\"",
+            "\"25% 75%\"",
+            "\"-10px 0\"",
+            "8",
+            "\"calc(10% + 4px) 0\"",
+        ],
+        refused: &["\"left top 2px\"", "\"a\"", "\"\"", "true"],
+    },
+    Row {
         properties: &["backfaceVisibility"],
         sample: r##"<View style={{ width: 40, height: 16, margin: "8px 60px", background: "linear-gradient(to right, #3949ab, #e57373)", transform: "rotateY(150deg)", PROPERTY: VALUE }} />"##,
         values: &["\"visible\"", "\"hidden\"", "\" HIDDEN \""],
@@ -2358,8 +2389,13 @@ pub fn cases(chrome: &[String]) -> Result<BTreeMap<String, String>, String> {
             return Err(format!("the engine takes {p}, which Chrome does not know"));
         }
         let sample = |v: &str| row.sample.replace("PROPERTY", p).replace("VALUE", v);
+        let controls = if row.sample.contains("<Image") {
+            CONTROLS
+        } else {
+            ""
+        };
         let mut css = format!(
-            "{COMPOSITION}\n\n// {p}: each value the engine takes, from the support table.\n\
+            "{COMPOSITION}\n{controls}\n// {p}: each value the engine takes, from the support table.\n\
              export default function Scene() {{\n  return (\n    <View style={{{{ padding: 4 }}}}>\n"
         );
         for &v in row.values {
@@ -2373,7 +2409,7 @@ pub fn cases(chrome: &[String]) -> Result<BTreeMap<String, String>, String> {
         for (n, &v) in row.refused.iter().enumerate() {
             let case = format!("errors/values/{p}.{n}.tsx");
             let source = format!(
-                "// error: {case}:…\n{COMPOSITION}\n\n// {p}: {v}, which the engine refuses.\n\
+                "// error: {case}:…\n{COMPOSITION}\n{controls}\n// {p}: {v}, which the engine refuses.\n\
                  export default function Scene() {{\n  return (\n    <View style={{{{ padding: 4 }}}}>\n\
                  \x20     <View style={{{{ paddingBottom: 4 }}}}>{}</View>\n    </View>\n  );\n}}\n",
                 sample(v)

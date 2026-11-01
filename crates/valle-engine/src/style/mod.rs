@@ -77,6 +77,10 @@ pub struct Style {
     /// `perspective-origin`.
     pub perspective: Option<f64>,
     pub perspective_origin: [position::Offset; 2],
+    /// An Image's `object-fit`, how its image is sized in its content box, and `object-position`,
+    /// where it goes there.
+    pub object_fit: Fit,
+    pub object_position: [position::Offset; 2],
     /// `backface-visibility: visible`; a box that shows its back otherwise hides with all in it.
     pub backface_visible: bool,
     /// `transform-style: preserve-3d`: its children with transforms stay in its space rather
@@ -110,6 +114,17 @@ pub struct Style {
     pub clamp: Option<u32>,
     /// The math functions with percentages in them that `layout` holds handles to.
     pub calcs: Vec<Calc>,
+}
+
+/// `object-fit`: an image filling its box, as large as fits in it whole or as covers it, at its
+/// natural size, or the smaller of that and fitting whole.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fit {
+    Fill,
+    Contain,
+    Cover,
+    None,
+    ScaleDown,
 }
 
 /// A `<Mask>`'s source: the root node whose painting masks the box, by its alpha or its
@@ -946,6 +961,8 @@ struct Declared {
     offset_position: offset::Start<Len>,
     perspective: Option<Len>,
     perspective_origin: [position::Offset<Len>; 2],
+    object_fit: Fit,
+    object_position: [position::Offset<Len>; 2],
     backface_visible: bool,
     preserve_3d: bool,
     blend: Blend,
@@ -1053,6 +1070,8 @@ impl Default for Declared {
             offset_position: offset::Start::Normal,
             perspective: None,
             perspective_origin: [CENTER; 2],
+            object_fit: Fit::Fill,
+            object_position: [CENTER; 2],
             backface_visible: true,
             preserve_3d: false,
             blend: Blend::Normal,
@@ -1176,6 +1195,8 @@ enum Field {
     OffsetRotate,
     OffsetAnchor,
     OffsetPosition,
+    ObjectFit,
+    ObjectPosition,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -1291,7 +1312,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 223] = [
+const FIELDS: [(&str, Field); 225] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1578,6 +1599,8 @@ const FIELDS: [(&str, Field); 223] = [
     ("offsetRotate", Field::OffsetRotate),
     ("offsetAnchor", Field::OffsetAnchor),
     ("offsetPosition", Field::OffsetPosition),
+    ("objectFit", Field::ObjectFit),
+    ("objectPosition", Field::ObjectPosition),
     ("visibility", Field::Visibility),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
@@ -2940,6 +2963,19 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::OffsetRotate => d.offset_rotate = offset::rotate(&text(v)?)?,
         F::OffsetAnchor => d.offset_anchor = offset::anchor(&px_text(v)?)?,
         F::OffsetPosition => d.offset_position = offset::start(&px_text(v)?)?,
+        F::ObjectFit => {
+            d.object_fit = keyword(
+                v,
+                &[
+                    ("fill", Fit::Fill),
+                    ("contain", Fit::Contain),
+                    ("cover", Fit::Cover),
+                    ("none", Fit::None),
+                    ("scale-down", Fit::ScaleDown),
+                ],
+            )?;
+        }
+        F::ObjectPosition => d.object_position = position::object(&px_text(v)?)?,
         F::Opacity => {
             let o = match v {
                 V::Str(_) => {
@@ -3559,6 +3595,8 @@ fn compute(
         }),
         perspective: d.perspective.as_ref().map(|l| l.px(u, 0.0)),
         perspective_origin: d.perspective_origin.each_ref().map(|o| o.computed(u)),
+        object_fit: d.object_fit,
+        object_position: d.object_position.each_ref().map(|o| o.computed(u)),
         backface_visible: d.backface_visible,
         preserve_3d: d.preserve_3d,
         blend: d.blend,

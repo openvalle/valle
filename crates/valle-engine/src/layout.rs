@@ -49,6 +49,8 @@ pub struct Layout {
     pub lines: Vec<Option<Lines>>,
     /// The canvas's size: the roots' containing block.
     pub canvas: [f32; 2],
+    /// Each Image's natural size.
+    pub naturals: Vec<Option<[f32; 2]>>,
 }
 
 /// A container's children in the order it lays them out and paints them: a flex or grid
@@ -171,6 +173,7 @@ pub fn layout(
         children,
         layouts,
         hoisted,
+        naturals,
         failed,
         ..
     } = tree;
@@ -261,6 +264,7 @@ pub fn layout(
         boxes,
         lines,
         canvas,
+        naturals,
     })
 }
 

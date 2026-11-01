@@ -48,6 +48,16 @@ enum Word {
 /// x and y from one, two or four words, or `three` too: a keyword or a length on either axis, a
 /// keyword or a length for x and then for y, keywords in either order, or two keywords, a side
 /// with a length from it or not and the other a side with a length or center.
+/// `object-position`: one, two or four words of a position.
+pub(super) fn object(s: &str) -> Result<[Offset<Len>; 2], String> {
+    position(&css::words(s), false).map_err(|_| {
+        format!(
+            "{s:?} is not an object position: one, two or four of left, center, right, top, \
+             bottom and lengths"
+        )
+    })
+}
+
 pub(super) fn position(words: &[&str], three: bool) -> Result<[Offset<Len>; 2], String> {
     let bad = || {
         let counts = if three {
