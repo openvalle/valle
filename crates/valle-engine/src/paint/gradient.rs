@@ -1,8 +1,9 @@
-//! Gradients as the GPU draws them: the line or ellipse in px their colors go along, and the parts
-//! of it between color stops, their colors in the space they mix in.
+//! Gradients as the GPU draws them: the line, ellipse or turn in px their colors go along, and the
+//! parts of it between color stops, their colors in the space they mix in.
 
 use crate::style::color::{self, Rgba};
 use crate::style::gradient::{Gradient, Hue, Line, Shape, Size, Space, Stop};
+use crate::style::position::Offset;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ramp {
@@ -28,6 +29,8 @@ pub enum Geometry {
     Line([[f32; 2]; 2]),
     /// Out from a center to an ellipse with these horizontal and vertical radii.
     Ellipse([f32; 2], [f32; 2]),
+    /// Clockwise around a center, from a fraction of a turn clockwise from up.
+    Turn([f32; 2], f32),
 }
 
 /// The chroma below which a hue is powerless, as CSS Color 4 takes it.
@@ -38,18 +41,16 @@ const POINT: f32 = 0.001;
 
 /// A gradient in an image `size` px.
 pub fn ramp(g: &Gradient, size: [f32; 2]) -> Ramp {
+    let center = |at: &[Offset; 2]| [at[0].resolve(size[0]), at[1].resolve(size[1])];
     let (geometry, len) = match &g.shape {
         Shape::Linear(line) => linear(*line, size),
         Shape::Radial {
             circle,
             size: s,
             at,
-        } => radial(
-            *circle,
-            s,
-            [at[0].resolve(size[0]), at[1].resolve(size[1])],
-            size,
-        ),
+        } => radial(*circle, s, center(at), size),
+        // Stops are degrees, as px of a line 360 long.
+        Shape::Conic { from, at } => (Geometry::Turn(center(at), (from / 360.0) as f32), 360.0),
     };
     let (segments, repeating) = segments(g, len);
     Ramp {

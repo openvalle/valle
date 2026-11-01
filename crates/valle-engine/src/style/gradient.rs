@@ -1,6 +1,6 @@
-//! Background images: gradients so far. A gradient is a line through its image or ellipses around
-//! a point in it, the color space its colors mix in, and color stops along the line or out from
-//! the point, with hints between them.
+//! Background images: gradients so far. A gradient is a line through its image, or ellipses or
+//! angles around a point in it, the color space its colors mix in, and color stops along the
+//! line, out from the point or around it, with hints between them.
 
 use super::color::{self, Rgba};
 use super::math::{self, Calc};
@@ -33,6 +33,12 @@ pub enum Shape<P = Calc> {
     Radial {
         circle: bool,
         size: Size<P>,
+        at: [Offset<P>; 2],
+    },
+    /// Around a point clockwise, from an angle in degrees clockwise from up; stops are degrees,
+    /// as px of a line 360 long.
+    Conic {
+        from: f64,
         at: [Offset<P>; 2],
     },
 }
@@ -130,9 +136,8 @@ pub(super) fn image(s: &str) -> Result<Declared, String> {
         "repeating-linear-gradient" => linear(args, true).map_err(at),
         "radial-gradient" => radial(args, false).map_err(at),
         "repeating-radial-gradient" => radial(args, true).map_err(at),
-        "conic-gradient" | "repeating-conic-gradient" => {
-            Err(format!("{name}() is not supported yet"))
-        }
+        "conic-gradient" => conic(args, false).map_err(at),
+        "repeating-conic-gradient" => conic(args, true).map_err(at),
         "url" => Err("url() images are not supported yet".into()),
         _ => Err(format!("{s} is not an image")),
     }
@@ -170,27 +175,91 @@ fn linear(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, St
             stops = &parts[1..];
         }
     }
-    gradient(
-        Shape::Linear(line.unwrap_or(Line::Angle(180.0))),
-        repeating,
-        space,
-        stops,
-    )
+    let shape = Shape::Linear(line.unwrap_or(Line::Angle(180.0)));
+    gradient(shape, repeating, space, color_stops(stops, along)?)
 }
 
 fn gradient(
     shape: Shape<Len>,
     repeating: bool,
     space: Option<Space>,
-    stops: &[&str],
+    stops: Vec<Stop<Len, Option<Rgba>>>,
 ) -> Result<Gradient<Len, Option<Rgba>>, String> {
     Ok(Gradient {
         shape,
         repeating,
         // Colors are all sRGB as CSS wrote them before color spaces, which mix in sRGB.
         space: space.unwrap_or(Space::Srgb),
-        stops: color_stops(stops)?,
+        stops,
     })
+}
+
+/// A stop position along a line: a length or a percentage of it.
+fn along(w: &str) -> Result<Len, String> {
+    length_text(w, POSITION)
+}
+
+/// A conic gradient's stop position: an angle, as degrees, or a percentage of a turn.
+fn angular(w: &str) -> Result<Len, String> {
+    match (angle(w), css::num(w)) {
+        (Some(degrees), _) => Ok(Len::Px(degrees)),
+        (None, Some(n)) if n.unit == "%" => Ok(Len::Percent(n.value)),
+        _ if math::is_math(w) => Err(format!(
+            "{w}: math functions of angles are not supported yet"
+        )),
+        _ => Err(format!("{w} is not an angle or a percentage")),
+    }
+}
+
+/// The center after `at` from word `i` on, up to a color space, and where it ends; the middle
+/// without one.
+fn center(words: &[&str], i: usize) -> Result<([Offset<Len>; 2], usize), String> {
+    if words.get(i) != Some(&"at") {
+        let middle = || Offset {
+            end: false,
+            by: Len::Percent(50.0),
+        };
+        return Ok(([middle(), middle()], i));
+    }
+    let end = (words[i + 1..].iter())
+        .position(|w| *w == "in")
+        .map_or(words.len(), |n| i + 1 + n);
+    Ok((position(&words[i + 1..end])?, end))
+}
+
+/// A conic gradient's arguments: a color space, then the angle it starts from and its center,
+/// or the color space last, and its stops.
+fn conic(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, String> {
+    let parts = css::commas(args);
+    let mut space = None;
+    let (mut from, (mut at, _)) = (0.0, center(&[], 0)?);
+    let mut stops = &parts[..];
+    let words = parts.first().map(|p| css::words(p)).unwrap_or_default();
+    if words
+        .first()
+        .is_some_and(|w| ["from", "at", "in"].contains(w))
+    {
+        let mut i = 0;
+        if words[0] == "in" {
+            i += 1 + interpolation(&words[1..], &mut space)?;
+        }
+        if words.get(i) == Some(&"from") {
+            from = (words.get(i + 1).and_then(|w| angle(w))).ok_or("from takes an angle")?;
+            i += 2;
+        }
+        (at, i) = center(&words, i)?;
+        if words.get(i) == Some(&"in") && space.is_none() {
+            i += 1 + interpolation(&words[i + 1..], &mut space)?;
+        }
+        if let Some(w) = words.get(i) {
+            return Err(format!(
+                "{w}: a conic gradient starts from an angle and at its center, and a color space"
+            ));
+        }
+        stops = &parts[1..];
+    }
+    let shape = Shape::Conic { from, at };
+    gradient(shape, repeating, space, color_stops(stops, angular)?)
 }
 
 /// A radial gradient's arguments: a color space, then its shape, its size and `at` its center,
@@ -198,7 +267,8 @@ fn gradient(
 fn radial(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, String> {
     let parts = css::commas(args);
     let mut space = None;
-    let (mut circle, mut size, mut radii, mut at) = (None, None, Vec::new(), None);
+    let (mut circle, mut size, mut radii) = (None, None, Vec::new());
+    let (mut at, _) = center(&[], 0)?;
     let sized = |w: &str| {
         SIZES
             .iter()
@@ -229,13 +299,7 @@ fn radial(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, St
             }
             i += 1;
         }
-        if words.get(i) == Some(&"at") {
-            let end = (words[i + 1..].iter())
-                .position(|w| *w == "in")
-                .map_or(words.len(), |n| i + 1 + n);
-            at = Some(position(&words[i + 1..end])?);
-            i = end;
-        }
+        (at, i) = center(&words, i)?;
         if words.get(i) == Some(&"in") && space.is_none() {
             i += 1 + interpolation(&words[i + 1..], &mut space)?;
         }
@@ -259,12 +323,8 @@ fn radial(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, St
         (None, _, true) => return Err("a circle takes one radius".into()),
         (None, _, false) => return Err("an ellipse takes two radii".into()),
     };
-    let center = || Offset {
-        end: false,
-        by: Len::Percent(50.0),
-    };
-    let at = at.unwrap_or_else(|| [center(), center()]);
-    gradient(Shape::Radial { circle, size, at }, repeating, space, stops)
+    let shape = Shape::Radial { circle, size, at };
+    gradient(shape, repeating, space, color_stops(stops, along)?)
 }
 
 /// Degrees, from `deg`, `rad`, `grad` or `turn`, or a 0.
@@ -361,7 +421,10 @@ const OTHER_SPACES: &[&str] = &[
 
 /// Color stops, each a color and up to two positions, and hints, each a lone position between
 /// two stops.
-fn color_stops(parts: &[&str]) -> Result<Vec<Stop<Len, Option<Rgba>>>, String> {
+fn color_stops(
+    parts: &[&str],
+    position: fn(&str) -> Result<Len, String>,
+) -> Result<Vec<Stop<Len, Option<Rgba>>>, String> {
     let mut stops = Vec::new();
     let positioned = |w: &str| css::num(w).is_some() || math::is_math(w);
     for (n, part) in parts.iter().enumerate() {
@@ -373,7 +436,7 @@ fn color_stops(parts: &[&str]) -> Result<Vec<Stop<Len, Option<Rgba>>>, String> {
                         "{at} is a hint, which goes between two color stops"
                     ));
                 }
-                stops.push(Stop::Hint(length_text(at, POSITION)?));
+                stops.push(Stop::Hint(position(at)?));
             }
             [c, ref at @ ..] if at.len() <= 2 && !positioned(c) => {
                 let color = current_color(&V::Str(c.into()))?;
@@ -381,7 +444,7 @@ fn color_stops(parts: &[&str]) -> Result<Vec<Stop<Len, Option<Rgba>>>, String> {
                     stops.push(Stop::Color(color, None));
                 }
                 for a in at {
-                    stops.push(Stop::Color(color, Some(length_text(a, POSITION)?)));
+                    stops.push(Stop::Color(color, Some(position(a)?)));
                 }
             }
             _ => {
@@ -415,6 +478,10 @@ impl Declared {
                             Size::FarthestCorner => Size::FarthestCorner,
                             Size::Radii(r) => Size::Radii(r.each_ref().map(|l| l.calc(u))),
                         },
+                        at: at.each_ref().map(|o| o.computed(u)),
+                    },
+                    Shape::Conic { from, at } => Shape::Conic {
+                        from: *from,
                         at: at.each_ref().map(|o| o.computed(u)),
                     },
                 },

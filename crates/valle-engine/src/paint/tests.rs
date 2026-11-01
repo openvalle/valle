@@ -724,7 +724,7 @@ fn rounded(v: f32) -> f32 {
 fn line(ramp: &Ramp) -> [[f32; 2]; 2] {
     match ramp.geometry {
         Geometry::Line(ends) => ends.map(|p| p.map(rounded)),
-        Geometry::Ellipse(..) => panic!("{ramp:?}"),
+        _ => panic!("{ramp:?}"),
     }
 }
 
@@ -794,7 +794,7 @@ fn radial_gradients_end_at_a_side_a_corner_or_their_radii() {
         let ramp = ramps(g).remove(0).2;
         match ramp.geometry {
             Geometry::Ellipse(c, r) => (c.map(rounded), r.map(rounded), spans(&ramp)),
-            Geometry::Line(_) => panic!("{ramp:?}"),
+            _ => panic!("{ramp:?}"),
         }
     };
     let shape = |g: &str| {
@@ -841,6 +841,22 @@ fn radial_gradients_end_at_a_side_a_corner_or_their_radii() {
         shape("radial-gradient(circle 0px, red, blue)").1,
         [0.001, 0.001]
     );
+}
+
+#[test]
+fn conic_gradients_turn_around_their_center() {
+    let ramp = ramps("conic-gradient(from 90deg at 20px 10px, red, blue 25%, green 180deg)")
+        .remove(0)
+        .2;
+    assert_eq!(ramp.geometry, Geometry::Turn([20.0, 10.0], 0.25));
+    // Stops are fractions of a turn.
+    assert_eq!(spans(&ramp), [[0.0, 0.25], [0.25, 0.5]]);
+    let ramp = ramps("repeating-conic-gradient(red 0 10deg, blue 10deg 20deg)")
+        .remove(0)
+        .2;
+    assert_eq!(ramp.geometry, Geometry::Turn([50.0, 25.0], 0.0));
+    assert_eq!(spans(&ramp), [[0.0, 0.028], [0.028, 0.028], [0.028, 0.056]]);
+    assert!(ramp.repeating);
 }
 
 #[test]

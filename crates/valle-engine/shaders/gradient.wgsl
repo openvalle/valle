@@ -1,7 +1,7 @@
 // Gradients filling rounded rectangles: each pixel's place along the gradient line in its image,
-// or out from its center to the ending shape, the image repeated from its tile, and the color
-// there, mixed premultiplied in the gradient's color space between the two stops around it, then
-// as a premultiplied working color.
+// out from its center to the ending shape, or around its center, the image repeated from its
+// tile, and the color there, mixed premultiplied in the gradient's color space between the two
+// stops around it, then as a premultiplied working color.
 
 struct Gradient {
   // Where it shows: x, y, width, height, and corner radii as `coverage` takes them.
@@ -9,11 +9,12 @@ struct Gradient {
   radii: array<vec4f, 2>,
   // The image: x, y, width and height.
   tile: vec4f,
-  // From the image's top left: where the gradient line starts, and where it ends; or the
-  // center, and the ending shape's horizontal and vertical radii.
+  // From the image's top left: where the gradient line starts, and where it ends; the center,
+  // and the ending shape's horizontal and vertical radii; or the center, and the fraction of a
+  // turn clockwise from up the colors start at.
   shape: vec4f,
   // x: 1 when the stops repeat; y: the color space, 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch;
-  // z: 0 along a line, 1 out to an ellipse.
+  // z: 0 along a line, 1 out to an ellipse, 2 around a turn.
   form: vec4u,
   // The first segment, and how many there are.
   segments: vec4u,
@@ -51,10 +52,19 @@ struct Out {
   let size = g.tile.zw;
   let q = p - g.tile.xy;
   let image = q - size * floor(q / size);
-  var t = length((image - g.shape.xy) / g.shape.zw);
-  if (g.form.z == 0u) {
-    let d = g.shape.zw - g.shape.xy;
-    t = dot(image - g.shape.xy, d) / dot(d, d);
+  let v = image - g.shape.xy;
+  var t = 0.0;
+  switch g.form.z {
+    case 0u: {
+      let d = g.shape.zw - g.shape.xy;
+      t = dot(v, d) / dot(d, d);
+    }
+    case 1u: {
+      t = length(v / g.shape.zw);
+    }
+    default: {
+      t = fract(atan2(v.x, -v.y) / 6.283185307 - g.shape.z);
+    }
   }
   let first = g.segments.x;
   let last = first + g.segments.y - 1u;

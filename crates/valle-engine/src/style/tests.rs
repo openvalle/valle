@@ -996,6 +996,56 @@ fn radial_gradients_take_a_shape_a_size_and_a_center() {
 }
 
 #[test]
+fn conic_gradients_take_an_angle_a_center_and_angles() {
+    use gradient::{Image, Shape, Space, Stop};
+    // From, the center in 100 × 100 px, and the stops in degrees.
+    let conic = |v: &str| match &one(&[("backgroundImage", text(v))]).images[..] {
+        [Image::Gradient(g)] => match &g.shape {
+            Shape::Conic { from, at } => {
+                let stops: Vec<Option<f32>> = (g.stops.iter())
+                    .map(|s| match s {
+                        Stop::Color(_, at) => at.as_ref().map(|a| a.resolve(360.0)),
+                        Stop::Hint(at) => Some(at.resolve(360.0)),
+                    })
+                    .collect();
+                let at = at.each_ref().map(|o| o.resolve(100.0));
+                (*from, at, stops, g.repeating, g.space)
+            }
+            _ => panic!("{g:?}"),
+        },
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        conic("conic-gradient(red, blue)"),
+        (0.0, [50.0, 50.0], vec![None, None], false, Space::Srgb)
+    );
+    assert_eq!(
+        conic("conic-gradient(from 90deg at 25% 0, red 10%, 25%, blue 0.25turn 180deg, green)"),
+        (
+            90.0,
+            [25.0, 0.0],
+            vec![Some(36.0), Some(90.0), Some(90.0), Some(180.0), None],
+            false,
+            Space::Srgb
+        )
+    );
+    assert_eq!(
+        conic("repeating-conic-gradient(in oklab from 0.5turn, red 0 10deg)"),
+        (
+            180.0,
+            [50.0, 50.0],
+            vec![Some(0.0), Some(10.0)],
+            true,
+            Space::Oklab
+        )
+    );
+    assert_eq!(
+        conic("conic-gradient(at left in oklab, red)").1,
+        [0.0, 50.0]
+    );
+}
+
+#[test]
 fn corner_radii_expand_as_sides_do() {
     // Each corner's radii, percentages of 100 px.
     let radii = |style: &[(&str, Prop)]| one(style).radii.map(|c| c.map(|r| r.resolve(100.0)));
@@ -1141,8 +1191,28 @@ fn what_is_not_supported_is_an_error() {
         ),
         (
             "backgroundImage",
-            text("conic-gradient(red, blue)"),
-            "conic-gradient() is not supported yet",
+            text("conic-gradient(red 10px)"),
+            "conic-gradient(): 10px is not an angle or a percentage",
+        ),
+        (
+            "backgroundImage",
+            text("conic-gradient(red calc(10deg + 5%))"),
+            "math functions of angles are not supported yet",
+        ),
+        (
+            "backgroundImage",
+            text("conic-gradient(from 10px, red)"),
+            "from takes an angle",
+        ),
+        (
+            "backgroundImage",
+            text("conic-gradient(at center from 10deg, red)"),
+            "conic-gradient(): \"center from 10deg\" is not a position",
+        ),
+        (
+            "backgroundImage",
+            text("linear-gradient(red 10deg)"),
+            "deg is not supported",
         ),
         (
             "backgroundImage",

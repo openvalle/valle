@@ -548,6 +548,7 @@ impl<'a> Renderer<'a> {
                     let (shape, [[a, b], [c, d]]) = match ramp.geometry {
                         Geometry::Line(ends) => (0, ends),
                         Geometry::Ellipse(center, radii) => (1, [center, radii]),
+                        Geometry::Turn(center, from) => (2, [center, [from, 0.0]]),
                     };
                     let words = (xywh(*rect).into_iter())
                         .chain(radii.iter().flatten().copied())
