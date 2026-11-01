@@ -12,6 +12,7 @@ mod css;
 pub mod gradient;
 mod grid;
 pub mod math;
+pub mod position;
 
 use std::borrow::Cow;
 use std::rc::Rc;

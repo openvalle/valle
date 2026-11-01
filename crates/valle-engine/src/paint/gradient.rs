@@ -1,13 +1,12 @@
-//! Gradients as the GPU draws them: the gradient line in px, and the parts of it between color
-//! stops, their colors in the space they mix in.
+//! Gradients as the GPU draws them: the line or ellipse in px their colors go along, and the parts
+//! of it between color stops, their colors in the space they mix in.
 
 use crate::style::color::{self, Rgba};
-use crate::style::gradient::{Gradient, Hue, Line, Space, Stop};
+use crate::style::gradient::{Gradient, Hue, Line, Shape, Size, Space, Stop};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ramp {
-    /// Where the gradient line starts and ends, px from the image's top left.
-    pub line: [[f32; 2]; 2],
+    pub geometry: Geometry,
     pub repeating: bool,
     pub space: Space,
     /// The parts of the line between color stops, in order, 0 at its start and 1 at its end.
@@ -22,14 +21,50 @@ pub struct Segment {
     pub colors: [[f32; 4]; 2],
 }
 
+/// Where a ramp's colors go, px from the image's top left.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Geometry {
+    /// From the start of a line to its end.
+    Line([[f32; 2]; 2]),
+    /// Out from a center to an ellipse with these horizontal and vertical radii.
+    Ellipse([f32; 2], [f32; 2]),
+}
+
 /// The chroma below which a hue is powerless, as CSS Color 4 takes it.
 const ACHROMATIC: f64 = 0.000004;
 
-/// A linear gradient across an image `size` px: its line through the image's middle, as long as
-/// the image's corners are far apart along it.
-pub fn linear(g: &Gradient, size: [f32; 2]) -> Ramp {
+/// The smallest radius an ending shape has: one of 0 is the last color all around, as CSS has it.
+const POINT: f32 = 0.001;
+
+/// A gradient in an image `size` px.
+pub fn ramp(g: &Gradient, size: [f32; 2]) -> Ramp {
+    let (geometry, len) = match &g.shape {
+        Shape::Linear(line) => linear(*line, size),
+        Shape::Radial {
+            circle,
+            size: s,
+            at,
+        } => radial(
+            *circle,
+            s,
+            [at[0].resolve(size[0]), at[1].resolve(size[1])],
+            size,
+        ),
+    };
+    let (segments, repeating) = segments(g, len);
+    Ramp {
+        geometry,
+        repeating,
+        space: g.space,
+        segments,
+    }
+}
+
+/// A linear gradient's line, through the middle of the image, as long as the image's corners
+/// are far apart along it, and its length.
+fn linear(line: Line, size: [f32; 2]) -> (Geometry, f32) {
     let [w, h] = size;
-    let [dx, dy] = match g.line {
+    let [dx, dy] = match line {
         Line::Angle(degrees) => {
             let a = degrees.to_radians() as f32;
             [a.sin(), -a.cos()]
@@ -43,16 +78,49 @@ pub fn linear(g: &Gradient, size: [f32; 2]) -> Ramp {
     let len = (w * dx).abs() + (h * dy).abs();
     let half = [dx * len / 2.0, dy * len / 2.0];
     let middle = [w / 2.0, h / 2.0];
-    let (segments, repeating) = segments(g, len);
-    Ramp {
-        line: [
-            [middle[0] - half[0], middle[1] - half[1]],
-            [middle[0] + half[0], middle[1] + half[1]],
-        ],
-        repeating,
-        space: g.space,
-        segments,
-    }
+    let ends = [
+        [middle[0] - half[0], middle[1] - half[1]],
+        [middle[0] + half[0], middle[1] + half[1]],
+    ];
+    (Geometry::Line(ends), len)
+}
+
+/// A radial gradient's ending shape around `center`, and its horizontal radius, along which its
+/// stops are. Sized by a side or a corner, it meets the sides nearest the center or farthest
+/// from it, or passes through the corner where they meet: an ellipse through a corner keeps
+/// the proportions it has at the sides.
+fn radial(circle: bool, size: &Size, center: [f32; 2], image: [f32; 2]) -> (Geometry, f32) {
+    let [x, y] = [0, 1].map(|k| [center[k].abs(), (image[k] - center[k]).abs()]);
+    let near = [x[0].min(x[1]), y[0].min(y[1])];
+    let far = [x[0].max(x[1]), y[0].max(y[1])];
+    let radii = match size {
+        Size::ClosestSide | Size::FarthestSide => {
+            let sides = if *size == Size::ClosestSide {
+                near
+            } else {
+                far
+            };
+            match circle {
+                true if *size == Size::ClosestSide => [sides[0].min(sides[1]); 2],
+                true => [sides[0].max(sides[1]); 2],
+                false => sides,
+            }
+        }
+        Size::ClosestCorner | Size::FarthestCorner => {
+            let sides = if *size == Size::ClosestCorner {
+                near
+            } else {
+                far
+            };
+            match circle {
+                true => [sides[0].hypot(sides[1]); 2],
+                false => sides.map(|s| s * std::f32::consts::SQRT_2),
+            }
+        }
+        Size::Radii([rx, ry]) => [rx.resolve(image[0]), ry.resolve(image[1])],
+    };
+    let radii = radii.map(|r| r.max(POINT));
+    (Geometry::Ellipse(center, radii), radii[0])
 }
 
 /// The parts between the color stops of a gradient whose line is `len` px, and whether they

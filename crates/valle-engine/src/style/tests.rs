@@ -873,7 +873,7 @@ fn box_shadows_take_lengths_a_color_and_inset() {
 
 #[test]
 fn backgrounds_take_gradients_over_a_color() {
-    use gradient::{Hue, Image, Line, Space, Stop};
+    use gradient::{Hue, Image, Line, Shape, Space, Stop};
     let c = |name| color::parse(name).unwrap();
     // Colors, `None` for a hint, at px of a 100 px line.
     let stops = |image: &Image| match image {
@@ -904,7 +904,10 @@ fn backgrounds_take_gradients_over_a_color() {
         ]
     );
     let gradient = |v: &str| match &one(&[("backgroundImage", text(v))]).images[..] {
-        [Image::Gradient(g)] => (g.line, g.repeating, g.space),
+        [Image::Gradient(g)] => match g.shape {
+            Shape::Linear(line) => (line, g.repeating, g.space),
+            _ => panic!("{g:?}"),
+        },
         other => panic!("{other:?}"),
     };
     assert_eq!(
@@ -933,6 +936,63 @@ fn backgrounds_take_gradients_over_a_color() {
         Space::Oklch(Hue::Shorter)
     );
     assert_eq!(one(&[("background", text("none"))]).images, [Image::None]);
+}
+
+#[test]
+fn radial_gradients_take_a_shape_a_size_and_a_center() {
+    use gradient::{Image, Shape, Size, Space};
+    // The shape, the size in px of 100 px, and the center from the top left of 100 × 100 px.
+    let radial = |v: &str| match &one(&[("backgroundImage", text(v))]).images[..] {
+        [Image::Gradient(g)] => match &g.shape {
+            Shape::Radial { circle, size, at } => {
+                let size = match size {
+                    Size::Radii(r) => Some(r.each_ref().map(|r| r.resolve(100.0))),
+                    _ => None,
+                };
+                let at = at.each_ref().map(|o| o.resolve(100.0));
+                (*circle, size, at, g.repeating, g.space)
+            }
+            _ => panic!("{g:?}"),
+        },
+        other => panic!("{other:?}"),
+    };
+    let size = |v: &str| match &one(&[("backgroundImage", text(v))]).images[..] {
+        [Image::Gradient(g)] => match &g.shape {
+            Shape::Radial { size, .. } => size.clone(),
+            _ => panic!("{g:?}"),
+        },
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        radial("radial-gradient(red, blue)"),
+        (false, None, [50.0, 50.0], false, Space::Srgb)
+    );
+    assert_eq!(size("radial-gradient(red, blue)"), Size::FarthestCorner);
+    assert_eq!(
+        size("radial-gradient(closest-side circle, red)"),
+        Size::ClosestSide
+    );
+    assert_eq!(
+        radial("radial-gradient(20px, red)"),
+        (true, Some([20.0, 20.0]), [50.0, 50.0], false, Space::Srgb)
+    );
+    assert_eq!(
+        radial("repeating-radial-gradient(10px 20% at left 5px bottom 10%, red)"),
+        (false, Some([10.0, 20.0]), [5.0, 90.0], true, Space::Srgb)
+    );
+    assert_eq!(
+        radial("radial-gradient(in oklab circle closest-corner at top, red)"),
+        (true, None, [50.0, 0.0], false, Space::Oklab)
+    );
+    assert_eq!(
+        radial("radial-gradient(circle at 25% calc(10px + 5%) in oklab, red)").2,
+        [25.0, 15.0]
+    );
+    assert_eq!(
+        radial("radial-gradient(at right center, red)").2,
+        [100.0, 50.0]
+    );
+    assert_eq!(radial("radial-gradient(at 0, red)").2, [0.0, 50.0]);
 }
 
 #[test]
@@ -1081,8 +1141,44 @@ fn what_is_not_supported_is_an_error() {
         ),
         (
             "backgroundImage",
-            text("radial-gradient(red, blue)"),
-            "radial-gradient() is not supported yet",
+            text("conic-gradient(red, blue)"),
+            "conic-gradient() is not supported yet",
+        ),
+        (
+            "backgroundImage",
+            text("radial-gradient(circle 50%, red)"),
+            "radial-gradient(): a circle's radius: 50%: percentages are not supported here",
+        ),
+        (
+            "backgroundImage",
+            text("radial-gradient(circle 1px 2px, red)"),
+            "a circle takes one radius",
+        ),
+        (
+            "backgroundImage",
+            text("radial-gradient(ellipse 1px, red)"),
+            "an ellipse takes two radii",
+        ),
+        (
+            "backgroundImage",
+            text("radial-gradient(-1px, red)"),
+            "-1px is negative",
+        ),
+        (
+            "backgroundImage",
+            text("radial-gradient(at top 10px, red)"),
+            "\"top 10px\" is not a position: one, two or four of left, center, right, top, \
+             bottom and lengths",
+        ),
+        (
+            "backgroundImage",
+            text("radial-gradient(at left 1px right 2px, red)"),
+            "is not a position",
+        ),
+        (
+            "backgroundImage",
+            text("radial-gradient(circle in oklab at center, red)"),
+            "at: a radial gradient starts with its shape, its size and at its center",
         ),
         ("backgroundImage", text("red"), "red is not an image"),
         (

@@ -16,7 +16,7 @@ use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 
 use crate::layout::Rect;
-use crate::paint::{Item, SQUARE};
+use crate::paint::{Geometry, Item, SQUARE};
 use crate::slug;
 use crate::style::gradient::Space;
 use crate::template::Error;
@@ -545,11 +545,14 @@ impl<'a> Renderer<'a> {
                         let words = words.chain(s.colors.into_iter().flatten());
                         plan.segments.extend(words.map(f32::to_bits));
                     }
-                    let [[x0, y0], [x1, y1]] = ramp.line;
+                    let (shape, [[a, b], [c, d]]) = match ramp.geometry {
+                        Geometry::Line(ends) => (0, ends),
+                        Geometry::Ellipse(center, radii) => (1, [center, radii]),
+                    };
                     let words = (xywh(*rect).into_iter())
                         .chain(radii.iter().flatten().copied())
                         .chain(xywh(*tile))
-                        .chain([x0, y0, x1, y1]);
+                        .chain([a, b, c, d]);
                     plan.gradients.extend(words.map(f32::to_bits));
                     let space = match ramp.space {
                         Space::Srgb => 0,
@@ -558,16 +561,9 @@ impl<'a> Renderer<'a> {
                         Space::Oklch(_) => 3,
                     };
                     let count = ramp.segments.len() as u32;
-                    plan.gradients.extend([
-                        u32::from(ramp.repeating),
-                        space,
-                        0,
-                        0,
-                        first,
-                        count,
-                        0,
-                        0,
-                    ]);
+                    let repeating = u32::from(ramp.repeating);
+                    plan.gradients
+                        .extend([repeating, space, shape, 0, first, count, 0, 0]);
                     extend(&mut runs, Run::Gradients(i..i + 1));
                 }
                 Item::Glyphs {

@@ -27,7 +27,7 @@ mod gradient;
 
 use taffy::{Display, Overflow, Position};
 
-pub use gradient::{Ramp, Segment};
+pub use gradient::{Geometry, Ramp, Segment};
 
 use crate::layout::{Layout, Rect, ordered};
 use crate::style::color::Rgba;
@@ -522,7 +522,7 @@ impl Painter<'_> {
         if inside.width > 0.0 && inside.height > 0.0 {
             for image in s.images.iter().rev() {
                 let Image::Gradient(g) = image else { continue };
-                let ramp = gradient::linear(g, [inside.width, inside.height]);
+                let ramp = gradient::ramp(g, [inside.width, inside.height]);
                 let item = Item::Gradient {
                     rect: area,
                     radii: area_radii,

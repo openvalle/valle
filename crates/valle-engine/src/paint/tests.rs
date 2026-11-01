@@ -720,6 +720,14 @@ fn rounded(v: f32) -> f32 {
     (v * 1000.0).round() / 1000.0
 }
 
+/// Where a linear ramp's line starts and ends.
+fn line(ramp: &Ramp) -> [[f32; 2]; 2] {
+    match ramp.geometry {
+        Geometry::Line(ends) => ends.map(|p| p.map(rounded)),
+        Geometry::Ellipse(..) => panic!("{ramp:?}"),
+    }
+}
+
 /// Where a ramp's segments start and end.
 fn spans(ramp: &Ramp) -> Vec<[f32; 2]> {
     ramp.segments.iter().map(|s| s.at.map(rounded)).collect()
@@ -757,16 +765,13 @@ fn gradients_paint_over_the_color_from_the_padding_box() {
         (10.0, 10.0, 100.0, 50.0)
     );
     // Top to bottom through the middle.
-    assert_eq!(
-        ramp.line.map(|p| p.map(rounded)),
-        [[50.0, 0.0], [50.0, 50.0]]
-    );
+    assert_eq!(line(ramp), [[50.0, 0.0], [50.0, 50.0]]);
     assert_eq!(spans(ramp), [[0.0, 1.0]]);
 }
 
 #[test]
 fn gradient_lines_span_the_image_corner_to_corner() {
-    let line = |g: &str| ramps(g)[0].2.line.map(|p| p.map(rounded));
+    let line = |g: &str| line(&ramps(g)[0].2);
     assert_eq!(
         line("linear-gradient(45deg, red, blue)"),
         [[12.5, 62.5], [87.5, -12.5]]
@@ -779,6 +784,62 @@ fn gradient_lines_span_the_image_corner_to_corner() {
     assert_eq!(
         line("linear-gradient(to left, red, blue)"),
         [[100.0, 25.0], [0.0, 25.0]]
+    );
+}
+
+#[test]
+fn radial_gradients_end_at_a_side_a_corner_or_their_radii() {
+    // The center and radii in an image 100 × 50 px, and where the stops are.
+    let ellipse = |g: &str| {
+        let ramp = ramps(g).remove(0).2;
+        match ramp.geometry {
+            Geometry::Ellipse(c, r) => (c.map(rounded), r.map(rounded), spans(&ramp)),
+            Geometry::Line(_) => panic!("{ramp:?}"),
+        }
+    };
+    let shape = |g: &str| {
+        let (c, r, _) = ellipse(g);
+        (c, r)
+    };
+    // Through the farthest corner, as the farthest sides are in proportion.
+    assert_eq!(
+        shape("radial-gradient(red, blue)"),
+        ([50.0, 25.0], [70.711, 35.355])
+    );
+    assert_eq!(
+        shape("radial-gradient(circle closest-side at 20px 10px, red, blue)"),
+        ([20.0, 10.0], [10.0, 10.0])
+    );
+    assert_eq!(
+        shape("radial-gradient(circle farthest-side at 20px 10px, red, blue)").1,
+        [80.0, 80.0]
+    );
+    assert_eq!(
+        shape("radial-gradient(circle at 20px 10px, red, blue)").1,
+        [89.443, 89.443]
+    );
+    assert_eq!(
+        shape("radial-gradient(closest-corner at 20px 10px, red, blue)").1,
+        [28.284, 14.142]
+    );
+    assert_eq!(
+        shape("radial-gradient(farthest-side at right 10px bottom 20%, red, blue)"),
+        ([90.0, 40.0], [90.0, 40.0])
+    );
+    // Sides measured from a center outside the image.
+    assert_eq!(
+        shape("radial-gradient(closest-side at -10px 25px, red, blue)").1,
+        [10.0, 25.0]
+    );
+    // Stops along the horizontal radius; percentages of the image's sides.
+    assert_eq!(
+        ellipse("radial-gradient(10px 50%, red 5px, blue)"),
+        ([50.0, 25.0], [10.0, 25.0], vec![[0.5, 1.0]])
+    );
+    // A radius of 0 is the last color all around.
+    assert_eq!(
+        shape("radial-gradient(circle 0px, red, blue)").1,
+        [0.001, 0.001]
     );
 }
 

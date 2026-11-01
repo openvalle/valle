@@ -1,6 +1,7 @@
 // Gradients filling rounded rectangles: each pixel's place along the gradient line in its image,
-// the image repeated from its tile, and the color there, mixed premultiplied in the gradient's
-// color space between the two stops around it, then as a premultiplied working color.
+// or out from its center to the ending shape, the image repeated from its tile, and the color
+// there, mixed premultiplied in the gradient's color space between the two stops around it, then
+// as a premultiplied working color.
 
 struct Gradient {
   // Where it shows: x, y, width, height, and corner radii as `coverage` takes them.
@@ -8,9 +9,11 @@ struct Gradient {
   radii: array<vec4f, 2>,
   // The image: x, y, width and height.
   tile: vec4f,
-  // From the image's top left: where the gradient line starts, and where it ends.
-  line: vec4f,
-  // x: 1 when the stops repeat; y: the color space, 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch.
+  // From the image's top left: where the gradient line starts, and where it ends; or the
+  // center, and the ending shape's horizontal and vertical radii.
+  shape: vec4f,
+  // x: 1 when the stops repeat; y: the color space, 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch;
+  // z: 0 along a line, 1 out to an ellipse.
   form: vec4u,
   // The first segment, and how many there are.
   segments: vec4u,
@@ -48,8 +51,11 @@ struct Out {
   let size = g.tile.zw;
   let q = p - g.tile.xy;
   let image = q - size * floor(q / size);
-  let d = g.line.zw - g.line.xy;
-  var t = dot(image - g.line.xy, d) / dot(d, d);
+  var t = length((image - g.shape.xy) / g.shape.zw);
+  if (g.form.z == 0u) {
+    let d = g.shape.zw - g.shape.xy;
+    t = dot(image - g.shape.xy, d) / dot(d, d);
+  }
   let first = g.segments.x;
   let last = first + g.segments.y - 1u;
   if (g.form.x == 1u) {

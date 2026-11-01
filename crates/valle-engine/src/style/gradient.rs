@@ -1,8 +1,10 @@
-//! Background images: gradients so far. A gradient is a line through its image, the color space
-//! its colors mix in, and color stops along the line, with hints between them.
+//! Background images: gradients so far. A gradient is a line through its image or ellipses around
+//! a point in it, the color space its colors mix in, and color stops along the line or out from
+//! the point, with hints between them.
 
 use super::color::{self, Rgba};
 use super::math::{self, Calc};
+use super::position::{Offset, position};
 use super::{Accept, Len, Units, css, current_color, length_text};
 use crate::template::V;
 
@@ -16,10 +18,35 @@ pub enum Image<P = Calc, C = Rgba> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gradient<P = Calc, C = Rgba> {
-    pub line: Line,
+    pub shape: Shape<P>,
     pub repeating: bool,
     pub space: Space,
     pub stops: Vec<Stop<P, C>>,
+}
+
+/// What a gradient's colors go along.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shape<P = Calc> {
+    Linear(Line),
+    /// Circles or ellipses around a point, out to an ending shape `size` big; stops are along
+    /// its horizontal radius.
+    Radial {
+        circle: bool,
+        size: Size<P>,
+        at: [Offset<P>; 2],
+    },
+}
+
+/// How big a radial gradient's ending shape is: out to the side or the corner of the image
+/// nearest its center or farthest from it, or its horizontal and vertical radii, percentages of
+/// the image's width and height.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Size<P = Calc> {
+    ClosestSide,
+    FarthestSide,
+    ClosestCorner,
+    FarthestCorner,
+    Radii([P; 2]),
 }
 
 /// Which way a linear gradient's line goes, through the middle of its image.
@@ -68,6 +95,26 @@ const POSITION: Accept = Accept {
     percent: true,
     sizing: &[],
 };
+/// A circle's radius, and an ellipse's.
+const CIRCLE: Accept = Accept {
+    keyword: None,
+    negative: false,
+    percent: false,
+    sizing: &[],
+};
+const ELLIPSE: Accept = Accept {
+    keyword: None,
+    negative: false,
+    percent: true,
+    sizing: &[],
+};
+
+const SIZES: [(&str, Size<Len>); 4] = [
+    ("closest-side", Size::ClosestSide),
+    ("farthest-side", Size::FarthestSide),
+    ("closest-corner", Size::ClosestCorner),
+    ("farthest-corner", Size::FarthestCorner),
+];
 
 /// `none` or a gradient.
 pub(super) fn image(s: &str) -> Result<Declared, String> {
@@ -81,10 +128,11 @@ pub(super) fn image(s: &str) -> Result<Declared, String> {
     match name {
         "linear-gradient" => linear(args, false).map_err(at),
         "repeating-linear-gradient" => linear(args, true).map_err(at),
-        "radial-gradient"
-        | "repeating-radial-gradient"
-        | "conic-gradient"
-        | "repeating-conic-gradient" => Err(format!("{name}() is not supported yet")),
+        "radial-gradient" => radial(args, false).map_err(at),
+        "repeating-radial-gradient" => radial(args, true).map_err(at),
+        "conic-gradient" | "repeating-conic-gradient" => {
+            Err(format!("{name}() is not supported yet"))
+        }
         "url" => Err("url() images are not supported yet".into()),
         _ => Err(format!("{s} is not an image")),
     }
@@ -122,13 +170,101 @@ fn linear(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, St
             stops = &parts[1..];
         }
     }
+    gradient(
+        Shape::Linear(line.unwrap_or(Line::Angle(180.0))),
+        repeating,
+        space,
+        stops,
+    )
+}
+
+fn gradient(
+    shape: Shape<Len>,
+    repeating: bool,
+    space: Option<Space>,
+    stops: &[&str],
+) -> Result<Gradient<Len, Option<Rgba>>, String> {
     Ok(Gradient {
-        line: line.unwrap_or(Line::Angle(180.0)),
+        shape,
         repeating,
         // Colors are all sRGB as CSS wrote them before color spaces, which mix in sRGB.
         space: space.unwrap_or(Space::Srgb),
         stops: color_stops(stops)?,
     })
+}
+
+/// A radial gradient's arguments: a color space, then its shape, its size and `at` its center,
+/// or the color space last, and its stops.
+fn radial(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, String> {
+    let parts = css::commas(args);
+    let mut space = None;
+    let (mut circle, mut size, mut radii, mut at) = (None, None, Vec::new(), None);
+    let sized = |w: &str| {
+        SIZES
+            .iter()
+            .find(|(name, _)| *name == w)
+            .map(|(_, s)| s.clone())
+    };
+    let length = |w: &str| css::num(w).is_some() || math::is_math(w);
+    let mut stops = &parts[..];
+    let words = parts.first().map(|p| css::words(p)).unwrap_or_default();
+    let shaped =
+        |w: &&str| ["circle", "ellipse", "at", "in"].contains(w) || sized(w).is_some() || length(w);
+    if words.first().is_some_and(shaped) {
+        let mut i = 0;
+        if words[0] == "in" {
+            i += 1 + interpolation(&words[1..], &mut space)?;
+        }
+        while let Some(&w) = words.get(i) {
+            match w {
+                "circle" | "ellipse" if circle.is_none() => circle = Some(w == "circle"),
+                w if size.is_none() && radii.is_empty() && sized(w).is_some() => size = sized(w),
+                w if size.is_none() && length(w) && radii.len() < 2 => {
+                    if !radii.is_empty() && !length(words[i - 1]) {
+                        break;
+                    }
+                    radii.push(w);
+                }
+                _ => break,
+            }
+            i += 1;
+        }
+        if words.get(i) == Some(&"at") {
+            let end = (words[i + 1..].iter())
+                .position(|w| *w == "in")
+                .map_or(words.len(), |n| i + 1 + n);
+            at = Some(position(&words[i + 1..end])?);
+            i = end;
+        }
+        if words.get(i) == Some(&"in") && space.is_none() {
+            i += 1 + interpolation(&words[i + 1..], &mut space)?;
+        }
+        if let Some(w) = words.get(i) {
+            return Err(format!(
+                "{w}: a radial gradient starts with its shape, its size and at its center, and \
+                 a color space"
+            ));
+        }
+        stops = &parts[1..];
+    }
+    let circle = circle.unwrap_or(radii.len() == 1);
+    let size = match (size, &radii[..], circle) {
+        (Some(size), ..) => size,
+        (None, [], _) => Size::FarthestCorner,
+        (None, [r], true) => {
+            let r = length_text(r, CIRCLE).map_err(|e| format!("a circle's radius: {e}"))?;
+            Size::Radii([r.clone(), r])
+        }
+        (None, [x, y], false) => Size::Radii([length_text(x, ELLIPSE)?, length_text(y, ELLIPSE)?]),
+        (None, _, true) => return Err("a circle takes one radius".into()),
+        (None, _, false) => return Err("an ellipse takes two radii".into()),
+    };
+    let center = || Offset {
+        end: false,
+        by: Len::Percent(50.0),
+    };
+    let at = at.unwrap_or_else(|| [center(), center()]);
+    gradient(Shape::Radial { circle, size, at }, repeating, space, stops)
 }
 
 /// Degrees, from `deg`, `rad`, `grad` or `turn`, or a 0.
@@ -268,7 +404,20 @@ impl Declared {
         match self {
             Image::None => Image::None,
             Image::Gradient(g) => Image::Gradient(Gradient {
-                line: g.line,
+                shape: match &g.shape {
+                    Shape::Linear(line) => Shape::Linear(*line),
+                    Shape::Radial { circle, size, at } => Shape::Radial {
+                        circle: *circle,
+                        size: match size {
+                            Size::ClosestSide => Size::ClosestSide,
+                            Size::FarthestSide => Size::FarthestSide,
+                            Size::ClosestCorner => Size::ClosestCorner,
+                            Size::FarthestCorner => Size::FarthestCorner,
+                            Size::Radii(r) => Size::Radii(r.each_ref().map(|l| l.calc(u))),
+                        },
+                        at: at.each_ref().map(|o| o.computed(u)),
+                    },
+                },
                 repeating: g.repeating,
                 space: g.space,
                 stops: (g.stops.iter())
