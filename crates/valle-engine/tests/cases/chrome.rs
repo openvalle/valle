@@ -1,12 +1,14 @@
 //! Chrome baselines: what the pinned Chrome for Testing makes of a case's frames printed as HTML,
-//! `tests/baselines/chrome/<case>.<frame>.json`. `web/tests/chrome.ts` draws them when they are
-//! missing, or were drawn from other HTML or by another Chrome; the engine's boxes and lines are
-//! compared with them.
+//! `tests/baselines/chrome/<case>.<frame>.json` and `.png`. `web/tests/chrome.ts` draws them when
+//! they are missing, or were drawn from other HTML or by another Chrome. The engine's boxes and
+//! lines are compared with them, and on the GPU its pixels, without the glyphs: Chrome's own text
+//! rendering is not what the engine draws.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use valle_engine::paint::Item;
 use valle_engine::scene::Frame;
 use valle_engine::template::{Kind, Prop};
 use valle_engine::text::collapse;
@@ -15,6 +17,8 @@ use crate::html::value;
 
 /// How far a box edge may be from Chrome's: its layout unit, 1/64 px.
 const EDGE: f64 = 1.0 / 64.0;
+/// How far a pixel may be from Chrome's, in levels of each premultiplied channel.
+const LEVELS: i32 = 8;
 
 #[derive(Deserialize)]
 pub struct Baseline {
@@ -89,4 +93,51 @@ fn lines(frame: &Frame, i: usize, text: &Prop) -> Vec<String> {
 
 fn shown([x, y, w, h]: [f64; 4]) -> String {
     format!("{w} × {h} at {x}, {y}")
+}
+
+/// The display list without its glyphs.
+pub fn shapes(items: &[Item]) -> Vec<Item> {
+    (items.iter())
+        .filter_map(|item| match item {
+            Item::Glyphs { .. } => None,
+            Item::Group { opacity, items } => {
+                let items = shapes(items);
+                let opacity = *opacity;
+                (!items.is_empty()).then_some(Item::Group { opacity, items })
+            }
+            item => Some(item.clone()),
+        })
+        .collect()
+}
+
+/// The pixels of `a` or `b`, both `size` and RGBA, that are more than `LEVELS` from every pixel
+/// of the other in the 3 × 3 around them, which absorbs antialiasing that differs; and an image
+/// marking them.
+pub fn far(a: &[u8], b: &[u8], size: [u32; 2]) -> (usize, Vec<u8>) {
+    let [w, h] = size.map(|n| n as usize);
+    let at = |image: &[u8], x: usize, y: usize| {
+        let p = &image[(y * w + x) * 4..][..4];
+        let alpha = i32::from(p[3]);
+        let pre = |c: u8| (i32::from(c) * alpha + 127) / 255;
+        [pre(p[0]), pre(p[1]), pre(p[2]), alpha]
+    };
+    let near = |from: &[u8], to: &[u8], x: usize, y: usize| {
+        let p = at(from, x, y);
+        (y.saturating_sub(1)..=(y + 1).min(h - 1)).any(|ny| {
+            (x.saturating_sub(1)..=(x + 1).min(w - 1)).any(|nx| {
+                let q = at(to, nx, ny);
+                p.iter().zip(&q).all(|(c, d)| (c - d).abs() <= LEVELS)
+            })
+        })
+    };
+    let mut count = 0;
+    let mut marked = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let off = !near(a, b, x, y) || !near(b, a, x, y);
+            count += usize::from(off);
+            marked.extend(if off { [255, 0, 0, 255] } else { [255; 4] });
+        }
+    }
+    (count, marked)
 }

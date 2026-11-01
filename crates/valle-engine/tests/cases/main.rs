@@ -46,10 +46,21 @@ struct Runner {
     review: PathBuf,
     gpu_layer: bool,
     gpu: OnceLock<Result<Gpu, String>>,
-    /// Frames that went to review: name, what was wrong, whether there is a baseline.
-    reviewed: Mutex<Vec<(String, String, bool)>>,
+    /// Frames that went to review.
+    reviewed: Mutex<Vec<Reviewed>>,
     /// The most any channel of a frame differed from its baseline.
     largest: AtomicU8,
+}
+
+/// A frame that went to review: its name, what was wrong, and when there was something to
+/// compare it with, the captions of that and of the image marking where they differ.
+type Reviewed = (String, String, Option<(&'static str, &'static str)>);
+
+/// What a frame in review was compared with, and an image marking where they differ.
+struct Against<'a> {
+    image: &'a Path,
+    marked: &'a [u8],
+    captions: (&'static str, &'static str),
 }
 
 enum Outcome {
@@ -309,10 +320,14 @@ impl Runner {
         }
     }
 
-    fn pixels(&self, case: &str) -> Result<(), String> {
-        let gpu = self.gpu.get_or_init(Gpu::new).as_ref().map_err(|e| {
+    fn gpu(&self) -> Result<&Gpu, String> {
+        self.gpu.get_or_init(Gpu::new).as_ref().map_err(|e| {
             format!("{e}; the gpu layer needs a GPU (`cargo xtask test --skip gpu` skips it)")
-        })?;
+        })
+    }
+
+    fn pixels(&self, case: &str) -> Result<(), String> {
+        let gpu = self.gpu()?;
         let stem = case.strip_suffix(".tsx").unwrap_or(case);
         let mut renderer = None;
         let mut problems = Vec::new();
@@ -340,26 +355,45 @@ impl Runner {
         }
     }
 
-    /// Compares the case's frames with their Chrome baselines, or gives the baselines to draw
-    /// when any is missing or was drawn from other HTML or by another Chrome.
+    /// Compares the case's frames with their Chrome baselines, boxes and lines and on the GPU
+    /// pixels, or gives the baselines to draw when any is missing or was drawn from other HTML or
+    /// by another Chrome.
     fn chrome(&self, case: &str) -> Result<Vec<chrome::Job>, String> {
         let version = self.chrome.as_ref().map_err(String::clone)?;
+        let gpu = if self.gpu_layer {
+            Some(self.gpu()?)
+        } else {
+            None
+        };
         let stem = case.strip_suffix(".tsx").unwrap_or(case);
+        let mut renderer = None;
         let mut jobs = Vec::new();
         let mut problems = Vec::new();
         let drawn = self.frames(case, &mut |scene, i, at| {
             let frame = scene.frame(at)?;
             let c = scene.composition();
+            let size = [c.width, c.height];
             let html = html::print(&frame, c);
             let out = self.chrome_baselines.join(format!("{stem}.{i}"));
+            let png = self.chrome_baselines.join(format!("{stem}.{i}.png"));
             match chrome::read(&self.chrome_baselines.join(format!("{stem}.{i}.json")))? {
-                Some(b) if b.chrome == *version && b.html == html => {
+                Some(b) if b.chrome == *version && b.html == html && png.exists() => {
                     let off = chrome::compare(&frame, &b);
                     problems.extend(off.into_iter().map(|p| format!("frame {i}: {p}")));
+                    if let Some(gpu) = gpu {
+                        let renderer =
+                            renderer.get_or_insert_with(|| Renderer::new(gpu, size[0], size[1]));
+                        let shapes = chrome::shapes(&frame.items);
+                        let drawn = renderer.render(&shapes, scene.faces())?;
+                        let name = format!("{stem}.{i}.png");
+                        if let Some(p) = self.against_chrome(&name, size, &drawn, &png)? {
+                            problems.push(format!("frame {i}: {p}"));
+                        }
+                    }
                 }
                 _ => jobs.push(chrome::Job {
                     html,
-                    size: [c.width, c.height],
+                    size,
                     out: out.to_string_lossy().into_owned(),
                 }),
             }
@@ -461,20 +495,77 @@ impl Runner {
         let Some(problem) = problem else {
             return Ok(None);
         };
-        let stem = name.trim_end_matches(".png");
-        write_png(&self.review.join(name), size, drawn)?;
-        if let Some(diff) = &diff {
-            write_png(&self.review.join(format!("{stem}.diff.png")), size, diff)?;
-            let expected = self.review.join(format!("{stem}.expected.png"));
-            std::fs::copy(&baseline, &expected)
-                .map_err(|e| format!("{}: {e}", baseline.display()))?;
-        }
-        let mut reviewed = self.reviewed.lock().unwrap_or_else(|e| e.into_inner());
-        reviewed.push((name.to_string(), problem.clone(), diff.is_some()));
+        let against = diff.as_ref().map(|marked| Against {
+            image: &baseline,
+            marked,
+            captions: ("baseline", "off by more than 1 level"),
+        });
+        self.to_review(name, size, drawn, against, &problem)?;
         Ok(Some(problem))
     }
 
-    fn reviewed(&self) -> Vec<(String, String, bool)> {
+    /// What is wrong with a frame drawn without its glyphs against Chrome's, if anything; a frame
+    /// that is wrong goes to review.
+    fn against_chrome(
+        &self,
+        name: &str,
+        size: [u32; 2],
+        drawn: &[u8],
+        png: &Path,
+    ) -> Result<Option<String>, String> {
+        let (got, theirs) = read_png(png)?;
+        if got != size {
+            let [w, h] = got;
+            let problem = format!("Chrome's frame is {w} × {h} px, the frame is not");
+            self.to_review(name, size, drawn, None, &problem)?;
+            return Ok(Some(problem));
+        }
+        let (far, marked) = chrome::far(drawn, &theirs, size);
+        // A thousandth of the pixels.
+        let most = (size[0] * size[1]) as usize / 1000;
+        if far <= most {
+            return Ok(None);
+        }
+        let problem = format!(
+            "{far} pixels are more than 8 levels from all of Chrome's around them; at most \
+             {most} may be"
+        );
+        let against = Against {
+            image: png,
+            marked: &marked,
+            captions: ("Chrome, without text", "far from Chrome"),
+        };
+        self.to_review(name, size, drawn, Some(against), &problem)?;
+        Ok(Some(problem))
+    }
+
+    /// Puts a frame in review: what was drawn, and what it was compared with.
+    fn to_review(
+        &self,
+        name: &str,
+        size: [u32; 2],
+        drawn: &[u8],
+        against: Option<Against>,
+        problem: &str,
+    ) -> Result<(), String> {
+        let stem = name.trim_end_matches(".png");
+        write_png(&self.review.join(name), size, drawn)?;
+        if let Some(a) = &against {
+            write_png(
+                &self.review.join(format!("{stem}.diff.png")),
+                size,
+                a.marked,
+            )?;
+            let to = self.review.join(format!("{stem}.expected.png"));
+            std::fs::copy(a.image, &to).map_err(|e| format!("{}: {e}", a.image.display()))?;
+        }
+        let captions = against.map(|a| a.captions);
+        let mut reviewed = self.reviewed.lock().unwrap_or_else(|e| e.into_inner());
+        reviewed.push((name.to_string(), problem.to_string(), captions));
+        Ok(())
+    }
+
+    fn reviewed(&self) -> Vec<Reviewed> {
         let mut list = (self.reviewed.lock().unwrap_or_else(|e| e.into_inner())).clone();
         list.sort();
         list
@@ -492,20 +583,21 @@ impl Runner {
              figure { display: inline-block; margin: 0 16px 16px 0; }\n\
              img { image-rendering: pixelated; background: repeating-conic-gradient(#ccc 0 25%, \
              #fff 0 50%) 0 0 / 16px 16px; }\n</style>\n<h1>Frames to review</h1>\n\
-             <p>Accept the cases that look right with <code>cargo xtask accept &lt;case&gt;</code>.\n",
+             <p>Accept the cases that look right with <code>cargo xtask accept &lt;case&gt;</code>; \
+             a css case that differs from Chrome is the engine's to fix.\n",
         );
-        for (name, problem, has_baseline) in reviewed {
+        for (name, problem, against) in reviewed {
             let stem = name.trim_end_matches(".png");
             let figure = |file: String, caption: &str| {
                 format!("<figure><img src=\"{file}\"><figcaption>{caption}</figcaption></figure>\n")
             };
             let _ = write!(html, "<h2>{name}</h2>\n<p>{problem}\n");
-            if has_baseline {
-                html += &figure(format!("{stem}.expected.png"), "baseline");
+            if let Some((expected, _)) = against {
+                html += &figure(format!("{stem}.expected.png"), expected);
             }
             html += &figure(name.clone(), "drawn");
-            if has_baseline {
-                html += &figure(format!("{stem}.diff.png"), "off by more than 1 level");
+            if let Some((_, marks)) = against {
+                html += &figure(format!("{stem}.diff.png"), marks);
             }
         }
         let page = self.review.join("index.html");
@@ -524,11 +616,20 @@ fn read_png(path: &Path) -> Result<([u32; 2], Vec<u8>), String> {
             .ok_or_else(|| bad(&"too large"))?
     ];
     let info = reader.next_frame(&mut pixels).map_err(|e| bad(&e))?;
-    if (info.color_type, info.bit_depth) != (png::ColorType::Rgba, png::BitDepth::Eight) {
-        return Err(bad(&"baselines are 8-bit RGBA"));
-    }
     pixels.truncate(info.buffer_size());
-    Ok(([info.width, info.height], pixels))
+    let size = [info.width, info.height];
+    match (info.color_type, info.bit_depth) {
+        (png::ColorType::Rgba, png::BitDepth::Eight) => Ok((size, pixels)),
+        // Chrome leaves out the alpha of an opaque frame.
+        (png::ColorType::Rgb, png::BitDepth::Eight) => {
+            let rgba = pixels
+                .chunks(3)
+                .flat_map(|p| [p[0], p[1], p[2], 255])
+                .collect();
+            Ok((size, rgba))
+        }
+        _ => Err(bad(&"frames are 8-bit RGBA or RGB")),
+    }
 }
 
 fn write_png(path: &Path, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {

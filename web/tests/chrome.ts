@@ -1,6 +1,7 @@
 // Draws Chrome baselines for the case runner: each job's HTML in the Chrome for Testing that
 // tests/baselines/chrome/version pins, with the border box of every element that has a node
-// index and the lines of every text node, written to `<out>.json`.
+// index and the lines of every text node, written to `<out>.json`, and the frame without its text
+// on a transparent canvas, `<out>.png`.
 //
 //   bun web/tests/chrome.ts <jobs.json>
 //
@@ -74,6 +75,9 @@ async function draw() {
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
     const page = (method: string, params: object = {}) => cdp.send(method, params, sessionId);
     await page("Page.enable");
+    await page("Emulation.setDefaultBackgroundColorOverride", {
+      color: { r: 0, g: 0, b: 0, a: 0 },
+    });
     for (const [i, job] of jobs.entries()) {
       const [width, height] = job.size;
       await page("Emulation.setDeviceMetricsOverride", {
@@ -106,6 +110,15 @@ async function draw() {
         "}",
       ];
       await Bun.write(`${job.out}.json`, `${baseline.join("\n")}\n`);
+      // Glyphs are not compared: Chrome's text rendering is not the engine's.
+      await page("Runtime.evaluate", {
+        expression: `document.head.insertAdjacentHTML("beforeend", "<style>* { -webkit-text-fill-color: transparent !important; }</style>")`,
+      });
+      const { data } = await page("Page.captureScreenshot", {
+        format: "png",
+        clip: { x: 0, y: 0, width, height, scale: 1 },
+      });
+      await Bun.write(`${job.out}.png`, Buffer.from(data, "base64"));
     }
     await cdp.send("Browser.close").catch(() => {});
   } finally {

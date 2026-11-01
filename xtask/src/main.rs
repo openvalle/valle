@@ -133,6 +133,12 @@ fn accept(cases: &[String]) -> Result<(), String> {
     for case in cases {
         let case = case.trim_end_matches('/');
         let case = case.strip_suffix(".tsx").unwrap_or(case);
+        if case == "css" || case.starts_with("css/") {
+            return Err(format!(
+                "{case}: Chrome draws the css baselines; a css case that differs is the engine's \
+                 to fix"
+            ));
+        }
         let mine: Vec<&String> = drawn
             .iter()
             .filter(|f| {
