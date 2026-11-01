@@ -33,6 +33,56 @@ impl Image {
             Err("not a PNG, JPEG or WebP image".into())
         }
     }
+
+    /// The levels of the image's mipmap below it, down to 1 × 1 px, as Skia makes them: each
+    /// half as big as the one above on each side, but at least 1 px, a pixel the mean of the
+    /// pixels under it, on each axis the 2 where the level above is even, the 3 weighted 1, 2, 1
+    /// where it is odd, or the 1 where it is a single px.
+    pub fn mipmap(&self) -> Vec<Image> {
+        let mut levels: Vec<Image> = Vec::new();
+        let mut above = self;
+        while above.size != [1, 1] {
+            let level = above.halved();
+            levels.push(level);
+            above = levels.last().expect("just pushed");
+        }
+        levels
+    }
+
+    fn halved(&self) -> Image {
+        let [w, h] = self.size.map(|n| n as usize);
+        let size = self.size.map(|n| (n / 2).max(1));
+        // Each axis's taps from the first under a pixel, and their weights.
+        let taps = |n: usize| -> &'static [usize] {
+            match (n, n % 2) {
+                (1, _) => &[1],
+                (_, 0) => &[1, 1],
+                _ => &[1, 2, 1],
+            }
+        };
+        let (across, down) = (taps(w), taps(h));
+        let total: usize = across.iter().sum::<usize>() * down.iter().sum::<usize>();
+        let mut pixels = Vec::with_capacity(size[0] as usize * size[1] as usize * 4);
+        for y in 0..size[1] as usize {
+            for x in 0..size[0] as usize {
+                let mut sum = [0; 4];
+                for (j, wy) in down.iter().enumerate() {
+                    let row = ((2 * y + j).min(h - 1)) * w;
+                    for (i, wx) in across.iter().enumerate() {
+                        let at = (row + (2 * x + i).min(w - 1)) * 4;
+                        for (c, s) in sum.iter_mut().enumerate() {
+                            *s += usize::from(self.pixels[at + c]) * wx * wy;
+                        }
+                    }
+                }
+                pixels.extend(sum.map(|s| ((s + total / 2) / total) as u8));
+            }
+        }
+        Image {
+            size,
+            pixels: pixels.into(),
+        }
+    }
 }
 
 fn png(bytes: &[u8]) -> Result<Image, String> {
@@ -123,6 +173,28 @@ fn times(c: u8, a: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mipmaps_halve_down_to_a_px() {
+        // 3 × 2: the 3 across weighted 1, 2, 1, the 2 down evenly.
+        let image = Image {
+            size: [3, 2],
+            pixels: [[0, 0, 0, 0], [40, 0, 0, 0], [80, 0, 0, 0]]
+                .repeat(2)
+                .concat()
+                .into(),
+        };
+        let levels = image.mipmap();
+        let sizes: Vec<_> = levels.iter().map(|l| l.size).collect();
+        assert_eq!(sizes, [[1, 1]]);
+        assert_eq!(levels[0].pixels[..], [40, 0, 0, 0]);
+        let wide = Image {
+            size: [8, 1],
+            pixels: [255, 0, 0, 255].repeat(8).into(),
+        };
+        let sizes: Vec<_> = wide.mipmap().iter().map(|l| l.size).collect();
+        assert_eq!(sizes, [[4, 1], [2, 1], [1, 1]]);
+    }
 
     #[test]
     fn an_animated_png_is_an_error() {

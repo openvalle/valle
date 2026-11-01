@@ -324,6 +324,44 @@ fn texture(device: &wgpu::Device, size: [u32; 2], format: wgpu::TextureFormat) -
     })
 }
 
+/// A texture of `image` with its mipmap.
+fn mipmapped(gpu: &Gpu, image: &Image) -> wgpu::Texture {
+    let levels = image.mipmap();
+    let size = |i: &Image| wgpu::Extent3d {
+        width: i.size[0],
+        height: i.size[1],
+        depth_or_array_layers: 1,
+    };
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: size(image),
+        mip_level_count: 1 + levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (level, i) in std::iter::once(image).chain(&levels).enumerate() {
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: level as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &i.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * i.size[0]),
+                rows_per_image: Some(i.size[1]),
+            },
+            size(i),
+        );
+    }
+    texture
+}
+
 /// A texture to draw into, and its bind group for reading it as an image.
 struct Surface {
     texture: wgpu::Texture,
@@ -787,17 +825,7 @@ impl<'a> Renderer<'a> {
                 {
                     Some(k) => k,
                     None => {
-                        let t = texture(&self.gpu.device, i.size, wgpu::TextureFormat::Rgba8Unorm);
-                        self.gpu.queue.write_texture(
-                            t.as_image_copy(),
-                            &i.pixels,
-                            wgpu::TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(4 * i.size[0]),
-                                rows_per_image: Some(i.size[1]),
-                            },
-                            t.size(),
-                        );
+                        let t = mipmapped(self.gpu, i);
                         self.images
                             .push((i.pixels.clone(), Surface::new(self.gpu, t)));
                         self.images.len() - 1

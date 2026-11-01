@@ -1,8 +1,9 @@
 // Images filling rounded rectangles in tiles: each pixel's place in the tile it is in, if any,
-// and the image there, stretched over the tile, read between its pixels linearly. On an axis
-// where the rectangle spans tiles that touch, an edge pixel's neighbor is the next tile's, as
-// Chrome reads a repeated image unless its tiles are spaced apart; elsewhere the edge goes on.
-// Its colors are premultiplied working colors already.
+// and the image there, stretched over the tile, read between its pixels linearly. A pixel that
+// spans 2 or more of the image's px reads the level of its mipmap where it spans at least 1 and
+// fewer than 2, as Skia picks it. On an axis where the rectangle spans tiles that touch, an edge
+// pixel's neighbor is the next tile's, as Chrome reads a repeated image unless its tiles are
+// spaced apart; elsewhere the edge goes on. Its colors are premultiplied working colors already.
 
 struct Image {
   // Where it shows: x, y, width, height, and corner radii as `coverage` takes them.
@@ -42,8 +43,13 @@ fn texel(i: vec2<i32>, n: vec2<i32>, wraps: vec2<bool>) -> vec2<i32> {
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let g = images[in.index];
   let p = local(in.pos.xy, g.form.w);
-  let cov = coverage(p, steps(in.pos.xy, g.form.w), g.rect, g.radii);
   let size = g.tile.zw;
+  // The image's px the pixel spans, the most along either side of it.
+  let u = p / size * vec2f(textureDimensions(image));
+  let spans = max(length(dpdx(u)), length(dpdy(u)));
+  let last = f32(textureNumLevels(image) - 1u);
+  let level = i32(clamp(floor(log2(max(spans, 1.0))), 0.0, last));
+  let cov = coverage(p, steps(in.pos.xy, g.form.w), g.rect, g.radii);
   let step = g.step.xy;
   // A pixel at the edge, its center outside, takes the color just inside, not the next tile's.
   let lo = g.rect.xy;
@@ -56,16 +62,20 @@ fn texel(i: vec2<i32>, n: vec2<i32>, wraps: vec2<bool>) -> vec2<i32> {
     return vec4f(0.0);
   }
   // Between the centers of the texels around the point.
-  let texels = vec2<i32>(textureDimensions(image));
+  let texels = vec2<i32>(textureDimensions(image, level));
   let c = at / size * vec2f(texels) - 0.5;
   let f = floor(c);
   let t = c - f;
   let n = floor((lo - g.tile.xy) / step);
-  let spans = lo + g.rect.zw > g.tile.xy + (n + 1.0) * step + 1e-3;
-  let wraps = repeats & spans & !vec2<bool>(any(repeats & (step > size)));
+  let several = lo + g.rect.zw > g.tile.xy + (n + 1.0) * step + 1e-3;
+  let wraps = repeats & several & !vec2<bool>(any(repeats & (step > size)));
   let a = texel(vec2<i32>(f), texels, wraps);
   let b = texel(vec2<i32>(f) + 1, texels, wraps);
-  let top = mix(textureLoad(image, a, 0), textureLoad(image, vec2<i32>(b.x, a.y), 0), t.x);
-  let bottom = mix(textureLoad(image, vec2<i32>(a.x, b.y), 0), textureLoad(image, b, 0), t.x);
+  let top = mix(textureLoad(image, a, level), textureLoad(image, vec2<i32>(b.x, a.y), level), t.x);
+  let bottom = mix(
+    textureLoad(image, vec2<i32>(a.x, b.y), level),
+    textureLoad(image, b, level),
+    t.x,
+  );
   return mix(top, bottom, t.y) * cov;
 }
