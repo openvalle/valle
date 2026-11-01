@@ -19,7 +19,7 @@ use taffy::{
 
 use color::Rgba;
 
-use crate::template::{Error, Kind, Node, Prop, Template, V};
+use crate::template::{Error, Node, Prop, Template, V};
 
 /// The root font size: `rem`.
 const REM: f64 = 16.0;
@@ -151,11 +151,7 @@ impl Sheet {
 }
 
 fn bind(node: &Node) -> Result<Bound, Error> {
-    let place: Rc<str> = match (&node.site, &node.kind) {
-        (Some(site), _) => site.clone(),
-        (None, Kind::View) => "<View>".into(),
-        (None, Kind::Text { .. }) => "<Text>".into(),
-    };
+    let place = node.place();
     if !node.classes.is_empty() {
         return Err(format!("{place}: className is not supported yet"));
     }

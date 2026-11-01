@@ -1,4 +1,5 @@
 use super::*;
+use crate::template::Kind;
 
 fn text(s: &str) -> Prop {
     Prop::Const(V::Str(s.into()))

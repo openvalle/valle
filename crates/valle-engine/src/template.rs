@@ -3,9 +3,10 @@
 //! guards under which the variant holds. It lives in memory only; `{:?}` is a debugging aid, not a
 //! format.
 
+use std::borrow::Cow;
 use std::rc::Rc;
 
-use crate::js::MathFn;
+use crate::js::{self, MathFn};
 
 pub type Error = String;
 
@@ -18,6 +19,15 @@ pub enum V {
 }
 
 impl V {
+    /// JavaScript `String(v)`.
+    pub fn text(&self) -> Cow<'_, str> {
+        match self {
+            V::Num(x) => Cow::Owned(js::number_to_string(*x)),
+            V::Bool(b) => Cow::Borrowed(if *b { "true" } else { "false" }),
+            V::Str(s) => Cow::Borrowed(s),
+        }
+    }
+
     /// JavaScript `Number(v)` for numbers and booleans; NaN otherwise.
     pub fn num(&self) -> f64 {
         match self {
@@ -126,6 +136,17 @@ pub struct Node {
     pub children: Vec<u32>,
     /// Where its JSX is written, `path:line:col`.
     pub site: Option<Rc<str>>,
+}
+
+impl Node {
+    /// Where errors about the node point: its site, else its tag.
+    pub fn place(&self) -> Rc<str> {
+        match (&self.site, &self.kind) {
+            (Some(site), _) => site.clone(),
+            (None, Kind::View) => "<View>".into(),
+            (None, Kind::Text { .. }) => "<Text>".into(),
+        }
+    }
 }
 
 /// A structural decision tracing took on a traced value. The variant holds while every guard does.

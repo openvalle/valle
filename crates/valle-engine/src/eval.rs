@@ -66,22 +66,13 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             for p in parts {
                 match p {
                     Part::Text(t) => s.push_str(t),
-                    Part::Expr(i) => push_string(&mut s, &values[*i as usize]),
+                    Part::Expr(i) => s.push_str(&values[*i as usize].text()),
                 }
             }
             V::Str(Rc::from(s))
         }
         Op::Interp(i) => V::Num(interpolate(i, values)?),
     })
-}
-
-/// `String(v)`.
-fn push_string(out: &mut String, v: &V) {
-    match v {
-        V::Num(x) => out.push_str(&js::number_to_string(*x)),
-        V::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        V::Str(s) => out.push_str(s),
-    }
 }
 
 fn interpolate(i: &Interp, values: &[V]) -> Result<f64, Error> {
