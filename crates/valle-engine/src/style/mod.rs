@@ -59,7 +59,8 @@ pub struct Style {
     pub shadows: Vec<Shadow>,
     /// Within [0, 1].
     pub opacity: f64,
-    /// `transform`, empty for `none`, and `transform-origin`, from the border box's top left.
+    /// `translate`, `rotate` and `scale`, then `transform`: one list, empty when all are `none`;
+    /// and `transform-origin`, from the border box's top left.
     pub transform: Vec<transform::Function>,
     pub transform_origin: [position::Offset; 2],
     /// `visibility: visible`; hidden boxes paint nothing of their own.
@@ -562,6 +563,9 @@ struct Declared {
     outline_offset: Len,
     shadows: Vec<Shadowed>,
     opacity: f64,
+    translate: Option<transform::Function<Len>>,
+    rotate: Option<transform::Function<Len>>,
+    scale: Option<transform::Function<Len>>,
     transform: Vec<transform::Function<Len>>,
     transform_origin: [position::Offset<Len>; 2],
     /// Inherited.
@@ -621,6 +625,9 @@ impl Default for Declared {
             outline_offset: ZERO,
             shadows: Vec::new(),
             opacity: 1.0,
+            translate: None,
+            rotate: None,
+            scale: None,
             transform: Vec::new(),
             transform_origin: [const {
                 position::Offset {
@@ -703,6 +710,9 @@ enum Field {
     BackgroundRepeat,
     BackgroundOrigin,
     BackgroundClip,
+    Translate,
+    Rotate,
+    Scale,
     Transform,
     TransformOrigin,
     BorderRadius,
@@ -770,7 +780,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 163] = [
+const FIELDS: [(&str, Field); 166] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1032,6 +1042,9 @@ const FIELDS: [(&str, Field); 163] = [
     ("outlineOffset", Field::OutlineOffset),
     ("boxShadow", Field::BoxShadow),
     ("opacity", Field::Opacity),
+    ("translate", Field::Translate),
+    ("rotate", Field::Rotate),
+    ("scale", Field::Scale),
     ("transform", Field::Transform),
     ("transformOrigin", Field::TransformOrigin),
     ("visibility", Field::Visibility),
@@ -1163,6 +1176,15 @@ fn text(v: &V) -> Result<String, String> {
     match v {
         V::Str(s) => Ok(s.trim().to_ascii_lowercase()),
         other => Err(format!("{} is not a string", shown(other))),
+    }
+}
+
+/// CSS text, or a number as itself.
+fn number_text(v: &V) -> Result<String, String> {
+    match v {
+        V::Num(x) if x.is_finite() => Ok(x.to_string()),
+        V::Num(x) => Err(format!("{x} is not a finite number")),
+        _ => text(v),
     }
 }
 
@@ -1962,6 +1984,9 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Outline(BorderPart::Color) => d.outline_color = current_color(v)?,
         F::OutlineOffset => d.outline_offset = length(v, OFFSET)?,
         F::BoxShadow => d.shadows = shadows(v)?,
+        F::Translate => d.translate = transform::translate(&px_text(v)?)?,
+        F::Rotate => d.rotate = transform::rotate(&text(v)?)?,
+        F::Scale => d.scale = transform::scale(&number_text(v)?)?,
         F::Transform => d.transform = transform::transform(&text(v)?)?,
         F::TransformOrigin => d.transform_origin = transform::origin(&px_text(v)?)?,
         F::Opacity => {
@@ -2187,7 +2212,12 @@ fn compute(
             })
             .collect(),
         opacity: d.opacity,
-        transform: d.transform.iter().map(|f| f.computed(u)).collect(),
+        transform: [&d.translate, &d.rotate, &d.scale]
+            .into_iter()
+            .flatten()
+            .chain(&d.transform)
+            .map(|f| f.computed(u))
+            .collect(),
         transform_origin: d.transform_origin.each_ref().map(|o| o.computed(u)),
         visible: d.visible.unwrap_or(inherited_visible),
         color,

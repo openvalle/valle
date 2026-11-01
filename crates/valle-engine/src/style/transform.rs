@@ -1,5 +1,5 @@
-//! Transforms: `transform`, functions applied from the last to the first, around
-//! `transform-origin`, a point in the border box.
+//! Transforms: `translate`, `rotate`, `scale` and then `transform`, functions applied from the
+//! last to the first, around `transform-origin`, a point in the border box.
 
 use super::css::{self, angle};
 use super::math::{self, Calc};
@@ -69,21 +69,11 @@ fn function(w: &str) -> Result<Function<Len>, String> {
         return Err(format!("{name}(): 3D transforms are not supported yet"));
     }
     let args = css::commas(inner);
-    let length = |a: &str| length_text(a, LENGTH).map_err(|e| format!("{name}(): {e}"));
-    // A number, or a percentage of one in scale().
-    let number = |a: &str, percent: bool| match css::num(a) {
-        Some(n) if n.unit.is_empty() => Ok(n.value),
-        Some(n) if percent && n.unit == "%" => Ok(n.value / 100.0),
-        _ => Err(format!("{name}(): {a} is not a number")),
-    };
+    let named = |e: String| format!("{name}(): {e}");
+    let length = |a: &str| length_text(a, LENGTH).map_err(named);
+    let number = |a: &str, percent: bool| self::number(a, percent).map_err(named);
     let scale = |a: &str| number(a, true);
-    let turn = |a: &str| match angle(a) {
-        Some(degrees) => Ok(degrees),
-        None if math::is_math(a) => Err(format!(
-            "{name}(): math functions of angles are not supported yet"
-        )),
-        None => Err(format!("{name}(): {a} is not an angle")),
-    };
+    let turn = |a: &str| degrees(a).map_err(named);
     let zero = || Len::Px(0.0);
     Ok(match (name, &args[..]) {
         ("translate" | "translatex", [x]) => Function::Translate([length(x)?, zero()]),
@@ -119,6 +109,64 @@ fn function(w: &str) -> Result<Function<Len>, String> {
             return Err(format!("{name}() takes {takes}, separated by commas"));
         }
     })
+}
+
+/// A number, or a percentage of one where `percent`.
+fn number(a: &str, percent: bool) -> Result<f64, String> {
+    match css::num(a) {
+        Some(n) if n.unit.is_empty() => Ok(n.value),
+        Some(n) if percent && n.unit == "%" => Ok(n.value / 100.0),
+        _ => Err(format!("{a} is not a number")),
+    }
+}
+
+fn degrees(a: &str) -> Result<f64, String> {
+    match angle(a) {
+        Some(degrees) => Ok(degrees),
+        None if math::is_math(a) => Err("math functions of angles are not supported yet".into()),
+        None => Err(format!("{a} is not an angle")),
+    }
+}
+
+/// `translate`: `none`, or x and y lengths, y 0 when left out.
+pub(super) fn translate(s: &str) -> Result<Option<Function<Len>>, String> {
+    let length = |a: &str| length_text(a, LENGTH);
+    match css::words(s)[..] {
+        ["none"] => Ok(None),
+        [x] => Ok(Some(Function::Translate([length(x)?, Len::Px(0.0)]))),
+        [x, y] => Ok(Some(Function::Translate([length(x)?, length(y)?]))),
+        [_, _, _] => Err("a z length: 3D transforms are not supported yet".into()),
+        _ => Err(format!(
+            "{s:?} is not a translation: none, or one or two lengths"
+        )),
+    }
+}
+
+/// `rotate`: `none`, or an angle about z. Unlike in `rotate()`, a bare 0 is not an angle.
+pub(super) fn rotate(s: &str) -> Result<Option<Function<Len>>, String> {
+    let a = match css::words(s)[..] {
+        ["none"] => return Ok(None),
+        [a] | ["z", a] | [a, "z"] => a,
+        ["x" | "y", _] | [_, "x" | "y"] | [_, _, _, _] => {
+            return Err("an axis but z: 3D transforms are not supported yet".into());
+        }
+        _ => return Err(format!("{s:?} is not a rotation: none, or an angle")),
+    };
+    match css::num(a) {
+        Some(n) if n.unit.is_empty() => Err(format!("{a} needs a unit: {a}deg")),
+        _ => Ok(Some(Function::Rotate(degrees(a)?))),
+    }
+}
+
+/// `scale`: `none`, or x and y factors, numbers or percentages, y x when left out.
+pub(super) fn scale(s: &str) -> Result<Option<Function<Len>>, String> {
+    match css::words(s)[..] {
+        ["none"] => Ok(None),
+        [x] => Ok(Some(Function::Scale([number(x, true)?; 2]))),
+        [x, y] => Ok(Some(Function::Scale([number(x, true)?, number(y, true)?]))),
+        [_, _, _] => Err("a z factor: 3D transforms are not supported yet".into()),
+        _ => Err(format!("{s:?} is not a scale: none, or one or two numbers")),
+    }
 }
 
 /// `transform-origin`: a point as one or two words of a position.

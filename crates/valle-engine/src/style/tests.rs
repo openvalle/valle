@@ -1118,6 +1118,54 @@ fn transforms_take_2d_functions_around_an_origin() {
 }
 
 #[test]
+fn translate_rotate_and_scale_come_before_transform() {
+    use transform::Function as F;
+    let functions = |style: &[(&str, Prop)]| {
+        (one(style).transform.into_iter())
+            .map(|f| match f {
+                F::Translate(t) => F::Translate(t.map(|l| l.resolve(100.0))),
+                F::Scale(s) => F::Scale(s),
+                F::Rotate(a) => F::Rotate(a),
+                F::Skew(a) => F::Skew(a),
+                F::Matrix(m) => F::Matrix(m),
+            })
+            .collect::<Vec<F<f32>>>()
+    };
+    assert_eq!(
+        functions(&[
+            ("transform", text("skew(10deg)")),
+            ("scale", text("2 50%")),
+            ("rotate", text("Z 90DEG")),
+            ("translate", text("10px 5%")),
+        ]),
+        [
+            F::Translate([10.0, 5.0]),
+            F::Rotate(90.0),
+            F::Scale([2.0, 0.5]),
+            F::Skew([10.0, 0.0]),
+        ]
+    );
+    assert_eq!(
+        functions(&[
+            ("translate", num(4.0)),
+            ("rotate", text("-0.25turn z")),
+            ("scale", num(3.0))
+        ]),
+        [
+            F::Translate([4.0, 0.0]),
+            F::Rotate(-90.0),
+            F::Scale([3.0, 3.0]),
+        ]
+    );
+    let none = [
+        ("translate", text("none")),
+        ("rotate", text("none")),
+        ("scale", text("none")),
+    ];
+    assert_eq!(functions(&none), []);
+}
+
+#[test]
 fn radial_gradients_take_a_shape_a_size_and_a_center() {
     use gradient::{Image, Shape, Size, Space};
     // The shape, the size in px of 100 px, and the center from the top left of 100 × 100 px.
@@ -1541,6 +1589,40 @@ fn what_is_not_supported_is_an_error() {
             "translate is not a transform function",
         ),
         ("transform", text(""), "\"\" is not a transform; use none"),
+        (
+            "translate",
+            text("1px 2px 0"),
+            "a z length: 3D transforms are not supported yet",
+        ),
+        ("translate", text("10"), "10 needs a unit: 10px"),
+        (
+            "translate",
+            text(""),
+            "\"\" is not a translation: none, or one or two lengths",
+        ),
+        (
+            "rotate",
+            text("x 10deg"),
+            "an axis but z: 3D transforms are not supported yet",
+        ),
+        (
+            "rotate",
+            text("0 0 1 10deg"),
+            "an axis but z: 3D transforms are not supported yet",
+        ),
+        ("rotate", text("0"), "0 needs a unit: 0deg"),
+        (
+            "rotate",
+            text("10deg 20deg"),
+            "\"10deg 20deg\" is not a rotation: none, or an angle",
+        ),
+        ("rotate", num(10.0), "10 is not a string"),
+        (
+            "scale",
+            text("2 2 1"),
+            "a z factor: 3D transforms are not supported yet",
+        ),
+        ("scale", text("2px"), "2px is not a number"),
         ("transform", num(0.0), "0 is not a string"),
         (
             "transformOrigin",
