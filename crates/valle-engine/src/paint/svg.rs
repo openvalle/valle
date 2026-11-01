@@ -12,7 +12,7 @@ use crate::path::Path;
 use crate::style::color;
 use crate::style::math::Calc;
 use crate::style::{Instance, Paint, Style};
-use crate::svg::file::Document;
+use crate::svg::file::{Document, Embedded};
 use crate::svg::{self, Element};
 use crate::template::Template;
 
@@ -44,7 +44,7 @@ pub fn document(document: &Document, first: Rect) -> Option<Item> {
     let scaled = Matrix::affine([kx, 0.0, 0.0, ky, first.x.into(), first.y.into()]);
     let matrix = scaled.times(matrix);
     let mut items = Vec::new();
-    let drawing = Drawing::new(&document.template, &document.styles);
+    let drawing = Drawing::new(&document.template, &document.styles, &document.embedded);
     drawing.element(0, units, matrix, &mut items, None);
     (!items.is_empty()).then(|| Item::Clip {
         rect: first,
@@ -59,12 +59,18 @@ pub struct Drawing<'a> {
     styles: &'a [Style],
     /// Its elements by id: as Chrome finds them in its document, the first of each.
     ids: HashMap<&'a str, usize>,
+    /// The images a file's `<image>`s show.
+    embedded: &'a [Embedded],
     /// The masks and markers what is drawing is in, innermost last.
     resources: RefCell<Vec<usize>>,
 }
 
 impl<'a> Drawing<'a> {
-    pub fn new(template: &'a Template, styles: &'a [Style]) -> Drawing<'a> {
+    pub fn new(
+        template: &'a Template,
+        styles: &'a [Style],
+        embedded: &'a [Embedded],
+    ) -> Drawing<'a> {
         let mut ids = HashMap::new();
         for (i, s) in styles.iter().enumerate() {
             if let Some(id) = s.svg.as_deref().and_then(|c| c.id.as_deref()) {
@@ -75,6 +81,7 @@ impl<'a> Drawing<'a> {
             template,
             styles,
             ids,
+            embedded,
             resources: RefCell::new(Vec::new()),
         }
     }
@@ -169,7 +176,22 @@ impl<'a> Drawing<'a> {
                 items.extend(stroke);
                 items.extend(markers);
             }
+            Element::Image { .. } if s.visible => {
+                let Some((viewport, first, image)) = self.image(i, size, copy) else {
+                    return;
+                };
+                items.push(Item::Image {
+                    rect: rect(viewport),
+                    radii: SQUARE,
+                    tiles: Tiles {
+                        first: rect(first),
+                        step: [None; 2],
+                    },
+                    image,
+                });
+            }
             Element::Shape(_)
+            | Element::Image { .. }
             | Element::Defs
             | Element::Gradient(_)
             | Element::Stop(_)
@@ -254,6 +276,7 @@ impl<'a> Drawing<'a> {
         match &c.element {
             Element::Shape(shape) => svg::path(shape, size).map(|p| svg::bounds(&p)),
             Element::G => self.around(&self.template.nodes[i].children, size, copy),
+            Element::Image { .. } => self.image(i, size, copy).map(|(viewport, ..)| viewport),
             Element::Use { .. } => {
                 let instance = s.instance.as_deref()?;
                 let root = instance.root;
@@ -268,6 +291,45 @@ impl<'a> Drawing<'a> {
             }
             _ => None,
         }
+    }
+
+    /// If `i` is an `<image>` of a file, in a viewport `size` user units big: the viewport it
+    /// gives its image, the rect its fit puts the image in, and the scene's image. `None` too
+    /// where its viewport has no area.
+    fn image(
+        &self,
+        i: usize,
+        size: [f64; 2],
+        copy: Option<&Instance>,
+    ) -> Option<([f64; 4], [f64; 4], u32)> {
+        let s = self.style(i, copy);
+        let Element::Image {
+            at,
+            size: given,
+            fit,
+        } = s.svg.as_deref()?.element
+        else {
+            return None;
+        };
+        let embedded = self.embedded.iter().find(|e| e.node as usize == i)?;
+        let [nw, nh] = embedded.size.map(f64::from);
+        let given = [0, 1].map(|k| given[k].map(|l| l.resolve(size[k])));
+        let [w, h] = match given {
+            [Some(w), Some(h)] => [w, h],
+            [Some(w), None] => [w, w * nh / nw],
+            [None, Some(h)] => [h * nw / nh, h],
+            [None, None] => [nw, nh],
+        };
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        let [x, y] = [0, 1].map(|k| at[k].resolve(size[k]));
+        let placed = Matrix::translate(x, y).times(svg::viewport([0.0, 0.0, nw, nh], fit, [w, h]));
+        Some((
+            [x, y, w, h],
+            mapped(placed, [0.0, 0.0, nw, nh]),
+            embedded.image,
+        ))
     }
 
     /// The box around the bounding boxes of `elements`, each through its transform.

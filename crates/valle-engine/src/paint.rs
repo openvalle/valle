@@ -759,7 +759,7 @@ pub fn paint(
         spaces: spaces(template, styles, layout),
         parents,
         clips: Vec::with_capacity(n),
-        drawing: Drawing::new(template, styles),
+        drawing: Drawing::new(template, styles, &[]),
     };
     // In preorder, so the box whose clips a box takes has its own.
     for i in 0..n {

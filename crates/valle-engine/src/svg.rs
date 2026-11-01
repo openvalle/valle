@@ -102,6 +102,13 @@ pub enum Element {
         fit: Fit,
     },
     Marker(Marker),
+    /// An image an SVG file embeds, in a viewport at `at` and `size` big, its natural size on an
+    /// axis without one, or what its ratio makes of the other's, the image placed by its fit.
+    Image {
+        at: [Length; 2],
+        size: [Option<Length>; 2],
+        fit: Fit,
+    },
 }
 
 /// A marker: what its children draw, through its viewBox by its fit in a viewport `size` big,
@@ -277,6 +284,15 @@ fn own(tag: Tag) -> &'static [&'static str] {
             "markerUnits",
             "orient",
         ],
+        Tag::Image => &[
+            "href",
+            "xlinkHref",
+            "x",
+            "y",
+            "width",
+            "height",
+            "preserveAspectRatio",
+        ],
     }
 }
 
@@ -323,7 +339,8 @@ pub fn presentational(tag: Tag, name: &str) -> bool {
 pub fn tables() -> String {
     let mut elements = serde_json::Map::new();
     let mut holding = serde_json::Map::new();
-    for tag in Tag::ALL {
+    // An <image> shows an image an SVG file embeds; inline, an <Image> shows one.
+    for tag in Tag::ALL.into_iter().filter(|&t| t != Tag::Image) {
         elements.insert(tag.name().into(), own(tag).into());
         match holds(tag) {
             Holds::Any => {
@@ -530,6 +547,11 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
                     .map_or(Ok(Orient::Angle(0.0)), |o| orient(&o).map_err(at("orient")))?,
             })
         }
+        Tag::Image => Element::Image {
+            at: [length("x")?, length("y")?],
+            size: [auto("width")?, auto("height")?],
+            fit: fitting()?.1,
+        },
     };
     if transform.is_some() && matches!(element, Element::Defs | Element::Stop(_)) {
         return Err(format!(
@@ -574,7 +596,7 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
             negative("width", Some(m.region[2]))?;
             negative("height", Some(m.region[3]))?;
         }
-        Element::Use { size, .. } => {
+        Element::Use { size, .. } | Element::Image { size, .. } => {
             negative("width", size[0])?;
             negative("height", size[1])?;
         }

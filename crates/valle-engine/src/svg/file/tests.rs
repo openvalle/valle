@@ -12,8 +12,13 @@ fn tags(d: &Document) -> Vec<&'static str> {
 }
 
 fn error(text: &str) -> String {
-    Document::parse(text).unwrap_err()
+    Document::parse(text, &mut Vec::new()).unwrap_err()
 }
+
+/// An 8 × 6 PNG, base64.
+const TILE: &str = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAYAAAD+Bd/7AAAAWklEQVR42mN4amn633mB+3+5jqf/QYCBgeH/3xum\
+    //tUVv1nWHOQgQGP5H+gZgYGJEkHNEmQyUAt2HXCrGVgwCMJ0QuUbABKNgAlG4CSDUDJBqBkA1CyAaQbAFcfbK/9DMaBAAA\
+    AAElFTkSuQmCC";
 
 #[test]
 fn files_keep_the_svg_elements_and_drop_what_editors_add() {
@@ -36,7 +41,7 @@ fn files_keep_the_svg_elements_and_drop_what_editors_add() {
   <rect id="dot" width="4" height="4" fill="url(#g)" />
 </svg>
 "##;
-    let d = Document::parse(text).unwrap();
+    let d = Document::parse(text, &mut Vec::new()).unwrap();
     assert_eq!(
         tags(&d),
         [
@@ -79,7 +84,7 @@ fn files_keep_the_svg_elements_and_drop_what_editors_add() {
 fn natural_sizes_come_from_absolute_sides_and_the_view_box() {
     let natural = |attributes: &str| {
         let text = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" {attributes}/>"#);
-        Document::parse(&text).unwrap().natural
+        Document::parse(&text, &mut Vec::new()).unwrap().natural
     };
     assert_eq!(
         natural(r#"width="40" height="20""#),
@@ -151,4 +156,72 @@ fn files_look_like_markup() {
     assert!(looks(b"<?xml version=\"1.0\"?><svg/>"));
     assert!(!looks(b"\x89PNG\r\n\x1a\n"));
     assert!(!looks(b"// <svg>"));
+}
+
+#[test]
+fn images_show_what_files_embed_as_data_uris() {
+    let text = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">
+  <rect width=\"4\" height=\"4\" />
+  <image x=\"2\" width=\"16\" preserveAspectRatio=\"none\" xlink:href=\"data:image/png;base64,{TILE}\" />
+  <g><image href=\"data:image/png;base64,\n{TILE}\n\" /></g>
+</svg>"
+    );
+    let mut images = vec![crate::image::Image {
+        size: [1, 1],
+        pixels: [0; 4].into(),
+    }];
+    let d = Document::parse(&text, &mut images).unwrap();
+    assert_eq!(tags(&d), ["svg", "rect", "image", "g", "image"]);
+    // After the images the scene has.
+    let embedded = |node, image| Embedded {
+        node,
+        image,
+        size: [8, 6],
+    };
+    assert_eq!(d.embedded, [embedded(2, 1), embedded(4, 2)]);
+    assert_eq!(images.len(), 3);
+    assert_eq!(images[1].size, [8, 6]);
+    // The data stays out of the attributes.
+    let Kind::Svg { attributes, .. } = &d.template.nodes[2].kind else {
+        unreachable!()
+    };
+    let names: Vec<&str> = attributes.iter().map(|(k, _)| &**k).collect();
+    assert_eq!(names, ["x", "width", "preserveAspectRatio"]);
+
+    let image = |href: &str| {
+        let text =
+            format!("<svg xmlns=\"http://www.w3.org/2000/svg\">\n  <image {href} />\n</svg>");
+        error(&text)
+    };
+    let e = image(r#"href="logo.png""#);
+    assert_eq!(
+        e,
+        "2:3: <image> href: an SVG file reads no other files: embed logo.png as a data URI"
+    );
+    let e = image("");
+    assert!(e.starts_with("2:3: <image> needs an href"), "{e}");
+    let e = image(r#"href="data:image/png,abc""#);
+    assert!(
+        e.starts_with("2:3: <image> href: an image's data URI is base64"),
+        "{e}"
+    );
+    let e = image(r#"href="data:image/png;base64,ab*c""#);
+    assert_eq!(e, "2:3: <image> href: its data is not base64");
+    let e = image(r#"href="data:image/svg+xml;base64,PHN2Zy8+""#);
+    assert!(
+        e.ends_with("an SVG file in an SVG file is not supported yet"),
+        "{e}"
+    );
+    let e = image(r#"href="data:image/gif;base64,R0lGODlh""#);
+    assert!(e.ends_with("not a PNG, JPEG, WebP or SVG image"), "{e}");
+}
+
+#[test]
+fn base64_decodes_with_or_without_padding() {
+    assert_eq!(base64("aGk=").as_deref(), Some(&b"hi"[..]));
+    assert_eq!(base64("aGk").as_deref(), Some(&b"hi"[..]));
+    assert_eq!(base64(" aG\nVs\tbG8= ").as_deref(), Some(&b"hello"[..]));
+    assert_eq!(base64("").as_deref(), Some(&b""[..]));
+    assert_eq!(base64("a-b_"), None);
 }

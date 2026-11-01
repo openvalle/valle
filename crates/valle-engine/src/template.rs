@@ -172,9 +172,10 @@ pub enum Tag {
     Use,
     Symbol,
     Marker,
+    Image,
 }
 
-const TAGS: [(&str, Tag); 18] = [
+const TAGS: [(&str, Tag); 19] = [
     ("svg", Tag::Svg),
     ("g", Tag::G),
     ("path", Tag::Path),
@@ -193,6 +194,7 @@ const TAGS: [(&str, Tag); 18] = [
     ("use", Tag::Use),
     ("symbol", Tag::Symbol),
     ("marker", Tag::Marker),
+    ("image", Tag::Image),
 ];
 
 impl Tag {

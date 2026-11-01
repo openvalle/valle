@@ -650,6 +650,10 @@ fn errors_point_at_the_source() {
             ),
             ("<mask />", "<mask> must be inside an <svg>"),
             ("<svg>hi</svg>", "text in an <svg> is not supported yet"),
+            (
+                "<svg><image href=\"data:image/png;base64,\" /></svg>",
+                "<image> in an <svg> is not supported yet",
+            ),
             ("<svg><View /></svg>", "<View> cannot be inside an <svg>"),
             (
                 "<svg><foreignObject /></svg>",

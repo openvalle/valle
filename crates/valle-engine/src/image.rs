@@ -29,7 +29,7 @@ impl Picture {
         if file::looks(bytes) {
             let text = std::str::from_utf8(bytes).map_err(|_| "an SVG file is UTF-8 text")?;
             let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-            return Ok(Picture::Svg(Box::new(Document::parse(text)?)));
+            return Ok(Picture::Svg(Box::new(Document::parse(text, images)?)));
         }
         let image = Image::decode(bytes)?;
         let size = image.size;

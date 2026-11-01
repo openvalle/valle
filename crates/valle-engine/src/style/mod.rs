@@ -829,6 +829,7 @@ impl Sheet {
                     | Tag::Polygon
                     | Tag::Use
                     | Tag::Symbol
+                    | Tag::Image
             )
         );
         if !copies {
