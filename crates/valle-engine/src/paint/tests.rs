@@ -65,6 +65,7 @@ fn names(items: &[Item]) -> Vec<String> {
                         Filter::Aberration(_) => "aberration",
                         Filter::Lens { .. } => "lens",
                         Filter::Grain { .. } => "grain",
+                        Filter::Radial { .. } => "radial",
                     })
                     .collect();
                 format!("filter {filters:?} {:?}", names(items))

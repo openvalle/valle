@@ -48,6 +48,7 @@ const TOLERANCE: f32 = 0.02;
 const ABERRATION: f32 = 0.0;
 const LENS: f32 = 1.0;
 const GRAIN: f32 = 2.0;
+const RADIAL: f32 = 3.0;
 
 /// Premultiplied colors to the luminance of their working values, Rec. 709's weights as Skia's,
 /// times their alpha, as the alpha of black.
@@ -516,6 +517,29 @@ impl Plan {
                         GRAIN,
                         &[t as f32, seed, *amount, *size, origin[0], origin[1]],
                     )
+                }
+                Filter::Radial { center, amount } => {
+                    let Some(t) = self.transform(matrix) else {
+                        continue;
+                    };
+                    if *amount <= 0.0 {
+                        continue;
+                    }
+                    // Passes of three taps, each twice as far apart as the last, 1, 2, 4… parts
+                    // of 2ⁿ − 1 of the reach: together a triangle across it either way, its taps
+                    // at most a px apart where the transform stretches it most.
+                    let reach = f64::from(*amount) * x[0].hypot(x[1]).max(y[0].hypot(y[1]));
+                    let mut passes = 1;
+                    while f64::from((1u32 << passes) - 1) < reach && passes < 16 {
+                        passes += 1;
+                    }
+                    let parts = ((1u32 << passes) - 1) as f32;
+                    for k in 0..passes {
+                        let part = (1u32 << k) as f32 / parts;
+                        let words = [t as f32, center[0], center[1], *amount, part];
+                        layer = self.effect(layer, RADIAL, &words);
+                    }
+                    layer
                 }
                 Filter::Shadow {
                     offset: [dx, dy],

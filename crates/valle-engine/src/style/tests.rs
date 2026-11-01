@@ -1763,6 +1763,13 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
             size: 2.5
         }]
     );
+    assert_eq!(
+        filter("radial-blur(-10px 0 128px)"),
+        [F::RadialBlur {
+            center: [-10.0, 0.0],
+            amount: 128.0
+        }]
+    );
     for (v, says) in [
         (
             "chromatic-aberration(300px)",
@@ -1783,6 +1790,12 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
             "the seed 1.5 is not a whole number",
         ),
         ("film-grain(-1 0.5 2px)", "the seed -1 is not within"),
+        ("radial-blur(10px 10px)", "takes x, y, the amount"),
+        ("radial-blur(50% 10px 4px)", "x 50% is not px"),
+        (
+            "radial-blur(1px 1px 129px)",
+            "the amount 129px is not within 0px and 128px",
+        ),
         (
             "film-grain(1 0.5 0.5px)",
             "the size 0.5px is not within 1px and 64px",

@@ -43,6 +43,13 @@ pub enum Function<L = f64, C = Rgba> {
         amount: f64,
         size: f64,
     },
+    /// Valle's `radial-blur(x y amount)`: blurred along each ray from the point `center` px
+    /// from the border box's top left, by up to `amount` px either way and never more than half
+    /// of the way to the point.
+    RadialBlur {
+        center: [f64; 2],
+        amount: f64,
+    },
 }
 
 impl Function<Len, Option<Rgba>> {
@@ -73,13 +80,17 @@ impl Function<Len, Option<Rgba>> {
                 amount: *amount,
                 size: *size,
             },
+            Function::RadialBlur { center, amount } => Function::RadialBlur {
+                center: *center,
+                amount: *amount,
+            },
         }
     }
 }
 
 const NAMES: &str = "blur, brightness, contrast, drop-shadow, grayscale, hue-rotate, invert, \
                      opacity, saturate or sepia, or Valle's chromatic-aberration, \
-                     film-grain or lens-distortion";
+                     film-grain, lens-distortion or radial-blur";
 
 /// `filter`: `none`, or functions separated by spaces.
 pub(super) fn filter(s: &str) -> Result<Vec<Function<Len, Option<Rgba>>>, String> {
@@ -197,6 +208,17 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
                 seed: a[0] as u32,
                 amount: a[1],
                 size: a[2],
+            }
+        }
+        "radial-blur" => {
+            let a = valle(&[
+                ("x", true, [-1e6, 1e6]),
+                ("y", true, [-1e6, 1e6]),
+                ("the amount", true, [0.0, 128.0]),
+            ])?;
+            Function::RadialBlur {
+                center: [a[0], a[1]],
+                amount: a[2],
             }
         }
         _ => return Err(format!("{name}() is not a filter function: {NAMES}")),

@@ -11,6 +11,10 @@
 //   across from an origin, each corner's value from a hash of its cell and the seed, added to the
 //   colors' encoded values by up to an amount of how far each is from 0 or 1, whichever is
 //   nearer, so it never clips.
+// - 3, radial blur: in the px of a transform, a pass along each ray from a center, 1, 2 and 1 of
+//   the points a part of the reach before each pixel, at it and after it, the reach an amount
+//   but at most half of the way to the center. Passes a part 1, 2, 4… of 2ⁿ − 1 apart weigh a
+//   triangle across the reach.
 
 struct Effect {
   // x: which effect; then its parameters.
@@ -105,6 +109,21 @@ fn grain(p: vec2f, t: u32, seed: u32, amount: f32, size: f32, origin: vec2f) -> 
   return vec4f((v + n * amount * room) * c.a, c.a);
 }
 
+fn radial(p: vec2f, t: u32, c: vec2f, amount: f32, part: f32) -> vec4f {
+  let here = texel(vec2<i32>(p));
+  let q = local(p, t);
+  let d = q - c;
+  let distance = length(d);
+  let reach = part * min(amount, distance * 0.5);
+  if (reach <= 0.0) {
+    return here;
+  }
+  let step = d * (reach / distance);
+  let before = transforms[t].forward * vec3f(q - step, 1.0);
+  let after = transforms[t].forward * vec3f(q + step, 1.0);
+  return (sampled(before.xy / before.z) + 2.0 * here + sampled(after.xy / after.z)) * 0.25;
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let e = effects[in.index];
   let kind = u32(e.head.x);
@@ -114,6 +133,9 @@ fn grain(p: vec2f, t: u32, seed: u32, amount: f32, size: f32, origin: vec2f) -> 
   if (kind == 2u) {
     let seed = bitcast<u32>(e.head.z);
     return grain(in.pos.xy, u32(e.head.y), seed, e.head.w, e.more[0].x, e.more[0].yz);
+  }
+  if (kind == 3u) {
+    return radial(in.pos.xy, u32(e.head.y), e.head.zw, e.more[0].x, e.more[0].y);
   }
   return aberration(in.pos.xy, e.head.yz);
 }

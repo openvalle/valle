@@ -179,6 +179,9 @@ pub enum Filter {
         size: f32,
         origin: [f32; 2],
     },
+    /// Blurred along each ray from `center` by up to `amount` px either way, and never more
+    /// than half of the way to it.
+    Radial { center: [f32; 2], amount: f32 },
 }
 
 /// Where a background image is: one tile, and on each axis how far it is to the next one, if it
@@ -526,6 +529,10 @@ fn filters(functions: &[filter::Function], frame: Rect) -> Vec<Filter> {
                 size: *size as f32,
                 origin: [frame.x, frame.y],
             },
+            filter::Function::RadialBlur { center, amount } => Filter::Radial {
+                center: [frame.x + center[0] as f32, frame.y + center[1] as f32],
+                amount: *amount as f32,
+            },
             f => {
                 let Some(m) = colors(f) else { continue };
                 if let Some(Filter::Colors(list)) = out.last_mut() {
@@ -610,7 +617,8 @@ fn colors(f: &filter::Function) -> Option<[f32; 20]> {
         | F::DropShadow { .. }
         | F::ChromaticAberration(_)
         | F::LensDistortion(_)
-        | F::FilmGrain { .. } => return None,
+        | F::FilmGrain { .. }
+        | F::RadialBlur { .. } => return None,
     })
 }
 
