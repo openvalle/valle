@@ -1,6 +1,8 @@
 use super::*;
 use crate::template::Kind;
 
+const CANVAS: [f32; 2] = [200.0, 100.0];
+
 fn text(s: &str) -> Prop {
     Prop::Const(V::Str(s.into()))
 }
@@ -32,7 +34,7 @@ fn sheet(nodes: Vec<Node>) -> Result<Sheet, Error> {
 }
 
 fn styles(nodes: Vec<Node>, values: &[V]) -> Result<Vec<Style>, Error> {
-    sheet(nodes)?.compute(values)
+    sheet(nodes)?.compute(values, CANVAS)
 }
 
 fn one(style: &[(&str, Prop)]) -> Style {
@@ -149,6 +151,35 @@ fn box_sizing_aspect_ratio_and_order() {
     assert!(error(&[("aspectRatio", num(-1.0))]).ends_with("-1 is negative"));
     assert_eq!(one(&[("order", text("-3"))]).order, -3);
     assert!(error(&[("order", num(1.5))]).ends_with("1.5 is not an integer"));
+}
+
+#[test]
+fn viewport_units_take_the_canvas() {
+    let l = one(&[
+        ("width", text("10vw")),
+        ("height", text("10vh")),
+        ("paddingLeft", text("10vmin")),
+        ("paddingRight", text("10vmax")),
+        ("paddingTop", text("10dvh")),
+        ("paddingBottom", text("10svi")),
+        ("marginLeft", text("-5lvb")),
+    ])
+    .layout;
+    assert_eq!(l.size.width, Dimension::length(20.0));
+    assert_eq!(l.size.height, Dimension::length(10.0));
+    let padding = taffy::Rect {
+        top: px(10.0),
+        right: px(20.0),
+        bottom: px(20.0),
+        left: px(10.0),
+    };
+    assert_eq!(l.padding, padding);
+    assert_eq!(l.margin.left, auto_px(-5.0));
+    assert_eq!(one(&[("fontSize", text("10vw"))]).font.size, 20.0);
+    assert!(
+        error(&[("width", text("1vq"))])
+            .ends_with("1vq: vq is not supported; use px, em, rem, %, vw, vh, vmin or vmax")
+    );
 }
 
 #[test]
@@ -296,15 +327,18 @@ fn expressions_are_set_in_declaration_order() {
     );
     let sheet = sheet(vec![view(&[("width", Prop::Expr(0))], &[])]).unwrap();
     assert_eq!(
-        sheet.compute(&[V::Num(5.0)]).unwrap()[0].layout.size.width,
+        sheet.compute(&[V::Num(5.0)], CANVAS).unwrap()[0]
+            .layout
+            .size
+            .width,
         Dimension::length(5.0)
     );
     assert_eq!(
-        sheet.compute(&[V::Str("abc".into())]).unwrap_err(),
+        sheet.compute(&[V::Str("abc".into())], CANVAS).unwrap_err(),
         "s.tsx:1:1: style width: abc is not a length"
     );
     assert_eq!(
-        sheet.compute(&[V::Bool(true)]).unwrap_err(),
+        sheet.compute(&[V::Bool(true)], CANVAS).unwrap_err(),
         "s.tsx:1:1: style width: true is not a length"
     );
 }
@@ -351,13 +385,8 @@ fn what_is_not_supported_is_an_error() {
         ("width", text("10"), "style width: 10 needs a unit: 10px"),
         (
             "width",
-            text("10vw"),
-            "style width: 10vw: vw is not supported yet",
-        ),
-        (
-            "width",
             text("1in"),
-            "style width: 1in: in is not supported; use px, em, rem or %",
+            "style width: 1in: in is not supported; use px, em, rem, %, vw, vh, vmin or vmax",
         ),
         ("padding", num(-1.0), "style padding: -1 is negative"),
         (

@@ -129,8 +129,10 @@ const ROWS: &[Row] = &[
             "\"0.5em\"",
             "\"1rem\"",
             "\"auto\"",
+            "\"2vw\"",
+            "\"-5vh\"",
         ],
-        refused: &["\"1vh\"", "\"calc(5px)\"", "\"5\"", "true", "NaN"],
+        refused: &["\"1pt\"", "\"calc(5px)\"", "\"5\"", "true", "NaN"],
     },
     Row {
         properties: &["inset"],
@@ -175,12 +177,16 @@ const ROWS: &[Row] = &[
             "\"auto\"",
             "\" 40PX \"",
             "300",
+            "\"10vw\"",
+            "\"20vmin\"",
+            "\"5svw\"",
+            "\"8vi\"",
         ],
         refused: &[
             "-1",
             "\"-1px\"",
             "\"10\"",
-            "\"1vw\"",
+            "\"2ch\"",
             "\"calc(10px)\"",
             "\"fit-content\"",
             "\"none\"",
@@ -211,8 +217,12 @@ const ROWS: &[Row] = &[
             "\"0.5rem\"",
             "\"auto\"",
             "20",
+            "\"5vh\"",
+            "\"3vmax\"",
+            "\"4dvh\"",
+            "\"6vb\"",
         ],
-        refused: &["-1", "\"1vh\"", "\"fit-content\"", "true"],
+        refused: &["-1", "\"1ex\"", "\"fit-content\"", "true"],
     },
     Row {
         properties: &["minHeight"],
@@ -259,8 +269,9 @@ const ROWS: &[Row] = &[
             "\"0.5em\"",
             "\"1rem\"",
             "\"auto\"",
+            "\"2vw\"",
         ],
-        refused: &["\"1vw\"", "\"5\"", "\"calc(1px)\"", "true"],
+        refused: &["\"1cm\"", "\"5\"", "\"calc(1px)\"", "true"],
     },
     Row {
         properties: &["margin"],
@@ -302,8 +313,9 @@ const ROWS: &[Row] = &[
             "\"0.5em\"",
             "\"1rem\"",
             "\" 3PX \"",
+            "\"1vh\"",
         ],
-        refused: &["-1", "\"-1px\"", "\"auto\"", "\"1vw\"", "true"],
+        refused: &["-1", "\"-1px\"", "\"auto\"", "\"-1vw\"", "true"],
     },
     Row {
         properties: &["padding"],
@@ -356,8 +368,10 @@ const ROWS: &[Row] = &[
     Row {
         properties: &["flexBasis"],
         sample: r##"<View style={{ display: "flex", width: 200, height: 8, background: "#e8eaf6" }}><View style={{ background: "#3949ab", PROPERTY: VALUE }} /><View style={{ flexGrow: 1, background: "#7986cb" }} /></View>"##,
-        values: &["0", "40", "\"30%\"", "\"2em\"", "\"auto\"", "250"],
-        refused: &["-5", "\"content\"", "\"1vw\""],
+        values: &[
+            "0", "40", "\"30%\"", "\"2em\"", "\"auto\"", "250", "\"20vw\"",
+        ],
+        refused: &["-5", "\"content\"", "\"1lh\""],
     },
     Row {
         properties: &["flex"],
@@ -521,8 +535,9 @@ const ROWS: &[Row] = &[
             "\"0.75rem\"",
             "\"80%\"",
             "\" 14PX \"",
+            "\"5vw\"",
         ],
-        refused: &["-1", "\"large\"", "\"1vw\"", "\"smaller\"", "true"],
+        refused: &["-1", "\"large\"", "\"1pc\"", "\"smaller\"", "true"],
     },
     // The font's masters, and the keywords. Between masters Chrome keeps the variation deltas of
     // glyph advances unrounded where HarfBuzz rounds them to font units, and text comes out a few
@@ -572,8 +587,9 @@ const ROWS: &[Row] = &[
             "\"150%\"",
             "\"2em\"",
             "\"0.8rem\"",
+            "\"8vh\"",
         ],
-        refused: &["-1", "\"-1px\"", "\"1vw\"", "true", "\"normal 2\""],
+        refused: &["-1", "\"-1px\"", "\"-1vh\"", "true", "\"normal 2\""],
     },
     Row {
         properties: &["textAlign"],
@@ -599,8 +615,9 @@ const ROWS: &[Row] = &[
             "\"0.2em\"",
             "\"0.1rem\"",
             "\"normal\"",
+            "\"0.5vw\"",
         ],
-        refused: &["\"10%\"", "\"1vw\"", "true", "\"wide\""],
+        refused: &["\"10%\"", "\"1pt\"", "true", "\"wide\""],
     },
 ];
 

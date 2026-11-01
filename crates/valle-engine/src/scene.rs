@@ -72,9 +72,9 @@ impl Scene {
                 self.sheets.truncate(SHEETS);
             }
         }
-        let styles = self.sheets[0].1.compute(&frame.values)?;
         let c = self.front.composition;
         let canvas = [c.width as f32, c.height as f32];
+        let styles = self.sheets[0].1.compute(&frame.values, canvas)?;
         let laid = layout(
             &frame.template,
             &frame.values,

@@ -11,8 +11,9 @@ fn paint_of(nodes: Vec<Node>, roots: &[u32]) -> (Vec<Item>, Layout) {
         roots: roots.to_vec(),
         ..Default::default()
     };
-    let styles = Sheet::new(&template).unwrap().compute(&[]).unwrap();
-    let laid = layout(&template, &[], &styles, [200.0, 100.0], &mut text()).unwrap();
+    let canvas = [200.0, 100.0];
+    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
     (paint(&template, &styles, &laid), laid)
 }
 
