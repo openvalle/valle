@@ -1276,7 +1276,7 @@ impl Painter<'_> {
         let same = |a: &Glyph, b: &Glyph| a.face == b.face && a.node == b.node;
         for run in lines.glyphs.chunk_by(same) {
             let s = &self.styles[run[0].node as usize];
-            let color = work(s.color);
+            let color = work(s.font.fill.unwrap_or(s.color));
             if !s.visible || color[3] <= 0.0 {
                 continue;
             }

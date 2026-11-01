@@ -1986,6 +1986,17 @@ const ROWS: &[Row] = &[
         values: &["\"auto\"", "0", "4", "-3", "\"0.5em\"", "\"30%\""],
         refused: &["\"far\"", "true"],
     },
+    Row {
+        properties: &["WebkitTextFillColor"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, color: "#1e88e5", textDecorationLine: "underline", PROPERTY: VALUE }}>Filled text</Text></View>"##,
+        values: &[
+            "\"#e53935\"",
+            "\"currentcolor\"",
+            "\"transparent\"",
+            "\"rgb(0 0 255 / 50%)\"",
+        ],
+        refused: &["\"banana\"", "1"],
+    },
 ];
 
 /// The cases, by path from `tests/cases`, and their source; `chrome` is every CSS property the

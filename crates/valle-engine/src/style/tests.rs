@@ -758,6 +758,12 @@ fn text_decoration_sets_its_longhands_or_refuses() {
         ("textDecoration", text("underline")),
     ]);
     assert_eq!(reset.decorations[0].color, color::BLACK);
+    // currentcolor is the glyphs' fill color, as in Chrome.
+    let filled = one(&[
+        ("WebkitTextFillColor", text("red")),
+        ("textDecoration", text("underline")),
+    ]);
+    assert_eq!(filled.decorations[0].color, color::parse("red").unwrap());
     for (bad, message) in [
         ("underline red overline", "twice"),
         ("none underline", "is not a text-decoration-line"),
@@ -789,6 +795,7 @@ fn text_properties_inherit() {
                 ("wordSpacing", text("0.25em")),
                 ("whiteSpace", text("pre-line")),
                 ("textTransform", text("uppercase")),
+                ("WebkitTextFillColor", text("blue")),
             ],
             &[2],
         ),
@@ -818,6 +825,7 @@ fn text_properties_inherit() {
         collapse: Collapse::Collapse,
         wrap: true,
         transform: TextTransform::None,
+        fill: None,
         skip_ink: true,
         underline_offset: None,
     };
@@ -840,6 +848,7 @@ fn text_properties_inherit() {
         collapse: Collapse::PreserveBreaks,
         wrap: true,
         transform: TextTransform::Uppercase,
+        fill: Some(color::parse("blue").unwrap()),
         skip_ink: true,
         underline_offset: None,
     };

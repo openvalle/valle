@@ -1,8 +1,8 @@
 //! Chrome baselines: what the pinned Chrome for Testing makes of a case's frames printed as HTML,
 //! `tests/baselines/chrome/<case>.<frame>.json` and `.png`. `web/tests/chrome.ts` draws them when
 //! they are missing, or were drawn from other HTML or by another Chrome. The engine's boxes and
-//! lines are compared with them, and on the GPU its pixels, without the glyphs: Chrome's own text
-//! rendering is not what the engine draws. Whenever it draws, it also lists the CSS properties
+//! lines are compared with them, and on the GPU its pixels, with glyphs unfilled: Chrome's own
+//! text rendering is not what the engine draws. Whenever it draws, it also lists the CSS properties
 //! Chrome knows, `tests/baselines/chrome/properties.json`.
 
 use std::collections::BTreeMap;
@@ -10,8 +10,9 @@ use std::path::Path;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use valle_engine::paint::Item;
+use valle_engine::paint::{self, Item};
 use valle_engine::scene::Frame;
+use valle_engine::style::color;
 use valle_engine::template::Kind;
 
 /// How far a box edge may be from Chrome's: two of its 1/64 px layout units. Chrome truncates
@@ -111,51 +112,14 @@ fn shown([x, y, w, h]: [f64; 4]) -> String {
     format!("{w} × {h} at {x}, {y}")
 }
 
-/// The display list without its glyphs.
-pub fn shapes(items: &[Item]) -> Vec<Item> {
-    (items.iter())
-        .filter_map(|item| match item {
-            Item::Glyphs { .. } => None,
-            Item::Group {
-                opacity,
-                blend,
-                items,
-            } => {
-                let items = shapes(items);
-                let (opacity, blend) = (*opacity, *blend);
-                (!items.is_empty()).then_some(Item::Group {
-                    opacity,
-                    blend,
-                    items,
-                })
-            }
-            Item::Clip { rect, radii, items } => {
-                let items = shapes(items);
-                let (rect, radii) = (*rect, *radii);
-                (!items.is_empty()).then_some(Item::Clip { rect, radii, items })
-            }
-            Item::Transform { matrix, items } => {
-                let items = shapes(items);
-                let matrix = *matrix;
-                (!items.is_empty()).then_some(Item::Transform { matrix, items })
-            }
-            Item::Cut { line, items } => {
-                let items = shapes(items);
-                let line = *line;
-                (!items.is_empty()).then_some(Item::Cut { line, items })
-            }
-            Item::Filter { filters, items } => {
-                let items = shapes(items);
-                let filters = filters.clone();
-                (!items.is_empty()).then_some(Item::Filter { filters, items })
-            }
-            Item::Mask { mask, items } => {
-                let (mask, items) = (shapes(mask), shapes(items));
-                (!items.is_empty()).then_some(Item::Mask { mask, items })
-            }
-            item => Some(item.clone()),
-        })
-        .collect()
+/// The frame painted as Chrome draws its baselines: its glyphs unfilled
+/// (`-webkit-text-fill-color: transparent`), so text differs only where shaping does.
+pub fn unfilled(frame: &Frame) -> Vec<Item> {
+    let mut styles = frame.styles.clone();
+    for s in &mut styles {
+        s.font.fill = Some(color::TRANSPARENT);
+    }
+    paint::paint(&frame.template, &styles, &frame.layout)
 }
 
 /// The pixels of `a` or `b`, both `size` and RGBA, with a channel more than `LEVELS` outside the

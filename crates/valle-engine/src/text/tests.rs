@@ -35,6 +35,7 @@ fn font(size: f64) -> Font {
         collapse: Collapse::Collapse,
         wrap: true,
         transform: TextTransform::None,
+        fill: None,
         skip_ink: true,
         underline_offset: None,
     }

@@ -224,6 +224,9 @@ pub struct Font {
     pub collapse: Collapse,
     pub wrap: bool,
     pub transform: TextTransform,
+    /// `-webkit-text-fill-color`, the color of glyphs; `None` is `currentcolor`, the color of
+    /// each box that inherits it.
+    pub fill: Option<Rgba>,
     /// `text-decoration-skip-ink: auto` (or `all`): underlines and overlines leave gaps where
     /// glyphs cross them.
     pub skip_ink: bool,
@@ -245,6 +248,7 @@ impl Font {
             collapse: Collapse::Collapse,
             wrap: true,
             transform: TextTransform::None,
+            fill: None,
             skip_ink: true,
             underline_offset: None,
         }
@@ -792,6 +796,8 @@ struct Declared {
     collapse: Option<Collapse>,
     wrap: Option<bool>,
     text_transform: Option<TextTransform>,
+    /// `Some(None)` is `currentcolor`.
+    fill: Option<Option<Rgba>>,
     skip_ink: Option<bool>,
     underline_offset: Option<Len>,
 }
@@ -872,6 +878,7 @@ impl Default for Declared {
             collapse: None,
             wrap: None,
             text_transform: None,
+            fill: None,
             skip_ink: None,
             underline_offset: None,
         }
@@ -989,6 +996,7 @@ enum Field {
     TextDecorationThickness,
     TextDecorationSkipInk,
     TextUnderlineOffset,
+    WebkitTextFillColor,
 }
 
 /// A declared box shadow; its color `None` is `currentcolor`.
@@ -1038,7 +1046,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 193] = [
+const FIELDS: [(&str, Field); 194] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1340,6 +1348,7 @@ const FIELDS: [(&str, Field); 193] = [
     ("textDecorationThickness", Field::TextDecorationThickness),
     ("textDecorationSkipInk", Field::TextDecorationSkipInk),
     ("textUnderlineOffset", Field::TextUnderlineOffset),
+    ("WebkitTextFillColor", Field::WebkitTextFillColor),
 ];
 
 impl Field {
@@ -1374,6 +1383,7 @@ impl Field {
                 | Field::TextDecorationThickness
                 | Field::TextDecorationSkipInk
                 | Field::TextUnderlineOffset
+                | Field::WebkitTextFillColor
         )
     }
 }
@@ -2415,6 +2425,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             d.skip_ink = Some(keyword(v, &skips)?);
         }
         F::TextUnderlineOffset => d.underline_offset = Some(length(v, UNDERLINE_OFFSET)?),
+        F::WebkitTextFillColor => d.fill = Some(current_color(v)?),
     }
     Ok(())
 }
@@ -2620,6 +2631,7 @@ fn compute(
         collapse: d.collapse.unwrap_or(inherited.collapse),
         wrap: d.wrap.unwrap_or(inherited.wrap),
         transform: d.text_transform.unwrap_or(inherited.transform),
+        fill: d.fill.unwrap_or(inherited.fill),
         skip_ink: d.skip_ink.unwrap_or(inherited.skip_ink),
         underline_offset: match &d.underline_offset {
             None => inherited.underline_offset.clone(),
@@ -2663,7 +2675,8 @@ fn compute(
     if d.decoration_lines.contains(&true) {
         decorations.push(Decoration {
             lines: d.decoration_lines,
-            color: d.decoration_color.unwrap_or(color),
+            // As Chrome has it, `currentcolor` is the fill color of glyphs.
+            color: (d.decoration_color).unwrap_or(font.fill.unwrap_or(color)),
             thickness: match &d.decoration_thickness {
                 Len::Auto => None,
                 l => Some(l.calc(u)),
