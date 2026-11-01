@@ -196,6 +196,16 @@ const TAGS: [(&str, Tag); 18] = [
 ];
 
 impl Tag {
+    pub const ALL: [Tag; TAGS.len()] = {
+        let mut all = [Tag::Svg; TAGS.len()];
+        let mut k = 0;
+        while k < TAGS.len() {
+            all[k] = TAGS[k].1;
+            k += 1;
+        }
+        all
+    };
+
     pub fn by_name(name: &str) -> Option<Tag> {
         TAGS.iter().find(|(n, _)| *n == name).map(|&(_, t)| t)
     }

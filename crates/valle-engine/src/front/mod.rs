@@ -407,7 +407,7 @@ fn json(value: &impl serde::Serialize) -> String {
 }
 
 /// `__host.op(name, args)`: one op's value over concrete operands, through the evaluator frames
-/// use, so tracing sees the values frames compute.
+/// use, so tracing sees the values frames compute; and `__host.svg`, the SVG tables as JSON.
 fn install_host<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
     host.set(
@@ -419,6 +419,7 @@ fn install_host<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
             },
         )?,
     )?;
+    host.set("svg", crate::svg::tables())?;
     ctx.globals().set("__host", host)
 }
 

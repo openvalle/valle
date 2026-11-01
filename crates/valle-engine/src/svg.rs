@@ -161,35 +161,184 @@ pub struct Computed {
     pub id: Option<Rc<str>>,
 }
 
+/// Presentation attributes: style properties of the same name, which the element's style
+/// overrides. Every SVG element takes them.
+const PRESENTATION: [&str; 23] = [
+    "fill",
+    "fillOpacity",
+    "fillRule",
+    "stroke",
+    "strokeOpacity",
+    "strokeWidth",
+    "strokeLinecap",
+    "strokeLinejoin",
+    "strokeMiterlimit",
+    "strokeDasharray",
+    "strokeDashoffset",
+    "stopColor",
+    "stopOpacity",
+    "markerStart",
+    "markerMid",
+    "markerEnd",
+    "clipPath",
+    "clipRule",
+    "mask",
+    "maskType",
+    "opacity",
+    "visibility",
+    "color",
+];
+
+/// Attributes that change nothing drawn, as pasted SVG has them.
+const INERT: [&str; 5] = ["xmlns", "xmlnsXlink", "version", "role", "focusable"];
+
+/// SVG elements that draw nothing.
+const SILENT: [&str; 3] = ["title", "desc", "metadata"];
+
+/// SVG elements Valle will never draw, and what to do instead.
+const NEVER: [(&str, &str); 6] = [
+    (
+        "foreignObject",
+        "put HTML-like content in Valle elements outside the <svg>",
+    ),
+    ("script", "scene code goes in the component"),
+    (
+        "animate",
+        "animate attributes with interpolate() in their values",
+    ),
+    (
+        "animateTransform",
+        "animate the transform attribute with interpolate()",
+    ),
+    (
+        "animateMotion",
+        "animate the transform attribute with interpolate()",
+    ),
+    ("set", "set attributes with conditions in their values"),
+];
+
+/// The attributes an element takes besides `id`, `transform` and the presentation attributes.
+fn own(tag: Tag) -> &'static [&'static str] {
+    match tag {
+        Tag::Svg => &["width", "height", "viewBox", "preserveAspectRatio"],
+        Tag::G | Tag::Defs => &[],
+        Tag::Path => &["d", "pathLength"],
+        Tag::Circle => &["cx", "cy", "r", "pathLength"],
+        Tag::Ellipse => &["cx", "cy", "rx", "ry", "pathLength"],
+        Tag::Rect => &["x", "y", "width", "height", "rx", "ry", "pathLength"],
+        Tag::Line => &["x1", "y1", "x2", "y2", "pathLength"],
+        Tag::Polyline | Tag::Polygon => &["points", "pathLength"],
+        Tag::LinearGradient => &[
+            "gradientUnits",
+            "gradientTransform",
+            "spreadMethod",
+            "href",
+            "xlinkHref",
+            "x1",
+            "y1",
+            "x2",
+            "y2",
+        ],
+        Tag::RadialGradient => &[
+            "gradientUnits",
+            "gradientTransform",
+            "spreadMethod",
+            "href",
+            "xlinkHref",
+            "cx",
+            "cy",
+            "r",
+            "fx",
+            "fy",
+            "fr",
+        ],
+        Tag::Stop => &["offset"],
+        Tag::ClipPath => &["clipPathUnits"],
+        Tag::Mask => &["maskUnits", "maskContentUnits", "x", "y", "width", "height"],
+        Tag::Use => &["href", "xlinkHref", "x", "y", "width", "height"],
+        Tag::Symbol => &["viewBox", "preserveAspectRatio"],
+        Tag::Marker => &[
+            "viewBox",
+            "preserveAspectRatio",
+            "refX",
+            "refY",
+            "markerWidth",
+            "markerHeight",
+            "markerUnits",
+            "orient",
+        ],
+    }
+}
+
+/// The elements an element holds.
+pub enum Holds {
+    Any,
+    Nothing,
+    /// Only these, which an error calls by `what`.
+    Only(&'static [Tag], &'static str),
+}
+
+pub fn holds(tag: Tag) -> Holds {
+    const SHAPES: [Tag; 7] = [
+        Tag::Path,
+        Tag::Circle,
+        Tag::Ellipse,
+        Tag::Rect,
+        Tag::Line,
+        Tag::Polyline,
+        Tag::Polygon,
+    ];
+    match tag {
+        Tag::Svg | Tag::G | Tag::Defs | Tag::Mask | Tag::Symbol | Tag::Marker => Holds::Any,
+        Tag::LinearGradient | Tag::RadialGradient => Holds::Only(&[Tag::Stop], "<stop>s"),
+        Tag::ClipPath => Holds::Only(&SHAPES, "shapes"),
+        _ => Holds::Nothing,
+    }
+}
+
 /// Whether an attribute is a presentation attribute: a style property of the same name, which
 /// the element's style overrides. An `<svg>`'s `width` and `height` are its box's.
 pub fn presentational(tag: Tag, name: &str) -> bool {
-    matches!(
-        name,
-        "fill"
-            | "fillOpacity"
-            | "fillRule"
-            | "stroke"
-            | "strokeOpacity"
-            | "strokeWidth"
-            | "strokeLinecap"
-            | "strokeLinejoin"
-            | "strokeMiterlimit"
-            | "strokeDasharray"
-            | "strokeDashoffset"
-            | "stopColor"
-            | "stopOpacity"
-            | "markerStart"
-            | "markerMid"
-            | "markerEnd"
-            | "clipPath"
-            | "clipRule"
-            | "mask"
-            | "maskType"
-            | "opacity"
-            | "visibility"
-            | "color"
-    ) || (tag == Tag::Svg && matches!(name, "width" | "height"))
+    PRESENTATION.contains(&name) || (tag == Tag::Svg && matches!(name, "width" | "height"))
+}
+
+/// The tables the frontend checks SVG in JSX by, as JSON: each element's own attributes and the
+/// elements it holds (`null` any, absent none), the attributes every element takes, those that
+/// change nothing, the elements that draw nothing, and those never drawn with what to do.
+pub fn tables() -> String {
+    let mut elements = serde_json::Map::new();
+    let mut holding = serde_json::Map::new();
+    for tag in Tag::ALL {
+        elements.insert(tag.name().into(), own(tag).into());
+        match holds(tag) {
+            Holds::Any => {
+                holding.insert(tag.name().into(), serde_json::Value::Null);
+            }
+            Holds::Nothing => {}
+            Holds::Only(tags, what) => {
+                let tags: Vec<&str> = tags.iter().map(|t| t.name()).collect();
+                holding.insert(
+                    tag.name().into(),
+                    serde_json::json!({ "tags": tags, "what": what }),
+                );
+            }
+        }
+    }
+    let common: Vec<&str> = ["id", "transform"]
+        .into_iter()
+        .chain(PRESENTATION)
+        .collect();
+    let never: serde_json::Map<String, serde_json::Value> =
+        (NEVER.iter()).map(|&(k, v)| (k.into(), v.into())).collect();
+    serde_json::json!({
+        "elements": elements,
+        "holds": holding,
+        "common": common,
+        "inert": INERT,
+        "silent": SILENT,
+        "never": never,
+    })
+    .to_string()
 }
 
 /// The element `tag` as these attribute values have it; presentation attributes are left to the

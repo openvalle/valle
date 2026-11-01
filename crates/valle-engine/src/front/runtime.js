@@ -552,94 +552,17 @@
     video: "Video",
   };
 
-  // Attributes of both kinds of gradient.
-  const GRADIENT = ["gradientUnits", "gradientTransform", "spreadMethod", "href", "xlinkHref"];
-  // Inline SVG elements Valle draws, each with the attributes it takes besides those every one
-  // takes. <svg> is a box; the others go inside it.
-  const SVG = {
-    svg: ["width", "height", "viewBox", "preserveAspectRatio"],
-    g: [],
-    path: ["d", "pathLength"],
-    circle: ["cx", "cy", "r", "pathLength"],
-    ellipse: ["cx", "cy", "rx", "ry", "pathLength"],
-    rect: ["x", "y", "width", "height", "rx", "ry", "pathLength"],
-    line: ["x1", "y1", "x2", "y2", "pathLength"],
-    polyline: ["points", "pathLength"],
-    polygon: ["points", "pathLength"],
-    defs: [],
-    linearGradient: GRADIENT.concat(["x1", "y1", "x2", "y2"]),
-    radialGradient: GRADIENT.concat(["cx", "cy", "r", "fx", "fy", "fr"]),
-    stop: ["offset"],
-    clipPath: ["clipPathUnits"],
-    mask: ["maskUnits", "maskContentUnits", "x", "y", "width", "height"],
-    use: ["href", "xlinkHref", "x", "y", "width", "height"],
-    symbol: ["viewBox", "preserveAspectRatio"],
-    marker: [
-      "viewBox",
-      "preserveAspectRatio",
-      "refX",
-      "refY",
-      "markerWidth",
-      "markerHeight",
-      "markerUnits",
-      "orient",
-    ],
-  };
-  const SHAPES = ["path", "circle", "ellipse", "rect", "line", "polyline", "polygon"];
-  // The elements that hold others, and those they hold if not any.
-  const SVG_HOLDS = {
-    svg: null,
-    g: null,
-    defs: null,
-    mask: null,
-    symbol: null,
-    marker: null,
-    linearGradient: { tags: ["stop"], what: "<stop>s" },
-    radialGradient: { tags: ["stop"], what: "<stop>s" },
-    clipPath: { tags: SHAPES, what: "shapes" },
-  };
-  // Attributes every SVG element takes: presentation attributes, which style overrides, and
-  // `transform` and `id`.
-  const SVG_ATTRIBUTES = [
-    "id",
-    "transform",
-    "fill",
-    "fillOpacity",
-    "fillRule",
-    "stroke",
-    "strokeOpacity",
-    "strokeWidth",
-    "strokeLinecap",
-    "strokeLinejoin",
-    "strokeMiterlimit",
-    "strokeDasharray",
-    "strokeDashoffset",
-    "stopColor",
-    "stopOpacity",
-    "markerStart",
-    "markerMid",
-    "markerEnd",
-    "clipPath",
-    "clipRule",
-    "mask",
-    "maskType",
-    "opacity",
-    "visibility",
-    "color",
-  ];
-  // Attributes that change nothing drawn, as pasted SVG has them.
-  const SVG_INERT = ["xmlns", "xmlnsXlink", "version", "role", "focusable"];
-  // SVG elements that draw nothing.
-  const SVG_SILENT = ["title", "desc", "metadata"];
-  // SVG elements Valle will never draw, and what to do instead.
-  const SVG_NEVER = {
-    foreignObject: "put HTML-like content in Valle elements outside the <svg>",
-    script: "scene code goes in the component",
-    animate: "animate attributes with interpolate() in their values",
-    animateTransform: "animate the transform attribute with interpolate()",
-    animateMotion: "animate the transform attribute with interpolate()",
-    set: "set attributes with conditions in their values",
-  };
+  // The SVG elements Valle draws and how it checks them, as the engine's tables have them: each
+  // element's own attributes and the elements it holds (null any, absent none), the attributes
+  // every element takes, those that change nothing, the elements that draw nothing, and those
+  // never drawn with what to do instead.
+  const SVG_TABLES = JSON.parse(host.svg);
+  const SVG = SVG_TABLES.elements;
+  const SVG_HOLDS = SVG_TABLES.holds;
+  const SVG_ATTRIBUTES = SVG_TABLES.common;
+  const SVG_INERT = SVG_TABLES.inert;
+  const SVG_SILENT = SVG_TABLES.silent;
+  const SVG_NEVER = SVG_TABLES.never;
 
   // Props each element takes besides key, className and style.
   const PROPS = {
