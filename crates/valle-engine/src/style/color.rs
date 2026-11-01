@@ -11,15 +11,45 @@ pub const BLACK: Rgba = [0.0, 0.0, 0.0, 1.0];
 
 /// A color as CSS writes it, lowercased.
 pub fn parse(s: &str) -> Result<Rgba, String> {
+    value(s).map(Color::drawn)
+}
+
+/// A color before it is drawn: encoded sRGB, extended past [0, 1] with the curve mirrored below
+/// 0, its alpha, and whether its hue is missing (`none`), which mixing fills from the other
+/// color.
+#[derive(Clone, Copy, Debug)]
+struct Color {
+    rgb: [f64; 3],
+    alpha: f64,
+    no_hue: bool,
+}
+
+impl Color {
+    fn new(rgb: [f64; 3], alpha: f64) -> Color {
+        Color {
+            rgb,
+            alpha: alpha.clamp(0.0, 1.0),
+            no_hue: false,
+        }
+    }
+
+    /// As Chrome draws it: each channel clipped into sRGB.
+    fn drawn(self) -> Rgba {
+        let [r, g, b] = self.rgb.map(|c| c.clamp(0.0, 1.0));
+        [r, g, b, self.alpha]
+    }
+}
+
+fn value(s: &str) -> Result<Color, String> {
     let bad = || format!("{s} is not a color");
     if let Some(h) = s.strip_prefix('#') {
         return hex(h).ok_or_else(bad);
     }
     if s == "transparent" {
-        return Ok(TRANSPARENT);
+        return Ok(Color::new([0.0; 3], 0.0));
     }
     if let Ok(i) = NAMED.binary_search_by(|(n, _)| (*n).cmp(s)) {
-        return Ok(encoded(NAMED[i].1.map(|v| f64::from(v) / 255.0), 1.0));
+        return Ok(Color::new(NAMED[i].1.map(|v| f64::from(v) / 255.0), 1.0));
     }
     let (name, args) = css::function(s).ok_or_else(bad)?;
     let c = match name {
@@ -30,15 +60,17 @@ pub fn parse(s: &str) -> Result<Rgba, String> {
         "lch" => lab(args, true),
         "oklab" => oklab_color(args, false),
         "oklch" => oklab_color(args, true),
-        "color" => color(args),
+        "color" => predefined(args),
+        "color-mix" => return mix(args),
         _ => None,
     };
     c.ok_or_else(bad)
 }
 
-fn encoded(rgb: [f64; 3], alpha: f64) -> Rgba {
-    let [r, g, b] = rgb.map(|c| c.clamp(0.0, 1.0));
-    [r, g, b, alpha.clamp(0.0, 1.0)]
+/// Whether word `i` of a color function's channels is `none`.
+fn missing(args: &str, i: usize) -> bool {
+    let main = args.split('/').next().unwrap_or("");
+    css::words(main).get(i) == Some(&"none")
 }
 
 /// An encoded sRGB channel in linear light, the curve mirrored below 0.
@@ -153,7 +185,7 @@ fn polar(chroma: f64, hue: f64) -> [f64; 2] {
     [chroma * h.cos(), chroma * h.sin()]
 }
 
-fn hex(h: &str) -> Option<Rgba> {
+fn hex(h: &str) -> Option<Color> {
     if !h.bytes().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
@@ -167,7 +199,7 @@ fn hex(h: &str) -> Option<Rgba> {
         _ => return None,
     };
     let [r, g, b, a] = c.map(|v| v.map(|v| f64::from(v) / 255.0));
-    Some(encoded([r.ok()?, g.ok()?, b.ok()?], a.ok()?))
+    Some(Color::new([r.ok()?, g.ok()?, b.ok()?], a.ok()?))
 }
 
 /// A color function's channels and alpha, in modern (`a b c / d`) or legacy (`a, b, c, d`)
@@ -215,7 +247,7 @@ fn alpha(a: Option<Num>) -> f64 {
     }
 }
 
-fn rgb(args: &str) -> Option<Rgba> {
+fn rgb(args: &str) -> Option<Color> {
     let (c, a, legacy) = channels(args)?;
     if c.iter().any(|n| !n.unit.is_empty() && n.unit != "%") {
         return None;
@@ -227,7 +259,7 @@ fn rgb(args: &str) -> Option<Rgba> {
         "%" => n.value / 100.0,
         _ => n.value / 255.0,
     };
-    Some(encoded(
+    Some(Color::new(
         [channel(&c[0]), channel(&c[1]), channel(&c[2])],
         alpha(a),
     ))
@@ -244,7 +276,7 @@ fn hue(n: &Num) -> Option<f64> {
     })
 }
 
-fn hsl(args: &str) -> Option<Rgba> {
+fn hsl(args: &str) -> Option<Color> {
     let (c, a, legacy) = channels(args)?;
     // Saturation and lightness: percentages, or (modern syntax) numbers on the same scale.
     let part = |n: &Num| match n.unit {
@@ -253,7 +285,11 @@ fn hsl(args: &str) -> Option<Rgba> {
         _ => None,
     };
     let (h, s, l) = (hue(&c[0])?, part(&c[1])?.clamp(0.0, 1.0), part(&c[2])?);
-    Some(encoded(from_hsl(h, s, l.clamp(0.0, 1.0)), alpha(a)))
+    let rgb = from_hsl(h, s, l.clamp(0.0, 1.0));
+    Some(Color {
+        no_hue: missing(args, 0),
+        ..Color::new(rgb, alpha(a))
+    })
 }
 
 /// Encoded sRGB channels of a hue, degrees, a saturation and a lightness, each 0–1.
@@ -276,7 +312,7 @@ fn scaled(n: &Num, full: f64) -> Option<f64> {
     }
 }
 
-fn hwb(args: &str) -> Option<Rgba> {
+fn hwb(args: &str) -> Option<Color> {
     let (c, a, legacy) = channels(args)?;
     if legacy {
         return None;
@@ -288,15 +324,21 @@ fn hwb(args: &str) -> Option<Rgba> {
     };
     let (h, w, b) = (hue(&c[0])?, part(&c[1])?, part(&c[2])?);
     if w + b >= 1.0 {
-        return Some(encoded([w / (w + b); 3], alpha(a)));
+        return Some(Color {
+            no_hue: missing(args, 0),
+            ..Color::new([w / (w + b); 3], alpha(a))
+        });
     }
     let rgb = from_hsl(h, 1.0, 0.5).map(|c| c * (1.0 - w - b) + w);
-    Some(encoded(rgb, alpha(a)))
+    Some(Color {
+        no_hue: missing(args, 0),
+        ..Color::new(rgb, alpha(a))
+    })
 }
 
 /// `lab()`, or `lch()` if `lch`: lightness 0–100, and a and b (100% = 125) or chroma
 /// (100% = 150) and hue.
-fn lab(args: &str, lch: bool) -> Option<Rgba> {
+fn lab(args: &str, lch: bool) -> Option<Color> {
     let (c, a, legacy) = channels(args)?;
     if legacy {
         return None;
@@ -306,12 +348,15 @@ fn lab(args: &str, lch: bool) -> Option<Rgba> {
         true => polar(scaled(&c[1], 150.0)?.max(0.0), hue(&c[2])?),
         false => [scaled(&c[1], 125.0)?, scaled(&c[2], 125.0)?],
     };
-    Some(encoded(from_lab([l, x, y]), alpha(a)))
+    Some(Color {
+        no_hue: lch && missing(args, 2),
+        ..Color::new(from_lab([l, x, y]), alpha(a))
+    })
 }
 
 /// `oklab()`, or `oklch()` if `lch`: lightness 0–1, and a and b (100% = 0.4) or chroma
 /// (100% = 0.4) and hue.
-fn oklab_color(args: &str, lch: bool) -> Option<Rgba> {
+fn oklab_color(args: &str, lch: bool) -> Option<Color> {
     let (c, a, legacy) = channels(args)?;
     if legacy {
         return None;
@@ -321,11 +366,14 @@ fn oklab_color(args: &str, lch: bool) -> Option<Rgba> {
         true => polar(scaled(&c[1], 0.4)?.max(0.0), hue(&c[2])?),
         false => [scaled(&c[1], 0.4)?, scaled(&c[2], 0.4)?],
     };
-    Some(encoded(from_oklab([l, x, y]), alpha(a)))
+    Some(Color {
+        no_hue: lch && missing(args, 2),
+        ..Color::new(from_oklab([l, x, y]), alpha(a))
+    })
 }
 
 /// `color()`: a predefined color space, its three channels (100% = 1), and an alpha.
-fn color(args: &str) -> Option<Rgba> {
+fn predefined(args: &str) -> Option<Color> {
     let (space, rest) = args.trim().split_once(char::is_whitespace)?;
     let (c, a, legacy) = channels(rest)?;
     if legacy {
@@ -357,8 +405,300 @@ fn color(args: &str) -> Option<Rgba> {
         "xyz-d50" => from_xyz(times(D50_TO_D65, v)),
         _ => return None,
     };
-    Some(encoded(rgb, alpha(a)))
+    Some(Color::new(rgb, alpha(a)))
 }
+
+/// The spaces `color-mix()` mixes in.
+#[derive(Clone, Copy, PartialEq)]
+enum Space {
+    Srgb,
+    SrgbLinear,
+    DisplayP3,
+    A98,
+    ProPhoto,
+    Rec2020,
+    Lab,
+    Oklab,
+    XyzD65,
+    XyzD50,
+    Hsl,
+    Hwb,
+    Lch,
+    Oklch,
+}
+
+impl Space {
+    fn named(s: &str) -> Option<Space> {
+        Some(match s {
+            "srgb" => Space::Srgb,
+            "srgb-linear" => Space::SrgbLinear,
+            "display-p3" => Space::DisplayP3,
+            "a98-rgb" => Space::A98,
+            "prophoto-rgb" => Space::ProPhoto,
+            "rec2020" => Space::Rec2020,
+            "lab" => Space::Lab,
+            "oklab" => Space::Oklab,
+            "xyz" | "xyz-d65" => Space::XyzD65,
+            "xyz-d50" => Space::XyzD50,
+            "hsl" => Space::Hsl,
+            "hwb" => Space::Hwb,
+            "lch" => Space::Lch,
+            "oklch" => Space::Oklch,
+            _ => return None,
+        })
+    }
+
+    /// The index of its hue, if it is polar.
+    fn hue(self) -> Option<usize> {
+        match self {
+            Space::Hsl | Space::Hwb => Some(0),
+            Space::Lch | Space::Oklch => Some(2),
+            _ => None,
+        }
+    }
+
+    /// The channels of encoded sRGB `rgb` in this space; a hue is NaN where it is powerless, for
+    /// a gray, as CSS Color 4's sample code has it.
+    fn of(self, rgb: [f64; 3]) -> [f64; 3] {
+        let xyz = || times(SRGB_TO_XYZ, rgb.map(linear));
+        let curve = |v: [f64; 3], f: fn(f64) -> f64| v.map(|c| f(c.abs()).copysign(c));
+        match self {
+            Space::Srgb => rgb,
+            Space::SrgbLinear => rgb.map(linear),
+            Space::DisplayP3 => times(inverse(P3), xyz()).map(gamma),
+            Space::A98 => curve(times(inverse(A98), xyz()), |c| c.powf(256.0 / 563.0)),
+            Space::ProPhoto => {
+                let lit = times(inverse(PROPHOTO), times(inverse(D50_TO_D65), xyz()));
+                curve(lit, |c| match c < 1.0 / 512.0 {
+                    true => c * 16.0,
+                    false => c.powf(1.0 / 1.8),
+                })
+            }
+            Space::Rec2020 => curve(times(inverse(REC2020), xyz()), |c| {
+                const ALPHA: f64 = 1.09929682680944;
+                const BETA: f64 = 0.018053968510807;
+                match c < BETA {
+                    true => c * 4.5,
+                    false => ALPHA * c.powf(0.45) - (ALPHA - 1.0),
+                }
+            }),
+            Space::Lab => to_lab(times(inverse(D50_TO_D65), xyz())),
+            Space::Oklab => oklab(rgb),
+            Space::XyzD65 => xyz(),
+            Space::XyzD50 => times(inverse(D50_TO_D65), xyz()),
+            Space::Hsl => to_hsl(rgb),
+            Space::Hwb => {
+                let [h, ..] = to_hsl(rgb);
+                let (min, max) = (
+                    rgb[0].min(rgb[1]).min(rgb[2]),
+                    rgb[0].max(rgb[1]).max(rgb[2]),
+                );
+                [h, min, 1.0 - max]
+            }
+            Space::Lch => polar_of(to_lab(times(inverse(D50_TO_D65), xyz())), 0.0015),
+            Space::Oklch => polar_of(oklab(rgb), 0.000004),
+        }
+    }
+
+    /// Encoded sRGB of `v`, channels in this space.
+    fn rgb(self, v: [f64; 3]) -> [f64; 3] {
+        let p = |[l, c, h]: [f64; 3]| {
+            let [a, b] = polar(c, h);
+            [l, a, b]
+        };
+        match self {
+            Space::Hsl => from_hsl(v[0], v[1], v[2]),
+            Space::Hwb => {
+                let [h, w, b] = v;
+                match w + b >= 1.0 {
+                    true => [w / (w + b); 3],
+                    false => from_hsl(h, 1.0, 0.5).map(|c| c * (1.0 - w - b) + w),
+                }
+            }
+            Space::Lab => from_lab(v),
+            Space::Lch => from_lab(p(v)),
+            Space::Oklab => from_oklab(v),
+            Space::Oklch => from_oklab(p(v)),
+            Space::XyzD65 => from_xyz(v),
+            Space::XyzD50 => from_xyz(times(D50_TO_D65, v)),
+            Space::Srgb => v,
+            Space::SrgbLinear => v.map(gamma),
+            Space::DisplayP3 => from_xyz(times(P3, v.map(linear))),
+            Space::A98 => from_xyz(times(
+                A98,
+                v.map(|c| c.abs().powf(563.0 / 256.0).copysign(c)),
+            )),
+            Space::ProPhoto => {
+                let lit = v.map(|c| match c.abs() <= 16.0 / 512.0 {
+                    true => c / 16.0,
+                    false => c.abs().powf(1.8).copysign(c),
+                });
+                from_xyz(times(D50_TO_D65, times(PROPHOTO, lit)))
+            }
+            Space::Rec2020 => from_xyz(times(REC2020, v.map(|c| rec2020(c.abs()).copysign(c)))),
+        }
+    }
+}
+
+/// `color-mix()`: in a color space (Oklab if left out) and a way round the hue for a polar one,
+/// two colors, each with a percentage or not. The percentages scale to add up to 100%, and one
+/// left out is what the other leaves; if they add up to less, the rest is transparent.
+fn mix(args: &str) -> Result<Color, String> {
+    let bad = || format!("color-mix({args}) is not two colors mixed in a color space");
+    let parts = css::commas(args);
+    let (method, colors) = match parts[..] {
+        [method, a, b] => (Some(method), [a, b]),
+        [a, b] => (None, [a, b]),
+        _ => return Err(bad()),
+    };
+    let (space, how) = match method.map(css::words).as_deref() {
+        None => (Space::Oklab, "shorter"),
+        Some(["in", space]) => (Space::named(space).ok_or_else(bad)?, "shorter"),
+        Some(["in", space, how, "hue"]) => {
+            let space = Space::named(space).filter(|s| s.hue().is_some());
+            let ways = ["shorter", "longer", "increasing", "decreasing"];
+            (
+                space.ok_or_else(bad)?,
+                *ways.iter().find(|w| *w == how).ok_or_else(bad)?,
+            )
+        }
+        Some(_) => return Err(bad()),
+    };
+    let mut mixed = Vec::new();
+    for part in colors {
+        let percentage = |w: &str| match css::num(w) {
+            Some(Num { value, unit: "%" }) if (0.0..=100.0).contains(&value) => Some(value),
+            _ => None,
+        };
+        let (color, p) = match css::words(part)[..] {
+            [c] => (c, None),
+            [c, p] if percentage(p).is_some() => (c, percentage(p)),
+            [p, c] if percentage(p).is_some() => (c, percentage(p)),
+            _ => return Err(bad()),
+        };
+        if color == "currentcolor" {
+            return Err("currentcolor in color-mix() is not supported yet: write the color".into());
+        }
+        mixed.push((value(color)?, p));
+    }
+    let [(a, pa), (b, pb)] = [mixed[0], mixed[1]];
+    let (pa, pb) = match (pa, pb) {
+        (None, None) => (50.0, 50.0),
+        (Some(p), None) => (p, 100.0 - p),
+        (None, Some(p)) => (100.0 - p, p),
+        (Some(pa), Some(pb)) => (pa, pb),
+    };
+    let sum = pa + pb;
+    if sum == 0.0 {
+        return Err(format!("color-mix({args}) mixes 0% of each color"));
+    }
+    let t = pb / sum;
+    // Channels in the space, premultiplied by alpha but for the hue.
+    let hue = space.hue();
+    let [mut va, mut vb] = [a, b].map(|c| {
+        let mut v = space.of(c.rgb);
+        if let Some(h) = hue
+            && c.no_hue
+        {
+            v[h] = f64::NAN;
+        }
+        v
+    });
+    if let Some(h) = hue {
+        match (va[h].is_nan(), vb[h].is_nan()) {
+            (true, true) => (va[h], vb[h]) = (0.0, 0.0),
+            (true, false) => va[h] = vb[h],
+            (false, true) => vb[h] = va[h],
+            (false, false) => {}
+        }
+        let (x, y) = (va[h].rem_euclid(360.0), vb[h].rem_euclid(360.0));
+        (va[h], vb[h]) = match how {
+            "shorter" if y - x > 180.0 => (x + 360.0, y),
+            "shorter" if y - x < -180.0 => (x, y + 360.0),
+            "longer" if 0.0 < y - x && y - x < 180.0 => (x + 360.0, y),
+            "longer" if -180.0 < y - x && y - x <= 0.0 => (x, y + 360.0),
+            "increasing" if y < x => (x, y + 360.0),
+            "decreasing" if x < y => (x + 360.0, y),
+            _ => (x, y),
+        };
+    }
+    let alpha = a.alpha * (1.0 - t) + b.alpha * t;
+    let v = std::array::from_fn(|i| match Some(i) == hue {
+        true => (va[i] * (1.0 - t) + vb[i] * t).rem_euclid(360.0),
+        false if alpha > 0.0 => (va[i] * a.alpha * (1.0 - t) + vb[i] * b.alpha * t) / alpha,
+        false => 0.0,
+    });
+    Ok(Color::new(space.rgb(v), alpha * sum.min(100.0) / 100.0))
+}
+
+/// CIE Lab, D50 white, of CIE XYZ, D50 white.
+fn to_lab(xyz: [f64; 3]) -> [f64; 3] {
+    const KAPPA: f64 = 24389.0 / 27.0;
+    const EPSILON: f64 = 216.0 / 24389.0;
+    let white = [0.3457 / 0.3585, 1.0, (1.0 - 0.3457 - 0.3585) / 0.3585];
+    let f = |i: usize| {
+        let v = xyz[i] / white[i];
+        match v > EPSILON {
+            true => v.cbrt(),
+            false => (KAPPA * v + 16.0) / 116.0,
+        }
+    };
+    let [fx, fy, fz] = [f(0), f(1), f(2)];
+    [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
+}
+
+/// Lightness, chroma and hue (degrees; NaN for a chroma up to `gray`) of a lightness, a and b.
+fn polar_of([l, a, b]: [f64; 3], gray: f64) -> [f64; 3] {
+    let chroma = a.hypot(b);
+    let hue = match chroma <= gray {
+        true => f64::NAN,
+        false => b.atan2(a).to_degrees().rem_euclid(360.0),
+    };
+    [l, chroma, hue]
+}
+
+/// Hue (degrees; NaN for a gray), saturation and lightness, each 0–1, of encoded sRGB, as CSS
+/// Color 4's sample code has them for colors past sRGB too.
+fn to_hsl([r, g, b]: [f64; 3]) -> [f64; 3] {
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let (light, d) = ((min + max) / 2.0, max - min);
+    if d == 0.0 {
+        return [f64::NAN, 0.0, light];
+    }
+    let mut sat = match light == 0.0 || light == 1.0 {
+        true => 0.0,
+        false => (max - light) / light.min(1.0 - light),
+    };
+    let mut hue = 60.0
+        * match max {
+            m if m == r => (g - b) / d + if g < b { 6.0 } else { 0.0 },
+            m if m == g => (b - r) / d + 2.0,
+            _ => (r - g) / d + 4.0,
+        };
+    if sat < 0.0 {
+        hue += 180.0;
+        sat = -sat;
+    }
+    [hue.rem_euclid(360.0), sat, light]
+}
+
+/// The inverse of a 3×3 matrix.
+fn inverse(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let c = |r: usize, k: usize| {
+        let (r0, r1) = ((r + 1) % 3, (r + 2) % 3);
+        let (k0, k1) = ((k + 1) % 3, (k + 2) % 3);
+        m[r0][k0] * m[r1][k1] - m[r0][k1] * m[r1][k0]
+    };
+    let det = m[0][0] * c(0, 0) + m[0][1] * c(0, 1) + m[0][2] * c(0, 2);
+    std::array::from_fn(|i| std::array::from_fn(|j| c(j, i) / det))
+}
+
+/// Linear-light sRGB to CIE XYZ, D65 white.
+const SRGB_TO_XYZ: [[f64; 3]; 3] = [
+    [0.41239079926595934, 0.357584339383878, 0.1804807884018343],
+    [0.21263900587151027, 0.715168678767756, 0.07219231536073371],
+    [0.01933081871559182, 0.11919477979462598, 0.9505321522496607],
+];
 
 /// A Rec. 2020 channel in linear light.
 fn rec2020(c: f64) -> f64 {
@@ -591,6 +931,92 @@ mod tests {
             "hsl(none, 10%, 10%)",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn colors_mix_as_chrome_mixes_them() {
+        // Chrome 156's pixels over #808080.
+        for (css, chrome) in [
+            ("color-mix(red, blue)", [140, 83, 162]),
+            ("color-mix(in oklch, white, blue)", [115, 163, 255]),
+            ("color-mix(in oklch, blue, white)", [115, 163, 255]),
+            ("color-mix(in hsl, white, blue)", [159, 159, 223]),
+            ("color-mix(in lch, gray, red)", [200, 97, 71]),
+            ("color-mix(in oklch, black, white)", [99, 99, 99]),
+            (
+                "color-mix(in srgb, oklch(0.7 0.4 30), white)",
+                [255, 70, 88],
+            ),
+            (
+                "color-mix(in oklch, oklch(0.7 0.4 30), white)",
+                [255, 147, 124],
+            ),
+            ("color-mix(in srgb, red 30%, blue 30%)", [128, 51, 128]),
+            ("color-mix(in srgb, 80% red, blue 80%)", [128, 0, 128]),
+            ("color-mix(in oklch, red, transparent)", [192, 64, 64]),
+            ("color-mix(in oklch, red 25%, transparent)", [160, 96, 96]),
+            ("color-mix(in srgb, transparent, blue)", [64, 64, 192]),
+            ("color-mix(in lab, red, rgb(0 0 255 / 50%))", [194, 32, 106]),
+            (
+                "color-mix(in oklch, oklch(0.6 0.2 none), oklch(0.6 0.2 120))",
+                [115, 142, 0],
+            ),
+            (
+                "color-mix(in hsl, hsl(none 50% 50%), hsl(120 50% 50%))",
+                [64, 191, 64],
+            ),
+            (
+                "color-mix(in oklch shorter hue, oklch(0.6 0.15 10), oklch(0.6 0.15 350))",
+                [197, 84, 124],
+            ),
+            (
+                "color-mix(in oklch increasing hue, oklch(0.6 0.15 10), oklch(0.6 0.15 350))",
+                [0, 156, 132],
+            ),
+            (
+                "color-mix(in oklch decreasing hue, oklch(0.6 0.15 10), oklch(0.6 0.15 350))",
+                [197, 84, 124],
+            ),
+            ("color-mix(in hwb, red, blue)", [255, 0, 255]),
+            ("color-mix(in display-p3, red, blue)", [128, 10, 145]),
+            ("color-mix(in xyz, red, blue)", [188, 0, 188]),
+            ("color-mix(in xyz-d50, red, blue)", [188, 0, 188]),
+            ("color-mix(in rec2020, red, lime)", [197, 160, 16]),
+            (
+                "color-mix(in oklab, color-mix(in srgb, red, blue), white)",
+                [195, 140, 192],
+            ),
+        ] {
+            let [r, g, b, a] = parse(css).unwrap();
+            let gray = 128.0 / 255.0;
+            let over = [r, g, b].map(|c| ((c * a + gray * (1.0 - a)) * 255.0).round() as u32);
+            let near = (0..3).all(|i| over[i].abs_diff(chrome[i]) <= 1);
+            assert!(near, "{css}: {over:?}, Chrome {chrome:?}");
+        }
+        for (bad, message) in [
+            (
+                "color-mix(in srgb, currentcolor, blue)",
+                "currentcolor in color-mix() is not supported yet",
+            ),
+            (
+                "color-mix(in srgb, red 0%, blue 0%)",
+                "mixes 0% of each color",
+            ),
+            ("color-mix(in foo, red, blue)", "is not two colors mixed"),
+            (
+                "color-mix(in srgb longer hue, red, blue)",
+                "is not two colors mixed",
+            ),
+            (
+                "color-mix(in srgb, red 120%, blue)",
+                "is not two colors mixed",
+            ),
+            ("color-mix(in srgb, red)", "is not two colors mixed"),
+            ("color-mix(in srgb, red, bleu)", "bleu is not a color"),
+        ] {
+            let e = parse(bad).unwrap_err();
+            assert!(e.contains(message), "{bad}: {e}");
         }
     }
 
