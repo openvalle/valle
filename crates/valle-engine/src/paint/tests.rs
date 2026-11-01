@@ -1614,55 +1614,79 @@ fn a_border_rounds_its_inside_less_its_widths() {
 }
 
 #[test]
-fn double_lines_are_two_rings_a_third_of_the_width_each() {
+fn border_lines_split_and_shade_sides_as_chrome_draws_them() {
     let rect = Rect {
         x: 0.0,
         y: 0.0,
         width: 40.0,
         height: 20.0,
     };
-    let blue = work(color::parse("blue").unwrap());
-    // From and to how deep in the top and the left each ring is, and its top and left colors.
-    let depths = |widths: [f32; 4], styles: [BorderStyle; 4]| {
-        (rings(
-            rect,
-            [[0.0; 2]; 4],
-            widths,
-            [blue; 4],
-            &lines(widths, styles),
-        )
-        .iter())
-        .map(|ring| match ring {
-            Item::Ring {
-                rect: r,
-                inner,
-                colors,
-                ..
-            } => [r.y, inner.y, r.x, inner.x, colors[0][3], colors[3][3]],
-            item => panic!("{item:?}"),
-        })
-        .collect::<Vec<_>>()
+    let green = color::parse("#4caf50").unwrap();
+    let [dark, light] = color::shades(green).map(work);
+    // Each ring: how deep it is in the top and the bottom, and the colors of those sides.
+    let rings = |widths: [f32; 4], styles: [BorderStyle; 4]| {
+        (rings(rect, SQUARE, widths, &lines(widths, styles, [green; 4])).iter())
+            .map(|ring| match ring {
+                Item::Ring {
+                    rect: r,
+                    inner,
+                    colors,
+                    ..
+                } => (
+                    [
+                        r.y,
+                        inner.y,
+                        20.0 - r.y - r.height,
+                        20.0 - inner.y - inner.height,
+                    ],
+                    [colors[0], colors[2]],
+                ),
+                item => panic!("{item:?}"),
+            })
+            .collect::<Vec<_>>()
     };
-    use BorderStyle::{Double, Solid};
+    use BorderStyle::{Double, Groove, Inset, Outset, Ridge, Solid};
+    let g = work(green);
     assert_eq!(
-        depths([10.0; 4], [Double; 4]),
+        rings([10.0; 4], [Double; 4]),
         [
-            [0.0, 3.0, 0.0, 3.0, 1.0, 1.0],
-            [7.0, 10.0, 7.0, 10.0, 1.0, 1.0]
+            ([0.0, 3.0, 0.0, 3.0], [g; 2]),
+            ([7.0, 10.0, 7.0, 10.0], [g; 2])
         ]
     );
-    assert_eq!(depths([7.0; 4], [Double; 4])[1][..2], [5.0, 7.0]);
-    // Under 3 px a line is solid, as is a side of another style.
+    assert_eq!(rings([7.0; 4], [Double; 4])[1].0[..2], [5.0, 7.0]);
+    // Under 3 px a double line is solid, as is a side of another style.
     assert_eq!(
-        depths([2.0; 4], [Double; 4]),
-        [[0.0, 2.0, 0.0, 2.0, 1.0, 1.0]]
+        rings([2.0; 4], [Double; 4]),
+        [([0.0, 2.0, 0.0, 2.0], [g; 2])]
     );
     assert_eq!(
-        depths([4.0, 4.0, 4.0, 6.0], [Double, Solid, Solid, Solid]),
+        rings([4.0, 4.0, 6.0, 4.0], [Double, Solid, Solid, Solid]),
         [
-            [0.0, 1.0, 0.0, 6.0, 1.0, 1.0],
-            [3.0, 4.0, 6.0, 6.0, 1.0, 0.0]
+            ([0.0, 1.0, 0.0, 6.0], [g; 2]),
+            ([3.0, 4.0, 6.0, 6.0], [g, [0.0; 4]])
         ]
+    );
+    // Inset is darker at the top, outset at the bottom.
+    assert_eq!(rings([3.0; 4], [Inset; 4])[0].1, [dark, light]);
+    assert_eq!(rings([3.0; 4], [Outset; 4])[0].1, [light, dark]);
+    // A groove is inset outside outset, the odd px in the top's outer half and the bottom's
+    // inner one; a ridge the other way round. An opaque outer half goes on under the inner one.
+    assert_eq!(
+        rings([5.0; 4], [Groove; 4]),
+        [
+            ([0.0, 5.0, 0.0, 5.0], [dark, light]),
+            ([3.0, 5.0, 2.0, 5.0], [light, dark])
+        ]
+    );
+    assert_eq!(rings([4.0; 4], [Ridge; 4])[0].1, [light, dark]);
+    let clear = [green[0], green[1], green[2], 0.5];
+    let halves = lines([5.0; 4], [Groove; 4], [clear; 4]).map(|l| l[0].depth);
+    assert_eq!(halves, [[0.0, 3.0], [0.0, 2.0], [0.0, 2.0], [0.0, 3.0]]);
+    // Under 2 px it is solid.
+    assert_eq!(
+        rings([1.0; 4], [Groove; 4]),
+        [([0.0, 1.0, 0.0, 1.0], [g; 2])]
     );
 }
 

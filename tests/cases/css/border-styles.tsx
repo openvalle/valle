@@ -1,7 +1,9 @@
-export const composition = { width: 256, height: 200, fps: 1, duration: 1 };
+export const composition = { width: 256, height: 360, fps: 1, duration: 1 };
 
 // Border styles: double lines 3, 4, 7 and 10 px wide; rounded, over a background; in four
-// colors; of four widths; double on top only; translucent; and a rounded double outline.
+// colors; of four widths; double on top only; translucent; and a rounded double outline. Groove
+// and an odd ridge; inset in black, whose shades are both lighter; outset, rounded; a rounded
+// ridge over a background; a groove of four widths; inset translucent; and an outset outline.
 export default function Scene() {
   const box = { width: 64, height: 40, borderColor: "#263238", borderStyle: "double" };
   return (
@@ -37,6 +39,27 @@ export default function Scene() {
           borderRadius: 8,
           outline: "7px double #00897b",
           outlineOffset: 3,
+        }}
+      />
+      <View style={{ ...box, border: "8px groove #4caf50" }} />
+      <View style={{ ...box, border: "7px ridge #4caf50" }} />
+      <View style={{ ...box, border: "8px inset #000" }} />
+      <View
+        style={{ ...box, border: "8px outset #e53935", borderRadius: 12, background: "#e8eaf6" }}
+      />
+      <View
+        style={{ ...box, border: "12px ridge #1e88e5", borderRadius: 20, background: "#ffe082" }}
+      />
+      <View style={{ ...box, border: "groove #8e24aa", borderWidth: "4px 10px 7px 12px" }} />
+      <View style={{ ...box, border: "9px inset rgb(76 175 80 / 50%)", background: "#e8eaf6" }} />
+      <View
+        style={{
+          ...box,
+          margin: 8,
+          borderStyle: "none",
+          background: "#e8eaf6",
+          outline: "6px outset #fdd835",
+          outlineOffset: 2,
         }}
       />
     </View>

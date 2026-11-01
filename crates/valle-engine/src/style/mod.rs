@@ -1221,6 +1221,12 @@ pub enum BorderStyle {
     Solid,
     /// Two lines with a gap between them.
     Double,
+    /// Lines that look carved into the canvas, out of it, sunk into it and raised from it: in
+    /// darker and lighter shades of their color.
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
 }
 
 /// The sides a box-edge property sets: the four of a shorthand, one, or logical ones, which in
@@ -2032,20 +2038,24 @@ const LINE_STYLES: [&str; 10] = [
     "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
 ];
 
-/// `border-style`: so far `solid` and `double`, and `none` or `hidden`, which are the same
-/// without tables.
+/// `border-style`: so far all but `dotted` and `dashed`, with `none` and `hidden` the same without
+/// tables.
 fn border_style(v: &V) -> Result<BorderStyle, String> {
     let s = text(v)?;
     match s.as_str() {
         "none" | "hidden" => Ok(BorderStyle::None),
         "solid" => Ok(BorderStyle::Solid),
         "double" => Ok(BorderStyle::Double),
+        "groove" => Ok(BorderStyle::Groove),
+        "ridge" => Ok(BorderStyle::Ridge),
+        "inset" => Ok(BorderStyle::Inset),
+        "outset" => Ok(BorderStyle::Outset),
         s if LINE_STYLES.contains(&s) => Err(format!("{s} lines are not supported yet; use solid")),
         s => Err(format!("{s} is not one of {}", LINE_STYLES.join(", "))),
     }
 }
 
-/// `outline-style`: so far `solid`, `double` and `none`.
+/// `outline-style`: those of `border-style` but `hidden`, and not `auto`.
 fn outline_style(v: &V) -> Result<BorderStyle, String> {
     match text(v)?.as_str() {
         "auto" => Err("auto is each browser's own focus ring; use solid".into()),

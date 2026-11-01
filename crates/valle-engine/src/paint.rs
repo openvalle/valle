@@ -47,7 +47,7 @@ pub use matrix::{Matrix, Matrix4};
 use crate::layout::{Layout, Rect, ordered};
 use crate::path::Path;
 use crate::style::background::{Area, ImageSize, Layer, Repeat};
-use crate::style::color::Rgba;
+use crate::style::color::{self, Rgba};
 use crate::style::filter;
 use crate::style::gradient::Image;
 use crate::style::transform::Function;
@@ -362,45 +362,69 @@ fn fit(radii: Radii, rect: Rect) -> Radii {
     radii.map(|r| r.map(|v| v * k))
 }
 
-/// The lines across each side of a border or an outline `widths` wide in `styles`, from and to
-/// how deep in it, as Chrome draws them: a double line is two lines and a gap, about a third of
-/// its width each (the gap from (w + 1) / 3 to (2w + 1) / 3 deep, rounded down), or one under
-/// 3 px.
-fn lines(widths: [f32; 4], styles: [BorderStyle; 4]) -> [Vec<[f32; 2]>; 4] {
-    std::array::from_fn(|k| match (styles[k], widths[k]) {
-        (BorderStyle::Double, w) if w >= 3.0 => vec![
-            [0.0, ((w + 1.0) / 3.0).floor()],
-            [((2.0 * w + 1.0) / 3.0).floor(), w],
-        ],
-        (_, w) => vec![[0.0, w]],
+/// A line across a side of a border or an outline: from and to how deep in it, and its color.
+struct Line {
+    depth: [f32; 2],
+    color: [f32; 4],
+}
+
+/// The lines across each side of a border or an outline `widths` wide in `styles` and `colors`, as
+/// Chrome draws them. A double line is two lines and a gap, about a third of its width each (the
+/// gap from (w + 1) / 3 to (2w + 1) / 3 deep, rounded down), or one under 3 px. An inset line is
+/// in the darker shade of its color at the top and left and the lighter at the bottom and right,
+/// an outset line the other way round; a groove is an inset line outside an outset one, a ridge
+/// the other way round, the side split with the odd px at its top or left, or solid under 2 px.
+/// An opaque outer half goes on under the inner one, which leaves no seam where their antialiased
+/// edges meet; Chrome's translucent ones meet in a layer, which is left out.
+fn lines(widths: [f32; 4], styles: [BorderStyle; 4], colors: [Rgba; 4]) -> [Vec<Line>; 4] {
+    std::array::from_fn(|k| {
+        let (w, c) = (widths[k], colors[k]);
+        let top_left = k == 0 || k == 3;
+        let shade = |inset: bool| work(color::shades(c)[usize::from(inset != top_left)]);
+        let half = if top_left {
+            (w / 2.0).ceil()
+        } else {
+            (w / 2.0).floor()
+        };
+        let line = |from, to, color| Line {
+            depth: [from, to],
+            color,
+        };
+        let under = if c[3] >= 1.0 { w } else { half };
+        match styles[k] {
+            BorderStyle::Double if w >= 3.0 => vec![
+                line(0.0, ((w + 1.0) / 3.0).floor(), work(c)),
+                line(((2.0 * w + 1.0) / 3.0).floor(), w, work(c)),
+            ],
+            BorderStyle::Groove if w >= 2.0 => {
+                vec![line(0.0, under, shade(true)), line(half, w, shade(false))]
+            }
+            BorderStyle::Ridge if w >= 2.0 => {
+                vec![line(0.0, under, shade(false)), line(half, w, shade(true))]
+            }
+            BorderStyle::Inset => vec![line(0.0, w, shade(true))],
+            BorderStyle::Outset => vec![line(0.0, w, shade(false))],
+            _ => vec![line(0.0, w, work(c))],
+        }
     })
 }
 
-/// The rings a border or an outline `widths` deep inside `rect` paints, its sides' `lines` in
-/// `colors`.
-fn rings(
-    rect: Rect,
-    radii: Radii,
-    widths: [f32; 4],
-    colors: [[f32; 4]; 4],
-    lines: &[Vec<[f32; 2]>; 4],
-) -> Vec<Item> {
+/// The rings a border or an outline `widths` deep inside `rect` paints: its sides' `lines`.
+fn rings(rect: Rect, radii: Radii, widths: [f32; 4], lines: &[Vec<Line>; 4]) -> Vec<Item> {
     let count = lines.iter().map(Vec::len).max().unwrap_or(0);
     (0..count)
         .map(|n| {
             // A side with fewer lines has none here.
-            let line = |k: usize| lines[k].get(n).copied().unwrap_or([widths[k]; 2]);
-            let (outer, outer_radii) = inner(rect, radii, std::array::from_fn(|k| line(k)[0]));
-            let (inside, inner_radii) = inner(rect, radii, std::array::from_fn(|k| line(k)[1]));
+            let line = |k: usize| lines[k].get(n);
+            let depth = |k: usize| line(k).map_or([widths[k]; 2], |l| l.depth);
+            let (outer, outer_radii) = inner(rect, radii, std::array::from_fn(|k| depth(k)[0]));
+            let (inside, inner_radii) = inner(rect, radii, std::array::from_fn(|k| depth(k)[1]));
             Item::Ring {
                 rect: outer,
                 radii: outer_radii,
                 inner: inside,
                 inner_radii,
-                colors: std::array::from_fn(|k| match lines[k].len() > n {
-                    true => colors[k],
-                    false => [0.0; 4],
-                }),
+                colors: std::array::from_fn(|k| line(k).map_or([0.0; 4], |l| l.color)),
             }
         })
         .collect()
@@ -1168,8 +1192,8 @@ impl Painter<'_> {
         // The background would show at the antialiased edge of a rounded border: under four
         // opaque sides the border box it shows in shrinks by half the widths of their outer
         // lines, as in Chrome, which shows it in the gap of a double line.
-        let lines = lines(widths, s.border_styles);
-        let half = lines.each_ref().map(|l| l[0][1] / 2.0);
+        let lines = lines(widths, s.border_styles, s.border_colors);
+        let half = lines.each_ref().map(|l| l[0].depth[1] / 2.0);
         let shrunk = match (0..4).all(|k| widths[k] > 0.0 && colors[k][3] >= 1.0) {
             true if radii != SQUARE => inner(rect, radii, half),
             _ => (rect, radii),
@@ -1249,7 +1273,7 @@ impl Painter<'_> {
             out.extend(inner_shadow(shadow, inside, inner_radii).map(|item| (clip, item)));
         }
         if (0..4).any(|k| widths[k] > 0.0 && colors[k][3] > 0.0) {
-            let border = rings(rect, radii, widths, colors, &lines);
+            let border = rings(rect, radii, widths, &lines);
             out.extend(border.into_iter().map(|ring| (clip, ring)));
         }
     }
@@ -1295,8 +1319,8 @@ impl Painter<'_> {
             return;
         }
         let radii = fit(grown(self.corners(i), by), rect);
-        let lines = lines([width; 4], [s.outline_style; 4]);
-        let outline = rings(rect, radii, [width; 4], [color; 4], &lines);
+        let lines = lines([width; 4], [s.outline_style; 4], [s.outline_color; 4]);
+        let outline = rings(rect, radii, [width; 4], &lines);
         let clip = self.clips[i].last().copied();
         out.extend(outline.into_iter().map(|ring| (clip, ring)));
     }

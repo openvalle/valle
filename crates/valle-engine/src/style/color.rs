@@ -9,6 +9,38 @@ pub type Rgba = [f64; 4];
 pub const TRANSPARENT: Rgba = [0.0; 4];
 pub const BLACK: Rgba = [0.0, 0.0, 0.0, 1.0];
 
+/// The darker and the lighter shade of `c` that Chrome paints inset, outset, groove and ridge lines
+/// in: its `Color::Dark()` and `Color::Light()` of the color's bytes, but for a color near black,
+/// whose shades are its lighter one and that one's lighter one, and one near white, which is its
+/// own lighter shade. Near is by relative luminance: at most #202020's, or over #ebebeb's.
+pub fn shades(c: Rgba) -> [Rgba; 2] {
+    // Chrome's float math, each channel rounded down into a byte by the float under 256.
+    const BYTE: f32 = 255.999_98;
+    let rgb = [c[0], c[1], c[2]].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as f32 / 255.0);
+    let by = |rgb: [f32; 3], k: f32| rgb.map(|v| (k * v * BYTE).floor() / 255.0);
+    let max = |rgb: [f32; 3]| rgb.into_iter().fold(0.0, f32::max);
+    let light = |rgb| match max(rgb) {
+        0.0 => [84.0 / 255.0; 3],
+        v => by(rgb, (v + 0.33).min(1.0) / v),
+    };
+    let dark = |rgb| {
+        let v = max(rgb);
+        by(rgb, ((v - 0.33) / v).max(0.0))
+    };
+    let luminance = |rgb: [f32; 3]| -> f64 {
+        (rgb.into_iter().zip([0.2126, 0.7152, 0.0722]))
+            .map(|(v, k)| k * linear(v.into()))
+            .sum()
+    };
+    let gray = |byte: f32| luminance([byte / 255.0; 3]);
+    let shades = match luminance(rgb) {
+        y if y <= gray(32.0) => [light(rgb), light(light(rgb))],
+        y if y > gray(235.0) => [dark(rgb), rgb],
+        _ => [dark(rgb), light(rgb)],
+    };
+    shades.map(|[r, g, b]| [r.into(), g.into(), b.into(), c[3]])
+}
+
 /// A color as CSS writes it, lowercased.
 pub fn parse(s: &str) -> Result<Rgba, String> {
     value(s).map(Color::drawn)
@@ -1068,5 +1100,39 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn shades_are_chromes() {
+        // Dark and light, as Chrome 156 paints `8px inset` lines of each.
+        let shades =
+            |s: &str| shades(parse(s).unwrap()).map(|c| c.map(|v| (v * 255.0).round() as u32));
+        let cases = [
+            ("#4caf50", [39, 91, 41], [111, 255, 117]),
+            ("#e53935", [145, 36, 33], [255, 63, 59]),
+            ("#808080", [44; 3], [212; 3]),
+            ("#fff", [171; 3], [255; 3]),
+            ("#00f", [0, 0, 171], [0, 0, 255]),
+            // Near black, by luminance: lighter shades.
+            ("#000", [84; 3], [168; 3]),
+            ("#202020", [116; 3], [200; 3]),
+            ("#400000", [148, 0, 0], [233, 0, 0]),
+            ("#00005a", [0, 0, 174], [0, 0, 255]),
+            ("#212121", [0; 3], [117; 3]),
+            ("#212020", [0, 0, 0], [117, 114, 114]),
+            ("#540000", [0, 0, 0], [168, 0, 0]),
+            ("#003000", [0, 0, 0], [0, 132, 0]),
+            // Near white: its own lighter shade.
+            ("#ececec", [152; 3], [236; 3]),
+            ("#ebebec", [151, 151, 152], [235, 235, 236]),
+            ("#ebebeb", [151; 3], [255; 3]),
+            ("#eeeec8", [154, 154, 129], [238, 238, 200]),
+            ("#f8e0f8", [164, 148, 164], [255, 231, 255]),
+        ];
+        for (c, dark, light) in cases {
+            let [d, l] = shades(c);
+            assert_eq!((&d[..3], &l[..3]), (&dark[..], &light[..]), "{c}");
+        }
+        assert_eq!(shades("rgb(0 0 0 / 50%)").map(|c| c[3]), [128; 2]);
     }
 }

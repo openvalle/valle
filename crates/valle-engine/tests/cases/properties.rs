@@ -1334,7 +1334,7 @@ const ROWS: &[Row] = &[
             "\"calc(1em - 13.5px) solid currentcolor\"",
             "\" 3PX SOLID RGB(0 0 255 / 50%) \"",
             "\"5px double #3949ab\"",
-            "\"double\"",
+            "\"6px ridge #4caf50\"",
         ],
         refused: &[
             "\"2px dashed\"",
@@ -1406,16 +1406,13 @@ const ROWS: &[Row] = &[
             "\"none solid hidden\"",
             "\"solid solid none solid\"",
             "\" SOLID \"",
-            "\"double\"",
             "\"double solid\"",
+            "\"groove\"",
+            "\"inset groove outset ridge\"",
         ],
         refused: &[
             "\"dashed\"",
             "\"dotted\"",
-            "\"groove\"",
-            "\"ridge\"",
-            "\"inset\"",
-            "\"outset\"",
             "\"wavy\"",
             "\"solid none solid none solid\"",
             "1",
@@ -1424,13 +1421,26 @@ const ROWS: &[Row] = &[
     Row {
         properties: BORDER_STYLES,
         sample: r##"<View style={{ width: 40, height: 12, background: "#e8eaf6", borderWidth: 3, borderColor: "#3949ab", PROPERTY: VALUE }} />"##,
-        values: &["\"solid\"", "\"none\"", "\"hidden\"", "\"double\""],
+        values: &[
+            "\"solid\"",
+            "\"none\"",
+            "\"hidden\"",
+            "\"double\"",
+            "\"groove\"",
+            "\"outset\"",
+        ],
         refused: &["\"dashed\"", "\"solid none\""],
     },
     Row {
         properties: &["borderInlineStyle", "borderBlockStyle"],
         sample: r##"<View style={{ width: 40, height: 12, background: "#e8eaf6", borderWidth: 3, borderColor: "#3949ab", PROPERTY: VALUE }} />"##,
-        values: &["\"solid\"", "\"solid none\"", "\"hidden solid\"", "\"double solid\""],
+        values: &[
+            "\"solid\"",
+            "\"solid none\"",
+            "\"hidden solid\"",
+            "\"double solid\"",
+            "\"inset outset\"",
+        ],
         refused: &["\"dashed\"", "\"solid none solid\""],
     },
     Row {
@@ -1500,7 +1510,14 @@ const ROWS: &[Row] = &[
     Row {
         properties: &["outlineStyle"],
         sample: r##"<View style={{ width: 40, height: 12, margin: 6, background: "#e8eaf6", outlineWidth: 3, outlineColor: "#3949ab", PROPERTY: VALUE }} />"##,
-        values: &["\"solid\"", "\"none\"", "\" SOLID \"", "\"double\""],
+        values: &[
+            "\"solid\"",
+            "\"none\"",
+            "\" SOLID \"",
+            "\"double\"",
+            "\"inset\"",
+            "\"ridge\"",
+        ],
         refused: &["\"auto\"", "\"hidden\"", "\"dashed\"", "\"solid none\""],
     },
     Row {

@@ -1411,7 +1411,7 @@ fn borders_take_lines_widths_styles_and_colors() {
         )
     );
     // Their styles, for paint.
-    use BorderStyle::{Double, Solid};
+    use BorderStyle::{Double, Groove, Inset, Outset, Ridge, Solid};
     let styles = |style: &[(&str, Prop)]| (one(style).border_styles, one(style).outline_style);
     assert_eq!(
         styles(&[
@@ -1420,6 +1420,13 @@ fn borders_take_lines_widths_styles_and_colors() {
             ("outline", text("double")),
         ]),
         ([Double, Solid, Double, BorderStyle::None], Double)
+    );
+    assert_eq!(
+        styles(&[
+            ("borderStyle", text("groove ridge inset outset")),
+            ("outlineStyle", text("ridge")),
+        ]),
+        ([Groove, Ridge, Inset, Outset], Ridge)
     );
 }
 
