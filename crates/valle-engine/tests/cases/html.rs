@@ -1,15 +1,15 @@
 //! A frame as HTML for Chrome: every node an element with its style as written, printed as React
 //! DOM prints a style object, on a canvas like the engine's: a Span as a `span`, an Image as an
-//! `img` of a block that shows its file from the server, and every other node as a `div`; a
-//! resource in a style's `url()` is its file too. Elements carry their node's index, `data-n`, and
-//! Texts `data-text`.
+//! `img` of a block that shows its file from the server, an SVG element as itself with its
+//! attributes, an `<svg>` a block, and every other node as a `div`; a resource in a style's
+//! `url()` is its file too. Elements carry their node's index, `data-n`, and Texts `data-text`.
 
 use std::fmt::Write as _;
 
 use valle_engine::front::{Composition, Slot};
 use valle_engine::js;
 use valle_engine::scene::Frame;
-use valle_engine::template::{Kind, Piece, Prop, V};
+use valle_engine::template::{Kind, Piece, Prop, Tag, V};
 
 /// Style properties React DOM prints as bare numbers; it gives other numbers but 0 `px`.
 const UNITLESS: &[&str] = &[
@@ -78,17 +78,24 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
     let n = &frame.template.nodes[i as usize];
     if let Kind::Mask { .. } = n.kind {
         return Err(format!(
-            "{}: <Mask> is not CSS, so Chrome cannot draw it; its cases go outside css/",
+            "{}: <Mask> is not CSS, so Chrome cannot draw it; its cases go outside css/ and svg/",
             n.place()
         ));
     }
     // A Span is an inline box.
-    let tag = match n.kind {
+    let tag = match &n.kind {
         Kind::Span { .. } => "span",
         Kind::Image { .. } => "img",
+        Kind::Svg { tag, .. } => tag.name(),
         _ => "div",
     };
     let _ = write!(html, "<{tag} data-n=\"{i}\"");
+    if let Kind::Svg { attributes, .. } = &n.kind {
+        for (name, prop) in attributes {
+            let v = value(frame, prop).text();
+            let _ = write!(html, " {}=\"{}\"", attribute(name), escape(&v));
+        }
+    }
     if matches!(n.kind, Kind::Text { .. }) {
         html.push_str(" data-text");
     }
@@ -96,6 +103,9 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
     if let Kind::Image { resource } = n.kind {
         let src = file(&resources[resource as usize])?;
         let _ = write!(html, " src=\"{}\"", escape(&src));
+        style.push("display: block;".to_string());
+    }
+    if let Kind::Svg { tag: Tag::Svg, .. } = n.kind {
         style.push("display: block;".to_string());
     }
     for (key, prop) in &n.style {
@@ -187,6 +197,15 @@ fn declaration(key: &str, v: &V) -> Option<String> {
         V::Bool(_) => return None,
     };
     Some(format!("{}: {value};", hyphenate(key)))
+}
+
+/// An SVG attribute's name as React DOM writes it: `fillOpacity` as `fill-opacity`, but
+/// `viewBox` and `preserveAspectRatio` as they are.
+fn attribute(name: &str) -> String {
+    match name {
+        "viewBox" | "preserveAspectRatio" => name.to_string(),
+        _ => hyphenate(name),
+    }
 }
 
 /// `backgroundColor` to `background-color`, `WebkitTextStroke` to `-webkit-text-stroke`.

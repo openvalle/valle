@@ -8,7 +8,8 @@ use serde::Deserialize;
 
 use crate::js::MathFn;
 use crate::template::{
-    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Template, V, Want,
+    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Tag, Template, V,
+    Want,
 };
 
 /// An operand of an op by name: an earlier expression, or literal text of a template.
@@ -162,6 +163,8 @@ struct TracedNode {
     content: Option<Vec<TracedPiece>>,
     mask: Option<TracedMask>,
     src: Option<String>,
+    tag: Option<String>,
+    attributes: Option<Vec<(String, Ref)>>,
 }
 
 #[derive(Deserialize)]
@@ -270,6 +273,16 @@ pub fn variant(
                 })?;
                 Kind::Image {
                     resource: resource as u32,
+                }
+            }
+            "svg" => {
+                let tag = n.tag.as_deref().ok_or("an svg node without a tag")?;
+                Kind::Svg {
+                    tag: Tag::by_name(tag).ok_or_else(|| format!("svg tag {tag}"))?,
+                    attributes: (n.attributes.ok_or("an svg node without attributes")?)
+                        .into_iter()
+                        .map(|(k, v)| Ok((Rc::from(k), prop(v)?)))
+                        .collect::<Result<_, Error>>()?,
                 }
             }
             other => return Err(format!("node type {other}")),

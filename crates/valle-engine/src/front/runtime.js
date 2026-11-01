@@ -552,6 +552,45 @@
     video: "Video",
   };
 
+  // Inline SVG elements Valle draws, each with the attributes it takes besides those every one
+  // takes. <svg> is a box; the others go inside it.
+  const SVG = {
+    svg: ["width", "height", "viewBox", "preserveAspectRatio"],
+    g: [],
+    path: ["d"],
+    circle: ["cx", "cy", "r"],
+    ellipse: ["cx", "cy", "rx", "ry"],
+    rect: ["x", "y", "width", "height", "rx", "ry"],
+    line: ["x1", "y1", "x2", "y2"],
+    polyline: ["points"],
+    polygon: ["points"],
+  };
+  // Attributes every SVG element takes: presentation attributes, which style overrides, and
+  // `transform` and `id`.
+  const SVG_ATTRIBUTES = [
+    "id",
+    "transform",
+    "fill",
+    "fillOpacity",
+    "fillRule",
+    "opacity",
+    "visibility",
+    "color",
+  ];
+  // Attributes that change nothing drawn, as pasted SVG has them.
+  const SVG_INERT = ["xmlns", "xmlnsXlink", "version", "role", "focusable"];
+  // SVG elements that draw nothing.
+  const SVG_SILENT = ["title", "desc", "metadata"];
+  // SVG elements Valle will never draw, and what to do instead.
+  const SVG_NEVER = {
+    foreignObject: "put HTML-like content in Valle elements outside the <svg>",
+    script: "scene code goes in the component",
+    animate: "animate attributes with interpolate() in their values",
+    animateTransform: "animate the transform attribute with interpolate()",
+    animateMotion: "animate the transform attribute with interpolate()",
+    set: "set attributes with conditions in their values",
+  };
+
   // Props each element takes besides key, className and style.
   const PROPS = {
     view: [],
@@ -604,7 +643,7 @@
         const here = c.site >= 0 ? c.site : at;
         if (c.type === __F) return c.children.forEach((x) => add(x, here));
         if (typeof c.type === "function") return expand(c, here, (x) => add(x, here));
-        if (INTRINSIC[c.type] && c.type !== "Span") {
+        if ((INTRINSIC[c.type] && c.type !== "Span") || c.type in SVG) {
           fail(here, "<" + c.type + "> cannot be inside <" + tag + ">: it holds text and <Span>s");
         }
         flush();
@@ -655,8 +694,75 @@
     node.src = src.slice("resource://".length);
   }
 
+  // An inline SVG element, into `out`: its attributes, constants or traced values, and the SVG
+  // elements in it.
+  function svgElement(type, props, children, out, at) {
+    if (type !== "svg" && G.svg === 0) fail(at, "<" + type + "> must be inside an <svg>");
+    if (type === "svg" && G.svg > 0) fail(at, "an <svg> inside an <svg> is not supported yet");
+    if (++G.nodes > MAX_NODES) fail(at, "a frame has more than " + MAX_NODES + " elements");
+    const attributes = [];
+    for (const [k, v] of entries(props)) {
+      if (k === "key" || k === "className" || k === "style" || k === "children") continue;
+      if (SVG_INERT.includes(k) || /^(aria|data)-/.test(k) || v === undefined || v === null) {
+        continue;
+      }
+      if (k.includes("-") || k.includes(":")) {
+        const camel = k.replace(/[-:]([a-z])/g, (_, c) => c.toUpperCase());
+        fail(at, "attributes are camelCase, as in React: write " + camel + ", not " + k);
+      }
+      if (/^on[A-Z]/.test(k)) {
+        fail(
+          at,
+          "<" + type + "> " + k + ": event handlers are not supported, a video has no interaction",
+        );
+      }
+      if (type === "svg" && k === "transform") {
+        fail(at, "<svg> transform is not supported yet: transform it with its style");
+      }
+      if (!SVG[type].includes(k) && !SVG_ATTRIBUTES.includes(k)) {
+        fail(at, "<" + type + "> " + k + " is not supported yet");
+      }
+      if (!scalar(v) || typeof v === "boolean") {
+        fail(at, "<" + type + "> " + k + " must be a number or a string");
+      }
+      attributes.push([k, v]);
+    }
+    const key = props.key === undefined ? null : String(fixed(props.key, "key", at));
+    const className = fixed(props.className ?? "", "className", at);
+    if (typeof className !== "string") fail(at, "<" + type + "> className must be a string");
+    const node = {
+      type: "svg",
+      tag: type,
+      attributes,
+      path: key === null ? null : [...G.keys, key].join("/"),
+      classes: className.split(/\s+/).filter(Boolean),
+      style: styleOf(props.style, type, at),
+      children: [],
+      site: at,
+    };
+    if (key !== null) G.keys.push(key);
+    G.svg++;
+    try {
+      for (const c of children) render(c, node.children, at);
+    } finally {
+      G.svg--;
+      if (key !== null) G.keys.pop();
+    }
+    if (type !== "svg" && type !== "g" && node.children.length > 0) {
+      fail(at, "<" + type + "> draws no elements inside it");
+    }
+    out.push(node);
+  }
+
   function element(type, props, children, out, at, inText) {
     if (typeof type !== "string") fail(at, "an element type must be a tag or a component function");
+    if (type in SVG) return svgElement(type, props, children, out, at);
+    if (G.svg > 0) {
+      if (SVG_SILENT.includes(type)) return;
+      if (type in SVG_NEVER) fail(at, "<" + type + "> is not supported: " + SVG_NEVER[type]);
+      if (INTRINSIC[type]) fail(at, "<" + type + "> cannot be inside an <svg>");
+      fail(at, "<" + type + "> in an <svg> is not supported yet");
+    }
     const kind = INTRINSIC[type];
     if (!kind) {
       if (type in REMOVED) fail(at, "<" + type + "> is removed: " + REMOVED[type]);
@@ -710,6 +816,7 @@
     if (isArray(x)) return x.forEach((y) => render(y, out, at));
     if (!x.__el) {
       if (typeof x === "string" && x.trim() === "") return;
+      if (G.svg > 0) fail(at, "text in an <svg> is not supported yet: " + stringify(String(x)));
       fail(at, "text must be inside <Text>: " + stringify(String(x)));
     }
     const { type, props, children } = x;
@@ -789,6 +896,10 @@
         out.mask = { source: node(n.source), luminance: n.luminance, invert: n.invert };
       }
       if ("src" in n) out.src = n.src;
+      if ("tag" in n) {
+        out.tag = n.tag;
+        out.attributes = n.attributes.map(([k, v]) => [k, ref(v)]);
+      }
       out.children = n.children.map(node);
       if ("content" in n) {
         // Its children are its Spans, in the order its content has them.
@@ -835,6 +946,8 @@
       keys: [],
       ops: 0,
       nodes: 0,
+      // How deep in <svg> elements tracing is.
+      svg: 0,
       composition,
       seconds: new T("seconds", [], seconds),
       progress: new T("progress", [], progress),

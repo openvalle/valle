@@ -31,10 +31,20 @@ use color::Rgba;
 use math::{Calc, Math};
 
 use crate::front::Slot;
-use crate::template::{Error, Kind, Node, Prop, Template, V};
+use crate::svg;
+use crate::template::{Error, Kind, Node, Prop, Tag, Template, V};
 
 /// The root font size: `rem`.
 const REM: f64 = 16.0;
+
+/// What fills an SVG shape.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Paint {
+    None,
+    Color(Rgba),
+    /// The shape's own `color`, wherever it inherits the fill from.
+    CurrentColor,
+}
 
 /// A node's computed style.
 #[derive(Clone, Debug, PartialEq)]
@@ -102,6 +112,13 @@ pub struct Style {
     pub source: Option<Source>,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
+    /// SVG `fill`, `fill-opacity` and `fill-rule: evenodd`: what fills a shape, the opacity it
+    /// fills at, and whether it fills where the shape winds around an odd number of times only.
+    pub fill: Paint,
+    pub fill_opacity: f64,
+    pub even_odd: bool,
+    /// An SVG element's geometry, as its attributes have it at the frame.
+    pub svg: Option<Rc<svg::Computed>>,
     pub color: Rgba,
     pub font: Font,
     /// The text decorations its text takes: those of the boxes around it, outermost first, then
@@ -501,10 +518,39 @@ struct Bound {
     declared: Declared,
     /// Whether it is a Text.
     text: bool,
-    rest: Vec<(Field, Prop, Rc<str>)>,
+    /// Each with what errors call it, and whether it is a presentation attribute.
+    rest: Vec<(Field, Prop, Rc<str>, bool)>,
     /// Where errors point.
     place: Rc<str>,
     source: Option<Source>,
+    svg: Option<Geometry>,
+}
+
+/// An SVG element's attributes that are not presentation attributes, and what they compute to
+/// when none is traced.
+struct Geometry {
+    tag: Tag,
+    attributes: Vec<(Rc<str>, Prop)>,
+    fixed: Option<Rc<svg::Computed>>,
+}
+
+impl Geometry {
+    fn computed(&self, values: &[V]) -> Result<Rc<svg::Computed>, String> {
+        if let Some(c) = &self.fixed {
+            return Ok(c.clone());
+        }
+        let list: Vec<(&str, &V)> = (self.attributes.iter())
+            .map(|(k, p)| {
+                let v = match p {
+                    Prop::Const(v) => v,
+                    Prop::Expr(e) => &values[*e as usize],
+                };
+                (&**k, v)
+            })
+            .collect();
+        let c = svg::computed(self.tag, &list).map_err(|e| format!("<{}> {e}", self.tag.name()))?;
+        Ok(Rc::new(c))
+    }
 }
 
 impl Sheet {
@@ -544,12 +590,13 @@ impl Sheet {
                 Cow::Borrowed(&b.declared)
             } else {
                 let mut d = b.declared.clone();
-                for (field, prop, key) in &b.rest {
+                for (field, prop, what, attribute) in &b.rest {
                     let v = match prop {
                         Prop::Const(v) => v,
                         Prop::Expr(e) => &values[*e as usize],
                     };
-                    set(&mut d, *field, v).map_err(|e| format!("{}: style {key}: {e}", b.place))?;
+                    set(&mut d, *field, &presented(v, *attribute))
+                        .map_err(|e| format!("{}: {what}: {e}", b.place))?;
                 }
                 Cow::Owned(d)
             };
@@ -557,6 +604,12 @@ impl Sheet {
             let mut style = compute(&declared, parent, canvas, calcs, i, b.text, resources)
                 .map_err(|e| format!("{}: {e}", b.place))?;
             style.source = b.source;
+            if let Some(g) = &b.svg {
+                style.svg = Some(
+                    g.computed(values)
+                        .map_err(|e| format!("{}: {e}", b.place))?,
+                );
+            }
             calcs += style.calcs.len();
             out.push(style);
         }
@@ -571,7 +624,24 @@ fn bind(node: &Node) -> Result<Bound, Error> {
     }
     let mut declared = Declared::default();
     let mut rest = Vec::new();
-    for (key, prop) in &node.style {
+    let (tag, attributes) = match &node.kind {
+        Kind::Svg { tag, attributes } => (Some(*tag), &attributes[..]),
+        _ => (None, &[][..]),
+    };
+    // An <svg> clips what it draws to its box, as Chrome's style for it has it.
+    if tag == Some(Tag::Svg) {
+        declared.overflow = pair(&V::Str("hidden".into()), overflow)?.into();
+    }
+    // Presentation attributes, then the style, which overrides them.
+    let presentation = (attributes.iter())
+        .filter(|(k, _)| tag.is_some_and(|t| svg::presentational(t, k)))
+        .map(|(k, p)| (k, p, true));
+    let style = node.style.iter().map(|(k, p)| (k, p, false));
+    for (key, prop, attribute) in presentation.chain(style) {
+        let what: Rc<str> = match attribute {
+            true => format!("attribute {key}").into(),
+            false => format!("style {key}").into(),
+        };
         let field = Field::by_name(key).ok_or_else(|| format!("{place}: {}", unsupported(key)))?;
         if matches!(node.kind, Kind::Span { .. }) && !field.textual() {
             return Err(format!(
@@ -579,17 +649,44 @@ fn bind(node: &Node) -> Result<Bound, Error> {
                  text properties"
             ));
         }
-        let at = |e: String| format!("{place}: style {key}: {e}");
+        if tag.is_some_and(|t| t != Tag::Svg) && !field.drawn_in_svg() {
+            return Err(format!(
+                "{place}: style {key} on an element in an <svg> is not supported yet"
+            ));
+        }
+        let at = |e: String| format!("{place}: {what}: {e}");
         match prop {
-            Prop::Const(v) if rest.is_empty() => set(&mut declared, field, v).map_err(at)?,
+            Prop::Const(v) if rest.is_empty() => {
+                set(&mut declared, field, &presented(v, attribute)).map_err(at)?;
+            }
             Prop::Const(v) => {
                 // Checked now, so a bad constant fails on the first frame as it would up front.
-                set(&mut Declared::default(), field, v).map_err(at)?;
-                rest.push((field, prop.clone(), key.clone()));
+                set(&mut Declared::default(), field, &presented(v, attribute)).map_err(at)?;
+                rest.push((field, prop.clone(), what, attribute));
             }
-            Prop::Expr(_) => rest.push((field, prop.clone(), key.clone())),
+            Prop::Expr(_) => rest.push((field, prop.clone(), what, attribute)),
         }
     }
+    let svg = match tag {
+        Some(tag) => {
+            let mut g = Geometry {
+                tag,
+                attributes: (attributes.iter())
+                    .filter(|(k, _)| !svg::presentational(tag, k))
+                    .cloned()
+                    .collect(),
+                fixed: None,
+            };
+            if g.attributes
+                .iter()
+                .all(|(_, p)| matches!(p, Prop::Const(_)))
+            {
+                g.fixed = Some(g.computed(&[]).map_err(|e| format!("{place}: {e}"))?);
+            }
+            Some(g)
+        }
+        None => None,
+    };
     let source = match node.kind {
         Kind::Mask {
             source,
@@ -608,6 +705,7 @@ fn bind(node: &Node) -> Result<Bound, Error> {
         rest,
         place,
         source,
+        svg,
     })
 }
 
@@ -989,6 +1087,9 @@ struct Declared {
     line_clamp: Option<u32>,
     /// Inherited.
     visible: Option<bool>,
+    svg_fill: Option<Paint>,
+    fill_opacity: Option<f64>,
+    even_odd: Option<bool>,
     color: Option<Rgba>,
     font_size: Option<Len>,
     font_weight: Option<Weight>,
@@ -1094,6 +1195,9 @@ impl Default for Declared {
             box_vertical: false,
             line_clamp: None,
             visible: None,
+            svg_fill: None,
+            fill_opacity: None,
+            even_odd: None,
             color: None,
             font_size: None,
             font_weight: None,
@@ -1222,6 +1326,9 @@ enum Field {
     MaskRepeat,
     MaskMode,
     Visibility,
+    Fill,
+    FillOpacity,
+    FillRule,
     Color,
     FontSize,
     FontWeight,
@@ -1318,7 +1425,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 225] = [
+const FIELDS: [(&str, Field); 228] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1608,6 +1715,9 @@ const FIELDS: [(&str, Field); 225] = [
     ("objectFit", Field::ObjectFit),
     ("objectPosition", Field::ObjectPosition),
     ("visibility", Field::Visibility),
+    ("fill", Field::Fill),
+    ("fillOpacity", Field::FillOpacity),
+    ("fillRule", Field::FillRule),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
     ("fontWeight", Field::FontWeight),
@@ -1675,6 +1785,20 @@ impl Field {
             .iter()
             .find(|(name, _)| *name == key)
             .map(|&(_, f)| f)
+    }
+
+    /// Whether it changes what an element in an `<svg>` draws.
+    fn drawn_in_svg(self) -> bool {
+        matches!(
+            self,
+            Field::Fill
+                | Field::FillOpacity
+                | Field::FillRule
+                | Field::Opacity
+                | Field::Visibility
+                | Field::Display
+                | Field::Color
+        )
     }
 
     /// Whether it styles text, as a Span takes it.
@@ -1834,6 +1958,33 @@ fn shown(v: &V) -> String {
         V::Bool(b) => b.to_string(),
         V::Str(s) => format!("{s:?}"),
     }
+}
+
+/// A presentation attribute's value as style takes it: a number written as a string is a number,
+/// so that `width="100"` is 100 px.
+fn presented(v: &V, attribute: bool) -> Cow<'_, V> {
+    match v {
+        V::Str(s) if attribute => match s.trim().parse::<f64>() {
+            Ok(x) if x.is_finite() => Cow::Owned(V::Num(x)),
+            _ => Cow::Borrowed(v),
+        },
+        _ => Cow::Borrowed(v),
+    }
+}
+
+/// An opacity: a number or a percentage, clamped to [0, 1].
+fn alpha(v: &V) -> Result<f64, String> {
+    let o = match v {
+        V::Str(_) => {
+            let s = text(v)?;
+            match css::num(&s) {
+                Some(n) if n.unit == "%" => n.value / 100.0,
+                _ => number(v)?,
+            }
+        }
+        _ => number(v)?,
+    };
+    Ok(o.clamp(0.0, 1.0))
 }
 
 /// CSS text, trimmed and lowercased: keywords, units and functions are ASCII case-insensitive.
@@ -2982,19 +3133,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             )?;
         }
         F::ObjectPosition => d.object_position = position::object(&px_text(v)?)?,
-        F::Opacity => {
-            let o = match v {
-                V::Str(_) => {
-                    let s = text(v)?;
-                    match css::num(&s) {
-                        Some(n) if n.unit == "%" => n.value / 100.0,
-                        _ => number(v)?,
-                    }
-                }
-                _ => number(v)?,
-            };
-            d.opacity = o.clamp(0.0, 1.0);
-        }
+        F::Opacity => d.opacity = alpha(v)?,
         F::MixBlendMode => d.blend = keyword(v, &BLENDS)?,
         F::Isolation => d.isolate = keyword(v, &[("auto", false), ("isolate", true)])?,
         F::Filter => d.filter = filter::filter(&text(v)?)?,
@@ -3013,6 +3152,18 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             let shown = [("visible", true), ("hidden", false), ("collapse", false)];
             d.visible = Some(keyword(v, &shown)?);
         }
+        F::Fill => {
+            d.svg_fill = Some(match text(v)?.as_str() {
+                "none" => Paint::None,
+                "currentcolor" => Paint::CurrentColor,
+                s if s.starts_with("url(") => {
+                    return Err("url() fills are not supported yet".into());
+                }
+                s => Paint::Color(color::parse(s)?),
+            });
+        }
+        F::FillOpacity => d.fill_opacity = Some(alpha(v)?),
+        F::FillRule => d.even_odd = Some(keyword(v, &[("nonzero", false), ("evenodd", true)])?),
         F::Color => d.color = Some(color_of(v)?),
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
@@ -3365,6 +3516,10 @@ fn compute(
             (&initial, color::BLACK, true, Display::Block)
         }
     };
+    let (fill, fill_opacity, even_odd) = match parent {
+        Some(p) => (p.fill, p.fill_opacity, p.even_odd),
+        None => (Paint::Color(color::BLACK), 1.0, false),
+    };
     let units = |em| Units { em, canvas };
     let size = match &d.font_size {
         None => inherited.size,
@@ -3622,6 +3777,10 @@ fn compute(
         },
         source: None,
         visible: d.visible.unwrap_or(inherited_visible),
+        fill: d.svg_fill.unwrap_or(fill),
+        fill_opacity: d.fill_opacity.unwrap_or(fill_opacity),
+        even_odd: d.even_odd.unwrap_or(even_odd),
+        svg: None,
         color,
         font,
         decorations,

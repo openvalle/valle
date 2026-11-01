@@ -12,6 +12,7 @@ pub mod path;
 pub mod scene;
 pub mod slug;
 pub mod style;
+pub mod svg;
 pub mod template;
 #[cfg(test)]
 mod testing;

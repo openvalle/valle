@@ -441,6 +441,21 @@ pub fn parse(d: &str) -> Result<Path, String> {
     Ok(Path(out))
 }
 
+/// Numbers separated by white space or a comma, as SVG's `points` and `viewBox` list them; `None`
+/// unless that is all `s` is.
+pub fn numbers(s: &str) -> Option<Vec<f32>> {
+    let mut r = Reader {
+        b: s.as_bytes(),
+        i: 0,
+    };
+    r.space();
+    let mut out = Vec::new();
+    while !r.done() {
+        out.push(r.number()?);
+    }
+    Some(out)
+}
+
 /// SVG path data's characters.
 struct Reader<'a> {
     b: &'a [u8],

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use valle_engine::paint::{self, Item};
 use valle_engine::scene::Frame;
 use valle_engine::style::color;
-use valle_engine::template::Kind;
+use valle_engine::template::{Kind, Tag};
 
 /// How far a box edge may be from Chrome's: two of its 1/64 px layout units. Chrome truncates
 /// each length it resolves, a percentage say, to a unit, which the engine does not, and an edge
@@ -67,6 +67,10 @@ pub fn compare(frame: &Frame, chrome: &Baseline) -> Vec<String> {
     }
     let mut problems = Vec::new();
     for (i, (node, theirs)) in nodes.iter().zip(&chrome.boxes).enumerate() {
+        // The elements in an <svg> are no boxes; its pixels show them.
+        if matches!(&node.kind, Kind::Svg { tag, .. } if *tag != Tag::Svg) {
+            continue;
+        }
         let r = frame.transforms[i].bounds(frame.layout.boxes[i].border);
         let ours = [r.x, r.y, r.width, r.height].map(f64::from);
         let edges = |[x, y, w, h]: [f64; 4]| [x, y, x + w, y + h];

@@ -677,6 +677,76 @@ fn a_span_takes_only_text_properties() {
 }
 
 #[test]
+fn svg_elements_take_presentation_attributes_under_their_style() {
+    let svg = |tag, attributes: &[(&str, Prop)], style: &[(&str, Prop)], children: &[u32]| Node {
+        kind: Kind::Svg {
+            tag,
+            attributes: (attributes.iter())
+                .map(|(k, p)| (Rc::from(*k), p.clone()))
+                .collect(),
+        },
+        ..view(style, children)
+    };
+    let root = [
+        ("width", text("40")),
+        ("viewBox", text("0 0 4 2")),
+        ("fill", text("red")),
+    ];
+    let mut tree = vec![
+        svg(Tag::Svg, &root, &[], &[1, 2]),
+        svg(
+            Tag::Circle,
+            &[("r", num(1.0)), ("fillOpacity", text("50%"))],
+            &[("fill", text("none"))],
+            &[],
+        ),
+        svg(
+            Tag::Rect,
+            &[("width", Prop::Expr(0)), ("color", text("blue"))],
+            &[("fill", text("currentColor"))],
+            &[],
+        ),
+    ];
+    let s = styles(tree.clone(), &[V::Num(2.0)]).unwrap();
+    // An <svg>'s width is its box's, a number in px, and it clips what it draws.
+    assert_eq!(s[0].layout.size.width, Dimension::length(40.0));
+    assert_eq!(s[0].layout.overflow.x, Overflow::Hidden);
+    let red = color::parse("red").unwrap();
+    assert_eq!((s[0].fill, s[0].fill_opacity), (Paint::Color(red), 1.0));
+    // The style beats the attribute.
+    assert_eq!((s[1].fill, s[1].fill_opacity), (Paint::None, 0.5));
+    assert_eq!(s[2].fill, Paint::CurrentColor);
+    assert_eq!(s[2].color, color::parse("blue").unwrap());
+    let rect = s[2].svg.as_deref().map(|c| &c.element);
+    let Some(svg::Element::Shape(svg::Shape::Rect { size, .. })) = rect else {
+        panic!("{rect:?}");
+    };
+    assert_eq!(size[0].units, 2.0);
+    for (circle, style, want) in [
+        (vec![("r", num(-1.0))], vec![], "<circle> r is negative"),
+        (
+            vec![],
+            vec![("width", num(4.0))],
+            "style width on an element in an <svg> is not supported yet",
+        ),
+        (
+            vec![("fill", text("url(#g)"))],
+            vec![],
+            "attribute fill: url() fills are not supported yet",
+        ),
+        (
+            vec![("fillRule", text("even-odd"))],
+            vec![],
+            "attribute fillRule: ",
+        ),
+    ] {
+        tree[1] = svg(Tag::Circle, &circle, &style, &[]);
+        let e = styles(tree.clone(), &[V::Num(2.0)]).unwrap_err();
+        assert!(e.starts_with("s.tsx:1:1: ") && e.contains(want), "{e}");
+    }
+}
+
+#[test]
 fn white_space_sets_its_collapsing_and_wrapping() {
     let font = |v: &str| one(&[("whiteSpace", text(v))]).font;
     for (v, collapse, wrap) in [

@@ -1,0 +1,32 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><svg data-n=\"2\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"3\" d=\"M1 1H29V9H1Z\" style=\"fill: #3949ab;\"></path><circle data-n=\"4\" cx=\"5\" cy=\"5\" r=\"3\" fill=\"#43a047\"></circle></svg></div><div data-n=\"5\" style=\"padding-bottom: 4px;\"><svg data-n=\"6\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"7\" d=\"M1 1H29V9H1Z\" style=\"fill: none;\"></path><circle data-n=\"8\" cx=\"5\" cy=\"5\" r=\"3\" fill=\"#43a047\"></circle></svg></div><div data-n=\"9\" style=\"padding-bottom: 4px;\"><svg data-n=\"10\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"11\" d=\"M1 1H29V9H1Z\" style=\"fill: currentColor;\"></path><circle data-n=\"12\" cx=\"5\" cy=\"5\" r=\"3\" fill=\"#43a047\"></circle></svg></div><div data-n=\"13\" style=\"padding-bottom: 4px;\"><svg data-n=\"14\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"15\" d=\"M1 1H29V9H1Z\" style=\"fill: rgb(57 73 171 / 50%);\"></path><circle data-n=\"16\" cx=\"5\" cy=\"5\" r=\"3\" fill=\"#43a047\"></circle></svg></div><div data-n=\"17\" style=\"padding-bottom: 4px;\"><svg data-n=\"18\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"19\" d=\"M1 1H29V9H1Z\" style=\"fill: transparent;\"></path><circle data-n=\"20\" cx=\"5\" cy=\"5\" r=\"3\" fill=\"#43a047\"></circle></svg></div><div data-n=\"21\" style=\"padding-bottom: 4px;\"><svg data-n=\"22\" width=\"90\" height=\"30\" viewBox=\"0 0 30 10\" style=\"display: block; background: #e8eaf6; color: #e53935;\"><path data-n=\"23\" d=\"M1 1H29V9H1Z\" style=\"fill: RED;\"></path><circle data-n=\"24\" cx=\"5\" cy=\"5\" r=\"3\" fill=\"#43a047\"></circle></svg></div></div></div>\n",
+ "boxes": [
+  [0,0,256,212],
+  [4,4,248,34],
+  [4,4,90,30],
+  [7,7,84,24],
+  [10,10,18,18],
+  [4,38,248,34],
+  [4,38,90,30],
+  [7,41,84,24],
+  [10,44,18,18],
+  [4,72,248,34],
+  [4,72,90,30],
+  [7,75,84,24],
+  [10,78,18,18],
+  [4,106,248,34],
+  [4,106,90,30],
+  [7,109,84,24],
+  [10,112,18,18],
+  [4,140,248,34],
+  [4,140,90,30],
+  [7,143,84,24],
+  [10,146,18,18],
+  [4,174,248,34],
+  [4,174,90,30],
+  [7,177,84,24],
+  [10,180,18,18]
+ ],
+ "lines": {}
+}

@@ -2356,6 +2356,31 @@ const ROWS: &[Row] = &[
             "1",
         ],
     },
+    Row {
+        properties: &["fill"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><path d="M1 1H29V9H1Z" style={{ PROPERTY: VALUE }} /><circle cx={5} cy={5} r={3} fill="#43a047" /></svg>"##,
+        values: &[
+            "\"#3949ab\"",
+            "\"none\"",
+            "\"currentColor\"",
+            "\"rgb(57 73 171 / 50%)\"",
+            "\"transparent\"",
+            "\" RED \"",
+        ],
+        refused: &["\"url(#paint)\"", "\"a\"", "\"\"", "0"],
+    },
+    Row {
+        properties: &["fillOpacity"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6" }}><path d="M1 1H29V9H1Z" style={{ fill: "#3949ab", PROPERTY: VALUE }} /></svg>"##,
+        values: &["0.5", "\"25%\"", "0", "1", "2", "-1"],
+        refused: &["\"a\"", "\"\"", "true"],
+    },
+    Row {
+        properties: &["fillRule"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6" }}><path d="M1 1H29V9H1Z M8 3H22V7H8Z" style={{ fill: "#3949ab", PROPERTY: VALUE }} /></svg>"##,
+        values: &["\"nonzero\"", "\"evenodd\"", "\" EVENODD \""],
+        refused: &["\"even-odd\"", "\"\"", "0"],
+    },
 ];
 
 /// The cases, by path from `tests/cases`, and their source; `chrome` is every CSS property the

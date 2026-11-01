@@ -143,6 +143,48 @@ pub enum Kind {
     Image {
         resource: u32,
     },
+    /// An inline SVG element: an `<svg>` is a box, and the elements in it, its descendants, are
+    /// not. Its attributes are as written, camelCase.
+    Svg {
+        tag: Tag,
+        attributes: Vec<(Rc<str>, Prop)>,
+    },
+}
+
+/// The SVG elements Valle draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tag {
+    Svg,
+    G,
+    Path,
+    Circle,
+    Ellipse,
+    Rect,
+    Line,
+    Polyline,
+    Polygon,
+}
+
+const TAGS: [(&str, Tag); 9] = [
+    ("svg", Tag::Svg),
+    ("g", Tag::G),
+    ("path", Tag::Path),
+    ("circle", Tag::Circle),
+    ("ellipse", Tag::Ellipse),
+    ("rect", Tag::Rect),
+    ("line", Tag::Line),
+    ("polyline", Tag::Polyline),
+    ("polygon", Tag::Polygon),
+];
+
+impl Tag {
+    pub fn by_name(name: &str) -> Option<Tag> {
+        TAGS.iter().find(|(n, _)| *n == name).map(|&(_, t)| t)
+    }
+
+    pub fn name(self) -> &'static str {
+        TAGS.iter().find(|(_, t)| *t == self).map_or("", |(n, _)| n)
+    }
 }
 
 /// What a Text or a Span holds, in order: text, or a Span, which is also one of its children.
@@ -175,6 +217,7 @@ impl Node {
             (None, Kind::Span { .. }) => "<Span>".into(),
             (None, Kind::Mask { .. }) => "<Mask>".into(),
             (None, Kind::Image { .. }) => "<Image>".into(),
+            (None, Kind::Svg { tag, .. }) => format!("<{}>", tag.name()).into(),
         }
     }
 }

@@ -53,7 +53,8 @@ use crate::style::color::{self, Rgba};
 use crate::style::filter;
 use crate::style::gradient::Image;
 use crate::style::transform::Function;
-use crate::style::{Blend, BorderStyle, DecorationStyle, Fit, Shadow, Style};
+use crate::style::{Blend, BorderStyle, DecorationStyle, Fit, Paint, Shadow, Style};
+use crate::svg::{self, Element};
 use crate::template::{Kind, Template};
 use crate::text::{Glyph, Stripe};
 
@@ -954,8 +955,15 @@ impl Painter<'_> {
     fn children(&self, i: Option<usize>) -> impl Iterator<Item = usize> {
         let list: Vec<usize> = match i {
             None => (self.template.roots.iter()).map(|&c| c as usize).collect(),
-            // Its Spans paint with its text.
-            Some(i) if matches!(self.template.nodes[i].kind, Kind::Text { .. }) => Vec::new(),
+            // Its Spans paint with its text, and an <svg>'s elements in its drawing.
+            Some(i)
+                if matches!(
+                    self.template.nodes[i].kind,
+                    Kind::Text { .. } | Kind::Svg { .. }
+                ) =>
+            {
+                Vec::new()
+            }
             Some(i) => ordered(
                 &self.template.nodes[i].children,
                 &self.styles[i],
@@ -1352,6 +1360,7 @@ impl Painter<'_> {
         if let Some(i) = i {
             self.text(i, out);
             self.image(i, out);
+            self.svg(i, out);
         }
         for c in self.children(i) {
             if self.atomic(c) {
@@ -1646,6 +1655,99 @@ impl Painter<'_> {
             image: resource,
         };
         out.push((clip, image));
+    }
+
+    /// `i`'s drawing if it is an `<svg>`: its elements in its content box through its viewBox,
+    /// which percentages of lengths measure, or else the box's size. The box clips them to its
+    /// content box with its corners unless its overflow is visible. A viewBox without area draws
+    /// nothing.
+    fn svg(&self, i: usize, out: &mut Drawn) {
+        let s = &self.styles[i];
+        let Some(Element::Svg { view_box, fit }) = s.svg.as_deref().map(|c| &c.element) else {
+            return;
+        };
+        let (rect, radii) = area(s, &self.layout.boxes[i], Area::ContentBox);
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return;
+        }
+        let size = [rect.width, rect.height].map(f64::from);
+        let (matrix, units) = match *view_box {
+            Some([.., w, h]) if w <= 0.0 || h <= 0.0 => return,
+            Some(b) => (svg::viewport(b, *fit, size), [b[2], b[3]]),
+            None => (Matrix::IDENTITY, size),
+        };
+        let mut items = Vec::new();
+        for &c in &self.template.nodes[i].children {
+            self.svg_element(c as usize, units, &mut items);
+        }
+        if items.is_empty() {
+            return;
+        }
+        let matrix = Matrix::translate(f64::from(rect.x), f64::from(rect.y)).times(matrix);
+        let mut item = Item::Transform { matrix, items };
+        if self.clipping(i) {
+            item = Item::Clip {
+                rect,
+                radii,
+                items: vec![item],
+            };
+        }
+        out.push((self.clips[i].last().copied(), item));
+    }
+
+    /// An element in an `<svg>` and its children, in user units of a viewport `size` units big:
+    /// a shape filled unless it is hidden, its fill opacity on its fill's alpha; its opacity on
+    /// all it draws as one layer, and its transform.
+    fn svg_element(&self, i: usize, size: [f64; 2], out: &mut Vec<Item>) {
+        let s = &self.styles[i];
+        let Some(c) = s.svg.as_deref() else {
+            return;
+        };
+        if s.layout.display == Display::None || s.opacity <= 0.0 {
+            return;
+        }
+        let mut items = Vec::new();
+        match &c.element {
+            Element::G => {
+                for &k in &self.template.nodes[i].children {
+                    self.svg_element(k as usize, size, &mut items);
+                }
+            }
+            Element::Shape(shape) => {
+                let fill = match s.fill {
+                    Paint::None => None,
+                    Paint::Color(c) => Some(c),
+                    Paint::CurrentColor => Some(s.color),
+                };
+                if let (true, Some(mut color)) = (s.visible, fill) {
+                    color[3] *= s.fill_opacity;
+                    if color[3] > 0.0
+                        && let Some(path) = svg::path(shape, size)
+                    {
+                        items.push(Item::Path {
+                            path,
+                            even_odd: s.even_odd,
+                            color: work(color),
+                        });
+                    }
+                }
+            }
+            Element::Svg { .. } => {}
+        }
+        if items.is_empty() {
+            return;
+        }
+        if s.opacity < 1.0 {
+            items = vec![Item::Group {
+                opacity: s.opacity as f32,
+                blend: Blend::Normal,
+                items,
+            }];
+        }
+        match c.transform {
+            Some(matrix) => out.push(Item::Transform { matrix, items }),
+            None => out.extend(items),
+        }
     }
 
     /// The glyphs and decorations of `i`'s text and its descendants', opaque, as Chrome clips a

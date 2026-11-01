@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::template::{Kind, Piece, Prop};
+use crate::template::{Kind, Piece, Prop, Tag};
 
 const HEAD: &str =
     "export const composition = { width: 320, height: 180, fps: 30, duration: 4 };\n";
@@ -171,6 +171,45 @@ fn a_mask_traces_its_source_as_a_root_after_it() {
         // Its source is keyed under it.
         assert_eq!(t.nodes[2].path.as_deref(), Some("m/s"));
         assert_eq!(texts(&frame), ["V"]);
+    });
+}
+
+#[test]
+fn svg_elements_trace_with_their_attributes() {
+    big_stack(|| {
+        let mut f = scene(
+            "export default function Scene() {
+  const { seconds } = useCurrentTime();
+  return (
+    <svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\" aria-hidden=\"true\">
+      <title>Dot</title>
+      <g fill=\"red\">
+        <circle cx={5} cy={5} r={seconds} />
+      </g>
+    </svg>
+  );
+}
+",
+        );
+        let frame = at(&mut f, "2");
+        let t = &frame.template;
+        let element = |i: usize| match &t.nodes[i].kind {
+            Kind::Svg { tag, attributes } => {
+                let values = attributes.iter().map(|(k, p)| (&**k, value(&frame, p)));
+                (*tag, values.collect::<Vec<_>>())
+            }
+            kind => panic!("{kind:?}"),
+        };
+        // Inert attributes and <title> leave nothing.
+        let view_box = ("viewBox", V::Str("0 0 10 10".into()));
+        assert_eq!(element(0), (Tag::Svg, vec![view_box]));
+        assert_eq!(t.nodes[0].children, [1]);
+        assert_eq!(element(1), (Tag::G, vec![("fill", V::Str("red".into()))]));
+        assert_eq!(t.nodes[1].children, [2]);
+        let circle = [("cx", 5.0), ("cy", 5.0), ("r", 2.0)].map(|(k, v)| (k, V::Num(v)));
+        assert_eq!(element(2), (Tag::Circle, circle.to_vec()));
+        at(&mut f, "3");
+        assert_eq!(f.traces(), 1);
     });
 }
 
@@ -572,6 +611,38 @@ fn errors_point_at_the_source() {
                 "<Mask> invert is true or false",
             ),
             ("<Mask source={\"red\"} />", "text must be inside <Text>"),
+            ("<circle />", "<circle> must be inside an <svg>"),
+            (
+                "<svg><svg /></svg>",
+                "an <svg> inside an <svg> is not supported yet",
+            ),
+            (
+                "<svg><path strokeWidth={2} /></svg>",
+                "<path> strokeWidth is not supported yet",
+            ),
+            (
+                "<svg><path fill-rule=\"evenodd\" /></svg>",
+                "write fillRule, not fill-rule",
+            ),
+            (
+                "<svg><path d={[1]} /></svg>",
+                "<path> d must be a number or a string",
+            ),
+            (
+                "<svg transform=\"scale(2)\" />",
+                "<svg> transform is not supported yet",
+            ),
+            (
+                "<svg><circle><rect /></circle></svg>",
+                "<circle> draws no elements inside it",
+            ),
+            ("<svg>hi</svg>", "text in an <svg> is not supported yet"),
+            ("<svg><View /></svg>", "<View> cannot be inside an <svg>"),
+            (
+                "<svg><foreignObject /></svg>",
+                "<foreignObject> is not supported: put HTML-like content",
+            ),
+            ("<Text><svg /></Text>", "<svg> cannot be inside <Text>"),
         ] {
             let e = element(jsx);
             assert!(e.starts_with("scene.motion.tsx:3:"), "{jsx}: {e}");

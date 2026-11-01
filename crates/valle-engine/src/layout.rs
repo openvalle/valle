@@ -20,7 +20,8 @@ use taffy::{
 use crate::image::Image;
 use crate::style::math::{self, Calc};
 use crate::style::{DecorationStyle, Style};
-use crate::template::{self, Error, Kind, Prop, Template, V};
+use crate::svg::Element;
+use crate::template::{self, Error, Kind, Prop, Tag, Template, V};
 use crate::text::{Content, Lines, Piece, Stripe, Text, wave};
 
 /// A rectangle in canvas px, y down.
@@ -99,8 +100,8 @@ pub fn layout(
         .collect();
     let mut children: Vec<Vec<NodeId>> = (template.nodes.iter().zip(styles))
         .map(|(node, style)| match node.kind {
-            // Its Spans are in its text, not boxes.
-            Kind::Text { .. } => Vec::new(),
+            // Its Spans are in its text, and an <svg>'s elements in its drawing, not boxes.
+            Kind::Text { .. } | Kind::Svg { .. } => Vec::new(),
             _ => (ordered(&node.children, style, styles))
                 .map(NodeId::from)
                 .collect(),
@@ -129,11 +130,25 @@ pub fn layout(
     };
     let mut roots = vec![None; n + 1];
     roots[n] = Some(root(canvas));
-    // An image's natural size, and its box as replaced content.
-    let mut naturals = vec![None; n];
+    // Images and <svg>s, boxes of replaced content.
+    let mut replaced = vec![None; n];
     for (i, node) in template.nodes.iter().enumerate() {
-        if let Kind::Image { resource } = node.kind {
-            naturals[i] = Some(images[resource as usize].size.map(|v| v as f32));
+        replaced[i] = match &node.kind {
+            Kind::Image { resource } => Some(Replaced::Image(
+                images[*resource as usize].size.map(|v| v as f32),
+            )),
+            Kind::Svg { tag: Tag::Svg, .. } => Some(Replaced::Svg(
+                styles[i].svg.as_deref().and_then(|c| match c.element {
+                    Element::Svg {
+                        view_box: Some([_, _, w, h]),
+                        ..
+                    } if w > 0.0 && h > 0.0 => Some((w / h) as f32),
+                    _ => None,
+                }),
+            )),
+            _ => None,
+        };
+        if replaced[i].is_some() {
             roots[i] = Some(taffy::Style {
                 item_is_replaced: true,
                 ..styles[i].layout.clone()
@@ -145,7 +160,7 @@ pub fn layout(
         styles,
         calcs: styles.iter().flat_map(|s| &s.calcs).collect(),
         roots,
-        naturals,
+        replaced,
         children,
         contents: &contents,
         text,
@@ -496,8 +511,8 @@ struct Tree<'a> {
     /// The style that takes the place of a node's own: each root's, the canvas's and the masks'
     /// sources', and each image's, as replaced content.
     roots: Vec<Option<taffy::Style>>,
-    /// Each image's natural size.
-    naturals: Vec<Option<[f32; 2]>>,
+    /// What each image or `<svg>` sizes its box by.
+    replaced: Vec<Option<Replaced>>,
     /// Each node's children in the order it lays them out, the canvas's last.
     children: Vec<Vec<NodeId>>,
     /// Each Text's paragraph.
@@ -540,7 +555,7 @@ impl Tree<'_> {
             let i = usize::from(id);
             let parent = !tree.children[i].is_empty();
             let text = tree.contents.get(i).is_some_and(Option::is_some);
-            let image = tree.naturals.get(i).is_some_and(Option::is_some);
+            let image = tree.replaced.get(i).is_some_and(Option::is_some);
             let mut out = match (tree.style(id).display, parent) {
                 (Display::None, _) => compute_hidden_layout(tree, id),
                 (Display::Block, true) => compute_block_layout(tree, id, inputs, block),
@@ -560,8 +575,8 @@ impl Tree<'_> {
     /// A box without children: text measured as Taffy asks and aligned on its first baseline, an
     /// image, or an empty box.
     fn leaf(&mut self, i: usize, inputs: LayoutInput) -> LayoutOutput {
-        if let Some(natural) = self.naturals.get(i).copied().flatten() {
-            return self.image(i, inputs, natural);
+        if let Some(r) = self.replaced.get(i).copied().flatten() {
+            return self.replaced(i, inputs, r);
         }
         let (styles, contents) = (self.styles, self.contents);
         let (Some(style), Some(Some(c))) = (styles.get(i), contents.get(i)) else {
@@ -617,9 +632,11 @@ impl Tree<'_> {
 }
 
 impl Tree<'_> {
-    /// An image's box: its content box the size given on an axis, by its container or its
-    /// style, and on the other as its natural ratio has it, or its natural size.
-    fn image(&self, i: usize, inputs: LayoutInput, [w, h]: [f32; 2]) -> LayoutOutput {
+    /// An image's or an `<svg>`'s box: its content box the size given on an axis, by its
+    /// container or its style, and on the other as its natural ratio has it, or its natural size.
+    /// An `<svg>` with a ratio but no size takes the width there is, and without a ratio 300 ×
+    /// 150 px.
+    fn replaced(&self, i: usize, inputs: LayoutInput, r: Replaced) -> LayoutOutput {
         let style = self.style(NodeId::from(i));
         let calc = |handle, basis| self.calc(handle, basis);
         let width = inputs.parent_size.width;
@@ -631,7 +648,7 @@ impl Tree<'_> {
         ];
         let sized = style.size.maybe_resolve(inputs.parent_size, calc);
         let border_box = style.box_sizing == BoxSizing::BorderBox;
-        compute_leaf_layout(inputs, style, calc, |known, _| {
+        compute_leaf_layout(inputs, style, calc, |known, available| {
             let given = |known: Option<f32>, sized: Option<f32>, inset: f32| {
                 let content = match known {
                     Some(k) => Some(k - inset),
@@ -643,15 +660,37 @@ impl Tree<'_> {
                 given(known.width, sized.width, inset[0]),
                 given(known.height, sized.height, inset[1]),
             ];
+            let [w, h] = match r {
+                Replaced::Image(natural) => natural,
+                Replaced::Svg(Some(ratio)) => {
+                    let w = match available.width {
+                        AvailableSpace::Definite(w) => (w - inset[0]).max(0.0),
+                        _ => 300.0,
+                    };
+                    [w, w / ratio]
+                }
+                Replaced::Svg(None) => [300.0, 150.0],
+            };
+            let ratio = match r {
+                Replaced::Svg(None) => false,
+                _ => w > 0.0 && h > 0.0,
+            };
             let [width, height] = match given {
                 [Some(x), Some(y)] => [x, y],
-                [Some(x), None] if w > 0.0 => [x, x * h / w],
-                [None, Some(y)] if h > 0.0 => [y * w / h, y],
+                [Some(x), None] if ratio => [x, x * h / w],
+                [None, Some(y)] if ratio => [y * w / h, y],
                 [x, y] => [x.unwrap_or(w), y.unwrap_or(h)],
             };
             Size { width, height }
         })
     }
+}
+
+/// What sizes a box of replaced content: an image's natural size, or an `<svg>`'s ratio.
+#[derive(Clone, Copy, Debug)]
+enum Replaced {
+    Image([f32; 2]),
+    Svg(Option<f32>),
 }
 
 impl TraversePartialTree for Tree<'_> {

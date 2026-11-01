@@ -3,8 +3,8 @@
 //!
 //! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`;
 //!   a `…` in it stands for any text.
-//! - A case in `css/` is standard CSS: each frame is printed as HTML, and its boxes and lines must
-//!   be where Chrome puts them, each box edge within 1/32 px. The Chrome baselines are drawn here
+//! - A case in `css/` or `svg/` is standard CSS or SVG: each frame is printed as HTML, and its
+//!   boxes and lines must be where Chrome puts them, each box edge within 1/32 px. The Chrome baselines are drawn here
 //!   when missing or out of date (see `chrome.rs`), never on CI.
 //! - Any other case is drawn on the GPU, every frame, and each frame compared with its Valle
 //!   baseline, `tests/baselines/valle/<case>.<frame>.png`, within one level a channel. Frames that
@@ -296,13 +296,13 @@ impl Runner {
     }
 
     fn run(&self, case: &str) -> Outcome {
-        let css = case.starts_with("css/");
-        let drawn = !css && !case.starts_with("errors/");
+        let standard = case.starts_with("css/") || case.starts_with("svg/");
+        let drawn = !standard && !case.starts_with("errors/");
         if drawn && !self.gpu_layer {
             return Outcome::Skipped;
         }
         let run = std::panic::AssertUnwindSafe(|| {
-            if css {
+            if standard {
                 self.chrome(case)
             } else if drawn {
                 self.pixels(case).map(|()| Vec::new())
@@ -640,7 +640,7 @@ impl Runner {
              img { image-rendering: pixelated; background: repeating-conic-gradient(#ccc 0 25%, \
              #fff 0 50%) 0 0 / 16px 16px; }\n</style>\n<h1>Frames to review</h1>\n\
              <p>Accept the cases that look right with <code>cargo xtask accept &lt;case&gt;</code>; \
-             a css case that differs from Chrome is the engine's to fix.\n",
+             a css or svg case that differs from Chrome is the engine's to fix.\n",
         );
         for (name, problem, against) in reviewed {
             let stem = name.trim_end_matches(".png");
