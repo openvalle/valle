@@ -1,0 +1,18 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 200px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"display: flex; padding: 8px; flex-direction: row; flex-wrap: wrap; gap: 10px;\"><div data-n=\"1\" style=\"width: 64px; height: 40px; border-color: #263238; border-style: double; border-width: 3px;\"></div><div data-n=\"2\" style=\"width: 64px; height: 40px; border-color: #263238; border-style: double; border-width: 4px;\"></div><div data-n=\"3\" style=\"width: 64px; height: 40px; border-color: #263238; border-style: double; border-width: 7px;\"></div><div data-n=\"4\" style=\"width: 64px; height: 40px; border-color: #263238; border-style: double; border-width: 10px;\"></div><div data-n=\"5\" style=\"width: 64px; height: 40px; border-color: #263238; border-style: double; border-width: 9px; border-radius: 14px; background: #ffe082;\"></div><div data-n=\"6\" style=\"width: 64px; height: 40px; border-color: #e53935 #1e88e5 #43a047 #fdd835; border-style: double; border-width: 8px;\"></div><div data-n=\"7\" style=\"width: 64px; height: 40px; border-color: #263238; border-style: double; border-width: 9px 3px 6px 12px; border-radius: 10px;\"></div><div data-n=\"8\" style=\"width: 64px; height: 40px; border-color: #263238; border-style: double solid solid solid; border-width: 8px;\"></div><div data-n=\"9\" style=\"width: 64px; height: 40px; border-color: rgb(57 73 171 / 50%); border-style: double; border-width: 9px; background: #e8eaf6;\"></div><div data-n=\"10\" style=\"width: 64px; height: 40px; border-color: #263238; border-style: none; margin: 10px; background: #e8eaf6; border-radius: 8px; outline: 7px double #00897b; outline-offset: 3px;\"></div></div></div>\n",
+ "boxes": [
+  [0,0,256,226],
+  [8,8,64,40],
+  [82,8,64,40],
+  [156,8,64,40],
+  [8,58,64,40],
+  [82,58,64,40],
+  [156,58,64,40],
+  [8,108,64,40],
+  [82,108,64,40],
+  [156,108,64,40],
+  [18,168,64,40]
+ ],
+ "lines": {}
+}

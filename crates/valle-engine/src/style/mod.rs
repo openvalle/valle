@@ -49,13 +49,15 @@ pub struct Style {
     /// clockwise, as px and fractions of the border box's width and height.
     pub radii: [[Calc; 2]; 4],
     /// The border's sides, top, right, bottom and left: their widths in whole px, 0 without a
-    /// line, and their colors.
+    /// line, their colors and their styles.
     pub border: [f64; 4],
     pub border_colors: [Rgba; 4],
-    /// The outline's width in whole px, 0 without a line, its color, and how far outside the
-    /// border box it is, in whole px toward 0, as Chrome draws it.
+    pub border_styles: [BorderStyle; 4],
+    /// The outline's width in whole px, 0 without a line, its color, its style, and how far
+    /// outside the border box it is, in whole px toward 0, as Chrome draws it.
     pub outline: f64,
     pub outline_color: Rgba,
+    pub outline_style: BorderStyle,
     pub outline_offset: f64,
     /// `box-shadow`, the first on top.
     pub shadows: Vec<Shadow>,
@@ -1212,11 +1214,13 @@ enum BorderPart {
     Color,
 }
 
-/// A border's line style.
+/// A border's or an outline's line style.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BorderStyle {
+pub enum BorderStyle {
     None,
     Solid,
+    /// Two lines with a gap between them.
+    Double,
 }
 
 /// The sides a box-edge property sets: the four of a shorthand, one, or logical ones, which in
@@ -2028,18 +2032,20 @@ const LINE_STYLES: [&str; 10] = [
     "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
 ];
 
-/// `border-style`: so far `solid`, and `none` or `hidden`, which are the same without tables.
+/// `border-style`: so far `solid` and `double`, and `none` or `hidden`, which are the same
+/// without tables.
 fn border_style(v: &V) -> Result<BorderStyle, String> {
     let s = text(v)?;
     match s.as_str() {
         "none" | "hidden" => Ok(BorderStyle::None),
         "solid" => Ok(BorderStyle::Solid),
+        "double" => Ok(BorderStyle::Double),
         s if LINE_STYLES.contains(&s) => Err(format!("{s} lines are not supported yet; use solid")),
         s => Err(format!("{s} is not one of {}", LINE_STYLES.join(", "))),
     }
 }
 
-/// `outline-style`: so far `solid` and `none`.
+/// `outline-style`: so far `solid`, `double` and `none`.
 fn outline_style(v: &V) -> Result<BorderStyle, String> {
     match text(v)?.as_str() {
         "auto" => Err("auto is each browser's own focus ring; use solid".into()),
@@ -3370,7 +3376,7 @@ fn compute(
     }
     let width = |style, width: &Len| match style {
         BorderStyle::None => 0.0,
-        BorderStyle::Solid => snapped(width.px(u, 0.0)),
+        _ => snapped(width.px(u, 0.0)),
     };
     let border: [f64; 4] = std::array::from_fn(|i| width(d.border_style[i], &d.border_width[i]));
     let mut l = Lengths {
@@ -3446,8 +3452,10 @@ fn compute(
         radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
         border,
         border_colors: d.border_color.map(|c| c.unwrap_or(color)),
+        border_styles: d.border_style,
         outline: width(d.outline_style, &d.outline_width),
         outline_color: d.outline_color.unwrap_or(color),
+        outline_style: d.outline_style,
         outline_offset: d.outline_offset.px(u, 0.0).trunc(),
         shadows: (d.shadows.iter())
             .map(|s| Shadow {

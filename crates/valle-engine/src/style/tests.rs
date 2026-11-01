@@ -1410,6 +1410,17 @@ fn borders_take_lines_widths_styles_and_colors() {
             [color::BLACK, c("blue"), color::BLACK, c("blue")]
         )
     );
+    // Their styles, for paint.
+    use BorderStyle::{Double, Solid};
+    let styles = |style: &[(&str, Prop)]| (one(style).border_styles, one(style).outline_style);
+    assert_eq!(
+        styles(&[
+            ("borderStyle", text("double solid")),
+            ("borderLeftStyle", text("hidden")),
+            ("outline", text("double")),
+        ]),
+        ([Double, Solid, Double, BorderStyle::None], Double)
+    );
 }
 
 #[test]

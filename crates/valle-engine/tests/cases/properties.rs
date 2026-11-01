@@ -1333,6 +1333,8 @@ const ROWS: &[Row] = &[
             "\"2.5px solid\"",
             "\"calc(1em - 13.5px) solid currentcolor\"",
             "\" 3PX SOLID RGB(0 0 255 / 50%) \"",
+            "\"5px double #3949ab\"",
+            "\"double\"",
         ],
         refused: &[
             "\"2px dashed\"",
@@ -1404,11 +1406,12 @@ const ROWS: &[Row] = &[
             "\"none solid hidden\"",
             "\"solid solid none solid\"",
             "\" SOLID \"",
+            "\"double\"",
+            "\"double solid\"",
         ],
         refused: &[
             "\"dashed\"",
             "\"dotted\"",
-            "\"double\"",
             "\"groove\"",
             "\"ridge\"",
             "\"inset\"",
@@ -1421,14 +1424,14 @@ const ROWS: &[Row] = &[
     Row {
         properties: BORDER_STYLES,
         sample: r##"<View style={{ width: 40, height: 12, background: "#e8eaf6", borderWidth: 3, borderColor: "#3949ab", PROPERTY: VALUE }} />"##,
-        values: &["\"solid\"", "\"none\"", "\"hidden\""],
+        values: &["\"solid\"", "\"none\"", "\"hidden\"", "\"double\""],
         refused: &["\"dashed\"", "\"solid none\""],
     },
     Row {
         properties: &["borderInlineStyle", "borderBlockStyle"],
         sample: r##"<View style={{ width: 40, height: 12, background: "#e8eaf6", borderWidth: 3, borderColor: "#3949ab", PROPERTY: VALUE }} />"##,
-        values: &["\"solid\"", "\"solid none\"", "\"hidden solid\""],
-        refused: &["\"double\"", "\"solid none solid\""],
+        values: &["\"solid\"", "\"solid none\"", "\"hidden solid\"", "\"double solid\""],
+        refused: &["\"dashed\"", "\"solid none solid\""],
     },
     Row {
         properties: &["borderColor"],
@@ -1469,6 +1472,7 @@ const ROWS: &[Row] = &[
             "\"2.5px solid\"",
             "\"0.5px solid\"",
             "\" 3PX SOLID RGB(0 0 255 / 50%) \"",
+            "\"5px double #3949ab\"",
         ],
         refused: &[
             "\"auto\"",
@@ -1496,14 +1500,8 @@ const ROWS: &[Row] = &[
     Row {
         properties: &["outlineStyle"],
         sample: r##"<View style={{ width: 40, height: 12, margin: 6, background: "#e8eaf6", outlineWidth: 3, outlineColor: "#3949ab", PROPERTY: VALUE }} />"##,
-        values: &["\"solid\"", "\"none\"", "\" SOLID \""],
-        refused: &[
-            "\"auto\"",
-            "\"hidden\"",
-            "\"dashed\"",
-            "\"double\"",
-            "\"solid none\"",
-        ],
+        values: &["\"solid\"", "\"none\"", "\" SOLID \"", "\"double\""],
+        refused: &["\"auto\"", "\"hidden\"", "\"dashed\"", "\"solid none\""],
     },
     Row {
         properties: &["outlineColor"],

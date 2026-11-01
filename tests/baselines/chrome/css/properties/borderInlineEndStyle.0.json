@@ -1,14 +1,16 @@
 {
  "chrome": "156.0.8078.80",
- "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><div data-n=\"2\" style=\"width: 40px; height: 12px; background: #e8eaf6; border-width: 3px; border-color: #3949ab; border-inline-end-style: solid;\"></div></div><div data-n=\"3\" style=\"padding-bottom: 4px;\"><div data-n=\"4\" style=\"width: 40px; height: 12px; background: #e8eaf6; border-width: 3px; border-color: #3949ab; border-inline-end-style: none;\"></div></div><div data-n=\"5\" style=\"padding-bottom: 4px;\"><div data-n=\"6\" style=\"width: 40px; height: 12px; background: #e8eaf6; border-width: 3px; border-color: #3949ab; border-inline-end-style: hidden;\"></div></div></div></div>\n",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><div data-n=\"2\" style=\"width: 40px; height: 12px; background: #e8eaf6; border-width: 3px; border-color: #3949ab; border-inline-end-style: solid;\"></div></div><div data-n=\"3\" style=\"padding-bottom: 4px;\"><div data-n=\"4\" style=\"width: 40px; height: 12px; background: #e8eaf6; border-width: 3px; border-color: #3949ab; border-inline-end-style: none;\"></div></div><div data-n=\"5\" style=\"padding-bottom: 4px;\"><div data-n=\"6\" style=\"width: 40px; height: 12px; background: #e8eaf6; border-width: 3px; border-color: #3949ab; border-inline-end-style: hidden;\"></div></div><div data-n=\"7\" style=\"padding-bottom: 4px;\"><div data-n=\"8\" style=\"width: 40px; height: 12px; background: #e8eaf6; border-width: 3px; border-color: #3949ab; border-inline-end-style: double;\"></div></div></div></div>\n",
  "boxes": [
-  [0,0,256,56],
+  [0,0,256,72],
   [4,4,248,16],
   [4,4,40,12],
   [4,20,248,16],
   [4,20,40,12],
   [4,36,248,16],
-  [4,36,40,12]
+  [4,36,40,12],
+  [4,52,248,16],
+  [4,52,40,12]
  ],
  "lines": {}
 }

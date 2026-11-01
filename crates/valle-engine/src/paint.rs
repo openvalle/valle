@@ -51,7 +51,7 @@ use crate::style::color::Rgba;
 use crate::style::filter;
 use crate::style::gradient::Image;
 use crate::style::transform::Function;
-use crate::style::{Blend, Shadow, Style};
+use crate::style::{Blend, BorderStyle, Shadow, Style};
 use crate::template::{Kind, Template};
 use crate::text::{Glyph, Stripe};
 
@@ -360,6 +360,50 @@ fn fit(radii: Radii, rect: Rect) -> Radii {
     ];
     let k = fit.into_iter().fold(1.0, f32::min).max(0.0);
     radii.map(|r| r.map(|v| v * k))
+}
+
+/// The lines across each side of a border or an outline `widths` wide in `styles`, from and to
+/// how deep in it, as Chrome draws them: a double line is two lines and a gap, about a third of
+/// its width each (the gap from (w + 1) / 3 to (2w + 1) / 3 deep, rounded down), or one under
+/// 3 px.
+fn lines(widths: [f32; 4], styles: [BorderStyle; 4]) -> [Vec<[f32; 2]>; 4] {
+    std::array::from_fn(|k| match (styles[k], widths[k]) {
+        (BorderStyle::Double, w) if w >= 3.0 => vec![
+            [0.0, ((w + 1.0) / 3.0).floor()],
+            [((2.0 * w + 1.0) / 3.0).floor(), w],
+        ],
+        (_, w) => vec![[0.0, w]],
+    })
+}
+
+/// The rings a border or an outline `widths` deep inside `rect` paints, its sides' `lines` in
+/// `colors`.
+fn rings(
+    rect: Rect,
+    radii: Radii,
+    widths: [f32; 4],
+    colors: [[f32; 4]; 4],
+    lines: &[Vec<[f32; 2]>; 4],
+) -> Vec<Item> {
+    let count = lines.iter().map(Vec::len).max().unwrap_or(0);
+    (0..count)
+        .map(|n| {
+            // A side with fewer lines has none here.
+            let line = |k: usize| lines[k].get(n).copied().unwrap_or([widths[k]; 2]);
+            let (outer, outer_radii) = inner(rect, radii, std::array::from_fn(|k| line(k)[0]));
+            let (inside, inner_radii) = inner(rect, radii, std::array::from_fn(|k| line(k)[1]));
+            Item::Ring {
+                rect: outer,
+                radii: outer_radii,
+                inner: inside,
+                inner_radii,
+                colors: std::array::from_fn(|k| match lines[k].len() > n {
+                    true => colors[k],
+                    false => [0.0; 4],
+                }),
+            }
+        })
+        .collect()
 }
 
 /// The inside of a border `widths` wide (top, right, bottom and left) on `rect` with its corners
@@ -1122,9 +1166,12 @@ impl Painter<'_> {
             std::array::from_fn(|k| widths[k] + paddings[k]),
         );
         // The background would show at the antialiased edge of a rounded border: under four
-        // opaque sides the border box it shows in shrinks by half their widths, as in Chrome.
+        // opaque sides the border box it shows in shrinks by half the widths of their outer
+        // lines, as in Chrome, which shows it in the gap of a double line.
+        let lines = lines(widths, s.border_styles);
+        let half = lines.each_ref().map(|l| l[0][1] / 2.0);
         let shrunk = match (0..4).all(|k| widths[k] > 0.0 && colors[k][3] >= 1.0) {
-            true if radii != SQUARE => inner(rect, radii, widths.map(|w| w / 2.0)),
+            true if radii != SQUARE => inner(rect, radii, half),
             _ => (rect, radii),
         };
         let shown = |a: Area| {
@@ -1202,14 +1249,8 @@ impl Painter<'_> {
             out.extend(inner_shadow(shadow, inside, inner_radii).map(|item| (clip, item)));
         }
         if (0..4).any(|k| widths[k] > 0.0 && colors[k][3] > 0.0) {
-            let border = Item::Ring {
-                rect,
-                radii,
-                inner: inside,
-                inner_radii,
-                colors,
-            };
-            out.push((clip, border));
+            let border = rings(rect, radii, widths, colors, &lines);
+            out.extend(border.into_iter().map(|ring| (clip, ring)));
         }
     }
 
@@ -1254,15 +1295,10 @@ impl Painter<'_> {
             return;
         }
         let radii = fit(grown(self.corners(i), by), rect);
-        let (inside, inner_radii) = inner(rect, radii, [width; 4]);
-        let outline = Item::Ring {
-            rect,
-            radii,
-            inner: inside,
-            inner_radii,
-            colors: [color; 4],
-        };
-        out.push((self.clips[i].last().copied(), outline));
+        let lines = lines([width; 4], [s.outline_style; 4]);
+        let outline = rings(rect, radii, [width; 4], [color; 4], &lines);
+        let clip = self.clips[i].last().copied();
+        out.extend(outline.into_iter().map(|ring| (clip, ring)));
     }
 
     /// Text as Chrome paints each run of it, in the style of the Text or Span it is in: its

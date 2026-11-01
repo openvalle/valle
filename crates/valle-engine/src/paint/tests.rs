@@ -1613,6 +1613,59 @@ fn a_border_rounds_its_inside_less_its_widths() {
     assert_eq!((inside.height, inner_radii), (-4.0, SQUARE));
 }
 
+#[test]
+fn double_lines_are_two_rings_a_third_of_the_width_each() {
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 40.0,
+        height: 20.0,
+    };
+    let blue = work(color::parse("blue").unwrap());
+    // From and to how deep in the top and the left each ring is, and its top and left colors.
+    let depths = |widths: [f32; 4], styles: [BorderStyle; 4]| {
+        (rings(
+            rect,
+            [[0.0; 2]; 4],
+            widths,
+            [blue; 4],
+            &lines(widths, styles),
+        )
+        .iter())
+        .map(|ring| match ring {
+            Item::Ring {
+                rect: r,
+                inner,
+                colors,
+                ..
+            } => [r.y, inner.y, r.x, inner.x, colors[0][3], colors[3][3]],
+            item => panic!("{item:?}"),
+        })
+        .collect::<Vec<_>>()
+    };
+    use BorderStyle::{Double, Solid};
+    assert_eq!(
+        depths([10.0; 4], [Double; 4]),
+        [
+            [0.0, 3.0, 0.0, 3.0, 1.0, 1.0],
+            [7.0, 10.0, 7.0, 10.0, 1.0, 1.0]
+        ]
+    );
+    assert_eq!(depths([7.0; 4], [Double; 4])[1][..2], [5.0, 7.0]);
+    // Under 3 px a line is solid, as is a side of another style.
+    assert_eq!(
+        depths([2.0; 4], [Double; 4]),
+        [[0.0, 2.0, 0.0, 2.0, 1.0, 1.0]]
+    );
+    assert_eq!(
+        depths([4.0, 4.0, 4.0, 6.0], [Double, Solid, Solid, Solid]),
+        [
+            [0.0, 1.0, 0.0, 6.0, 1.0, 1.0],
+            [3.0, 4.0, 6.0, 6.0, 1.0, 0.0]
+        ]
+    );
+}
+
 /// The gradients a box paints, 100 × 50 px and with a 10 px border, with its `background`.
 fn ramps(background: &str) -> Vec<(Rect, Rect, Ramp)> {
     let style = [
