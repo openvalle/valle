@@ -4,5 +4,6 @@
 pub mod eval;
 pub mod front;
 pub mod js;
+pub mod style;
 pub mod template;
 pub mod time;

@@ -150,6 +150,7 @@ pub enum Want {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Template {
     pub program: Program,
+    /// In preorder: a parent comes before its children.
     pub nodes: Vec<Node>,
     /// What the scene's root component returned, in order; the canvas holds them.
     pub roots: Vec<u32>,

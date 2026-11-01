@@ -13,3 +13,4 @@ oxc.workspace = true
 rquickjs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+taffy.workspace = true
