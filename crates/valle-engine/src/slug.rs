@@ -60,15 +60,19 @@ impl Outline {
 
 /// The outline of glyph `glyph` of `face`, in its variation instance.
 pub fn outline(face: &Face, glyph: u32) -> Result<Outline, Error> {
+    let (em, contours) = contours(face, glyph)?;
+    Ok(encode(em, &contours))
+}
+
+/// The closed contours of glyph `glyph` of `face`, in its variation instance, in font units y
+/// up, and the font's units per em.
+pub fn contours(face: &Face, glyph: u32) -> Result<(f32, Vec<Vec<Curve>>), Error> {
     let bad = |e: &dyn std::fmt::Display| format!("font file: {e}");
     let font = FontRef::from_index(face.data.data(), face.index).map_err(|e| bad(&e))?;
     let em = f32::from(font.head().map_err(|e| bad(&e))?.units_per_em());
     let outlines = font.outline_glyphs();
     let Some(drawn) = outlines.get(GlyphId::new(glyph)) else {
-        return Ok(Outline {
-            em,
-            ..Outline::default()
-        });
+        return Ok((em, Vec::new()));
     };
     let coords: Vec<NormalizedCoord> = face
         .coords
@@ -88,7 +92,7 @@ pub fn outline(face: &Face, glyph: u32) -> Result<Outline, Error> {
             "glyph {glyph}: cubic outlines are not supported yet"
         ));
     }
-    Ok(encode(em, &pen.contours))
+    Ok((em, pen.contours))
 }
 
 #[derive(Default)]

@@ -20,7 +20,7 @@ use taffy::{
 use crate::style::Style;
 use crate::style::math::{self, Calc};
 use crate::template::{self, Error, Kind, Prop, Template, V};
-use crate::text::{Content, Lines, Piece, Text};
+use crate::text::{Content, Lines, Piece, Stripe, Text};
 
 /// A rectangle in canvas px, y down.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -214,7 +214,9 @@ pub fn layout(
         };
         if let Some(c) = &contents[i] {
             let place = |e| format!("{}: {e}", template.nodes[i].place());
-            let laid = text.lines(c, content.width).map_err(place)?;
+            let mut laid = text.lines(c, content.width).map_err(place)?;
+            let at = [content.x, content.y];
+            laid.decorations = decorations(&laid, at, i, template, styles, text).map_err(place)?;
             spans(
                 &laid,
                 [content.x, content.y],
@@ -308,6 +310,100 @@ fn spans(
         };
     }
     Ok(())
+}
+
+/// The text decorations of Text `i` laid out in `lines` from `at`, as Chrome draws them: on each
+/// run, those its node takes, in the color, thickness and underline offset of the box that
+/// declares each, as the font of its decorating box has them, the Span that declares it or else
+/// the Text. A line is a tenth of that font size thick, at least 1 px, or as thick as set, rounded
+/// to whole px; it is drawn whole px thick, at least 1, its top on a whole px of the canvas. An
+/// underline is under the baseline by its offset, or by half its thickness rounded up to whole
+/// px, at least 1; an overline is on the run's ascent; a line-through is centered two thirds of
+/// the decorating box's ascent under the run's ascent. Underlines and overlines leave gaps where
+/// the run's glyphs have ink across them but for their outer half px, wider by their thickness on
+/// each side, up to 13 px, with edges rounded to whole px.
+fn decorations(
+    lines: &Lines,
+    at: [f32; 2],
+    i: usize,
+    template: &Template,
+    styles: &[Style],
+    text: &mut Text,
+) -> Result<Vec<Stripe>, Error> {
+    let mut out = Vec::new();
+    for run in &lines.runs {
+        let style = &styles[run.node as usize];
+        if style.decorations.is_empty() {
+            continue;
+        }
+        let baseline = at[1] + lines.baselines[run.line as usize];
+        let ascent = text.metrics(&style.font)?[0].round();
+        let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
+        for d in &style.decorations {
+            let font = match template.nodes[d.by].kind {
+                Kind::Span { .. } => &styles[d.by].font,
+                _ => &styles[i].font,
+            };
+            let size = font.size as f32;
+            let thickness = match &d.thickness {
+                None => (size / 10.0).max(1.0),
+                Some(t) => t.resolve(size).round().max(1.0),
+            };
+            let height = thickness.trunc().max(1.0);
+            let mut tops = Vec::new();
+            if d.lines[0] {
+                let offset = match &d.offset {
+                    None => (thickness / 2.0).ceil().max(1.0),
+                    Some(o) => o.resolve(size),
+                };
+                tops.push((baseline + offset, false));
+            }
+            if d.lines[1] {
+                tops.push((baseline - ascent - height, false));
+            }
+            if d.lines[2] {
+                let decorating = text.metrics(font)?[0].round();
+                let top = baseline - ascent + decorating * 2.0 / 3.0 - thickness / 2.0;
+                tops.push((top, true));
+            }
+            for (top, through) in tops {
+                let y = top.round();
+                let mut gaps = Vec::new();
+                if !through && style.font.skip_ink {
+                    let dilation = thickness.min(13.0);
+                    for g in glyphs {
+                        let below = top - at[1] - g.y;
+                        let band = [below + 0.5, below + thickness - 0.5];
+                        let size = style.font.size as f32;
+                        if let Some([x0, x1]) = text.ink(g.face, g.id, size, band)? {
+                            let x = at[0] + g.x;
+                            gaps.push([(x + x0 - dilation).round(), (x + x1 + dilation).round()]);
+                        }
+                    }
+                    gaps.sort_by(|a, b| a[0].total_cmp(&b[0]));
+                }
+                let mut x = at[0] + run.x[0];
+                let end = at[0] + run.x[1];
+                for [g0, g1] in gaps.into_iter().chain([[end, end]]) {
+                    if g0.min(end) > x {
+                        out.push(Stripe {
+                            rect: [
+                                x - at[0],
+                                y - at[1],
+                                g0.min(end) - at[0],
+                                y + height - at[1],
+                            ],
+                            color: d.color,
+                            node: run.node,
+                            through,
+                        });
+                    }
+                    x = x.max(g1);
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// `r` less `edges`.

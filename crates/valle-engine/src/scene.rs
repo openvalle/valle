@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::front::{Composition, Front};
 use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
-use crate::style::Sheet;
+use crate::style::{Sheet, Style};
 use crate::template::{Error, Template, V};
 use crate::text::{Blob, Face, Text};
 use crate::time::Tick;
@@ -23,6 +23,8 @@ const SHEETS: usize = 64;
 pub struct Frame {
     pub template: Rc<Template>,
     pub values: Vec<V>,
+    /// Each node's computed style.
+    pub styles: Vec<Style>,
     pub layout: Layout,
     /// Each node's transform from its px, those of `layout`, to the canvas's.
     pub transforms: Vec<Matrix>,
@@ -90,6 +92,7 @@ impl Scene {
         Ok(Frame {
             template: frame.template,
             values: frame.values,
+            styles,
             layout: laid,
             transforms,
             items,

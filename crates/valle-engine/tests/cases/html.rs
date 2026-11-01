@@ -87,9 +87,17 @@ fn node(html: &mut String, frame: &Frame, i: u32) -> Result<(), String> {
     if matches!(n.kind, Kind::Text { .. }) {
         html.push_str(" data-text");
     }
-    let style: Vec<String> = (n.style.iter())
+    let mut style: Vec<String> = (n.style.iter())
         .filter_map(|(key, prop)| declaration(key, value(frame, prop)))
         .collect();
+    // Chrome draws a decoration in `currentcolor` in the text's fill color, which hides with the
+    // glyphs for the runner; its color as a value keeps it.
+    let declared = frame.styles[i as usize].decorations.last();
+    if let Some(d) = declared.filter(|d| d.by == i as usize) {
+        let [r, g, b] = [0, 1, 2].map(|k| js::number_to_string(d.color[k] * 255.0));
+        let a = js::number_to_string(d.color[3]);
+        style.push(format!("text-decoration-color: rgb({r} {g} {b} / {a});"));
+    }
     if !style.is_empty() {
         let _ = write!(html, " style=\"{}\"", escape(&style.join(" ")));
     }

@@ -695,6 +695,85 @@ fn white_space_sets_its_collapsing_and_wrapping() {
 }
 
 #[test]
+fn text_decorations_pass_to_the_text_in_flow_inside() {
+    let tree = vec![
+        view(
+            &[
+                ("color", text("red")),
+                ("fontSize", num(20.0)),
+                ("textDecoration", text("underline overline 10%")),
+                ("textUnderlineOffset", text("0.5em")),
+            ],
+            &[1, 2],
+        ),
+        view(
+            &[
+                ("textDecorationLine", text("line-through")),
+                ("textDecorationColor", text("blue")),
+                ("textDecorationThickness", num(3.0)),
+                ("textUnderlineOffset", text("20%")),
+                ("textDecorationSkipInk", text("none")),
+            ],
+            &[],
+        ),
+        view(&[("position", text("absolute"))], &[]),
+    ];
+    let s = styles(tree, &[]).unwrap();
+    let red = color::parse("red").unwrap();
+    let px = |c: &Option<Calc>| c.as_ref().map(|c| c.resolve(10.0));
+    let d = &s[0].decorations;
+    assert_eq!(d.len(), 1);
+    assert_eq!(
+        (d[0].lines, d[0].color, d[0].by),
+        ([true, true, false], red, 0)
+    );
+    // Percentages are of the decorating box's font size; em is of the declaring box's.
+    assert_eq!(
+        (px(&d[0].thickness), px(&d[0].offset)),
+        (Some(1.0), Some(10.0))
+    );
+    let d = &s[1].decorations;
+    assert_eq!(d.len(), 2);
+    assert_eq!(d[0], s[0].decorations[0]);
+    assert_eq!((d[1].lines, d[1].by), ([false, false, true], 1));
+    assert_eq!(d[1].color, color::parse("blue").unwrap());
+    assert_eq!(
+        (px(&d[1].thickness), px(&d[1].offset)),
+        (Some(3.0), Some(2.0))
+    );
+    assert!(s[0].font.skip_ink && !s[1].font.skip_ink);
+    assert!(s[2].decorations.is_empty());
+}
+
+#[test]
+fn text_decoration_sets_its_longhands_or_refuses() {
+    let d = |v: &str| one(&[("textDecoration", text(v))]).decorations;
+    assert!(d("none").is_empty());
+    let all = &d("Line-Through underline solid 2px #00f")[0];
+    assert_eq!(all.lines, [true, false, true]);
+    assert_eq!(all.color, color::parse("#00f").unwrap());
+    assert_eq!(all.thickness.as_ref().map(|t| t.resolve(16.0)), Some(2.0));
+    let reset = one(&[
+        ("textDecorationColor", text("red")),
+        ("textDecoration", text("underline")),
+    ]);
+    assert_eq!(reset.decorations[0].color, color::BLACK);
+    for (bad, message) in [
+        ("underline red overline", "twice"),
+        ("none underline", "is not a text-decoration-line"),
+        ("underline wavy", "wavy decorations are not supported yet"),
+        ("underline from-font", "from-font is not supported yet"),
+        ("underline 2", "needs a unit"),
+        ("blink", "is not a color"),
+    ] {
+        let e = error(&[("textDecoration", text(bad))]);
+        assert!(e.contains(message), "{bad}: {e}");
+    }
+    let e = error(&[("textDecorationThickness", num(-1.0))]);
+    assert!(e.contains("is negative"), "{e}");
+}
+
+#[test]
 fn text_properties_inherit() {
     let tree = vec![
         view(&[], &[1, 4]),
@@ -739,6 +818,8 @@ fn text_properties_inherit() {
         collapse: Collapse::Collapse,
         wrap: true,
         transform: TextTransform::None,
+        skip_ink: true,
+        underline_offset: None,
     };
     assert_eq!(s[0].font, initial);
     assert_eq!(s[0].color, color::BLACK);
@@ -759,6 +840,8 @@ fn text_properties_inherit() {
         collapse: Collapse::PreserveBreaks,
         wrap: true,
         transform: TextTransform::Uppercase,
+        skip_ink: true,
+        underline_offset: None,
     };
     assert_eq!(s[1].font, brand);
     assert_eq!(s[1].color, [1.0, 0.0, 0.0, 1.0]);

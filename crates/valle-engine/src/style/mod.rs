@@ -92,6 +92,9 @@ pub struct Style {
     pub visible: bool,
     pub color: Rgba,
     pub font: Font,
+    /// The text decorations its text takes: those of the boxes around it, outermost first, then
+    /// its own. A box out of flow takes none from around it.
+    pub decorations: Vec<Decoration>,
     /// The math functions with percentages in them that `layout` holds handles to.
     pub calcs: Vec<Calc>,
 }
@@ -134,6 +137,20 @@ impl Style {
             && o.x == taffy::Overflow::Visible
             && o.y == taffy::Overflow::Visible
     }
+}
+
+/// A text decoration as the box that declares it gives it to the text in it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Decoration {
+    /// Underline, overline and line-through.
+    pub lines: [bool; 3],
+    pub color: Rgba,
+    /// `text-decoration-thickness` and `text-underline-offset`, px and fractions of the font
+    /// size of the decorating box, which percentages are of; `None` is `auto`.
+    pub thickness: Option<Calc>,
+    pub offset: Option<Calc>,
+    /// The node that declares it.
+    pub by: usize,
 }
 
 /// `mix-blend-mode`: how a box's colors mix with those under it, numbered as shaders take them.
@@ -207,6 +224,11 @@ pub struct Font {
     pub collapse: Collapse,
     pub wrap: bool,
     pub transform: TextTransform,
+    /// `text-decoration-skip-ink: auto` (or `all`): underlines and overlines leave gaps where
+    /// glyphs cross them.
+    pub skip_ink: bool,
+    /// `text-underline-offset`, which a decoration takes from the box that declares it.
+    pub underline_offset: Option<Calc>,
 }
 
 impl Font {
@@ -223,6 +245,8 @@ impl Font {
             collapse: Collapse::Collapse,
             wrap: true,
             transform: TextTransform::None,
+            skip_ink: true,
+            underline_offset: None,
         }
     }
 }
@@ -321,7 +345,7 @@ impl Sheet {
         let canvas = canvas.map(f64::from);
         let mut out: Vec<Style> = Vec::with_capacity(self.nodes.len());
         let mut calcs = 0;
-        for (b, parent) in self.nodes.iter().zip(&self.parents) {
+        for (i, (b, parent)) in self.nodes.iter().zip(&self.parents).enumerate() {
             let declared = if b.rest.is_empty() {
                 Cow::Borrowed(&b.declared)
             } else {
@@ -336,7 +360,7 @@ impl Sheet {
                 Cow::Owned(d)
             };
             let parent = parent.map(|p| &out[p as usize]);
-            let mut style = compute(&declared, parent, canvas, calcs)
+            let mut style = compute(&declared, parent, canvas, calcs, i)
                 .map_err(|e| format!("{}: {e}", b.place))?;
             style.source = b.source;
             calcs += style.calcs.len();
@@ -749,6 +773,11 @@ struct Declared {
     backdrop: Vec<filter::Function<Len, Option<Rgba>>>,
     clip: Option<shape::Clip<Len>>,
     masks: background::Declared,
+    /// `text-decoration-*`: its lines (under, over, through), its color (`None` is
+    /// `currentcolor`) and its thickness.
+    decoration_lines: [bool; 3],
+    decoration_color: Option<Rgba>,
+    decoration_thickness: Len,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -763,6 +792,8 @@ struct Declared {
     collapse: Option<Collapse>,
     wrap: Option<bool>,
     text_transform: Option<TextTransform>,
+    skip_ink: Option<bool>,
+    underline_offset: Option<Len>,
 }
 
 impl Default for Declared {
@@ -826,6 +857,9 @@ impl Default for Declared {
             backdrop: Vec::new(),
             clip: None,
             masks: background::Declared::default(),
+            decoration_lines: [false; 3],
+            decoration_color: None,
+            decoration_thickness: AUTO,
             visible: None,
             color: None,
             font_size: None,
@@ -838,6 +872,8 @@ impl Default for Declared {
             collapse: None,
             wrap: None,
             text_transform: None,
+            skip_ink: None,
+            underline_offset: None,
         }
     }
 }
@@ -946,6 +982,13 @@ enum Field {
     WhiteSpaceCollapse,
     TextWrapMode,
     TextTransform,
+    TextDecoration,
+    TextDecorationLine,
+    TextDecorationColor,
+    TextDecorationStyle,
+    TextDecorationThickness,
+    TextDecorationSkipInk,
+    TextUnderlineOffset,
 }
 
 /// A declared box shadow; its color `None` is `currentcolor`.
@@ -995,7 +1038,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 186] = [
+const FIELDS: [(&str, Field); 193] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1290,6 +1333,13 @@ const FIELDS: [(&str, Field); 186] = [
     ("whiteSpaceCollapse", Field::WhiteSpaceCollapse),
     ("textWrapMode", Field::TextWrapMode),
     ("textTransform", Field::TextTransform),
+    ("textDecoration", Field::TextDecoration),
+    ("textDecorationLine", Field::TextDecorationLine),
+    ("textDecorationColor", Field::TextDecorationColor),
+    ("textDecorationStyle", Field::TextDecorationStyle),
+    ("textDecorationThickness", Field::TextDecorationThickness),
+    ("textDecorationSkipInk", Field::TextDecorationSkipInk),
+    ("textUnderlineOffset", Field::TextUnderlineOffset),
 ];
 
 impl Field {
@@ -1317,6 +1367,13 @@ impl Field {
                 | Field::WhiteSpaceCollapse
                 | Field::TextWrapMode
                 | Field::TextTransform
+                | Field::TextDecoration
+                | Field::TextDecorationLine
+                | Field::TextDecorationColor
+                | Field::TextDecorationStyle
+                | Field::TextDecorationThickness
+                | Field::TextDecorationSkipInk
+                | Field::TextUnderlineOffset
         )
     }
 }
@@ -1414,6 +1471,18 @@ const SPACING: Accept = Accept {
     keyword: Some("normal"),
     negative: true,
     percent: false,
+    sizing: &[],
+};
+const THICKNESS: Accept = Accept {
+    keyword: Some("auto"),
+    negative: false,
+    percent: true,
+    sizing: &[],
+};
+const UNDERLINE_OFFSET: Accept = Accept {
+    keyword: Some("auto"),
+    negative: true,
+    percent: true,
     sizing: &[],
 };
 
@@ -2330,8 +2399,110 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                 ],
             )?)
         }
+        F::TextDecoration => {
+            (
+                d.decoration_lines,
+                d.decoration_color,
+                d.decoration_thickness,
+            ) = decoration(v)?
+        }
+        F::TextDecorationLine => d.decoration_lines = decoration_lines(&text(v)?)?,
+        F::TextDecorationColor => d.decoration_color = current_color(v)?,
+        F::TextDecorationStyle => decoration_style(&text(v)?)?,
+        F::TextDecorationThickness => d.decoration_thickness = thickness_of(v)?,
+        F::TextDecorationSkipInk => {
+            let skips = [("auto", true), ("all", true), ("none", false)];
+            d.skip_ink = Some(keyword(v, &skips)?);
+        }
+        F::TextUnderlineOffset => d.underline_offset = Some(length(v, UNDERLINE_OFFSET)?),
     }
     Ok(())
+}
+
+const DECORATION_LINES: [&str; 3] = ["underline", "overline", "line-through"];
+const DECORATION_STYLES: [&str; 5] = ["solid", "double", "dotted", "dashed", "wavy"];
+
+/// `text-decoration`: `none`, or lines, a style, a color and a thickness in any order, each at
+/// most once, and the initial ones for those left out.
+fn decoration(v: &V) -> Result<([bool; 3], Option<Rgba>, Len), String> {
+    let s = text(v)?;
+    let words = css::words(&s);
+    if words.is_empty() {
+        return Err(format!("{} is not a text decoration", shown(v)));
+    }
+    let (mut lines, mut style, mut color, mut thickness) = (Vec::new(), None, None, None);
+    let mut after_line = false;
+    for w in words {
+        let word = &V::Str(w.into());
+        let line = w == "none" || DECORATION_LINES.contains(&w);
+        // The lines are one value: their words go together.
+        let twice = if line {
+            lines.push(w);
+            lines.len() > 1 && !after_line
+        } else if DECORATION_STYLES.contains(&w) {
+            style.replace(decoration_style(w)?).is_some()
+        } else if matches!(w, "auto" | "from-font") || css::num(w).is_some() || math::is_math(w) {
+            thickness.replace(thickness_of(word)?).is_some()
+        } else {
+            color.replace(current_color(word)?).is_some()
+        };
+        if twice {
+            return Err(format!(
+                "{s} sets its lines, style, color or thickness twice"
+            ));
+        }
+        after_line = line;
+    }
+    let lines = match lines.is_empty() {
+        true => [false; 3],
+        false => decoration_lines(&lines.join(" "))?,
+    };
+    Ok((lines, color.flatten(), thickness.unwrap_or(AUTO)))
+}
+
+/// `text-decoration-line`: `none`, or any of `underline`, `overline` and `line-through`.
+fn decoration_lines(s: &str) -> Result<[bool; 3], String> {
+    if s == "none" {
+        return Ok([false; 3]);
+    }
+    let mut lines = [false; 3];
+    for w in s.split_ascii_whitespace() {
+        match DECORATION_LINES.iter().position(|l| *l == w) {
+            Some(k) if !lines[k] => lines[k] = true,
+            _ => {
+                return Err(format!(
+                    "{s:?} is not a text-decoration-line: none, or underline, overline and \
+                     line-through, each at most once"
+                ));
+            }
+        }
+    }
+    match lines.contains(&true) {
+        true => Ok(lines),
+        false => Err(format!("{s:?} is not a text-decoration-line")),
+    }
+}
+
+/// `text-decoration-style`: so far `solid`.
+fn decoration_style(s: &str) -> Result<(), String> {
+    match s {
+        "solid" => Ok(()),
+        s if DECORATION_STYLES.contains(&s) => {
+            Err(format!("{s} decorations are not supported yet; use solid"))
+        }
+        s => Err(format!(
+            "{s:?} is not one of {}",
+            DECORATION_STYLES.join(", ")
+        )),
+    }
+}
+
+/// `text-decoration-thickness`: `auto`, or a length or a percentage of the font size.
+fn thickness_of(v: &V) -> Result<Len, String> {
+    match text(v).as_deref() {
+        Ok("from-font") => Err("from-font is not supported yet; use auto or a length".into()),
+        _ => length(v, THICKNESS),
+    }
 }
 
 const COLLAPSE: &[(&str, Collapse)] = &[
@@ -2404,6 +2575,7 @@ fn compute(
     parent: Option<&Style>,
     canvas: [f64; 2],
     first: usize,
+    node: usize,
 ) -> Result<Style, String> {
     let initial;
     let (inherited, inherited_color, inherited_visible, container) = match parent {
@@ -2448,6 +2620,12 @@ fn compute(
         collapse: d.collapse.unwrap_or(inherited.collapse),
         wrap: d.wrap.unwrap_or(inherited.wrap),
         transform: d.text_transform.unwrap_or(inherited.transform),
+        skip_ink: d.skip_ink.unwrap_or(inherited.skip_ink),
+        underline_offset: match &d.underline_offset {
+            None => inherited.underline_offset.clone(),
+            Some(Len::Auto) => None,
+            Some(l) => Some(l.calc(units(size))),
+        },
     };
     let display = match d.display {
         Shown::Block => Display::Block,
@@ -2477,6 +2655,23 @@ fn compute(
     };
     let u = units(size);
     let color = d.color.unwrap_or(inherited_color);
+    let out_of_flow = matches!(d.position, Position::Absolute | Position::Fixed);
+    let mut decorations = match parent {
+        Some(p) if !out_of_flow => p.decorations.clone(),
+        _ => Vec::new(),
+    };
+    if d.decoration_lines.contains(&true) {
+        decorations.push(Decoration {
+            lines: d.decoration_lines,
+            color: d.decoration_color.unwrap_or(color),
+            thickness: match &d.decoration_thickness {
+                Len::Auto => None,
+                l => Some(l.calc(u)),
+            },
+            offset: font.underline_offset.clone(),
+            by: node,
+        });
+    }
     let width = |style, width: &Len| match style {
         BorderStyle::None => 0.0,
         BorderStyle::Solid => snapped(width.px(u, 0.0)),
@@ -2598,6 +2793,7 @@ fn compute(
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,
+        decorations,
         calcs: l.calcs,
     })
 }

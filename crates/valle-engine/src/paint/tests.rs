@@ -951,6 +951,18 @@ fn spans_paint_their_text_in_their_own_style() {
 }
 
 #[test]
+fn text_paints_line_throughs_over_its_glyphs_and_other_lines_under() {
+    let style = [
+        ("color", "black"),
+        ("textDecoration", "underline overline line-through red"),
+    ];
+    let (items, _) = paint_of(vec![text_node("x", &style)], &[0]);
+    assert_eq!(names(&items), ["red", "red", "text black", "red"]);
+    let hidden = [("visibility", "hidden"), ("textDecoration", "underline")];
+    assert!(paint_of(vec![text_node("x", &hidden)], &[0]).0.is_empty());
+}
+
+#[test]
 fn a_mask_element_shows_what_its_box_paints_through_its_source() {
     let masked = |source: (u32, bool, bool), shown: &[u32]| {
         paint_of(

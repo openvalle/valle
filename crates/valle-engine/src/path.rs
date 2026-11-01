@@ -125,6 +125,62 @@ pub fn cubic(points: [Point; 4], tolerance: f32, out: &mut Vec<Curve>) {
     }
 }
 
+/// The left and right of where curves are between heights `lo` and `hi`, if they are there: from
+/// their ends, where they cross the two heights, and their turns left and right, in that band.
+pub fn across(curves: &[Curve], lo: f32, hi: f32) -> Option<[f32; 2]> {
+    // Crossings computed in f32 land a little off the heights they cross.
+    let near = (hi - lo).abs().max(1.0) * 1e-4;
+    let mut out: Option<[f32; 2]> = None;
+    for &[p0, p1, p2] in curves {
+        let ys = [p0[1], p1[1], p2[1]];
+        if ys.iter().all(|&y| y < lo) || ys.iter().all(|&y| y > hi) {
+            continue;
+        }
+        let at = |t: f32, k: usize| {
+            let s = 1.0 - t;
+            s * s * p0[k] + 2.0 * s * t * p1[k] + t * t * p2[k]
+        };
+        let mut ts = [0.0, 1.0, f32::NAN, f32::NAN, f32::NAN, f32::NAN, f32::NAN];
+        // y = a t² + b t + p0.y, and x likewise.
+        let a = p0[1] - 2.0 * p1[1] + p2[1];
+        let b = 2.0 * (p1[1] - p0[1]);
+        for (k, h) in [lo, hi].into_iter().enumerate() {
+            let c = p0[1] - h;
+            if a.abs() < 1e-6 {
+                if b != 0.0 {
+                    ts[2 + 2 * k] = -c / b;
+                }
+            } else {
+                let d = b * b - 4.0 * a * c;
+                if d >= 0.0 {
+                    let r = d.sqrt();
+                    ts[2 + 2 * k] = (-b - r) / (2.0 * a);
+                    ts[3 + 2 * k] = (-b + r) / (2.0 * a);
+                }
+            }
+        }
+        let ax = p0[0] - 2.0 * p1[0] + p2[0];
+        if ax != 0.0 {
+            ts[6] = (p0[0] - p1[0]) / ax;
+        }
+        for t in ts {
+            if !(0.0..=1.0).contains(&t) {
+                continue;
+            }
+            let y = at(t, 1);
+            if y < lo - near || y > hi + near {
+                continue;
+            }
+            let x = at(t, 0);
+            out = Some(match out {
+                None => [x, x],
+                Some([x0, x1]) => [x0.min(x), x1.max(x)],
+            });
+        }
+    }
+    out
+}
+
 /// SVG path data (SVG 2, 9.3.9): commands, each a letter, upper case for absolute points and
 /// lower case for points relative to where the path is, and their numbers, which may repeat for
 /// the command again; a subpath starts with a move.

@@ -35,6 +35,8 @@ fn font(size: f64) -> Font {
         collapse: Collapse::Collapse,
         wrap: true,
         transform: TextTransform::None,
+        skip_ink: true,
+        underline_offset: None,
     }
 }
 
@@ -250,4 +252,21 @@ fn pieces_shape_in_their_own_fonts_on_shared_lines() {
     };
     assert_eq!(t.measure(&small, None).unwrap()[1], 43.0);
     assert_eq!(t.metrics(&normal).unwrap()[0].round(), 17.0);
+}
+
+#[test]
+fn ink_is_where_a_glyph_crosses_a_band() {
+    let mut t = text();
+    let f = font(20.0);
+    let lines = t.lines(&plain("xg", &f), 1000.0).unwrap();
+    assert_eq!(lines.runs[0].glyphs, [0, 2]);
+    let [x, g] = [lines.glyphs[0], lines.glyphs[1]];
+    let below = [1.5, 2.5];
+    assert_eq!(t.ink(x.face, x.id, 20.0, below).unwrap(), None);
+    let [left, right] = t.ink(g.face, g.id, 20.0, below).unwrap().unwrap();
+    // The g's tail, within its advance.
+    assert!(
+        0.0 < left && left < right && right < g.x - x.x,
+        "{left} {right}"
+    );
 }

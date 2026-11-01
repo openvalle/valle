@@ -1,0 +1,22 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 320px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px; color: #263238;\"><div data-n=\"1\" data-text style=\"background: #eceff1; margin-bottom: 4px; font-size: 20px; text-decoration: underline; text-decoration-color: rgb(38 50 56 / 1);\">Hamburger gyp</div><div data-n=\"2\" data-text style=\"background: #eceff1; margin-bottom: 4px; font-size: 20px; text-decoration: underline; text-decoration-skip-ink: none; text-decoration-color: rgb(38 50 56 / 1);\">Hamburger gyp</div><div data-n=\"3\" data-text style=\"background: #eceff1; margin-bottom: 4px; font-size: 14px; text-decoration: overline line-through #e53935; text-decoration-color: rgb(229 57 53 / 1);\">Struck through and over</div><div data-n=\"4\" data-text style=\"background: #eceff1; margin-bottom: 4px; text-decoration: underline 3px #1e88e5; text-underline-offset: 4px; text-decoration-color: rgb(30 136 229 / 1);\">Thick and lower, jumpy</div><div data-n=\"5\" style=\"position: relative; font-size: 12px; text-decoration: underline #00897b; text-decoration-color: rgb(0 137 123 / 1);\"><div data-n=\"6\" style=\"display: flex;\"><div data-n=\"7\" data-text style=\"background: #eceff1; margin-bottom: 4px;\">In a flex row</div></div><div data-n=\"8\" data-text style=\"position: absolute; right: 0; top: 0;\">absolute</div></div><div data-n=\"9\" data-text style=\"background: #eceff1; margin-bottom: 4px; text-decoration: line-through; text-decoration-color: rgb(38 50 56 / 1);\">Small <span data-n=\"10\" style=\"font-size: 26px; color: #8e24aa; text-decoration: underline 10% #8e24aa; text-decoration-color: rgb(142 36 170 / 1);\">Big</span> small</div><div data-n=\"11\" data-text style=\"background: #eceff1; margin-bottom: 4px; width: 150px; text-decoration: underline; text-decoration-color: rgb(38 50 56 / 1);\">Before <span data-n=\"12\" style=\"color: #00897b; text-decoration-line: overline; text-decoration-color: rgb(0 137 123 / 1);\">a span that breaks</span> after</div><div data-n=\"13\" data-text style=\"background: #eceff1; margin-bottom: 4px; text-decoration: underline; text-decoration-color: rgb(38 50 56 / 1);\">shown <span data-n=\"14\" style=\"visibility: hidden;\">hidden</span> shown</div></div></div>\n",
+ "boxes": [
+  [0,0,256,254],
+  [4,4,248,27],
+  [4,35,248,27],
+  [4,66,248,19],
+  [4,89,248,22],
+  [4,115,248,21],
+  [4,115,248,21],
+  [4,115,68.859375,17],
+  [203.265625,115,48.734375,17],
+  [4,136,248,36],
+  [49.140625,136,39.609375,36],
+  [4,176,150,44],
+  [4,176,138.1875,44],
+  [4,224,248,22],
+  [57.546875,224,52.609375,22]
+ ],
+ "lines": {"1":["Hamburger gyp"],"2":["Hamburger gyp"],"3":["Struck through and over"],"4":["Thick and lower, jumpy"],"7":["In a flex row"],"8":["absolute"],"9":["Small Big small"],"11":["Before a span that","breaks after"],"13":["shown hidden shown"]}
+}

@@ -152,3 +152,26 @@ fn cubic_curves_split_into_quadratic_ones_within_the_tolerance() {
         }
     }
 }
+
+#[test]
+fn across_finds_where_curves_are_in_a_band() {
+    // A diamond of lines from (0, 0) to (10, 10) and back, and a bowl from (0, 10) down to y 0
+    // at x 5 and up to (10, 10).
+    let line = |a: Point, b: Point| [a, [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], b];
+    let diamond = [
+        line([5.0, 0.0], [10.0, 5.0]),
+        line([10.0, 5.0], [5.0, 10.0]),
+        line([5.0, 10.0], [0.0, 5.0]),
+        line([0.0, 5.0], [5.0, 0.0]),
+    ];
+    assert_eq!(across(&diamond, 1.0, 2.0), Some([3.0, 7.0]));
+    assert_eq!(across(&diamond, 4.0, 6.0), Some([0.0, 10.0]));
+    assert_eq!(across(&diamond, 11.0, 12.0), None);
+    let bowl = [[[0.0, 10.0], [5.0, -10.0], [10.0, 10.0]]];
+    let [x0, x1] = across(&bowl, 0.0, 1.0).unwrap();
+    // x = 10 t and y = 10 (1 - 2t)²: it touches 0 at x 5, and is at 1 where t is ½ ∓ √0.1 / 2.
+    assert!(
+        (x0 - 3.419).abs() < 0.001 && (x1 - 6.581).abs() < 0.001,
+        "{x0} {x1}"
+    );
+}

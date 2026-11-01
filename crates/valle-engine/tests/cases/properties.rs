@@ -1900,6 +1900,92 @@ const ROWS: &[Row] = &[
         ],
         refused: &["\"full-width\"", "\"small-caps\"", "1"],
     },
+    Row {
+        properties: &["textDecoration"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>gyp jumpy</Text></View>"##,
+        values: &[
+            "\"none\"",
+            "\"underline\"",
+            "\"overline line-through\"",
+            "\"underline 3px #e53935\"",
+            "\"line-through solid 0.2em\"",
+            "\" Underline Overline currentColor auto \"",
+        ],
+        refused: &[
+            "\"wavy underline\"",
+            "\"underline red blue\"",
+            "\"underline line-through underline\"",
+            "\"blink\"",
+            "1",
+        ],
+    },
+    Row {
+        properties: &["textDecorationLine"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, PROPERTY: VALUE }}>gyp jumpy</Text></View>"##,
+        values: &[
+            "\"none\"",
+            "\"underline\"",
+            "\"overline\"",
+            "\"line-through\"",
+            "\"underline line-through\"",
+            "\" Overline \"",
+        ],
+        refused: &[
+            "\"underline underline\"",
+            "\"blink\"",
+            "\"spelling-error\"",
+            "1",
+        ],
+    },
+    Row {
+        properties: &["textDecorationColor"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, textDecorationLine: "underline", textDecorationThickness: 3, PROPERTY: VALUE }}>gyp jumpy</Text></View>"##,
+        values: &[
+            "\"#e53935\"",
+            "\"currentcolor\"",
+            "\"rgb(0 0 255 / 50%)\"",
+            "\"transparent\"",
+        ],
+        refused: &["\"banana\"", "1"],
+    },
+    Row {
+        properties: &["textDecorationStyle"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, textDecorationLine: "underline", PROPERTY: VALUE }}>gyp jumpy</Text></View>"##,
+        values: &["\"solid\"", "\" SOLID \""],
+        refused: &[
+            "\"wavy\"",
+            "\"double\"",
+            "\"dotted\"",
+            "\"dashed\"",
+            "\"zigzag\"",
+        ],
+    },
+    Row {
+        properties: &["textDecorationThickness"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, textDecorationLine: "underline", PROPERTY: VALUE }}>gyp jumpy</Text></View>"##,
+        values: &[
+            "\"auto\"",
+            "1",
+            "3",
+            "\"0.5px\"",
+            "\"0.3em\"",
+            "\"25%\"",
+            "\"calc(1px + 10%)\"",
+        ],
+        refused: &["\"from-font\"", "-1", "\"thick\""],
+    },
+    Row {
+        properties: &["textDecorationSkipInk"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, textDecorationLine: "underline overline", PROPERTY: VALUE }}>gyp jumpy</Text></View>"##,
+        values: &["\"auto\"", "\"none\"", "\"all\""],
+        refused: &["\"skip\"", "1"],
+    },
+    Row {
+        properties: &["textUnderlineOffset"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 14, textDecorationLine: "underline", PROPERTY: VALUE }}>gyp jumpy</Text></View>"##,
+        values: &["\"auto\"", "0", "4", "-3", "\"0.5em\"", "\"30%\""],
+        refused: &["\"far\"", "true"],
+    },
 ];
 
 /// The cases, by path from `tests/cases`, and their source; `chrome` is every CSS property the

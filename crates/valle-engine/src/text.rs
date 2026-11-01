@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -18,6 +19,9 @@ use parley::{
     LayoutContext, PositionedLayoutItem, StyleProperty, TextWrapMode, WhiteSpaceCollapse,
 };
 
+use crate::path::{self, Curve};
+use crate::slug;
+use crate::style::color::Rgba;
 use crate::style::{Collapse, Family, Font, LineHeight, TextAlign, TextTransform};
 use crate::template::Error;
 
@@ -56,12 +60,24 @@ pub struct Glyph {
 }
 
 /// A run of glyphs of one node on a line, with its left and right edges, less the white space
-/// that hangs at the end of the line.
+/// that hangs at the end of the line, and the range of its glyphs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Run {
     pub node: u32,
     pub line: u32,
     pub x: [f32; 2],
+    pub glyphs: [u32; 2],
+}
+
+/// A line of a text decoration over a run, or a piece of one between the gaps it leaves for
+/// glyphs: left, top, right and bottom, px from the text box's top left. It shows where the run's
+/// `node` does, and goes over the glyphs if it is a line-through.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stripe {
+    pub rect: [f32; 4],
+    pub color: Rgba,
+    pub node: u32,
+    pub through: bool,
 }
 
 /// A paragraph broken into lines at a width and aligned in it.
@@ -75,6 +91,8 @@ pub struct Lines {
     /// The text as white space collapses it, and each line's byte range of it.
     pub string: Rc<str>,
     pub text: Vec<Range<usize>>,
+    /// Its text decorations, which layout gives it.
+    pub decorations: Vec<Stripe>,
 }
 
 /// What shaping a piece and breaking it into lines depend on.
@@ -126,6 +144,8 @@ pub struct Text {
     /// The ascent, descent and line gap of each font's first face, px.
     metrics: HashMap<Shaping, [f32; 3]>,
     faces: Vec<Face>,
+    /// Glyph outlines by face and glyph id, in font units y up, and their units per em.
+    outlines: HashMap<(u32, u32), (f32, Vec<Curve>)>,
 }
 
 impl Text {
@@ -150,6 +170,7 @@ impl Text {
             paragraphs: HashMap::new(),
             metrics: HashMap::new(),
             faces: Vec::new(),
+            outlines: HashMap::new(),
         })
     }
 
@@ -213,6 +234,7 @@ impl Text {
                 baselines: Vec::new(),
                 string,
                 text: Vec::new(),
+                decorations: Vec::new(),
             });
         }
         p.layout.align(alignment, AlignmentOptions::default());
@@ -250,6 +272,7 @@ impl Text {
                     node,
                     line: i as u32,
                     x: [run.offset(), x],
+                    glyphs: [0, 0],
                 });
                 shaped.push((face, node, glyphs));
             }
@@ -262,7 +285,8 @@ impl Text {
             }
         }
         let mut glyphs = Vec::new();
-        for (face, node, list) in shaped {
+        for (run, (face, node, list)) in runs.iter_mut().zip(shaped) {
+            run.glyphs = [glyphs.len() as u32, (glyphs.len() + list.len()) as u32];
             let face = self.face(face);
             glyphs.extend((list.into_iter()).map(|(id, x, y)| Glyph {
                 face,
@@ -279,7 +303,30 @@ impl Text {
             baselines,
             string,
             text,
+            decorations: Vec::new(),
         })
+    }
+
+    /// The left and right, px from its origin, of where glyph `id` of `faces()[face]` at `size`
+    /// px has ink between `band` px below its baseline, if it has any there.
+    pub fn ink(
+        &mut self,
+        face: u32,
+        id: u32,
+        size: f32,
+        band: [f32; 2],
+    ) -> Result<Option<[f32; 2]>, Error> {
+        let (em, curves) = match self.outlines.entry((face, id)) {
+            Entry::Occupied(o) => o.into_mut(),
+            Entry::Vacant(v) => {
+                let (em, contours) = slug::contours(&self.faces[face as usize], id)?;
+                v.insert((em, contours.concat()))
+            }
+        };
+        let k = size / *em;
+        // Font units are y up.
+        let x = path::across(curves, -band[1] / k, -band[0] / k);
+        Ok(x.map(|x| x.map(|x| x * k)))
     }
 
     /// The ascent, descent and line gap, px, of the first face of `font`, at its size and

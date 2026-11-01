@@ -433,6 +433,76 @@ fn spans_are_boxes_of_their_text_on_its_lines() {
 }
 
 #[test]
+fn decorations_are_lines_on_runs_with_gaps_at_ink() {
+    let style = |skip: &str| {
+        let style = [
+            ("fontSize", "20px"),
+            ("lineHeight", "30px"),
+            ("textDecoration", "underline line-through"),
+            ("textDecorationSkipInk", skip),
+        ];
+        let l = lay(vec![text_node("Hugs", &style)], &[0]).unwrap();
+        l.lines[0].clone().unwrap()
+    };
+    let lines = style("auto");
+    let b = lines.baselines[0];
+    let run = lines.runs[0];
+    let (under, through): (Vec<&Stripe>, Vec<_>) =
+        lines.decorations.iter().partition(|d| !d.through);
+    // 2 px thick, 1 px under the baseline, and broken where the g goes through it, in whole px.
+    let top = (b + 1.0).round();
+    assert_eq!(under.len(), 2);
+    for d in &under {
+        assert_eq!([d.rect[1], d.rect[3]], [top, top + 2.0]);
+    }
+    assert_eq!([under[0].rect[0], under[1].rect[2]], run.x);
+    let gap = [under[0].rect[2], under[1].rect[0]];
+    let g = lines.glyphs[2].x;
+    assert!(gap[0].fract() == 0.0 && gap[1].fract() == 0.0, "{gap:?}");
+    assert!(
+        gap[0] < g + 5.0 && g + 5.0 < gap[1],
+        "{gap:?} for the g at {g}"
+    );
+    // A third of the ascent, 21 px, over the baseline, centered.
+    assert_eq!(through.len(), 1);
+    assert_eq!(through[0].rect[1], (b - 7.0 - 1.0).round());
+    assert_eq!(style("none").decorations.len(), 2);
+}
+
+#[test]
+fn a_decoration_takes_the_font_of_its_decorating_box() {
+    let piece = |s: &str| template::Piece::Text(Prop::Const(V::Str(s.into())));
+    let mut text = text_node("", &[("textDecoration", "line-through")]);
+    text.kind = Kind::Text {
+        content: vec![piece("aa"), template::Piece::Span(1)],
+    };
+    text.children = vec![1];
+    let mut span = view(&[("fontSize", "32px"), ("textDecoration", "overline")], &[]);
+    span.kind = Kind::Span {
+        content: vec![piece("bb")],
+    };
+    let l = lay(vec![text, span], &[0]).unwrap();
+    let lines = l.lines[0].as_ref().unwrap();
+    let b = lines.baselines[0];
+    let on = |node: u32| -> Vec<[f32; 2]> {
+        (lines.decorations.iter())
+            .filter(|d| d.node == node)
+            .map(|d| [d.rect[1], d.rect[3]])
+            .collect()
+    };
+    // The Text's line-through, 1.6 px drawn as 1, is two thirds of the Text's ascent, 17 px,
+    // under each run's ascent: the Text's 17 px, and the big Span's 34.
+    let through = |ascent: f32| {
+        let top = (b - ascent + 17.0 * 2.0 / 3.0 - 0.8).round();
+        [top, top + 1.0]
+    };
+    assert_eq!(on(0), [through(17.0)]);
+    // The Span's overline, 3.2 px drawn as 3, is on its ascent.
+    let over = (b - 34.0 - 3.0).round();
+    assert_eq!(on(1), [through(34.0), [over, over + 3.0]]);
+}
+
+#[test]
 fn flex_items_align_on_the_first_baseline_of_text() {
     let l = lay(
         vec![

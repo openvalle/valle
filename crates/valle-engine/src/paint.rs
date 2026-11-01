@@ -21,7 +21,8 @@
 //! own, but what it contains still paints if visible. A box's background, its color and then its
 //! images, the first on top, paints over its outer shadows, and its inner shadows and border over
 //! the background; it is a layer of its own when an image blends, which blends with what is
-//! under it in the background alone.
+//! under it in the background alone. Text paints its underlines and overlines, its glyphs, then
+//! its line-throughs.
 //!
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
@@ -52,7 +53,7 @@ use crate::style::gradient::Image;
 use crate::style::transform::Function;
 use crate::style::{Blend, Shadow, Style};
 use crate::template::{Kind, Template};
-use crate::text::Glyph;
+use crate::text::{Glyph, Stripe};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
@@ -1262,6 +1263,15 @@ impl Painter<'_> {
             true => Some(i),
             false => self.clips[i].last().copied(),
         };
+        // Underlines and overlines go under the glyphs, and line-throughs over them.
+        let stripes = |through: bool, out: &mut Drawn| {
+            for d in lines.decorations.iter().filter(|d| d.through == through) {
+                if let Some(item) = self.stripe(d, at) {
+                    out.push((clip, item));
+                }
+            }
+        };
+        stripes(false, out);
         // Each run in the style of the Text or Span it is in.
         let same = |a: &Glyph, b: &Glyph| a.face == b.face && a.node == b.node;
         for run in lines.glyphs.chunk_by(same) {
@@ -1281,6 +1291,26 @@ impl Painter<'_> {
             };
             out.push((clip, item));
         }
+        stripes(true, out);
+    }
+
+    /// A decoration's line from `at`, where its run shows.
+    fn stripe(&self, d: &Stripe, at: Rect) -> Option<Item> {
+        let color = work(d.color);
+        if !self.styles[d.node as usize].visible || color[3] <= 0.0 {
+            return None;
+        }
+        let [x0, y0, x1, y1] = d.rect;
+        Some(Item::Rect {
+            rect: Rect {
+                x: at.x + x0,
+                y: at.y + y0,
+                width: x1 - x0,
+                height: y1 - y0,
+            },
+            radii: SQUARE,
+            color,
+        })
     }
 
     /// The items inside the clips they are under: runs of items under a clip share it.
