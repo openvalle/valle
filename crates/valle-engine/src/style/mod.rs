@@ -30,6 +30,7 @@ use taffy::{
 use color::Rgba;
 use math::{Calc, Math};
 
+use crate::front::Slot;
 use crate::template::{Error, Kind, Node, Prop, Template, V};
 
 /// The root font size: `rem`.
@@ -528,8 +529,13 @@ impl Sheet {
     }
 
     /// Every node's computed style for the program's values at one frame on a canvas of `canvas`
-    /// px, in template order.
-    pub fn compute(&self, values: &[V], canvas: [f32; 2]) -> Result<Vec<Style>, Error> {
+    /// px, in template order, in a scene of these `resources`.
+    pub fn compute(
+        &self,
+        values: &[V],
+        canvas: [f32; 2],
+        resources: &[Slot],
+    ) -> Result<Vec<Style>, Error> {
         let canvas = canvas.map(f64::from);
         let mut out: Vec<Style> = Vec::with_capacity(self.nodes.len());
         let mut calcs = 0;
@@ -548,7 +554,7 @@ impl Sheet {
                 Cow::Owned(d)
             };
             let parent = parent.map(|p| &out[p as usize]);
-            let mut style = compute(&declared, parent, canvas, calcs, i, b.text)
+            let mut style = compute(&declared, parent, canvas, calcs, i, b.text, resources)
                 .map_err(|e| format!("{}: {e}", b.place))?;
             style.source = b.source;
             calcs += style.calcs.len();
@@ -3349,6 +3355,7 @@ fn compute(
     first: usize,
     node: usize,
     text: bool,
+    resources: &[Slot],
 ) -> Result<Style, String> {
     let initial;
     let (inherited, inherited_color, inherited_visible, container) = match parent {
@@ -3553,7 +3560,7 @@ fn compute(
         order: d.order,
         z_index: d.z_index,
         background: d.background,
-        layers: d.layers.computed(u, color, background::Area::PaddingBox),
+        layers: (d.layers).computed(u, color, background::Area::PaddingBox, resources)?,
         radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
         border,
         border_colors: d.border_color.map(|c| c.unwrap_or(color)),
@@ -3611,7 +3618,7 @@ fn compute(
             .all(|i| matches!(i, gradient::Image::None))
         {
             true => Vec::new(),
-            false => d.masks.computed(u, color, background::Area::BorderBox),
+            false => (d.masks).computed(u, color, background::Area::BorderBox, resources)?,
         },
         source: None,
         visible: d.visible.unwrap_or(inherited_visible),

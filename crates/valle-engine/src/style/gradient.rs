@@ -1,20 +1,26 @@
-//! Background images: gradients so far. A gradient is a line through its image, or ellipses or
-//! angles around a point in it, the color space its colors mix in, and color stops along the
-//! line, out from the point or around it, with hints between them.
+//! Background images: gradients, and resources' images. A gradient is a line through its image,
+//! or ellipses or angles around a point in it, the color space its colors mix in, and color stops
+//! along the line, out from the point or around it, with hints between them.
+
+use std::rc::Rc;
 
 use super::color::Rgba;
 use super::css::{self, angle};
 use super::math::{self, Calc};
 use super::position::{Offset, position};
 use super::{Accept, Len, Units, current_color, length_text};
+use crate::front::Slot;
 use crate::template::V;
 
-/// A `background-image` layer, its stop positions `P` (declared lengths, then px and fractions
-/// of the gradient line) and colors `C` (declared, `None` is `currentcolor`).
+/// A `background-image` or `mask-image` layer, its stop positions `P` (declared lengths, then px
+/// and fractions of the gradient line), colors `C` (declared, `None` is `currentcolor`) and
+/// resources `R` (declared by name, then by their number in the scene).
 #[derive(Clone, Debug, PartialEq)]
-pub enum Image<P = Calc, C = Rgba> {
+pub enum Image<P = Calc, C = Rgba, R = u32> {
     None,
     Gradient(Gradient<P, C>),
+    /// A resource's image.
+    Url(R),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -93,7 +99,7 @@ pub enum Hue {
 }
 
 /// An image as declared.
-pub(super) type Declared = Image<Len, Option<Rgba>>;
+pub(super) type Declared = Image<Len, Option<Rgba>, Rc<str>>;
 
 /// Stop positions and hints: px or percentages of the gradient line, either side of it.
 const POSITION: Accept = Accept {
@@ -123,7 +129,7 @@ const SIZES: [(&str, Size<Len>); 4] = [
     ("farthest-corner", Size::FarthestCorner),
 ];
 
-/// `none` or a gradient.
+/// `none`, a gradient, or `url()` of a resource.
 pub(super) fn image(s: &str) -> Result<Declared, String> {
     if s == "none" {
         return Ok(Image::None);
@@ -131,18 +137,34 @@ pub(super) fn image(s: &str) -> Result<Declared, String> {
     let Some((name, args)) = css::function(s) else {
         return Err(format!("{s} is not an image"));
     };
-    let at = |e: String| format!("{name}(): {e}");
-    match name {
-        "linear-gradient" => linear(args, false).map_err(at),
-        "repeating-linear-gradient" => linear(args, true).map_err(at),
-        "radial-gradient" => radial(args, false).map_err(at),
-        "repeating-radial-gradient" => radial(args, true).map_err(at),
-        "conic-gradient" => conic(args, false).map_err(at),
-        "repeating-conic-gradient" => conic(args, true).map_err(at),
-        "url" => Err("url() images are not supported yet".into()),
-        _ => Err(format!("{s} is not an image")),
+    let gradient = match name {
+        "linear-gradient" => linear(args, false),
+        "repeating-linear-gradient" => linear(args, true),
+        "radial-gradient" => radial(args, false),
+        "repeating-radial-gradient" => radial(args, true),
+        "conic-gradient" => conic(args, false),
+        "repeating-conic-gradient" => conic(args, true),
+        "url" => return url(args).map(Image::Url),
+        _ => return Err(format!("{s} is not an image")),
+    };
+    gradient
+        .map(Image::Gradient)
+        .map_err(|e| format!("{name}(): {e}"))
+}
+
+/// The name of the resource `url()` gives, quoted or not.
+fn url(args: &str) -> Result<Rc<str>, String> {
+    let s = args.trim();
+    let bare = (['"', '\''])
+        .iter()
+        .find_map(|&q| s.strip_prefix(q)?.strip_suffix(q));
+    match bare.unwrap_or(s).strip_prefix("resource://") {
+        Some(name) if !name.is_empty() => Ok(name.into()),
+        _ => Err(format!(
+            "url({s}): an image is a resource declared in controls.resources, such as \
+             url(\"resource://logo\")"
+        )),
     }
-    .map(Image::Gradient)
 }
 
 /// A linear gradient's arguments: which way it goes, its color space, and its stops.
@@ -449,11 +471,25 @@ fn color_stops(
 }
 
 impl Declared {
-    /// The image computed: lengths in px and fractions of the gradient line, and `currentcolor`
-    /// the `current` color.
-    pub(super) fn computed(&self, u: Units, current: Rgba) -> Image {
-        match self {
+    /// The image computed: lengths in px and fractions of the gradient line, `currentcolor` the
+    /// `current` color, and a resource its number among the scene's `resources`.
+    pub(super) fn computed(
+        &self,
+        u: Units,
+        current: Rgba,
+        resources: &[Slot],
+    ) -> Result<Image, String> {
+        Ok(match self {
             Image::None => Image::None,
+            Image::Url(name) => match resources.iter().position(|r| *r.name == **name) {
+                Some(i) => Image::Url(i as u32),
+                None => {
+                    return Err(format!(
+                        "url(resource://{name}): the scene declares no resource {name} in \
+                         controls.resources"
+                    ));
+                }
+            },
             Image::Gradient(g) => Image::Gradient(Gradient {
                 shape: match &g.shape {
                     Shape::Linear(line) => Shape::Linear(*line),
@@ -484,6 +520,6 @@ impl Declared {
                     })
                     .collect(),
             }),
-        }
+        })
     }
 }

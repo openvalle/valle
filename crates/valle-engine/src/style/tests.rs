@@ -33,8 +33,16 @@ fn sheet(nodes: Vec<Node>) -> Result<Sheet, Error> {
     })
 }
 
+/// The scene's resources: photo, then tile.
+fn resources() -> [Slot; 2] {
+    ["photo", "tile"].map(|name| Slot {
+        name: name.into(),
+        default: None,
+    })
+}
+
 fn styles(nodes: Vec<Node>, values: &[V]) -> Result<Vec<Style>, Error> {
-    sheet(nodes)?.compute(values, CANVAS)
+    sheet(nodes)?.compute(values, CANVAS, &resources())
 }
 
 fn one(style: &[(&str, Prop)]) -> Style {
@@ -1354,18 +1362,20 @@ fn expressions_are_set_in_declaration_order() {
     );
     let sheet = sheet(vec![view(&[("width", Prop::Expr(0))], &[])]).unwrap();
     assert_eq!(
-        sheet.compute(&[V::Num(5.0)], CANVAS).unwrap()[0]
+        sheet.compute(&[V::Num(5.0)], CANVAS, &[]).unwrap()[0]
             .layout
             .size
             .width,
         Dimension::length(5.0)
     );
     assert_eq!(
-        sheet.compute(&[V::Str("abc".into())], CANVAS).unwrap_err(),
+        sheet
+            .compute(&[V::Str("abc".into())], CANVAS, &[])
+            .unwrap_err(),
         "s.tsx:1:1: style width: abc is not a length"
     );
     assert_eq!(
-        sheet.compute(&[V::Bool(true)], CANVAS).unwrap_err(),
+        sheet.compute(&[V::Bool(true)], CANVAS, &[]).unwrap_err(),
         "s.tsx:1:1: style width: true is not a length"
     );
 }
@@ -1518,7 +1528,7 @@ fn backgrounds_take_gradients_over_a_color() {
                 Stop::Hint(at) => (None, Some(at.resolve(100.0))),
             })
             .collect(),
-        Image::None => Vec::new(),
+        Image::None | Image::Url(_) => Vec::new(),
     };
     let s = one(&[
         ("color", text("blue")),
@@ -1571,6 +1581,34 @@ fn backgrounds_take_gradients_over_a_color() {
         Space::Oklch(Hue::Shorter)
     );
     assert_eq!(images(&[("background", text("none"))]), [Image::None]);
+}
+
+#[test]
+fn backgrounds_and_masks_take_images_of_resources() {
+    use background::ImageSize;
+    use gradient::Image;
+    assert_eq!(
+        images(&[(
+            "backgroundImage",
+            text("url(resource://tile), url(\"resource://photo\")")
+        )]),
+        [Image::Url(1), Image::Url(0)]
+    );
+    let s = one(&[
+        (
+            "background",
+            text("url('resource://photo') center / cover no-repeat"),
+        ),
+        ("maskImage", text("url(resource://tile)")),
+    ]);
+    assert_eq!(s.layers[0].image, Image::Url(0));
+    assert_eq!(s.layers[0].size, ImageSize::Cover);
+    assert_eq!(s.masks[0].image, Image::Url(1));
+    assert_eq!(
+        error(&[("backgroundImage", text("url(resource://logo)"))]),
+        "s.tsx:1:1: url(resource://logo): the scene declares no resource logo in \
+         controls.resources"
+    );
 }
 
 #[test]
@@ -2523,7 +2561,7 @@ fn what_is_not_supported_is_an_error() {
         (
             "background",
             text("url(a.png)"),
-            "images are not supported yet",
+            "url(a.png): an image is a resource declared in controls.resources",
         ),
         (
             "background",
@@ -2809,7 +2847,8 @@ fn what_is_not_supported_is_an_error() {
         (
             "maskImage",
             text("url(a.png)"),
-            "url() images are not supported yet",
+            "url(a.png): an image is a resource declared in controls.resources, such as \
+             url(\"resource://logo\")",
         ),
         ("clipPath", text(""), "\"\" is not a clip path; use none"),
         ("clipPath", num(0.0), "0 is not a string"),

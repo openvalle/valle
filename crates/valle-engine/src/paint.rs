@@ -250,18 +250,40 @@ fn spread(radii: Radii, by: f32) -> Radii {
     })
 }
 
-/// A background image's tiles in `area`, if it has a size. Gradients have no size of their own:
-/// `auto`, `contain` and `cover` are the area's. A rounded axis fits a whole number of tiles,
-/// and the other, if `auto`, keeps the tile's proportions; a spaced one fits as many whole
-/// tiles as it can from edge to edge, or a single one where the position puts it.
-fn tiles(layer: &Layer, area: Rect) -> Option<Tiles> {
+/// A background image's tiles in `area`, if it has a size. A resource's image has a natural
+/// size, `images` giving each one's: `auto` on both axes is that size, on one the size the other
+/// gives in its proportions, and `contain` and `cover` scale it to fit the area or cover it.
+/// Gradients have no size of their own: `auto`, `contain` and `cover` are the area's. A rounded
+/// axis fits a whole number of tiles, and the other, if `auto`, keeps the tile's proportions; a
+/// spaced one fits as many whole tiles as it can from edge to edge, or a single one where the
+/// position puts it.
+fn tiles(layer: &Layer, area: Rect, images: &[[f32; 2]]) -> Option<Tiles> {
     let room = [area.width, area.height];
-    let (asked, auto) = match &layer.size {
-        ImageSize::Contain | ImageSize::Cover => (room, [false; 2]),
-        ImageSize::Sized(s) => (
-            [0, 1].map(|k| s[k].as_ref().map_or(room[k], |l| l.resolve(room[k]))),
-            [s[0].is_none(), s[1].is_none()],
-        ),
+    let natural = match layer.image {
+        Image::Url(r) => Some(images[r as usize]),
+        _ => None,
+    };
+    let (asked, auto) = match (&layer.size, natural) {
+        (ImageSize::Sized(s), _) => {
+            let given = [0, 1].map(|k| s[k].as_ref().map(|l| l.resolve(room[k])));
+            let asked = match (given, natural) {
+                ([Some(w), Some(h)], _) => [w, h],
+                (_, None) => [0, 1].map(|k| given[k].unwrap_or(room[k])),
+                ([None, None], Some(n)) => n,
+                ([Some(w), None], Some([nw, nh])) => [w, w * nh / nw],
+                ([None, Some(h)], Some([nw, nh])) => [h * nw / nh, h],
+            };
+            (asked, [s[0].is_none(), s[1].is_none()])
+        }
+        (_, None) => (room, [false; 2]),
+        (fit, Some([w, h])) => {
+            let [kw, kh] = [room[0] / w, room[1] / h];
+            let k = match fit {
+                ImageSize::Contain => kw.min(kh),
+                _ => kw.max(kh),
+            };
+            ([w * k, h * k], [false; 2])
+        }
     };
     let round = layer.repeat.map(|r| r == Repeat::Round);
     let mut size = asked;
@@ -302,6 +324,25 @@ fn tiles(layer: &Layer, area: Rect) -> Option<Tiles> {
         height: size[1],
     };
     Some(Tiles { first, step })
+}
+
+/// A layer's image in `rect`, its corners rounded by `radii`, in `tiles`; nothing for `none`.
+fn filled(image: &Image, rect: Rect, radii: Radii, tiles: Tiles) -> Option<Item> {
+    Some(match image {
+        Image::None => return None,
+        Image::Gradient(g) => Item::Gradient {
+            rect,
+            radii,
+            tiles,
+            ramp: gradient::ramp(g, [tiles.first.width, tiles.first.height]),
+        },
+        Image::Url(r) => Item::Image {
+            rect,
+            radii,
+            tiles,
+            image: *r,
+        },
+    })
 }
 
 /// `rect` grown by `by` px on each side.
@@ -1131,23 +1172,16 @@ impl Painter<'_> {
         };
         let mut mask = Vec::new();
         for layer in s.masks.iter().rev() {
-            let Image::Gradient(g) = &layer.image else {
-                continue;
-            };
             let (rect, radii) = area(layer.clip);
             let rect = snap(rect);
-            let Some(tiles) = tiles(layer, area(layer.origin).0) else {
+            let Some(tiles) = tiles(layer, area(layer.origin).0, &self.layout.images) else {
                 continue;
             };
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 continue;
             }
-            let ramp = gradient::ramp(g, [tiles.first.width, tiles.first.height]);
-            let image = Item::Gradient {
-                rect,
-                radii,
-                tiles,
-                ramp,
+            let Some(image) = filled(&layer.image, rect, radii, tiles) else {
+                continue;
             };
             mask.push(match layer.luminance {
                 true => Item::Filter {
@@ -1398,20 +1432,14 @@ impl Painter<'_> {
         // Images over the color, the first on top, repeated out to the area they show in.
         let mut blends = false;
         for layer in s.layers.iter().rev() {
-            let Image::Gradient(g) = &layer.image else {
-                continue;
-            };
+            let images = &self.layout.images;
             let Some(((rect, radii), tiles)) =
-                shown(layer.clip).zip(tiles(layer, placed(layer.origin)))
+                shown(layer.clip).zip(tiles(layer, placed(layer.origin), images))
             else {
                 continue;
             };
-            let ramp = gradient::ramp(g, [tiles.first.width, tiles.first.height]);
-            let image = Item::Gradient {
-                rect,
-                radii,
-                tiles,
-                ramp,
+            let Some(image) = filled(&layer.image, rect, radii, tiles) else {
+                continue;
             };
             let image = through(layer.clip, image);
             fill.push(match layer.blend {
@@ -1569,11 +1597,10 @@ impl Painter<'_> {
     /// `i`'s image if it is an Image: in its content box as its object fit and position have
     /// it, the box clipping it with its corners.
     fn image(&self, i: usize, out: &mut Drawn) {
-        let (Kind::Image { resource }, Some(Some([w, h]))) =
-            (&self.template.nodes[i].kind, self.layout.naturals.get(i))
-        else {
+        let Kind::Image { resource } = self.template.nodes[i].kind else {
             return;
         };
+        let [w, h] = &self.layout.images[resource as usize];
         let s = &self.styles[i];
         let (rect, radii) = area(s, &self.layout.boxes[i], Area::ContentBox);
         if !s.visible || rect.width <= 0.0 || rect.height <= 0.0 {
@@ -1616,7 +1643,7 @@ impl Painter<'_> {
             rect,
             radii,
             tiles,
-            image: *resource,
+            image: resource,
         };
         out.push((clip, image));
     }

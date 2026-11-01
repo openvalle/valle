@@ -12,7 +12,10 @@ fn paint_of(nodes: Vec<Node>, roots: &[u32]) -> (Vec<Item>, Layout) {
         ..Default::default()
     };
     let canvas = [200.0, 100.0];
-    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let styles = Sheet::new(&template)
+        .unwrap()
+        .compute(&[], canvas, &[])
+        .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     (paint(&template, &styles, &laid), laid)
 }
@@ -414,7 +417,10 @@ fn transforms_take_a_box_to_the_canvas_through_its_ancestors() {
         ..Default::default()
     };
     let canvas = [200.0, 100.0];
-    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let styles = Sheet::new(&template)
+        .unwrap()
+        .compute(&[], canvas, &[])
+        .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
     let at = |i: usize, p| transforms[i].apply(p).map(rounded);
@@ -472,7 +478,10 @@ fn motion_paths_move_a_box_along_and_turn_it_after_its_own_transforms() {
         ..Default::default()
     };
     let canvas = [200.0, 100.0];
-    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let styles = Sheet::new(&template)
+        .unwrap()
+        .compute(&[], canvas, &[])
+        .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
     // Each box's center and the point 20 px right of it, from its border box at 55, 25.
@@ -515,7 +524,10 @@ fn a_perspective_reaches_only_the_boxs_children() {
         ..Default::default()
     };
     let canvas = [200.0, 100.0];
-    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let styles = Sheet::new(&template)
+        .unwrap()
+        .compute(&[], canvas, &[])
+        .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
     let at = |i: usize, p| transforms[i].apply(p).map(rounded);
@@ -633,7 +645,10 @@ fn transforms_in_a_3d_scene_add_up_before_they_are_flattened() {
         ..Default::default()
     };
     let canvas = [200.0, 100.0];
-    let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
+    let styles = Sheet::new(&template)
+        .unwrap()
+        .compute(&[], canvas, &[])
+        .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
     // A quarter turn about y in all: edge on.

@@ -1,7 +1,8 @@
 //! A frame as HTML for Chrome: every node an element with its style as written, printed as React
 //! DOM prints a style object, on a canvas like the engine's: a Span as a `span`, an Image as an
-//! `img` of a block that shows its file from the server, and every other node as a `div`.
-//! Elements carry their node's index, `data-n`, and Texts `data-text`.
+//! `img` of a block that shows its file from the server, and every other node as a `div`; a
+//! resource in a style's `url()` is its file too. Elements carry their node's index, `data-n`, and
+//! Texts `data-text`.
 
 use std::fmt::Write as _;
 
@@ -93,12 +94,15 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
     }
     let mut style = Vec::new();
     if let Kind::Image { resource } = n.kind {
-        let slot = &resources[resource as usize];
-        let path = slot.default.as_deref().ok_or("an image without a file")?;
-        let _ = write!(html, " src=\"/cases/{}\"", escape(path));
+        let src = file(&resources[resource as usize])?;
+        let _ = write!(html, " src=\"{}\"", escape(&src));
         style.push("display: block;".to_string());
     }
-    style.extend((n.style.iter()).filter_map(|(key, prop)| declaration(key, value(frame, prop))));
+    for (key, prop) in &n.style {
+        if let Some(d) = declaration(key, value(frame, prop)) {
+            style.push(served(&d, resources)?);
+        }
+    }
     // Chrome draws a decoration in `currentcolor` in the color of the text's stroke or fill,
     // which hide with the glyphs for the runner; its color as a value keeps it.
     let declared = frame.styles[i as usize].decorations.last();
@@ -131,6 +135,32 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
         let _ = write!(html, "</{tag}>");
     }
     Ok(())
+}
+
+/// Where the server gives a resource's file.
+fn file(slot: &Slot) -> Result<String, String> {
+    let path = (slot.default.as_deref()).ok_or_else(|| format!("{}: no file", slot.name))?;
+    Ok(format!("/cases/{path}"))
+}
+
+/// `text` with each `resource://` name in it the path of the resource's file.
+fn served(text: &str, resources: &[Slot]) -> Result<String, String> {
+    const SCHEME: &str = "resource://";
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(SCHEME) {
+        out.push_str(&rest[..i]);
+        rest = &rest[i + SCHEME.len()..];
+        let end = (rest.find(|c: char| !(c.is_ascii_alphanumeric() || "._-".contains(c))))
+            .unwrap_or(rest.len());
+        let slot = (resources.iter())
+            .find(|s| s.name == rest[..end])
+            .ok_or_else(|| format!("no resource {}", &rest[..end]))?;
+        out += &file(slot)?;
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 /// A prop's value at the frame.

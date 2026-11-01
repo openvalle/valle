@@ -10,6 +10,7 @@ use super::position::{Offset, position};
 use super::{
     Accept, BLENDS, Blend, Len, NO_SCROLL, NO_SCROLL_INSTEAD, Units, css, length_text, math,
 };
+use crate::front::Slot;
 
 /// A background image, how big it is, where it is, how it repeats, the box it is placed in, the
 /// one it shows in, and how it blends with the images under it and the color. The last layer's
@@ -79,28 +80,40 @@ impl Declared {
     /// A layer for each image, at least one, its other properties from their lists, repeated as
     /// needed; placed in `origin` unless it says, the padding box for backgrounds and the border
     /// box for masks.
-    pub(super) fn computed(&self, u: Units, current: Rgba, origin: Area) -> Vec<Layer> {
+    pub(super) fn computed(
+        &self,
+        u: Units,
+        current: Rgba,
+        origin: Area,
+        resources: &[Slot],
+    ) -> Result<Vec<Layer>, String> {
         let start = || Offset {
             end: false,
             by: Len::Percent(0.0),
         };
         (0..self.images.len().max(1))
-            .map(|i| Layer {
-                image: nth(&self.images, i).map_or(Image::None, |m| m.computed(u, current)),
-                size: match nth(&self.sizes, i).unwrap_or(ImageSize::Sized([None, None])) {
-                    ImageSize::Contain => ImageSize::Contain,
-                    ImageSize::Cover => ImageSize::Cover,
-                    ImageSize::Sized(s) => {
-                        ImageSize::Sized(s.each_ref().map(|l| l.as_ref().map(|l| l.calc(u))))
-                    }
-                },
-                position: (self.positions.each_ref())
-                    .map(|list| nth(list, i).unwrap_or_else(start).computed(u)),
-                repeat: nth(&self.repeats, i).unwrap_or([Repeat::Repeat; 2]),
-                origin: nth(&self.origins, i).unwrap_or(origin),
-                clip: nth(&self.clips, i).unwrap_or(Area::BorderBox),
-                blend: nth(&self.blends, i).unwrap_or(Blend::Normal),
-                luminance: nth(&self.modes, i).unwrap_or(false),
+            .map(|i| {
+                let image = match nth(&self.images, i) {
+                    Some(m) => m.computed(u, current, resources)?,
+                    None => Image::None,
+                };
+                Ok(Layer {
+                    image,
+                    size: match nth(&self.sizes, i).unwrap_or(ImageSize::Sized([None, None])) {
+                        ImageSize::Contain => ImageSize::Contain,
+                        ImageSize::Cover => ImageSize::Cover,
+                        ImageSize::Sized(s) => {
+                            ImageSize::Sized(s.each_ref().map(|l| l.as_ref().map(|l| l.calc(u))))
+                        }
+                    },
+                    position: (self.positions.each_ref())
+                        .map(|list| nth(list, i).unwrap_or_else(start).computed(u)),
+                    repeat: nth(&self.repeats, i).unwrap_or([Repeat::Repeat; 2]),
+                    origin: nth(&self.origins, i).unwrap_or(origin),
+                    clip: nth(&self.clips, i).unwrap_or(Area::BorderBox),
+                    blend: nth(&self.blends, i).unwrap_or(Blend::Normal),
+                    luminance: nth(&self.modes, i).unwrap_or(false),
+                })
             })
             .collect()
     }

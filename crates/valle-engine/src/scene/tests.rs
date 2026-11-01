@@ -139,3 +139,59 @@ export default function Scene() {
         assert!(e.contains("resource dot: img/dot.png: not found"), "{e}");
     });
 }
+
+#[test]
+fn background_and_mask_images_take_their_natural_size() {
+    big_stack(|| {
+        let source = "export const composition = { width: 200, height: 40, fps: 1, duration: 1 };
+export const controls = {
+  resources: { dot: resource({ kind: 'image', default: './dot.png' }) },
+};
+const image = 'url(resource://dot)';
+export default function Scene() {
+  return (
+    <View style={{ display: 'flex' }}>
+      <View style={{ width: 40, height: 30, backgroundImage: image }} />
+      <View style={{ width: 40, height: 30, backgroundImage: image, backgroundSize: 'auto 4px' }} />
+      <View style={{ width: 40, height: 30, backgroundImage: image, backgroundSize: 'contain' }} />
+      <View style={{ width: 40, height: 30, backgroundImage: image, backgroundSize: 'cover' }} />
+      <View style={{ width: 40, height: 30, backgroundColor: 'red', maskImage: image }} />
+    </View>
+  );
+}
+";
+        let image = png(2, &[[255, 0, 0, 255], [255, 255, 255, 128]]);
+        let read = |path: &str| match path {
+            "scenes/s.tsx" => Some(source.as_bytes().to_vec()),
+            "scenes/dot.png" => Some(image.clone()),
+            _ => None,
+        };
+        let frame = Scene::load("scenes/s.tsx", &read)
+            .unwrap()
+            .frame(Tick(0))
+            .unwrap();
+        let size = |item: &Item| match item {
+            Item::Image {
+                tiles, image: 0, ..
+            } => Some([tiles.first.width, tiles.first.height]),
+            _ => None,
+        };
+        let sizes: Vec<_> = (frame.items.iter())
+            .filter_map(|item| match item {
+                Item::Mask { mask, .. } => mask.first().and_then(size),
+                item => size(item),
+            })
+            .collect();
+        // 2 × 1 as it is, 4 px tall, fitting the box and covering it, and as a mask.
+        assert_eq!(
+            sizes,
+            [
+                [2.0, 1.0],
+                [8.0, 4.0],
+                [40.0, 20.0],
+                [60.0, 30.0],
+                [2.0, 1.0]
+            ]
+        );
+    });
+}

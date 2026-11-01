@@ -1,6 +1,8 @@
 // Images filling rounded rectangles in tiles: each pixel's place in the tile it is in, if any,
-// and the image there, stretched over the tile, read between its pixels linearly and clamped at
-// its edges. Its colors are premultiplied working colors already.
+// and the image there, stretched over the tile, read between its pixels linearly. On an axis
+// where the rectangle spans tiles that touch, an edge pixel's neighbor is the next tile's, as
+// Chrome reads a repeated image unless its tiles are spaced apart; elsewhere the edge goes on.
+// Its colors are premultiplied working colors already.
 
 struct Image {
   // Where it shows: x, y, width, height, and corner radii as `coverage` takes them.
@@ -32,6 +34,11 @@ struct Out {
   return out;
 }
 
+// Texel `i` of `n` on each axis: around to the other side where it `wraps`, else the edge one.
+fn texel(i: vec2<i32>, n: vec2<i32>, wraps: vec2<bool>) -> vec2<i32> {
+  return select(clamp(i, vec2<i32>(0), n - 1), (i % n + n) % n, wraps);
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let g = images[in.index];
   let p = local(in.pos.xy, g.form.w);
@@ -48,14 +55,16 @@ struct Out {
   if (any(out)) {
     return vec4f(0.0);
   }
-  // Between the centers of the texels around the point, the edge ones going on past them.
+  // Between the centers of the texels around the point.
   let texels = vec2<i32>(textureDimensions(image));
   let c = at / size * vec2f(texels) - 0.5;
   let f = floor(c);
   let t = c - f;
-  let last = texels - 1;
-  let a = clamp(vec2<i32>(f), vec2<i32>(0), last);
-  let b = clamp(vec2<i32>(f) + 1, vec2<i32>(0), last);
+  let n = floor((lo - g.tile.xy) / step);
+  let spans = lo + g.rect.zw > g.tile.xy + (n + 1.0) * step + 1e-3;
+  let wraps = repeats & spans & !vec2<bool>(any(repeats & (step > size)));
+  let a = texel(vec2<i32>(f), texels, wraps);
+  let b = texel(vec2<i32>(f) + 1, texels, wraps);
   let top = mix(textureLoad(image, a, 0), textureLoad(image, vec2<i32>(b.x, a.y), 0), t.x);
   let bottom = mix(textureLoad(image, vec2<i32>(a.x, b.y), 0), textureLoad(image, b, 0), t.x);
   return mix(top, bottom, t.y) * cov;
