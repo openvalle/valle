@@ -11,12 +11,13 @@ use taffy::{
     ContainingBlockClaims, CoreStyle, DetailedGridInfo, DetailedLayoutInfo, Dimension, Direction,
     Display, LayoutBlockContainer, LayoutContainingBlock, LayoutFlexboxContainer,
     LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, LengthPercentage,
-    LengthPercentageAuto, NodeId, Overflow, Point, Position, Rect as Edges, ResolveOrZero, RunMode,
-    Size, TraversePartialTree, compute_block_layout, compute_cached_layout, compute_flexbox_layout,
-    compute_grid_layout, compute_hidden_layout, compute_leaf_layout, compute_oof_layout,
-    compute_root_layout,
+    LengthPercentageAuto, MaybeResolve, NodeId, Overflow, Point, Position, Rect as Edges,
+    ResolveOrZero, RunMode, Size, TraversePartialTree, compute_block_layout, compute_cached_layout,
+    compute_flexbox_layout, compute_grid_layout, compute_hidden_layout, compute_leaf_layout,
+    compute_oof_layout, compute_root_layout,
 };
 
+use crate::image::Image;
 use crate::style::math::{self, Calc};
 use crate::style::{DecorationStyle, Style};
 use crate::template::{self, Error, Kind, Prop, Template, V};
@@ -68,13 +69,14 @@ pub fn ordered<'a>(
 }
 
 /// Lays out a frame: the template's nodes with their computed styles and the program's values,
-/// on a canvas of `canvas` px.
+/// on a canvas of `canvas` px, its Images showing `images`.
 pub fn layout(
     template: &Template,
     values: &[V],
     styles: &[Style],
     canvas: [f32; 2],
     text: &mut Text,
+    images: &[Image],
 ) -> Result<Layout, Error> {
     let n = template.nodes.len();
     let contents: Vec<Option<Content>> = (template.nodes.iter().enumerate())
@@ -125,11 +127,23 @@ pub fn layout(
     };
     let mut roots = vec![None; n + 1];
     roots[n] = Some(root(canvas));
+    // An image's natural size, and its box as replaced content.
+    let mut naturals = vec![None; n];
+    for (i, node) in template.nodes.iter().enumerate() {
+        if let Kind::Image { resource } = node.kind {
+            naturals[i] = Some(images[resource as usize].size.map(|v| v as f32));
+            roots[i] = Some(taffy::Style {
+                item_is_replaced: true,
+                ..styles[i].layout.clone()
+            });
+        }
+    }
     let mut tree = Tree {
         template,
         styles,
         calcs: styles.iter().flat_map(|s| &s.calcs).collect(),
         roots,
+        naturals,
         children,
         contents: &contents,
         text,
@@ -476,9 +490,11 @@ struct Tree<'a> {
     styles: &'a [Style],
     /// The styles' calcs, which handles number in order.
     calcs: Vec<&'a Calc>,
-    /// The style of each root, the canvas and the masks' sources, which takes the place of its
-    /// own.
+    /// The style that takes the place of a node's own: each root's, the canvas's and the masks'
+    /// sources', and each image's, as replaced content.
     roots: Vec<Option<taffy::Style>>,
+    /// Each image's natural size.
+    naturals: Vec<Option<[f32; 2]>>,
     /// Each node's children in the order it lays them out, the canvas's last.
     children: Vec<Vec<NodeId>>,
     /// Each Text's paragraph.
@@ -521,12 +537,13 @@ impl Tree<'_> {
             let i = usize::from(id);
             let parent = !tree.children[i].is_empty();
             let text = tree.contents.get(i).is_some_and(Option::is_some);
+            let image = tree.naturals.get(i).is_some_and(Option::is_some);
             let mut out = match (tree.style(id).display, parent) {
                 (Display::None, _) => compute_hidden_layout(tree, id),
                 (Display::Block, true) => compute_block_layout(tree, id, inputs, block),
                 (Display::Flex, true) => compute_flexbox_layout(tree, id, inputs),
                 // A grid's tracks size it even without items.
-                (Display::Grid, _) if !text => compute_grid_layout(tree, id, inputs),
+                (Display::Grid, _) if !text && !image => compute_grid_layout(tree, id, inputs),
                 _ => tree.leaf(i, inputs),
             };
             // The out-of-flow boxes it contains, once their static positions are known.
@@ -537,9 +554,12 @@ impl Tree<'_> {
         })
     }
 
-    /// A box without children: text measured as Taffy asks and aligned on its first baseline, or
-    /// an empty box.
+    /// A box without children: text measured as Taffy asks and aligned on its first baseline, an
+    /// image, or an empty box.
     fn leaf(&mut self, i: usize, inputs: LayoutInput) -> LayoutOutput {
+        if let Some(natural) = self.naturals.get(i).copied().flatten() {
+            return self.image(i, inputs, natural);
+        }
         let (styles, contents) = (self.styles, self.contents);
         let (Some(style), Some(Some(c))) = (styles.get(i), contents.get(i)) else {
             let style = self.style(NodeId::from(i));
@@ -590,6 +610,44 @@ impl Tree<'_> {
             }
         }
         out
+    }
+}
+
+impl Tree<'_> {
+    /// An image's box: its content box the size given on an axis, by its container or its
+    /// style, and on the other as its natural ratio has it, or its natural size.
+    fn image(&self, i: usize, inputs: LayoutInput, [w, h]: [f32; 2]) -> LayoutOutput {
+        let style = self.style(NodeId::from(i));
+        let calc = |handle, basis| self.calc(handle, basis);
+        let width = inputs.parent_size.width;
+        let side = |l: LengthPercentage| l.resolve_or_zero(width, calc);
+        let (p, b) = (style.padding, style.border);
+        let inset = [
+            side(p.left) + side(p.right) + side(b.left) + side(b.right),
+            side(p.top) + side(p.bottom) + side(b.top) + side(b.bottom),
+        ];
+        let sized = style.size.maybe_resolve(inputs.parent_size, calc);
+        let border_box = style.box_sizing == BoxSizing::BorderBox;
+        compute_leaf_layout(inputs, style, calc, |known, _| {
+            let given = |known: Option<f32>, sized: Option<f32>, inset: f32| {
+                let content = match known {
+                    Some(k) => Some(k - inset),
+                    None => sized.map(|s| if border_box { s - inset } else { s }),
+                };
+                content.map(|c| c.max(0.0))
+            };
+            let given = [
+                given(known.width, sized.width, inset[0]),
+                given(known.height, sized.height, inset[1]),
+            ];
+            let [width, height] = match given {
+                [Some(x), Some(y)] => [x, y],
+                [Some(x), None] if w > 0.0 => [x, x * h / w],
+                [None, Some(y)] if h > 0.0 => [y * w / h, y],
+                [x, y] => [x.unwrap_or(w), y.unwrap_or(h)],
+            };
+            Size { width, height }
+        })
     }
 }
 

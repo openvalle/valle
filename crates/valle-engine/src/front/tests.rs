@@ -538,7 +538,19 @@ fn errors_point_at_the_source() {
             ),
             ("<div />", "use <View> instead of <div>"),
             ("<Group />", "<Group> is removed: use <View>"),
-            ("<Image />", "<Image> is not a Valle element"),
+            ("<Video />", "<Video> is not a Valle element"),
+            (
+                "<Image />",
+                "<Image> src is a resource declared in controls.resources",
+            ),
+            (
+                "<Image src=\"a.png\" />",
+                "such as \"resource://logo\", not \"a.png\"",
+            ),
+            (
+                "<Image src=\"resource://a\"><View /></Image>",
+                "<Image> has no children",
+            ),
             (
                 "<View>hello</View>",
                 "text must be inside <Text>: \"hello\"",

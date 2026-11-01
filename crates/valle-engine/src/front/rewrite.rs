@@ -32,8 +32,8 @@ use oxc::allocator::Allocator;
 use oxc::ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentTarget, AwaitExpression,
     BindingPattern, Declaration, DoWhileStatement, Expression, ForOfStatement, ForStatement,
-    Function, IfStatement, ObjectPropertyKind, Program, PropertyKey, SpreadElement, Statement,
-    SwitchStatement, WhileStatement,
+    Function, IfStatement, ObjectProperty, ObjectPropertyKind, Program, PropertyKey, SpreadElement,
+    Statement, SwitchStatement, WhileStatement,
 };
 use oxc::ast_visit::{Visit, walk};
 use oxc::codegen::{Codegen, CodegenOptions};
@@ -66,6 +66,16 @@ pub struct Rewritten {
     pub lines: Vec<u32>,
     /// The module's `composition` export, read without running it.
     pub composition: Option<Composition>,
+    /// The resources its `controls` export declares, read without running it.
+    pub resources: Vec<Slot>,
+}
+
+/// A resource `controls.resources` declares: its name, and the file it reads, as written, unless
+/// another is bound to it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slot {
+    pub name: String,
+    pub default: Option<String>,
 }
 
 /// What `code` starts with before the first line of the module body.
@@ -98,10 +108,12 @@ pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten,
              synchronously, so there is nothing to wait for"
         ));
     }
-    let composition = composition(&program).map_err(|(offset, e)| {
+    let at = |(offset, e): (u32, String)| {
         let (line, col) = place(offset);
         format!("{line}:{col}: {e}")
-    })?;
+    };
+    let composition = composition(&program).map_err(at)?;
+    let resources = controls(&program).map_err(at)?;
     // Where each JSX element and fragment opens, in source order. The transform keeps their
     // order, so the k-th `__h` call of the printed code is the k-th of them; the source map only
     // places a call near some token of it.
@@ -214,6 +226,7 @@ pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten,
         free,
         lines,
         composition,
+        resources,
     })
 }
 
@@ -272,6 +285,43 @@ impl<'a> Visit<'a> for Async {
 /// The `composition` export: an object literal of literals, which tools read without running the
 /// scene. Errors carry the source offset they point at.
 fn composition(program: &Program<'_>) -> Result<Option<Composition>, (u32, String)> {
+    let Some((at, init)) = exported(program, "composition") else {
+        return Ok(None);
+    };
+    let not_static = || {
+        (
+            at,
+            "composition must be an object literal of numbers, strings and booleans: tools read \
+             it without running the scene"
+                .to_string(),
+        )
+    };
+    let Some(Expression::ObjectExpression(object)) = init else {
+        return Err(not_static());
+    };
+    let mut fields = Vec::new();
+    for p in &object.properties {
+        let ObjectPropertyKind::ObjectProperty(p) = p else {
+            return Err(not_static());
+        };
+        let key = key(p).ok_or_else(not_static)?;
+        let value = match &p.value {
+            Expression::NumericLiteral(n) => Literal::Number(n.value),
+            Expression::StringLiteral(s) => Literal::Text(s.value.to_string()),
+            Expression::BooleanLiteral(b) => Literal::Bool(b.value),
+            _ => return Err(not_static()),
+        };
+        fields.push((key, value, p.span.start));
+    }
+    composition_fields(&fields, at).map(Some)
+}
+
+/// The value of `export const name = …`, past `as`, `satisfies` and parentheses, and where the
+/// declaration starts.
+fn exported<'b, 'a>(
+    program: &'b Program<'a>,
+    name: &str,
+) -> Option<(u32, Option<&'b Expression<'a>>)> {
     for statement in &program.body {
         let Statement::ExportDeclaration(export) = statement else {
             continue;
@@ -283,51 +333,139 @@ fn composition(program: &Program<'_>) -> Result<Option<Composition>, (u32, Strin
             let BindingPattern::BindingIdentifier(id) = &d.id else {
                 continue;
             };
-            if id.name.as_str() != "composition" {
-                continue;
+            if id.name.as_str() == name {
+                return Some((d.span.start, d.init.as_ref().map(bare)));
             }
-            let not_static = || {
-                (
-                    d.span.start,
-                    "composition must be an object literal of numbers, strings and booleans: \
-                     tools read it without running the scene"
-                        .to_string(),
-                )
-            };
-            let mut init = d.init.as_ref().ok_or_else(not_static)?;
-            loop {
-                init = match init {
-                    Expression::TSAsExpression(e) => &e.expression,
-                    Expression::TSSatisfiesExpression(e) => &e.expression,
-                    Expression::ParenthesizedExpression(e) => &e.expression,
-                    _ => break,
-                };
-            }
-            let Expression::ObjectExpression(object) = init else {
-                return Err(not_static());
-            };
-            let mut fields = Vec::new();
-            for p in &object.properties {
-                let ObjectPropertyKind::ObjectProperty(p) = p else {
-                    return Err(not_static());
-                };
-                let key = match &p.key {
-                    PropertyKey::StaticIdentifier(n) if !p.computed => n.name.as_str(),
-                    PropertyKey::StringLiteral(s) => s.value.as_str(),
-                    _ => return Err(not_static()),
-                };
-                let value = match &p.value {
-                    Expression::NumericLiteral(n) => Literal::Number(n.value),
-                    Expression::StringLiteral(s) => Literal::Text(s.value.to_string()),
-                    Expression::BooleanLiteral(b) => Literal::Bool(b.value),
-                    _ => return Err(not_static()),
-                };
-                fields.push((key, value, p.span.start));
-            }
-            return composition_fields(&fields, d.span.start).map(Some);
         }
     }
-    Ok(None)
+    None
+}
+
+fn bare<'b, 'a>(mut e: &'b Expression<'a>) -> &'b Expression<'a> {
+    loop {
+        e = match e {
+            Expression::TSAsExpression(x) => &x.expression,
+            Expression::TSSatisfiesExpression(x) => &x.expression,
+            Expression::ParenthesizedExpression(x) => &x.expression,
+            _ => return e,
+        };
+    }
+}
+
+/// A property's name, when it is written out.
+fn key<'b>(p: &'b ObjectProperty<'_>) -> Option<&'b str> {
+    match &p.key {
+        PropertyKey::StaticIdentifier(n) if !p.computed => Some(n.name.as_str()),
+        PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
+        _ => None,
+    }
+}
+
+/// The `controls` export's resources, `resources: { logo: resource({ kind: "image", default:
+/// "./logo.png" }) }`, which tools read without running the scene.
+fn controls(program: &Program<'_>) -> Result<Vec<Slot>, (u32, String)> {
+    let Some((at, init)) = exported(program, "controls") else {
+        return Ok(Vec::new());
+    };
+    let literal = |at: u32, what: &str| {
+        (
+            at,
+            format!("{what} must be an object literal: tools read it without running the scene"),
+        )
+    };
+    let Some(Expression::ObjectExpression(object)) = init else {
+        return Err(literal(at, "controls"));
+    };
+    let mut slots = Vec::new();
+    for p in &object.properties {
+        let ObjectPropertyKind::ObjectProperty(p) = p else {
+            return Err(literal(p.span().start, "controls"));
+        };
+        match key(p) {
+            Some("resources") => {}
+            Some(k @ ("props" | "data")) => {
+                return Err((p.span.start, format!("controls.{k} is not supported yet")));
+            }
+            _ => return Err((p.span.start, "controls takes resources".into())),
+        }
+        let Expression::ObjectExpression(resources) = bare(&p.value) else {
+            return Err(literal(p.span.start, "controls.resources"));
+        };
+        for r in &resources.properties {
+            let ObjectPropertyKind::ObjectProperty(r) = r else {
+                return Err(literal(r.span().start, "controls.resources"));
+            };
+            let at = r.span.start;
+            let name = key(r).ok_or_else(|| literal(at, "controls.resources"))?;
+            let named = name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".-_".contains(c));
+            if !named || !(1..=64).contains(&name.len()) {
+                return Err((
+                    at,
+                    format!(
+                        "resource name {name:?} is not 1 to 64 ASCII letters, digits, dots, \
+                         underscores and hyphens"
+                    ),
+                ));
+            }
+            let slot =
+                slot(name, bare(&r.value)).map_err(|e| (at, format!("resource {name}: {e}")))?;
+            slots.push(slot);
+        }
+    }
+    Ok(slots)
+}
+
+/// `resource({ kind: "image", default: "…" })`.
+fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
+    let written = || "write resource({ kind: \"image\", default: \"./file.png\" })".to_string();
+    let Expression::CallExpression(call) = e else {
+        return Err(written());
+    };
+    let named = matches!(&call.callee, Expression::Identifier(f) if f.name.as_str() == "resource");
+    let spec = call
+        .arguments
+        .first()
+        .and_then(|a| a.as_expression())
+        .map(bare);
+    let (true, 1, Some(Expression::ObjectExpression(spec))) = (named, call.arguments.len(), spec)
+    else {
+        return Err(written());
+    };
+    let (mut kind, mut default) = (None, None);
+    for p in &spec.properties {
+        let ObjectPropertyKind::ObjectProperty(p) = p else {
+            return Err(written());
+        };
+        let Expression::StringLiteral(v) = bare(&p.value) else {
+            return Err(format!(
+                "{} is a string literal",
+                key(p).unwrap_or("each field")
+            ));
+        };
+        match key(p) {
+            Some("kind") => kind = Some(v.value.to_string()),
+            Some("default") => default = Some(v.value.to_string()),
+            _ => return Err("resource() takes kind and default".into()),
+        }
+    }
+    match kind.as_deref() {
+        Some("image") => {}
+        Some(k @ ("video" | "font" | "model3d" | "environment" | "shader")) => {
+            return Err(format!("{k} resources are not supported yet"));
+        }
+        Some(k) => return Err(format!("{k:?} is not a kind of resource: image")),
+        None => return Err("resource() needs a kind: \"image\"".into()),
+    }
+    let web = |d: &String| d.starts_with("http://") || d.starts_with("https://");
+    if default.as_ref().is_some_and(web) {
+        return Err("a default from the web is not supported yet; use a project file".into());
+    }
+    Ok(Slot {
+        name: name.to_string(),
+        default,
+    })
 }
 
 enum Literal {
@@ -916,6 +1054,70 @@ mod tests {
         );
         let e = err("export const composition = { size: 1 };\n");
         assert!(e.contains("no field size"), "{e}");
+    }
+
+    #[test]
+    fn controls_declare_resources_read_statically() {
+        let r = rewrite(
+            "s.motion.tsx",
+            "export const controls = { resources: { logo: resource({ kind: \"image\", default: \
+             \"../media/logo.png\" }), \"hero-2.b\": resource({ kind: \"image\" }) } };\n",
+            0,
+        )
+        .unwrap();
+        let slot = |name: &str, default: Option<&str>| Slot {
+            name: name.into(),
+            default: default.map(String::from),
+        };
+        assert_eq!(
+            r.resources,
+            [
+                slot("logo", Some("../media/logo.png")),
+                slot("hero-2.b", None)
+            ]
+        );
+        for (source, says) in [
+            (
+                "const c = {};\nexport const controls = c;",
+                "2:14: controls must be an object",
+            ),
+            (
+                "export const controls = { props: {} };",
+                "controls.props is not supported yet",
+            ),
+            (
+                "export const controls = { fonts: {} };",
+                "controls takes resources",
+            ),
+            (
+                "export const controls = { resources: { a: { kind: \"image\" } } };",
+                "resource a: write resource({ kind: \"image\"",
+            ),
+            (
+                "export const controls = { resources: { a: resource({ kind: \"video\" }) } };",
+                "resource a: video resources are not supported yet",
+            ),
+            (
+                "export const controls = { resources: { a: resource({ kind: \"photo\" }) } };",
+                "\"photo\" is not a kind of resource: image",
+            ),
+            (
+                "export const controls = { resources: { a: resource({ default: \"a.png\" }) } };",
+                "resource() needs a kind",
+            ),
+            (
+                "export const controls = { resources: { a: resource({ kind: \"image\", default: \
+                 \"https://x.org/a.png\" }) } };",
+                "a default from the web is not supported yet",
+            ),
+            (
+                "export const controls = { resources: { \"a b\": resource({ kind: \"image\" }) } };",
+                "resource name \"a b\" is not 1 to 64",
+            ),
+        ] {
+            let e = err(source);
+            assert!(e.contains(says), "{source}: {e}");
+        }
     }
 
     #[test]

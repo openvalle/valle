@@ -15,9 +15,10 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::task::{Context, Poll, Waker};
 
+use crate::image::Image;
 use crate::layout::Rect;
 use crate::paint::{Filter, Geometry, Item, Matrix, Radii, SQUARE};
 use crate::path::Curve;
@@ -81,6 +82,7 @@ pub struct Gpu {
     image: wgpu::BindGroupLayout,
     rects: wgpu::RenderPipeline,
     gradients: wgpu::RenderPipeline,
+    images: wgpu::RenderPipeline,
     glyphs: wgpu::RenderPipeline,
     layers: wgpu::RenderPipeline,
     adds: wgpu::RenderPipeline,
@@ -206,6 +208,7 @@ impl Gpu {
         };
         let rect = include_str!("../shaders/rect.wgsl");
         let gradient = include_str!("../shaders/gradient.wgsl");
+        let picture = include_str!("../shaders/image.wgsl");
         let glyph = include_str!("../shaders/slug.wgsl");
         let layer = include_str!("../shaders/layer.wgsl");
         let blend = include_str!("../shaders/blend.wgsl");
@@ -218,6 +221,7 @@ impl Gpu {
             info: adapter.get_info(),
             rects: pipeline(&drawing, "rect", rect, WORK, over),
             gradients: pipeline(&drawing, "gradient", gradient, WORK, over),
+            images: pipeline(&imaging, "image", picture, WORK, over),
             glyphs: pipeline(&drawing, "slug", glyph, WORK, over),
             layers: pipeline(&imaging, "layer", layer, WORK, over),
             adds: pipeline(&imaging, "layer", layer, WORK, add),
@@ -350,6 +354,8 @@ impl Surface {
 enum Run {
     Rects(Range<u32>),
     Gradients(Range<u32>),
+    /// Instances of one of the scene's images, which are in the gradients' store.
+    Images(Range<u32>, u32),
     Glyphs(Range<u32>),
 }
 
@@ -708,6 +714,10 @@ pub struct Renderer<'a> {
     /// a glyph without curves.
     outlines: HashMap<(u32, u32, u32), Option<Placed>>,
     draw: Option<wgpu::BindGroup>,
+    /// The textures of the images the last frames showed, and of each of this frame's images, the
+    /// index of its texture.
+    images: Vec<(Arc<[u8]>, Surface)>,
+    shown: Vec<usize>,
     /// Layer textures: all of them, and the free ones.
     pool: Vec<Surface>,
     free: Vec<usize>,
@@ -750,14 +760,51 @@ impl<'a> Renderer<'a> {
             atlas_len: [0, 0],
             outlines: HashMap::new(),
             draw: None,
+            images: Vec::new(),
+            shown: Vec::new(),
             pool: Vec::new(),
             free: Vec::new(),
         }
     }
 
     /// The frame `items` paint: straight sRGB, 4 bytes a pixel, rows top down. `faces` are the
-    /// faces their glyphs name.
-    pub fn render(&mut self, items: &[Item], faces: &[Face]) -> Result<Vec<u8>, Error> {
+    /// faces their glyphs name, and `images` the images they show.
+    pub fn render(
+        &mut self,
+        items: &[Item],
+        faces: &[Face],
+        images: &[Image],
+    ) -> Result<Vec<u8>, Error> {
+        // The images' textures, kept while frames show them.
+        self.images
+            .retain(|(p, _)| images.iter().any(|i| Arc::ptr_eq(&i.pixels, p)));
+        self.shown = (images.iter())
+            .map(|i| {
+                match self
+                    .images
+                    .iter()
+                    .position(|(p, _)| Arc::ptr_eq(&i.pixels, p))
+                {
+                    Some(k) => k,
+                    None => {
+                        let t = texture(&self.gpu.device, i.size, wgpu::TextureFormat::Rgba8Unorm);
+                        self.gpu.queue.write_texture(
+                            t.as_image_copy(),
+                            &i.pixels,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(4 * i.size[0]),
+                                rows_per_image: Some(i.size[1]),
+                            },
+                            t.size(),
+                        );
+                        self.images
+                            .push((i.pixels.clone(), Surface::new(self.gpu, t)));
+                        self.images.len() - 1
+                    }
+                }
+            })
+            .collect();
         let mut plan = Plan {
             targets: 1,
             ..Plan::default()
@@ -967,6 +1014,22 @@ impl<'a> Renderer<'a> {
                     plan.gradients
                         .extend([repeating, space, shape, transform, first, count, 0, 0]);
                     extend(runs, Run::Gradients(i..i + 1));
+                }
+                Item::Image {
+                    rect,
+                    radii,
+                    tiles,
+                    image,
+                } => {
+                    let i = (plan.gradients.len() / GRADIENT) as u32;
+                    let words = (xywh(*rect).into_iter())
+                        .chain(radii.iter().flatten().copied())
+                        .chain(xywh(tiles.first))
+                        .chain(tiles.step.map(|s| s.unwrap_or(0.0)))
+                        .chain([0.0; 6]);
+                    plan.gradients.extend(words.map(f32::to_bits));
+                    plan.gradients.extend([0, 0, 0, transform, 0, 0, 0, 0]);
+                    extend(runs, Run::Images(i..i + 1, *image));
                 }
                 Item::Glyphs {
                     face,
@@ -1367,6 +1430,11 @@ impl<'a> Renderer<'a> {
                         let (pipeline, range) = match run {
                             Run::Rects(r) => (&gpu.rects, r),
                             Run::Gradients(r) => (&gpu.gradients, r),
+                            Run::Images(r, image) => {
+                                let shown = &self.images[self.shown[*image as usize]].1;
+                                pass.set_bind_group(1, &shown.image, &[]);
+                                (&gpu.images, r)
+                            }
                             Run::Glyphs(r) => (&gpu.glyphs, r),
                         };
                         pass.set_pipeline(pipeline);
@@ -1474,6 +1542,9 @@ fn extend(runs: &mut Vec<Run>, next: Run) {
         | (Some(Run::Glyphs(r)), Run::Glyphs(n))
             if r.end == n.start =>
         {
+            r.end = n.end;
+        }
+        (Some(Run::Images(r, a)), Run::Images(n, b)) if a == b && r.end == n.start => {
             r.end = n.end;
         }
         _ => runs.push(next),

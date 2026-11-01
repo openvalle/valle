@@ -6,8 +6,9 @@
 //
 //   bun web/tests/chrome.ts <jobs.json>
 //
-// Chrome is downloaded once into ~/.valle/cache/chrome (or $VALLE_CACHE_DIR/chrome). The pages and
-// the fonts come from a local server, so the HTML names no path on this machine.
+// Chrome is downloaded once into ~/.valle/cache/chrome (or $VALLE_CACHE_DIR/chrome). The pages, the
+// fonts and the files the cases read come from a local server, so the HTML names no path on this
+// machine.
 
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -48,6 +49,10 @@ async function draw() {
       }
       if (/^\/fonts\/[\w.-]+$/.test(path)) {
         return new Response(Bun.file(join(root, path)));
+      }
+      const file = /^\/cases\/((?:[\w-][\w.-]*\/)*[\w-][\w.-]*)$/.exec(path);
+      if (file) {
+        return new Response(Bun.file(join(root, "tests/cases", file[1])));
       }
       return new Response("not found", { status: 404 });
     },
@@ -192,7 +197,7 @@ async function listening(stderr: ReadableStream<Uint8Array>): Promise<string> {
   }
 }
 
-/** Runs in the page: the boxes and lines once the fonts are in. */
+/** Runs in the page: the boxes and lines once the fonts and the images are in. */
 function measure(): Promise<Measured> {
   const lines = (element: Element): string[] => {
     const out: string[] = [];
@@ -229,7 +234,8 @@ function measure(): Promise<Measured> {
     }
     return out.map((l) => l.replace(/[ \t\n\r\f]+/g, " ").trim());
   };
-  return document.fonts.load('16px "Valle Sans"').then(() => {
+  const images = [...document.images].map((i) => i.decode());
+  return Promise.all([document.fonts.load('16px "Valle Sans"'), ...images]).then(() => {
     for (const face of document.fonts) {
       if (face.status !== "loaded") {
         throw new Error(`font ${face.family} is ${face.status}`);

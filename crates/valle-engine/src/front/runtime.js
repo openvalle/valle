@@ -453,6 +453,11 @@
     };
   }
 
+  // A resource slot of `controls.resources`, which tools read without running the scene.
+  function resource(slot) {
+    return slot;
+  }
+
   const EXTRAPOLATE = ["clamp", "extend"];
 
   // `interpolate(input, inputs, outputs, { extrapolateLeft, extrapolateRight })` over numbers.
@@ -508,7 +513,7 @@
     throw e;
   }
 
-  const INTRINSIC = { View: "view", Text: "text", Span: "span", Mask: "mask" };
+  const INTRINSIC = { View: "view", Text: "text", Span: "span", Mask: "mask", Image: "image" };
 
   // Tags that are gone, with what replaces them.
   const REMOVED = {
@@ -548,7 +553,13 @@
   };
 
   // Props each element takes besides key, className and style.
-  const PROPS = { view: [], text: [], span: [], mask: ["source", "mode", "invert"] };
+  const PROPS = {
+    view: [],
+    text: [],
+    span: [],
+    mask: ["source", "mode", "invert"],
+    image: ["src"],
+  };
 
   const fixed = (x, kind, at) => (x instanceof T ? exact(x, kind, at) : x);
 
@@ -626,6 +637,24 @@
     node.source = { type: "view", path: null, classes: [], style: [], children: [], site: at };
   }
 
+  // An <Image>'s resource, by the name its src gives as a literal: which files a scene reads
+  // cannot depend on time.
+  function imageOf(node, props, children, at) {
+    const src = props.src;
+    if (src instanceof T) {
+      fail(at, '<Image> src is written as a literal, such as "resource://logo"; it cannot change');
+    }
+    if (typeof src !== "string" || !src.startsWith("resource://")) {
+      fail(
+        at,
+        '<Image> src is a resource declared in controls.resources, such as "resource://logo", not ' +
+          stringify(src),
+      );
+    }
+    if (children.length > 0) fail(at, "<Image> has no children");
+    node.src = src.slice("resource://".length);
+  }
+
   function element(type, props, children, out, at, inText) {
     if (typeof type !== "string") fail(at, "an element type must be a tag or a component function");
     const kind = INTRINSIC[type];
@@ -660,6 +689,7 @@
       site: at,
     };
     if (kind === "mask") maskOf(node, props, at);
+    if (kind === "image") imageOf(node, props, children, at);
     if (key !== null) G.keys.push(key);
     try {
       if (kind === "text" || kind === "span") {
@@ -758,6 +788,7 @@
       if ("source" in n) {
         out.mask = { source: node(n.source), luminance: n.luminance, invert: n.invert };
       }
+      if ("src" in n) out.src = n.src;
       out.children = n.children.map(node);
       if ("content" in n) {
         // Its children are its Spans, in the order its content has them.
@@ -992,5 +1023,7 @@
     Text: "Text",
     Span: "Span",
     Mask: "Mask",
+    Image: "Image",
+    resource,
   });
 })();

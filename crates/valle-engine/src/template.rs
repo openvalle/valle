@@ -138,6 +138,11 @@ pub enum Kind {
         luminance: bool,
         invert: bool,
     },
+    /// A box that shows an image: the scene's resource of this index, as the frontend lists
+    /// them.
+    Image {
+        resource: u32,
+    },
 }
 
 /// What a Text or a Span holds, in order: text, or a Span, which is also one of its children.
@@ -169,6 +174,7 @@ impl Node {
             (None, Kind::Text { .. }) => "<Text>".into(),
             (None, Kind::Span { .. }) => "<Span>".into(),
             (None, Kind::Mask { .. }) => "<Mask>".into(),
+            (None, Kind::Image { .. }) => "<Image>".into(),
         }
     }
 }

@@ -161,6 +161,7 @@ struct TracedNode {
     site: Option<u32>,
     content: Option<Vec<TracedPiece>>,
     mask: Option<TracedMask>,
+    src: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -188,8 +189,12 @@ struct TracedGuard {
 }
 
 /// The template of a variant `runtime.js` serialized; `place` names where a site or stack line is
-/// in the source.
-pub fn variant(json: &str, place: &dyn Fn(&At) -> Rc<str>) -> Result<Template, Error> {
+/// in the source, and `resources` are the names of the scene's resources.
+pub fn variant(
+    json: &str,
+    place: &dyn Fn(&At) -> Rc<str>,
+    resources: &[String],
+) -> Result<Template, Error> {
     let traced: Traced =
         serde_json::from_str(json).map_err(|e| format!("a traced variant: {e}"))?;
     let mut program = Program::default();
@@ -252,6 +257,19 @@ pub fn variant(json: &str, place: &dyn Fn(&At) -> Rc<str>) -> Result<Template, E
                     source: node_id(m.source)?,
                     luminance: m.luminance,
                     invert: m.invert,
+                }
+            }
+            "image" => {
+                let name = n.src.as_deref().ok_or("an image node without a source")?;
+                let resource = resources.iter().position(|r| r == name).ok_or_else(|| {
+                    let at = n.site.map_or("<Image>".into(), |s| place(&At::Site(s)));
+                    format!(
+                        "{at}: <Image> src resource://{name}: the scene declares no resource \
+                         {name} in controls.resources"
+                    )
+                })?;
+                Kind::Image {
+                    resource: resource as u32,
                 }
             }
             other => return Err(format!("node type {other}")),
@@ -358,7 +376,7 @@ mod tests {
                 At::Stack(s) => s.as_str().into(),
             }
         };
-        let t = variant(json, &place).unwrap();
+        let t = variant(json, &place, &[]).unwrap();
         // seconds, 2, mul, 1, gt, template
         assert_eq!(t.program.ops.len(), 6);
         assert_eq!(t.program.ops[2], Op::Bin(Bin::Mul, 0, 1));
@@ -378,6 +396,6 @@ mod tests {
         assert_eq!(t.guards[0].expr, 4);
         assert_eq!(&*t.guards[1].at, "m0.js:3");
         assert_eq!(t.guards[1].when, [(4, true)]);
-        assert!(variant(r#"{"ops": [["add", [{"e": 5}, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#, &place).is_err());
+        assert!(variant(r#"{"ops": [["add", [{"e": 5}, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#, &place, &[]).is_err());
     }
 }

@@ -331,6 +331,14 @@ impl Runner {
         }
     }
 
+    /// The bytes of a case or of a file it reads.
+    fn bytes(&self, path: &str) -> Option<Vec<u8>> {
+        match self.made.get(path) {
+            Some(source) => Some(source.clone().into_bytes()),
+            None => std::fs::read(self.root.join(path)).ok(),
+        }
+    }
+
     fn error(&self, case: &str) -> Result<(), String> {
         let source = self.source(case).ok_or("cannot read the case")?;
         let expected = (source.lines().next())
@@ -364,7 +372,7 @@ impl Runner {
             let c = scene.composition();
             let renderer = renderer.get_or_insert_with(|| Renderer::new(gpu, c.width, c.height));
             let items = scene.frame(at)?.items;
-            let pixels = renderer.render(&items, scene.faces())?;
+            let pixels = renderer.render(&items, scene.faces(), scene.images())?;
             match self.compare(&format!("{stem}.{i}.png"), [c.width, c.height], &pixels) {
                 Ok(Some(problem)) => problems.push(format!("frame {i}: {problem}")),
                 Ok(None) => {}
@@ -401,7 +409,7 @@ impl Runner {
             let frame = scene.frame(at)?;
             let c = scene.composition();
             let size = [c.width, c.height];
-            let html = html::print(&frame, c)?;
+            let html = html::print(&frame, c, scene.resources())?;
             let out = self.chrome_baselines.join(format!("{stem}.{i}"));
             let png = self.chrome_baselines.join(format!("{stem}.{i}.png"));
             let json = self.chrome_baselines.join(format!("{stem}.{i}.json"));
@@ -413,7 +421,7 @@ impl Runner {
                         let renderer =
                             renderer.get_or_insert_with(|| Renderer::new(gpu, size[0], size[1]));
                         let items = chrome::glyphless(&frame);
-                        let drawn = renderer.render(&items, scene.faces())?;
+                        let drawn = renderer.render(&items, scene.faces(), scene.images())?;
                         let name = format!("{stem}.{i}.png");
                         if let Some(p) = self.against_chrome(&name, size, &drawn, &png)? {
                             problems.push(format!("frame {i}: {p}"));
@@ -493,7 +501,7 @@ impl Runner {
         case: &str,
         each: &mut dyn FnMut(&mut Scene, i64, Tick) -> Result<(), String>,
     ) -> Result<(), Failure> {
-        let read = |path: &str| self.source(path);
+        let read = |path: &str| self.bytes(path);
         let mut scene = Scene::load(case, &read).map_err(Failure::Scene)?;
         let c = scene.composition();
         if c.width > MAX_SIZE || c.height > MAX_SIZE {

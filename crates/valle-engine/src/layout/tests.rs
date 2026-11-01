@@ -11,7 +11,7 @@ fn lay(nodes: Vec<Node>, roots: &[u32]) -> Result<Layout, Error> {
         ..Default::default()
     };
     let styles = Sheet::new(&template)?.compute(&[], [200.0, 100.0])?;
-    layout(&template, &[], &styles, [200.0, 100.0], &mut text())
+    layout(&template, &[], &styles, [200.0, 100.0], &mut text(), &[])
 }
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {

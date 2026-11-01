@@ -13,7 +13,7 @@ fn paint_of(nodes: Vec<Node>, roots: &[u32]) -> (Vec<Item>, Layout) {
     };
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
-    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     (paint(&template, &styles, &laid), laid)
 }
 
@@ -38,6 +38,7 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Rect { color, .. } => name(*color),
             Item::Ring { colors, .. } => format!("ring {}", name(colors[0])),
             Item::Gradient { ramp, .. } => format!("gradient of {}", ramp.segments.len()),
+            Item::Image { image, .. } => format!("image {image}"),
             Item::Glyphs { color, .. } => format!("text {}", name(*color)),
             Item::Path { color, .. } => format!("path {}", name(*color)),
             Item::Mask { mask, items } => format!("mask {:?} {:?}", names(mask), names(items)),
@@ -414,7 +415,7 @@ fn transforms_take_a_box_to_the_canvas_through_its_ancestors() {
     };
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
-    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
     let at = |i: usize, p| transforms[i].apply(p).map(rounded);
     assert_eq!(at(0, [0.0, 0.0]), [10.0, 0.0]);
@@ -472,7 +473,7 @@ fn motion_paths_move_a_box_along_and_turn_it_after_its_own_transforms() {
     };
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
-    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
     // Each box's center and the point 20 px right of it, from its border box at 55, 25.
     let at = |i: usize| [[75.0, 35.0], [95.0, 35.0]].map(|p| transforms[i].apply(p));
@@ -515,7 +516,7 @@ fn a_perspective_reaches_only_the_boxs_children() {
     };
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
-    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
     let at = |i: usize, p| transforms[i].apply(p).map(rounded);
     // Halfway to a viewer 100 px in front of the center: twice as far from it.
@@ -633,7 +634,7 @@ fn transforms_in_a_3d_scene_add_up_before_they_are_flattened() {
     };
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template).unwrap().compute(&[], canvas).unwrap();
-    let laid = layout(&template, &[], &styles, canvas, &mut text()).unwrap();
+    let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
     // A quarter turn about y in all: edge on.
     assert_eq!(transforms[1].inverse(), None);

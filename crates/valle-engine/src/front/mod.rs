@@ -28,6 +28,7 @@ use crate::template::{Error, Template, V};
 use crate::time::{Rate, Tick};
 
 use lower::{Arg, At};
+pub use rewrite::Slot;
 
 const RUNTIME: &str = include_str!("runtime.js");
 
@@ -67,6 +68,8 @@ struct Module {
 
 pub struct Front {
     pub composition: Composition,
+    /// The resources the scene declares, each default a path joined to the scene's folder.
+    pub resources: Vec<Slot>,
     entry: String,
     modules: Vec<Module>,
     /// `path:line:col` of each site the rewrite numbered.
@@ -91,15 +94,23 @@ impl Front {
             sites: Vec::new(),
         };
         loader.visit(entry.to_string(), text)?;
-        let composition = loader.loaded[loader.by_path[entry]]
-            .code
-            .composition
-            .ok_or_else(|| {
-                format!(
-                    "{entry}: a scene exports its composition, such as `export const composition \
+        let scene = &loader.loaded[loader.by_path[entry]].code;
+        let folder = entry.rsplit_once('/').map_or("", |(dir, _)| dir);
+        let resources = (scene.resources.iter())
+            .map(|slot| Slot {
+                name: slot.name.clone(),
+                default: (slot.default.as_ref()).map(|d| match d.starts_with('/') {
+                    true => d.clone(),
+                    false => rewrite::join(folder, d),
+                }),
+            })
+            .collect();
+        let composition = scene.composition.ok_or_else(|| {
+            format!(
+                "{entry}: a scene exports its composition, such as `export const composition \
                      = {{ width: 1920, height: 1080, fps: 30, duration: 5 }}`"
-                )
-            })?;
+            )
+        })?;
 
         let runtime = Runtime::new_with_alloc(Counted(0)).map_err(|e| e.to_string())?;
         runtime.set_max_stack_size(STACK);
@@ -129,6 +140,7 @@ impl Front {
             .collect();
         let front = Front {
             composition,
+            resources,
             entry: entry.to_string(),
             modules,
             sites: loader.sites,
@@ -214,7 +226,8 @@ impl Front {
                 ))
                 .map_err(|e| self.describe(&ctx, e))
         })?;
-        lower::variant(&traced, &|at| self.place(at))
+        let names: Vec<String> = self.resources.iter().map(|r| r.name.clone()).collect();
+        lower::variant(&traced, &|at| self.place(at), &names)
     }
 
     fn run(&self, ctx: &Ctx<'_>, source: String, file: &str) -> Result<(), Error> {

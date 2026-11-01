@@ -1,10 +1,11 @@
 //! A frame as HTML for Chrome: every node an element with its style as written, printed as React
-//! DOM prints a style object, on a canvas like the engine's: a Span as a `span`, every other node
-//! as a `div`. Elements carry their node's index, `data-n`, and Texts `data-text`.
+//! DOM prints a style object, on a canvas like the engine's: a Span as a `span`, an Image as an
+//! `img` of a block that shows its file from the server, and every other node as a `div`.
+//! Elements carry their node's index, `data-n`, and Texts `data-text`.
 
 use std::fmt::Write as _;
 
-use valle_engine::front::Composition;
+use valle_engine::front::{Composition, Slot};
 use valle_engine::js;
 use valle_engine::scene::Frame;
 use valle_engine::template::{Kind, Piece, Prop, V};
@@ -51,8 +52,9 @@ const UNITLESS: &[&str] = &[
 /// The built-in sans-serif as Chrome loads it, from the server `web/tests/chrome.ts` runs.
 const SANS_SERIF: &str = "\"Valle Sans\"";
 
-/// The frame's HTML, or what in it has none.
-pub fn print(frame: &Frame, c: Composition) -> Result<String, String> {
+/// The frame's HTML, or what in it has none; `resources` are the scene's, their files paths from
+/// the cases' folder.
+pub fn print(frame: &Frame, c: Composition, resources: &[Slot]) -> Result<String, String> {
     let mut html = format!(
         "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n\
          @font-face {{ font-family: {SANS_SERIF}; src: url(\"/fonts/NotoSans-Variable.ttf\"); \
@@ -65,13 +67,13 @@ pub fn print(frame: &Frame, c: Composition) -> Result<String, String> {
         c.width, c.height
     );
     for &root in &frame.template.roots {
-        node(&mut html, frame, root)?;
+        node(&mut html, frame, resources, root)?;
     }
     html += "</div>\n";
     Ok(html)
 }
 
-fn node(html: &mut String, frame: &Frame, i: u32) -> Result<(), String> {
+fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<(), String> {
     let n = &frame.template.nodes[i as usize];
     if let Kind::Mask { .. } = n.kind {
         return Err(format!(
@@ -82,15 +84,21 @@ fn node(html: &mut String, frame: &Frame, i: u32) -> Result<(), String> {
     // A Span is an inline box.
     let tag = match n.kind {
         Kind::Span { .. } => "span",
+        Kind::Image { .. } => "img",
         _ => "div",
     };
     let _ = write!(html, "<{tag} data-n=\"{i}\"");
     if matches!(n.kind, Kind::Text { .. }) {
         html.push_str(" data-text");
     }
-    let mut style: Vec<String> = (n.style.iter())
-        .filter_map(|(key, prop)| declaration(key, value(frame, prop)))
-        .collect();
+    let mut style = Vec::new();
+    if let Kind::Image { resource } = n.kind {
+        let slot = &resources[resource as usize];
+        let path = slot.default.as_deref().ok_or("an image without a file")?;
+        let _ = write!(html, " src=\"/cases/{}\"", escape(path));
+        style.push("display: block;".to_string());
+    }
+    style.extend((n.style.iter()).filter_map(|(key, prop)| declaration(key, value(frame, prop))));
     // Chrome draws a decoration in `currentcolor` in the color of the text's stroke or fill,
     // which hide with the glyphs for the runner; its color as a value keeps it.
     let declared = frame.styles[i as usize].decorations.last();
@@ -108,17 +116,20 @@ fn node(html: &mut String, frame: &Frame, i: u32) -> Result<(), String> {
             for piece in content {
                 match piece {
                     Piece::Text(text) => html.push_str(&escape(&value(frame, text).text())),
-                    Piece::Span(span) => node(html, frame, *span)?,
+                    Piece::Span(span) => node(html, frame, resources, *span)?,
                 }
             }
         }
         _ => {
             for &child in &n.children {
-                node(html, frame, child)?;
+                node(html, frame, resources, child)?;
             }
         }
     }
-    let _ = write!(html, "</{tag}>");
+    // An img has no end tag.
+    if tag != "img" {
+        let _ = write!(html, "</{tag}>");
+    }
     Ok(())
 }
 

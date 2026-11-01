@@ -83,6 +83,14 @@ pub enum Item {
         tiles: Tiles,
         ramp: Ramp,
     },
+    /// The scene's image `image` filling a rectangle with its corners rounded by `radii`, in
+    /// `tiles`.
+    Image {
+        rect: Rect,
+        radii: Radii,
+        tiles: Tiles,
+        image: u32,
+    },
     /// Glyphs of `Text::faces()[face]` at `size` px: glyph ids at their baseline origins. With a
     /// `stroke` above 0, a stroke that many px wide along their edges instead.
     Glyphs {
@@ -1309,6 +1317,7 @@ impl Painter<'_> {
     fn foreground(&self, i: Option<usize>, out: &mut Drawn) {
         if let Some(i) = i {
             self.text(i, out);
+            self.image(i, out);
         }
         for c in self.children(i) {
             if self.atomic(c) {
@@ -1557,6 +1566,33 @@ impl Painter<'_> {
         }
     }
 
+    /// `i`'s image if it is an Image: filling its content box, which clips it with its corners.
+    fn image(&self, i: usize, out: &mut Drawn) {
+        let Kind::Image { resource } = self.template.nodes[i].kind else {
+            return;
+        };
+        let s = &self.styles[i];
+        let (rect, radii) = area(s, &self.layout.boxes[i], Area::ContentBox);
+        if !s.visible || rect.width <= 0.0 || rect.height <= 0.0 {
+            return;
+        }
+        let clip = match self.clipping(i) {
+            true => Some(i),
+            false => self.clips[i].last().copied(),
+        };
+        let tiles = Tiles {
+            first: rect,
+            step: [None; 2],
+        };
+        let image = Item::Image {
+            rect,
+            radii,
+            tiles,
+            image: resource,
+        };
+        out.push((clip, image));
+    }
+
     /// The glyphs and decorations of `i`'s text and its descendants', opaque, as Chrome clips a
     /// background to text: their fills, without strokes or shadows. Descendants with transforms
     /// of their own are left out.
@@ -1686,7 +1722,8 @@ impl Painter<'_> {
             let inside = |item: &Item| match item {
                 Item::Rect { rect: r, .. }
                 | Item::Ring { rect: r, .. }
-                | Item::Gradient { rect: r, .. } => within(*r, rect),
+                | Item::Gradient { rect: r, .. }
+                | Item::Image { rect: r, .. } => within(*r, rect),
                 _ => false,
             };
             if items.iter().all(inside) {

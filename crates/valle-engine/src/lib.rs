@@ -4,6 +4,7 @@
 pub mod eval;
 pub mod front;
 pub mod gpu;
+pub mod image;
 pub mod js;
 pub mod layout;
 pub mod paint;

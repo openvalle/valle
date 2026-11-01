@@ -27,7 +27,7 @@ fn big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
 
 fn load(source: &'static str) -> Result<Scene, Error> {
     Scene::load("s.tsx", &|path| {
-        (path == "s.tsx").then(|| source.to_string())
+        (path == "s.tsx").then(|| source.as_bytes().to_vec())
     })
 }
 
@@ -80,5 +80,62 @@ export default function Scene() {
         let e = scene.frame(Tick(0)).unwrap_err();
         assert!(e.starts_with("s.tsx:3:"), "{e}");
         assert!(e.contains("style width"), "{e}");
+    });
+}
+
+/// A PNG of RGBA `pixels`, rows of `width`.
+fn png(width: u32, pixels: &[[u8; 4]]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let height = pixels.len() as u32 / width;
+    let mut encoder = png::Encoder::new(&mut out, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(pixels.as_flattened()).unwrap();
+    writer.finish().unwrap();
+    out
+}
+
+#[test]
+fn images_come_from_the_resources_the_scene_declares() {
+    big_stack(|| {
+        let source = "export const composition = { width: 40, height: 20, fps: 1, duration: 1 };
+export const controls = {
+  resources: { dot: resource({ kind: 'image', default: '../img/dot.png' }) },
+};
+export default function Scene() {
+  return <Image src='resource://dot' style={{ width: 10 }} />;
+}
+";
+        let image = png(2, &[[255, 0, 0, 255], [255, 255, 255, 128]]);
+        let files = |source: String, image: Option<Vec<u8>>| {
+            move |path: &str| match path {
+                "scenes/s.tsx" => Some(source.clone().into_bytes()),
+                "img/dot.png" => image.clone(),
+                _ => None,
+            }
+        };
+        let read = files(source.into(), Some(image.clone()));
+        let mut scene = Scene::load("scenes/s.tsx", &read).unwrap();
+        // The default from the scene's folder.
+        assert_eq!(scene.resources()[0].default.as_deref(), Some("img/dot.png"));
+        assert_eq!(scene.images()[0].size, [2, 1]);
+        // Premultiplied in 8 bits, as Chrome keeps it.
+        assert_eq!(scene.images()[0].pixels[4..], [128, 128, 128, 128]);
+        let frame = scene.frame(Tick(0)).unwrap();
+        // As tall as its width and the image's ratio make it.
+        let border = frame.layout.boxes[0].border;
+        assert_eq!([border.width, border.height], [10.0, 5.0]);
+        assert!(matches!(&frame.items[..], [Item::Image { image: 0, .. }]));
+
+        let read = files(source.replace("://dot", "://logo"), Some(image));
+        let e = Scene::load("scenes/s.tsx", &read)
+            .and_then(|mut s| s.frame(Tick(0)).map(drop))
+            .unwrap_err();
+        assert!(e.starts_with("scenes/s.tsx:6:"), "{e}");
+        assert!(e.contains("declares no resource logo"), "{e}");
+        let read = files(source.into(), None);
+        let e = Scene::load("scenes/s.tsx", &read).err().unwrap();
+        assert!(e.contains("resource dot: img/dot.png: not found"), "{e}");
     });
 }
