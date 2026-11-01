@@ -4,6 +4,9 @@
 // - 0, chromatic aberration: red from half an offset back and blue from half of it on, so red
 //   moves on and blue back, and green where it is; the alpha the most of the three's, as each
 //   channel already carries its own.
+// - 1, lens distortion: in the px of a transform, each point of a frame shows the one as much
+//   farther from its center as 1 + k1 r² + k2 r⁴, r its distance over the half diagonal's;
+//   nothing shows out of the frame, its edges antialiased.
 
 struct Effect {
   // x: which effect; then its parameters.
@@ -52,7 +55,26 @@ fn aberration(p: vec2f, offset: vec2f) -> vec4f {
   return vec4f(r.r, g.g, b.b, max(r.a, max(g.a, b.a)));
 }
 
+fn lens(p: vec2f, t: u32, k: vec2f, frame: vec4f) -> vec4f {
+  let q = local(p, t);
+  let none = array<vec4f, 2>(vec4f(0.0), vec4f(0.0));
+  let inside = coverage(q, steps(p, t), frame, none);
+  if (inside <= 0.0) {
+    return vec4f(0.0);
+  }
+  let c = frame.xy + frame.zw * 0.5;
+  let d = q - c;
+  let r2 = dot(d, d) / (dot(frame.zw, frame.zw) * 0.25);
+  let seen = c + d * (1.0 + k.x * r2 + k.y * r2 * r2);
+  let h = transforms[t].forward * vec3f(seen, 1.0);
+  return sampled(h.xy / h.z) * inside;
+}
+
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let e = effects[in.index];
+  let kind = u32(e.head.x);
+  if (kind == 1u) {
+    return lens(in.pos.xy, u32(e.head.y), e.head.zw, e.more[0]);
+  }
   return aberration(in.pos.xy, e.head.yz);
 }

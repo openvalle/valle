@@ -1751,6 +1751,10 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
     );
     let backdrop = one(&[("backdropFilter", text("chromatic-aberration(256px)"))]);
     assert_eq!(backdrop.backdrop, [F::ChromaticAberration(256.0)]);
+    assert_eq!(
+        filter("lens-distortion(0.25 -0.5)"),
+        [F::LensDistortion([0.25, -0.5])]
+    );
     for (v, says) in [
         (
             "chromatic-aberration(300px)",
@@ -1760,6 +1764,12 @@ fn filters_take_valles_functions_in_px_within_their_ranges() {
         ("chromatic-aberration(4)", "the offset 4 is not px"),
         ("chromatic-aberration()", "takes the offset"),
         ("chromatic-aberration(1px 2px)", "takes the offset"),
+        (
+            "lens-distortion(0.6 0)",
+            "k1 0.6 is not within -0.5 and 0.5",
+        ),
+        ("lens-distortion(0 1px)", "k2 1px is not a number"),
+        ("lens-distortion(0.1)", "takes k1, k2"),
     ] {
         let e = error(&[("filter", text(v))]);
         assert!(e.contains(says), "{v}: {e}");

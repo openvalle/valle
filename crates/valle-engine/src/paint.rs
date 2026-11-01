@@ -167,6 +167,9 @@ pub enum Filter {
     /// Its red moved on by half this many px along x and its blue back by half, its alpha the
     /// most of the three's.
     Aberration(f32),
+    /// Each point of the box `frame` shows the one as much farther from its center as
+    /// 1 + k1 r² + k2 r⁴, r its distance over the half diagonal's; nothing shows out of it.
+    Lens { k: [f32; 2], frame: Rect },
 }
 
 /// Where a background image is: one tile, and on each axis how far it is to the next one, if it
@@ -487,8 +490,9 @@ fn snap(r: Rect) -> Rect {
     }
 }
 
-/// Filter functions as filters, those of colors one after another in one.
-fn filters(functions: &[filter::Function]) -> Vec<Filter> {
+/// Filter functions of a box with the border box `frame` as filters, those of colors one after
+/// another in one.
+fn filters(functions: &[filter::Function], frame: Rect) -> Vec<Filter> {
     let mut out = Vec::new();
     for f in functions {
         let next = match f {
@@ -503,6 +507,10 @@ fn filters(functions: &[filter::Function]) -> Vec<Filter> {
                 color: work(*color),
             },
             filter::Function::ChromaticAberration(offset) => Filter::Aberration(*offset as f32),
+            filter::Function::LensDistortion(k) => Filter::Lens {
+                k: k.map(|v| v as f32),
+                frame,
+            },
             f => {
                 let Some(m) = colors(f) else { continue };
                 if let Some(Filter::Colors(list)) = out.last_mut() {
@@ -583,7 +591,9 @@ fn colors(f: &filter::Function) -> Option<[f32; 20]> {
                 0.0,
             )
         }
-        F::Blur(_) | F::DropShadow { .. } | F::ChromaticAberration(_) => return None,
+        F::Blur(_) | F::DropShadow { .. } | F::ChromaticAberration(_) | F::LensDistortion(_) => {
+            return None;
+        }
     })
 }
 
@@ -936,7 +946,7 @@ impl Painter<'_> {
             // It contains all in it, so the clips around it go around all it paints.
             let mut items = self.nest_from(self.chained(inside), self.clips[d].len());
             if !s.filter.is_empty() && !items.is_empty() {
-                let filters = filters(&s.filter);
+                let filters = filters(&s.filter, snap(self.layout.boxes[d].border));
                 items = vec![Item::Filter { filters, items }];
             }
             items = self.over_backdrop(d, items);
@@ -986,7 +996,7 @@ impl Painter<'_> {
             return items;
         }
         let backdrop = Item::Backdrop {
-            filters: filters(&s.backdrop),
+            filters: filters(&s.backdrop, rect),
             rect,
             radii: self.radii(d, rect),
         };
@@ -1150,7 +1160,7 @@ impl Painter<'_> {
             self.context(Some(e), &mut drawn);
             let mut items = self.nest_from(self.chained(drawn), self.clips[e].len());
             if !s.filter.is_empty() && !items.is_empty() {
-                let filters = filters(&s.filter);
+                let filters = filters(&s.filter, snap(self.layout.boxes[e].border));
                 items = vec![Item::Filter { filters, items }];
             }
             items = self.over_backdrop(e, items);

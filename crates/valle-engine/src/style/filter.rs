@@ -31,6 +31,10 @@ pub enum Function<L = f64, C = Rgba> {
     /// Valle's `chromatic-aberration()`: red moved on along x by half this many px and blue
     /// back by half, as a lens splits colors.
     ChromaticAberration(f64),
+    /// Valle's `lens-distortion(k1 k2)`: each point of the border box shows the one as much
+    /// farther from its center as 1 + k1 r² + k2 r⁴, r its distance over the half diagonal's;
+    /// barrel for more than 0 and pincushion for less.
+    LensDistortion([f64; 2]),
 }
 
 impl Function<Len, Option<Rgba>> {
@@ -55,12 +59,14 @@ impl Function<Len, Option<Rgba>> {
                 color: color.unwrap_or(current),
             },
             Function::ChromaticAberration(offset) => Function::ChromaticAberration(*offset),
+            Function::LensDistortion(k) => Function::LensDistortion(*k),
         }
     }
 }
 
 const NAMES: &str = "blur, brightness, contrast, drop-shadow, grayscale, hue-rotate, invert, \
-                     opacity, saturate or sepia, or Valle's chromatic-aberration";
+                     opacity, saturate or sepia, or Valle's chromatic-aberration or \
+                     lens-distortion";
 
 /// `filter`: `none`, or functions separated by spaces.
 pub(super) fn filter(s: &str) -> Result<Vec<Function<Len, Option<Rgba>>>, String> {
@@ -160,6 +166,10 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
         "chromatic-aberration" => {
             let a = valle(&[("the offset", true, [-256.0, 256.0])])?;
             Function::ChromaticAberration(a[0])
+        }
+        "lens-distortion" => {
+            let a = valle(&[("k1", false, [-0.5, 0.5]), ("k2", false, [-0.5, 0.5])])?;
+            Function::LensDistortion([a[0], a[1]])
         }
         _ => return Err(format!("{name}() is not a filter function: {NAMES}")),
     })
