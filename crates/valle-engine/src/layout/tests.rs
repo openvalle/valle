@@ -318,6 +318,36 @@ fn fixed_boxes_take_the_canvas() {
 }
 
 #[test]
+fn transformed_boxes_contain_absolute_and_fixed_boxes() {
+    let at = |inset: [(&'static str, &'static str); 3]| {
+        let mut style = vec![inset[0], inset[1], inset[2]];
+        style.extend([("width", "10px"), ("height", "10px")]);
+        view(&style, &[])
+    };
+    let l = lay(
+        vec![
+            view(
+                &[
+                    ("marginLeft", "20px"),
+                    ("marginTop", "10px"),
+                    ("width", "100px"),
+                    ("height", "50px"),
+                    ("transform", "rotate(10deg)"),
+                ],
+                &[1, 2],
+            ),
+            at([("position", "absolute"), ("right", "0"), ("bottom", "0")]),
+            at([("position", "fixed"), ("left", "5px"), ("top", "5px")]),
+        ],
+        &[0],
+    )
+    .unwrap();
+    // From its padding box, as laid out before it is transformed.
+    assert_eq!(l.boxes[1].border, rect(110.0, 50.0, 10.0, 10.0));
+    assert_eq!(l.boxes[2].border, rect(25.0, 15.0, 10.0, 10.0));
+}
+
+#[test]
 fn text_is_measured_and_set_in_its_box() {
     let l = lay(
         vec![

@@ -3,7 +3,8 @@ export const composition = { width: 256, height: 256, fps: 1, duration: 1 };
 // 2D transforms: a turned box with a border and rounded corners, a scaled gradient, skewed text,
 // a matrix, a moved and turned box with a shadow, a turn undone inside another, a clip turned
 // with its box, a turned layer, a turn about a corner, a mirrored conic gradient, a turned box
-// over the boxes after it, and turned text.
+// over the boxes after it, turned text, and absolute and fixed boxes in a turned box, which
+// contains them.
 export default function Scene() {
   const tile = (style: object, children?: any) => (
     <View style={{ width: 52, height: 36, background: "#3949ab", ...style }}>{children}</View>
@@ -57,6 +58,28 @@ export default function Scene() {
         { transform: "rotate(90deg)", background: "#e8eaf6", color: "#283593", fontSize: 12 },
         <Text>Turned</Text>,
       )}
+      <View style={{ width: 52, height: 36, transform: "rotate(-10deg)", background: "#d1c4e9" }}>
+        <View
+          style={{
+            position: "absolute",
+            right: 4,
+            bottom: 4,
+            width: 16,
+            height: 10,
+            background: "#5e35b1",
+          }}
+        />
+        <View
+          style={{
+            position: "fixed",
+            left: 4,
+            top: 4,
+            width: 10,
+            height: 10,
+            background: "#311b92",
+          }}
+        />
+      </View>
     </View>
   );
 }

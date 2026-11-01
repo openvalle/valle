@@ -2,17 +2,20 @@
 //! their computed styles; text measured as Taffy asks and aligned on its first baseline; and
 //! every node's boxes in canvas px. The canvas is a block container the size of the composition
 //! that clips what overflows it, and the containing block of fixed boxes and of what no
-//! positioned ancestor contains.
+//! positioned ancestor contains. A transformed box contains the absolute and fixed boxes in it,
+//! as CSS has it.
 
 use std::borrow::Cow;
 
 use taffy::{
-    AvailableSpace, BlockContext, Cache, CacheTree, DetailedGridInfo, DetailedLayoutInfo,
-    Dimension, Display, LayoutBlockContainer, LayoutContainingBlock, LayoutFlexboxContainer,
-    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, LengthPercentage, NodeId,
-    Overflow, Point, Position, ResolveOrZero, RunMode, Size, TraversePartialTree,
-    compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout, compute_oof_layout, compute_root_layout,
+    AvailableSpace, BlockContext, BoxGenerationMode, BoxSizing, Cache, CacheTree, Contain,
+    ContainingBlockClaims, CoreStyle, DetailedGridInfo, DetailedLayoutInfo, Dimension, Direction,
+    Display, LayoutBlockContainer, LayoutContainingBlock, LayoutFlexboxContainer,
+    LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, LengthPercentage,
+    LengthPercentageAuto, NodeId, Overflow, Point, Position, Rect as Edges, ResolveOrZero, RunMode,
+    Size, TraversePartialTree, compute_block_layout, compute_cached_layout, compute_flexbox_layout,
+    compute_grid_layout, compute_hidden_layout, compute_leaf_layout, compute_oof_layout,
+    compute_root_layout,
 };
 
 use crate::style::Style;
@@ -343,13 +346,18 @@ impl TraversePartialTree for Tree<'_> {
 
 impl LayoutPartialTree for Tree<'_> {
     type CoreContainerStyle<'a>
-        = &'a taffy::Style
+        = Container<'a>
     where
         Self: 'a;
     type CustomIdent = String;
 
-    fn get_core_container_style(&self, id: NodeId) -> &taffy::Style {
-        self.style(id)
+    fn get_core_container_style(&self, id: NodeId) -> Container<'_> {
+        let transformed =
+            (self.styles.get(usize::from(id))).is_some_and(|s| !s.transform.is_empty());
+        Container {
+            style: self.style(id),
+            transformed,
+        }
     }
 
     fn set_unrounded_layout(&mut self, id: NodeId, layout: &taffy::Layout) {
@@ -362,6 +370,96 @@ impl LayoutPartialTree for Tree<'_> {
 
     fn compute_child_layout(&mut self, id: NodeId, inputs: LayoutInput) -> LayoutOutput {
         self.compute(id, inputs, None)
+    }
+}
+
+/// A container's style as the boxes it lays out see it: a transformed one is the containing block
+/// of every absolute and fixed box in it.
+struct Container<'a> {
+    style: &'a taffy::Style,
+    transformed: bool,
+}
+
+impl CoreStyle for Container<'_> {
+    type CustomIdent = String;
+
+    fn is_containing_block(&self) -> ContainingBlockClaims {
+        match self.transformed {
+            true => ContainingBlockClaims::ALL,
+            false => self.style.is_containing_block(),
+        }
+    }
+
+    fn box_generation_mode(&self) -> BoxGenerationMode {
+        self.style.box_generation_mode()
+    }
+
+    fn is_block(&self) -> bool {
+        self.style.is_block()
+    }
+
+    fn is_compressible_replaced(&self) -> bool {
+        self.style.is_compressible_replaced()
+    }
+
+    fn is_replaced(&self) -> bool {
+        self.style.is_replaced()
+    }
+
+    fn box_sizing(&self) -> BoxSizing {
+        self.style.box_sizing()
+    }
+
+    fn direction(&self) -> Direction {
+        self.style.direction()
+    }
+
+    fn overflow(&self) -> Point<Overflow> {
+        self.style.overflow()
+    }
+
+    fn scrollbar_width(&self) -> f32 {
+        self.style.scrollbar_width()
+    }
+
+    fn position(&self) -> Position {
+        self.style.position()
+    }
+
+    fn inset(&self) -> Edges<LengthPercentageAuto> {
+        self.style.inset()
+    }
+
+    fn size(&self) -> Size<Dimension> {
+        self.style.size()
+    }
+
+    fn min_size(&self) -> Size<LengthPercentageAuto> {
+        self.style.min_size()
+    }
+
+    fn max_size(&self) -> Size<LengthPercentageAuto> {
+        self.style.max_size()
+    }
+
+    fn aspect_ratio(&self) -> Option<f32> {
+        self.style.aspect_ratio()
+    }
+
+    fn margin(&self) -> Edges<LengthPercentageAuto> {
+        self.style.margin()
+    }
+
+    fn padding(&self) -> Edges<LengthPercentage> {
+        self.style.padding()
+    }
+
+    fn border(&self) -> Edges<LengthPercentage> {
+        self.style.border()
+    }
+
+    fn contain(&self) -> Contain {
+        self.style.contain()
     }
 }
 
