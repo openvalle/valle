@@ -425,9 +425,10 @@ impl Painter<'_> {
             || (s.z_index.is_some() && (self.positioned(i) || self.item(i)))
     }
 
-    /// Where `i` paints among the layered boxes of its stacking context.
+    /// Where `i` paints among the layered boxes of its stacking context: only a positioned box
+    /// or a flex or grid item takes a z-index.
     fn z(&self, i: usize) -> i32 {
-        match self.stacking(i) {
+        match self.positioned(i) || self.item(i) {
             true => self.styles[i].z_index.unwrap_or(0),
             false => 0,
         }

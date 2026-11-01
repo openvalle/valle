@@ -250,6 +250,26 @@ fn z_index_orders_stacking_contexts() {
         &[0, 2],
     );
     assert_eq!(order, ["green", "red", "blue"]);
+
+    // A block that is neither positioned nor an item takes no z-index, even as a stacking
+    // context: at 0, after the in-flow content.
+    let order = painted(
+        vec![
+            view(&[("height", "10px"), ("background", "red")], &[1, 2]),
+            view(
+                &[
+                    ("opacity", "0.5"),
+                    ("zIndex", "-1"),
+                    ("height", "5px"),
+                    ("background", "blue"),
+                ],
+                &[],
+            ),
+            view(&[("height", "5px"), ("background", "green")], &[]),
+        ],
+        &[0],
+    );
+    assert_eq!(order, ["red", "green", "blue@0.5"]);
 }
 
 #[test]

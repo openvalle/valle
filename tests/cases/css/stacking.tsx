@@ -1,7 +1,8 @@
 export const composition = { width: 256, height: 256, fps: 1, duration: 1 };
 
 // Stacking: z-index on positioned boxes, below and above in-flow content, in a stacking context
-// and out of one, on flex and grid items, with opacity, and in a fixed box.
+// and out of one, on flex and grid items, with opacity, ignored on a block with opacity, and in a
+// fixed box.
 export default function Scene() {
   const card = (background: string, style: object) => (
     <View style={{ position: "relative", width: 40, height: 24, background, ...style }} />
@@ -46,6 +47,20 @@ export default function Scene() {
           }}
         />
         {card("#004d40", { position: "absolute", left: 30, top: 6 })}
+      </View>
+      <View style={{ width: 100, background: "#e1f5fe" }}>
+        <View style={{ height: 20, background: "#0288d1" }} />
+        <View
+          style={{
+            opacity: 0.8,
+            zIndex: -1,
+            width: 60,
+            height: 20,
+            marginTop: -10,
+            marginLeft: 20,
+            background: "#ff7043",
+          }}
+        />
       </View>
       <View
         style={{
