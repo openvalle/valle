@@ -163,9 +163,13 @@ pub enum Tag {
     Line,
     Polyline,
     Polygon,
+    Defs,
+    LinearGradient,
+    RadialGradient,
+    Stop,
 }
 
-const TAGS: [(&str, Tag); 9] = [
+const TAGS: [(&str, Tag); 13] = [
     ("svg", Tag::Svg),
     ("g", Tag::G),
     ("path", Tag::Path),
@@ -175,6 +179,10 @@ const TAGS: [(&str, Tag); 9] = [
     ("line", Tag::Line),
     ("polyline", Tag::Polyline),
     ("polygon", Tag::Polygon),
+    ("defs", Tag::Defs),
+    ("linearGradient", Tag::LinearGradient),
+    ("radialGradient", Tag::RadialGradient),
+    ("stop", Tag::Stop),
 ];
 
 impl Tag {

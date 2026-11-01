@@ -2367,7 +2367,7 @@ const ROWS: &[Row] = &[
             "\"transparent\"",
             "\" RED \"",
         ],
-        refused: &["\"url(#paint)\"", "\"a\"", "\"\"", "0"],
+        refused: &["\"url(paint)\"", "\"a\"", "\"\"", "0"],
     },
     Row {
         properties: &["fillOpacity"],
@@ -2391,7 +2391,7 @@ const ROWS: &[Row] = &[
             "\"rgb(57 73 171 / 50%)\"",
             "\" RED \"",
         ],
-        refused: &["\"url(#paint)\"", "\"a\"", "\"\"", "0"],
+        refused: &["\"url(paint)\"", "\"a\"", "\"\"", "0"],
     },
     Row {
         properties: &["strokeOpacity"],
@@ -2452,6 +2452,24 @@ const ROWS: &[Row] = &[
         values: &["0", "2", "-3", "\"10%\"", "\"1px\""],
         refused: &["\"a\"", "\"\"", "true"],
     },
+    Row {
+        properties: &["stopColor"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><linearGradient id="UNIQUE"><stop offset={0.1} stopColor="#3949ab" /><stop offset={0.9} style={{ PROPERTY: VALUE }} /></linearGradient><rect x={1} y={1} width={28} height={8} fill="url(#UNIQUE)" /></svg>"##,
+        values: &[
+            "\"#43a047\"",
+            "\"currentColor\"",
+            "\"rgb(0 0 0 / 50%)\"",
+            "\"transparent\"",
+            "\" RED \"",
+        ],
+        refused: &["\"none\"", "\"url(#g)\"", "\"a\"", "\"\"", "0"],
+    },
+    Row {
+        properties: &["stopOpacity"],
+        sample: r##"<svg width={90} height={30} viewBox="0 0 30 10" style={{ background: "#e8eaf6", color: "#e53935" }}><linearGradient id="UNIQUE"><stop offset={0.1} stopColor="#3949ab" /><stop offset={0.9} stopColor="#43a047" style={{ PROPERTY: VALUE }} /></linearGradient><rect x={1} y={1} width={28} height={8} fill="url(#UNIQUE)" /></svg>"##,
+        values: &["0.5", "\"25%\"", "0", "1", "2", "-1"],
+        refused: &["\"a\"", "\"\"", "true"],
+    },
 ];
 
 /// The cases, by path from `tests/cases`, and their source; `chrome` is every CSS property the
@@ -2484,7 +2502,11 @@ pub fn cases(chrome: &[String]) -> Result<BTreeMap<String, String>, String> {
         if !known.contains(p) {
             return Err(format!("the engine takes {p}, which Chrome does not know"));
         }
-        let sample = |v: &str| row.sample.replace("PROPERTY", p).replace("VALUE", v);
+        // `UNIQUE` is an id of the sample's own: Chrome finds an id in the whole page.
+        let sample = |n: usize, v: &str| {
+            let s = row.sample.replace("PROPERTY", p).replace("VALUE", v);
+            s.replace("UNIQUE", &format!("{p}{n}"))
+        };
         let controls = if row.sample.contains("<Image") {
             CONTROLS
         } else {
@@ -2494,10 +2516,10 @@ pub fn cases(chrome: &[String]) -> Result<BTreeMap<String, String>, String> {
             "{COMPOSITION}\n{controls}\n// {p}: each value the engine takes, from the support table.\n\
              export default function Scene() {{\n  return (\n    <View style={{{{ padding: 4 }}}}>\n"
         );
-        for &v in row.values {
+        for (n, &v) in row.values.iter().enumerate() {
             css += &format!(
                 "      <View style={{{{ paddingBottom: 4 }}}}>{}</View>\n",
-                sample(v)
+                sample(n, v)
             );
         }
         css += "    </View>\n  );\n}\n";
@@ -2508,7 +2530,7 @@ pub fn cases(chrome: &[String]) -> Result<BTreeMap<String, String>, String> {
                 "// error: {case}:…\n{COMPOSITION}\n{controls}\n// {p}: {v}, which the engine refuses.\n\
                  export default function Scene() {{\n  return (\n    <View style={{{{ padding: 4 }}}}>\n\
                  \x20     <View style={{{{ paddingBottom: 4 }}}}>{}</View>\n    </View>\n  );\n}}\n",
-                sample(v)
+                sample(n, v)
             );
             out.insert(case, source);
         }

@@ -41,9 +41,11 @@ mod offset;
 mod scene;
 mod shape;
 
+use std::collections::HashMap;
+
 use taffy::{Display, Overflow, Position};
 
-pub use gradient::{Geometry, Ramp, Segment};
+pub use gradient::{Geometry, Ramp, Segment, Spread};
 pub use matrix::{Matrix, Matrix4};
 
 use crate::layout::{Boxes, Layout, Rect, ordered};
@@ -729,6 +731,13 @@ pub fn work(c: Rgba) -> [f32; 4] {
 pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item> {
     let n = template.nodes.len();
     let parents = parents(template);
+    // As Chrome finds them in its document: the first element of each id, in order.
+    let mut ids = HashMap::new();
+    for (i, s) in styles.iter().enumerate() {
+        if let Some(id) = s.svg.as_deref().and_then(|c| c.id.as_deref()) {
+            ids.entry(id).or_insert(i);
+        }
+    }
     let mut painter = Painter {
         template,
         styles,
@@ -736,6 +745,7 @@ pub fn paint(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Item
         spaces: spaces(template, styles, layout),
         parents,
         clips: Vec::with_capacity(n),
+        ids,
     };
     // In preorder, so the box whose clips a box takes has its own.
     for i in 0..n {
@@ -950,6 +960,8 @@ struct Painter<'a> {
     parents: Vec<Option<usize>>,
     /// The boxes whose clips each box is under, outermost first.
     clips: Vec<Vec<usize>>,
+    /// SVG elements by id.
+    ids: HashMap<&'a str, usize>,
 }
 
 impl Painter<'_> {
@@ -1708,6 +1720,7 @@ impl Painter<'_> {
             return;
         }
         let matrix = c.transform.map_or(matrix, |t| matrix.times(t));
+        let scale = matrix.radius_scale();
         let mut items = Vec::new();
         match &c.element {
             Element::G => {
@@ -1719,48 +1732,38 @@ impl Painter<'_> {
                 let Some(path) = svg::path(shape, size) else {
                     return;
                 };
-                let color = |paint: Paint, opacity: f64| {
-                    let mut color = match paint {
-                        Paint::None => return None,
-                        Paint::Color(c) => c,
-                        Paint::CurrentColor => s.color,
-                    };
-                    color[3] *= opacity;
-                    (color[3] > 0.0).then(|| work(color))
-                };
+                let bbox = svg::bounds(&path);
                 let k = &s.stroke;
-                let stroke = color(k.paint, k.opacity).and_then(|color| {
-                    let [w, h] = size;
-                    let diagonal = ((w * w + h * h) / 2.0).sqrt() as f32;
-                    let length = |l: &Calc| f64::from(l.resolve(diagonal));
-                    let pen = svg::Pen {
-                        width: length(&k.width),
-                        cap: k.cap,
-                        join: k.join,
-                        miter_limit: k.miter_limit,
-                        dashes: k.dashes.iter().map(length).collect(),
-                        dash_offset: length(&k.dash_offset),
-                        path_length: c.path_length,
-                    };
-                    let outline = (pen.width > 0.0)
-                        .then(|| svg::stroke(&path, &pen, matrix.radius_scale()))
-                        .flatten()?;
-                    Some(Item::Path {
-                        path: outline,
-                        even_odd: false,
-                        color,
-                    })
-                });
-                if let Some(color) = color(s.fill, s.fill_opacity) {
-                    items.push(Item::Path {
-                        path,
-                        even_odd: s.even_odd,
-                        color,
+                let stroke = self
+                    .svg_paint(&k.paint, k.opacity, s, size, bbox)
+                    .and_then(|paint| {
+                        let [w, h] = size;
+                        let diagonal = ((w * w + h * h) / 2.0).sqrt() as f32;
+                        let length = |l: &Calc| f64::from(l.resolve(diagonal));
+                        let pen = svg::Pen {
+                            width: length(&k.width),
+                            cap: k.cap,
+                            join: k.join,
+                            miter_limit: k.miter_limit,
+                            dashes: k.dashes.iter().map(length).collect(),
+                            dash_offset: length(&k.dash_offset),
+                            path_length: c.path_length,
+                        };
+                        let outline = (pen.width > 0.0)
+                            .then(|| svg::stroke(&path, &pen, scale))
+                            .flatten()?;
+                        let cover = svg::bounds(&outline);
+                        painted(outline, false, paint, cover, scale)
                     });
-                }
+                let fill = self.svg_paint(&s.fill, s.fill_opacity, s, size, bbox);
+                items.extend(fill.and_then(|f| painted(path, s.even_odd, f, bbox, scale)));
                 items.extend(stroke);
             }
-            Element::Shape(_) | Element::Svg { .. } => {}
+            Element::Shape(_)
+            | Element::Svg { .. }
+            | Element::Defs
+            | Element::Gradient(_)
+            | Element::Stop(_) => {}
         }
         if items.is_empty() {
             return;
@@ -1776,6 +1779,70 @@ impl Painter<'_> {
             Some(matrix) => out.push(Item::Transform { matrix, items }),
             None => out.extend(items),
         }
+    }
+
+    /// A shape's paint at `opacity`, in a viewport `size` user units big, over the shape's
+    /// bounding box `bbox`; `None` where it paints nothing.
+    fn svg_paint(
+        &self,
+        paint: &Paint,
+        opacity: f64,
+        s: &Style,
+        size: [f64; 2],
+        bbox: [f64; 4],
+    ) -> Option<Fill> {
+        let mut color = match paint {
+            Paint::None => return None,
+            Paint::Color(c) => *c,
+            Paint::CurrentColor => s.color,
+            Paint::Url(id) => {
+                let (mut ramp, matrix) = self.gradient(id, size, bbox)?;
+                let colors = ramp.segments.iter_mut().flat_map(|s| &mut s.colors);
+                colors.for_each(|c| c[3] *= opacity as f32);
+                let shows = (ramp.segments.iter()).any(|s| s.colors.iter().any(|c| c[3] > 0.0));
+                return shows.then_some(Fill::Ramp(ramp, matrix));
+            }
+        };
+        color[3] *= opacity;
+        (color[3] > 0.0).then(|| Fill::Color(work(color)))
+    }
+
+    /// Gradient `id` over a shape's bounding box `bbox`, in a viewport `size` user units big,
+    /// and the transform from where its ramp is to the shape's user units: each attribute the
+    /// first of the gradients along its `href`s has, and the stops of the first with any. `None`
+    /// if there is no such gradient; an `href` to none ends the chain.
+    fn gradient(&self, id: &str, size: [f64; 2], bbox: [f64; 4]) -> Option<(Ramp, Matrix)> {
+        let (mut chain, mut stops) = (Vec::new(), Vec::new());
+        let mut next = Some(id);
+        while let Some(id) = next
+            && chain.len() < 16
+        {
+            let Some(&n) = self.ids.get(id) else {
+                break;
+            };
+            let Some(Element::Gradient(g)) = self.styles[n].svg.as_deref().map(|c| &c.element)
+            else {
+                break;
+            };
+            if stops.is_empty() {
+                for &k in &self.template.nodes[n].children {
+                    let s = &self.styles[k as usize];
+                    let Some(Element::Stop(offset)) = s.svg.as_deref().map(|c| &c.element) else {
+                        continue;
+                    };
+                    let mut color = match s.stop_color {
+                        Paint::CurrentColor => s.color,
+                        Paint::Color(c) => c,
+                        _ => color::BLACK,
+                    };
+                    color[3] *= s.stop_opacity;
+                    stops.push((*offset, color));
+                }
+            }
+            chain.push(g);
+            next = g.href.as_deref();
+        }
+        svg::gradient(&chain, &stops, bbox, size)
     }
 
     /// The glyphs and decorations of `i`'s text and its descendants', opaque, as Chrome clips a
@@ -1933,6 +2000,61 @@ impl Painter<'_> {
         }
         out.push(Item::Clip { rect, radii, items });
     }
+}
+
+/// A shape's paint: a working color, or a ramp in the space `Matrix` takes to its user units.
+enum Fill {
+    Color([f32; 4]),
+    Ramp(Ramp, Matrix),
+}
+
+/// `path` filled with `fill`: a ramp over the path's bounding box `cover`, in the space it is
+/// in, masked by the path; `scale` is px a user unit, for the edge pixels the path covers.
+fn painted(path: Path, even_odd: bool, fill: Fill, cover: [f64; 4], scale: f64) -> Option<Item> {
+    let (ramp, matrix) = match fill {
+        Fill::Color(color) => {
+            return Some(Item::Path {
+                path,
+                even_odd,
+                color,
+            });
+        }
+        Fill::Ramp(ramp, matrix) => (ramp, matrix),
+    };
+    let margin = 2.0 / scale.max(1e-9);
+    let [x, y, w, h] = cover;
+    let around = Rect {
+        x: (x - margin) as f32,
+        y: (y - margin) as f32,
+        width: (w + 2.0 * margin) as f32,
+        height: (h + 2.0 * margin) as f32,
+    };
+    let rect = matrix.inverse()?.bounds(around);
+    // Where its colors go from the image's top left, as a gradient image has it.
+    let ramp = Ramp {
+        geometry: ramp.geometry.moved([-rect.x, -rect.y]),
+        ..ramp
+    };
+    let gradient = Item::Gradient {
+        rect,
+        radii: SQUARE,
+        tiles: Tiles {
+            first: rect,
+            step: [None; 2],
+        },
+        ramp,
+    };
+    Some(Item::Mask {
+        mask: vec![Item::Path {
+            path,
+            even_odd,
+            color: [1.0; 4],
+        }],
+        items: vec![Item::Transform {
+            matrix,
+            items: vec![gradient],
+        }],
+    })
 }
 
 /// Whether `inner` is inside `outer`.

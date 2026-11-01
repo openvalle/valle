@@ -1,10 +1,14 @@
 //! Inline SVG: what an element's attributes say it draws, in its user units, where an `<svg>`'s
 //! viewBox puts them in its box, and the outlines of strokes.
 
-use kurbo::{BezPath, ParamCurveArclen, PathEl, StrokeOpts};
+use std::rc::Rc;
 
-use crate::paint::Matrix;
+use kurbo::{BezPath, ParamCurveArclen, PathEl, Shape as _, StrokeOpts};
+
+use crate::paint::{self, Geometry, Matrix, Ramp, Spread};
 use crate::path::{self, Path, Point, Segment};
+use crate::style::color::Rgba;
+use crate::style::gradient::Space;
 use crate::style::{Cap, Join};
 use crate::template::{Tag, V};
 
@@ -58,7 +62,8 @@ pub enum Shape {
     },
 }
 
-/// What an element draws: an `<svg>` its viewBox through its fit, a group its children.
+/// What an element draws: an `<svg>` its viewBox through its fit, a group its children, a shape
+/// itself. Definitions, gradients and their stops draw nothing themselves.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Element {
     Svg {
@@ -67,6 +72,24 @@ pub enum Element {
     },
     G,
     Shape(Shape),
+    Defs,
+    Gradient(Gradient),
+    /// A gradient's stop, at an offset from 0 to 1.
+    Stop(f64),
+}
+
+/// A gradient as its own attributes have it; those it leaves out come from the gradient its
+/// `href` names, then their defaults.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Gradient {
+    pub radial: bool,
+    pub href: Option<Rc<str>>,
+    /// `x1`, `y1`, `x2` and `y2`, or `cx`, `cy`, `r`, `fx`, `fy` and `fr`.
+    pub lengths: [Option<Length>; 6],
+    /// `gradientUnits`: user units, not fractions of the shape's bounding box.
+    pub user_space: Option<bool>,
+    pub transform: Option<Matrix>,
+    pub spread: Option<Spread>,
 }
 
 /// An element as its attributes have it at a frame.
@@ -77,6 +100,7 @@ pub struct Computed {
     pub transform: Option<Matrix>,
     /// A shape's `pathLength`: the length its dashes take its path to have.
     pub path_length: Option<f64>,
+    pub id: Option<Rc<str>>,
 }
 
 /// Whether an attribute is a presentation attribute: a style property of the same name, which
@@ -95,6 +119,8 @@ pub fn presentational(tag: Tag, name: &str) -> bool {
             | "strokeMiterlimit"
             | "strokeDasharray"
             | "strokeDashoffset"
+            | "stopColor"
+            | "stopOpacity"
             | "opacity"
             | "visibility"
             | "color"
@@ -157,7 +183,64 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
             },
             closed: tag == Tag::Polygon,
         }),
+        Tag::Defs => Element::Defs,
+        Tag::LinearGradient | Tag::RadialGradient => {
+            let radial = tag == Tag::RadialGradient;
+            let names = match radial {
+                true => ["cx", "cy", "r", "fx", "fy", "fr"],
+                false => ["x1", "y1", "x2", "y2", "", ""],
+            };
+            let mut lengths = [None; 6];
+            for (l, name) in lengths.iter_mut().zip(names) {
+                *l = get(name)
+                    .map(|v| self::length(v).map_err(at(name)))
+                    .transpose()?;
+            }
+            let href = match text("href").or_else(|| text("xlinkHref")) {
+                Some(h) => match h.trim().strip_prefix('#') {
+                    Some(id) if !id.is_empty() => Some(id.into()),
+                    _ => return Err(format!("href: {h} is not #id, an element in the <svg>")),
+                },
+                None => None,
+            };
+            let user_space = text("gradientUnits").map(|u| match u.trim() {
+                "userSpaceOnUse" => Ok(true),
+                "objectBoundingBox" => Ok(false),
+                u => Err(format!(
+                    "gradientUnits: {u} is not userSpaceOnUse or objectBoundingBox"
+                )),
+            });
+            let spread = text("spreadMethod").map(|m| match m.trim() {
+                "pad" => Ok(Spread::Pad),
+                "repeat" => Ok(Spread::Repeat),
+                "reflect" => Ok(Spread::Reflect),
+                m => Err(format!("spreadMethod: {m} is not pad, reflect or repeat")),
+            });
+            let matrix = text("gradientTransform")
+                .map(|t| self::transform(&t).map_err(at("gradientTransform")));
+            Element::Gradient(Gradient {
+                radial,
+                href,
+                lengths,
+                user_space: user_space.transpose()?,
+                transform: matrix.transpose()?,
+                spread: spread.transpose()?,
+            })
+        }
+        Tag::Stop => Element::Stop(match get("offset") {
+            Some(v) => offset(v).map_err(at("offset"))?,
+            None => 0.0,
+        }),
     };
+    if transform.is_some() && matches!(element, Element::Defs | Element::Stop(_)) {
+        return Err(format!(
+            "transform: a <{}> draws nothing to transform",
+            tag.name()
+        ));
+    }
+    if transform.is_some() && matches!(element, Element::Gradient(_)) {
+        return Err("transform: a gradient takes gradientTransform".into());
+    }
     let negative = |name: &str, l: Option<Length>| match l {
         Some(l) if l.units < 0.0 || l.percent < 0.0 => Err(format!("{name} is negative")),
         _ => Ok(()),
@@ -174,6 +257,10 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
             negative("rx", r[0])?;
             negative("ry", r[1])?;
         }
+        Element::Gradient(g) if g.radial => {
+            negative("r", g.lengths[2])?;
+            negative("fr", g.lengths[5])?;
+        }
         _ => {}
     }
     let path_length = match get("pathLength") {
@@ -187,7 +274,22 @@ pub fn computed(tag: Tag, attributes: &[(&str, &V)]) -> Result<Computed, String>
         element,
         transform,
         path_length,
+        id: text("id").map(Rc::from),
     })
+}
+
+/// A stop's offset: a number or a percentage, clamped to [0, 1].
+fn offset(v: &V) -> Result<f64, String> {
+    let text = v.text();
+    let s = text.trim();
+    let x = match s.strip_suffix('%') {
+        Some(p) => p.trim().parse::<f64>().map(|p| p / 100.0),
+        None => s.parse::<f64>(),
+    };
+    match x {
+        Ok(x) if x.is_finite() => Ok(x.clamp(0.0, 1.0)),
+        _ => Err(format!("{s} is not a number or a percentage")),
+    }
 }
 
 /// An error in attribute `name`, which says so.
@@ -471,16 +573,7 @@ const DOT: f64 = 1e-3;
 /// that draws nothing.
 pub fn stroke(path: &Path, pen: &Pen, scale: f64) -> Option<Path> {
     let s = scale.max(1e-9);
-    let to = |p: Point| kurbo::Point::new(f64::from(p[0]) * s, f64::from(p[1]) * s);
-    let mut els: BezPath = (path.0.iter())
-        .map(|segment| match *segment {
-            Segment::Move(p) => PathEl::MoveTo(to(p)),
-            Segment::Line(p) => PathEl::LineTo(to(p)),
-            Segment::Quad(c, p) => PathEl::QuadTo(to(c), to(p)),
-            Segment::Cubic(c1, c2, p) => PathEl::CurveTo(to(c1), to(c2), to(p)),
-            Segment::Close => PathEl::ClosePath,
-        })
-        .collect();
+    let mut els = bez(path, s);
     // In px: user units, or those of the path length.
     let k = match pen.path_length {
         Some(l) if !pen.dashes.is_empty() => arclen(&els) / l,
@@ -559,6 +652,132 @@ fn dotted(path: &BezPath, dots: bool) -> BezPath {
     }
     flush(&mut out, start, &mut subpath);
     out
+}
+
+/// `path` in kurbo's terms, `s` times as big.
+fn bez(path: &Path, s: f64) -> BezPath {
+    let to = |p: Point| kurbo::Point::new(f64::from(p[0]) * s, f64::from(p[1]) * s);
+    (path.0.iter())
+        .map(|segment| match *segment {
+            Segment::Move(p) => PathEl::MoveTo(to(p)),
+            Segment::Line(p) => PathEl::LineTo(to(p)),
+            Segment::Quad(c, p) => PathEl::QuadTo(to(c), to(p)),
+            Segment::Cubic(c1, c2, p) => PathEl::CurveTo(to(c1), to(c2), to(p)),
+            Segment::Close => PathEl::ClosePath,
+        })
+        .collect()
+}
+
+/// A path's bounding box, as its curves reach: x, y, width and height.
+pub fn bounds(path: &Path) -> [f64; 4] {
+    let r = bez(path, 1.0).bounding_box();
+    [r.x0, r.y0, r.width(), r.height()]
+}
+
+/// The ramp a gradient paints a shape with, and the transform from where the ramp is to the
+/// shape's user units. `chain` is the gradient and those its `href`s name in turn, each
+/// attribute from the first that has it, the geometry's from those of its kind; `stops` its
+/// stops' offsets and colors; `bbox` the shape's bounding box, which its default units are
+/// fractions of; `viewport` the size user-space percentages measure. `None` where it paints
+/// nothing: without stops, or in units of a bounding box without area.
+pub fn gradient(
+    chain: &[&Gradient],
+    stops: &[(f64, Rgba)],
+    bbox: [f64; 4],
+    viewport: [f64; 2],
+) -> Option<(Ramp, Matrix)> {
+    fn pick<T>(chain: &[&Gradient], f: impl Fn(&Gradient) -> Option<T>) -> Option<T> {
+        chain.iter().find_map(|g| f(g))
+    }
+    let radial = chain.first()?.radial;
+    let lengths: [Option<Length>; 6] = std::array::from_fn(|k| {
+        pick(chain, |g| {
+            (g.radial == radial).then_some(g.lengths[k]).flatten()
+        })
+    });
+    let [x, y, w, h] = bbox;
+    let (units, basis) = match pick(chain, |g| g.user_space).unwrap_or(false) {
+        true => {
+            let [vw, vh] = viewport;
+            (
+                Matrix::IDENTITY,
+                [vw, vh, ((vw * vw + vh * vh) / 2.0).sqrt()],
+            )
+        }
+        false if w > 0.0 && h > 0.0 => (Matrix::affine([w, 0.0, 0.0, h, x, y]), [1.0; 3]),
+        false => return None,
+    };
+    let transform = pick(chain, |g| g.transform).unwrap_or(Matrix::IDENTITY);
+    let (first, last) = (stops.first()?, stops.last()?);
+    let color = |c: Rgba| c.map(|v| v as f32);
+    let percent = |p| Length {
+        units: 0.0,
+        percent: p,
+    };
+    let at =
+        |k: usize, or: Length, axis: usize| lengths[k].unwrap_or(or).resolve(basis[axis]) as f32;
+    let geometry = match radial {
+        true => {
+            let center = [at(0, percent(50.0), 0), at(1, percent(50.0), 1)];
+            let radius = at(2, percent(50.0), 2);
+            let focus = [
+                lengths[3].map_or(center[0], |l| l.resolve(basis[0]) as f32),
+                lengths[4].map_or(center[1], |l| l.resolve(basis[1]) as f32),
+            ];
+            let focus_radius = at(5, percent(0.0), 2);
+            match (focus == center && focus_radius == 0.0, radius > 0.0) {
+                (_, false) => None,
+                (true, true) => Some(Geometry::Ellipse(center, [radius; 2])),
+                (false, true) => Some(Geometry::Focal {
+                    focus,
+                    focus_radius,
+                    center,
+                    radius,
+                }),
+            }
+        }
+        false => {
+            let start = [at(0, percent(0.0), 0), at(1, percent(0.0), 1)];
+            let end = [at(2, percent(100.0), 0), at(3, percent(0.0), 1)];
+            (start != end).then_some(Geometry::Line([start, end]))
+        }
+    };
+    // Without a line or a radius, the last stop's color everywhere.
+    let Some(geometry) = geometry else {
+        let ramp = Ramp {
+            geometry: Geometry::Line([[0.0, 0.0], [1.0, 0.0]]),
+            spread: Spread::Pad,
+            space: Space::Srgb,
+            premultiplied: false,
+            segments: vec![paint::Segment {
+                at: [0.0, 1.0],
+                colors: [color(last.1); 2],
+            }],
+        };
+        return Some((ramp, units.times(transform)));
+    };
+    // Offsets never go back, and the first and last colors reach 0 and 1.
+    let mut list = vec![(0.0, color(first.1))];
+    let mut floor = 0.0;
+    for &(o, c) in stops {
+        floor = o.max(floor);
+        list.push((floor as f32, color(c)));
+    }
+    list.push((1.0, color(last.1)));
+    let segments = (list.windows(2))
+        .map(|w| paint::Segment {
+            at: [w[0].0, w[1].0],
+            colors: [w[0].1, w[1].1],
+        })
+        .collect();
+    let ramp = Ramp {
+        geometry,
+        spread: pick(chain, |g| g.spread).unwrap_or(Spread::Pad),
+        space: Space::Srgb,
+        premultiplied: false,
+        segments,
+    };
+    Some((ramp, units.times(transform)))
 }
 
 /// A path's length.

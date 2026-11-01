@@ -20,7 +20,7 @@ use std::task::{Context, Poll, Waker};
 
 use crate::image::Image;
 use crate::layout::Rect;
-use crate::paint::{Filter, Geometry, Item, Matrix, Radii, SQUARE};
+use crate::paint::{Filter, Geometry, Item, Matrix, Radii, SQUARE, Spread};
 use crate::path::Curve;
 use crate::slug;
 use crate::style::Blend;
@@ -1024,27 +1024,39 @@ impl<'a> Renderer<'a> {
                         let words = words.chain(s.colors.into_iter().flatten());
                         plan.segments.extend(words.map(f32::to_bits));
                     }
-                    let (shape, [[a, b], [c, d]]) = match ramp.geometry {
-                        Geometry::Line(ends) => (0, ends),
-                        Geometry::Ellipse(center, radii) => (1, [center, radii]),
-                        Geometry::Turn(center, from) => (2, [center, [from, 0.0]]),
+                    let (shape, [[a, b], [c, d]], more) = match ramp.geometry {
+                        Geometry::Line(ends) => (0, ends, [0.0; 2]),
+                        Geometry::Ellipse(center, radii) => (1, [center, radii], [0.0; 2]),
+                        Geometry::Turn(center, from) => (2, [center, [from, 0.0]], [0.0; 2]),
+                        Geometry::Focal {
+                            focus,
+                            focus_radius,
+                            center,
+                            radius,
+                        } => (3, [focus, center], [focus_radius, radius]),
                     };
                     let words = (xywh(*rect).into_iter())
                         .chain(radii.iter().flatten().copied())
                         .chain(xywh(tiles.first))
                         .chain(tiles.step.map(|s| s.unwrap_or(0.0)))
-                        .chain([0.0, 0.0, a, b, c, d]);
+                        .chain(more)
+                        .chain([a, b, c, d]);
                     plan.gradients.extend(words.map(f32::to_bits));
                     let space = match ramp.space {
+                        _ if !ramp.premultiplied => 4,
                         Space::Srgb => 0,
                         Space::SrgbLinear => 1,
                         Space::Oklab => 2,
                         Space::Oklch(_) => 3,
                     };
                     let count = ramp.segments.len() as u32;
-                    let repeating = u32::from(ramp.repeating);
+                    let spread = match ramp.spread {
+                        Spread::Pad => 0,
+                        Spread::Repeat => 1,
+                        Spread::Reflect => 2,
+                    };
                     plan.gradients
-                        .extend([repeating, space, shape, transform, first, count, 0, 0]);
+                        .extend([spread, space, shape, transform, first, count, 0, 0]);
                     extend(runs, Run::Gradients(i..i + 1));
                 }
                 Item::Image {

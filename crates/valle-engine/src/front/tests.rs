@@ -634,7 +634,15 @@ fn errors_point_at_the_source() {
             ),
             (
                 "<svg><circle><rect /></circle></svg>",
-                "<circle> draws no elements inside it",
+                "<circle> holds no elements",
+            ),
+            (
+                "<svg><stop /></svg>",
+                "<stop> must be inside a <linearGradient> or <radialGradient>",
+            ),
+            (
+                "<svg><linearGradient><rect /></linearGradient></svg>",
+                "<rect> cannot be inside <linearGradient>: it holds <stop>s",
             ),
             ("<svg>hi</svg>", "text in an <svg> is not supported yet"),
             ("<svg><View /></svg>", "<View> cannot be inside an <svg>"),

@@ -38,12 +38,15 @@ use crate::template::{Error, Kind, Node, Prop, Tag, Template, V};
 const REM: f64 = 16.0;
 
 /// What fills or strokes an SVG shape.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
     None,
     Color(Rgba),
     /// The shape's own `color`, wherever it inherits the paint from.
     CurrentColor,
+    /// The first gradient of this id in the frame, as Chrome finds one in its document; none if
+    /// there is none.
+    Url(Rc<str>),
 }
 
 /// How an SVG shape is stroked (`stroke-*`): its paint and the opacity it strokes at; its width,
@@ -163,6 +166,9 @@ pub struct Style {
     pub fill_opacity: f64,
     pub even_odd: bool,
     pub stroke: Stroke,
+    /// A gradient stop's color, a color or `currentColor`, and its opacity.
+    pub stop_color: Paint,
+    pub stop_opacity: f64,
     /// An SVG element's geometry, as its attributes have it at the frame.
     pub svg: Option<Rc<svg::Computed>>,
     pub color: Rgba,
@@ -1144,6 +1150,8 @@ struct Declared {
     miter_limit: Option<f64>,
     dashes: Option<Rc<[Len]>>,
     dash_offset: Option<Len>,
+    stop_color: Option<Paint>,
+    stop_opacity: Option<f64>,
     color: Option<Rgba>,
     font_size: Option<Len>,
     font_weight: Option<Weight>,
@@ -1260,6 +1268,8 @@ impl Default for Declared {
             miter_limit: None,
             dashes: None,
             dash_offset: None,
+            stop_color: None,
+            stop_opacity: None,
             color: None,
             font_size: None,
             font_weight: None,
@@ -1399,6 +1409,8 @@ enum Field {
     StrokeMiterlimit,
     StrokeDasharray,
     StrokeDashoffset,
+    StopColor,
+    StopOpacity,
     Color,
     FontSize,
     FontWeight,
@@ -1495,7 +1507,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 236] = [
+const FIELDS: [(&str, Field); 238] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1796,6 +1808,8 @@ const FIELDS: [(&str, Field); 236] = [
     ("strokeMiterlimit", Field::StrokeMiterlimit),
     ("strokeDasharray", Field::StrokeDasharray),
     ("strokeDashoffset", Field::StrokeDashoffset),
+    ("stopColor", Field::StopColor),
+    ("stopOpacity", Field::StopOpacity),
     ("color", Field::Color),
     ("fontSize", Field::FontSize),
     ("fontWeight", Field::FontWeight),
@@ -1880,6 +1894,8 @@ impl Field {
                 | Field::StrokeMiterlimit
                 | Field::StrokeDasharray
                 | Field::StrokeDashoffset
+                | Field::StopColor
+                | Field::StopOpacity
                 | Field::Opacity
                 | Field::Visibility
                 | Field::Display
@@ -2058,12 +2074,25 @@ fn presented(v: &V, attribute: bool) -> Cow<'_, V> {
     }
 }
 
-/// What fills or strokes an SVG shape: `none`, `currentcolor` or a color.
+/// What fills or strokes an SVG shape: `none`, `currentcolor`, a color, or `url(#id)`, its id
+/// as written.
 fn paint(v: &V) -> Result<Paint, String> {
-    Ok(match text(v)?.as_str() {
+    let s = text(v)?;
+    if s.starts_with("url(") {
+        let raw = v.text();
+        let inner = (raw.trim().get(4..).and_then(|r| r.strip_suffix(')')))
+            .ok_or_else(|| format!("{s}: a color after url() is not supported yet"))?;
+        let quoted = inner.trim().trim_matches(|c| c == '"' || c == '\'');
+        return match quoted.strip_prefix('#') {
+            Some(id) if !id.is_empty() => Ok(Paint::Url(id.into())),
+            _ => Err(format!(
+                "{s}: url() names an element in the <svg>, as url(#gradient)"
+            )),
+        };
+    }
+    Ok(match s.as_str() {
         "none" => Paint::None,
         "currentcolor" => Paint::CurrentColor,
-        s if s.starts_with("url(") => return Err("url() paints are not supported yet".into()),
         s => Paint::Color(color::parse(s)?),
     })
 }
@@ -3314,6 +3343,11 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         },
         F::StrokeDasharray => d.dashes = Some(dashes(v)?),
         F::StrokeDashoffset => d.dash_offset = Some(svg_length(v, true)?),
+        F::StopColor => match paint(v)? {
+            p @ (Paint::Color(_) | Paint::CurrentColor) => d.stop_color = Some(p),
+            _ => return Err("a stop's color is a color or currentColor".into()),
+        },
+        F::StopOpacity => d.stop_opacity = Some(alpha(v)?),
         F::Color => d.color = Some(color_of(v)?),
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),
@@ -3667,7 +3701,7 @@ fn compute(
         }
     };
     let (fill, fill_opacity, even_odd) = match parent {
-        Some(p) => (p.fill, p.fill_opacity, p.even_odd),
+        Some(p) => (p.fill.clone(), p.fill_opacity, p.even_odd),
         None => (Paint::Color(color::BLACK), 1.0, false),
     };
     let mut stroke = parent.map_or_else(Stroke::initial, |p| p.stroke.clone());
@@ -3774,7 +3808,9 @@ fn compute(
     };
     let u = units(size);
     let color = d.color.unwrap_or(inherited_color);
-    stroke.paint = d.svg_stroke.unwrap_or(stroke.paint);
+    if let Some(p) = &d.svg_stroke {
+        stroke.paint = p.clone();
+    }
     stroke.opacity = d.stroke_opacity.unwrap_or(stroke.opacity);
     if let Some(w) = &d.stroke_width {
         stroke.width = w.calc(u);
@@ -3942,10 +3978,12 @@ fn compute(
         },
         source: None,
         visible: d.visible.unwrap_or(inherited_visible),
-        fill: d.svg_fill.unwrap_or(fill),
+        fill: d.svg_fill.clone().unwrap_or(fill),
         fill_opacity: d.fill_opacity.unwrap_or(fill_opacity),
         even_odd: d.even_odd.unwrap_or(even_odd),
         stroke,
+        stop_color: d.stop_color.clone().unwrap_or(Paint::Color(color::BLACK)),
+        stop_opacity: d.stop_opacity.unwrap_or(1.0),
         svg: None,
         color,
         font,

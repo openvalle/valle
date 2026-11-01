@@ -712,9 +712,9 @@ fn svg_elements_take_presentation_attributes_under_their_style() {
     assert_eq!(s[0].layout.size.width, Dimension::length(40.0));
     assert_eq!(s[0].layout.overflow.x, Overflow::Hidden);
     let red = color::parse("red").unwrap();
-    assert_eq!((s[0].fill, s[0].fill_opacity), (Paint::Color(red), 1.0));
+    assert_eq!((&s[0].fill, s[0].fill_opacity), (&Paint::Color(red), 1.0));
     // The style beats the attribute.
-    assert_eq!((s[1].fill, s[1].fill_opacity), (Paint::None, 0.5));
+    assert_eq!((&s[1].fill, s[1].fill_opacity), (&Paint::None, 0.5));
     assert_eq!(s[2].fill, Paint::CurrentColor);
     assert_eq!(s[2].color, color::parse("blue").unwrap());
     let rect = s[2].svg.as_deref().map(|c| &c.element);
@@ -730,9 +730,9 @@ fn svg_elements_take_presentation_attributes_under_their_style() {
             "style width on an element in an <svg> is not supported yet",
         ),
         (
-            vec![("fill", text("url(#g)"))],
+            vec![("fill", text("url(g)"))],
             vec![],
-            "attribute fill: url() paints are not supported yet",
+            "attribute fill: url(g): url() names an element in the <svg>, as url(#gradient)",
         ),
         (
             vec![("fillRule", text("even-odd"))],
@@ -772,7 +772,7 @@ fn svg_strokes_inherit_with_their_lengths_in_px_and_percentages() {
     let s = styles(tree, &[]).unwrap();
     let k = &s[1].stroke;
     let red = color::parse("red").unwrap();
-    assert_eq!((k.paint, k.opacity), (Paint::Color(red), 0.5));
+    assert_eq!((&k.paint, k.opacity), (&Paint::Color(red), 0.5));
     // An em is the declaring element's.
     assert_eq!(k.width, Math::Sum([10.0, 0.0]));
     let dashes = [[1.0, 0.0], [2.0, 0.0], [0.0, 0.05]].map(Math::Sum);
@@ -798,8 +798,13 @@ fn svg_strokes_inherit_with_their_lengths_in_px_and_percentages() {
         ("strokeDasharray", text(","), "there are no dashes"),
         (
             "stroke",
-            text("url(#g)"),
-            "url() paints are not supported yet",
+            text("url(#g) red"),
+            "url(#g) red: a color after url() is not supported yet",
+        ),
+        (
+            "stopColor",
+            text("none"),
+            "a stop's color is a color or currentColor",
         ),
     ] {
         let e = error(&[(key, value)]);

@@ -552,6 +552,8 @@
     video: "Video",
   };
 
+  // Attributes of both kinds of gradient.
+  const GRADIENT = ["gradientUnits", "gradientTransform", "spreadMethod", "href", "xlinkHref"];
   // Inline SVG elements Valle draws, each with the attributes it takes besides those every one
   // takes. <svg> is a box; the others go inside it.
   const SVG = {
@@ -564,6 +566,18 @@
     line: ["x1", "y1", "x2", "y2", "pathLength"],
     polyline: ["points", "pathLength"],
     polygon: ["points", "pathLength"],
+    defs: [],
+    linearGradient: GRADIENT.concat(["x1", "y1", "x2", "y2"]),
+    radialGradient: GRADIENT.concat(["cx", "cy", "r", "fx", "fy", "fr"]),
+    stop: ["offset"],
+  };
+  // The elements that hold others, and those they hold if not any.
+  const SVG_HOLDS = {
+    svg: null,
+    g: null,
+    defs: null,
+    linearGradient: ["stop"],
+    radialGradient: ["stop"],
   };
   // Attributes every SVG element takes: presentation attributes, which style overrides, and
   // `transform` and `id`.
@@ -581,6 +595,8 @@
     "strokeMiterlimit",
     "strokeDasharray",
     "strokeDashoffset",
+    "stopColor",
+    "stopOpacity",
     "opacity",
     "visibility",
     "color",
@@ -756,8 +772,17 @@
       G.svg--;
       if (key !== null) G.keys.pop();
     }
-    if (type !== "svg" && type !== "g" && node.children.length > 0) {
-      fail(at, "<" + type + "> draws no elements inside it");
+    const holds = SVG_HOLDS[type];
+    if (holds === undefined && node.children.length > 0) {
+      fail(at, "<" + type + "> holds no elements");
+    }
+    for (const c of node.children) {
+      if (holds && !holds.includes(c.tag)) {
+        fail(c.site, "<" + c.tag + "> cannot be inside <" + type + ">: it holds <stop>s");
+      }
+      if (c.tag === "stop" && !holds) {
+        fail(c.site, "<stop> must be inside a <linearGradient> or <radialGradient>");
+      }
     }
     out.push(node);
   }

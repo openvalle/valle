@@ -2072,7 +2072,7 @@ fn conic_gradients_turn_around_their_center() {
         .2;
     assert_eq!(ramp.geometry, Geometry::Turn([50.0, 25.0], 0.0));
     assert_eq!(spans(&ramp), [[0.0, 0.028], [0.028, 0.028], [0.028, 0.056]]);
-    assert!(ramp.repeating);
+    assert_eq!(ramp.spread, Spread::Repeat);
 }
 
 #[test]
@@ -2115,14 +2115,14 @@ fn stops_go_where_css_puts_them() {
     let even = ramp("linear-gradient(to right, red, 50%, blue)");
     assert_eq!(even.segments[0].colors, [red, blue]);
     let one = ramp("linear-gradient(red 20%)");
-    assert_eq!((spans(&one), one.repeating), (vec![[0.2, 0.2]], false));
+    assert_eq!((spans(&one), one.spread), (vec![[0.2, 0.2]], Spread::Pad));
     let repeating = ramp("repeating-linear-gradient(to right, red 10px, blue 30px)");
     assert_eq!(spans(&repeating), [[0.1, 0.3]]);
-    assert!(repeating.repeating);
+    assert_eq!(repeating.spread, Spread::Repeat);
     // Stops 0 px apart that repeat are the last color, as in Chrome.
     let flat = ramp("repeating-linear-gradient(red 10px, blue 10px)");
     assert_eq!(flat.segments[0].colors, [blue; 2]);
-    assert!(!flat.repeating);
+    assert_eq!(flat.spread, Spread::Pad);
 }
 
 #[test]

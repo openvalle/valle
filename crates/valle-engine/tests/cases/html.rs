@@ -201,11 +201,13 @@ fn declaration(key: &str, v: &V) -> Option<String> {
 }
 
 /// An SVG attribute's name as React DOM writes it: a presentation attribute's as its property's,
-/// `fillOpacity` as `fill-opacity`, and others as they are, as `viewBox` and `pathLength`.
+/// `fillOpacity` as `fill-opacity`, `xlinkHref` as `xlink:href`, and others as they are, as
+/// `viewBox` and `pathLength`.
 fn attribute(tag: Tag, name: &str) -> String {
-    match svg::presentational(tag, name) {
-        true => hyphenate(name),
-        false => name.to_string(),
+    match name {
+        "xlinkHref" => "xlink:href".into(),
+        _ if svg::presentational(tag, name) => hyphenate(name),
+        _ => name.to_string(),
     }
 }
 

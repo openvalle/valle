@@ -227,3 +227,82 @@ fn path_lengths_are_above_0() {
     let e = attributes(Tag::Circle, &[("pathLength", text("0"))]).unwrap_err();
     assert_eq!(e, "pathLength 0 is not a number above 0");
 }
+
+#[test]
+fn gradients_take_their_attributes_along_their_hrefs() {
+    let gradient = |tag, list: &[(&str, V)]| match attributes(tag, list).unwrap().element {
+        Element::Gradient(g) => g,
+        e => panic!("{e:?}"),
+    };
+    let own = gradient(
+        Tag::LinearGradient,
+        &[
+            ("href", text("#base")),
+            ("x2", text("50%")),
+            ("spreadMethod", text("reflect")),
+        ],
+    );
+    let base = gradient(
+        Tag::LinearGradient,
+        &[
+            ("x1", V::Num(0.25)),
+            ("x2", V::Num(1.0)),
+            ("gradientUnits", text("objectBoundingBox")),
+            ("gradientTransform", text("translate(1 0)")),
+        ],
+    );
+    assert_eq!(own.href.as_deref(), Some("base"));
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    // Offsets never go back; the ends' colors reach 0 and 1.
+    let stops = [(0.5, red), (0.25, blue)];
+    let bbox = [10.0, 20.0, 100.0, 50.0];
+    let (ramp, m) = gradient_of(&[&own, &base], &stops, bbox);
+    assert_eq!(ramp.geometry, Geometry::Line([[0.25, 0.0], [0.5, 0.0]]));
+    assert_eq!(ramp.spread, Spread::Reflect);
+    assert!(!ramp.premultiplied);
+    let spans: Vec<[f32; 2]> = ramp.segments.iter().map(|s| s.at).collect();
+    assert_eq!(spans, [[0.0, 0.5], [0.5, 0.5], [0.5, 1.0]]);
+    // Fractions of the bounding box, after the gradient's transform.
+    assert_eq!(m.apply([0.0, 1.0]), [110.0, 70.0]);
+    // In user units, percentages of the viewport; a radius of its normalized diagonal.
+    let radial = gradient(
+        Tag::RadialGradient,
+        &[
+            ("gradientUnits", text("userSpaceOnUse")),
+            ("r", text("10%")),
+            ("fx", V::Num(10.0)),
+        ],
+    );
+    let (ramp, _) = super::gradient(&[&radial], &stops, bbox, [200.0, 100.0]).unwrap();
+    let Geometry::Focal {
+        focus,
+        center,
+        radius,
+        ..
+    } = ramp.geometry
+    else {
+        panic!("{:?}", ramp.geometry)
+    };
+    assert_eq!((focus, center), ([10.0, 50.0], [100.0, 50.0]));
+    assert!((radius - 15.81).abs() < 0.01, "{radius}");
+    // No stops, or a bounding box without area for its units: nothing.
+    assert_eq!(super::gradient(&[&base], &[], bbox, [1.0; 2]), None);
+    let flat = [10.0, 20.0, 100.0, 0.0];
+    assert_eq!(super::gradient(&[&base], &stops, flat, [1.0; 2]), None);
+    let e = attributes(Tag::RadialGradient, &[("r", V::Num(-1.0))]).unwrap_err();
+    assert_eq!(e, "r is negative");
+    let e = attributes(Tag::LinearGradient, &[("href", text("other.svg#g"))]).unwrap_err();
+    assert!(e.contains("is not #id"), "{e}");
+    let e = attributes(Tag::LinearGradient, &[("transform", text("scale(2)"))]).unwrap_err();
+    assert!(e.contains("takes gradientTransform"), "{e}");
+    let stop = |v: V| attributes(Tag::Stop, &[("offset", v)]).map(|c| c.element);
+    assert_eq!(stop(text("150%")), Ok(Element::Stop(1.0)));
+    assert_eq!(stop(V::Num(0.3)), Ok(Element::Stop(0.3)));
+    assert!(stop(text("a")).is_err());
+}
+
+/// A gradient over `bbox` in a viewport 100 units a side.
+fn gradient_of(chain: &[&Gradient], stops: &[(f64, Rgba)], bbox: [f64; 4]) -> (Ramp, Matrix) {
+    super::gradient(chain, stops, bbox, [100.0; 2]).unwrap()
+}

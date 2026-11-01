@@ -8,17 +8,28 @@ use crate::style::position::Offset;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ramp {
     pub geometry: Geometry,
-    pub repeating: bool,
+    pub spread: Spread,
     pub space: Space,
+    /// Whether colors mix premultiplied, as CSS mixes them, or not, as SVG does.
+    pub premultiplied: bool,
     /// The parts of the line between color stops, in order, 0 at its start and 1 at its end.
-    /// Before the first is its first color, after the last its last, unless they repeat.
     pub segments: Vec<Segment>,
+}
+
+/// What is past the segments: before the first its first color and after the last its last,
+/// the segments repeated, or repeated each the other way round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spread {
+    Pad,
+    Repeat,
+    Reflect,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Segment {
     pub at: [f32; 2],
-    /// The colors at either end, in the ramp's space, premultiplied but for a hue.
+    /// The colors at either end, in the ramp's space, premultiplied but for a hue if the ramp
+    /// is.
     pub colors: [[f32; 4]; 2],
 }
 
@@ -31,6 +42,38 @@ pub enum Geometry {
     Ellipse([f32; 2], [f32; 2]),
     /// Clockwise around a center, from a fraction of a turn clockwise from up.
     Turn([f32; 2], f32),
+    /// From a circle around a focus, with a radius, to another around a center: SVG's radial
+    /// gradient with its focus away from its center, a cone where one circle is not in the
+    /// other.
+    Focal {
+        focus: [f32; 2],
+        focus_radius: f32,
+        center: [f32; 2],
+        radius: f32,
+    },
+}
+
+impl Geometry {
+    /// The geometry moved by `by`.
+    pub fn moved(&self, by: [f32; 2]) -> Geometry {
+        let p = |q: [f32; 2]| [q[0] + by[0], q[1] + by[1]];
+        match *self {
+            Geometry::Line([a, b]) => Geometry::Line([p(a), p(b)]),
+            Geometry::Ellipse(center, radii) => Geometry::Ellipse(p(center), radii),
+            Geometry::Turn(center, from) => Geometry::Turn(p(center), from),
+            Geometry::Focal {
+                focus,
+                focus_radius,
+                center,
+                radius,
+            } => Geometry::Focal {
+                focus: p(focus),
+                focus_radius,
+                center: p(center),
+                radius,
+            },
+        }
+    }
 }
 
 /// The chroma below which a hue is powerless, as CSS Color 4 takes it.
@@ -55,8 +98,12 @@ pub fn ramp(g: &Gradient, size: [f32; 2]) -> Ramp {
     let (segments, repeating) = segments(g, len);
     Ramp {
         geometry,
-        repeating,
+        spread: match repeating {
+            true => Spread::Repeat,
+            false => Spread::Pad,
+        },
         space: g.space,
+        premultiplied: true,
         segments,
     }
 }

@@ -1,22 +1,24 @@
 // Gradients filling rounded rectangles in tiles: each pixel's place in the tile it is in, if any,
-// along the gradient line there, out from the center to the ending shape, or around the center,
-// and the color there, mixed premultiplied in the gradient's color space between the two stops
-// around it, then as a premultiplied working color.
+// along the gradient line there, out from the center to the ending shape, around the center, or
+// on the circles from a focus out to the ending circle; and the color there, mixed in the
+// gradient's color space between the two stops around it, premultiplied or not, then as a
+// premultiplied working color.
 
 struct Gradient {
   // Where it shows: x, y, width, height, and corner radii as `coverage` takes them.
   rect: vec4f,
   radii: array<vec4f, 2>,
   // The first tile: x, y, width and height; and on each axis how far the next one is, 0 when it
-  // does not repeat.
+  // does not repeat; then the radii of a focal gradient's circles, at its focus and its end.
   tile: vec4f,
   step: vec4f,
   // From the image's top left: where the gradient line starts, and where it ends; the center,
-  // and the ending shape's horizontal and vertical radii; or the center, and the fraction of a
-  // turn clockwise from up the colors start at.
+  // and the ending shape's horizontal and vertical radii; the center, and the fraction of a
+  // turn clockwise from up the colors start at; or the focus, and the center.
   shape: vec4f,
-  // x: 1 when the stops repeat; y: the color space, 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch;
-  // z: 0 along a line, 1 out to an ellipse, 2 around a turn; w: the transform.
+  // x: past the stops, 0 their ends' colors, 1 the stops repeated, 2 reflected; y: the color
+  // space, 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch, all premultiplied, 4 sRGB not; z: 0 along a
+  // line, 1 out to an ellipse, 2 around a turn, 3 out from a focus; w: the transform.
   form: vec4u,
   // The first segment, and how many there are.
   segments: vec4u,
@@ -72,6 +74,37 @@ struct Out {
     case 1u: {
       t = length(v / g.shape.zw);
     }
+    case 3u: {
+      // The largest t whose circle, between the focus's and the end's, passes through the
+      // pixel with a radius of at least 0: none outside the cone they make.
+      let d = g.shape.zw - g.shape.xy;
+      let r = g.step.zw;
+      let dr = r.y - r.x;
+      let a = dot(d, d) - dr * dr;
+      let b = dot(v, d) + r.x * dr;
+      let c = dot(v, v) - r.x * r.x;
+      var found = false;
+      if (abs(a) < 1e-6) {
+        t = c / (2.0 * b);
+        found = abs(b) > 1e-9 && r.x + t * dr >= 0.0;
+      } else {
+        let disc = b * b - a * c;
+        if (disc >= 0.0) {
+          let root = sqrt(disc);
+          let t1 = (b + root) / a;
+          let t2 = (b - root) / a;
+          t = max(t1, t2);
+          found = r.x + t * dr >= 0.0;
+          if (!found) {
+            t = min(t1, t2);
+            found = r.x + t * dr >= 0.0;
+          }
+        }
+      }
+      if (!found) {
+        return vec4f(0.0);
+      }
+    }
     default: {
       // Half a turn from (-x, y)'s angle: atan2(x, -y) would take -0 on the center's row,
       // which Metal divides by as if it were +0, swapping the row's halves.
@@ -80,10 +113,16 @@ struct Out {
   }
   let first = g.segments.x;
   let last = first + g.segments.y - 1u;
-  if (g.form.x == 1u) {
+  if (g.form.x != 0u) {
     let start = segments[first].at.x;
     let period = segments[last].at.y - start;
-    t = t - period * floor((t - start) / period);
+    var u = (t - start) / period;
+    if (g.form.x == 2u) {
+      u = 1.0 - abs(u - 2.0 * floor(u * 0.5) - 1.0);
+    } else {
+      u = u - floor(u);
+    }
+    t = start + u * period;
   }
   var c = segments[last].colors[1];
   for (var i = first; i <= last; i++) {
@@ -102,6 +141,9 @@ struct Out {
 fn working(c: vec4f, space: u32) -> vec4f {
   if (space == 0u) {
     return c;
+  }
+  if (space == 4u) {
+    return vec4f(c.rgb * c.a, c.a);
   }
   if (c.a <= 0.0) {
     return vec4f(0.0);
