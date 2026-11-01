@@ -109,6 +109,9 @@ impl Text {
     /// The box `text` takes in `font` with its lines broken to fit `width` px (`None`: only at
     /// forced breaks; 0: at every opportunity, the min-content width). Widths round up to 1/64
     /// px, as Chrome's layout units do, so the text fits again in the width it measures.
+    ///
+    /// Text that breaks takes all of the width, unless a word is wider: a box sized to its
+    /// content is as wide as it may be once the content is wider (CSS's fit-content).
     pub fn measure(
         &mut self,
         text: &str,
@@ -121,8 +124,11 @@ impl Text {
         }
         let boxes = stack(&p.layout, font);
         let height = boxes.last().map_or(0.0, |[top, h]| top + h);
-        let widest = p.layout.width();
-        Ok([(widest * 64.0).ceil() / 64.0, height])
+        let widest = (p.layout.width() * 64.0).ceil() / 64.0;
+        match width {
+            Some(w) if boxes.len() > 1 => Ok([widest.max(w), height]),
+            _ => Ok([widest, height]),
+        }
     }
 
     /// The baseline of `text`'s first line from the top of its box, its lines broken to fit

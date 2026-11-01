@@ -63,9 +63,9 @@ fn lines_break_to_fit() {
         t.measure("one two three", &f, Some(wide)).unwrap(),
         [wide, 22.0]
     );
-    let [narrow, two] = t.measure("one two three", &f, Some(wide - 1.0)).unwrap();
-    assert!(narrow < wide - 1.0);
-    assert_eq!(two, 44.0);
+    // Broken, it takes all of the width.
+    let broken = t.measure("one two three", &f, Some(wide - 1.0)).unwrap();
+    assert_eq!(broken, [wide - 1.0, 44.0]);
     // The min-content width: the widest word.
     let [three, _] = t.measure("three", &f, None).unwrap();
     assert_eq!(
