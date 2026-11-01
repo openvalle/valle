@@ -1,6 +1,7 @@
 //! Backgrounds: a color under layers of images, each sized, placed and repeated in one of its
 //! boxes, clipped to one, and blended with what is under it. The properties of the layers are
-//! lists, each repeated for as many images as there are.
+//! lists, each repeated for as many images as there are. Masks are layers of images too, which
+//! show the box by their alpha or their luminance.
 
 use super::color::{self, Rgba};
 use super::gradient::{self, Image, image};
@@ -12,7 +13,8 @@ use super::{
 
 /// A background image, how big it is, where it is, how it repeats, the box it is placed in, the
 /// one it shows in, and how it blends with the images under it and the color. The last layer's
-/// `clip` is the color's too.
+/// `clip` is the color's too. A mask's layer does not blend, and shows the box by its image's
+/// alpha, or with `luminance` by its luminance times its alpha.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layer {
     pub image: Image,
@@ -22,6 +24,7 @@ pub struct Layer {
     pub origin: Area,
     pub clip: Area,
     pub blend: Blend,
+    pub luminance: bool,
 }
 
 /// `background-size`.
@@ -54,7 +57,8 @@ pub enum Repeat {
     NoRepeat,
 }
 
-/// The background properties as declared: each a list, `positions` one for x and one for y.
+/// The background or mask properties as declared: each a list, `positions` one for x and one
+/// for y.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Declared {
     pub images: Vec<gradient::Declared>,
@@ -64,12 +68,15 @@ pub(super) struct Declared {
     pub origins: Vec<Area>,
     pub clips: Vec<Area>,
     pub blends: Vec<Blend>,
+    /// Masks', whether each shows by luminance.
+    pub modes: Vec<bool>,
 }
 
 impl Declared {
     /// A layer for each image, at least one, its other properties from their lists, repeated as
-    /// needed.
-    pub(super) fn computed(&self, u: Units, current: Rgba) -> Vec<Layer> {
+    /// needed; placed in `origin` unless it says, the padding box for backgrounds and the border
+    /// box for masks.
+    pub(super) fn computed(&self, u: Units, current: Rgba, origin: Area) -> Vec<Layer> {
         let start = || Offset {
             end: false,
             by: Len::Percent(0.0),
@@ -87,9 +94,10 @@ impl Declared {
                 position: (self.positions.each_ref())
                     .map(|list| nth(list, i).unwrap_or_else(start).computed(u)),
                 repeat: nth(&self.repeats, i).unwrap_or([Repeat::Repeat; 2]),
-                origin: nth(&self.origins, i).unwrap_or(Area::PaddingBox),
+                origin: nth(&self.origins, i).unwrap_or(origin),
                 clip: nth(&self.clips, i).unwrap_or(Area::BorderBox),
                 blend: nth(&self.blends, i).unwrap_or(Blend::Normal),
+                luminance: nth(&self.modes, i).unwrap_or(false),
             })
             .collect()
     }
@@ -155,9 +163,10 @@ fn size(words: &[&str]) -> Result<ImageSize<Len>, String> {
     })
 }
 
-/// `background-position`: positions of one to four words.
-pub(super) fn positions(s: &str) -> Result<[Vec<Offset<Len>>; 2], String> {
-    let both = list(s, "a position", |s| position(&css::words(s), true))?;
+/// `background-position`: positions of one to four words; `mask-position`, of one, two or four,
+/// unless `three`.
+pub(super) fn positions(s: &str, three: bool) -> Result<[Vec<Offset<Len>>; 2], String> {
+    let both = list(s, "a position", |s| position(&css::words(s), three))?;
     let (x, y) = both.into_iter().map(|[x, y]| (x, y)).unzip();
     Ok([x, y])
 }
@@ -238,6 +247,17 @@ pub(super) fn blends(s: &str) -> Result<Vec<Blend>, String> {
                 Err(format!("{s} is not one of {}", names.join(", ")))
             }
         }
+    })
+}
+
+/// `mask-mode`: whether each layer shows by luminance; an image's own mode is alpha.
+pub(super) fn modes(s: &str) -> Result<Vec<bool>, String> {
+    list(s, "a mask mode", |s| match s {
+        "alpha" | "match-source" => Ok(false),
+        "luminance" => Ok(true),
+        _ => Err(format!(
+            "{s:?} is not a mask mode: alpha, luminance or match-source"
+        )),
     })
 }
 

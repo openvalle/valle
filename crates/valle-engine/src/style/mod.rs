@@ -84,6 +84,8 @@ pub struct Style {
     pub backdrop: Vec<filter::Function>,
     /// `clip-path`; `None` for `none`.
     pub clip: Option<shape::Clip>,
+    /// `mask-*`: its layers, the first on top; none when every image is `none`.
+    pub masks: Vec<background::Layer>,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
     pub color: Rgba,
@@ -105,8 +107,8 @@ impl Style {
     }
 
     /// Whether its children with transforms stay in its space: it preserves 3D and nothing
-    /// groups what is in it into one flat layer, as an opacity, a clip, a clip path, a blend,
-    /// isolation or a filter of it or of its backdrop does.
+    /// groups what is in it into one flat layer, as an opacity, a clip, a clip path, a mask, a
+    /// blend, isolation or a filter of it or of its backdrop does.
     pub fn keeps_3d(&self) -> bool {
         let o = self.layout.overflow;
         self.preserve_3d
@@ -116,6 +118,7 @@ impl Style {
             && self.blend == Blend::Normal
             && !self.isolate
             && self.clip.is_none()
+            && self.masks.is_empty()
             && o.x == taffy::Overflow::Visible
             && o.y == taffy::Overflow::Visible
     }
@@ -676,6 +679,7 @@ struct Declared {
     filter: Vec<filter::Function<Len, Option<Rgba>>>,
     backdrop: Vec<filter::Function<Len, Option<Rgba>>>,
     clip: Option<shape::Clip<Len>>,
+    masks: background::Declared,
     /// Inherited.
     visible: Option<bool>,
     color: Option<Rgba>,
@@ -748,6 +752,7 @@ impl Default for Declared {
             filter: Vec::new(),
             backdrop: Vec::new(),
             clip: None,
+            masks: background::Declared::default(),
             visible: None,
             color: None,
             font_size: None,
@@ -846,6 +851,11 @@ enum Field {
     Filter,
     BackdropFilter,
     ClipPath,
+    MaskImage,
+    MaskSize,
+    MaskPosition,
+    MaskRepeat,
+    MaskMode,
     Visibility,
     Color,
     FontSize,
@@ -903,7 +913,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 176] = [
+const FIELDS: [(&str, Field); 181] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1171,6 +1181,11 @@ const FIELDS: [(&str, Field); 176] = [
     ("filter", Field::Filter),
     ("backdropFilter", Field::BackdropFilter),
     ("clipPath", Field::ClipPath),
+    ("maskImage", Field::MaskImage),
+    ("maskSize", Field::MaskSize),
+    ("maskPosition", Field::MaskPosition),
+    ("maskRepeat", Field::MaskRepeat),
+    ("maskMode", Field::MaskMode),
     ("translate", Field::Translate),
     ("rotate", Field::Rotate),
     ("scale", Field::Scale),
@@ -2088,7 +2103,9 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::BackgroundColor => d.background = color_of(v)?,
         F::BackgroundImage => d.layers.images = background::images(&text(v)?)?,
         F::BackgroundSize => d.layers.sizes = background::sizes(&px_text(v)?)?,
-        F::BackgroundPosition => d.layers.positions = background::positions(&px_text(v)?)?,
+        F::BackgroundPosition => {
+            d.layers.positions = background::positions(&px_text(v)?, true)?;
+        }
         F::BackgroundPositionAxis(axis) => {
             d.layers.positions[axis] = background::axis_positions(&px_text(v)?, axis)?
         }
@@ -2161,6 +2178,11 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             V::Str(s) => d.clip = shape::clip(s)?,
             other => return Err(format!("{} is not a string", shown(other))),
         },
+        F::MaskImage => d.masks.images = background::images(&text(v)?)?,
+        F::MaskSize => d.masks.sizes = background::sizes(&px_text(v)?)?,
+        F::MaskPosition => d.masks.positions = background::positions(&px_text(v)?, false)?,
+        F::MaskRepeat => d.masks.repeats = background::repeats(&text(v)?)?,
+        F::MaskMode => d.masks.modes = background::modes(&text(v)?)?,
         F::Visibility => {
             // Collapse is hidden but in tables, which there are none of.
             let shown = [("visible", true), ("hidden", false), ("collapse", false)];
@@ -2354,7 +2376,7 @@ fn compute(
         order: d.order,
         z_index: d.z_index,
         background: d.background,
-        layers: d.layers.computed(u, color),
+        layers: d.layers.computed(u, color, background::Area::PaddingBox),
         radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
         border,
         border_colors: d.border_color.map(|c| c.unwrap_or(color)),
@@ -2388,6 +2410,15 @@ fn compute(
         filter: d.filter.iter().map(|f| f.computed(u, color)).collect(),
         backdrop: d.backdrop.iter().map(|f| f.computed(u, color)).collect(),
         clip: d.clip.as_ref().map(|c| c.computed(u)),
+        masks: match d
+            .masks
+            .images
+            .iter()
+            .all(|i| matches!(i, gradient::Image::None))
+        {
+            true => Vec::new(),
+            false => d.masks.computed(u, color, background::Area::BorderBox),
+        },
         visible: d.visible.unwrap_or(inherited_visible),
         color,
         font,

@@ -1,10 +1,12 @@
-// A layer's colors through 4 × 5 matrices into a new target, which the pass replaces: unpremultiplied,
-// each matrix's result clamped to [0, 1] before the next, as CSS's filter functions have them. The
-// layer is read moved by an offset, between its pixels linearly, and transparent past its edges.
+// A layer's colors through 4 × 5 matrices into a new target, which the pass replaces:
+// unpremultiplied, or premultiplied if asked, each matrix's result clamped to [0, 1] before the
+// next, as CSS's filter functions have them. The layer is read moved by an offset, between its
+// pixels linearly, and transparent past its edges.
 
 struct Colors {
-  // In the first of a run: x, how many matrices follow; yz, the offset, px. In the others: the
-  // factors of red, green, blue and alpha in each of them, then their offsets.
+  // In the first of a run: x, how many matrices follow; yz, the offset, px; w, 1 for
+  // premultiplied colors. In the others: the factors of red, green, blue and alpha in each of
+  // them, then their offsets.
   m: array<vec4f, 5>,
 }
 
@@ -41,9 +43,12 @@ fn texel(p: vec2<i32>) -> vec4f {
   let top = mix(texel(p), texel(p + vec2<i32>(1, 0)), t.x);
   let bottom = mix(texel(p + vec2<i32>(0, 1)), texel(p + vec2<i32>(1, 1)), t.x);
   let c = mix(top, bottom, t.y);
-  var u = vec4f(0.0);
-  if (c.a > 0.0) {
-    u = vec4f(c.rgb / c.a, c.a);
+  var u = c;
+  if (head.w == 0.0) {
+    u = vec4f(0.0);
+    if (c.a > 0.0) {
+      u = vec4f(c.rgb / c.a, c.a);
+    }
   }
   for (var i = 1u; i <= u32(head.x); i++) {
     let m = colors[in.index + i].m;

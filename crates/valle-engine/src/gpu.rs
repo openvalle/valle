@@ -44,6 +44,13 @@ const TRANSFORM: usize = 24;
 /// How far a path's quadratic curves may be from its cubic ones and arcs, in target px.
 const TOLERANCE: f32 = 0.02;
 
+/// Premultiplied colors to the luminance of their working values, Rec. 709's weights as Skia's,
+/// times their alpha, as the alpha of black.
+const LUMINANCE: [f32; 20] = [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2126, 0.7152, 0.0722, 0.0, 0.0,
+    0.0, 0.0, 0.0,
+];
+
 /// The result of a request wgpu completes at once, as it does on native backends.
 fn now<T>(request: impl Future<Output = T>) -> Result<T, Error> {
     let mut request = std::pin::pin!(request);
@@ -465,7 +472,8 @@ impl Plan {
         for filter in filters {
             layer = match filter {
                 Filter::Blur(sigma) => self.blurred(layer, sigma * scale, bounds),
-                Filter::Colors(matrices) => self.colored(layer, [0.0; 2], matrices),
+                Filter::Colors(matrices) => self.colored(layer, [0.0; 2], matrices, false),
+                Filter::Luminance => self.colored(layer, [0.0; 2], &[LUMINANCE], true),
                 Filter::Shadow {
                     offset: [dx, dy],
                     sigma,
@@ -482,7 +490,7 @@ impl Plan {
                     tint[16..19].copy_from_slice(&[r, g, b]);
                     let (dx, dy) = (f64::from(*dx), f64::from(*dy));
                     let offset = [0, 1].map(|k| (x[k] * dx + y[k] * dy) as f32);
-                    let shadow = self.colored(layer, offset, &[tint]);
+                    let shadow = self.colored(layer, offset, &[tint], false);
                     let shadow = self.blurred(shadow, sigma * scale, bounds);
                     let both = self.layer();
                     self.composite(both, shadow);
@@ -494,11 +502,19 @@ impl Plan {
         layer
     }
 
-    /// A new layer of `layer` moved by `offset` px, its colors through `matrices`.
-    fn colored(&mut self, layer: usize, offset: [f32; 2], matrices: &[[f32; 20]]) -> usize {
+    /// A new layer of `layer` moved by `offset` px, its colors through `matrices`, its
+    /// `premultiplied` ones if asked.
+    fn colored(
+        &mut self,
+        layer: usize,
+        offset: [f32; 2],
+        matrices: &[[f32; 20]],
+        premultiplied: bool,
+    ) -> usize {
         let count = matrices.len() as f32;
+        let flag = f32::from(u8::from(premultiplied));
         let at = self.words(
-            [count, offset[0], offset[1], 0.0]
+            [count, offset[0], offset[1], flag]
                 .into_iter()
                 .chain([0.0; 16]),
         );

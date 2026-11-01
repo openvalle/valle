@@ -61,6 +61,7 @@ fn names(items: &[Item]) -> Vec<String> {
                         Filter::Blur(_) => "blur",
                         Filter::Colors(_) => "colors",
                         Filter::Shadow { .. } => "shadow",
+                        Filter::Luminance => "luminance",
                     })
                     .collect();
                 format!("filter {filters:?} {:?}", names(items))
@@ -858,6 +859,65 @@ fn a_clip_path_masks_all_its_stacking_context_paints() {
             "backdrop of 1",
             r#"group 1 ["filter [\"blur\"] [\"red\"]"]"#
         ]
+    );
+}
+
+#[test]
+fn a_mask_shows_what_its_box_paints_through_its_layers() {
+    let (items, _) = paint_of(
+        vec![
+            view(&[("background", "gray")], &[1]),
+            view(
+                &[
+                    (
+                        "maskImage",
+                        "linear-gradient(black, transparent), radial-gradient(red, blue, green)",
+                    ),
+                    ("maskMode", "alpha, luminance"),
+                    ("clipPath", "circle()"),
+                    ("margin", "10px"),
+                    ("height", "20px"),
+                    ("borderRadius", "5px"),
+                    ("background", "red"),
+                ],
+                &[2],
+            ),
+            view(
+                &[
+                    ("position", "absolute"),
+                    ("width", "5px"),
+                    ("height", "5px"),
+                    ("background", "blue"),
+                ],
+                &[],
+            ),
+        ],
+        &[0],
+    );
+    // The last layer first, under the first; through the clip path first.
+    let [_, Item::Mask { mask, items }] = &items[..] else {
+        panic!("{items:?}")
+    };
+    assert_eq!(
+        names(mask),
+        [r#"filter ["luminance"] ["gradient of 2"]"#, "gradient of 1"]
+    );
+    assert_eq!(names(items), [r#"mask ["white"] ["red", "blue"]"#]);
+    let Item::Gradient { rect, radii, .. } = &mask[1] else {
+        panic!("{mask:?}")
+    };
+    // In the border box, rounded by its corners.
+    assert_eq!(
+        (*rect, *radii),
+        (
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 180.0,
+                height: 20.0
+            },
+            [[5.0; 2]; 4]
+        )
     );
 }
 

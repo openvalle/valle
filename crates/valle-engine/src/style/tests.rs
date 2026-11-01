@@ -1183,6 +1183,47 @@ fn clip_paths_take_basic_shapes_in_a_box() {
 }
 
 #[test]
+fn masks_are_layers_of_images_shown_by_alpha_or_luminance() {
+    use background::{Area, ImageSize, Repeat};
+    assert!(one(&[]).masks.is_empty());
+    assert!(one(&[("maskImage", text("none, none"))]).masks.is_empty());
+    let s = one(&[
+        ("maskImage", text("linear-gradient(#000, #0000), none")),
+        ("maskSize", text("10px auto")),
+        ("maskPosition", text("right 4px bottom 2px")),
+        ("maskRepeat", text("no-repeat")),
+        ("maskMode", text("LUMINANCE, match-source")),
+    ]);
+    let [a, b] = &s.masks[..] else {
+        panic!("{:?}", s.masks)
+    };
+    assert!(a.luminance && !b.luminance);
+    assert!(matches!(b.image, gradient::Image::None));
+    // Placed in the border box, where backgrounds are placed in the padding box.
+    assert_eq!(a.origin, Area::BorderBox);
+    assert_eq!(
+        one(&[("backgroundImage", text("linear-gradient(red, blue)"))]).layers[0].origin,
+        Area::PaddingBox
+    );
+    assert_eq!(
+        a.size,
+        ImageSize::Sized([Some(Math::Sum([10.0, 0.0])), None])
+    );
+    let from_end = |px| position::Offset {
+        end: true,
+        by: Math::Sum([px, 0.0]),
+    };
+    assert_eq!(b.position, [from_end(4.0), from_end(2.0)]);
+    assert_eq!(b.repeat, [Repeat::NoRepeat; 2]);
+    assert!(!s.contains_all());
+    let flat = one(&[
+        ("transformStyle", text("preserve-3d")),
+        ("maskImage", text("linear-gradient(#000, #0000)")),
+    ]);
+    assert!(!flat.keeps_3d());
+}
+
+#[test]
 fn background_layers_take_blend_modes_which_the_shorthand_leaves() {
     let blends = |style: &[(&str, Prop)]| {
         (one(style).layers.iter())
@@ -1907,6 +1948,21 @@ fn what_is_not_supported_is_an_error() {
             text("bloom(1)"),
             "bloom() is not a filter function: blur, brightness, contrast, drop-shadow, \
              grayscale, hue-rotate, invert, opacity, saturate or sepia",
+        ),
+        (
+            "maskMode",
+            text("luminance alpha"),
+            "\"luminance alpha\" is not a mask mode: alpha, luminance or match-source",
+        ),
+        (
+            "maskPosition",
+            text("right 5px top"),
+            "\"right 5px top\" is not a position: one, two or four",
+        ),
+        (
+            "maskImage",
+            text("url(a.png)"),
+            "url() images are not supported yet",
         ),
         ("clipPath", text(""), "\"\" is not a clip path; use none"),
         ("clipPath", num(0.0), "0 is not a string"),

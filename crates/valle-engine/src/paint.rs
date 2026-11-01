@@ -12,8 +12,9 @@
 //! a z-index on a positioned box or a flex or grid item make a stacking context. One with an
 //! opacity or a blend paints as a layer, and so does one with a box blending in it: CSS isolates
 //! every stacking context, so a box blends only with what its stacking context paints under it.
-//! A filtered one's items go in its filter, then over its backdrop, then in its clip path's mask,
-//! which takes all it paints, and a transformed one's in its transform around them, which takes
+//! A filtered one's items go in its filter, then over its backdrop, then through its clip path
+//! and its mask, which take all it paints, and a transformed one's in its transform around them,
+//! which takes
 //! its px, those of the untransformed layout, to its parent's; a transform that flattens the
 //! plane hides it. Tree order puts a flex or grid container's children in the order it lays them
 //! out. A hidden box (`visibility`) paints nothing of its
@@ -154,6 +155,9 @@ pub enum Filter {
         sigma: f32,
         color: [f32; 4],
     },
+    /// The image's luminance, of its working values with Rec. 709's weights as Chrome takes it,
+    /// times its alpha, as the alpha of black: what a mask layer shows by its luminance.
+    Luminance,
 }
 
 /// Where a background image is: one tile, and on each axis how far it is to the next one, if it
@@ -688,6 +692,7 @@ impl Painter<'_> {
             || s.blend != Blend::Normal
             || s.isolate
             || s.clip.is_some()
+            || !s.masks.is_empty()
             || s.contains_all()
             || self.in_scene(i)
             || s.layout.position == Position::Fixed
@@ -763,7 +768,7 @@ impl Painter<'_> {
                 items = vec![Item::Filter { filters, items }];
             }
             items = self.over_backdrop(d, items);
-            items = self.clipped(d, items);
+            items = self.masked(d, self.clipped(d, items));
             if !s.transform.is_empty() && !items.is_empty() {
                 items = vec![Item::Transform { matrix, items }];
             }
@@ -771,9 +776,10 @@ impl Painter<'_> {
             drawn.extend(items.into_iter().map(|item| (clip, item)));
         } else {
             self.context(Some(d), &mut drawn);
-            if s.clip.is_some() {
+            if s.clip.is_some() || !s.masks.is_empty() {
                 // With the clips in the mask, which takes all the box paints.
                 let items = self.clipped(d, self.nest(std::mem::take(&mut drawn)));
+                let items = self.masked(d, items);
                 drawn = items.into_iter().map(|item| (None, item)).collect();
             }
         }
@@ -853,6 +859,61 @@ impl Painter<'_> {
         .collect()
     }
 
+    /// `items` through `d`'s mask, if it has one: its layers' images, sized, placed and repeated
+    /// as a background's are, each in its area rounded by the box's corners, and the first on
+    /// top. Each shows `items` by its alpha, or its luminance.
+    fn masked(&self, d: usize, items: Vec<Item>) -> Vec<Item> {
+        let s = &self.styles[d];
+        if s.masks.is_empty() || items.is_empty() {
+            return items;
+        }
+        let border = snap(self.layout.boxes[d].border);
+        let radii = self.radii(d, border);
+        let widths = self.widths(d);
+        let paddings = self.paddings(d);
+        let area = |a: Area| match a {
+            Area::BorderBox => (border, radii),
+            Area::PaddingBox => inner(border, radii, widths),
+            Area::ContentBox => inner(
+                border,
+                radii,
+                std::array::from_fn(|k| widths[k] + paddings[k]),
+            ),
+        };
+        let mut mask = Vec::new();
+        for layer in s.masks.iter().rev() {
+            let Image::Gradient(g) = &layer.image else {
+                continue;
+            };
+            let (rect, radii) = area(layer.clip);
+            let rect = snap(rect);
+            let Some(tiles) = tiles(layer, area(layer.origin).0) else {
+                continue;
+            };
+            if rect.width <= 0.0 || rect.height <= 0.0 {
+                continue;
+            }
+            let ramp = gradient::ramp(g, [tiles.first.width, tiles.first.height]);
+            let image = Item::Gradient {
+                rect,
+                radii,
+                tiles,
+                ramp,
+            };
+            mask.push(match layer.luminance {
+                true => Item::Filter {
+                    filters: vec![Filter::Luminance],
+                    items: vec![image],
+                },
+                false => image,
+            });
+        }
+        match mask.is_empty() {
+            true => Vec::new(),
+            false => vec![Item::Mask { mask, items }],
+        }
+    }
+
     /// Whether `i` is a plane of a 3D scene: its parent keeps its children in its space, and it
     /// has a transform, keeps its own children in its space too, or hides its back, which is
     /// where it is in the scene. As in Chrome, any other child paints on its parent's plane.
@@ -896,7 +957,7 @@ impl Painter<'_> {
                 items = vec![Item::Filter { filters, items }];
             }
             items = self.over_backdrop(e, items);
-            items = self.clipped(e, items);
+            items = self.masked(e, self.clipped(e, items));
             if self.grouped(e) {
                 items = group(s.opacity as f32, s.blend, items)
                     .into_iter()
