@@ -15,6 +15,7 @@ use taffy::{
 };
 
 use crate::style::Style;
+use crate::style::math::{self, Calc};
 use crate::template::{Error, Kind, Prop, Template, V};
 use crate::text::{Lines, Text};
 
@@ -99,6 +100,7 @@ pub fn layout(
     let mut tree = Tree {
         template,
         styles,
+        calcs: styles.iter().flat_map(|s| &s.calcs).collect(),
         canvas: taffy::Style {
             display: Display::Block,
             position: Position::Relative,
@@ -194,6 +196,8 @@ pub fn layout(
 struct Tree<'a> {
     template: &'a Template,
     styles: &'a [Style],
+    /// The styles' calcs, which handles number in order.
+    calcs: Vec<&'a Calc>,
     canvas: taffy::Style,
     /// Each node's children in the order it lays them out, the canvas's last.
     children: Vec<Vec<NodeId>>,
@@ -214,6 +218,10 @@ impl Tree<'_> {
             Some(s) => &s.layout,
             None => &self.canvas,
         }
+    }
+
+    fn calc(&self, handle: *const (), basis: f32) -> f32 {
+        self.calcs[math::index(handle)].resolve(basis)
     }
 
     fn compute(
@@ -248,45 +256,42 @@ impl Tree<'_> {
         let (styles, strings) = (self.styles, self.strings);
         let (Some(style), Some(Some(s))) = (styles.get(i), strings.get(i)) else {
             let style = self.style(NodeId::from(i));
-            return compute_leaf_layout(inputs, style, |_, _| 0.0, |_, _| Size::ZERO);
+            let calc = |h, basis| self.calc(h, basis);
+            return compute_leaf_layout(inputs, style, calc, |_, _| Size::ZERO);
         };
         let (layout, font) = (&style.layout, &style.font);
         let Tree {
             template,
+            calcs,
             text,
             failed,
             ..
         } = self;
+        let calc = |h, basis| calcs[math::index(h)].resolve(basis);
         let mut fail = |e: Error| {
             failed.get_or_insert_with(|| format!("{}: {e}", template.nodes[i].place()));
         };
-        let mut out = compute_leaf_layout(
-            inputs,
-            layout,
-            |_, _| 0.0,
-            |known, available| {
-                let width = known.width.or(match available.width {
-                    AvailableSpace::Definite(w) => Some(w),
-                    AvailableSpace::MinContent => Some(0.0),
-                    AvailableSpace::MaxContent => None,
-                });
-                match text.measure(s, font, width) {
-                    Ok([w, h]) => Size {
-                        width: known.width.unwrap_or(w),
-                        height: known.height.unwrap_or(h),
-                    },
-                    Err(e) => {
-                        fail(e);
-                        Size::ZERO
-                    }
+        let mut out = compute_leaf_layout(inputs, layout, calc, |known, available| {
+            let width = known.width.or(match available.width {
+                AvailableSpace::Definite(w) => Some(w),
+                AvailableSpace::MinContent => Some(0.0),
+                AvailableSpace::MaxContent => None,
+            });
+            match text.measure(s, font, width) {
+                Ok([w, h]) => Size {
+                    width: known.width.unwrap_or(w),
+                    height: known.height.unwrap_or(h),
+                },
+                Err(e) => {
+                    fail(e);
+                    Size::ZERO
                 }
-            },
-        );
+            }
+        });
         // Flex items align on their first baselines, from the top of the border box; text has
         // one where its first line has, and empty text none.
         if inputs.run_mode == RunMode::PerformLayout {
-            let side =
-                |l: LengthPercentage| l.resolve_or_zero(inputs.parent_size.width, |_, _| 0.0);
+            let side = |l: LengthPercentage| l.resolve_or_zero(inputs.parent_size.width, calc);
             let (pad, border) = (layout.padding, layout.border);
             let inset = side(pad.left) + side(pad.right) + side(border.left) + side(border.right);
             match text.baseline(s, font, out.size.width - inset) {
@@ -333,6 +338,10 @@ impl LayoutPartialTree for Tree<'_> {
 
     fn set_unrounded_layout(&mut self, id: NodeId, layout: &taffy::Layout) {
         self.layouts[usize::from(id)] = *layout;
+    }
+
+    fn resolve_calc_value(&self, handle: *const (), basis: f32) -> f32 {
+        self.calc(handle, basis)
     }
 
     fn compute_child_layout(&mut self, id: NodeId, inputs: LayoutInput) -> LayoutOutput {

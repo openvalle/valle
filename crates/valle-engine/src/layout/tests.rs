@@ -104,6 +104,35 @@ fn sizes_take_box_sizing_and_aspect_ratio() {
 }
 
 #[test]
+fn math_functions_resolve_against_what_their_percentages_are_of() {
+    let l = lay(
+        vec![
+            view(
+                &[
+                    ("width", "calc(50% - 10px)"),
+                    ("height", "min(10px, 50%)"),
+                    ("paddingLeft", "calc(10% + 5px)"),
+                ],
+                &[],
+            ),
+            text_node(
+                "Hi",
+                &[
+                    ("width", "max(20%, 10px)"),
+                    ("paddingLeft", "calc(5% - 2px)"),
+                ],
+            ),
+        ],
+        &[0, 1],
+    )
+    .unwrap();
+    assert_eq!(l.boxes[0].border, rect(0.0, 0.0, 90.0, 10.0));
+    assert_eq!(l.boxes[0].content.x, 25.0);
+    assert_eq!(l.boxes[1].border.width, 40.0);
+    assert_eq!(l.boxes[1].content.x, 8.0);
+}
+
+#[test]
 fn absolute_boxes_take_the_nearest_positioned_ancestor() {
     let l = lay(
         vec![

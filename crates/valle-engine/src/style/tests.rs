@@ -183,6 +183,60 @@ fn viewport_units_take_the_canvas() {
 }
 
 #[test]
+fn math_functions_are_px_or_calcs_for_layout() {
+    let s = one(&[
+        ("fontSize", text("calc(1em + 4px)")),
+        ("width", text("calc(100% - 2em)")),
+        ("height", text("calc(2 * (1vw + 3px))")),
+        ("minWidth", text("clamp(10px, 50%, 2em)")),
+        ("paddingLeft", text("calc(10px - 20px)")),
+        ("marginLeft", text("calc(10px - 20px)")),
+    ]);
+    assert_eq!(s.font.size, 20.0);
+    let l = &s.layout;
+    // With a percentage in it, a calc layout resolves; it clamps at 0 where lengths have to.
+    assert_eq!(l.size.width, Dimension::calc(math::handle(0)));
+    assert_eq!(
+        l.min_size.width,
+        LengthPercentageAuto::calc(math::handle(1))
+    );
+    let calcs = &s.calcs;
+    let [width, min] = [0, 1].map(|i| move |basis| calcs[i].resolve(basis));
+    assert_eq!((width(200.0), width(10.0)), (160.0, 0.0));
+    assert_eq!((min(200.0), min(60.0), min(10.0)), (40.0, 30.0, 10.0));
+    // Without one, it is px.
+    assert_eq!(l.size.height, Dimension::length(10.0));
+    assert_eq!((l.padding.left, l.margin.left), (px(0.0), auto_px(-10.0)));
+    for (bad, e) in [
+        ("calc(1px+2px)", "+ and - need white space around them"),
+        ("calc(1px * 2px)", "two lengths do not multiply"),
+        ("calc(1px / 0)", "it divides by 0"),
+        ("calc(1 + 1px)", "a number and a length do not add"),
+        ("min(1px, 2)", "numbers and lengths do not compare"),
+        ("calc(2)", "calc(2) is a number, not a length"),
+        ("calc(1px, 2px)", "calc() takes one sum"),
+        (
+            "clamp(1px, 2px)",
+            "clamp() takes a minimum, a value and a maximum",
+        ),
+        ("calc((1px)", "it ends too soon"),
+        ("calc(1px) 2px", "calc(1px) 2px is not a length"),
+        (
+            "calc(1in)",
+            "in is not supported; use px, em, rem, %, vw, vh, vmin or vmax",
+        ),
+    ] {
+        let got = error(&[("width", text(bad))]);
+        assert!(
+            got.starts_with("s.tsx:1:1: style width: ") && got.ends_with(e),
+            "{got}"
+        );
+    }
+    let radius = error(&[("borderRadius", text("calc(1% + 1px)"))]);
+    assert!(radius.ends_with("percentages are not supported here"));
+}
+
+#[test]
 fn the_flex_shorthand_follows_css() {
     let flex = |p: Prop| {
         let l = one(&[("flex", p)]).layout;

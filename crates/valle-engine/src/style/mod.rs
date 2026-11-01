@@ -9,6 +9,7 @@
 
 pub mod color;
 mod css;
+pub mod math;
 
 use std::borrow::Cow;
 use std::rc::Rc;
@@ -19,6 +20,7 @@ use taffy::{
 };
 
 use color::Rgba;
+use math::{Calc, Math};
 
 use crate::template::{Error, Node, Prop, Template, V};
 
@@ -38,6 +40,8 @@ pub struct Style {
     pub opacity: f64,
     pub color: Rgba,
     pub font: Font,
+    /// The math functions with percentages in them that `layout` holds handles to.
+    pub calcs: Vec<Calc>,
 }
 
 /// The inherited text properties, computed.
@@ -133,6 +137,7 @@ impl Sheet {
     pub fn compute(&self, values: &[V], canvas: [f32; 2]) -> Result<Vec<Style>, Error> {
         let canvas = canvas.map(f64::from);
         let mut out: Vec<Style> = Vec::with_capacity(self.nodes.len());
+        let mut calcs = 0;
         for (b, parent) in self.nodes.iter().zip(&self.parents) {
             let declared = if b.rest.is_empty() {
                 Cow::Borrowed(&b.declared)
@@ -148,8 +153,9 @@ impl Sheet {
                 Cow::Owned(d)
             };
             let parent = parent.map(|p| &out[p as usize]);
-            let style =
-                compute(&declared, parent, canvas).map_err(|e| format!("{}: {e}", b.place))?;
+            let style = compute(&declared, parent, canvas, calcs)
+                .map_err(|e| format!("{}: {e}", b.place))?;
+            calcs += style.calcs.len();
             out.push(style);
         }
         Ok(out)
@@ -261,7 +267,7 @@ fn unsupported(key: &str) -> String {
 }
 
 /// A length as declared; `em` resolves when the style is computed.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Len {
     /// The property's keyword: `auto`, or `none` and `normal` where they stand in for it.
     Auto,
@@ -273,7 +279,12 @@ enum Len {
     Vh(f64),
     Vmin(f64),
     Vmax(f64),
+    /// A math function's sums of the lengths above.
+    Calc(Rc<math::Expr>),
 }
+
+const AUTO: Len = Len::Auto;
+const ZERO: Len = Len::Px(0.0);
 
 /// What lengths resolve against besides their percentage base: the font size and the canvas, in
 /// px.
@@ -284,60 +295,114 @@ struct Units {
 }
 
 impl Len {
-    fn negative(self) -> bool {
-        match self {
-            Len::Auto => false,
+    /// Whether it is below 0; a math function is not, and clamps to 0 where it has to.
+    fn negative(&self) -> bool {
+        match *self {
+            Len::Auto | Len::Calc(_) => false,
             Len::Px(v) | Len::Percent(v) | Len::Em(v) => v < 0.0,
             Len::Vw(v) | Len::Vh(v) | Len::Vmin(v) | Len::Vmax(v) => v < 0.0,
         }
     }
 
     /// px, against `base` for percentages; the keyword is 0.
-    fn px(self, u: Units, base: f64) -> f64 {
+    fn px(&self, u: Units, base: f64) -> f64 {
         let [w, h] = u.canvas;
         match self {
             Len::Auto => 0.0,
-            Len::Px(v) => v,
+            Len::Px(v) => *v,
             Len::Percent(p) => p / 100.0 * base,
             Len::Em(e) => e * u.em,
             Len::Vw(v) => v / 100.0 * w,
             Len::Vh(v) => v / 100.0 * h,
             Len::Vmin(v) => v / 100.0 * w.min(h),
             Len::Vmax(v) => v / 100.0 * w.max(h),
+            Len::Calc(m) => m.value(&|ls| ls.iter().map(|l| l.px(u, base)).sum()),
+        }
+    }
+
+    /// The length `k` times; a math function's sums take only the units.
+    fn scaled(&self, k: f64) -> Len {
+        match *self {
+            Len::Px(v) => Len::Px(v * k),
+            Len::Percent(v) => Len::Percent(v * k),
+            Len::Em(v) => Len::Em(v * k),
+            Len::Vw(v) => Len::Vw(v * k),
+            Len::Vh(v) => Len::Vh(v * k),
+            Len::Vmin(v) => Len::Vmin(v * k),
+            Len::Vmax(v) => Len::Vmax(v * k),
+            Len::Auto | Len::Calc(_) => self.clone(),
         }
     }
 }
 
-fn lpa(l: Len, u: Units) -> LengthPercentageAuto {
-    match l {
-        Len::Auto => LengthPercentageAuto::auto(),
-        Len::Percent(p) => LengthPercentageAuto::percent((p / 100.0) as f32),
-        l => LengthPercentageAuto::length(l.px(u, 0.0) as f32),
-    }
+/// Lengths as Taffy takes them. A math function with a percentage in it is kept for layout,
+/// with a handle numbered after the `first` calcs of the frame's styles before.
+struct Lengths {
+    u: Units,
+    first: usize,
+    calcs: Vec<Calc>,
 }
 
-fn lp(l: Len, u: Units) -> LengthPercentage {
-    match l {
-        Len::Percent(p) => LengthPercentage::percent((p / 100.0) as f32),
-        l => LengthPercentage::length(l.px(u, 0.0) as f32),
+impl Lengths {
+    /// `l` made by Taffy's constructors for px, percentages and calc handles; `auto` is the
+    /// caller's.
+    fn taffy<T>(
+        &mut self,
+        l: &Len,
+        length: fn(f32) -> T,
+        percent: fn(f32) -> T,
+        calc: fn(*const ()) -> T,
+    ) -> T {
+        let u = self.u;
+        match l {
+            Len::Percent(p) => percent((p / 100.0) as f32),
+            Len::Calc(m) => {
+                // Each sum as px and a fraction of the basis.
+                let c = m.map(&|ls: &Vec<Len>| {
+                    ls.iter().fold([0.0, 0.0], |[px, of], l| match l {
+                        Len::Percent(p) => [px, of + p / 100.0],
+                        l => [px + l.px(u, 0.0), of],
+                    })
+                });
+                if !c.any(&|&[_, of]| of != 0.0) {
+                    return length(c.value(&|&[px, _]| px) as f32);
+                }
+                self.calcs.push(c);
+                calc(math::handle(self.first + self.calcs.len() - 1))
+            }
+            l => length(l.px(u, 0.0) as f32),
+        }
     }
-}
 
-fn dim(l: Len, u: Units) -> Dimension {
-    match l {
-        Len::Auto => Dimension::auto(),
-        Len::Percent(p) => Dimension::percent((p / 100.0) as f32),
-        l => Dimension::length(l.px(u, 0.0) as f32),
+    fn lpa(&mut self, l: &Len) -> LengthPercentageAuto {
+        type T = LengthPercentageAuto;
+        match l {
+            Len::Auto => T::auto(),
+            l => self.taffy(l, T::length, T::percent, T::calc),
+        }
     }
-}
 
-/// Top, right, bottom, left.
-fn rect<T>(s: [Len; 4], u: Units, f: fn(Len, Units) -> T) -> taffy::Rect<T> {
-    taffy::Rect {
-        top: f(s[0], u),
-        right: f(s[1], u),
-        bottom: f(s[2], u),
-        left: f(s[3], u),
+    fn lp(&mut self, l: &Len) -> LengthPercentage {
+        type T = LengthPercentage;
+        self.taffy(l, T::length, T::percent, T::calc)
+    }
+
+    fn dim(&mut self, l: &Len) -> Dimension {
+        type T = Dimension;
+        match l {
+            Len::Auto => T::auto(),
+            l => self.taffy(l, T::length, T::percent, T::calc),
+        }
+    }
+
+    /// Top, right, bottom, left.
+    fn rect<T>(&mut self, s: &[Len; 4], f: fn(&mut Lengths, &Len) -> T) -> taffy::Rect<T> {
+        taffy::Rect {
+            top: f(self, &s[0]),
+            right: f(self, &s[1]),
+            bottom: f(self, &s[2]),
+            left: f(self, &s[3]),
+        }
     }
 }
 
@@ -358,7 +423,7 @@ enum Weight {
     Lighter,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Leading {
     Normal,
     Factor(f64),
@@ -409,18 +474,17 @@ struct Declared {
 
 impl Default for Declared {
     fn default() -> Declared {
-        let zero = Len::Px(0.0);
         Declared {
             display: Shown::Block,
             position: Position::Static,
-            inset: [Len::Auto; 4],
-            size: [Len::Auto; 2],
-            min_size: [Len::Auto; 2],
-            max_size: [Len::Auto; 2],
+            inset: [AUTO; 4],
+            size: [AUTO; 2],
+            min_size: [AUTO; 2],
+            max_size: [AUTO; 2],
             box_sizing: BoxSizing::BorderBox,
             aspect_ratio: None,
-            margin: [zero; 4],
-            padding: [zero; 4],
+            margin: [ZERO; 4],
+            padding: [ZERO; 4],
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::NoWrap,
             flex_grow: 0.0,
@@ -431,9 +495,9 @@ impl Default for Declared {
             align_items: AlignItems::NORMAL,
             align_self: None,
             align_content: AlignContent::NORMAL,
-            gap: [Len::Auto; 2],
+            gap: [AUTO; 2],
             background: color::TRANSPARENT,
-            radius: zero,
+            radius: ZERO,
             opacity: 1.0,
             color: None,
             font_size: None,
@@ -660,24 +724,40 @@ fn length_text(s: &str, a: Accept) -> Result<Len, String> {
     if Some(s) == a.keyword {
         return Ok(Len::Auto);
     }
+    if math::is_math(s) {
+        let m = math::length(s, |n| unit(n, a))?;
+        // Out of the property's range, a math function clamps to it.
+        let m = match a.negative {
+            true => m,
+            false => Math::Max(vec![m, Math::Sum(vec![ZERO])]),
+        };
+        return Ok(Len::Calc(Rc::new(m)));
+    }
     let n = css::num(s).ok_or_else(|| format!("{s} is not a length"))?;
     let l = match n.unit {
-        "px" => Len::Px(n.value),
-        "em" => Len::Em(n.value),
-        "rem" => Len::Px(n.value * REM),
-        "%" if a.percent => Len::Percent(n.value),
-        "%" => return Err(format!("{s}: percentages are not supported here")),
         "" if n.value == 0.0 => Len::Px(0.0),
         "" => return Err(format!("{s} needs a unit: {s}px")),
-        u => match viewport(u) {
-            Some(unit) => unit(n.value),
-            None => return Err(format!("{s}: {u} is not supported; use {UNITS}")),
-        },
+        _ => unit(n, a).map_err(|e| format!("{s}: {e}"))?,
     };
     if !a.negative && l.negative() {
         return Err(format!("{s} is negative"));
     }
     Ok(l)
+}
+
+/// A number with a unit as a length.
+fn unit(n: css::Num, a: Accept) -> Result<Len, String> {
+    Ok(match n.unit {
+        "px" => Len::Px(n.value),
+        "em" => Len::Em(n.value),
+        "rem" => Len::Px(n.value * REM),
+        "%" if a.percent => Len::Percent(n.value),
+        "%" => return Err("percentages are not supported here".into()),
+        u => match viewport(u) {
+            Some(unit) => unit(n.value),
+            None => return Err(format!("{u} is not supported; use {UNITS}")),
+        },
+    })
 }
 
 const UNITS: &str = "px, em, rem, %, vw, vh, vmin or vmax";
@@ -731,12 +811,12 @@ fn lengths(v: &V, a: Accept, most: usize) -> Result<Vec<Len>, String> {
 
 /// The four sides of a box as CSS shorthands give them.
 fn sides(v: &V, a: Accept) -> Result<[Len; 4], String> {
-    Ok(match lengths(v, a, 4)?[..] {
-        [x] => [x; 4],
-        [y, x] => [y, x, y, x],
-        [t, x, b] => [t, x, b, x],
-        [t, r, b, l, ..] => [t, r, b, l],
-        [] => [Len::Px(0.0); 4],
+    Ok(match &lengths(v, a, 4)?[..] {
+        [x] => [x; 4].map(Len::clone),
+        [y, x] => [y, x, y, x].map(Len::clone),
+        [t, x, b] => [t, x, b, x].map(Len::clone),
+        [t, r, b, l, ..] => [t, r, b, l].map(Len::clone),
+        [] => [ZERO; 4],
     })
 }
 
@@ -745,10 +825,10 @@ fn sides(v: &V, a: Accept) -> Result<[Len; 4], String> {
 fn set_sides(sides: &mut [Len; 4], which: Sides, v: &V, a: Accept) -> Result<(), String> {
     use Sides as S;
     let pair = |v: &V| -> Result<[Len; 2], String> {
-        Ok(match lengths(v, a, 2)?[..] {
-            [start, end, ..] => [start, end],
-            [both] => [both; 2],
-            [] => [Len::Px(0.0); 2],
+        Ok(match &lengths(v, a, 2)?[..] {
+            [start, end, ..] => [start, end].map(Len::clone),
+            [both] => [both; 2].map(Len::clone),
+            [] => [ZERO; 2],
         })
     };
     match which {
@@ -1105,10 +1185,10 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         }
         F::AlignContent => d.align_content = keyword(v, &CONTENT_ALIGN)?,
         F::Gap => {
-            d.gap = match lengths(v, GAP, 2)?[..] {
-                [row, column, ..] => [row, column],
-                [g] => [g, g],
-                [] => [Len::Auto; 2],
+            d.gap = match &lengths(v, GAP, 2)?[..] {
+                [row, column, ..] => [row, column].map(Len::clone),
+                [g] => [g; 2].map(Len::clone),
+                [] => [AUTO; 2],
             }
         }
         F::RowGap => d.gap[0] = length(v, GAP)?,
@@ -1189,8 +1269,13 @@ fn lighter(w: f64) -> f64 {
 }
 
 /// The computed style of a node with these declared values under `parent` (`None`: the canvas,
-/// a block container with CSS's initial text properties).
-fn compute(d: &Declared, parent: Option<&Style>, canvas: [f64; 2]) -> Result<Style, String> {
+/// a block container with CSS's initial text properties), after `first` calcs in the frame.
+fn compute(
+    d: &Declared,
+    parent: Option<&Style>,
+    canvas: [f64; 2],
+    first: usize,
+) -> Result<Style, String> {
     let initial;
     let (inherited, inherited_color, container) = match parent {
         Some(p) => (&p.font, p.color, p.layout.display),
@@ -1200,7 +1285,7 @@ fn compute(d: &Declared, parent: Option<&Style>, canvas: [f64; 2]) -> Result<Sty
         }
     };
     let units = |em| Units { em, canvas };
-    let size = match d.font_size {
+    let size = match &d.font_size {
         None => inherited.size,
         Some(l) => l.px(units(inherited.size), inherited.size),
     };
@@ -1216,14 +1301,14 @@ fn compute(d: &Declared, parent: Option<&Style>, canvas: [f64; 2]) -> Result<Sty
             None => inherited.family.clone(),
             Some(f) => f.clone(),
         },
-        line_height: match d.line_height {
+        line_height: match &d.line_height {
             None => inherited.line_height,
             Some(Leading::Normal) => LineHeight::Normal,
-            Some(Leading::Factor(f)) => LineHeight::Factor(f),
+            Some(Leading::Factor(f)) => LineHeight::Factor(*f),
             Some(Leading::Len(l)) => LineHeight::Px(l.px(units(size), size)),
         },
         align: d.text_align.unwrap_or(inherited.align),
-        spacing: match d.letter_spacing {
+        spacing: match &d.letter_spacing {
             None => inherited.spacing,
             Some(l) => l.px(units(size), 0.0),
         },
@@ -1252,38 +1337,43 @@ fn compute(d: &Declared, parent: Option<&Style>, canvas: [f64; 2]) -> Result<Sty
         }
     };
     let u = units(size);
+    let mut l = Lengths {
+        u,
+        first,
+        calcs: Vec::new(),
+    };
     let layout: taffy::Style = taffy::Style {
         display,
         position: d.position,
-        inset: rect(d.inset, u, lpa),
+        inset: l.rect(&d.inset, Lengths::lpa),
         size: taffy::Size {
-            width: dim(d.size[0], u),
-            height: dim(d.size[1], u),
+            width: l.dim(&d.size[0]),
+            height: l.dim(&d.size[1]),
         },
         min_size: taffy::Size {
-            width: lpa(d.min_size[0], u),
-            height: lpa(d.min_size[1], u),
+            width: l.lpa(&d.min_size[0]),
+            height: l.lpa(&d.min_size[1]),
         },
         max_size: taffy::Size {
-            width: lpa(d.max_size[0], u),
-            height: lpa(d.max_size[1], u),
+            width: l.lpa(&d.max_size[0]),
+            height: l.lpa(&d.max_size[1]),
         },
         box_sizing: d.box_sizing,
         aspect_ratio: d.aspect_ratio.map(|r| r as f32),
-        margin: rect(d.margin, u, lpa),
-        padding: rect(d.padding, u, lp),
+        margin: l.rect(&d.margin, Lengths::lpa),
+        padding: l.rect(&d.padding, Lengths::lp),
         flex_direction: d.flex_direction,
         flex_wrap: d.flex_wrap,
         flex_grow: d.flex_grow as f32,
         flex_shrink: d.flex_shrink as f32,
-        flex_basis: dim(d.flex_basis, u),
+        flex_basis: l.dim(&d.flex_basis),
         justify_content: d.justify_content,
         align_items: d.align_items,
         align_self: d.align_self,
         align_content: d.align_content,
         gap: taffy::Size {
-            width: lp(d.gap[1], u),
-            height: lp(d.gap[0], u),
+            width: l.lp(&d.gap[1]),
+            height: l.lp(&d.gap[0]),
         },
         ..taffy::Style::DEFAULT
     };
@@ -1295,6 +1385,7 @@ fn compute(d: &Declared, parent: Option<&Style>, canvas: [f64; 2]) -> Result<Sty
         opacity: d.opacity,
         color: d.color.unwrap_or(inherited_color),
         font,
+        calcs: l.calcs,
     })
 }
 
