@@ -101,6 +101,30 @@ fn declarations_compute_into_a_layout_style() {
 }
 
 #[test]
+fn logical_sides_are_the_physical_ones_in_declaration_order() {
+    let l = one(&[
+        ("padding", num(1.0)),
+        ("paddingInline", text("2px 3px")),
+        ("paddingTop", num(4.0)),
+        ("paddingBlock", num(5.0)),
+        ("marginInlineEnd", num(6.0)),
+        ("marginRight", num(7.0)),
+        ("insetBlockEnd", text("10%")),
+    ])
+    .layout;
+    let padding = taffy::Rect {
+        top: px(5.0),
+        right: px(3.0),
+        bottom: px(5.0),
+        left: px(2.0),
+    };
+    assert_eq!(l.padding, padding);
+    assert_eq!(l.margin.right, auto_px(7.0));
+    assert_eq!(l.inset.bottom, LengthPercentageAuto::percent(0.1));
+    assert!(error(&[("marginBlock", text("1px 2px 3px"))]).ends_with("takes one or two lengths"));
+}
+
+#[test]
 fn the_flex_shorthand_follows_css() {
     let flex = |p: Prop| {
         let l = one(&[("flex", p)]).layout;

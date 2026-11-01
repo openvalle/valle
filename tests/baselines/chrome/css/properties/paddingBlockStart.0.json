@@ -1,0 +1,29 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><div data-n=\"2\" style=\"width: 100px; background: #7986cb; padding-block-start: 0;\"><div data-n=\"3\" style=\"height: 4px; background: #3949ab;\"></div></div></div><div data-n=\"4\" style=\"padding-bottom: 4px;\"><div data-n=\"5\" style=\"width: 100px; background: #7986cb; padding-block-start: 5px;\"><div data-n=\"6\" style=\"height: 4px; background: #3949ab;\"></div></div></div><div data-n=\"7\" style=\"padding-bottom: 4px;\"><div data-n=\"8\" style=\"width: 100px; background: #7986cb; padding-block-start: 2.5px;\"><div data-n=\"9\" style=\"height: 4px; background: #3949ab;\"></div></div></div><div data-n=\"10\" style=\"padding-bottom: 4px;\"><div data-n=\"11\" style=\"width: 100px; background: #7986cb; padding-block-start: 10%;\"><div data-n=\"12\" style=\"height: 4px; background: #3949ab;\"></div></div></div><div data-n=\"13\" style=\"padding-bottom: 4px;\"><div data-n=\"14\" style=\"width: 100px; background: #7986cb; padding-block-start: 0.5em;\"><div data-n=\"15\" style=\"height: 4px; background: #3949ab;\"></div></div></div><div data-n=\"16\" style=\"padding-bottom: 4px;\"><div data-n=\"17\" style=\"width: 100px; background: #7986cb; padding-block-start: 1rem;\"><div data-n=\"18\" style=\"height: 4px; background: #3949ab;\"></div></div></div><div data-n=\"19\" style=\"padding-bottom: 4px;\"><div data-n=\"20\" style=\"width: 100px; background: #7986cb; padding-block-start: 3PX;\"><div data-n=\"21\" style=\"height: 4px; background: #3949ab;\"></div></div></div></div></div>\n",
+ "boxes": [
+  [0,0,256,123.296875],
+  [4,4,248,8],
+  [4,4,100,4],
+  [4,4,100,4],
+  [4,12,248,13],
+  [4,12,100,9],
+  [4,17,100,4],
+  [4,25,248,10.5],
+  [4,25,100,6.5],
+  [4,27.5,100,4],
+  [4,35.5,248,32.796875],
+  [4,35.5,100,28.796875],
+  [4,60.296875,100,4],
+  [4,68.296875,248,16],
+  [4,68.296875,100,12],
+  [4,76.296875,100,4],
+  [4,84.296875,248,24],
+  [4,84.296875,100,20],
+  [4,100.296875,100,4],
+  [4,108.296875,248,11],
+  [4,108.296875,100,7],
+  [4,111.296875,100,4]
+ ],
+ "lines": {}
+}

@@ -24,9 +24,36 @@ struct Row {
 const COMPOSITION: &str =
     "export const composition = { width: 256, height: 256, fps: 1, duration: 1 };";
 
-const SIDES: &[&str] = &["top", "right", "bottom", "left"];
-const MARGINS: &[&str] = &["marginTop", "marginRight", "marginBottom", "marginLeft"];
-const PADDINGS: &[&str] = &["paddingTop", "paddingRight", "paddingBottom", "paddingLeft"];
+const SIDES: &[&str] = &[
+    "top",
+    "right",
+    "bottom",
+    "left",
+    "insetInlineStart",
+    "insetInlineEnd",
+    "insetBlockStart",
+    "insetBlockEnd",
+];
+const MARGINS: &[&str] = &[
+    "marginTop",
+    "marginRight",
+    "marginBottom",
+    "marginLeft",
+    "marginInlineStart",
+    "marginInlineEnd",
+    "marginBlockStart",
+    "marginBlockEnd",
+];
+const PADDINGS: &[&str] = &[
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "paddingInlineStart",
+    "paddingInlineEnd",
+    "paddingBlockStart",
+    "paddingBlockEnd",
+];
 
 const CONTENT_ALIGN: &[&str] = &[
     "\"normal\"",
@@ -118,6 +145,20 @@ const ROWS: &[Row] = &[
             "\"auto 0 auto auto\"",
         ],
         refused: &["\"1px 2px 3px 4px 5px\"", "\"\"", "\"1px, 2px\"", "true"],
+    },
+    Row {
+        properties: &["insetInline", "insetBlock"],
+        sample: r##"<View style={{ position: "relative", height: 16, background: "#e8eaf6" }}><View style={{ position: "absolute", width: 30, height: 8, background: "#3949ab", PROPERTY: VALUE }} /></View>"##,
+        values: &[
+            "0",
+            "4",
+            "-3",
+            "\"2px 8px\"",
+            "\"auto\"",
+            "\"10% auto\"",
+            "\"auto 0.5em\"",
+        ],
+        refused: &["\"1px 2px 3px\"", "\"\"", "true"],
     },
     Row {
         properties: &["width"],
@@ -215,6 +256,20 @@ const ROWS: &[Row] = &[
         refused: &["\"1px 2px 3px 4px 5px\"", "\"\"", "\"1px, 2px\""],
     },
     Row {
+        properties: &["marginInline", "marginBlock"],
+        sample: r##"<View style={{ padding: 1, background: "#e8eaf6" }}><View style={{ width: 100, height: 6, background: "#3949ab", PROPERTY: VALUE }} /></View>"##,
+        values: &[
+            "0",
+            "4",
+            "-3",
+            "\"2px 8px\"",
+            "\"auto\"",
+            "\"0 auto\"",
+            "\"-2px 5%\"",
+        ],
+        refused: &["\"1px 2px 3px\"", "\"\"", "\"1px, 2px\""],
+    },
+    Row {
         properties: PADDINGS,
         sample: r##"<View style={{ width: 100, background: "#7986cb", PROPERTY: VALUE }}><View style={{ height: 4, background: "#3949ab" }} /></View>"##,
         values: &[
@@ -240,6 +295,12 @@ const ROWS: &[Row] = &[
             "\"5%\"",
         ],
         refused: &["\"auto\"", "\"1px 2px 3px 4px 5px\"", "-2"],
+    },
+    Row {
+        properties: &["paddingInline", "paddingBlock"],
+        sample: r##"<View style={{ width: 100, background: "#7986cb", PROPERTY: VALUE }}><View style={{ height: 4, background: "#3949ab" }} /></View>"##,
+        values: &["0", "4", "\"2px 8px\"", "\"5%\"", "\"0.5em 1px\""],
+        refused: &["\"auto\"", "\"1px 2px 3px\"", "-2"],
     },
     Row {
         properties: &["flexDirection"],

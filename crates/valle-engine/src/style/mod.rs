@@ -419,27 +419,15 @@ impl Default for Declared {
 enum Field {
     Display,
     Position,
-    Top,
-    Right,
-    Bottom,
-    Left,
-    Inset,
+    Inset(Sides),
     Width,
     Height,
     MinWidth,
     MinHeight,
     MaxWidth,
     MaxHeight,
-    Margin,
-    MarginTop,
-    MarginRight,
-    MarginBottom,
-    MarginLeft,
-    Padding,
-    PaddingTop,
-    PaddingRight,
-    PaddingBottom,
-    PaddingLeft,
+    Margin(Sides),
+    Padding(Sides),
     FlexDirection,
     FlexWrap,
     FlexGrow,
@@ -466,33 +454,68 @@ enum Field {
     LetterSpacing,
 }
 
+/// The sides a box-edge property sets: the four of a shorthand, one, or logical ones, which in
+/// horizontal left-to-right text are left and right (inline) and top and bottom (block).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sides {
+    All,
+    Top,
+    Right,
+    Bottom,
+    Left,
+    Inline,
+    Block,
+    InlineStart,
+    InlineEnd,
+    BlockStart,
+    BlockEnd,
+}
+
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 47] = [
+const FIELDS: [(&str, Field); 65] = [
     ("display", Field::Display),
     ("position", Field::Position),
-    ("top", Field::Top),
-    ("right", Field::Right),
-    ("bottom", Field::Bottom),
-    ("left", Field::Left),
-    ("inset", Field::Inset),
+    ("inset", Field::Inset(Sides::All)),
+    ("top", Field::Inset(Sides::Top)),
+    ("right", Field::Inset(Sides::Right)),
+    ("bottom", Field::Inset(Sides::Bottom)),
+    ("left", Field::Inset(Sides::Left)),
+    ("insetInline", Field::Inset(Sides::Inline)),
+    ("insetBlock", Field::Inset(Sides::Block)),
+    ("insetInlineStart", Field::Inset(Sides::InlineStart)),
+    ("insetInlineEnd", Field::Inset(Sides::InlineEnd)),
+    ("insetBlockStart", Field::Inset(Sides::BlockStart)),
+    ("insetBlockEnd", Field::Inset(Sides::BlockEnd)),
     ("width", Field::Width),
     ("height", Field::Height),
     ("minWidth", Field::MinWidth),
     ("minHeight", Field::MinHeight),
     ("maxWidth", Field::MaxWidth),
     ("maxHeight", Field::MaxHeight),
-    ("margin", Field::Margin),
-    ("marginTop", Field::MarginTop),
-    ("marginRight", Field::MarginRight),
-    ("marginBottom", Field::MarginBottom),
-    ("marginLeft", Field::MarginLeft),
-    ("padding", Field::Padding),
-    ("paddingTop", Field::PaddingTop),
-    ("paddingRight", Field::PaddingRight),
-    ("paddingBottom", Field::PaddingBottom),
-    ("paddingLeft", Field::PaddingLeft),
+    ("margin", Field::Margin(Sides::All)),
+    ("marginTop", Field::Margin(Sides::Top)),
+    ("marginRight", Field::Margin(Sides::Right)),
+    ("marginBottom", Field::Margin(Sides::Bottom)),
+    ("marginLeft", Field::Margin(Sides::Left)),
+    ("marginInline", Field::Margin(Sides::Inline)),
+    ("marginBlock", Field::Margin(Sides::Block)),
+    ("marginInlineStart", Field::Margin(Sides::InlineStart)),
+    ("marginInlineEnd", Field::Margin(Sides::InlineEnd)),
+    ("marginBlockStart", Field::Margin(Sides::BlockStart)),
+    ("marginBlockEnd", Field::Margin(Sides::BlockEnd)),
+    ("padding", Field::Padding(Sides::All)),
+    ("paddingTop", Field::Padding(Sides::Top)),
+    ("paddingRight", Field::Padding(Sides::Right)),
+    ("paddingBottom", Field::Padding(Sides::Bottom)),
+    ("paddingLeft", Field::Padding(Sides::Left)),
+    ("paddingInline", Field::Padding(Sides::Inline)),
+    ("paddingBlock", Field::Padding(Sides::Block)),
+    ("paddingInlineStart", Field::Padding(Sides::InlineStart)),
+    ("paddingInlineEnd", Field::Padding(Sides::InlineEnd)),
+    ("paddingBlockStart", Field::Padding(Sides::BlockStart)),
+    ("paddingBlockEnd", Field::Padding(Sides::BlockEnd)),
     ("flexDirection", Field::FlexDirection),
     ("flexWrap", Field::FlexWrap),
     ("flexGrow", Field::FlexGrow),
@@ -662,6 +685,29 @@ fn sides(v: &V, a: Accept) -> Result<[Len; 4], String> {
         [t, r, b, l, ..] => [t, r, b, l],
         [] => [Len::Px(0.0); 4],
     })
+}
+
+/// Sets the sides `which` names of `sides`, which are top, right, bottom and left. A logical pair
+/// takes one length for both, or the start's and the end's.
+fn set_sides(sides: &mut [Len; 4], which: Sides, v: &V, a: Accept) -> Result<(), String> {
+    use Sides as S;
+    let pair = |v: &V| -> Result<[Len; 2], String> {
+        Ok(match lengths(v, a, 2)?[..] {
+            [start, end, ..] => [start, end],
+            [both] => [both; 2],
+            [] => [Len::Px(0.0); 2],
+        })
+    };
+    match which {
+        S::All => *sides = self::sides(v, a)?,
+        S::Top | S::BlockStart => sides[0] = length(v, a)?,
+        S::Right | S::InlineEnd => sides[1] = length(v, a)?,
+        S::Bottom | S::BlockEnd => sides[2] = length(v, a)?,
+        S::Left | S::InlineStart => sides[3] = length(v, a)?,
+        S::Inline => [sides[3], sides[1]] = pair(v)?,
+        S::Block => [sides[0], sides[2]] = pair(v)?,
+    }
+    Ok(())
 }
 
 fn number(v: &V) -> Result<f64, String> {
@@ -906,27 +952,15 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
     match field {
         F::Display => d.display = display(v)?,
         F::Position => d.position = position(v)?,
-        F::Top => d.inset[0] = length(v, INSET)?,
-        F::Right => d.inset[1] = length(v, INSET)?,
-        F::Bottom => d.inset[2] = length(v, INSET)?,
-        F::Left => d.inset[3] = length(v, INSET)?,
-        F::Inset => d.inset = sides(v, INSET)?,
+        F::Inset(s) => set_sides(&mut d.inset, s, v, INSET)?,
         F::Width => d.size[0] = length(v, SIZE)?,
         F::Height => d.size[1] = length(v, SIZE)?,
         F::MinWidth => d.min_size[0] = length(v, SIZE)?,
         F::MinHeight => d.min_size[1] = length(v, SIZE)?,
         F::MaxWidth => d.max_size[0] = length(v, MAX_SIZE)?,
         F::MaxHeight => d.max_size[1] = length(v, MAX_SIZE)?,
-        F::Margin => d.margin = sides(v, INSET)?,
-        F::MarginTop => d.margin[0] = length(v, INSET)?,
-        F::MarginRight => d.margin[1] = length(v, INSET)?,
-        F::MarginBottom => d.margin[2] = length(v, INSET)?,
-        F::MarginLeft => d.margin[3] = length(v, INSET)?,
-        F::Padding => d.padding = sides(v, PADDING)?,
-        F::PaddingTop => d.padding[0] = length(v, PADDING)?,
-        F::PaddingRight => d.padding[1] = length(v, PADDING)?,
-        F::PaddingBottom => d.padding[2] = length(v, PADDING)?,
-        F::PaddingLeft => d.padding[3] = length(v, PADDING)?,
+        F::Margin(s) => set_sides(&mut d.margin, s, v, INSET)?,
+        F::Padding(s) => set_sides(&mut d.padding, s, v, PADDING)?,
         F::FlexDirection => {
             d.flex_direction = keyword(
                 v,
