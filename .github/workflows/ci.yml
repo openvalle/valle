@@ -27,5 +27,6 @@ jobs:
         run: cargo xtask fmt --check
       - name: Lint
         run: cargo xtask lint
+      # No GPU here: the gpu layer runs on a Mac.
       - name: Test
-        run: cargo xtask test
+        run: cargo xtask test --skip gpu,browser

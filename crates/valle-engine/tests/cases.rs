@@ -1,16 +1,26 @@
-//! The case runner: every scene under `tests/cases` is a case, and cases run in parallel. A case
-//! in `errors/` names the error it must fail with on its first line, as `// error: …`.
+//! The case runner: every scene under `tests/cases` is a case, and cases run in parallel.
+//!
+//! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`.
+//! - Any other case is drawn on the GPU, every frame, and each frame compared with its Valle
+//!   baseline, `tests/baselines/valle/<case>.<frame>.png`, within one level a channel. Frames that
+//!   differ or have no baseline go to `target/review` with a page to compare them, and
+//!   `cargo xtask accept <case>` takes what was drawn as the new baselines.
 //!
 //! `cargo test -p valle-engine --test cases [-- <case>…]` runs the cases, or those under the
-//! given paths (`errors`, `errors/style.tsx`).
+//! given paths (`errors`, `errors/style.tsx`). The GPU cases run only when `VALLE_TEST_LAYERS`
+//! names `gpu`, as `cargo xtask test` does unless told to skip them.
 
+use std::fmt::Write as _;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use valle_engine::gpu::{Gpu, Renderer};
 use valle_engine::scene::Scene;
+use valle_engine::time::Tick;
 
 /// The largest canvas, px a side, and the most frames a case may have.
 const MAX_SIZE: u32 = 512;
@@ -18,16 +28,59 @@ const MAX_FRAMES: i64 = 10;
 /// Scene code needs a stack of more than 12 MiB.
 const STACK: usize = 32 << 20;
 
+struct Runner {
+    root: PathBuf,
+    baselines: PathBuf,
+    review: PathBuf,
+    gpu_layer: bool,
+    gpu: OnceLock<Result<Gpu, String>>,
+    /// Frames that went to review: name, what was wrong, whether there is a baseline.
+    reviewed: Mutex<Vec<(String, String, bool)>>,
+}
+
+enum Outcome {
+    Passed,
+    Failed(String),
+    Skipped,
+}
+
+/// Why a case's frames stopped: its scene failed, or the case breaks the runner's rules.
+enum Failure {
+    Scene(String),
+    Case(String),
+}
+
 fn main() -> ExitCode {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cases");
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repo = manifest
+        .ancestors()
+        .nth(2)
+        .expect("the crate is in crates/");
+    let layers = std::env::var("VALLE_TEST_LAYERS").unwrap_or_default();
+    let runner = Runner {
+        root: repo.join("tests/cases"),
+        baselines: repo.join("tests/baselines/valle"),
+        review: repo.join("target/review"),
+        gpu_layer: layers.split(',').any(|l| l == "gpu"),
+        gpu: OnceLock::new(),
+        reviewed: Mutex::new(Vec::new()),
+    };
     let filters: Vec<String> = std::env::args().skip(1).collect();
-    match select(&root, &filters) {
-        Ok(cases) => run_all(&root, &cases),
+    let cases = match select(&runner.root, &filters) {
+        Ok(cases) => cases,
         Err(e) => {
             eprintln!("cases: {e}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
         }
+    };
+    // Review holds only the last run's frames, which are what `accept` takes.
+    let _ = std::fs::remove_dir_all(&runner.review);
+    let code = runner.run_all(&cases);
+    if let Err(e) = runner.write_review() {
+        eprintln!("cases: review: {e}");
+        return ExitCode::FAILURE;
     }
+    code
 }
 
 /// The cases under `root`, as `/`-separated paths from it, sorted; only those the filters name
@@ -59,7 +112,7 @@ fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), String> {
     for entry in entries {
         let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        let path: PathBuf = entry.path();
+        let path = entry.path();
         if path.is_dir() {
             walk(&path, &format!("{prefix}{name}/"), out)?;
         } else if name.ends_with(".tsx") {
@@ -69,103 +122,285 @@ fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-fn run_all(root: &Path, cases: &[String]) -> ExitCode {
-    println!("\nrunning {} cases", cases.len());
-    let start = Instant::now();
-    let next = AtomicUsize::new(0);
-    let done: Mutex<Vec<(usize, Duration, Option<String>)>> = Mutex::new(Vec::new());
-    let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
-    std::thread::scope(|s| {
-        for _ in 0..workers.min(cases.len()) {
-            std::thread::Builder::new()
-                .stack_size(STACK)
-                .spawn_scoped(s, || {
-                    loop {
-                        let i = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(case) = cases.get(i) else { break };
-                        let began = Instant::now();
-                        let failure = run(root, case).err();
-                        let took = began.elapsed();
-                        let status = if failure.is_some() { "FAILED" } else { "ok" };
-                        let mut done = done.lock().unwrap_or_else(|e| e.into_inner());
-                        println!("case {case} ... {status}");
-                        done.push((i, took, failure));
-                    }
-                })
-                .expect("a worker thread");
+impl Runner {
+    fn run_all(&self, cases: &[String]) -> ExitCode {
+        println!("\nrunning {} cases", cases.len());
+        let start = Instant::now();
+        let next = AtomicUsize::new(0);
+        let done: Mutex<Vec<(usize, Duration, Outcome)>> = Mutex::new(Vec::new());
+        let workers = std::thread::available_parallelism().map_or(1, |n| n.get());
+        std::thread::scope(|s| {
+            for _ in 0..workers.min(cases.len()) {
+                std::thread::Builder::new()
+                    .stack_size(STACK)
+                    .spawn_scoped(s, || {
+                        loop {
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let Some(case) = cases.get(i) else { break };
+                            let began = Instant::now();
+                            let outcome = self.run(case);
+                            let took = began.elapsed();
+                            let mut done = done.lock().unwrap_or_else(|e| e.into_inner());
+                            match outcome {
+                                Outcome::Passed => println!("case {case} ... ok"),
+                                Outcome::Failed(_) => println!("case {case} ... FAILED"),
+                                Outcome::Skipped => {}
+                            }
+                            done.push((i, took, outcome));
+                        }
+                    })
+                    .expect("a worker thread");
+            }
+        });
+        let mut done = done.into_inner().unwrap_or_else(|e| e.into_inner());
+        done.sort_by_key(|&(i, ..)| i);
+        let failed = (done.iter())
+            .filter(|(.., o)| matches!(o, Outcome::Failed(_)))
+            .count();
+        let skipped = (done.iter())
+            .filter(|(.., o)| matches!(o, Outcome::Skipped))
+            .count();
+        if failed > 0 {
+            println!("\nfailures:");
+            for (i, _, outcome) in &done {
+                if let Outcome::Failed(why) = outcome {
+                    println!("\n---- {}\n{why}", cases[*i]);
+                }
+            }
+            if !self.reviewed().is_empty() {
+                let page = self.review.join("index.html");
+                println!("\ncompare the frames in {}", page.display());
+            }
         }
-    });
-    let mut done = done.into_inner().unwrap_or_else(|e| e.into_inner());
-    done.sort_by_key(|&(i, ..)| i);
-    let failed = done.iter().filter(|(.., f)| f.is_some()).count();
-    if failed > 0 {
-        println!("\nfailures:");
-        for (i, _, failure) in &done {
-            if let Some(failure) = failure {
-                println!("\n---- {}\n{failure}", cases[*i]);
+        done.sort_by_key(|&(_, took, _)| std::cmp::Reverse(took));
+        println!("\nslowest:");
+        for (i, took, _) in done.iter().take(10) {
+            println!("  {:>8.3} s  {}", took.as_secs_f64(), cases[*i]);
+        }
+        let skips = match skipped {
+            0 => String::new(),
+            n => format!("; {n} skipped, the gpu layer being off"),
+        };
+        println!(
+            "\ncase result: {}. {} passed; {failed} failed{skips}; finished in {:.2}s\n",
+            if failed == 0 { "ok" } else { "FAILED" },
+            cases.len() - failed - skipped,
+            start.elapsed().as_secs_f64()
+        );
+        if failed == 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        }
+    }
+
+    fn run(&self, case: &str) -> Outcome {
+        let drawn = !case.starts_with("errors/");
+        if drawn && !self.gpu_layer {
+            return Outcome::Skipped;
+        }
+        let run = std::panic::AssertUnwindSafe(|| {
+            if drawn {
+                self.pixels(case)
+            } else {
+                self.error(case)
+            }
+        });
+        match std::panic::catch_unwind(run) {
+            Ok(Ok(())) => Outcome::Passed,
+            Ok(Err(why)) => Outcome::Failed(why),
+            Err(panic) => {
+                let why = (panic.downcast_ref::<String>().cloned())
+                    .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                Outcome::Failed(format!("panicked: {why}"))
             }
         }
     }
-    done.sort_by_key(|&(_, took, _)| std::cmp::Reverse(took));
-    println!("\nslowest:");
-    for (i, took, _) in done.iter().take(10) {
-        println!("  {:>8.3} s  {}", took.as_secs_f64(), cases[*i]);
-    }
-    let result = if failed == 0 { "ok" } else { "FAILED" };
-    println!(
-        "\ncase result: {result}. {} passed; {} failed; finished in {:.2}s\n",
-        cases.len() - failed,
-        failed,
-        start.elapsed().as_secs_f64()
-    );
-    if failed == 0 {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    }
-}
 
-fn run(root: &Path, case: &str) -> Result<(), String> {
-    let source = std::fs::read_to_string(root.join(case)).map_err(|e| e.to_string())?;
-    let expected = source
-        .lines()
-        .next()
-        .and_then(|l| l.strip_prefix("// error: "));
-    match case.split('/').next() {
-        Some("errors") => {
-            let expected =
-                expected.ok_or("an errors/ case names its error on its first line: // error: …")?;
-            match frames(root, case)? {
-                Ok(()) => Err(format!("no error; expected: {expected}")),
-                Err(e) if e == expected => Ok(()),
-                Err(e) => Err(format!("error:    {e}\nexpected: {expected}")),
+    fn error(&self, case: &str) -> Result<(), String> {
+        let source = std::fs::read_to_string(self.root.join(case)).map_err(|e| e.to_string())?;
+        let expected = (source.lines().next())
+            .and_then(|l| l.strip_prefix("// error: "))
+            .ok_or("an errors/ case names its error on its first line: // error: …")?;
+        let failed = match self.frames(case, &mut |scene, _, at| scene.frame(at).map(drop)) {
+            Ok(()) => None,
+            Err(Failure::Scene(e)) => Some(e),
+            Err(Failure::Case(e)) => return Err(e),
+        };
+        match failed {
+            None => Err(format!("no error; expected: {expected}")),
+            Some(e) if e == expected => Ok(()),
+            Some(e) => Err(format!("error:    {e}\nexpected: {expected}")),
+        }
+    }
+
+    fn pixels(&self, case: &str) -> Result<(), String> {
+        let gpu = self.gpu.get_or_init(Gpu::new).as_ref().map_err(|e| {
+            format!("{e}; the gpu layer needs a GPU (`cargo xtask test --skip gpu` skips it)")
+        })?;
+        let stem = case.strip_suffix(".tsx").unwrap_or(case);
+        let mut renderer = None;
+        let mut problems = Vec::new();
+        let mut review = Ok(());
+        let drawn = self.frames(case, &mut |scene, i, at| {
+            let c = scene.composition();
+            let renderer = renderer.get_or_insert_with(|| Renderer::new(gpu, c.width, c.height));
+            let items = scene.frame(at)?;
+            let pixels = renderer.render(&items, scene.faces())?;
+            match self.compare(&format!("{stem}.{i}.png"), [c.width, c.height], &pixels) {
+                Ok(Some(problem)) => problems.push(format!("frame {i}: {problem}")),
+                Ok(None) => {}
+                Err(e) => review = Err(e),
+            }
+            Ok(())
+        });
+        match drawn {
+            Ok(()) => review?,
+            Err(Failure::Scene(e) | Failure::Case(e)) => return Err(e),
+        }
+        if problems.is_empty() {
+            Ok(())
+        } else {
+            Err(problems.join("\n"))
+        }
+    }
+
+    /// Runs `each` on the case's frames in order, with the scene, the frame and its time.
+    fn frames(
+        &self,
+        case: &str,
+        each: &mut dyn FnMut(&mut Scene, i64, Tick) -> Result<(), String>,
+    ) -> Result<(), Failure> {
+        let read = |path: &str| std::fs::read_to_string(self.root.join(path)).ok();
+        let mut scene = Scene::load(case, &read).map_err(Failure::Scene)?;
+        let c = scene.composition();
+        if c.width > MAX_SIZE || c.height > MAX_SIZE {
+            let e = format!("cases are at most {MAX_SIZE} × {MAX_SIZE} px");
+            return Err(Failure::Case(e));
+        }
+        let n = c.fps.frames_in(c.duration);
+        if n > MAX_FRAMES {
+            let e = format!("cases have at most {MAX_FRAMES} frames, not {n}");
+            return Err(Failure::Case(e));
+        }
+        for i in 0..n {
+            let at = c.fps.frame_start(i).map_err(Failure::Case)?;
+            each(&mut scene, i, at).map_err(Failure::Scene)?;
+        }
+        Ok(())
+    }
+
+    /// What is wrong with a drawn frame against its baseline, if anything; a frame that is wrong
+    /// goes to review.
+    fn compare(&self, name: &str, size: [u32; 2], drawn: &[u8]) -> Result<Option<String>, String> {
+        let baseline = self.baselines.join(name);
+        let (problem, diff) = if baseline.exists() {
+            let (got, expected) = read_png(&baseline)?;
+            if got != size {
+                let [w, h] = got;
+                let problem = format!("the baseline is {w} × {h} px, the frame is not");
+                (Some(problem), None)
+            } else {
+                let mut diff = Vec::with_capacity(drawn.len());
+                let (mut off, mut most) = (0, 0);
+                for (a, b) in drawn.chunks(4).zip(expected.chunks(4)) {
+                    let d = (a.iter().zip(b)).map(|(x, y)| x.abs_diff(*y)).max();
+                    let d = d.unwrap_or(0);
+                    most = most.max(d);
+                    off += usize::from(d > 1);
+                    diff.extend(if d > 1 { [255, 0, 0, 255] } else { [255; 4] });
+                }
+                let problem = (off > 0)
+                    .then(|| format!("{off} pixels are off by more than 1 level, by up to {most}"));
+                (problem, Some(diff))
+            }
+        } else {
+            (Some(format!("no baseline {name}")), None)
+        };
+        let Some(problem) = problem else {
+            return Ok(None);
+        };
+        let stem = name.trim_end_matches(".png");
+        write_png(&self.review.join(name), size, drawn)?;
+        if let Some(diff) = &diff {
+            write_png(&self.review.join(format!("{stem}.diff.png")), size, diff)?;
+            let expected = self.review.join(format!("{stem}.expected.png"));
+            std::fs::copy(&baseline, &expected)
+                .map_err(|e| format!("{}: {e}", baseline.display()))?;
+        }
+        let mut reviewed = self.reviewed.lock().unwrap_or_else(|e| e.into_inner());
+        reviewed.push((name.to_string(), problem.clone(), diff.is_some()));
+        Ok(Some(problem))
+    }
+
+    fn reviewed(&self) -> Vec<(String, String, bool)> {
+        let mut list = (self.reviewed.lock().unwrap_or_else(|e| e.into_inner())).clone();
+        list.sort();
+        list
+    }
+
+    /// The page comparing the frames that went to review.
+    fn write_review(&self) -> Result<(), String> {
+        let reviewed = self.reviewed();
+        if reviewed.is_empty() {
+            return Ok(());
+        }
+        let mut html = String::from(
+            "<!doctype html>\n<meta charset=\"utf-8\">\n<title>Valle review</title>\n<style>\n\
+             body { font: 14px system-ui, sans-serif; margin: 24px; }\n\
+             figure { display: inline-block; margin: 0 16px 16px 0; }\n\
+             img { image-rendering: pixelated; background: repeating-conic-gradient(#ccc 0 25%, \
+             #fff 0 50%) 0 0 / 16px 16px; }\n</style>\n<h1>Frames to review</h1>\n\
+             <p>Accept the cases that look right with <code>cargo xtask accept &lt;case&gt;</code>.\n",
+        );
+        for (name, problem, has_baseline) in reviewed {
+            let stem = name.trim_end_matches(".png");
+            let figure = |file: String, caption: &str| {
+                format!("<figure><img src=\"{file}\"><figcaption>{caption}</figcaption></figure>\n")
+            };
+            let _ = write!(html, "<h2>{name}</h2>\n<p>{problem}\n");
+            if has_baseline {
+                html += &figure(format!("{stem}.expected.png"), "baseline");
+            }
+            html += &figure(name.clone(), "drawn");
+            if has_baseline {
+                html += &figure(format!("{stem}.diff.png"), "off by more than 1 level");
             }
         }
-        _ => Err("no layer runs cases here yet".into()),
+        let page = self.review.join("index.html");
+        std::fs::write(&page, html).map_err(|e| format!("{}: {e}", page.display()))
     }
 }
 
-/// Every frame of the case's scene: `Ok(Err)` is the scene's error, `Err` the case breaking the
-/// runner's rules.
-fn frames(root: &Path, case: &str) -> Result<Result<(), String>, String> {
-    let read = |path: &str| std::fs::read_to_string(root.join(path)).ok();
-    let mut scene = match Scene::load(case, &read) {
-        Ok(scene) => scene,
-        Err(e) => return Ok(Err(e)),
-    };
-    let c = scene.composition();
-    if c.width > MAX_SIZE || c.height > MAX_SIZE {
-        return Err(format!("cases are at most {MAX_SIZE} × {MAX_SIZE} px"));
+fn read_png(path: &Path) -> Result<([u32; 2], Vec<u8>), String> {
+    let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let file = std::fs::File::open(path).map_err(|e| bad(&e))?;
+    let mut reader = (png::Decoder::new(BufReader::new(file)).read_info()).map_err(|e| bad(&e))?;
+    let mut pixels = vec![
+        0;
+        reader
+            .output_buffer_size()
+            .ok_or_else(|| bad(&"too large"))?
+    ];
+    let info = reader.next_frame(&mut pixels).map_err(|e| bad(&e))?;
+    if (info.color_type, info.bit_depth) != (png::ColorType::Rgba, png::BitDepth::Eight) {
+        return Err(bad(&"baselines are 8-bit RGBA"));
     }
-    let n = c.fps.frames_in(c.duration);
-    if n > MAX_FRAMES {
-        return Err(format!("cases have at most {MAX_FRAMES} frames, not {n}"));
+    pixels.truncate(info.buffer_size());
+    Ok(([info.width, info.height], pixels))
+}
+
+fn write_png(path: &Path, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {
+    let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| bad(&e))?;
     }
-    for i in 0..n {
-        let at = c.fps.frame_start(i)?;
-        if let Err(e) = scene.frame(at) {
-            return Ok(Err(e));
-        }
-    }
-    Ok(Ok(()))
+    let file = std::fs::File::create(path).map_err(|e| bad(&e))?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().map_err(|e| bad(&e))?;
+    writer.write_image_data(pixels).map_err(|e| bad(&e))?;
+    writer.finish().map_err(|e| bad(&e))
 }

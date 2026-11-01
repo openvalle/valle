@@ -15,7 +15,10 @@ usage: cargo xtask <command>
 commands:
   fmt [--check]   format the code with rustfmt and Prettier, or only check it
   lint [--fix]    run clippy and Oxlint with warnings as errors, optionally applying fixes
-  test [case...]  run the tests, or only the cases under tests/cases at these paths
+  test [case...] [--skip gpu,browser]
+                  run the tests, or only the cases under tests/cases at these paths;
+                  --skip leaves out test layers
+  accept case...  take the frames the last test run drew for these cases as their baselines
 ";
 
 fn main() -> ExitCode {
@@ -28,6 +31,7 @@ fn main() -> ExitCode {
         "fmt" => fmt(flags),
         "lint" => lint(flags),
         "test" => test(flags),
+        "accept" => accept(flags),
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
             Ok(())
@@ -73,24 +77,106 @@ fn lint(flags: &[String]) -> Result<(), String> {
     bun("oxlint", &args, &scripts)
 }
 
+/// Test layers past the first, which `--skip` can leave out. The browser layer does not exist
+/// yet.
+const LAYERS: [&str; 2] = ["gpu", "browser"];
+
 fn test(args: &[String]) -> Result<(), String> {
-    if let Some(flag) = args.iter().find(|a| a.starts_with('-')) {
+    let mut cases = Vec::new();
+    let mut skip = Vec::new();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--skip" => {
+                let list = args
+                    .next()
+                    .ok_or("--skip takes layers, as in --skip gpu,browser")?;
+                for layer in list.split(',') {
+                    if !LAYERS.contains(&layer) {
+                        return Err(format!("no test layer is called {layer}"));
+                    }
+                    skip.push(layer);
+                }
+            }
+            flag if flag.starts_with('-') => return Err(format!("unexpected flag {flag}")),
+            case => cases.push(case),
+        }
+    }
+    let layers: Vec<&str> = LAYERS.into_iter().filter(|l| !skip.contains(l)).collect();
+    let mut command = vec!["test", "--locked"];
+    if cases.is_empty() {
+        command.push("--workspace");
+    } else {
+        command.extend(["-p", "valle-engine", "--test", "cases", "--"]);
+        command.extend(cases);
+    }
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
+    run(
+        Command::new(cargo)
+            .args(&command)
+            .env("VALLE_TEST_LAYERS", layers.join(",")),
+        &format!("cargo {}", command.join(" ")),
+    )
+}
+
+/// Takes the frames the last test run drew for `cases` as their Valle baselines.
+fn accept(cases: &[String]) -> Result<(), String> {
+    if cases.is_empty() {
+        return Err("name the cases to accept, as shown on target/review/index.html".into());
+    }
+    if let Some(flag) = cases.iter().find(|c| c.starts_with('-')) {
         return Err(format!("unexpected flag {flag}"));
     }
-    if args.is_empty() {
-        return cargo(&["test", "--locked", "--workspace"]);
+    let review = root().join("target/review");
+    let mut drawn = Vec::new();
+    frames(&review, "", &mut drawn)?;
+    for case in cases {
+        let case = case.trim_end_matches('/');
+        let case = case.strip_suffix(".tsx").unwrap_or(case);
+        let mine: Vec<&String> = drawn
+            .iter()
+            .filter(|f| {
+                let stem = f.rsplitn(3, '.').nth(2).unwrap_or_default();
+                stem == case || stem.starts_with(&format!("{case}/"))
+            })
+            .collect();
+        if mine.is_empty() {
+            return Err(format!(
+                "the last test run drew nothing to review for {case}"
+            ));
+        }
+        for frame in mine {
+            let to = root().join("tests/baselines/valle").join(frame);
+            if let Some(dir) = to.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            }
+            std::fs::copy(review.join(frame), &to).map_err(|e| format!("{frame}: {e}"))?;
+            println!("accepted {frame}");
+        }
     }
-    let mut command = vec![
-        "test",
-        "--locked",
-        "-p",
-        "valle-engine",
-        "--test",
-        "cases",
-        "--",
-    ];
-    command.extend(args.iter().map(String::as_str));
-    cargo(&command)
+    Ok(())
+}
+
+/// The drawn frames under `dir`, `<case>.<frame>.png`, as paths from it.
+fn frames(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) if prefix.is_empty() => return Ok(()),
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if entry.path().is_dir() {
+            frames(&entry.path(), &format!("{prefix}{name}/"), out)?;
+            continue;
+        }
+        let frame = name.strip_suffix(".png").and_then(|n| n.rsplit_once('.'));
+        if frame.is_some_and(|(_, i)| !i.is_empty() && i.bytes().all(|b| b.is_ascii_digit())) {
+            out.push(format!("{prefix}{name}"));
+        }
+    }
+    Ok(())
 }
 
 /// Accepts either no flags or exactly `name`, and reports which.
