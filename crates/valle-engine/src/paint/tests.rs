@@ -996,6 +996,43 @@ fn text_shadows_go_under_each_part_of_a_run_the_last_lowest() {
 }
 
 #[test]
+fn text_strokes_go_over_the_fill_and_cast_one_shadow_with_it() {
+    let style = [
+        ("color", "black"),
+        ("WebkitTextStroke", "2px blue"),
+        ("textShadow", "1px 1px rgb(255 0 0 / 0.5), 2px 2px green"),
+    ];
+    let (items, _) = paint_of(vec![text_node("x", &style)], &[0]);
+    // A translucent shadow is one layer, so that it is no darker where the two overlap.
+    assert_eq!(
+        names(&items),
+        [
+            "text green",
+            "text green",
+            "group 0.5 [\"text red\", \"text red\"]",
+            "text black",
+            "text blue",
+        ]
+    );
+    let strokes: Vec<f32> = [&items[..2], &items[3..]]
+        .concat()
+        .iter()
+        .map(|item| match item {
+            Item::Glyphs { stroke, .. } => *stroke,
+            _ => unreachable!(),
+        })
+        .collect();
+    assert_eq!(strokes, [0.0, 2.0, 0.0, 2.0]);
+    // Its currentcolor is the color of the text, whatever its fill.
+    let outlined = [
+        ("color", "red"),
+        ("WebkitTextFillColor", "transparent"),
+        ("WebkitTextStrokeWidth", "1px"),
+    ];
+    assert_eq!(painted(vec![text_node("x", &outlined)], &[0]), ["text red"]);
+}
+
+#[test]
 fn a_mask_element_shows_what_its_box_paints_through_its_source() {
     let masked = |source: (u32, bool, bool), shown: &[u32]| {
         paint_of(
@@ -1932,6 +1969,7 @@ fn glyphs_sit_in_the_content_box() {
             face,
             size,
             color: c,
+            stroke: 0.0,
             glyphs,
         },
     ] = &items[..]

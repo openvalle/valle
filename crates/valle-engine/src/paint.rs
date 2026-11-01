@@ -22,7 +22,7 @@
 //! images, the first on top, paints over its outer shadows, and its inner shadows and border over
 //! the background; it is a layer of its own when an image blends, which blends with what is
 //! under it in the background alone. Text paints run by run its underlines and overlines, its
-//! glyphs, then its line-throughs, each over its shadows.
+//! glyphs and their stroke, then its line-throughs, each over its shadows.
 //!
 //! A box that clips what overflows it clips what it contains to its padding box, with its
 //! corners rounded: its content and in-flow descendants, and the positioned ones whose
@@ -80,11 +80,13 @@ pub enum Item {
         tiles: Tiles,
         ramp: Ramp,
     },
-    /// Glyphs of `Text::faces()[face]` at `size` px: glyph ids at their baseline origins.
+    /// Glyphs of `Text::faces()[face]` at `size` px: glyph ids at their baseline origins. With a
+    /// `stroke` above 0, a stroke that many px wide along their edges instead.
     Glyphs {
         face: u32,
         size: f32,
         color: [f32; 4],
+        stroke: f32,
         glyphs: Vec<(u32, [f32; 2])>,
     },
     /// A path filled in a color where it winds around, or with `even_odd` where it winds an odd
@@ -1253,7 +1255,8 @@ impl Painter<'_> {
     }
 
     /// Text as Chrome paints each run of it, in the style of the Text or Span it is in: its
-    /// underlines and overlines, its glyphs and its line-throughs, each over its shadows.
+    /// underlines and overlines, its glyphs and their stroke, and its line-throughs, each over
+    /// its shadows.
     fn text(&self, i: usize, out: &mut Drawn) {
         let Some(lines) = &self.layout.lines[i] else {
             return;
@@ -1291,18 +1294,44 @@ impl Painter<'_> {
                 }
             };
             let glyphs = &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize];
+            let drawn = |stroke: f32, color: [f32; 4], [dx, dy]: [f32; 2]| {
+                (glyphs.chunk_by(|a, b| a.face == b.face)).map(move |g| Item::Glyphs {
+                    face: g[0].face,
+                    size: s.font.size as f32,
+                    color,
+                    stroke,
+                    glyphs: (g.iter())
+                        .map(|g| (g.id, [at.x + g.x + dx, at.y + g.y + dy]))
+                        .collect(),
+                })
+            };
             let fill = work(s.font.fill.unwrap_or(s.color));
-            let glyphs = |color: Option<[f32; 4]>, [dx, dy]: [f32; 2]| -> Vec<Item> {
-                (glyphs.chunk_by(|a, b| a.face == b.face))
-                    .map(|g| Item::Glyphs {
-                        face: g[0].face,
-                        size: s.font.size as f32,
-                        color: color.unwrap_or(fill),
-                        glyphs: (g.iter())
-                            .map(|g| (g.id, [at.x + g.x + dx, at.y + g.y + dy]))
-                            .collect(),
-                    })
-                    .collect()
+            let stroke = match s.font.stroke > 0.0 && s.font.size > 0.0 {
+                true => Some((
+                    s.font.stroke as f32,
+                    work(s.font.stroke_color.unwrap_or(s.color)),
+                )),
+                false => None,
+            };
+            let glyphs = |shadow: Option<[f32; 4]>, by: [f32; 2]| -> Vec<Item> {
+                // The stroke and the fill under it cast one shadow: both opaque, in one layer.
+                let layer = shadow.filter(|c| stroke.is_some() && c[3] < 1.0);
+                let shadow = match layer {
+                    Some(c) => Some(c.map(|v| v / c[3])),
+                    None => shadow,
+                };
+                let mut items: Vec<Item> = drawn(0.0, shadow.unwrap_or(fill), by).collect();
+                if let Some((width, color)) = stroke {
+                    items.extend(drawn(width, shadow.unwrap_or(color), by));
+                }
+                match layer {
+                    Some(c) => vec![Item::Group {
+                        opacity: c[3],
+                        blend: Blend::Normal,
+                        items,
+                    }],
+                    None => items,
+                }
             };
             self.shadowed(s, stripes(false), clip, out);
             self.shadowed(s, glyphs, clip, out);
@@ -1326,6 +1355,9 @@ impl Painter<'_> {
         };
         for shadow in s.font.shadows.iter().rev() {
             let color = work(shadow.color.unwrap_or(s.color));
+            if color[3] <= 0.0 {
+                continue;
+            }
             let by = shadow.offset.map(|v| v as f32);
             let items: Vec<Item> = part(Some(color), by).into_iter().filter(shown).collect();
             match shadow.blur > 0.0 && !items.is_empty() {

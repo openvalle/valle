@@ -236,6 +236,10 @@ pub struct Font {
     /// `-webkit-text-fill-color`, the color of glyphs; `None` is `currentcolor`, the color of
     /// each box that inherits it.
     pub fill: Option<Rgba>,
+    /// `-webkit-text-stroke-width`, px, and `-webkit-text-stroke-color` (`None` is
+    /// `currentcolor`): a line along the edges of glyphs, centered on them, over their fill.
+    pub stroke: f64,
+    pub stroke_color: Option<Rgba>,
     /// `text-shadow`, the first on top.
     pub shadows: Rc<[TextShadow]>,
     /// `text-decoration-skip-ink: auto` (or `all`): underlines and overlines leave gaps where
@@ -246,6 +250,16 @@ pub struct Font {
 }
 
 impl Font {
+    /// What a decoration's `currentcolor` is, as Chrome has it, in this font of a box of color
+    /// `color`: its stroke's color if it has a stroke in another color that shows, or else the
+    /// fill color of its glyphs.
+    pub fn decoration_color(&self, color: Rgba) -> Rgba {
+        match self.stroke_color {
+            Some(c) if self.stroke > 0.0 && c[3] > 0.0 => c,
+            _ => self.fill.unwrap_or(color),
+        }
+    }
+
     /// What the canvas gives its children: CSS's initial values, in sans-serif.
     fn initial() -> Font {
         Font {
@@ -260,6 +274,8 @@ impl Font {
             wrap: true,
             transform: TextTransform::None,
             fill: None,
+            stroke: 0.0,
+            stroke_color: None,
             shadows: Rc::new([]),
             skip_ink: true,
             underline_offset: None,
@@ -810,6 +826,8 @@ struct Declared {
     text_transform: Option<TextTransform>,
     /// `Some(None)` is `currentcolor`.
     fill: Option<Option<Rgba>>,
+    stroke: Option<Len>,
+    stroke_color: Option<Option<Rgba>>,
     text_shadows: Option<Vec<Shadowed>>,
     skip_ink: Option<bool>,
     underline_offset: Option<Len>,
@@ -892,6 +910,8 @@ impl Default for Declared {
             wrap: None,
             text_transform: None,
             fill: None,
+            stroke: None,
+            stroke_color: None,
             text_shadows: None,
             skip_ink: None,
             underline_offset: None,
@@ -1011,6 +1031,9 @@ enum Field {
     TextDecorationSkipInk,
     TextUnderlineOffset,
     WebkitTextFillColor,
+    WebkitTextStroke,
+    WebkitTextStrokeWidth,
+    WebkitTextStrokeColor,
     TextShadow,
 }
 
@@ -1061,7 +1084,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 195] = [
+const FIELDS: [(&str, Field); 198] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1364,6 +1387,9 @@ const FIELDS: [(&str, Field); 195] = [
     ("textDecorationSkipInk", Field::TextDecorationSkipInk),
     ("textUnderlineOffset", Field::TextUnderlineOffset),
     ("WebkitTextFillColor", Field::WebkitTextFillColor),
+    ("WebkitTextStroke", Field::WebkitTextStroke),
+    ("WebkitTextStrokeWidth", Field::WebkitTextStrokeWidth),
+    ("WebkitTextStrokeColor", Field::WebkitTextStrokeColor),
     ("textShadow", Field::TextShadow),
 ];
 
@@ -1400,6 +1426,9 @@ impl Field {
                 | Field::TextDecorationSkipInk
                 | Field::TextUnderlineOffset
                 | Field::WebkitTextFillColor
+                | Field::WebkitTextStroke
+                | Field::WebkitTextStrokeWidth
+                | Field::WebkitTextStrokeColor
                 | Field::TextShadow
         )
     }
@@ -2451,6 +2480,12 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         }
         F::TextUnderlineOffset => d.underline_offset = Some(length(v, UNDERLINE_OFFSET)?),
         F::WebkitTextFillColor => d.fill = Some(current_color(v)?),
+        F::WebkitTextStroke => {
+            let (width, color) = stroke(v)?;
+            (d.stroke, d.stroke_color) = (Some(width), Some(color));
+        }
+        F::WebkitTextStrokeWidth => d.stroke = Some(stroke_width(v)?),
+        F::WebkitTextStrokeColor => d.stroke_color = Some(current_color(v)?),
         F::TextShadow => d.text_shadows = Some(shadows(v, true)?),
     }
     Ok(())
@@ -2531,6 +2566,43 @@ fn decoration_style(s: &str) -> Result<(), String> {
             "{s:?} is not one of {}",
             DECORATION_STYLES.join(", ")
         )),
+    }
+}
+
+/// `-webkit-text-stroke`: a width and a color in either order, each at most once, and the
+/// initial ones for those left out.
+fn stroke(v: &V) -> Result<(Len, Option<Rgba>), String> {
+    if let V::Num(_) = v {
+        return Ok((stroke_width(v)?, None));
+    }
+    let s = text(v)?;
+    let words = css::words(&s);
+    if words.is_empty() {
+        return Err(format!("{} is not a text stroke", shown(v)));
+    }
+    let (mut width, mut color) = (None, None);
+    for w in words {
+        let word = &V::Str(w.into());
+        let twice = if WIDTHS.contains(&w) || css::num(w).is_some() || math::is_math(w) {
+            width.replace(stroke_width(word)?).is_some()
+        } else {
+            color.replace(current_color(word)?).is_some()
+        };
+        if twice {
+            return Err(format!("{s} sets a width or a color twice"));
+        }
+    }
+    Ok((width.unwrap_or(ZERO), color.flatten()))
+}
+
+/// `-webkit-text-stroke-width`: a length, or `thin`, `medium` or `thick`, which Chrome takes as
+/// 1, 3 and 5 px of a font size of 48 px.
+fn stroke_width(v: &V) -> Result<Len, String> {
+    match text(v).as_deref() {
+        Ok("thin") => Ok(Len::Em(1.0 / 48.0)),
+        Ok("medium") => Ok(Len::Em(3.0 / 48.0)),
+        Ok("thick") => Ok(Len::Em(5.0 / 48.0)),
+        _ => length(v, WIDTH),
     }
 }
 
@@ -2658,6 +2730,11 @@ fn compute(
         wrap: d.wrap.unwrap_or(inherited.wrap),
         transform: d.text_transform.unwrap_or(inherited.transform),
         fill: d.fill.unwrap_or(inherited.fill),
+        stroke: match &d.stroke {
+            None => inherited.stroke,
+            Some(l) => l.px(units(size), 0.0),
+        },
+        stroke_color: d.stroke_color.unwrap_or(inherited.stroke_color),
         shadows: match &d.text_shadows {
             None => inherited.shadows.clone(),
             Some(list) => (list.iter())
@@ -2711,8 +2788,7 @@ fn compute(
     if d.decoration_lines.contains(&true) {
         decorations.push(Decoration {
             lines: d.decoration_lines,
-            // As Chrome has it, `currentcolor` is the fill color of glyphs.
-            color: (d.decoration_color).unwrap_or(font.fill.unwrap_or(color)),
+            color: d.decoration_color.unwrap_or(font.decoration_color(color)),
             thickness: match &d.decoration_thickness {
                 Len::Auto => None,
                 l => Some(l.calc(u)),

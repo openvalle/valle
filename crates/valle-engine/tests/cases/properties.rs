@@ -1998,6 +1998,36 @@ const ROWS: &[Row] = &[
         refused: &["\"banana\"", "1"],
     },
     Row {
+        properties: &["WebkitTextStroke"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 16, color: "#1e88e5", textDecorationLine: "underline", PROPERTY: VALUE }}>Stroked</Text></View>"##,
+        values: &[
+            "\"1px\"",
+            "\"2px #e53935\"",
+            "\"rgb(0 0 0 / 50%) thick\"",
+            "\"0.1em currentcolor\"",
+            "\"0 #e53935\"",
+            "0",
+        ],
+        refused: &["\"1px 2px\"", "\"2 red\"", "\"-1px\"", "\"10%\""],
+    },
+    Row {
+        properties: &["WebkitTextStrokeWidth"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 16, color: "#1e88e5", WebkitTextStrokeColor: "#e53935", textDecorationLine: "underline", PROPERTY: VALUE }}>Stroked</Text></View>"##,
+        values: &["0", "1", "\"thin\"", "\"medium\"", "\"thick\"", "\"0.2em\""],
+        refused: &["-1", "\"10%\"", "\"wide\""],
+    },
+    Row {
+        properties: &["WebkitTextStrokeColor"],
+        sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 16, color: "#1e88e5", WebkitTextStrokeWidth: 2, textDecorationLine: "underline", PROPERTY: VALUE }}>Stroked</Text></View>"##,
+        values: &[
+            "\"#e53935\"",
+            "\"currentcolor\"",
+            "\"transparent\"",
+            "\"rgb(0 0 255 / 50%)\"",
+        ],
+        refused: &["\"banana\"", "1"],
+    },
+    Row {
         properties: &["textShadow"],
         sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 16, color: "#1e88e5", PROPERTY: VALUE }}>Shadow</Text></View>"##,
         values: &[

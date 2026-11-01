@@ -175,3 +175,62 @@ fn across_finds_where_curves_are_in_a_band() {
         "{x0} {x1}"
     );
 }
+
+/// The ends of a contour's curves.
+fn ends(contour: &[Curve]) -> Vec<Point> {
+    contour.iter().map(|c| c[2]).collect()
+}
+
+#[test]
+fn strokes_miter_outer_corners_and_turn_inner_ones_through_the_corner() {
+    let square = parse("M0 0 H10 V10 H0 Z").unwrap().quads(0.1);
+    let sides = stroke(&square, 2.0, 0.01);
+    assert_eq!(sides.len(), 2);
+    // The square turns left: its left side is inside, and goes through its corners.
+    let inside = ends(&sides[0]);
+    for corner in [[10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]] {
+        assert!(inside.contains(&corner), "{corner:?} in {inside:?}");
+    }
+    // Its right side, reversed, is mitered out to the square around it.
+    let outside = ends(&sides[1]);
+    for tip in [[-1.0, -1.0], [11.0, -1.0], [11.0, 11.0], [-1.0, 11.0]] {
+        assert!(outside.contains(&tip), "{tip:?} in {outside:?}");
+    }
+    assert!(outside.iter().flatten().all(|v| (-1.0..=11.0).contains(v)));
+    assert_eq!(sides[1][0][0], sides[1].last().unwrap()[2]);
+    // A corner sharper than the miter limit (29°) is beveled: the miter would reach 20 px out.
+    let sharp = parse("M0 0 L20 0 L0 2 Z").unwrap().quads(0.1);
+    let reach = (stroke(&sharp, 2.0, 0.01).iter().flatten())
+        .flat_map(|c| c.map(|p| p[0]))
+        .fold(f32::MIN, f32::max);
+    assert!(reach > 20.0 && reach < 21.0, "{reach}");
+}
+
+#[test]
+fn strokes_move_curves_by_half_their_width_within_the_tolerance() {
+    // A circle of radius 10 as 8 curves.
+    let (r, k) = (10.0f32, std::f32::consts::FRAC_PI_4);
+    let at = |a: f32, r: f32| [r * a.cos(), r * a.sin()];
+    let circle: Vec<Curve> = (0..8)
+        .map(|i| {
+            let a = i as f32 * k;
+            [at(a, r), at(a + k / 2.0, r / (k / 2.0).cos()), at(a + k, r)]
+        })
+        .collect();
+    let sides = stroke(std::slice::from_ref(&circle), 4.0, 0.01);
+    let samples = |curves: &[Curve], n: usize| -> Vec<Point> {
+        (curves.iter())
+            .flat_map(|&c| (0..=n).map(move |i| point(c, i as f32 / n as f32)))
+            .collect()
+    };
+    let on = samples(&circle, 200);
+    for side in &sides {
+        assert!(side.len() <= 8 * 4, "{}", side.len());
+        for p in samples(side, 8) {
+            let d = (on.iter())
+                .map(|q| (p[0] - q[0]).hypot(p[1] - q[1]))
+                .fold(f32::MAX, f32::min);
+            assert!((d - 2.0).abs() < 0.02, "{p:?} is {d} away");
+        }
+    }
+}

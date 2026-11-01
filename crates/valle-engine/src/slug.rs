@@ -10,7 +10,7 @@ use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::raw::TableProvider;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 
-use crate::path::Curve;
+use crate::path::{self, Curve};
 use crate::template::Error;
 use crate::text::Face;
 
@@ -58,9 +58,14 @@ impl Outline {
     }
 }
 
-/// The outline of glyph `glyph` of `face`, in its variation instance.
-pub fn outline(face: &Face, glyph: u32) -> Result<Outline, Error> {
-    let (em, contours) = contours(face, glyph)?;
+/// The outline of glyph `glyph` of `face`, in its variation instance; with a `stroke` above 0,
+/// that of a stroke that many ems wide along its edges, within 1/4096 em (under 0.1 px up to 400
+/// px text).
+pub fn outline(face: &Face, glyph: u32, stroke: f32) -> Result<Outline, Error> {
+    let (em, mut contours) = contours(face, glyph)?;
+    if stroke > 0.0 {
+        contours = path::stroke(&contours, stroke * em, em / 4096.0);
+    }
     Ok(encode(em, &contours))
 }
 

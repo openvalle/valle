@@ -90,8 +90,8 @@ fn node(html: &mut String, frame: &Frame, i: u32) -> Result<(), String> {
     let mut style: Vec<String> = (n.style.iter())
         .filter_map(|(key, prop)| declaration(key, value(frame, prop)))
         .collect();
-    // Chrome draws a decoration in `currentcolor` in the text's fill color, which hides with the
-    // glyphs for the runner; its color as a value keeps it.
+    // Chrome draws a decoration in `currentcolor` in the color of the text's stroke or fill,
+    // which hide with the glyphs for the runner; its color as a value keeps it.
     let declared = frame.styles[i as usize].decorations.last();
     if let Some(d) = declared.filter(|d| d.by == i as usize) {
         let [r, g, b] = [0, 1, 2].map(|k| js::number_to_string(d.color[k] * 255.0));

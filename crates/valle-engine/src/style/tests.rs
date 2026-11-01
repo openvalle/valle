@@ -780,6 +780,57 @@ fn text_decoration_sets_its_longhands_or_refuses() {
 }
 
 #[test]
+fn text_stroke_sets_its_longhands_or_refuses() {
+    let font = |style: &[(&str, Prop)]| one(style).font;
+    // The keywords are in proportion to the font size, as in Chrome.
+    let both = font(&[
+        ("fontSize", num(24.0)),
+        ("WebkitTextStroke", text("thick rgb(0 0 255)")),
+    ]);
+    let blue = color::parse("blue").unwrap();
+    assert_eq!((both.stroke, both.stroke_color), (2.5, Some(blue)));
+    // Left out of the shorthand, the width is 0 and the color currentcolor.
+    let reset = font(&[
+        ("WebkitTextStrokeWidth", num(2.0)),
+        ("WebkitTextStrokeColor", text("red")),
+        ("WebkitTextStroke", text("currentcolor")),
+    ]);
+    assert_eq!((reset.stroke, reset.stroke_color), (0.0, None));
+    assert_eq!(font(&[("WebkitTextStroke", num(1.5))]).stroke, 1.5);
+    // A decoration's currentcolor is the stroke's color where the stroke shows in a color of
+    // its own, as in Chrome, and else the fill color.
+    let decoration = |stroke: &str| {
+        one(&[
+            ("color", text("red")),
+            ("WebkitTextFillColor", text("yellow")),
+            ("WebkitTextStroke", text(stroke)),
+            ("textDecoration", text("underline")),
+        ])
+        .decorations[0]
+            .color
+    };
+    let yellow = color::parse("yellow").unwrap();
+    assert_eq!(decoration("2px blue"), blue);
+    for hidden in ["2px currentcolor", "2px transparent", "0 blue"] {
+        assert_eq!(decoration(hidden), yellow, "{hidden}");
+    }
+    for (key, bad, message) in [
+        ("WebkitTextStroke", text("2px red 3px"), "twice"),
+        ("WebkitTextStroke", text("2 red"), "needs a unit"),
+        ("WebkitTextStrokeWidth", num(-1.0), "is negative"),
+        (
+            "WebkitTextStrokeWidth",
+            text("10%"),
+            "percentages are not supported",
+        ),
+        ("WebkitTextStrokeColor", text("2px"), "is not a color"),
+    ] {
+        let e = error(&[(key, bad)]);
+        assert!(e.contains(message), "{key}: {e}");
+    }
+}
+
+#[test]
 fn text_shadows_inherit_in_px_with_currentcolor_kept() {
     let tree = vec![
         view(
@@ -836,6 +887,7 @@ fn text_properties_inherit() {
                 ("whiteSpace", text("pre-line")),
                 ("textTransform", text("uppercase")),
                 ("WebkitTextFillColor", text("blue")),
+                ("WebkitTextStroke", text("0.1em #0f0")),
             ],
             &[2],
         ),
@@ -866,6 +918,8 @@ fn text_properties_inherit() {
         wrap: true,
         transform: TextTransform::None,
         fill: None,
+        stroke: 0.0,
+        stroke_color: None,
         shadows: Rc::new([]),
         skip_ink: true,
         underline_offset: None,
@@ -890,6 +944,8 @@ fn text_properties_inherit() {
         wrap: true,
         transform: TextTransform::Uppercase,
         fill: Some(color::parse("blue").unwrap()),
+        stroke: 2.0,
+        stroke_color: Some(color::parse("#0f0").unwrap()),
         shadows: Rc::new([]),
         skip_ink: true,
         underline_offset: None,

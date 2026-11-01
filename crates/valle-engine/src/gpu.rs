@@ -559,8 +559,9 @@ pub struct Renderer<'a> {
     lists: Store,
     /// Words in `curves` (4 a texel) and `lists` so far.
     atlas_len: [u64; 2],
-    /// By face and glyph; `None` for a glyph without curves.
-    outlines: HashMap<(u32, u32), Option<Placed>>,
+    /// By face, glyph and the bits of the width of its stroke in ems (0 for its fill); `None` for
+    /// a glyph without curves.
+    outlines: HashMap<(u32, u32, u32), Option<Placed>>,
     draw: Option<wgpu::BindGroup>,
     /// Layer textures: all of them, and the free ones.
     pool: Vec<Surface>,
@@ -826,10 +827,11 @@ impl<'a> Renderer<'a> {
                     face,
                     size,
                     color,
+                    stroke,
                     glyphs,
                 } => {
                     for &(id, [x, y]) in glyphs {
-                        let Some(o) = self.outline(*face, id, faces, atlas)? else {
+                        let Some(o) = self.outline(*face, id, stroke / size, faces, atlas)? else {
                             continue;
                         };
                         let i = (plan.glyphs.len() / GLYPH) as u32;
@@ -1081,22 +1083,24 @@ impl<'a> Renderer<'a> {
         Ok(())
     }
 
-    /// Where glyph `id` of face `face` is in the atlas, encoding it into `atlas` (curve words,
-    /// list words) if it is new.
+    /// Where glyph `id` of face `face` is in the atlas, or its stroke `stroke` ems wide, encoding
+    /// it into `atlas` (curve words, list words) if it is new.
     fn outline(
         &mut self,
         face: u32,
         id: u32,
+        stroke: f32,
         faces: &[Face],
         atlas: &mut (Vec<u32>, Vec<u32>),
     ) -> Result<Option<Placed>, Error> {
-        if let Some(placed) = self.outlines.get(&(face, id)) {
+        let key = (face, id, stroke.to_bits());
+        if let Some(placed) = self.outlines.get(&key) {
             return Ok(*placed);
         }
         let f = faces
             .get(face as usize)
             .ok_or("engine bug: a glyph names a face that is not there")?;
-        let o = slug::outline(f, id)?;
+        let o = slug::outline(f, id, stroke)?;
         let placed = (!o.curves.is_empty()).then(|| {
             let at = [
                 ((self.atlas_len[0] + atlas.0.len() as u64) / 4) as u32,
@@ -1114,7 +1118,7 @@ impl<'a> Renderer<'a> {
                 at,
             }
         });
-        self.outlines.insert((face, id), placed);
+        self.outlines.insert(key, placed);
         Ok(placed)
     }
 

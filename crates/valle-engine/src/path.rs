@@ -75,9 +75,12 @@ impl Path {
 
 fn line(out: &mut Vec<Curve>, from: Point, to: Point) {
     if from != to {
-        let mid = [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5];
-        out.push([from, mid, to]);
+        out.push([from, mid(from, to), to]);
     }
+}
+
+fn mid(a: Point, b: Point) -> Point {
+    [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5]
 }
 
 /// A cubic curve as quadratic curves no further than `tolerance` from it: as many pieces of it,
@@ -122,6 +125,140 @@ pub fn cubic(points: [Point; 4], tolerance: f32, out: &mut Vec<Curve>) {
             out.push([start, c, end]);
         }
         start = end;
+    }
+}
+
+/// How far a stroke's outer corner reaches, in half its width, before it is cut off: Skia's
+/// default, with which Chrome strokes text.
+const MITER_LIMIT: f32 = 4.0;
+
+/// The outline of a stroke `width` wide along closed contours, centered on them, as Skia
+/// strokes them: each contour moved half the width to its left, and moved to its right and
+/// reversed, which wind around what the stroke covers. A curve moves as curves no further than
+/// `tolerance` from where it should. At a corner, the outer side meets in a miter, or in a bevel
+/// past `MITER_LIMIT`, and the inner side goes through the corner.
+pub fn stroke(contours: &[Vec<Curve>], width: f32, tolerance: f32) -> Vec<Vec<Curve>> {
+    let mut out = Vec::new();
+    for contour in contours {
+        let curves: Vec<Curve> = contour.iter().flat_map(|&c| unfolded(c)).collect();
+        for d in [width / 2.0, -width / 2.0] {
+            let mut side = Vec::new();
+            for (i, &c) in curves.iter().enumerate() {
+                offset(c, d, tolerance, 0, &mut side);
+                let next = curves[(i + 1) % curves.len()];
+                join(c[2], tangents(c)[1], tangents(next)[0], d, &mut side);
+            }
+            if d < 0.0 {
+                side.reverse();
+                side.iter_mut().for_each(|c| c.swap(0, 2));
+            }
+            if !side.is_empty() {
+                out.push(side);
+            }
+        }
+    }
+    out
+}
+
+fn sub(a: Point, b: Point) -> Point {
+    [a[0] - b[0], a[1] - b[1]]
+}
+
+/// `a` moved `d` times along `v`.
+fn along(a: Point, v: Point, d: f32) -> Point {
+    [a[0] + v[0] * d, a[1] + v[1] * d]
+}
+
+fn cross(a: Point, b: Point) -> f32 {
+    a[0] * b[1] - a[1] * b[0]
+}
+
+fn dot(a: Point, b: Point) -> f32 {
+    a[0] * b[0] + a[1] * b[1]
+}
+
+fn unit(v: Point) -> Option<Point> {
+    let l = v[0].hypot(v[1]);
+    (l > 1e-6).then(|| [v[0] / l, v[1] / l])
+}
+
+/// A direction turned a quarter left.
+fn left(v: Point) -> Point {
+    [-v[1], v[0]]
+}
+
+/// The point of curve `c` at `t`.
+fn point(c: Curve, t: f32) -> Point {
+    let s = 1.0 - t;
+    std::array::from_fn(|k| s * s * c[0][k] + 2.0 * s * t * c[1][k] + t * t * c[2][k])
+}
+
+/// The directions a curve starts and ends in, as units.
+fn tangents(c: Curve) -> [Point; 2] {
+    let [p0, p1, p2] = c;
+    let dir = |v, or| unit(v).or(unit(or)).unwrap_or([1.0, 0.0]);
+    [dir(sub(p1, p0), sub(p2, p0)), dir(sub(p2, p1), sub(p2, p0))]
+}
+
+/// A curve that turns back where it stops, its control point in line with its ends but past
+/// one of them, as the two lines on either side of where it stops; other curves as they are.
+fn unfolded(c: Curve) -> Vec<Curve> {
+    let [p0, p1, p2] = c;
+    let (a, b) = (sub(p1, p0), sub(p2, p1));
+    let (la, lb) = (a[0].hypot(a[1]), b[0].hypot(b[1]));
+    if dot(a, b) >= 0.0 || cross(a, b).abs() > 1e-3 * la * lb {
+        return vec![c];
+    }
+    let tip = point(c, la / (la + lb));
+    let mut out = Vec::new();
+    line(&mut out, p0, tip);
+    line(&mut out, tip, p2);
+    out
+}
+
+/// Curve `c` moved `d` to its left: a curve from its ends moved along their normals, with its
+/// control point where the moved tangents there meet (Tiller and Hanson), or the halves of `c`
+/// moved alike where its middle is further than `tolerance` from `c`'s middle moved.
+fn offset(c: Curve, d: f32, tolerance: f32, depth: u32, out: &mut Vec<Curve>) {
+    let [t0, t1] = tangents(c);
+    let (a, b) = (along(c[0], left(t0), d), along(c[2], left(t1), d));
+    let turn = cross(t0, t1);
+    let control = match turn.abs() < 1e-4 {
+        true => mid(a, b),
+        false => along(a, t0, cross(sub(b, a), t1) / turn),
+    };
+    let moved = [a, control, b];
+    // The tangent halfway is the chord's.
+    let middle = left(unit(sub(c[2], c[0])).unwrap_or(t0));
+    let off = sub(point(moved, 0.5), along(point(c, 0.5), middle, d));
+    if depth < 4 && off[0].hypot(off[1]) > tolerance {
+        let m = point(c, 0.5);
+        offset([c[0], mid(c[0], c[1]), m], d, tolerance, depth + 1, out);
+        offset([m, mid(c[1], c[2]), c[2]], d, tolerance, depth + 1, out);
+        return;
+    }
+    out.push(moved);
+}
+
+/// Where a curve ending in direction `a` meets the next, starting in direction `b`, at `p`: the
+/// lines from the first's end moved `d` to its left to the next's start moved alike.
+fn join(p: Point, a: Point, b: Point, d: f32, out: &mut Vec<Curve>) {
+    let (from, to) = (along(p, left(a), d), along(p, left(b), d));
+    let cos = dot(a, b);
+    if cos > 1.0 - 1e-6 {
+        line(out, from, to);
+    } else if cross(a, b) * d > 0.0 {
+        // The inner side of a turn, which goes back through the corner.
+        line(out, from, p);
+        line(out, p, to);
+    } else if 1.0 + cos >= 2.0 / (MITER_LIMIT * MITER_LIMIT) {
+        // The miter's tip is 1 / cos(θ / 2) out along the normals' bisector.
+        let n = [left(a)[0] + left(b)[0], left(a)[1] + left(b)[1]];
+        let tip = along(p, n, d / (1.0 + cos));
+        line(out, from, tip);
+        line(out, tip, to);
+    } else {
+        line(out, from, to);
     }
 }
 

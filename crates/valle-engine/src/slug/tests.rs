@@ -22,7 +22,7 @@ fn glyph(face: &Face, c: char) -> u32 {
 
 fn of(c: char) -> Outline {
     let f = face(Vec::new());
-    outline(&f, glyph(&f, c)).unwrap()
+    outline(&f, glyph(&f, c), 0.0).unwrap()
 }
 
 /// The curve at a texel, relative to `p`.
@@ -265,7 +265,30 @@ fn spaces_have_no_curves_and_weights_change_the_outline() {
     let font = FontRef::from_index(regular.data.data(), 0).unwrap();
     let black = font.axes().location([("wght", 900.0)]);
     let f = face(black.coords().iter().map(|c| c.to_bits()).collect());
-    let bold = outline(&f, glyph(&f, 'l')).unwrap();
+    let bold = outline(&f, glyph(&f, 'l'), 0.0).unwrap();
     let regular = of('l');
     assert!(bold.bounds[2] - bold.bounds[0] > regular.bounds[2] - regular.bounds[0]);
+}
+
+#[test]
+fn strokes_cover_a_band_centered_on_the_edges() {
+    let f = face(Vec::new());
+    // 40 font units wide, on the stem of an l, a rectangle 1000 units to the em.
+    let o = outline(&f, glyph(&f, 'l'), 0.04).unwrap();
+    let [x0, y0, x1, y1] = of('l').bounds;
+    let grown = [x0 - 20.0, y0 - 20.0, x1 + 20.0, y1 + 20.0];
+    assert!(
+        (0..4).all(|k| (o.bounds[k] - grown[k]).abs() < 0.01),
+        "{:?}",
+        o.bounds
+    );
+    // Pixels of 10 font units across the stem, and in the corner, which is mitered.
+    let mid = (y0 + y1) / 2.0;
+    let ppu = 0.1;
+    assert_eq!(coverage(&o, [x0 - 20.0, mid], ppu), 0.5);
+    assert_eq!(coverage(&o, [x0 - 10.0, mid], ppu), 1.0);
+    assert_eq!(coverage(&o, [x0 + 10.0, mid], ppu), 1.0);
+    assert_eq!(coverage(&o, [x0 + 20.0, mid], ppu), 0.5);
+    assert_eq!(coverage(&o, [(x0 + x1) / 2.0, mid], ppu), 0.0);
+    assert_eq!(coverage(&o, [x0 - 15.0, y1 + 15.0], ppu), 1.0);
 }

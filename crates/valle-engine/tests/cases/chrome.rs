@@ -114,11 +114,13 @@ fn shown([x, y, w, h]: [f64; 4]) -> String {
 }
 
 /// The frame painted as Chrome draws its baselines: its glyphs unfilled
-/// (`-webkit-text-fill-color: transparent`) and without text shadows, which are glyphs too.
+/// (`-webkit-text-fill-color: transparent`), and without strokes or text shadows, which are
+/// glyphs too.
 pub fn glyphless(frame: &Frame) -> Vec<Item> {
     let mut styles = frame.styles.clone();
     for s in &mut styles {
         s.font.fill = Some(color::TRANSPARENT);
+        s.font.stroke = 0.0;
         s.font.shadows = Rc::new([]);
     }
     paint::paint(&frame.template, &styles, &frame.layout)

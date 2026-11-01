@@ -1,0 +1,18 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 320px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 6px;\"><div data-n=\"1\" data-text style=\"background: #eceff1; margin-bottom: 6px; font-size: 28px; color: #263238; -webkit-text-fill-color: transparent; -webkit-text-stroke: 1px;\">Outlined</div><div data-n=\"2\" data-text style=\"background: #eceff1; margin-bottom: 6px; font-size: 28px; color: #263238; -webkit-text-fill-color: #ffca28; -webkit-text-stroke: 2px #1e88e5;\">Stroked</div><div data-n=\"3\" data-text style=\"background: #eceff1; margin-bottom: 6px; font-size: 44px; color: #263238; font-weight: 800; -webkit-text-stroke: 6px rgb(229 57 53 / 50%);\">AVWk</div><div data-n=\"4\" data-text style=\"background: #eceff1; margin-bottom: 6px; font-size: 28px; color: #1e88e5; -webkit-text-stroke: 0.05em;\">In em <span data-n=\"5\" style=\"color: #e53935;\">span</span></div><div data-n=\"6\" data-text style=\"background: #eceff1; margin-bottom: 6px; font-size: 28px; color: #263238; -webkit-text-fill-color: #fff; -webkit-text-stroke: 2px #00897b; text-decoration: underline; text-shadow: 3px 3px rgb(0 0 0 / 40%); text-decoration-color: rgb(0 137 123 / 1);\">Shadowed</div><div data-n=\"7\" data-text style=\"background: #eceff1; margin-bottom: 6px; font-size: 20px; color: #263238; -webkit-text-fill-color: #fff;\"><span data-n=\"8\" style=\"-webkit-text-stroke: thin;\">thin </span><span data-n=\"9\" style=\"-webkit-text-stroke: medium;\">medium </span><span data-n=\"10\" style=\"-webkit-text-stroke: thick;\">thick</span></div></div></div>\n",
+ "boxes": [
+  [0,0,256,287],
+  [6,6,244,38],
+  [6,50,244,38],
+  [6,94,244,60],
+  [6,160,244,38],
+  [89.328125,160,63.65625,38],
+  [6,204,244,38],
+  [6,248,244,27],
+  [6,248,42.3125,27],
+  [48.3125,248,83.703125,27],
+  [132.015625,248,45.03125,27]
+ ],
+ "lines": {"1":["Outlined"],"2":["Stroked"],"3":["AVWk"],"4":["In em span"],"6":["Shadowed"],"7":["thin medium thick"]}
+}
