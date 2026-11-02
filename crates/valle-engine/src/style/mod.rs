@@ -1386,7 +1386,8 @@ struct Declared {
     grid_lines: [Line<GridPlacement<String>>; 2],
     justify_items: AlignItems,
     justify_self: Option<AlignItems>,
-    background: Rgba,
+    /// `None` is `currentcolor`.
+    background: Option<Rgba>,
     layers: background::Declared,
     /// Horizontal and vertical, from the top left clockwise.
     radii: [[Len; 2]; 4],
@@ -1518,7 +1519,7 @@ impl Default for Declared {
             grid_lines: [AUTO_LINES; 2],
             justify_items: AlignItems::NORMAL,
             justify_self: None,
-            background: color::TRANSPARENT,
+            background: Some(color::TRANSPARENT),
             layers: background::Declared::default(),
             radii: [const { [ZERO; 2] }; 4],
             border_width: [MEDIUM; 4],
@@ -3591,10 +3592,11 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Background => {
             // The shorthand leaves the blend modes as they are.
             let blends = std::mem::take(&mut d.layers.blends);
-            (d.layers, d.background) = background::background(&text(v)?)?;
+            let (layers, color) = background::background(&text(v)?)?;
+            (d.layers, d.background) = (layers, Some(color));
             d.layers.blends = blends;
         }
-        F::BackgroundColor => d.background = color_of(v)?,
+        F::BackgroundColor => d.background = current_color(v)?,
         F::BackgroundImage => d.layers.images = background::images(&text(v)?)?,
         F::BackgroundSize => d.layers.sizes = background::sizes(&px_text(v)?)?,
         F::BackgroundPosition => {
@@ -4337,7 +4339,7 @@ fn compute(
         layout,
         order: d.order,
         z_index: d.z_index,
-        background: d.background,
+        background: d.background.unwrap_or(color),
         layers: (d.layers).computed(u, color, background::Area::PaddingBox, resources)?,
         radii: d.radii.each_ref().map(|r| r.each_ref().map(|l| l.calc(u))),
         border,

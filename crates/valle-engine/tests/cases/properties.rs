@@ -931,9 +931,10 @@ const ROWS: &[Row] = &[
     },
     Row {
         properties: &["backgroundColor"],
-        sample: r##"<View style={{ height: 8, PROPERTY: VALUE }} />"##,
+        sample: r##"<View style={{ height: 8, color: "#e53935", PROPERTY: VALUE }} />"##,
         values: &[
             "\"#3949ab\"",
+            "\"currentcolor\"",
             "\"#36c8\"",
             "\"red\"",
             "\" RED \"",
