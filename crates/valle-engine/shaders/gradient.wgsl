@@ -141,10 +141,10 @@ struct Out {
 // clipped to the sRGB gamut, as browsers draw gradients.
 fn working(c: vec4f, space: u32) -> vec4f {
   if (space == 0u) {
-    return c;
+    return vec4f(clamp(c.rgb, vec3f(0.0), vec3f(c.a)), c.a);
   }
   if (space == 4u) {
-    return vec4f(c.rgb * c.a, c.a);
+    return vec4f(clamp(c.rgb, vec3f(0.0), vec3f(1.0)) * c.a, c.a);
   }
   if (c.a <= 0.0) {
     return vec4f(0.0);

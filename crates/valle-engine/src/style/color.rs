@@ -3,7 +3,8 @@
 
 use super::css::{self, Num};
 
-/// Encoded sRGB and straight alpha, each in [0, 1].
+/// Encoded sRGB and straight alpha, each in [0, 1]; a gradient's colors may be wider, see
+/// [`wide`].
 pub type Rgba = [f64; 4];
 
 pub const TRANSPARENT: Rgba = [0.0; 4];
@@ -44,6 +45,12 @@ pub fn shades(c: Rgba) -> [Rgba; 2] {
 /// A color as CSS writes it, lowercased.
 pub fn parse(s: &str) -> Result<Rgba, String> {
     value(s).map(Color::drawn)
+}
+
+/// A color as CSS writes it, lowercased, its channels past sRGB kept: a gradient mixes them so,
+/// and clips what it draws, as Chrome does.
+pub fn wide(s: &str) -> Result<Rgba, String> {
+    value(s).map(|c| [c.rgb[0], c.rgb[1], c.rgb[2], c.alpha])
 }
 
 /// A color before it is drawn: encoded sRGB, extended past [0, 1] with the curve mirrored below

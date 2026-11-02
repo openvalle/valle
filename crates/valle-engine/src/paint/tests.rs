@@ -2159,6 +2159,9 @@ fn gradient_colors_mix_premultiplied_in_their_space() {
         both(ends("linear-gradient(in lab, red, red)"))[0],
         [54.291, 80.805, 69.891, 1.0]
     );
+    // A wide color keeps its channels past sRGB until the gradient's pixels clip them.
+    let [green, _] = ends("linear-gradient(in srgb, color(display-p3 0 1 0), red)");
+    assert!(green[0] < 0.0 && green[1] > 1.0, "{green:?}");
     let [red, gray] = ends("linear-gradient(in lch, red, gray)");
     assert_eq!(
         [red, gray].map(|c| (c[2] * 10.0).round() / 10.0),

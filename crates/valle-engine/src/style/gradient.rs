@@ -4,13 +4,12 @@
 
 use std::rc::Rc;
 
-use super::color::Rgba;
+use super::color::{self, Rgba};
 use super::css::{self, angle};
 use super::math::{self, Calc};
 use super::position::{Offset, position};
-use super::{Accept, Len, Units, current_color, length_text};
+use super::{Accept, Len, Units, length_text};
 use crate::front::Slot;
-use crate::template::V;
 
 /// A `background-image` or `mask-image` layer, its stop positions `P` (declared lengths, then px
 /// and fractions of the gradient line), colors `C` (declared, `None` is `currentcolor`) and
@@ -460,7 +459,10 @@ fn color_stops(
                 stops.push(Stop::Hint(position(at)?));
             }
             [c, ref at @ ..] if at.len() <= 2 && !positioned(c) => {
-                let color = current_color(&V::Str(c.into()))?;
+                let color = match c.to_ascii_lowercase().as_str() {
+                    "currentcolor" => None,
+                    c => Some(color::wide(c)?),
+                };
                 if at.is_empty() {
                     stops.push(Stop::Color(color, None));
                 }
