@@ -16,7 +16,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 type Job = { html: string; size: [number, number]; out: string };
-type Measured = { boxes: number[][]; lines: Record<string, string[]> };
+type Measured = { boxes: number[][]; lines: Record<string, string[]>; refused: string[] };
 
 const root = join(import.meta.dir, "../..");
 const version = (await Bun.file(join(root, "tests/baselines/chrome/version")).text()).trim();
@@ -86,6 +86,7 @@ async function draw() {
     await page("Emulation.setDefaultBackgroundColorOverride", {
       color: { r: 0, g: 0, b: 0, a: 0 },
     });
+    const refused: string[] = [];
     for (const [i, job] of jobs.entries()) {
       const [width, height] = job.size;
       await page("Emulation.setDeviceMetricsOverride", {
@@ -106,6 +107,7 @@ async function draw() {
         throw new Error(`${job.out}: ${exceptionDetails.exception?.description ?? "failed"}`);
       }
       const measured: Measured = result.value;
+      refused.push(...measured.refused.map((r) => `${job.out}: ${r}`));
       await mkdir(dirname(job.out), { recursive: true });
       // A box a line, so a change shows as the lines it moves.
       const boxes = measured.boxes.map((b) => `  ${JSON.stringify(b)}`).join(",\n");
@@ -128,6 +130,9 @@ async function draw() {
         clip: { x: 0, y: 0, width, height, scale: 1 },
       });
       await Bun.write(`${job.out}.png`, Buffer.from(data, "base64"));
+    }
+    if (refused.length > 0) {
+      throw new Error(`Chrome refuses what the engine takes:\n${refused.join("\n")}`);
     }
     const { result } = await page("Runtime.evaluate", {
       expression: `(${known})()`,
@@ -226,6 +231,28 @@ async function listening(stderr: ReadableStream<Uint8Array>): Promise<string> {
 
 /** Runs in the page: the boxes and lines once the fonts and the images are in. */
 function measure(): Promise<Measured> {
+  // The declarations of a style attribute: semicolons outside quotes and brackets end them.
+  const declarations = (style: string): string[] => {
+    const out: string[] = [];
+    let [start, depth, quote] = [0, 0, ""];
+    for (let i = 0; i < style.length; i++) {
+      const c = style[i];
+      if (quote) {
+        quote = c === quote ? "" : quote;
+      } else if (c === '"' || c === "'") {
+        quote = c;
+      } else if (c === "(") {
+        depth++;
+      } else if (c === ")") {
+        depth--;
+      } else if (c === ";" && depth === 0) {
+        out.push(style.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    out.push(style.slice(start).trim());
+    return out.filter((d) => d);
+  };
   const lines = (element: Element): string[] => {
     const out: string[] = [];
     let line = "";
@@ -287,6 +314,13 @@ function measure(): Promise<Measured> {
     const boxes: number[][] = [];
     const text: Record<string, string[]> = {};
     const elements = [...document.querySelectorAll<HTMLElement>("[data-n]")];
+    // A declaration Chrome drops would pass as the value the box has without it.
+    const refused = elements.flatMap((e) =>
+      declarations(e.getAttribute("style") ?? "").filter((d) => {
+        const colon = d.indexOf(":");
+        return !CSS.supports(d.slice(0, colon).trim(), d.slice(colon + 1).trim());
+      }),
+    );
     for (const element of elements) {
       const r = element.getBoundingClientRect();
       boxes[Number(element.dataset.n)] = [r.x, r.y, r.width, r.height];
@@ -311,7 +345,7 @@ function measure(): Promise<Measured> {
       }
     }
     moved.forEach((e, i) => e.setAttribute("style", written[i]));
-    return { boxes, lines: text };
+    return { boxes, lines: text, refused };
   });
 }
 
