@@ -311,6 +311,7 @@ impl Text {
             TextAlign::Left => Alignment::Left,
             TextAlign::Right => Alignment::Right,
             TextAlign::Center => Alignment::Center,
+            TextAlign::Justify => Alignment::Justify,
         };
         let strut = self.strut(content.font)?;
         let p = self.paragraph(content, Some(width), false)?;

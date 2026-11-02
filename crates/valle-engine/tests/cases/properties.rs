@@ -1998,9 +1998,10 @@ const ROWS: &[Row] = &[
             "\"left\"",
             "\"right\"",
             "\"center\"",
+            "\"justify\"",
             "\" CENTER \"",
         ],
-        refused: &["\"justify\"", "\"middle\"", "\"match-parent\"", "1"],
+        refused: &["\"middle\"", "\"match-parent\"", "1"],
     },
     Row {
         properties: &["textIndent"],

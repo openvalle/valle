@@ -540,6 +540,8 @@ pub enum TextAlign {
     Left,
     Right,
     Center,
+    /// Lines full to both edges, but for a paragraph's last.
+    Justify,
 }
 
 /// `white-space-collapse`: which white space stays as written.
@@ -3771,6 +3773,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                     ("left", TextAlign::Left),
                     ("right", TextAlign::Right),
                     ("center", TextAlign::Center),
+                    ("justify", TextAlign::Justify),
                 ],
             )?)
         }
