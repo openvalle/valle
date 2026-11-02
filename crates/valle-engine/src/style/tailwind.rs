@@ -304,6 +304,14 @@ fn legacy(base: &str) -> Option<String> {
         let width = THEME.value(&format!("--breakpoint-{size}"))?;
         return Some(format!("max-w-[{width}]"));
     }
+    // Opacities are the colors' own: bg-black/50.
+    for color in ["bg", "text", "border", "divide", "ring", "placeholder"] {
+        if let Some(opacity) = base.strip_prefix(&format!("{color}-opacity-"))
+            && !opacity.is_empty()
+        {
+            return Some(format!("{color}-<color>/{opacity}"));
+        }
+    }
     for (v3, v4) in [
         ("flex-grow-", "grow-"),
         ("flex-shrink-", "shrink-"),

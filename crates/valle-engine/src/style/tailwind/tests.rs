@@ -137,6 +137,34 @@ fn classes_expand_to_tailwinds_css() {
             "& { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; \
              -webkit-line-clamp: 3; }",
         ),
+        (
+            "bg-sky-500",
+            "& { background-color: var(--color-sky-500); }",
+        ),
+        (
+            "bg-black/[0.3]",
+            "& { background-color: color-mix(in oklab, var(--color-black) 30%, transparent); }",
+        ),
+        ("bg-[#0af]", "& { background-color: #0af; }"),
+        ("bg-[center_top]", "& { background-position: center top; }"),
+        ("bg-[10px]", "& { background-position: 10px; }"),
+        (
+            "bg-[length:200px_100px]",
+            "& { background-size: 200px 100px; }",
+        ),
+        (
+            "bg-[linear-gradient(red,blue)]",
+            "& { background-image: linear-gradient(red,blue); }",
+        ),
+        ("fill-none", "& { fill: none; }"),
+        (
+            "fill-red-500/50",
+            "& { fill: color-mix(in oklab, var(--color-red-500) 50%, transparent); }",
+        ),
+        ("stroke-current", "& { stroke: currentcolor; }"),
+        ("stroke-2", "& { stroke-width: 2; }"),
+        ("stroke-[1.5]", "& { stroke-width: 1.5; }"),
+        ("stroke-[#f00]", "& { stroke: #f00; }"),
     ];
     for (name, expected) in cases {
         assert_eq!(css(name), expected, "{name}");
@@ -157,6 +185,9 @@ fn classes_tailwind_does_not_make_are_errors() {
         "grid-cols-0",
         "-col-span-2",
         "grow-[2]/3",
+        "bg-[10px]/50",
+        "bg-foo",
+        "stroke-[3px]/50",
     ] {
         assert_eq!(
             error(name),
@@ -192,6 +223,8 @@ fn errors_say_what_to_write_instead() {
         ("rounded-t", "rounded-t-sm"),
         ("max-w-screen-md", "max-w-[48rem]"),
         ("max-w-prose", "max-w-[65ch]"),
+        ("bg-opacity-50", "bg-<color>/50"),
+        ("text-opacity-25", "text-<color>/25"),
     ] {
         assert_eq!(
             error(v3),

@@ -785,6 +785,110 @@ fn register(r: &mut Registry) {
         );
     }
     text(r);
+    r.add("bg".into(), true, Box::new(background));
+    r.fixed("fill-none", &[("fill", "none")]);
+    r.add("fill".into(), true, Box::new(fill));
+    r.fixed("stroke-none", &[("stroke", "none")]);
+    r.add("stroke".into(), true, Box::new(stroke));
+}
+
+/// `bg-*`: a background color, or a background image of the theme; or written, a color, a
+/// position, a size or an image, whichever kind it is.
+fn background(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let modifier = modifier.as_ref();
+    let value = match value {
+        Value::Arbitrary { kind, value } => {
+            let kinds = [
+                "image",
+                "color",
+                "percentage",
+                "position",
+                "bg-size",
+                "length",
+                "url",
+            ];
+            let set = |property: &str| match modifier {
+                Some(_) => None,
+                None => Some(vec![decl(property, value.clone())]),
+            };
+            return match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                Some("percentage" | "position") => set("background-position"),
+                Some("bg-size" | "length" | "size") => set("background-size"),
+                Some("image" | "url") => set("background-image"),
+                _ => Some(vec![decl("background-color", as_color(value, modifier)?)]),
+            };
+        }
+        Value::Named { value, .. } => value,
+    };
+    let keys = ["--background-color", "--color"];
+    if let Some(color) = theme_color(value, modifier, &keys) {
+        return Some(vec![decl("background-color", color)]);
+    }
+    if modifier.is_some() {
+        return None;
+    }
+    let image = theme().resolve(Some(value), &["--background-image"])?;
+    Some(vec![decl("background-image", image)])
+}
+
+/// `fill-*`: an SVG shape's fill color.
+fn fill(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let color = match value {
+        Value::Arbitrary { value, .. } => as_color(value, modifier.as_ref())?,
+        Value::Named { value, .. } => {
+            theme_color(value, modifier.as_ref(), &["--fill", "--color"])?
+        }
+    };
+    Some(vec![decl("fill", color)])
+}
+
+/// `stroke-*`: an SVG shape's stroke color, or its width.
+fn stroke(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let modifier = modifier.as_ref();
+    let value = match value {
+        Value::Arbitrary { kind, value } => {
+            let kinds = ["color", "number", "length", "percentage"];
+            return match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                Some("number" | "length" | "percentage") => match modifier {
+                    Some(_) => None,
+                    None => Some(vec![decl("stroke-width", value)]),
+                },
+                _ => Some(vec![decl("stroke", as_color(value, modifier)?)]),
+            };
+        }
+        Value::Named { value, .. } => value,
+    };
+    if let Some(color) = theme_color(value, modifier, &["--stroke", "--color"]) {
+        return Some(vec![decl("stroke", color)]);
+    }
+    if let Some(width) = theme().resolve(Some(value), &["--stroke-width"]) {
+        return Some(vec![decl("stroke-width", width)]);
+    }
+    positive_integer(value).then(|| vec![decl("stroke-width", value)])
 }
 
 /// The text utilities: fonts, sizes, line heights and letter spacing, alignment, decoration,
