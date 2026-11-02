@@ -47,6 +47,16 @@ pub fn parse(s: &str) -> Result<Rgba, String> {
     value(s).map(Color::drawn)
 }
 
+/// Whether a color, lowercased, is written as sRGB was before color spaces: a hex color, a named
+/// one, or `rgb()`, `hsl()` or `hwb()`.
+pub fn legacy(s: &str) -> bool {
+    const FUNCTIONS: [&str; 5] = ["rgb", "rgba", "hsl", "hsla", "hwb"];
+    s.starts_with('#')
+        || s == "transparent"
+        || NAMED.binary_search_by(|(n, _)| (*n).cmp(s)).is_ok()
+        || css::function(s).is_some_and(|(name, _)| FUNCTIONS.contains(&name))
+}
+
 /// A color as CSS writes it, lowercased, its channels past sRGB kept: a gradient mixes them so,
 /// and clips what it draws, as Chrome does.
 pub fn wide(s: &str) -> Result<Rgba, String> {

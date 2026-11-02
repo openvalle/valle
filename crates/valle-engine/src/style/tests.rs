@@ -1882,6 +1882,15 @@ fn backgrounds_take_gradients_over_a_color() {
         gradient("linear-gradient(in oklch, red, blue)").2,
         Space::Oklch(Hue::Shorter)
     );
+    // Colors past legacy sRGB mix in Oklab unless the gradient says.
+    assert_eq!(
+        gradient("linear-gradient(oklch(70% 0.2 30), red)").2,
+        Space::Oklab
+    );
+    assert_eq!(
+        gradient("linear-gradient(hsl(0 50% 50%), currentColor, #fff, rgb(0 0 0))").2,
+        Space::Srgb
+    );
     assert_eq!(
         gradient("linear-gradient(calc(30deg * -1), red, blue)").0,
         Line::Angle(-30.0)

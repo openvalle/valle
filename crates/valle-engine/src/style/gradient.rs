@@ -207,13 +207,15 @@ fn gradient(
     shape: Shape<Len>,
     repeating: bool,
     space: Option<Space>,
-    stops: Vec<Stop<Len, Option<Rgba>>>,
+    (stops, legacy): (Stops, bool),
 ) -> Result<Gradient<Len, Option<Rgba>>, String> {
+    // Colors all written as sRGB was before color spaces mix in sRGB, as then; others, as CSS
+    // Color 4 has it, in Oklab.
+    let otherwise = if legacy { Space::Srgb } else { Space::Oklab };
     Ok(Gradient {
         shape,
         repeating,
-        // Colors are all sRGB as CSS wrote them before color spaces, which mix in sRGB.
-        space: space.unwrap_or(Space::Srgb),
+        space: space.unwrap_or(otherwise),
         stops,
     })
 }
@@ -439,13 +441,16 @@ const OTHER_SPACES: &[&str] = &[
     "xyz-d65",
 ];
 
+/// A gradient's color stops and hints, as declared; a color `None` is `currentcolor`.
+type Stops = Vec<Stop<Len, Option<Rgba>>>;
+
 /// Color stops, each a color and up to two positions, and hints, each a lone position between
-/// two stops.
+/// two stops; and whether the colors are all legacy sRGB ones, `currentcolor` too.
 fn color_stops(
     parts: &[&str],
     position: fn(&str) -> Result<Len, String>,
-) -> Result<Vec<Stop<Len, Option<Rgba>>>, String> {
-    let mut stops = Vec::new();
+) -> Result<(Stops, bool), String> {
+    let (mut stops, mut legacy) = (Vec::new(), true);
     let positioned = |w: &str| css::num(w).is_some() || math::is_math(w);
     for (n, part) in parts.iter().enumerate() {
         match css::words(part)[..] {
@@ -461,7 +466,10 @@ fn color_stops(
             [c, ref at @ ..] if at.len() <= 2 && !positioned(c) => {
                 let color = match c.to_ascii_lowercase().as_str() {
                     "currentcolor" => None,
-                    c => Some(color::wide(c)?),
+                    c => {
+                        legacy &= color::legacy(c);
+                        Some(color::wide(c)?)
+                    }
                 };
                 if at.is_empty() {
                     stops.push(Stop::Color(color, None));
@@ -480,7 +488,7 @@ fn color_stops(
     if stops.is_empty() {
         return Err("a gradient needs a color stop".into());
     }
-    Ok(stops)
+    Ok((stops, legacy))
 }
 
 impl Declared {
