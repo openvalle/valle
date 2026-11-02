@@ -8,7 +8,9 @@
 //!
 //! The utilities are Tailwind's (MIT, see THIRD_PARTY.md), family by family, and the case runner
 //! compares each class's CSS with what the compiler makes of it. Variants, CSS variables and the
-//! names Tailwind v4 keeps from v3 are errors that say what to write instead.
+//! names Tailwind v4 keeps from v3 are errors that say what to write instead. So is a class whose
+//! CSS the style layer does not take, as its declarations resolve on an element of it alone: it
+//! fails where it is written, with the style layer's reason.
 
 mod order;
 mod utilities;
@@ -115,11 +117,19 @@ pub fn class(name: &str) -> Result<Class, String> {
         return Err(unknown());
     }
     rules.sort_by(|a, b| a.sort.compare(&b.sort));
-    Ok(Class {
+    let class = Class {
         name: name.into(),
         important,
         rules,
-    })
+    };
+    // What the engine cannot draw fails where the class is written, not when a frame takes it:
+    // its declarations as an element of it alone has them, and its children.
+    let one = std::slice::from_ref(&class);
+    for d in element(one, &[])?.iter().chain(&element(&[], one)?) {
+        let what = format!("className {name}: {}", d.property);
+        super::accepts(&what, &d.property, &d.value)?;
+    }
+    Ok(class)
 }
 
 /// That a class's CSS holds only what the engine applies: declarations on the element and on

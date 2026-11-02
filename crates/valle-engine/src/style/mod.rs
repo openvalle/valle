@@ -1066,6 +1066,14 @@ const USE_FLEX: &str = "use flex or grid layout";
 const NO_INLINE: &str = "there is no HTML inline flow";
 const INLINE_INSTEAD: &str = "use flex layout, and Span for styled runs of text";
 
+/// Whether a class's declaration `property: value` is one the engine takes, which errors call
+/// `what`; what an element's kind allows is checked when its style is.
+fn accepts(what: &str, property: &str, value: &str) -> Result<(), String> {
+    let key = camel(property);
+    let field = Field::by_name(&key).ok_or_else(|| unsupported(what, &key))?;
+    set(&mut Declared::default(), field, &V::Str(value.into())).map_err(|e| format!("{what}: {e}"))
+}
+
 /// That the property `key`, which errors call `what`, is not supported, and why.
 fn unsupported(what: &str, key: &str) -> String {
     let never = NEVER

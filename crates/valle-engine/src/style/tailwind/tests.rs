@@ -104,6 +104,17 @@ fn errors_say_what_to_write_instead() {
             format!("className {v3} is a Tailwind v3 name: write {v4}")
         );
     }
+    // What the engine cannot draw fails as the style would.
+    assert_eq!(
+        error("w-[var(--size)]"),
+        "className w-[var(--size)]: width: CSS variables are not supported: name the value with a \
+         const"
+    );
+    assert_eq!(
+        error("sticky"),
+        "className sticky: position: sticky is not supported: the canvas does not scroll; use \
+         relative or absolute"
+    );
     let e = error("container");
     assert_eq!(
         e,
@@ -146,12 +157,6 @@ fn variables_resolve_on_each_element() {
                 false
             )
         ]
-    );
-    let e = element(&[class("w-[var(--size)]").unwrap()], &[]).unwrap_err();
-    assert_eq!(
-        e,
-        "className w-[var(--size)]: width: CSS variables are not supported: name the value with \
-         a const"
     );
 }
 
