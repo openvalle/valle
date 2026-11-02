@@ -3,7 +3,7 @@
 //! `offset-position`, where a ray starts.
 
 use super::background::{Area, area};
-use super::math::Calc;
+use super::math::{self, Calc};
 use super::position::{Offset, position};
 use super::shape::{self, Shape};
 use super::{Accept, Len, Units, css, length_text};
@@ -185,15 +185,15 @@ fn ray(s: &str) -> Result<Route<Len>, String> {
             "farthest-corner" => size.replace(Size::FarthestCorner).is_some(),
             "sides" => size.replace(Size::Sides).is_some(),
             "contain" => return Err("contain is not supported".into()),
-            w => match css::angle(w) {
-                Some(a) => angle.replace(a).is_some(),
-                None => {
-                    return Err(format!(
-                        "{w} is not an angle or a size, closest-side, closest-corner, \
-                         farthest-side, farthest-corner or sides"
-                    ));
-                }
-            },
+            w if css::angle(w).is_some() || math::is_math(w) => {
+                angle.replace(math::degrees(w)?).is_some()
+            }
+            w => {
+                return Err(format!(
+                    "{w} is not an angle or a size, closest-side, closest-corner, \
+                     farthest-side, farthest-corner or sides"
+                ));
+            }
         };
         if found {
             return Err("takes one angle and one size".into());
@@ -218,7 +218,9 @@ pub(super) fn rotate(s: &str) -> Result<(bool, f64), String> {
         let twice = match *w {
             "auto" => along.replace(0.0).is_some(),
             "reverse" => along.replace(180.0).is_some(),
-            w => angle.replace(css::angle(w).ok_or_else(bad)?).is_some(),
+            w => angle
+                .replace(math::degrees(w).map_err(|_| bad())?)
+                .is_some(),
         };
         if twice {
             return Err(bad());

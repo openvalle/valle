@@ -2,7 +2,7 @@
 //! CSS's, and Valle's for video, whose lengths are px in the box's own px.
 
 use super::color::Rgba;
-use super::css::{self, angle};
+use super::css;
 use super::math;
 use super::{Len, Shadowed, Units, shadow};
 
@@ -215,7 +215,7 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
         "sepia" => Function::Sepia(amount(true)?),
         "hue-rotate" => Function::HueRotate(match args[..] {
             [] => 0.0,
-            [a] => angle(a).ok_or_else(|| named(format!("{a} is not an angle")))?,
+            [a] => math::degrees(a).map_err(named)?,
             _ => return Err(named("takes one angle".into())),
         }),
         "drop-shadow" => {

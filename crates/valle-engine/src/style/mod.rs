@@ -3120,8 +3120,8 @@ fn font_style(v: &V) -> Result<FontStyle, String> {
         ["normal"] => Ok(FontStyle::Normal),
         ["italic"] => Ok(FontStyle::Italic),
         ["oblique"] => Ok(FontStyle::Oblique(14.0)),
-        ["oblique", a] => match css::angle(a) {
-            Some(d) if (-90.0..=90.0).contains(&d) => Ok(FontStyle::Oblique(d)),
+        ["oblique", a] => match math::degrees(a) {
+            Ok(d) if (-90.0..=90.0).contains(&d) => Ok(FontStyle::Oblique(d)),
             _ => Err(format!("{a} is not an angle from -90deg to 90deg")),
         },
         _ => Err(format!(

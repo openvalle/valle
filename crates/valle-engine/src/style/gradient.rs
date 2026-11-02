@@ -178,15 +178,15 @@ fn linear(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, St
         let words = css::words(first);
         if words
             .first()
-            .is_some_and(|w| ["to", "in"].contains(w) || angle(w).is_some())
+            .is_some_and(|w| ["to", "in"].contains(w) || turned(w))
         {
             let mut i = 0;
             while i < words.len() {
                 let used = match words[i] {
                     "in" if space.is_none() => interpolation(&words[i + 1..], &mut space)?,
                     "to" if line.is_none() => to(&words[i + 1..], &mut line)?,
-                    w if line.is_none() && angle(w).is_some() => {
-                        line = angle(w).map(Line::Angle);
+                    w if line.is_none() && turned(w) => {
+                        line = Some(Line::Angle(math::degrees(w)?));
                         0
                     }
                     w => {
@@ -226,14 +226,16 @@ fn along(w: &str) -> Result<Len, String> {
 
 /// A conic gradient's stop position: an angle, as degrees, or a percentage of a turn.
 fn angular(w: &str) -> Result<Len, String> {
-    match (angle(w), css::num(w)) {
-        (Some(degrees), _) => Ok(Len::Px(degrees)),
-        (None, Some(n)) if n.unit == "%" => Ok(Len::Percent(n.value)),
-        _ if math::is_math(w) => Err(format!(
-            "{w}: math functions of angles are not supported yet"
-        )),
+    match css::num(w) {
+        Some(n) if n.unit == "%" => Ok(Len::Percent(n.value)),
+        _ if turned(w) => Ok(Len::Px(math::degrees(w)?)),
         _ => Err(format!("{w} is not an angle or a percentage")),
     }
+}
+
+/// Whether `w` is an angle, or a math function, which may be one.
+fn turned(w: &str) -> bool {
+    angle(w).is_some() || math::is_math(w)
 }
 
 /// The center after `at` from word `i` on, up to a color space, and where it ends; the middle
@@ -269,7 +271,10 @@ fn conic(args: &str, repeating: bool) -> Result<Gradient<Len, Option<Rgba>>, Str
             i += 1 + interpolation(&words[1..], &mut space)?;
         }
         if words.get(i) == Some(&"from") {
-            from = (words.get(i + 1).and_then(|w| angle(w))).ok_or("from takes an angle")?;
+            from = match words.get(i + 1) {
+                Some(w) if turned(w) => math::degrees(w)?,
+                _ => return Err("from takes an angle".into()),
+            };
             i += 2;
         }
         (at, i) = center(&words, i)?;

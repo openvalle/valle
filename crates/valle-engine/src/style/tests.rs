@@ -1883,6 +1883,10 @@ fn backgrounds_take_gradients_over_a_color() {
         Space::Oklch(Hue::Shorter)
     );
     assert_eq!(
+        gradient("linear-gradient(calc(30deg * -1), red, blue)").0,
+        Line::Angle(-30.0)
+    );
+    assert_eq!(
         gradient("linear-gradient(to right in lab, red, blue)").2,
         Space::Lab
     );
@@ -2409,6 +2413,11 @@ fn transforms_take_2d_functions_around_an_origin() {
             F::Skew([0.0, 90.0]),
         ]
     );
+    // Math functions of angles come to degrees.
+    assert_eq!(
+        functions("rotate(calc(45deg * -1)) skewX(min(0.1turn, 30deg)) rotate(calc(1rad - 1rad))"),
+        [F::Rotate(-45.0), F::Skew([30.0, 0.0]), F::Rotate(0.0)]
+    );
     assert_eq!(
         functions(" MATRIX(1, 0, 0.5, 1, 10, -5) "),
         [F::Matrix([1.0, 0.0, 0.5, 1.0, 10.0, -5.0])]
@@ -2922,7 +2931,7 @@ fn what_is_not_supported_is_an_error() {
         (
             "backgroundImage",
             text("conic-gradient(red calc(10deg + 5%))"),
-            "math functions of angles are not supported yet",
+            "calc(10deg + 5%): 5% is not an angle",
         ),
         (
             "backgroundImage",
@@ -3078,8 +3087,8 @@ fn what_is_not_supported_is_an_error() {
         ),
         (
             "transform",
-            text("rotate(calc(10deg + 5deg))"),
-            "rotate(): math functions of angles are not supported yet",
+            text("rotate(calc(10deg + 5px))"),
+            "rotate(): calc(10deg + 5px): 5px is not an angle",
         ),
         (
             "transform",

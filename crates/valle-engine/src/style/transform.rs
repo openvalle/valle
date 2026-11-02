@@ -1,8 +1,8 @@
 //! Transforms: `translate`, `rotate`, `scale` and then `transform`, functions applied from the
 //! last to the first, around `transform-origin`, a point in the border box and a z.
 
-use super::css::{self, angle};
-use super::math::{self, Calc};
+use super::css;
+use super::math::{Calc, degrees};
 use super::position::{Offset, position};
 use super::{Accept, Len, Units, length_text};
 
@@ -140,14 +140,6 @@ fn number(a: &str, percent: bool) -> Result<f64, String> {
         Some(n) if n.unit.is_empty() => Ok(n.value),
         Some(n) if percent && n.unit == "%" => Ok(n.value / 100.0),
         _ => Err(format!("{a} is not a number")),
-    }
-}
-
-fn degrees(a: &str) -> Result<f64, String> {
-    match angle(a) {
-        Some(degrees) => Ok(degrees),
-        None if math::is_math(a) => Err("math functions of angles are not supported yet".into()),
-        None => Err(format!("{a} is not an angle")),
     }
 }
 

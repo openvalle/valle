@@ -1,4 +1,4 @@
-//! CSS math functions in lengths and numbers: `calc()`, `min()`, `max()` and `clamp()`. Once numbers have
+//! CSS math functions in lengths, numbers and angles: `calc()`, `min()`, `max()` and `clamp()`. Once numbers have
 //! multiplied into the lengths, any of them is the larger or smaller of sums of lengths: adding to
 //! a `min()` adds to each of its arguments, and a negative factor turns it into a `max()`.
 //!
@@ -89,6 +89,36 @@ pub(super) fn number(s: &str) -> Result<f64, String> {
         Value::Number(x) if x.is_finite() => Ok(x),
         Value::Number(x) => Err(format!("{s} is {x}, not a finite number")),
         Value::Length(_) => Err(format!("{s} is a length, not a number")),
+    }
+}
+
+/// Degrees of an angle, `45deg`, or of a math function of angles, `calc(45deg * -1)`.
+pub(super) fn degrees(s: &str) -> Result<f64, String> {
+    if let Some(degrees) = css::angle(s) {
+        return Ok(degrees);
+    }
+    if !is_math(s) {
+        return Err(format!("{s} is not an angle"));
+    }
+    // Angles are degrees as px are lengths: nothing they are of waits for layout.
+    let unit = |n: Num| match css::degrees(&n) {
+        Some(degrees) => Ok(Len::Px(degrees)),
+        None => Err(format!("{}{} is not an angle", n.value, n.unit)),
+    };
+    let sum = |lengths: &Vec<Len>| {
+        (lengths.iter())
+            .map(|l| match l {
+                Len::Px(degrees) => *degrees,
+                _ => f64::NAN,
+            })
+            .sum()
+    };
+    match parse(s, unit)? {
+        Value::Length(m) => match m.value(&sum) {
+            d if d.is_finite() => Ok(d),
+            d => Err(format!("{s} is {d}, not a finite angle")),
+        },
+        Value::Number(_) => Err(format!("{s} is a number, not an angle")),
     }
 }
 

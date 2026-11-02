@@ -61,12 +61,19 @@ pub fn function(s: &str) -> Option<(&str, &str)> {
 /// Degrees, from `deg`, `rad`, `grad` or `turn`, or a 0.
 pub fn angle(s: &str) -> Option<f64> {
     let n = num(s)?;
+    match n.unit {
+        "" if n.value == 0.0 => Some(0.0),
+        _ => degrees(&n),
+    }
+}
+
+/// The degrees of a number in `deg`, `rad`, `grad` or `turn`.
+pub fn degrees(n: &Num) -> Option<f64> {
     Some(match n.unit {
         "deg" => n.value,
         "rad" => n.value.to_degrees(),
         "grad" => n.value * 0.9,
         "turn" => n.value * 360.0,
-        "" if n.value == 0.0 => 0.0,
         _ => return None,
     })
 }
