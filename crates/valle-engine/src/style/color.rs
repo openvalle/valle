@@ -176,6 +176,11 @@ pub fn oklab(rgb: [f64; 3]) -> [f64; 3] {
     ]
 }
 
+/// The CIE Lab lightness, a and b of encoded sRGB channels, D50 white.
+pub fn lab_of(rgb: [f64; 3]) -> [f64; 3] {
+    Space::Lab.of(rgb)
+}
+
 /// Encoded sRGB channels of an Oklab lightness, a and b.
 fn from_oklab([l, a, b]: [f64; 3]) -> [f64; 3] {
     let [l, m, s] = [

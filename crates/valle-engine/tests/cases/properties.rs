@@ -957,6 +957,8 @@ const ROWS: &[Row] = &[
             "\"linear-gradient(90deg in oklab, red, blue)\"",
             "\"linear-gradient(to right in oklch, red, blue)\"",
             "\"linear-gradient(to right in oklch longer hue, red, blue)\"",
+            "\"linear-gradient(to right in lab, red, blue)\"",
+            "\"linear-gradient(to right in lch longer hue, #e53935, #1e88e5)\"",
             "\"linear-gradient(to right in srgb-linear, red, 30%, blue)\"",
             "\"linear-gradient(to left, rgb(0 0 255 / 50%) 20%, currentColor 40px, green calc(50% + 2px))\"",
             "\"linear-gradient(to right, red, blue), linear-gradient(transparent, white)\"",

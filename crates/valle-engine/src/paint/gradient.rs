@@ -76,8 +76,8 @@ impl Geometry {
     }
 }
 
-/// The chroma below which a hue is powerless, as CSS Color 4 takes it.
-const ACHROMATIC: f64 = 0.000004;
+/// The chroma up to which a hue is powerless, in Oklch and in LCH, as CSS Color 4 takes it.
+const ACHROMATIC: [f64; 2] = [0.000004, 0.0015];
 
 /// The smallest radius an ending shape has: one of 0 is the last color all around, as CSS has it.
 const POINT: f32 = 0.001;
@@ -281,19 +281,22 @@ fn hinted(a: f32, b: f32, h: Option<f32>) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// A color in `space`, straight, and for Oklch its hue in degrees, `None` where it is powerless.
+/// A color in `space`, straight, and for a polar space its hue in degrees, `None` where it is
+/// powerless.
 fn mixed(c: Rgba, space: Space) -> ([f64; 4], Option<f64>) {
     let rgb = [c[0], c[1], c[2]];
+    let polar = |[l, a, b]: [f64; 3], gray: f64| {
+        let chroma = a.hypot(b);
+        let hue = (chroma > gray).then(|| b.atan2(a).to_degrees().rem_euclid(360.0));
+        ([l, chroma, 0.0], hue)
+    };
     let ([x, y, z], hue) = match space {
         Space::Srgb => (rgb, None),
         Space::SrgbLinear => (rgb.map(color::linear), None),
+        Space::Lab => (color::lab_of(rgb), None),
         Space::Oklab => (color::oklab(rgb), None),
-        Space::Oklch(_) => {
-            let [l, a, b] = color::oklab(rgb);
-            let chroma = a.hypot(b);
-            let hue = (chroma > ACHROMATIC).then(|| b.atan2(a).to_degrees().rem_euclid(360.0));
-            ([l, chroma, 0.0], hue)
-        }
+        Space::Lch(_) => polar(color::lab_of(rgb), ACHROMATIC[1]),
+        Space::Oklch(_) => polar(color::oklab(rgb), ACHROMATIC[0]),
     };
     ([x, y, z, c[3]], hue)
 }
@@ -303,7 +306,7 @@ fn mixed(c: Rgba, space: Space) -> ([f64; 4], Option<f64>) {
 fn ends(colors: [([f64; 4], Option<f64>); 2], space: Space) -> [[f32; 4]; 2] {
     let [(from, a), (to, b)] = colors;
     let hues = match space {
-        Space::Oklch(way) => {
+        Space::Lch(way) | Space::Oklch(way) => {
             let [a, b] = [a.or(b).unwrap_or(0.0), b.or(a).unwrap_or(0.0)];
             let d = b - a;
             match way {
@@ -321,7 +324,7 @@ fn ends(colors: [([f64; 4], Option<f64>); 2], space: Space) -> [[f32; 4]; 2] {
     let premultiplied = |c: [f64; 4], hue: f64| {
         let k = c[3];
         let third = match space {
-            Space::Oklch(_) => hue,
+            Space::Lch(_) | Space::Oklch(_) => hue,
             _ => c[2] * k,
         };
         [c[0] * k, c[1] * k, third, k].map(|v| v as f32)

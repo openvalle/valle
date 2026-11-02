@@ -17,8 +17,9 @@ struct Gradient {
   // turn clockwise from up the colors start at; or the focus, and the center.
   shape: vec4f,
   // x: past the stops, 0 their ends' colors, 1 the stops repeated, 2 reflected; y: the color
-  // space, 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch, all premultiplied, 4 sRGB not; z: 0 along a
-  // line, 1 out to an ellipse, 2 around a turn, 3 out from a focus; w: the transform.
+  // space, 0 sRGB, 1 linear sRGB, 2 Oklab, 3 Oklch, 5 CIE Lab, 6 LCH, all premultiplied, 4 sRGB
+  // not; z: 0 along a line, 1 out to an ellipse, 2 around a turn, 3 out from a focus; w: the
+  // transform.
   form: vec4u,
   // The first segment, and how many there are.
   segments: vec4u,
@@ -149,13 +150,15 @@ fn working(c: vec4f, space: u32) -> vec4f {
     return vec4f(0.0);
   }
   var v = c.rgb / c.a;
-  if (space == 3u) {
-    // Oklch: the hue in degrees is not premultiplied.
+  if (space == 3u || space == 6u) {
+    // Oklch and LCH: the hue in degrees is not premultiplied.
     let h = radians(c.b);
     v = vec3f(v.x, v.y * cos(h), v.y * sin(h));
   }
-  if (space >= 2u) {
+  if (space == 2u || space == 3u) {
     v = linear_from_oklab(v);
+  } else if (space >= 5u) {
+    v = linear_from_lab(v);
   }
   return vec4f(encode(clamp(v, vec3f(0.0), vec3f(1.0))) * c.a, c.a);
 }
@@ -169,6 +172,23 @@ fn linear_from_oklab(lab: vec3f) -> vec3f {
     dot(lms, vec3f(4.0767416621, -3.3077115913, 0.2309699292)),
     dot(lms, vec3f(-1.2684380046, 2.6097574011, -0.3413193965)),
     dot(lms, vec3f(-0.0041960863, -0.7034186147, 1.7076147010)),
+  );
+}
+
+// Linear sRGB of a CIE Lab lightness, a and b, D50 white.
+fn linear_from_lab(lab: vec3f) -> vec3f {
+  let kappa = 24389.0 / 27.0;
+  let epsilon = 216.0 / 24389.0;
+  let fy = (lab.x + 16.0) / 116.0;
+  let f = vec3f(fy + lab.y / 500.0, fy, fy - lab.z / 200.0);
+  var xyz = select((116.0 * f - 16.0) / kappa, f * f * f, f * f * f > vec3f(epsilon));
+  xyz.y = select(lab.x / kappa, fy * fy * fy, lab.x > kappa * epsilon);
+  xyz *= vec3f(0.3457 / 0.3585, 1.0, (1.0 - 0.3457 - 0.3585) / 0.3585);
+  // To D65 white, Bradford's, then to linear sRGB.
+  return vec3f(
+    dot(xyz, vec3f(3.1341358529, -1.6173859980, -0.4906622179)),
+    dot(xyz, vec3f(-0.9787954766, 1.9162543774, 0.0334428734)),
+    dot(xyz, vec3f(0.0719553926, -0.2289767598, 1.4053860351)),
   );
 }
 

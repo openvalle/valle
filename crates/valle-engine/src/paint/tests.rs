@@ -2154,6 +2154,16 @@ fn gradient_colors_mix_premultiplied_in_their_space() {
     assert_eq!(rounded(blue[0]), 0.226);
     let [red, blue] = ends("linear-gradient(in oklch longer hue, red, blue)");
     assert_eq!([red, blue].map(|c| c[2].round()), [29.0, 264.0]);
+    // CIE Lab's red, D50 white, as CSS Color 4 gives it; and in LCH a gray's hue is powerless.
+    assert_eq!(
+        both(ends("linear-gradient(in lab, red, red)"))[0],
+        [54.291, 80.805, 69.891, 1.0]
+    );
+    let [red, gray] = ends("linear-gradient(in lch, red, gray)");
+    assert_eq!(
+        [red, gray].map(|c| (c[2] * 10.0).round() / 10.0),
+        [40.9, 40.9]
+    );
 }
 
 #[test]

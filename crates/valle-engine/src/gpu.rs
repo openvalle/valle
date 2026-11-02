@@ -1048,6 +1048,8 @@ impl<'a> Renderer<'a> {
                         Space::SrgbLinear => 1,
                         Space::Oklab => 2,
                         Space::Oklch(_) => 3,
+                        Space::Lab => 5,
+                        Space::Lch(_) => 6,
                     };
                     let count = ramp.segments.len() as u32;
                     let spread = match ramp.spread {

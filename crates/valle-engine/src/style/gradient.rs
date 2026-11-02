@@ -85,7 +85,9 @@ pub enum Stop<P, C> {
 pub enum Space {
     Srgb,
     SrgbLinear,
+    Lab,
     Oklab,
+    Lch(Hue),
     Oklch(Hue),
 }
 
@@ -386,25 +388,31 @@ fn to(words: &[&str], line: &mut Option<Line>) -> Result<usize, String> {
     Ok(used)
 }
 
-/// The color space after `in`, into `space`, and for `oklch` the way hues go; how many words it
-/// takes.
+/// The color space after `in`, into `space`, and for `lch` or `oklch` the way hues go; how many
+/// words it takes.
 fn interpolation(words: &[&str], space: &mut Option<Space>) -> Result<usize, String> {
-    const SPACES: &str = "srgb, srgb-linear, oklab or oklch";
+    const SPACES: &str = "srgb, srgb-linear, lab, oklab, lch or oklch";
     let (s, used) = match words {
         ["srgb", ..] => (Space::Srgb, 1),
         ["srgb-linear", ..] => (Space::SrgbLinear, 1),
+        ["lab", ..] => (Space::Lab, 1),
         ["oklab", ..] => (Space::Oklab, 1),
-        ["oklch", way, "hue", ..] => {
-            let hue = match *way {
-                "shorter" => Hue::Shorter,
-                "longer" => Hue::Longer,
-                "increasing" => Hue::Increasing,
-                "decreasing" => Hue::Decreasing,
-                w => return Err(format!("{w} hue is not a way around the hue circle")),
+        [polar @ ("lch" | "oklch"), rest @ ..] => {
+            let (hue, used) = match rest {
+                [way, "hue", ..] => match *way {
+                    "shorter" => (Hue::Shorter, 3),
+                    "longer" => (Hue::Longer, 3),
+                    "increasing" => (Hue::Increasing, 3),
+                    "decreasing" => (Hue::Decreasing, 3),
+                    w => return Err(format!("{w} hue is not a way around the hue circle")),
+                },
+                _ => (Hue::Shorter, 1),
             };
-            (Space::Oklch(hue), 3)
+            match *polar {
+                "lch" => (Space::Lch(hue), used),
+                _ => (Space::Oklch(hue), used),
+            }
         }
-        ["oklch", ..] => (Space::Oklch(Hue::Shorter), 1),
         [s, ..] if OTHER_SPACES.contains(s) => {
             return Err(format!("in {s} is not supported yet; use {SPACES}"));
         }
@@ -418,8 +426,6 @@ fn interpolation(words: &[&str], space: &mut Option<Space>) -> Result<usize, Str
 const OTHER_SPACES: &[&str] = &[
     "hsl",
     "hwb",
-    "lab",
-    "lch",
     "display-p3",
     "a98-rgb",
     "prophoto-rgb",

@@ -1882,6 +1882,14 @@ fn backgrounds_take_gradients_over_a_color() {
         gradient("linear-gradient(in oklch, red, blue)").2,
         Space::Oklch(Hue::Shorter)
     );
+    assert_eq!(
+        gradient("linear-gradient(to right in lab, red, blue)").2,
+        Space::Lab
+    );
+    assert_eq!(
+        gradient("linear-gradient(in lch increasing hue, red, blue)").2,
+        Space::Lch(Hue::Increasing)
+    );
     assert_eq!(images(&[("background", text("none"))]), [Image::None]);
 }
 
@@ -2889,7 +2897,7 @@ fn what_is_not_supported_is_an_error() {
         (
             "backgroundImage",
             text("linear-gradient(in hsl, red, blue)"),
-            "in hsl is not supported yet; use srgb, srgb-linear, oklab or oklch",
+            "in hsl is not supported yet; use srgb, srgb-linear, lab, oklab, lch or oklch",
         ),
         (
             "backgroundImage",
