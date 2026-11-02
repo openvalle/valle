@@ -830,6 +830,7 @@ fn register(r: &mut Registry) {
     blending(r);
     transforms(r);
     filters(r);
+    masks(r);
     r.add("bg".into(), true, Box::new(background));
     r.fixed("fill-none", &[("fill", "none")]);
     let keys = &["--fill", "--color"];
@@ -2078,6 +2079,323 @@ fn drop_shadow(c: &Candidate) -> Option<Vec<Node>> {
         modifier,
         &["--drop-shadow-color", "--color"],
     )?)
+}
+
+/// What `mask-image` is set to: a linear gradient of each side or its own, a radial one and a
+/// conic one, each all white until a class sets it, which `mask-composite: intersect` multiplies.
+const MASK_IMAGE: &str = "var(--tw-mask-linear), var(--tw-mask-radial), var(--tw-mask-conic)";
+
+/// A stop's value of a mask's gradient.
+enum Stop {
+    Color(String),
+    Position(String),
+}
+
+impl Stop {
+    /// As Tailwind's `maskStopUtility`: a color, a length or a percentage, of the spacing scale
+    /// or written.
+    fn of(c: &Candidate) -> Option<Stop> {
+        let Candidate::Functional {
+            value: Some(value),
+            modifier,
+            ..
+        } = c
+        else {
+            return None;
+        };
+        let modifier = modifier.as_ref();
+        let percent = |v: &str| positive_integer(v.strip_suffix('%').unwrap_or(v));
+        match value {
+            Value::Arbitrary { kind, value } => {
+                let kinds = ["length", "percentage", "color"];
+                match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                    Some("color") => Some(Stop::Color(as_color(value, modifier)?)),
+                    Some("percentage") if !percent(value) => None,
+                    _ => modifier.is_none().then(|| Stop::Position(value.clone())),
+                }
+            }
+            Value::Named { value, .. } => {
+                let keys = ["--background-color", "--color"];
+                if let Some(c) = theme_color(value, modifier, &keys) {
+                    return Some(Stop::Color(c));
+                }
+                if modifier.is_some() {
+                    return None;
+                }
+                match types::infer(value, &["number", "percentage"])? {
+                    "number" => multiplier(value, "").map(Stop::Position),
+                    "percentage" => percent(value).then(|| Stop::Position(value.clone())),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    /// The declaration of this stop, `--tw-mask-top-from` being `start`.
+    fn decl(&self, start: &str) -> Node {
+        match self {
+            Stop::Color(c) => decl(&format!("{start}-color"), &c[..]),
+            Stop::Position(p) => decl(&format!("{start}-position"), &p[..]),
+        }
+    }
+}
+
+/// The start of what every gradient of a mask sets: the mask itself, and this gradient.
+fn masked(variable: &str, gradient: impl Into<String>) -> Vec<Node> {
+    vec![
+        decl("mask-image", MASK_IMAGE),
+        decl("mask-composite", "intersect"),
+        decl(variable, gradient),
+    ]
+}
+
+/// The mask utilities: the mask's image, size, position and the rest as a background's; and
+/// gradients from each side, linear, radial and conic, of their stops.
+fn masks(r: &mut Registry) {
+    const POSITIONS: [(&str, &str); 9] = [
+        ("top", "top"),
+        ("top-left", "left top"),
+        ("top-right", "right top"),
+        ("bottom", "bottom"),
+        ("bottom-left", "left bottom"),
+        ("bottom-right", "right bottom"),
+        ("left", "left"),
+        ("right", "right"),
+        ("center", "center"),
+    ];
+    const BOXES: [(&str, &str); 6] = [
+        ("border", "border-box"),
+        ("padding", "padding-box"),
+        ("content", "content-box"),
+        ("fill", "fill-box"),
+        ("stroke", "stroke-box"),
+        ("view", "view-box"),
+    ];
+    r.fixed("mask-none", &[("mask-image", "none")]);
+    r.add("mask".into(), true, Box::new(mask));
+    for name in ["add", "subtract", "intersect", "exclude"] {
+        r.fixed(format!("mask-{name}"), &[("mask-composite", name)]);
+    }
+    r.fixed("mask-alpha", &[("mask-mode", "alpha")]);
+    r.fixed("mask-luminance", &[("mask-mode", "luminance")]);
+    r.fixed("mask-match", &[("mask-mode", "match-source")]);
+    r.fixed("mask-type-alpha", &[("mask-type", "alpha")]);
+    r.fixed("mask-type-luminance", &[("mask-type", "luminance")]);
+    for name in ["auto", "cover", "contain"] {
+        r.fixed(format!("mask-{name}"), &[("mask-size", name)]);
+    }
+    for (name, position) in POSITIONS {
+        r.fixed(format!("mask-{name}"), &[("mask-position", position)]);
+    }
+    for (name, property) in [("size", "mask-size"), ("position", "mask-position")] {
+        r.functional(
+            &format!("mask-{name}"),
+            Desc {
+                handle: Some(one(property)),
+                ..Desc::default()
+            },
+        );
+    }
+    for (name, value) in [
+        ("repeat", "repeat"),
+        ("no-repeat", "no-repeat"),
+        ("repeat-x", "repeat-x"),
+        ("repeat-y", "repeat-y"),
+        ("repeat-round", "round"),
+        ("repeat-space", "space"),
+    ] {
+        r.fixed(format!("mask-{name}"), &[("mask-repeat", value)]);
+    }
+    for (name, value) in BOXES {
+        r.fixed(format!("mask-clip-{name}"), &[("mask-clip", value)]);
+        r.fixed(format!("mask-origin-{name}"), &[("mask-origin", value)]);
+    }
+    r.fixed("mask-no-clip", &[("mask-clip", "no-clip")]);
+
+    const LINEAR: &str = "var(--tw-mask-left), var(--tw-mask-right), var(--tw-mask-bottom), \
+                          var(--tw-mask-top)";
+    const SIDES: [(&str, &[&str]); 6] = [
+        ("x", &["right", "left"]),
+        ("y", &["top", "bottom"]),
+        ("t", &["top"]),
+        ("r", &["right"]),
+        ("b", &["bottom"]),
+        ("l", &["left"]),
+    ];
+    for (name, sides) in SIDES {
+        for stop in ["from", "to"] {
+            let compile = move |c: &Candidate| {
+                let value = Stop::of(c)?;
+                let mut nodes = masked("--tw-mask-linear", LINEAR);
+                for side in sides {
+                    let at = |stop: &str, of: &str| format!("var(--tw-mask-{side}-{stop}-{of})");
+                    nodes.push(decl(
+                        &format!("--tw-mask-{side}"),
+                        format!(
+                            "linear-gradient(to {side}, {} {}, {} {})",
+                            at("from", "color"),
+                            at("from", "position"),
+                            at("to", "color"),
+                            at("to", "position"),
+                        ),
+                    ));
+                    nodes.push(value.decl(&format!("--tw-mask-{side}-{stop}")));
+                }
+                Some(nodes)
+            };
+            r.add(format!("mask-{name}-{stop}"), true, Box::new(compile));
+        }
+    }
+
+    // How many degrees a class turns its gradient, as `calc()` of whole degrees.
+    fn turned(v: &str, sign: &str) -> Option<String> {
+        positive_integer(v).then(|| match v.parse::<f64>() {
+            Ok(0.0) => "0deg".to_string(),
+            Ok(1.0) => format!("{sign}1deg"),
+            _ => format!("calc(1deg * {sign}{v})"),
+        })
+    }
+    for (name, gradient) in [("linear", "linear-gradient"), ("conic", "conic-gradient")] {
+        let variable = format!("--tw-mask-{name}");
+        let position = format!("{variable}-position");
+        let image = format!("{gradient}(var({variable}-stops, var({position})))");
+        r.functional(
+            &format!("mask-{name}"),
+            Desc {
+                negative: true,
+                bare: Bare::Nothing,
+                value: Some(|v, _| turned(v, "")),
+                negative_value: Some(|v, _| turned(v, "-")),
+                handle: Some(Arc::new(move |v, _| {
+                    let mut nodes = masked(&variable, &image[..]);
+                    nodes.push(decl(&position, v));
+                    Some(nodes)
+                })),
+                ..Desc::default()
+            },
+        );
+    }
+
+    for (name, value) in [("mask-circle", "circle"), ("mask-ellipse", "ellipse")] {
+        r.fixed(name, &[("--tw-mask-radial-shape", value)]);
+    }
+    for size in [
+        "closest-side",
+        "farthest-side",
+        "closest-corner",
+        "farthest-corner",
+    ] {
+        r.fixed(
+            format!("mask-radial-{size}"),
+            &[("--tw-mask-radial-size", size)],
+        );
+    }
+    for (name, position) in [
+        ("top", "top"),
+        ("top-left", "top left"),
+        ("top-right", "top right"),
+        ("bottom", "bottom"),
+        ("bottom-left", "bottom left"),
+        ("bottom-right", "bottom right"),
+        ("left", "left"),
+        ("right", "right"),
+        ("center", "center"),
+    ] {
+        r.fixed(
+            format!("mask-radial-at-{name}"),
+            &[("--tw-mask-radial-position", position)],
+        );
+    }
+    r.functional(
+        "mask-radial-at",
+        Desc {
+            bare: Bare::Nothing,
+            handle: Some(one("--tw-mask-radial-position")),
+            ..Desc::default()
+        },
+    );
+    r.functional(
+        "mask-radial",
+        Desc {
+            bare: Bare::Nothing,
+            handle: Some(Arc::new(|v, _| {
+                let image = "radial-gradient(var(--tw-mask-radial-stops, \
+                             var(--tw-mask-radial-size)))";
+                let mut nodes = masked("--tw-mask-radial", image);
+                nodes.push(decl("--tw-mask-radial-size", v));
+                Some(nodes)
+            })),
+            ..Desc::default()
+        },
+    );
+
+    // The stops of the gradients of their own.
+    for (name, gradient, head) in [
+        (
+            "linear",
+            "linear-gradient",
+            "var(--tw-mask-linear-position)",
+        ),
+        (
+            "radial",
+            "radial-gradient",
+            "var(--tw-mask-radial-shape) var(--tw-mask-radial-size) at \
+             var(--tw-mask-radial-position)",
+        ),
+        (
+            "conic",
+            "conic-gradient",
+            "from var(--tw-mask-conic-position)",
+        ),
+    ] {
+        for stop in ["from", "to"] {
+            let compile = move |c: &Candidate| {
+                let value = Stop::of(c)?;
+                let variable = format!("--tw-mask-{name}");
+                let mut nodes = vec![
+                    decl("mask-image", MASK_IMAGE),
+                    decl("mask-composite", "intersect"),
+                    decl(
+                        &format!("{variable}-stops"),
+                        format!(
+                            "{head}, var({variable}-from-color) var({variable}-from-position), \
+                             var({variable}-to-color) var({variable}-to-position)"
+                        ),
+                    ),
+                    decl(&variable, format!("{gradient}(var({variable}-stops))")),
+                ];
+                nodes.push(value.decl(&format!("{variable}-{stop}")));
+                Some(nodes)
+            };
+            r.add(format!("mask-{name}-{stop}"), true, Box::new(compile));
+        }
+    }
+}
+
+/// `mask-[…]`: a position, a size or an image, as what is written is.
+fn mask(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(Value::Arbitrary { kind, value }),
+        modifier: None,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let kinds = [
+        "image",
+        "percentage",
+        "position",
+        "bg-size",
+        "length",
+        "url",
+    ];
+    let property = match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+        Some("percentage" | "position") => "mask-position",
+        Some("bg-size" | "length" | "size") => "mask-size",
+        _ => "mask-image",
+    };
+    Some(vec![decl(property, &value[..])])
 }
 
 /// What `transform` is set to by what rotates and skews on one axis, each `var()` empty until a

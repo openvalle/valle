@@ -18,7 +18,7 @@ pub const CASE: &str = "tailwind/classes";
 
 /// Classes Tailwind does not list: how values, modifiers and the `!` read, and what the engine
 /// refuses.
-const SAMPLES: [&str; 196] = [
+const SAMPLES: [&str; 222] = [
     "p-13",
     "p-0.75",
     "p-0.3",
@@ -215,6 +215,32 @@ const SAMPLES: [&str; 196] = [
     "drop-shadow-[#f00]",
     "object-[25%_75%]",
     "object-[center_top]",
+    "mask-[50%]",
+    "mask-[url(a.png)]",
+    "mask-[10px_20px]",
+    "mask-[linear-gradient(red,blue)]",
+    "mask-size-[10px_20px]",
+    "mask-position-[10px_20px]",
+    "mask-t-from-50%",
+    "mask-t-from-4",
+    "mask-t-from-[3px]",
+    "mask-t-from-[33%]",
+    "mask-x-to-red-500/50",
+    "mask-y-from-[#f00]",
+    "mask-l-to-33.3%",
+    "mask-linear-45",
+    "-mask-linear-1",
+    "-mask-linear-[30deg]",
+    "mask-linear-from-20%",
+    "mask-linear-to-black/50",
+    "mask-radial-[closest-side]",
+    "mask-radial-at-[10%_20%]",
+    "mask-radial-from-20%",
+    "mask-radial-to-3",
+    "mask-conic-90",
+    "-mask-conic-2",
+    "mask-conic-from-transparent",
+    "mask-conic-to-75%",
 ];
 
 /// What `web/tests/tailwind.ts` writes.

@@ -146,6 +146,53 @@ pub const PROPERTIES: &[(&str, Option<&str>)] = &[
     ("--tw-backdrop-opacity", None),
     ("--tw-backdrop-saturate", None),
     ("--tw-backdrop-sepia", None),
+    ("--tw-mask-linear", Some("linear-gradient(#fff, #fff)")),
+    ("--tw-mask-radial", Some("linear-gradient(#fff, #fff)")),
+    ("--tw-mask-conic", Some("linear-gradient(#fff, #fff)")),
+    ("--tw-mask-left", Some("linear-gradient(#fff, #fff)")),
+    ("--tw-mask-right", Some("linear-gradient(#fff, #fff)")),
+    ("--tw-mask-bottom", Some("linear-gradient(#fff, #fff)")),
+    ("--tw-mask-top", Some("linear-gradient(#fff, #fff)")),
+    ("--tw-mask-top-from-position", Some("0%")),
+    ("--tw-mask-top-to-position", Some("100%")),
+    ("--tw-mask-top-from-color", Some("black")),
+    ("--tw-mask-top-to-color", Some("transparent")),
+    ("--tw-mask-right-from-position", Some("0%")),
+    ("--tw-mask-right-to-position", Some("100%")),
+    ("--tw-mask-right-from-color", Some("black")),
+    ("--tw-mask-right-to-color", Some("transparent")),
+    ("--tw-mask-bottom-from-position", Some("0%")),
+    ("--tw-mask-bottom-to-position", Some("100%")),
+    ("--tw-mask-bottom-from-color", Some("black")),
+    ("--tw-mask-bottom-to-color", Some("transparent")),
+    ("--tw-mask-left-from-position", Some("0%")),
+    ("--tw-mask-left-to-position", Some("100%")),
+    ("--tw-mask-left-from-color", Some("black")),
+    ("--tw-mask-left-to-color", Some("transparent")),
+    ("--tw-mask-linear-position", Some("0deg")),
+    ("--tw-mask-linear-from-position", Some("0%")),
+    ("--tw-mask-linear-to-position", Some("100%")),
+    ("--tw-mask-linear-from-color", Some("black")),
+    ("--tw-mask-linear-to-color", Some("transparent")),
+    ("--tw-mask-radial-from-position", Some("0%")),
+    ("--tw-mask-radial-to-position", Some("100%")),
+    ("--tw-mask-radial-from-color", Some("black")),
+    ("--tw-mask-radial-to-color", Some("transparent")),
+    ("--tw-mask-radial-shape", Some("ellipse")),
+    ("--tw-mask-radial-size", Some("farthest-corner")),
+    ("--tw-mask-radial-position", Some("center")),
+    ("--tw-mask-conic-position", Some("0deg")),
+    ("--tw-mask-conic-from-position", Some("0%")),
+    ("--tw-mask-conic-to-position", Some("100%")),
+    ("--tw-mask-conic-from-color", Some("black")),
+    ("--tw-mask-conic-to-color", Some("transparent")),
+];
+
+/// The variables Tailwind reads without registering them, which have no value until set.
+const UNREGISTERED: [&str; 3] = [
+    "--tw-mask-linear-stops",
+    "--tw-mask-radial-stops",
+    "--tw-mask-conic-stops",
 ];
 
 const VARIANTS: &str = "variants are not supported: the canvas has a fixed size, and nothing \
@@ -1152,6 +1199,7 @@ fn substitute(
         rest = &rest[end + 1..];
         let registered = || match PROPERTIES.iter().find(|(p, _)| *p == name) {
             Some((_, initial)) => Ok(initial.map(str::to_string)),
+            None if UNREGISTERED.contains(&name) => Ok(None),
             None if name.starts_with("--tw-") => {
                 Err(format!("engine bug: {name} is not registered"))
             }

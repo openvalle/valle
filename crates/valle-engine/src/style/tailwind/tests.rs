@@ -316,6 +316,20 @@ fn classes_expand_to_tailwinds_css() {
              var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,); }",
         ),
         ("origin-top-right", "& { transform-origin: 100% 0; }"),
+        ("mask-[50%]", "& { mask-position: 50%; }"),
+        (
+            "mask-radial-at-top-left",
+            "& { --tw-mask-radial-position: top left; }",
+        ),
+        (
+            "mask-t-from-50%",
+            "& { mask-image: var(--tw-mask-linear), var(--tw-mask-radial), var(--tw-mask-conic); \
+             mask-composite: intersect; --tw-mask-linear: var(--tw-mask-left), \
+             var(--tw-mask-right), var(--tw-mask-bottom), var(--tw-mask-top); --tw-mask-top: \
+             linear-gradient(to top, var(--tw-mask-top-from-color) \
+             var(--tw-mask-top-from-position), var(--tw-mask-top-to-color) \
+             var(--tw-mask-top-to-position)); --tw-mask-top-from-position: 50%; }",
+        ),
         ("object-cover", "& { object-fit: cover; }"),
         ("object-top-left", "& { object-position: left top; }"),
         ("object-[25%_75%]", "& { object-position: 25% 75%; }"),
@@ -376,6 +390,10 @@ fn classes_tailwind_does_not_make_are_errors() {
         "-rotate-[1_1_0]",
         "transform-foo",
         "filter-foo",
+        "mask-foo",
+        "mask-t-from-foo",
+        "mask-l-to-33.3%",
+        "-mask-radial-[closest-side]",
         "drop-shadow-sm/foo",
         "brightness-[50%]/50",
     ] {
@@ -582,6 +600,38 @@ fn filters_run_in_tailwinds_order_and_drop_shadows_take_their_color() {
     // None of a filter's functions set: nothing to apply.
     assert_eq!(last(&["filter"]), None);
     assert_eq!(last(&["blur-none"]), None);
+}
+
+#[test]
+fn masks_intersect_their_gradients() {
+    let image = |classes: &[&str]| {
+        let all = applied(classes, &[]);
+        (all.iter())
+            .find(|(p, ..)| p == "mask-image")
+            .map(|(_, v, _)| v.clone())
+            .unwrap()
+    };
+    let white = "linear-gradient(#fff, #fff)";
+    assert_eq!(
+        image(&["mask-b-from-50%", "mask-t-to-75%"]),
+        format!(
+            "{white}, {white}, linear-gradient(to bottom, black 50%, transparent 100%), \
+             linear-gradient(to top, black 0%, transparent 75%), {white}, {white}"
+        )
+    );
+    assert_eq!(
+        image(&["mask-radial-from-20%", "mask-circle", "mask-radial-at-top"]),
+        format!(
+            "{white}, radial-gradient(circle farthest-corner at top, black 20%, transparent \
+             100%), {white}"
+        )
+    );
+    assert_eq!(
+        image(&["mask-conic-90", "mask-conic-to-50%"]),
+        format!(
+            "{white}, {white}, conic-gradient(from calc(1deg * 90), black 0%, transparent 50%)"
+        )
+    );
 }
 
 #[test]
