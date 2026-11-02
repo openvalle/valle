@@ -53,6 +53,29 @@ fn classes_expand_to_tailwinds_css() {
             "space-x-reverse",
             ":where(& > :not(:last-child)) { --tw-space-x-reverse: 1; }",
         ),
+        ("order-first", "& { order: -9999; }"),
+        ("-order-2", "& { order: calc(2 * -1); }"),
+        ("col-span-2", "& { grid-column: span 2 / span 2; }"),
+        ("row-span-full", "& { grid-row: 1 / -1; }"),
+        ("-col-start-2", "& { grid-column-start: calc(2 * -1); }"),
+        ("flex-1", "& { flex: 1; }"),
+        ("flex-1/2", "& { flex: calc(1/2 * 100%); }"),
+        ("flex-[2_2_0%]", "& { flex: 2 2 0%; }"),
+        ("grow", "& { flex-grow: 1; }"),
+        ("shrink-0", "& { flex-shrink: 0; }"),
+        ("basis-md", "& { flex-basis: var(--container-md); }"),
+        ("basis-1/3", "& { flex-basis: calc(1 / 3 * 100%); }"),
+        (
+            "grid-cols-3",
+            "& { grid-template-columns: repeat(3, minmax(0, 1fr)); }",
+        ),
+        ("auto-rows-fr", "& { grid-auto-rows: minmax(0, 1fr); }"),
+        (
+            "auto-cols-4",
+            "& { grid-auto-columns: calc(var(--spacing) * 4); }",
+        ),
+        ("grid-flow-col-dense", "& { grid-auto-flow: column dense; }"),
+        ("justify-self-end", "& { justify-self: flex-end; }"),
     ];
     for (name, expected) in cases {
         assert_eq!(css(name), expected, "{name}");
@@ -62,7 +85,17 @@ fn classes_expand_to_tailwinds_css() {
 #[test]
 fn classes_tailwind_does_not_make_are_errors() {
     for name in [
-        "p-foo", "p-0.3", "p-4/50", "w-", "p-[]", "m-[a;b]", "-p-4", "foo",
+        "p-foo",
+        "p-0.3",
+        "p-4/50",
+        "w-",
+        "p-[]",
+        "m-[a;b]",
+        "-p-4",
+        "foo",
+        "grid-cols-0",
+        "-col-span-2",
+        "grow-[2]/3",
     ] {
         assert_eq!(
             error(name),
@@ -115,6 +148,12 @@ fn errors_say_what_to_write_instead() {
         "className sticky: position: sticky is not supported: the canvas does not scroll; use \
          relative or absolute"
     );
+    assert_eq!(
+        error("float-left"),
+        "className float-left: float is not supported: there is no document flow; use flex or \
+         grid layout"
+    );
+    assert!(error("items-center-safe").starts_with("className items-center-safe: align-items: "));
     let e = error("container");
     assert_eq!(
         e,

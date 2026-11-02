@@ -127,6 +127,7 @@ enum Bare {
     /// The theme's variable of the utility's first namespace, if it has one.
     #[default]
     Theme,
+    Value(&'static str),
     Nothing,
 }
 
@@ -240,6 +241,7 @@ fn made(d: Arc<Desc>, negative: bool) -> Compile {
                 }
                 match d.bare {
                     Bare::Theme => theme().resolve(None, d.keys)?,
+                    Bare::Value(v) => v.to_string(),
                     Bare::Nothing => return None,
                 }
             }
@@ -298,6 +300,11 @@ fn made(d: Arc<Desc>, negative: bool) -> Compile {
         };
         handle(&value, kind)
     })
+}
+
+/// A whole number at least 0 as itself, as Tailwind's `isPositiveInteger`.
+fn integer(v: &str, _: Option<&str>) -> Option<String> {
+    positive_integer(v).then(|| v.to_string())
 }
 
 /// A handle that sets `property` to the value.
@@ -363,12 +370,42 @@ fn register(r: &mut Registry) {
         Desc {
             negative: true,
             keys: &["--z-index"],
-            value: Some(|v, _| positive_integer(v).then(|| v.to_string())),
+            value: Some(integer),
             statics: vec![("auto", vec![decl("z-index", "auto")])],
             handle: Some(one("z-index")),
             ..Desc::default()
         },
     );
+    r.functional(
+        "order",
+        Desc {
+            negative: true,
+            keys: &["--order"],
+            value: Some(integer),
+            statics: vec![
+                ("first", vec![decl("order", "-9999")]),
+                ("last", vec![decl("order", "9999")]),
+            ],
+            handle: Some(one("order")),
+            ..Desc::default()
+        },
+    );
+    lines(r, "col", "grid-column");
+    lines(r, "row", "grid-row");
+    for value in ["start", "end", "right", "left", "none"] {
+        let float = match value {
+            "start" | "end" => format!("inline-{value}"),
+            _ => value.to_string(),
+        };
+        r.fixed(format!("float-{value}"), &[("float", float.as_str())]);
+    }
+    for value in ["start", "end", "right", "left", "both", "none"] {
+        let clear = match value {
+            "start" | "end" => format!("inline-{value}"),
+            _ => value.to_string(),
+        };
+        r.fixed(format!("clear-{value}"), &[("clear", clear.as_str())]);
+    }
     for (name, property) in [
         ("m", "margin"),
         ("mx", "margin-inline"),
@@ -431,6 +468,230 @@ fn register(r: &mut Registry) {
         },
     );
     sizes(r);
+    r.fixed("flex-auto", &[("flex", "auto")]);
+    r.fixed("flex-initial", &[("flex", "0 auto")]);
+    r.fixed("flex-none", &[("flex", "none")]);
+    r.add(
+        "flex".into(),
+        true,
+        Box::new(|c| {
+            let Candidate::Functional {
+                value: Some(value),
+                modifier,
+                ..
+            } = c
+            else {
+                return None;
+            };
+            let flex = match value {
+                Value::Arbitrary { value, .. } if modifier.is_none() => value.clone(),
+                Value::Named {
+                    fraction: Some(f), ..
+                } => {
+                    let (l, r) = f.split_once('/')?;
+                    if !positive_integer(l) || !positive_integer(r) {
+                        return None;
+                    }
+                    format!("calc({f} * 100%)")
+                }
+                Value::Named { value, .. } if positive_integer(value) && modifier.is_none() => {
+                    value.clone()
+                }
+                _ => return None,
+            };
+            Some(vec![decl("flex", flex)])
+        }),
+    );
+    for (name, property) in [("shrink", "flex-shrink"), ("grow", "flex-grow")] {
+        r.functional(
+            name,
+            Desc {
+                bare: Bare::Value("1"),
+                value: Some(integer),
+                handle: Some(one(property)),
+                ..Desc::default()
+            },
+        );
+    }
+    r.fixed("basis-auto", &[("flex-basis", "auto")]);
+    r.fixed("basis-full", &[("flex-basis", "100%")]);
+    let keys = &["--flex-basis", "--spacing", "--container"];
+    r.spacing("basis", keys, one("flex-basis"), false, true);
+    r.fixed("table-auto", &[("table-layout", "auto")]);
+    r.fixed("table-fixed", &[("table-layout", "fixed")]);
+    r.fixed("caption-top", &[("caption-side", "top")]);
+    r.fixed("caption-bottom", &[("caption-side", "bottom")]);
+    r.fixed("border-collapse", &[("border-collapse", "collapse")]);
+    r.fixed("border-separate", &[("border-collapse", "separate")]);
+    r.functional(
+        "columns",
+        Desc {
+            keys: &["--columns", "--container"],
+            value: Some(integer),
+            statics: vec![("auto", vec![decl("columns", "auto")])],
+            handle: Some(one("columns")),
+            ..Desc::default()
+        },
+    );
+    let before = [
+        "auto",
+        "avoid",
+        "all",
+        "avoid-page",
+        "page",
+        "left",
+        "right",
+        "column",
+    ];
+    for (side, values) in [
+        ("before", &before[..]),
+        (
+            "inside",
+            &["auto", "avoid", "avoid-page", "avoid-column"][..],
+        ),
+        ("after", &before[..]),
+    ] {
+        for value in values {
+            let property = format!("break-{side}");
+            r.fixed(
+                format!("{property}-{value}"),
+                &[(property.as_str(), *value)],
+            );
+        }
+    }
+    for (name, flow) in [
+        ("row", "row"),
+        ("col", "column"),
+        ("dense", "dense"),
+        ("row-dense", "row dense"),
+        ("col-dense", "column dense"),
+    ] {
+        r.fixed(format!("grid-flow-{name}"), &[("grid-auto-flow", flow)]);
+    }
+    for (name, property) in [
+        ("auto-cols", "grid-auto-columns"),
+        ("auto-rows", "grid-auto-rows"),
+    ] {
+        let keys: &'static [&'static str] = match name {
+            "auto-cols" => &["--grid-auto-columns"],
+            _ => &["--grid-auto-rows"],
+        };
+        r.functional(
+            name,
+            Desc {
+                keys,
+                value: Some(|v, _| multiplier(v, "")),
+                statics: vec![
+                    ("auto", vec![decl(property, "auto")]),
+                    ("min", vec![decl(property, "min-content")]),
+                    ("max", vec![decl(property, "max-content")]),
+                    ("fr", vec![decl(property, "minmax(0, 1fr)")]),
+                ],
+                handle: Some(one(property)),
+                ..Desc::default()
+            },
+        );
+    }
+    for (name, property) in [
+        ("grid-cols", "grid-template-columns"),
+        ("grid-rows", "grid-template-rows"),
+    ] {
+        let keys: &'static [&'static str] = match name {
+            "grid-cols" => &["--grid-template-columns"],
+            _ => &["--grid-template-rows"],
+        };
+        r.functional(
+            name,
+            Desc {
+                keys,
+                value: Some(|v, _| {
+                    let n = positive_integer(v) && v != "0";
+                    n.then(|| format!("repeat({v}, minmax(0, 1fr))"))
+                }),
+                statics: vec![
+                    ("none", vec![decl(property, "none")]),
+                    ("subgrid", vec![decl(property, "subgrid")]),
+                ],
+                handle: Some(one(property)),
+                ..Desc::default()
+            },
+        );
+    }
+    for (name, direction) in [
+        ("row", "row"),
+        ("row-reverse", "row-reverse"),
+        ("col", "column"),
+        ("col-reverse", "column-reverse"),
+    ] {
+        r.fixed(format!("flex-{name}"), &[("flex-direction", direction)]);
+    }
+    r.fixed("flex-wrap", &[("flex-wrap", "wrap")]);
+    r.fixed("flex-nowrap", &[("flex-wrap", "nowrap")]);
+    r.fixed("flex-wrap-reverse", &[("flex-wrap", "wrap-reverse")]);
+    // Alignment: each prefix, its property, and its values as named and as written.
+    let place_content: &[(&str, &str)] = &[
+        ("center", "center"),
+        ("start", "start"),
+        ("end", "end"),
+        ("center-safe", "safe center"),
+        ("end-safe", "safe end"),
+        ("between", "space-between"),
+        ("around", "space-around"),
+        ("evenly", "space-evenly"),
+        ("baseline", "baseline"),
+        ("stretch", "stretch"),
+    ];
+    let place_items: &[(&str, &str)] = &[
+        ("center", "center"),
+        ("start", "start"),
+        ("end", "end"),
+        ("center-safe", "safe center"),
+        ("end-safe", "safe end"),
+        ("baseline", "baseline"),
+        ("stretch", "stretch"),
+    ];
+    let content: &[(&str, &str)] = &[
+        ("normal", "normal"),
+        ("center", "center"),
+        ("start", "flex-start"),
+        ("end", "flex-end"),
+        ("center-safe", "safe center"),
+        ("end-safe", "safe flex-end"),
+        ("between", "space-between"),
+        ("around", "space-around"),
+        ("evenly", "space-evenly"),
+        ("baseline", "baseline"),
+        ("stretch", "stretch"),
+    ];
+    let items: &[(&str, &str)] = &[
+        ("center", "center"),
+        ("start", "flex-start"),
+        ("end", "flex-end"),
+        ("center-safe", "safe center"),
+        ("end-safe", "safe flex-end"),
+        ("baseline", "baseline"),
+        ("baseline-last", "last baseline"),
+        ("stretch", "stretch"),
+    ];
+    let justify_items: &[(&str, &str)] = &[
+        ("normal", "normal"),
+        ("center", "center"),
+        ("start", "start"),
+        ("end", "end"),
+        ("center-safe", "safe center"),
+        ("end-safe", "safe end"),
+        ("stretch", "stretch"),
+    ];
+    for (prefix, property, values) in [
+        ("place-content", "place-content", place_content),
+        ("place-items", "place-items", place_items),
+        ("content", "align-content", content),
+        ("items", "align-items", items),
+        ("justify", "justify-content", content),
+        ("justify-items", "justify-items", justify_items),
+    ] {
+        aligned(r, prefix, property, values);
+    }
     for (name, property) in [
         ("gap", "gap"),
         ("gap-x", "column-gap"),
@@ -473,6 +734,29 @@ fn register(r: &mut Registry) {
             vec![Node::Rule(CHILDREN, children)],
         );
     }
+    let place_self: &[(&str, &str)] = &[
+        ("auto", "auto"),
+        ("start", "start"),
+        ("end", "end"),
+        ("center", "center"),
+        ("end-safe", "safe end"),
+        ("center-safe", "safe center"),
+        ("stretch", "stretch"),
+    ];
+    let align_self: &[(&str, &str)] = &[
+        ("auto", "auto"),
+        ("start", "flex-start"),
+        ("end", "flex-end"),
+        ("center", "center"),
+        ("end-safe", "safe flex-end"),
+        ("center-safe", "safe center"),
+        ("stretch", "stretch"),
+        ("baseline", "baseline"),
+        ("baseline-last", "last baseline"),
+    ];
+    aligned(r, "place-self", "place-self", place_self);
+    aligned(r, "self", "align-self", align_self);
+    aligned(r, "justify-self", "justify-self", &align_self[..7]);
     for value in ["auto", "hidden", "clip", "visible", "scroll"] {
         r.fixed(format!("overflow-{value}"), &[("overflow", value)]);
         r.fixed(format!("overflow-x-{value}"), &[("overflow-x", value)]);
@@ -498,6 +782,65 @@ fn register(r: &mut Registry) {
             false,
             false,
         );
+    }
+}
+
+/// `col-*` or `row-*`: a grid item's lines, `-span-*`, `-start-*` and `-end-*`.
+fn lines(r: &mut Registry, name: &str, property: &'static str) {
+    let key = |suffix: &str| -> &'static [&'static str] {
+        match (property, suffix) {
+            ("grid-column", "") => &["--grid-column"],
+            ("grid-column", "-start") => &["--grid-column-start"],
+            ("grid-column", _) => &["--grid-column-end"],
+            ("grid-row", "") => &["--grid-row"],
+            ("grid-row", "-start") => &["--grid-row-start"],
+            _ => &["--grid-row-end"],
+        }
+    };
+    r.functional(
+        name,
+        Desc {
+            negative: true,
+            keys: key(""),
+            value: Some(integer),
+            statics: vec![("auto", vec![decl(property, "auto")])],
+            handle: Some(one(property)),
+            ..Desc::default()
+        },
+    );
+    r.functional(
+        &format!("{name}-span"),
+        Desc {
+            value: Some(integer),
+            statics: vec![("full", vec![decl(property, "1 / -1")])],
+            handle: Some(Arc::new(move |v, _| {
+                Some(vec![decl(property, format!("span {v} / span {v}"))])
+            })),
+            ..Desc::default()
+        },
+    );
+    for (suffix, longhand) in match property {
+        "grid-column" => [("-start", "grid-column-start"), ("-end", "grid-column-end")],
+        _ => [("-start", "grid-row-start"), ("-end", "grid-row-end")],
+    } {
+        r.functional(
+            &format!("{name}{suffix}"),
+            Desc {
+                negative: true,
+                keys: key(suffix),
+                value: Some(integer),
+                statics: vec![("auto", vec![decl(longhand, "auto")])],
+                handle: Some(one(longhand)),
+                ..Desc::default()
+            },
+        );
+    }
+}
+
+/// Static alignment utilities: `{prefix}-{name}` sets `property` to each value.
+fn aligned(r: &mut Registry, prefix: &str, property: &str, values: &[(&str, &str)]) {
+    for (name, value) in values {
+        r.fixed(format!("{prefix}-{name}"), &[(property, value)]);
     }
 }
 
