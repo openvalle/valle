@@ -1,0 +1,19 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 170px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"display: flex; flex-wrap: wrap; gap: 6px; padding: 6px; background: #eceff1;\"><div data-n=\"1\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); mask-image: linear-gradient(to right, #000, transparent), linear-gradient(#000, transparent); mask-composite: add;\"></div><div data-n=\"2\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); mask-image: linear-gradient(to right, #000, transparent), linear-gradient(#000, transparent); mask-composite: subtract;\"></div><div data-n=\"3\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); mask-image: linear-gradient(to right, #000, transparent), linear-gradient(#000, transparent); mask-composite: intersect;\"></div><div data-n=\"4\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); mask-image: linear-gradient(to right, #000, transparent), linear-gradient(#000, transparent); mask-composite: exclude;\"></div><div data-n=\"5\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); mask-image: radial-gradient(circle, #000 50%, transparent 70%), linear-gradient(to right, #000, transparent), linear-gradient(#000, transparent); mask-composite: intersect, add, subtract;\"></div><div data-n=\"6\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); mask-image: linear-gradient(45deg, #000, transparent), conic-gradient(#fff, #000, #fff), linear-gradient(#000, #000); mask-mode: alpha, luminance, alpha; mask-composite: exclude, intersect;\"></div><div data-n=\"7\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); mask-image: linear-gradient(#000, #000), none; mask-composite: intersect;\"></div><div data-n=\"8\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); border: 6px solid #3949ab; padding: 6px; mask-image: radial-gradient(circle, #000 60%, transparent 62%); mask-repeat: no-repeat; mask-clip: padding-box;\"></div><div data-n=\"9\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); border: 6px solid #3949ab; padding: 6px; mask-image: radial-gradient(circle, #000 60%, transparent 62%); mask-repeat: no-repeat; mask-clip: content-box;\"></div><div data-n=\"10\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); border: 6px solid #3949ab; padding: 6px; mask-image: radial-gradient(circle, #000 60%, transparent 62%); mask-repeat: no-repeat; mask-origin: padding-box; mask-size: 50% 50%; mask-clip: padding-box;\"></div><div data-n=\"11\" style=\"width: 54px; height: 54px; background: linear-gradient(135deg, #ffca28, #e57373 50%, #00897b); border: 6px solid #3949ab; padding: 6px; mask-image: radial-gradient(circle, #000 60%, transparent 62%); mask-repeat: no-repeat; mask-origin: content-box; mask-size: 50% 50%;\"></div></div></div>\n",
+ "boxes": [
+  [0,0,256,186],
+  [6,6,54,54],
+  [66,6,54,54],
+  [126,6,54,54],
+  [186,6,54,54],
+  [6,66,54,54],
+  [66,66,54,54],
+  [126,66,54,54],
+  [186,66,54,54],
+  [6,126,54,54],
+  [66,126,54,54],
+  [126,126,54,54]
+ ],
+ "lines": {}
+}

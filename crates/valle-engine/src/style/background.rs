@@ -26,6 +26,20 @@ pub struct Layer {
     pub clip: Area,
     pub blend: Blend,
     pub luminance: bool,
+    pub composite: Composite,
+}
+
+/// `mask-composite`: how a mask layer goes with all the layers under it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Composite {
+    /// Over them.
+    Add,
+    /// Where they are not.
+    Subtract,
+    /// Where they are.
+    Intersect,
+    /// Where they are not, and they where it is not.
+    Exclude,
 }
 
 /// `background-size`.
@@ -74,6 +88,8 @@ pub(super) struct Declared {
     pub blends: Vec<Blend>,
     /// Masks', whether each shows by luminance.
     pub modes: Vec<bool>,
+    /// Masks', how each goes with those under it.
+    pub composites: Vec<Composite>,
 }
 
 impl Declared {
@@ -113,6 +129,7 @@ impl Declared {
                     clip: nth(&self.clips, i).unwrap_or(Area::BorderBox),
                     blend: nth(&self.blends, i).unwrap_or(Blend::Normal),
                     luminance: nth(&self.modes, i).unwrap_or(false),
+                    composite: nth(&self.composites, i).unwrap_or(Composite::Add),
                 })
             })
             .collect()
@@ -271,6 +288,19 @@ pub(super) fn modes(s: &str) -> Result<Vec<bool>, String> {
         "luminance" => Ok(true),
         _ => Err(format!(
             "{s:?} is not a mask mode: alpha, luminance or match-source"
+        )),
+    })
+}
+
+/// `mask-composite`.
+pub(super) fn composites(s: &str) -> Result<Vec<Composite>, String> {
+    list(s, "a mask composite", |s| match s {
+        "add" => Ok(Composite::Add),
+        "subtract" => Ok(Composite::Subtract),
+        "intersect" => Ok(Composite::Intersect),
+        "exclude" => Ok(Composite::Exclude),
+        _ => Err(format!(
+            "{s:?} is not a mask composite: add, subtract, intersect or exclude"
         )),
     })
 }

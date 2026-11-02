@@ -50,7 +50,7 @@ pub use matrix::{Matrix, Matrix4};
 use crate::image::Picture;
 use crate::layout::{Boxes, Layout, Natural, Rect, ordered};
 use crate::path::Path;
-use crate::style::background::{Area, ImageSize, Layer, Repeat};
+use crate::style::background::{Area, Composite, ImageSize, Layer, Repeat};
 use crate::style::color::{self, Rgba};
 use crate::style::filter;
 use crate::style::gradient::Image;
@@ -1185,7 +1185,8 @@ impl Painter<'_> {
 
     /// `items` through `d`'s mask, if it has one: its layers' images, sized, placed and repeated
     /// as a background's are, each in its area rounded by the box's corners, and the first on
-    /// top. Each shows `items` by its alpha, or its luminance. Then through its `<Mask>` source,
+    /// top, going with those under it as its composite says. Each shows `items` by its alpha, or
+    /// its luminance. Then through its `<Mask>` source,
     /// if it has one: what the source paints, by its alpha or its luminance, inverted or not, in
     /// the border box rounded by its corners.
     fn masked(&self, d: usize, items: Vec<Item>) -> Vec<Item> {
@@ -1206,26 +1207,75 @@ impl Painter<'_> {
                 std::array::from_fn(|k| widths[k] + paddings[k]),
             ),
         };
-        let mut mask = Vec::new();
-        for layer in s.masks.iter().rev() {
+        let image = |layer: &Layer| {
             let (rect, radii) = area(layer.clip);
             let rect = snap(rect);
-            let Some(tiles) = tiles(layer, area(layer.origin).0, self.pictures) else {
-                continue;
-            };
+            let tiles = tiles(layer, area(layer.origin).0, self.pictures)?;
             if rect.width <= 0.0 || rect.height <= 0.0 {
-                continue;
+                return None;
             }
-            let Some(image) = filled(&layer.image, rect, radii, tiles, self.pictures) else {
-                continue;
-            };
-            mask.push(match layer.luminance {
+            let image = filled(&layer.image, rect, radii, tiles, self.pictures)?;
+            Some(match layer.luminance {
                 true => Item::Filter {
                     filters: vec![Filter::Luminance],
                     items: vec![image],
                 },
                 false => image,
-            });
+            })
+        };
+        // The box but where `items` show, which a filter cannot say outside what they paint.
+        let outside = |items: Vec<Item>| Item::Mask {
+            mask: vec![Item::Rect {
+                rect: border,
+                radii: Radii::default(),
+                color: shape::SHOWN,
+            }],
+            items: vec![Item::Filter {
+                filters: vec![Filter::Colors(vec![INVERTED])],
+                items,
+            }],
+        };
+        // The bottom layer has nothing to go with, whatever its composite.
+        let mut layers = s.masks.iter().rev();
+        let mut mask: Vec<Item> = layers.next().and_then(image).into_iter().collect();
+        for layer in layers {
+            let image = image(layer);
+            match (layer.composite, image, mask.is_empty()) {
+                (Composite::Add | Composite::Exclude, None, _) => {}
+                (_, None, _) | (Composite::Intersect, _, true) => mask.clear(),
+                (Composite::Add, Some(image), _) | (_, Some(image), true) => mask.push(image),
+                (Composite::Subtract, Some(image), false) => {
+                    mask = vec![Item::Mask {
+                        mask: vec![outside(mask)],
+                        items: vec![image],
+                    }];
+                }
+                (Composite::Intersect, Some(image), false) => {
+                    mask = vec![Item::Mask {
+                        mask,
+                        items: vec![image],
+                    }];
+                }
+                (Composite::Exclude, Some(image), false) => {
+                    let under = Item::Mask {
+                        mask: vec![outside(vec![image.clone()])],
+                        items: mask.clone(),
+                    };
+                    let over = Item::Mask {
+                        mask: vec![outside(mask)],
+                        items: vec![image],
+                    };
+                    // Their sum: what each lets through of a pixel leaves room for the other.
+                    mask = vec![
+                        under,
+                        Item::Group {
+                            opacity: 1.0,
+                            blend: Blend::PlusLighter,
+                            items: vec![over],
+                        },
+                    ];
+                }
+            }
         }
         let items = match (s.masks.is_empty(), mask.is_empty()) {
             (true, _) => items,

@@ -1699,6 +1699,9 @@ enum Field {
     MaskPosition,
     MaskRepeat,
     MaskMode,
+    MaskComposite,
+    MaskClip,
+    MaskOrigin,
     Visibility,
     Fill,
     FillOpacity,
@@ -1814,7 +1817,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 251] = [
+const FIELDS: [(&str, Field); 254] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -2093,6 +2096,9 @@ const FIELDS: [(&str, Field); 251] = [
     ("maskPosition", Field::MaskPosition),
     ("maskRepeat", Field::MaskRepeat),
     ("maskMode", Field::MaskMode),
+    ("maskComposite", Field::MaskComposite),
+    ("maskClip", Field::MaskClip),
+    ("maskOrigin", Field::MaskOrigin),
     ("translate", Field::Translate),
     ("rotate", Field::Rotate),
     ("scale", Field::Scale),
@@ -3656,6 +3662,9 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::MaskPosition => d.masks.positions = background::positions(&px_text(v)?, false)?,
         F::MaskRepeat => d.masks.repeats = background::repeats(&text(v)?)?,
         F::MaskMode => d.masks.modes = background::modes(&text(v)?)?,
+        F::MaskComposite => d.masks.composites = background::composites(&text(v)?)?,
+        F::MaskClip => d.masks.clips = background::areas(&text(v)?, false)?,
+        F::MaskOrigin => d.masks.origins = background::areas(&text(v)?, false)?,
         F::Visibility => {
             // Collapse is hidden but in tables, which there are none of.
             let shown = [("visible", true), ("hidden", false), ("collapse", false)];

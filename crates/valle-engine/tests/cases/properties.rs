@@ -1863,6 +1863,41 @@ const ROWS: &[Row] = &[
         refused: &["\"luminance alpha\"", "\"\"", "0"],
     },
     Row {
+        properties: &["maskComposite"],
+        sample: r##"<View style={{ width: 80, height: 16, padding: 2, margin: "0 40px", border: "2px solid #263238", background: "linear-gradient(to right, #e53935, #fdd835, #43a047, #1e88e5, #8e24aa)", maskImage: "linear-gradient(to right, #000, #0000), linear-gradient(#0000, #000)", PROPERTY: VALUE }} />"##,
+        values: &[
+            "\"add\"",
+            "\"subtract\"",
+            "\"intersect\"",
+            "\"exclude\"",
+            "\"intersect, add\"",
+            "\" EXCLUDE \"",
+        ],
+        refused: &["\"over\"", "\"add intersect\"", "\"\"", "0"],
+    },
+    Row {
+        properties: &["maskClip"],
+        sample: r##"<View style={{ width: 80, height: 16, padding: 2, margin: "0 40px", border: "2px solid #263238", background: "linear-gradient(to right, #e53935, #fdd835, #43a047, #1e88e5, #8e24aa)", maskImage: "linear-gradient(to right, #000, #0000)", PROPERTY: VALUE }} />"##,
+        values: &[
+            "\"border-box\"",
+            "\"padding-box\"",
+            "\"content-box\"",
+            "\" CONTENT-BOX \"",
+        ],
+        refused: &["\"text\"", "\"a\"", "\"\"", "0"],
+    },
+    Row {
+        properties: &["maskOrigin"],
+        sample: r##"<View style={{ width: 80, height: 16, padding: 2, margin: "0 40px", border: "2px solid #263238", background: "linear-gradient(to right, #e53935, #fdd835, #43a047, #1e88e5, #8e24aa)", maskImage: "linear-gradient(to right, #000, #0000)", maskSize: "50% 50%", PROPERTY: VALUE }} />"##,
+        values: &[
+            "\"border-box\"",
+            "\"padding-box\"",
+            "\"content-box\"",
+            "\" CONTENT-BOX \"",
+        ],
+        refused: &["\"text\"", "\"a\"", "\"\"", "0"],
+    },
+    Row {
         properties: &["visibility"],
         sample: r##"<View style={{ padding: 2, background: "#e8eaf6", PROPERTY: VALUE }}><View style={{ height: 6, background: "#3949ab" }} /><View style={{ height: 6, visibility: "visible", background: "#7986cb" }} /><Text style={{ fontSize: 8 }}>Ag</Text></View>"##,
         values: &["\"visible\"", "\"hidden\"", "\"collapse\"", "\" HIDDEN \""],
