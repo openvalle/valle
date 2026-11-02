@@ -1,0 +1,18 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 320px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 8px; display: flex; flex-wrap: wrap; gap: 8px;\"><img data-n=\"1\" src=\"/cases/resources/photo.png\" style=\"display: block; image-rendering: pixelated; width: 128px;\"><img data-n=\"2\" src=\"/cases/resources/photo.png\" style=\"display: block; width: 128px;\"><img data-n=\"3\" src=\"/cases/resources/photo.png\" style=\"display: block; image-rendering: pixelated; width: 92px; height: 60px;\"><img data-n=\"4\" src=\"/cases/resources/rings.png\" style=\"display: block; image-rendering: pixelated; width: 48px;\"><img data-n=\"5\" src=\"/cases/resources/rings.png\" style=\"display: block; image-rendering: pixelated; width: 96px; height: 32px;\"><div data-n=\"6\" style=\"image-rendering: pixelated; display: flex; gap: 4px;\"><img data-n=\"7\" src=\"/cases/resources/photo.png\" style=\"display: block; width: 50px;\"><img data-n=\"8\" src=\"/cases/resources/photo.png\" style=\"display: block; width: 50px; image-rendering: auto;\"></div><div data-n=\"9\" style=\"image-rendering: pixelated; width: 80px; height: 56px; background-image: url(/cases/resources/photo.png); background-size: 50px 34px;\"></div><div data-n=\"10\" style=\"image-rendering: pixelated; width: 64px; height: 64px; background: #3949ab; mask-image: url(/cases/resources/rings.png); mask-size: 100% 100%;\"></div></div></div>\n",
+ "boxes": [
+  [0,0,320,236],
+  [8,8,128,80],
+  [144,8,128,80],
+  [8,96,92,60],
+  [108,96,48,60],
+  [164,96,96,32],
+  [8,164,104,64],
+  [8,164,50,64],
+  [62,164,50,64],
+  [120,164,80,56],
+  [208,164,64,64]
+ ],
+ "lines": {}
+}

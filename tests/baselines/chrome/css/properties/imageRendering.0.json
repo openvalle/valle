@@ -1,0 +1,14 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><img data-n=\"2\" src=\"/cases/resources/photo.png\" style=\"display: block; width: 120px; height: 30px; image-rendering: auto;\"></div><div data-n=\"3\" style=\"padding-bottom: 4px;\"><img data-n=\"4\" src=\"/cases/resources/photo.png\" style=\"display: block; width: 120px; height: 30px; image-rendering: pixelated;\"></div><div data-n=\"5\" style=\"padding-bottom: 4px;\"><img data-n=\"6\" src=\"/cases/resources/photo.png\" style=\"display: block; width: 120px; height: 30px; image-rendering: PIXELATED;\"></div></div></div>\n",
+ "boxes": [
+  [0,0,256,110],
+  [4,4,248,34],
+  [4,4,120,30],
+  [4,38,248,34],
+  [4,38,120,30],
+  [4,72,248,34],
+  [4,72,120,30]
+ ],
+ "lines": {}
+}

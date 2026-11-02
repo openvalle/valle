@@ -1066,6 +1066,7 @@ impl<'a> Renderer<'a> {
                     radii,
                     tiles,
                     image,
+                    pixelated,
                 } => {
                     let i = (plan.gradients.len() / GRADIENT) as u32;
                     let words = (xywh(*rect).into_iter())
@@ -1074,7 +1075,8 @@ impl<'a> Renderer<'a> {
                         .chain(tiles.step.map(|s| s.unwrap_or(0.0)))
                         .chain([0.0; 6]);
                     plan.gradients.extend(words.map(f32::to_bits));
-                    plan.gradients.extend([0, 0, 0, transform, 0, 0, 0, 0]);
+                    plan.gradients
+                        .extend([*pixelated as u32, 0, 0, transform, 0, 0, 0, 0]);
                     extend(runs, Run::Images(i..i + 1, *image));
                 }
                 Item::Glyphs {

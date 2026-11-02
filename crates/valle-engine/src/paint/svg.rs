@@ -188,6 +188,7 @@ impl<'a> Drawing<'a> {
                         step: [None; 2],
                     },
                     image,
+                    pixelated: s.pixelated,
                 });
             }
             Element::Shape(_)

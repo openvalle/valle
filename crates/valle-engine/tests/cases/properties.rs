@@ -1271,6 +1271,12 @@ const ROWS: &[Row] = &[
         refused: &["\"left top 10px\"", "\"a\"", "\"\"", "true"],
     },
     Row {
+        properties: &["imageRendering"],
+        sample: r##"<Image src="resource://photo" style={{ width: 120, height: 30, PROPERTY: VALUE }} />"##,
+        values: &["\"auto\"", "\"pixelated\"", "\" PIXELATED \""],
+        refused: &["\"smooth\"", "\"crisp-edges\"", "1"],
+    },
+    Row {
         properties: &["objectFit"],
         sample: r##"<Image src="resource://photo" style={{ width: 120, height: 30, marginLeft: 60, background: "#e8eaf6", PROPERTY: VALUE }} />"##,
         values: &[

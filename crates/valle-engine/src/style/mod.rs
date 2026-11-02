@@ -163,6 +163,8 @@ pub struct Style {
     pub source: Option<Source>,
     /// `visibility: visible`; hidden boxes paint nothing of their own.
     pub visible: bool,
+    /// `image-rendering: pixelated`: images read their nearest px.
+    pub pixelated: bool,
     /// SVG `fill`, `fill-opacity` and `fill-rule: evenodd`: what fills a shape, the opacity it
     /// fills at, and whether it fills where the shape winds around an odd number of times only.
     pub fill: Paint,
@@ -1438,6 +1440,7 @@ struct Declared {
     line_clamp: Option<u32>,
     /// Inherited.
     visible: Option<bool>,
+    pixelated: Option<bool>,
     svg_fill: Option<Paint>,
     fill_opacity: Option<f64>,
     even_odd: Option<bool>,
@@ -1563,6 +1566,7 @@ impl Default for Declared {
             box_vertical: false,
             line_clamp: None,
             visible: None,
+            pixelated: None,
             svg_fill: None,
             fill_opacity: None,
             even_odd: None,
@@ -1691,6 +1695,7 @@ enum Field {
     OffsetPosition,
     ObjectFit,
     ObjectPosition,
+    ImageRendering,
     BorderRadius,
     /// Of the corners from the top left clockwise.
     CornerRadius(usize),
@@ -1828,7 +1833,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 255] = [
+const FIELDS: [(&str, Field); 256] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -2126,6 +2131,7 @@ const FIELDS: [(&str, Field); 255] = [
     ("offsetPosition", Field::OffsetPosition),
     ("objectFit", Field::ObjectFit),
     ("objectPosition", Field::ObjectPosition),
+    ("imageRendering", Field::ImageRendering),
     ("visibility", Field::Visibility),
     ("fill", Field::Fill),
     ("fillOpacity", Field::FillOpacity),
@@ -2240,6 +2246,7 @@ impl Field {
                 | Field::Mask
                 | Field::MaskType
                 | Field::Opacity
+                | Field::ImageRendering
                 | Field::Visibility
                 | Field::Display
                 | Field::Color
@@ -3717,6 +3724,9 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             )?;
         }
         F::ObjectPosition => d.object_position = position::object(&px_text(v)?)?,
+        F::ImageRendering => {
+            d.pixelated = Some(keyword(v, &[("auto", false), ("pixelated", true)])?)
+        }
         F::Opacity => d.opacity = alpha(v)?,
         F::MixBlendMode => d.blend = keyword(v, &BLENDS)?,
         F::Isolation => d.isolate = keyword(v, &[("auto", false), ("isolate", true)])?,
@@ -4445,6 +4455,7 @@ fn compute(
         },
         source: None,
         visible: d.visible.unwrap_or(inherited_visible),
+        pixelated: (d.pixelated).unwrap_or(parent.is_some_and(|p| p.pixelated)),
         fill: d.svg_fill.clone().unwrap_or(fill),
         fill_opacity: d.fill_opacity.unwrap_or(fill_opacity),
         even_odd: d.even_odd.unwrap_or(even_odd),

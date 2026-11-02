@@ -88,12 +88,13 @@ pub enum Item {
         ramp: Ramp,
     },
     /// The scene's image `image` filling a rectangle with its corners rounded by `radii`, in
-    /// `tiles`.
+    /// `tiles`; read at its nearest px if `pixelated`.
     Image {
         rect: Rect,
         radii: Radii,
         tiles: Tiles,
         image: u32,
+        pixelated: bool,
     },
     /// Glyphs of `Text::faces()[face]` at `size` px: glyph ids at their baseline origins. With a
     /// `stroke` above 0, a stroke that many px wide along their edges instead.
@@ -342,6 +343,7 @@ fn filled(
     radii: Radii,
     tiles: Tiles,
     pictures: &[Picture],
+    pixelated: bool,
 ) -> Option<Item> {
     Some(match image {
         Image::None => return None,
@@ -357,6 +359,7 @@ fn filled(
                 radii,
                 tiles,
                 image,
+                pixelated,
             },
             Picture::Svg(_) => return None,
         },
@@ -1214,7 +1217,7 @@ impl Painter<'_> {
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 return None;
             }
-            let image = filled(&layer.image, rect, radii, tiles, self.pictures)?;
+            let image = filled(&layer.image, rect, radii, tiles, self.pictures, s.pixelated)?;
             Some(match layer.luminance {
                 true => Item::Filter {
                     filters: vec![Filter::Luminance],
@@ -1525,7 +1528,8 @@ impl Painter<'_> {
             else {
                 continue;
             };
-            let Some(image) = filled(&layer.image, rect, radii, tiles, self.pictures) else {
+            let Some(image) = filled(&layer.image, rect, radii, tiles, pictures, s.pixelated)
+            else {
                 continue;
             };
             let image = through(layer.clip, image);
@@ -1739,6 +1743,7 @@ impl Painter<'_> {
                 radii,
                 tiles,
                 image,
+                pixelated: s.pixelated,
             },
             Picture::Svg(document) => {
                 let Some(drawn) = svg::document(document, first) else {

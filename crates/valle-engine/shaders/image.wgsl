@@ -3,7 +3,8 @@
 // spans 2 or more of the image's px reads the level of its mipmap where it spans at least 1 and
 // fewer than 2, as Skia picks it. On an axis where the rectangle spans tiles that touch, an edge
 // pixel's neighbor is the next tile's, as Chrome reads a repeated image unless its tiles are
-// spaced apart; elsewhere the edge goes on. Its colors are premultiplied working colors already.
+// spaced apart; elsewhere the edge goes on. A pixelated image reads the px nearest instead. Its
+// colors are premultiplied working colors already.
 
 struct Image {
   // Where it shows: x, y, width, height, and corner radii as `coverage` takes them.
@@ -14,7 +15,7 @@ struct Image {
   tile: vec4f,
   step: vec4f,
   unused: vec4f,
-  // w: the transform.
+  // x: 1 if it reads its nearest px; w: the transform.
   form: vec4u,
   more: vec4u,
 }
@@ -60,6 +61,12 @@ fn texel(i: vec2<i32>, n: vec2<i32>, wraps: vec2<bool>) -> vec2<i32> {
   let out = select((q < vec2f(0.0)) | (q >= size), (at >= size) & (step > size), repeats);
   if (any(out)) {
     return vec4f(0.0);
+  }
+  if (g.form.x == 1u) {
+    // Between two px, the first, as Skia picks it.
+    let n = vec2<i32>(textureDimensions(image));
+    let i = vec2<i32>(floor(at * vec2f(n) / size - 1.0 / 1024.0));
+    return textureLoad(image, clamp(i, vec2<i32>(0), n - 1), 0) * cov;
   }
   // Between the centers of the texels around the point.
   let texels = vec2<i32>(textureDimensions(image, level));
