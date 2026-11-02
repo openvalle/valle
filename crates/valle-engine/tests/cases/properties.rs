@@ -1395,6 +1395,7 @@ const ROWS: &[Row] = &[
             "\"4px 8px\"",
             "\"4px / 2px\"",
             "\"calc(10% + 1px)\"",
+            "\"calc(infinity * 1px)\"",
             "\"30px 10px 2px / 8px 4px\"",
             "\"1px 2px 3px 4px / 25% 50%\"",
             "\" 2PX 6PX \"",

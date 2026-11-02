@@ -196,6 +196,21 @@ fn viewport_units_take_the_canvas() {
 }
 
 #[test]
+fn math_constants_and_infinite_lengths() {
+    let s = one(&[
+        ("width", text("calc(infinity * 1px)")),
+        ("height", text("calc(pi * 10px)")),
+    ]);
+    let l = &s.layout;
+    // An infinity is the largest length.
+    assert_eq!(l.size.width, Dimension::length(33_554_431.0));
+    assert_eq!(
+        l.size.height,
+        Dimension::length((std::f64::consts::PI * 10.0) as f32)
+    );
+}
+
+#[test]
 fn math_functions_are_px_or_calcs_for_layout() {
     let s = one(&[
         ("fontSize", text("calc(1em + 4px)")),

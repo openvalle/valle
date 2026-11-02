@@ -1163,7 +1163,29 @@ struct Units {
     canvas: [f64; 2],
 }
 
+/// The largest length Chrome lays out, px: its `LayoutUnit`'s.
+const LARGEST: f64 = 33_554_431.0;
+
 impl Len {
+    /// As CSS clamps what a math function comes to: an infinity to the largest length, and NaN
+    /// to 0.
+    fn finite(&self) -> Len {
+        let f = |v: f64| match v.is_nan() {
+            true => 0.0,
+            false => v.clamp(-LARGEST, LARGEST),
+        };
+        match *self {
+            Len::Px(v) => Len::Px(f(v)),
+            Len::Percent(v) => Len::Percent(f(v)),
+            Len::Em(v) => Len::Em(f(v)),
+            Len::Vw(v) => Len::Vw(f(v)),
+            Len::Vh(v) => Len::Vh(f(v)),
+            Len::Vmin(v) => Len::Vmin(f(v)),
+            Len::Vmax(v) => Len::Vmax(f(v)),
+            ref l => l.clone(),
+        }
+    }
+
     /// Whether it is below 0; a math function is not, and clamps to 0 where it has to.
     fn negative(&self) -> bool {
         match *self {

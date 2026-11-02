@@ -1,6 +1,7 @@
-//! CSS math functions in lengths, numbers and angles: `calc()`, `min()`, `max()` and `clamp()`. Once numbers have
-//! multiplied into the lengths, any of them is the larger or smaller of sums of lengths: adding to
-//! a `min()` adds to each of its arguments, and a negative factor turns it into a `max()`.
+//! CSS math functions in lengths, numbers and angles: `calc()`, `min()`, `max()` and `clamp()`,
+//! with the constants `e`, `pi`, `infinity` and `NaN`. Once numbers have multiplied into the
+//! lengths, any of them is the larger or smaller of sums of lengths: adding to a `min()` adds to
+//! each of its arguments, and a negative factor turns it into a `max()`.
 //!
 //! A computed one with a percentage in it waits for layout, which knows what the percentage is
 //! of. Taffy holds a handle to it, which numbers the calcs of a frame's styles in order.
@@ -74,10 +75,11 @@ pub(super) fn is_math(s: &str) -> bool {
 
 const FUNCTIONS: [&str; 4] = ["calc", "min", "max", "clamp"];
 
-/// The math function `s` as a length, `unit` giving the lengths of numbers with units in it.
+/// The math function `s` as a length, `unit` giving the lengths of numbers with units in it; an
+/// infinity in it comes to the largest length, and NaN to 0.
 pub(super) fn length(s: &str, unit: impl Fn(Num) -> Result<Len, String>) -> Result<Expr, String> {
     match parse(s, unit)? {
-        Value::Length(m) => Ok(m),
+        Value::Length(m) => Ok(m.map(&|sum: &Vec<Len>| sum.iter().map(Len::finite).collect())),
         Value::Number(_) => Err(format!("{s} is a number, not a length")),
     }
 }
@@ -277,6 +279,18 @@ impl<F: Fn(Num) -> Result<Len, String>> Parser<'_, F> {
             end += 1;
         }
         let token = &self.rest()[..end];
+        let constant = match token {
+            "e" => Some(std::f64::consts::E),
+            "pi" => Some(std::f64::consts::PI),
+            "infinity" => Some(f64::INFINITY),
+            "-infinity" => Some(f64::NEG_INFINITY),
+            "nan" => Some(f64::NAN),
+            _ => None,
+        };
+        if let Some(c) = constant {
+            self.at += end;
+            return Ok(Value::Number(c));
+        }
         let n = css::num(token).ok_or_else(|| match token {
             "" => self.unexpected(),
             _ => format!("{token} is not a number or a length"),
