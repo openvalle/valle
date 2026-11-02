@@ -3485,6 +3485,16 @@ fn color_of(v: &V) -> Result<Rgba, String> {
     color::parse(&text(v)?)
 }
 
+fn is_current_color(v: &V) -> bool {
+    matches!(v, V::Str(s) if s.trim().eq_ignore_ascii_case("currentcolor"))
+}
+
+/// Whether `v` is `inherit`, of a property that inherits: as if it were not declared, over what
+/// an earlier declaration set.
+fn inherits(v: &V) -> bool {
+    matches!(v, V::Str(s) if s.trim().eq_ignore_ascii_case("inherit"))
+}
+
 fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
     use Field as F;
     match field {
@@ -3687,9 +3697,11 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             let shown = [("visible", true), ("hidden", false), ("collapse", false)];
             d.visible = Some(keyword(v, &shown)?);
         }
+        F::Fill if inherits(v) => d.svg_fill = None,
         F::Fill => d.svg_fill = Some(paint(v)?),
         F::FillOpacity => d.fill_opacity = Some(alpha(v)?),
         F::FillRule => d.even_odd = Some(keyword(v, &[("nonzero", false), ("evenodd", true)])?),
+        F::Stroke if inherits(v) => d.svg_stroke = None,
         F::Stroke => d.svg_stroke = Some(paint(v)?),
         F::StrokeOpacity => d.stroke_opacity = Some(alpha(v)?),
         F::StrokeWidth => d.stroke_width = Some(svg_length(v, false)?),
@@ -3751,9 +3763,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
             }
         }
         // `currentcolor` is the color the element would otherwise inherit.
-        F::Color if matches!(v, V::Str(s) if s.trim().eq_ignore_ascii_case("currentcolor")) => {
-            d.color = None
-        }
+        F::Color if inherits(v) || is_current_color(v) => d.color = None,
         F::Color => d.color = Some(color_of(v)?),
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),

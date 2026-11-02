@@ -1,8 +1,8 @@
 {
  "chrome": "156.0.8078.80",
- "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><div data-n=\"2\" data-text style=\"font-size: 10px; color: #3949ab;\">Color</div></div><div data-n=\"3\" style=\"padding-bottom: 4px;\"><div data-n=\"4\" data-text style=\"font-size: 10px; color: red;\">Color</div></div><div data-n=\"5\" style=\"padding-bottom: 4px;\"><div data-n=\"6\" data-text style=\"font-size: 10px; color: rgb(10 20 30 / 50%);\">Color</div></div><div data-n=\"7\" style=\"padding-bottom: 4px;\"><div data-n=\"8\" data-text style=\"font-size: 10px; color: transparent;\">Color</div></div><div data-n=\"9\" style=\"padding-bottom: 4px;\"><div data-n=\"10\" data-text style=\"font-size: 10px; color: hsl(0 0% 50%);\">Color</div></div><div data-n=\"11\" style=\"padding-bottom: 4px;\"><div data-n=\"12\" data-text style=\"font-size: 10px; color: currentcolor;\">Color</div></div></div></div>\n",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 4px;\"><div data-n=\"1\" style=\"padding-bottom: 4px;\"><div data-n=\"2\" data-text style=\"font-size: 10px; color: #3949ab;\">Color</div></div><div data-n=\"3\" style=\"padding-bottom: 4px;\"><div data-n=\"4\" data-text style=\"font-size: 10px; color: red;\">Color</div></div><div data-n=\"5\" style=\"padding-bottom: 4px;\"><div data-n=\"6\" data-text style=\"font-size: 10px; color: rgb(10 20 30 / 50%);\">Color</div></div><div data-n=\"7\" style=\"padding-bottom: 4px;\"><div data-n=\"8\" data-text style=\"font-size: 10px; color: transparent;\">Color</div></div><div data-n=\"9\" style=\"padding-bottom: 4px;\"><div data-n=\"10\" data-text style=\"font-size: 10px; color: hsl(0 0% 50%);\">Color</div></div><div data-n=\"11\" style=\"padding-bottom: 4px;\"><div data-n=\"12\" data-text style=\"font-size: 10px; color: currentcolor;\">Color</div></div><div data-n=\"13\" style=\"padding-bottom: 4px;\"><div data-n=\"14\" data-text style=\"font-size: 10px; color: inherit;\">Color</div></div></div></div>\n",
  "boxes": [
-  [0,0,256,116],
+  [0,0,256,134],
   [4,4,248,18],
   [4,4,248,14],
   [4,22,248,18],
@@ -14,7 +14,9 @@
   [4,76,248,18],
   [4,76,248,14],
   [4,94,248,18],
-  [4,94,248,14]
+  [4,94,248,14],
+  [4,112,248,18],
+  [4,112,248,14]
  ],
- "lines": {"2":["Color"],"4":["Color"],"6":["Color"],"8":["Color"],"10":["Color"],"12":["Color"]}
+ "lines": {"2":["Color"],"4":["Color"],"6":["Color"],"8":["Color"],"10":["Color"],"12":["Color"],"14":["Color"]}
 }

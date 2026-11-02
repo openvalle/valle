@@ -660,6 +660,16 @@ fn color_currentcolor_inherits() {
 }
 
 #[test]
+fn inherit_takes_back_what_an_earlier_declaration_set() {
+    let tree = vec![
+        view(&[("color", text("red"))], &[1]),
+        view(&[("color", text("blue")), ("color", text("inherit"))], &[]),
+    ];
+    let s = styles(tree, &[]).unwrap();
+    assert_eq!(s[1].color, color::parse("red").unwrap());
+}
+
+#[test]
 fn a_mask_source_inherits_from_the_mask() {
     let mut tree = vec![
         view(&[("color", text("red"))], &[2]),
