@@ -798,8 +798,38 @@ fn register(r: &mut Registry) {
     backgrounds(r);
     borders(r);
     shadows(r);
+    for (name, fit) in [
+        ("contain", "contain"),
+        ("cover", "cover"),
+        ("fill", "fill"),
+        ("none", "none"),
+        ("scale-down", "scale-down"),
+    ] {
+        r.fixed(format!("object-{name}"), &[("object-fit", fit)]);
+    }
+    let place = |value: &str| vec![decl("object-position", value)];
+    r.functional(
+        "object",
+        Desc {
+            keys: &["--object-position"],
+            statics: vec![
+                ("top", place("top")),
+                ("top-left", place("left top")),
+                ("top-right", place("right top")),
+                ("bottom", place("bottom")),
+                ("bottom-left", place("left bottom")),
+                ("bottom-right", place("right bottom")),
+                ("left", place("left")),
+                ("right", place("right")),
+                ("center", place("center")),
+            ],
+            handle: Some(one("object-position")),
+            ..Desc::default()
+        },
+    );
     blending(r);
     transforms(r);
+    filters(r);
     r.add("bg".into(), true, Box::new(background));
     r.fixed("fill-none", &[("fill", "none")]);
     let keys = &["--fill", "--color"];
@@ -1452,12 +1482,8 @@ fn shadow(c: &Candidate, name: &str) -> Option<Vec<Node>> {
         }
         Some(nodes)
     };
-    let alpha = match modifier {
-        Some(Modifier::Arbitrary(a)) => Some(a.clone()),
-        Some(Modifier::Named(m)) if quarter(m) => Some(format!("{m}%")),
-        _ => None,
-    };
-    let shadows = |value: &str, prefix: &str| {
+    let alpha = shadow_alpha(modifier);
+    let shadows = |value: &str, written: fn(String) -> String| {
         let mut nodes: Vec<Node> = (alpha.iter())
             .map(|a| decl(&alpha_variable, a.clone()))
             .collect();
@@ -1466,7 +1492,7 @@ fn shadow(c: &Candidate, name: &str) -> Option<Vec<Node>> {
             value,
             alpha.as_deref(),
             &color,
-            prefix,
+            written,
         ));
         boxed(nodes)
     };
@@ -1475,12 +1501,12 @@ fn shadow(c: &Candidate, name: &str) -> Option<Vec<Node>> {
         Some(vec![decl(&color, with_alpha(&c, &alpha))])
     };
     let value = match value {
-        None => return shadows(theme().value(&format!("--{name}"))?, ""),
+        None => return shadows(theme().value(&format!("--{name}"))?, as_they_are),
         Some(Value::Arbitrary { kind, value }) => {
             return match kind.as_deref().or_else(|| types::infer(value, &["color"])) {
                 Some("color") => colored(as_color(value, modifier)?),
-                _ if name == "inset-shadow" => shadows(value, "inset"),
-                _ => shadows(value, ""),
+                _ if name == "inset-shadow" => shadows(value, inset),
+                _ => shadows(value, as_they_are),
             };
         }
         Some(Value::Named { value, .. }) => value,
@@ -1490,31 +1516,53 @@ fn shadow(c: &Candidate, name: &str) -> Option<Vec<Node>> {
         "none" => boxed(vec![decl(property, none)]),
         "inherit" => Some(vec![decl(&color, "inherit")]),
         _ => match theme().value(&format!("--{name}-{value}")) {
-            Some(shadows_of_theme) => shadows(shadows_of_theme, ""),
+            Some(shadows_of_theme) => shadows(shadows_of_theme, as_they_are),
             None => colored(theme_color(value, modifier, &keys)?),
         },
     }
 }
 
-/// The declaration of `property` that sets shadows `value`, each of `prefix` and with its color
-/// that of `variable` if it is set, at opacity `alpha` if one is given, as Tailwind's
-/// `alphaReplacedShadowProperties`. Where the opacity, or a color, is a `var()`, the shadows at
-/// their own opacities come first, for browsers without relative colors.
+/// The opacity a shadow's modifier gives.
+fn shadow_alpha(modifier: Option<&Modifier>) -> Option<String> {
+    match modifier {
+        Some(Modifier::Arbitrary(a)) => Some(a.clone()),
+        Some(Modifier::Named(m)) if quarter(m) => Some(format!("{m}%")),
+        _ => None,
+    }
+}
+
+fn as_they_are(shadows: String) -> String {
+    shadows
+}
+
+/// Shadows that are all inset.
+fn inset(shadows: String) -> String {
+    (segment(&shadows, b',').iter())
+        .map(|s| format!("inset {}", s.trim()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Shadows as filter functions, one after another.
+fn drop_shadows(shadows: String) -> String {
+    (segment(&shadows, b',').iter())
+        .map(|s| format!("drop-shadow({})", s.trim()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The declaration of `property` that sets shadows `value`, with each color that of `variable` if
+/// it is set, at opacity `alpha` if one is given, and written as `written` writes them, as
+/// Tailwind's `alphaReplacedShadowProperties`. Where the opacity, or a color, is a `var()`, the
+/// shadows at their own opacities come first, for browsers without relative colors.
 fn alpha_shadows(
     property: &str,
     value: &str,
     alpha: Option<&str>,
     variable: &str,
-    prefix: &str,
+    written: fn(String) -> String,
 ) -> Vec<Node> {
     let colored = |c: &str| format!("var({variable}, {c})");
-    let prefixed = |shadows: String| match prefix {
-        "" => shadows,
-        _ => (segment(&shadows, b',').iter())
-            .map(|s| format!("{prefix} {}", s.trim()))
-            .collect::<Vec<_>>()
-            .join(", "),
-    };
     let mut relative = false;
     let shadows = shadow_colors(value, &mut |c| match alpha {
         None => colored(c),
@@ -1524,11 +1572,11 @@ fn alpha_shadows(
             colored(&replace_alpha(c, a))
         }
     });
-    let shadows = prefixed(shadows);
+    let shadows = written(shadows);
     if !relative {
         return vec![decl(property, shadows)];
     }
-    let plain = prefixed(shadow_colors(value, &mut |c| colored(c)));
+    let plain = written(shadow_colors(value, &mut |c| colored(c)));
     let supports = "@supports (color: lab(from red l a b))".to_string();
     vec![
         decl(property, plain),
@@ -1746,6 +1794,290 @@ fn blending(r: &mut Registry) {
     }
     r.fixed("isolate", &[("isolation", "isolate")]);
     r.fixed("isolation-auto", &[("isolation", "auto")]);
+}
+
+/// What `filter` is set to, each `var()` empty until a class sets it.
+const FILTER: &str = "var(--tw-blur,) var(--tw-brightness,) var(--tw-contrast,) \
+                      var(--tw-grayscale,) var(--tw-hue-rotate,) var(--tw-invert,) \
+                      var(--tw-saturate,) var(--tw-sepia,) var(--tw-drop-shadow,)";
+
+/// What `backdrop-filter` is set to.
+const BACKDROP: &str = "var(--tw-backdrop-blur,) var(--tw-backdrop-brightness,) \
+                        var(--tw-backdrop-contrast,) var(--tw-backdrop-grayscale,) \
+                        var(--tw-backdrop-hue-rotate,) var(--tw-backdrop-invert,) \
+                        var(--tw-backdrop-opacity,) var(--tw-backdrop-saturate,) \
+                        var(--tw-backdrop-sepia,)";
+
+/// A filter function's utilities: its name, the theme's namespaces of it and of its backdrop's,
+/// what it is bare, what a whole number is, and whether it takes negatives.
+type Amount = (
+    &'static str,
+    &'static [&'static str],
+    &'static [&'static str],
+    Bare,
+    Named,
+    bool,
+);
+
+/// A filter's variable set, and `filter` to all of them.
+fn filtered(variable: &str, value: impl Into<String>) -> Vec<Node> {
+    vec![decl(variable, value), decl("filter", FILTER)]
+}
+
+/// A backdrop filter's variable set, and `backdrop-filter` to all of them.
+fn backdropped(variable: &str, value: impl Into<String>) -> Vec<Node> {
+    vec![
+        decl(variable, value),
+        decl("-webkit-backdrop-filter", BACKDROP),
+        decl("backdrop-filter", BACKDROP),
+    ]
+}
+
+/// The filter utilities: `filter` and `backdrop-filter` themselves, and a utility of each
+/// function for each; and drop shadows.
+fn filters(r: &mut Registry) {
+    const FULL: Bare = Bare::Value("100%");
+    const AMOUNTS: [Amount; 7] = [
+        (
+            "brightness",
+            &["--brightness"],
+            &["--backdrop-brightness", "--brightness"],
+            Bare::Theme,
+            percentage,
+            false,
+        ),
+        (
+            "contrast",
+            &["--contrast"],
+            &["--backdrop-contrast", "--contrast"],
+            Bare::Theme,
+            percentage,
+            false,
+        ),
+        (
+            "grayscale",
+            &["--grayscale"],
+            &["--backdrop-grayscale", "--grayscale"],
+            FULL,
+            percentage,
+            false,
+        ),
+        (
+            "hue-rotate",
+            &["--hue-rotate"],
+            &["--backdrop-hue-rotate", "--hue-rotate"],
+            Bare::Theme,
+            whole_degrees,
+            true,
+        ),
+        (
+            "invert",
+            &["--invert"],
+            &["--backdrop-invert", "--invert"],
+            FULL,
+            percentage,
+            false,
+        ),
+        (
+            "saturate",
+            &["--saturate"],
+            &["--backdrop-saturate", "--saturate"],
+            Bare::Theme,
+            percentage,
+            false,
+        ),
+        (
+            "sepia",
+            &["--sepia"],
+            &["--backdrop-sepia", "--sepia"],
+            FULL,
+            percentage,
+            false,
+        ),
+    ];
+    r.add("filter".into(), true, Box::new(filter));
+    r.add("backdrop-filter".into(), true, Box::new(backdrop_filter));
+    r.functional(
+        "blur",
+        Desc {
+            keys: &["--blur"],
+            statics: vec![("none", filtered("--tw-blur", " "))],
+            handle: Some(Arc::new(|v, _| {
+                Some(filtered("--tw-blur", format!("blur({v})")))
+            })),
+            ..Desc::default()
+        },
+    );
+    r.functional(
+        "backdrop-blur",
+        Desc {
+            keys: &["--backdrop-blur", "--blur"],
+            statics: vec![("none", backdropped("--tw-backdrop-blur", " "))],
+            handle: Some(Arc::new(|v, _| {
+                Some(backdropped("--tw-backdrop-blur", format!("blur({v})")))
+            })),
+            ..Desc::default()
+        },
+    );
+    for (name, keys, backdrop_keys, bare, value, negative) in AMOUNTS {
+        let variable = format!("--tw-{name}");
+        r.functional(
+            name,
+            Desc {
+                negative,
+                keys,
+                bare,
+                value: Some(value),
+                handle: Some(Arc::new(move |v, _| {
+                    Some(filtered(&variable, format!("{name}({v})")))
+                })),
+                ..Desc::default()
+            },
+        );
+        let variable = format!("--tw-backdrop-{name}");
+        r.functional(
+            &format!("backdrop-{name}"),
+            Desc {
+                negative,
+                keys: backdrop_keys,
+                bare,
+                value: Some(value),
+                handle: Some(Arc::new(move |v, _| {
+                    Some(backdropped(&variable, format!("{name}({v})")))
+                })),
+                ..Desc::default()
+            },
+        );
+    }
+    r.functional(
+        "backdrop-opacity",
+        Desc {
+            keys: &["--backdrop-opacity", "--opacity"],
+            value: Some(|v, _| quarter(v).then(|| format!("{v}%"))),
+            handle: Some(Arc::new(|v, _| {
+                Some(backdropped(
+                    "--tw-backdrop-opacity",
+                    format!("opacity({v})"),
+                ))
+            })),
+            ..Desc::default()
+        },
+    );
+    r.nodes("drop-shadow-none", filtered("--tw-drop-shadow", " "));
+    r.add("drop-shadow".into(), true, Box::new(drop_shadow));
+}
+
+/// `filter`, what the classes of its functions set, `filter-none`, or `filter-[…]`, written.
+fn filter(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value,
+        modifier: None,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    match value {
+        None => Some(vec![decl("filter", FILTER)]),
+        Some(Value::Arbitrary { value, .. }) => Some(vec![decl("filter", &value[..])]),
+        Some(Value::Named { value, .. }) if value == "none" => Some(vec![decl("filter", "none")]),
+        _ => None,
+    }
+}
+
+/// `backdrop-filter`, what the classes of its functions set, `backdrop-filter-none`, or
+/// `backdrop-filter-[…]`, written.
+fn backdrop_filter(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value,
+        modifier: None,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let both = |v: &str| {
+        Some(vec![
+            decl("-webkit-backdrop-filter", v),
+            decl("backdrop-filter", v),
+        ])
+    };
+    match value {
+        None => both(BACKDROP),
+        Some(Value::Arbitrary { value, .. }) => both(value),
+        Some(Value::Named { value, .. }) if value == "none" => both("none"),
+        _ => None,
+    }
+}
+
+/// `drop-shadow-*`: shadows of the theme, at the opacity the modifier gives, or written; or their
+/// color. A color reads the shadows as sizes, in `--tw-drop-shadow-size`.
+fn drop_shadow(c: &Candidate) -> Option<Vec<Node>> {
+    const SIZE: &str = "var(--tw-drop-shadow-size)";
+    let Candidate::Functional {
+        value, modifier, ..
+    } = c
+    else {
+        return None;
+    };
+    let modifier = modifier.as_ref();
+    let alpha = shadow_alpha(modifier);
+    // The shadows, sized in their variable, and what `--tw-drop-shadow` is.
+    let shadows = |value: &str, drop: String| {
+        let mut nodes: Vec<Node> = (alpha.iter())
+            .map(|a| decl("--tw-drop-shadow-alpha", &a[..]))
+            .collect();
+        nodes.extend(alpha_shadows(
+            "--tw-drop-shadow-size",
+            value,
+            alpha.as_deref(),
+            "--tw-drop-shadow-color",
+            drop_shadows,
+        ));
+        nodes.extend(filtered("--tw-drop-shadow", drop));
+        Some(nodes)
+    };
+    let colored = |c: &str| {
+        let color = match c {
+            "inherit" => c.to_string(),
+            _ => with_alpha(c, "var(--tw-drop-shadow-alpha)"),
+        };
+        Some(vec![
+            decl("--tw-drop-shadow-color", color),
+            decl("--tw-drop-shadow", SIZE),
+        ])
+    };
+    let value = match value {
+        None => {
+            let shadow = theme().value("--drop-shadow")?;
+            let drop = drop_shadows(theme().resolve(None, &["--drop-shadow"])?);
+            return shadows(shadow, drop);
+        }
+        Some(Value::Arbitrary { kind, value }) => {
+            return match kind.as_deref().or_else(|| types::infer(value, &["color"])) {
+                Some("color") => colored(&as_color(value, modifier)?),
+                _ if modifier.is_some() && alpha.is_none() => None,
+                _ => shadows(value, SIZE.into()),
+            };
+        }
+        Some(Value::Named { value, .. }) => value,
+    };
+    let key = format!("--drop-shadow-{value}");
+    if let (Some(shadow), Some(variable)) = (
+        theme().value(&key),
+        theme().resolve(Some(value), &["--drop-shadow"]),
+    ) {
+        return match (modifier, &alpha) {
+            (Some(_), None) => None,
+            (_, Some(_)) => shadows(shadow, SIZE.into()),
+            (None, None) => shadows(shadow, drop_shadows(variable)),
+        };
+    }
+    colored(&theme_color(
+        value,
+        modifier,
+        &["--drop-shadow-color", "--color"],
+    )?)
 }
 
 /// What `transform` is set to by what rotates and skews on one axis, each `var()` empty until a

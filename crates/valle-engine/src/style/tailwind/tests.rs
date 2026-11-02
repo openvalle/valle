@@ -316,6 +316,17 @@ fn classes_expand_to_tailwinds_css() {
              var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,); }",
         ),
         ("origin-top-right", "& { transform-origin: 100% 0; }"),
+        ("object-cover", "& { object-fit: cover; }"),
+        ("object-top-left", "& { object-position: left top; }"),
+        ("object-[25%_75%]", "& { object-position: 25% 75%; }"),
+        (
+            "drop-shadow-[0_0_4px_red]/50",
+            "& { --tw-drop-shadow-alpha: 50%; --tw-drop-shadow-size: drop-shadow(0 0 4px \
+             var(--tw-drop-shadow-color, oklab(from red l a b / 50%))); --tw-drop-shadow: \
+             var(--tw-drop-shadow-size); filter: var(--tw-blur,) var(--tw-brightness,) \
+             var(--tw-contrast,) var(--tw-grayscale,) var(--tw-hue-rotate,) var(--tw-invert,) \
+             var(--tw-saturate,) var(--tw-sepia,) var(--tw-drop-shadow,); }",
+        ),
         (
             "perspective-near",
             "& { perspective: var(--perspective-near); }",
@@ -364,6 +375,9 @@ fn classes_tailwind_does_not_make_are_errors() {
         "scale-50/50",
         "-rotate-[1_1_0]",
         "transform-foo",
+        "filter-foo",
+        "drop-shadow-sm/foo",
+        "brightness-[50%]/50",
     ] {
         assert_eq!(
             error(name),
@@ -545,6 +559,29 @@ fn transforms_read_each_axis() {
     );
     // With no axis set there is nothing to transform.
     assert_eq!(last(&["transform"]), None);
+}
+
+#[test]
+fn filters_run_in_tailwinds_order_and_drop_shadows_take_their_color() {
+    let last = |classes: &[&str]| applied(classes, &[]).pop();
+    // Whatever order they are written in, and without the name only Safari reads.
+    let filter = last(&["sepia", "blur-sm", "brightness-150"]).unwrap().1;
+    assert_eq!(
+        filter.split_whitespace().collect::<Vec<_>>(),
+        ["blur(8px)", "brightness(150%)", "sepia(100%)"]
+    );
+    let backdrop = applied(&["backdrop-blur-sm"], &[]);
+    assert_eq!(backdrop.len(), 1);
+    assert_eq!(backdrop[0].0, "backdrop-filter");
+    let red = "color-mix(in oklab, oklch(63.7% 0.237 25.331) 50%, transparent)";
+    let filter = last(&["drop-shadow-md/50", "drop-shadow-red-500"]);
+    assert_eq!(
+        filter.unwrap().1.trim(),
+        format!("drop-shadow(0 3px 3px {red})")
+    );
+    // None of a filter's functions set: nothing to apply.
+    assert_eq!(last(&["filter"]), None);
+    assert_eq!(last(&["blur-none"]), None);
 }
 
 #[test]

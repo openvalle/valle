@@ -125,6 +125,27 @@ pub const PROPERTIES: &[(&str, Option<&str>)] = &[
     ("--tw-rotate-z", None),
     ("--tw-skew-x", None),
     ("--tw-skew-y", None),
+    ("--tw-blur", None),
+    ("--tw-brightness", None),
+    ("--tw-contrast", None),
+    ("--tw-grayscale", None),
+    ("--tw-hue-rotate", None),
+    ("--tw-invert", None),
+    ("--tw-saturate", None),
+    ("--tw-sepia", None),
+    ("--tw-drop-shadow", None),
+    ("--tw-drop-shadow-color", None),
+    ("--tw-drop-shadow-alpha", Some("100%")),
+    ("--tw-drop-shadow-size", None),
+    ("--tw-backdrop-blur", None),
+    ("--tw-backdrop-brightness", None),
+    ("--tw-backdrop-contrast", None),
+    ("--tw-backdrop-grayscale", None),
+    ("--tw-backdrop-hue-rotate", None),
+    ("--tw-backdrop-invert", None),
+    ("--tw-backdrop-opacity", None),
+    ("--tw-backdrop-saturate", None),
+    ("--tw-backdrop-sepia", None),
 ];
 
 const VARIANTS: &str = "variants are not supported: the canvas has a fixed size, and nothing \
@@ -1077,7 +1098,8 @@ fn element(own: &[Class], parent: &[Class]) -> Result<Vec<Declaration>, String> 
         .collect();
     let mut out = Vec::new();
     for (p, v, c) in written {
-        if p.starts_with("--") {
+        // Safari's name of `backdrop-filter`, which Tailwind writes beside it.
+        if p.starts_with("--") || p == "-webkit-backdrop-filter" {
             continue;
         }
         let at = |e: String| format!("className {}: {p}: {e}", c.name);
