@@ -3870,7 +3870,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         }
         F::WebkitLineClamp => {
             d.line_clamp = match v {
-                V::Str(_) if text(v)? == "none" => None,
+                V::Str(_) if matches!(&*text(v)?, "none" | "unset") => None,
                 _ => match integer(v)? {
                     n if n >= 1 => Some(n as u32),
                     n => return Err(format!("{n} is not a number of lines: none, or 1 or more")),

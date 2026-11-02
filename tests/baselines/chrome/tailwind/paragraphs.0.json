@@ -1,0 +1,15 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 320px; height: 320px; font-family: \"Valle Sans\"; }\n</style>\n<style data-tailwind=\"4.3.3\"></style>\n<div id=\"canvas\"><div data-n=\"0\" class=\"p-2 text-xs text-slate-800\"><div data-n=\"1\" class=\"mb-1 w-64 bg-slate-100 indent-4\" data-text>The quick brown fox jumps over the lazy dog and runs into the woods</div><div data-n=\"2\" class=\"mb-1 ml-2 w-64 bg-slate-100 -indent-2\" data-text>The quick brown fox jumps over the lazy dog and runs into the woods</div><div data-n=\"3\" class=\"mb-1 w-64 bg-slate-100 indent-[10%]\" data-text>The quick brown fox jumps over the lazy dog and runs into the woods</div><div data-n=\"4\" class=\"mb-1 w-64 bg-slate-100 text-justify\" data-text>The quick brown fox jumps over the lazy dog and runs into the woods</div><div data-n=\"5\" class=\"mb-1 line-clamp-1 w-64 bg-slate-100 line-clamp-none\" data-text>The quick brown fox jumps over the lazy dog and runs into the woods The quick brown fox jumps over the lazy dog and runs into the woods</div><div data-n=\"6\" class=\"w-64 bg-slate-100 antialiased\" data-text>The quick brown fox jumps over the lazy dog and runs into the woods</div><div data-n=\"7\" class=\"w-64 bg-slate-100 subpixel-antialiased\" data-text>The quick brown fox jumps over the lazy dog and runs into the woods</div></div></div>\n",
+ "boxes": [
+  [0,0,320,292],
+  [8,8,256,32],
+  [16,44,256,32],
+  [8,80,256,32],
+  [8,116,256,32],
+  [8,152,256,64],
+  [8,220,256,32],
+  [8,252,256,32]
+ ],
+ "lines": {"1":["The quick brown fox jumps over the lazy","dog and runs into the woods"],"2":["The quick brown fox jumps over the lazy dog","and runs into the woods"],"3":["The quick brown fox jumps over the lazy","dog and runs into the woods"],"4":["The quick brown fox jumps over the lazy dog","and runs into the woods"],"5":["The quick brown fox jumps over the lazy dog","and runs into the woods The quick brown fox","jumps over the lazy dog and runs into the","woods"],"6":["The quick brown fox jumps over the lazy dog","and runs into the woods"],"7":["The quick brown fox jumps over the lazy dog","and runs into the woods"]}
+}

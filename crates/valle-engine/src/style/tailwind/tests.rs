@@ -479,6 +479,12 @@ fn applied(own: &[&str], parent: &[&str]) -> Vec<(String, String, bool)> {
         .collect()
 }
 
+#[test]
+fn what_no_canvas_takes_is_left_out() {
+    assert!(applied(&["antialiased"], &[]).is_empty());
+    assert!(applied(&["subpixel-antialiased"], &[]).is_empty());
+}
+
 fn d(property: &str, value: &str, important: bool) -> (String, String, bool) {
     (property.into(), value.into(), important)
 }

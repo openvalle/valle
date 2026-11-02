@@ -188,6 +188,14 @@ pub const PROPERTIES: &[(&str, Option<&str>)] = &[
     ("--tw-mask-conic-to-color", Some("transparent")),
 ];
 
+/// What Tailwind writes for a browser that no canvas is: Safari's name of `backdrop-filter`
+/// beside it, and font smoothing, which is always grayscale here.
+const BESIDE: [&str; 3] = [
+    "-webkit-backdrop-filter",
+    "-webkit-font-smoothing",
+    "-moz-osx-font-smoothing",
+];
+
 /// The variables Tailwind reads without registering them, which have no value until set.
 const UNREGISTERED: [&str; 3] = [
     "--tw-mask-linear-stops",
@@ -1145,8 +1153,7 @@ fn element(own: &[Class], parent: &[Class]) -> Result<Vec<Declaration>, String> 
         .collect();
     let mut out = Vec::new();
     for (p, v, c) in written {
-        // Safari's name of `backdrop-filter`, which Tailwind writes beside it.
-        if p.starts_with("--") || p == "-webkit-backdrop-filter" {
+        if p.starts_with("--") || BESIDE.contains(&p) {
             continue;
         }
         let at = |e: String| format!("className {}: {p}: {e}", c.name);

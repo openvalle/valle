@@ -2349,7 +2349,7 @@ const ROWS: &[Row] = &[
     Row {
         properties: &["WebkitLineClamp"],
         sample: r##"<View style={{ width: 60, background: "#e8eaf6" }}><Text style={{ fontSize: 10, display: "-webkit-box", WebkitBoxOrient: "vertical", overflow: "hidden", PROPERTY: VALUE }}>The quick brown fox jumps over the lazy dog</Text></View>"##,
-        values: &["\"none\"", "1", "2", "\"3\""],
+        values: &["\"none\"", "\"unset\"", "1", "2", "\"3\""],
         refused: &["0", "-1", "1.5", "\"two\""],
     },
     Row {
