@@ -786,9 +786,15 @@ fn register(r: &mut Registry) {
     }
     text(r);
     backgrounds(r);
+    borders(r);
     r.add("bg".into(), true, Box::new(background));
     r.fixed("fill-none", &[("fill", "none")]);
-    r.add("fill".into(), true, Box::new(fill));
+    let keys = &["--fill", "--color"];
+    colors(r, "fill", keys, |c| vec![decl("fill", c)]);
+    let keys = &["--accent-color", "--color"];
+    colors(r, "accent", keys, |c| vec![decl("accent-color", c)]);
+    let keys = &["--caret-color", "--color"];
+    colors(r, "caret", keys, |c| vec![decl("caret-color", c)]);
     r.fixed("stroke-none", &[("stroke", "none")]);
     r.add("stroke".into(), true, Box::new(stroke));
 }
@@ -1115,23 +1121,277 @@ fn background(c: &Candidate) -> Option<Vec<Node>> {
     Some(vec![decl("background-image", image)])
 }
 
-/// `fill-*`: an SVG shape's fill color.
-fn fill(c: &Candidate) -> Option<Vec<Node>> {
+/// A color utility, as Tailwind's `colorUtility`: a color of the theme's `keys` at the opacity
+/// its modifier gives, or written, into the declarations `make` makes of it.
+fn colors(
+    r: &mut Registry,
+    name: &str,
+    keys: &'static [&'static str],
+    make: fn(String) -> Vec<Node>,
+) {
+    let compile = move |c: &Candidate| {
+        let Candidate::Functional {
+            value: Some(value),
+            modifier,
+            ..
+        } = c
+        else {
+            return None;
+        };
+        let color = match value {
+            Value::Arbitrary { value, .. } => as_color(value, modifier.as_ref())?,
+            Value::Named { value, .. } => theme_color(value, modifier.as_ref(), keys)?,
+        };
+        Some(make(color))
+    };
+    r.add(name.into(), true, Box::new(compile));
+}
+
+/// The border utilities: radii of each corner, widths, colors and styles of each side, lines
+/// between children, and outlines.
+fn borders(r: &mut Registry) {
+    const CORNERS: [(&str, &[&str]); 15] = [
+        ("rounded", &["border-radius"]),
+        (
+            "rounded-s",
+            &["border-start-start-radius", "border-end-start-radius"],
+        ),
+        (
+            "rounded-e",
+            &["border-start-end-radius", "border-end-end-radius"],
+        ),
+        (
+            "rounded-t",
+            &["border-top-left-radius", "border-top-right-radius"],
+        ),
+        (
+            "rounded-r",
+            &["border-top-right-radius", "border-bottom-right-radius"],
+        ),
+        (
+            "rounded-b",
+            &["border-bottom-right-radius", "border-bottom-left-radius"],
+        ),
+        (
+            "rounded-l",
+            &["border-top-left-radius", "border-bottom-left-radius"],
+        ),
+        ("rounded-ss", &["border-start-start-radius"]),
+        ("rounded-se", &["border-start-end-radius"]),
+        ("rounded-ee", &["border-end-end-radius"]),
+        ("rounded-es", &["border-end-start-radius"]),
+        ("rounded-tl", &["border-top-left-radius"]),
+        ("rounded-tr", &["border-top-right-radius"]),
+        ("rounded-br", &["border-bottom-right-radius"]),
+        ("rounded-bl", &["border-bottom-left-radius"]),
+    ];
+    for (name, properties) in CORNERS {
+        let all = |v: &str| properties.iter().map(|p| decl(p, v)).collect::<Vec<_>>();
+        let statics = vec![("none", all("0")), ("full", all("calc(infinity * 1px)"))];
+        let handle: Handle =
+            Arc::new(move |v, _| Some(properties.iter().map(|p| decl(p, v)).collect()));
+        r.functional(
+            name,
+            Desc {
+                keys: &["--radius"],
+                statics,
+                handle: Some(handle),
+                ..Desc::default()
+            },
+        );
+    }
+    for style in ["solid", "dashed", "dotted", "double", "hidden", "none"] {
+        let declarations = [("--tw-border-style", style), ("border-style", style)];
+        r.fixed(format!("border-{style}"), &declarations);
+    }
+    for (name, side) in [
+        ("border", "border"),
+        ("border-x", "border-inline"),
+        ("border-y", "border-block"),
+        ("border-s", "border-inline-start"),
+        ("border-e", "border-inline-end"),
+        ("border-bs", "border-block-start"),
+        ("border-be", "border-block-end"),
+        ("border-t", "border-top"),
+        ("border-r", "border-right"),
+        ("border-b", "border-bottom"),
+        ("border-l", "border-left"),
+    ] {
+        r.add(name.into(), true, Box::new(move |c| border(c, side)));
+    }
+    for axis in ["x", "y"] {
+        let reverse = match axis {
+            "x" => "--tw-divide-x-reverse",
+            _ => "--tw-divide-y-reverse",
+        };
+        let handle: Handle = Arc::new(move |w, _| {
+            let start = format!("calc({w} * var({reverse}))");
+            let end = format!("calc({w} * calc(1 - var({reverse})))");
+            let mut children = vec![decl("--tw-sort", format!("divide-{axis}-width"))];
+            children.push(decl(reverse, "0"));
+            children.extend(match axis {
+                "x" => vec![
+                    decl("border-inline-style", "var(--tw-border-style)"),
+                    decl("border-inline-start-width", start),
+                    decl("border-inline-end-width", end),
+                ],
+                _ => vec![
+                    decl("border-bottom-style", "var(--tw-border-style)"),
+                    decl("border-top-style", "var(--tw-border-style)"),
+                    decl("border-top-width", start),
+                    decl("border-bottom-width", end),
+                ],
+            });
+            Some(vec![Node::Rule(CHILDREN, children)])
+        });
+        r.functional(
+            &format!("divide-{axis}"),
+            Desc {
+                keys: &["--divide-width", "--border-width"],
+                bare: Bare::Value("1px"),
+                value: Some(|v, _| positive_integer(v).then(|| format!("{v}px"))),
+                handle: Some(handle),
+                ..Desc::default()
+            },
+        );
+        let children = vec![decl(reverse, "1")];
+        r.nodes(
+            format!("divide-{axis}-reverse"),
+            vec![Node::Rule(CHILDREN, children)],
+        );
+    }
+    for style in ["solid", "dashed", "dotted", "double", "none"] {
+        let children = vec![
+            decl("--tw-sort", "divide-style"),
+            decl("--tw-border-style", style),
+            decl("border-style", style),
+        ];
+        r.nodes(
+            format!("divide-{style}"),
+            vec![Node::Rule(CHILDREN, children)],
+        );
+    }
+    let keys = &["--divide-color", "--border-color", "--color"];
+    colors(r, "divide", keys, |c| {
+        let children = vec![decl("--tw-sort", "divide-color"), decl("border-color", c)];
+        vec![Node::Rule(CHILDREN, children)]
+    });
+    r.nodes(
+        "outline-hidden",
+        vec![
+            decl("--tw-outline-style", "none"),
+            decl("outline-style", "none"),
+            Node::At(
+                "@media (forced-colors: active)".into(),
+                vec![
+                    decl("outline", "2px solid transparent"),
+                    decl("outline-offset", "2px"),
+                ],
+            ),
+        ],
+    );
+    for style in ["none", "solid", "dashed", "dotted", "double"] {
+        let declarations = [("--tw-outline-style", style), ("outline-style", style)];
+        r.fixed(format!("outline-{style}"), &declarations);
+    }
+    r.add("outline".into(), true, Box::new(outline));
+    r.functional(
+        "outline-offset",
+        Desc {
+            negative: true,
+            keys: &["--outline-offset"],
+            value: Some(|v, _| positive_integer(v).then(|| format!("{v}px"))),
+            handle: Some(one("outline-offset")),
+            ..Desc::default()
+        },
+    );
+}
+
+/// `border-*`, `border-x-*` and the other sides: a width, of the theme, in px or written, in the
+/// style `--tw-border-style` says; or a color.
+fn border(c: &Candidate, side: &str) -> Option<Vec<Node>> {
     let Candidate::Functional {
-        value: Some(value),
-        modifier,
-        ..
+        value, modifier, ..
     } = c
     else {
         return None;
     };
-    let color = match value {
-        Value::Arbitrary { value, .. } => as_color(value, modifier.as_ref())?,
-        Value::Named { value, .. } => {
-            theme_color(value, modifier.as_ref(), &["--fill", "--color"])?
-        }
+    let modifier = modifier.as_ref();
+    let width = |w: &str| {
+        Some(vec![
+            decl(&format!("{side}-style"), "var(--tw-border-style)"),
+            decl(&format!("{side}-width"), w),
+        ])
     };
-    Some(vec![decl("fill", color)])
+    let color = |c: String| Some(vec![decl(&format!("{side}-color"), c)]);
+    let value = match value {
+        None if modifier.is_some() => return None,
+        None => return width("1px"),
+        Some(Value::Arbitrary { kind, value }) => {
+            let kinds = ["color", "line-width", "length"];
+            return match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                Some("line-width" | "length") if modifier.is_none() => width(value),
+                Some("line-width" | "length") => None,
+                _ => color(as_color(value, modifier)?),
+            };
+        }
+        Some(Value::Named { value, .. }) => value,
+    };
+    if let Some(c) = theme_color(value, modifier, &["--border-color", "--color"]) {
+        return color(c);
+    }
+    if modifier.is_some() {
+        return None;
+    }
+    if let Some(w) = theme().resolve(Some(value), &["--border-width"]) {
+        return width(&w);
+    }
+    positive_integer(value)
+        .then(|| width(&format!("{value}px")))
+        .flatten()
+}
+
+/// `outline`, `outline-*`: a width, of the theme, in px or written, in the style
+/// `--tw-outline-style` says; or a color.
+fn outline(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value, modifier, ..
+    } = c
+    else {
+        return None;
+    };
+    let modifier = modifier.as_ref();
+    let width = |w: &str| {
+        Some(vec![
+            decl("outline-style", "var(--tw-outline-style)"),
+            decl("outline-width", w),
+        ])
+    };
+    let value = match value {
+        None if modifier.is_some() => return None,
+        None => return width("1px"),
+        Some(Value::Arbitrary { kind, value }) => {
+            let kinds = ["color", "length", "number", "percentage"];
+            return match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                Some("length" | "number" | "percentage") if modifier.is_none() => width(value),
+                Some("length" | "number" | "percentage") => None,
+                _ => Some(vec![decl("outline-color", as_color(value, modifier)?)]),
+            };
+        }
+        Some(Value::Named { value, .. }) => value,
+    };
+    if let Some(c) = theme_color(value, modifier, &["--outline-color", "--color"]) {
+        return Some(vec![decl("outline-color", c)]);
+    }
+    if modifier.is_some() {
+        return None;
+    }
+    if let Some(w) = theme().resolve(Some(value), &["--outline-width"]) {
+        return width(&w);
+    }
+    positive_integer(value)
+        .then(|| width(&format!("{value}px")))
+        .flatten()
 }
 
 /// `stroke-*`: an SVG shape's stroke color, or its width.

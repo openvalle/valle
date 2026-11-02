@@ -94,6 +94,10 @@ pub const PROPERTIES: &[(&str, Option<&str>)] = &[
     ("--tw-gradient-from-position", Some("0%")),
     ("--tw-gradient-via-position", Some("50%")),
     ("--tw-gradient-to-position", Some("100%")),
+    ("--tw-border-style", Some("solid")),
+    ("--tw-divide-x-reverse", Some("0")),
+    ("--tw-divide-y-reverse", Some("0")),
+    ("--tw-outline-style", Some("solid")),
 ];
 
 const VARIANTS: &str = "variants are not supported: the canvas has a fixed size, and nothing \
@@ -198,8 +202,10 @@ fn check(nodes: &[Node]) -> Result<(), String> {
                     "its CSS styles {selector}, which is not supported yet"
                 ));
             }
+            // Forced colors never apply: the canvas has no such mode.
             Node::At(rule, inner)
-                if rule.starts_with("@supports (")
+                if (rule.starts_with("@supports (")
+                    || rule == "@media (forced-colors: active)")
                     && inner.iter().all(|n| matches!(n, Node::Declaration(..))) => {}
             Node::At(rule, _) => {
                 let at = rule.split_whitespace().next().unwrap_or_default();

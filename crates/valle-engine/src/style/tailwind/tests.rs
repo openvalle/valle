@@ -204,6 +204,49 @@ fn classes_expand_to_tailwinds_css() {
         ),
         ("via-30%", "& { --tw-gradient-via-position: 30%; }"),
         ("to-[3px]", "& { --tw-gradient-to-position: 3px; }"),
+        ("rounded-lg", "& { border-radius: var(--radius-lg); }"),
+        ("rounded-full", "& { border-radius: calc(infinity * 1px); }"),
+        (
+            "rounded-t-none",
+            "& { border-top-left-radius: 0; border-top-right-radius: 0; }",
+        ),
+        (
+            "border",
+            "& { border-style: var(--tw-border-style); border-width: 1px; }",
+        ),
+        (
+            "border-x-4",
+            "& { border-inline-style: var(--tw-border-style); border-inline-width: 4px; }",
+        ),
+        (
+            "border-t-sky-500/50",
+            "& { border-top-color: color-mix(in oklab, var(--color-sky-500) 50%, transparent); }",
+        ),
+        (
+            "border-dashed",
+            "& { --tw-border-style: dashed; border-style: dashed; }",
+        ),
+        (
+            "divide-y-2",
+            ":where(& > :not(:last-child)) { --tw-divide-y-reverse: 0; border-bottom-style: \
+             var(--tw-border-style); border-top-style: var(--tw-border-style); border-top-width: \
+             calc(2px * var(--tw-divide-y-reverse)); border-bottom-width: calc(2px * calc(1 - \
+             var(--tw-divide-y-reverse))); }",
+        ),
+        (
+            "divide-red-500",
+            ":where(& > :not(:last-child)) { border-color: var(--color-red-500); }",
+        ),
+        (
+            "outline-2",
+            "& { outline-style: var(--tw-outline-style); outline-width: 2px; }",
+        ),
+        ("-outline-offset-2", "& { outline-offset: calc(2px * -1); }"),
+        (
+            "outline-hidden",
+            "& { --tw-outline-style: none; outline-style: none; @media (forced-colors: active) { \
+             outline: 2px solid transparent; outline-offset: 2px; } }",
+        ),
     ];
     for (name, expected) in cases {
         assert_eq!(css(name), expected, "{name}");
@@ -233,6 +276,11 @@ fn classes_tailwind_does_not_make_are_errors() {
         "bg-radial-50",
         "from-31",
         "from-[3px]/50",
+        "border-2/50",
+        "outline-[3px]/50",
+        "rounded-foo",
+        "-rounded-lg",
+        "divide-x-[3px]/2",
     ] {
         assert_eq!(
             error(name),
@@ -362,6 +410,24 @@ fn text_classes_read_each_others_variables() {
     let numeric = applied(&["ordinal", "tabular-nums"], &[]);
     let words: Vec<&str> = numeric[1].1.split_whitespace().collect();
     assert_eq!(words, ["ordinal", "tabular-nums"]);
+}
+
+#[test]
+fn borders_take_their_style_and_divide_children() {
+    let own = applied(&["border-2", "border-dotted"], &[]);
+    assert!(own.contains(&d("border-width", "2px", false)), "{own:?}");
+    for (p, v, _) in &own {
+        assert!(p != "border-style" || v == "dotted", "{own:?}");
+    }
+    assert_eq!(
+        applied(&[], &["divide-x-2", "divide-x-reverse", "divide-dashed"]),
+        [
+            d("border-inline-style", "dashed", false),
+            d("border-inline-start-width", "calc(2px * 1)", false),
+            d("border-inline-end-width", "calc(2px * calc(1 - 1))", false),
+            d("border-style", "dashed", false)
+        ]
+    );
 }
 
 #[test]
