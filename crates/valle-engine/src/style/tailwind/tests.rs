@@ -289,6 +289,11 @@ fn classes_expand_to_tailwinds_css() {
             "text-shadow-[0_1px_red]",
             "& { text-shadow: 0 1px var(--tw-text-shadow-color, red); }",
         ),
+        ("opacity-40", "& { opacity: 40%; }"),
+        ("opacity-[0.3]", "& { opacity: 0.3; }"),
+        ("mix-blend-multiply", "& { mix-blend-mode: multiply; }"),
+        ("bg-blend-screen", "& { background-blend-mode: screen; }"),
+        ("isolate", "& { isolation: isolate; }"),
     ];
     for (name, expected) in cases {
         assert_eq!(css(name), expected, "{name}");
@@ -328,6 +333,8 @@ fn classes_tailwind_does_not_make_are_errors() {
         "text-shadow",
         "ring-2/50",
         "ring-offset-2/50",
+        "opacity-0.3",
+        "opacity-50/50",
     ] {
         assert_eq!(
             error(name),

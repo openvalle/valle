@@ -798,6 +798,7 @@ fn register(r: &mut Registry) {
     backgrounds(r);
     borders(r);
     shadows(r);
+    blending(r);
     r.add("bg".into(), true, Box::new(background));
     r.fixed("fill-none", &[("fill", "none")]);
     let keys = &["--fill", "--color"];
@@ -1701,6 +1702,49 @@ fn ring_offset(c: &Candidate) -> Option<Vec<Node>> {
         modifier,
         &["--ring-offset-color", "--color"],
     )?)
+}
+
+/// How elements mix with what is under them: opacity, blend modes and isolation.
+fn blending(r: &mut Registry) {
+    const MODES: [&str; 16] = [
+        "normal",
+        "multiply",
+        "screen",
+        "overlay",
+        "darken",
+        "lighten",
+        "color-dodge",
+        "color-burn",
+        "hard-light",
+        "soft-light",
+        "difference",
+        "exclusion",
+        "hue",
+        "saturation",
+        "color",
+        "luminosity",
+    ];
+    r.functional(
+        "opacity",
+        Desc {
+            keys: &["--opacity"],
+            value: Some(|v, _| quarter(v).then(|| format!("{v}%"))),
+            handle: Some(one("opacity")),
+            ..Desc::default()
+        },
+    );
+    for mode in MODES {
+        r.fixed(
+            format!("bg-blend-{mode}"),
+            &[("background-blend-mode", mode)],
+        );
+        r.fixed(format!("mix-blend-{mode}"), &[("mix-blend-mode", mode)]);
+    }
+    for mode in ["plus-darker", "plus-lighter"] {
+        r.fixed(format!("mix-blend-{mode}"), &[("mix-blend-mode", mode)]);
+    }
+    r.fixed("isolate", &[("isolation", "isolate")]);
+    r.fixed("isolation-auto", &[("isolation", "auto")]);
 }
 
 /// `stroke-*`: an SVG shape's stroke color, or its width.
