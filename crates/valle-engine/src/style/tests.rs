@@ -632,6 +632,19 @@ fn visibility_inherits() {
 }
 
 #[test]
+fn color_currentcolor_inherits() {
+    let tree = vec![
+        view(&[("color", text("red"))], &[1]),
+        view(
+            &[("color", text("blue")), ("color", text("CurrentColor"))],
+            &[],
+        ),
+    ];
+    let s = styles(tree, &[]).unwrap();
+    assert_eq!(s[1].color, color::parse("red").unwrap());
+}
+
+#[test]
 fn a_mask_source_inherits_from_the_mask() {
     let mut tree = vec![
         view(&[("color", text("red"))], &[2]),

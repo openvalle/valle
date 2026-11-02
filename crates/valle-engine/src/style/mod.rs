@@ -3702,6 +3702,10 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                 None => d.markers = [(); 3].map(|_| Some(marker.clone())),
             }
         }
+        // `currentcolor` is the color the element would otherwise inherit.
+        F::Color if matches!(v, V::Str(s) if s.trim().eq_ignore_ascii_case("currentcolor")) => {
+            d.color = None
+        }
         F::Color => d.color = Some(color_of(v)?),
         F::FontSize => d.font_size = Some(length(v, PADDING)?),
         F::FontWeight => d.font_weight = Some(weight(v)?),

@@ -1867,6 +1867,7 @@ const ROWS: &[Row] = &[
             "\"rgb(10 20 30 / 50%)\"",
             "\"transparent\"",
             "\"hsl(0 0% 50%)\"",
+            "\"currentcolor\"",
         ],
         refused: &["\"none\"", "1", "\"url(a.png)\""],
     },
