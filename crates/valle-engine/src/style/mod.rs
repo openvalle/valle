@@ -3140,6 +3140,10 @@ fn leading(v: &V) -> Result<Leading, String> {
     }
     match css::num(&s) {
         Some(n) if n.unit.is_empty() => Ok(Leading::Factor(factor(&V::Num(n.value))?)),
+        // A math function of numbers is a factor, clamped to 0 as CSS clamps one.
+        _ if math::is_math(&s) && math::number(&s).is_ok() => {
+            Ok(Leading::Factor(math::number(&s)?.max(0.0)))
+        }
         _ => Ok(Leading::Len(length_text(&s, PADDING)?)),
     }
 }
