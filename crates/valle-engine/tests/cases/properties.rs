@@ -545,7 +545,7 @@ const ROWS: &[Row] = &[
         properties: &["justifyContent"],
         sample: r##"<View style={{ display: "flex", height: 8, background: "#e8eaf6", PROPERTY: VALUE }}><View style={{ width: 20, background: "#3949ab" }} /><View style={{ width: 30, background: "#7986cb" }} /><View style={{ width: 10, background: "#3949ab" }} /></View>"##,
         values: CONTENT_ALIGN,
-        refused: &["\"left\"", "\"baseline\"", "\"safe center\"", "1"],
+        refused: &["\"left\"", "\"baseline\"", "\"safe stretch\"", "1"],
     },
     Row {
         properties: &["alignItems"],

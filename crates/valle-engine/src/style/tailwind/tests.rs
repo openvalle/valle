@@ -455,7 +455,9 @@ fn errors_say_what_to_write_instead() {
         "className float-left: float is not supported: there is no document flow; use flex or \
          grid layout"
     );
-    assert!(error("items-center-safe").starts_with("className items-center-safe: align-items: "));
+    assert!(
+        error("items-baseline-last").starts_with("className items-baseline-last: align-items: ")
+    );
     assert_eq!(
         error("align-middle"),
         "className align-middle: vertical-align is not supported: there is no HTML inline flow; \

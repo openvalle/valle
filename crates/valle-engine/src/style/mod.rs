@@ -25,8 +25,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use taffy::{
-    AlignContent, AlignItems, BoxSizing, Dimension, Display, FlexDirection, FlexWrap, GridAutoFlow,
-    GridPlacement, LengthPercentage, LengthPercentageAuto, Line, Overflow, Position,
+    AlignContent, AlignItems, AlignmentSafety, BoxSizing, Dimension, Display, FlexDirection,
+    FlexWrap, GridAutoFlow, GridPlacement, LengthPercentage, LengthPercentageAuto, Line, Overflow,
+    Position,
 };
 
 use color::Rgba;
@@ -3054,8 +3055,44 @@ fn overflow(v: &V) -> Result<Overflow, String> {
 fn self_align(v: &V) -> Result<Option<AlignItems>, String> {
     Ok(match text(v)?.as_str() {
         "auto" => None,
-        _ => Some(keyword(v, &SELF_ALIGN)?),
+        _ => Some(items_align(v)?),
     })
+}
+
+/// The `safe` or `unsafe` before an alignment, and the alignment; only those that place a box
+/// at one point take it.
+fn overflow_position(v: &V) -> Result<(AlignmentSafety, V), String> {
+    let s = text(v)?;
+    let words = css::words(&s);
+    let safety = match words[..] {
+        ["safe", _] => AlignmentSafety::Safe,
+        ["unsafe", _] => AlignmentSafety::Unsafe,
+        _ => return Ok((AlignmentSafety::Default, v.clone())),
+    };
+    match POSITIONAL.contains(&words[1]) {
+        true => Ok((safety, V::Str(words[1].into()))),
+        false => Err(format!("{} takes no {}", words[1], words[0])),
+    }
+}
+
+const POSITIONAL: [&str; 7] = [
+    "center",
+    "start",
+    "end",
+    "flex-start",
+    "flex-end",
+    "self-start",
+    "self-end",
+];
+
+fn items_align(v: &V) -> Result<AlignItems, String> {
+    let (safety, v) = overflow_position(v)?;
+    Ok(keyword(&v, &SELF_ALIGN)?.with_safety(safety))
+}
+
+fn content_align(v: &V) -> Result<AlignContent, String> {
+    let (safety, v) = overflow_position(v)?;
+    Ok(keyword(&v, &CONTENT_ALIGN)?.with_safety(safety))
 }
 
 /// A shorthand of two values, such as `place-items`' alignment and justification, where one value
@@ -3063,7 +3100,15 @@ fn self_align(v: &V) -> Result<Option<AlignItems>, String> {
 fn pair<T: Clone>(v: &V, one: fn(&V) -> Result<T, String>) -> Result<(T, T), String> {
     let s = text(v)?;
     let word = |w: &str| one(&V::Str(w.into()));
-    match css::words(&s)[..] {
+    // `safe` and `unsafe` go with the word after them.
+    let mut values: Vec<String> = Vec::new();
+    for w in css::words(&s) {
+        match values.last_mut() {
+            Some(last) if last == "safe" || last == "unsafe" => *last = format!("{last} {w}"),
+            _ => values.push(w.into()),
+        }
+    }
+    match &values[..] {
         [both] => word(both).map(|t| (t.clone(), t)),
         [align, justify] => Ok((word(align)?, word(justify)?)),
         _ => Err(format!("{} takes one or two values", shown(v))),
@@ -3555,10 +3600,10 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::Overflow => d.overflow = pair(v, overflow)?.into(),
         F::OverflowX => d.overflow[0] = overflow(v)?,
         F::OverflowY => d.overflow[1] = overflow(v)?,
-        F::JustifyContent => d.justify_content = keyword(v, &CONTENT_ALIGN)?,
-        F::AlignItems => d.align_items = keyword(v, &SELF_ALIGN)?,
+        F::JustifyContent => d.justify_content = content_align(v)?,
+        F::AlignItems => d.align_items = items_align(v)?,
         F::AlignSelf => d.align_self = self_align(v)?,
-        F::AlignContent => d.align_content = keyword(v, &CONTENT_ALIGN)?,
+        F::AlignContent => d.align_content = content_align(v)?,
         F::Gap => {
             d.gap = match &lengths(v, GAP, 2)?[..] {
                 [row, column, ..] => [row, column].map(Len::clone),
@@ -3582,13 +3627,11 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::GridStart(axis) => d.grid_lines[axis].start = grid::line(v)?,
         F::GridEnd(axis) => d.grid_lines[axis].end = grid::line(v)?,
         F::GridArea => d.grid_lines = grid::area(v)?,
-        F::JustifyItems => d.justify_items = keyword(v, &SELF_ALIGN)?,
+        F::JustifyItems => d.justify_items = items_align(v)?,
         F::JustifySelf => d.justify_self = self_align(v)?,
-        F::PlaceItems => (d.align_items, d.justify_items) = pair(v, |v| keyword(v, &SELF_ALIGN))?,
+        F::PlaceItems => (d.align_items, d.justify_items) = pair(v, items_align)?,
         F::PlaceSelf => (d.align_self, d.justify_self) = pair(v, self_align)?,
-        F::PlaceContent => {
-            (d.align_content, d.justify_content) = pair(v, |v| keyword(v, &CONTENT_ALIGN))?
-        }
+        F::PlaceContent => (d.align_content, d.justify_content) = pair(v, content_align)?,
         F::Background => {
             // The shorthand leaves the blend modes as they are.
             let blends = std::mem::take(&mut d.layers.blends);
