@@ -165,6 +165,45 @@ fn classes_expand_to_tailwinds_css() {
         ("stroke-2", "& { stroke-width: 2; }"),
         ("stroke-[1.5]", "& { stroke-width: 1.5; }"),
         ("stroke-[#f00]", "& { stroke: #f00; }"),
+        ("bg-top-left", "& { background-position: left top; }"),
+        ("bg-size-[auto_50%]", "& { background-size: auto 50%; }"),
+        ("bg-repeat-round", "& { background-repeat: round; }"),
+        (
+            "bg-linear-to-r",
+            "& { --tw-gradient-position: to right; @supports (background-image: \
+             linear-gradient(in lab, red, red)) { --tw-gradient-position: to right in oklab; } \
+             background-image: linear-gradient(var(--tw-gradient-stops)); }",
+        ),
+        (
+            "-bg-linear-45/longer",
+            "& { --tw-gradient-position: calc(45deg * -1); @supports (background-image: \
+             linear-gradient(in lab, red, red)) { --tw-gradient-position: calc(45deg * -1) in \
+             oklch longer hue; } background-image: linear-gradient(var(--tw-gradient-stops)); }",
+        ),
+        (
+            "bg-linear-[25deg,red_5%,blue]",
+            "& { --tw-gradient-position: 25deg,red 5%,blue; background-image: \
+             linear-gradient(var(--tw-gradient-stops,25deg,red 5%,blue)); }",
+        ),
+        (
+            "bg-conic-90/srgb",
+            "& { --tw-gradient-position: from 90deg in srgb; background-image: \
+             conic-gradient(var(--tw-gradient-stops)); }",
+        ),
+        (
+            "bg-radial-[at_25%_25%]",
+            "& { --tw-gradient-position: at 25% 25%; background-image: \
+             radial-gradient(var(--tw-gradient-stops,at 25% 25%)); }",
+        ),
+        (
+            "from-red-500",
+            "& { --tw-gradient-from: var(--color-red-500); --tw-gradient-stops: \
+             var(--tw-gradient-via-stops, var(--tw-gradient-position), var(--tw-gradient-from) \
+             var(--tw-gradient-from-position), var(--tw-gradient-to) \
+             var(--tw-gradient-to-position)); }",
+        ),
+        ("via-30%", "& { --tw-gradient-via-position: 30%; }"),
+        ("to-[3px]", "& { --tw-gradient-to-position: 3px; }"),
     ];
     for (name, expected) in cases {
         assert_eq!(css(name), expected, "{name}");
@@ -188,6 +227,12 @@ fn classes_tailwind_does_not_make_are_errors() {
         "bg-[10px]/50",
         "bg-foo",
         "stroke-[3px]/50",
+        "bg-linear",
+        "-bg-linear-[to_right]",
+        "-bg-linear-to-r",
+        "bg-radial-50",
+        "from-31",
+        "from-[3px]/50",
     ] {
         assert_eq!(
             error(name),
@@ -317,6 +362,32 @@ fn text_classes_read_each_others_variables() {
     let numeric = applied(&["ordinal", "tabular-nums"], &[]);
     let words: Vec<&str> = numeric[1].1.split_whitespace().collect();
     assert_eq!(words, ["ordinal", "tabular-nums"]);
+}
+
+#[test]
+fn gradients_read_their_color_stops() {
+    let image = |classes: &[&str]| applied(classes, &[]).pop().unwrap().1;
+    // Mixed in Oklab, as the engine takes Lab, from 0% to 100% unless the stops say.
+    assert_eq!(
+        image(&["bg-linear-to-r", "from-[#f00]", "to-[#00f]"]),
+        "linear-gradient(to right in oklab, #f00 0%, #00f 100%)"
+    );
+    assert_eq!(
+        image(&[
+            "to-[#00f]",
+            "via-[#0f0]",
+            "via-20%",
+            "from-[#f00]",
+            "bg-linear-90"
+        ]),
+        "linear-gradient(90deg in oklab, #f00 0%, #0f0 20%, #00f 100%)"
+    );
+    // Without stops the gradient is not drawn; one stop goes to transparent.
+    assert!(applied(&["bg-radial"], &[]).is_empty());
+    assert_eq!(
+        image(&["bg-conic", "from-[#f00]"]),
+        "conic-gradient(in oklab, #f00 0%, #0000 100%)"
+    );
 }
 
 #[test]

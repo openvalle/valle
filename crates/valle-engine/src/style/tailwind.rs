@@ -85,6 +85,15 @@ pub const PROPERTIES: &[(&str, Option<&str>)] = &[
     ("--tw-numeric-figure", None),
     ("--tw-numeric-spacing", None),
     ("--tw-numeric-fraction", None),
+    ("--tw-gradient-position", None),
+    ("--tw-gradient-from", Some("#0000")),
+    ("--tw-gradient-via", Some("#0000")),
+    ("--tw-gradient-to", Some("#0000")),
+    ("--tw-gradient-stops", None),
+    ("--tw-gradient-via-stops", None),
+    ("--tw-gradient-from-position", Some("0%")),
+    ("--tw-gradient-via-position", Some("50%")),
+    ("--tw-gradient-to-position", Some("100%")),
 ];
 
 const VARIANTS: &str = "variants are not supported: the canvas has a fixed size, and nothing \
@@ -132,13 +141,48 @@ pub fn class(name: &str) -> Result<Class, String> {
         rules,
     };
     // What the engine cannot draw fails where the class is written, not when a frame takes it:
-    // its declarations as an element of it alone has them, and its children.
+    // its declarations as an element of it alone has them, and its children. One that reads what
+    // other classes set, a gradient's color stops say, is checked where the classes meet.
     let one = std::slice::from_ref(&class);
     for d in element(one, &[])?.iter().chain(&element(&[], one)?) {
         let what = format!("className {name}: {}", d.property);
-        super::accepts(&what, &d.property, &d.value)?;
+        if let Err(e) = super::accepts(&what, &d.property, &d.value)
+            && !open(&class, &d.property)
+        {
+            return Err(e);
+        }
     }
     Ok(class)
+}
+
+/// Whether a class's `property` reads a variable of Tailwind's that the class leaves to others.
+fn open(class: &Class, property: &str) -> bool {
+    fn walk<'a>(nodes: &'a [Node], out: &mut Vec<(&'a str, &'a str)>) {
+        for n in nodes {
+            match n {
+                Node::Declaration(p, v) => out.push((p, v)),
+                Node::Rule(_, inner) | Node::At(_, inner) => walk(inner, out),
+            }
+        }
+    }
+    fn reads(value: &str, set: &[(&str, &str)], depth: usize) -> bool {
+        value.match_indices("var(--tw-").any(|(i, _)| {
+            let rest = &value[i + "var(".len()..];
+            let name = &rest[..rest.find([',', ')']).unwrap_or(rest.len())];
+            let values: Vec<&str> = (set.iter())
+                .filter(|(p, _)| *p == name.trim())
+                .map(|(_, v)| *v)
+                .collect();
+            values.is_empty() || (depth < 8 && values.iter().any(|v| reads(v, set, depth + 1)))
+        })
+    }
+    let mut set = Vec::new();
+    for r in &class.rules {
+        walk(&r.nodes, &mut set);
+    }
+    (set.iter())
+        .filter(|(p, _)| *p == property)
+        .any(|(_, v)| reads(v, &set, 0))
 }
 
 /// That a class's CSS holds only what the engine applies: declarations on the element and on
@@ -154,6 +198,9 @@ fn check(nodes: &[Node]) -> Result<(), String> {
                     "its CSS styles {selector}, which is not supported yet"
                 ));
             }
+            Node::At(rule, inner)
+                if rule.starts_with("@supports (")
+                    && inner.iter().all(|n| matches!(n, Node::Declaration(..))) => {}
             Node::At(rule, _) => {
                 let at = rule.split_whitespace().next().unwrap_or_default();
                 return Err(format!(
@@ -972,6 +1019,13 @@ fn element(own: &[Class], parent: &[Class]) -> Result<Vec<Declaration>, String> 
             for n in &r.nodes {
                 match (n, inherited) {
                     (Node::Declaration(p, v), false) => written.push((p, v, c)),
+                    (Node::At(rule, inner), false) if supports(rule) => {
+                        for n in inner {
+                            if let Node::Declaration(p, v) = n {
+                                written.push((p, v, c));
+                            }
+                        }
+                    }
                     (Node::Rule(CHILDREN, inner), true) => {
                         for n in inner {
                             if let Node::Declaration(p, v) = n {
@@ -1007,6 +1061,16 @@ fn element(own: &[Class], parent: &[Class]) -> Result<Vec<Declaration>, String> 
     Ok(out)
 }
 
+/// Whether the engine takes the declaration an `@supports (property: value)` rule asks about.
+fn supports(rule: &str) -> bool {
+    let condition = rule
+        .strip_prefix("@supports (")
+        .and_then(|r| r.strip_suffix(')'));
+    condition
+        .and_then(|c| c.split_once(':'))
+        .is_some_and(|(p, v)| super::accepts(rule, p.trim(), v.trim()).is_ok())
+}
+
 /// `value` with its `var()`s resolved for an element of these custom properties; `None` if one
 /// has no value and no fallback, which makes it invalid.
 fn substitute(
@@ -1028,17 +1092,20 @@ fn substitute(
             None => (rest[..end].trim(), None),
         };
         rest = &rest[end + 1..];
+        let registered = || match PROPERTIES.iter().find(|(p, _)| *p == name) {
+            Some((_, initial)) => Ok(initial.map(str::to_string)),
+            None if name.starts_with("--tw-") => {
+                Err(format!("engine bug: {name} is not registered"))
+            }
+            None => Err(VARIABLES.to_string()),
+        };
         let found = match custom.get(name) {
+            // `initial` is the value it is registered with, if any.
+            Some(v) if v.trim() == "initial" => registered()?,
             Some(v) => substitute(v, custom, depth + 1)?,
             None => match THEME.value(name) {
                 Some(v) => substitute(v, custom, depth + 1)?,
-                None => match PROPERTIES.iter().find(|(p, _)| *p == name) {
-                    Some((_, initial)) => initial.map(str::to_string),
-                    None if name.starts_with("--tw-") => {
-                        return Err(format!("engine bug: {name} is not registered"));
-                    }
-                    None => return Err(VARIABLES.into()),
-                },
+                None => registered()?,
             },
         };
         let found = match (found, fallback) {
@@ -1072,19 +1139,19 @@ fn closing(s: &str) -> Option<usize> {
 /// A class's CSS on one line, as `web/tests/tailwind.ts` prints Tailwind's: its rules, `&` its
 /// element.
 pub fn print(class: &Class) -> String {
-    let important = if class.important { " !important" } else { "" };
-    let body = |head: &str, nodes: &[Node]| {
+    fn body(head: &str, nodes: &[Node], important: &str) -> String {
         let mut inner = Vec::new();
         for n in nodes {
             match n {
                 Node::Declaration(p, _) if p == "--tw-sort" => {}
                 Node::Declaration(p, v) => inner.push(format!("{p}: {v}{important};")),
-                Node::Rule(s, _) => inner.push(format!("{s} {{ … }}")),
-                Node::At(s, _) => inner.push(format!("{s} {{ … }}")),
+                Node::Rule(s, nodes) => inner.push(body(s, nodes, important)),
+                Node::At(s, nodes) => inner.push(body(s, nodes, important)),
             }
         }
         format!("{head} {{ {} }}", inner.join(" "))
-    };
+    }
+    let important = if class.important { " !important" } else { "" };
     let mut rules = Vec::new();
     for r in &class.rules {
         let own: Vec<Node> = (r.nodes.iter())
@@ -1095,11 +1162,11 @@ pub fn print(class: &Class) -> String {
             .iter()
             .any(|n| !matches!(n, Node::Declaration(p, _) if p == "--tw-sort"))
         {
-            rules.push(body("&", &own));
+            rules.push(body("&", &own, important));
         }
         for n in &r.nodes {
             if let Node::Rule(s, inner) = n {
-                rules.push(body(s, inner));
+                rules.push(body(s, inner, important));
             }
         }
     }

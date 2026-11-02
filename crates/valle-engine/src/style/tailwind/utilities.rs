@@ -785,11 +785,287 @@ fn register(r: &mut Registry) {
         );
     }
     text(r);
+    backgrounds(r);
     r.add("bg".into(), true, Box::new(background));
     r.fixed("fill-none", &[("fill", "none")]);
     r.add("fill".into(), true, Box::new(fill));
     r.fixed("stroke-none", &[("stroke", "none")]);
     r.add("stroke".into(), true, Box::new(stroke));
+}
+
+/// The background utilities but `bg-*`: sizes, positions, repeats, boxes, and gradients with their
+/// color stops.
+fn backgrounds(r: &mut Registry) {
+    for (name, value) in [("auto", "auto"), ("cover", "cover"), ("contain", "contain")] {
+        r.fixed(format!("bg-{name}"), &[("background-size", value)]);
+    }
+    for value in ["fixed", "local", "scroll"] {
+        r.fixed(format!("bg-{value}"), &[("background-attachment", value)]);
+    }
+    for (name, value) in [
+        ("top", "top"),
+        ("top-left", "left top"),
+        ("top-right", "right top"),
+        ("bottom", "bottom"),
+        ("bottom-left", "left bottom"),
+        ("bottom-right", "right bottom"),
+        ("left", "left"),
+        ("right", "right"),
+        ("center", "center"),
+    ] {
+        r.fixed(format!("bg-{name}"), &[("background-position", value)]);
+    }
+    for (name, property) in [
+        ("bg-size", "background-size"),
+        ("bg-position", "background-position"),
+    ] {
+        let handle = Some(one(property));
+        r.functional(
+            name,
+            Desc {
+                handle,
+                ..Desc::default()
+            },
+        );
+    }
+    for (name, value) in [
+        ("repeat", "repeat"),
+        ("no-repeat", "no-repeat"),
+        ("repeat-x", "repeat-x"),
+        ("repeat-y", "repeat-y"),
+        ("repeat-round", "round"),
+        ("repeat-space", "space"),
+    ] {
+        r.fixed(format!("bg-{name}"), &[("background-repeat", value)]);
+    }
+    r.fixed("bg-none", &[("background-image", "none")]);
+    for (name, value) in [
+        ("text", "text"),
+        ("border", "border-box"),
+        ("padding", "padding-box"),
+        ("content", "content-box"),
+    ] {
+        r.fixed(format!("bg-clip-{name}"), &[("background-clip", value)]);
+    }
+    for (name, value) in [
+        ("border", "border-box"),
+        ("padding", "padding-box"),
+        ("content", "content-box"),
+    ] {
+        r.fixed(format!("bg-origin-{name}"), &[("background-origin", value)]);
+    }
+    for negative in [false, true] {
+        let sign = if negative { "-" } else { "" };
+        r.add(
+            format!("{sign}bg-linear"),
+            true,
+            Box::new(move |c| linear(c, negative)),
+        );
+        r.add(
+            format!("{sign}bg-conic"),
+            true,
+            Box::new(move |c| conic(c, negative)),
+        );
+    }
+    r.add("bg-radial".into(), true, Box::new(radial));
+    r.fixed("via-none", &[("--tw-gradient-via-stops", "initial")]);
+    for stop in ["from", "via", "to"] {
+        r.add(stop.into(), true, Box::new(move |c| color_stop(c, stop)));
+    }
+}
+
+/// The color space a gradient's modifier names its colors to mix in: Oklab without one, a way
+/// round Oklch's hue, or written.
+fn interpolation(modifier: Option<&Modifier>) -> String {
+    const WAYS: [&str; 4] = ["longer", "shorter", "increasing", "decreasing"];
+    match modifier {
+        None => "in oklab".into(),
+        Some(Modifier::Named(way)) if WAYS.contains(&way.as_str()) => {
+            format!("in oklch {way} hue")
+        }
+        Some(Modifier::Named(space)) => format!("in {space}"),
+        Some(Modifier::Arbitrary(method)) => method.clone(),
+    }
+}
+
+/// `bg-linear-*`: a linear gradient of the color stops, to a side or at an angle, or written; its
+/// colors mix in the space its modifier names, Oklab without one.
+fn linear(c: &Candidate, negative: bool) -> Option<Vec<Node>> {
+    const SIDES: [(&str, &str); 8] = [
+        ("to-t", "to top"),
+        ("to-tr", "to top right"),
+        ("to-r", "to right"),
+        ("to-br", "to bottom right"),
+        ("to-b", "to bottom"),
+        ("to-bl", "to bottom left"),
+        ("to-l", "to left"),
+        ("to-tl", "to top left"),
+    ];
+    let Candidate::Functional {
+        value: Some(value),
+        modifier,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let position = match value {
+        Value::Arbitrary { kind, value } => {
+            if modifier.is_some() {
+                return None;
+            }
+            let angle =
+                kind.as_deref().or_else(|| types::infer(value, &["angle"])) == Some("angle");
+            let position = match (angle, negative) {
+                (true, true) => format!("calc({value} * -1)"),
+                (_, false) => value.clone(),
+                (false, true) => return None,
+            };
+            let image = format!("linear-gradient(var(--tw-gradient-stops,{position}))");
+            return Some(vec![
+                decl("--tw-gradient-position", position),
+                decl("background-image", image),
+            ]);
+        }
+        Value::Named { value, .. } => {
+            match SIDES.iter().find(|(name, _)| *name == value.as_str()) {
+                Some((_, side)) if !negative => side.to_string(),
+                _ if positive_integer(value) && negative => format!("calc({value}deg * -1)"),
+                _ if positive_integer(value) => format!("{value}deg"),
+                _ => return None,
+            }
+        }
+    };
+    let mixed = format!("{position} {}", interpolation(modifier.as_ref()));
+    Some(vec![
+        decl("--tw-gradient-position", position),
+        Node::At(
+            "@supports (background-image: linear-gradient(in lab, red, red))".into(),
+            vec![decl("--tw-gradient-position", mixed)],
+        ),
+        decl(
+            "background-image",
+            "linear-gradient(var(--tw-gradient-stops))",
+        ),
+    ])
+}
+
+/// `bg-conic`, `bg-conic-*`: a conic gradient of the color stops, from an angle, or written.
+fn conic(c: &Candidate, negative: bool) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value, modifier, ..
+    } = c
+    else {
+        return None;
+    };
+    let method = interpolation(modifier.as_ref());
+    let stops = "conic-gradient(var(--tw-gradient-stops))".to_string();
+    let (position, image) = match value {
+        Some(Value::Arbitrary { value, .. }) if modifier.is_none() => (
+            value.clone(),
+            format!("conic-gradient(var(--tw-gradient-stops,{value}))"),
+        ),
+        None => (method, stops),
+        Some(Value::Named { value, .. }) if positive_integer(value) => {
+            let angle = match negative {
+                true => format!("calc({value}deg * -1)"),
+                false => format!("{value}deg"),
+            };
+            (format!("from {angle} {method}"), stops)
+        }
+        _ => return None,
+    };
+    Some(vec![
+        decl("--tw-gradient-position", position),
+        decl("background-image", image),
+    ])
+}
+
+/// `bg-radial`, `bg-radial-[…]`: a radial gradient of the color stops, or written.
+fn radial(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value, modifier, ..
+    } = c
+    else {
+        return None;
+    };
+    let (position, image) = match value {
+        None => (
+            interpolation(modifier.as_ref()),
+            "radial-gradient(var(--tw-gradient-stops))".to_string(),
+        ),
+        Some(Value::Arbitrary { value, .. }) if modifier.is_none() => (
+            value.clone(),
+            format!("radial-gradient(var(--tw-gradient-stops,{value}))"),
+        ),
+        Some(_) => return None,
+    };
+    Some(vec![
+        decl("--tw-gradient-position", position),
+        decl("background-image", image),
+    ])
+}
+
+/// `from-*`, `via-*`, `to-*`: a gradient's color stop, its color or its position.
+fn color_stop(c: &Candidate, stop: &str) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let modifier = modifier.as_ref();
+    let position = |at: &str| vec![decl(&format!("--tw-gradient-{stop}-position"), at)];
+    let color = match value {
+        Value::Arbitrary { kind, value } => {
+            let kinds = ["color", "length", "percentage"];
+            match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                Some("length" | "percentage") => {
+                    return modifier.is_none().then(|| position(value));
+                }
+                _ => as_color(value, modifier)?,
+            }
+        }
+        Value::Named { value, .. } => {
+            match theme_color(value, modifier, &["--background-color", "--color"]) {
+                Some(color) => color,
+                None if modifier.is_some() => return None,
+                None => {
+                    let keys = ["--gradient-color-stop-positions"];
+                    if let Some(at) = theme().resolve(Some(value), &keys) {
+                        return Some(position(&at));
+                    }
+                    let percent = value.strip_suffix('%').is_some_and(positive_integer);
+                    return percent.then(|| position(value));
+                }
+            }
+        }
+    };
+    // From and to stand alone; a via stop goes between them.
+    let ends = "var(--tw-gradient-from) var(--tw-gradient-from-position), var(--tw-gradient-to) \
+                var(--tw-gradient-to-position)";
+    let stops = match stop {
+        "via" => vec![
+            decl(
+                "--tw-gradient-via-stops",
+                "var(--tw-gradient-position), var(--tw-gradient-from) \
+                 var(--tw-gradient-from-position), var(--tw-gradient-via) \
+                 var(--tw-gradient-via-position), var(--tw-gradient-to) \
+                 var(--tw-gradient-to-position)",
+            ),
+            decl("--tw-gradient-stops", "var(--tw-gradient-via-stops)"),
+        ],
+        _ => vec![decl(
+            "--tw-gradient-stops",
+            format!("var(--tw-gradient-via-stops, var(--tw-gradient-position), {ends})"),
+        )],
+    };
+    let variable = format!("--tw-gradient-{stop}");
+    let mut nodes = vec![decl("--tw-sort", &variable), decl(&variable, color)];
+    nodes.extend(stops);
+    Some(nodes)
 }
 
 /// `bg-*`: a background color, or a background image of the theme; or written, a color, a
