@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use super::{CHILDREN, Candidate, Modifier, Node, Value};
-use super::{dimension, positive_integer, quarter, spaced, theme, types};
+use super::{dimension, positive_integer, quarter, segment, spaced, theme, types};
 
 /// What a utility makes of a candidate: its CSS, or nothing when it is not the utility's.
 type Compile = Box<dyn Fn(&Candidate) -> Option<Vec<Node>> + Send + Sync>;
@@ -108,14 +108,24 @@ fn as_color(value: &str, modifier: Option<&Modifier>) -> Option<String> {
 
 /// As Tailwind's `withAlpha`.
 fn with_alpha(value: &str, alpha: &str) -> String {
-    let alpha = match alpha.trim().parse::<f64>() {
-        Ok(n) if !alpha.trim().is_empty() => format!("{}%", crate::js::number_to_string(n * 100.0)),
-        _ => alpha.to_string(),
-    };
+    let alpha = percent(alpha);
     if alpha == "100%" {
         return value.into();
     }
     format!("color-mix(in oklab, {value} {alpha}, transparent)")
+}
+
+/// As Tailwind's `replaceAlpha`: the color at the opacity, whatever its own.
+fn replace_alpha(value: &str, alpha: &str) -> String {
+    format!("oklab(from {value} l a b / {})", percent(alpha))
+}
+
+/// An opacity as a percentage, a number of them times 100.
+fn percent(alpha: &str) -> String {
+    match alpha.trim().parse::<f64>() {
+        Ok(n) if !alpha.trim().is_empty() => format!("{}%", crate::js::number_to_string(n * 100.0)),
+        _ => alpha.to_string(),
+    }
 }
 
 #[derive(Default)]
@@ -787,6 +797,7 @@ fn register(r: &mut Registry) {
     text(r);
     backgrounds(r);
     borders(r);
+    shadows(r);
     r.add("bg".into(), true, Box::new(background));
     r.fixed("fill-none", &[("fill", "none")]);
     let keys = &["--fill", "--color"];
@@ -1392,6 +1403,304 @@ fn outline(c: &Candidate) -> Option<Vec<Node>> {
     positive_integer(value)
         .then(|| width(&format!("{value}px")))
         .flatten()
+}
+
+/// What the shadow utilities set `box-shadow` to: each kind of shadow, `0 0 #0000` until one
+/// sets it, inset ones on top.
+const BOX_SHADOW: &str = "var(--tw-inset-shadow), var(--tw-inset-ring-shadow), \
+                          var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow)";
+
+/// The theme's namespaces of box shadow colors.
+const BOX_SHADOW_COLOR: [&str; 2] = ["--box-shadow-color", "--color"];
+
+/// The shadow utilities: box shadows, inset shadows and text shadows, each of the theme or
+/// written, and their colors; and rings, inset rings and the offsets between rings and boxes.
+fn shadows(r: &mut Registry) {
+    for name in ["shadow", "inset-shadow", "text-shadow"] {
+        let color = format!("--tw-{name}-color");
+        r.fixed(format!("{name}-initial"), &[(color.as_str(), "initial")]);
+        r.add(name.into(), true, Box::new(move |c| shadow(c, name)));
+    }
+    r.fixed("ring-inset", &[("--tw-ring-inset", "inset")]);
+    r.add("ring".into(), true, Box::new(|c| ring(c, false)));
+    r.add("inset-ring".into(), true, Box::new(|c| ring(c, true)));
+    r.add("ring-offset".into(), true, Box::new(ring_offset));
+}
+
+/// `shadow-*`, `inset-shadow-*` or `text-shadow-*`, as `name` says: shadows of the theme, at the
+/// opacity the modifier gives, or written, or `none`; or their color.
+fn shadow(c: &Candidate, name: &str) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value, modifier, ..
+    } = c
+    else {
+        return None;
+    };
+    let modifier = modifier.as_ref();
+    let (color, alpha_variable) = (format!("--tw-{name}-color"), format!("--tw-{name}-alpha"));
+    // The property the shadows go in, and what `none` sets.
+    let (property, none, keys) = match name {
+        "text-shadow" => ("text-shadow", "none", ["--text-shadow-color", "--color"]),
+        "inset-shadow" => ("--tw-inset-shadow", "inset 0 0 #0000", BOX_SHADOW_COLOR),
+        _ => ("--tw-shadow", "0 0 #0000", BOX_SHADOW_COLOR),
+    };
+    let boxed = |mut nodes: Vec<Node>| {
+        if name != "text-shadow" {
+            nodes.push(decl("box-shadow", BOX_SHADOW));
+        }
+        Some(nodes)
+    };
+    let alpha = match modifier {
+        Some(Modifier::Arbitrary(a)) => Some(a.clone()),
+        Some(Modifier::Named(m)) if quarter(m) => Some(format!("{m}%")),
+        _ => None,
+    };
+    let shadows = |value: &str, prefix: &str| {
+        let mut nodes: Vec<Node> = (alpha.iter())
+            .map(|a| decl(&alpha_variable, a.clone()))
+            .collect();
+        nodes.extend(alpha_shadows(
+            property,
+            value,
+            alpha.as_deref(),
+            &color,
+            prefix,
+        ));
+        boxed(nodes)
+    };
+    let colored = |c: String| {
+        let alpha = format!("var({alpha_variable})");
+        Some(vec![decl(&color, with_alpha(&c, &alpha))])
+    };
+    let value = match value {
+        None => return shadows(theme().value(&format!("--{name}"))?, ""),
+        Some(Value::Arbitrary { kind, value }) => {
+            return match kind.as_deref().or_else(|| types::infer(value, &["color"])) {
+                Some("color") => colored(as_color(value, modifier)?),
+                _ if name == "inset-shadow" => shadows(value, "inset"),
+                _ => shadows(value, ""),
+            };
+        }
+        Some(Value::Named { value, .. }) => value,
+    };
+    match &value[..] {
+        "none" | "inherit" if modifier.is_some() => None,
+        "none" => boxed(vec![decl(property, none)]),
+        "inherit" => Some(vec![decl(&color, "inherit")]),
+        _ => match theme().value(&format!("--{name}-{value}")) {
+            Some(shadows_of_theme) => shadows(shadows_of_theme, ""),
+            None => colored(theme_color(value, modifier, &keys)?),
+        },
+    }
+}
+
+/// The declaration of `property` that sets shadows `value`, each of `prefix` and with its color
+/// that of `variable` if it is set, at opacity `alpha` if one is given, as Tailwind's
+/// `alphaReplacedShadowProperties`. Where the opacity, or a color, is a `var()`, the shadows at
+/// their own opacities come first, for browsers without relative colors.
+fn alpha_shadows(
+    property: &str,
+    value: &str,
+    alpha: Option<&str>,
+    variable: &str,
+    prefix: &str,
+) -> Vec<Node> {
+    let colored = |c: &str| format!("var({variable}, {c})");
+    let prefixed = |shadows: String| match prefix {
+        "" => shadows,
+        _ => (segment(&shadows, b',').iter())
+            .map(|s| format!("{prefix} {}", s.trim()))
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    let mut relative = false;
+    let shadows = shadow_colors(value, &mut |c| match alpha {
+        None => colored(c),
+        Some(a) if c.starts_with("current") => colored(&with_alpha(c, a)),
+        Some(a) => {
+            relative |= c.starts_with("var(") || a.starts_with("var(");
+            colored(&replace_alpha(c, a))
+        }
+    });
+    let shadows = prefixed(shadows);
+    if !relative {
+        return vec![decl(property, shadows)];
+    }
+    let plain = prefixed(shadow_colors(value, &mut |c| colored(c)));
+    let supports = "@supports (color: lab(from red l a b))".to_string();
+    vec![
+        decl(property, plain),
+        Node::At(supports, vec![decl(property, shadows)]),
+    ]
+}
+
+/// Each of the shadows `value` with its color, or `currentcolor` where it has none, made into
+/// `replace` of it, as Tailwind's `replaceShadowColors`; one of fewer than two lengths, or whose
+/// color it cannot tell, as it is.
+fn shadow_colors(value: &str, replace: &mut dyn FnMut(&str) -> String) -> String {
+    const KEYWORDS: [&str; 5] = ["inset", "inherit", "initial", "revert", "unset"];
+    const MATH: [&str; 5] = ["calc", "clamp", "max", "min", "--spacing"];
+    const COLORS: [&str; 15] = [
+        "color",
+        "color-mix",
+        "contrast-color",
+        "device-cmyk",
+        "hsl",
+        "hsla",
+        "hwb",
+        "lab",
+        "lch",
+        "light-dark",
+        "oklab",
+        "oklch",
+        "rgb",
+        "rgba",
+        "--alpha",
+    ];
+    // A number, a length of one, as Tailwind tells them: `-?(\d+|\.\d+)` first.
+    let numeric = |w: &str| {
+        let w = w.strip_prefix('-').unwrap_or(w);
+        let w = w.strip_prefix('.').unwrap_or(w);
+        w.starts_with(|c: char| c.is_ascii_digit())
+    };
+    let shadows = segment(value, b',').into_iter().map(|shadow| {
+        let shadow = shadow.trim();
+        let mut words: Vec<String> = segment(shadow, b' ')
+            .iter()
+            .map(|w| w.to_string())
+            .collect();
+        // The color's word if it has one, how many lengths, and the words that may be its color.
+        let (mut color, mut lengths, mut others) = (None, 0, Vec::new());
+        for (i, w) in words.iter().enumerate() {
+            let lower = w.to_ascii_lowercase();
+            match lower.find('(').map(|p| &lower[..p]) {
+                _ if w.is_empty() => {}
+                Some(f) if COLORS.contains(&f) => {
+                    color = Some(i);
+                    break;
+                }
+                Some(f) if MATH.contains(&f) => lengths += 1,
+                Some(_) => others.push(i),
+                None if KEYWORDS.contains(&&lower[..]) => {}
+                None if numeric(&lower) => lengths += 1,
+                None if w.starts_with('#') || types::named_color(w) => {
+                    color = Some(i);
+                    break;
+                }
+                None => others.push(i),
+            }
+        }
+        let i = match (color, &others[..]) {
+            (Some(i), _) => i,
+            _ if lengths < 2 => return shadow.to_string(),
+            (None, []) => return format!("{shadow} {}", replace("currentcolor")),
+            (None, [i]) => *i,
+            _ => return shadow.to_string(),
+        };
+        words[i] = replace(&words[i]);
+        words.join(" ")
+    });
+    shadows.collect::<Vec<_>>().join(", ")
+}
+
+/// `ring-*`, or `inset-ring-*` (`inset` true): a ring, 1px wide bare, of a width of the theme, in
+/// px or written, in the ring color, outside the ring offset; or that color.
+fn ring(c: &Candidate, inset: bool) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value, modifier, ..
+    } = c
+    else {
+        return None;
+    };
+    let modifier = modifier.as_ref();
+    let (shadow, color) = match inset {
+        true => ("--tw-inset-ring-shadow", "--tw-inset-ring-color"),
+        false => ("--tw-ring-shadow", "--tw-ring-color"),
+    };
+    let width = |w: &str| {
+        let ring = match inset {
+            true => format!("inset 0 0 0 {w} var(--tw-inset-ring-color, currentcolor)"),
+            false => format!(
+                "var(--tw-ring-inset,) 0 0 0 calc({w} + var(--tw-ring-offset-width)) \
+                 var(--tw-ring-color, currentcolor)"
+            ),
+        };
+        Some(vec![decl(shadow, ring), decl("box-shadow", BOX_SHADOW)])
+    };
+    let value = match value {
+        None if modifier.is_some() => return None,
+        None => return width("1px"),
+        Some(Value::Arbitrary { kind, value }) => {
+            return match kind
+                .as_deref()
+                .or_else(|| types::infer(value, &["color", "length"]))
+            {
+                Some("length") if modifier.is_none() => width(value),
+                Some("length") => None,
+                _ => Some(vec![decl(color, as_color(value, modifier)?)]),
+            };
+        }
+        Some(Value::Named { value, .. }) => value,
+    };
+    if let Some(c) = theme_color(value, modifier, &["--ring-color", "--color"]) {
+        return Some(vec![decl(color, c)]);
+    }
+    if modifier.is_some() {
+        return None;
+    }
+    if let Some(w) = theme().resolve(Some(value), &["--ring-width"]) {
+        return width(&w);
+    }
+    positive_integer(value)
+        .then(|| width(&format!("{value}px")))
+        .flatten()
+}
+
+/// `ring-offset-*`: how far outside the box a ring starts, of the theme, in px or written; or the
+/// color between them.
+fn ring_offset(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let modifier = modifier.as_ref();
+    let width = |w: String| {
+        let shadow = "var(--tw-ring-inset,) 0 0 0 var(--tw-ring-offset-width) \
+                      var(--tw-ring-offset-color)";
+        let nodes = vec![
+            decl("--tw-ring-offset-width", w),
+            decl("--tw-ring-offset-shadow", shadow),
+        ];
+        modifier.is_none().then_some(nodes)
+    };
+    let color = |c: String| Some(vec![decl("--tw-ring-offset-color", c)]);
+    let value = match value {
+        Value::Arbitrary { kind, value } => {
+            return match kind
+                .as_deref()
+                .or_else(|| types::infer(value, &["color", "length"]))
+            {
+                Some("length") => width(value.clone()),
+                _ => color(as_color(value, modifier)?),
+            };
+        }
+        Value::Named { value, .. } => value,
+    };
+    if let Some(w) = theme().resolve(Some(value), &["--ring-offset-width"]) {
+        return width(w);
+    }
+    if positive_integer(value) {
+        return width(format!("{value}px"));
+    }
+    color(theme_color(
+        value,
+        modifier,
+        &["--ring-offset-color", "--color"],
+    )?)
 }
 
 /// `stroke-*`: an SVG shape's stroke color, or its width.

@@ -98,6 +98,22 @@ pub const PROPERTIES: &[(&str, Option<&str>)] = &[
     ("--tw-divide-x-reverse", Some("0")),
     ("--tw-divide-y-reverse", Some("0")),
     ("--tw-outline-style", Some("solid")),
+    ("--tw-shadow", Some("0 0 #0000")),
+    ("--tw-shadow-color", None),
+    ("--tw-shadow-alpha", Some("100%")),
+    ("--tw-inset-shadow", Some("0 0 #0000")),
+    ("--tw-inset-shadow-color", None),
+    ("--tw-inset-shadow-alpha", Some("100%")),
+    ("--tw-ring-color", None),
+    ("--tw-ring-shadow", Some("0 0 #0000")),
+    ("--tw-inset-ring-color", None),
+    ("--tw-inset-ring-shadow", Some("0 0 #0000")),
+    ("--tw-ring-inset", None),
+    ("--tw-ring-offset-width", Some("0px")),
+    ("--tw-ring-offset-color", Some("#fff")),
+    ("--tw-ring-offset-shadow", Some("0 0 #0000")),
+    ("--tw-text-shadow-color", None),
+    ("--tw-text-shadow-alpha", Some("100%")),
 ];
 
 const VARIANTS: &str = "variants are not supported: the canvas has a fixed size, and nothing \

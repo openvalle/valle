@@ -247,6 +247,48 @@ fn classes_expand_to_tailwinds_css() {
             "& { --tw-outline-style: none; outline-style: none; @media (forced-colors: active) { \
              outline: 2px solid transparent; outline-offset: 2px; } }",
         ),
+        (
+            "shadow-md/50",
+            "& { --tw-shadow-alpha: 50%; --tw-shadow: 0 4px 6px -1px var(--tw-shadow-color, \
+             oklab(from rgb(0 0 0 / 0.1) l a b / 50%)), 0 2px 4px -2px var(--tw-shadow-color, \
+             oklab(from rgb(0 0 0 / 0.1) l a b / 50%)); box-shadow: var(--tw-inset-shadow), \
+             var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), \
+             var(--tw-shadow); }",
+        ),
+        (
+            "shadow-[0_0_4px]",
+            "& { --tw-shadow: 0 0 4px var(--tw-shadow-color, currentcolor); box-shadow: \
+             var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), \
+             var(--tw-ring-shadow), var(--tw-shadow); }",
+        ),
+        (
+            "shadow-red-500/50",
+            "& { --tw-shadow-color: color-mix(in oklab, color-mix(in oklab, var(--color-red-500) \
+             50%, transparent) var(--tw-shadow-alpha), transparent); }",
+        ),
+        (
+            "inset-shadow-[0_2px_red]/20",
+            "& { --tw-inset-shadow-alpha: 20%; --tw-inset-shadow: inset 0 2px \
+             var(--tw-inset-shadow-color, oklab(from red l a b / 20%)); box-shadow: \
+             var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), \
+             var(--tw-ring-shadow), var(--tw-shadow); }",
+        ),
+        (
+            "ring",
+            "& { --tw-ring-shadow: var(--tw-ring-inset,) 0 0 0 calc(1px + \
+             var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor); box-shadow: \
+             var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), \
+             var(--tw-ring-shadow), var(--tw-shadow); }",
+        ),
+        (
+            "ring-offset-2",
+            "& { --tw-ring-offset-width: 2px; --tw-ring-offset-shadow: var(--tw-ring-inset,) 0 0 \
+             0 var(--tw-ring-offset-width) var(--tw-ring-offset-color); }",
+        ),
+        (
+            "text-shadow-[0_1px_red]",
+            "& { text-shadow: 0 1px var(--tw-text-shadow-color, red); }",
+        ),
     ];
     for (name, expected) in cases {
         assert_eq!(css(name), expected, "{name}");
@@ -281,6 +323,11 @@ fn classes_tailwind_does_not_make_are_errors() {
         "rounded-foo",
         "-rounded-lg",
         "divide-x-[3px]/2",
+        "shadow-none/50",
+        "inset-shadow",
+        "text-shadow",
+        "ring-2/50",
+        "ring-offset-2/50",
     ] {
         assert_eq!(
             error(name),
@@ -427,6 +474,25 @@ fn borders_take_their_style_and_divide_children() {
             d("border-inline-end-width", "calc(2px * calc(1 - 1))", false),
             d("border-style", "dashed", false)
         ]
+    );
+}
+
+#[test]
+fn shadows_stack_rings_over_box_shadows_in_their_colors() {
+    let shadow = |classes: &[&str]| applied(classes, &[]).pop().unwrap().1;
+    // Each kind is none until a class sets it; the offset is the background's, white unless set.
+    assert_eq!(
+        shadow(&["ring-red-500", "shadow-sm", "ring-offset-2", "ring-2"]),
+        "0 0 #0000, 0 0 #0000,  0 0 0 2px #fff,  0 0 0 calc(2px + 2px) oklch(63.7% 0.237 25.331), \
+         0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1)"
+    );
+    // A shadow's color takes the opacity the shadow's modifier gives.
+    let red = "color-mix(in oklab, oklch(63.7% 0.237 25.331) 50%, transparent)";
+    assert_eq!(
+        shadow(&["shadow-red-500", "shadow-md/50"]),
+        format!(
+            "0 0 #0000, 0 0 #0000, 0 0 #0000, 0 0 #0000, 0 4px 6px -1px {red}, 0 2px 4px -2px {red}"
+        )
     );
 }
 

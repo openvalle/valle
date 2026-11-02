@@ -115,7 +115,12 @@ pub(super) fn color(s: &str) -> bool {
     s.starts_with('#')
         || FUNCTIONS.iter().any(|f| lower.starts_with(f))
         || lower.starts_with("--alpha(")
-        || NAMED.contains(&lower.as_str())
+        || named_color(&lower)
+}
+
+/// Whether `s` is a named color, or a system color, as Tailwind's `isNamedColor`.
+pub(super) fn named_color(s: &str) -> bool {
+    NAMED.contains(&s.to_ascii_lowercase().as_str())
 }
 
 pub(super) fn length(s: &str) -> bool {
