@@ -1784,7 +1784,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 245] = [
+const FIELDS: [(&str, Field); 251] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -1804,6 +1804,12 @@ const FIELDS: [(&str, Field); 245] = [
     ("minHeight", Field::MinHeight),
     ("maxWidth", Field::MaxWidth),
     ("maxHeight", Field::MaxHeight),
+    ("inlineSize", Field::Width),
+    ("blockSize", Field::Height),
+    ("minInlineSize", Field::MinWidth),
+    ("minBlockSize", Field::MinHeight),
+    ("maxInlineSize", Field::MaxWidth),
+    ("maxBlockSize", Field::MaxHeight),
     ("boxSizing", Field::BoxSizing),
     ("aspectRatio", Field::AspectRatio),
     ("overflow", Field::Overflow),

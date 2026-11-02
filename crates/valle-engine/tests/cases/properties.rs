@@ -213,7 +213,7 @@ const ROWS: &[Row] = &[
         refused: &["\"1px 2px 3px\"", "\"\"", "true"],
     },
     Row {
-        properties: &["width"],
+        properties: &["width", "inlineSize"],
         sample: r##"<View style={{ height: 6, background: "#3949ab", PROPERTY: VALUE }} />"##,
         values: &[
             "0",
@@ -255,7 +255,7 @@ const ROWS: &[Row] = &[
         ],
     },
     Row {
-        properties: &["minWidth"],
+        properties: &["minWidth", "minInlineSize"],
         sample: r##"<View style={{ width: 20, height: 6, background: "#3949ab", PROPERTY: VALUE }} />"##,
         values: &[
             "0",
@@ -269,7 +269,7 @@ const ROWS: &[Row] = &[
         refused: &["-1", "\"none\"", "\"min-content\""],
     },
     Row {
-        properties: &["maxWidth"],
+        properties: &["maxWidth", "maxInlineSize"],
         sample: r##"<View style={{ height: 6, background: "#3949ab", PROPERTY: VALUE }} />"##,
         values: &[
             "0",
@@ -283,7 +283,7 @@ const ROWS: &[Row] = &[
         refused: &["-1", "\"auto\"", "\"max-content\""],
     },
     Row {
-        properties: &["height"],
+        properties: &["height", "blockSize"],
         sample: r##"<View style={{ height: 20, background: "#e8eaf6" }}><View style={{ width: 40, background: "#3949ab", PROPERTY: VALUE }} /></View>"##,
         values: &[
             "0",
@@ -308,7 +308,7 @@ const ROWS: &[Row] = &[
         refused: &["-1", "\"1ex\"", "\"fit-content(-1px)\"", "true"],
     },
     Row {
-        properties: &["minHeight"],
+        properties: &["minHeight", "minBlockSize"],
         sample: r##"<View style={{ height: 20, background: "#e8eaf6" }}><View style={{ width: 40, height: 4, background: "#3949ab", PROPERTY: VALUE }} /></View>"##,
         values: &[
             "0",
@@ -322,7 +322,7 @@ const ROWS: &[Row] = &[
         refused: &["-1", "\"none\""],
     },
     Row {
-        properties: &["maxHeight"],
+        properties: &["maxHeight", "maxBlockSize"],
         sample: r##"<View style={{ height: 20, background: "#e8eaf6" }}><View style={{ width: 40, height: 16, background: "#3949ab", PROPERTY: VALUE }} /></View>"##,
         values: &[
             "0",
