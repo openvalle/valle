@@ -106,7 +106,7 @@ fn static_scenes_trace_once() {
         let mut f = scene(
             "export default function Scene() {
   return (
-    <View className=\"flex  items-center\" style={{ backgroundColor: \"#123456\", opacity: 0.5 }}>
+    <View className=\"flex  p-4\" style={{ backgroundColor: \"#123456\", opacity: 0.5 }}>
       <Text key=\"title\">Hello {\"world\"}</Text>
     </View>
   );
@@ -118,10 +118,7 @@ fn static_scenes_trace_once() {
         let t = &frame.template;
         assert_eq!(t.roots, [0]);
         assert_eq!(t.nodes[0].kind, Kind::View);
-        assert_eq!(
-            t.nodes[0].classes,
-            [Rc::from("flex"), Rc::from("items-center")]
-        );
+        assert_eq!(t.nodes[0].classes, [Rc::from("flex"), Rc::from("p-4")]);
         assert_eq!(t.nodes[0].site.as_deref(), Some("scene.motion.tsx:4:5"));
         assert_eq!(t.nodes[0].children, [1]);
         assert_eq!(

@@ -25,6 +25,9 @@
 //!
 //! `async` and `await` are the one syntax rule: a frame is computed synchronously, so there is
 //! nothing to wait for. Everything else a scene cannot do comes from what its environment lacks.
+//!
+//! Every class a `className` may take is checked where it is written, as Tailwind finds classes
+//! in source, before a frame reaches it.
 
 use std::path::Path;
 
@@ -32,8 +35,8 @@ use oxc::allocator::Allocator;
 use oxc::ast::ast::{
     ArrowFunctionExpression, AssignmentExpression, AssignmentTarget, AwaitExpression,
     BindingPattern, Declaration, DoWhileStatement, Expression, ForOfStatement, ForStatement,
-    Function, IfStatement, ObjectProperty, ObjectPropertyKind, Program, PropertyKey, SpreadElement,
-    Statement, SwitchStatement, WhileStatement,
+    Function, IfStatement, JSXAttribute, JSXAttributeValue, ObjectProperty, ObjectPropertyKind,
+    Program, PropertyKey, SpreadElement, Statement, SwitchStatement, WhileStatement,
 };
 use oxc::ast_visit::{Visit, walk};
 use oxc::codegen::{Codegen, CodegenOptions};
@@ -114,6 +117,11 @@ pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten,
     };
     let composition = composition(&program).map_err(at)?;
     let resources = controls(&program).map_err(at)?;
+    let mut classes = Classes(None);
+    classes.visit_program(&program);
+    if let Some(e) = classes.0 {
+        return Err(at(e));
+    }
     // Where each JSX element and fragment opens, in source order. The transform keeps their
     // order, so the k-th `__h` call of the printed code is the k-th of them; the source map only
     // places a call near some token of it.
@@ -723,6 +731,73 @@ impl<'a> Visit<'a> for Jsx {
     }
 }
 
+/// The first class a `className` may take that is not one, and where it is written. A class is a
+/// word of a string literal, or of a template literal's text, the value may be: through `? :`,
+/// `&&`, `||` and `??`, as Tailwind finds classes in source. A word a template literal runs into a
+/// value of is part of a class the frame makes, checked then.
+struct Classes(Option<(u32, String)>);
+
+impl Classes {
+    fn value(&mut self, e: &Expression<'_>) {
+        match bare(e) {
+            Expression::StringLiteral(s) => self.words(s.span.start + 1, &s.value, false, false),
+            Expression::TemplateLiteral(t) => {
+                for (i, q) in t.quasis.iter().enumerate() {
+                    let text = q.value.cooked.as_ref().unwrap_or(&q.value.raw);
+                    self.words(q.span.start, text, i > 0, !q.tail);
+                }
+                t.expressions.iter().for_each(|e| self.value(e));
+            }
+            Expression::ConditionalExpression(c) => {
+                self.value(&c.consequent);
+                self.value(&c.alternate);
+            }
+            Expression::LogicalExpression(l) => {
+                self.value(&l.left);
+                self.value(&l.right);
+            }
+            _ => {}
+        }
+    }
+
+    /// Checks the words of `text`, written from `at`, but a first one a value comes right
+    /// before, `after` one, and a last one it comes right after, `before` one.
+    fn words(&mut self, at: u32, text: &str, after: bool, before: bool) {
+        let space = |c: Option<char>| c.is_none_or(|c| c.is_ascii_whitespace());
+        let words: Vec<&str> = text.split_ascii_whitespace().collect();
+        for (i, word) in words.iter().enumerate() {
+            let cut = (i == 0 && after && !space(text.chars().next()))
+                || (i + 1 == words.len() && before && !space(text.chars().last()));
+            if cut || self.0.is_some() {
+                continue;
+            }
+            if let Err(e) = crate::style::tailwind::class(word) {
+                let offset = word.as_ptr() as usize - text.as_ptr() as usize;
+                self.0 = Some((at + offset as u32, e));
+            }
+        }
+    }
+}
+
+impl<'a> Visit<'a> for Classes {
+    fn visit_jsx_attribute(&mut self, a: &JSXAttribute<'a>) {
+        if a.is_identifier("className") {
+            match &a.value {
+                Some(JSXAttributeValue::StringLiteral(s)) => {
+                    self.words(s.span.start + 1, &s.value, false, false);
+                }
+                Some(JSXAttributeValue::ExpressionContainer(c)) => {
+                    if let Some(e) = c.expression.as_expression() {
+                        self.value(e);
+                    }
+                }
+                _ => {}
+            }
+        }
+        walk::walk_jsx_attribute(self, a);
+    }
+}
+
 #[derive(Default)]
 struct Collector {
     edits: Vec<Edit>,
@@ -1117,6 +1192,32 @@ mod tests {
         ] {
             let e = err(source);
             assert!(e.contains(says), "{source}: {e}");
+        }
+    }
+
+    #[test]
+    fn classes_a_class_name_may_take_are_checked_where_written() {
+        let scene = |class: &str| format!("const a = 1;\nconst v = <View className={class} />;\n");
+        assert!(rewrite("s.tsx", &scene("{a > 1 ? `p-4 ${a}` : \"m-2\"}"), 0).is_ok());
+        // Words running into a value are left to the frame.
+        assert!(rewrite("s.tsx", &scene("{`text-${a} ${a}-x`}"), 0).is_ok());
+        for (class, says) in [
+            (
+                "\"block hover:p-4\"",
+                "2:34: className hover:p-4: variants are not supported",
+            ),
+            (
+                "{a > 1 ? \"p-4\" : \"p-foo\"}",
+                "2:45: className p-foo is not a Tailwind class",
+            ),
+            (
+                "{`p-4 ${a && \"flex-grow\"} m-1`}",
+                "2:41: className flex-grow is a Tailwind v3 name: write grow",
+            ),
+            ("{`p-4 ${a} m-1 w-`}", "2:42: className w- is not"),
+        ] {
+            let e = err(&scene(class));
+            assert!(e.starts_with(says), "{class}: {e}");
         }
     }
 
