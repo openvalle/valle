@@ -294,6 +294,32 @@ fn classes_expand_to_tailwinds_css() {
         ("mix-blend-multiply", "& { mix-blend-mode: multiply; }"),
         ("bg-blend-screen", "& { background-blend-mode: screen; }"),
         ("isolate", "& { isolation: isolate; }"),
+        (
+            "-translate-x-1/2",
+            "& { --tw-translate-x: calc(calc(1 / 2 * 100%) * -1); \
+             translate: var(--tw-translate-x) var(--tw-translate-y); }",
+        ),
+        (
+            "translate-full",
+            "& { --tw-translate-x: 100%; --tw-translate-y: 100%; \
+             translate: var(--tw-translate-x) var(--tw-translate-y); }",
+        ),
+        (
+            "scale-50",
+            "& { --tw-scale-x: 50%; --tw-scale-y: 50%; --tw-scale-z: 50%; \
+             scale: var(--tw-scale-x) var(--tw-scale-y); }",
+        ),
+        ("-rotate-45", "& { rotate: calc(45deg * -1); }"),
+        (
+            "rotate-x-45",
+            "& { --tw-rotate-x: rotateX(45deg); transform: var(--tw-rotate-x,) \
+             var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,); }",
+        ),
+        ("origin-top-right", "& { transform-origin: 100% 0; }"),
+        (
+            "perspective-near",
+            "& { perspective: var(--perspective-near); }",
+        ),
     ];
     for (name, expected) in cases {
         assert_eq!(css(name), expected, "{name}");
@@ -335,6 +361,9 @@ fn classes_tailwind_does_not_make_are_errors() {
         "ring-offset-2/50",
         "opacity-0.3",
         "opacity-50/50",
+        "scale-50/50",
+        "-rotate-[1_1_0]",
+        "transform-foo",
     ] {
         assert_eq!(
             error(name),
@@ -501,6 +530,21 @@ fn shadows_stack_rings_over_box_shadows_in_their_colors() {
             "0 0 #0000, 0 0 #0000, 0 0 #0000, 0 0 #0000, 0 4px 6px -1px {red}, 0 2px 4px -2px {red}"
         )
     );
+}
+
+#[test]
+fn transforms_read_each_axis() {
+    let last = |classes: &[&str]| applied(classes, &[]).pop();
+    assert_eq!(
+        last(&["translate-x-full", "-translate-y-1/2"]),
+        Some(d("translate", "100% calc(calc(1 / 2 * 100%) * -1)", false))
+    );
+    assert_eq!(
+        last(&["rotate-y-45", "skew-x-6"]),
+        Some(d("transform", " rotateY(45deg)  skewX(6deg) ", false))
+    );
+    // With no axis set there is nothing to transform.
+    assert_eq!(last(&["transform"]), None);
 }
 
 #[test]

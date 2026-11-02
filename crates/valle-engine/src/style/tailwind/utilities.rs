@@ -799,6 +799,7 @@ fn register(r: &mut Registry) {
     borders(r);
     shadows(r);
     blending(r);
+    transforms(r);
     r.add("bg".into(), true, Box::new(background));
     r.fixed("fill-none", &[("fill", "none")]);
     let keys = &["--fill", "--color"];
@@ -1745,6 +1746,277 @@ fn blending(r: &mut Registry) {
     }
     r.fixed("isolate", &[("isolation", "isolate")]);
     r.fixed("isolation-auto", &[("isolation", "auto")]);
+}
+
+/// What `transform` is set to by what rotates and skews on one axis, each `var()` empty until a
+/// class sets it.
+const TRANSFORM: &str = "var(--tw-rotate-x,) var(--tw-rotate-y,) var(--tw-rotate-z,) \
+                         var(--tw-skew-x,) var(--tw-skew-y,)";
+
+/// The transform utilities: origins, perspective, the `translate`, `scale` and `rotate`
+/// properties and each of their axes, skews, and how the 3D space is kept.
+fn transforms(r: &mut Registry) {
+    const PLACES: [(&str, &str); 9] = [
+        ("center", "center"),
+        ("top", "top"),
+        ("top-right", "100% 0"),
+        ("right", "100%"),
+        ("bottom-right", "100% 100%"),
+        ("bottom", "bottom"),
+        ("bottom-left", "0 100%"),
+        ("left", "0"),
+        ("top-left", "0 0"),
+    ];
+    const XY: &str = "var(--tw-translate-x) var(--tw-translate-y)";
+    const XYZ: &str = "var(--tw-translate-x) var(--tw-translate-y) var(--tw-translate-z)";
+    let places = |property: &str| {
+        (PLACES.iter())
+            .map(|&(name, value)| (name, vec![decl(property, value)]))
+            .collect()
+    };
+    r.functional(
+        "origin",
+        Desc {
+            keys: &["--transform-origin"],
+            statics: places("transform-origin"),
+            handle: Some(one("transform-origin")),
+            ..Desc::default()
+        },
+    );
+    r.functional(
+        "perspective-origin",
+        Desc {
+            keys: &["--perspective-origin"],
+            statics: places("perspective-origin"),
+            handle: Some(one("perspective-origin")),
+            ..Desc::default()
+        },
+    );
+    r.functional(
+        "perspective",
+        Desc {
+            keys: &["--perspective"],
+            statics: vec![("none", vec![decl("perspective", "none")])],
+            handle: Some(one("perspective")),
+            ..Desc::default()
+        },
+    );
+
+    r.fixed("translate-none", &[("translate", "none")]);
+    for (sign, full) in [("-", "-100%"), ("", "100%")] {
+        r.fixed(
+            format!("{sign}translate-full"),
+            &[
+                ("--tw-translate-x", full),
+                ("--tw-translate-y", full),
+                ("translate", XY),
+            ],
+        );
+    }
+    let keys = &["--translate", "--spacing"];
+    let handle: Handle = Arc::new(|v, _| {
+        Some(vec![
+            decl("--tw-translate-x", v),
+            decl("--tw-translate-y", v),
+            decl("translate", XY),
+        ])
+    });
+    r.spacing("translate", keys, handle, true, true);
+    for axis in ["x", "y"] {
+        let variable = format!("--tw-translate-{axis}");
+        for (sign, full) in [("-", "-100%"), ("", "100%")] {
+            r.fixed(
+                format!("{sign}translate-{axis}-full"),
+                &[(variable.as_str(), full), ("translate", XY)],
+            );
+        }
+        let handle: Handle =
+            Arc::new(move |v, _| Some(vec![decl(&variable, v), decl("translate", XY)]));
+        r.spacing(&format!("translate-{axis}"), keys, handle, true, true);
+    }
+    let handle: Handle =
+        Arc::new(|v, _| Some(vec![decl("--tw-translate-z", v), decl("translate", XYZ)]));
+    r.spacing("translate-z", keys, handle, true, false);
+    r.fixed("translate-3d", &[("translate", XYZ)]);
+
+    r.fixed("scale-none", &[("scale", "none")]);
+    r.add("-scale".into(), true, Box::new(|c| scale(c, true)));
+    r.add("scale".into(), true, Box::new(|c| scale(c, false)));
+    for axis in ["x", "y", "z"] {
+        let last = if axis == "z" {
+            " var(--tw-scale-z)"
+        } else {
+            ""
+        };
+        let variable = format!("--tw-scale-{axis}");
+        let scales = format!("var(--tw-scale-x) var(--tw-scale-y){last}");
+        r.functional(
+            &format!("scale-{axis}"),
+            Desc {
+                negative: true,
+                keys: &["--scale"],
+                value: Some(percentage),
+                handle: Some(Arc::new(move |v, _| {
+                    Some(vec![decl(&variable, v), decl("scale", &scales[..])])
+                })),
+                ..Desc::default()
+            },
+        );
+    }
+    let scales = "var(--tw-scale-x) var(--tw-scale-y) var(--tw-scale-z)";
+    r.fixed("scale-3d", &[("scale", scales)]);
+
+    r.fixed("rotate-none", &[("rotate", "none")]);
+    r.add("-rotate".into(), true, Box::new(|c| rotate(c, true)));
+    r.add("rotate".into(), true, Box::new(|c| rotate(c, false)));
+    for (axis, function) in [("x", "rotateX"), ("y", "rotateY"), ("z", "rotateZ")] {
+        let variable = format!("--tw-rotate-{axis}");
+        r.functional(
+            &format!("rotate-{axis}"),
+            Desc {
+                negative: true,
+                keys: &["--rotate"],
+                value: Some(whole_degrees),
+                handle: Some(Arc::new(move |v, _| {
+                    Some(vec![
+                        decl(&variable, format!("{function}({v})")),
+                        decl("transform", TRANSFORM),
+                    ])
+                })),
+                ..Desc::default()
+            },
+        );
+    }
+    for (name, x, y) in [
+        ("skew", true, true),
+        ("skew-x", true, false),
+        ("skew-y", false, true),
+    ] {
+        r.functional(
+            name,
+            Desc {
+                negative: true,
+                keys: &["--skew"],
+                value: Some(whole_degrees),
+                handle: Some(Arc::new(move |v, _| {
+                    let mut nodes = Vec::new();
+                    if x {
+                        nodes.push(decl("--tw-skew-x", format!("skewX({v})")));
+                    }
+                    if y {
+                        nodes.push(decl("--tw-skew-y", format!("skewY({v})")));
+                    }
+                    nodes.push(decl("transform", TRANSFORM));
+                    Some(nodes)
+                })),
+                ..Desc::default()
+            },
+        );
+    }
+    r.add("transform".into(), true, Box::new(transform));
+    r.fixed("transform-cpu", &[("transform", TRANSFORM)]);
+    let gpu = format!("translateZ(0) {TRANSFORM}");
+    r.fixed("transform-gpu", &[("transform", gpu.as_str())]);
+    r.fixed("transform-none", &[("transform", "none")]);
+    r.fixed("transform-flat", &[("transform-style", "flat")]);
+    r.fixed("transform-3d", &[("transform-style", "preserve-3d")]);
+    for (name, value) in [
+        ("content", "content-box"),
+        ("border", "border-box"),
+        ("fill", "fill-box"),
+        ("stroke", "stroke-box"),
+        ("view", "view-box"),
+    ] {
+        r.fixed(format!("transform-{name}"), &[("transform-box", value)]);
+    }
+    r.fixed("backface-visible", &[("backface-visibility", "visible")]);
+    r.fixed("backface-hidden", &[("backface-visibility", "hidden")]);
+}
+
+/// A whole number as a percentage.
+fn percentage(v: &str, _: Option<&str>) -> Option<String> {
+    positive_integer(v).then(|| format!("{v}%"))
+}
+
+/// A whole number as an angle.
+fn whole_degrees(v: &str, _: Option<&str>) -> Option<String> {
+    positive_integer(v).then(|| format!("{v}deg"))
+}
+
+/// `scale-*` or `-scale-*`: of the theme or in percent on each axis, or written as the property.
+fn scale(c: &Candidate, negative: bool) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier: None,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let signed = |v: String| match negative {
+        true => format!("calc({v} * -1)"),
+        false => v,
+    };
+    let value = match value {
+        Value::Arbitrary { value, .. } => return Some(vec![decl("scale", signed(value.clone()))]),
+        Value::Named { value, .. } => value,
+    };
+    let scale = theme().resolve(Some(value), &["--scale"]);
+    let scale = signed(scale.or_else(|| percentage(value, None))?);
+    Some(vec![
+        decl("--tw-scale-x", &scale[..]),
+        decl("--tw-scale-y", &scale[..]),
+        decl("--tw-scale-z", &scale[..]),
+        decl("scale", "var(--tw-scale-x) var(--tw-scale-y)"),
+    ])
+}
+
+/// `rotate-*` or `-rotate-*`: an angle of the theme, in degrees or written. Tailwind's written
+/// axis reads a variable nothing sets, so it is not taken.
+fn rotate(c: &Candidate, negative: bool) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier: None,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let angle = match value {
+        Value::Arbitrary { kind, value } => {
+            let kinds = ["angle", "vector"];
+            match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                Some("vector") => return None,
+                _ => value.clone(),
+            }
+        }
+        Value::Named { value, .. } => {
+            let angle = theme().resolve(Some(value), &["--rotate"]);
+            angle.or_else(|| whole_degrees(value, None))?
+        }
+    };
+    let angle = match negative {
+        true => format!("calc({angle} * -1)"),
+        false => angle,
+    };
+    Some(vec![decl("rotate", angle)])
+}
+
+/// `transform`, what the classes of its axes set, or `transform-[…]`, written.
+fn transform(c: &Candidate) -> Option<Vec<Node>> {
+    match c {
+        Candidate::Functional {
+            value: None,
+            modifier: None,
+            ..
+        } => Some(vec![decl("transform", TRANSFORM)]),
+        Candidate::Functional {
+            value: Some(Value::Arbitrary { value, .. }),
+            modifier: None,
+            ..
+        } => Some(vec![decl("transform", value.clone())]),
+        _ => None,
+    }
 }
 
 /// `stroke-*`: an SVG shape's stroke color, or its width.

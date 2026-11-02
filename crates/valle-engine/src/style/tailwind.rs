@@ -114,6 +114,17 @@ pub const PROPERTIES: &[(&str, Option<&str>)] = &[
     ("--tw-ring-offset-shadow", Some("0 0 #0000")),
     ("--tw-text-shadow-color", None),
     ("--tw-text-shadow-alpha", Some("100%")),
+    ("--tw-translate-x", Some("0")),
+    ("--tw-translate-y", Some("0")),
+    ("--tw-translate-z", Some("0")),
+    ("--tw-scale-x", Some("1")),
+    ("--tw-scale-y", Some("1")),
+    ("--tw-scale-z", Some("1")),
+    ("--tw-rotate-x", None),
+    ("--tw-rotate-y", None),
+    ("--tw-rotate-z", None),
+    ("--tw-skew-x", None),
+    ("--tw-skew-y", None),
 ];
 
 const VARIANTS: &str = "variants are not supported: the canvas has a fixed size, and nothing \
@@ -1070,8 +1081,11 @@ fn element(own: &[Class], parent: &[Class]) -> Result<Vec<Declaration>, String> 
             continue;
         }
         let at = |e: String| format!("className {}: {p}: {e}", c.name);
-        // One that is invalid at computed-value time is as if it were not written.
-        if let Some(value) = substitute(v, &custom, 0).map_err(at)? {
+        // One that is invalid at computed-value time is as if it were not written, and so is one
+        // whose variables are all empty.
+        if let Some(value) = substitute(v, &custom, 0).map_err(at)?
+            && !value.trim().is_empty()
+        {
             out.push(Declaration {
                 property: p.to_string(),
                 value,
