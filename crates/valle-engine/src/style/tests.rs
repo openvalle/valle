@@ -3356,11 +3356,50 @@ fn what_is_not_supported_is_an_error() {
             "{key}: {e}"
         );
     }
-    let mut classes = view(&[], &[]);
-    classes.classes.push("flex".into());
-    assert_eq!(
-        styles(vec![classes], &[]).err().unwrap(),
-        "s.tsx:1:1: className is not supported yet"
+}
+
+/// A View of these classes and this style.
+fn classed(classes: &[&str], style: &[(&str, Prop)], children: &[u32]) -> Node {
+    let mut node = view(style, children);
+    node.classes = classes.iter().map(|&c| c.into()).collect();
+    node
+}
+
+#[test]
+fn classes_cascade_under_the_style_and_important_ones_over_it() {
+    let s = styles(
+        vec![classed(
+            &["p-4", "mt-2!"],
+            &[("padding", num(1.0)), ("marginTop", num(1.0))],
+            &[],
+        )],
+        &[],
+    )
+    .unwrap()
+    .remove(0);
+    assert_eq!(s.layout.padding.top, px(1.0));
+    assert_eq!(s.layout.margin.top, auto_px(8.0));
+    // The parent's spacing between its children, the last of them without.
+    let tree = vec![
+        classed(&["flex", "space-x-[3px]"], &[], &[1, 2]),
+        view(&[], &[]),
+        view(&[], &[]),
+    ];
+    let s = styles(tree, &[]).unwrap();
+    assert_eq!(s[0].layout.display, Display::Flex);
+    assert_eq!(s[1].layout.margin.right, auto_px(3.0));
+    assert_eq!(s[2].layout.margin.right, auto_px(0.0));
+    let e = styles(vec![classed(&["hover:flex"], &[], &[])], &[]).unwrap_err();
+    assert!(
+        e.starts_with("s.tsx:1:1: className hover:flex: variants are not supported"),
+        "{e}"
+    );
+    let s = styles(vec![classed(&["-z-[2.5]"], &[], &[])], &[]).unwrap();
+    assert_eq!(s[0].z_index, Some(-2));
+    let e = styles(vec![classed(&["h-[1lh]"], &[], &[])], &[]).unwrap_err();
+    assert!(
+        e.starts_with("s.tsx:1:1: className h-[1lh]: height: "),
+        "{e}"
     );
 }
 

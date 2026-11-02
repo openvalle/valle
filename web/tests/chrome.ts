@@ -3,6 +3,7 @@
 // index and the lines of every text node, written to `<out>.json`, and the frame without its text
 // on a transparent canvas, `<out>.png`. It also lists the CSS properties that Chrome knows,
 // tests/baselines/chrome/properties.json, which the cases the engine must refuse are made from.
+// A page with classes gets the stylesheet the Tailwind of package.json builds of them.
 //
 //   bun web/tests/chrome.ts <jobs.json>
 //
@@ -35,6 +36,7 @@ if (!platform) {
 
 /** Draws every job in one Chrome. */
 async function draw() {
+  const pages = await Promise.all(jobs.map((job) => page(job.html)));
   const chrome = await install();
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -43,7 +45,7 @@ async function draw() {
       const path = new URL(request.url).pathname;
       const job = /^\/job\/(\d+)$/.exec(path);
       if (job) {
-        return new Response(jobs[Number(job[1])].html, {
+        return new Response(pages[Number(job[1])], {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
@@ -143,6 +145,31 @@ async function draw() {
     server.stop(true);
     await rm(profile, { recursive: true, force: true });
   }
+}
+
+/** A job's HTML, with the stylesheet Tailwind builds of its classes where it asks for one. */
+async function page(html: string): Promise<string> {
+  const marker = /<style data-tailwind="([^"]*)"><\/style>/.exec(html);
+  if (!marker) {
+    return html;
+  }
+  const { stylesheet, version: tailwind } = await import("./tailwind.ts");
+  if (marker[1] !== tailwind) {
+    throw new Error(`a page asks for Tailwind ${marker[1]}, and ${tailwind} is installed`);
+  }
+  const classes = new Set<string>();
+  for (const [, list] of html.matchAll(/ class="([^"]*)"/g)) {
+    const text = list
+      .replaceAll("&quot;", '"')
+      .replaceAll("&lt;", "<")
+      .replaceAll("&gt;", ">")
+      .replaceAll("&amp;", "&");
+    for (const c of text.split(/\s+/)) {
+      if (c) classes.add(c);
+    }
+  }
+  const css = await stylesheet([...classes]);
+  return html.replace(marker[0], () => `<style data-tailwind="${tailwind}">\n${css}</style>`);
 }
 
 /** The pinned Chrome's executable, downloaded into the cache the first time. */

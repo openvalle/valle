@@ -133,13 +133,13 @@ fn accept(cases: &[String]) -> Result<(), String> {
     for case in cases {
         let case = case.trim_end_matches('/');
         let case = case.strip_suffix(".tsx").unwrap_or(case);
-        let standard = ["css", "svg"]
+        let standard = ["css", "svg", "tailwind"]
             .iter()
             .any(|d| case == *d || case.starts_with(&format!("{d}/")));
         if standard {
             return Err(format!(
-                "{case}: Chrome draws the css and svg baselines; a case that differs is the \
-                 engine's to fix"
+                "{case}: Chrome draws the css, svg and tailwind baselines; a case that differs \
+                 is the engine's to fix"
             ));
         }
         let mine: Vec<&String> = drawn

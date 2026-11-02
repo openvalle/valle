@@ -2,7 +2,9 @@
 //! DOM prints a style object, on a canvas like the engine's: a Span as a `span`, an Image as an
 //! `img` of a block that shows its file from the server, an SVG element as itself with its
 //! attributes, an `<svg>` a block, and every other node as a `div`; a resource in a style's
-//! `url()` is its file too. Elements carry their node's index, `data-n`, and Texts `data-text`.
+//! `url()` is its file too. Elements carry their node's index, `data-n`, Texts `data-text`, and
+//! their classes; a page with classes asks for the stylesheet the pinned Tailwind builds of them,
+//! which `web/tests/chrome.ts` puts in.
 
 use std::fmt::Write as _;
 
@@ -55,8 +57,13 @@ const UNITLESS: &[&str] = &[
 const SANS_SERIF: &str = "\"Valle Sans\"";
 
 /// The frame's HTML, or what in it has none; `resources` are the scene's, their files paths from
-/// the cases' folder.
-pub fn print(frame: &Frame, c: Composition, resources: &[Slot]) -> Result<String, String> {
+/// the cases' folder, and `tailwind` the Tailwind version its classes are compiled by.
+pub fn print(
+    frame: &Frame,
+    c: Composition,
+    resources: &[Slot],
+    tailwind: &str,
+) -> Result<String, String> {
     let mut html = format!(
         "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n\
          @font-face {{ font-family: {SANS_SERIF}; src: url(\"/fonts/NotoSans-Variable.ttf\"); \
@@ -65,9 +72,13 @@ pub fn print(frame: &Frame, c: Composition, resources: &[Slot]) -> Result<String
          body {{ margin: 0; }}\n\
          #canvas {{ position: relative; overflow: hidden; width: {}px; height: {}px; \
          font-family: {SANS_SERIF}; }}\n\
-         </style>\n<div id=\"canvas\">",
+         </style>\n",
         c.width, c.height
     );
+    if frame.template.nodes.iter().any(|n| !n.classes.is_empty()) {
+        let _ = writeln!(html, "<style data-tailwind=\"{tailwind}\"></style>");
+    }
+    html += "<div id=\"canvas\">";
     for &root in &frame.template.roots {
         node(&mut html, frame, resources, root)?;
     }
@@ -91,6 +102,9 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
         _ => "div",
     };
     let _ = write!(html, "<{tag} data-n=\"{i}\"");
+    if !n.classes.is_empty() {
+        let _ = write!(html, " class=\"{}\"", escape(&n.classes.join(" ")));
+    }
     if let Kind::Svg { tag, attributes } = &n.kind {
         for (name, prop) in attributes {
             let v = value(frame, prop).text();

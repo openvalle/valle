@@ -1,4 +1,4 @@
-//! CSS math functions in lengths: `calc()`, `min()`, `max()` and `clamp()`. Once numbers have
+//! CSS math functions in lengths and numbers: `calc()`, `min()`, `max()` and `clamp()`. Once numbers have
 //! multiplied into the lengths, any of them is the larger or smaller of sums of lengths: adding to
 //! a `min()` adds to each of its arguments, and a negative factor turns it into a `max()`.
 //!
@@ -76,15 +76,29 @@ const FUNCTIONS: [&str; 4] = ["calc", "min", "max", "clamp"];
 
 /// The math function `s` as a length, `unit` giving the lengths of numbers with units in it.
 pub(super) fn length(s: &str, unit: impl Fn(Num) -> Result<Len, String>) -> Result<Expr, String> {
+    match parse(s, unit)? {
+        Value::Length(m) => Ok(m),
+        Value::Number(_) => Err(format!("{s} is a number, not a length")),
+    }
+}
+
+/// The math function `s` as a number: `calc(10 * -1)`.
+pub(super) fn number(s: &str) -> Result<f64, String> {
+    let unit = |n: Num| Err(format!("{}{} is not a number", n.value, n.unit));
+    match parse(s, unit)? {
+        Value::Number(x) if x.is_finite() => Ok(x),
+        Value::Number(x) => Err(format!("{s} is {x}, not a finite number")),
+        Value::Length(_) => Err(format!("{s} is a length, not a number")),
+    }
+}
+
+fn parse(s: &str, unit: impl Fn(Num) -> Result<Len, String>) -> Result<Value, String> {
     let mut p = Parser { s, at: 0, unit };
     let v = p.term().and_then(|v| match p.s[p.at..].trim() {
         "" => Ok(v),
         rest => Err(format!("{rest} is left over")),
     });
-    match v.map_err(|e| format!("{s}: {e}"))? {
-        Value::Length(m) => Ok(m),
-        Value::Number(_) => Err(format!("{s} is a number, not a length")),
-    }
+    v.map_err(|e| format!("{s}: {e}"))
 }
 
 /// What math comes to: a number, or a length.

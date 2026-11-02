@@ -17,6 +17,7 @@ pub mod math;
 pub mod offset;
 pub mod position;
 pub mod shape;
+pub mod tailwind;
 pub mod transform;
 
 use std::borrow::Cow;
@@ -657,7 +658,10 @@ impl Sheet {
                 ends[p as usize] = ends[p as usize].max(ends[i]);
             }
         }
-        let nodes = template.nodes.iter().map(bind).collect::<Result<_, _>>()?;
+        let classes = tailwind::declarations(template)?;
+        let nodes = (template.nodes.iter().zip(&classes))
+            .map(|(node, classes)| bind(node, classes))
+            .collect::<Result<_, _>>()?;
         Ok(Sheet {
             nodes,
             parents,
@@ -880,11 +884,13 @@ struct Frame<'a> {
     resources: &'a [Slot],
 }
 
-fn bind(node: &Node) -> Result<Bound, Error> {
+/// A declaration as written: its key, its value, what errors call it, and whether it is a
+/// presentation attribute.
+type Written<'a> = (Rc<str>, Cow<'a, Prop>, Rc<str>, bool);
+
+/// A node's declarations, with those its classes make.
+fn bind(node: &Node, classes: &[tailwind::Declaration]) -> Result<Bound, Error> {
     let place = node.place();
-    if !node.classes.is_empty() {
-        return Err(format!("{place}: className is not supported yet"));
-    }
     let mut declared = Declared::default();
     let mut rest = Vec::new();
     let (tag, attributes) = match &node.kind {
@@ -895,39 +901,64 @@ fn bind(node: &Node) -> Result<Bound, Error> {
     if tag == Some(Tag::Svg) {
         declared.overflow = pair(&V::Str("hidden".into()), overflow)?.into();
     }
-    // Presentation attributes, then the style, which overrides them.
-    let presentation = (attributes.iter())
-        .filter(|(k, _)| tag.is_some_and(|t| svg::presentational(t, k)))
-        .map(|(k, p)| (k, p, true));
-    let style = node.style.iter().map(|(k, p)| (k, p, false));
-    for (key, prop, attribute) in presentation.chain(style) {
-        let what: Rc<str> = match attribute {
-            true => format!("attribute {key}").into(),
-            false => format!("style {key}").into(),
-        };
-        let field = Field::by_name(key).ok_or_else(|| format!("{place}: {}", unsupported(key)))?;
+    // Presentation attributes, the classes, the style, then the important classes, each over
+    // what comes before: each with its key, what errors call it, and whether it is an attribute.
+    let class = |d: &tailwind::Declaration| {
+        let what = format!("className {}: {}", d.class, d.property);
+        let prop = Prop::Const(V::Str(d.value.as_str().into()));
+        (
+            camel(&d.property).into(),
+            Cow::Owned(prop),
+            what.into(),
+            false,
+        )
+    };
+    let mut written: Vec<Written> = Vec::new();
+    for (k, p) in attributes {
+        if tag.is_some_and(|t| svg::presentational(t, k)) {
+            written.push((
+                k.clone(),
+                Cow::Borrowed(p),
+                format!("attribute {k}").into(),
+                true,
+            ));
+        }
+    }
+    written.extend(classes.iter().filter(|d| !d.important).map(class));
+    for (k, p) in &node.style {
+        written.push((
+            k.clone(),
+            Cow::Borrowed(p),
+            format!("style {k}").into(),
+            false,
+        ));
+    }
+    written.extend(classes.iter().filter(|d| d.important).map(class));
+    for (key, prop, what, attribute) in written {
+        let field = (Field::by_name(&key))
+            .ok_or_else(|| format!("{place}: {}", unsupported(&what, &key)))?;
         if matches!(node.kind, Kind::Span { .. }) && !field.textual() {
             return Err(format!(
-                "{place}: style {key}: a <Span> is part of a text, not a box, so it takes only \
-                 text properties"
+                "{place}: {what}: a <Span> is part of a text, not a box, so it takes only text \
+                 properties"
             ));
         }
         if tag.is_some_and(|t| t != Tag::Svg) && !field.drawn_in_svg() {
             return Err(format!(
-                "{place}: style {key} on an element in an <svg> is not supported yet"
+                "{place}: {what} on an element in an <svg> is not supported yet"
             ));
         }
         let at = |e: String| format!("{place}: {what}: {e}");
-        match prop {
+        match &*prop {
             Prop::Const(v) if rest.is_empty() => {
                 set(&mut declared, field, &presented(v, attribute)).map_err(at)?;
             }
             Prop::Const(v) => {
                 // Checked now, so a bad constant fails on the first frame as it would up front.
                 set(&mut Declared::default(), field, &presented(v, attribute)).map_err(at)?;
-                rest.push((field, prop.clone(), what, attribute));
+                rest.push((field, prop.into_owned(), what, attribute));
             }
-            Prop::Expr(_) => rest.push((field, prop.clone(), what, attribute)),
+            Prop::Expr(_) => rest.push((field, prop.into_owned(), what, attribute)),
         }
     }
     let svg = match tag {
@@ -1035,7 +1066,8 @@ const USE_FLEX: &str = "use flex or grid layout";
 const NO_INLINE: &str = "there is no HTML inline flow";
 const INLINE_INSTEAD: &str = "use flex layout, and Span for styled runs of text";
 
-fn unsupported(key: &str) -> String {
+/// That the property `key`, which errors call `what`, is not supported, and why.
+fn unsupported(what: &str, key: &str) -> String {
     let never = NEVER
         .iter()
         .find(|(name, ..)| match name.strip_suffix('*') {
@@ -1043,10 +1075,28 @@ fn unsupported(key: &str) -> String {
             None => key == *name,
         });
     match never {
-        Some((_, "", instead)) => format!("style {key} is not supported: {instead}"),
-        Some((_, why, instead)) => format!("style {key} is not supported: {why}; {instead}"),
-        None => format!("style {key} is not supported"),
+        Some((_, "", instead)) => format!("{what} is not supported: {instead}"),
+        Some((_, why, instead)) => format!("{what} is not supported: {why}; {instead}"),
+        None => format!("{what} is not supported"),
     }
+}
+
+/// A CSS property's name as a style key: `margin-inline-start` as `marginInlineStart`,
+/// `-webkit-line-clamp` as `WebkitLineClamp`.
+fn camel(property: &str) -> String {
+    let mut out = String::with_capacity(property.len());
+    let mut upper = false;
+    for (i, c) in property.chars().enumerate() {
+        match c {
+            '-' => upper = i > 0 || !property.starts_with("-ms-"),
+            c if upper => {
+                out.push(c.to_ascii_uppercase());
+                upper = false;
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// A length as declared; `em` resolves when the style is computed.
@@ -2783,6 +2833,9 @@ fn number(v: &V) -> Result<f64, String> {
         V::Bool(_) => Err(format!("{} is not a number", shown(v))),
         V::Str(_) => {
             let s = text(v)?;
+            if math::is_math(&s) {
+                return math::number(&s);
+            }
             css::num(&s)
                 .filter(|n| n.unit.is_empty())
                 .map(|n| n.value)
@@ -2800,7 +2853,11 @@ fn factor(v: &V) -> Result<f64, String> {
 }
 
 fn integer(v: &V) -> Result<i32, String> {
-    let x = number(v)?;
+    let mut x = number(v)?;
+    // CSS rounds a math function to the nearest integer, halves up.
+    if matches!(v, V::Str(s) if math::is_math(s.trim())) {
+        x = (x + 0.5).floor();
+    }
     if x.fract() != 0.0 || x.abs() > f64::from(i32::MAX) {
         return Err(format!("{x} is not an integer"));
     }

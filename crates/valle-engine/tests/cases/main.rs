@@ -3,9 +3,12 @@
 //!
 //! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`;
 //!   a `…` in it stands for any text.
-//! - A case in `css/` or `svg/` is standard CSS or SVG: each frame is printed as HTML, and its
-//!   boxes and lines must be where Chrome puts them, each box edge within 1/32 px. The Chrome baselines are drawn here
-//!   when missing or out of date (see `chrome.rs`), never on CI.
+//! - A case in `css/`, `svg/` or `tailwind/` is standard CSS, SVG or Tailwind: each frame is
+//!   printed as HTML, and its boxes and lines must be where Chrome puts them, each box edge within
+//!   1/32 px. The Chrome baselines are drawn here when missing or out of date (see `chrome.rs`),
+//!   never on CI.
+//! - The case `tailwind/classes` compares the CSS of every Tailwind class the engine expands with
+//!   the Tailwind compiler's (see `tailwind.rs`).
 //! - Any other case is drawn on the GPU, every frame, and each frame compared with its Valle
 //!   baseline, `tests/baselines/valle/<case>.<frame>.png`, within one level a channel. Frames that
 //!   differ or have no baseline go to `target/review` with a page to compare them, and
@@ -31,6 +34,7 @@ use valle_engine::time::Tick;
 mod chrome;
 mod html;
 mod properties;
+mod tailwind;
 
 /// The largest canvas, px a side, and the most frames a case may have.
 const MAX_SIZE: u32 = 512;
@@ -47,6 +51,8 @@ struct Runner {
     chrome_baselines: PathBuf,
     /// The Chrome version the Chrome baselines are drawn by.
     chrome: Result<String, String>,
+    /// The Tailwind version `package.json` pins.
+    tailwind: Result<String, String>,
     /// On CI, which never draws baselines.
     ci: bool,
     review: PathBuf,
@@ -100,6 +106,7 @@ fn main() -> ExitCode {
         chrome: std::fs::read_to_string(&version)
             .map(|v| v.trim().to_string())
             .map_err(|e| format!("{}: {e}", version.display())),
+        tailwind: tailwind::version(repo),
         ci: std::env::var_os("CI").is_some(),
         review: repo.join("target/review"),
         gpu_layer: layers.split(',').any(|l| l == "gpu"),
@@ -116,7 +123,8 @@ fn main() -> ExitCode {
         }
     };
     let filters: Vec<String> = std::env::args().skip(1).collect();
-    let cases = match select(&runner.root, runner.made.keys(), &filters) {
+    let checks = [tailwind::CASE.to_string()];
+    let cases = match select(&runner.root, runner.made.keys().chain(&checks), &filters) {
         Ok(cases) => cases,
         Err(e) => {
             eprintln!("cases: {e}");
@@ -296,7 +304,15 @@ impl Runner {
     }
 
     fn run(&self, case: &str) -> Outcome {
-        let standard = case.starts_with("css/") || case.starts_with("svg/");
+        if case == tailwind::CASE {
+            return match tailwind::case(&self.repo, self.ci) {
+                Ok(()) => Outcome::Passed,
+                Err(e) => Outcome::Failed(e),
+            };
+        }
+        let standard = ["css/", "svg/", "tailwind/"]
+            .iter()
+            .any(|d| case.starts_with(d));
         let drawn = !standard && !case.starts_with("errors/");
         if drawn && !self.gpu_layer {
             return Outcome::Skipped;
@@ -409,7 +425,8 @@ impl Runner {
             let frame = scene.frame(at)?;
             let c = scene.composition();
             let size = [c.width, c.height];
-            let html = html::print(&frame, c, scene.resources())?;
+            let tailwind = self.tailwind.as_deref().map_err(|e| e.to_string())?;
+            let html = html::print(&frame, c, scene.resources(), tailwind)?;
             let out = self.chrome_baselines.join(format!("{stem}.{i}"));
             let png = self.chrome_baselines.join(format!("{stem}.{i}.png"));
             let json = self.chrome_baselines.join(format!("{stem}.{i}.json"));
@@ -466,17 +483,10 @@ impl Runner {
             0 => println!("\nlisting the CSS properties Chrome knows"),
             n => println!("\ndrawing {n} Chrome baselines"),
         }
-        let status = Command::new("bun")
-            .arg("web/tests/chrome.ts")
-            .arg(&list)
-            .current_dir(&self.repo)
-            .status()
-            .map_err(|e| format!("cannot run bun, which draws the Chrome baselines: {e}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("`bun web/tests/chrome.ts` failed ({status})"))
-        }
+        bun(
+            &self.repo,
+            &["web/tests/chrome.ts".as_ref(), list.as_os_str()],
+        )
     }
 
     /// The CSS properties the pinned Chrome knows, which `web/tests/chrome.ts` lists whenever it
@@ -659,6 +669,26 @@ impl Runner {
         let page = self.review.join("index.html");
         std::fs::write(&page, html).map_err(|e| format!("{}: {e}", page.display()))
     }
+}
+
+/// Runs a script with bun in the repository, after installing the locked packages.
+fn bun(repo: &Path, args: &[&std::ffi::OsStr]) -> Result<(), String> {
+    let script = args.first().map_or("".into(), |s| s.to_string_lossy());
+    for args in [
+        &["install", "--frozen-lockfile", "--silent"].map(std::ffi::OsStr::new)[..],
+        args,
+    ] {
+        let status = Command::new("bun")
+            .args(args)
+            .current_dir(repo)
+            .status()
+            .map_err(|e| format!("cannot run bun, which {script} needs: {e}"))?;
+        if !status.success() {
+            let shown: Vec<_> = args.iter().map(|a| a.to_string_lossy()).collect();
+            return Err(format!("`bun {}` failed ({status})", shown.join(" ")));
+        }
+    }
+    Ok(())
 }
 
 /// Whether `error` fits `expected`, where each `…` stands for any text.
