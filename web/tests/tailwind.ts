@@ -27,9 +27,14 @@ const options = {
   },
 };
 
-/** The stylesheet Tailwind builds for `classes`. */
+// Valle's font stacks, its built-in families, as the engine's theme has them; sans-serif is the
+// served "Valle Sans", as the HTML printer writes it.
+const FONTS =
+  '@theme { --font-sans: "Valle Sans"; --font-serif: serif; --font-mono: monospace; }\n';
+
+/** The stylesheet Tailwind builds for `classes`, with Valle's font stacks. */
 export async function stylesheet(classes: string[]): Promise<string> {
-  return (await compile(INPUT, options)).build(classes);
+  return (await compile(INPUT + FONTS, options)).build(classes);
 }
 
 type Node =
@@ -38,22 +43,25 @@ type Node =
   | { kind: "declaration"; property: string; value?: string; important: boolean }
   | { kind: string; nodes?: Node[] };
 
-/** A class's CSS on one line, its own selector `&`. */
+/** A class's CSS on one line, its own selector `&`, without the declarations of no value, which
+ * Tailwind leaves out of its stylesheets. */
 function print(nodes: Node[], selector: string): string {
+  const all = (nodes: Node[]) => nodes.map(one).filter(Boolean).join(" ");
   const one = (n: Node): string => {
     if (n.kind === "declaration" && "property" in n) {
-      return `${n.property}: ${n.value ?? ""}${n.important ? " !important" : ""};`;
+      if (n.value === undefined) return "";
+      return `${n.property}: ${n.value}${n.important ? " !important" : ""};`;
     }
     if (n.kind === "rule" && "selector" in n) {
-      return `${n.selector.split(selector).join("&")} { ${n.nodes.map(one).join(" ")} }`;
+      return `${n.selector.split(selector).join("&")} { ${all(n.nodes)} }`;
     }
     if (n.kind === "at-rule" && "name" in n) {
-      const body = n.nodes.length > 0 ? ` { ${n.nodes.map(one).join(" ")} }` : ";";
+      const body = n.nodes.length > 0 ? ` { ${all(n.nodes)} }` : ";";
       return `${n.name} ${n.params}${body}`;
     }
     throw new Error(`a ${n.kind} node in a class's CSS`);
   };
-  return nodes.map(one).join(" ");
+  return all(nodes);
 }
 
 /** `CSS.escape`, as Tailwind escapes a class into its selector. */

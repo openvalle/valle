@@ -76,6 +76,67 @@ fn classes_expand_to_tailwinds_css() {
         ),
         ("grid-flow-col-dense", "& { grid-auto-flow: column dense; }"),
         ("justify-self-end", "& { justify-self: flex-end; }"),
+        (
+            "text-sm",
+            "& { font-size: var(--text-sm); line-height: var(--tw-leading, \
+             var(--text-sm--line-height)); }",
+        ),
+        (
+            "text-sm/6",
+            "& { font-size: var(--text-sm); line-height: calc(var(--spacing) * 6); }",
+        ),
+        (
+            "text-[13px]/[20px]",
+            "& { font-size: 13px; line-height: 20px; }",
+        ),
+        ("text-[1.5em]", "& { font-size: 1.5em; }"),
+        (
+            "text-red-500/50",
+            "& { color: color-mix(in oklab, var(--color-red-500) 50%, transparent); }",
+        ),
+        ("text-current", "& { color: currentcolor; }"),
+        ("text-[#f00]", "& { color: #f00; }"),
+        (
+            "font-bold",
+            "& { --tw-font-weight: var(--font-weight-bold); font-weight: \
+             var(--font-weight-bold); }",
+        ),
+        ("font-sans", "& { font-family: var(--font-sans); }"),
+        (
+            "font-[300]",
+            "& { --tw-font-weight: 300; font-weight: 300; }",
+        ),
+        ("font-['Brand_Sans']", "& { font-family: 'Brand Sans'; }"),
+        (
+            "leading-tight",
+            "& { --tw-leading: var(--leading-tight); line-height: var(--leading-tight); }",
+        ),
+        ("leading-none", "& { --tw-leading: 1; line-height: 1; }"),
+        (
+            "-tracking-[1px]",
+            "& { --tw-tracking: calc(1px * -1); letter-spacing: calc(1px * -1); }",
+        ),
+        ("decoration-2", "& { text-decoration-thickness: 2px; }"),
+        (
+            "decoration-sky-500",
+            "& { text-decoration-color: var(--color-sky-500); }",
+        ),
+        (
+            "-underline-offset-2",
+            "& { text-underline-offset: calc(2px * -1); }",
+        ),
+        ("font-stretch-75%", "& { font-stretch: 75%; }"),
+        (
+            "tabular-nums",
+            "& { --tw-numeric-spacing: tabular-nums; font-variant-numeric: var(--tw-ordinal,) \
+             var(--tw-slashed-zero,) var(--tw-numeric-figure,) var(--tw-numeric-spacing,) \
+             var(--tw-numeric-fraction,); }",
+        ),
+        (
+            "line-clamp-3",
+            "& { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; \
+             -webkit-line-clamp: 3; }",
+        ),
     ];
     for (name, expected) in cases {
         assert_eq!(css(name), expected, "{name}");
@@ -154,6 +215,11 @@ fn errors_say_what_to_write_instead() {
          grid layout"
     );
     assert!(error("items-center-safe").starts_with("className items-center-safe: align-items: "));
+    assert_eq!(
+        error("align-middle"),
+        "className align-middle: vertical-align is not supported: there is no HTML inline flow; \
+         use flex layout, and Span for styled runs of text"
+    );
     let e = error("container");
     assert_eq!(
         e,
@@ -197,6 +263,27 @@ fn variables_resolve_on_each_element() {
             )
         ]
     );
+}
+
+#[test]
+fn text_classes_read_each_others_variables() {
+    // The size's line height gives way to the leading's, whatever the order written.
+    assert_eq!(
+        applied(&["leading-6", "text-sm"], &[]),
+        [
+            d("font-size", "0.875rem", false),
+            d("line-height", "calc(0.25rem * 6)", false),
+            d("line-height", "calc(0.25rem * 6)", false)
+        ]
+    );
+    assert_eq!(
+        applied(&["text-sm"], &[])[1],
+        d("line-height", "calc(1.25 / 0.875)", false)
+    );
+    // Numeric variants add up.
+    let numeric = applied(&["ordinal", "tabular-nums"], &[]);
+    let words: Vec<&str> = numeric[1].1.split_whitespace().collect();
+    assert_eq!(words, ["ordinal", "tabular-nums"]);
 }
 
 #[test]
@@ -246,16 +333,38 @@ fn arbitrary_values_decode_as_tailwind_does() {
     assert_eq!(decode("min(1px,2px)"), "min(1px, 2px)");
     assert_eq!(decode("calc(1e-3*2)"), "calc(1e-3 * 2)");
     assert_eq!(segment("a:[b:c]:d", b':'), ["a", "[b:c]", "d"]);
+    let kinds = ["color", "length", "percentage", "relative-size"];
+    for (value, kind) in [
+        ("larger", Some("relative-size")),
+        ("1e3px", Some("length")),
+        ("calc(1px+2%)", Some("length")),
+        ("50%", Some("percentage")),
+        ("RGB(0 0 0)", Some("color")),
+        ("Red", Some("color")),
+        ("var(--x)", None),
+        ("1.px", None),
+    ] {
+        assert_eq!(types::infer(value, &kinds), kind, "{value}");
+    }
     assert!(!valid("a;b") && valid("'a;b'") && !valid("a)"));
 }
 
 #[test]
 fn the_theme_has_tailwinds_variables() {
     assert_eq!(THEME.value("--spacing"), Some("0.25rem"));
-    let sans = THEME.value("--font-sans").unwrap();
-    assert!(
-        sans.starts_with("-apple-system, BlinkMacSystemFont, 'Segoe UI'"),
-        "{sans}"
+    assert_eq!(
+        THEME.value("--text-sm--line-height"),
+        Some("calc(1.25 / 0.875)")
+    );
+    // Valle's font stacks, its built-in families.
+    assert_eq!(THEME.value("--font-sans"), Some("sans-serif"));
+    assert_eq!(THEME.value("--font-mono"), Some("monospace"));
+    assert_eq!(
+        THEME.resolve_with("sm", &["--text"], &["--line-height", "--font-weight"]),
+        Some((
+            "var(--text-sm)".into(),
+            vec![Some("var(--text-sm--line-height)".into()), None]
+        ))
     );
     // Deprecated values are written as they are.
     assert_eq!(

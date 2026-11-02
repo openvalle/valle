@@ -18,7 +18,7 @@ pub const CASE: &str = "tailwind/classes";
 
 /// Classes Tailwind does not list: how values, modifiers and the `!` read, and what the engine
 /// refuses.
-const SAMPLES: [&str; 50] = [
+const SAMPLES: [&str; 70] = [
     "p-13",
     "p-0.75",
     "p-0.3",
@@ -69,6 +69,26 @@ const SAMPLES: [&str; 50] = [
     "auto-cols-[1fr]",
     "basis-3.5",
     "-basis-4",
+    "text-sm/6",
+    "text-sm/none",
+    "text-sm/[20px]",
+    "text-sm/foo",
+    "text-[13px]/[20px]",
+    "text-[13px]/6",
+    "text-[larger]",
+    "text-red-500/50",
+    "text-[#f00]/25",
+    "font-['Brand_Sans']",
+    "font-[300]",
+    "font-bold/50",
+    "font-stretch-75%",
+    "font-stretch-49%",
+    "decoration-[3px]",
+    "decoration-[#f00]",
+    "-underline-offset-2",
+    "-tracking-[1px]",
+    "leading-[1.3]",
+    "indent-[2em]",
 ];
 
 /// What `web/tests/tailwind.ts` writes.

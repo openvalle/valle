@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use super::{CHILDREN, Candidate, Modifier, Node, Value};
-use super::{dimension, positive_integer, quarter, spaced, theme};
+use super::{dimension, positive_integer, quarter, spaced, theme, types};
 
 /// What a utility makes of a candidate: its CSS, or nothing when it is not the utility's.
 type Compile = Box<dyn Fn(&Candidate) -> Option<Vec<Node>> + Send + Sync>;
@@ -710,7 +710,8 @@ fn register(r: &mut Registry) {
         let handle: Handle = Arc::new(move |v, _| {
             let zero = v == "--spacing(0)"
                 || v == "--spacing(-0)"
-                || dimension(v).is_some_and(|(n, unit)| n == 0.0 && (unit.is_empty() || length(v)));
+                || dimension(v)
+                    .is_some_and(|(n, unit)| n == 0.0 && (unit.is_empty() || types::length(v)));
             let (s, e) = match zero {
                 true => ("0".to_string(), "0".to_string()),
                 false => (
@@ -783,6 +784,388 @@ fn register(r: &mut Registry) {
             false,
         );
     }
+    text(r);
+}
+
+/// The text utilities: fonts, sizes, line heights and letter spacing, alignment, decoration,
+/// case, wrapping and truncating.
+fn text(r: &mut Registry) {
+    r.functional(
+        "line-clamp",
+        Desc {
+            keys: &["--line-clamp"],
+            value: Some(integer),
+            statics: vec![(
+                "none",
+                vec![
+                    decl("overflow", "visible"),
+                    decl("display", "block"),
+                    decl("-webkit-box-orient", "horizontal"),
+                    decl("-webkit-line-clamp", "unset"),
+                ],
+            )],
+            handle: Some(Arc::new(|v, _| {
+                Some(vec![
+                    decl("overflow", "hidden"),
+                    decl("display", "-webkit-box"),
+                    decl("-webkit-box-orient", "vertical"),
+                    decl("-webkit-line-clamp", v),
+                ])
+            })),
+            ..Desc::default()
+        },
+    );
+    r.fixed(
+        "truncate",
+        &[
+            ("overflow", "hidden"),
+            ("text-overflow", "ellipsis"),
+            ("white-space", "nowrap"),
+        ],
+    );
+    r.fixed("text-ellipsis", &[("text-overflow", "ellipsis")]);
+    r.fixed("text-clip", &[("text-overflow", "clip")]);
+    for value in ["none", "manual", "auto"] {
+        let declarations = [("-webkit-hyphens", value), ("hyphens", value)];
+        r.fixed(format!("hyphens-{value}"), &declarations);
+    }
+    for value in [
+        "normal",
+        "nowrap",
+        "pre",
+        "pre-line",
+        "pre-wrap",
+        "break-spaces",
+    ] {
+        r.fixed(format!("whitespace-{value}"), &[("white-space", value)]);
+    }
+    r.fixed("text-wrap", &[("text-wrap", "wrap")]);
+    r.fixed("text-nowrap", &[("text-wrap", "nowrap")]);
+    r.fixed("text-balance", &[("text-wrap", "balance")]);
+    r.fixed("text-pretty", &[("text-wrap", "pretty")]);
+    r.fixed(
+        "break-normal",
+        &[("overflow-wrap", "normal"), ("word-break", "normal")],
+    );
+    r.fixed("break-all", &[("word-break", "break-all")]);
+    r.fixed("break-keep", &[("word-break", "keep-all")]);
+    r.fixed("wrap-anywhere", &[("overflow-wrap", "anywhere")]);
+    r.fixed("wrap-break-word", &[("overflow-wrap", "break-word")]);
+    r.fixed("wrap-normal", &[("overflow-wrap", "normal")]);
+    for align in ["left", "center", "right", "justify", "start", "end"] {
+        r.fixed(format!("text-{align}"), &[("text-align", align)]);
+    }
+    let keys = &["--text-indent", "--spacing"];
+    r.spacing("indent", keys, one("text-indent"), true, false);
+    for align in [
+        "baseline",
+        "top",
+        "middle",
+        "bottom",
+        "text-top",
+        "text-bottom",
+        "sub",
+        "super",
+    ] {
+        r.fixed(format!("align-{align}"), &[("vertical-align", align)]);
+    }
+    r.functional(
+        "align",
+        Desc {
+            handle: Some(one("vertical-align")),
+            ..Desc::default()
+        },
+    );
+    r.add("font".into(), true, Box::new(font));
+    r.functional(
+        "font-features",
+        Desc {
+            handle: Some(one("font-feature-settings")),
+            ..Desc::default()
+        },
+    );
+    r.fixed("uppercase", &[("text-transform", "uppercase")]);
+    r.fixed("lowercase", &[("text-transform", "lowercase")]);
+    r.fixed("capitalize", &[("text-transform", "capitalize")]);
+    r.fixed("normal-case", &[("text-transform", "none")]);
+    r.fixed("italic", &[("font-style", "italic")]);
+    r.fixed("not-italic", &[("font-style", "normal")]);
+    for (name, line) in [
+        ("underline", "underline"),
+        ("overline", "overline"),
+        ("line-through", "line-through"),
+        ("no-underline", "none"),
+    ] {
+        r.fixed(name, &[("text-decoration-line", line)]);
+    }
+    for stretch in [
+        "normal",
+        "ultra-condensed",
+        "extra-condensed",
+        "condensed",
+        "semi-condensed",
+        "semi-expanded",
+        "expanded",
+        "extra-expanded",
+        "ultra-expanded",
+    ] {
+        r.fixed(
+            format!("font-stretch-{stretch}"),
+            &[("font-stretch", stretch)],
+        );
+    }
+    r.functional(
+        "font-stretch",
+        Desc {
+            value: Some(|v, _| {
+                let n: f64 = v.strip_suffix('%')?.parse().ok()?;
+                (n.fract() == 0.0 && (50.0..=200.0).contains(&n)).then(|| v.to_string())
+            }),
+            handle: Some(one("font-stretch")),
+            ..Desc::default()
+        },
+    );
+    for style in ["solid", "double", "dotted", "dashed", "wavy"] {
+        let name = format!("decoration-{style}");
+        r.fixed(name, &[("text-decoration-style", style)]);
+    }
+    r.fixed("decoration-auto", &[("text-decoration-thickness", "auto")]);
+    r.fixed(
+        "decoration-from-font",
+        &[("text-decoration-thickness", "from-font")],
+    );
+    r.add("decoration".into(), true, Box::new(decoration));
+    r.functional(
+        "underline-offset",
+        Desc {
+            negative: true,
+            keys: &["--text-underline-offset"],
+            value: Some(|v, _| positive_integer(v).then(|| format!("{v}px"))),
+            statics: vec![("auto", vec![decl("text-underline-offset", "auto")])],
+            handle: Some(one("text-underline-offset")),
+            ..Desc::default()
+        },
+    );
+    r.add("text".into(), true, Box::new(text_size_or_color));
+    let leading: Handle =
+        Arc::new(|v, _| Some(vec![decl("--tw-leading", v), decl("line-height", v)]));
+    r.spacing(
+        "leading",
+        &["--leading", "--spacing"],
+        leading,
+        false,
+        false,
+    );
+    r.nodes(
+        "leading-none",
+        vec![decl("--tw-leading", "1"), decl("line-height", "1")],
+    );
+    r.functional(
+        "tracking",
+        Desc {
+            negative: true,
+            keys: &["--tracking"],
+            handle: Some(Arc::new(|v, _| {
+                Some(vec![decl("--tw-tracking", v), decl("letter-spacing", v)])
+            })),
+            ..Desc::default()
+        },
+    );
+    r.fixed(
+        "antialiased",
+        &[
+            ("-webkit-font-smoothing", "antialiased"),
+            ("-moz-osx-font-smoothing", "grayscale"),
+        ],
+    );
+    r.fixed(
+        "subpixel-antialiased",
+        &[
+            ("-webkit-font-smoothing", "auto"),
+            ("-moz-osx-font-smoothing", "auto"),
+        ],
+    );
+    r.fixed("normal-nums", &[("font-variant-numeric", "normal")]);
+    let numeric = "var(--tw-ordinal,) var(--tw-slashed-zero,) var(--tw-numeric-figure,) \
+                   var(--tw-numeric-spacing,) var(--tw-numeric-fraction,)";
+    for (name, variable) in [
+        ("ordinal", "--tw-ordinal"),
+        ("slashed-zero", "--tw-slashed-zero"),
+        ("lining-nums", "--tw-numeric-figure"),
+        ("oldstyle-nums", "--tw-numeric-figure"),
+        ("proportional-nums", "--tw-numeric-spacing"),
+        ("tabular-nums", "--tw-numeric-spacing"),
+        ("diagonal-fractions", "--tw-numeric-fraction"),
+        ("stacked-fractions", "--tw-numeric-fraction"),
+    ] {
+        r.fixed(name, &[(variable, name), ("font-variant-numeric", numeric)]);
+    }
+}
+
+/// `font-*`: a family of the theme or written, or a weight.
+fn font(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier: None,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let weight = |w: String| {
+        Some(vec![
+            decl("--tw-font-weight", w.clone()),
+            decl("font-weight", w),
+        ])
+    };
+    let value = match value {
+        Value::Arbitrary { kind, value } => {
+            let kinds = ["number", "generic-name", "family-name"];
+            return match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                Some("generic-name" | "family-name") => Some(vec![decl("font-family", value)]),
+                _ => weight(value.clone()),
+            };
+        }
+        Value::Named { value, .. } => value,
+    };
+    let nested = ["--font-feature-settings", "--font-variation-settings"];
+    if let Some((family, settings)) = theme().resolve_with(value, &["--font"], &nested) {
+        let mut nodes = vec![decl("font-family", family)];
+        for (property, setting) in ["font-feature-settings", "font-variation-settings"]
+            .into_iter()
+            .zip(settings)
+        {
+            nodes.extend(setting.map(|s| decl(property, s)));
+        }
+        return Some(nodes);
+    }
+    weight(theme().resolve(Some(value), &["--font-weight"])?)
+}
+
+/// `decoration-*`: the thickness of text decoration lines, or their color.
+fn decoration(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let thickness = |t: String| match modifier {
+        Some(_) => None,
+        None => Some(vec![decl("text-decoration-thickness", t)]),
+    };
+    let value = match value {
+        Value::Arbitrary { kind, value } => {
+            let kinds = ["color", "length", "percentage"];
+            return match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                Some("length" | "percentage") => thickness(value.clone()),
+                _ => Some(vec![decl(
+                    "text-decoration-color",
+                    as_color(value, modifier.as_ref())?,
+                )]),
+            };
+        }
+        Value::Named { value, .. } => value,
+    };
+    if let Some(t) = theme().resolve(Some(value), &["--text-decoration-thickness"]) {
+        return thickness(t);
+    }
+    if positive_integer(value) {
+        return thickness(format!("{value}px"));
+    }
+    let keys = ["--text-decoration-color", "--color"];
+    let color = theme_color(value, modifier.as_ref(), &keys)?;
+    Some(vec![decl("text-decoration-color", color)])
+}
+
+/// `text-*`: a font size of the theme, with its line height and the rest, or written, with a line
+/// height after `/`; or a color.
+fn text_size_or_color(c: &Candidate) -> Option<Vec<Node>> {
+    let Candidate::Functional {
+        value: Some(value),
+        modifier,
+        ..
+    } = c
+    else {
+        return None;
+    };
+    let modifier = modifier.as_ref();
+    let value = match value {
+        Value::Arbitrary { kind, value } => {
+            let kinds = [
+                "color",
+                "length",
+                "percentage",
+                "absolute-size",
+                "relative-size",
+            ];
+            return match kind.as_deref().or_else(|| types::infer(value, &kinds)) {
+                Some("size" | "length" | "percentage" | "absolute-size" | "relative-size") => {
+                    let mut nodes = vec![decl("font-size", value)];
+                    if let Some(m) = modifier {
+                        nodes.push(decl("line-height", leading(m)?));
+                    }
+                    Some(nodes)
+                }
+                _ => Some(vec![decl("color", as_color(value, modifier)?)]),
+            };
+        }
+        Value::Named { value, .. } => value,
+    };
+    if let Some(color) = theme_color(value, modifier, &["--text-color", "--color"]) {
+        return Some(vec![decl("color", color)]);
+    }
+    let nested = ["--line-height", "--letter-spacing", "--font-weight"];
+    let (size, nested) = theme().resolve_with(value, &["--text"], &nested)?;
+    let [line_height, letter_spacing, font_weight] =
+        <[Option<String>; 3]>::try_from(nested).ok()?;
+    let mut nodes = vec![decl("font-size", size)];
+    if let Some(m) = modifier {
+        nodes.push(decl("line-height", leading(m)?));
+        return Some(nodes);
+    }
+    for (property, variable, value) in [
+        ("line-height", "--tw-leading", line_height),
+        ("letter-spacing", "--tw-tracking", letter_spacing),
+        ("font-weight", "--tw-font-weight", font_weight),
+    ] {
+        if let Some(v) = value {
+            nodes.push(decl(property, format!("var({variable}, {v})")));
+        }
+    }
+    Some(nodes)
+}
+
+/// The line height a font size's modifier gives: `text-sm/6`, `text-sm/[20px]`, `text-sm/none`.
+fn leading(m: &Modifier) -> Option<String> {
+    match m {
+        Modifier::Arbitrary(v) if !v.is_empty() => Some(v.clone()),
+        Modifier::Arbitrary(_) => None,
+        Modifier::Named(m) => {
+            if let Some(v) = theme().resolve(Some(m), &["--leading"]) {
+                return Some(v);
+            }
+            if quarter(m) {
+                theme().resolve(None, &["--spacing"])?;
+                return Some(format!("--spacing({m})"));
+            }
+            (m == "none").then(|| "1".to_string())
+        }
+    }
+}
+
+/// A color a named value names, at the opacity its modifier gives, as Tailwind's
+/// `resolveThemeColor`: `current`, `inherit`, `transparent`, or a variable of `keys`.
+fn theme_color(value: &str, modifier: Option<&Modifier>, keys: &[&str]) -> Option<String> {
+    let color = match value {
+        "inherit" => "inherit".to_string(),
+        "transparent" => "transparent".to_string(),
+        "current" => "currentcolor".to_string(),
+        _ => theme().resolve(Some(value), keys)?,
+    };
+    as_color(&color, modifier)
 }
 
 /// `col-*` or `row-*`: a grid item's lines, `-span-*`, `-start-*` and `-end-*`.
@@ -1016,16 +1399,4 @@ fn sizes(r: &mut Registry) {
         container.push(Node::At(format!("@media (width >= {b})"), width));
     }
     r.nodes("container", container);
-}
-
-/// Whether `v` is a length, as Tailwind's `isLength` has it.
-fn length(v: &str) -> bool {
-    const UNITS: [&str; 31] = [
-        "cm", "mm", "Q", "in", "pc", "pt", "px", "em", "ex", "ch", "rem", "lh", "rlh", "vw", "vh",
-        "vmin", "vmax", "vb", "vi", "svw", "svh", "lvw", "lvh", "dvw", "dvh", "cqw", "cqh", "cqi",
-        "cqb", "cqmin", "cqmax",
-    ];
-    dimension(v).is_some_and(|(_, unit)| UNITS.contains(&unit))
-        || v.starts_with("--spacing(")
-        || super::MATH.iter().any(|f| v.contains(&format!("{f}(")))
 }

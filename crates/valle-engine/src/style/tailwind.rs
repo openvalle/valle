@@ -13,6 +13,7 @@
 //! fails where it is written, with the style layer's reason.
 
 mod order;
+mod types;
 mod utilities;
 
 use std::cmp::Ordering;
@@ -76,6 +77,14 @@ pub struct Declaration {
 pub const PROPERTIES: &[(&str, Option<&str>)] = &[
     ("--tw-space-x-reverse", Some("0")),
     ("--tw-space-y-reverse", Some("0")),
+    ("--tw-font-weight", None),
+    ("--tw-leading", None),
+    ("--tw-tracking", None),
+    ("--tw-ordinal", None),
+    ("--tw-slashed-zero", None),
+    ("--tw-numeric-figure", None),
+    ("--tw-numeric-spacing", None),
+    ("--tw-numeric-fraction", None),
 ];
 
 const VARIANTS: &str = "variants are not supported: the canvas has a fixed size, and nothing \
@@ -748,8 +757,22 @@ fn quarter(s: &str) -> bool {
 
 // ----------------------------------------------------------------------------------------- theme
 
-/// Tailwind's default theme, its `theme.css`.
-static THEME: LazyLock<Theme> = LazyLock::new(|| Theme::parse(include_str!("tailwind/theme.css")));
+/// Tailwind's default theme, its `theme.css`, with Valle's font stacks.
+static THEME: LazyLock<Theme> = LazyLock::new(|| {
+    let mut theme = Theme::parse(include_str!("tailwind/theme.css"));
+    for (key, family) in FONTS {
+        theme.values.insert(key.into(), (family.into(), false));
+    }
+    theme
+});
+
+/// The font stacks: Valle draws its built-in fonts and font resources, never the system's that
+/// Tailwind's stacks name first, so `font-sans` is its sans-serif.
+const FONTS: [(&str, &str); 3] = [
+    ("--font-sans", "sans-serif"),
+    ("--font-serif", "serif"),
+    ("--font-mono", "monospace"),
+];
 
 struct Theme {
     /// Each variable's value, and whether utilities write it inline rather than as a `var()`:
@@ -854,12 +877,30 @@ impl Theme {
     /// itself.
     fn resolve(&self, value: Option<&str>, keys: &[&str]) -> Option<String> {
         let key = self.key(value, keys)?;
-        let (v, inline) = &self.values[&key];
-        Some(if *inline {
-            v.clone()
-        } else {
-            format!("var({key})")
-        })
+        Some(self.written(&key))
+    }
+
+    /// What `resolve` writes, and for each of `nested` the variable of that key with it after,
+    /// if the theme has one, as Tailwind's `resolveWith`: `--text-sm--line-height` of `text-sm`.
+    fn resolve_with(
+        &self,
+        value: &str,
+        keys: &[&str],
+        nested: &[&str],
+    ) -> Option<(String, Vec<Option<String>>)> {
+        let key = self.key(Some(value), keys)?;
+        let nested = (nested.iter())
+            .map(|n| format!("{key}{n}"))
+            .map(|k| self.values.contains_key(&k).then(|| self.written(&k)))
+            .collect();
+        Some((self.written(&key), nested))
+    }
+
+    fn written(&self, key: &str) -> String {
+        match &self.values[key] {
+            (v, true) => v.clone(),
+            (_, false) => format!("var({key})"),
+        }
     }
 
     fn value(&self, key: &str) -> Option<&str> {
