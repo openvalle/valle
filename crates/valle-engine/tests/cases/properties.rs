@@ -2003,6 +2003,20 @@ const ROWS: &[Row] = &[
         refused: &["\"justify\"", "\"middle\"", "\"match-parent\"", "1"],
     },
     Row {
+        properties: &["textIndent"],
+        sample: r##"<View style={{ width: 120, background: "#e8eaf6" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Indented text that wraps onto two lines</Text></View>"##,
+        values: &[
+            "0",
+            "12",
+            "-6",
+            "\"1em\"",
+            "\"10%\"",
+            "\"2vw\"",
+            "\"calc(10% - 1em)\"",
+        ],
+        refused: &["\"hanging\"", "\"auto\"", "\"1pt\"", "true"],
+    },
+    Row {
         properties: &["letterSpacing"],
         sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Spaced</Text></View>"##,
         values: &[

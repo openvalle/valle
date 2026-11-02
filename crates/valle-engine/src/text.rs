@@ -17,8 +17,9 @@ use parley::fontique::{Collection, CollectionOptions, GenericFamily, SourceCache
 use parley::setting::Tag;
 use parley::{
     Alignment, AlignmentOptions, BreakReason, FontContext, FontFamily, FontFamilyName, FontFeature,
-    FontFeatures, FontVariation, FontVariations, FontWeight, FontWidth, LayoutContext,
-    PositionedLayoutItem, StyleProperty, TextWrapMode, WhiteSpaceCollapse, YieldData,
+    FontFeatures, FontVariation, FontVariations, FontWeight, FontWidth, IndentOptions,
+    LayoutContext, PositionedLayoutItem, StyleProperty, TextWrapMode, WhiteSpaceCollapse,
+    YieldData,
 };
 
 use crate::path::{self, Curve};
@@ -201,8 +202,8 @@ struct Paragraph {
     /// Nothing is left once white space collapses: no line boxes, as in CSS (parley still makes
     /// one line).
     empty: bool,
-    /// The width its lines were last broken at, and whether they balance.
-    broken: Option<(Option<f32>, bool)>,
+    /// The width its lines were last broken at, their indent, and whether they balance.
+    broken: Option<(Option<f32>, f32, bool)>,
     used: bool,
 }
 
@@ -680,12 +681,15 @@ impl Text {
             .ok_or("engine bug: a paragraph went missing")?;
         p.used = true;
         let balanced = content.font.balance && !min;
-        if p.broken != Some((width, balanced)) {
+        let indent = (content.font.indent.as_ref())
+            .map_or(0.0, |indent| indent.resolve(width.unwrap_or(0.0)));
+        if p.broken != Some((width, indent, balanced)) {
+            p.layout.set_text_indent(indent, IndentOptions::default());
             p.layout.break_all_lines(width);
             if let Some(width) = width.filter(|_| balanced && !p.empty) {
                 balance(&mut p.layout, width);
             }
-            p.broken = Some((width, balanced));
+            p.broken = Some((width, indent, balanced));
         }
         Ok(p)
     }

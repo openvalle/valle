@@ -435,6 +435,9 @@ pub struct Font {
     pub family: Rc<[Family]>,
     pub line_height: LineHeight,
     pub align: TextAlign,
+    /// `text-indent` of the first line, which the text's own box takes, not a Span's; its
+    /// percentages are of the width lines break to fit.
+    pub indent: Option<Calc>,
     /// `letter-spacing` and `word-spacing`, px.
     pub spacing: f64,
     pub word_spacing: f64,
@@ -491,6 +494,7 @@ impl Font {
             family: Rc::new([Family::SansSerif]),
             line_height: LineHeight::Normal,
             align: TextAlign::Start,
+            indent: None,
             spacing: 0.0,
             word_spacing: 0.0,
             collapse: Collapse::Collapse,
@@ -1461,6 +1465,7 @@ struct Declared {
     line_height: Option<Leading>,
     text_align: Option<TextAlign>,
     /// `normal` is `Auto`, 0.
+    text_indent: Option<Len>,
     letter_spacing: Option<Len>,
     word_spacing: Option<Len>,
     collapse: Option<Collapse>,
@@ -1583,6 +1588,7 @@ impl Default for Declared {
             variations: None,
             line_height: None,
             text_align: None,
+            text_indent: None,
             letter_spacing: None,
             word_spacing: None,
             collapse: None,
@@ -1732,6 +1738,7 @@ enum Field {
     FontVariationSettings,
     LineHeight,
     TextAlign,
+    TextIndent,
     LetterSpacing,
     WordSpacing,
     WhiteSpace,
@@ -1817,7 +1824,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 254] = [
+const FIELDS: [(&str, Field); 255] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -2169,6 +2176,7 @@ const FIELDS: [(&str, Field); 254] = [
     ("fontVariationSettings", Field::FontVariationSettings),
     ("lineHeight", Field::LineHeight),
     ("textAlign", Field::TextAlign),
+    ("textIndent", Field::TextIndent),
     ("letterSpacing", Field::LetterSpacing),
     ("wordSpacing", Field::WordSpacing),
     ("whiteSpace", Field::WhiteSpace),
@@ -2250,6 +2258,7 @@ impl Field {
                 | Field::FontVariationSettings
                 | Field::LineHeight
                 | Field::TextAlign
+                | Field::TextIndent
                 | Field::LetterSpacing
                 | Field::WordSpacing
                 | Field::WhiteSpace
@@ -2374,6 +2383,12 @@ const SPACING: Accept = Accept {
 const THICKNESS: Accept = Accept {
     keyword: Some("auto"),
     negative: false,
+    percent: true,
+    sizing: &[],
+};
+const INDENT: Accept = Accept {
+    keyword: None,
+    negative: true,
     percent: true,
     sizing: &[],
 };
@@ -3759,6 +3774,7 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
                 ],
             )?)
         }
+        F::TextIndent => d.text_indent = Some(length(v, INDENT)?),
         F::LetterSpacing => d.letter_spacing = Some(length(v, SPACING)?),
         F::WordSpacing => d.word_spacing = Some(length(v, SPACING)?),
         F::WhiteSpace => {
@@ -4120,6 +4136,10 @@ fn compute(
             Some(Leading::Len(l)) => LineHeight::Px(l.px(units(size), size)),
         },
         align: d.text_align.unwrap_or(inherited.align),
+        indent: match &d.text_indent {
+            None => inherited.indent.clone(),
+            Some(l) => Some(l.calc(units(size))),
+        },
         spacing: match &d.letter_spacing {
             None => inherited.spacing,
             Some(l) => l.px(units(size), 0.0),

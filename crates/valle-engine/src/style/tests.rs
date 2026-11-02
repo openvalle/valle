@@ -1536,6 +1536,7 @@ fn text_properties_inherit() {
         family: Rc::new([Family::SansSerif]),
         line_height: LineHeight::Normal,
         align: TextAlign::Start,
+        indent: None,
         spacing: 0.0,
         word_spacing: 0.0,
         collapse: Collapse::Collapse,
@@ -1570,6 +1571,7 @@ fn text_properties_inherit() {
         ]),
         line_height: LineHeight::Factor(1.5),
         align: TextAlign::Center,
+        indent: None,
         spacing: 2.0,
         word_spacing: 5.0,
         collapse: Collapse::PreserveBreaks,
@@ -2860,9 +2862,9 @@ fn what_is_not_supported_is_an_error() {
         ),
         ("zoom", num(2.0), "style zoom is not supported: use scale"),
         (
-            "textIndent",
+            "textAlignLast",
             text("1em"),
-            "style textIndent is not supported",
+            "style textAlignLast is not supported",
         ),
         ("width", text("10"), "style width: 10 needs a unit: 10px"),
         (

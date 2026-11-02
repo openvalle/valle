@@ -33,6 +33,7 @@ fn font(size: f64) -> Font {
         family: Rc::new([Family::SansSerif]),
         line_height: LineHeight::Normal,
         align: TextAlign::Start,
+        indent: None,
         spacing: 0.0,
         word_spacing: 0.0,
         collapse: Collapse::Collapse,
