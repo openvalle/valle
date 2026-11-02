@@ -101,6 +101,9 @@ fn value(s: &str) -> Result<Color, String> {
         return Ok(Color::new(NAMED[i].1.map(|v| f64::from(v) / 255.0), 1.0));
     }
     let (name, args) = css::function(s).ok_or_else(bad)?;
+    if let Some(rest) = args.trim_start().strip_prefix("from ") {
+        return relative(name, rest).ok_or_else(bad);
+    }
     let c = match name {
         "rgb" | "rgba" => rgb(args),
         "hsl" | "hsla" => hsl(args),
@@ -114,6 +117,35 @@ fn value(s: &str) -> Result<Color, String> {
         _ => None,
     };
     c.ok_or_else(bad)
+}
+
+/// A relative color, `oklab(from <color> l a b / 50%)`: the color in the function's space, a
+/// channel each its letter or written, and `alpha` its alpha. Math on the channels is not
+/// supported yet.
+fn relative(name: &str, rest: &str) -> Option<Color> {
+    let words = css::words(rest);
+    let (origin, written) = words.split_first()?;
+    let origin = value(origin).ok()?;
+    let (space, letters, scale) = match name {
+        "rgb" | "rgba" => (Space::Srgb, ["r", "g", "b"], [255.0; 3]),
+        "hsl" | "hsla" => (Space::Hsl, ["h", "s", "l"], [1.0, 100.0, 100.0]),
+        "hwb" => (Space::Hwb, ["h", "w", "b"], [1.0, 100.0, 100.0]),
+        "lab" => (Space::Lab, ["l", "a", "b"], [1.0; 3]),
+        "lch" => (Space::Lch, ["l", "c", "h"], [1.0; 3]),
+        "oklab" => (Space::Oklab, ["l", "a", "b"], [1.0; 3]),
+        "oklch" => (Space::Oklch, ["l", "c", "h"], [1.0; 3]),
+        _ => return None,
+    };
+    let v = space.of(origin.rgb);
+    let channel = |w: &str| match letters.iter().position(|l| *l == w) {
+        // A powerless hue is missing.
+        Some(i) if v[i].is_nan() => Some("none".to_string()),
+        Some(i) => Some((v[i] * scale[i]).to_string()),
+        None if w == "alpha" => Some(origin.alpha.to_string()),
+        None => (!w.contains('(')).then(|| w.to_string()),
+    };
+    let channels: Option<Vec<String>> = written.iter().map(|w| channel(w)).collect();
+    value(&format!("{name}({})", channels?.join(" "))).ok()
 }
 
 /// Whether word `i` of a color function's channels is `none`.
@@ -983,6 +1015,27 @@ mod tests {
             "hsl(120, 100, 50)",
             "hsl(1px 2% 3%)",
             "hsl(none, 10%, 10%)",
+        ] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn relative_colors_take_the_channels_of_another() {
+        assert_eq!(bytes("rgb(from #f80 r g b)"), [255, 136, 0, 255]);
+        assert_eq!(bytes("rgb(from red b g r / 50%)"), [0, 0, 255, 128]);
+        assert_eq!(bytes("hsl(from #f80 h s 20)"), [102, 54, 0, 255]);
+        assert_eq!(
+            bytes("oklab(from rgb(0 0 0 / 0.1) l a b / 50%)"),
+            [0, 0, 0, 128]
+        );
+        assert_eq!(bytes("oklch(from #f80 l c h / alpha)"), [255, 136, 0, 255]);
+        // A gray's hue is powerless: it stays missing, and draws as 0.
+        assert_eq!(bytes("lch(from white l c h)"), [255, 255, 255, 255]);
+        for bad in [
+            "rgb(from red calc(r / 2) g b)",
+            "color(from red srgb r g b)",
+            "rgb(from x r g b)",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }

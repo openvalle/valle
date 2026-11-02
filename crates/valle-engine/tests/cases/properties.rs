@@ -941,6 +941,8 @@ const ROWS: &[Row] = &[
             "\"rgba(57, 73, 171, 0.5)\"",
             "\"hsl(200 50% 40%)\"",
             "\"transparent\"",
+            "\"oklab(from #3949ab l a b / 50%)\"",
+            "\"hsl(from #3949ab h s 70)\"",
         ],
         refused: &["\"none\"", "\"blue red\"", "\"#ggg\"", "0"],
     },
