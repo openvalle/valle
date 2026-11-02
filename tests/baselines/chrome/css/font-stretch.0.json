@@ -12,5 +12,15 @@
   [4,172,248,24],
   [72.265625,172,75.78125,24]
  ],
- "lines": {"1":["Condensed text"],"2":["At 62.5 percent"],"3":["Ultra-condensed"],"4":["Expanded text"],"5":["Semi-condensed and heavy"],"6":["Settings over the stretch"],"7":["Normal condensed"]}
+ "lines": {"1":["Condensed text"],"2":["At 62.5 percent"],"3":["Ultra-condensed"],"4":["Expanded text"],"5":["Semi-condensed and heavy"],"6":["Settings over the stretch"],"7":["Normal condensed"]},
+ "fonts": {
+  "1": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"18px","weight":"400","stretch":"75%","style":"normal","transform":"none"},
+  "2": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"18px","weight":"400","stretch":"62.5%","style":"normal","transform":"none"},
+  "3": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"18px","weight":"400","stretch":"50%","style":"normal","transform":"none"},
+  "4": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"18px","weight":"400","stretch":"125%","style":"normal","transform":"none"},
+  "5": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"18px","weight":"800","stretch":"87.5%","style":"normal","transform":"none"},
+  "6": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"18px","weight":"400","stretch":"75%","style":"normal","transform":"none"},
+  "7": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"18px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "8": {"color":"rgb(30, 136, 229)","fill":"rgb(30, 136, 229)","stroke":"0px","stroke_color":"rgb(30, 136, 229)","shadow":"none","size":"18px","weight":"400","stretch":"75%","style":"normal","transform":"none"}
+ }
 }

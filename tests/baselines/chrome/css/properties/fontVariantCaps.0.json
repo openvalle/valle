@@ -16,5 +16,11 @@
   [4,73,248,19],
   [4,73,51.6875,19]
  ],
- "lines": {"3":["Caps 12"],"6":["Caps 12"],"9":["Caps 12"],"12":["Caps 12"]}
+ "lines": {"3":["Caps 12"],"6":["Caps 12"],"9":["Caps 12"],"12":["Caps 12"]},
+ "fonts": {
+  "3": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"14px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "6": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"14px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "9": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"14px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "12": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"14px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

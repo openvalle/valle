@@ -24,5 +24,9 @@
   [102.60343933105469,168.1189727783203,17.493408203125,12.626449584960938],
   [71.90315246582031,156.2964630126953,11.584564208984375,11.584564208984375]
  ],
- "lines": {"4":["Valle"],"17":["Turned"]}
+ "lines": {"4":["Valle"],"17":["Turned"]},
+ "fonts": {
+  "4": {"color":"rgb(239, 108, 0)","fill":"rgb(239, 108, 0)","stroke":"0px","stroke_color":"rgb(239, 108, 0)","shadow":"none","size":"14px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "17": {"color":"rgb(40, 53, 147)","fill":"rgb(40, 53, 147)","stroke":"0px","stroke_color":"rgb(40, 53, 147)","shadow":"none","size":"12px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

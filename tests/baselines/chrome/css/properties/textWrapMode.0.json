@@ -13,5 +13,10 @@
   [4,54,60,14],
   [4,54,60,14]
  ],
- "lines": {"3":["Words that","wrap"],"6":["Words that wrap"],"9":["Words that wrap"]}
+ "lines": {"3":["Words that","wrap"],"6":["Words that wrap"],"9":["Words that wrap"]},
+ "fonts": {
+  "3": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "6": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "9": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

@@ -18,5 +18,8 @@
   [8,168,80,48],
   [96,168,92.265625,32]
  ],
- "lines": {"14":["Clipped"]}
+ "lines": {"14":["Clipped"]},
+ "fonts": {
+  "14": {"color":"rgba(0, 0, 0, 0)","fill":"rgba(0, 0, 0, 0)","stroke":"0px","stroke_color":"rgba(0, 0, 0, 0)","shadow":"none","size":"24px","weight":"900","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

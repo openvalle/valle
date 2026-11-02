@@ -26,5 +26,8 @@
   [8,146,150,12],
   [8,146,150,6]
  ],
- "lines": {"4":["Rounded clip of","text that runs on"]}
+ "lines": {"4":["Rounded clip of","text that runs on"]},
+ "fonts": {
+  "4": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

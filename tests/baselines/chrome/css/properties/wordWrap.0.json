@@ -13,5 +13,10 @@
   [4,82,60,42],
   [4,82,60,42]
  ],
- "lines": {"3":["Unbreakableness","of words"],"6":["Unbreakabl","eness of","words"],"9":["Unbreakabl","eness of","words"]}
+ "lines": {"3":["Unbreakableness","of words"],"6":["Unbreakabl","eness of","words"],"9":["Unbreakabl","eness of","words"]},
+ "fonts": {
+  "3": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "6": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "9": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

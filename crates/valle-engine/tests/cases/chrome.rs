@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use valle_engine::image::Picture;
 use valle_engine::paint::{self, Item};
 use valle_engine::scene::Frame;
-use valle_engine::style::color;
+use valle_engine::style::color::{self, Rgba};
+use valle_engine::style::{FontStyle, Style, TextShadow, TextTransform};
 use valle_engine::template::{Kind, Tag};
 
 /// How far a box edge may be from Chrome's: two of its 1/64 px layout units. Chrome truncates
@@ -23,6 +24,8 @@ use valle_engine::template::{Kind, Tag};
 const EDGE: f64 = 2.0 / 64.0;
 /// How far a pixel may be from Chrome's, in levels of each premultiplied channel.
 const LEVELS: i32 = 8;
+/// How far a length or a number of a font may be from Chrome's: one of its 1/64 px units.
+const UNIT: f64 = 1.0 / 64.0;
 
 #[derive(Deserialize)]
 pub struct Baseline {
@@ -33,6 +36,24 @@ pub struct Baseline {
     pub boxes: Vec<[f64; 4]>,
     /// The text of each line of each text node, by node index.
     pub lines: BTreeMap<u32, Vec<String>>,
+    /// The computed style of each Text and Span, by node index.
+    pub fonts: BTreeMap<u32, Font>,
+}
+
+/// What a text node's glyphs show, which are not in the pixels: computed values as Chrome writes
+/// them.
+#[derive(Deserialize)]
+pub struct Font {
+    color: String,
+    fill: String,
+    stroke: String,
+    stroke_color: String,
+    shadow: String,
+    size: String,
+    weight: String,
+    stretch: String,
+    style: String,
+    transform: String,
 }
 
 /// The CSS properties a Chrome knows, by their CSS names.
@@ -91,8 +112,103 @@ pub fn compare(frame: &Frame, chrome: &Baseline) -> Vec<String> {
                 ));
             }
         }
+        if let Some(theirs) = chrome.fonts.get(&(i as u32)) {
+            let off = font(&frame.styles[i], theirs);
+            problems.extend(off.into_iter().map(|p| format!("{}: {p}", node.place())));
+        }
     }
     problems
+}
+
+/// Where a text node's style differs from Chrome's.
+fn font(style: &Style, theirs: &Font) -> Vec<String> {
+    let f = &style.font;
+    let slant = match f.style {
+        FontStyle::Normal => "normal".to_string(),
+        FontStyle::Italic => "italic".to_string(),
+        // Chrome leaves out the angle it defaults to.
+        FontStyle::Oblique(14.0) => "oblique".to_string(),
+        FontStyle::Oblique(angle) => format!("oblique {angle}deg"),
+    };
+    let transform = match f.transform {
+        TextTransform::None => "none",
+        TextTransform::Uppercase => "uppercase",
+        TextTransform::Lowercase => "lowercase",
+        TextTransform::Capitalize => "capitalize",
+    };
+    let word = |what: &str, ours: &str, theirs: &str| {
+        (ours != theirs).then(|| format!("{what} {ours}, Chrome's {theirs}"))
+    };
+    let stroke = f.stroke_color.unwrap_or(style.color);
+    let colors = [
+        ("color", style.color, &theirs.color),
+        ("fill", f.fill.unwrap_or(style.color), &theirs.fill),
+        ("stroke color", stroke, &theirs.stroke_color),
+    ];
+    let numbers = [
+        ("stroke", f.stroke, &theirs.stroke),
+        ("size", f.size, &theirs.size),
+        ("weight", f.weight, &theirs.weight),
+        ("stretch", f.stretch, &theirs.stretch),
+    ];
+    let shadows = (shadows(&theirs.shadow)).filter(|s| {
+        let alike = |(a, b): (&TextShadow, &TextShadow)| {
+            let lengths = [a.offset[0], a.offset[1], a.blur];
+            let others = [b.offset[0], b.offset[1], b.blur];
+            let current = |c: Option<Rgba>| c.unwrap_or(style.color);
+            (lengths.iter().zip(others)).all(|(a, b)| (a - b).abs() <= UNIT)
+                && close(current(a.color), current(b.color))
+        };
+        s.len() == f.shadows.len() && f.shadows.iter().zip(s).all(alike)
+    });
+    let colors = colors.into_iter().filter_map(|(what, ours, theirs)| {
+        let same = color::parse(theirs).is_ok_and(|t| close(ours, t));
+        (!same).then(|| format!("{what} {ours:?}, Chrome's {theirs}"))
+    });
+    let numbers = numbers.into_iter().filter_map(|(what, ours, theirs)| {
+        let value = theirs.trim_end_matches(['p', 'x', '%']).parse::<f64>();
+        let same = value.is_ok_and(|t| (ours - t).abs() <= UNIT);
+        (!same).then(|| format!("{what} {ours}, Chrome's {theirs}"))
+    });
+    let shadow = shadows.is_none().then(|| {
+        let ours = &f.shadows;
+        format!("text shadows {ours:?}, Chrome's {}", theirs.shadow)
+    });
+    (colors.chain(numbers))
+        .chain(word("font style", &slant, &theirs.style))
+        .chain(word("text transform", transform, &theirs.transform))
+        .chain(shadow)
+        .collect()
+}
+
+/// Whether two colors are the same to within a level of each channel.
+fn close(a: Rgba, b: Rgba) -> bool {
+    (0..4).all(|k| (a[k] - b[k]).abs() <= 1.5 / 255.0)
+}
+
+/// A computed `text-shadow`: `none`, or a color and three lengths each.
+fn shadows(s: &str) -> Option<Vec<TextShadow>> {
+    if s == "none" {
+        return Some(Vec::new());
+    }
+    let mut depth = 0;
+    let parts = s.split(|c| {
+        depth += (c == '(') as i32 - (c == ')') as i32;
+        c == ',' && depth == 0
+    });
+    parts
+        .map(|shadow| {
+            let px = |w: &str| w.strip_suffix("px")?.parse::<f64>().ok();
+            let (rest, blur) = shadow.trim().rsplit_once(' ')?;
+            let (rest, y) = rest.rsplit_once(' ')?;
+            let (color, x) = rest.rsplit_once(' ')?;
+            Some(TextShadow {
+                offset: [px(x)?, px(y)?],
+                blur: px(blur)?,
+                color: Some(color::parse(color).ok()?),
+            })
+        })
+        .collect()
 }
 
 /// The text of each of the node's lines, as `canonical` has it.

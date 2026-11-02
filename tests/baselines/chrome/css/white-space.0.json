@@ -13,5 +13,16 @@
   [4,170,177.6875,44],
   [66.4375,192,61.1875,22]
  ],
- "lines": {"1":["collapse kept","spaces then collapse"],"3":["Words wrap here but","these words stay together","always"],"5":["kept spaces collapsed","here kept again"],"7":["every word loud and","spaced left as is"]}
+ "lines": {"1":["collapse kept","spaces then collapse"],"3":["Words wrap here but","these words stay together","always"],"5":["kept spaces collapsed","here kept again"],"7":["every word loud and","spaced left as is"]},
+ "fonts": {
+  "1": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "2": {"color":"rgb(229, 57, 53)","fill":"rgb(229, 57, 53)","stroke":"0px","stroke_color":"rgb(229, 57, 53)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "3": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "4": {"color":"rgb(30, 136, 229)","fill":"rgb(30, 136, 229)","stroke":"0px","stroke_color":"rgb(30, 136, 229)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "5": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "6": {"color":"rgb(142, 36, 170)","fill":"rgb(142, 36, 170)","stroke":"0px","stroke_color":"rgb(142, 36, 170)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "7": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"capitalize"},
+  "8": {"color":"rgb(0, 137, 123)","fill":"rgb(0, 137, 123)","stroke":"0px","stroke_color":"rgb(0, 137, 123)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"uppercase"},
+  "9": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

@@ -19,5 +19,12 @@
   [4,76,248,14],
   [4,76,167.203125,14]
  ],
- "lines": {"3":["don't stop-me 3d Straße ÉCOLE"],"6":["don't stop-me 3d Straße ÉCOLE"],"9":["don't stop-me 3d Straße ÉCOLE"],"12":["don't stop-me 3d Straße ÉCOLE"],"15":["don't stop-me 3d Straße ÉCOLE"]}
+ "lines": {"3":["don't stop-me 3d Straße ÉCOLE"],"6":["don't stop-me 3d Straße ÉCOLE"],"9":["don't stop-me 3d Straße ÉCOLE"],"12":["don't stop-me 3d Straße ÉCOLE"],"15":["don't stop-me 3d Straße ÉCOLE"]},
+ "fonts": {
+  "3": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "6": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"uppercase"},
+  "9": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"lowercase"},
+  "12": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"capitalize"},
+  "15": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"uppercase"}
+ }
 }

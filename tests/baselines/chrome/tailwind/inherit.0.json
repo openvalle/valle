@@ -8,5 +8,8 @@
   [12,40,52,32],
   [72,40,52,32]
  ],
- "lines": {"1":["The parent's color"]}
+ "lines": {"1":["The parent's color"]},
+ "fonts": {
+  "1": {"color":"oklch(0.511 0.262 276.966)","fill":"oklch(0.511 0.262 276.966)","stroke":"0px","stroke_color":"oklch(0.511 0.262 276.966)","shadow":"none","size":"14px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

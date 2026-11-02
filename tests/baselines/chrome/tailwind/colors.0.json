@@ -46,5 +46,10 @@
   [100,139,36,36],
   [148,139,36,36]
  ],
- "lines": {"34":["Red"],"35":["Sky half"],"36":["Purple"]}
+ "lines": {"34":["Red"],"35":["Sky half"],"36":["Purple"]},
+ "fonts": {
+  "34": {"color":"oklch(0.577 0.245 27.325)","fill":"oklch(0.577 0.245 27.325)","stroke":"0px","stroke_color":"oklch(0.577 0.245 27.325)","shadow":"none","size":"14px","weight":"700","stretch":"100%","style":"normal","transform":"none"},
+  "35": {"color":"oklab(0.685 -0.0912435 -0.142252 / 0.5)","fill":"oklab(0.685 -0.0912435 -0.142252 / 0.5)","stroke":"0px","stroke_color":"oklab(0.685 -0.0912435 -0.142252 / 0.5)","shadow":"none","size":"14px","weight":"700","stretch":"100%","style":"normal","transform":"none"},
+  "36": {"color":"rgb(142, 36, 170)","fill":"rgb(142, 36, 170)","stroke":"0px","stroke_color":"rgb(142, 36, 170)","shadow":"none","size":"14px","weight":"700","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

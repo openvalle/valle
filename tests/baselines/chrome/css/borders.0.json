@@ -22,5 +22,11 @@
   [188,108,52,36],
   [8,152,52,36]
  ],
- "lines": {"7":["Clipped inside the","border, past it"],"10":["Flex"],"12":["Items"],"16":["Color"]}
+ "lines": {"7":["Clipped inside the","border, past it"],"10":["Flex"],"12":["Items"],"16":["Color"]},
+ "fonts": {
+  "7": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "10": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "12": {"color":"rgb(0, 0, 0)","fill":"rgb(0, 0, 0)","stroke":"0px","stroke_color":"rgb(0, 0, 0)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "16": {"color":"rgb(46, 125, 50)","fill":"rgb(46, 125, 50)","stroke":"0px","stroke_color":"rgb(46, 125, 50)","shadow":"none","size":"10px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
 }

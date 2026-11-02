@@ -16,7 +16,12 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 type Job = { html: string; size: [number, number]; out: string };
-type Measured = { boxes: number[][]; lines: Record<string, string[]>; refused: string[] };
+type Measured = {
+  boxes: number[][];
+  lines: Record<string, string[]>;
+  fonts: Record<string, Record<string, string>>;
+  refused: string[];
+};
 
 const root = join(import.meta.dir, "../..");
 const version = (await Bun.file(join(root, "tests/baselines/chrome/version")).text()).trim();
@@ -111,12 +116,16 @@ async function draw() {
       await mkdir(dirname(job.out), { recursive: true });
       // A box a line, so a change shows as the lines it moves.
       const boxes = measured.boxes.map((b) => `  ${JSON.stringify(b)}`).join(",\n");
+      const fonts = Object.entries(measured.fonts)
+        .map(([n, f]) => `  ${JSON.stringify(n)}: ${JSON.stringify(f)}`)
+        .join(",\n");
       const baseline = [
         "{",
         ` "chrome": ${JSON.stringify(version)},`,
         ` "html": ${JSON.stringify(job.html)},`,
         ` "boxes": [\n${boxes}\n ],`,
-        ` "lines": ${JSON.stringify(measured.lines)}`,
+        ` "lines": ${JSON.stringify(measured.lines)},`,
+        ` "fonts": {\n${fonts}\n }`,
         "}",
       ];
       await Bun.write(`${job.out}.json`, `${baseline.join("\n")}\n`);
@@ -325,6 +334,23 @@ function measure(): Promise<Measured> {
       const r = element.getBoundingClientRect();
       boxes[Number(element.dataset.n)] = [r.x, r.y, r.width, r.height];
     }
+    // What the glyphs show, which are hidden in the pixels.
+    const fonts: Measured["fonts"] = {};
+    for (const element of elements.filter((e) => e.matches("[data-text], span"))) {
+      const s = getComputedStyle(element);
+      fonts[element.dataset.n!] = {
+        color: s.color,
+        fill: s.webkitTextFillColor,
+        stroke: s.webkitTextStrokeWidth,
+        stroke_color: s.webkitTextStrokeColor,
+        shadow: s.textShadow,
+        size: s.fontSize,
+        weight: s.fontWeight,
+        stretch: s.fontStretch,
+        style: s.fontStyle,
+        transform: s.textTransform,
+      };
+    }
     // Lines as laid out, untransformed: a transform or a motion path moves text but breaks no
     // line. `will-change` keeps what a transform contains and stacks, so the layout stays. Their
     // styles go back as written: Chrome's `cssText` can parse back to another style, as a
@@ -345,7 +371,7 @@ function measure(): Promise<Measured> {
       }
     }
     moved.forEach((e, i) => e.setAttribute("style", written[i]));
-    return { boxes, lines: text, refused };
+    return { boxes, lines: text, fonts, refused };
   });
 }
 

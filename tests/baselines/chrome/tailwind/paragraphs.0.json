@@ -11,5 +11,14 @@
   [8,220,256,32],
   [8,252,256,32]
  ],
- "lines": {"1":["The quick brown fox jumps over the lazy","dog and runs into the woods"],"2":["The quick brown fox jumps over the lazy dog","and runs into the woods"],"3":["The quick brown fox jumps over the lazy","dog and runs into the woods"],"4":["The quick brown fox jumps over the lazy dog","and runs into the woods"],"5":["The quick brown fox jumps over the lazy dog","and runs into the woods The quick brown fox","jumps over the lazy dog and runs into the","woods"],"6":["The quick brown fox jumps over the lazy dog","and runs into the woods"],"7":["The quick brown fox jumps over the lazy dog","and runs into the woods"]}
+ "lines": {"1":["The quick brown fox jumps over the lazy","dog and runs into the woods"],"2":["The quick brown fox jumps over the lazy dog","and runs into the woods"],"3":["The quick brown fox jumps over the lazy","dog and runs into the woods"],"4":["The quick brown fox jumps over the lazy dog","and runs into the woods"],"5":["The quick brown fox jumps over the lazy dog","and runs into the woods The quick brown fox","jumps over the lazy dog and runs into the","woods"],"6":["The quick brown fox jumps over the lazy dog","and runs into the woods"],"7":["The quick brown fox jumps over the lazy dog","and runs into the woods"]},
+ "fonts": {
+  "1": {"color":"oklch(0.279 0.041 260.031)","fill":"oklch(0.279 0.041 260.031)","stroke":"0px","stroke_color":"oklch(0.279 0.041 260.031)","shadow":"none","size":"12px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "2": {"color":"oklch(0.279 0.041 260.031)","fill":"oklch(0.279 0.041 260.031)","stroke":"0px","stroke_color":"oklch(0.279 0.041 260.031)","shadow":"none","size":"12px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "3": {"color":"oklch(0.279 0.041 260.031)","fill":"oklch(0.279 0.041 260.031)","stroke":"0px","stroke_color":"oklch(0.279 0.041 260.031)","shadow":"none","size":"12px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "4": {"color":"oklch(0.279 0.041 260.031)","fill":"oklch(0.279 0.041 260.031)","stroke":"0px","stroke_color":"oklch(0.279 0.041 260.031)","shadow":"none","size":"12px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "5": {"color":"oklch(0.279 0.041 260.031)","fill":"oklch(0.279 0.041 260.031)","stroke":"0px","stroke_color":"oklch(0.279 0.041 260.031)","shadow":"none","size":"12px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "6": {"color":"oklch(0.279 0.041 260.031)","fill":"oklch(0.279 0.041 260.031)","stroke":"0px","stroke_color":"oklch(0.279 0.041 260.031)","shadow":"none","size":"12px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "7": {"color":"oklch(0.279 0.041 260.031)","fill":"oklch(0.279 0.041 260.031)","stroke":"0px","stroke_color":"oklch(0.279 0.041 260.031)","shadow":"none","size":"12px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
 }
