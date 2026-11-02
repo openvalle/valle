@@ -2,7 +2,7 @@
 //! last to the first, around `transform-origin`, a point in the border box and a z.
 
 use super::css;
-use super::math::{Calc, degrees};
+use super::math::{self, Calc, degrees};
 use super::position::{Offset, position};
 use super::{Accept, Len, Units, length_text};
 
@@ -139,6 +139,7 @@ fn number(a: &str, percent: bool) -> Result<f64, String> {
     match css::num(a) {
         Some(n) if n.unit.is_empty() => Ok(n.value),
         Some(n) if percent && n.unit == "%" => Ok(n.value / 100.0),
+        None if percent && math::is_math(a) => math::factor(a),
         _ => Err(format!("{a} is not a number")),
     }
 }

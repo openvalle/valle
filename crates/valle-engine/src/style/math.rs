@@ -107,21 +107,40 @@ pub(super) fn degrees(s: &str) -> Result<f64, String> {
         Some(degrees) => Ok(Len::Px(degrees)),
         None => Err(format!("{}{} is not an angle", n.value, n.unit)),
     };
-    let sum = |lengths: &Vec<Len>| {
-        (lengths.iter())
-            .map(|l| match l {
-                Len::Px(degrees) => *degrees,
-                _ => f64::NAN,
-            })
-            .sum()
-    };
     match parse(s, unit)? {
-        Value::Length(m) => match m.value(&sum) {
+        Value::Length(m) => match m.value(&|terms: &Vec<Len>| plain(terms)) {
             d if d.is_finite() => Ok(d),
             d => Err(format!("{s} is {d}, not a finite angle")),
         },
         Value::Number(_) => Err(format!("{s} is a number, not an angle")),
     }
+}
+
+/// A number of a math function of numbers or of percentages, `calc(125% * -1)` as -1.25.
+pub(super) fn factor(s: &str) -> Result<f64, String> {
+    // Like angles, percentages of 1 wait for nothing.
+    let unit = |n: Num| match n.unit {
+        "%" => Ok(Len::Px(n.value / 100.0)),
+        _ => Err(format!("{}{} is not a number", n.value, n.unit)),
+    };
+    let x = match parse(s, unit)? {
+        Value::Length(m) => m.value(&|terms: &Vec<Len>| plain(terms)),
+        Value::Number(x) => x,
+    };
+    match x.is_finite() {
+        true => Ok(x),
+        false => Err(format!("{s} is {x}, not a finite number")),
+    }
+}
+
+/// The sum of terms that are all px, standing for what is not a length.
+fn plain(terms: &[Len]) -> f64 {
+    (terms.iter())
+        .map(|l| match l {
+            Len::Px(x) => *x,
+            _ => f64::NAN,
+        })
+        .sum()
 }
 
 fn parse(s: &str, unit: impl Fn(Num) -> Result<Len, String>) -> Result<Value, String> {
