@@ -8,7 +8,7 @@ use taffy::{
     MinTrackSizingFunction as Min, RepetitionCount, TrackSizingFunction,
 };
 
-use super::{Accept, Len, Lengths, css, length, length_text, shown, text};
+use super::{Accept, Len, Lengths, css, length, length_text, math, shown, text};
 use crate::template::V;
 
 /// A track's size: the least and the most it takes, or `fit-content()`'s limit.
@@ -274,6 +274,9 @@ fn placement(s: &str) -> Result<GridPlacement<String>, String> {
                 return Err(bad());
             }
             count = Some(number(n.value, s)?);
+        } else if math::is_math(w) && count.is_none() {
+            // CSS rounds a math function to the nearest integer, halves up.
+            count = Some(number((math::number(w)? + 0.5).floor(), s)?);
         } else if name.is_none() {
             name = Some(self::name(w)?);
         } else {

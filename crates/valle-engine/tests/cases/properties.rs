@@ -799,8 +799,9 @@ const ROWS: &[Row] = &[
             "\"b 1\"",
             "\"span b\"",
             "\"-2\"",
+            "\"calc(2 * -1)\"",
         ],
-        refused: &["0", "\"1 / 2\"", "\"span\"", "\"2 3\""],
+        refused: &["0", "\"1 / 2\"", "\"span\"", "\"2 3\"", "\"calc(1px)\""],
     },
     Row {
         properties: &["gridArea"],
