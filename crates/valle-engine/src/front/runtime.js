@@ -700,6 +700,38 @@
   const noise1d = (seed, x) => noise("noise1d", seed, [x]);
   const noise2d = (seed, x, y) => noise("noise2d", seed, [x, y]);
 
+  // `rangeSelector(unit, { start, end, offset, softness, shape })`: the weight in [0, 1] of the
+  // unit `perUnit` gets, at its index over the count, as After Effects' range selector gives it
+  // (`eval.rs`). The shape is fixed: "square" (the default), "ramp", "smooth" or "triangle".
+  const RANGE = ["start", "end", "offset", "softness", "shape"];
+  const SHAPES = ["square", "ramp", "smooth", "triangle"];
+  function rangeSelector(unit, options) {
+    if (!unit || !Number.isInteger(unit.index) || !Number.isInteger(unit.count)) {
+      throw new TypeError("rangeSelector takes the unit perUnit gets, then its options");
+    }
+    const o = options ?? {};
+    for (const k of keys(o)) {
+      if (!RANGE.includes(k)) {
+        throw new TypeError("rangeSelector has no option " + k + "; it takes " + RANGE.join(", "));
+      }
+    }
+    const shape = o.shape instanceof T ? exact(o.shape, "shape", site()) : (o.shape ?? "square");
+    if (!SHAPES.includes(shape)) {
+      throw new TypeError("rangeSelector shape is " + SHAPES.map((x) => '"' + x + '"').join(", "));
+    }
+    const args = [
+      unit.index / unit.count,
+      o.start ?? 0,
+      o.end ?? 1,
+      o.offset ?? 0,
+      o.softness ?? 0,
+    ];
+    if (!args.every(numeric))
+      throw new TypeError("rangeSelector start, end, offset and softness are numbers");
+    const op = "range|" + shape;
+    return args.some(isT) ? mk(op, args) : host.op(op, args);
+  }
+
   // `formatNumber(value, { decimals, grouping })`, `formatPercent(value, { decimals, grouping })`
   // and `padNumber(value, { width })`: text as `Intl.NumberFormat("en-US")` writes it, remade
   // every frame for a value that changes with time. The options are fixed.
@@ -2057,6 +2089,7 @@
     formatPercent,
     padNumber,
     noise1d,
+    rangeSelector,
     noise2d,
     clamp,
     mod,

@@ -15,7 +15,7 @@ use crate::spring::Spring;
 use crate::style::color::Mixing;
 use crate::template::{
     Bin, Cmp, Error, Guard, Interp, Kind, Measure, Node, Op, Part, PathFn, Piece, Program, Prop,
-    Sample, Stage, Table, Tag, Template, V, Want,
+    Sample, Shape, Stage, Table, Tag, Template, V, Want,
 };
 use crate::time::{Rate, Speed, Tick};
 
@@ -64,6 +64,16 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
     }
     if let Some(spec) = name.strip_prefix("format|") {
         return Ok(Op::Format(fixed(1)?[0], Format::parse(spec)?));
+    }
+    if let Some(shape) = name.strip_prefix("range|") {
+        let shape = match shape {
+            "square" => Shape::Square,
+            "ramp" => Shape::Ramp,
+            "smooth" => Shape::Smooth,
+            "triangle" => Shape::Triangle,
+            _ => return Err(format!("range shape {shape}")),
+        };
+        return Ok(Op::Range(shape, fixed(5)?));
     }
     if let Some(seed) = name.strip_prefix("noise|") {
         let seed = seed.parse().map_err(|_| format!("noise seed {seed}"))?;

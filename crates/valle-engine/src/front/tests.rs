@@ -609,6 +609,15 @@ fn split_text_traces_a_unit_for_each_piece() {
         let turns: Vec<V> = chars.iter().map(|&u| style(&frame, u, "rotate")).collect();
         assert_eq!(turns, ["0deg", "20deg", "70deg"].map(|t| V::Str(t.into())));
         assert_eq!(units(9).len(), 2);
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  const weigh = (u) => ({ opacity: rangeSelector(u, { end: 0.5, softness: 0.5, shape: \"ramp\" }) });
+                  return <Text split=\"char\" perUnit={weigh}>abcd</Text>;
+                }
+            "});
+        let frame = at(&mut f, "0");
+        let weights: Vec<V> = (1..5).map(|u| style(&frame, u, "opacity")).collect();
+        assert_eq!(weights, [1.0, 1.0, 0.5, 0.0].map(V::Num));
         assert_eq!(f.traces(), 1);
         for (body, want) in [
             (
@@ -616,6 +625,10 @@ fn split_text_traces_a_unit_for_each_piece() {
                 "split is \"char\"",
             ),
             ("<Text split=\"char\">a</Text>", "split needs perUnit"),
+            (
+                "<Text split=\"char\" perUnit={(u) => ({ opacity: rangeSelector(u, { shape: \"saw\" }) })}>a</Text>",
+                "rangeSelector shape is",
+            ),
             (
                 "<Text split=\"char\" perUnit={() => ({})}>a<Span>b</Span></Text>",
                 "text only",

@@ -9,7 +9,7 @@ use crate::noise;
 use crate::path::edit;
 use crate::style::{color, css};
 use crate::template::{
-    Axis, Bin, Boolean, Cmp, Error, Interp, Measure, Op, Part, PathFn, Program, V,
+    Axis, Bin, Boolean, Cmp, Error, Interp, Measure, Op, Part, PathFn, Program, Shape, V,
 };
 use crate::time::Tick;
 
@@ -19,6 +19,50 @@ pub struct Clock {
     pub seconds: f64,
     /// `seconds / duration`, within [0, 1].
     pub progress: f64,
+}
+
+/// A unit's weight at `position` (its index over the count) in the range from `start` to `end`,
+/// both moved by `offset`, as After Effects' range selector weighs it: an empty or reversed range
+/// weighs nothing, and a soft edge is centered on its end, unless the range reaches past it.
+fn range(
+    shape: Shape,
+    position: f64,
+    [start, end]: [f64; 2],
+    offset: f64,
+    softness: f64,
+) -> Result<f64, Error> {
+    let within = |v: f64| (0.0..=1.0).contains(&v);
+    if !within(start) || !within(end) || !within(softness) || !offset.is_finite() {
+        return Err(
+            "rangeSelector start, end and softness are numbers from 0 to 1, and offset a number"
+                .into(),
+        );
+    }
+    if start >= end {
+        return Ok(0.0);
+    }
+    let [left, right] = [start + offset, end + offset];
+    if shape == Shape::Square || softness == 0.0 {
+        return Ok(f64::from(u8::from(position >= left && position <= right)));
+    }
+    let left_edge = match left <= 0.0 {
+        true => 1.0,
+        false => (0.5 + (position - left) / softness).clamp(0.0, 1.0),
+    };
+    let right_edge = match right >= 1.0 {
+        true => 1.0,
+        false => (0.5 + (right - position) / softness).clamp(0.0, 1.0),
+    };
+    let smooth = |v: f64| v * v * (3.0 - 2.0 * v);
+    Ok(match shape {
+        Shape::Square | Shape::Ramp => left_edge.min(right_edge),
+        Shape::Smooth => smooth(left_edge).min(smooth(right_edge)),
+        Shape::Triangle => {
+            let center = left / 2.0 + right / 2.0;
+            let half = (right - left + softness) / 2.0;
+            (1.0 - (position - center).abs() / half).clamp(0.0, 1.0)
+        }
+    })
 }
 
 /// Every expression's value, in program order, a late one's 0 until `settle` gives it.
@@ -114,6 +158,16 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
         )?,
         Op::Format(input, format) => V::Str(Rc::from(format.text(num(input)))),
         Op::Bounds(..) => V::Num(0.0),
+        Op::Range(shape, args) => {
+            let [position, start, end, offset, softness] = args[..] else {
+                return Err(
+                    "rangeSelector takes a position, start, end, offset and softness".into(),
+                );
+            };
+            let [p, start, end, offset, softness] =
+                [position, start, end, offset, softness].map(|i| values[i as usize].num());
+            V::Num(range(*shape, p, [start, end], offset, softness)?)
+        }
         Op::Noise(seed, args) => V::Num(match args[..] {
             [x] => noise::noise1(*seed, 0, num(&x)),
             [x, y] => noise::noise2(*seed, num(&x), num(&y)),
@@ -441,5 +495,22 @@ mod tests {
         assert_eq!(between(0.25, s("#000"), s("white")).unwrap(), gray);
         assert!(between(0.5, V::Num(0.0), s("1px")).is_err());
         assert!(between(0.5, s("1px"), s("wide")).is_err());
+    }
+
+    #[test]
+    fn range_selectors_weigh_units_by_their_shape() {
+        let at = |shape, [start, end]: [f64; 2], softness| -> Vec<f64> {
+            (0..4)
+                .map(|i| range(shape, f64::from(i) / 4.0, [start, end], 0.0, softness).unwrap())
+                .collect()
+        };
+        assert_eq!(at(Shape::Square, [0.25, 0.5], 0.5), [0.0, 1.0, 1.0, 0.0]);
+        assert_eq!(at(Shape::Ramp, [0.0, 0.5], 0.5), [1.0, 1.0, 0.5, 0.0]);
+        assert_eq!(at(Shape::Smooth, [0.0, 0.5], 0.5), [1.0, 1.0, 0.5, 0.0]);
+        assert_eq!(at(Shape::Triangle, [0.25, 0.75], 0.5), [0.0, 0.5, 1.0, 0.5]);
+        assert_eq!(at(Shape::Ramp, [0.5, 0.5], 0.5), [0.0; 4]);
+        // Moved by the offset.
+        assert_eq!(range(Shape::Square, 0.75, [0.0, 0.25], 0.5, 0.0), Ok(1.0));
+        assert!(range(Shape::Square, 0.0, [0.0, 1.5], 0.0, 0.0).is_err());
     }
 }

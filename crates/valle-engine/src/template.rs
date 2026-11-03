@@ -116,6 +116,9 @@ pub enum Op {
     Format(u32, Format),
     /// A path function over its operands: path data and numbers.
     Path(PathFn, Vec<u32>),
+    /// `rangeSelector`'s weight of a unit in [0, 1]: over its position, start, end, offset and
+    /// softness.
+    Range(Shape, Vec<u32>),
     /// `noise1d(seed, x)` with one operand, `noise2d(seed, x, y)` with two.
     Noise(u64, Vec<u32>),
     /// `spring(t)`, or its velocity.
@@ -150,6 +153,17 @@ impl Sample {
     }
 }
 
+/// How a `rangeSelector` weighs the units in its range: all or none (`Square`), or with its edges
+/// feathered over its softness, straight (`Ramp`) or eased (`Smooth`), or rising to its middle and
+/// falling from it (`Triangle`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    Square,
+    Ramp,
+    Smooth,
+    Triangle,
+}
+
 /// What `bounds()` gives of a box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Measure {
@@ -178,7 +192,7 @@ impl Op {
             | Op::Format(a, _)
             | Op::Spring { input: a, .. } => f(*a),
             Op::Select(a, b, c) => [a, b, c].into_iter().for_each(|x| f(*x)),
-            Op::Math(_, args) | Op::Path(_, args) | Op::Noise(_, args) => {
+            Op::Math(_, args) | Op::Path(_, args) | Op::Noise(_, args) | Op::Range(_, args) => {
                 args.iter().for_each(|x| f(*x));
             }
             Op::Template(parts) => {
