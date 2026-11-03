@@ -1800,7 +1800,7 @@ impl Painter<'_> {
     /// it, the box clipping it with its corners. An SVG file without a natural size is as big as
     /// its ratio fits in the box, or the box without one, before it fits.
     fn image(&self, i: usize, out: &mut Drawn) {
-        let Kind::Image { resource } = self.template.nodes[i].kind else {
+        let Kind::Image { resource, .. } = self.template.nodes[i].kind else {
             return;
         };
         let picture = &self.pictures[resource as usize];

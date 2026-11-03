@@ -47,8 +47,26 @@ struct Laid {
 /// The node each `bounds()` of a variant measures, by its key path.
 type Measured = HashMap<Rc<str>, usize>;
 
+/// A video the host decodes, for a video resource.
+pub trait Video {
+    /// The size of its frames, in px.
+    fn size(&self) -> [u32; 2];
+    /// The frame it shows `at` into it: the last that starts at or before then, or the first,
+    /// before it starts.
+    fn frame(&mut self, at: Tick) -> Result<Image, String>;
+}
+
+/// A video resource's decoder, the image its frames go into, and the time of the one there.
+struct Shown {
+    video: Box<dyn Video>,
+    image: usize,
+    at: Option<Tick>,
+}
+
 pub struct Scene {
     front: Front,
+    /// The decoder of each video resource the host gave one, by its index.
+    videos: Vec<Option<Shown>>,
     /// What each of the scene's resources shows.
     pictures: Vec<Picture>,
     /// The images they show, as display lists number them.
@@ -83,8 +101,12 @@ impl Scene {
             if files.is_empty() {
                 return Err(fail("nothing is bound to it, and it has no default".into()));
             }
-            // An image has one file, a font the faces of its family.
+            // An image has one file, a font the faces of its family; the host decodes a video.
             let mut picture = Picture::None;
+            if slot.kind == Holds::Video {
+                pictures.push(picture);
+                continue;
+            }
             for path in files {
                 let bytes = read(path).ok_or_else(|| fail(format!("{path}: not found")))?;
                 picture = match slot.kind {
@@ -95,6 +117,7 @@ impl Scene {
                             .and_then(|()| text.add_font(&slot.name, path, blob))
                             .map(|()| Picture::None)
                     }
+                    Holds::Video => unreachable!("skipped above"),
                     Holds::Shader => String::from_utf8(bytes)
                         .map(|code| front.set_shader(&slot.name, code.into()))
                         .map(|()| Picture::None)
@@ -129,13 +152,127 @@ impl Scene {
             canvas: [c.width as f32, c.height as f32],
             measured: RefCell::default(),
         }));
+        let videos = front.resources.iter().map(|_| None).collect();
         Ok(Scene {
             front,
+            videos,
             pictures,
             images,
             text,
             sheets: Vec::new(),
         })
+    }
+
+    /// The file of each video resource, by its name: the one bound to it, else its default.
+    pub fn video_files(&self, inputs: &Inputs) -> Vec<(String, String)> {
+        (self.front.resources.iter())
+            .filter(|s| s.kind == Holds::Video)
+            .filter_map(|s| {
+                let files = inputs.resources.get(&s.name).unwrap_or(&s.default);
+                Some((s.name.clone(), files.first()?.clone()))
+            })
+            .collect()
+    }
+
+    /// Gives video resource `name` its decoder.
+    pub fn set_video(&mut self, name: &str, video: Box<dyn Video>) -> Result<(), Error> {
+        let slot = (self.front.resources.iter())
+            .position(|s| s.name == name && s.kind == Holds::Video)
+            .ok_or_else(|| format!("the scene declares no video resource {name}"))?;
+        let size = video.size();
+        let pixels = vec![0; size[0] as usize * size[1] as usize * 4];
+        self.images.push(Image {
+            size,
+            pixels: pixels.into(),
+        });
+        let image = self.images.len() - 1;
+        self.pictures[slot] = Picture::Image {
+            image: image as u32,
+            size,
+        };
+        self.videos[slot] = Some(Shown {
+            video,
+            image,
+            at: None,
+        });
+        Ok(())
+    }
+
+    /// The frame of each video a shown `<Video>` shows, decoded into its image. A video
+    /// resource shows one time in a frame.
+    fn show_videos(
+        &mut self,
+        template: &Template,
+        values: &[V],
+        styles: &[Style],
+    ) -> Result<(), Error> {
+        let mut asked: Vec<Option<Tick>> = vec![None; self.videos.len()];
+        for (i, node) in template.nodes.iter().enumerate() {
+            let Kind::Image {
+                resource,
+                video: Some(time),
+            } = &node.kind
+            else {
+                continue;
+            };
+            let s = &styles[i];
+            if s.layout.display == taffy::Display::None || !s.visible {
+                continue;
+            }
+            let r = *resource as usize;
+            let name = &self.front.resources[r].name;
+            let seconds = match time {
+                Prop::Const(V::Num(x)) => *x,
+                Prop::Expr(e) => match &values[*e as usize] {
+                    V::Num(x) => *x,
+                    v => {
+                        return Err(format!(
+                            "{}: <Video> time is a number, not {v:?}",
+                            node.place()
+                        ));
+                    }
+                },
+                Prop::Const(v) => {
+                    return Err(format!(
+                        "{}: <Video> time is a number, not {v:?}",
+                        node.place()
+                    ));
+                }
+            };
+            let at = Tick::from_seconds(seconds)
+                .map_err(|e| format!("{}: <Video> time: {e}", node.place()))?;
+            match asked[r] {
+                Some(other) if other != at => {
+                    return Err(format!(
+                        "{}: <Video> resource://{name} shows {} s here and {} s elsewhere in the \
+                         frame: a video resource shows one time a frame, so declare another \
+                         resource of the same file",
+                        node.place(),
+                        at.seconds_text(),
+                        other.seconds_text()
+                    ));
+                }
+                _ => asked[r] = Some(at),
+            }
+        }
+        for (r, at) in asked.into_iter().enumerate() {
+            let Some(at) = at else { continue };
+            let name = &self.front.resources[r].name;
+            let shown = self.videos[r]
+                .as_mut()
+                .ok_or_else(|| format!("video resource {name}: the host gave no decoder for it"))?;
+            if shown.at == Some(at) {
+                continue;
+            }
+            let frame =
+                (shown.video.frame(at)).map_err(|e| format!("video resource {name}: {e}"))?;
+            if frame.size != self.images[shown.image].size {
+                return Err(format!("video resource {name}: a frame of another size"));
+            }
+            self.images[shown.image] = frame;
+            shown.at = Some(at);
+        }
+        Ok(())
     }
 
     /// The scene's resources, as display lists and templates number them.
@@ -179,6 +316,7 @@ impl Scene {
             self.trails(at, &template, &mut styles, &laid)?;
         }
         self.text.sweep();
+        self.show_videos(&template, &values, &styles)?;
         backgrounds(&template, &styles, &self.pictures)?;
         let items = paint(&template, &styles, &laid, &self.pictures);
         let transforms = transforms(&template, &styles, &laid);

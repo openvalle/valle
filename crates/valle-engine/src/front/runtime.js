@@ -1127,6 +1127,7 @@
     Span: "span",
     Mask: "mask",
     Image: "image",
+    Video: "video",
     ShaderLayer: "shader",
   };
 
@@ -1203,6 +1204,7 @@
     span: [],
     mask: ["source", "mode", "invert", "layoutId"],
     image: ["src", "layoutId"],
+    video: ["src", "trimStart", "rate", "time", "layoutId"],
     shader: ["code", "source", "uniforms", "inputs", "outset", "layoutId", "__transition"],
   };
 
@@ -1424,6 +1426,35 @@
     }
     if (children.length > 0) fail(at, "<Image> has no children");
     node.src = name;
+  }
+
+  // A <Video>'s resource, by the name its src gives as a literal, and the time it shows, in
+  // seconds into the video: `time`, or `trimStart` plus the clock times `rate`.
+  function videoOf(node, props, children, at) {
+    const src = props.src;
+    if (src instanceof T || typeof src !== "string" || !src.startsWith("resource://")) {
+      fail(
+        at,
+        "<Video> src is a video resource declared in controls.resources, written as a literal, " +
+          'such as "resource://clip"',
+      );
+    }
+    if (children.length > 0) fail(at, "<Video> has no children");
+    node.src = src.slice("resource://".length);
+    const number = (x, what) => {
+      if (!(x instanceof T) && !Number.isFinite(x)) fail(at, "<Video> " + what + " is a number");
+      return x;
+    };
+    if (props.time !== undefined) {
+      if (props.trimStart !== undefined || props.rate !== undefined) {
+        fail(at, "<Video> takes time, or trimStart and rate, not both");
+      }
+      node.time = number(props.time, "time");
+      return;
+    }
+    const trimStart = number(props.trimStart ?? 0, "trimStart");
+    const rate = number(props.rate ?? 1, "rate");
+    node.time = __b("+", trimStart, __b("*", G.seconds, rate));
   }
 
   // A uniform's value as parts, numbers, booleans, colors or traced values: checked.
@@ -1674,6 +1705,7 @@
     };
     if (kind === "mask") maskOf(node, props, at);
     if (kind === "image") imageOf(node, props, children, at);
+    if (kind === "video") videoOf(node, props, children, at);
     if (kind === "shader") shaderOf(node, props, at);
     if (key !== null) G.keys.push(key);
     try {
@@ -1946,6 +1978,7 @@
         out.mask = { source: node(n.source), luminance: n.luminance, invert: n.invert };
       }
       if ("src" in n) out.src = n.src;
+      if ("time" in n) out.time = ref(n.time);
       if ("shader" in n) {
         const { code, source, uniforms, inputs, outset } = n.shader;
         out.shader = {

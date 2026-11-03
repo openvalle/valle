@@ -466,9 +466,10 @@ pub enum Kind {
         invert: bool,
     },
     /// A box that shows an image: the scene's resource of this index, as the frontend lists
-    /// them.
+    /// them. A `<Video>`'s shows the frame of its video at `video`, seconds into it.
     Image {
         resource: u32,
+        video: Option<Prop>,
     },
     /// A box a shader authors write paints (`shader.rs`): its GLSL code, the values its uniforms
     /// take by name, a number, a boolean or a color string each, or a vector's numbers, the
@@ -588,6 +589,7 @@ impl Node {
             (None, Kind::Text { .. }) => "<Text>".into(),
             (None, Kind::Span { .. }) => "<Span>".into(),
             (None, Kind::Mask { .. }) => "<Mask>".into(),
+            (None, Kind::Image { video: Some(_), .. }) => "<Video>".into(),
             (None, Kind::Image { .. }) => "<Image>".into(),
             (
                 None,

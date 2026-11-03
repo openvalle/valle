@@ -163,7 +163,9 @@ impl Front {
             let e = match (slot.kind, files.len()) {
                 (_, 0) => Err("nothing is bound to it".to_string()),
                 (Holds::Image, 2..) => Err("an image resource has one file".to_string()),
-                (Holds::Shader, 2..) => Err("a shader resource has one file".to_string()),
+                (Holds::Shader | Holds::Video, 2..) => {
+                    Err(format!("a {} resource has one file", slot.kind.name()))
+                }
                 _ => files.iter().try_for_each(|f| rewrite::located(f)),
             };
             if let Err(e) = e {

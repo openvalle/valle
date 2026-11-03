@@ -177,7 +177,7 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
         html.push_str(" data-text");
     }
     let mut style = Vec::new();
-    if let Kind::Image { resource } = n.kind {
+    if let Kind::Image { resource, .. } = n.kind {
         let src = file(&resources[resource as usize])?;
         let _ = write!(html, " src=\"{}\"", escape(&src));
         style.push("display: block;".to_string());

@@ -1,6 +1,6 @@
 //! Video files through FFmpeg, loaded at run time: version 7, 8 or 9, whichever the machine has.
-//! The code is written once (`encode.rs`) and built against each version's API; the one loaded
-//! picks which runs.
+//! The code is written once (`encode.rs`, `decode.rs`) and built against each version's API; the
+//! one loaded picks which runs.
 #![allow(clippy::duplicate_mod)]
 
 use std::path::Path;
@@ -26,6 +26,45 @@ pub enum Codec {
 pub enum Encoding {
     Hardware,
     Software,
+}
+
+/// Ticks a second: the engine's unit of time, which frame times are given in.
+pub const TICKS_PER_SECOND: i64 = 254_016_000_000;
+
+/// Which decoder reads a video: the machine's hardware (VideoToolbox), or FFmpeg's own on the
+/// CPU.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Decoding {
+    Hardware,
+    Software,
+}
+
+/// A video's frames, by time.
+pub trait Read {
+    /// The size of its frames, in px.
+    fn size(&self) -> [u32; 2];
+    /// The frame shown `at` ticks into the video, the last that starts at or before then, or the
+    /// first: straight sRGB RGBA, rows top down.
+    fn frame(&mut self, at: i64) -> Result<Vec<u8>, String>;
+}
+
+/// The frames of the video at `path`, decoded as `decoding` says: by default the hardware's on
+/// macOS where it opens, else FFmpeg's own.
+pub fn reader(path: &Path, decoding: Option<Decoding>) -> Result<Box<dyn Read>, String> {
+    let open = |d: Decoding| -> Result<Box<dyn Read>, String> {
+        Ok(match version()? {
+            Version::V7 => Box::new(v7::decode::Reader::open(path, d)?),
+            Version::V8 => Box::new(v8::decode::Reader::open(path, d)?),
+            Version::V9 => Box::new(v9::decode::Reader::open(path, d)?),
+        })
+    };
+    match decoding {
+        Some(d) => open(d),
+        None if cfg!(target_os = "macos") => {
+            open(Decoding::Hardware).or_else(|_| open(Decoding::Software))
+        }
+        None => open(Decoding::Software),
+    }
 }
 
 /// A video to write.

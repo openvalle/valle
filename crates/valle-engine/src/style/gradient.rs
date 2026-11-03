@@ -504,11 +504,7 @@ impl Declared {
             Image::None => Image::None,
             Image::Url(name) => match resources.iter().position(|r| *r.name == **name) {
                 Some(i) if resources[i].kind != Holds::Image => {
-                    let kind = if resources[i].kind == Holds::Font {
-                        "font"
-                    } else {
-                        "shader"
-                    };
+                    let kind = resources[i].kind.name();
                     return Err(format!(
                         "url(resource://{name}): {name} is a {kind}, not an image"
                     ));

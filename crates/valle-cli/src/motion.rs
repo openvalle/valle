@@ -8,9 +8,11 @@ use std::sync::Mutex;
 
 use serde_json::{Value, json};
 use valle_engine::gpu::{Gpu, Renderer};
-use valle_engine::scene::Scene;
+use valle_engine::image::Image;
+use valle_engine::scene::{Scene, Video};
 use valle_engine::text::{Blob, BuiltIn, Fonts};
 use valle_engine::time::Tick;
+use valle_native::media::{self, Decoding};
 use valle_native::urls::UrlCache;
 
 use crate::args::{Args, Frames};
@@ -39,12 +41,49 @@ pub fn load(args: &Args) -> Result<Loaded, Failure> {
         }
         std::fs::read(path).ok()
     };
-    let scene = Scene::load(&args.file, &read, &args.inputs, fonts())
+    let mut scene = Scene::load(&args.file, &read, &args.inputs, fonts())
         .map_err(|e| Failure::new("scene", e))?;
+    let decoding = match args.option("decoder") {
+        None => None,
+        Some("vt" | "hardware") => Some(Decoding::Hardware),
+        Some("ffmpeg" | "software") => Some(Decoding::Software),
+        Some(other) => {
+            return Err(Failure::new("usage", format!("no decoder {other}"))
+                .hint("--decoder is vt (the hardware's) or ffmpeg (FFmpeg's own, on the CPU)"));
+        }
+    };
+    for (name, file) in scene.video_files(&args.inputs) {
+        let failed = |e: String| Failure::new("video", format!("video resource {name}: {e}"));
+        let path = match file.starts_with("https://") || file.starts_with("http://") {
+            true => (UrlCache::global().and_then(|c| c.fetch(&file))).map_err(failed)?,
+            false => PathBuf::from(&file),
+        };
+        let reader = media::reader(&path, decoding).map_err(failed)?;
+        scene
+            .set_video(&name, Box::new(Decoded(reader)))
+            .map_err(|e| Failure::new("scene", e))?;
+    }
     Ok(Loaded {
         scene,
         urls: urls.into_inner(),
     })
+}
+
+/// A video the host decodes, as the scene reads it.
+struct Decoded(Box<dyn media::Read>);
+
+impl Video for Decoded {
+    fn size(&self) -> [u32; 2] {
+        self.0.size()
+    }
+
+    fn frame(&mut self, at: Tick) -> Result<Image, String> {
+        let pixels = self.0.frame(at.0)?;
+        Ok(Image {
+            size: self.0.size(),
+            pixels: pixels.into(),
+        })
+    }
 }
 
 /// The built-in fonts, from the global cache, each read once.

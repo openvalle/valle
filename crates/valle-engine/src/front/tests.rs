@@ -924,7 +924,7 @@ fn errors_point_at_the_source() {
             ),
             ("<div />", "use <View> instead of <div>"),
             ("<Group />", "<Group> is removed: use <View>"),
-            ("<Video />", "<Video> is not a Valle element"),
+            ("<Video />", "<Video> src is a video resource"),
             (
                 "<Image />",
                 "<Image> src is a resource declared in controls.resources",

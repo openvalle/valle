@@ -292,6 +292,8 @@ struct TracedNode {
     tag: Option<String>,
     attributes: Option<Vec<(String, Ref)>>,
     shader: Option<TracedShader>,
+    /// A video's source time, in seconds.
+    time: Option<Ref>,
 }
 
 #[derive(Deserialize)]
@@ -386,8 +388,13 @@ pub fn variant(
             .collect()
     };
     // The image resource `name`, which `what` reads.
-    let image = |name: &str, what: &str| -> Result<u32, Error> {
+    let picture = |name: &str, what: &str, video: bool| -> Result<u32, Error> {
         if let Some(input) = name.strip_prefix("input://") {
+            if video {
+                return Err(format!(
+                    "{what} {name}: a <Video> shows a video resource; an <Image> shows a picture the Timeline gives"
+                ));
+            }
             if let Some(k) = inputs.iter().position(|i| *i == input) {
                 return Ok((resources.len() + k) as u32);
             }
@@ -412,18 +419,26 @@ pub fn variant(
                  controls.resources"
             ));
         };
-        if resources[r].kind != Holds::Image {
+        let (kind, wanted) = (
+            resources[r].kind,
+            if video { Holds::Video } else { Holds::Image },
+        );
+        if kind != wanted {
+            let instead = match kind {
+                Holds::Video => "; a <Video> shows it",
+                Holds::Image if video => "; an <Image> shows it",
+                _ => "",
+            };
             return Err(format!(
-                "{what} resource://{name}: {name} is a {}, not an image",
-                if resources[r].kind == Holds::Font {
-                    "font"
-                } else {
-                    "shader"
-                }
+                "{what} resource://{name}: {name} is a {}, not a{} {}{instead}",
+                kind.name(),
+                if video { "" } else { "n" },
+                wanted.name(),
             ));
         }
         Ok(r as u32)
     };
+    let image = |name: &str, what: &str| picture(name, what, false);
     let mut nodes = Vec::with_capacity(traced.nodes.len());
     for n in traced.nodes {
         let kind = match &*n.kind {
@@ -448,6 +463,16 @@ pub fn variant(
                 let at = || n.site.map_or("<Image>".into(), |s| place(&At::Site(s)));
                 Kind::Image {
                     resource: image(name, &format!("{}: <Image> src", at()))?,
+                    video: None,
+                }
+            }
+            "video" => {
+                let name = n.src.as_deref().ok_or("a video node without a source")?;
+                let at = || n.site.map_or("<Video>".into(), |s| place(&At::Site(s)));
+                let time = n.time.ok_or("a video node without its time")?;
+                Kind::Image {
+                    resource: picture(name, &format!("{}: <Video> src", at()), true)?,
+                    video: Some(prop(time)?),
                 }
             }
             "shader" => {

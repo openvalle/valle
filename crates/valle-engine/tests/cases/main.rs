@@ -30,9 +30,11 @@ use std::time::{Duration, Instant};
 
 use valle_engine::front::Inputs;
 use valle_engine::gpu::{Gpu, Renderer};
-use valle_engine::scene::Scene;
+use valle_engine::image::Image;
+use valle_engine::scene::{Scene, Video};
 use valle_engine::text::{BUILT_IN, Blob, BuiltIn, Fonts};
 use valle_engine::time::Tick;
+use valle_native::media::{self, Decoding};
 use valle_native::urls::UrlCache;
 
 mod chrome;
@@ -610,8 +612,15 @@ impl Runner {
         each: &mut dyn FnMut(&mut Scene, i64, Tick) -> Result<(), String>,
     ) -> Result<(), Failure> {
         let read = |path: &str| self.bytes(path);
-        let mut scene =
-            Scene::load(case, &read, &Inputs::default(), fonts()).map_err(Failure::Scene)?;
+        let inputs = Inputs::default();
+        let mut scene = Scene::load(case, &read, &inputs, fonts()).map_err(Failure::Scene)?;
+        // Its videos, decoded by FFmpeg's own decoder, which every machine has.
+        for (name, file) in scene.video_files(&inputs) {
+            let path = self.root.join(&file);
+            let reader = media::reader(&path, Some(Decoding::Software))
+                .map_err(|e| Failure::Scene(format!("video resource {name}: {e}")))?;
+            (scene.set_video(&name, Box::new(Decoded(reader)))).map_err(Failure::Scene)?;
+        }
         let c = scene.composition();
         if c.width > MAX_SIZE || c.height > MAX_SIZE {
             let e = format!("cases are at most {MAX_SIZE} × {MAX_SIZE} px");
@@ -851,6 +860,23 @@ fn write_png(path: &Path, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {
 }
 
 /// The file of pinned font `font` in the global cache.
+/// A video FFmpeg decodes, as the scene reads it.
+struct Decoded(Box<dyn media::Read>);
+
+impl Video for Decoded {
+    fn size(&self) -> [u32; 2] {
+        self.0.size()
+    }
+
+    fn frame(&mut self, at: Tick) -> Result<Image, String> {
+        let pixels = self.0.frame(at.0)?;
+        Ok(Image {
+            size: self.0.size(),
+            pixels: pixels.into(),
+        })
+    }
+}
+
 fn cached(font: &BuiltIn) -> Result<PathBuf, String> {
     UrlCache::global()?.fetch_pinned(font.url, font.sha256, font.file)
 }

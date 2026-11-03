@@ -95,12 +95,24 @@ pub struct Slot {
 pub const BUILT_IN_FAMILIES: [&str; 4] = ["sans-serif", "serif", "monospace", "emoji"];
 
 /// What a resource holds: an image, an SVG file among them, a font, whose family is the
-/// resource's name, or a shader's GLSL code.
+/// resource's name, a shader's GLSL code, or a video, which the host decodes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Holds {
     Image,
     Font,
     Shader,
+    Video,
+}
+
+impl Holds {
+    pub fn name(self) -> &'static str {
+        match self {
+            Holds::Image => "image",
+            Holds::Font => "font",
+            Holds::Shader => "shader",
+            Holds::Video => "video",
+        }
+    }
 }
 
 /// What `code` starts with before the first line of the module body.
@@ -533,15 +545,20 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
         Some("image") => Holds::Image,
         Some("font") => Holds::Font,
         Some("shader") => Holds::Shader,
-        Some(k @ ("video" | "model3d" | "environment")) => {
+        Some("video") => Holds::Video,
+        Some(k @ ("model3d" | "environment")) => {
             return Err(format!("{k} resources are not supported yet"));
         }
         Some(k) => {
             return Err(format!(
-                "{k:?} is not a kind of resource: image, font or shader"
+                "{k:?} is not a kind of resource: image, font, shader or video"
             ));
         }
-        None => return Err("resource() needs a kind: \"image\", \"font\" or \"shader\"".into()),
+        None => {
+            return Err(
+                "resource() needs a kind: \"image\", \"font\", \"shader\" or \"video\"".into(),
+            );
+        }
     };
     // Its name is a family name, which the built-in ones would hide.
     if kind == Holds::Font
@@ -557,8 +574,11 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
         (Holds::Image, _) if list => {
             return Err("an image resource has one file, not a list".into());
         }
-        (Holds::Shader, _) if list => {
-            return Err("a shader resource has one file, not a list".into());
+        (Holds::Shader | Holds::Video, _) if list => {
+            return Err(format!(
+                "a {} resource has one file, not a list",
+                kind.name()
+            ));
         }
         (_, 0) if list => return Err("default lists no file".into()),
         _ => {}
@@ -1342,7 +1362,7 @@ mod tests {
             ),
             (
                 "export const controls = { resources: { a: resource({ kind: \"photo\" }) } };",
-                "\"photo\" is not a kind of resource: image, font or shader",
+                "\"photo\" is not a kind of resource: image, font, shader or video",
             ),
             (
                 "export const controls = { resources: { Serif: resource({ kind: \"font\" }) } };",

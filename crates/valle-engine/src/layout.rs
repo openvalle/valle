@@ -132,7 +132,7 @@ pub fn layout(
     let mut replaced = vec![None; n];
     for (i, node) in template.nodes.iter().enumerate() {
         replaced[i] = match &node.kind {
-            Kind::Image { resource } => Some(pictures[*resource as usize].natural()),
+            Kind::Image { resource, .. } => Some(pictures[*resource as usize].natural()),
             Kind::Svg { tag: Tag::Svg, .. } => Some(Natural::Ratio(
                 styles[i].svg.as_deref().and_then(|c| match c.element {
                     Element::Svg {

@@ -39,6 +39,8 @@ options of render:
                               a .mov
   --encoder <vt|ffmpeg>       the hardware encoder (VideoToolbox), or FFmpeg's own on the CPU
                               (x264, x265, prores_ks); the hardware's where it has the codec
+  --decoder <vt|ffmpeg>       how videos the scene shows are decoded: the hardware's (where it
+                              opens the file) or FFmpeg's own
   --bitrate <bits>            a video's bits a second, such as 8M, in place of its quality
 ";
 
