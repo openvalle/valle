@@ -6,8 +6,9 @@ use std::rc::Rc;
 
 use crate::js;
 use crate::noise;
+use crate::path::edit;
 use crate::style::{color, css};
-use crate::template::{Bin, Cmp, Error, Interp, Op, Part, Program, V};
+use crate::template::{Axis, Bin, Cmp, Error, Interp, Op, Part, PathFn, Program, V};
 
 /// The clock a frame is evaluated at.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -77,6 +78,13 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
         Op::Stage(input, stage) => V::Num(stage.at(num(input))),
         Op::Table(input, table) => V::Num(table.at(num(input))),
         Op::Wiggle(input, wiggle) => V::Num(wiggle.at(num(input))),
+        Op::Path(f, args) => path(
+            *f,
+            &args
+                .iter()
+                .map(|a| &values[*a as usize])
+                .collect::<Vec<_>>(),
+        )?,
         Op::Format(input, format) => V::Str(Rc::from(format.text(num(input)))),
         Op::Noise(seed, args) => V::Num(match args[..] {
             [x] => noise::noise1(*seed, 0, num(&x)),
@@ -97,6 +105,21 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             V::Num(if *velocity { v } else { x })
         }
     })
+}
+
+fn path(f: PathFn, args: &[&V]) -> Result<V, Error> {
+    let p = edit::bez(&args[0].text())?;
+    let (point, direction) = match f {
+        PathFn::Length => return Ok(V::Num(edit::length(&p))),
+        _ => edit::at(&p, args[1].num()),
+    };
+    Ok(V::Num(match f {
+        PathFn::Point(Axis::X) => point.x,
+        PathFn::Point(Axis::Y) => point.y,
+        PathFn::Tangent(Axis::X) => direction.x,
+        PathFn::Tangent(Axis::Y) => direction.y,
+        _ => direction.y.atan2(direction.x).to_degrees(),
+    }))
 }
 
 /// Numbers, colors, or lengths and angles; a segment between two units is a `calc()`.

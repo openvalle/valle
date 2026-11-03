@@ -45,6 +45,21 @@ const EASINGS = [
   "linear(0, 0.5 60%, 0.2 40%, 1)",
 ];
 
+/** The paths `path/edit.rs` measures as Chrome does. */
+const PATHS = [
+  "M0 0 L100 0",
+  "M10 10 L90 10 L90 60 Z",
+  "M0 0 Q50 100 100 0",
+  "M0 0 C0 100 100 -50 100 50",
+  "M0 0 C30 0 70 0 100 0",
+  "M10 50 A40 40 0 1 1 90 50",
+  "M0 50 A50 25 30 0 1 100 50",
+  "M0 0 L50 0 M100 0 L150 0",
+  "M20 20 h60 v40 h-60 z m10 10 h20",
+  "M0 0 S50 50 100 0 T200 0",
+  "M5 5",
+];
+
 /** The formats and numbers `format.rs` is tested against, as text so -0 and NaN survive JSON. */
 const FORMATS = [
   "number||true",
@@ -225,12 +240,19 @@ async function draw() {
       expression: `(${written})(${JSON.stringify(FORMATS)}, ${JSON.stringify(VALUES)})`,
       returnByValue: true,
     });
+    const { result: lengths } = await page("Runtime.evaluate", {
+      expression: `(${measured})(${JSON.stringify(PATHS)})`,
+      returnByValue: true,
+    });
+    const paths = Object.entries(lengths.value as Record<string, unknown>)
+      .map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`)
+      .join(",\n");
     const formats = Object.entries(texts.value as Record<string, string>)
       .map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`)
       .join(",\n");
     await Bun.write(
       join(root, "tests/baselines/chrome/properties.json"),
-      `{\n "chrome": ${JSON.stringify(version)},\n "properties": [\n${properties}\n ],\n "easings": {\n${easings}\n },\n "formats": {\n${formats}\n }\n}\n`,
+      `{\n "chrome": ${JSON.stringify(version)},\n "properties": [\n${properties}\n ],\n "easings": {\n${easings}\n },\n "formats": {\n${formats}\n },\n "paths": {\n${paths}\n }\n}\n`,
     );
     await cdp.send("Browser.close").catch(() => {});
   } finally {
@@ -468,6 +490,26 @@ function eased(easings: string[]): Record<string, number[]> {
     });
     animation.cancel();
   }
+  return out;
+}
+
+/** Runs in the page: each path's total length and its points at tenths of it. */
+function measured(paths: string[]): Record<string, { length: number; points: number[][] }> {
+  const out: Record<string, { length: number; points: number[][] }> = {};
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  svg.append(path);
+  document.body.append(svg);
+  for (const d of paths) {
+    path.setAttribute("d", d);
+    const length = path.getTotalLength();
+    const points = Array.from({ length: 11 }, (_, i) => {
+      const p = path.getPointAtLength((length * i) / 10);
+      return [p.x, p.y];
+    });
+    out[d] = { length, points };
+  }
+  svg.remove();
   return out;
 }
 

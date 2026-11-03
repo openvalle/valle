@@ -67,6 +67,9 @@ pub struct Properties {
     /// Numbers as `Intl.NumberFormat` writes them, which `format.rs` is tested against.
     #[serde(default)]
     pub formats: BTreeMap<String, String>,
+    /// Paths' lengths and points as Chrome measures them, which `path/edit.rs` is tested against.
+    #[serde(default)]
+    pub paths: BTreeMap<String, serde_json::Value>,
 }
 
 /// A baseline to draw: the HTML, the canvas size, and its path without the extension.

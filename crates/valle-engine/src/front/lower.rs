@@ -13,8 +13,8 @@ use crate::noise::Wiggle;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
 use crate::template::{
-    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Stage, Table, Tag,
-    Template, V, Want,
+    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, PathFn, Piece, Program, Prop, Stage,
+    Table, Tag, Template, V, Want,
 };
 
 /// An operand of an op by name: an earlier expression, or literal text of a template.
@@ -44,6 +44,10 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
     if let Some(f) = name.strip_prefix("math|") {
         let f = MathFn::parse(f).ok_or_else(|| format!("no Math function {f}"))?;
         return Ok(Op::Math(f, exprs()?));
+    }
+    if let Some(f) = name.strip_prefix("path|") {
+        let f = PathFn::parse(f).ok_or_else(|| format!("no path function {f}"))?;
+        return Ok(Op::Path(f, fixed(f.operands())?));
     }
     if let Some(spec) = name.strip_prefix("format|") {
         return Ok(Op::Format(fixed(1)?[0], Format::parse(spec)?));

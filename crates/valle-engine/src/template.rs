@@ -108,6 +108,8 @@ pub enum Op {
     Wiggle(u32, Wiggle),
     /// A number as text.
     Format(u32, Format),
+    /// A path function over its operands: path data and numbers.
+    Path(PathFn, Vec<u32>),
     /// `noise1d(seed, x)` with one operand, `noise2d(seed, x, y)` with two.
     Noise(u64, Vec<u32>),
     /// `spring(t)`, or its velocity.
@@ -218,6 +220,46 @@ impl Table {
         let i = (at.floor() as usize).min(self.values.len() - 2);
         let (a, b) = (self.values[i], self.values[i + 1]);
         a + (b - a) * (at - i as f64)
+    }
+}
+
+/// What a path function gives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathFn {
+    /// `pathLength(path)`.
+    Length,
+    /// `pointAt(path, progress)`, x or y.
+    Point(Axis),
+    /// `tangentAt(path, progress)`: the unit direction's x or y, or its angle in degrees.
+    Tangent(Axis),
+    Angle,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    X,
+    Y,
+}
+
+impl PathFn {
+    pub fn parse(name: &str) -> Option<PathFn> {
+        Some(match name {
+            "length" => PathFn::Length,
+            "x" => PathFn::Point(Axis::X),
+            "y" => PathFn::Point(Axis::Y),
+            "dx" => PathFn::Tangent(Axis::X),
+            "dy" => PathFn::Tangent(Axis::Y),
+            "angle" => PathFn::Angle,
+            _ => return None,
+        })
+    }
+
+    /// How many operands it takes: the path, then numbers.
+    pub fn operands(self) -> usize {
+        match self {
+            PathFn::Length => 1,
+            _ => 2,
+        }
     }
 }
 

@@ -711,6 +711,25 @@
   const formatPercent = (v, o) => formatted("formatPercent", v, o, "percent", NUMBER);
   const padNumber = (v, o) => formatted("padNumber", v, o, "pad", ["width"]);
 
+  // Path data in: `pathLength(path)`, `pointAt(path, progress)` as `{ x, y }`, and
+  // `tangentAt(path, progress)` as the unit direction `{ x, y }` and its `angle` in degrees.
+  const pathOp = (name, f, args) => {
+    if (typeof val(args[0]) !== "string" || !args.slice(1).every(numeric)) {
+      throw new TypeError(name + " takes path data" + (args.length > 1 ? " and a number" : ""));
+    }
+    return args.some(isT) ? mk("path|" + f, args) : host.op("path|" + f, args);
+  };
+  const pathLength = (path) => pathOp("pathLength", "length", [path]);
+  const pointAt = (path, progress) => ({
+    x: pathOp("pointAt", "x", [path, progress]),
+    y: pathOp("pointAt", "y", [path, progress]),
+  });
+  const tangentAt = (path, progress) => ({
+    x: pathOp("tangentAt", "dx", [path, progress]),
+    y: pathOp("tangentAt", "dy", [path, progress]),
+    angle: pathOp("tangentAt", "angle", [path, progress]),
+  });
+
   // `clamp(x, min, max)` as CSS clamps: `min` wins over `max`.
   const clamp = (x, min, max) => {
     if (![x, min, max].every(numeric)) throw new TypeError("clamp(x, min, max) takes numbers");
@@ -1443,6 +1462,9 @@
     wiggle,
     wiggle2D,
     seededRandom,
+    pathLength,
+    pointAt,
+    tangentAt,
     formatNumber,
     formatPercent,
     padNumber,

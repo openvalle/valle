@@ -640,5 +640,7 @@ fn arc(
     }
 }
 
+pub mod edit;
+
 #[cfg(test)]
 mod tests;
