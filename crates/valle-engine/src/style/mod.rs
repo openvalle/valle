@@ -1127,7 +1127,7 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
             outset,
         } => {
             let at = |e: String| format!("{place}: <ShaderLayer> code {e}");
-            let program = shader::program(code, &["content"]).map_err(at)?;
+            let program = shader::program(code, &["content", "backdrop"]).map_err(at)?;
             let mut s = Shading {
                 program,
                 uniforms: uniforms.clone(),

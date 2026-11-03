@@ -129,8 +129,9 @@ pub enum Item {
         filters: Vec<Filter>,
         items: Vec<Item>,
     },
-    /// Items drawn into a layer that a shader authors wrote reads as its `content` image: the
-    /// shader paints the box `rect`, grown by `outset` px on each side, with its uniform `block`.
+    /// Items drawn into a layer that a shader authors wrote reads as its `content` image, and
+    /// what is under the box as its `backdrop`, as a `Backdrop` has it: the shader paints the box
+    /// `rect`, grown by `outset` px on each side, with its uniform `block`.
     Shader {
         program: Rc<Program>,
         block: Rc<[u8]>,
@@ -1150,12 +1151,16 @@ impl Painter<'_> {
         }
     }
 
-    /// Whether stacking context `d` paints as one layer: it has an opacity, blends or filters its
-    /// backdrop, or a box in it blends, which blends with what the context paints alone, as CSS
-    /// isolates a stacking context.
+    /// Whether stacking context `d` paints as one layer: it has an opacity, blends, filters its
+    /// backdrop or has a shader read it, or a box in it blends, which blends with what the
+    /// context paints alone, as CSS isolates a stacking context.
     fn grouped(&self, d: usize) -> bool {
         let s = &self.styles[d];
-        s.opacity < 1.0 || s.blend != Blend::Normal || !s.backdrop.is_empty() || {
+        let reads = s
+            .shader
+            .as_ref()
+            .is_some_and(|s| s.program.reads("backdrop"));
+        s.opacity < 1.0 || s.blend != Blend::Normal || !s.backdrop.is_empty() || reads || {
             let mut layered = Vec::new();
             self.collect(Some(d), &mut layered);
             (layered.iter()).any(|&b| self.styles[b].blend != Blend::Normal)

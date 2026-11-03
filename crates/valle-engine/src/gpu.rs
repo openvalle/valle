@@ -514,10 +514,12 @@ enum Step {
         target: usize,
         layer: usize,
     },
-    /// Draws one of the frame's shaders into `target`, reading `content` as its content.
+    /// Draws one of the frame's shaders into `target`, reading `content` as its content and
+    /// `backdrop` as its backdrop.
     Shader {
         target: usize,
         content: Option<usize>,
+        backdrop: Option<usize>,
         shading: usize,
     },
 }
@@ -528,7 +530,9 @@ impl Step {
         match *self {
             Step::Draw { .. } => [None; 2],
             Step::Mask { layer, mask, .. } => [Some(layer), Some(mask)],
-            Step::Shader { content, .. } => [content, None],
+            Step::Shader {
+                content, backdrop, ..
+            } => [content, backdrop],
             Step::Composite { layer, .. }
             | Step::Add { layer, .. }
             | Step::Blend { layer, .. }
@@ -1406,6 +1410,26 @@ impl<'a> Renderer<'a> {
                         }
                         false => None,
                     };
+                    // What is under the box's group, as a backdrop filter reads it.
+                    let backdrop = match program.reads("backdrop") {
+                        true => {
+                            let Under { root, open } = plan.seen.group.clone();
+                            let copy = plan.layer();
+                            plan.steps.push(Step::Copy {
+                                target: copy,
+                                layer: root,
+                            });
+                            for (layer, at) in open {
+                                plan.steps.push(Step::Composite {
+                                    target: copy,
+                                    layer,
+                                    at,
+                                });
+                            }
+                            Some(copy)
+                        }
+                        false => None,
+                    };
                     // Its images have as many pixels as the box covers on the target.
                     let scale = matrix.radius_scale() as f32;
                     let [w, h] =
@@ -1426,6 +1450,7 @@ impl<'a> Renderer<'a> {
                     plan.steps.push(Step::Shader {
                         target,
                         content,
+                        backdrop,
                         shading,
                     });
                 }
@@ -1730,6 +1755,7 @@ impl<'a> Renderer<'a> {
             if let Step::Shader {
                 target,
                 content,
+                backdrop,
                 shading,
             } = *step
             {
@@ -1759,6 +1785,7 @@ impl<'a> Renderer<'a> {
                 for name in &program.samplers {
                     let layer = match &**name {
                         "content" => content,
+                        "backdrop" => backdrop,
                         _ => None,
                     };
                     let view = texture(device, size, WORK).create_view(&Default::default());
@@ -1812,8 +1839,10 @@ impl<'a> Renderer<'a> {
                 pass.set_bind_group(2, &own, &[]);
                 pass.draw(0..4, 0..1);
                 drop(pass);
-                if let Some(l) = content.filter(|&l| last[l] == k) {
-                    self.free.extend(surfaces[l]);
+                for l in [content, backdrop].into_iter().flatten() {
+                    if last[l] == k {
+                        self.free.extend(surfaces[l]);
+                    }
                 }
                 continue;
             }

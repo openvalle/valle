@@ -473,7 +473,7 @@ pub enum Kind {
     /// A box a shader authors write paints (`shader.rs`): its GLSL code, the values its uniforms
     /// take by name, a number, a boolean or a color string each, or a vector's numbers, and the
     /// px it paints out past its border box on each side. What the box and the boxes in it paint
-    /// is the image the shader reads as `content`.
+    /// is the image the shader reads as `content`, and what is painted under it its `backdrop`.
     Shader {
         code: Rc<str>,
         uniforms: Vec<(Rc<str>, Vec<Prop>)>,
