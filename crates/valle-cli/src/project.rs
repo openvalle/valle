@@ -42,7 +42,7 @@ impl Words {
                 }
             } else if FLAGS.contains(&w.as_str()) {
                 out.flags.push(w.clone());
-            } else if w != "--json" {
+            } else if w != "--json" && w != "--events" {
                 out.rest.push(w.clone());
             }
         }

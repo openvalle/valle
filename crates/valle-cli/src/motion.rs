@@ -285,7 +285,7 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
     let size = [c.width, c.height];
     let mut drawn = Vec::new();
     let mut written = Vec::new();
-    for &i in &frames {
+    for (k, &i) in frames.iter().enumerate() {
         let pixels = draw(&mut scene, &mut renderer, c.fps.frame_start(i))?;
         if args.storyboard {
             drawn.push(pixels);
@@ -297,6 +297,7 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
             write_png(&path, size, &pixels)?;
             written.push(path.display().to_string());
         }
+        crate::progress(k + 1, frames.len());
     }
     if args.storyboard {
         let (size, pixels) = storyboard(size, &drawn);

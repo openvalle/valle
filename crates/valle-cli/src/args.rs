@@ -49,7 +49,7 @@ impl Args {
             let mut value =
                 || (words.next().cloned()).ok_or_else(|| bad(format!("{w} needs a value")));
             match w.as_str() {
-                "--json" => {}
+                "--json" | "--events" => {}
                 "--storyboard" => args.storyboard = true,
                 "-o" | "--out" => args.out = Some(value()?),
                 "--props" => args.inputs.props = object(&value()?, "--props")?,

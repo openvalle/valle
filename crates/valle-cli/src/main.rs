@@ -8,7 +8,9 @@ mod project;
 mod timeline;
 mod video;
 
+use std::io::Write;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::{Value, json};
 
@@ -17,6 +19,20 @@ use args::Args;
 /// Scene code runs on the thread that loads it, which needs more than the 12 MiB stack QuickJS
 /// is given.
 const STACK: usize = 64 << 20;
+
+/// Whether `--events` was given: what the command does is printed as it goes, a line of JSON
+/// each, before its result.
+static EVENTS: AtomicBool = AtomicBool::new(false);
+
+/// Says, with `--events`, that `done` of `total` frames are drawn.
+pub fn progress(done: usize, total: usize) {
+    if EVENTS.load(Ordering::Relaxed) {
+        let line = json!({ "event": "progress", "done": done, "frames": total });
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
+    }
+}
 
 const USAGE: &str = "\
 usage: valle <command> [options]
@@ -48,6 +64,11 @@ usage: valle <command> [options]
   project render [timeline] [-o <out>] render, by default a video into renders/; a full render
                                        saves a snapshot and records what it read and made
 
+options of every command:
+  --json                      print the result as JSON
+  --events                    print what it does as it goes, a line of JSON each, then the
+                              result as JSON
+
 options of project:
   -C <folder>                 the project there, not the one the current folder is in
 
@@ -65,7 +86,6 @@ options of motion:
   --resource <name>=<path>    a file bound to a resource; a font's faces, once each
   --input <name>=<path>       a picture a role reads as input://<name>
   --caption <json|@file>      the caption a captionPresenter() shows
-  --json                      print the result as JSON
 
 options of render (motion and timeline):
   --frame <n>                 the frame a .png shows (0)
@@ -157,7 +177,9 @@ fn main() -> ExitCode {
 }
 
 fn run(words: &[String]) -> (Result<Value, Failure>, bool) {
-    let json = words.iter().any(|w| w == "--json");
+    let events = words.iter().any(|w| w == "--events");
+    EVENTS.store(events, Ordering::Relaxed);
+    let json = events || words.iter().any(|w| w == "--json");
     let result = (|| {
         let usage = || Failure::new("usage", "no such command").hint(USAGE.trim_end());
         if let [group, command, rest @ ..] = words

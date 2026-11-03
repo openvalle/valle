@@ -78,7 +78,7 @@ pub fn render(
     let mut writer = media::writer(out, &options).map_err(failed)?;
     let gpu = Gpu::new().map_err(|e| Failure::new("gpu", e))?;
     let mut renderer = Renderer::new(&gpu, c.width, c.height);
-    for &i in &frames {
+    for (k, &i) in frames.iter().enumerate() {
         let pixels = draw(scene, &mut renderer, c.fps.frame_start(i))?;
         writer.push(&pixels).map_err(failed)?;
         if let Some(m) = mixer.as_deref_mut() {
@@ -89,6 +89,7 @@ pub fn render(
             meter.push(&samples);
             writer.sound(&samples).map_err(failed)?;
         }
+        crate::progress(k + 1, frames.len());
     }
     writer.finish().map_err(failed)?;
     let seconds = started.elapsed().as_secs_f64();
