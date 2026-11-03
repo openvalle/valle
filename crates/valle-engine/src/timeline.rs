@@ -66,15 +66,7 @@ pub fn lower(path: &str, doc: &Document, host: &Host<'_>) -> Result<Lowered, Err
                 ));
             }
         }
-        if let Some(t) = track.transitions.first() {
-            return Err(format!("{}: transitions are not supported yet", t.at));
-        }
-        writeln!(body, "      <View key={} style={{{fill}}}>", js(&track.id)).unwrap();
-        for clip in track.clips.iter().filter(|c| c.enabled) {
-            let shown = l.clip(track, clip, &fill)?;
-            body.push_str(&shown);
-        }
-        body.push_str("      </View>\n");
+        body.push_str(&l.track(track, &fill)?);
     }
 
     let mut code = String::from("// The scene a Timeline document plays as.\n");
@@ -199,7 +191,7 @@ impl Lowering<'_> {
 
     /// A visual clip's `<TimeScope clip>`, and the component it shows that draws its box and
     /// what is in it, on the clip's time.
-    fn clip(&mut self, track: &Track, clip: &Clip, fill: &str) -> Result<String, Error> {
+    fn clip(&mut self, track: &Track, clip: &Clip, reads: [Tick; 2]) -> Result<Drawn, Error> {
         let at = clip.at.as_str();
         if !clip.look.effects.is_empty() {
             return Err(format!("{at}.effects: clip effects are not supported yet"));
@@ -229,11 +221,11 @@ impl Lowering<'_> {
             Content::Video { src } => {
                 let file = self.file(src, &format!("{at}.src"))?;
                 let length = (self.host.length)(&file);
-                scope.time = Some(source_time(clip, length, &file)?);
+                scope.time = Some(source_time(clip, reads, length, &file)?);
                 let r = self.resource(Holds::Video, vec![file]);
                 media(&r, "Video")
             }
-            Content::Motion(c) => self.motion(clip, c, &mut scope)?,
+            Content::Motion(c) => self.motion(clip, c, reads, &mut scope)?,
             Content::Timeline { .. } => {
                 return Err(format!("{at}: nested timelines are not supported yet"));
             }
@@ -241,41 +233,154 @@ impl Lowering<'_> {
                 unreachable!("not on a visual track: {}", track.at)
             }
         };
-        let id = clip.id.clone();
         let time = scope.time.take().unwrap_or(ClipTime::Source {
             trim: Tick::ZERO,
             rate: Speed::from_f64(1.0)?,
             map: Vec::new(),
             length: None,
         });
-        self.clips.insert(
-            id.clone(),
-            Rc::new(template::Clip {
-                start: clip.start,
-                end: clip.end(),
-                time,
-            }),
-        );
         let shows = format!("K{}", self.functions.len());
         let body = self.look(clip, &scope.lets, &content)?;
         self.functions.push(format!(
             "function {shows}() {{\n  const t = useCurrentTime().clipSeconds;\n{body}}}\n"
         ));
-        let mut props = vec![
-            format!("key={}", js(&id)),
-            format!("clip={}", js(&id)),
-            format!("style={{{fill}}}"),
-        ];
+        let mut props = Vec::new();
         if let Some(c) = scope.composition {
             props.push(format!("composition={{{c}}}"));
         }
         if !scope.names.is_empty() {
             props.push(format!("resources={{{}}}", js(&scope.names)));
         }
-        Ok(format!(
-            "        <TimeScope {}>\n          <{shows} />\n        </TimeScope>\n",
-            props.join(" ")
-        ))
+        Ok(Drawn { shows, props, time })
+    }
+
+    /// A clip of the table, `id`, shown over `on` and timed as `clip`, and its TimeScope with
+    /// `inside` in it.
+    fn scope(
+        &mut self,
+        id: &str,
+        key: &str,
+        clip: template::Clip,
+        props: &[String],
+        fill: &str,
+        inside: &str,
+    ) -> String {
+        self.clips.insert(id.to_string(), Rc::new(clip));
+        let mut all = vec![
+            format!("key={}", js(&key)),
+            format!("clip={}", js(&id)),
+            format!("style={{{fill}}}"),
+        ];
+        all.extend(props.iter().cloned());
+        format!("<TimeScope {}>{inside}</TimeScope>", all.join(" "))
+    }
+
+    /// A visual track: each clip where it shows alone, and each transition with the two clips it
+    /// goes between, both on their own time over its span, in a `<Transition>`.
+    fn track(&mut self, track: &Track, fill: &str) -> Result<String, Error> {
+        let n = track.clips.len();
+        // How much of each clip its transitions take at its head and its tail.
+        let (mut head, mut tail) = (vec![Tick::ZERO; n], vec![Tick::ZERO; n]);
+        for t in &track.transitions {
+            tail[t.from] = t.in_offset;
+            head[t.to] = t.out_offset;
+        }
+        let mut out = format!("      <View key={} style={{{fill}}}>\n", js(&track.id));
+        let mut drawn: Vec<Option<Drawn>> = Vec::new();
+        for (i, clip) in track.clips.iter().enumerate() {
+            if !clip.enabled {
+                drawn.push(None);
+                continue;
+            }
+            // The clip reads its source from before its start into the transition before it, to
+            // past its end into the one after it: the handles.
+            let into = (track.transitions.iter())
+                .find(|t| t.to == i)
+                .map(|t| t.in_offset);
+            let past = (track.transitions.iter())
+                .find(|t| t.from == i)
+                .map(|t| t.out_offset);
+            let reads = [
+                Tick::ZERO - into.unwrap_or_default(),
+                clip.duration + past.unwrap_or_default(),
+            ];
+            let d = self.clip(track, clip, reads)?;
+            let on = [clip.start + head[i], clip.end() - tail[i]];
+            if on[0] < on[1] {
+                let table = template::Clip {
+                    start: clip.start,
+                    end: clip.end(),
+                    on,
+                    time: d.time.clone(),
+                    frames: None,
+                };
+                let inside = format!("<{} />", d.shows);
+                let shown = self.scope(&clip.id, &clip.id, table, &d.props, fill, &inside);
+                writeln!(out, "        {shown}").unwrap();
+            }
+            drawn.push(Some(d));
+        }
+        for (k, t) in track.transitions.iter().enumerate() {
+            let (lo, hi) = t.span(track);
+            if t.kind == "motion" {
+                return Err(format!(
+                    "{}: motion transitions are not supported yet",
+                    t.at
+                ));
+            }
+            let id = format!("{}~{k}", track.id);
+            let mut sides = Vec::new();
+            for (side, i) in [("from", t.from), ("to", t.to)] {
+                let clip = &track.clips[i];
+                let d = drawn[i]
+                    .as_ref()
+                    .expect("transitions go between enabled clips");
+                let table = template::Clip {
+                    start: clip.start,
+                    end: clip.end(),
+                    on: [lo, hi],
+                    time: d.time.clone(),
+                    frames: None,
+                };
+                let (props, inside) = (d.props.clone(), format!("<{} />", d.shows));
+                sides.push(self.scope(&format!("{id}~{side}"), side, table, &props, fill, &inside));
+            }
+            let shows = format!("K{}", self.functions.len());
+            self.functions.push(format!(
+                "function {shows}() {{
+  const progress = useCurrentTime().clipProgress;
+  return (
+    <Transition kind={} progress={{progress}} params={{{}}} style={{{fill}}}>
+      {}
+      {}
+    </Transition>
+  );
+}}
+",
+                js(&t.kind),
+                js(&t.params),
+                sides[0],
+                sides[1],
+            ));
+            // The transition's own clip: the timeline's time, its progress over its frames.
+            let table = template::Clip {
+                start: lo,
+                end: hi,
+                on: [lo, hi],
+                time: ClipTime::Source {
+                    trim: lo,
+                    rate: Speed::from_f64(1.0)?,
+                    map: Vec::new(),
+                    length: None,
+                },
+                frames: Some(self.doc.canvas.fps),
+            };
+            let inside = format!("<{shows} />");
+            let shown = self.scope(&id, &id, table, &[], fill, &inside);
+            writeln!(out, "        {shown}").unwrap();
+        }
+        out.push_str("      </View>\n");
+        Ok(out)
     }
 
     /// The body of a clip's component: its box where `position`, `size`, `anchor`, `scale` and
@@ -376,7 +481,13 @@ impl Lowering<'_> {
 
     /// A motion clip's component, given its props, data and resources, and fitted into the
     /// clip's box, or laid out at its size when it is an overlay.
-    fn motion(&mut self, clip: &Clip, c: &Component, scope: &mut Scope) -> Result<String, Error> {
+    fn motion(
+        &mut self,
+        clip: &Clip,
+        c: &Component,
+        reads: [Tick; 2],
+        scope: &mut Scope,
+    ) -> Result<String, Error> {
         let at = clip.at.as_str();
         let (d, name) = self.component(&c.component, &format!("{at}.component"))?;
         let props = self.given(c, &d, at, None, scope)?;
@@ -384,7 +495,7 @@ impl Lowering<'_> {
         match d.role {
             Role::Clip => {
                 let length = Some(composition.duration);
-                scope.time = Some(source_time(clip, length, &c.component)?);
+                scope.time = Some(source_time(clip, reads, length, &c.component)?);
                 scope.composition = Some(format!(
                     "{{ width: {}, height: {}, duration: {}, clipDuration: {} }}",
                     composition.width,
@@ -553,6 +664,13 @@ impl Lowering<'_> {
     }
 }
 
+/// A clip as drawn: the component that draws it, the props of its TimeScopes, and its time.
+struct Drawn {
+    shows: String,
+    props: Vec<String>,
+    time: ClipTime,
+}
+
 /// What a clip's TimeScope gives inside: its time, the composition components see, and the
 /// names of the scene's resources that their own names stand for.
 #[derive(Default)]
@@ -566,17 +684,38 @@ struct Scope {
 
 /// A source's time in a clip: its trim and rate or its time map, held or looped past `length`
 /// as the clip's `end` says; with `end: "error"`, an error when the clip reads past it.
-fn source_time(clip: &Clip, length: Option<Tick>, what: &str) -> Result<ClipTime, Error> {
+fn source_time(
+    clip: &Clip,
+    reads: [Tick; 2],
+    length: Option<Tick>,
+    what: &str,
+) -> Result<ClipTime, Error> {
     let at = &clip.at;
     let (trim, rate, map) = match &clip.source.time {
         SourceTime::Linear { trim, rate } => (*trim, *rate, Vec::new()),
         SourceTime::Map(points) => (Tick::ZERO, Speed::from_f64(1.0)?, points.clone()),
     };
-    // How far into the source the clip reads, and whether it reads that tick itself.
-    let (reach, inclusive) = match map.as_slice() {
-        [] => (trim + rate.apply(clip.duration)?, false),
-        points => (points.iter().map(|p| p.1).max().unwrap_or_default(), true),
+    // How far into the source the clip reads, from where, and whether it reads that far tick
+    // itself; its handles in a transition too.
+    let (from, reach, inclusive) = match map.as_slice() {
+        [] => (
+            trim + rate.apply(reads[0])?,
+            trim + rate.apply(reads[1])?,
+            false,
+        ),
+        points => (
+            points.iter().map(|p| p.1).min().unwrap_or_default(),
+            points.iter().map(|p| p.1).max().unwrap_or_default(),
+            true,
+        ),
     };
+    if clip.source.end == End::Error && from < Tick::ZERO {
+        return Err(format!(
+            "{at}: the transition before it reads {what} from {} s, before its start; trim \
+             later into it, or set end to \"hold\" or \"loop\"",
+            from.seconds_text()
+        ));
+    }
     let length = match (clip.source.end, length) {
         (End::Error, Some(length)) if reach > length || (inclusive && reach == length) => {
             return Err(format!(

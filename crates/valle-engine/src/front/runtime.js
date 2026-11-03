@@ -1774,10 +1774,9 @@
     if (c !== undefined) {
       G.composition = { ...G.composition, ...c };
     }
-    const clipDuration = G.composition.clipDuration ?? G.composition.duration;
     G.seconds = mk(op("time"), [G.seconds]);
     G.progress = progressOf(G.seconds);
-    G.clip = [local, clamp(__b("/", local, clipDuration), 0, 1)];
+    G.clip = [local, mk(op("progress"), [outer[0]])];
     G.scopes.push(op("time"));
     if (props.resources !== undefined) G.names = props.resources;
     if (props.inputs !== undefined) G.inputs = props.inputs;

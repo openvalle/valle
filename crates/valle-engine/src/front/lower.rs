@@ -108,6 +108,7 @@ pub fn make(name: &str, args: &[Arg], clips: &Clips) -> Result<Op, Error> {
             "time" => ClipPart::Time,
             "local" => ClipPart::Local,
             "on" => ClipPart::On,
+            "progress" => ClipPart::Progress,
             _ => return Err(format!("clip {spec}")),
         };
         let clip = clips

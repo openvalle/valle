@@ -135,17 +135,17 @@ pub enum Op {
     Bounds(Rc<str>, Measure),
 }
 
-/// A clip of a Timeline, as the scene it lowers to reads it from the clip table: when it is on
-/// its parent's clock, `[start, end)`, and the time inside it.
+/// A clip of a Timeline, as the scene it lowers to reads it from the clip table: where its time
+/// starts and ends on its parent's clock, when it shows, `[on[0], on[1])`, and the time inside
+/// it. A transition's progress steps over its frames at `frames`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Clip {
     pub start: Tick,
     pub end: Tick,
+    pub on: [Tick; 2],
     pub time: ClipTime,
+    pub frames: Option<Rate>,
 }
-
-/// The clip table: a Timeline's clips by id.
-pub type Clips = std::collections::HashMap<String, Rc<Clip>>;
 
 /// The time a clip gives what it holds.
 #[derive(Clone, Debug, PartialEq)]
@@ -161,17 +161,18 @@ pub enum ClipTime {
     },
     /// A scene's in a role, for a scene `duration` long (`Role::time`).
     Role { role: Role, duration: Tick },
-    /// A transition's progress over its frames at `fps`: frame i of N is at i / (N − 1), a lone
-    /// frame at 0.5.
-    Progress(Rate),
 }
 
+/// The clip table: a Timeline's clips by id.
+pub type Clips = std::collections::HashMap<String, Rc<Clip>>;
+
 /// What an `Op::Clip` gives: the time inside the clip, in seconds; the time since its start;
-/// or whether it is on.
+/// how far through it is; or whether it shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipPart {
     Time,
     Local,
+    Progress,
     On,
 }
 
@@ -179,9 +180,23 @@ impl Clip {
     /// Its `part` at its parent's time `t`.
     pub fn at(&self, part: ClipPart, t: Tick) -> Result<V, Error> {
         let local = t - self.start;
+        let length = self.end - self.start;
         Ok(match part {
-            ClipPart::On => V::Bool(self.start <= t && t < self.end),
+            ClipPart::On => V::Bool(self.on[0] <= t && t < self.on[1]),
             ClipPart::Local => V::Num(local.seconds()),
+            // Frame i of N at i / (N − 1), a lone frame at 0.5.
+            ClipPart::Progress => V::Num(match self.frames {
+                Some(fps) => {
+                    let first = fps.frame_at(Tick(self.start.0 - 1)) + 1;
+                    let n = fps.frame_at(Tick(self.end.0 - 1)) - first + 1;
+                    match n {
+                        ..=1 => 0.5,
+                        _ => ((fps.frame_at(t) - first) as f64 / (n - 1) as f64).clamp(0.0, 1.0),
+                    }
+                }
+                None if length.0 > 0 => (local.seconds() / length.seconds()).clamp(0.0, 1.0),
+                None => 0.0,
+            }),
             ClipPart::Time => V::Num(match &self.time {
                 ClipTime::Source {
                     trim,
@@ -201,20 +216,9 @@ impl Clip {
                     }
                     .seconds()
                 }
-                ClipTime::Role { role, duration } => {
-                    let clip = self.end - self.start;
-                    role.time(*duration, clip, local.clamp(Tick::ZERO, clip))?
-                        .seconds()
-                }
-                ClipTime::Progress(fps) => {
-                    let first = fps.frame_at(Tick(self.start.0 - 1)) + 1;
-                    let last = fps.frame_at(Tick(self.end.0 - 1));
-                    let n = last - first + 1;
-                    match n {
-                        ..=1 => 0.5,
-                        _ => ((fps.frame_at(t) - first) as f64 / (n - 1) as f64).clamp(0.0, 1.0),
-                    }
-                }
+                ClipTime::Role { role, duration } => role
+                    .time(*duration, length, local.clamp(Tick::ZERO, length))?
+                    .seconds(),
             }),
         })
     }

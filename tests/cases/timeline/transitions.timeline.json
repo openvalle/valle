@@ -1,0 +1,27 @@
+{
+  "canvas": { "width": 160, "height": 90, "fps": 4 },
+  "resources": { "counter": "../resources/counter.mp4", "photo": "../resources/photo.png" },
+  "tracks": {
+    "visual": [
+      {
+        "items": [
+          { "id": "counter", "kind": "video", "src": "counter", "trimStart": 1, "duration": 0.75 },
+          {
+            "transition": "circleOpen",
+            "inOffset": 0.25,
+            "outOffset": 0.5,
+            "params": { "softness": 4 }
+          },
+          { "id": "blue", "kind": "solid", "color": "#2563eb", "duration": 0.75 },
+          {
+            "transition": "wipeLeft",
+            "inOffset": 0.25,
+            "outOffset": 0.25,
+            "params": { "softness": 0.2 }
+          },
+          { "id": "photo", "kind": "image", "src": "photo", "fit": "cover", "duration": 0.75 }
+        ]
+      }
+    ]
+  }
+}
