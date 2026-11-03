@@ -1357,8 +1357,8 @@ mod tests {
                 "resource a: write resource({ kind: \"image\"",
             ),
             (
-                "export const controls = { resources: { a: resource({ kind: \"video\" }) } };",
-                "resource a: video resources are not supported yet",
+                "export const controls = { resources: { a: resource({ kind: \"model3d\" }) } };",
+                "resource a: model3d resources are not supported yet",
             ),
             (
                 "export const controls = { resources: { a: resource({ kind: \"photo\" }) } };",

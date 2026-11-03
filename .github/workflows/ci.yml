@@ -37,6 +37,9 @@ jobs:
           path: ~/.valle/cache/files
           key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs', 'crates/valle-engine/tests/cases/main.rs') }}
           restore-keys: downloads-
+      # The FFmpeg the video cases decode with, loaded at run time.
+      - name: Install FFmpeg
+        run: bun .github/scripts/install-ffmpeg.ts
       - name: Check formatting
         run: cargo xtask fmt --check
       - name: Lint
@@ -64,6 +67,8 @@ jobs:
           path: ~/.valle/cache/files
           key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs', 'crates/valle-engine/tests/cases/main.rs') }}
           restore-keys: downloads-
+      - name: Install FFmpeg
+        run: brew install ffmpeg
       - name: Test
         run: cargo xtask test
       - name: Keep the frames to review
@@ -92,6 +97,11 @@ jobs:
           path: ~/.valle/cache/files
           key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs', 'crates/valle-engine/tests/cases/main.rs') }}
           restore-keys: downloads-
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Install FFmpeg
+        run: bun .github/scripts/install-ffmpeg.ts
       # No GPU here either.
       - name: Test
         run: cargo xtask test --skip gpu,browser
