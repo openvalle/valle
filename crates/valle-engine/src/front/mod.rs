@@ -158,6 +158,34 @@ pub fn declared(entry: &str, read: &dyn Fn(&str) -> Option<String>) -> Result<De
     })
 }
 
+/// The files the scene at `entry` reads, without running it: the modules it imports, itself
+/// first, then its resources' defaults joined to its folder, addresses on the web left out.
+pub fn files(entry: &str, read: &dyn Fn(&str) -> Option<String>) -> Result<Vec<String>, Error> {
+    let text = read(entry).ok_or_else(|| format!("{entry}: not found"))?;
+    let mut loader = Loader {
+        read,
+        loaded: Vec::new(),
+        by_path: HashMap::new(),
+        visiting: Vec::new(),
+        sites: Vec::new(),
+    };
+    loader.visit(entry.to_string(), text)?;
+    let mut files = vec![entry.to_string()];
+    let modules = loader.loaded.iter().rev().filter(|l| l.path != entry);
+    files.extend(modules.map(|l| l.path.clone()));
+    let folder = entry.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let scene = &loader.loaded[loader.by_path[entry]].code;
+    for d in scene.resources.iter().flat_map(|slot| &slot.default) {
+        if !rewrite::web(d) {
+            files.push(match d.starts_with('/') {
+                true => d.clone(),
+                false => rewrite::join(folder, d),
+            });
+        }
+    }
+    Ok(files)
+}
+
 impl Front {
     /// Loads the scene at `entry` and the project modules it imports, its controls bound to
     /// `inputs`; `read` gives a file's text by its `/`-separated path.

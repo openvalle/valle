@@ -2302,6 +2302,7 @@ dependencies = [
  "serde_json",
  "valle-engine",
  "valle-native",
+ "valle-project",
  "valle-timeline",
 ]
 
@@ -2370,6 +2371,16 @@ dependencies = [
  "serde_json",
  "ureq",
  "valle-ffmpeg",
+]
+
+[[package]]
+name = "valle-project"
+version = "0.1.0"
+dependencies = [
+ "ring",
+ "serde_json",
+ "valle-engine",
+ "valle-timeline",
 ]
 
 [[package]]

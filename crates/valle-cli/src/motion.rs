@@ -26,7 +26,7 @@ pub struct Loaded {
 }
 
 pub fn load(args: &Args) -> Result<Loaded, Failure> {
-    let lowered = match args.file.ends_with(".timeline.json") {
+    let lowered = match args.timeline {
         true => Some(crate::timeline::lower(args)?),
         false => None,
     };
@@ -245,7 +245,7 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
     let out =
         (args.out.as_deref()).ok_or_else(|| Failure::new("usage", "render needs -o <out>"))?;
     let lower = out.to_ascii_lowercase();
-    let document = args.file.ends_with(".timeline.json");
+    let document = args.timeline;
     if lower.ends_with(".wav") {
         return match document {
             true => video::sound(&mut crate::timeline::mixer(args)?, Path::new(out)),

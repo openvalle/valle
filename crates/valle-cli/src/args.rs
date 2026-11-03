@@ -9,6 +9,8 @@ use crate::Failure;
 pub struct Args {
     /// The scene, or the document, the command works on.
     pub file: String,
+    /// Whether `file` is a timeline, not a scene.
+    pub timeline: bool,
     pub out: Option<String>,
     pub inputs: Inputs,
     /// The frames to draw, if not all.

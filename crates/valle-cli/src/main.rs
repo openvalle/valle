@@ -4,6 +4,7 @@
 mod args;
 mod motion;
 mod picture;
+mod project;
 mod timeline;
 mod video;
 
@@ -30,6 +31,25 @@ usage: valle <command> [options]
   timeline query <edit.timeline.json> [filters]
                                        the clips the filters pick, with their program and source
                                        timecodes, lines, anchors and the clips anchored to them
+
+  project create <folder> [--width W --height H --fps F]
+                                       a new project: project.json, timeline.json and its
+                                       folders (1920×1080 at 30 fps unless given)
+  project show                         its timelines, resources, files out of the project or
+                                       missing, snapshots and last render
+  project add <file or folder>… [--link]
+                                       copy files in (components/, else media/), or link them
+                                       where they are; gives each an alias and resource entry
+  project check [timeline] [--cost]    check a timeline, its files and components' folders;
+                                       --cost also plans every frame
+  project save [-m <message>]          save a snapshot of the sources
+  project history                      the snapshots
+  project restore <n>                  put snapshot n's sources back, saving what they replace
+  project render [timeline] [-o <out>] render, by default a video into renders/; a full render
+                                       saves a snapshot and records what it read and made
+
+options of project:
+  -C <folder>                 the project there, not the one the current folder is in
 
 options of query (every one given holds):
   --clip <id>                 the clip of that id
@@ -94,6 +114,8 @@ fn main() -> ExitCode {
         Ok(Ok(done)) => done,
         _ => (Err(Failure::new("internal", "the command stopped")), false),
     };
+    // Some of it done and the rest not: the command failed.
+    let partial = matches!(&result, Ok(v) if v["status"] == "partial");
     match (result, json) {
         (Ok(value), true) => println!("{value}"),
         (Ok(value), false) => print_text(&value),
@@ -110,15 +132,16 @@ fn main() -> ExitCode {
         }
         (Err(f), false) => {
             for p in &f.problems {
+                let message = p["message"].as_str().unwrap_or("");
                 let (first, count) = (&p["first"], p["count"].as_u64().unwrap_or(1));
                 let more = match count {
                     1 => String::new(),
                     n => format!(" and {} more", n - 1),
                 };
-                eprintln!(
-                    "frame {first}{more}: {}",
-                    p["message"].as_str().unwrap_or("")
-                );
+                match first.is_null() {
+                    true => eprintln!("{message}"),
+                    false => eprintln!("frame {first}{more}: {message}"),
+                }
             }
             eprintln!("error: {}", f.message);
             if let Some(hint) = f.hint {
@@ -127,13 +150,21 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    ExitCode::SUCCESS
+    match partial {
+        true => ExitCode::FAILURE,
+        false => ExitCode::SUCCESS,
+    }
 }
 
 fn run(words: &[String]) -> (Result<Value, Failure>, bool) {
     let json = words.iter().any(|w| w == "--json");
     let result = (|| {
         let usage = || Failure::new("usage", "no such command").hint(USAGE.trim_end());
+        if let [group, command, rest @ ..] = words
+            && group == "project"
+        {
+            return project::run(command, rest);
+        }
         let (group, command, rest) = match words {
             [group, command, rest @ ..] if group == "motion" || group == "timeline" => {
                 (group.as_str(), command.as_str(), rest)
@@ -143,8 +174,9 @@ fn run(words: &[String]) -> (Result<Value, Failure>, bool) {
             }
             _ => return Err(usage()),
         };
-        let args = Args::parse(rest)?;
+        let mut args = Args::parse(rest)?;
         let document = args.file.ends_with(".timeline.json");
+        args.timeline = group == "timeline";
         if group == "motion" && document {
             return Err(Failure::new("usage", "a .timeline.json is a timeline")
                 .hint(format!("valle timeline {command} {}", args.file)));

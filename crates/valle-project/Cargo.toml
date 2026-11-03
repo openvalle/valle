@@ -1,0 +1,14 @@
+[package]
+name = "valle-project"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ring.workspace = true
+serde_json.workspace = true
+valle-engine = { path = "../valle-engine" }
+valle-timeline = { path = "../valle-timeline" }
