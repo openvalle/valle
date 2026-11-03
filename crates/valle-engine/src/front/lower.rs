@@ -11,7 +11,7 @@ use crate::js::MathFn;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
 use crate::template::{
-    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Stage, Tag,
+    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Stage, Table, Tag,
     Template, V, Want,
 };
 
@@ -42,6 +42,9 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
     if let Some(f) = name.strip_prefix("math|") {
         let f = MathFn::parse(f).ok_or_else(|| format!("no Math function {f}"))?;
         return Ok(Op::Math(f, exprs()?));
+    }
+    if let Some(spec) = name.strip_prefix("table|") {
+        return Ok(Op::Table(fixed(1)?[0], Rc::new(Table::parse(spec)?)));
     }
     if let Some(spec) = name.strip_prefix("freeze|") {
         let span = spec

@@ -594,6 +594,58 @@
     progress("repeatProgress", t, stage, "repeat", count, 0);
   const yoyoProgress = (t, stage, count) => progress("yoyoProgress", t, stage, "yoyo", count, 0);
 
+  // `simulate({ dt, duration, init, step })`: a state of numbers stepped here every `dt` seconds
+  // up to `duration`, once; `at(t)` reads each field linearly between steps.
+  function simulate(options) {
+    const o = options ?? {};
+    if (keys(o).some((k) => !SIMULATE.includes(k))) {
+      throw new TypeError("simulate takes " + SIMULATE.join(", "));
+    }
+    const fix = (v) => (v instanceof T ? exact(v, "simulate", site()) : v);
+    const [dt, duration] = [fix(o.dt), fix(o.duration)];
+    if (!(Number.isFinite(dt) && dt > 0 && Number.isFinite(duration) && duration > 0)) {
+      throw new TypeError("simulate dt and duration must be numbers over 0");
+    }
+    if (typeof o.init !== "function" || typeof o.step !== "function") {
+      throw new TypeError("simulate init and step must be functions");
+    }
+    const steps = Math.ceil(duration / dt);
+    if (steps > MAX_STEPS) {
+      throw new RangeError("simulate takes at most " + MAX_STEPS + " steps; make dt longer");
+    }
+    let names;
+    const read = (state) => {
+      if (!plain(state) || hasT(state)) {
+        throw new TypeError(
+          "a simulation's state is an object of numbers that do not depend on the time",
+        );
+      }
+      const k = keys(state).sort();
+      names ??= k;
+      if (k.join() !== names.join() || k.some((n) => !Number.isFinite(state[n]))) {
+        throw new TypeError("a simulation's state keeps the same fields, each a finite number");
+      }
+      return state;
+    };
+    let state = read(o.init());
+    const fields = names.map((n) => [state[n]]);
+    for (let i = 0; i < steps; i++) {
+      state = read(o.step(state, i * dt, dt));
+      names.forEach((n, j) => fields[j].push(state[n]));
+    }
+    const ops = fields.map((v) => "table|" + dt + "|" + duration + "|" + v.join(" "));
+    return {
+      at(t) {
+        if (!numeric(t)) throw new TypeError("a simulation's at(seconds) takes a number");
+        const out = {};
+        names.forEach((n, j) => (out[n] = isT(t) ? mk(ops[j], [t]) : host.op(ops[j], [t])));
+        return out;
+      },
+    };
+  }
+  const SIMULATE = ["dt", "duration", "init", "step"];
+  const MAX_STEPS = 16384;
+
   // `freezeTime(t, { from, to })`: the time held at `from` until `to`, later less the time held.
   function freezeTime(t, options) {
     const o = options ?? {};
@@ -1268,6 +1320,7 @@
     springVelocity,
     defineSequence,
     freezeTime,
+    simulate,
     stageProgress,
     staggerProgress,
     repeatProgress,

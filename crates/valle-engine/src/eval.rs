@@ -74,6 +74,7 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
         }
         Op::Interp(i) => interpolate(i, values)?,
         Op::Stage(input, stage) => V::Num(stage.at(num(input))),
+        Op::Table(input, table) => V::Num(table.at(num(input))),
         Op::Freeze(input, [from, to]) => V::Num(match num(input) {
             t if t < *from => t,
             t if t < *to => *from,
@@ -152,7 +153,7 @@ mod tests {
     use super::*;
     use crate::ease::Easing;
     use crate::js::MathFn;
-    use crate::template::Stage;
+    use crate::template::{Stage, Table};
 
     fn program(ops: Vec<Op>) -> Program {
         Program { ops }
@@ -279,6 +280,19 @@ mod tests {
             "0|1|1",
         ] {
             assert!(Stage::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn tables() {
+        let table = Table::parse("0.5|1.2|0 1 3 4").unwrap();
+        let at = |t| table.at(t);
+        assert_eq!(
+            [-1.0, 0.25, 0.5, 0.75, 1.0, 1.2, 9.0].map(at),
+            [0.0, 0.5, 1.0, 2.0, 3.0, 3.4, 3.4]
+        );
+        for bad in ["0|1|0 1", "1|1|0", "0.5|1.2|0 1 2", "1|1|0 x", "1|1"] {
+            assert!(Table::parse(bad).is_err(), "{bad}");
         }
     }
 

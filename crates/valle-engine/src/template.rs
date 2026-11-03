@@ -101,6 +101,8 @@ pub enum Op {
     Stage(u32, Stage),
     /// The input time held still from the first time to the second, and later less that span.
     Freeze(u32, [f64; 2]),
+    /// A field of a simulation at the input time.
+    Table(u32, Rc<Table>),
     /// `spring(t)`, or its velocity.
     Spring {
         input: u32,
@@ -159,6 +161,56 @@ impl Stage {
         } else {
             (p * self.count).fract()
         }
+    }
+}
+
+/// A field of `simulate()`: its value every `dt` seconds from 0, read linearly between them up to
+/// `duration`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Table {
+    pub dt: f64,
+    pub duration: f64,
+    pub values: Vec<f64>,
+}
+
+impl Table {
+    /// From `dt|duration|values`, the values space separated.
+    pub fn parse(spec: &str) -> Result<Table, String> {
+        let bad = || "a simulation table: dt|duration|values".to_string();
+        let [dt, duration, values] = spec.splitn(3, '|').collect::<Vec<_>>()[..] else {
+            return Err(bad());
+        };
+        let number = |s: &str| {
+            s.parse::<f64>()
+                .ok()
+                .filter(|x| x.is_finite())
+                .ok_or_else(bad)
+        };
+        let (dt, duration) = (number(dt)?, number(duration)?);
+        let values: Vec<f64> = values.split(' ').map(number).collect::<Result<_, _>>()?;
+        // The steps cover the duration, as `simulate()` takes them.
+        if dt <= 0.0
+            || duration <= 0.0
+            || values.len() < 2
+            || (values.len() - 1) as f64 * dt < duration
+        {
+            return Err(bad());
+        }
+        Ok(Table {
+            dt,
+            duration,
+            values,
+        })
+    }
+
+    pub fn at(&self, t: f64) -> f64 {
+        if t.is_nan() {
+            return t;
+        }
+        let at = t.clamp(0.0, self.duration) / self.dt;
+        let i = (at.floor() as usize).min(self.values.len() - 2);
+        let (a, b) = (self.values[i], self.values[i + 1]);
+        a + (b - a) * (at - i as f64)
     }
 }
 
