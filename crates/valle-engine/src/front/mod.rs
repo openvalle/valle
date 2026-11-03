@@ -111,6 +111,9 @@ pub struct Front {
     /// Most recently used first.
     variants: VecDeque<Rc<Template>>,
     traces: usize,
+    /// Why the scene was traced again last: the decision of the variant used before that no
+    /// longer held, as `kind at path:line`.
+    retraced: Option<Rc<str>>,
     context: Context,
     /// What lays out text for `measureText` and `textOutline`, once the scene gives it.
     typeset: Rc<RefCell<Option<Box<dyn Typeset>>>>,
@@ -331,6 +334,7 @@ impl Front {
             steps,
             variants: VecDeque::new(),
             traces: 0,
+            retraced: None,
             context,
             typeset: Rc::default(),
             shaders: RefCell::default(),
@@ -376,6 +380,7 @@ impl Front {
             seconds,
             progress: (seconds / self.composition.duration.seconds()).clamp(0.0, 1.0),
         };
+        let mut missed = None;
         for i in 0..self.variants.len() {
             // A variant that fails to evaluate here does not hold here either; a fresh trace
             // reports the error if it is real.
@@ -387,6 +392,13 @@ impl Front {
                 self.variants.push_front(template.clone());
                 return Ok(Frame { template, values });
             }
+            if i == 0 {
+                missed = (self.variants[0].failing(&values))
+                    .map(|g| Rc::from(format!("{} at {}", g.kind, g.at)));
+            }
+        }
+        if missed.is_some() {
+            self.retraced = missed;
         }
         let template = Rc::new(self.trace(clock)?);
         let values = eval::run(&template.program, clock)?;
@@ -403,6 +415,11 @@ impl Front {
     /// How many times the scene was traced.
     pub fn traces(&self) -> usize {
         self.traces
+    }
+
+    /// Why it was traced again last, if it was.
+    pub fn retraced(&self) -> Option<&str> {
+        self.retraced.as_deref()
     }
 
     fn trace(&mut self, clock: Clock) -> Result<Template, Error> {

@@ -309,6 +309,11 @@ impl Scene {
         self.front.composition
     }
 
+    /// How many times the scene was traced, and why it was traced again last.
+    pub fn traces(&self) -> (usize, Option<&str>) {
+        (self.front.traces(), self.front.retraced())
+    }
+
     /// The files of its font resources, a face each.
     pub fn font_files(&self) -> &[FontFile] {
         self.text.font_files()

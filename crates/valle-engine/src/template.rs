@@ -750,13 +750,18 @@ pub struct Template {
 impl Template {
     /// Whether the variant holds for these expression values (the program's, at one frame).
     pub fn holds(&self, values: &[V]) -> bool {
-        self.guards.iter().all(|g| {
+        self.failing(values).is_none()
+    }
+
+    /// The first of its guards that does not hold with `values`.
+    pub fn failing(&self, values: &[V]) -> Option<&Guard> {
+        self.guards.iter().find(|g| {
             let applies = g
                 .when
                 .iter()
                 .all(|&(c, side)| values[c as usize].truthy() == side);
-            !applies
-                || match &g.want {
+            applies
+                && !match &g.want {
                     Want::Truthy(t) => values[g.expr as usize].truthy() == *t,
                     Want::Eq(v) => same(&values[g.expr as usize], v),
                 }

@@ -188,19 +188,34 @@ pub fn check(args: &Args) -> Result<Value, Failure> {
     let c = scene.composition();
     let count = c.fps.frames_in(c.duration);
     let mut problems: Vec<(String, Vec<i64>)> = Vec::new();
-    for i in chosen(args, count)? {
+    // The frames traced again, by why.
+    let mut retraced: Vec<(String, Vec<i64>)> = Vec::new();
+    let frames = chosen(args, count)?;
+    for &i in &frames {
         let at = c.fps.frame_start(i).map_err(|e| Failure::new("scene", e))?;
+        let before = scene.traces().0;
         if let Err(e) = scene.frame(at) {
             match problems.iter_mut().find(|(m, _)| *m == e) {
                 Some((_, frames)) => frames.push(i),
                 None => problems.push((e, vec![i])),
             }
         }
+        if let (after, Some(why)) = scene.traces()
+            && after > before
+            && before > 0
+        {
+            match retraced.iter_mut().find(|(w, _)| w == why) {
+                Some((_, frames)) => frames.push(i),
+                None => retraced.push((why.to_string(), vec![i])),
+            }
+        }
     }
+    let warnings = slow(&retraced, frames.len());
     let urls: Vec<Value> = (urls.iter())
         .map(|(url, file)| json!({ "url": url, "sha256": sha256_of(file) }))
         .collect();
     let checked = json!({
+        "warnings": warnings,
         "frames": count,
         "width": c.width,
         "height": c.height,
@@ -209,7 +224,14 @@ pub fn check(args: &Args) -> Result<Value, Failure> {
         "urls": urls,
     });
     if problems.is_empty() {
-        let mut out = json!({ "status": "ok", "summary": format!("{}, no problems", counted(count as usize, "frame")) });
+        let mut summary = format!("{}, no problems", counted(count as usize, "frame"));
+        for w in &warnings {
+            summary.push_str(&format!(
+                "\nwarning: {}",
+                w["message"].as_str().unwrap_or("")
+            ));
+        }
+        let mut out = json!({ "status": "ok", "summary": summary });
         merge(&mut out, checked);
         return Ok(out);
     }
@@ -226,6 +248,28 @@ pub fn check(args: &Args) -> Result<Value, Failure> {
     );
     f.problems = listed;
     Err(f.hint("fix the first frame of each, then check again"))
+}
+
+/// A warning where more than a tenth of the `checked` frames traced the scene again, which is
+/// slow: how many did, and the decisions that changed, the most frequent first.
+fn slow(retraced: &[(String, Vec<i64>)], checked: usize) -> Vec<Value> {
+    let total: usize = retraced.iter().map(|(_, f)| f.len()).sum();
+    if total * 10 <= checked {
+        return Vec::new();
+    }
+    let mut sites: Vec<_> = retraced.iter().collect();
+    sites.sort_by_key(|(_, frames)| std::cmp::Reverse(frames.len()));
+    let listed: Vec<String> = (sites.iter().take(3))
+        .map(|(why, frames)| format!("{why} ({} frames, from {})", frames.len(), frames[0]))
+        .collect();
+    let message = format!(
+        "{total} of {} trace the scene again, which is slow: the structure follows values that \
+         change, {}",
+        counted(checked, "frame"),
+        listed.join("; ")
+    );
+    let frames: Vec<i64> = sites.iter().map(|(_, f)| f[0]).collect();
+    vec![json!({ "message": message, "count": total, "first": frames })]
 }
 
 fn merge(out: &mut Value, more: Value) {
