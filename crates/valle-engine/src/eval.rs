@@ -111,6 +111,10 @@ fn path(f: PathFn, args: &[&V]) -> Result<V, Error> {
     let p = edit::bez(&args[0].text())?;
     let (point, direction) = match f {
         PathFn::Length => return Ok(V::Num(edit::length(&p))),
+        PathFn::RoundCorners => {
+            let rounded = edit::round_corners(&p, args[1].num());
+            return Ok(V::Str(Rc::from(edit::data(&rounded))));
+        }
         _ => edit::at(&p, args[1].num()),
     };
     Ok(V::Num(match f {

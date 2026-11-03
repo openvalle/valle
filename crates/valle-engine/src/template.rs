@@ -233,6 +233,8 @@ pub enum PathFn {
     /// `tangentAt(path, progress)`: the unit direction's x or y, or its angle in degrees.
     Tangent(Axis),
     Angle,
+    /// `roundCorners(path, radius)`.
+    RoundCorners,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,6 +252,7 @@ impl PathFn {
             "dx" => PathFn::Tangent(Axis::X),
             "dy" => PathFn::Tangent(Axis::Y),
             "angle" => PathFn::Angle,
+            "roundCorners" => PathFn::RoundCorners,
             _ => return None,
         })
     }

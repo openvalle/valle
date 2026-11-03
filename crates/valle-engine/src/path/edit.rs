@@ -72,6 +72,134 @@ pub fn at(path: &BezPath, progress: f64) -> (kurbo::Point, Vec2) {
     unreachable!("a path with length has a segment")
 }
 
+/// A path's subpaths as segments, a closing line made a segment, and whether each is closed.
+/// A subpath of only a move keeps its point.
+fn subpaths(path: &BezPath) -> Vec<(Vec<PathSeg>, bool, kurbo::Point)> {
+    let mut out: Vec<(Vec<PathSeg>, bool, kurbo::Point)> = Vec::new();
+    let (mut start, mut at) = (kurbo::Point::ZERO, kurbo::Point::ZERO);
+    // A segment after a close starts a subpath where that one started.
+    let open = |out: &mut Vec<(Vec<PathSeg>, bool, kurbo::Point)>, p: kurbo::Point| {
+        if out.last().is_none_or(|s| s.1) {
+            out.push((Vec::new(), false, p));
+        }
+    };
+    for el in path.elements() {
+        let segment = match *el {
+            PathEl::MoveTo(p) => {
+                (start, at) = (p, p);
+                out.push((Vec::new(), false, p));
+                continue;
+            }
+            PathEl::LineTo(p) => PathSeg::Line(kurbo::Line::new(at, p)),
+            PathEl::QuadTo(c, p) => PathSeg::Quad(kurbo::QuadBez::new(at, c, p)),
+            PathEl::CurveTo(c1, c2, p) => PathSeg::Cubic(kurbo::CubicBez::new(at, c1, c2, p)),
+            PathEl::ClosePath => {
+                open(&mut out, start);
+                let last = out.last_mut().expect("opened");
+                if at != start {
+                    last.0.push(PathSeg::Line(kurbo::Line::new(at, start)));
+                }
+                last.1 = true;
+                at = start;
+                continue;
+            }
+        };
+        open(&mut out, at);
+        out.last_mut().expect("opened").0.push(segment);
+        at = segment.end();
+    }
+    out
+}
+
+/// `roundCorners(path, radius)`: each corner, where two segments meet at an angle, cut back on
+/// both and joined by a curve: a circular arc of `radius` between lines, smaller where a segment
+/// is too short for it (at most half of each is cut). The ends of an open subpath stay.
+pub fn round_corners(path: &BezPath, radius: f64) -> BezPath {
+    if radius.is_nan() || radius <= 0.0 {
+        return path.clone();
+    }
+    let mut out = BezPath::new();
+    for (segments, closed, first) in subpaths(path) {
+        let n = segments.len();
+        if n == 0 {
+            out.move_to(first);
+            continue;
+        }
+        let lengths: Vec<f64> = segments.iter().map(|s| s.arclen(ACCURACY)).collect();
+        // The corner before each segment: the cut on both sides, and the turn.
+        let corners: Vec<Option<(f64, f64)>> = (0..n)
+            .map(|i| {
+                if i == 0 && !closed {
+                    return None;
+                }
+                let before = (i + n - 1) % n;
+                let (a, b) = (
+                    direction(&segments[before], 1.0),
+                    direction(&segments[i], 0.0),
+                );
+                let turn = a.cross(b).atan2(a.dot(b)).abs();
+                if turn < 1e-6 {
+                    return None;
+                }
+                let cut = (radius * (turn / 2.0).tan())
+                    .min(lengths[before] / 2.0)
+                    .min(lengths[i] / 2.0);
+                (cut > 0.0).then_some((cut, turn))
+            })
+            .collect();
+        // Each segment's part left between its corners.
+        let span = |i: usize| {
+            let s = &segments[i];
+            let cut_start = corners[i].map_or(0.0, |c| c.0);
+            let cut_end = corners[(i + 1) % n]
+                .filter(|_| closed || i + 1 < n)
+                .map_or(0.0, |c| c.0);
+            let t0 = if cut_start > 0.0 {
+                s.inv_arclen(cut_start, ACCURACY)
+            } else {
+                0.0
+            };
+            let t1 = match cut_end {
+                0.0 => 1.0,
+                cut => s.inv_arclen(lengths[i] - cut, ACCURACY),
+            };
+            (s.subsegment(t0..t1.max(t0)), t0, t1.max(t0))
+        };
+        let spans: Vec<(PathSeg, f64, f64)> = (0..n).map(span).collect();
+        let parts: Vec<PathSeg> = spans.iter().map(|s| s.0).collect();
+        out.move_to(parts[0].start());
+        for i in 0..n {
+            push(&mut out, parts[i]);
+            let next = (i + 1) % n;
+            if next == 0 && !closed {
+                break;
+            }
+            if let Some((cut, turn)) = corners[next] {
+                let (from, to) = (parts[i].end(), parts[next].start());
+                // From the whole segments: a part may have no length left.
+                let a = direction(&segments[i], spans[i].2);
+                let b = direction(&segments[next], spans[next].1);
+                // A circular arc's handles, for the radius the cut makes.
+                let handle = cut * 4.0 / 3.0 * (turn / 4.0).tan() / (turn / 2.0).tan();
+                out.curve_to(from + a * handle, to - b * handle, to);
+            }
+        }
+        if closed {
+            out.close_path();
+        }
+    }
+    out
+}
+
+/// Appends a segment from where the path is.
+fn push(out: &mut BezPath, s: PathSeg) {
+    match s {
+        PathSeg::Line(l) => out.line_to(l.p1),
+        PathSeg::Quad(q) => out.quad_to(q.p1, q.p2),
+        PathSeg::Cubic(c) => out.curve_to(c.p1, c.p2, c.p3),
+    }
+}
+
 /// The unit direction along a segment at `t`, from its chord where the derivative vanishes, as at
 /// a cubic's end whose control point sits on it.
 fn direction(segment: &PathSeg, t: f64) -> Vec2 {
@@ -142,6 +270,31 @@ mod tests {
             at(&bez("M3 4").unwrap(), 0.5).0,
             kurbo::Point::new(3.0, 4.0)
         );
+    }
+
+    #[test]
+    fn corners_round_to_their_radius() {
+        let square = bez("M0 0 H100 V100 H0 Z").unwrap();
+        let round = round_corners(&square, 10.0);
+        // Four sides less two radii each, and a circle of the radius (a cubic's within 0.03%).
+        let expected = 4.0 * 80.0 + std::f64::consts::TAU * 10.0;
+        assert!(
+            (length(&round) - expected).abs() < 0.01,
+            "{}",
+            length(&round)
+        );
+        assert!(data(&round).starts_with("M10 0 L90 0 C95.523 0 100 4.477 100 10 L100 90"));
+        // Too big a radius rounds as much as the sides allow: a circle.
+        let circle = round_corners(&square, 1000.0);
+        let l = length(&circle);
+        assert!((l - std::f64::consts::PI * 100.0).abs() < 0.1, "{l}");
+        // An open path keeps its ends; a smooth join stays as it is.
+        let open = round_corners(&bez("M0 0 L50 0 L50 50").unwrap(), 5.0);
+        assert!(data(&open).starts_with("M0 0 L45 0 C"));
+        assert!(data(&open).ends_with("L50 50"));
+        let smooth = bez("M0 0 C50 0 50 0 100 0 C150 0 150 0 200 0").unwrap();
+        assert_eq!(data(&round_corners(&smooth, 5.0)), data(&smooth));
+        assert_eq!(data(&round_corners(&square, 0.0)), data(&square));
     }
 
     #[test]

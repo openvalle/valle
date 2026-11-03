@@ -730,6 +730,9 @@
     angle: pathOp("tangentAt", "angle", [path, progress]),
   });
 
+  // `roundCorners(path, radius)`: path data with its corners rounded.
+  const roundCorners = (path, radius) => pathOp("roundCorners", "roundCorners", [path, radius]);
+
   // `clamp(x, min, max)` as CSS clamps: `min` wins over `max`.
   const clamp = (x, min, max) => {
     if (![x, min, max].every(numeric)) throw new TypeError("clamp(x, min, max) takes numbers");
@@ -1465,6 +1468,7 @@
     pathLength,
     pointAt,
     tangentAt,
+    roundCorners,
     formatNumber,
     formatPercent,
     padNumber,
