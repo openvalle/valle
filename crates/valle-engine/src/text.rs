@@ -80,7 +80,8 @@ pub struct Piece<'a> {
 }
 
 /// A glyph of `Text::faces()[face]` in the text of `node`, in px from the text box's top left,
-/// `y` on its baseline.
+/// `y` on its baseline, and where its characters start in `Lines::string` (an ellipsis's at its
+/// end).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Glyph {
     pub face: u32,
@@ -88,6 +89,7 @@ pub struct Glyph {
     pub x: f32,
     pub y: f32,
     pub node: u32,
+    pub cluster: u32,
 }
 
 /// A run of glyphs of one node on a line, with its left and right edges, less the white space
@@ -558,16 +560,31 @@ impl Text {
         for (i, (line, [top, _])) in p.layout.lines().zip(&boxes).enumerate() {
             let baseline = top + extent(&line, content, strut)[0];
             baselines.push(baseline);
+            // Where each glyph's characters start: the clusters of a shaping run in visual
+            // order, which its glyph runs on the line take one after another.
+            let mut starts = Vec::new().into_iter();
+            let mut from = None;
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(run) = item else {
                     continue;
                 };
                 let piece = &content.pieces[run.style().brush as usize];
                 let (node, face) = (piece.node, Face::of(run.run(), piece.font.style));
+                if from != Some(run.run().index()) {
+                    from = Some(run.run().index());
+                    starts = (run.run().visual_clusters())
+                        .flat_map(|c| {
+                            let at = c.text_range().start as u32;
+                            c.glyphs().map(move |_| at)
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter();
+                }
                 let mut x = run.offset();
                 let mut glyphs = Vec::new();
                 for g in run.glyphs() {
-                    glyphs.push((g.id, x + g.x, baseline + g.y));
+                    let at = starts.next().unwrap_or(run.run().text_range().end as u32);
+                    glyphs.push((g.id, x + g.x, baseline + g.y, at));
                     x += g.advance;
                 }
                 runs.push(Run {
@@ -590,12 +607,13 @@ impl Text {
         for (run, (face, node, list)) in runs.iter_mut().zip(shaped) {
             run.glyphs = [glyphs.len() as u32, (glyphs.len() + list.len()) as u32];
             let face = self.face(face);
-            glyphs.extend((list.into_iter()).map(|(id, x, y)| Glyph {
+            glyphs.extend((list.into_iter()).map(|(id, x, y, cluster)| Glyph {
                 face,
                 id,
                 x,
                 y,
                 node,
+                cluster,
             }));
         }
         Ok(Lines {
@@ -733,6 +751,7 @@ impl Text {
                 x: c + x,
                 y: lines.baselines[l],
                 node,
+                cluster: lines.string.len() as u32,
             }));
             lines.runs.push(Run {
                 node,

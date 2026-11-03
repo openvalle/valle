@@ -700,28 +700,59 @@
   const noise1d = (seed, x) => noise("noise1d", seed, [x]);
   const noise2d = (seed, x, y) => noise("noise2d", seed, [x, y]);
 
-  // `measureText(text, style)`: the box a <Text> of `text` in `style` lays out in, alone and
-  // absolute in the canvas: max-content wide, or wrapped at the style's maxWidth; `width` and
-  // `height` in px and its count of `lines`. What it measures cannot change with time.
-  function measureText(text, style) {
-    const fix = (v) => (v instanceof T ? exact(v, "measureText", site()) : v);
+  // The text and the style `measureText` or `textOutline` (`name`) lays out, fixed, the style as
+  // [property, value] pairs.
+  function typeset(name, text, style, options) {
+    const fix = (v) => (v instanceof T ? exact(v, name, site()) : v);
     text = fix(text);
     if (typeof text !== "string" && typeof text !== "number") {
-      throw new TypeError("measureText(text, style) measures a string");
+      throw new TypeError(name + "(text, " + options + ") takes a string");
     }
     const s = style ?? {};
-    if (!plain(s)) throw new TypeError("measureText's style is an object, as a <Text>'s is");
+    if (!plain(s))
+      throw new TypeError(name + "'s " + options + " is an object, as a <Text>'s style is");
     const declared = [];
     for (const [k, v] of entries(s)) {
       const value = fix(v);
       if (value === undefined || value === null) continue;
       if (typeof value !== "number" && typeof value !== "string") {
-        throw new TypeError("measureText style " + k + " must be a number or a string");
+        throw new TypeError(name + " style " + k + " must be a number or a string");
       }
       declared.push([k, value]);
     }
-    const [width, height, lines] = host.measure(String(text), stringify(declared));
+    return [String(text), declared];
+  }
+
+  // `measureText(text, style)`: the box a <Text> of `text` in `style` lays out in, alone and
+  // absolute in the canvas: max-content wide, or wrapped at the style's maxWidth; `width` and
+  // `height` in px and its count of `lines`. What it measures cannot change with time.
+  function measureText(text, style) {
+    const [content, declared] = typeset("measureText", text, style, "style");
+    const [width, height, lines] = host.measure(content, stringify(declared));
     return freeze({ width, height, lines });
+  }
+
+  // `textOutline(text, { ...style, origin, align })`: the outlines of the glyphs a <Text> of
+  // `text` in `style` lays out, as SVG path data in px: the first line's baseline at `origin`
+  // ({ x, y }, 0 0 by default), the lines aligned "left" (the default), "center" or "right" of
+  // its x. It gives `path`, all of them, their `bounds` ({ x, y, width, height }), and `glyphs`,
+  // each glyph with ink: its `path`, its baseline origin `x` and `y`, and its `line` and `word`
+  // (white space parts words) from 0. What it outlines cannot change with time.
+  function textOutline(text, options) {
+    const { origin, align, ...style } = options ?? {};
+    const fix = (v) => (v instanceof T ? exact(v, "textOutline", site()) : v);
+    const o = fix(origin) ?? {};
+    const x = fix(o.x) ?? 0;
+    const y = fix(o.y) ?? 0;
+    if (typeof x !== "number" || typeof y !== "number") {
+      throw new TypeError("textOutline origin is { x, y } in px");
+    }
+    const [content, declared] = typeset("textOutline", text, style, "options");
+    const out = JSON.parse(host.outline(content, stringify(declared), x, y, fix(align) ?? "left"));
+    freeze(out.bounds);
+    out.glyphs.forEach(freeze);
+    freeze(out.glyphs);
+    return freeze(out);
   }
 
   // `rangeSelector(unit, { start, end, offset, softness, shape })`: the weight in [0, 1] of the
@@ -2115,6 +2146,7 @@
     noise1d,
     rangeSelector,
     measureText,
+    textOutline,
     noise2d,
     clamp,
     mod,

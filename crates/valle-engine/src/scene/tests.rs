@@ -442,3 +442,64 @@ fn measure_text_gives_the_box_the_text_lays_out_in() {
         );
     });
 }
+
+#[test]
+fn text_outline_gives_the_glyphs_as_paths() {
+    big_stack(|| {
+        let mut scene = load(indoc! {"
+            export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+            const style = { fontSize: 40, fontWeight: 700 };
+            const m = measureText('Hi there', style);
+            const left = textOutline('Hi there', { ...style, origin: { x: 100, y: 50 } });
+            const center = textOutline('Hi there', { ...style, origin: { x: 100, y: 50 }, align: 'center' });
+            const two = textOutline('a b\\nc', { fontSize: 20, whiteSpace: 'pre-line' });
+            const g = left.glyphs;
+            const b = left.bounds;
+            export default function Scene() {
+              return (
+                <View>
+                  <View style={{ width: g.length, height: g[1].word + 10 * g[2].word }} />
+                  <View style={{ width: g[0].x, height: g[0].y }} />
+                  <View style={{ width: center.glyphs[0].x + m.width / 2, height: center.bounds.width - b.width }} />
+                  <View style={{ width: b.y, height: b.y + b.height }} />
+                  <View style={{ width: two.glyphs.map((x) => x.line).join('') === '001' ? 1 : 0, height: two.glyphs[2].word }} />
+                  <View style={{ width: left.path.startsWith('M') && left.path.includes(g[3].path) ? 1 : 0 }} />
+                </View>
+              );
+            }
+        "})
+        .unwrap();
+        let frame = scene.frame(Tick::ZERO).unwrap();
+        let size = |i: usize| {
+            let b = frame.layout.boxes[i].border;
+            [b.width, b.height]
+        };
+        // "Hi there": 7 glyphs with ink, "i" of word 0, "t" of word 1.
+        assert_eq!(size(1), [7.0, 10.0]);
+        assert_eq!(size(2), [100.0, 50.0]);
+        let [x, w] = size(3);
+        assert!((x - 100.0).abs() < 0.01 && w.abs() < 0.01, "{:?}", size(3));
+        // Ink above the baseline and below it.
+        let [top, bottom] = size(4);
+        assert!(top < 30.0 && bottom > 50.0, "{:?}", size(4));
+        assert_eq!(size(5), [1.0, 2.0]);
+        assert_eq!(size(6)[0], 1.0);
+        for bad in [
+            "textOutline('x', { align: 'middle' })",
+            "textOutline('x', { origin: { x: '1' } })",
+            "textOutline('x', { padding: { top: 1 } })",
+        ] {
+            let source = format!(
+                "export const composition = {{ width: 200, height: 100, fps: 30, duration: 2 }};\n\
+                 const o = {bad};\n\
+                 export default function Scene() {{ return <View />; }}\n"
+            );
+            assert!(
+                load(Box::leak(source.into_boxed_str()))
+                    .and_then(|mut s| s.frame(Tick::ZERO).map(|_| ()))
+                    .is_err(),
+                "{bad}"
+            );
+        }
+    });
+}

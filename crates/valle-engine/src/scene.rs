@@ -6,10 +6,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::eval::{self, Clock};
-use crate::front::{Composition, Front, Holds, Inputs, Slot};
+use kurbo::{BezPath, Point, Shape};
+
+use crate::front::{Composition, Front, Holds, Inputs, Slot, Typeset};
 use crate::image::{Image, Picture};
 use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
+use crate::slug;
 use crate::style::{Sheet, Style, filter, gradient};
 use crate::template::{
     Error, Kind, Measure, Node, Op, Piece, Program, Prop, Sample, Tag, Template, V,
@@ -98,24 +101,11 @@ impl Scene {
             pictures.push(picture);
         }
         let c = front.composition;
-        let canvas = [c.width as f32, c.height as f32];
-        let resources = front.resources.clone();
-        let measuring = RefCell::new(measuring);
-        let measured = RefCell::new(HashMap::new());
-        front.set_measure(Box::new(move |content: &str, style: &str| {
-            let key = (content.to_string(), style.to_string());
-            if let Some(&m) = measured.borrow().get(&key) {
-                return Ok(m);
-            }
-            let m = measure(
-                &mut measuring.borrow_mut(),
-                &resources,
-                canvas,
-                content,
-                style,
-            )?;
-            measured.borrow_mut().insert(key, m);
-            Ok(m)
+        front.set_typeset(Box::new(Typesetter {
+            text: RefCell::new(measuring),
+            resources: front.resources.clone(),
+            canvas: [c.width as f32, c.height as f32],
+            measured: RefCell::default(),
         }));
         Ok(Scene {
             front,
@@ -296,51 +286,164 @@ impl Scene {
     }
 }
 
-/// What `measureText` gives: the border box width and height of a Text of `content` laid out
-/// alone, absolute in the canvas, in `style`, max-content wide or as its max width wraps it, and
-/// its count of lines.
-fn measure(
-    text: &mut Text,
-    resources: &[Slot],
+/// `measureText` and `textOutline`: a text laid out alone, absolute in the canvas, in a style,
+/// max-content wide or as its max width wraps it, in a text of the scene's fonts of its own.
+struct Typesetter {
+    text: RefCell<Text>,
+    resources: Vec<Slot>,
     canvas: [f32; 2],
-    content: &str,
-    style: &str,
-) -> Result<[f64; 3], Error> {
-    let declared: Vec<(String, serde_json::Value)> =
-        serde_json::from_str(style).map_err(|e| e.to_string())?;
-    let mut props = vec![
-        ("position".into(), Prop::Const(V::Str("absolute".into()))),
-        ("width".into(), Prop::Const(V::Str("max-content".into()))),
-    ];
-    for (k, v) in declared {
-        let v = match v {
-            serde_json::Value::Number(n) => V::Num(n.as_f64().unwrap_or(f64::NAN)),
-            serde_json::Value::String(s) => V::Str(s.into()),
-            _ => return Err(format!("style {k} must be a number or a string")),
+    /// Measures by text and style.
+    measured: RefCell<HashMap<(String, String), [f64; 3]>>,
+}
+
+impl Typesetter {
+    /// `content` in `style`, aligned as `align` says if it says: its style and layout.
+    fn laid(
+        &self,
+        text: &mut Text,
+        content: &str,
+        style: &str,
+        align: Option<&str>,
+    ) -> Result<(Style, Layout), Error> {
+        let declared: Vec<(String, serde_json::Value)> =
+            serde_json::from_str(style).map_err(|e| e.to_string())?;
+        let mut props = vec![
+            ("position".into(), Prop::Const(V::Str("absolute".into()))),
+            ("width".into(), Prop::Const(V::Str("max-content".into()))),
+        ];
+        for (k, v) in declared {
+            let v = match v {
+                serde_json::Value::Number(n) => V::Num(n.as_f64().unwrap_or(f64::NAN)),
+                serde_json::Value::String(s) => V::Str(s.into()),
+                _ => return Err(format!("style {k} must be a number or a string")),
+            };
+            props.push((k.into(), Prop::Const(v)));
+        }
+        if let Some(align) = align {
+            props.push(("textAlign".into(), Prop::Const(V::Str(align.into()))));
+        }
+        let template = Template {
+            program: Program::default(),
+            nodes: vec![Node {
+                kind: Kind::Text {
+                    content: vec![Piece::Text(Prop::Const(V::Str(content.into())))],
+                },
+                path: None,
+                classes: Vec::new(),
+                style: props,
+                children: Vec::new(),
+                site: None,
+            }],
+            roots: vec![0],
+            guards: Vec::new(),
         };
-        props.push((k.into(), Prop::Const(v)));
+        let mut styles = Sheet::new(&template)?.compute(&[], true, self.canvas, &self.resources)?;
+        let laid = layout(&template, &[], &styles, self.canvas, text, &[])?;
+        text.sweep();
+        Ok((styles.remove(0), laid))
     }
-    let template = Template {
-        program: Program::default(),
-        nodes: vec![Node {
-            kind: Kind::Text {
-                content: vec![Piece::Text(Prop::Const(V::Str(content.into())))],
-            },
-            path: None,
-            classes: Vec::new(),
-            style: props,
-            children: Vec::new(),
-            site: Some("measureText".into()),
-        }],
-        roots: vec![0],
-        guards: Vec::new(),
-    };
-    let styles = Sheet::new(&template)?.compute(&[], true, canvas, resources)?;
-    let laid = layout(&template, &[], &styles, canvas, text, &[])?;
-    text.sweep();
-    let b = laid.boxes[0].border;
-    let lines = laid.lines[0].as_ref().map_or(0, |l| l.boxes.len());
-    Ok([b.width.into(), b.height.into(), lines as f64])
+}
+
+impl Typeset for Typesetter {
+    fn measure(&self, content: &str, style: &str) -> Result<[f64; 3], Error> {
+        let key = (content.to_string(), style.to_string());
+        if let Some(&m) = self.measured.borrow().get(&key) {
+            return Ok(m);
+        }
+        let (_, laid) = self.laid(&mut self.text.borrow_mut(), content, style, None)?;
+        let b = laid.boxes[0].border;
+        let lines = laid.lines[0].as_ref().map_or(0, |l| l.boxes.len());
+        let m = [b.width.into(), b.height.into(), lines as f64];
+        self.measured.borrow_mut().insert(key, m);
+        Ok(m)
+    }
+
+    /// The outlines as path data in canvas px, to 1/1000 px: all of them as one path, its
+    /// bounds, and each glyph with ink, with its baseline origin, its line and its word, the
+    /// words being what white space parts.
+    fn outline(
+        &self,
+        content: &str,
+        style: &str,
+        [ox, oy]: [f64; 2],
+        align: &str,
+    ) -> Result<String, Error> {
+        let part = match align {
+            "left" => 0.0,
+            "center" => 0.5,
+            "right" => 1.0,
+            _ => {
+                return Err(format!(
+                    "align is \"left\", \"center\" or \"right\", not {align:?}"
+                ));
+            }
+        };
+        let mut text = self.text.borrow_mut();
+        let (s, laid) = self.laid(&mut text, content, style, Some(align))?;
+        let (border, at) = (laid.boxes[0].border, laid.boxes[0].content);
+        let mut all = BezPath::new();
+        let mut glyphs = Vec::new();
+        if let Some(lines) = &laid.lines[0] {
+            let first = lines.baselines.first().copied().unwrap_or(0.0);
+            let dx = ox - f64::from(border.width) * part - f64::from(border.x);
+            let dy = oy - f64::from(at.y + first);
+            // Each byte's word.
+            let mut word = vec![0u32; lines.string.len() + 1];
+            let (mut count, mut inside) = (0, false);
+            for (i, c) in lines.string.char_indices() {
+                if c.is_whitespace() {
+                    inside = false;
+                } else if !inside {
+                    (count, inside) = (count + 1, true);
+                }
+                word[i] = count.max(1) - 1;
+            }
+            word[lines.string.len()] = count.max(1) - 1;
+            let round = |v: f64| (v * 1000.0).round() / 1000.0;
+            for run in &lines.runs {
+                let k = s.font.size;
+                for g in &lines.glyphs[run.glyphs[0] as usize..run.glyphs[1] as usize] {
+                    let (em, contours) = slug::contours(&text.faces()[g.face as usize], g.id)?;
+                    if contours.is_empty() {
+                        continue;
+                    }
+                    let k = k / f64::from(em);
+                    let x = f64::from(at.x + g.x) + dx;
+                    let y = f64::from(at.y + g.y) + dy;
+                    let p = |[px, py]: [f32; 2]| {
+                        Point::new(round(x + f64::from(px) * k), round(y - f64::from(py) * k))
+                    };
+                    let mut path = BezPath::new();
+                    for contour in &contours {
+                        path.move_to(p(contour[0][0]));
+                        for &[a, c, e] in contour {
+                            // A line is a curve with its control point halfway.
+                            let mid = [(a[0] + e[0]) * 0.5, (a[1] + e[1]) * 0.5];
+                            match c == mid {
+                                true => path.line_to(p(e)),
+                                false => path.quad_to(p(c), p(e)),
+                            }
+                        }
+                        path.close_path();
+                    }
+                    all.extend(path.iter());
+                    glyphs.push(serde_json::json!({
+                        "path": path.to_svg(),
+                        "x": round(x),
+                        "y": round(y),
+                        "line": run.line,
+                        "word": word[g.cluster as usize],
+                    }));
+                }
+            }
+        }
+        let r = all.bounding_box();
+        let bounds = serde_json::json!({
+            "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height(),
+        });
+        let out = serde_json::json!({ "path": all.to_svg(), "bounds": bounds, "glyphs": glyphs });
+        Ok(out.to_string())
+    }
 }
 
 /// The node each `bounds()` of the variant measures.

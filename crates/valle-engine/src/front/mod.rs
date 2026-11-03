@@ -59,9 +59,21 @@ pub struct Composition {
     pub looped: bool,
 }
 
-/// What `measureText` asks of the scene: the box of a text in a style, its declarations as JSON
-/// pairs; its width, height and count of lines.
-pub type Measure = Box<dyn Fn(&str, &str) -> Result<[f64; 3], Error>>;
+/// What lays text out for `measureText` and `textOutline`, with the scene's fonts: a text alone
+/// in a style, its declarations as JSON pairs.
+pub trait Typeset {
+    /// Its box's width and height, and its count of lines.
+    fn measure(&self, text: &str, style: &str) -> Result<[f64; 3], Error>;
+    /// Its glyphs' outlines as `textOutline` gives them, as JSON: the first line's baseline at
+    /// `origin`, from the left, the middle or the right of its box as `align` says.
+    fn outline(
+        &self,
+        text: &str,
+        style: &str,
+        origin: [f64; 2],
+        align: &str,
+    ) -> Result<String, Error>;
+}
 
 /// One frame: the variant that holds at its time, and its expressions' values there.
 pub struct Frame {
@@ -95,8 +107,8 @@ pub struct Front {
     variants: VecDeque<Rc<Template>>,
     traces: usize,
     context: Context,
-    /// What measures text for `measureText`, once the scene gives it.
-    measure: Rc<RefCell<Option<Measure>>>,
+    /// What lays out text for `measureText` and `textOutline`, once the scene gives it.
+    typeset: Rc<RefCell<Option<Box<dyn Typeset>>>>,
 }
 
 impl Front {
@@ -201,10 +213,10 @@ impl Front {
             variants: VecDeque::new(),
             traces: 0,
             context,
-            measure: Rc::default(),
+            typeset: Rc::default(),
         };
         front.context.with(|ctx| -> Result<(), Error> {
-            install_host(&ctx, front.measure.clone()).map_err(|e| e.to_string())?;
+            install_host(&ctx, front.typeset.clone()).map_err(|e| e.to_string())?;
             front.run(&ctx, RUNTIME.into(), "runtime.js")?;
             front.run(&ctx, format!("__builtin({})", charts.code), "charts.js")?;
             let mut free: Vec<&str> = loader
@@ -224,9 +236,9 @@ impl Front {
         Ok(front)
     }
 
-    /// Gives `measureText` what measures text.
-    pub fn set_measure(&self, measure: Measure) {
-        *self.measure.borrow_mut() = Some(measure);
+    /// Gives `measureText` and `textOutline` what lays out text.
+    pub fn set_typeset(&self, typeset: Box<dyn Typeset>) {
+        *self.typeset.borrow_mut() = Some(typeset);
     }
 
     /// The frame at `at`: a variant whose guards hold there, traced when none does.
@@ -484,6 +496,8 @@ fn json(value: &impl serde::Serialize) -> String {
     serde_json::to_string(value).expect("names serialize")
 }
 
+const NO_FONTS: &str = "it lays text out with a scene's fonts, which this has not";
+
 /// The units `<Text split>` splits `text` into, by `split`: each unit's start and end one after
 /// another, in UTF-16 code units as JavaScript indexes strings. `char` gives grapheme clusters, but white space;
 /// `word` runs of characters between white space; `line` the lines between line feeds, but empty
@@ -533,24 +547,37 @@ fn units(text: &str, split: &str) -> Vec<usize> {
 /// `__host.op(name, args)`: one op's value over concrete operands, through the evaluator frames
 /// use, so tracing sees the values frames compute; `__host.svg`, the SVG tables as JSON;
 /// `__host.random(seed, count, low, high)`, checked by the runtime; `__host.units(text, split)`,
-/// the units of a split text; and `__host.measure(text, style)`, what `measureText` gives.
+/// the units of a split text; and `__host.measure(text, style)` and `__host.outline(text, style,
+/// x, y, align)`, what `measureText` and `textOutline` give.
 fn install_host<'js>(
     ctx: &Ctx<'js>,
-    measure: Rc<RefCell<Option<Measure>>>,
+    typeset: Rc<RefCell<Option<Box<dyn Typeset>>>>,
 ) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
+    let set = typeset.clone();
     host.set(
         "measure",
         Function::new(
             ctx.clone(),
             move |ctx: Ctx<'js>, text: String, style: String| {
-                let measured = match &*measure.borrow() {
-                    Some(m) => m(&text, &style).map(Vec::from),
-                    None => {
-                        Err("measureText measures with a scene's fonts, which this has not".into())
-                    }
+                let measured = match &*set.borrow() {
+                    Some(t) => t.measure(&text, &style).map(Vec::from),
+                    None => Err(NO_FONTS.into()),
                 };
                 measured.map_err(|e| Exception::throw_type(&ctx, &format!("measureText: {e}")))
+            },
+        )?,
+    )?;
+    host.set(
+        "outline",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, text: String, style: String, x: f64, y: f64, align: String| {
+                let outlined = match &*typeset.borrow() {
+                    Some(t) => t.outline(&text, &style, [x, y], &align),
+                    None => Err(NO_FONTS.into()),
+                };
+                outlined.map_err(|e| Exception::throw_type(&ctx, &format!("textOutline: {e}")))
             },
         )?,
     )?;
