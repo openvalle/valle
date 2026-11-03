@@ -459,9 +459,10 @@
   }
 
   const EXTRAPOLATE = ["clamp", "extend"];
+  const INTERPOLATE = ["easing", "colorSpace", "hue", "extrapolateLeft", "extrapolateRight"];
 
-  // `interpolate(input, inputs, outputs, { easing, extrapolateLeft, extrapolateRight })` over
-  // numbers.
+  // `interpolate(input, inputs, outputs, { easing, colorSpace, hue, extrapolateLeft,
+  // extrapolateRight })` over numbers, colors, or lengths and angles.
   // The options decide the op, so a traced option is fixed by a guard.
   function interpolate(x, inputs, outputs, options) {
     if (
@@ -476,18 +477,19 @@
     }
     const o = options ?? {};
     for (const k of keys(o)) {
-      if (k !== "easing" && k !== "extrapolateLeft" && k !== "extrapolateRight") {
+      if (!INTERPOLATE.includes(k)) {
         throw new TypeError(
-          "interpolate has no option " +
-            k +
-            "; it takes easing, extrapolateLeft and extrapolateRight",
+          "interpolate has no option " + k + "; it takes " + INTERPOLATE.join(", "),
         );
       }
     }
     const fixed = (k, otherwise) =>
       o[k] instanceof T ? exact(o[k], "interpolate", site()) : (o[k] ?? otherwise);
-    const easing = fixed("easing", "linear");
-    if (typeof easing !== "string") throw new TypeError("interpolate easing must be a string");
+    const text = (k, otherwise) => {
+      const v = fixed(k, otherwise);
+      if (typeof v !== "string") throw new TypeError("interpolate " + k + " must be a string");
+      return v;
+    };
     const side = (k) => {
       const e = fixed(k, "clamp");
       if (!EXTRAPOLATE.includes(e)) {
@@ -496,9 +498,20 @@
       return e;
     };
     const args = [x, ...inputs, ...outputs];
-    if (!args.every(numeric)) throw new TypeError("interpolate takes numbers");
-    const left = side("extrapolateLeft");
-    const name = "interpolate|" + left + "|" + side("extrapolateRight") + "|" + easing;
+    const strings = outputs.every((o) => typeof val(o) === "string");
+    if (![x, ...inputs].every(numeric) || !(strings || outputs.every(numeric))) {
+      throw new TypeError(
+        "interpolate takes numbers in, and numbers, colors, or lengths and angles out",
+      );
+    }
+    const spec = [
+      side("extrapolateLeft"),
+      side("extrapolateRight"),
+      text("colorSpace", ""),
+      text("hue", ""),
+      text("easing", "linear"),
+    ];
+    const name = "interpolate|" + spec.join("|");
     return args.some(isT) ? mk(name, args) : host.op(name, args);
   }
 

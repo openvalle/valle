@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::rc::Rc;
 
 use crate::js;
+use crate::style::{color, css};
 use crate::template::{Bin, Cmp, Error, Interp, Op, Part, Program, V};
 
 /// The clock a frame is evaluated at.
@@ -71,16 +72,19 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             }
             V::Str(Rc::from(s))
         }
-        Op::Interp(i) => V::Num(interpolate(i, values)?),
+        Op::Interp(i) => interpolate(i, values)?,
     })
 }
 
-fn interpolate(i: &Interp, values: &[V]) -> Result<f64, Error> {
+/// Numbers, colors, or lengths and angles; a segment between two units is a `calc()`.
+fn interpolate(i: &Interp, values: &[V]) -> Result<V, Error> {
     let num = |id: u32| values[id as usize].num();
     let x = num(i.input);
-    let stops: Vec<(f64, f64)> = i.stops.iter().map(|&(a, b)| (num(a), num(b))).collect();
+    let stops: Vec<(f64, &V)> = (i.stops.iter())
+        .map(|&(a, b)| (num(a), &values[b as usize]))
+        .collect();
     // NaN stops fail too.
-    let increasing = |w: &[(f64, f64)]| w[0].0.partial_cmp(&w[1].0) == Some(Ordering::Less);
+    let increasing = |w: &[(f64, &V)]| w[0].0.partial_cmp(&w[1].0) == Some(Ordering::Less);
     if !stops.windows(2).all(increasing) {
         let inputs: Vec<String> = stops.iter().map(|s| js::number_to_string(s.0)).collect();
         return Err(format!(
@@ -88,21 +92,45 @@ fn interpolate(i: &Interp, values: &[V]) -> Result<f64, Error> {
             inputs.join(", ")
         ));
     }
-    if x.is_nan() {
-        return Ok(f64::NAN);
+    let numbers = stops.iter().all(|s| matches!(s.1, V::Num(_)));
+    if !numbers && !stops.iter().all(|s| matches!(s.1, V::Str(_))) {
+        return Err("interpolate: the outputs are all numbers or all strings".into());
+    }
+    if x.is_nan() && numbers {
+        return Ok(V::Num(f64::NAN));
     }
     let (first, last) = (stops[0], stops[stops.len() - 1]);
-    if x < first.0 && !i.extend[0] {
-        return Ok(first.1);
+    if !(x >= first.0 || i.extend[0]) {
+        return Ok(first.1.clone());
     }
     if x > last.0 && !i.extend[1] {
-        return Ok(last.1);
+        return Ok(last.1.clone());
     }
     // The segment holding x; the end segments extend past the range.
     let k = stops[1..stops.len() - 1].partition_point(|s| s.0 <= x);
     let ((x0, y0), (x1, y1)) = (stops[k], stops[k + 1]);
     let t = i.easing.at((x - x0) / (x1 - x0));
-    Ok(y0 + t * (y1 - y0))
+    let (a, b) = match (y0, y1) {
+        (V::Num(a), V::Num(b)) => return Ok(V::Num(a + t * (b - a))),
+        _ => (y0.text(), y1.text()),
+    };
+    let lerp = |a: f64, b: f64| js::number_to_string(a + t * (b - a));
+    let text = match (css::num(&a), css::num(&b)) {
+        (Some(p), Some(q)) if p.unit == q.unit => format!("{}{}", lerp(p.value, q.value), p.unit),
+        (Some(p), Some(q)) => format!(
+            "calc({}{} * {} + {}{} * {})",
+            js::number_to_string(p.value),
+            p.unit,
+            js::number_to_string(1.0 - t),
+            js::number_to_string(q.value),
+            q.unit,
+            js::number_to_string(t),
+        ),
+        _ => color::between(&a, &b, t, i.mixing).map_err(|e| {
+            format!("interpolate: outputs {a} and {b} are not two lengths, angles or colors: {e}")
+        })?,
+    };
+    Ok(V::Str(Rc::from(text)))
 }
 
 #[cfg(test)]
@@ -179,6 +207,7 @@ mod tests {
                 stops: vec![(1, 4), (2, 5), (3, 6)],
                 extend,
                 easing: Easing::Linear,
+                mixing: None,
             })),
         ];
         Ok(run(&program(ops), AT)?[7].num())
@@ -203,9 +232,43 @@ mod tests {
                 stops: vec![(1, 1), (2, 2)],
                 extend: [false; 2],
                 easing: Easing::Linear,
+                mixing: None,
             })),
         ];
         let e = run(&program(decreasing), AT).unwrap_err();
         assert!(e.contains("[1, 0]"), "{e}");
+    }
+
+    fn between(x: f64, a: V, b: V) -> Result<String, Error> {
+        let ops = vec![
+            Op::Const(V::Num(x)),
+            Op::Const(V::Num(0.0)),
+            Op::Const(V::Num(1.0)),
+            Op::Const(a),
+            Op::Const(b),
+            Op::Interp(Rc::new(Interp {
+                input: 0,
+                stops: vec![(1, 3), (2, 4)],
+                extend: [false; 2],
+                easing: Easing::Linear,
+                mixing: None,
+            })),
+        ];
+        Ok(run(&program(ops), AT)?[5].text().into_owned())
+    }
+
+    #[test]
+    fn outputs_with_units_and_colors() {
+        let s = |s: &str| V::Str(Rc::from(s));
+        assert_eq!(between(0.25, s("10px"), s("30px")), Ok("15px".into()));
+        assert_eq!(
+            between(0.5, s("0deg"), s("1turn")).unwrap(),
+            "calc(0deg * 0.5 + 1turn * 0.5)"
+        );
+        assert_eq!(between(2.0, s("1em"), s("2em")), Ok("2em".into()));
+        let gray = "color(srgb 0.25 0.25 0.25 / 1)";
+        assert_eq!(between(0.25, s("#000"), s("white")).unwrap(), gray);
+        assert!(between(0.5, V::Num(0.0), s("1px")).is_err());
+        assert!(between(0.5, s("1px"), s("wide")).is_err());
     }
 }

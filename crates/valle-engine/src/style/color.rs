@@ -2,6 +2,7 @@
 //! composite these values, and so does the working space.
 
 use super::css::{self, Num};
+use crate::js;
 
 /// Encoded sRGB and straight alpha, each in [0, 1]; a gradient's colors may be wider, see
 /// [`wide`].
@@ -494,8 +495,53 @@ fn predefined(args: &str) -> Option<Color> {
     Some(Color::new(rgb, alpha(a)))
 }
 
+/// How colors mix: in a space and, for a polar one, a way round the hue.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mixing {
+    space: Space,
+    how: &'static str,
+}
+
+impl Mixing {
+    /// `colorSpace` and `hue` as `color-mix()` writes them, as in `in oklch longer hue`.
+    pub fn parse(space: &str, hue: &str) -> Result<Mixing, String> {
+        let Some(space) = Space::named(space) else {
+            return Err(format!("{space} is not a color space colors mix in"));
+        };
+        let Some(&how) = HUES.iter().find(|w| **w == hue) else {
+            return Err(format!(
+                "hue {hue} is not a way round: shorter, longer, increasing or decreasing"
+            ));
+        };
+        if space.hue().is_none() && how != "shorter" {
+            return Err(format!(
+                "hue {hue} needs a color space with a hue, as oklch"
+            ));
+        }
+        Ok(Mixing { space, how })
+    }
+}
+
+const HUES: [&str; 4] = ["shorter", "longer", "increasing", "decreasing"];
+
+/// The color `t` of the way from `a` to `b`, past them where `t` is outside [0, 1], as CSS text.
+/// Without a [`Mixing`] colors mix as a transition mixes them: in sRGB if both are legacy colors,
+/// else in Oklab.
+pub fn between(a: &str, b: &str, t: f64, mixing: Option<Mixing>) -> Result<String, String> {
+    let (a, b) = (a.trim().to_ascii_lowercase(), b.trim().to_ascii_lowercase());
+    let legacy = legacy(&a) && legacy(&b);
+    let Mixing { space, how } = mixing.unwrap_or(Mixing {
+        space: if legacy { Space::Srgb } else { Space::Oklab },
+        how: "shorter",
+    });
+    let c = blend(value(&a)?, value(&b)?, t, space, how);
+    let [r, g, b] = c.rgb.map(js::number_to_string);
+    let alpha = js::number_to_string(c.alpha);
+    Ok(format!("color(srgb {r} {g} {b} / {alpha})"))
+}
+
 /// The spaces `color-mix()` mixes in.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Space {
     Srgb,
     SrgbLinear,
@@ -642,10 +688,9 @@ fn mix(args: &str) -> Result<Color, String> {
         Some(["in", space]) => (Space::named(space).ok_or_else(bad)?, "shorter"),
         Some(["in", space, how, "hue"]) => {
             let space = Space::named(space).filter(|s| s.hue().is_some());
-            let ways = ["shorter", "longer", "increasing", "decreasing"];
             (
                 space.ok_or_else(bad)?,
-                *ways.iter().find(|w| *w == how).ok_or_else(bad)?,
+                *HUES.iter().find(|w| *w == how).ok_or_else(bad)?,
             )
         }
         Some(_) => return Err(bad()),
@@ -678,7 +723,13 @@ fn mix(args: &str) -> Result<Color, String> {
     if sum == 0.0 {
         return Err(format!("color-mix({args}) mixes 0% of each color"));
     }
-    let t = pb / sum;
+    let mut c = blend(a, b, pb / sum, space, how);
+    c.alpha *= sum.min(100.0) / 100.0;
+    Ok(c)
+}
+
+/// The color `t` of the way from `a` to `b` in `space`, round the hue as `how` says.
+fn blend(a: Color, b: Color, t: f64, space: Space, how: &str) -> Color {
     // Channels in the space, premultiplied by alpha but for the hue.
     let hue = space.hue();
     let [mut va, mut vb] = [a, b].map(|c| {
@@ -714,7 +765,7 @@ fn mix(args: &str) -> Result<Color, String> {
         false if alpha > 0.0 => (va[i] * a.alpha * (1.0 - t) + vb[i] * b.alpha * t) / alpha,
         false => 0.0,
     });
-    Ok(Color::new(space.rgb(v), alpha * sum.min(100.0) / 100.0))
+    Color::new(space.rgb(v), alpha)
 }
 
 /// CIE Lab, D50 white, of CIE XYZ, D50 white.
@@ -1039,6 +1090,40 @@ mod tests {
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn colors_between_are_mixed_ones() {
+        for (a, b, mixing, method) in [
+            ("red", "blue", None, "in srgb"),
+            ("red", "oklch(0.7 0.1 200)", None, "in oklab"),
+            (
+                "#0f08",
+                "hsl(300 50% 50%)",
+                Some(("oklch", "longer")),
+                "in oklch longer hue",
+            ),
+            (
+                "lab(50 20 30)",
+                "white",
+                Some(("display-p3", "shorter")),
+                "in display-p3",
+            ),
+        ] {
+            let mixing = mixing.map(|(s, h)| Mixing::parse(s, h).unwrap());
+            for t in [0.0, 0.3, 0.75, 1.0] {
+                let ours = parse(&between(a, b, t, mixing).unwrap()).unwrap();
+                let p = js::number_to_string(t * 100.0);
+                let mixed = parse(&format!("color-mix({method}, {a}, {b} {p}%)")).unwrap();
+                for (x, y) in ours.iter().zip(mixed) {
+                    assert!((x - y).abs() < 1e-9, "{a} {b} {t}: {ours:?} {mixed:?}");
+                }
+            }
+        }
+        let past = wide(&between("#000", "#888", 2.0, None).unwrap()).unwrap();
+        assert!((past[0] - 2.0 * 0x88 as f64 / 255.0).abs() < 1e-9);
+        assert!(Mixing::parse("srgb", "longer").is_err());
+        assert!(Mixing::parse("cmyk", "shorter").is_err());
     }
 
     #[test]

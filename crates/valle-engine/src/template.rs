@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::ease::Easing;
+use crate::style::color::Mixing;
 
 use crate::js::{self, MathFn};
 
@@ -108,6 +109,8 @@ pub struct Interp {
     pub extend: [bool; 2],
     /// Between each two stops.
     pub easing: Easing,
+    /// How colors mix, if not as a transition mixes them.
+    pub mixing: Option<Mixing>,
 }
 
 /// Expressions in dependency order: every operand has a lower index.
