@@ -1029,11 +1029,13 @@ fn spans_paint_their_text_in_their_own_style() {
     let mut span = view(&[("color", "red"), ("fontSize", "20px")], &[]);
     span.kind = Kind::Span {
         content: vec![piece("b"), Piece::Span(2)],
+        unit: false,
     };
     span.children = vec![2];
     let mut hidden = view(&[("visibility", "hidden")], &[]);
     hidden.kind = Kind::Span {
         content: vec![piece("d")],
+        unit: false,
     };
     let (items, _) = paint_of(vec![text, span, hidden], &[0]);
     assert_eq!(names(&items), ["text black", "text red", "text black"]);

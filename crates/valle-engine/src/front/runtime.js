@@ -1102,7 +1102,7 @@
   // Props each element takes besides key, className and style.
   const PROPS = {
     view: ["layoutId"],
-    text: ["layoutId"],
+    text: ["layoutId", "split", "perUnit"],
     span: [],
     mask: ["source", "mode", "invert", "layoutId"],
     image: ["src", "layoutId"],
@@ -1231,6 +1231,54 @@
     };
     children.forEach((c) => add(c, at));
     flush();
+    node.content = content;
+  }
+
+  // A <Text split perUnit>'s content: its text split into units by `split` (`host.units`), each
+  // a unit node in the style `perUnit(unit)` gives it, and the white space between them. A unit
+  // is { index, count, start, end, text }, start and end UTF-16 indexes into the text. Which
+  // units there are cannot depend on time.
+  function splitOf(node, props, children, tag, at) {
+    const split = fixed(props.split, "split", at);
+    if (split !== "char" && split !== "word" && split !== "line") {
+      fail(at, "<" + tag + '> split is "char", "word" or "line"');
+    }
+    if (typeof props.perUnit !== "function") {
+      fail(at, "<" + tag + "> split needs perUnit, a function of a unit that returns its style");
+    }
+    let text = "";
+    const add = (c) => {
+      if (c === null || c === undefined || typeof c === "boolean") return;
+      if (isArray(c)) return c.forEach(add);
+      if (typeof c === "object" && !isT(c)) {
+        fail(at, "<" + tag + " split> holds text only, not <Span>s or other elements yet");
+      }
+      text += String(fixed(c, "split", at));
+    };
+    children.forEach(add);
+    const ends = host.units(text, split);
+    const count = ends.length / 2;
+    const content = [];
+    let last = 0;
+    for (let index = 0; index < count; index++) {
+      const [start, end] = [ends[2 * index], ends[2 * index + 1]];
+      if (start > last) content.push({ text: text.slice(last, start) });
+      const unit = freeze({ index, count, start, end, text: text.slice(start, end) });
+      if (++G.nodes > MAX_NODES) fail(at, "a frame has more than " + MAX_NODES + " elements");
+      const u = {
+        type: "unit",
+        path: null,
+        classes: [],
+        style: styleOf(props.perUnit(unit), tag, at),
+        children: [],
+        site: at,
+        content: [{ text: unit.text }],
+      };
+      node.children.push(u);
+      content.push({ span: u });
+      last = end;
+    }
+    if (last < text.length) content.push({ text: text.slice(last) });
     node.content = content;
   }
 
@@ -1383,7 +1431,9 @@
     if (kind === "image") imageOf(node, props, children, at);
     if (key !== null) G.keys.push(key);
     try {
-      if (kind === "text" || kind === "span") {
+      if (kind === "text" && (props.split !== undefined || props.perUnit !== undefined)) {
+        splitOf(node, props, children, type, at);
+      } else if (kind === "text" || kind === "span") {
         contentOf(node, children, type, at);
       } else {
         if (kind === "mask") render(props.source, node.source.children, at);

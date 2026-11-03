@@ -194,7 +194,7 @@ pub fn layout(
     // The Text or Span each Span is in.
     let mut parents = vec![None; n];
     for (i, node) in template.nodes.iter().enumerate() {
-        if let Kind::Text { content } | Kind::Span { content } = &node.kind {
+        if let Kind::Text { content } | Kind::Span { content, .. } = &node.kind {
             for piece in content {
                 if let template::Piece::Span(s) = piece {
                     parents[*s as usize] = Some(i);
@@ -285,7 +285,7 @@ fn pieces_of<'a>(
     i: usize,
     out: &mut Vec<Piece<'a>>,
 ) {
-    let (Kind::Text { content } | Kind::Span { content }) = &template.nodes[i].kind else {
+    let (Kind::Text { content } | Kind::Span { content, .. }) = &template.nodes[i].kind else {
         return;
     };
     for piece in content {

@@ -700,6 +700,7 @@ fn a_span_takes_only_text_properties() {
     let span = |style: &[(&str, Prop)]| Node {
         kind: Kind::Span {
             content: Vec::new(),
+            unit: false,
         },
         ..view(style, &[])
     };

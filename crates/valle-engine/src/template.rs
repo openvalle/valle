@@ -436,9 +436,12 @@ pub enum Kind {
     Text {
         content: Vec<Piece>,
     },
-    /// Part of a Text styled on its own, not a box: its text and the Spans in it.
+    /// Part of a Text styled on its own, not a box: its text and the Spans in it. A `unit` is
+    /// one of the pieces a `<Text split>` is split into, which also takes an opacity, a
+    /// transform and filters, applied to its glyphs as an inline-block's are to its box.
     Span {
         content: Vec<Piece>,
+        unit: bool,
     },
     /// A box whose source masks all it paints: the root node `source` (not a child), which is
     /// laid out in its border box as the canvas is, shown by its alpha or its luminance, and

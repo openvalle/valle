@@ -926,7 +926,7 @@ type Written<'a> = (Rc<str>, Cow<'a, Prop>, Rc<str>, bool);
 fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result<Bound, Error> {
     let place = node.place();
     let late_prop = |p: &Prop| matches!(p, Prop::Expr(e) if late.get(*e as usize) == Some(&true));
-    if let Kind::Text { content } | Kind::Span { content } = &node.kind
+    if let Kind::Text { content } | Kind::Span { content, .. } = &node.kind
         && content
             .iter()
             .any(|p| matches!(p, Piece::Text(t) if late_prop(t)))
@@ -981,7 +981,14 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
     for (key, prop, what, attribute) in written {
         let field = (Field::by_name(&key))
             .ok_or_else(|| format!("{place}: {}", unsupported(&what, &key)))?;
-        if matches!(node.kind, Kind::Span { .. }) && !field.textual() {
+        let unit = matches!(node.kind, Kind::Span { unit: true, .. });
+        if unit && !field.textual() && !field.on_units() {
+            return Err(format!(
+                "{place}: {what}: a unit of a split text takes only text properties, opacity, \
+                 transforms and filter"
+            ));
+        }
+        if matches!(node.kind, Kind::Span { unit: false, .. }) && !field.textual() {
             return Err(format!(
                 "{place}: {what}: a <Span> is part of a text, not a box, so it takes only text \
                  properties"
@@ -2367,6 +2374,20 @@ impl Field {
                 | Field::TextShadow
                 | Field::WebkitTextFillColor
                 | Field::WebkitTextStrokeColor
+        )
+    }
+
+    /// Whether a unit of a split text takes it besides the text properties.
+    fn on_units(self) -> bool {
+        matches!(
+            self,
+            Field::Opacity
+                | Field::Translate
+                | Field::Rotate
+                | Field::Scale
+                | Field::Transform
+                | Field::TransformOrigin
+                | Field::Filter
         )
     }
 

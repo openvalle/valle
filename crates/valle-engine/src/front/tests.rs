@@ -77,7 +77,7 @@ fn text(v: V) -> String {
 /// The text of each Text node, its Spans' too, in node order.
 fn texts(frame: &Frame) -> Vec<String> {
     fn of(frame: &Frame, i: usize, out: &mut String) {
-        if let Kind::Text { content } | Kind::Span { content } = &frame.template.nodes[i].kind {
+        if let Kind::Text { content } | Kind::Span { content, .. } = &frame.template.nodes[i].kind {
             for piece in content {
                 match piece {
                     Piece::Text(t) => out.push_str(&text(value(frame, t))),
@@ -236,7 +236,7 @@ fn spans_trace_into_their_text_with_time_next_to_them() {
         assert_eq!(content[1], Piece::Span(1));
         assert!(matches!(content[..], [Piece::Text(_), _, Piece::Text(_)]));
         assert_eq!(t.nodes[0].children, [1]);
-        let Kind::Span { content } = &t.nodes[1].kind else {
+        let Kind::Span { content, .. } = &t.nodes[1].kind else {
             panic!("{:?}", t.nodes[1])
         };
         assert!(matches!(
@@ -547,6 +547,78 @@ fn motion_blur_is_the_trail_while_the_shutter_is_open() {
             (
                 "<View style={{ motionBlur: { velocity: { x: 1, y: 0 }, shutterAngle: 400 } }} />",
                 "degrees from 0 to 360",
+            ),
+        ] {
+            let e = error(&format!(
+                "export default function Scene() {{ return {body}; }}"
+            ));
+            assert!(e.contains(want), "{body}: {e}");
+        }
+    });
+}
+
+#[test]
+fn split_text_traces_a_unit_for_each_piece() {
+    big_stack(|| {
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return (
+                    <View>
+                      <Text split=\"word\" perUnit={(u) => ({ opacity: (u.index / u.count) * seconds })}>
+                        {\"Hello big  world\"}
+                      </Text>
+                      <Text split=\"char\" perUnit={(u) => ({ rotate: `${u.start * 10}deg` })}>
+                        {\"e\\u0301\\u{1F44D}\\u{1F3FD} a\"}
+                      </Text>
+                      <Text split=\"line\" perUnit={(u) => ({ color: u.text === \"two\" ? \"red\" : \"blue\" })}>
+                        {\"one\\n\\ntwo\"}
+                      </Text>
+                    </View>
+                  );
+                }
+            "});
+        let frame = at(&mut f, "3");
+        assert_eq!(
+            texts(&frame),
+            [
+                "Hello big  world",
+                "e\u{301}\u{1F44D}\u{1F3FD} a",
+                "one\n\ntwo"
+            ]
+        );
+        let units = |text: usize| -> Vec<usize> {
+            let Kind::Text { content } = &frame.template.nodes[text].kind else {
+                panic!("not a text");
+            };
+            (content.iter())
+                .filter_map(|p| match p {
+                    Piece::Span(s) => Some(*s as usize),
+                    Piece::Text(_) => None,
+                })
+                .collect()
+        };
+        let words = units(1);
+        assert_eq!(words.len(), 3);
+        assert!(matches!(
+            frame.template.nodes[words[0]].kind,
+            Kind::Span { unit: true, .. }
+        ));
+        assert_eq!(style(&frame, words[1], "opacity"), V::Num(1.0));
+        let chars = units(5);
+        let turns: Vec<V> = chars.iter().map(|&u| style(&frame, u, "rotate")).collect();
+        assert_eq!(turns, ["0deg", "20deg", "70deg"].map(|t| V::Str(t.into())));
+        assert_eq!(units(9).len(), 2);
+        assert_eq!(f.traces(), 1);
+        for (body, want) in [
+            (
+                "<Text split=\"letter\" perUnit={() => ({})}>a</Text>",
+                "split is \"char\"",
+            ),
+            ("<Text split=\"char\">a</Text>", "split needs perUnit"),
+            (
+                "<Text split=\"char\" perUnit={() => ({})}>a<Span>b</Span></Text>",
+                "text only",
             ),
         ] {
             let e = error(&format!(

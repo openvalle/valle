@@ -472,6 +472,52 @@ fn json(value: &impl serde::Serialize) -> String {
     serde_json::to_string(value).expect("names serialize")
 }
 
+/// The units `<Text split>` splits `text` into, by `split`: each unit's start and end one after
+/// another, in UTF-16 code units as JavaScript indexes strings. `char` gives grapheme clusters, but white space;
+/// `word` runs of characters between white space; `line` the lines between line feeds, but empty
+/// ones.
+fn units(text: &str, split: &str) -> Vec<usize> {
+    use unicode_segmentation::UnicodeSegmentation;
+    // Each char boundary's UTF-16 index, by its byte index.
+    let mut index = vec![0; text.len() + 1];
+    for (i, c) in text.char_indices() {
+        index[i + c.len_utf8()] = index[i] + c.len_utf16();
+    }
+    let utf16 = |byte: usize| index[byte];
+    let pieces: Vec<(usize, &str)> = match split {
+        "char" => text.grapheme_indices(true).collect(),
+        "word" => {
+            let mut out = Vec::new();
+            let mut start = None;
+            for (i, c) in text.char_indices().chain([(text.len(), ' ')]) {
+                match (c.is_whitespace(), start) {
+                    (false, None) => start = Some(i),
+                    (true, Some(s)) => {
+                        out.push((s, &text[s..i]));
+                        start = None;
+                    }
+                    _ => {}
+                }
+            }
+            out
+        }
+        _ => {
+            let mut at = 0;
+            (text.split('\n'))
+                .map(|line| {
+                    let piece = (at, line);
+                    at += line.len() + 1;
+                    piece
+                })
+                .collect()
+        }
+    };
+    (pieces.into_iter())
+        .filter(|(_, p)| !p.trim().is_empty())
+        .flat_map(|(i, p)| [utf16(i), utf16(i + p.len())])
+        .collect()
+}
+
 /// `__host.op(name, args)`: one op's value over concrete operands, through the evaluator frames
 /// use, so tracing sees the values frames compute; `__host.svg`, the SVG tables as JSON; and
 /// `__host.random(seed, count, low, high)`, checked by the runtime.
@@ -487,6 +533,12 @@ fn install_host<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
         )?,
     )?;
     host.set("svg", crate::svg::tables())?;
+    host.set(
+        "units",
+        Function::new(ctx.clone(), |text: String, split: String| {
+            units(&text, &split)
+        })?,
+    )?;
     // A color as d3 reads one: sRGB written as CSS had it before color spaces, as 0–255 channels
     // and an opacity; one with no opacity has no channels either, NaN.
     host.set(

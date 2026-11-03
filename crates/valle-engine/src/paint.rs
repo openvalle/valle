@@ -1683,10 +1683,42 @@ impl Painter<'_> {
                     None => items,
                 }
             };
-            self.shadowed(s, stripes(false), clip, out);
-            self.shadowed(s, glyphs, clip, out);
-            self.shadowed(s, stripes(true), clip, out);
+            let mut drawn = Vec::new();
+            self.shadowed(s, stripes(false), clip, &mut drawn);
+            self.shadowed(s, glyphs, clip, &mut drawn);
+            self.shadowed(s, stripes(true), clip, &mut drawn);
+            match self.template.nodes[run.node as usize].kind {
+                Kind::Span { unit: true, .. } => {
+                    let items = drawn.into_iter().map(|(_, item)| item).collect();
+                    let items = self.unit(run.node as usize, items);
+                    out.extend(items.into_iter().map(|item| (clip, item)));
+                }
+                _ => out.extend(drawn),
+            }
         }
+    }
+
+    /// What a run of unit `u` of a split text paints, as an inline-block paints what is in it:
+    /// through its filters, at its opacity, and through its transform around its box.
+    fn unit(&self, u: usize, mut items: Vec<Item>) -> Vec<Item> {
+        let s = &self.styles[u];
+        if !s.filter.is_empty() && !items.is_empty() {
+            let filters = filters(&s.filter, snap(self.layout.boxes[u].border));
+            items = vec![Item::Filter { filters, items }];
+        }
+        if s.opacity < 1.0 {
+            items = group(s.opacity as f32, Blend::Normal, items)
+                .into_iter()
+                .collect();
+        }
+        if s.transformed() && !items.is_empty() {
+            let matrix = self.spaces[u].flatten();
+            if matrix.inverse().is_none() {
+                return Vec::new();
+            }
+            items = vec![Item::Transform { matrix, items }];
+        }
+        items
     }
 
     /// `i`'s image if it is an Image: in its content box as its object fit and position have

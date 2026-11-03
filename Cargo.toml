@@ -33,6 +33,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 taffy = { version = "0.15.1", default-features = false, features = ["std", "flexbox", "block_layout", "grid", "calc"] }
+# The characters of a split text: grapheme clusters, as UAX #29 has them.
+unicode-segmentation = "1.13.3"
 # Blocking HTTPS over rustls with ring and the Mozilla roots, gzip decoded.
 ureq = { version = "3.5.1", default-features = false, features = ["rustls", "gzip"] }
 # Color glyphs (COLR) rasterized on the CPU, with no SIMD level picked at run time.

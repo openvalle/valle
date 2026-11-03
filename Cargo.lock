@@ -2164,6 +2164,7 @@ dependencies = [
  "serde_json",
  "skrifa",
  "taffy",
+ "unicode-segmentation",
  "valle-native",
  "vello_cpu",
  "wgpu",

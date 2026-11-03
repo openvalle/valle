@@ -421,6 +421,7 @@ fn spans_are_boxes_of_their_text_on_its_lines() {
     let mut span = view(&[("fontSize", "32px")], &[]);
     span.kind = Kind::Span {
         content: vec![piece("big")],
+        unit: false,
     };
     let l = lay(vec![text, span], &[0]).unwrap();
     let lines = l.lines[0].as_ref().unwrap();
@@ -526,6 +527,7 @@ fn a_decoration_takes_the_font_of_its_decorating_box() {
     let mut span = view(&[("fontSize", "32px"), ("textDecoration", "overline")], &[]);
     span.kind = Kind::Span {
         content: vec![piece("bb")],
+        unit: false,
     };
     let l = lay(vec![text, span], &[0]).unwrap();
     let lines = l.lines[0].as_ref().unwrap();

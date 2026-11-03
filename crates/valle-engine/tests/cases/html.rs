@@ -203,7 +203,7 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
     }
     html.push('>');
     match &n.kind {
-        Kind::Text { content } | Kind::Span { content } => {
+        Kind::Text { content } | Kind::Span { content, .. } => {
             for piece in content {
                 match piece {
                     Piece::Text(text) => html.push_str(&escape(&value(frame, text).text())),

@@ -365,8 +365,9 @@ pub fn variant(
             "text" => Kind::Text {
                 content: content(n.content)?,
             },
-            "span" => Kind::Span {
+            "span" | "unit" => Kind::Span {
                 content: content(n.content)?,
+                unit: n.kind == "unit",
             },
             "mask" => {
                 let m = n.mask.ok_or("a mask node without a source")?;
