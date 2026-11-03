@@ -1,7 +1,7 @@
 // Charts: the subset of d3 v7 that scenes call as built-ins, by d3's names and with d3's results
-// (design §2.8.8), and Valle's own label placing. It is scene code to the frontend: rewritten for
-// tracing as a scene's modules are, so a value that depends on the time goes through it as ops.
-// It keeps no state.
+// (design §2.8.8), and Valle's own label placing and graph layout. It is scene code to the
+// frontend: rewritten for tracing as a scene's modules are, so a value that depends on the time
+// goes through it as ops. It keeps no state.
 //
 // Ported from d3 7.9.0 (https://d3js.org): Copyright 2010-2023 Mike Bostock, under the ISC
 // License: Permission to use, copy, modify, and/or distribute this software for any purpose with
@@ -2757,4 +2757,213 @@ export function placeLabels(labels, options = {}) {
     }
   }
   return out;
+}
+
+// A layered layout of a graph of nodes of `sizes`, `[width, height]`, and `edges`, `[from, to]`
+// node indices, flowing `direction` "down" or "right": ranks by longest path with the edges that
+// close cycles left out, rows ordered by their neighbours, and nodes lined up with them. It gives
+// the nodes' `centers`, `[x, y]`, in a box from 0, 0 of `width` and `height`, their `ranks`, the
+// `rows` of node indices in order, and which edges are `backEdges`.
+export function graphLayout(options) {
+  const { sizes, edges = [], direction = "down", nodeGap = 40, rankGap = 64 } = options;
+  if (direction !== "down" && direction !== "right") {
+    throw new RangeError(`graphLayout's direction is "down" or "right", not ${direction}`);
+  }
+  const n = sizes.length;
+  for (const [from, to] of edges) {
+    for (const v of [from, to]) {
+      if (!(Number.isInteger(v) && v >= 0 && v < n)) {
+        throw new RangeError(
+          `graphLayout's edge [${from}, ${to}] names ${v}, and the nodes are 0 to ${n - 1}`,
+        );
+      }
+    }
+  }
+  // Across and along the flow.
+  const size = sizes.map(([w, h]) => (direction === "down" ? [w, h] : [h, w]));
+  const backEdges = graphBackEdges(n, edges);
+  const ranks = graphRanks(n, edges, backEdges);
+  const rows = graphRows(n, edges, ranks);
+  const across = graphCenters(rows, size, edges, nodeGap, rankGap);
+  // From 0 on both axes.
+  const left = Math.min(...across.map(([c], v) => c - size[v][0] / 2));
+  const wide = Math.max(0, ...across.map(([c], v) => c + size[v][0] / 2 - left));
+  const deep = Math.max(0, ...across.map(([, f], v) => f + size[v][1] / 2));
+  const centers = across.map(([c, f]) => (direction === "down" ? [c - left, f] : [f, c - left]));
+  const [width, height] = direction === "down" ? [wide, deep] : [deep, wide];
+  return { centers, width, height, ranks, rows, backEdges };
+}
+
+// Which edges go back to a node on the path to them, in a depth-first walk.
+function graphBackEdges(n, edges) {
+  const out = sequence(n).map(() => []);
+  for (const [e, [from]] of edges.entries()) out[from].push(e);
+  const state = sequence(n).map(() => 0);
+  const back = edges.map(() => false);
+  for (let root = 0; root < n; root++) {
+    if (state[root] !== 0) continue;
+    const stack = [[root, 0]];
+    state[root] = 1;
+    while (stack.length) {
+      const top = stack[stack.length - 1];
+      const u = top[0];
+      if (top[1] < out[u].length) {
+        const e = out[u][top[1]++];
+        const v = edges[e][1];
+        if (state[v] === 0) {
+          state[v] = 1;
+          stack.push([v, 0]);
+        } else if (state[v] === 1) {
+          back[e] = true;
+        }
+      } else {
+        state[u] = 2;
+        stack.pop();
+      }
+    }
+  }
+  return back;
+}
+
+// Longest-path ranks without the back edges; a node with no edges is at 0.
+function graphRanks(n, edges, back) {
+  const indegree = sequence(n).map(() => 0);
+  const out = sequence(n).map(() => []);
+  for (const [e, [from, to]] of edges.entries()) {
+    if (back[e] || from === to) continue;
+    out[from].push(to);
+    indegree[to]++;
+  }
+  const rank = sequence(n).map(() => 0);
+  const queue = sequence(n).filter((v) => indegree[v] === 0);
+  for (let i = 0; i < queue.length; i++) {
+    const u = queue[i];
+    for (const v of out[u]) {
+      rank[v] = Math.max(rank[v], rank[u] + 1);
+      if (--indegree[v] === 0) queue.push(v);
+    }
+  }
+  return rank;
+}
+
+// Each rank's nodes, ordered by the mean place of their neighbours in the rank before, then
+// after, twice over.
+function graphRows(n, edges, rank) {
+  const rows = sequence(Math.max(0, ...rank) + 1).map(() => []);
+  for (let v = 0; v < n; v++) rows[rank[v]].push(v);
+  const pos = [];
+  const sync = () => rows.forEach((row) => row.forEach((v, i) => (pos[v] = i)));
+  sync();
+  for (let sweep = 0; sweep < 4; sweep++) {
+    const down = sweep % 2 === 0;
+    for (let k = 0; k < rows.length; k++) {
+      const r = down ? k : rows.length - 1 - k;
+      const want = down ? r - 1 : r + 1;
+      const keyed = rows[r].map((v) => {
+        let s = 0;
+        let c = 0;
+        for (const [from, to] of edges) {
+          const other = from === v ? to : to === v ? from : -1;
+          if (other >= 0 && rank[other] === want) {
+            s += pos[other];
+            c++;
+          }
+        }
+        return [c === 0 ? pos[v] : s / c, pos[v], v];
+      });
+      keyed.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+      rows[r] = keyed.map((k) => k[2]);
+      sync();
+    }
+  }
+  return rows;
+}
+
+// Centers across and along the flow: ranks one after another, each as deep as its deepest node;
+// across, nodes at the mean of their neighbours as far as their order and gaps let them, then
+// chains lined up straight where there is room.
+function graphCenters(rows, size, edges, nodeGap, rankGap) {
+  const n = size.length;
+  const center = sequence(n).map(() => [0, 0]);
+  let along = 0;
+  for (const row of rows) {
+    const depth = Math.max(0, ...row.map((v) => size[v][1]));
+    for (const v of row) center[v][1] = along + depth / 2;
+    along += depth + rankGap;
+  }
+  for (const row of rows) {
+    let x = 0;
+    for (const v of row) {
+      center[v][0] = x + size[v][0] / 2;
+      x += size[v][0] + nodeGap;
+    }
+  }
+  for (let pass = 0; pass < 3; pass++) {
+    for (const row of rows) {
+      const want = row.map((v) => {
+        let s = 0;
+        let c = 0;
+        for (const [from, to] of edges) {
+          const other = from === v ? to : to === v ? from : -1;
+          if (other >= 0) {
+            s += center[other][0];
+            c++;
+          }
+        }
+        return c === 0 ? center[v][0] : s / c;
+      });
+      const placed = [];
+      let edge = -Infinity;
+      for (const [i, v] of row.entries()) {
+        const half = size[v][0] / 2;
+        const p = Math.max(want[i], edge + half);
+        placed.push(p);
+        edge = p + half + nodeGap;
+      }
+      const mean = (xs) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length);
+      const d = mean(placed) - mean(want);
+      for (const [i, v] of row.entries()) center[v][0] = placed[i] - d;
+    }
+  }
+  const into = sequence(n).map(() => []);
+  const from = sequence(n).map(() => []);
+  for (const [f, t] of edges) {
+    from[f].push(t);
+    into[t].push(f);
+  }
+  const rowOf = [];
+  for (const [r, row] of rows.entries()) for (const [i, v] of row.entries()) rowOf[v] = [r, i];
+  // Moves `v` across to `x` unless that crowds its row's neighbours.
+  const snap = (v, x) => {
+    const [r, i] = rowOf[v];
+    const row = rows[r];
+    const half = size[v][0] / 2;
+    if (i > 0) {
+      const l = row[i - 1];
+      if (x - half < center[l][0] + size[l][0] / 2 + nodeGap) return;
+    }
+    if (i + 1 < row.length) {
+      const k = row[i + 1];
+      if (x + half > center[k][0] - size[k][0] / 2 - nodeGap) return;
+    }
+    center[v][0] = x;
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    // Under a single parent, or parents lined up.
+    for (const row of rows) {
+      for (const v of row) {
+        const ps = into[v];
+        if (!ps.length) continue;
+        const x0 = center[ps[0]][0];
+        if (ps.every((u) => Math.abs(center[u][0] - x0) < 1e-6)) snap(v, x0);
+      }
+    }
+    // A source over its single child.
+    for (const row of rows) {
+      for (const v of row) {
+        if (!into[v].length && from[v].length === 1) snap(v, center[from[v][0]][0]);
+      }
+    }
+  }
+  return center;
 }
