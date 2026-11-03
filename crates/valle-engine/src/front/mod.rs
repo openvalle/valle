@@ -31,6 +31,8 @@ use lower::{Arg, At};
 pub use rewrite::Slot;
 
 const RUNTIME: &str = include_str!("runtime.js");
+/// The built-in charts, d3's subset, which run as scene code.
+const CHARTS: (&str, &str) = ("valle/charts.js", include_str!("charts.js"));
 
 /// Interrupt polls one trace may take. QuickJS polls every 10 000 calls and backward jumps, so
 /// this is about 2·10⁸ steps; the first poll of a trace may come early by what the last one left.
@@ -94,6 +96,7 @@ impl Front {
             sites: Vec::new(),
         };
         loader.visit(entry.to_string(), text)?;
+        let charts = loader.builtin(CHARTS.0, CHARTS.1)?;
         let scene = &loader.loaded[loader.by_path[entry]].code;
         let folder = entry.rsplit_once('/').map_or("", |(dir, _)| dir);
         let resources = (scene.resources.iter())
@@ -152,6 +155,7 @@ impl Front {
         front.context.with(|ctx| -> Result<(), Error> {
             install_host(&ctx).map_err(|e| e.to_string())?;
             front.run(&ctx, RUNTIME.into(), "runtime.js")?;
+            front.run(&ctx, format!("__builtin({})", charts.code), "charts.js")?;
             let mut free: Vec<&str> = loader
                 .loaded
                 .iter()
@@ -386,6 +390,17 @@ impl Loader<'_> {
             }
         }
         Ok(index)
+    }
+
+    /// Rewrites a built-in module, which the runtime makes globals of.
+    fn builtin(&mut self, path: &str, text: &str) -> Result<rewrite::Rewritten, Error> {
+        let code = rewrite::rewrite(path, text, self.sites.len())
+            .map_err(|e| format!("engine bug: {path}: {e}"))?;
+        for s in &code.sites {
+            self.sites
+                .push(format!("{path}:{}:{}", s.line, s.col).into());
+        }
+        Ok(code)
     }
 
     /// The file an import key names: the key itself when it has an extension, else the first of

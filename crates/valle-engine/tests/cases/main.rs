@@ -8,7 +8,8 @@
 //!   1/32 px. The Chrome baselines are drawn here when missing or out of date (see `chrome.rs`),
 //!   never on CI.
 //! - The case `tailwind/classes` compares the CSS of every Tailwind class the engine expands with
-//!   the Tailwind compiler's (see `tailwind.rs`).
+//!   the Tailwind compiler's (see `tailwind.rs`), and `d3/checks` the built-in charts' results
+//!   with d3's (see `d3.rs`).
 //! - Any other case is drawn on the GPU, every frame, and each frame compared with its Valle
 //!   baseline, `tests/baselines/valle/<case>.<frame>.png`, within one level a channel. Frames that
 //!   differ or have no baseline go to `target/review` with a page to compare them, and
@@ -32,6 +33,7 @@ use valle_engine::scene::Scene;
 use valle_engine::time::Tick;
 
 mod chrome;
+mod d3;
 mod html;
 mod properties;
 mod tailwind;
@@ -123,7 +125,7 @@ fn main() -> ExitCode {
         }
     };
     let filters: Vec<String> = std::env::args().skip(1).collect();
-    let checks = [tailwind::CASE.to_string()];
+    let checks = [tailwind::CASE.to_string(), d3::CASE.to_string()];
     let cases = match select(&runner.root, runner.made.keys().chain(&checks), &filters) {
         Ok(cases) => cases,
         Err(e) => {
@@ -304,8 +306,13 @@ impl Runner {
     }
 
     fn run(&self, case: &str) -> Outcome {
-        if case == tailwind::CASE {
-            return match tailwind::case(&self.repo, self.ci) {
+        let checked = match case {
+            tailwind::CASE => Some(tailwind::case(&self.repo, self.ci)),
+            d3::CASE => Some(d3::case(&self.repo, self.ci)),
+            _ => None,
+        };
+        if let Some(checked) = checked {
+            return match checked {
                 Ok(()) => Outcome::Passed,
                 Err(e) => Outcome::Failed(e),
             };

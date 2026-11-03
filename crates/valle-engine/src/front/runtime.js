@@ -1466,6 +1466,11 @@
     for (const k of names) factories.set(k, factory);
   }
 
+  // A built-in module's exports, as globals.
+  function __builtin(exports) {
+    Object.assign(globalThis, exports);
+  }
+
   function __import(key) {
     const factory = factories.get(key);
     if (!instances.has(factory)) instances.set(factory, freeze(factory()));
@@ -1626,7 +1631,7 @@
   ];
 
   function __lockdown() {
-    for (const name of ["__host", "__declareFree", "__define", "__lockdown"]) {
+    for (const name of ["__host", "__declareFree", "__define", "__builtin", "__lockdown"]) {
       delete globalThis[name];
     }
 
@@ -1699,6 +1704,7 @@
     __hs,
     __F,
     __define,
+    __builtin,
     __import,
     __trace,
     __declareFree,

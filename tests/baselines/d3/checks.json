@@ -1,0 +1,111 @@
+{
+  "d3": "7.9.0",
+  "source": "// Calls of d3's functions whose results the built-in charts must give: the case d3/checks runs\n// them on both (see crates/valle-engine/tests/cases/d3.rs).\n\nexport const checks = {\n  extent: () => [\n    extent([3, 1, null, 7, NaN, 2]),\n    extent([]),\n    extent([\"b\", \"a\", \"c\"]),\n    extent([{ v: 4 }, { v: -2 }], (d) => d.v),\n  ],\n  ticks: () => [\n    ticks(0, 1, 10),\n    ticks(0, 100, 5),\n    ticks(-3.7, 12.1, 7),\n    ticks(1, 0, 4),\n    ticks(0.001, 0.0093, 6),\n    ticks(5, 5, 3),\n    ticks(0, 1e6, 3),\n    ticks(0, 10, 0),\n  ],\n  tickIncrement: () => [tickIncrement(0, 1, 10), tickIncrement(0, 1000, 7)],\n  tickStep: () => [tickStep(0, 1, 10), tickStep(10, 0, 3)],\n  nice: () => [nice(0.13, 9.87, 10), nice(-41, 997, 5), nice(5, 5, 3), nice(12, 1, 4)],\n};\n",
+  "results": {
+    "extent": [
+      [
+        1,
+        7
+      ],
+      [
+        null,
+        null
+      ],
+      [
+        "a",
+        "c"
+      ],
+      [
+        -2,
+        4
+      ]
+    ],
+    "nice": [
+      [
+        0,
+        10
+      ],
+      [
+        -200,
+        1000
+      ],
+      [
+        5,
+        5
+      ],
+      [
+        12,
+        1
+      ]
+    ],
+    "tickIncrement": [
+      -10,
+      200
+    ],
+    "tickStep": [
+      0.1,
+      -5
+    ],
+    "ticks": [
+      [
+        0,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
+        0.5,
+        0.6,
+        0.7,
+        0.8,
+        0.9,
+        1
+      ],
+      [
+        0,
+        20,
+        40,
+        60,
+        80,
+        100
+      ],
+      [
+        -2,
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12
+      ],
+      [
+        1,
+        0.8,
+        0.6,
+        0.4,
+        0.2,
+        0
+      ],
+      [
+        0.001,
+        0.002,
+        0.003,
+        0.004,
+        0.005,
+        0.006,
+        0.007,
+        0.008,
+        0.009
+      ],
+      [
+        5
+      ],
+      [
+        0,
+        500000,
+        1000000
+      ],
+      []
+    ]
+  }
+}

@@ -607,6 +607,12 @@ fn import(line: &str, dir: &str) -> Result<(String, String), String> {
     let rest = line.strip_prefix("import ").ok_or_else(unsupported)?;
     let (clause, spec) = rest.rsplit_once(" from ").ok_or_else(unsupported)?;
     let spec = spec.trim().trim_end_matches(';').trim_matches(['"', '\'']);
+    if spec == "d3" || spec.starts_with("d3-") {
+        return Err(format!(
+            "cannot import {spec:?}: d3's scales, shapes and projections are built in; call \
+             them without importing"
+        ));
+    }
     if !(spec.starts_with("./") || spec.starts_with("../")) {
         return Err(format!(
             "cannot import {spec:?}: scenes import only project files (./ or ../), not packages, \
@@ -1247,7 +1253,8 @@ mod tests {
         )
         .unwrap();
         assert!(r.code.contains("return { default: Scene };"), "{}", r.code);
-        assert!(err("import { scaleLinear } from \"d3\";\n").contains("not packages"));
+        assert!(err("import { scaleLinear } from \"d3\";\n").contains("built in"));
+        assert!(err("import { lodash } from \"lodash\";\n").contains("not packages"));
         assert!(err("import * as M from \"./m\";\n").contains("unsupported import"));
         assert!(err("const a = 1;\nexport { a };\n").contains("unsupported export"));
     }
