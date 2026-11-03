@@ -1192,7 +1192,7 @@
         if (c.type === "TimeScope") {
           return scoped(c.props, here, () => c.children.forEach((x) => add(x, here)));
         }
-        if (c.type === "Echo" || c.type === "Shutter") {
+        if (c.type === "Echo" || c.type === "Shutter" || c.type === "World") {
           fail(here, "<" + c.type + "> cannot be inside <" + tag + ">: put the <Text> in it");
         }
         if ((INTRINSIC[c.type] && c.type !== "Span") || c.type in SVG) {
@@ -1489,6 +1489,46 @@
     render({ __el: true, type: "View", props: box, children: cells, site: at }, out, at);
   }
 
+  // <World camera={{ center, zoom, rotation }}>: a box over the canvas, laid out as the canvas is,
+  // whose painting the camera moves: `center` (canvas px, the canvas's center by default) comes to
+  // the canvas's center, scaled by `zoom` and turned by `rotation` degrees, so the world turns the
+  // other way. Layout stays where it is.
+  function world(props, children, out, at) {
+    if (G.svg > 0) fail(at, "<World> cannot be inside an <svg>");
+    for (const k of keys(props)) {
+      if (k !== "key" && k !== "camera") fail(at, "<World> has no prop " + k + "; it takes camera");
+    }
+    const camera = props.camera ?? {};
+    if (!plain(camera)) fail(at, "<World> camera is { center, zoom, rotation }");
+    for (const k of keys(camera)) {
+      if (k !== "center" && k !== "zoom" && k !== "rotation") {
+        fail(at, "<World> camera has no field " + k + "; it takes center, zoom and rotation");
+      }
+    }
+    const { width, height } = G.composition;
+    const center = camera.center ?? { x: width / 2, y: height / 2 };
+    const [zoom, rotation] = [camera.zoom ?? 1, camera.rotation ?? 0];
+    if (!plain(center) || !numeric(center.x) || !numeric(center.y)) {
+      fail(at, "<World> camera center is a point, { x, y }");
+    }
+    if (!numeric(zoom) || !numeric(rotation)) {
+      fail(at, "<World> camera zoom and rotation (degrees) are numbers");
+    }
+    const minus = (x) => __b("-", 0, x);
+    const transform = __tpl(
+      ["translate(", "px, ", "px) rotate(", "deg) scale(", ") translate(", "px, ", "px)"],
+      width / 2,
+      height / 2,
+      minus(rotation),
+      zoom,
+      minus(center.x),
+      minus(center.y),
+    );
+    const style = { position: "fixed", inset: 0, transformOrigin: "0 0", transform };
+    const box = props.key === undefined ? { style } : { key: props.key, style };
+    render({ __el: true, type: "View", props: box, children, site: at }, out, at);
+  }
+
   // Appends the nodes `x` renders to `out`; `at` is the enclosing element's site.
   function render(x, out, at) {
     if (x === null || x === undefined || typeof x === "boolean") return;
@@ -1509,6 +1549,7 @@
       return sampled(props.sample, () => children.forEach((c) => render(c, out, here)));
     }
     if (type === "Echo" || type === "Shutter") return sampling(type, props, children, out, here);
+    if (type === "World") return world(props, children, out, here);
     element(type, props, children, out, here);
   }
 
@@ -1957,6 +1998,7 @@
     TimeScope: "TimeScope",
     Echo: "Echo",
     Shutter: "Shutter",
+    World: "World",
     resource,
     number: propKind("number"),
     string: propKind("string"),

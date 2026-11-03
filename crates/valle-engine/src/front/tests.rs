@@ -474,6 +474,50 @@ fn echo_and_shutter_trace_their_children_at_other_times() {
 }
 
 #[test]
+fn a_world_is_a_canvas_box_its_camera_moves() {
+    big_stack(|| {
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  const camera = { center: { x: 100, y: 50 }, zoom: 2, rotation: seconds * 10 };
+                  return (
+                    <View>
+                      <World camera={camera}>
+                        <View />
+                      </World>
+                      <World>
+                        <View />
+                      </World>
+                    </View>
+                  );
+                }
+            "});
+        let frame = at(&mut f, "1");
+        assert_eq!(style(&frame, 1, "position"), V::Str("fixed".into()));
+        assert_eq!(
+            style(&frame, 1, "transform"),
+            V::Str(
+                "translate(160px, 90px) rotate(-10deg) scale(2) translate(-100px, -50px)".into()
+            )
+        );
+        assert_eq!(
+            style(&frame, 3, "transform"),
+            V::Str("translate(160px, 90px) rotate(0deg) scale(1) translate(-160px, -90px)".into())
+        );
+        for (body, want) in [
+            ("<World camera={{ fov: 30 }} />", "no field fov"),
+            ("<World camera={{ center: [1, 2] }} />", "is a point"),
+            ("<World zoom={2} />", "no prop zoom"),
+        ] {
+            let e = error(&format!(
+                "export default function Scene() {{ return {body}; }}"
+            ));
+            assert!(e.contains(want), "{body}: {e}");
+        }
+    });
+}
+
+#[test]
 fn branches_become_variants() {
     big_stack(|| {
         let mut f = scene(indoc! {"
