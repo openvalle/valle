@@ -630,16 +630,17 @@ class Path {
       if (Math.abs(t01 - 1) > pathEpsilon) {
         this._append("L", x1 + t01 * x01, ",", y1 + t01 * y01);
       }
-      this._append("A", r, ",", r, ",0,0,", +(y01 * x20 > x01 * y20), ",");
+      this._append("A", r, ",", r, ",0,0,", y01 * x20 > x01 * y20 ? 1 : 0, ",");
       this._append("", (this._x1 = x1 + t21 * x21), ",", (this._y1 = y1 + t21 * y21));
     }
   }
+  // Its flags are selects, so traced angles stay ops; what decides the commands is guarded.
   arc(x, y, r, a0, a1, ccw) {
-    [x, y, r, ccw] = [+x, +y, +r, !!ccw];
+    [x, y, r] = [+x, +y, +r];
     if (r < 0) throw new Error(`negative radius: ${r}`);
     const [dx, dy] = [r * Math.cos(a0), r * Math.sin(a0)];
     const [x0, y0] = [x + dx, y + dy];
-    const cw = 1 ^ ccw;
+    const cw = ccw ? 0 : 1;
     let da = ccw ? a0 - a1 : a1 - a0;
     if (this._x1 === null) {
       this._append("M", x0, ",", y0);
@@ -647,7 +648,7 @@ class Path {
       this._append("L", x0, ",", y0);
     }
     if (!r) return;
-    if (da < 0) da = (da % tau) + tau;
+    da = da < 0 ? (da % tau) + tau : da;
     if (da > tauEpsilon) {
       this._append("A", r, ",", r, ",0,1,", cw, ",", x - dx, ",", y - dy);
       this._append("A", r, ",", r, ",0,1,", cw, ",", (this._x1 = x0), ",");
@@ -657,10 +658,10 @@ class Path {
       if (da >= pi && this._equal(x0, y0, x1, y1)) {
         da /= 2;
         const a00 = a0 + da;
-        this._append("A", r, ",", r, ",0,", +(da >= pi), ",", cw, ",");
+        this._append("A", r, ",", r, ",0,", da >= pi ? 1 : 0, ",", cw, ",");
         this._append("", x + r * Math.cos(a00), ",", y + r * Math.sin(a00));
       }
-      this._append("A", r, ",", r, ",0,", +(da >= pi), ",", cw, ",", (this._x1 = x1), ",");
+      this._append("A", r, ",", r, ",0,", da >= pi ? 1 : 0, ",", cw, ",", (this._x1 = x1), ",");
       this._append("", (this._y1 = y1));
     }
   }
@@ -937,5 +938,251 @@ export function area(x0, y0, y1) {
     else output = curve((context = a[0]));
     return shape;
   };
+  return shape;
+}
+
+const halfPi = pi / 2;
+const epsilon = 1e-12;
+const clampedAcos = (x) => (x > 1 ? 0 : x < -1 ? pi : Math.acos(x));
+const clampedAsin = (x) => (x >= 1 ? halfPi : x <= -1 ? -halfPi : Math.asin(x));
+
+// Where lines 0–1 and 2–3 cross, if they do.
+function intersect(x0, y0, x1, y1, x2, y2, x3, y3) {
+  const [x10, y10, x32, y32] = [x1 - x0, y1 - y0, x3 - x2, y3 - y2];
+  let t = y32 * x10 - x32 * y10;
+  if (t * t < epsilon) return;
+  t = (x32 * (y0 - y2) - y32 * (x0 - x2)) / t;
+  return [x0 + t * x10, y0 + t * y10];
+}
+
+// The corner of radius `rc` tangent to the line 0–1 and the circle of radius `r1`.
+function cornerTangents(x0, y0, x1, y1, r1, rc, cw) {
+  const [x01, y01] = [x0 - x1, y0 - y1];
+  const lo = (cw ? rc : -rc) / Math.sqrt(x01 * x01 + y01 * y01);
+  const [ox, oy] = [lo * y01, -lo * x01];
+  const [x11, y11, x10, y10] = [x0 + ox, y0 + oy, x1 + ox, y1 + oy];
+  const [x00, y00] = [(x11 + x10) / 2, (y11 + y10) / 2];
+  const [dx, dy] = [x10 - x11, y10 - y11];
+  const d2 = dx * dx + dy * dy;
+  const r = r1 - rc;
+  const D = x11 * y10 - x10 * y11;
+  const d = (dy < 0 ? -1 : 1) * Math.sqrt(Math.max(0, r * r * d2 - D * D));
+  let [cx0, cy0] = [(D * dy - dx * d) / d2, (-D * dx - dy * d) / d2];
+  const [cx1, cy1] = [(D * dy + dx * d) / d2, (-D * dx + dy * d) / d2];
+  const [dx0, dy0, dx1, dy1] = [cx0 - x00, cy0 - y00, cx1 - x00, cy1 - y00];
+  // The closer of the two.
+  if (dx0 * dx0 + dy0 * dy0 > dx1 * dx1 + dy1 * dy1) [cx0, cy0] = [cx1, cy1];
+  return {
+    cx: cx0,
+    cy: cy0,
+    x01: -ox,
+    y01: -oy,
+    x11: cx0 * (r1 / r - 1),
+    y11: cy0 * (r1 / r - 1),
+  };
+}
+
+const numberOr = (v) => (typeof v === "function" ? v : shapeConstant(+v));
+
+export function arc() {
+  let innerRadius = (d) => d.innerRadius;
+  let outerRadius = (d) => d.outerRadius;
+  let cornerRadius = shapeConstant(0);
+  let padRadius = null;
+  let startAngle = (d) => d.startAngle;
+  let endAngle = (d) => d.endAngle;
+  let padAngle = (d) => d && d.padAngle;
+  let context = null;
+  const path = withPath(shape);
+
+  function shape(...args) {
+    let buffer;
+    let r0 = +innerRadius(...args);
+    let r1 = +outerRadius(...args);
+    const a0 = startAngle(...args) - halfPi;
+    const a1 = endAngle(...args) - halfPi;
+    const da = Math.abs(a1 - a0);
+    const cw = a1 > a0;
+    if (!context) context = buffer = path();
+    if (r1 < r0) [r0, r1] = [r1, r0];
+    if (!(r1 > epsilon)) {
+      // A point.
+      context.moveTo(0, 0);
+    } else if (da > tau - epsilon) {
+      // A circle or an annulus.
+      context.moveTo(r1 * Math.cos(a0), r1 * Math.sin(a0));
+      context.arc(0, 0, r1, a0, a1, !cw);
+      if (r0 > epsilon) {
+        context.moveTo(r0 * Math.cos(a1), r0 * Math.sin(a1));
+        context.arc(0, 0, r0, a1, a0, cw);
+      }
+    } else {
+      // A circular or an annular sector.
+      let [a01, a11, a00, a10, da0, da1] = [a0, a1, a0, a1, da, da];
+      const ap = padAngle(...args) / 2;
+      const rp = ap > epsilon && (padRadius ? +padRadius(...args) : Math.sqrt(r0 * r0 + r1 * r1));
+      const rc = Math.min(Math.abs(r1 - r0) / 2, +cornerRadius(...args));
+      let [rc0, rc1] = [rc, rc];
+      if (rp > epsilon) {
+        let p0 = clampedAsin((rp / r0) * Math.sin(ap));
+        let p1 = clampedAsin((rp / r1) * Math.sin(ap));
+        if ((da0 -= p0 * 2) > epsilon) {
+          p0 *= cw ? 1 : -1;
+          [a00, a10] = [a00 + p0, a10 - p0];
+        } else {
+          da0 = 0;
+          a00 = a10 = (a0 + a1) / 2;
+        }
+        if ((da1 -= p1 * 2) > epsilon) {
+          p1 *= cw ? 1 : -1;
+          [a01, a11] = [a01 + p1, a11 - p1];
+        } else {
+          da1 = 0;
+          a01 = a11 = (a0 + a1) / 2;
+        }
+      }
+      const [x01, y01] = [r1 * Math.cos(a01), r1 * Math.sin(a01)];
+      const [x10, y10] = [r0 * Math.cos(a10), r0 * Math.sin(a10)];
+      let x11, y11, x00, y00;
+      if (rc > epsilon) {
+        [x11, y11] = [r1 * Math.cos(a11), r1 * Math.sin(a11)];
+        [x00, y00] = [r0 * Math.cos(a00), r0 * Math.sin(a00)];
+        // The corner radius as the sector's angle allows; none if the sector is too small.
+        if (da < pi) {
+          const oc = intersect(x01, y01, x00, y00, x11, y11, x10, y10);
+          if (oc) {
+            const [ax, ay, bx, by] = [x01 - oc[0], y01 - oc[1], x11 - oc[0], y11 - oc[1]];
+            const cos =
+              (ax * bx + ay * by) / (Math.sqrt(ax * ax + ay * ay) * Math.sqrt(bx * bx + by * by));
+            const kc = 1 / Math.sin(clampedAcos(cos) / 2);
+            const lc = Math.sqrt(oc[0] * oc[0] + oc[1] * oc[1]);
+            rc0 = Math.min(rc, (r0 - lc) / (kc - 1));
+            rc1 = Math.min(rc, (r1 - lc) / (kc + 1));
+          } else {
+            rc0 = rc1 = 0;
+          }
+        }
+      }
+      if (!(da1 > epsilon)) {
+        // Collapsed to a line.
+        context.moveTo(x01, y01);
+      } else if (rc1 > epsilon) {
+        const t0 = cornerTangents(x00, y00, x01, y01, r1, rc1, cw);
+        const t1 = cornerTangents(x11, y11, x10, y10, r1, rc1, cw);
+        context.moveTo(t0.cx + t0.x01, t0.cy + t0.y01);
+        if (rc1 < rc) {
+          // The corners merged.
+          const [s, e] = [Math.atan2(t0.y01, t0.x01), Math.atan2(t1.y01, t1.x01)];
+          context.arc(t0.cx, t0.cy, rc1, s, e, !cw);
+        } else {
+          let [s, e] = [Math.atan2(t0.y01, t0.x01), Math.atan2(t0.y11, t0.x11)];
+          context.arc(t0.cx, t0.cy, rc1, s, e, !cw);
+          s = Math.atan2(t0.cy + t0.y11, t0.cx + t0.x11);
+          e = Math.atan2(t1.cy + t1.y11, t1.cx + t1.x11);
+          context.arc(0, 0, r1, s, e, !cw);
+          [s, e] = [Math.atan2(t1.y11, t1.x11), Math.atan2(t1.y01, t1.x01)];
+          context.arc(t1.cx, t1.cy, rc1, s, e, !cw);
+        }
+      } else {
+        context.moveTo(x01, y01);
+        context.arc(0, 0, r1, a01, a11, !cw);
+      }
+      if (!(r0 > epsilon) || !(da0 > epsilon)) {
+        // No inner ring, or one collapsed by padding.
+        context.lineTo(x10, y10);
+      } else if (rc0 > epsilon) {
+        const t0 = cornerTangents(x10, y10, x11, y11, r0, -rc0, cw);
+        const t1 = cornerTangents(x01, y01, x00, y00, r0, -rc0, cw);
+        context.lineTo(t0.cx + t0.x01, t0.cy + t0.y01);
+        if (rc0 < rc) {
+          const [s, e] = [Math.atan2(t0.y01, t0.x01), Math.atan2(t1.y01, t1.x01)];
+          context.arc(t0.cx, t0.cy, rc0, s, e, !cw);
+        } else {
+          let [s, e] = [Math.atan2(t0.y01, t0.x01), Math.atan2(t0.y11, t0.x11)];
+          context.arc(t0.cx, t0.cy, rc0, s, e, !cw);
+          s = Math.atan2(t0.cy + t0.y11, t0.cx + t0.x11);
+          e = Math.atan2(t1.cy + t1.y11, t1.cx + t1.x11);
+          context.arc(0, 0, r0, s, e, cw);
+          [s, e] = [Math.atan2(t1.y11, t1.x11), Math.atan2(t1.y01, t1.x01)];
+          context.arc(t1.cx, t1.cy, rc0, s, e, !cw);
+        }
+      } else {
+        context.arc(0, 0, r0, a10, a00, cw);
+      }
+    }
+    context.closePath();
+    if (buffer) {
+      context = null;
+      return text(buffer);
+    }
+  }
+
+  shape.centroid = (...args) => {
+    const r = (+innerRadius(...args) + +outerRadius(...args)) / 2;
+    const a = (+startAngle(...args) + +endAngle(...args)) / 2 - pi / 2;
+    return [Math.cos(a) * r, Math.sin(a) * r];
+  };
+  shape.innerRadius = (...a) => (a.length ? ((innerRadius = numberOr(a[0])), shape) : innerRadius);
+  shape.outerRadius = (...a) => (a.length ? ((outerRadius = numberOr(a[0])), shape) : outerRadius);
+  shape.cornerRadius = (...a) =>
+    a.length ? ((cornerRadius = numberOr(a[0])), shape) : cornerRadius;
+  shape.padRadius = (...a) =>
+    a.length ? ((padRadius = a[0] == null ? null : numberOr(a[0])), shape) : padRadius;
+  shape.startAngle = (...a) => (a.length ? ((startAngle = numberOr(a[0])), shape) : startAngle);
+  shape.endAngle = (...a) => (a.length ? ((endAngle = numberOr(a[0])), shape) : endAngle);
+  shape.padAngle = (...a) => (a.length ? ((padAngle = numberOr(a[0])), shape) : padAngle);
+  shape.context = (...a) => (a.length ? ((context = a[0] == null ? null : a[0]), shape) : context);
+  return shape;
+}
+
+const descending = (a, b) => (b < a ? -1 : b > a ? 1 : b >= a ? 0 : NaN);
+
+export function pie() {
+  let value = identity;
+  let sortValues = descending;
+  let sort = null;
+  let startAngle = shapeConstant(0);
+  let endAngle = shapeConstant(tau);
+  let padAngle = shapeConstant(0);
+
+  function shape(data, ...rest) {
+    data = asArray(data);
+    const n = data.length;
+    const args = [data, ...rest];
+    let sum = 0;
+    const index = [];
+    const values = [];
+    let a0 = +startAngle(...args);
+    const da = Math.min(tau, Math.max(-tau, endAngle(...args) - a0));
+    const p = Math.min(Math.abs(da) / n, padAngle(...args));
+    const pa = p * (da < 0 ? -1 : 1);
+    for (let i = 0; i < n; ++i) {
+      const v = +value(data[i], i, data);
+      index.push(i);
+      values.push(v);
+      if (v > 0) sum += v;
+    }
+    if (sortValues != null) index.sort((i, j) => sortValues(values[i], values[j]));
+    else if (sort != null) index.sort((i, j) => sort(data[i], data[j]));
+    // The arcs, in the data's order.
+    const arcs = [];
+    const k = sum ? (da - n * pa) / sum : 0;
+    for (let i = 0; i < n; ++i) {
+      const j = index[i];
+      const v = values[j];
+      const a1 = a0 + (v > 0 ? v * k : 0) + pa;
+      arcs[j] = { data: data[j], index: i, value: v, startAngle: a0, endAngle: a1, padAngle: p };
+      a0 = a1;
+    }
+    return arcs;
+  }
+
+  shape.value = (...a) => (a.length ? ((value = numberOr(a[0])), shape) : value);
+  shape.sortValues = (...a) =>
+    a.length ? ((sortValues = a[0]), (sort = null), shape) : sortValues;
+  shape.sort = (...a) => (a.length ? ((sort = a[0]), (sortValues = null), shape) : sort);
+  shape.startAngle = (...a) => (a.length ? ((startAngle = numberOr(a[0])), shape) : startAngle);
+  shape.endAngle = (...a) => (a.length ? ((endAngle = numberOr(a[0])), shape) : endAngle);
+  shape.padAngle = (...a) => (a.length ? ((padAngle = numberOr(a[0])), shape) : padAngle);
   return shape;
 }

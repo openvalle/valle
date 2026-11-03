@@ -168,4 +168,47 @@ export const checks = {
         .x1((d) => d[0])(points),
     ];
   },
+  arc: () => {
+    const a = arc();
+    const sector = { innerRadius: 0, outerRadius: 100, startAngle: 0, endAngle: Math.PI / 2 };
+    const ring = { innerRadius: 40, outerRadius: 100, startAngle: 1, endAngle: 4 };
+    return [
+      a(sector),
+      a(ring),
+      a({ innerRadius: 0, outerRadius: 50, startAngle: 0, endAngle: 2 * Math.PI }),
+      a({ innerRadius: 30, outerRadius: 50, startAngle: 0, endAngle: 7 }),
+      a({ innerRadius: 0, outerRadius: 0, startAngle: 0, endAngle: 1 }),
+      a({ innerRadius: 20, outerRadius: 50, startAngle: 2, endAngle: 0.5 }),
+      a.centroid(ring),
+      arc().cornerRadius(8)(ring),
+      arc().cornerRadius(30)(ring),
+      arc().cornerRadius(10)(sector),
+      arc().padAngle(0.05)(ring),
+      arc().padAngle(0.05).padRadius(200)(ring),
+      arc().padAngle(0.3).cornerRadius(6)({ ...ring, endAngle: 1.4 }),
+      arc().innerRadius(10).outerRadius(60).startAngle(0).endAngle(5).cornerRadius(4)(),
+      arc().digits(1)(ring),
+      arc().cornerRadius(12)({ innerRadius: 0, outerRadius: 60, startAngle: 0, endAngle: 4.5 }),
+    ];
+  },
+  pie: () => {
+    const values = [3, 1, 4, 1, 5, -2, 0];
+    return [
+      pie()(values),
+      pie().sort(null).sortValues(null)(values),
+      pie()
+        .padAngle(0.02)
+        .startAngle(-Math.PI / 2)
+        .endAngle(Math.PI / 2)(values),
+      pie()
+        .value((d) => d.n)
+        .sort((a, b) => (a.name < b.name ? -1 : 1))([
+        { name: "b", n: 2 },
+        { name: "a", n: 7 },
+      ]),
+      pie().endAngle(-Math.PI)([1, 1]),
+      pie()([]),
+      pie()([0, 0]),
+    ];
+  },
 };
