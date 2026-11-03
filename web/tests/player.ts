@@ -366,8 +366,22 @@ async function main() {
     const bound = props ? ["--props", JSON.stringify(props)] : [];
     for (const frame of frames) {
       const png = join(out, `${natives.size}.png`);
+      // Videos decoded by FFmpeg's own decoder, as the cases' baselines are: a virtual machine's
+      // hardware decoder hands frames over unlike a real one's.
       const run = Bun.spawnSync(
-        [valle, kind, "render", entry, "--frame", String(frame), ...bound, "-o", png],
+        [
+          valle,
+          kind,
+          "render",
+          entry,
+          "--frame",
+          String(frame),
+          ...bound,
+          "--decoder",
+          "ffmpeg",
+          "-o",
+          png,
+        ],
         { cwd: root, stdout: "pipe", stderr: "pipe" },
       );
       if (run.exitCode !== 0) {
@@ -608,6 +622,8 @@ async function main() {
       join(out, "shown.motion.tsx"),
       "--frame",
       "45",
+      "--decoder",
+      "ffmpeg",
       "-o",
       join(out, "shown.png"),
     ]);
