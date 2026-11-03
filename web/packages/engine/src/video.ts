@@ -1,8 +1,6 @@
 // The frames of video files, which the worker decodes with WebCodecs as the engine shows them:
 // mediabunny reads the containers. A reader goes on from the frame it gave last, so playing
-// decodes each frame once; a jump starts it again from the key frame before. Where the decoder
-// gives frames as its GPU has them, whose planes cannot be read (as some machines' hardware
-// decoders do), the file is decoded again in software, which gives them.
+// decodes each frame once; a jump starts it again from the key frame before.
 
 import {
   ALL_FORMATS,
@@ -22,8 +20,6 @@ export class Reader {
   #input: Input;
   #track: InputVideoTrack;
   #sink: VideoSampleSink;
-  /** Whether it decodes in software, having had frames from the hardware it could not read. */
-  #software = false;
   /** The color space the file tags, which frames' do not tell apart from a guess. */
   #tags: VideoColorSpaceInit;
   #samples: AsyncGenerator<VideoSample, void> | undefined;
@@ -76,12 +72,6 @@ export class Reader {
       this.#current = this.#next;
       this.#next = (await this.#samples!.next()).value ?? undefined;
     }
-    if (!this.#software && unreadable(this.#current!)) {
-      this.#software = true;
-      this.#sink = new VideoSampleSink(this.#track, { hardwareAcceleration: "prefer-software" });
-      await this.#from(seconds);
-      return this.frame(seconds);
-    }
     return planes(this.#current!, this.#tags);
   }
 
@@ -115,13 +105,6 @@ export class Reader {
 
 /** The formats the engine converts itself, by its numbers for them. */
 const FORMATS: Record<string, number> = { I420: 1, NV12: 2, I420A: 3 };
-
-/** Whether a decoder gave a frame as its GPU has it, whose planes cannot be read: no format, or
- * RGB a file does not have. */
-function unreadable(sample: VideoSample): boolean {
-  const format = sample.format;
-  return format === null || ["RGBA", "RGBX", "BGRA", "BGRX"].includes(format);
-}
 
 /** A frame as the engine takes it: little-endian u32s of its format (0 for straight RGBA), BT.709
  * or not, full range or not, its width and height, its count of planes and each one's offset and
