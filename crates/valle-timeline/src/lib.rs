@@ -10,6 +10,7 @@
 //!
 //! The engine lowers a document to a Motion scene; this crate only holds it.
 
+pub mod edit;
 pub mod query;
 pub mod time;
 pub mod timecode;

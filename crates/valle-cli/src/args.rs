@@ -27,7 +27,7 @@ pub enum Frames {
 }
 
 /// Options that take a value, beyond those read here.
-const VALUED: [&str; 10] = [
+const VALUED: [&str; 11] = [
     "--encoder",
     "--decoder",
     "--codec",
@@ -38,6 +38,7 @@ const VALUED: [&str; 10] = [
     "--at",
     "--marker",
     "--meta",
+    "--op",
 ];
 
 impl Args {
@@ -83,7 +84,7 @@ impl Args {
 }
 
 /// JSON written out, or `@path` for a file of it.
-fn json(text: &str, what: &str) -> Result<Value, Failure> {
+pub fn json(text: &str, what: &str) -> Result<Value, Failure> {
     let text = match text.strip_prefix('@') {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|e| Failure::new("not_found", format!("{what} {path}: {e}")))?,

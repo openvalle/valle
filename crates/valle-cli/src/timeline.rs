@@ -1,5 +1,6 @@
 //! `valle timeline check` and `valle timeline render`: a document lowered to the scene it plays
-//! as, which the Motion commands then check and draw; and `valle timeline query`.
+//! as, which the Motion commands then check and draw; `valle timeline query`; and `valle
+//! timeline edit`.
 
 use std::path::Path;
 
@@ -22,6 +23,20 @@ fn document(args: &Args) -> Result<(String, String, valle_timeline::Document), F
     let doc = valle_timeline::parse(&text)
         .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
     Ok((path, text, doc))
+}
+
+/// The document edited by `--op`, as Studio edits it, and written back whole or not at all.
+pub fn edit(args: &Args) -> Result<Value, Failure> {
+    let (path, text, _) = document(args)?;
+    let op = args
+        .option("op")
+        .ok_or_else(|| Failure::new("usage", "edit needs --op <json|@file>"))?;
+    let op = crate::args::json(op, "--op")?;
+    let edited = valle_timeline::edit::apply(&text, &op)
+        .map_err(|e| Failure::new("timeline", format!("{path}: {e}")))?;
+    valle_project::write(Path::new(&path), edited.as_bytes(), true)
+        .map_err(|e| Failure::new("timeline", e))?;
+    Ok(json!({ "status": "ok", "summary": format!("edited {path}"), "file": path }))
 }
 
 /// The clips the options pick: `--clip`, `--track`, `--index`, `--at`, `--marker`, `--meta`.

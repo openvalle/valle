@@ -49,6 +49,9 @@ usage: valle <command> [options]
   timeline query <edit.timeline.json> [filters]
                                        the clips the filters pick, with their program and source
                                        timecodes, lines, anchors and the clips anchored to them
+  timeline edit <edit.timeline.json> --op <json|@file>
+                                       edit it as Studio does: set, move, trim, delete or add a
+                                       clip ({ \"op\": \"move\", \"clip\": \"intro\", \"start\": 2 })
 
   project create <folder> [--width W --height H --fps F]
                                        a new project: project.json, timeline.json and its
@@ -229,6 +232,7 @@ fn run(words: &[String]) -> (Result<Value, Failure>, bool) {
             "check" => motion::check(&args),
             "render" => motion::render(&args),
             "query" if group == "timeline" => timeline::query(&args),
+            "edit" if group == "timeline" => timeline::edit(&args),
             _ => Err(usage()),
         }
     })();
