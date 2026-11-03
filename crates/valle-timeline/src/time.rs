@@ -239,6 +239,10 @@ impl Speed {
         Ok(Speed { num, den })
     }
 
+    pub fn as_f64(self) -> f64 {
+        self.num as f64 / self.den as f64
+    }
+
     /// `t × rate`, rounded down.
     pub fn apply(self, t: Tick) -> Result<Tick, String> {
         let ticks = (i128::from(t.0) * i128::from(self.num)).div_euclid(i128::from(self.den));

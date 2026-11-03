@@ -1,6 +1,7 @@
 //! The Valle engine: Motion scenes and timelines, traced once and rendered frame by frame on the
 //! GPU, natively and in the browser.
 
+pub mod audio;
 pub mod ease;
 pub mod eval;
 pub mod format;
@@ -9,6 +10,7 @@ pub mod gpu;
 pub mod image;
 pub mod js;
 pub mod layout;
+pub mod mix;
 pub mod noise;
 pub mod paint;
 pub mod path;

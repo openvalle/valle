@@ -6,3 +6,5 @@ use valle_ffmpeg::backend::v8 as ff;
 pub mod decode;
 #[path = "../encode.rs"]
 pub mod encode;
+#[path = "../sound.rs"]
+pub mod sound;

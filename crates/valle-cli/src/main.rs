@@ -25,7 +25,8 @@ usage: valle <command> [options]
                                        sequence), or a .mp4 or .mov video
   timeline check <edit.timeline.json>  check the document, its clips' sources and every frame
   timeline render <edit.timeline.json> -o <out>
-                                       draw the timeline's frames, as motion render does
+                                       draw the timeline's frames, as motion render does, its
+                                       sound mixed into a video; a .wav <out> is its sound alone
 
 options of motion:
   --props <json|@file>        values of the props controls.props declares

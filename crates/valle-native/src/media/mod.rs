@@ -82,6 +82,19 @@ pub fn length(path: &Path) -> Result<i64, String> {
     }
 }
 
+/// Sound's samples a second: every file's is resampled to it, and the mix runs at it.
+pub const RATE: u32 = 48_000;
+
+/// The sound of the file at `path`: interleaved stereo 32-bit float samples at `RATE`; none
+/// when it has no audio.
+pub fn sound(path: &Path) -> Result<Option<Vec<f32>>, String> {
+    match version()? {
+        Version::V7 => v7::sound::decode(path),
+        Version::V8 => v8::sound::decode(path),
+        Version::V9 => v9::sound::decode(path),
+    }
+}
+
 /// A video to write.
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -92,12 +105,16 @@ pub struct Options {
     pub encoding: Encoding,
     /// Bits a second, in place of the encoder's quality target.
     pub bitrate: Option<u64>,
+    /// Whether it has sound, which `Write::sound` gives.
+    pub sound: bool,
 }
 
 /// Frames into a video, one after another.
 pub trait Write {
     /// The next frame: straight sRGB RGBA, rows top down.
     fn push(&mut self, rgba: &[u8]) -> Result<(), String>;
+    /// More of its sound: interleaved stereo 32-bit float samples at `RATE`.
+    fn sound(&mut self, samples: &[f32]) -> Result<(), String>;
     /// Writes what is left and closes the file.
     fn finish(&mut self) -> Result<(), String>;
 }

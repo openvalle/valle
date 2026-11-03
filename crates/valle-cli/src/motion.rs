@@ -244,12 +244,25 @@ fn sha256_of(file: &Path) -> Option<String> {
 pub fn render(args: &Args) -> Result<Value, Failure> {
     let out =
         (args.out.as_deref()).ok_or_else(|| Failure::new("usage", "render needs -o <out>"))?;
+    let lower = out.to_ascii_lowercase();
+    let document = args.file.ends_with(".timeline.json");
+    if lower.ends_with(".wav") {
+        return match document {
+            true => video::sound(&mut crate::timeline::mixer(args)?, Path::new(out)),
+            false => Err(Failure::new("usage", "a Motion scene has no sound").hint(
+                "a timeline's sound goes into a .wav; a scene's frames into images or video",
+            )),
+        };
+    }
     let Loaded { mut scene, .. } = load(args)?;
     let c = scene.composition();
     let count = c.fps.frames_in(c.duration);
-    let lower = out.to_ascii_lowercase();
     if lower.ends_with(".mp4") || lower.ends_with(".mov") {
-        return video::render(args, &mut scene, Path::new(out));
+        let mut mixer = match document {
+            true => Some(crate::timeline::mixer(args)?),
+            false => None,
+        };
+        return video::render(args, &mut scene, Path::new(out), mixer.as_mut());
     }
     let png = lower.ends_with(".png");
     let frames = match (png, args.storyboard, &args.frames) {
