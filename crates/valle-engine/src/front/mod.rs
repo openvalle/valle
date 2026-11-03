@@ -24,6 +24,7 @@ use rquickjs::context::{EvalOptions, intrinsic};
 use rquickjs::{Array, Context, Ctx, Exception, Function, Object, Runtime, Value};
 
 use crate::eval::{self, Clock};
+use crate::style::color;
 use crate::template::{Error, Template, V};
 use crate::time::{Rate, Tick};
 
@@ -436,6 +437,21 @@ fn install_host<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
         )?,
     )?;
     host.set("svg", crate::svg::tables())?;
+    // A color as d3 reads one: sRGB written as CSS had it before color spaces, as 0–255 channels
+    // and an opacity; one with no opacity has no channels either, NaN.
+    host.set(
+        "color",
+        Function::new(ctx.clone(), |text: String| {
+            let text = text.trim().to_ascii_lowercase();
+            let c = color::legacy(&text)
+                .then(|| color::wide(&text).ok())
+                .flatten()?;
+            let channel = |x: f64| {
+                if c[3] <= 0.0 { f64::NAN } else { x * 255.0 }
+            };
+            Some(vec![channel(c[0]), channel(c[1]), channel(c[2]), c[3]])
+        })?,
+    )?;
     host.set(
         "random",
         Function::new(ctx.clone(), |seed: f64, count: f64, low: f64, high: f64| {

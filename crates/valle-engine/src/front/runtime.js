@@ -1466,6 +1466,10 @@
     for (const k of names) factories.set(k, factory);
   }
 
+  // What the built-in charts module takes from the runtime: whether a value is traced, its
+  // concrete value fixed by a guard, and a color as d3 reads one.
+  const __charts = freeze({ traced: isT, fixed: escape, color: host.color });
+
   // A built-in module's exports, as globals.
   function __builtin(exports) {
     Object.assign(globalThis, exports);
@@ -1631,7 +1635,14 @@
   ];
 
   function __lockdown() {
-    for (const name of ["__host", "__declareFree", "__define", "__builtin", "__lockdown"]) {
+    for (const name of [
+      "__host",
+      "__declareFree",
+      "__define",
+      "__builtin",
+      "__charts",
+      "__lockdown",
+    ]) {
       delete globalThis[name];
     }
 
@@ -1705,6 +1716,7 @@
     __F,
     __define,
     __builtin,
+    __charts,
     __import,
     __trace,
     __declareFree,
