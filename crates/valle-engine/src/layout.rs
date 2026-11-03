@@ -305,7 +305,10 @@ fn pieces_of<'a>(
 
 /// The boxes of the Spans in a Text laid out in `lines` from `at`, as Chrome has an inline box's:
 /// on each line, from the left of its first run of glyphs to the right of its last, and from its
-/// font's ascent above the baseline to its descent below, rounded; its lines together.
+/// font's ascent above the baseline to its descent below, rounded; its lines together. A run that
+/// is only white space hanging at the end of its line has no part in a box, as in Chrome a Span
+/// that starts with the space a line breaks at starts on the next line; unless the Span has
+/// nothing else.
 fn spans(
     lines: &Lines,
     at: [f32; 2],
@@ -315,7 +318,12 @@ fn spans(
     boxes: &mut [Boxes],
 ) -> Result<(), Error> {
     let mut extents: Vec<(usize, [f32; 4])> = Vec::new();
-    for run in &lines.runs {
+    let mut hanging: Vec<(usize, [f32; 4])> = Vec::new();
+    for (i, run) in lines.runs.iter().enumerate() {
+        let hangs = (lines.runs[i..].iter())
+            .take_while(|r| r.line == run.line)
+            .all(|r| r.x[1] <= r.x[0]);
+        let extents = if hangs { &mut hanging } else { &mut extents };
         let baseline = at[1] + lines.baselines[run.line as usize];
         // The run's own Span and those around it, up to the Text.
         let mut span = Some(run.node as usize);
@@ -339,6 +347,11 @@ fn spans(
                 None => extents.push((s, r)),
             }
             span = parents[s];
+        }
+    }
+    for (s, e) in hanging {
+        if !extents.iter().any(|(t, _)| *t == s) {
+            extents.push((s, e));
         }
     }
     for (s, [x0, y0, x1, y1]) in extents {
