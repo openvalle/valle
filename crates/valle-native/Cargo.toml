@@ -12,3 +12,4 @@ ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
+valle-ffmpeg.workspace = true

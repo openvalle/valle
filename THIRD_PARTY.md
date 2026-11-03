@@ -27,6 +27,7 @@ in `Cargo.lock` and `bun.lock`.
 
 | Project | Use | License |
 | --- | --- | --- |
+| [valle-ffmpeg](https://github.com/openvalle/ffmpeg-rs) | Calling FFmpeg 7, 8 or 9, loaded at run time, to encode and decode video | WTFPL; FFmpeg itself LGPL-2.1 or later, or GPL with x264 and x265 |
 | [ureq](https://github.com/algesten/ureq) | Downloading files from the web | MIT or Apache-2.0 |
 | [rustls](https://github.com/rustls/rustls), with [rustls-webpki](https://github.com/rustls/webpki) | The TLS of those downloads | Apache-2.0, ISC or MIT; rustls-webpki ISC |
 | [ring](https://github.com/briansmith/ring) | The cryptography of that TLS, and the SHA-256 of downloads | Apache-2.0 and ISC |

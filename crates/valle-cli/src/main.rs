@@ -35,6 +35,11 @@ options of render:
   --frame <n>                 the frame a .png shows (0)
   --frames <a,b,…|a..b>       the frames to draw (all)
   --storyboard                draw the frames side by side into the one .png
+  --codec <h264|hevc|prores>  a video's codec: h264 for a .mp4, prores (4444, with alpha) for
+                              a .mov
+  --encoder <vt|ffmpeg>       the hardware encoder (VideoToolbox), or FFmpeg's own on the CPU
+                              (x264, x265, prores_ks); the hardware's where it has the codec
+  --bitrate <bits>            a video's bits a second, such as 8M, in place of its quality
 ";
 
 /// A command's failure: a code tools can match, what went wrong, and what to do about it.

@@ -37,6 +37,8 @@ skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 taffy = { version = "0.15.1", default-features = false, features = ["std", "flexbox", "block_layout", "grid", "calc"] }
 # The characters of a split text: grapheme clusters, as UAX #29 has them.
 unicode-segmentation = "1.13.3"
+# FFmpeg 7, 8 or 9, loaded at run time: encoding, decoding, containers and color conversion.
+valle-ffmpeg = { version = "0.1.0", default-features = false, features = ["codec", "format", "software-scaling"] }
 # Blocking HTTPS over rustls with ring and the Mozilla roots, gzip decoded.
 ureq = { version = "3.5.1", default-features = false, features = ["rustls", "gzip"] }
 # Color glyphs (COLR) rasterized on the CPU, with no SIMD level picked at run time.
