@@ -1,7 +1,7 @@
 // The engine's worker: the wasm engine drawing into the page's canvas, the files it reads fetched
 // as it asks for them. One request at a time, answered in order.
 
-import init, { builtInFonts, Engine } from "./wasm/valle_web.js";
+import init, { builtInFonts, Engine, type Sound } from "./wasm/valle_web.js";
 import type { Code, Reply, Request, Source } from "./messages.ts";
 
 type Font = { name: string; file: string; url: string; sha256: string; size: number };
@@ -23,6 +23,19 @@ let fontBase: string | undefined;
 let fonts = new Map<string, Font>();
 /** What the page gave in place of fetching a path. */
 const given = new Map<string, Source>();
+/** Where the engine reads a file's sound, which the page decodes. */
+const SOUND = "valle:sound/";
+/** The sound of the timeline open: what the audio worklet plays, and what is rendered on its own. */
+let playing: Sound | undefined;
+let rendering: Sound | undefined;
+/** The sample `rendering` gives next, which a render from there need not seek to. */
+let next = 0;
+/** The audio worklet's port, and the sound it plays: the samples asked for at a time. */
+let worklet: MessagePort | undefined;
+const CHUNK = 4800;
+/** Sounds the page is decoding, by id. */
+const decoding = new Map<number, (pcm: Float32Array | null) => void>();
+let decodes = 0;
 
 async function handle(request: Request): Promise<unknown> {
   if (request.type === "start") {
@@ -59,7 +72,40 @@ async function handle(request: Request): Promise<unknown> {
       return undefined;
     case "pixels":
       return await e.pixels();
+    case "sound": {
+      const status = JSON.parse(await fetching(() => e.sound(request.entry))) as { status: string };
+      forget();
+      playing = status.status === "ok" ? e.take_sound() : undefined;
+      rendering = playing?.fresh();
+      next = 0;
+      return playing ? { length: playing.length() } : null;
+    }
+    case "render-sound": {
+      if (!rendering) {
+        throw new Failure("scene", "what is open has no sound");
+      }
+      if (request.sample !== next) {
+        rendering.seek(request.sample);
+      }
+      next = request.sample + request.samples;
+      return rendering.render(request.samples);
+    }
+    case "worklet":
+      worklet = request.port;
+      worklet.onmessage = (event: MessageEvent<{ gen: number; sample?: number }>) => {
+        const { gen, sample } = event.data;
+        if (!playing) {
+          return;
+        }
+        if (sample !== undefined) {
+          playing.seek(sample);
+        }
+        const data = playing.render(CHUNK);
+        worklet!.postMessage({ gen, data }, [data.buffer]);
+      };
+      return undefined;
     case "close":
+      forget();
       e.close();
       return undefined;
     case "destroy":
@@ -67,6 +113,13 @@ async function handle(request: Request): Promise<unknown> {
       engine = undefined;
       return undefined;
   }
+}
+
+/** Lets the sound of what was open go. */
+function forget() {
+  playing?.free();
+  rendering?.free();
+  playing = rendering = undefined;
 }
 
 /** Runs `step` until it has every file it reads, fetching those it asks for in between. */
@@ -89,6 +142,16 @@ async function fetching(step: () => string): Promise<string> {
 /** Gives the engine the file at `path`, or says there is none. */
 async function load(path: string): Promise<void> {
   const e = engine!;
+  if (path.startsWith(SOUND)) {
+    const file = await read(path.slice(SOUND.length));
+    const pcm = file && (await decode(file.slice()));
+    if (pcm) {
+      e.give(path, new Uint8Array(pcm.buffer));
+    } else {
+      e.absent(path);
+    }
+    return;
+  }
   const bytes = await read(path);
   if (bytes) {
     e.give(path, bytes);
@@ -139,8 +202,26 @@ async function read(path: string): Promise<Uint8Array | undefined> {
   return bytes;
 }
 
+/** A file's sound as the page decodes it, a worker cannot: interleaved stereo at 48 000 a
+ * second, or none where it has no sound. */
+function decode(file: Uint8Array): Promise<Float32Array | null> {
+  const id = decodes++;
+  return new Promise((resolve) => {
+    decoding.set(id, resolve);
+    self.postMessage({ decode: id, file }, [file.buffer]);
+  });
+}
+
 let queue = Promise.resolve();
-self.onmessage = (event: MessageEvent<{ id: number } & Request>) => {
+self.onmessage = (
+  event: MessageEvent<({ id: number } & Request) | { decoded: number; pcm: Float32Array | null }>,
+) => {
+  if ("decoded" in event.data) {
+    const { decoded, pcm } = event.data;
+    decoding.get(decoded)?.(pcm);
+    decoding.delete(decoded);
+    return;
+  }
   const { id, ...request } = event.data;
   queue = queue.then(async () => {
     let reply: Reply;
@@ -152,6 +233,6 @@ self.onmessage = (event: MessageEvent<{ id: number } & Request>) => {
       reply = { id, ok: false, code, message };
     }
     const value = reply.ok ? reply.value : undefined;
-    self.postMessage(reply, value instanceof Uint8Array ? [value.buffer] : []);
+    self.postMessage(reply, ArrayBuffer.isView(value) ? [value.buffer] : []);
   });
 };

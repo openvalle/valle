@@ -97,6 +97,20 @@ const PAGE = `<!doctype html>
     off();
     return { at: window.player.time, drawn: shown.size };
   };
+  /** How the sound of \`entry\` differs from the native mix in the WAV at \`mix\`, and where its
+   * clock is after it plays for a second. */
+  window.heard = async (entry, mix) => {
+    await window.player?.close();
+    const canvas = document.createElement("canvas");
+    document.querySelector("canvas").replaceWith(canvas);
+    const player = (window.player = await createPlayer({ canvas, entry, base: "/", fonts: "/fonts/" }));
+    const native = new Float32Array(await (await (await fetch(mix)).arrayBuffer()).slice(44));
+    const mine = await player.renderSound(0, native.length / 2 / 48000);
+    let most = mine.length === native.length ? 0 : Infinity;
+    for (let i = 0; i < native.length; i++) most = Math.max(most, Math.abs(mine[i] - native[i]));
+    const { at } = await window.played();
+    return { sound: player.hasSound, samples: native.length / 2, most, at };
+  };
   /** How the frame on screen differs from \`native\`'s where it is opaque: the canvas is. */
   window.shown = async (screenshot, native) => {
     const [x, y] = [await decoded(screenshot), await decoded(native)];
@@ -109,6 +123,42 @@ const PAGE = `<!doctype html>
   };
 </script>
 `;
+
+/** The timeline with sound. */
+const SOUND = {
+  canvas: { width: 320, height: 180, fps: 30 },
+  resources: { tone: "tone.wav" },
+  tracks: {
+    visual: [{ clips: [{ kind: "solid", color: "#204060ff", start: 0, duration: 2 }] }],
+    audio: [{ clips: [{ src: "tone", start: 0.25, duration: 1.5, gain: 0.8 }] }],
+  },
+};
+
+/** A WAV of a sine at `hertz` for `seconds`: stereo 32-bit floats at 48 000 samples a second. */
+function tone(seconds: number, hertz: number): Uint8Array {
+  const samples = seconds * 48_000;
+  const wav = new DataView(new ArrayBuffer(44 + samples * 8));
+  const text = (at: number, s: string) =>
+    [...s].forEach((c, i) => wav.setUint8(at + i, c.charCodeAt(0)));
+  text(0, "RIFF");
+  wav.setUint32(4, 36 + samples * 8, true);
+  text(8, "WAVEfmt ");
+  wav.setUint32(16, 16, true);
+  wav.setUint16(20, 3, true);
+  wav.setUint16(22, 2, true);
+  wav.setUint32(24, 48_000, true);
+  wav.setUint32(28, 48_000 * 8, true);
+  wav.setUint16(32, 8, true);
+  wav.setUint16(34, 32, true);
+  text(36, "data");
+  wav.setUint32(40, samples * 8, true);
+  for (let i = 0; i < samples; i++) {
+    const v = 0.5 * Math.sin((2 * Math.PI * hertz * i) / 48_000);
+    wav.setFloat32(44 + i * 8, v, true);
+    wav.setFloat32(48 + i * 8, v, true);
+  }
+  return new Uint8Array(wav.buffer);
+}
 
 /** A frame's name: its entry, its index, and the props bound. */
 function named(entry: string, frame: number, props?: Record<string, unknown>): string {
@@ -145,6 +195,17 @@ async function main() {
       natives.set(named(entry, frame, props), png);
     }
   }
+  // A timeline with sound: a tone, its own file, which both engines mix.
+  const sound = join(out, "sound");
+  await Bun.write(join(sound, "tone.wav"), tone(2, 440));
+  await Bun.write(join(sound, "sound.timeline.json"), JSON.stringify(SOUND));
+  const mixed = Bun.spawnSync(
+    [valle, "timeline", "render", join(sound, "sound.timeline.json"), "-o", join(out, "mix.wav")],
+    { cwd: root, stdout: "pipe", stderr: "pipe" },
+  );
+  if (mixed.exitCode !== 0) {
+    throw new Error(`valle timeline render: ${mixed.stderr.toString()}`);
+  }
   const cached = await fonts();
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -158,6 +219,9 @@ async function main() {
       if (font) {
         const file = cached.get(font[1]);
         return file ? new Response(Bun.file(file)) : new Response("not found", { status: 404 });
+      }
+      if (path === "/mix.wav" || path.startsWith("/sound/")) {
+        return new Response(Bun.file(join(out, path.slice(1))));
       }
       const frame = /^\/native\/(.+)$/.exec(path);
       if (frame && natives.has(frame[1])) {
@@ -191,6 +255,7 @@ async function main() {
       "--enable-unsafe-webgpu",
       "--force-color-profile=srgb",
       "--force-device-scale-factor=1",
+      "--autoplay-policy=no-user-gesture-required",
       "about:blank",
     ],
     { stdout: "ignore", stderr: "pipe" },
@@ -270,6 +335,14 @@ async function main() {
     console.log(`played: at ${played.at.toFixed(2)} s after 1 s, ${played.drawn} frames drawn`);
     if (played.at < 0.5 || played.drawn < 2) {
       failed.push(`playing for 1 s reached ${played.at} s and drew ${played.drawn} frames`);
+    }
+    // A timeline's sound: the native mix, and played on its clock.
+    const heard = await evaluate(`heard("sound/sound.timeline.json", "/mix.wav")`);
+    console.log(
+      `sound: ${heard.samples} samples, most ${heard.most.toExponential(1)} apart; played: at ${heard.at.toFixed(2)} s after 1 s on the sound's clock`,
+    );
+    if (!heard.sound || heard.most > 1e-6 || heard.at < 0.5) {
+      failed.push(`sound: ${JSON.stringify(heard)}`);
     }
     await cdp.send("Browser.close").catch(() => {});
   } finally {

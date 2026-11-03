@@ -24,6 +24,12 @@ export type Request =
   | { type: "open"; entry: string; inputs: Inputs }
   | { type: "frame"; index: number }
   | { type: "pixels" }
+  /** Mixes the timeline's sound: its length in samples, or null where it has none. */
+  | { type: "sound"; entry: string }
+  /** `samples` of it from `sample`, interleaved stereo. */
+  | { type: "render-sound"; sample: number; samples: number }
+  /** The port the audio worklet asks for the sound it plays at. */
+  | { type: "worklet"; port: MessagePort }
   | { type: "close" }
   | { type: "destroy" };
 

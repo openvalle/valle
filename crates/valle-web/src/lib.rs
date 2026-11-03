@@ -11,8 +11,10 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
+use valle_engine::audio::Mixer;
 use valle_engine::front::{self, Inputs, controls};
 use valle_engine::gpu::{Gpu, Renderer};
+use valle_engine::mix;
 use valle_engine::scene::Scene;
 use valle_engine::text::{BUILT_IN, Blob, BuiltIn, Fonts};
 use valle_engine::timeline::{self, Host};
@@ -101,7 +103,46 @@ pub struct Engine {
     canvas: OffscreenCanvas,
     files: Files,
     open: Option<Open>,
+    /// The sound of the timeline open, mixed, until it is taken.
+    mixed: RefCell<Option<Mixer>>,
 }
+
+/// The sound of a timeline, which the page's audio worklet plays and its export encodes.
+#[wasm_bindgen]
+pub struct Sound {
+    mixer: Mixer,
+}
+
+#[wasm_bindgen]
+impl Sound {
+    /// Its length in samples, at 48 000 a second.
+    pub fn length(&self) -> f64 {
+        self.mixer.length() as f64
+    }
+
+    /// Ready to give the samples from `sample` on.
+    pub fn seek(&mut self, sample: f64) {
+        self.mixer.seek(sample as i64);
+    }
+
+    /// The next `samples`, interleaved stereo.
+    pub fn render(&mut self, samples: usize) -> Vec<f32> {
+        let mut out = vec![0.0; 2 * samples];
+        self.mixer.render(&mut out);
+        out
+    }
+
+    /// Another of it, from the start, its sources shared.
+    pub fn fresh(&self) -> Sound {
+        Sound {
+            mixer: self.mixer.fresh(),
+        }
+    }
+}
+
+/// The path the worker gives a file's sound at: interleaved stereo at 48 000 a second, 32-bit
+/// floats, little-endian; absent when it has none.
+const SOUND: &str = "valle:sound/";
 
 /// The built-in fonts' files: name, file, address, SHA-256 and bytes, as JSON. A page that hosts
 /// them itself maps these addresses to its own in its `fetch`.
@@ -148,6 +189,7 @@ impl Engine {
             canvas,
             files: Files::default(),
             open: None,
+            mixed: RefCell::new(None),
         })
     }
 
@@ -341,6 +383,56 @@ impl Engine {
 
     pub fn close(&mut self) {
         self.open = None;
+        self.mixed.take();
+    }
+
+    /// Mixes the sound of the timeline at `entry`. Gives JSON: `status` `ok`, then `take_sound`
+    /// gives it; `none` where it has no sound, as a Motion scene; or `missing` with the files to
+    /// give first.
+    pub fn sound(&self, entry: String) -> Result<String, JsValue> {
+        if !entry.ends_with(".json") {
+            return Ok(json!({ "status": "none" }).to_string());
+        }
+        let text = |p: &str| (self.files.read(p)).and_then(|b| String::from_utf8(b).ok());
+        let attempt = || -> Result<Option<Mixer>, String> {
+            let doc = valle_timeline::parse(&text(&entry).ok_or("not loaded yet")?)
+                .map_err(|e| format!("{entry}: {e}"))?;
+            let (_, sources) = mix::mix(&entry, &doc)?;
+            if sources.is_empty() {
+                return Ok(None);
+            }
+            let files = self.files.clone();
+            let sound = move |p: &str| -> Result<Option<Vec<f32>>, String> {
+                let path = format!("{SOUND}{p}");
+                if files.absent.borrow().contains(&path) {
+                    return Ok(None);
+                }
+                let bytes = files.read(&path).ok_or("not decoded yet")?;
+                let samples = bytes.as_chunks::<4>().0.iter();
+                Ok(Some(samples.map(|b| f32::from_le_bytes(*b)).collect()))
+            };
+            let host = mix::Host {
+                read: &text,
+                sound: &sound,
+            };
+            mix::mixer(&entry, &doc, &host).map(Some)
+        };
+        let mixer = match attempt() {
+            Ok(mixer) => mixer,
+            Err(e) => {
+                let missing = self.files.missing();
+                return missing.map(|m| m.to_string()).ok_or_else(|| js(e));
+            }
+        };
+        self.files.wanted.borrow_mut().clear();
+        let status = if mixer.is_some() { "ok" } else { "none" };
+        *self.mixed.borrow_mut() = mixer;
+        Ok(json!({ "status": status }).to_string())
+    }
+
+    /// The sound `sound` mixed, once.
+    pub fn take_sound(&self) -> Option<Sound> {
+        self.mixed.take().map(|mixer| Sound { mixer })
     }
 }
 

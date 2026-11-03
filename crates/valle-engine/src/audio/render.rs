@@ -227,9 +227,14 @@ impl Mixer {
         &self.reductions
     }
 
+    /// The same mix, its sources shared, ready to render from the start.
+    pub fn fresh(&self) -> Mixer {
+        Mixer::new(self.mix.clone(), self.pcm.clone()).expect("the same mix")
+    }
+
     /// Ready to render from `sample`: from the start as the export does, else after pre-roll.
     pub fn seek(&mut self, sample: i64) {
-        let fresh = Mixer::new(self.mix.clone(), self.pcm.clone()).expect("the same mix");
+        let fresh = self.fresh();
         let windows: Vec<Vec<f32>> = self
             .reductions
             .iter_mut()
