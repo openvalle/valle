@@ -1467,8 +1467,14 @@
   }
 
   // What the built-in charts module takes from the runtime: whether a value is traced, its
-  // concrete value fixed by a guard, and a color as d3 reads one.
-  const __charts = freeze({ traced: isT, fixed: escape, color: host.color });
+  // concrete value fixed by a guard, a color as d3 reads one, and text joined from parts as one
+  // template.
+  const __charts = freeze({
+    traced: isT,
+    fixed: escape,
+    color: host.color,
+    concat: (parts) => (parts.some(isT) ? template(parts) : parts.join("")),
+  });
 
   // A built-in module's exports, as globals.
   function __builtin(exports) {

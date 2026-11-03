@@ -15,7 +15,7 @@
 // What the runtime gives: whether a value is traced, its concrete value fixed by a guard, and a
 // color as d3 reads one, `[r, g, b, opacity]`. A traced value is never null, so where d3 tests
 // for null or NaN, a traced one goes on as a number.
-const { traced, fixed, color: parseColor } = __charts;
+const { traced, fixed, color: parseColor, concat } = __charts;
 const missing = (x) => !traced(x) && x == null;
 
 // ------------------------------------------------------------------------------ d3-array
@@ -554,4 +554,388 @@ function pointish(scale) {
 
 export function scalePoint(...args) {
   return pointish(scaleBand(...args).paddingInner(1));
+}
+
+// ------------------------------------------------------------------------------ d3-path
+
+const pi = Math.PI;
+const tau = 2 * pi;
+const pathEpsilon = 1e-6;
+const tauEpsilon = tau - pathEpsilon;
+
+// Path data as d3-path writes it, its numbers rounded to `digits` decimals unless null. Its
+// parts are joined once, so a path of traced numbers is one template.
+class Path {
+  constructor(digits) {
+    this._x0 = this._y0 = this._x1 = this._y1 = null;
+    this._parts = [];
+    let k = null;
+    if (digits != null) {
+      const d = Math.floor(digits);
+      if (!(d >= 0)) throw new RangeError(`invalid digits: ${digits}`);
+      if (d <= 15) k = 10 ** d;
+    }
+    this._k = k;
+  }
+  // Text, and numbers, rounded.
+  _append(...items) {
+    for (const [i, item] of items.entries()) {
+      const number = i % 2 === 1;
+      this._parts.push(number && this._k !== null ? Math.round(item * this._k) / this._k : item);
+    }
+  }
+  _equal(x0, y0, x1, y1) {
+    if (this._k === null) return x0 === x1 && y0 === y1;
+    const r = (v) => Math.round(v * this._k);
+    return r(x0) === r(x1) && r(y0) === r(y1);
+  }
+  moveTo(x, y) {
+    this._append("M", (this._x0 = this._x1 = +x), ",", (this._y0 = this._y1 = +y));
+  }
+  closePath() {
+    if (this._x1 !== null) {
+      [this._x1, this._y1] = [this._x0, this._y0];
+      this._append("Z");
+    }
+  }
+  lineTo(x, y) {
+    this._append("L", (this._x1 = +x), ",", (this._y1 = +y));
+  }
+  quadraticCurveTo(x1, y1, x, y) {
+    this._append("Q", +x1, ",", +y1, ",", (this._x1 = +x), ",", (this._y1 = +y));
+  }
+  bezierCurveTo(x1, y1, x2, y2, x, y) {
+    this._append("C", +x1, ",", +y1, ",", +x2, ",", +y2, ",", (this._x1 = +x), ",");
+    this._append("", (this._y1 = +y));
+  }
+  arcTo(x1, y1, x2, y2, r) {
+    [x1, y1, x2, y2, r] = [+x1, +y1, +x2, +y2, +r];
+    if (r < 0) throw new Error(`negative radius: ${r}`);
+    const [x0, y0] = [this._x1, this._y1];
+    const [x21, y21, x01, y01] = [x2 - x1, y2 - y1, x0 - x1, y0 - y1];
+    const l01_2 = x01 * x01 + y01 * y01;
+    if (this._x1 === null) {
+      this._append("M", (this._x1 = x1), ",", (this._y1 = y1));
+    } else if (!(l01_2 > pathEpsilon)) {
+      // Coincident with the last point: nothing to draw.
+    } else if (!(Math.abs(y01 * x21 - y21 * x01) > pathEpsilon) || !r) {
+      this._append("L", (this._x1 = x1), ",", (this._y1 = y1));
+    } else {
+      const [x20, y20] = [x2 - x0, y2 - y0];
+      const l21_2 = x21 * x21 + y21 * y21;
+      const l20_2 = x20 * x20 + y20 * y20;
+      const [l21, l01] = [Math.sqrt(l21_2), Math.sqrt(l01_2)];
+      const l = r * Math.tan((pi - Math.acos((l21_2 + l01_2 - l20_2) / (2 * l21 * l01))) / 2);
+      const [t01, t21] = [l / l01, l / l21];
+      if (Math.abs(t01 - 1) > pathEpsilon) {
+        this._append("L", x1 + t01 * x01, ",", y1 + t01 * y01);
+      }
+      this._append("A", r, ",", r, ",0,0,", +(y01 * x20 > x01 * y20), ",");
+      this._append("", (this._x1 = x1 + t21 * x21), ",", (this._y1 = y1 + t21 * y21));
+    }
+  }
+  arc(x, y, r, a0, a1, ccw) {
+    [x, y, r, ccw] = [+x, +y, +r, !!ccw];
+    if (r < 0) throw new Error(`negative radius: ${r}`);
+    const [dx, dy] = [r * Math.cos(a0), r * Math.sin(a0)];
+    const [x0, y0] = [x + dx, y + dy];
+    const cw = 1 ^ ccw;
+    let da = ccw ? a0 - a1 : a1 - a0;
+    if (this._x1 === null) {
+      this._append("M", x0, ",", y0);
+    } else if (Math.abs(this._x1 - x0) > pathEpsilon || Math.abs(this._y1 - y0) > pathEpsilon) {
+      this._append("L", x0, ",", y0);
+    }
+    if (!r) return;
+    if (da < 0) da = (da % tau) + tau;
+    if (da > tauEpsilon) {
+      this._append("A", r, ",", r, ",0,1,", cw, ",", x - dx, ",", y - dy);
+      this._append("A", r, ",", r, ",0,1,", cw, ",", (this._x1 = x0), ",");
+      this._append("", (this._y1 = y0));
+    } else if (da > pathEpsilon) {
+      const [x1, y1] = [x + r * Math.cos(a1), y + r * Math.sin(a1)];
+      if (da >= pi && this._equal(x0, y0, x1, y1)) {
+        da /= 2;
+        const a00 = a0 + da;
+        this._append("A", r, ",", r, ",0,", +(da >= pi), ",", cw, ",");
+        this._append("", x + r * Math.cos(a00), ",", y + r * Math.sin(a00));
+      }
+      this._append("A", r, ",", r, ",0,", +(da >= pi), ",", cw, ",", (this._x1 = x1), ",");
+      this._append("", (this._y1 = y1));
+    }
+  }
+  rect(x, y, w, h) {
+    this._append("M", (this._x0 = this._x1 = +x), ",", (this._y0 = this._y1 = +y), "h");
+    this._append("", (w = +w), "v", +h, "h", -w, "Z");
+  }
+  toString() {
+    return concat(this._parts);
+  }
+}
+
+// ------------------------------------------------------------------------------ d3-shape
+
+const shapeConstant = (x) => () => x;
+
+// A shape's path data, with its `digits()`, 3 unless set.
+function withPath(shape) {
+  let digits = 3;
+  shape.digits = (...a) => {
+    if (!a.length) return digits;
+    if (a[0] == null) {
+      digits = null;
+    } else {
+      const d = Math.floor(a[0]);
+      if (!(d >= 0)) throw new RangeError(`invalid digits: ${a[0]}`);
+      digits = d;
+    }
+    return shape;
+  };
+  return () => new Path(digits);
+}
+
+// A shape's path data, null when empty; traced data is never empty.
+function text(buffer) {
+  const t = buffer.toString();
+  return traced(t) ? t : t || null;
+}
+
+const asArray = (x) => (typeof x === "object" && "length" in x ? x : Array.from(x));
+const pointX = (p) => p[0];
+const pointY = (p) => p[1];
+const accessor = (f, otherwise) =>
+  typeof f === "function" ? f : f === undefined ? otherwise : shapeConstant(f);
+
+class Linear {
+  constructor(context) {
+    this._context = context;
+  }
+  areaStart() {
+    this._line = 0;
+  }
+  areaEnd() {
+    this._line = NaN;
+  }
+  lineStart() {
+    this._point = 0;
+  }
+  lineEnd() {
+    if (this._line || (this._line !== 0 && this._point === 1)) this._context.closePath();
+    this._line = 1 - this._line;
+  }
+  point(x, y) {
+    [x, y] = [+x, +y];
+    if (this._point === 0) {
+      this._point = 1;
+      if (this._line) this._context.lineTo(x, y);
+      else this._context.moveTo(x, y);
+    } else {
+      this._point = 2;
+      this._context.lineTo(x, y);
+    }
+  }
+}
+
+export function curveLinear(context) {
+  return new Linear(context);
+}
+
+const sign = (x) => (x < 0 ? -1 : 1);
+
+// The slope of the tangent at the middle of three points (Steffen 1990).
+function slope3(that, x2, y2) {
+  const h0 = that._x1 - that._x0;
+  const h1 = x2 - that._x1;
+  const s0 = (that._y1 - that._y0) / (h0 || (h1 < 0 && -0));
+  const s1 = (y2 - that._y1) / (h1 || (h0 < 0 && -0));
+  const p = (s0 * h1 + s1 * h0) / (h0 + h1);
+  return (sign(s0) + sign(s1)) * Math.min(Math.abs(s0), Math.abs(s1), 0.5 * Math.abs(p)) || 0;
+}
+
+// A one-sided slope.
+function slope2(that, t) {
+  const h = that._x1 - that._x0;
+  return h ? ((3 * (that._y1 - that._y0)) / h - t) / 2 : t;
+}
+
+// The cubic Hermite segment to the last point, as a Bézier curve.
+function hermite(that, t0, t1) {
+  const [x0, y0, x1, y1] = [that._x0, that._y0, that._x1, that._y1];
+  const dx = (x1 - x0) / 3;
+  that._context.bezierCurveTo(x0 + dx, y0 + dx * t0, x1 - dx, y1 - dx * t1, x1, y1);
+}
+
+class MonotoneX {
+  constructor(context) {
+    this._context = context;
+  }
+  areaStart() {
+    this._line = 0;
+  }
+  areaEnd() {
+    this._line = NaN;
+  }
+  lineStart() {
+    this._x0 = this._x1 = this._y0 = this._y1 = this._t0 = NaN;
+    this._point = 0;
+  }
+  lineEnd() {
+    if (this._point === 2) this._context.lineTo(this._x1, this._y1);
+    else if (this._point === 3) hermite(this, this._t0, slope2(this, this._t0));
+    if (this._line || (this._line !== 0 && this._point === 1)) this._context.closePath();
+    this._line = 1 - this._line;
+  }
+  point(x, y) {
+    let t1 = NaN;
+    [x, y] = [+x, +y];
+    // Coincident points are left out.
+    if (x === this._x1 && y === this._y1) return;
+    if (this._point === 0) {
+      this._point = 1;
+      if (this._line) this._context.lineTo(x, y);
+      else this._context.moveTo(x, y);
+    } else if (this._point === 1) {
+      this._point = 2;
+    } else if (this._point === 2) {
+      this._point = 3;
+      t1 = slope3(this, x, y);
+      hermite(this, slope2(this, t1), t1);
+    } else {
+      t1 = slope3(this, x, y);
+      hermite(this, this._t0, t1);
+    }
+    [this._x0, this._x1, this._y0, this._y1, this._t0] = [this._x1, x, this._y1, y, t1];
+  }
+}
+
+export function curveMonotoneX(context) {
+  return new MonotoneX(context);
+}
+
+export function line(x, y) {
+  let defined = shapeConstant(true);
+  let context = null;
+  let curve = curveLinear;
+  let output = null;
+  const path = withPath(shape);
+  x = accessor(x, pointX);
+  y = accessor(y, pointY);
+
+  function shape(data) {
+    data = asArray(data);
+    const n = data.length;
+    let d;
+    let defined0 = false;
+    let buffer;
+    if (context == null) output = curve((buffer = path()));
+    for (let i = 0; i <= n; ++i) {
+      if (!(i < n && defined((d = data[i]), i, data)) === defined0) {
+        if ((defined0 = !defined0)) output.lineStart();
+        else output.lineEnd();
+      }
+      if (defined0) output.point(+x(d, i, data), +y(d, i, data));
+    }
+    if (buffer) {
+      output = null;
+      return text(buffer);
+    }
+  }
+
+  shape.x = (...a) =>
+    a.length ? ((x = typeof a[0] === "function" ? a[0] : shapeConstant(+a[0])), shape) : x;
+  shape.y = (...a) =>
+    a.length ? ((y = typeof a[0] === "function" ? a[0] : shapeConstant(+a[0])), shape) : y;
+  shape.defined = (...a) =>
+    a.length
+      ? ((defined = typeof a[0] === "function" ? a[0] : shapeConstant(!!a[0])), shape)
+      : defined;
+  shape.curve = (...a) => {
+    if (!a.length) return curve;
+    curve = a[0];
+    if (context != null) output = curve(context);
+    return shape;
+  };
+  shape.context = (...a) => {
+    if (!a.length) return context;
+    if (a[0] == null) context = output = null;
+    else output = curve((context = a[0]));
+    return shape;
+  };
+  return shape;
+}
+
+export function area(x0, y0, y1) {
+  let x1 = null;
+  let defined = shapeConstant(true);
+  let context = null;
+  let curve = curveLinear;
+  let output = null;
+  const path = withPath(shape);
+  const number = (v) => (typeof v === "function" ? v : shapeConstant(+v));
+  x0 = typeof x0 === "function" ? x0 : x0 === undefined ? pointX : shapeConstant(+x0);
+  y0 = typeof y0 === "function" ? y0 : y0 === undefined ? shapeConstant(0) : shapeConstant(+y0);
+  y1 = typeof y1 === "function" ? y1 : y1 === undefined ? pointY : shapeConstant(+y1);
+
+  function shape(data) {
+    data = asArray(data);
+    const n = data.length;
+    let j;
+    let d;
+    let defined0 = false;
+    let buffer;
+    const x0z = [];
+    const y0z = [];
+    if (context == null) output = curve((buffer = path()));
+    for (let i = 0; i <= n; ++i) {
+      if (!(i < n && defined((d = data[i]), i, data)) === defined0) {
+        if ((defined0 = !defined0)) {
+          j = i;
+          output.areaStart();
+          output.lineStart();
+        } else {
+          output.lineEnd();
+          output.lineStart();
+          for (let k = i - 1; k >= j; --k) output.point(x0z[k], y0z[k]);
+          output.lineEnd();
+          output.areaEnd();
+        }
+      }
+      if (defined0) {
+        [x0z[i], y0z[i]] = [+x0(d, i, data), +y0(d, i, data)];
+        output.point(x1 ? +x1(d, i, data) : x0z[i], y1 ? +y1(d, i, data) : y0z[i]);
+      }
+    }
+    if (buffer) {
+      output = null;
+      return text(buffer);
+    }
+  }
+
+  const arealine = () => line().defined(defined).curve(curve).context(context);
+  shape.x = (...a) => (a.length ? ((x0 = number(a[0])), (x1 = null), shape) : x0);
+  shape.x0 = (...a) => (a.length ? ((x0 = number(a[0])), shape) : x0);
+  shape.x1 = (...a) => (a.length ? ((x1 = a[0] == null ? null : number(a[0])), shape) : x1);
+  shape.y = (...a) => (a.length ? ((y0 = number(a[0])), (y1 = null), shape) : y0);
+  shape.y0 = (...a) => (a.length ? ((y0 = number(a[0])), shape) : y0);
+  shape.y1 = (...a) => (a.length ? ((y1 = a[0] == null ? null : number(a[0])), shape) : y1);
+  shape.lineX0 = shape.lineY0 = () => arealine().x(x0).y(y0);
+  shape.lineY1 = () => arealine().x(x0).y(y1);
+  shape.lineX1 = () => arealine().x(x1).y(y0);
+  shape.defined = (...a) =>
+    a.length
+      ? ((defined = typeof a[0] === "function" ? a[0] : shapeConstant(!!a[0])), shape)
+      : defined;
+  shape.curve = (...a) => {
+    if (!a.length) return curve;
+    curve = a[0];
+    if (context != null) output = curve(context);
+    return shape;
+  };
+  shape.context = (...a) => {
+    if (!a.length) return context;
+    if (a[0] == null) context = output = null;
+    else output = curve((context = a[0]));
+    return shape;
+  };
+  return shape;
 }

@@ -97,4 +97,75 @@ export const checks = {
       scaleQuantize().domain([0.1, 9.7]).nice().domain(),
     ];
   },
+  line: () => {
+    const points = [
+      [0, 10],
+      [10.12345, 40],
+      [20, 25],
+      [35, 25],
+      [50, 60],
+    ];
+    const rows = [
+      { t: 0, v: 3 },
+      { t: 1, v: null },
+      { t: 2, v: 5 },
+      { t: 3, v: 4 },
+      { t: 4, v: 9 },
+    ];
+    const gappy = line()
+      .x((d) => d.t * 20)
+      .y((d) => d.v * 10)
+      .defined((d) => d.v != null);
+    return [
+      line()(points),
+      line().curve(curveMonotoneX)(points),
+      line().digits(1)(points),
+      line().digits(null)(points),
+      gappy(rows),
+      gappy.curve(curveMonotoneX)(rows),
+      line()([]),
+      line()([[1, 2]]),
+      line().curve(curveMonotoneX)([
+        [0, 0],
+        [5, 5],
+      ]),
+      line(
+        (d) => d.x,
+        (d) => d.y,
+      ).curve(curveMonotoneX)([
+        { x: 0, y: 5 },
+        { x: 1, y: 5 },
+        { x: 2, y: 9 },
+        { x: 3, y: 1 },
+        { x: 3, y: 1 },
+        { x: 6, y: 8 },
+      ]),
+    ];
+  },
+  area: () => {
+    const points = [
+      [0, 10],
+      [10, 40],
+      [20, 25],
+      [30, 50],
+    ];
+    const band = area()
+      .x((d) => d[0])
+      .y0((d) => d[1] - 5)
+      .y1((d) => d[1] + 5);
+    return [
+      area()(points),
+      area().y0(100)(points),
+      area().curve(curveMonotoneX).y0(60)(points),
+      band(points),
+      band.lineY1()(points),
+      band.lineY0()(points),
+      area()
+        .defined((d) => d[1] !== 40)
+        .y0(0)(points),
+      area()
+        .x0(0)
+        .x1((d) => d[0])(points),
+    ];
+  },
 };
