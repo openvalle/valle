@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "error": "errors/timeline-keyframe-prop.timeline.json: tracks.visual[0].clips[0].props.label.keyframes[0][1]: keyframes are for number, length, angle, point, rect and color props; a string prop is a constant"
+  },
+  "canvas": { "width": 64, "height": 36, "fps": 4 },
+  "resources": { "card": "../timeline/components/card.motion.tsx" },
+  "tracks": {
+    "visual": [
+      {
+        "clips": [
+          {
+            "kind": "motion",
+            "component": "card",
+            "start": 0,
+            "duration": 1,
+            "props": {
+              "label": {
+                "keyframes": [
+                  [0, "a"],
+                  [1, "b"]
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

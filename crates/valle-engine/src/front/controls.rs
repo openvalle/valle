@@ -244,7 +244,7 @@ fn common(
 }
 
 /// `value` as `kind` takes it, or why it does not.
-fn check(kind: &Kind, value: Value) -> Result<Value, String> {
+pub(crate) fn check(kind: &Kind, value: Value) -> Result<Value, String> {
     let shown = value.to_string();
     let fail = |what: &str| Err(format!("{shown} is not {what}"));
     let numbers = |v: &Value, fields: &[&str]| match v {
