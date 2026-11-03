@@ -259,6 +259,9 @@ fn build_web() -> Result<(), String> {
     )?;
     let dist = package.join("dist");
     let _ = std::fs::remove_dir_all(&dist);
+    // The SDK bundles packages of package.json: mediabunny.
+    let install = ["install", "--frozen-lockfile", "--silent"];
+    run(Command::new("bun").args(install), "bun install")?;
     run(
         Command::new("bun")
             .args([
