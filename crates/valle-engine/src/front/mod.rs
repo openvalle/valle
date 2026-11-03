@@ -9,6 +9,7 @@
 //!
 //! A `Front` runs scene code on the thread that calls it, which needs a stack of more than 12 MiB.
 
+pub mod controls;
 mod lower;
 mod rewrite;
 #[cfg(test)]
@@ -28,6 +29,7 @@ use crate::style::color;
 use crate::template::{Error, Template, V};
 use crate::time::{Rate, Tick};
 
+pub use controls::{Inputs, Prop};
 use lower::{Arg, At};
 pub use rewrite::{Holds, Slot};
 
@@ -71,8 +73,12 @@ struct Module {
 
 pub struct Front {
     pub composition: Composition,
-    /// The resources the scene declares, each default a path joined to the scene's folder.
+    /// The props the scene declares.
+    pub props: Vec<Prop>,
+    /// The resources it declares, each default a path joined to the scene's folder.
     pub resources: Vec<Slot>,
+    /// What its root component takes: the props' values, as JSON.
+    values: String,
     entry: String,
     modules: Vec<Module>,
     /// `path:line:col` of each site the rewrite numbered.
@@ -85,9 +91,13 @@ pub struct Front {
 }
 
 impl Front {
-    /// Loads the scene at `entry` and the project modules it imports; `read` gives a file's text
-    /// by its `/`-separated path.
-    pub fn load(entry: &str, read: &dyn Fn(&str) -> Option<String>) -> Result<Front, Error> {
+    /// Loads the scene at `entry` and the project modules it imports, its controls bound to
+    /// `inputs`; `read` gives a file's text by its `/`-separated path.
+    pub fn load(
+        entry: &str,
+        read: &dyn Fn(&str) -> Option<String>,
+        inputs: &Inputs,
+    ) -> Result<Front, Error> {
         let text = read(entry).ok_or_else(|| format!("{entry}: not found"))?;
         let mut loader = Loader {
             read,
@@ -110,6 +120,9 @@ impl Front {
                 }),
             })
             .collect();
+        let props = scene.props.clone();
+        let values = controls::values(&props, inputs).map_err(|e| format!("{entry}: {e}"))?;
+        let values = serde_json::Value::Object(values).to_string();
         let composition = scene.composition.ok_or_else(|| {
             format!(
                 "{entry}: a scene exports its composition, such as `export const composition \
@@ -145,7 +158,9 @@ impl Front {
             .collect();
         let front = Front {
             composition,
+            props,
             resources,
+            values,
             entry: entry.to_string(),
             modules,
             sites: loader.sites,
@@ -229,6 +244,7 @@ impl Front {
                     clock.seconds,
                     clock.progress,
                     composition,
+                    self.values.as_str(),
                 ))
                 .map_err(|e| self.describe(&ctx, e))
         })?;

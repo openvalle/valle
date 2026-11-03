@@ -26,9 +26,11 @@ fn big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
 }
 
 fn load(source: &'static str) -> Result<Scene, Error> {
-    Scene::load("s.tsx", &|path| {
-        (path == "s.tsx").then(|| source.as_bytes().to_vec())
-    })
+    Scene::load(
+        "s.tsx",
+        &|path| (path == "s.tsx").then(|| source.as_bytes().to_vec()),
+        &Inputs::default(),
+    )
 }
 
 #[test]
@@ -116,7 +118,7 @@ export default function Scene() {
             }
         };
         let read = files(source.into(), Some(image.clone()));
-        let mut scene = Scene::load("scenes/s.tsx", &read).unwrap();
+        let mut scene = Scene::load("scenes/s.tsx", &read, &Inputs::default()).unwrap();
         // The default from the scene's folder.
         assert_eq!(scene.resources()[0].default.as_deref(), Some("img/dot.png"));
         assert_eq!(scene.images()[0].size, [2, 1]);
@@ -129,13 +131,15 @@ export default function Scene() {
         assert!(matches!(&frame.items[..], [Item::Image { image: 0, .. }]));
 
         let read = files(source.replace("://dot", "://logo"), Some(image));
-        let e = Scene::load("scenes/s.tsx", &read)
+        let e = Scene::load("scenes/s.tsx", &read, &Inputs::default())
             .and_then(|mut s| s.frame(Tick(0)).map(drop))
             .unwrap_err();
         assert!(e.starts_with("scenes/s.tsx:6:"), "{e}");
         assert!(e.contains("declares no resource logo"), "{e}");
         let read = files(source.into(), None);
-        let e = Scene::load("scenes/s.tsx", &read).err().unwrap();
+        let e = Scene::load("scenes/s.tsx", &read, &Inputs::default())
+            .err()
+            .unwrap();
         assert!(e.contains("resource dot: img/dot.png: not found"), "{e}");
     });
 }
@@ -166,7 +170,7 @@ export default function Scene() {
             "scenes/dot.png" => Some(image.clone()),
             _ => None,
         };
-        let frame = Scene::load("scenes/s.tsx", &read)
+        let frame = Scene::load("scenes/s.tsx", &read, &Inputs::default())
             .unwrap()
             .frame(Tick(0))
             .unwrap();
@@ -227,7 +231,8 @@ export default function Scene() {
                 _ => None,
             }
         };
-        let mut scene = Scene::load("scenes/s.tsx", &files(source.into())).unwrap();
+        let mut scene =
+            Scene::load("scenes/s.tsx", &files(source.into()), &Inputs::default()).unwrap();
         // The images display lists name are the files that are not SVG.
         assert_eq!(scene.images().len(), 1);
         assert!(matches!(
@@ -248,7 +253,7 @@ export default function Scene() {
         ));
 
         let source = source.replace("url(resource://dot)", "url(resource://icon)");
-        let e = Scene::load("scenes/s.tsx", &files(source.clone()))
+        let e = Scene::load("scenes/s.tsx", &files(source.clone()), &Inputs::default())
             .and_then(|mut s| s.frame(Tick(0)).map(drop))
             .unwrap_err();
         assert!(e.starts_with("scenes/s.tsx:13:"), "{e}");
@@ -263,7 +268,9 @@ export default function Scene() {
             }
             _ => files(source.clone())(path),
         };
-        let e = Scene::load("scenes/s.tsx", &broken).err().unwrap();
+        let e = Scene::load("scenes/s.tsx", &broken, &Inputs::default())
+            .err()
+            .unwrap();
         assert_eq!(
             e,
             "scenes/s.tsx: resource icon: scenes/icon.svg: 1:41: <text> is not supported yet"

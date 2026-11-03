@@ -29,6 +29,7 @@
   const isArray = Array.isArray;
   const nativeFrom = Array.from;
   const stringify = JSON.stringify;
+  const parse = JSON.parse;
   const NativeError = Error;
   const NativeNumber = Number;
 
@@ -476,6 +477,9 @@
   function resource(slot) {
     return slot;
   }
+
+  // A prop of `controls.props` of a kind, which tools read without running the scene.
+  const propKind = (kind) => (options) => ({ kind, ...options });
 
   const EXTRAPOLATE = ["clamp", "extend"];
   const INTERPOLATE = ["easing", "colorSpace", "hue", "extrapolateLeft", "extrapolateRight"];
@@ -1506,7 +1510,7 @@
   }
 
   // Traces the scene `entry` at a time; returns the variant as JSON.
-  function __trace(entry, seconds, progress, composition) {
+  function __trace(entry, seconds, progress, composition, props) {
     G = {
       guards: [],
       when: [],
@@ -1526,7 +1530,7 @@
         throw new TypeError("the scene's default export must be its root component, a function");
       }
       const roots = [];
-      render(__h(scene.default, {}), roots, -1);
+      render(__h(scene.default, parse(props)), roots, -1);
       return stringify(serialize(roots, G.guards));
     } finally {
       G = null;
@@ -1814,5 +1818,14 @@
     Mask: "Mask",
     Image: "Image",
     resource,
+    number: propKind("number"),
+    string: propKind("string"),
+    boolean: propKind("boolean"),
+    color: propKind("color"),
+    select: propKind("select"),
+    point: propKind("point"),
+    length: propKind("length"),
+    angle: propKind("angle"),
+    rect: propKind("rect"),
   });
 })();

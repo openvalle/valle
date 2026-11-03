@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use valle_engine::front::Inputs;
 use valle_engine::gpu::{Gpu, Renderer};
 use valle_engine::scene::Scene;
 use valle_engine::time::Tick;
@@ -527,7 +528,7 @@ impl Runner {
         each: &mut dyn FnMut(&mut Scene, i64, Tick) -> Result<(), String>,
     ) -> Result<(), Failure> {
         let read = |path: &str| self.bytes(path);
-        let mut scene = Scene::load(case, &read).map_err(Failure::Scene)?;
+        let mut scene = Scene::load(case, &read, &Inputs::default()).map_err(Failure::Scene)?;
         let c = scene.composition();
         if c.width > MAX_SIZE || c.height > MAX_SIZE {
             let e = format!("cases are at most {MAX_SIZE} × {MAX_SIZE} px");

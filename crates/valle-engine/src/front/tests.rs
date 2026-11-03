@@ -18,11 +18,16 @@ fn big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
 
 /// A front over `files`, the first of them the scene.
 fn load(files: &[(&str, &str)]) -> Result<Front, Error> {
+    load_bound(files, &Inputs::default())
+}
+
+/// A front over `files`, its controls bound to `inputs`.
+fn load_bound(files: &[(&str, &str)], inputs: &Inputs) -> Result<Front, Error> {
     let map: BTreeMap<String, String> = files
         .iter()
         .map(|(path, text)| (path.to_string(), text.to_string()))
         .collect();
-    Front::load(files[0].0, &|path| map.get(path).cloned())
+    Front::load(files[0].0, &|path| map.get(path).cloned(), inputs)
 }
 
 /// A front over one scene, `HEAD` then `body`.
@@ -694,5 +699,148 @@ fn errors_point_at_the_source() {
             e.starts_with("s.tsx: a scene exports its composition"),
             "{e}"
         );
+    });
+}
+
+#[test]
+fn props_are_bound_or_take_their_defaults() {
+    big_stack(|| {
+        let source = format!(
+            "{HEAD}export const controls = {{
+  props: {{
+    title: string({{ default: \"Valle\" }}),
+    count: number({{ default: 3, min: 1, max: 9, step: 1 }}),
+    theme: select({{ values: [\"light\", \"dark\"], required: true }}),
+    at: point({{ default: {{ x: 1, y: -2 }}, label: \"Where\" }}),
+  }},
+}};
+export default function Scene({{ title, count, theme, at }}) {{
+  return <Text>{{title}} {{count}} {{theme}} {{at.y}}</Text>;
+}}
+"
+        );
+        let bound = |json: &str| {
+            let props = serde_json::from_str(json).expect("JSON");
+            load_bound(&[("scene.motion.tsx", &source)], &Inputs { props })
+        };
+        let mut f = bound(r#"{ "theme": "dark" }"#).unwrap();
+        assert_eq!(
+            f.props[1].kind,
+            controls::Kind::Number {
+                min: Some(1.0),
+                max: Some(9.0),
+                step: Some(1.0)
+            }
+        );
+        assert!(f.props[2].required);
+        assert_eq!(f.props[3].label.as_deref(), Some("Where"));
+        assert_eq!(texts(&at(&mut f, "0")), ["Valle 3 dark -2"]);
+        let mut f = bound(r#"{ "theme": "light", "count": 5, "title": "Hi" }"#).unwrap();
+        assert_eq!(texts(&at(&mut f, "0")), ["Hi 5 light -2"]);
+        for (json, want) in [
+            (
+                "{}",
+                "props.theme: it is required, and nothing is bound to it",
+            ),
+            (
+                r#"{ "theme": "blue" }"#,
+                r#"props.theme: "blue" is not one of "light", "dark""#,
+            ),
+            (
+                r#"{ "theme": "dark", "count": 2.5 }"#,
+                "props.count: 2.5 is not on its steps of 1",
+            ),
+            (
+                r#"{ "theme": "dark", "count": 10 }"#,
+                "props.count: 10 is over its max, 9",
+            ),
+            (
+                r#"{ "theme": "dark", "at": { "x": 1 } }"#,
+                r#"props.at: {"x":1} is not a point, { x, y }"#,
+            ),
+            (
+                r#"{ "theme": "dark", "size": 1 }"#,
+                "props: the scene declares no prop size in controls.props",
+            ),
+        ] {
+            let e = bound(json).err().expect(json);
+            assert_eq!(e, format!("scene.motion.tsx: {want}"), "{json}");
+        }
+    });
+}
+
+#[test]
+fn props_are_declared_as_literals_of_their_kinds() {
+    big_stack(|| {
+        for (prop, want) in [
+            (
+                "n: number({ default: 0, min: 1 })",
+                "prop n: 0 is under its min, 1",
+            ),
+            (
+                "n: number({ min: 2, max: 1 })",
+                "prop n: its min, 2, is over its max, 1",
+            ),
+            (
+                "n: number({ step: 0 })",
+                "prop n: its step, 0, is not over 0",
+            ),
+            (
+                "n: number({ unit: \"px\" })",
+                "prop n: number() takes no option unit",
+            ),
+            (
+                "s: string({ default: \"a\", required: true })",
+                "prop s: a prop with a default is never missing",
+            ),
+            (
+                "c: color({ default: \"nope\" })",
+                "prop c: \"nope\" is not a CSS color",
+            ),
+            (
+                "l: length({ default: \"24\" })",
+                "prop l: \"24\" is not a CSS length",
+            ),
+            ("a: angle({ default: 15 })", "prop a: 15 is not a CSS angle"),
+            (
+                "r: rect({ default: { x: 0, y: 0, width: 1 } })",
+                "is not a rect",
+            ),
+            ("t: select({ values: [] })", "prop t: select() needs values"),
+            ("v: vector()", "prop v: vector is not a kind of prop"),
+            ("v: 3", "prop v: write its kind and options"),
+            (
+                "v: string({ default: title })",
+                "prop v: its values are literals",
+            ),
+            (
+                "\"my-prop\": string()",
+                "prop name \"my-prop\" is not 1 to 64 ASCII letters",
+            ),
+        ] {
+            let e = error(&format!(
+                "export const controls = {{ props: {{ {prop} }} }};
+export default function Scene() {{
+  return null;
+}}
+"
+            ));
+            assert!(e.starts_with("scene.motion.tsx:2:"), "{prop}: {e}");
+            assert!(e.contains(want), "{prop}: {e}");
+        }
+        let f = scene(
+            "export const controls = { props: {
+  l: length({ default: \"2em\" }),
+  a: angle({ default: \"-0.5turn\" }),
+  c: color({ default: \"oklch(70% 0.1 200)\" }),
+  r: rect({ default: { x: 0, y: 0, width: 4, height: 3 } }),
+  b: boolean({ default: false }),
+} };
+export default function Scene() {
+  return null;
+}
+",
+        );
+        assert_eq!(f.props.len(), 5);
     });
 }

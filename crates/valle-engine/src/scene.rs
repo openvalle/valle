@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::eval::{self, Clock};
-use crate::front::{Composition, Front, Holds, Slot};
+use crate::front::{Composition, Front, Holds, Inputs, Slot};
 use crate::image::{Image, Picture};
 use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
@@ -45,12 +45,17 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// Loads the scene at `entry` as `Front::load` does, and the files of its resources; `read`
-    /// gives a file's bytes by its `/`-separated path. Like a `Front`, a scene runs scene code on
-    /// the thread that calls it, which needs a stack of more than 12 MiB.
-    pub fn load(entry: &str, read: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<Scene, Error> {
+    /// Loads the scene at `entry` as `Front::load` does, its controls bound to `inputs`, and the
+    /// files of its resources; `read` gives a file's bytes by its `/`-separated path. Like a
+    /// `Front`, a scene runs scene code on the thread that calls it, which needs a stack of more
+    /// than 12 MiB.
+    pub fn load(
+        entry: &str,
+        read: &dyn Fn(&str) -> Option<Vec<u8>>,
+        inputs: &Inputs,
+    ) -> Result<Scene, Error> {
         let text = |path: &str| read(path).and_then(|b| String::from_utf8(b).ok());
-        let front = Front::load(entry, &text)?;
+        let front = Front::load(entry, &text, inputs)?;
         let mut images = Vec::new();
         let mut pictures = Vec::new();
         let mut text = Text::new()?;

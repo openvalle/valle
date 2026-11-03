@@ -9,7 +9,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use valle_engine::front::Front;
+use valle_engine::front::{Front, Inputs};
 use valle_engine::template::{Kind, Piece, Prop, V};
 use valle_engine::time::Tick;
 
@@ -132,7 +132,7 @@ fn run(repo: &Path, source: &str) -> Result<BTreeMap<String, Value>, String> {
         "d3/checks.js" => Some(source.to_string()),
         _ => std::fs::read_to_string(root.join(p)).ok(),
     };
-    let mut front = Front::load("d3/run.tsx", &read)?;
+    let mut front = Front::load("d3/run.tsx", &read, &Inputs::default())?;
     let frame = front.frame(Tick::ZERO)?;
     let text = (frame.template.nodes.iter())
         .find_map(|n| match &n.kind {

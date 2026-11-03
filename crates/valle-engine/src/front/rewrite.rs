@@ -47,6 +47,7 @@ use oxc::syntax::scope::ScopeFlags;
 use oxc::transformer::{JsxRuntime, TransformOptions, Transformer};
 
 use super::Composition;
+use super::controls::{self, Prop};
 use crate::time::{Rate, Tick};
 
 /// A place in the source where the runtime may record a guard or an element.
@@ -69,7 +70,9 @@ pub struct Rewritten {
     pub lines: Vec<u32>,
     /// The module's `composition` export, read without running it.
     pub composition: Option<Composition>,
-    /// The resources its `controls` export declares, read without running it.
+    /// The props its `controls` export declares, read without running it.
+    pub props: Vec<Prop>,
+    /// The resources it declares.
     pub resources: Vec<Slot>,
 }
 
@@ -125,7 +128,7 @@ pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten,
         format!("{line}:{col}: {e}")
     };
     let composition = composition(&program).map_err(at)?;
-    let resources = controls(&program).map_err(at)?;
+    let (props, resources) = controls(&program).map_err(at)?;
     let mut classes = Classes(None);
     classes.visit_program(&program);
     if let Some(e) = classes.0 {
@@ -243,6 +246,7 @@ pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten,
         free,
         lines,
         composition,
+        props,
         resources,
     })
 }
@@ -358,7 +362,7 @@ fn exported<'b, 'a>(
     None
 }
 
-fn bare<'b, 'a>(mut e: &'b Expression<'a>) -> &'b Expression<'a> {
+pub(super) fn bare<'b, 'a>(mut e: &'b Expression<'a>) -> &'b Expression<'a> {
     loop {
         e = match e {
             Expression::TSAsExpression(x) => &x.expression,
@@ -370,7 +374,7 @@ fn bare<'b, 'a>(mut e: &'b Expression<'a>) -> &'b Expression<'a> {
 }
 
 /// A property's name, when it is written out.
-fn key<'b>(p: &'b ObjectProperty<'_>) -> Option<&'b str> {
+pub(super) fn key<'b>(p: &'b ObjectProperty<'_>) -> Option<&'b str> {
     match &p.key {
         PropertyKey::StaticIdentifier(n) if !p.computed => Some(n.name.as_str()),
         PropertyKey::StringLiteral(s) => Some(s.value.as_str()),
@@ -378,11 +382,11 @@ fn key<'b>(p: &'b ObjectProperty<'_>) -> Option<&'b str> {
     }
 }
 
-/// The `controls` export's resources, `resources: { logo: resource({ kind: "image", default:
-/// "./logo.png" }) }`, which tools read without running the scene.
-fn controls(program: &Program<'_>) -> Result<Vec<Slot>, (u32, String)> {
+/// The `controls` export's props and resources, `resources: { logo: resource({ kind: "image",
+/// default: "./logo.png" }) }`, which tools read without running the scene.
+fn controls(program: &Program<'_>) -> Result<(Vec<Prop>, Vec<Slot>), (u32, String)> {
     let Some((at, init)) = exported(program, "controls") else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     };
     let literal = |at: u32, what: &str| {
         (
@@ -393,17 +397,24 @@ fn controls(program: &Program<'_>) -> Result<Vec<Slot>, (u32, String)> {
     let Some(Expression::ObjectExpression(object)) = init else {
         return Err(literal(at, "controls"));
     };
-    let mut slots = Vec::new();
+    let (mut props, mut slots) = (Vec::new(), Vec::new());
     for p in &object.properties {
         let ObjectPropertyKind::ObjectProperty(p) = p else {
             return Err(literal(p.span().start, "controls"));
         };
         match key(p) {
             Some("resources") => {}
-            Some(k @ ("props" | "data")) => {
-                return Err((p.span.start, format!("controls.{k} is not supported yet")));
+            Some("props") => {
+                let Expression::ObjectExpression(o) = bare(&p.value) else {
+                    return Err(literal(p.span.start, "controls.props"));
+                };
+                props = controls::props(o)?;
+                continue;
             }
-            _ => return Err((p.span.start, "controls takes resources".into())),
+            Some("data") => {
+                return Err((p.span.start, "controls.data is not supported yet".into()));
+            }
+            _ => return Err((p.span.start, "controls takes props and resources".into())),
         }
         let Expression::ObjectExpression(resources) = bare(&p.value) else {
             return Err(literal(p.span.start, "controls.resources"));
@@ -431,7 +442,7 @@ fn controls(program: &Program<'_>) -> Result<Vec<Slot>, (u32, String)> {
             slots.push(slot);
         }
     }
-    Ok(slots)
+    Ok((props, slots))
 }
 
 /// `resource({ kind: "image", default: "…" })`.
@@ -1184,12 +1195,12 @@ mod tests {
                 "2:14: controls must be an object",
             ),
             (
-                "export const controls = { props: {} };",
-                "controls.props is not supported yet",
+                "export const controls = { data: {} };",
+                "controls.data is not supported yet",
             ),
             (
                 "export const controls = { fonts: {} };",
-                "controls takes resources",
+                "controls takes props and resources",
             ),
             (
                 "export const controls = { resources: { a: { kind: \"image\" } } };",
