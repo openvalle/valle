@@ -677,6 +677,40 @@
   const noise1d = (seed, x) => noise("noise1d", seed, [x]);
   const noise2d = (seed, x, y) => noise("noise2d", seed, [x, y]);
 
+  // `formatNumber(value, { decimals, grouping })`, `formatPercent(value, { decimals, grouping })`
+  // and `padNumber(value, { width })`: text as `Intl.NumberFormat("en-US")` writes it, remade
+  // every frame for a value that changes with time. The options are fixed.
+  function formatted(name, value, options, kind, allowed) {
+    const o = options ?? {};
+    if (keys(o).some((k) => !allowed.includes(k))) {
+      throw new TypeError(name + " takes " + allowed.join(" and "));
+    }
+    const fix = (v) => (v instanceof T ? exact(v, name, site()) : v);
+    const whole = (v, least, most) => Number.isInteger(v) && v >= least && v <= most;
+    let spec;
+    if (kind === "pad") {
+      const width = fix(o.width);
+      if (!whole(width, 1, 21))
+        throw new TypeError(name + " width must be a whole number, 1 to 21");
+      spec = ["pad", width, false];
+    } else {
+      const [decimals, grouping] = [fix(o.decimals), fix(o.grouping ?? true)];
+      if (decimals !== undefined && !whole(decimals, 0, 100)) {
+        throw new TypeError(name + " decimals must be a whole number, 0 to 100");
+      }
+      if (typeof grouping !== "boolean")
+        throw new TypeError(name + " grouping must be true or false");
+      spec = [kind, decimals ?? "", grouping];
+    }
+    if (!numeric(value)) throw new TypeError(name + " takes a number");
+    const op = "format|" + spec.join("|");
+    return isT(value) ? mk(op, [value]) : host.op(op, [value]);
+  }
+  const NUMBER = ["decimals", "grouping"];
+  const formatNumber = (v, o) => formatted("formatNumber", v, o, "number", NUMBER);
+  const formatPercent = (v, o) => formatted("formatPercent", v, o, "percent", NUMBER);
+  const padNumber = (v, o) => formatted("padNumber", v, o, "pad", ["width"]);
+
   // `clamp(x, min, max)` as CSS clamps: `min` wins over `max`.
   const clamp = (x, min, max) => {
     if (![x, min, max].every(numeric)) throw new TypeError("clamp(x, min, max) takes numbers");
@@ -1409,6 +1443,9 @@
     wiggle,
     wiggle2D,
     seededRandom,
+    formatNumber,
+    formatPercent,
+    padNumber,
     noise1d,
     noise2d,
     clamp,

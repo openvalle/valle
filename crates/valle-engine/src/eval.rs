@@ -77,6 +77,7 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
         Op::Stage(input, stage) => V::Num(stage.at(num(input))),
         Op::Table(input, table) => V::Num(table.at(num(input))),
         Op::Wiggle(input, wiggle) => V::Num(wiggle.at(num(input))),
+        Op::Format(input, format) => V::Str(Rc::from(format.text(num(input)))),
         Op::Noise(seed, args) => V::Num(match args[..] {
             [x] => noise::noise1(*seed, 0, num(&x)),
             [x, y] => noise::noise2(*seed, num(&x), num(&y)),

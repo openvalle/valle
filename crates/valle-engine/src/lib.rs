@@ -3,6 +3,7 @@
 
 pub mod ease;
 pub mod eval;
+pub mod format;
 pub mod front;
 pub mod gpu;
 pub mod image;

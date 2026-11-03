@@ -7,6 +7,7 @@ use std::rc::Rc;
 use serde::Deserialize;
 
 use crate::ease::Easing;
+use crate::format::Format;
 use crate::js::MathFn;
 use crate::noise::Wiggle;
 use crate::spring::Spring;
@@ -43,6 +44,9 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
     if let Some(f) = name.strip_prefix("math|") {
         let f = MathFn::parse(f).ok_or_else(|| format!("no Math function {f}"))?;
         return Ok(Op::Math(f, exprs()?));
+    }
+    if let Some(spec) = name.strip_prefix("format|") {
+        return Ok(Op::Format(fixed(1)?[0], Format::parse(spec)?));
     }
     if let Some(seed) = name.strip_prefix("noise|") {
         let seed = seed.parse().map_err(|_| format!("noise seed {seed}"))?;

@@ -45,6 +45,43 @@ const EASINGS = [
   "linear(0, 0.5 60%, 0.2 40%, 1)",
 ];
 
+/** The formats and numbers `format.rs` is tested against, as text so -0 and NaN survive JSON. */
+const FORMATS = [
+  "number||true",
+  "number||false",
+  "number|0|true",
+  "number|2|true",
+  "number|5|false",
+  "percent||true",
+  "percent|1|true",
+  "pad|2|false",
+  "pad|4|false",
+];
+const VALUES = [
+  "0",
+  "-0",
+  "0.5",
+  "1.5",
+  "2.5",
+  "-2.5",
+  "1.005",
+  "0.125",
+  "-0.0001",
+  "0.0145",
+  "7",
+  "999.5",
+  "999.9995",
+  "1234567.891",
+  "-1234.5678",
+  "0.000001234",
+  "5e-324",
+  "1e21",
+  "123456789012345680000",
+  "NaN",
+  "Infinity",
+  "-Infinity",
+];
+
 type Measured = {
   boxes: number[][];
   lines: Record<string, string[]>;
@@ -184,9 +221,16 @@ async function draw() {
     const easings = Object.entries(curves.value as Record<string, number[]>)
       .map(([e, v]) => `  ${JSON.stringify(e)}: ${JSON.stringify(v)}`)
       .join(",\n");
+    const { result: texts } = await page("Runtime.evaluate", {
+      expression: `(${written})(${JSON.stringify(FORMATS)}, ${JSON.stringify(VALUES)})`,
+      returnByValue: true,
+    });
+    const formats = Object.entries(texts.value as Record<string, string>)
+      .map(([k, v]) => `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`)
+      .join(",\n");
     await Bun.write(
       join(root, "tests/baselines/chrome/properties.json"),
-      `{\n "chrome": ${JSON.stringify(version)},\n "properties": [\n${properties}\n ],\n "easings": {\n${easings}\n }\n}\n`,
+      `{\n "chrome": ${JSON.stringify(version)},\n "properties": [\n${properties}\n ],\n "easings": {\n${easings}\n },\n "formats": {\n${formats}\n }\n}\n`,
     );
     await cdp.send("Browser.close").catch(() => {});
   } finally {
@@ -423,6 +467,30 @@ function eased(easings: string[]): Record<string, number[]> {
       return animation.effect!.getComputedTiming().progress!;
     });
     animation.cancel();
+  }
+  return out;
+}
+
+/**
+ * Runs in the page: each number as `Intl.NumberFormat("en-US")` writes it for each format, keyed
+ * `format|value`, as `format.rs` reads the formats.
+ */
+function written(formats: string[], values: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const format of formats) {
+    const [kind, n, grouping] = format.split("|");
+    const options: Intl.NumberFormatOptions =
+      kind === "pad"
+        ? { minimumIntegerDigits: Number(n), useGrouping: false, maximumFractionDigits: 0 }
+        : {
+            style: kind === "percent" ? "percent" : "decimal",
+            useGrouping: grouping === "true",
+            ...(n === ""
+              ? {}
+              : { minimumFractionDigits: Number(n), maximumFractionDigits: Number(n) }),
+          };
+    const intl = new Intl.NumberFormat("en-US", options);
+    for (const value of values) out[`${format}|${value}`] = intl.format(Number(value));
   }
   return out;
 }

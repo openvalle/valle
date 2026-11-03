@@ -64,6 +64,9 @@ pub struct Properties {
     /// Each easing's progress at twenty-firsts of the way, which `ease.rs` is tested against.
     #[serde(default)]
     pub easings: BTreeMap<String, Vec<f64>>,
+    /// Numbers as `Intl.NumberFormat` writes them, which `format.rs` is tested against.
+    #[serde(default)]
+    pub formats: BTreeMap<String, String>,
 }
 
 /// A baseline to draw: the HTML, the canvas size, and its path without the extension.

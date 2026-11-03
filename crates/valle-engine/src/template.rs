@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::ease::Easing;
+use crate::format::Format;
 use crate::noise::Wiggle;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
@@ -105,6 +106,8 @@ pub enum Op {
     /// A field of a simulation at the input time.
     Table(u32, Rc<Table>),
     Wiggle(u32, Wiggle),
+    /// A number as text.
+    Format(u32, Format),
     /// `noise1d(seed, x)` with one operand, `noise2d(seed, x, y)` with two.
     Noise(u64, Vec<u32>),
     /// `spring(t)`, or its velocity.
