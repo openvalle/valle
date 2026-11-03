@@ -3,6 +3,7 @@
 //! outside, checked against their declarations. The root component takes both as its props.
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use oxc::ast::ast::{
     ArrayExpressionElement, Expression, ObjectExpression, ObjectPropertyKind, UnaryOperator,
@@ -12,6 +13,7 @@ use serde_json::{Map, Number, Value};
 
 use super::rewrite::{bare, key};
 use crate::style::{color, css};
+use crate::template::Clips;
 
 /// A prop `controls.props` declares, or data `controls.data` does.
 #[derive(Clone, Debug, PartialEq)]
@@ -71,6 +73,8 @@ pub struct Inputs {
     pub pictures: BTreeMap<String, String>,
     /// The caption a `captionPresenter()` shows, `{ text, runs }`, in place of its placeholder.
     pub caption: Option<Value>,
+    /// The clip table of the scene a Timeline lowers to, which its clips' `TimeScope`s name.
+    pub clips: Rc<Clips>,
 }
 
 /// The props of `controls.props`, an object of `name: number({ … })` and the like.

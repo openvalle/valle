@@ -16,3 +16,4 @@ png.workspace = true
 serde_json.workspace = true
 valle-engine = { path = "../valle-engine" }
 valle-native = { path = "../valle-native" }
+valle-timeline = { path = "../valle-timeline" }

@@ -770,7 +770,7 @@ fn import(line: &str, dir: &str) -> Result<(String, String), String> {
 }
 
 /// Whether a resource's file is on the web.
-pub(super) fn web(location: &str) -> bool {
+pub(crate) fn web(location: &str) -> bool {
     location.starts_with("http://") || location.starts_with("https://")
 }
 

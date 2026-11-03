@@ -2302,6 +2302,7 @@ dependencies = [
  "serde_json",
  "valle-engine",
  "valle-native",
+ "valle-timeline",
 ]
 
 [[package]]
@@ -2326,6 +2327,7 @@ dependencies = [
  "taffy",
  "unicode-segmentation",
  "valle-native",
+ "valle-timeline",
  "vello_cpu",
  "wgpu",
  "wuff",
@@ -2368,6 +2370,13 @@ dependencies = [
  "serde_json",
  "ureq",
  "valle-ffmpeg",
+]
+
+[[package]]
+name = "valle-timeline"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

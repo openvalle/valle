@@ -4,6 +4,7 @@
 mod args;
 mod motion;
 mod picture;
+mod timeline;
 mod video;
 
 use std::process::ExitCode;
@@ -22,8 +23,11 @@ usage: valle <command> [options]
   motion check <scene.tsx>             compile the scene and check every frame without drawing
   motion render <scene.tsx> -o <out>   draw frames: <out> is a .png (one frame), a folder (a
                                        sequence), or a .mp4 or .mov video
+  timeline check <edit.timeline.json>  check the document, its clips' sources and every frame
+  timeline render <edit.timeline.json> -o <out>
+                                       draw the timeline's frames, as motion render does
 
-options of both:
+options of motion:
   --props <json|@file>        values of the props controls.props declares
   --data <json|@file>         values of the data controls.data declares
   --resource <name>=<path>    a file bound to a resource; a font's faces, once each
@@ -31,7 +35,7 @@ options of both:
   --caption <json|@file>      the caption a captionPresenter() shows
   --json                      print the result as JSON
 
-options of render:
+options of render (motion and timeline):
   --frame <n>                 the frame a .png shows (0)
   --frames <a,b,…|a..b>       the frames to draw (all)
   --storyboard                draw the frames side by side into the one .png
@@ -118,14 +122,27 @@ fn run(words: &[String]) -> (Result<Value, Failure>, bool) {
     let json = words.iter().any(|w| w == "--json");
     let result = (|| {
         let usage = || Failure::new("usage", "no such command").hint(USAGE.trim_end());
-        let (command, rest) = match words {
-            [group, command, rest @ ..] if group == "motion" => (command.as_str(), rest),
+        let (group, command, rest) = match words {
+            [group, command, rest @ ..] if group == "motion" || group == "timeline" => {
+                (group.as_str(), command.as_str(), rest)
+            }
             [help] if help == "--help" || help == "help" => {
                 return Ok(json!({ "status": "ok", "usage": USAGE }));
             }
             _ => return Err(usage()),
         };
         let args = Args::parse(rest)?;
+        let document = args.file.ends_with(".timeline.json");
+        if group == "motion" && document {
+            return Err(Failure::new("usage", "a .timeline.json is a timeline")
+                .hint(format!("valle timeline {command} {}", args.file)));
+        }
+        if group == "timeline" && !document {
+            return Err(Failure::new(
+                "usage",
+                "valle timeline takes a .timeline.json",
+            ));
+        }
         match command {
             "check" => motion::check(&args),
             "render" => motion::render(&args),

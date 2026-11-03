@@ -46,7 +46,13 @@ pub trait Read {
     /// The frame shown `at` ticks into the video, the last that starts at or before then, or the
     /// first: straight sRGB RGBA, rows top down.
     fn frame(&mut self, at: i64) -> Result<Vec<u8>, String>;
+    /// When the frame it decoded last starts, in ticks: from there to `AHEAD` past it, it decodes
+    /// on rather than seeks.
+    fn position(&self) -> Option<i64>;
 }
+
+/// How far past the frame a reader decoded last it decodes on rather than seeks: 2 s, in ticks.
+pub const AHEAD: i64 = 2 * TICKS_PER_SECOND;
 
 /// The frames of the video at `path`, decoded as `decoding` says: by default the hardware's on
 /// macOS where it opens, else FFmpeg's own.
@@ -64,6 +70,15 @@ pub fn reader(path: &Path, decoding: Option<Decoding>) -> Result<Box<dyn Read>, 
             open(Decoding::Hardware).or_else(|_| open(Decoding::Software))
         }
         None => open(Decoding::Software),
+    }
+}
+
+/// How long the video in the file at `path` is, in ticks.
+pub fn length(path: &Path) -> Result<i64, String> {
+    match version()? {
+        Version::V7 => v7::decode::length(path),
+        Version::V8 => v8::decode::length(path),
+        Version::V9 => v9::decode::length(path),
     }
 }
 

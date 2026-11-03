@@ -1,8 +1,10 @@
 //! The case runner: every scene under `tests/cases` is a case, and so is each scene the support
 //! table makes (see `properties.rs`). Cases run in parallel.
 //!
-//! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`;
-//!   a `…` in it stands for any text.
+//! - A case is a scene, `.tsx`, or a Timeline document, `.timeline.json`; the components the
+//!   documents play are in `components/` folders, which are not cases.
+//! - A case in `errors/` names the error it must fail with on its first line, as `// error: …`,
+//!   or a document in its metadata, `"error": "…"`; a `…` in it stands for any text.
 //! - A case in `css/`, `svg/` or `tailwind/` is standard CSS, SVG or Tailwind: each frame is
 //!   printed as HTML, and its boxes and lines must be where Chrome puts them, each box edge within
 //!   1/32 px. The Chrome baselines are drawn here when missing or out of date (see `chrome.rs`),
@@ -34,6 +36,7 @@ use valle_engine::image::Image;
 use valle_engine::scene::{Scene, Video};
 use valle_engine::text::{BUILT_IN, Blob, BuiltIn, Fonts};
 use valle_engine::time::Tick;
+use valle_engine::timeline;
 use valle_native::media::{self, Decoding};
 use valle_native::urls::UrlCache;
 
@@ -239,7 +242,7 @@ fn select<'a>(
     cases.sort();
     let named = |case: &str, filter: &str| {
         let f = filter.trim_end_matches('/');
-        case == f || case.strip_suffix(".tsx") == Some(f) || case.starts_with(&format!("{f}/"))
+        case == f || stem(case) == f || case.starts_with(&format!("{f}/"))
     };
     for f in filters {
         if !cases.iter().any(|c| named(c, f)) {
@@ -252,15 +255,23 @@ fn select<'a>(
     Ok(cases)
 }
 
+/// A case's path without its extension, which its baselines are named by.
+fn stem(case: &str) -> &str {
+    (case.strip_suffix(".timeline.json"))
+        .or_else(|| case.strip_suffix(".tsx"))
+        .unwrap_or(case)
+}
+
 fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
-        if path.is_dir() {
+        // Components the timeline cases play are not cases of their own.
+        if path.is_dir() && name != "components" {
             walk(&path, &format!("{prefix}{name}/"), out)?;
-        } else if name.ends_with(".tsx") {
+        } else if name.ends_with(".tsx") || name.ends_with(".timeline.json") {
             out.push(format!("{prefix}{name}"));
         }
     }
@@ -449,9 +460,19 @@ impl Runner {
 
     fn error(&self, case: &str) -> Result<(), String> {
         let source = self.source(case).ok_or("cannot read the case")?;
-        let expected = (source.lines().next())
-            .and_then(|l| l.strip_prefix("// error: "))
-            .ok_or("an errors/ case names its error on its first line: // error: …")?;
+        let named = match case.ends_with(".timeline.json") {
+            // A document names it in its metadata, which playback ignores.
+            true => (serde_json::from_str::<serde_json::Value>(&source).ok())
+                .and_then(|d| d["metadata"]["error"].as_str().map(String::from)),
+            false => (source.lines().next())
+                .and_then(|l| l.strip_prefix("// error: "))
+                .map(String::from),
+        };
+        let expected = named.ok_or(
+            "an errors/ case names its error on its first line, // error: …, or a document in \
+             its metadata, \"error\": \"…\"",
+        )?;
+        let expected = expected.as_str();
         let failed = match self.frames(case, &mut |scene, _, at| scene.frame(at).map(drop)) {
             Ok(()) => None,
             Err(Failure::Scene(e)) => Some(e),
@@ -472,7 +493,7 @@ impl Runner {
 
     fn pixels(&self, case: &str) -> Result<(), String> {
         let gpu = self.gpu()?;
-        let stem = case.strip_suffix(".tsx").unwrap_or(case);
+        let stem = stem(case);
         let mut renderer = None;
         let mut problems = Vec::new();
         let mut review = Ok(());
@@ -509,7 +530,7 @@ impl Runner {
         } else {
             None
         };
-        let stem = case.strip_suffix(".tsx").unwrap_or(case);
+        let stem = stem(case);
         let mut renderer = None;
         let mut jobs = Vec::new();
         let mut problems = Vec::new();
@@ -611,9 +632,19 @@ impl Runner {
         case: &str,
         each: &mut dyn FnMut(&mut Scene, i64, Tick) -> Result<(), String>,
     ) -> Result<(), Failure> {
-        let read = |path: &str| self.bytes(path);
-        let inputs = Inputs::default();
-        let mut scene = Scene::load(case, &read, &inputs, fonts()).map_err(Failure::Scene)?;
+        let lowered = match case.ends_with(".timeline.json") {
+            true => Some(self.lower(case).map_err(Failure::Scene)?),
+            false => None,
+        };
+        let read = |path: &str| match &lowered {
+            Some(l) if l.files.contains_key(path) => Some(l.files[path].clone().into_bytes()),
+            _ => self.bytes(path),
+        };
+        let (entry, inputs) = match &lowered {
+            Some(l) => (l.entry.as_str(), l.inputs.clone()),
+            None => (case, Inputs::default()),
+        };
+        let mut scene = Scene::load(entry, &read, &inputs, fonts()).map_err(Failure::Scene)?;
         // Its videos, decoded by FFmpeg's own decoder, which every machine has.
         for (name, file) in scene.video_files(&inputs) {
             let path = self.root.join(&file);
@@ -636,6 +667,19 @@ impl Runner {
             each(&mut scene, i, at).map_err(Failure::Scene)?;
         }
         Ok(())
+    }
+
+    /// The scene a timeline case plays as.
+    fn lower(&self, case: &str) -> Result<timeline::Lowered, String> {
+        let text = self.source(case).ok_or("cannot read the case")?;
+        let doc = valle_timeline::parse(&text).map_err(|e| format!("{case}: {e}"))?;
+        let read = |path: &str| self.source(path);
+        let length = |path: &str| media::length(&self.root.join(path)).ok().map(Tick);
+        let host = timeline::Host {
+            read: &read,
+            length: &length,
+        };
+        timeline::lower(case, &doc, &host).map_err(|e| format!("{case}: {e}"))
     }
 
     /// What is wrong with a drawn frame against its baseline, if anything; a frame that is wrong

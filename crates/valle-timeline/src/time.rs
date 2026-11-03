@@ -187,6 +187,20 @@ impl Rate {
         Tick::from_i128(ticks.div_euclid(per)).expect("an exposure within a frame")
     }
 
+    /// `t` on the start of the nearest frame when it is less than a thousandth of a frame from
+    /// it, else `t`: seconds written to 6 places cut exactly where the frames of rates like 29.97
+    /// are.
+    pub fn snap(self, t: Tick) -> Tick {
+        let (num, den) = (i128::from(self.num), TPS * i128::from(self.den));
+        let scaled = i128::from(t.0) * num;
+        let frame = (2 * scaled + den).div_euclid(2 * den);
+        let off = (scaled - frame * den).abs();
+        match i64::try_from(frame).ok().map(|f| self.frame_start(f)) {
+            Some(Ok(start)) if off * 1000 < den => start,
+            _ => t,
+        }
+    }
+
     /// How many frames, counting from frame 0, start before `duration`.
     pub fn frames_in(self, duration: Tick) -> i64 {
         if duration.0 <= 0 {
@@ -516,5 +530,24 @@ mod tests {
         assert_eq!(rate("30").frames_in(Tick(1)), 1);
         assert_eq!(rate("30").frames_in(Tick(0)), 0);
         assert_eq!(rate("30").frames_in(seconds("-1")), 0);
+    }
+
+    #[test]
+    fn cuts_snap_to_frames_within_a_thousandth_of_one() {
+        let ntsc = rate("30000/1001");
+        // Frame 1 at 29.97 starts 0.0333666… s in; 6 places land on it.
+        assert_eq!(ntsc.snap(seconds("0.033367")), ntsc.frame_start(1).unwrap());
+        assert_eq!(
+            ntsc.snap(seconds("10.010000")),
+            ntsc.frame_start(300).unwrap()
+        );
+        // A hundredth of a frame off stays where it is.
+        let off = seconds("0.0337");
+        assert_eq!(ntsc.snap(off), off);
+        assert_eq!(rate("30").snap(seconds("2")), seconds("2"));
+        assert_eq!(
+            rate("30").snap(seconds("-0.0333333")),
+            rate("30").frame_start(-1).unwrap()
+        );
     }
 }

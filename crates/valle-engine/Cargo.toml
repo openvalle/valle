@@ -24,6 +24,7 @@ serde_json.workspace = true
 skrifa.workspace = true
 taffy.workspace = true
 unicode-segmentation.workspace = true
+valle-timeline = { path = "../valle-timeline" }
 vello_cpu.workspace = true
 wgpu.workspace = true
 wuff.workspace = true

@@ -22,5 +22,6 @@ pub mod template;
 #[cfg(test)]
 mod testing;
 pub mod text;
-pub mod time;
+pub use valle_timeline::time;
+pub mod timeline;
 pub mod transition;

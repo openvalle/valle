@@ -15,8 +15,8 @@ use crate::noise::Wiggle;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
 use crate::template::{
-    Bin, Cmp, Error, Guard, Interp, Kind, Measure, Node, Op, Part, PathFn, Piece, Program, Prop,
-    Sample, Shape, Stage, Table, Tag, Template, V, Want,
+    Bin, ClipPart, Clips, Cmp, Error, Guard, Interp, Kind, Measure, Node, Op, Part, PathFn, Piece,
+    Program, Prop, Sample, Shape, Stage, Table, Tag, Template, V, Want,
 };
 use crate::time::{Rate, Speed, Tick};
 use crate::transition;
@@ -27,8 +27,8 @@ pub enum Arg {
     Text(Rc<str>),
 }
 
-/// The expression `name` over `args`.
-pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
+/// The expression `name` over `args`; a clip's reads the clip table `clips`.
+pub fn make(name: &str, args: &[Arg], clips: &Clips) -> Result<Op, Error> {
     let exprs = || -> Result<Vec<u32>, Error> {
         args.iter()
             .map(|a| match a {
@@ -101,6 +101,19 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
             }
             _ => Err(format!("freeze {spec}")),
         };
+    }
+    if let Some(spec) = name.strip_prefix("clip|") {
+        let (part, id) = spec.split_once('|').ok_or_else(|| format!("clip {spec}"))?;
+        let part = match part {
+            "time" => ClipPart::Time,
+            "local" => ClipPart::Local,
+            "on" => ClipPart::On,
+            _ => return Err(format!("clip {spec}")),
+        };
+        let clip = clips
+            .get(id)
+            .ok_or_else(|| format!("no clip {id} in the clip table"))?;
+        return Ok(Op::Clip(fixed(1)?[0], clip.clone(), part));
     }
     if let Some(spec) = name.strip_prefix("scope|") {
         let (offset, rate) = spec
@@ -340,6 +353,7 @@ pub fn variant(
     resources: &[Slot],
     inputs: &[&str],
     shaders: &HashMap<String, Rc<str>>,
+    clips: &Clips,
 ) -> Result<Template, Error> {
     let traced: Traced =
         serde_json::from_str(json).map_err(|e| format!("a traced variant: {e}"))?;
@@ -363,7 +377,7 @@ pub fn variant(
                 Ref::Text { text } => Arg::Text(text.into()),
             });
         }
-        program.ops.push(make(&name, &args)?);
+        program.ops.push(make(&name, &args, clips)?);
         ids.push(program.ops.len() as u32 - 1);
     }
     let prop = |r: Ref| -> Result<Prop, Error> {
@@ -605,15 +619,22 @@ mod tests {
     #[test]
     fn ops_are_made_by_name() {
         let e = |i| Arg::Expr(i);
-        assert_eq!(make("add", &[e(0), e(1)]), Ok(Op::Bin(Bin::Add, 0, 1)));
-        assert_eq!(make("select", &[e(0), e(1), e(2)]), Ok(Op::Select(0, 1, 2)));
         assert_eq!(
-            make("math|sin", &[e(3)]),
+            make("add", &[e(0), e(1)], &Clips::new()),
+            Ok(Op::Bin(Bin::Add, 0, 1))
+        );
+        assert_eq!(
+            make("select", &[e(0), e(1), e(2)], &Clips::new()),
+            Ok(Op::Select(0, 1, 2))
+        );
+        assert_eq!(
+            make("math|sin", &[e(3)], &Clips::new()),
             Ok(Op::Math(MathFn::Sin, vec![3]))
         );
         let Ok(Op::Interp(i)) = make(
             "interpolate|clamp|extend|||ease",
             &[e(0), e(1), e(2), e(3), e(4)],
+            &Clips::new(),
         ) else {
             panic!("an interpolation")
         };
@@ -621,14 +642,21 @@ mod tests {
             (i.input, &i.stops[..], i.extend, i.easing.at(1.0)),
             (0, &[(1, 3), (2, 4)][..], [false, true], 1.0)
         );
-        assert!(make("interpolate|clamp|clamp|||linear", &[e(0), e(1), e(2)]).is_err());
         assert!(
-            make("add", &[e(0)])
+            make(
+                "interpolate|clamp|clamp|||linear",
+                &[e(0), e(1), e(2)],
+                &Clips::new()
+            )
+            .is_err()
+        );
+        assert!(
+            make("add", &[e(0)], &Clips::new())
                 .unwrap_err()
                 .contains("takes 2 operands")
         );
-        assert!(make("math|random", &[]).is_err());
-        assert!(make("add", &[e(0), Arg::Text("x".into())]).is_err());
+        assert!(make("math|random", &[], &Clips::new()).is_err());
+        assert!(make("add", &[e(0), Arg::Text("x".into())], &Clips::new()).is_err());
     }
 
     #[test]
@@ -653,7 +681,7 @@ mod tests {
                 At::Stack(s) => s.as_str().into(),
             }
         };
-        let t = variant(json, &place, &[], &[], &HashMap::new()).unwrap();
+        let t = variant(json, &place, &[], &[], &HashMap::new(), &Clips::new()).unwrap();
         // seconds, 2, mul, 1, gt, template
         assert_eq!(t.program.ops.len(), 6);
         assert_eq!(t.program.ops[2], Op::Bin(Bin::Mul, 0, 1));
@@ -673,6 +701,6 @@ mod tests {
         assert_eq!(t.guards[0].expr, 4);
         assert_eq!(&*t.guards[1].at, "m0.js:3");
         assert_eq!(t.guards[1].when, [(4, true)]);
-        assert!(variant(r#"{"ops": [["add", [{"e": 5}, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#, &place, &[], &[], &HashMap::new()).is_err());
+        assert!(variant(r#"{"ops": [["add", [{"e": 5}, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#, &place, &[], &[], &HashMap::new(), &Clips::new()).is_err());
     }
 }

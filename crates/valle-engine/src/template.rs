@@ -8,11 +8,12 @@ use std::rc::Rc;
 
 use crate::ease::Easing;
 use crate::format::Format;
+use crate::front::Role;
 use crate::noise::Wiggle;
 use crate::path::edit::Join;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
-use crate::time::{Speed, Tick};
+use crate::time::{Rate, Speed, Tick};
 
 use crate::js::{self, MathFn};
 
@@ -109,6 +110,8 @@ pub enum Op {
     Scope(u32, Tick, Speed),
     /// The root clock at another output time, for `Echo` and `Shutter`.
     Sample(u32, Sample),
+    /// A Timeline clip's measure at its parent's time.
+    Clip(u32, Rc<Clip>, ClipPart),
     /// A field of a simulation at the input time.
     Table(u32, Rc<Table>),
     Wiggle(u32, Wiggle),
@@ -130,6 +133,106 @@ pub enum Op {
     /// `bounds(path)`: a measure of the border box of the element with this key path, in canvas
     /// px, as laid out. It is known only after layout, as is every value made from it (`late`).
     Bounds(Rc<str>, Measure),
+}
+
+/// A clip of a Timeline, as the scene it lowers to reads it from the clip table: when it is on
+/// its parent's clock, `[start, end)`, and the time inside it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Clip {
+    pub start: Tick,
+    pub end: Tick,
+    pub time: ClipTime,
+}
+
+/// The clip table: a Timeline's clips by id.
+pub type Clips = std::collections::HashMap<String, Rc<Clip>>;
+
+/// The time a clip gives what it holds.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClipTime {
+    /// Its source's: `trim + t × rate`, or a time map's points (clip time, source time) straight
+    /// between them and held past the ends; then past the source's length held on its last tick
+    /// (`looped` false) or looped.
+    Source {
+        trim: Tick,
+        rate: Speed,
+        map: Vec<(Tick, Tick)>,
+        length: Option<(Tick, bool)>,
+    },
+    /// A scene's in a role, for a scene `duration` long (`Role::time`).
+    Role { role: Role, duration: Tick },
+    /// A transition's progress over its frames at `fps`: frame i of N is at i / (N − 1), a lone
+    /// frame at 0.5.
+    Progress(Rate),
+}
+
+/// What an `Op::Clip` gives: the time inside the clip, in seconds; the time since its start;
+/// or whether it is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipPart {
+    Time,
+    Local,
+    On,
+}
+
+impl Clip {
+    /// Its `part` at its parent's time `t`.
+    pub fn at(&self, part: ClipPart, t: Tick) -> Result<V, Error> {
+        let local = t - self.start;
+        Ok(match part {
+            ClipPart::On => V::Bool(self.start <= t && t < self.end),
+            ClipPart::Local => V::Num(local.seconds()),
+            ClipPart::Time => V::Num(match &self.time {
+                ClipTime::Source {
+                    trim,
+                    rate,
+                    map,
+                    length,
+                } => {
+                    let source = match map.as_slice() {
+                        [] => *trim + rate.apply(local)?,
+                        points => mapped(points, local),
+                    };
+                    match length {
+                        Some((length, _)) if length.0 <= 0 => Tick::ZERO,
+                        Some((length, false)) => source.clamp(Tick::ZERO, Tick(length.0 - 1)),
+                        Some((length, true)) => Tick(source.0.rem_euclid(length.0)),
+                        None => source,
+                    }
+                    .seconds()
+                }
+                ClipTime::Role { role, duration } => {
+                    let clip = self.end - self.start;
+                    role.time(*duration, clip, local.clamp(Tick::ZERO, clip))?
+                        .seconds()
+                }
+                ClipTime::Progress(fps) => {
+                    let first = fps.frame_at(Tick(self.start.0 - 1)) + 1;
+                    let last = fps.frame_at(Tick(self.end.0 - 1));
+                    let n = last - first + 1;
+                    match n {
+                        ..=1 => 0.5,
+                        _ => ((fps.frame_at(t) - first) as f64 / (n - 1) as f64).clamp(0.0, 1.0),
+                    }
+                }
+            }),
+        })
+    }
+}
+
+/// A time map's source time at clip time `t`.
+fn mapped(points: &[(Tick, Tick)], t: Tick) -> Tick {
+    let (first, last) = (points[0], points[points.len() - 1]);
+    if t <= first.0 {
+        return first.1;
+    }
+    if t >= last.0 {
+        return last.1;
+    }
+    let k = points.partition_point(|p| p.0 <= t);
+    let ((x0, y0), (x1, y1)) = (points[k - 1], points[k]);
+    let into = i128::from((t - x0).0) * i128::from((y1 - y0).0);
+    Tick(y0.0 + into.div_euclid(i128::from((x1 - x0).0)) as i64)
 }
 
 /// An output time other than the frame's: moved by `offset`, then held inside the composition's
@@ -187,6 +290,7 @@ impl Op {
             | Op::Freeze(a, _)
             | Op::Scope(a, ..)
             | Op::Sample(a, _)
+            | Op::Clip(a, ..)
             | Op::Table(a, _)
             | Op::Wiggle(a, _)
             | Op::Format(a, _)

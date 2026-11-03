@@ -27,12 +27,13 @@ use rquickjs::{Array, Context, Ctx, Exception, Function, Object, Runtime, Value}
 
 use crate::eval::{self, Clock};
 use crate::style::color;
-use crate::template::{Error, Template, V};
+use crate::template::{Clips, Error, Template, V};
 use crate::time::{Rate, Tick};
 
 pub use controls::{Inputs, Prop};
 use lower::{Arg, At};
 pub use rewrite::{BUILT_IN_FAMILIES, Holds, Slot};
+pub(crate) use rewrite::{join, web};
 pub use role::{Hold, Role};
 
 const RUNTIME: &str = include_str!("runtime.js");
@@ -115,6 +116,44 @@ pub struct Front {
     typeset: Rc<RefCell<Option<Box<dyn Typeset>>>>,
     /// The code of its shader resources, by name, once the scene reads them.
     shaders: RefCell<HashMap<String, Rc<str>>>,
+    /// The clip table of a Timeline's scene.
+    clips: Rc<Clips>,
+}
+
+/// What a scene declares, read without running it: its composition, controls and role, its
+/// resources' defaults joined to its folder.
+pub struct Declared {
+    pub composition: Composition,
+    pub props: Vec<Prop>,
+    pub data: Vec<Prop>,
+    pub resources: Vec<Slot>,
+    pub role: Role,
+}
+
+/// What the scene at `entry` declares; `read` gives its text.
+pub fn declared(entry: &str, read: &dyn Fn(&str) -> Option<String>) -> Result<Declared, Error> {
+    let text = read(entry).ok_or_else(|| format!("{entry}: not found"))?;
+    let code = rewrite::rewrite(entry, &text, 0).map_err(|e| format!("{entry}: {e}"))?;
+    let folder = entry.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let composition = code.composition.ok_or_else(|| {
+        format!("{entry}: a scene exports its composition, which a Timeline clip plays")
+    })?;
+    Ok(Declared {
+        composition,
+        props: code.props,
+        data: code.data,
+        resources: (code.resources.into_iter())
+            .map(|mut slot| {
+                for d in &mut slot.default {
+                    if !(d.starts_with('/') || rewrite::web(d)) {
+                        *d = rewrite::join(folder, d);
+                    }
+                }
+                slot
+            })
+            .collect(),
+        role: code.role,
+    })
 }
 
 impl Front {
@@ -265,9 +304,11 @@ impl Front {
             context,
             typeset: Rc::default(),
             shaders: RefCell::default(),
+            clips: inputs.clips.clone(),
         };
         front.context.with(|ctx| -> Result<(), Error> {
-            install_host(&ctx, front.typeset.clone()).map_err(|e| e.to_string())?;
+            install_host(&ctx, front.typeset.clone(), front.clips.clone())
+                .map_err(|e| e.to_string())?;
             front.run(&ctx, RUNTIME.into(), "runtime.js")?;
             front.run(&ctx, format!("__builtin({})", charts.code), "charts.js")?;
             let mut free: Vec<&str> = loader
@@ -351,6 +392,10 @@ impl Front {
             composition
                 .set("looped", c.looped)
                 .map_err(|e| e.to_string())?;
+            // A Timeline's scene: its clips' TimeScopes name them.
+            composition
+                .set("timeline", !self.clips.is_empty())
+                .map_err(|e| e.to_string())?;
             let trace: Function = ctx.globals().get("__trace").map_err(|e| e.to_string())?;
             trace
                 .call((
@@ -368,6 +413,7 @@ impl Front {
             &self.resources,
             self.role.inputs(),
             &self.shaders.borrow(),
+            &self.clips,
         )
     }
 
@@ -614,6 +660,7 @@ fn units(text: &str, split: &str) -> Vec<usize> {
 fn install_host<'js>(
     ctx: &Ctx<'js>,
     typeset: Rc<RefCell<Option<Box<dyn Typeset>>>>,
+    clips: Rc<Clips>,
 ) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
     let set = typeset.clone();
@@ -647,8 +694,8 @@ fn install_host<'js>(
         "op",
         Function::new(
             ctx.clone(),
-            |ctx: Ctx<'js>, name: String, args: Array<'js>| {
-                op(&ctx, &name, &args).map_err(|e| Exception::throw_type(&ctx, &e))
+            move |ctx: Ctx<'js>, name: String, args: Array<'js>| {
+                op(&ctx, &name, &args, &clips).map_err(|e| Exception::throw_type(&ctx, &e))
             },
         )?,
     )?;
@@ -683,7 +730,12 @@ fn install_host<'js>(
     ctx.globals().set("__host", host)
 }
 
-fn op<'js>(ctx: &Ctx<'js>, name: &str, args: &Array<'js>) -> Result<Value<'js>, Error> {
+fn op<'js>(
+    ctx: &Ctx<'js>,
+    name: &str,
+    args: &Array<'js>,
+    clips: &Clips,
+) -> Result<Value<'js>, Error> {
     let mut values = Vec::new();
     let mut operands = Vec::new();
     for a in args.iter::<Value>() {
@@ -704,7 +756,7 @@ fn op<'js>(ctx: &Ctx<'js>, name: &str, args: &Array<'js>) -> Result<Value<'js>, 
         operands.push(Arg::Expr(values.len() as u32));
         values.push(v);
     }
-    let op = lower::make(name, &operands)?;
+    let op = lower::make(name, &operands, clips)?;
     let clock = Clock {
         seconds: 0.0,
         progress: 0.0,

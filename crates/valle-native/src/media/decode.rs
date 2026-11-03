@@ -9,11 +9,7 @@ use std::ptr;
 use super::ff;
 use ff::{Packet, codec, decoder, format, frame, media, software};
 
-use crate::media::{Decoding, Read, TICKS_PER_SECOND};
-
-/// How far past the frame decoded last a frame is still reached by decoding on, not by seeking:
-/// 2 s, in ticks.
-const AHEAD: i64 = 2 * TICKS_PER_SECOND;
+use crate::media::{AHEAD, Decoding, Read, TICKS_PER_SECOND};
 
 pub struct Reader {
     input: format::context::Input,
@@ -32,6 +28,25 @@ pub struct Reader {
     /// The RGBA of `current`, once converted.
     converted: Option<(i64, Vec<u8>)>,
     scaler: Option<(format::Pixel, software::scaling::Context)>,
+}
+
+/// How long the video stream of the file at `path` is, in ticks: its own length, else the
+/// file's.
+pub fn length(path: &Path) -> Result<i64, String> {
+    let bad = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let input = format::input(path).map_err(|e| bad(&e))?;
+    let stream = (input.streams().best(media::Type::Video)).ok_or_else(|| bad(&"no video"))?;
+    let tb = stream.time_base();
+    let ticks = if stream.duration() > 0 {
+        let n = stream.duration() as i128 * tb.numerator() as i128 * TICKS_PER_SECOND as i128;
+        n / (tb.denominator() as i128).max(1)
+    } else if input.duration() > 0 {
+        // Microseconds.
+        input.duration() as i128 * TICKS_PER_SECOND as i128 / 1_000_000
+    } else {
+        return Err(bad(&"the file does not say how long it is"));
+    };
+    Ok(ticks as i64)
 }
 
 impl Reader {
@@ -198,6 +213,10 @@ impl Reader {
 impl Read for Reader {
     fn size(&self) -> [u32; 2] {
         self.size
+    }
+
+    fn position(&self) -> Option<i64> {
+        self.current.as_ref().map(|(t, _)| *t)
     }
 
     fn frame(&mut self, at: i64) -> Result<Vec<u8>, String> {

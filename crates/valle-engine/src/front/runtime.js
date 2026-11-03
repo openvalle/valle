@@ -469,7 +469,7 @@
       height: c.height,
       fps: c.fps,
       duration: c.duration,
-      clipDuration: c.duration,
+      clipDuration: c.clipDuration ?? c.duration,
     };
   }
 
@@ -1237,7 +1237,7 @@
       if (!scalar(v) || typeof v === "boolean") {
         fail(at, "<" + tag + "> style " + k + " must be a number or a string");
       }
-      out.push([k, v]);
+      out.push([k, renamed(k, v)]);
     }
     return out;
   }
@@ -1257,7 +1257,7 @@
     if (!(Number.isFinite(angle) && angle >= 0 && angle <= 360)) {
       fail(at, "<" + tag + "> motionBlur shutterAngle is degrees from 0 to 360");
     }
-    const exposure = (G.rate * angle) / 360 / G.composition.fps;
+    const exposure = (G.rate * angle) / 360 / G.root.fps;
     return __tpl(["", " ", ""], __b("*", velocity.x, exposure), __b("*", velocity.y, exposure));
   }
 
@@ -1403,8 +1403,8 @@
   // `input://name`; null for anything else.
   function pictureOf(src) {
     if (typeof src !== "string") return null;
-    if (src.startsWith("resource://")) return src.slice("resource://".length);
-    if (src.startsWith("input://")) return src;
+    if (src.startsWith("resource://")) return named(src.slice("resource://".length));
+    if (src.startsWith("input://")) return inputNamed(src.slice("input://".length));
     return null;
   }
 
@@ -1440,7 +1440,7 @@
       );
     }
     if (children.length > 0) fail(at, "<Video> has no children");
-    node.src = src.slice("resource://".length);
+    node.src = named(src.slice("resource://".length));
     const number = (x, what) => {
       if (!(x instanceof T) && !Number.isFinite(x)) fail(at, "<Video> " + what + " is a number");
       return x;
@@ -1554,7 +1554,7 @@
           '<ShaderLayer> source is a shader resource written as a literal, such as "resource://wave"',
         );
       }
-      source = src.slice("resource://".length);
+      source = named(src.slice("resource://".length));
     } else if (typeof code !== "string") {
       fail(
         at,
@@ -1662,7 +1662,7 @@
     out.push(node);
   }
 
-  function element(type, props, children, out, at, inText) {
+  function element(type, props, children, out, at, inText, inside) {
     if (typeof type !== "string") fail(at, "an element type must be a tag or a component function");
     if (type in SVG) return svgElement(type, props, children, out, at);
     if (G.svg > 0) {
@@ -1713,6 +1713,8 @@
         splitOf(node, props, children, type, at);
       } else if (kind === "text" || kind === "span") {
         contentOf(node, children, type, at);
+      } else if (inside !== undefined) {
+        inside(node.children);
       } else {
         if (kind === "mask") render(props.source, node.source.children, at);
         for (const c of children) render(c, node.children, at);
@@ -1727,7 +1729,9 @@
 
   // Runs `f` under a <TimeScope>'s clock: `(seconds − offset) × rate` in ticks, rounded down, and
   // `progress` from it. Like a component, it adds no element and a key is a segment of key paths.
-  function scoped(props, at, f) {
+  // In the scene a Timeline lowers to, a clip's TimeScope names it in the clip table instead.
+  function scoped(props, at, f, out) {
+    if (props.clip !== undefined && G.composition.timeline) return clipped(props, at, f, out);
     for (const k of keys(props)) {
       if (k !== "key" && k !== "offset" && k !== "rate") {
         fail(at, "<TimeScope> has no prop " + k + "; it takes offset and rate");
@@ -1753,6 +1757,65 @@
       G.scopes.pop();
       [G.seconds, G.progress, G.rate] = outer;
     }
+  }
+
+  // A Timeline clip, `<TimeScope clip={id} composition style resources inputs>`, which only the
+  // lowering writes: a box styled `style` that shows while the clip is on, its children on the
+  // clip's time from the clip table; `composition` is what useComposition() gives inside
+  // (`{ width, height, duration, clipDuration }`, seconds), and `resources` and `inputs` name the
+  // scene's resources and pictures that the names of the component inside stand for.
+  function clipped(props, at, f, out) {
+    const id = props.clip;
+    const c = props.composition;
+    const op = (part) => "clip|" + part + "|" + id;
+    const on = mk(op("on"), [G.seconds]);
+    const local = mk(op("local"), [G.seconds]);
+    const outer = [G.seconds, G.progress, G.clip, G.composition, G.names, G.inputs];
+    if (c !== undefined) {
+      G.composition = { ...G.composition, ...c };
+    }
+    const clipDuration = G.composition.clipDuration ?? G.composition.duration;
+    G.seconds = mk(op("time"), [G.seconds]);
+    G.progress = progressOf(G.seconds);
+    G.clip = [local, clamp(__b("/", local, clipDuration), 0, 1)];
+    G.scopes.push(op("time"));
+    if (props.resources !== undefined) G.names = props.resources;
+    if (props.inputs !== undefined) G.inputs = props.inputs;
+    const style = { ...props.style, display: mk("select", [on, "flex", "none"]) };
+    try {
+      element("View", { key: props.key, style }, [], out, at, false, f);
+    } finally {
+      G.scopes.pop();
+      [G.seconds, G.progress, G.clip, G.composition, G.names, G.inputs] = outer;
+    }
+  }
+
+  // A resource's name in the scene: in a Timeline clip, the scene's resource that the
+  // component's own name stands for.
+  const named = (name) => (G.names !== null && Object.hasOwn(G.names, name) ? G.names[name] : name);
+
+  // A picture's name, `input://name`: in a Timeline clip, the picture of the scene it stands
+  // for.
+  const inputNamed = (name) =>
+    G.inputs !== null && Object.hasOwn(G.inputs, name)
+      ? "input://" + G.inputs[name]
+      : "input://" + name;
+
+  // Resource names in a style's text, `url(resource://name)` and a font family's, as the scene
+  // names them.
+  function renamed(k, v) {
+    if (G.names === null || typeof v !== "string") return v;
+    v = v.replace(/resource:\/\/([A-Za-z0-9._-]+)/g, (_, n) => "resource://" + named(n));
+    if (k === "fontFamily") {
+      v = v
+        .split(",")
+        .map((f) => {
+          const name = f.trim().replace(/^["']|["']$/g, "");
+          return Object.hasOwn(G.names, name) ? G.names[name] : f.trim();
+        })
+        .join(", ");
+    }
+    return v;
   }
 
   // Runs `f` at another output time, the root clock through the op `sample`: the clip clock is
@@ -1793,7 +1856,7 @@
     }
     const get = (k, d) => fixed(props[k] ?? d, k, at);
     const whole = (v, max) => Number.isInteger(v) && v >= 1 && v <= max;
-    const c = G.composition;
+    const c = G.root;
     const tail = "|" + c.ticks + "|" + c.looped;
     const cells = [];
     const cell = (style, sample) => {
@@ -1895,7 +1958,12 @@
     if (type === __F) return children.forEach((c) => render(c, out, here));
     if (typeof type === "function") return expand(x, here, (y) => render(y, out, here));
     if (type === "TimeScope") {
-      return scoped(props, here, () => children.forEach((c) => render(c, out, here)));
+      return scoped(
+        props,
+        here,
+        (inner) => children.forEach((c) => render(c, inner ?? out, here)),
+        out,
+      );
     }
     if (type === SAMPLE) {
       return sampled(props.sample, () => children.forEach((c) => render(c, out, here)));
@@ -2059,6 +2127,11 @@
       // How deep in <svg> elements tracing is.
       svg: 0,
       composition,
+      // The scene's own: Echo and Shutter sample its clock, inside clips as well.
+      root: composition,
+      // In a Timeline clip, the scene's resources and pictures that a component's names stand for.
+      names: null,
+      inputs: null,
       seconds: new T("seconds", [], seconds, false),
       progress: new T("progress", [], progress, false),
     };

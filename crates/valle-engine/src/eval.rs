@@ -185,6 +185,7 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             V::Num(speed.apply(Tick(t))?.seconds())
         }
         Op::Sample(input, sample) => V::Num(sample.at(Tick::from_seconds(num(input))?).seconds()),
+        Op::Clip(input, clip, part) => clip.at(*part, Tick::from_seconds(num(input))?)?,
         Op::Spring {
             input,
             spring,
