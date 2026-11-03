@@ -1052,6 +1052,172 @@
     return { x, y };
   };
 
+  // `particles(t, { seed, count, emitter, birth, lifetime, loop, velocity, gravity, forces })`:
+  // `count` particles, one born every `birth.interval` seconds from 0 (around again every
+  // count × interval with `loop`) at a seeded point of `emitter` ({ x, y, width, height }) with a
+  // seeded velocity ({ x: [low, high], y: [low, high] } pixels a second), living `lifetime`
+  // seconds. Each is `{ index, key, x, y, age, progress, alive }` at `t`, to render with `.map`.
+  function particles(t, options) {
+    const o = options ?? {};
+    if (!plain(o) || keys(o).some((k) => !PARTICLES.includes(k))) {
+      throw new TypeError("particles(t, options) takes " + PARTICLES.join(", "));
+    }
+    const fix = (v, what) => {
+      v = v instanceof T ? exact(v, "particles", site()) : v;
+      if (typeof v !== "number" || !Number.isFinite(v)) {
+        throw new TypeError(
+          "particles " + what + " must be a number that does not depend on the time",
+        );
+      }
+      return v;
+    };
+    const box = (v, names, what) => {
+      if (!plain(v) || keys(v).some((k) => !names.includes(k))) {
+        throw new TypeError("particles " + what + " is { " + names.join(", ") + " }");
+      }
+      return names.map((n) => fix(v[n] ?? 0, what + "." + n));
+    };
+    const range = (r, what) => {
+      if (!isArray(r) || r.length !== 2) {
+        throw new TypeError("particles velocity." + what + " is [low, high]");
+      }
+      return r.map((x) => fix(x, "velocity." + what));
+    };
+    const [seed, count, lifetime] = [
+      fix(o.seed ?? 0, "seed"),
+      fix(o.count, "count"),
+      fix(o.lifetime, "lifetime"),
+    ];
+    if (!Number.isSafeInteger(seed) || seed < 0) {
+      throw new TypeError("particles seed must be a whole number, at least 0");
+    }
+    if (!Number.isInteger(count) || count < 1 || count > MAX_PARTICLES) {
+      throw new TypeError("particles count must be a whole number from 1 to " + MAX_PARTICLES);
+    }
+    const [interval] = box(o.birth ?? {}, ["interval"], "birth");
+    if (!(interval > 0 && lifetime > 0)) {
+      throw new TypeError("particles birth.interval and lifetime must be over 0 seconds");
+    }
+    const looping = o.loop ?? false;
+    if (typeof looping !== "boolean") throw new TypeError("particles loop is true or false");
+    const v = o.velocity ?? {};
+    if (!plain(v) || keys(v).some((k) => k !== "x" && k !== "y")) {
+      throw new TypeError("particles velocity is { x: [low, high], y: [low, high] }");
+    }
+    const forces = o.forces ?? [];
+    if (!isArray(forces) || !forces.every((f) => plain(f) && f[FORCE])) {
+      throw new TypeError("particles forces is a list of curlNoise() and drag()");
+    }
+    const spec = JSON.stringify({
+      seed,
+      count,
+      interval,
+      loop: looping,
+      lifetime,
+      emitter: box(o.emitter ?? {}, ["x", "y", "width", "height"], "emitter"),
+      velocity: [...range(v.x ?? [0, 0], "x"), ...range(v.y ?? [0, 0], "y")],
+      gravity: box(o.gravity ?? {}, ["x", "y"], "gravity"),
+      forces: forces.map((f) => f[FORCE]),
+    });
+    if (!numeric(t)) throw new TypeError("particles takes a number of seconds");
+    const at = (index, field) => {
+      const op = "particle|" + field + "|" + index + "|" + spec;
+      return isT(t) ? mk(op, [t]) : host.op(op, [t]);
+    };
+    return Array.from({ length: count }, (_, index) =>
+      freeze({
+        index,
+        key: "particle-" + index,
+        x: at(index, "x"),
+        y: at(index, "y"),
+        age: at(index, "age"),
+        progress: at(index, "progress"),
+        alive: at(index, "alive"),
+      }),
+    );
+  }
+  const PARTICLES = [
+    "seed",
+    "count",
+    "emitter",
+    "birth",
+    "lifetime",
+    "loop",
+    "velocity",
+    "gravity",
+    "forces",
+  ];
+  const MAX_PARTICLES = 10000;
+  const FORCE = Symbol("force");
+
+  // `curlNoise({ seed, scale, strength })`: a force swirling along a noise field's contours,
+  // `scale` its features per pixel, `strength` pixels a second squared. `drag(coefficient)`:
+  // a force against the velocity, `coefficient` a second.
+  function curlNoise(options) {
+    const o = options ?? {};
+    if (!plain(o) || keys(o).some((k) => !["seed", "scale", "strength"].includes(k))) {
+      throw new TypeError("curlNoise takes seed, scale, strength");
+    }
+    const fix = (v) => (v instanceof T ? exact(v, "curlNoise", site()) : v);
+    const [seed, scale, strength] = [fix(o.seed ?? 0), fix(o.scale), fix(o.strength)];
+    if (!Number.isSafeInteger(seed) || seed < 0 || !(scale > 0) || !Number.isFinite(strength)) {
+      throw new TypeError("curlNoise takes a whole seed from 0, a scale over 0 and a strength");
+    }
+    return freeze({ [FORCE]: { curl: [seed, scale, strength] } });
+  }
+  function drag(coefficient) {
+    const k = coefficient instanceof T ? exact(coefficient, "drag", site()) : coefficient;
+    if (!(Number.isFinite(k) && k >= 0))
+      throw new TypeError("drag(coefficient) takes a number from 0");
+    return freeze({ [FORCE]: { drag: k } });
+  }
+
+  // `field({ from, to, progress, stagger })`: each value of `from` going to the one of `to` in
+  // the same place, starting late by its delay (`stagger` × index, or `stagger[index]` in
+  // [0, 1)) and arriving at progress 1. Values are numbers, or arrays or objects of numbers.
+  function field(options) {
+    const o = options ?? {};
+    if (!plain(o) || keys(o).some((k) => !["from", "to", "progress", "stagger"].includes(k))) {
+      throw new TypeError("field takes from, to, progress, stagger");
+    }
+    const { from, to, progress } = o;
+    if (!isArray(from) || !isArray(to) || from.length !== to.length) {
+      throw new TypeError("field from and to are lists of the same length");
+    }
+    if (!numeric(progress)) throw new TypeError("field progress must be a number");
+    const n = from.length;
+    let stagger = o.stagger ?? 0;
+    stagger = stagger instanceof T ? exact(stagger, "field", site()) : stagger;
+    const delays = isArray(stagger)
+      ? stagger.map((d) => (d instanceof T ? exact(d, "field", site()) : d))
+      : Array.from({ length: n }, (_, i) => i * stagger);
+    if (delays.length !== n || !delays.every((d) => typeof d === "number" && d >= 0 && d < 1)) {
+      throw new TypeError(
+        "field stagger is a step from 0 that keeps the last delay below 1, or one delay in [0, 1) per value",
+      );
+    }
+    const blend = (a, b, u, where) => {
+      if (typeof a === "number" && typeof b === "number") return __b("+", a, __b("*", b - a, u));
+      if (isArray(a) && isArray(b) && a.length === b.length) {
+        return a.map((x, i) => blend(x, b[i], u, where));
+      }
+      if (plain(a) && plain(b) && keys(a).join() === keys(b).join()) {
+        const out = {};
+        for (const k of keys(a)) out[k] = blend(a[k], b[k], u, where);
+        return out;
+      }
+      throw new TypeError(
+        "field " +
+          where +
+          ": from and to are numbers, or arrays or objects of numbers, of one shape",
+      );
+    };
+    return from.map((a, i) => {
+      const u = clamp(__b("/", __b("-", progress, delays[i]), 1 - delays[i]), 0, 1);
+      return blend(a, to[i], u, "value " + i);
+    });
+  }
+
   // `freezeTime(t, { from, to })`: the time held at `from` until `to`, later less the time held.
   function freezeTime(t, options) {
     const o = options ?? {};
@@ -2181,10 +2347,6 @@
 
   // Valle functions that come in a later version.
   const LATER = [
-    "particles",
-    "field",
-    "curlNoise",
-    "drag",
     "particles3d",
     "project3d",
     "extrude",
@@ -2406,6 +2568,10 @@
     simulate,
     wiggle,
     wiggle2D,
+    particles,
+    curlNoise,
+    drag,
+    field,
     seededRandom,
     pathLength,
     pointAt,

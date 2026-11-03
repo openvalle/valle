@@ -12,6 +12,7 @@ use crate::ease::Easing;
 use crate::format::Format;
 use crate::js::MathFn;
 use crate::noise::Wiggle;
+use crate::particles::{Field, System};
 use crate::spring::Spring;
 use crate::style::color::Mixing;
 use crate::template::{
@@ -87,6 +88,20 @@ pub fn make(name: &str, args: &[Arg], clips: &Clips) -> Result<Op, Error> {
     }
     if let Some(spec) = name.strip_prefix("wiggle|") {
         return Ok(Op::Wiggle(fixed(1)?[0], Wiggle::parse(spec)?));
+    }
+    if let Some(spec) = name.strip_prefix("particle|") {
+        let bad = || format!("particle {spec}");
+        let [field, index, spec] = spec.splitn(3, '|').collect::<Vec<_>>()[..] else {
+            return Err(bad());
+        };
+        let field = Field::parse(field).ok_or_else(bad)?;
+        let system = System::get(spec)?;
+        let index = index
+            .parse()
+            .ok()
+            .filter(|i| *i < system.count())
+            .ok_or_else(bad)?;
+        return Ok(Op::Particle(fixed(1)?[0], system, index, field));
     }
     if let Some(spec) = name.strip_prefix("table|") {
         return Ok(Op::Table(fixed(1)?[0], Rc::new(Table::parse(spec)?)));

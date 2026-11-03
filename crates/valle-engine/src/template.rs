@@ -10,6 +10,7 @@ use crate::ease::Easing;
 use crate::format::Format;
 use crate::front::Role;
 use crate::noise::Wiggle;
+use crate::particles::{Field, System};
 use crate::path::edit::Join;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
@@ -115,6 +116,8 @@ pub enum Op {
     /// A field of a simulation at the input time.
     Table(u32, Rc<Table>),
     Wiggle(u32, Wiggle),
+    /// A field of one particle of a `particles()` system at the input time.
+    Particle(u32, Rc<System>, u32, Field),
     /// A number as text.
     Format(u32, Format),
     /// A path function over its operands: path data and numbers.
@@ -297,6 +300,7 @@ impl Op {
             | Op::Clip(a, ..)
             | Op::Table(a, _)
             | Op::Wiggle(a, _)
+            | Op::Particle(a, ..)
             | Op::Format(a, _)
             | Op::Spring { input: a, .. } => f(*a),
             Op::Select(a, b, c) => [a, b, c].into_iter().for_each(|x| f(*x)),

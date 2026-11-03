@@ -149,6 +149,7 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
         Op::Stage(input, stage) => V::Num(stage.at(num(input))),
         Op::Table(input, table) => V::Num(table.at(num(input))),
         Op::Wiggle(input, wiggle) => V::Num(wiggle.at(num(input))),
+        Op::Particle(input, system, index, field) => system.field(*index, *field, num(input)),
         Op::Path(f, args) => path(
             *f,
             &args

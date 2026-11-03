@@ -13,6 +13,7 @@ pub mod layout;
 pub mod mix;
 pub mod noise;
 pub mod paint;
+pub mod particles;
 pub mod path;
 pub mod scene;
 pub mod shader;
