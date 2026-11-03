@@ -1036,7 +1036,7 @@
     Group: "use <View>",
     Flex: 'use <View className="flex">',
     Absolute: 'use <View className="absolute">',
-    GeometryBatch: "particles() and field() return arrays: render them with .map",
+    GeometryBatch: "render an array of elements with .map",
     Clip: "use the CSS clip-path property",
     MaskSource: "use <Mask source={…}>",
     ThemeProvider: "import theme constants from a module, or pass them as props",
@@ -1048,6 +1048,23 @@
     Polyline: "use <polyline> inside an inline <svg>",
     Polygon: "use <polygon> inside an inline <svg>",
   };
+  // Valle elements that come in a later version.
+  const LATER_TAGS = [
+    "Scene3D",
+    "Mesh",
+    "Texture",
+    "Anchor",
+    "AmbientLight",
+    "DirectionalLight",
+    "HemisphereLight",
+    "PointLight",
+    "SpotLight",
+    "RectAreaLight",
+    "Particles3D",
+    "Glass",
+    "GlassField",
+    "MathFormula",
+  ];
   const HTML = {
     div: "View",
     section: "View",
@@ -1303,6 +1320,7 @@
       if (type in HTML) {
         fail(at, "HTML tags are not supported: use <" + HTML[type] + "> instead of <" + type + ">");
       }
+      if (LATER_TAGS.includes(type)) fail(at, "<" + type + "> is not supported yet");
       fail(at, "<" + type + "> is not a Valle element");
     }
     if (kind === "span" && !inText) fail(at, "<Span> must be inside <Text>");
@@ -1535,6 +1553,27 @@
     useVideoConfig: "use useComposition()",
   };
 
+  // Valle functions that come in a later version.
+  const LATER = [
+    "particles",
+    "field",
+    "curlNoise",
+    "drag",
+    "particles3d",
+    "project3d",
+    "extrude",
+    "lathe",
+    "tube",
+    "morphSequence",
+    "noiseDisplace",
+    "simplify",
+    "resamplePath",
+    "reversePath",
+    "strokeToPath",
+    "pathTrajectory",
+    "fitText",
+  ];
+
   // Functions of Valle's earlier engine that are gone, with what replaces them.
   const GONE = {
     TAU: "write 2 * Math.PI",
@@ -1580,6 +1619,10 @@
             throw new TypeError(name + " is removed: " + GONE[name]);
           },
         });
+      } else if (LATER.includes(name)) {
+        globalThis[name] = () => {
+          throw new TypeError(name + "() is not supported yet");
+        };
       } else if (name in UNAVAILABLE) {
         globalThis[name] = () => {
           throw new TypeError(name + "() is not supported: " + UNAVAILABLE[name]);
