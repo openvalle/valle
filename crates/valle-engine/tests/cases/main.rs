@@ -450,7 +450,8 @@ impl Runner {
             let c = scene.composition();
             let size = [c.width, c.height];
             let tailwind = self.tailwind.as_deref().map_err(|e| e.to_string())?;
-            let html = html::print(&frame, c, scene.resources(), tailwind)?;
+            let fonts = scene.font_files();
+            let html = html::print(&frame, c, scene.resources(), fonts, tailwind)?;
             let out = self.chrome_baselines.join(format!("{stem}.{i}"));
             let png = self.chrome_baselines.join(format!("{stem}.{i}.png"));
             let json = self.chrome_baselines.join(format!("{stem}.{i}.json"));

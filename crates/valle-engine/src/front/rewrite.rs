@@ -84,8 +84,12 @@ pub struct Rewritten {
 pub struct Slot {
     pub name: String,
     pub kind: Holds,
-    pub default: Option<String>,
+    /// Its default files: none, one, or for a font, the faces of its family.
+    pub default: Vec<String>,
 }
+
+/// The names of the built-in font families, which no font resource takes.
+pub const BUILT_IN_FAMILIES: [&str; 4] = ["sans-serif", "serif", "monospace", "emoji"];
 
 /// What a resource holds: an image, an SVG file among them, or a font, whose family is the
 /// resource's name.
@@ -469,7 +473,7 @@ struct Declared {
     resources: Vec<Slot>,
 }
 
-/// `resource({ kind: "image", default: "…" })`.
+/// `resource({ kind: "image", default: "…" })`; a font's default may be a list of files.
 fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
     let written = || "write resource({ kind: \"image\", default: \"./file.png\" })".to_string();
     let Expression::CallExpression(call) = e else {
@@ -485,20 +489,30 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
     else {
         return Err(written());
     };
-    let (mut kind, mut default) = (None, None);
+    let (mut kind, mut default, mut list) = (None, Vec::new(), false);
     for p in &spec.properties {
         let ObjectPropertyKind::ObjectProperty(p) = p else {
             return Err(written());
         };
-        let Expression::StringLiteral(v) = bare(&p.value) else {
-            return Err(format!(
-                "{} is a string literal",
-                key(p).unwrap_or("each field")
-            ));
+        let text = |e: &Expression<'_>| match bare(e) {
+            Expression::StringLiteral(v) => Some(v.value.to_string()),
+            _ => None,
         };
-        match key(p) {
-            Some("kind") => kind = Some(v.value.to_string()),
-            Some("default") => default = Some(v.value.to_string()),
+        match (key(p), bare(&p.value)) {
+            (Some("default"), Expression::ArrayExpression(files)) => {
+                list = true;
+                for file in &files.elements {
+                    let file = file.as_expression().and_then(text);
+                    default.push(file.ok_or("default is a string literal or a list of them")?);
+                }
+            }
+            (Some(k @ ("kind" | "default")), v) => {
+                let v = text(v).ok_or_else(|| format!("{k} is a string literal"))?;
+                match k {
+                    "kind" => kind = Some(v),
+                    _ => default.push(v),
+                }
+            }
             _ => return Err("resource() takes kind and default".into()),
         }
     }
@@ -512,13 +526,23 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
         None => return Err("resource() needs a kind: \"image\" or \"font\"".into()),
     };
     // Its name is a family name, which the built-in ones would hide.
-    let generic = ["sans-serif", "serif", "monospace"];
-    if kind == Holds::Font && generic.iter().any(|g| name.eq_ignore_ascii_case(g)) {
+    if kind == Holds::Font
+        && BUILT_IN_FAMILIES
+            .iter()
+            .any(|g| name.eq_ignore_ascii_case(g))
+    {
         return Err(format!(
             "a font resource cannot be named {name}: that is a built-in family"
         ));
     }
-    if let Some(d) = &default {
+    match (kind, default.len()) {
+        (Holds::Image, _) if list => {
+            return Err("an image resource has one file, not a list".into());
+        }
+        (_, 0) if list => return Err("default lists no file".into()),
+        _ => {}
+    }
+    for d in &default {
         located(d)?;
     }
     Ok(Slot {
@@ -1210,21 +1234,23 @@ mod tests {
             "s.motion.tsx",
             "export const controls = { resources: { logo: resource({ kind: \"image\", default: \
              \"../media/logo.png\" }), \"hero-2.b\": resource({ kind: \"image\" }), brand: \
-             resource({ kind: \"font\", default: \"Brand.ttf\" }) } };\n",
+             resource({ kind: \"font\", default: \"Brand.ttf\" }), faces: resource({ kind: \
+             \"font\", default: [\"A.ttf\", \"https://x.org/B.otf\"] }) } };\n",
             0,
         )
         .unwrap();
-        let slot = |name: &str, kind: Holds, default: Option<&str>| Slot {
+        let slot = |name: &str, kind: Holds, default: &[&str]| Slot {
             name: name.into(),
             kind,
-            default: default.map(String::from),
+            default: default.iter().map(|d| d.to_string()).collect(),
         };
         assert_eq!(
             r.resources,
             [
-                slot("logo", Holds::Image, Some("../media/logo.png")),
-                slot("hero-2.b", Holds::Image, None),
-                slot("brand", Holds::Font, Some("Brand.ttf")),
+                slot("logo", Holds::Image, &["../media/logo.png"]),
+                slot("hero-2.b", Holds::Image, &[]),
+                slot("brand", Holds::Font, &["Brand.ttf"]),
+                slot("faces", Holds::Font, &["A.ttf", "https://x.org/B.otf"]),
             ]
         );
         for (source, says) in [
@@ -1251,6 +1277,25 @@ mod tests {
             (
                 "export const controls = { resources: { Serif: resource({ kind: \"font\" }) } };",
                 "resource Serif: a font resource cannot be named Serif: that is a built-in family",
+            ),
+            (
+                "export const controls = { resources: { emoji: resource({ kind: \"font\" }) } };",
+                "resource emoji: a font resource cannot be named emoji",
+            ),
+            (
+                "export const controls = { resources: { a: resource({ kind: \"image\", default: \
+                 [\"a.png\"] }) } };",
+                "resource a: an image resource has one file, not a list",
+            ),
+            (
+                "export const controls = { resources: { a: resource({ kind: \"font\", default: [] \
+                 }) } };",
+                "resource a: default lists no file",
+            ),
+            (
+                "export const controls = { resources: { a: resource({ kind: \"font\", default: \
+                 [\"a.ttf\", 1] }) } };",
+                "resource a: default is a string literal or a list of them",
             ),
             (
                 "export const controls = { resources: { a: resource({ default: \"a.png\" }) } };",

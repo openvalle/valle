@@ -183,13 +183,53 @@ fn families_are_built_in_or_resources() {
         "font family Brand: the scene declares no font resource Brand in controls.resources"
     );
     // A font resource is a family by its name, whatever its ASCII case.
-    t.add_font("brand", crate::testing::built_in(2)).unwrap();
+    t.add_font("brand", "Serif.ttf", crate::testing::built_in(2))
+        .unwrap();
     let mut width = |family: Family| t.measure(&plain("Serif", &with(family)), None).unwrap()[0];
     assert_eq!(width(Family::Named("Brand".into())), width(Family::Serif));
     assert_eq!(
-        t.add_font("bad", Blob::from(b"not a font".to_vec()))
+        t.add_font("bad", "bad.ttf", Blob::from(b"not a font".to_vec()))
             .unwrap_err(),
         "not a font file: TrueType, OpenType or a collection of them"
+    );
+}
+
+#[test]
+fn a_font_resource_is_a_family_of_its_files() {
+    let mut t = text();
+    t.add_font("brand", "Sans.ttf", crate::testing::built_in(0))
+        .unwrap();
+    t.add_font("brand", "Italic.ttf", crate::testing::built_in(1))
+        .unwrap();
+    let file = |path: &str, italic| FontFile {
+        family: "brand".into(),
+        path: path.into(),
+        weight: [100.0, 900.0],
+        width: [62.5, 100.0],
+        italic,
+    };
+    assert_eq!(
+        t.font_files(),
+        [file("Sans.ttf", false), file("Italic.ttf", true)]
+    );
+    // Italic text takes the italic file, not the upright one slanted.
+    let mut face = |style| {
+        let f = Font {
+            family: Rc::from([Family::Named("brand".into())]),
+            style,
+            ..font(16.0)
+        };
+        let lines = t.lines(&plain("Lean", &f), 1000.0).unwrap();
+        let face = &t.faces()[lines.glyphs[0].face as usize];
+        (face.data.id(), face.slanted)
+    };
+    let (upright, _) = face(FontStyle::Normal);
+    let (italic, slanted) = face(FontStyle::Italic);
+    assert!(italic != upright && !slanted);
+    assert_eq!(
+        t.add_font("brand", "Again.ttf", crate::testing::built_in(0))
+            .unwrap_err(),
+        "the same weight, style and width as Sans.ttf"
     );
 }
 

@@ -8,12 +8,12 @@
 
 use std::fmt::Write as _;
 
-use valle_engine::front::{Composition, Holds, Slot};
+use valle_engine::front::{Composition, Slot};
 use valle_engine::js;
 use valle_engine::scene::Frame;
 use valle_engine::svg;
 use valle_engine::template::{Kind, Piece, Prop, Tag, V};
-use valle_engine::text::BUILT_IN;
+use valle_engine::text::{BUILT_IN, FontFile};
 
 /// Style properties React DOM prints as bare numbers; it gives other numbers but 0 `px`.
 const UNITLESS: &[&str] = &[
@@ -65,11 +65,13 @@ const FAMILIES: [(&str, &str, usize, Option<usize>, &str); 3] = [
 const SANS_SERIF: &str = FAMILIES[0].1;
 
 /// The frame's HTML, or what in it has none; `resources` are the scene's, their files paths from
-/// the cases' folder, and `tailwind` the Tailwind version its classes are compiled by.
+/// the cases' folder, `fonts` the files of its font resources, and `tailwind` the Tailwind
+/// version its classes are compiled by.
 pub fn print(
     frame: &Frame,
     c: Composition,
     resources: &[Slot],
+    fonts: &[FontFile],
     tailwind: &str,
 ) -> Result<String, String> {
     let mut body = "<div id=\"canvas\">".to_string();
@@ -94,13 +96,21 @@ pub fn print(
             );
         }
     }
-    // Font resources, each a family by its name.
-    for slot in resources.iter().filter(|s| s.kind == Holds::Font) {
+    // Font resources, each a family by its name, a face per file as the file describes it.
+    for f in fonts {
+        let range = |[low, high]: [f32; 2], unit: &str| match low == high {
+            true => format!("{low}{unit}"),
+            false => format!("{low}{unit} {high}{unit}"),
+        };
         let _ = writeln!(
             html,
-            "@font-face {{ font-family: \"{}\"; src: url(\"{}\"); }}",
-            slot.name,
-            file(slot)?
+            "@font-face {{ font-family: \"{}\"; src: url(\"{}\"); font-weight: {}; \
+             font-stretch: {}; font-style: {}; }}",
+            f.family,
+            location(&f.path)?,
+            range(f.weight, ""),
+            range(f.width, "%"),
+            if f.italic { "italic" } else { "normal" }
         );
     }
     let _ = write!(
@@ -195,9 +205,16 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
     Ok(())
 }
 
-/// Where the server gives a resource's file; a built-in font's from the web is its file's name.
+/// Where the server gives a resource's file.
 fn file(slot: &Slot) -> Result<String, String> {
-    let path = (slot.default.as_deref()).ok_or_else(|| format!("{}: no file", slot.name))?;
+    match &slot.default[..] {
+        [path] => location(path),
+        _ => Err(format!("{}: not one file", slot.name)),
+    }
+}
+
+/// Where the server gives the file at `path`; a built-in font's from the web is its file's name.
+fn location(path: &str) -> Result<String, String> {
     if path.starts_with("https://") {
         let font = (BUILT_IN.iter().find(|f| f.url == path))
             .ok_or_else(|| format!("{path}: cases read only the built-in fonts from the web"))?;

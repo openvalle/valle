@@ -63,9 +63,9 @@ const LENGTHS: [&str; 15] = [
 pub struct Inputs {
     pub props: Map<String, Value>,
     pub data: Map<String, Value>,
-    /// The file of each resource bound, by its name: a path `read` takes, in place of the
-    /// resource's default.
-    pub resources: BTreeMap<String, String>,
+    /// The files of each resource bound, by its name: paths `read` takes, in place of the
+    /// resource's default; one for an image, the faces of its family for a font.
+    pub resources: BTreeMap<String, Vec<String>>,
 }
 
 /// The props of `controls.props`, an object of `name: number({ … })` and the like.

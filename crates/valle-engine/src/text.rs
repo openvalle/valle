@@ -212,6 +212,18 @@ struct Paragraph {
     used: bool,
 }
 
+/// A face in a file of a font resource: its family, the file's path, and what CSS's
+/// `@font-face` would say of it: its weights and widths (%), from one to another for a variable
+/// font, and whether it is italic.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontFile {
+    pub family: Rc<str>,
+    pub path: String,
+    pub weight: [f32; 2],
+    pub width: [f32; 2],
+    pub italic: bool,
+}
+
 pub struct Text {
     fonts: FontContext,
     layouts: LayoutContext<u32>,
@@ -223,8 +235,9 @@ pub struct Text {
     faces: Vec<Face>,
     /// Glyph outlines by face and glyph id, in font units y up, and their units per em.
     outlines: HashMap<(u32, u32), (f32, Vec<Curve>)>,
-    /// The families of font resources, by their resources' names.
+    /// The families of font resources, by their resources' names, and their files.
     named: Vec<Rc<str>>,
+    files: Vec<FontFile>,
     /// Where the built-in fonts come from, and the family of each one given so far.
     built_in: Fonts,
     given: [Option<FamilyId>; BUILT_IN.len()],
@@ -331,6 +344,7 @@ impl Text {
             faces: Vec::new(),
             outlines: HashMap::new(),
             named: Vec::new(),
+            files: Vec::new(),
             built_in: fonts,
             given: [None; BUILT_IN.len()],
         }
@@ -378,17 +392,57 @@ impl Text {
         Ok(())
     }
 
-    /// The font resource `name`, a family by that name, of the faces in `data`.
-    pub fn add_font(&mut self, name: &str, data: Blob<u8>) -> Result<(), Error> {
+    /// Adds the faces in `data`, the file at `path`, to the family of font resource `name`; no
+    /// two files of a family have a face of the same weight, style and width.
+    pub fn add_font(&mut self, name: &str, path: &str, data: Blob<u8>) -> Result<(), Error> {
         let named = FontInfoOverride {
             family_name: Some(name),
             ..Default::default()
         };
-        if (self.fonts.collection.register_fonts(data, Some(named))).is_empty() {
+        let added = self.fonts.collection.register_fonts(data, Some(named));
+        let Some((_, infos)) = added.first() else {
             return Err("not a font file: TrueType, OpenType or a collection of them".into());
+        };
+        let family: Rc<str> = match self.named.iter().find(|n| ***n == *name) {
+            Some(family) => family.clone(),
+            None => {
+                self.named.push(name.into());
+                name.into()
+            }
+        };
+        let file = self.files.len();
+        for info in infos {
+            let range = |tag: &[u8; 4], value: f32| match (info.axes().iter())
+                .find(|a| a.tag == skrifa::Tag::new(tag))
+            {
+                Some(axis) => [axis.min, axis.max],
+                None => [value, value],
+            };
+            let face = FontFile {
+                family: family.clone(),
+                path: path.to_string(),
+                weight: range(b"wght", info.weight().value()),
+                width: range(b"wdth", info.width().ratio() * 100.0),
+                italic: info.style() != parley::fontique::FontStyle::Normal,
+            };
+            let same = |f: &FontFile| {
+                (f.family == face.family && f.weight[0] == face.weight[0])
+                    && (f.width[0] == face.width[0] && f.italic == face.italic)
+            };
+            if let Some(other) = self.files[..file].iter().find(|f| same(f)) {
+                return Err(format!(
+                    "the same weight, style and width as {}",
+                    other.path
+                ));
+            }
+            self.files.push(face);
         }
-        self.named.push(name.into());
         Ok(())
+    }
+
+    /// The files of font resources, a face each.
+    pub fn font_files(&self) -> &[FontFile] {
+        &self.files
     }
 
     /// The faces glyphs name.

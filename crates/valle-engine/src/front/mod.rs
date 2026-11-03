@@ -31,7 +31,7 @@ use crate::time::{Rate, Tick};
 
 pub use controls::{Inputs, Prop};
 use lower::{Arg, At};
-pub use rewrite::{Holds, Slot};
+pub use rewrite::{BUILT_IN_FAMILIES, Holds, Slot};
 
 const RUNTIME: &str = include_str!("runtime.js");
 /// The built-in charts, d3's subset, which run as scene code.
@@ -117,12 +117,12 @@ impl Front {
             .map(|slot| Slot {
                 name: slot.name.clone(),
                 kind: slot.kind,
-                default: (slot.default.as_ref()).map(|d| {
-                    match d.starts_with('/') || rewrite::web(d) {
+                default: (slot.default.iter())
+                    .map(|d| match d.starts_with('/') || rewrite::web(d) {
                         true => d.clone(),
                         false => rewrite::join(folder, d),
-                    }
-                }),
+                    })
+                    .collect(),
             })
             .collect::<Vec<_>>();
         if let Some(k) =
@@ -132,12 +132,18 @@ impl Front {
                 "{entry}: resources: the scene declares no resource {k} in controls.resources"
             ));
         }
-        if let Some(e) = inputs
-            .resources
-            .values()
-            .find_map(|v| rewrite::located(v).err())
-        {
-            return Err(format!("{entry}: resources: {e}"));
+        for slot in &resources {
+            let Some(files) = inputs.resources.get(&slot.name) else {
+                continue;
+            };
+            let e = match (slot.kind, files.len()) {
+                (_, 0) => Err("nothing is bound to it".to_string()),
+                (Holds::Image, 2..) => Err("an image resource has one file".to_string()),
+                _ => files.iter().try_for_each(|f| rewrite::located(f)),
+            };
+            if let Err(e) = e {
+                return Err(format!("{entry}: resource {}: {e}", slot.name));
+            }
         }
         let (props, data) = (scene.props.clone(), scene.data.clone());
         let values =

@@ -39,7 +39,7 @@ fn resources() -> [Slot; 2] {
     ["photo", "tile"].map(|name| Slot {
         name: name.into(),
         kind: Holds::Image,
-        default: None,
+        default: Vec::new(),
     })
 }
 

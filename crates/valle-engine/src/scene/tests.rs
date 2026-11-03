@@ -125,7 +125,7 @@ fn images_come_from_the_resources_the_scene_declares() {
         let read = files(source.into(), Some(image.clone()));
         let mut scene = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts()).unwrap();
         // The default from the scene's folder.
-        assert_eq!(scene.resources()[0].default.as_deref(), Some("img/dot.png"));
+        assert_eq!(scene.resources()[0].default, ["img/dot.png"]);
         assert_eq!(scene.images()[0].size, [2, 1]);
         // Premultiplied in 8 bits, as Chrome keeps it.
         assert_eq!(scene.images()[0].pixels[4..], [128, 128, 128, 128]);
@@ -155,7 +155,7 @@ fn images_come_from_the_resources_the_scene_declares() {
             _ => None,
         };
         let bind = |name: &str| Inputs {
-            resources: [(name.to_string(), "other/wide.png".to_string())].into(),
+            resources: [(name.to_string(), vec!["other/wide.png".to_string()])].into(),
             ..Inputs::default()
         };
         let scene = Scene::load("scenes/s.tsx", &read, &bind("dot"), fonts()).unwrap();
@@ -177,11 +177,10 @@ fn images_come_from_the_resources_the_scene_declares() {
             _ => None,
         };
         let scene = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts()).unwrap();
-        let default = scene.resources()[0].default.as_deref();
-        assert_eq!(default, Some("https://x.org/dot.png"));
+        assert_eq!(scene.resources()[0].default, ["https://x.org/dot.png"]);
         assert_eq!(scene.images()[0].size, [2, 1]);
         let bind = |location: &str| Inputs {
-            resources: [("dot".to_string(), location.to_string())].into(),
+            resources: [("dot".to_string(), vec![location.to_string()])].into(),
             ..Inputs::default()
         };
         let scene = Scene::load(
@@ -197,8 +196,8 @@ fn images_come_from_the_resources_the_scene_declares() {
             .unwrap();
         assert_eq!(
             e,
-            "scenes/s.tsx: resources: file:///wide.png: write a path, or an http:// or https:// \
-             address"
+            "scenes/s.tsx: resource dot: file:///wide.png: write a path, or an http:// or \
+             https:// address"
         );
     });
 }

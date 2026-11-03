@@ -11,7 +11,7 @@ use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
 use crate::style::{Sheet, Style, gradient};
 use crate::template::{Error, Kind, Measure, Op, Tag, Template, V};
-use crate::text::{Blob, Face, Fonts, Text};
+use crate::text::{Blob, Face, FontFile, Fonts, Text};
 use crate::time::Tick;
 
 /// Variants whose sheets are kept, as many as the frontend keeps.
@@ -63,16 +63,23 @@ impl Scene {
         let mut text = Text::new(fonts);
         for slot in &front.resources {
             let fail = |e: String| format!("{entry}: resource {}: {e}", slot.name);
-            let path = (inputs.resources.get(&slot.name).or(slot.default.as_ref()))
-                .ok_or_else(|| fail("nothing is bound to it, and it has no default".into()))?;
-            let bytes = read(path).ok_or_else(|| fail(format!("{path}: not found")))?;
-            let picture = match slot.kind {
-                Holds::Image => Picture::load(&bytes, &mut images),
-                Holds::Font => {
-                    (text.add_font(&slot.name, Blob::from(bytes))).map(|()| Picture::None)
+            let files = (inputs.resources.get(&slot.name)).unwrap_or(&slot.default);
+            if files.is_empty() {
+                return Err(fail("nothing is bound to it, and it has no default".into()));
+            }
+            // An image has one file, a font the faces of its family.
+            let mut picture = Picture::None;
+            for path in files {
+                let bytes = read(path).ok_or_else(|| fail(format!("{path}: not found")))?;
+                picture = match slot.kind {
+                    Holds::Image => Picture::load(&bytes, &mut images),
+                    Holds::Font => {
+                        (text.add_font(&slot.name, path, Blob::from(bytes))).map(|()| Picture::None)
+                    }
                 }
-            };
-            pictures.push(picture.map_err(|e| fail(format!("{path}: {e}")))?);
+                .map_err(|e| fail(format!("{path}: {e}")))?;
+            }
+            pictures.push(picture);
         }
         Ok(Scene {
             front,
@@ -100,6 +107,11 @@ impl Scene {
 
     pub fn composition(&self) -> Composition {
         self.front.composition
+    }
+
+    /// The files of its font resources, a face each.
+    pub fn font_files(&self) -> &[FontFile] {
+        self.text.font_files()
     }
 
     /// The faces display lists name.
