@@ -492,11 +492,13 @@ enum Step {
         layer: usize,
         mask: usize,
     },
-    /// Draws `layer` blurred along one axis into `target`, a new layer.
+    /// Draws `layer` blurred along one axis into `target`, a new layer, only within `clip` (min
+    /// x, min y, max x, max y px), out of which the blur has nothing to spread.
     Blur {
         target: usize,
         layer: usize,
         at: u32,
+        clip: [f32; 4],
     },
     /// Draws `layer` with its colors through matrices into `target`, a new layer.
     Colors {
@@ -558,6 +560,55 @@ struct Under {
     open: Vec<(usize, u32)>,
 }
 
+/// Where what is drawn into a layer is on it, px: min x, min y, max x, max y; none if nothing
+/// is. A blur needs to run only within it, grown by the blur's spread.
+#[derive(Clone, Copy, Debug, Default)]
+struct Reach(Option<[f32; 4]>);
+
+impl Reach {
+    /// Anywhere: what an effect may draw where nothing was.
+    const ALL: Reach = Reach(Some([f32::MIN, f32::MIN, f32::MAX, f32::MAX]));
+
+    /// The bounds of `rect` in px `matrix` takes to the layer's, anywhere if they are not finite.
+    fn of(matrix: Matrix, rect: Rect) -> Reach {
+        let b = matrix.bounds(rect);
+        let r = [b.x, b.y, b.x + b.width, b.y + b.height];
+        if r.iter().all(|v| v.is_finite()) {
+            Reach(Some(r))
+        } else {
+            Reach::ALL
+        }
+    }
+
+    fn union(self, other: Reach) -> Reach {
+        match (self.0, other.0) {
+            (Some(a), Some(b)) => Reach(Some([
+                a[0].min(b[0]),
+                a[1].min(b[1]),
+                a[2].max(b[2]),
+                a[3].max(b[3]),
+            ])),
+            (a, b) => Reach(a.or(b)),
+        }
+    }
+
+    /// Grown by `d` px on each side.
+    fn grown(self, d: f32) -> Reach {
+        Reach(
+            self.0
+                .map(|[x0, y0, x1, y1]| [x0 - d, y0 - d, x1 + d, y1 + d]),
+        )
+    }
+
+    /// Moved by `offset` px.
+    fn moved(self, [dx, dy]: [f32; 2]) -> Reach {
+        Reach(
+            self.0
+                .map(|[x0, y0, x1, y1]| [x0 + dx, y0 + dy, x1 + dx, y1 + dy]),
+        )
+    }
+}
+
 #[derive(Default)]
 struct Plan {
     transforms: Vec<u32>,
@@ -575,6 +626,8 @@ struct Plan {
     paths: (Vec<u32>, Vec<u32>),
     placed: Vec<usize>,
     shadings: Vec<Shading>,
+    /// Where what was drawn since the innermost layer that blurs began is.
+    reach: Reach,
 }
 
 /// A shader drawn: its program, the words of its host block, its uniform block, and the frame's
@@ -621,15 +674,37 @@ impl Plan {
 
     /// A new layer of `layer` blurred by a Gaussian of `sigma` px: along x, then along y. Within
     /// `bounds` (x, y, width and height, whole px) if they are given, which it reads as if
-    /// mirrored at their edges.
-    fn blurred(&mut self, mut layer: usize, sigma: f32, bounds: Option<[f32; 4]>) -> usize {
+    /// mirrored at their edges; otherwise `reach`, where the layer has anything, grows by the
+    /// blur's three standard deviations.
+    fn blurred(
+        &mut self,
+        mut layer: usize,
+        sigma: f32,
+        bounds: Option<[f32; 4]>,
+        reach: &mut Reach,
+    ) -> usize {
         if sigma > 0.0 {
+            let clip = match bounds {
+                Some([x, y, w, h]) => Reach(Some([x, y, x + w, y + h])),
+                None => {
+                    *reach = reach.grown((3.0 * sigma).ceil() + 1.0);
+                    *reach
+                }
+            };
+            let Some(clip) = clip.0 else {
+                return layer;
+            };
             for [x, y] in [[1.0, 0.0], [0.0, 1.0]] {
                 let words = [sigma, x, y, 0.0].into_iter();
                 let words = words.chain(bounds.unwrap_or([0.0; 4])).chain([0.0; 12]);
                 let at = self.words(words);
                 let target = self.layer();
-                self.steps.push(Step::Blur { target, layer, at });
+                self.steps.push(Step::Blur {
+                    target,
+                    layer,
+                    at,
+                    clip,
+                });
                 layer = target;
             }
         }
@@ -638,27 +713,37 @@ impl Plan {
 
     /// A new layer of `layer` through `filters`, in the px `matrix` takes to the target's, where
     /// a blur is as much larger as the transform makes it and an offset turns with it. Blurs are
-    /// within `bounds` if they are given.
+    /// within `bounds` if they are given. `reach` is where the layer has anything, and becomes
+    /// where the new one may.
     fn filtered(
         &mut self,
         mut layer: usize,
         filters: &[Filter],
         matrix: Matrix,
         bounds: Option<[f32; 4]>,
+        reach: &mut Reach,
     ) -> usize {
         let scale = matrix.radius_scale() as f32;
         let [x, y, _] = matrix.0;
         for filter in filters {
             layer = match filter {
-                Filter::Blur(sigma) => self.blurred(layer, sigma * scale, bounds),
-                Filter::Colors(matrices) => self.colored(layer, [0.0; 2], matrices, false),
+                Filter::Blur(sigma) => self.blurred(layer, sigma * scale, bounds, reach),
+                Filter::Colors(matrices) => {
+                    // An alpha offset shows where nothing was.
+                    if matrices.iter().any(|m| m[19] > 0.0) {
+                        *reach = Reach::ALL;
+                    }
+                    self.colored(layer, [0.0; 2], matrices, false)
+                }
                 Filter::Luminance => self.colored(layer, [0.0; 2], &[LUMINANCE], true),
                 Filter::Aberration(offset) => {
                     let d = f64::from(*offset);
                     let [dx, dy] = [0, 1].map(|k| (x[k] * d) as f32);
+                    *reach = reach.grown(dx.abs().max(dy.abs()).ceil());
                     self.effect(layer, ABERRATION, &[dx, dy])
                 }
                 Filter::Lens { k, frame } => {
+                    *reach = Reach::ALL;
                     let Some(t) = self.transform(matrix) else {
                         continue;
                     };
@@ -671,6 +756,7 @@ impl Plan {
                     size,
                     origin,
                 } => {
+                    *reach = Reach::ALL;
                     let Some(t) = self.transform(matrix) else {
                         continue;
                     };
@@ -682,6 +768,7 @@ impl Plan {
                     )
                 }
                 Filter::Radial { center, amount } => {
+                    *reach = Reach::ALL;
                     let Some(t) = self.transform(matrix) else {
                         continue;
                     };
@@ -713,6 +800,7 @@ impl Plan {
                     }
                     // A tap a px or less apart, so that between them it reads as one smear.
                     let taps = (length.ceil() + 1.0).min(MOTION_TAPS) as f32;
+                    *reach = reach.grown(length.ceil() as f32);
                     self.effect(layer, MOTION, &[taps, dx as f32, dy as f32])
                 }
                 Filter::Bloom {
@@ -725,7 +813,7 @@ impl Plan {
                         continue;
                     }
                     let light = self.effect(layer, LIGHT, &[*threshold, *knee, *intensity]);
-                    let halo = self.blurred(light, radius * scale / 2.0, bounds);
+                    let halo = self.blurred(light, radius * scale / 2.0, bounds, reach);
                     let both = self.layer();
                     self.composite(both, layer);
                     self.add(both, halo);
@@ -739,6 +827,7 @@ impl Plan {
                     turbulence,
                     origin: [ox, oy],
                 } => {
+                    *reach = Reach::ALL;
                     let Some(t) = self.transform(matrix) else {
                         continue;
                     };
@@ -766,7 +855,9 @@ impl Plan {
                     let (dx, dy) = (f64::from(*dx), f64::from(*dy));
                     let offset = [0, 1].map(|k| (x[k] * dx + y[k] * dy) as f32);
                     let shadow = self.colored(layer, offset, &[tint], false);
-                    let shadow = self.blurred(shadow, sigma * scale, bounds);
+                    let mut moved = reach.moved(offset);
+                    let shadow = self.blurred(shadow, sigma * scale, bounds, &mut moved);
+                    *reach = reach.union(moved);
                     let both = self.layer();
                     self.composite(both, shadow);
                     self.composite(both, layer);
@@ -1205,6 +1296,25 @@ impl<'a> Renderer<'a> {
         let (transform, matrix) = at;
         for item in items {
             match item {
+                Item::Rect { rect, .. }
+                | Item::Ring { rect, .. }
+                | Item::Gradient { rect, .. }
+                | Item::Image { rect, .. }
+                | Item::Backdrop { rect, .. } => {
+                    plan.reach = plan.reach.union(Reach::of(matrix, *rect));
+                }
+                Item::Shader { rect, outset, .. } => {
+                    let r = Rect {
+                        x: rect.x - outset,
+                        y: rect.y - outset,
+                        width: rect.width + 2.0 * outset,
+                        height: rect.height + 2.0 * outset,
+                    };
+                    plan.reach = plan.reach.union(Reach::of(matrix, r));
+                }
+                _ => {}
+            }
+            match item {
                 Item::Rect { .. } | Item::Ring { .. } => {
                     // A fill is a ring whose inside has no size.
                     let (rect, radii, inside, inner_radii, colors) = match item {
@@ -1349,6 +1459,15 @@ impl<'a> Renderer<'a> {
                         let Some(o) = self.outline(*face, id, stroke / size, faces, atlas)? else {
                             continue;
                         };
+                        let s = size / o.em;
+                        let [x0, y0, x1, y1] = o.bounds;
+                        let r = Rect {
+                            x: x + x0 * s,
+                            y: y - y1 * s,
+                            width: (x1 - x0) * s,
+                            height: (y1 - y0) * s,
+                        };
+                        plan.reach = plan.reach.union(Reach::of(matrix, r).grown(1.0));
                         let i = (plan.glyphs.len() / GLYPH) as u32;
                         let floats = [x, y, size / o.em, 0.0].into_iter().chain(o.bounds).chain([
                             o.band_scale[0],
@@ -1377,6 +1496,14 @@ impl<'a> Renderer<'a> {
                     if o.curves.is_empty() {
                         continue;
                     }
+                    let [x0, y0, x1, y1] = o.bounds;
+                    let r = Rect {
+                        x: x0,
+                        y: -y1,
+                        width: x1 - x0,
+                        height: y1 - y0,
+                    };
+                    plan.reach = plan.reach.union(Reach::of(matrix, r).grown(1.0));
                     let (curves, lists) = &mut plan.paths;
                     let first = [(curves.len() / 4) as u32, lists.len() as u32];
                     curves.extend(o.curves.iter().flatten().map(|v| v.to_bits()));
@@ -1412,9 +1539,12 @@ impl<'a> Renderer<'a> {
                         open: Vec::new(),
                     };
                     let around = std::mem::replace(&mut plan.seen, inside);
+                    let outer = std::mem::take(&mut plan.reach);
                     self.plan(items, layer, at, faces, plan, atlas)?;
                     plan.seen = around;
-                    let layer = plan.filtered(layer, filters, matrix, None);
+                    let mut reach = std::mem::replace(&mut plan.reach, outer);
+                    let layer = plan.filtered(layer, filters, matrix, None, &mut reach);
+                    plan.reach = plan.reach.union(reach);
                     plan.composite(target, layer);
                 }
                 Item::Shader {
@@ -1530,7 +1660,8 @@ impl<'a> Renderer<'a> {
                     let [x0, y0] = [b.x, b.y].map(f32::floor);
                     let [x1, y1] = [b.x + b.width, b.y + b.height].map(f32::ceil);
                     let bounds = [x0, y0, x1 - x0, y1 - y0];
-                    let layer = plan.filtered(copy, filters, matrix, Some(bounds));
+                    let mut all = Reach::ALL;
+                    let layer = plan.filtered(copy, filters, matrix, Some(bounds), &mut all);
                     let at = plan.words([1.0, 0.0, 0.0, 0.0].into_iter().chain(xywh(*rect)));
                     plan.layers
                         .extend(radii.iter().flatten().map(|v| v.to_bits()));
@@ -1669,9 +1800,13 @@ impl<'a> Renderer<'a> {
                         }
                     };
                     let around = std::mem::replace(&mut plan.seen, inside);
+                    let outer = std::mem::take(&mut plan.reach);
                     self.plan(items, layer, at, faces, plan, atlas)?;
                     plan.seen = around;
-                    let layer = plan.blurred(layer, sigma * matrix.radius_scale() as f32, None);
+                    let mut reach = std::mem::replace(&mut plan.reach, outer);
+                    let sigma = sigma * matrix.radius_scale() as f32;
+                    let layer = plan.blurred(layer, sigma, None, &mut reach);
+                    plan.reach = plan.reach.union(reach);
                     plan.steps.push(Step::Composite {
                         target,
                         layer,
@@ -2031,7 +2166,22 @@ impl<'a> Renderer<'a> {
                     if let Some(u) = under {
                         pass.set_bind_group(2, &self.pool[u].image, &[]);
                     }
-                    pass.draw(0..3, *at..*at + 1);
+                    let mut shown = true;
+                    if let Step::Blur { clip, .. } = step {
+                        // The whole px of the target the clip touches, if any.
+                        let [w, h] = self.size.map(|v| v as f32);
+                        let [x0, y0] =
+                            [clip[0].floor().clamp(0.0, w), clip[1].floor().clamp(0.0, h)];
+                        let [x1, y1] = [clip[2].ceil().clamp(0.0, w), clip[3].ceil().clamp(0.0, h)];
+                        let [x0, y0, x1, y1] = [x0, y0, x1, y1].map(|v| v as u32);
+                        shown = x1 > x0 && y1 > y0;
+                        if shown {
+                            pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
+                        }
+                    }
+                    if shown {
+                        pass.draw(0..3, *at..*at + 1);
+                    }
                 }
             }
             drop(pass);
