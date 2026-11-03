@@ -73,6 +73,14 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             V::Str(Rc::from(s))
         }
         Op::Interp(i) => interpolate(i, values)?,
+        Op::Spring {
+            input,
+            spring,
+            velocity,
+        } => {
+            let (x, v) = spring.at(num(input));
+            V::Num(if *velocity { v } else { x })
+        }
     })
 }
 

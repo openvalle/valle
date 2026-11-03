@@ -515,6 +515,41 @@
     return args.some(isT) ? mk(name, args) : host.op(name, args);
   }
 
+  // `spring(t, options)` and `springVelocity(t, options)`: options as `spring.rs` takes them,
+  // fixed values.
+  const springOf = (name) => (t, options) => {
+    const o = options ?? {};
+    for (const k of keys(o)) {
+      if (!SPRING.includes(k)) {
+        throw new TypeError(name + " has no option " + k + "; it takes " + SPRING.join(", "));
+      }
+    }
+    if (!numeric(t)) throw new TypeError(name + "(seconds, options?) takes a number of seconds");
+    const spec = SPRING.map((k) => {
+      const v = o[k] instanceof T ? exact(o[k], name, site()) : o[k];
+      if (v === undefined) return "";
+      if (typeof v !== (k === "preset" ? "string" : "number") || String(v).includes("|")) {
+        throw new TypeError(
+          name + " " + k + (k === "preset" ? " must be a name" : " must be a number"),
+        );
+      }
+      return String(v);
+    });
+    const op = name + "|" + spec.join("|");
+    return isT(t) ? mk(op, [t]) : host.op(op, [t]);
+  };
+  const SPRING = [
+    "preset",
+    "duration",
+    "bounce",
+    "mass",
+    "stiffness",
+    "damping",
+    "initialVelocity",
+  ];
+  const spring = springOf("spring");
+  const springVelocity = springOf("springVelocity");
+
   // ------------------------------------------------------------------------------ elements
 
   function __h(type, props, ...children) {
@@ -1135,6 +1170,8 @@
     useCurrentTime,
     useComposition,
     interpolate,
+    spring,
+    springVelocity,
     View: "View",
     Text: "Text",
     Span: "Span",

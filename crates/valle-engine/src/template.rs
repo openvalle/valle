@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::ease::Easing;
+use crate::spring::Spring;
 use crate::style::color::Mixing;
 
 use crate::js::{self, MathFn};
@@ -96,6 +97,12 @@ pub enum Op {
     /// The parts joined as a template literal joins them.
     Template(Vec<Part>),
     Interp(Rc<Interp>),
+    /// `spring(t)`, or its velocity.
+    Spring {
+        input: u32,
+        spring: Spring,
+        velocity: bool,
+    },
 }
 
 /// `interpolate(input, inputs, outputs, options)` over numbers. Stops are operands, so traced

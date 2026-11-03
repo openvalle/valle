@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::ease::Easing;
 use crate::js::MathFn;
+use crate::spring::Spring;
 use crate::style::color::Mixing;
 use crate::template::{
     Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Tag, Template, V,
@@ -41,6 +42,19 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
     if let Some(f) = name.strip_prefix("math|") {
         let f = MathFn::parse(f).ok_or_else(|| format!("no Math function {f}"))?;
         return Ok(Op::Math(f, exprs()?));
+    }
+    for (prefix, velocity) in [("spring|", false), ("springVelocity|", true)] {
+        if let Some(spec) = name.strip_prefix(prefix) {
+            let mut parts = spec.split('|').map(|p| (!p.is_empty()).then_some(p));
+            let options = std::array::from_fn(|_| parts.next().flatten());
+            let input = fixed(1)?[0];
+            let spring = Spring::new(options)?;
+            return Ok(Op::Spring {
+                input,
+                spring,
+                velocity,
+            });
+        }
     }
     if let Some(spec) = name.strip_prefix("interpolate|") {
         let side = |s: &str| match s {
