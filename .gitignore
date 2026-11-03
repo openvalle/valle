@@ -11,6 +11,7 @@
 # Web tooling
 /node_modules/
 
-# The engine in the browser, which `cargo xtask build-web` makes
+# The engine in the browser and Studio, which `cargo xtask build-web` makes
 /web/packages/engine/dist/
 /web/packages/engine/src/wasm/
+/web/apps/studio/dist/

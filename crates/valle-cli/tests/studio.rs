@@ -270,6 +270,26 @@ fn the_service_reads_writes_and_runs_for_its_page_only() {
     });
     assert_eq!(done["id"], started["id"]);
     assert_eq!(done["result"]["status"], "error");
+    // Timeline edits as `valle timeline edit` does them, and the folder's files.
+    let doc = serde_json::json!({
+        "canvas": { "width": 64, "height": 36, "fps": 30 },
+        "tracks": { "visual": [{ "items": [
+            { "id": "a", "kind": "solid", "color": "#000000ff", "duration": 1 }
+        ] }] }
+    });
+    let op = serde_json::json!({ "op": "trim", "clip": "a", "duration": 0.5 });
+    let body = serde_json::json!({ "text": doc.to_string(), "op": op }).to_string();
+    let edited = studio
+        .send("POST", "/api/edit", &[], body.as_bytes())
+        .json();
+    assert_eq!(
+        edited["layout"]["duration"],
+        serde_json::json!(0.5),
+        "{edited}"
+    );
+    let listed = studio.get("/api/list").json();
+    let files = listed["files"].as_array().expect("files");
+    assert!(files.iter().any(|f| f["path"] == "notes/a.txt"), "{listed}");
     let body = br#"{ "args": ["studio"] }"#;
     assert_eq!(studio.send("POST", "/api/project", &[], body).status, 400);
 

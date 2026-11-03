@@ -19,7 +19,8 @@ commands:
                   run the tests, or only the cases under tests/cases at these paths;
                   --skip leaves out test layers
   accept case...  take the frames the last test run drew for these cases as their baselines
-  build-web       build the engine for the browser into web/packages/engine/dist
+  build-web       build the engine for the browser into web/packages/engine/dist, and
+                  Studio into web/apps/studio/dist
 ";
 
 /// The wasm-bindgen that makes the browser module's JavaScript: the version `valle-web` pins.
@@ -89,7 +90,8 @@ fn lint(flags: &[String]) -> Result<(), String> {
 }
 
 /// Test layers past the first, which `--skip` can leave out: the cases the GPU draws, and the
-/// engine in Chrome with WebGPU, which `web/tests/player.ts` compares with the native engine.
+/// engine in Chrome with WebGPU, which `web/tests/player.ts` compares with the native engine,
+/// with Studio driven end to end by `web/tests/studio.ts`.
 const LAYERS: [&str; 2] = ["gpu", "browser"];
 
 fn test(args: &[String]) -> Result<(), String> {
@@ -133,10 +135,13 @@ fn test(args: &[String]) -> Result<(), String> {
     build_web()?;
     cargo(&["build", "--locked", "-p", "valle-cli"])?;
     let valle = root().join("target/debug/valle");
-    run(
-        Command::new("bun").arg("web/tests/player.ts").arg(valle),
-        "bun web/tests/player.ts",
-    )
+    for test in ["web/tests/player.ts", "web/tests/studio.ts"] {
+        run(
+            Command::new("bun").arg(test).arg(&valle),
+            &format!("bun {test}"),
+        )?;
+    }
+    Ok(())
 }
 
 /// Takes the frames the last test run drew for `cases` as their Valle baselines.
@@ -282,6 +287,23 @@ fn build_web() -> Result<(), String> {
     )?;
     let from = package.join("src/wasm/valle_web_bg.wasm");
     std::fs::copy(&from, dist.join("valle_web_bg.wasm"))
+        .map_err(|e| format!("{}: {e}", from.display()))?;
+    println!("built {}", dist.display());
+    // Studio, which the local service serves beside the SDK's runtime.
+    let studio = root().join("web/apps/studio");
+    let dist = studio.join("dist");
+    let _ = std::fs::remove_dir_all(&dist);
+    run(
+        Command::new("bun")
+            .args([
+                "build", "--target", "browser", "--format", "esm", "--outdir",
+            ])
+            .arg(&dist)
+            .arg(studio.join("src/main.ts")),
+        "bun build",
+    )?;
+    let from = studio.join("index.html");
+    std::fs::copy(&from, dist.join("index.html"))
         .map_err(|e| format!("{}: {e}", from.display()))?;
     println!("built {}", dist.display());
     Ok(())

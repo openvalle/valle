@@ -28,6 +28,8 @@ const POLL: Duration = Duration::from_millis(300);
 const PING: Duration = Duration::from_secs(15);
 /// The projects opened last, newest first.
 const RECENT: usize = 20;
+/// The most files a folder is listed with.
+const LISTED: usize = 10_000;
 
 /// What is open: a scene, a timeline or a project, the folder its files are read from and
 /// written to, and the entry in it; or nothing yet, on the projects' home.
@@ -302,6 +304,8 @@ impl Service {
             ("POST", "/api/open") => self.open_project(&request.body),
             ("POST", "/api/project") => self.command(&request.body),
             ("POST", "/api/render") => self.render(&request.body),
+            ("POST", "/api/edit") => edit(&request.body),
+            ("GET", "/api/list") => self.list(),
             ("GET", "/api/url") => return url(request.query("u")),
             ("GET", p) if p.starts_with("/api/fonts/") => return font(&p["/api/fonts/".len()..]),
             ("GET", p) if p.starts_with("/api/files/") => return self.read(&p[11..]),
@@ -451,6 +455,42 @@ impl Service {
         Response::json(200, &json!({ "status": "ok", "sha256": sha256 }))
     }
 
+    /// The files in the folder open, but those of hidden folders: each one's path, bytes and
+    /// when it was changed, in seconds.
+    fn list(&self) -> Result<Value, String> {
+        let root = self.root().ok_or("no folder is open")?;
+        let mut files = Vec::new();
+        let mut folders = vec![root.clone()];
+        while let Some(dir) = folders.pop() {
+            let mut entries: Vec<_> = (std::fs::read_dir(&dir).map_err(|e| e.to_string())?)
+                .flatten()
+                .collect();
+            entries.sort_by_key(|e| e.file_name());
+            for entry in entries {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if name.starts_with('.') || name == "node_modules" {
+                    continue;
+                }
+                if meta.is_dir() {
+                    folders.push(entry.path());
+                } else if files.len() < LISTED {
+                    let modified = (meta.modified().ok())
+                        .and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_secs());
+                    files.push(json!({
+                        "path": relative(&root, &entry.path()),
+                        "size": meta.len(),
+                        "modified": modified,
+                    }));
+                }
+            }
+        }
+        Ok(json!({ "status": "ok", "files": files }))
+    }
+
     /// `path` in the folder open, as a file and as its normalized path.
     fn place(&self, path: &str) -> Option<(PathBuf, String)> {
         let path = inside(path)?;
@@ -575,6 +615,18 @@ impl Service {
             }
         }
     }
+}
+
+/// `{ text, op? }`: the timeline's text with `op` done, as `valle timeline edit` does it, and
+/// where its clips are then.
+fn edit(body: &[u8]) -> Result<Value, String> {
+    let body: Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+    let mut text = body["text"].as_str().ok_or("{ text, op? }")?.to_string();
+    if let Some(op) = body.get("op").filter(|o| !o.is_null()) {
+        text = valle_timeline::edit::apply(&text, op)?;
+    }
+    let layout = valle_timeline::edit::layout(&text)?;
+    Ok(json!({ "status": "ok", "text": text, "layout": layout }))
 }
 
 /// Says `event` to every stream open.

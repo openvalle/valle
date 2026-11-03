@@ -11,7 +11,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { Cdp, cache, install, listening, root } from "./browser.ts";
+import { Cdp, cache, flags, install, listening, root } from "./browser.ts";
 
 /** The examples and frames compared, and the props bound once the player is open. */
 const CASES: { entry: string; frames: number[]; props?: Record<string, unknown> }[] = [
@@ -434,25 +434,10 @@ async function main() {
     },
   });
   const profile = await mkdtemp(join(tmpdir(), "valle-chrome-"));
-  const browser = Bun.spawn(
-    [
-      await install("chrome"),
-      "--headless=new",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profile}`,
-      "--no-first-run",
-      // Else Chrome asks the keychain for its password store, and waits.
-      "--use-mock-keychain",
-      "--no-default-browser-check",
-      "--hide-scrollbars",
-      "--enable-unsafe-webgpu",
-      "--force-color-profile=srgb",
-      "--force-device-scale-factor=1",
-      "--autoplay-policy=no-user-gesture-required",
-      "about:blank",
-    ],
-    { stdout: "ignore", stderr: "pipe" },
-  );
+  const browser = Bun.spawn([await install("chrome"), ...flags(profile)], {
+    stdout: "ignore",
+    stderr: "pipe",
+  });
   const failed: string[] = [];
   try {
     const cdp = await Cdp.open(await listening(browser.stderr));

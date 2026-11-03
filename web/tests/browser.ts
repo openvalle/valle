@@ -63,6 +63,26 @@ export async function install(
   return exe;
 }
 
+/** How the tests run the whole of Chrome: headless, with WebGPU, colors as sRGB at one pixel a
+ * CSS pixel, sound without a gesture, and its DevTools on a port it picks. */
+export function flags(profile: string): string[] {
+  return [
+    "--headless=new",
+    "--remote-debugging-port=0",
+    `--user-data-dir=${profile}`,
+    "--no-first-run",
+    // Else Chrome asks the keychain for its password store, and waits.
+    "--use-mock-keychain",
+    "--no-default-browser-check",
+    "--hide-scrollbars",
+    "--enable-unsafe-webgpu",
+    "--force-color-profile=srgb",
+    "--force-device-scale-factor=1",
+    "--autoplay-policy=no-user-gesture-required",
+    "about:blank",
+  ];
+}
+
 /** The DevTools address Chrome prints once it listens. Its later output is read and dropped. */
 export async function listening(stderr: ReadableStream<Uint8Array>): Promise<string> {
   const reader = stderr.getReader();
