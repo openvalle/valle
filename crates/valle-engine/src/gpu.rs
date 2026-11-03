@@ -12,16 +12,24 @@
 //! texture from a pool when a step first draws into it and gives it back once composited. Glyph
 //! outlines are encoded once and kept in two buffers, the atlas, for the renderer's life; paths
 //! are encoded as they are, after the atlas, for their frame only.
+//!
+//! A shader authors write (`shader.rs`) draws its box's quad straight onto its target, through a
+//! pipeline of its own, made once; the images it reads are taken out of their layers first, each
+//! into a texture of the box's size.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::{Arc, mpsc};
 use std::task::{Context, Poll, Waker};
+
+use wgpu::util::DeviceExt;
 
 use crate::image::Image;
 use crate::layout::Rect;
 use crate::paint::{Filter, Geometry, Item, Matrix, Radii, SQUARE, Spread, Tiles};
 use crate::path::Curve;
+use crate::shader::Program;
 use crate::slug;
 use crate::style::Blend;
 use crate::style::gradient::Space;
@@ -95,6 +103,12 @@ pub struct Gpu {
     colors: wgpu::RenderPipeline,
     effects: wgpu::RenderPipeline,
     output: wgpu::RenderPipeline,
+    /// Shaders authors write: the block of what the engine tells them, the quad of their box,
+    /// the pass taking their images out of layers, and how they sample those.
+    host: wgpu::BindGroupLayout,
+    quad: wgpu::ShaderModule,
+    extract: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
 }
 
 impl Gpu {
@@ -220,6 +234,45 @@ impl Gpu {
         let colors = include_str!("../shaders/colors.wgsl");
         let effects = include_str!("../shaders/effects.wgsl");
         let output = include_str!("../shaders/output.wgsl");
+        let host = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("host"),
+            entries: &[entry(0, buffer(wgpu::BufferBindingType::Uniform))],
+        });
+        let quad = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                [COMMON, include_str!("../shaders/shader.wgsl")]
+                    .concat()
+                    .into(),
+            ),
+        });
+        let extract = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("extract"),
+            layout: Some(&layout(&[Some(&draw), Some(&host), Some(&image)])),
+            vertex: wgpu::VertexState {
+                module: &quad,
+                entry_point: Some("vx"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &quad,
+                entry_point: Some("fx"),
+                compilation_options: Default::default(),
+                targets: &[Some(WORK.into())],
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shader"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         Ok(Gpu {
             info: adapter.get_info(),
             rects: pipeline(&drawing, "rect", rect, WORK, over),
@@ -234,6 +287,10 @@ impl Gpu {
             colors: pipeline(&imaging, "colors", colors, WORK, None),
             effects: pipeline(&imaging, "effects", effects, WORK, None),
             output: pipeline(&imaging, "output", output, OUTPUT, None),
+            host,
+            quad,
+            extract,
+            sampler,
             device,
             queue,
             draw,
@@ -457,6 +514,12 @@ enum Step {
         target: usize,
         layer: usize,
     },
+    /// Draws one of the frame's shaders into `target`, reading `content` as its content.
+    Shader {
+        target: usize,
+        content: Option<usize>,
+        shading: usize,
+    },
 }
 
 impl Step {
@@ -465,6 +528,7 @@ impl Step {
         match *self {
             Step::Draw { .. } => [None; 2],
             Step::Mask { layer, mask, .. } => [Some(layer), Some(mask)],
+            Step::Shader { content, .. } => [content, None],
             Step::Composite { layer, .. }
             | Step::Add { layer, .. }
             | Step::Blend { layer, .. }
@@ -508,7 +572,11 @@ struct Plan {
     /// first curve texel and list word, which are from the start of these.
     paths: (Vec<u32>, Vec<u32>),
     placed: Vec<usize>,
+    shadings: Vec<Shading>,
 }
+
+/// A shader drawn: its program, the words of its host block and its uniform block.
+type Shading = (Rc<Program>, [f32; 16], Rc<[u8]>);
 
 impl Plan {
     /// A new layer.
@@ -783,6 +851,9 @@ pub struct Renderer<'a> {
     /// Layer textures: all of them, and the free ones.
     pool: Vec<Surface>,
     free: Vec<usize>,
+    /// The pipelines of the shaders authors wrote, and the layouts of their own bindings, by
+    /// program.
+    programs: HashMap<u64, (wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
 }
 
 impl<'a> Renderer<'a> {
@@ -829,7 +900,86 @@ impl<'a> Renderer<'a> {
             shown: Vec::new(),
             pool: Vec::new(),
             free: Vec::new(),
+            programs: HashMap::new(),
         }
+    }
+
+    /// Makes the pipeline of `program` if there is none yet: the engine's quad, then its code,
+    /// over the target. Its own bindings: its uniform block, then each image and its sampler.
+    fn pipeline(&mut self, program: &Program) {
+        let gpu = self.gpu;
+        let device = &gpu.device;
+        self.programs.entry(program.key).or_insert_with(|| {
+            let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty,
+                count: None,
+            };
+            let mut entries = Vec::new();
+            if !program.uniforms.is_empty() {
+                entries.push(entry(
+                    0,
+                    wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                ));
+            }
+            for k in 0..program.samplers.len() as u32 {
+                let texture = wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                };
+                entries.push(entry(1 + 2 * k, texture));
+                let sampler = wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering);
+                entries.push(entry(2 + 2 * k, sampler));
+            }
+            let own = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("shader"),
+                entries: &entries,
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&gpu.draw), Some(&gpu.host), Some(&own)],
+                immediate_size: 0,
+            });
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("authored"),
+                source: wgpu::ShaderSource::Wgsl(program.wgsl.as_str().into()),
+            });
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("authored"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &gpu.quad,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: WORK,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            (own, pipeline)
+        });
     }
 
     /// The frame `items` paint: straight sRGB, 4 bytes a pixel, rows top down. `faces` are the
@@ -1226,6 +1376,59 @@ impl<'a> Renderer<'a> {
                     let layer = plan.filtered(layer, filters, matrix, None);
                     plan.composite(target, layer);
                 }
+                Item::Shader {
+                    program,
+                    block,
+                    rect,
+                    outset,
+                    items,
+                } => {
+                    if rect.width <= 0.0 || rect.height <= 0.0 {
+                        continue;
+                    }
+                    if !runs.is_empty() {
+                        let runs = std::mem::take(runs);
+                        plan.steps.push(Step::Draw { target, runs });
+                    }
+                    // What is in the box, in a layer of its own, if the shader reads it.
+                    let content = match program.reads("content") {
+                        true => {
+                            let layer = plan.layer();
+                            let mut inside = plan.seen.clone();
+                            inside.here = Under {
+                                root: layer,
+                                open: Vec::new(),
+                            };
+                            let around = std::mem::replace(&mut plan.seen, inside);
+                            self.plan(items, layer, at, faces, plan, atlas)?;
+                            plan.seen = around;
+                            Some(layer)
+                        }
+                        false => None,
+                    };
+                    // Its images have as many pixels as the box covers on the target.
+                    let scale = matrix.radius_scale() as f32;
+                    let [w, h] =
+                        [rect.width, rect.height].map(|v| (v * scale).ceil().clamp(1.0, 4096.0));
+                    let mut host = [0.0; 16];
+                    host[..8].copy_from_slice(&[
+                        rect.width,
+                        rect.height,
+                        *outset,
+                        transform as f32,
+                        w,
+                        h,
+                        rect.x,
+                        rect.y,
+                    ]);
+                    plan.shadings.push((program.clone(), host, block.clone()));
+                    let shading = plan.shadings.len() - 1;
+                    plan.steps.push(Step::Shader {
+                        target,
+                        content,
+                        shading,
+                    });
+                }
                 Item::Backdrop {
                     filters,
                     rect,
@@ -1507,6 +1710,9 @@ impl<'a> Renderer<'a> {
 
     fn encode(&mut self, encoder: &mut wgpu::CommandEncoder, plan: &Plan) {
         let gpu = self.gpu;
+        for (program, ..) in &plan.shadings {
+            self.pipeline(program);
+        }
         let Some(draw) = &self.draw else {
             return;
         };
@@ -1521,6 +1727,96 @@ impl<'a> Renderer<'a> {
             }
         }
         for (k, step) in plan.steps.iter().enumerate() {
+            if let Step::Shader {
+                target,
+                content,
+                shading,
+            } = *step
+            {
+                let (program, host, block) = &plan.shadings[shading];
+                let device = &gpu.device;
+                let uniform = |label, contents: &[u8]| {
+                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some(label),
+                        contents,
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    })
+                };
+                let words: Vec<u32> = host.iter().map(|v| v.to_bits()).collect();
+                let host = uniform("host", &bytes(&words));
+                let hosted = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &gpu.host,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: host.as_entire_binding(),
+                    }],
+                });
+                // Its images, each out of its layer into a texture of the box's size; one
+                // nothing was drawn into is clear.
+                let size = [f32::from_bits(words[4]), f32::from_bits(words[5])].map(|v| v as u32);
+                let mut views = Vec::new();
+                for name in &program.samplers {
+                    let layer = match &**name {
+                        "content" => content,
+                        _ => None,
+                    };
+                    let view = texture(device, size, WORK).create_view(&Default::default());
+                    let mut pass = begin(encoder, &view, false);
+                    if let Some(s) = layer.and_then(|l| surfaces[l]) {
+                        pass.set_pipeline(&gpu.extract);
+                        pass.set_bind_group(0, draw, &[]);
+                        pass.set_bind_group(1, &hosted, &[]);
+                        pass.set_bind_group(2, &self.pool[s].image, &[]);
+                        pass.draw(0..3, 0..1);
+                    }
+                    drop(pass);
+                    views.push(view);
+                }
+                let block = uniform("uniforms", block);
+                let mut entries = Vec::new();
+                if !program.uniforms.is_empty() {
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: block.as_entire_binding(),
+                    });
+                }
+                for (k, view) in views.iter().enumerate() {
+                    let k = k as u32;
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 1 + 2 * k,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    });
+                    entries.push(wgpu::BindGroupEntry {
+                        binding: 2 + 2 * k,
+                        resource: wgpu::BindingResource::Sampler(&gpu.sampler),
+                    });
+                }
+                let (own, pipeline) = &self.programs[&program.key];
+                let own = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: own,
+                    entries: &entries,
+                });
+                let surface = match target {
+                    0 => None,
+                    t => Some(*surfaces[t].get_or_insert_with(|| {
+                        take(gpu, &mut self.pool, &mut self.free, self.size)
+                    })),
+                };
+                let view = &surface.map_or(&self.frame, |s| &self.pool[s]).view;
+                let mut pass = begin(encoder, view, std::mem::replace(&mut started[target], true));
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, draw, &[]);
+                pass.set_bind_group(1, &hosted, &[]);
+                pass.set_bind_group(2, &own, &[]);
+                pass.draw(0..4, 0..1);
+                drop(pass);
+                if let Some(l) = content.filter(|&l| last[l] == k) {
+                    self.free.extend(surfaces[l]);
+                }
+                continue;
+            }
             if let Step::Copy { target, layer } = *step {
                 // Nothing to copy from a layer nothing was drawn into, and the frame is cleared
                 // first if nothing was.
@@ -1550,7 +1846,7 @@ impl<'a> Renderer<'a> {
                 | Step::Blur { target, .. }
                 | Step::Colors { target, .. }
                 | Step::Effect { target, .. } => target,
-                Step::Copy { .. } => unreachable!("copied above"),
+                Step::Copy { .. } | Step::Shader { .. } => unreachable!("done above"),
             };
             // The layers the step reads go back to the pool once it is their last; a layer
             // nothing was drawn into shows nothing, nor does a mask let anything through.
@@ -1590,7 +1886,7 @@ impl<'a> Renderer<'a> {
             let mut pass = begin(encoder, view, std::mem::replace(&mut started[target], true));
             pass.set_bind_group(0, draw, &[]);
             match step {
-                Step::Copy { .. } => {}
+                Step::Copy { .. } | Step::Shader { .. } => {}
                 Step::Mask { .. } => {
                     let [Some(s), Some(m)] = [layer, mask] else {
                         unreachable!("a mask step reads two layers");

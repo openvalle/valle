@@ -1118,7 +1118,14 @@
     throw e;
   }
 
-  const INTRINSIC = { View: "view", Text: "text", Span: "span", Mask: "mask", Image: "image" };
+  const INTRINSIC = {
+    View: "view",
+    Text: "text",
+    Span: "span",
+    Mask: "mask",
+    Image: "image",
+    ShaderLayer: "shader",
+  };
 
   // Tags that are gone, with what replaces them.
   const REMOVED = {
@@ -1193,6 +1200,7 @@
     span: [],
     mask: ["source", "mode", "invert", "layoutId"],
     image: ["src", "layoutId"],
+    shader: ["code", "uniforms", "outset", "layoutId"],
   };
 
   const fixed = (x, kind, at) => (x instanceof T ? exact(x, kind, at) : x);
@@ -1404,6 +1412,38 @@
     node.src = src.slice("resource://".length);
   }
 
+  // A <ShaderLayer>'s GLSL code, which cannot change, the values its uniforms take by name, each
+  // a number, a boolean, a color or an array of numbers for a vector, any of them traced, and the
+  // px it paints out past its box.
+  function shaderOf(node, props, at) {
+    const code = fixed(props.code, "code", at);
+    if (typeof code !== "string") fail(at, "<ShaderLayer> code is its shader's GLSL, a string");
+    const given = props.uniforms ?? {};
+    if (!plain(given)) {
+      fail(at, "<ShaderLayer> uniforms is an object of the values its uniforms take, by name");
+    }
+    const uniforms = [];
+    for (const [k, v] of entries(given)) {
+      const parts = Array.isArray(v) ? v : [v];
+      for (const p of parts) {
+        if (!(p instanceof T) && !["number", "boolean", "string"].includes(typeof p)) {
+          fail(
+            at,
+            "<ShaderLayer> uniforms " +
+              k +
+              " is a number, a boolean, a color or an array of numbers",
+          );
+        }
+      }
+      uniforms.push([k, parts]);
+    }
+    const outset = fixed(props.outset ?? 0, "outset", at);
+    if (typeof outset !== "number" || !(outset >= 0) || outset === Infinity) {
+      fail(at, "<ShaderLayer> outset is px it paints past its box, 0 or more");
+    }
+    node.shader = { code, uniforms, outset };
+  }
+
   // An inline SVG element, into `out`: its attributes, constants or traced values, and the SVG
   // elements in it.
   function svgElement(type, props, children, out, at) {
@@ -1516,6 +1556,7 @@
     };
     if (kind === "mask") maskOf(node, props, at);
     if (kind === "image") imageOf(node, props, children, at);
+    if (kind === "shader") shaderOf(node, props, at);
     if (key !== null) G.keys.push(key);
     try {
       if (kind === "text" && (props.split !== undefined || props.perUnit !== undefined)) {
@@ -1784,6 +1825,10 @@
         out.mask = { source: node(n.source), luminance: n.luminance, invert: n.invert };
       }
       if ("src" in n) out.src = n.src;
+      if ("shader" in n) {
+        const { code, uniforms, outset } = n.shader;
+        out.shader = { code, uniforms: uniforms.map(([k, v]) => [k, v.map(ref)]), outset };
+      }
       if ("tag" in n) {
         out.tag = n.tag;
         out.attributes = n.attributes.map(([k, v]) => [k, ref(v)]);
@@ -2160,6 +2205,7 @@
     Span: "Span",
     Mask: "Mask",
     Image: "Image",
+    ShaderLayer: "ShaderLayer",
     TimeScope: "TimeScope",
     Echo: "Echo",
     Shutter: "Shutter",

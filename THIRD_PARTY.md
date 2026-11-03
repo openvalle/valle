@@ -14,7 +14,7 @@ in `Cargo.lock` and `bun.lock`.
 | [Skrifa](https://github.com/googlefonts/fontations) | Reading glyph outlines | MIT or Apache-2.0 |
 | [Vello CPU](https://github.com/linebender/vello) | Rasterizing color glyphs (COLR) | MIT or Apache-2.0 |
 | [kurbo](https://github.com/linebender/kurbo) | The outlines of SVG strokes | MIT or Apache-2.0 |
-| [wgpu](https://github.com/gfx-rs/wgpu), with naga | Drawing on the GPU through Metal, Vulkan and Direct3D 12 | MIT or Apache-2.0 |
+| [wgpu](https://github.com/gfx-rs/wgpu), with naga | Drawing on the GPU through Metal, Vulkan and Direct3D 12; naga also turns the GLSL shaders authors write into WGSL | MIT or Apache-2.0 |
 | [png](https://github.com/image-rs/image-png), [zune-jpeg](https://github.com/etemesi254/zune-image) and [image-webp](https://github.com/image-rs/image-webp) | Decoding PNG, JPEG and WebP images | MIT or Apache-2.0; zune-jpeg also Zlib |
 | [roxmltree](https://github.com/RazrFalcon/roxmltree) | Reading SVG files | MIT or Apache-2.0 |
 | [wuff](https://github.com/nicoburns/wuff), with [brotli-decompressor](https://github.com/dropbox/rust-brotli-decompressor) and [flate2](https://github.com/rust-lang/flate2-rs) | Decoding WOFF and WOFF2 fonts | MIT; brotli-decompressor BSD-3-Clause or MIT; flate2 MIT or Apache-2.0 |

@@ -13,6 +13,7 @@ pub mod noise;
 pub mod paint;
 pub mod path;
 pub mod scene;
+pub mod shader;
 pub mod slug;
 pub mod spring;
 pub mod style;

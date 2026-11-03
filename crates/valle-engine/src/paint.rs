@@ -42,6 +42,8 @@ mod scene;
 mod shape;
 mod svg;
 
+use std::rc::Rc;
+
 use taffy::{Display, Overflow, Position};
 
 pub use gradient::{Geometry, Ramp, Segment, Spread};
@@ -50,6 +52,7 @@ pub use matrix::{Matrix, Matrix4};
 use crate::image::Picture;
 use crate::layout::{Boxes, Layout, Natural, Rect, ordered};
 use crate::path::Path;
+use crate::shader::Program;
 use crate::style::background::{Area, Composite, ImageSize, Layer, Repeat};
 use crate::style::color::{self, Rgba};
 use crate::style::filter;
@@ -124,6 +127,15 @@ pub enum Item {
     /// Items drawn as one image through `filters`, one after another, onto what is under them.
     Filter {
         filters: Vec<Filter>,
+        items: Vec<Item>,
+    },
+    /// Items drawn into a layer that a shader authors wrote reads as its `content` image: the
+    /// shader paints the box `rect`, grown by `outset` px on each side, with its uniform `block`.
+    Shader {
+        program: Rc<Program>,
+        block: Rc<[u8]>,
+        rect: Rect,
+        outset: f32,
         items: Vec<Item>,
     },
     /// What is under a box's layer, in its border box `rect`, its edges mirrored, through
@@ -1108,6 +1120,7 @@ impl Painter<'_> {
             self.context(Some(d), &mut inside);
             // It contains all in it, so the clips around it go around all it paints.
             let mut items = self.nest_from(self.chained(inside), self.clips[d].len());
+            items = self.shaded(d, items);
             if !s.filter.is_empty() && !items.is_empty() {
                 let filters = filters(&s.filter, snap(self.layout.boxes[d].border));
                 items = vec![Item::Filter { filters, items }];
@@ -1147,6 +1160,32 @@ impl Painter<'_> {
             self.collect(Some(d), &mut layered);
             (layered.iter()).any(|&b| self.styles[b].blend != Blend::Normal)
         }
+    }
+
+    /// `items` as the content of `d`'s shader, if it is a `<ShaderLayer>`, which its corners
+    /// round as they do a canvas, grown by its outset.
+    fn shaded(&self, d: usize, items: Vec<Item>) -> Vec<Item> {
+        let Some(shader) = &self.styles[d].shader else {
+            return items;
+        };
+        let rect = snap(self.layout.boxes[d].border);
+        let by = shader.outset as f32;
+        let shaded = Item::Shader {
+            program: shader.program.clone(),
+            block: shader.block.clone(),
+            rect,
+            outset: by,
+            items,
+        };
+        let radii = self.radii(d, rect);
+        if radii == SQUARE {
+            return vec![shaded];
+        }
+        vec![Item::Clip {
+            rect: outset(rect, by),
+            radii: grown(radii, by),
+            items: vec![shaded],
+        }]
     }
 
     /// `items` over what is under `d` through its backdrop filter, in its border box, if it has
@@ -1365,6 +1404,7 @@ impl Painter<'_> {
             let mut drawn = Vec::new();
             self.context(Some(e), &mut drawn);
             let mut items = self.nest_from(self.chained(drawn), self.clips[e].len());
+            items = self.shaded(e, items);
             if !s.filter.is_empty() && !items.is_empty() {
                 let filters = filters(&s.filter, snap(self.layout.boxes[e].border));
                 items = vec![Item::Filter { filters, items }];

@@ -34,6 +34,7 @@ use color::Rgba;
 use math::{Calc, Math};
 
 use crate::front::Slot;
+use crate::shader::{self, Program};
 use crate::svg;
 use crate::template::{Error, Kind, Node, Piece, Prop, Tag, Template, V};
 
@@ -188,6 +189,8 @@ pub struct Style {
     pub svg: Option<Rc<svg::Computed>>,
     /// A `<use>`'s copy.
     pub instance: Option<Rc<Instance>>,
+    /// A `<ShaderLayer>`'s shader, with its uniforms' values at the frame.
+    pub shader: Option<Shaded>,
     pub color: Rgba,
     pub font: Font,
     /// The text decorations its text takes: those of the boxes around it, outermost first, then
@@ -238,16 +241,62 @@ pub struct Source {
     pub invert: bool,
 }
 
+/// A shader as a frame has it: its program, its uniform block, and the px it paints out past the
+/// box on each side.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shaded {
+    pub program: Rc<Program>,
+    pub block: Rc<[u8]>,
+    pub outset: f64,
+}
+
+/// A `<ShaderLayer>`'s program and its uniforms' values, and its block when none is traced.
+struct Shading {
+    program: Rc<Program>,
+    uniforms: Vec<(Rc<str>, Vec<Prop>)>,
+    outset: f64,
+    fixed: Option<Rc<[u8]>>,
+}
+
+impl Shading {
+    fn computed(&self, frame: &Frame) -> Result<Shaded, String> {
+        let block = match &self.fixed {
+            Some(b) => b.clone(),
+            None => {
+                let values: Vec<(&str, Vec<&V>)> = (self.uniforms.iter())
+                    .filter(|(_, v)| !v.iter().any(|p| frame.unsettled(p)))
+                    .map(|(k, v)| {
+                        let v = (v.iter())
+                            .map(|p| match p {
+                                Prop::Const(v) => v,
+                                Prop::Expr(e) => &frame.values[*e as usize],
+                            })
+                            .collect();
+                        (&**k, v)
+                    })
+                    .collect();
+                Rc::from(self.program.block(&values)?)
+            }
+        };
+        Ok(Shaded {
+            program: self.program.clone(),
+            block,
+            outset: self.outset,
+        })
+    }
+}
+
 impl Style {
     /// Whether the box is the containing block of every box in it, fixed ones too, and a
     /// stacking context: it has a transform, a perspective, a filter or a backdrop filter, or
-    /// preserves 3D, as CSS has it.
+    /// preserves 3D, as CSS has it, or is a `<ShaderLayer>`, which a filter's rules hold for.
     pub fn contains_all(&self) -> bool {
         self.transformed()
             || self.perspective.is_some()
             || self.preserve_3d
             || !self.filter.is_empty()
             || !self.backdrop.is_empty()
+            || self.shader.is_some()
     }
 
     /// Whether it has a transform: functions, or a motion path.
@@ -257,13 +306,14 @@ impl Style {
 
     /// Whether its children with transforms stay in its space: it preserves 3D and nothing
     /// groups what is in it into one flat layer, as an opacity, a clip, a clip path, a mask or a
-    /// `<Mask>` source, a blend, isolation or a filter of it or of its backdrop does.
+    /// `<Mask>` source, a blend, isolation, a filter of it or of its backdrop, or a shader does.
     pub fn keeps_3d(&self) -> bool {
         let o = self.layout.overflow;
         self.preserve_3d
             && self.opacity >= 1.0
             && self.filter.is_empty()
             && self.backdrop.is_empty()
+            && self.shader.is_none()
             && self.blend == Blend::Normal
             && !self.isolate
             && self.clip.is_none()
@@ -619,6 +669,7 @@ struct Bound {
     place: Rc<str>,
     source: Option<Source>,
     svg: Option<Geometry>,
+    shader: Option<Shading>,
 }
 
 /// An SVG element's attributes that are not presentation attributes, and what they compute to
@@ -770,6 +821,10 @@ impl Sheet {
         }
         if let Some(g) = &b.svg {
             style.svg = Some(g.computed(frame).map_err(|e| format!("{}: {e}", b.place))?);
+        }
+        if let Some(s) = &b.shader {
+            let shaded = s.computed(frame);
+            style.shader = Some(shaded.map_err(|e| format!("{}: <ShaderLayer> {e}", b.place))?);
         }
         Ok(style)
     }
@@ -1065,6 +1120,40 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
         }),
         _ => None,
     };
+    let shader = match &node.kind {
+        Kind::Shader {
+            code,
+            uniforms,
+            outset,
+        } => {
+            let at = |e: String| format!("{place}: <ShaderLayer> code {e}");
+            let program = shader::program(code, &["content"]).map_err(at)?;
+            let mut s = Shading {
+                program,
+                uniforms: uniforms.clone(),
+                outset: *outset,
+                fixed: None,
+            };
+            if uniforms
+                .iter()
+                .flat_map(|(_, v)| v)
+                .all(|p| matches!(p, Prop::Const(_)))
+            {
+                let none = Frame {
+                    values: &[],
+                    late: None,
+                    canvas: [0.0; 2],
+                    resources: &[],
+                };
+                let block = s
+                    .computed(&none)
+                    .map_err(|e| format!("{place}: <ShaderLayer> {e}"))?;
+                s.fixed = Some(block.block);
+            }
+            Some(s)
+        }
+        _ => None,
+    };
     Ok(Bound {
         declared,
         text: matches!(node.kind, Kind::Text { .. }),
@@ -1072,6 +1161,7 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
         place,
         source,
         svg,
+        shader,
     })
 }
 
@@ -4631,6 +4721,7 @@ fn compute(
         }),
         svg: None,
         instance: None,
+        shader: None,
         color,
         font,
         decorations,

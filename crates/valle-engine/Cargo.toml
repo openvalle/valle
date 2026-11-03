@@ -13,6 +13,7 @@ image-webp.workspace = true
 i_overlay.workspace = true
 kurbo.workspace = true
 libm.workspace = true
+naga.workspace = true
 oxc.workspace = true
 parley.workspace = true
 png.workspace = true

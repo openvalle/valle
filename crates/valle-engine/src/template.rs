@@ -470,6 +470,15 @@ pub enum Kind {
     Image {
         resource: u32,
     },
+    /// A box a shader authors write paints (`shader.rs`): its GLSL code, the values its uniforms
+    /// take by name, a number, a boolean or a color string each, or a vector's numbers, and the
+    /// px it paints out past its border box on each side. What the box and the boxes in it paint
+    /// is the image the shader reads as `content`.
+    Shader {
+        code: Rc<str>,
+        uniforms: Vec<(Rc<str>, Vec<Prop>)>,
+        outset: f64,
+    },
     /// An inline SVG element: an `<svg>` is a box, and the elements in it, its descendants, are
     /// not. Its attributes are as written, camelCase.
     Svg {
@@ -574,6 +583,7 @@ impl Node {
             (None, Kind::Span { .. }) => "<Span>".into(),
             (None, Kind::Mask { .. }) => "<Mask>".into(),
             (None, Kind::Image { .. }) => "<Image>".into(),
+            (None, Kind::Shader { .. }) => "<ShaderLayer>".into(),
             (None, Kind::Svg { tag, .. }) => format!("<{}>", tag.name()).into(),
         }
     }

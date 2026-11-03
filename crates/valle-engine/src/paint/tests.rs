@@ -59,6 +59,7 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Transform { items, .. } => format!("transform {:?}", names(items)),
             Item::Cut { items, .. } => format!("cut {:?}", names(items)),
             Item::Backdrop { filters, .. } => format!("backdrop of {}", filters.len()),
+            Item::Shader { items, .. } => format!("shader {:?}", names(items)),
             Item::Filter { filters, items } => {
                 let filters: Vec<&str> = (filters.iter())
                     .map(|f| match f {

@@ -289,6 +289,14 @@ struct TracedNode {
     src: Option<String>,
     tag: Option<String>,
     attributes: Option<Vec<(String, Ref)>>,
+    shader: Option<TracedShader>,
+}
+
+#[derive(Deserialize)]
+struct TracedShader {
+    code: String,
+    uniforms: Vec<(String, Vec<Ref>)>,
+    outset: f64,
 }
 
 #[derive(Deserialize)]
@@ -406,6 +414,19 @@ pub fn variant(
                 }
                 Kind::Image {
                     resource: resource as u32,
+                }
+            }
+            "shader" => {
+                let s = n.shader.ok_or("a shader node without its shader")?;
+                Kind::Shader {
+                    code: s.code.into(),
+                    uniforms: (s.uniforms.into_iter())
+                        .map(|(k, v)| {
+                            let v = v.into_iter().map(&prop).collect::<Result<_, Error>>()?;
+                            Ok((Rc::from(k), v))
+                        })
+                        .collect::<Result<_, Error>>()?,
+                    outset: s.outset,
                 }
             }
             "svg" => {
