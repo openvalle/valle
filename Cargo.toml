@@ -12,6 +12,8 @@ publish = false
 
 [workspace.dependencies]
 image-webp = "0.2.4"
+# Tests only: multi-line sources indented with the code, the indentation removed.
+indoc = "2.0.8"
 libm = "0.2.16"
 oxc = { version = "=0.148.0", features = ["ast_visit", "codegen", "semantic", "transformer"] }
 # Without system fonts: every host shapes with the same bytes.

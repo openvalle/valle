@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use indoc::{formatdoc, indoc};
+
 use super::*;
 use crate::template::{Kind, Piece, Prop, Tag};
 
@@ -108,16 +110,15 @@ fn style(frame: &Frame, node: usize, key: &str) -> V {
 #[test]
 fn static_scenes_trace_once() {
     big_stack(|| {
-        let mut f = scene(
-            "export default function Scene() {
-  return (
-    <View className=\"flex  p-4\" style={{ backgroundColor: \"#123456\", opacity: 0.5 }}>
-      <Text key=\"title\">Hello {\"world\"}</Text>
-    </View>
-  );
-}
-",
-        );
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  return (
+                    <View className=\"flex  p-4\" style={{ backgroundColor: \"#123456\", opacity: 0.5 }}>
+                      <Text key=\"title\">Hello {\"world\"}</Text>
+                    </View>
+                  );
+                }
+            "});
         assert_eq!((f.composition.width, f.composition.height), (320, 180));
         let frame = at(&mut f, "0");
         let t = &frame.template;
@@ -144,16 +145,15 @@ fn static_scenes_trace_once() {
 #[test]
 fn a_mask_traces_its_source_as_a_root_after_it() {
     big_stack(|| {
-        let mut f = scene(
-            "export default function Scene() {
-  return (
-    <Mask key=\"m\" source={<Text key=\"s\">V</Text>} mode=\"luminance\" invert>
-      <View />
-    </Mask>
-  );
-}
-",
-        );
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  return (
+                    <Mask key=\"m\" source={<Text key=\"s\">V</Text>} mode=\"luminance\" invert>
+                      <View />
+                    </Mask>
+                  );
+                }
+            "});
         let frame = at(&mut f, "0");
         let t = &frame.template;
         assert_eq!(t.roots, [0]);
@@ -179,20 +179,19 @@ fn a_mask_traces_its_source_as_a_root_after_it() {
 #[test]
 fn svg_elements_trace_with_their_attributes() {
     big_stack(|| {
-        let mut f = scene(
-            "export default function Scene() {
-  const { seconds } = useCurrentTime();
-  return (
-    <svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\" aria-hidden=\"true\">
-      <title>Dot</title>
-      <g fill=\"red\">
-        <circle cx={5} cy={5} r={seconds} />
-      </g>
-    </svg>
-  );
-}
-",
-        );
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return (
+                    <svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\" aria-hidden=\"true\">
+                      <title>Dot</title>
+                      <g fill=\"red\">
+                        <circle cx={5} cy={5} r={seconds} />
+                      </g>
+                    </svg>
+                  );
+                }
+            "});
         let frame = at(&mut f, "2");
         let t = &frame.template;
         let element = |i: usize| match &t.nodes[i].kind {
@@ -218,18 +217,17 @@ fn svg_elements_trace_with_their_attributes() {
 #[test]
 fn spans_trace_into_their_text_with_time_next_to_them() {
     big_stack(|| {
-        let mut f = scene(
-            "const Strong = (props) => <Span style={{ fontWeight: 700 }}>{props.children}</Span>;
-export default function Scene() {
-  const { seconds } = useCurrentTime();
-  return (
-    <Text>
-      Time <Span key=\"t\">{seconds} s <Strong>now</Strong></Span>!
-    </Text>
-  );
-}
-",
-        );
+        let mut f = scene(indoc! {"
+                const Strong = (props) => <Span style={{ fontWeight: 700 }}>{props.children}</Span>;
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return (
+                    <Text>
+                      Time <Span key=\"t\">{seconds} s <Strong>now</Strong></Span>!
+                    </Text>
+                  );
+                }
+            "});
         let frame = at(&mut f, "2");
         let t = &frame.template;
         let Kind::Text { content } = &t.nodes[0].kind else {
@@ -256,27 +254,26 @@ export default function Scene() {
 #[test]
 fn time_flows_through_expressions() {
     big_stack(|| {
-        let mut f = scene(
-            "const sin = Math.sin;
-export default function Scene() {
-  const { seconds, progress } = useCurrentTime();
-  const { width, duration } = useComposition();
-  return (
-    <View
-      style={{
-        opacity: interpolate(seconds, [0, 2], [0, 1]),
-        width: width * progress,
-        height: seconds ** 2,
-        transform: `rotate(${seconds * 90}deg)`,
-      }}
-    >
-      <Text>{`t=${seconds} of ${duration}`}</Text>
-      <Text>{sin(seconds)}</Text>
-    </View>
-  );
-}
-",
-        );
+        let mut f = scene(indoc! {"
+                const sin = Math.sin;
+                export default function Scene() {
+                  const { seconds, progress } = useCurrentTime();
+                  const { width, duration } = useComposition();
+                  return (
+                    <View
+                      style={{
+                        opacity: interpolate(seconds, [0, 2], [0, 1]),
+                        width: width * progress,
+                        height: seconds ** 2,
+                        transform: `rotate(${seconds * 90}deg)`,
+                      }}
+                    >
+                      <Text>{`t=${seconds} of ${duration}`}</Text>
+                      <Text>{sin(seconds)}</Text>
+                    </View>
+                  );
+                }
+            "});
         let frame = at(&mut f, "1");
         assert_eq!(style(&frame, 0, "opacity"), V::Num(0.5));
         assert_eq!(style(&frame, 0, "width"), V::Num(80.0));
@@ -299,20 +296,19 @@ export default function Scene() {
 #[test]
 fn branches_become_variants() {
     big_stack(|| {
-        let mut f = scene(
-            "export default function Scene() {
-  const { seconds } = useCurrentTime();
-  if (seconds < 1) return <Text>early</Text>;
-  return seconds < 2 ? (
-    <Text>middle</Text>
-  ) : (
-    <View style={{ opacity: seconds < 3 ? 0.5 : 1 }}>
-      <Text>late</Text>
-    </View>
-  );
-}
-",
-        );
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  if (seconds < 1) return <Text>early</Text>;
+                  return seconds < 2 ? (
+                    <Text>middle</Text>
+                  ) : (
+                    <View style={{ opacity: seconds < 3 ? 0.5 : 1 }}>
+                      <Text>late</Text>
+                    </View>
+                  );
+                }
+            "});
         assert_eq!(texts(&at(&mut f, "0.5")), ["early"]);
         assert_eq!(texts(&at(&mut f, "1.5")), ["middle"]);
         let late = at(&mut f, "2.5");
@@ -329,20 +325,19 @@ fn branches_become_variants() {
 #[test]
 fn escapes_and_indices_retrace() {
     big_stack(|| {
-        let mut f = scene(
-            "const WORDS = [\"zero\", \"one\", \"two\", \"three\"];
-export default function Scene() {
-  const { seconds } = useCurrentTime();
-  const label = seconds.toFixed(1);
-  return (
-    <View>
-      <Text>{WORDS[Math.floor(seconds)]}</Text>
-      <Text>{label}</Text>
-    </View>
-  );
-}
-",
-        );
+        let mut f = scene(indoc! {"
+                const WORDS = [\"zero\", \"one\", \"two\", \"three\"];
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  const label = seconds.toFixed(1);
+                  return (
+                    <View>
+                      <Text>{WORDS[Math.floor(seconds)]}</Text>
+                      <Text>{label}</Text>
+                    </View>
+                  );
+                }
+            "});
         let frame = at(&mut f, "0.5");
         assert_eq!(texts(&frame), ["zero", "0.5"]);
         let escapes: Vec<&str> = frame.template.escapes().map(|g| &*g.at).collect();
@@ -356,13 +351,12 @@ export default function Scene() {
 #[test]
 fn variants_are_kept_least_recently_used_first() {
     big_stack(|| {
-        let mut f = scene(
-            "export default function Scene() {
-  const { seconds } = useCurrentTime();
-  return <Text>{String(Math.round(seconds * 30))}</Text>;
-}
-",
-        );
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return <Text>{String(Math.round(seconds * 30))}</Text>;
+                }
+            "});
         for frame in 0..100 {
             let t = f.composition.fps.frame_start(frame).expect("a frame time");
             let shown = f.frame(t).expect("a frame");
@@ -379,30 +373,30 @@ fn variants_are_kept_least_recently_used_first() {
 #[test]
 fn modules_are_instantiated_once_per_trace() {
     big_stack(|| {
-        let scene = format!(
-            "{HEAD}import Title, {{ ACCENT, TOKEN }} from \"./lib/title\";
-import {{ token }} from \"./sizes.ts\";
-let calls = 0;
-export default function Scene() {{
-  calls = calls + 1;
-  const {{ seconds }} = useCurrentTime();
-  if (seconds >= 2) return <Text>{{`late ${{calls}}`}}</Text>;
-  return (
-    <View>
-      <Title text={{seconds < 1 ? \"hi\" : \"bye\"}} />
-      <Text>{{`${{ACCENT}} ${{calls}} ${{token === TOKEN ? \"shared\" : \"twice\"}}`}}</Text>
-    </View>
-  );
-}}
-"
-        );
-        let title = "import { SIZE, token } from \"../sizes\";
-export const ACCENT = \"#f00\";
-export const TOKEN = token;
-export default function Title(props: { text: string }) {
-  return <Text style={{ color: ACCENT, fontSize: SIZE }}>{props.text}</Text>;
-}
-";
+        let scene = formatdoc! {"
+                {HEAD}import Title, {{ ACCENT, TOKEN }} from \"./lib/title\";
+                import {{ token }} from \"./sizes.ts\";
+                let calls = 0;
+                export default function Scene() {{
+                  calls = calls + 1;
+                  const {{ seconds }} = useCurrentTime();
+                  if (seconds >= 2) return <Text>{{`late ${{calls}}`}}</Text>;
+                  return (
+                    <View>
+                      <Title text={{seconds < 1 ? \"hi\" : \"bye\"}} />
+                      <Text>{{`${{ACCENT}} ${{calls}} ${{token === TOKEN ? \"shared\" : \"twice\"}}`}}</Text>
+                    </View>
+                  );
+                }}
+            "};
+        let title = indoc! {"
+            import { SIZE, token } from \"../sizes\";
+            export const ACCENT = \"#f00\";
+            export const TOKEN = token;
+            export default function Title(props: { text: string }) {
+              return <Text style={{ color: ACCENT, fontSize: SIZE }}>{props.text}</Text>;
+            }
+        "};
         let sizes = "export const SIZE: number = 48;\nexport const token = {};\n";
         let mut f = load(&[
             ("scene.motion.tsx", scene.as_str()),
@@ -543,12 +537,11 @@ fn limits_stop_runaway_scripts() {
             e.contains("more than 250000 values that depend on the time"),
             "{e}"
         );
-        let e = error(
-            "export default function Scene() {
-  return <View>{Array.from({ length: 100001 }, (_, i) => <View key={i} />)}</View>;
-}
-",
-        );
+        let e = error(indoc! {"
+                export default function Scene() {
+                  return <View>{Array.from({ length: 100001 }, (_, i) => <View key={i} />)}</View>;
+                }
+            "});
         assert!(e.starts_with("scene.motion.tsx:3:"), "{e}");
         assert!(e.contains("more than 100000 elements"), "{e}");
     });
@@ -676,13 +669,12 @@ fn errors_point_at_the_source() {
             e.starts_with("scene.motion.tsx:3: Error: boom\n    at Scene"),
             "{e}"
         );
-        let e = error(
-            "export default function Scene() {
-  const { seconds } = useCurrentTime();
-  return <View style={{ opacity: interpolate(seconds, [1, 0], [0, 1]) }} />;
-}
-",
-        );
+        let e = error(indoc! {"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return <View style={{ opacity: interpolate(seconds, [1, 0], [0, 1]) }} />;
+                }
+            "});
         assert!(
             e.contains("the input range must strictly increase, got [1, 0]"),
             "{e}"
@@ -705,20 +697,19 @@ fn errors_point_at_the_source() {
 #[test]
 fn props_are_bound_or_take_their_defaults() {
     big_stack(|| {
-        let source = format!(
-            "{HEAD}export const controls = {{
-  props: {{
-    title: string({{ default: \"Valle\" }}),
-    count: number({{ default: 3, min: 1, max: 9, step: 1 }}),
-    theme: select({{ values: [\"light\", \"dark\"], required: true }}),
-    at: point({{ default: {{ x: 1, y: -2 }}, label: \"Where\" }}),
-  }},
-}};
-export default function Scene({{ title, count, theme, at }}) {{
-  return <Text>{{title}} {{count}} {{theme}} {{at.y}}</Text>;
-}}
-"
-        );
+        let source = formatdoc! {"
+                {HEAD}export const controls = {{
+                  props: {{
+                    title: string({{ default: \"Valle\" }}),
+                    count: number({{ default: 3, min: 1, max: 9, step: 1 }}),
+                    theme: select({{ values: [\"light\", \"dark\"], required: true }}),
+                    at: point({{ default: {{ x: 1, y: -2 }}, label: \"Where\" }}),
+                  }},
+                }};
+                export default function Scene({{ title, count, theme, at }}) {{
+                  return <Text>{{title}} {{count}} {{theme}} {{at.y}}</Text>;
+                }}
+            "};
         let bound = |json: &str| {
             let props = serde_json::from_str(json).expect("JSON");
             load_bound(
@@ -824,29 +815,27 @@ fn props_are_declared_as_literals_of_their_kinds() {
                 "prop name \"my-prop\" is not 1 to 64 ASCII letters",
             ),
         ] {
-            let e = error(&format!(
-                "export const controls = {{ props: {{ {prop} }} }};
-export default function Scene() {{
-  return null;
-}}
-"
-            ));
+            let e = error(&formatdoc! {"
+                    export const controls = {{ props: {{ {prop} }} }};
+                    export default function Scene() {{
+                      return null;
+                    }}
+                "});
             assert!(e.starts_with("scene.motion.tsx:2:"), "{prop}: {e}");
             assert!(e.contains(want), "{prop}: {e}");
         }
-        let f = scene(
-            "export const controls = { props: {
-  l: length({ default: \"2em\" }),
-  a: angle({ default: \"-0.5turn\" }),
-  c: color({ default: \"oklch(70% 0.1 200)\" }),
-  r: rect({ default: { x: 0, y: 0, width: 4, height: 3 } }),
-  b: boolean({ default: false }),
-} };
-export default function Scene() {
-  return null;
-}
-",
-        );
+        let f = scene(indoc! {"
+                export const controls = { props: {
+                  l: length({ default: \"2em\" }),
+                  a: angle({ default: \"-0.5turn\" }),
+                  c: color({ default: \"oklch(70% 0.1 200)\" }),
+                  r: rect({ default: { x: 0, y: 0, width: 4, height: 3 } }),
+                  b: boolean({ default: false }),
+                } };
+                export default function Scene() {
+                  return null;
+                }
+            "});
         assert_eq!(f.props.len(), 5);
     });
 }
@@ -854,19 +843,18 @@ export default function Scene() {
 #[test]
 fn data_is_any_json_named_apart_from_props() {
     big_stack(|| {
-        let source = format!(
-            "{HEAD}export const controls = {{
-  props: {{ unit: string({{ default: \"kg\" }}) }},
-  data: {{
-    rows: {{ default: [{{ v: 1 }}, {{ v: 2 }}] }},
-    title: {{ required: true, label: \"Title\" }},
-  }},
-}};
-export default function Scene({{ rows, unit, title }}) {{
-  return <Text>{{title}} {{rows.map((r) => r.v).join(\"+\")}} {{unit}}</Text>;
-}}
-"
-        );
+        let source = formatdoc! {"
+                {HEAD}export const controls = {{
+                  props: {{ unit: string({{ default: \"kg\" }}) }},
+                  data: {{
+                    rows: {{ default: [{{ v: 1 }}, {{ v: 2 }}] }},
+                    title: {{ required: true, label: \"Title\" }},
+                  }},
+                }};
+                export default function Scene({{ rows, unit, title }}) {{
+                  return <Text>{{title}} {{rows.map((r) => r.v).join(\"+\")}} {{unit}}</Text>;
+                }}
+            "};
         let bound = |json: &str| {
             let data = serde_json::from_str(json).expect("JSON");
             load_bound(
@@ -910,13 +898,12 @@ export default function Scene({{ rows, unit, title }}) {{
                 "data a: data takes no option kind",
             ),
         ] {
-            let e = error(&format!(
-                "export const controls = {{ {controls} }};
-export default function Scene() {{
-  return null;
-}}
-"
-            ));
+            let e = error(&formatdoc! {"
+                    export const controls = {{ {controls} }};
+                    export default function Scene() {{
+                      return null;
+                    }}
+                "});
             assert!(e.starts_with("scene.motion.tsx:2:"), "{controls}: {e}");
             assert!(e.contains(want), "{controls}: {e}");
         }

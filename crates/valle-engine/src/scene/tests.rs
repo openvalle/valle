@@ -1,19 +1,22 @@
+use indoc::indoc;
+
 use super::*;
 use crate::layout::Rect;
 use crate::paint::{SQUARE, work};
 use crate::style::color;
 
-const SOURCE: &str = "export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
-export default function Scene() {
-  const { seconds, progress } = useCurrentTime();
-  return (
-    <View style={{ display: 'flex', padding: 10 }}>
-      <View style={{ width: 100 * progress, height: 20, background: 'red' }} />
-      {seconds < 1 ? <Text style={{ color: 'blue' }}>early</Text> : null}
-    </View>
-  );
-}
-";
+const SOURCE: &str = indoc! {"
+    export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+    export default function Scene() {
+      const { seconds, progress } = useCurrentTime();
+      return (
+        <View style={{ display: 'flex', padding: 10 }}>
+          <View style={{ width: 100 * progress, height: 20, background: 'red' }} />
+          {seconds < 1 ? <Text style={{ color: 'blue' }}>early</Text> : null}
+        </View>
+      );
+    }
+"};
 
 /// Runs `f` on a thread with the stack scene code needs.
 fn big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
@@ -71,13 +74,12 @@ fn frames_paint_from_source() {
 #[test]
 fn errors_point_at_the_source() {
     big_stack(|| {
-        let mut scene = load(
-            "export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
-export default function Scene() {
-  return <View style={{ width: 'wide' }} />;
-}
-",
-        )
+        let mut scene = load(indoc! {"
+                export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+                export default function Scene() {
+                  return <View style={{ width: 'wide' }} />;
+                }
+            "})
         .unwrap();
         let e = scene.frame(Tick(0)).unwrap_err();
         assert!(e.starts_with("s.tsx:3:"), "{e}");
@@ -101,14 +103,15 @@ fn png(width: u32, pixels: &[[u8; 4]]) -> Vec<u8> {
 #[test]
 fn images_come_from_the_resources_the_scene_declares() {
     big_stack(|| {
-        let source = "export const composition = { width: 40, height: 20, fps: 1, duration: 1 };
-export const controls = {
-  resources: { dot: resource({ kind: 'image', default: '../img/dot.png' }) },
-};
-export default function Scene() {
-  return <Image src='resource://dot' style={{ width: 10 }} />;
-}
-";
+        let source = indoc! {"
+            export const composition = { width: 40, height: 20, fps: 1, duration: 1 };
+            export const controls = {
+              resources: { dot: resource({ kind: 'image', default: '../img/dot.png' }) },
+            };
+            export default function Scene() {
+              return <Image src='resource://dot' style={{ width: 10 }} />;
+            }
+        "};
         let image = png(2, &[[255, 0, 0, 255], [255, 255, 255, 128]]);
         let files = |source: String, image: Option<Vec<u8>>| {
             move |path: &str| match path {
@@ -195,23 +198,24 @@ export default function Scene() {
 #[test]
 fn background_and_mask_images_take_their_natural_size() {
     big_stack(|| {
-        let source = "export const composition = { width: 200, height: 40, fps: 1, duration: 1 };
-export const controls = {
-  resources: { dot: resource({ kind: 'image', default: './dot.png' }) },
-};
-const image = 'url(resource://dot)';
-export default function Scene() {
-  return (
-    <View style={{ display: 'flex' }}>
-      <View style={{ width: 40, height: 30, backgroundImage: image }} />
-      <View style={{ width: 40, height: 30, backgroundImage: image, backgroundSize: 'auto 4px' }} />
-      <View style={{ width: 40, height: 30, backgroundImage: image, backgroundSize: 'contain' }} />
-      <View style={{ width: 40, height: 30, backgroundImage: image, backgroundSize: 'cover' }} />
-      <View style={{ width: 40, height: 30, backgroundColor: 'red', maskImage: image }} />
-    </View>
-  );
-}
-";
+        let source = indoc! {"
+            export const composition = { width: 200, height: 40, fps: 1, duration: 1 };
+            export const controls = {
+              resources: { dot: resource({ kind: 'image', default: './dot.png' }) },
+            };
+            const image = 'url(resource://dot)';
+            export default function Scene() {
+              return (
+                <View style={{ display: 'flex' }}>
+                  <View style={{ width: 40, height: 30, backgroundImage: image }} />
+                  <View style={{ width: 40, height: 30, backgroundImage: image, backgroundSize: 'auto 4px' }} />
+                  <View style={{ width: 40, height: 30, backgroundImage: image, backgroundSize: 'contain' }} />
+                  <View style={{ width: 40, height: 30, backgroundImage: image, backgroundSize: 'cover' }} />
+                  <View style={{ width: 40, height: 30, backgroundColor: 'red', maskImage: image }} />
+                </View>
+              );
+            }
+        "};
         let image = png(2, &[[255, 0, 0, 255], [255, 255, 255, 128]]);
         let read = |path: &str| match path {
             "scenes/s.tsx" => Some(source.as_bytes().to_vec()),
@@ -251,23 +255,24 @@ export default function Scene() {
 #[test]
 fn svg_files_show_in_images_only() {
     big_stack(|| {
-        let source = "export const composition = { width: 200, height: 40, fps: 1, duration: 1 };
-export const controls = {
-  resources: {
-    dot: resource({ kind: 'image', default: './dot.png' }),
-    icon: resource({ kind: 'image', default: './icon.svg' }),
-  },
-};
-export default function Scene() {
-  return (
-    <View style={{ display: 'flex', alignItems: 'flex-start' }}>
-      <Image src='resource://icon' style={{ width: 20 }} />
-      <Image src='resource://dot' />
-      <View style={{ width: 40, height: 30, backgroundImage: 'url(resource://dot)' }} />
-    </View>
-  );
-}
-";
+        let source = indoc! {"
+            export const composition = { width: 200, height: 40, fps: 1, duration: 1 };
+            export const controls = {
+              resources: {
+                dot: resource({ kind: 'image', default: './dot.png' }),
+                icon: resource({ kind: 'image', default: './icon.svg' }),
+              },
+            };
+            export default function Scene() {
+              return (
+                <View style={{ display: 'flex', alignItems: 'flex-start' }}>
+                  <Image src='resource://icon' style={{ width: 20 }} />
+                  <Image src='resource://dot' />
+                  <View style={{ width: 40, height: 30, backgroundImage: 'url(resource://dot)' }} />
+                </View>
+              );
+            }
+        "};
         let icon = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 1'><rect width='2' height='1'/></svg>";
         let image = png(2, &[[255, 0, 0, 255], [255, 255, 255, 128]]);
         let files = |source: String| {

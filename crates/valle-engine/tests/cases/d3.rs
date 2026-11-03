@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use indoc::indoc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use valle_engine::front::{Front, Inputs};
@@ -18,16 +19,17 @@ use crate::chrome;
 pub const CASE: &str = "d3/checks";
 
 /// A scene that runs the checks and writes their results as JSON text.
-const SCENE: &str = r#"import { checks } from "./checks.js";
+const SCENE: &str = indoc! {r#"
+    import { checks } from "./checks.js";
 
-export const composition = { width: 8, height: 8, fps: 1, duration: 1 };
+    export const composition = { width: 8, height: 8, fps: 1, duration: 1 };
 
-export default function Scene() {
-  const results = {};
-  for (const name of Object.keys(checks)) results[name] = checks[name]();
-  return <Text>{JSON.stringify(results)}</Text>;
-}
-"#;
+    export default function Scene() {
+      const results = {};
+      for (const name of Object.keys(checks)) results[name] = checks[name]();
+      return <Text>{JSON.stringify(results)}</Text>;
+    }
+"#};
 
 #[derive(Deserialize, Serialize)]
 struct Baseline {

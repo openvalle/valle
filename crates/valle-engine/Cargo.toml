@@ -25,6 +25,7 @@ wgpu.workspace = true
 zune-jpeg.workspace = true
 
 [dev-dependencies]
+indoc.workspace = true
 
 # The case runner over tests/cases, the crate's one integration test binary.
 [[test]]
