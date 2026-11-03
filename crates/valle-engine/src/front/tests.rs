@@ -508,9 +508,12 @@ fn limits_stop_runaway_scripts() {
                  {code}\n  return null;\n}}\n"
             )
         };
+        // QuickJS polls every 10 000 calls and back jumps, so where the limit lands depends on
+        // all that ran before; on the loop's back jump it gives the line of the call before.
         for code in ["while (true) {}", "try { while (true) {} } catch {}"] {
             let e = error(&body(code));
-            assert!(e.starts_with("scene.motion.tsx:4: "), "{e}");
+            let line = ["scene.motion.tsx:3: ", "scene.motion.tsx:4: "];
+            assert!(line.iter().any(|l| e.starts_with(l)), "{e}");
             assert!(e.contains("step limit"), "{e}");
         }
         let e = error(&body(
