@@ -1,6 +1,7 @@
 // Charts: the subset of d3 v7 that scenes call as built-ins, by d3's names and with d3's results
-// (design §2.8.8). It is scene code to the frontend: rewritten for tracing as a scene's modules
-// are, so a value that depends on the time goes through it as ops. It keeps no state.
+// (design §2.8.8), and Valle's own label placing. It is scene code to the frontend: rewritten for
+// tracing as a scene's modules are, so a value that depends on the time goes through it as ops.
+// It keeps no state.
 //
 // Ported from d3 7.9.0 (https://d3js.org): Copyright 2010-2023 Mike Bostock, under the ISC
 // License: Permission to use, copy, modify, and/or distribute this software for any purpose with
@@ -2703,4 +2704,57 @@ export function geoPath(projection, context) {
     return path;
   };
   return path.projection(projection ?? null);
+}
+
+// ------------------------------------------------------------------------------ Valle's own
+
+// Boxes of `size` placed next to their `point`s without overlapping each other or leaving
+// `bounds`, `[left, top, right, bottom]`: by `priority`, highest first, each takes the first of
+// nine places around its point that is free, or is hidden. Each gives `{ x, y, visible }`, its
+// box's top left, in the labels' order.
+export function placeLabels(labels, options = {}) {
+  const { bounds = [-Infinity, -Infinity, Infinity, Infinity], padding = 4 } = options;
+  const [left, top, right, bottom] = bounds;
+  const gap = Math.max(0, padding);
+  const order = labels.map((_, i) => i);
+  order.sort((a, b) => (labels[b].priority ?? 0) - (labels[a].priority ?? 0) || a - b);
+  const placed = [];
+  const out = [];
+  const free = (r) =>
+    r.left >= left &&
+    r.top >= top &&
+    r.right <= right &&
+    r.bottom <= bottom &&
+    placed.every(
+      (o) =>
+        r.right + gap <= o.left ||
+        o.right + gap <= r.left ||
+        r.bottom + gap <= o.top ||
+        o.bottom + gap <= r.top,
+    );
+  for (const i of order) {
+    const [x, y] = labels[i].point;
+    const [w, h] = labels[i].size;
+    const places = [
+      [x - w / 2, y - h - gap],
+      [x - w / 2, y + gap],
+      [x + gap, y - h / 2],
+      [x - w - gap, y - h / 2],
+      [x - w / 2, y - h / 2],
+      [x + gap, y - h - gap],
+      [x - w - gap, y - h - gap],
+      [x + gap, y + gap],
+      [x - w - gap, y + gap],
+    ];
+    out[i] = { x: x - w / 2, y: y - h / 2, visible: false };
+    for (const [px, py] of places) {
+      const r = { left: px, top: py, right: px + w, bottom: py + h };
+      if (free(r)) {
+        placed.push(r);
+        out[i] = { x: px, y: py, visible: true };
+        break;
+      }
+    }
+  }
+  return out;
 }
