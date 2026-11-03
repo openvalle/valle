@@ -1,4 +1,5 @@
 use super::*;
+use crate::front::Holds;
 use crate::template::Kind;
 
 const CANVAS: [f32; 2] = [200.0, 100.0];
@@ -37,6 +38,7 @@ fn sheet(nodes: Vec<Node>) -> Result<Sheet, Error> {
 fn resources() -> [Slot; 2] {
     ["photo", "tile"].map(|name| Slot {
         name: name.into(),
+        kind: Holds::Image,
         default: None,
     })
 }

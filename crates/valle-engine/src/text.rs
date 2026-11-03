@@ -14,7 +14,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 pub use parley::fontique::Blob;
-use parley::fontique::{Collection, CollectionOptions, GenericFamily, SourceCache};
+use parley::fontique::{
+    Collection, CollectionOptions, FontInfoOverride, GenericFamily, SourceCache,
+};
 use parley::setting::Tag;
 use parley::{
     Alignment, AlignmentOptions, BreakReason, FontContext, FontFamily, FontFamilyName, FontFeature,
@@ -219,6 +221,8 @@ pub struct Text {
     faces: Vec<Face>,
     /// Glyph outlines by face and glyph id, in font units y up, and their units per em.
     outlines: HashMap<(u32, u32), (f32, Vec<Curve>)>,
+    /// The families of font resources, by their resources' names.
+    named: Vec<Rc<str>>,
 }
 
 /// The built-in families, as `font-family` names them, and their fonts.
@@ -265,7 +269,21 @@ impl Text {
             ellipses: HashMap::new(),
             faces: Vec::new(),
             outlines: HashMap::new(),
+            named: Vec::new(),
         })
+    }
+
+    /// The font resource `name`, a family by that name, of the faces in `data`.
+    pub fn add_font(&mut self, name: &str, data: Blob<u8>) -> Result<(), Error> {
+        let named = FontInfoOverride {
+            family_name: Some(name),
+            ..Default::default()
+        };
+        if (self.fonts.collection.register_fonts(data, Some(named))).is_empty() {
+            return Err("not a font file: TrueType, OpenType or a collection of them".into());
+        }
+        self.named.push(name.into());
+        Ok(())
     }
 
     /// The faces glyphs name.
@@ -575,7 +593,7 @@ impl Text {
 
     /// `text` shaped in `font` alone, on one line.
     fn alone(&mut self, text: &str, font: &Font) -> Result<parley::Layout<u32>, Error> {
-        let families = families(&font.family)?;
+        let families = families(&font.family, &self.named)?;
         let mut builder = (self.layouts).ranged_builder(&mut self.fonts, text, 1.0, false);
         let family = FontFamily::List(Cow::Borrowed(&families));
         builder.push_default(StyleProperty::FontFamily(family));
@@ -632,7 +650,7 @@ impl Text {
                 .map(|p| (p.text.as_ref(), p.font.collapse, p.font.transform));
             let (string, ranges) = prepare(pieces)?;
             let families = (content.pieces.iter())
-                .map(|p| families(&p.font.family))
+                .map(|p| families(&p.font.family, &self.named))
                 .collect::<Result<Vec<_>, _>>()?;
             let mut builder = (self.layouts).ranged_builder(&mut self.fonts, &string, 1.0, false);
             for (k, (piece, range)) in content.pieces.iter().zip(ranges).enumerate() {
@@ -846,17 +864,26 @@ fn variations(font: &Font) -> FontVariations<'static> {
     FontVariations::List(Cow::Owned(axes.collect()))
 }
 
-fn families(list: &[Family]) -> Result<Vec<FontFamilyName<'static>>, Error> {
-    list.iter()
+/// `list` as parley takes it: built-in families, and the font resources of `named`, as CSS
+/// matches family names regardless of ASCII case; then sans-serif, for the characters none of
+/// them has.
+fn families(list: &[Family], named: &[Rc<str>]) -> Result<Vec<FontFamilyName<'static>>, Error> {
+    let mut out = (list.iter())
         .map(|f| match f {
             Family::SansSerif => Ok(FontFamilyName::Generic(GenericFamily::SansSerif)),
             Family::Serif => Ok(FontFamilyName::Generic(GenericFamily::Serif)),
             Family::Monospace => Ok(FontFamilyName::Generic(GenericFamily::Monospace)),
-            Family::Named(name) => Err(format!(
-                "font family {name}: font resources are not supported yet"
-            )),
+            Family::Named(name) => match named.iter().find(|n| n.eq_ignore_ascii_case(name)) {
+                Some(n) => Ok(FontFamilyName::Named(Cow::Owned(n.to_string()))),
+                None => Err(format!(
+                    "font family {name}: the scene declares no font resource {name} in \
+                     controls.resources"
+                )),
+            },
         })
-        .collect()
+        .collect::<Result<Vec<_>, Error>>()?;
+    out.push(FontFamilyName::Generic(GenericFamily::SansSerif));
+    Ok(out)
 }
 
 /// What a box in `font`, with ascent, descent and line gap `m`, takes above and below its

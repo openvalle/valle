@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use serde::Deserialize;
 
+use super::{Holds, Slot};
 use crate::ease::Easing;
 use crate::format::Format;
 use crate::js::MathFn;
@@ -267,11 +268,11 @@ struct TracedGuard {
 }
 
 /// The template of a variant `runtime.js` serialized; `place` names where a site or stack line is
-/// in the source, and `resources` are the names of the scene's resources.
+/// in the source, and `resources` are the scene's.
 pub fn variant(
     json: &str,
     place: &dyn Fn(&At) -> Rc<str>,
-    resources: &[String],
+    resources: &[Slot],
 ) -> Result<Template, Error> {
     let traced: Traced =
         serde_json::from_str(json).map_err(|e| format!("a traced variant: {e}"))?;
@@ -339,13 +340,21 @@ pub fn variant(
             }
             "image" => {
                 let name = n.src.as_deref().ok_or("an image node without a source")?;
-                let resource = resources.iter().position(|r| r == name).ok_or_else(|| {
-                    let at = n.site.map_or("<Image>".into(), |s| place(&At::Site(s)));
-                    format!(
-                        "{at}: <Image> src resource://{name}: the scene declares no resource \
-                         {name} in controls.resources"
-                    )
-                })?;
+                let at = || n.site.map_or("<Image>".into(), |s| place(&At::Site(s)));
+                let resource =
+                    (resources.iter().position(|r| r.name == name)).ok_or_else(|| {
+                        format!(
+                            "{}: <Image> src resource://{name}: the scene declares no resource \
+                         {name} in controls.resources",
+                            at()
+                        )
+                    })?;
+                if resources[resource].kind != Holds::Image {
+                    return Err(format!(
+                        "{}: <Image> src resource://{name}: {name} is a font, not an image",
+                        at()
+                    ));
+                }
                 Kind::Image {
                     resource: resource as u32,
                 }

@@ -1,0 +1,18 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n@font-face { font-family: \"Valle Serif\"; src: url(\"/fonts/NotoSerif-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n@font-face { font-family: \"display\"; src: url(\"/cases/resources/Bungee-Regular.ttf\"); }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 160px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 8px; gap: 6px; color: #263238;\"><div data-n=\"1\" data-text style=\"font-family: display; font-size: 24px; color: #e53935;\">Valle 2026</div><div data-n=\"2\" data-text style=\"font-size: 16px;\">Plain and <span data-n=\"3\" style=\"font-family: display; color: #1e88e5;\">display</span> text</div><div data-n=\"4\" data-text style=\"font-family: Display, &quot;Valle Serif&quot;; font-size: 18px; background: #eceff1;\">First of a list</div></div></div>\n",
+ "boxes": [
+  [0,0,256,92],
+  [8,8,240,31],
+  [8,39,240,22],
+  [81.828125,40,76.609375,21],
+  [8,61,240,23]
+ ],
+ "lines": {"1":["Valle 2026"],"2":["Plain and display text"],"4":["First of a list"]},
+ "fonts": {
+  "1": {"color":"rgb(229, 57, 53)","fill":"rgb(229, 57, 53)","stroke":"0px","stroke_color":"rgb(229, 57, 53)","shadow":"none","size":"24px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "2": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "3": {"color":"rgb(30, 136, 229)","fill":"rgb(30, 136, 229)","stroke":"0px","stroke_color":"rgb(30, 136, 229)","shadow":"none","size":"16px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "4": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"18px","weight":"400","stretch":"100%","style":"normal","transform":"none"}
+ }
+}

@@ -15,11 +15,16 @@ use zune_jpeg::zune_core::options::DecoderOptions;
 use crate::layout::Natural;
 use crate::svg::file::{self, Document};
 
-/// What a resource shows: one of the scene's images, by its index there, or an SVG file.
+/// What a resource shows: one of the scene's images, by its index there, an SVG file, or nothing.
 #[derive(Debug)]
 pub enum Picture {
-    Image { image: u32, size: [u32; 2] },
+    Image {
+        image: u32,
+        size: [u32; 2],
+    },
     Svg(Box<Document>),
+    /// A font resource's, which no image names.
+    None,
 }
 
 impl Picture {
@@ -44,6 +49,7 @@ impl Picture {
         match self {
             Picture::Image { size, .. } => Natural::Size(size.map(|v| v as f32)),
             Picture::Svg(document) => document.natural,
+            Picture::None => Natural::Ratio(None),
         }
     }
 }

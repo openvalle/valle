@@ -180,7 +180,21 @@ fn families_are_built_in_or_resources() {
     assert_eq!(
         t.measure(&plain("a", &with(Family::Named("Brand".into()))), None)
             .unwrap_err(),
-        "font family Brand: font resources are not supported yet"
+        "font family Brand: the scene declares no font resource Brand in controls.resources"
+    );
+    // A font resource is a family by its name, whatever its ASCII case.
+    let serif = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fonts/NotoSerif-Variable.ttf"
+    );
+    t.add_font("brand", Blob::from(std::fs::read(serif).unwrap()))
+        .unwrap();
+    let mut width = |family: Family| t.measure(&plain("Serif", &with(family)), None).unwrap()[0];
+    assert_eq!(width(Family::Named("Brand".into())), width(Family::Serif));
+    assert_eq!(
+        t.add_font("bad", Blob::from(b"not a font".to_vec()))
+            .unwrap_err(),
+        "not a font file: TrueType, OpenType or a collection of them"
     );
 }
 

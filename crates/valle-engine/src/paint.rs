@@ -361,7 +361,7 @@ fn filled(
                 image,
                 pixelated,
             },
-            Picture::Svg(_) => return None,
+            Picture::Svg(_) | Picture::None => return None,
         },
     })
 }
@@ -1755,6 +1755,7 @@ impl Painter<'_> {
                     items: vec![drawn],
                 }
             }
+            Picture::None => return,
         };
         out.push((clip, image));
     }

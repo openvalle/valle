@@ -73,12 +73,21 @@ pub struct Rewritten {
     pub resources: Vec<Slot>,
 }
 
-/// A resource `controls.resources` declares: its name, and the file it reads, as written, unless
-/// another is bound to it.
+/// A resource `controls.resources` declares: its name, what it holds, and the file it reads, as
+/// written, unless another is bound to it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Slot {
     pub name: String,
+    pub kind: Holds,
     pub default: Option<String>,
+}
+
+/// What a resource holds: an image, an SVG file among them, or a font, whose family is the
+/// resource's name.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Holds {
+    Image,
+    Font,
 }
 
 /// What `code` starts with before the first line of the module body.
@@ -458,13 +467,21 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
             _ => return Err("resource() takes kind and default".into()),
         }
     }
-    match kind.as_deref() {
-        Some("image") => {}
-        Some(k @ ("video" | "font" | "model3d" | "environment" | "shader")) => {
+    let kind = match kind.as_deref() {
+        Some("image") => Holds::Image,
+        Some("font") => Holds::Font,
+        Some(k @ ("video" | "model3d" | "environment" | "shader")) => {
             return Err(format!("{k} resources are not supported yet"));
         }
-        Some(k) => return Err(format!("{k:?} is not a kind of resource: image")),
-        None => return Err("resource() needs a kind: \"image\"".into()),
+        Some(k) => return Err(format!("{k:?} is not a kind of resource: image or font")),
+        None => return Err("resource() needs a kind: \"image\" or \"font\"".into()),
+    };
+    // Its name is a family name, which the built-in ones would hide.
+    let generic = ["sans-serif", "serif", "monospace"];
+    if kind == Holds::Font && generic.iter().any(|g| name.eq_ignore_ascii_case(g)) {
+        return Err(format!(
+            "a font resource cannot be named {name}: that is a built-in family"
+        ));
     }
     let web = |d: &String| d.starts_with("http://") || d.starts_with("https://");
     if default.as_ref().is_some_and(web) {
@@ -472,6 +489,7 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
     }
     Ok(Slot {
         name: name.to_string(),
+        kind,
         default,
     })
 }
@@ -1142,19 +1160,22 @@ mod tests {
         let r = rewrite(
             "s.motion.tsx",
             "export const controls = { resources: { logo: resource({ kind: \"image\", default: \
-             \"../media/logo.png\" }), \"hero-2.b\": resource({ kind: \"image\" }) } };\n",
+             \"../media/logo.png\" }), \"hero-2.b\": resource({ kind: \"image\" }), brand: \
+             resource({ kind: \"font\", default: \"Brand.ttf\" }) } };\n",
             0,
         )
         .unwrap();
-        let slot = |name: &str, default: Option<&str>| Slot {
+        let slot = |name: &str, kind: Holds, default: Option<&str>| Slot {
             name: name.into(),
+            kind,
             default: default.map(String::from),
         };
         assert_eq!(
             r.resources,
             [
-                slot("logo", Some("../media/logo.png")),
-                slot("hero-2.b", None)
+                slot("logo", Holds::Image, Some("../media/logo.png")),
+                slot("hero-2.b", Holds::Image, None),
+                slot("brand", Holds::Font, Some("Brand.ttf")),
             ]
         );
         for (source, says) in [
@@ -1180,7 +1201,11 @@ mod tests {
             ),
             (
                 "export const controls = { resources: { a: resource({ kind: \"photo\" }) } };",
-                "\"photo\" is not a kind of resource: image",
+                "\"photo\" is not a kind of resource: image or font",
+            ),
+            (
+                "export const controls = { resources: { Serif: resource({ kind: \"font\" }) } };",
+                "resource Serif: a font resource cannot be named Serif: that is a built-in family",
             ),
             (
                 "export const controls = { resources: { a: resource({ default: \"a.png\" }) } };",

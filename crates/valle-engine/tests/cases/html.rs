@@ -8,7 +8,7 @@
 
 use std::fmt::Write as _;
 
-use valle_engine::front::{Composition, Slot};
+use valle_engine::front::{Composition, Holds, Slot};
 use valle_engine::js;
 use valle_engine::scene::Frame;
 use valle_engine::svg;
@@ -102,6 +102,15 @@ pub fn print(
                  font-weight: 100 900; font-stretch: 62.5% 100%; }}"
             );
         }
+    }
+    // Font resources, each a family by its name.
+    for slot in resources.iter().filter(|s| s.kind == Holds::Font) {
+        let _ = writeln!(
+            html,
+            "@font-face {{ font-family: \"{}\"; src: url(\"{}\"); }}",
+            slot.name,
+            file(slot)?
+        );
     }
     let _ = write!(
         html,

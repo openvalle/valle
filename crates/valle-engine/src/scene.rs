@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::eval::{self, Clock};
-use crate::front::{Composition, Front, Slot};
+use crate::front::{Composition, Front, Holds, Slot};
 use crate::image::{Image, Picture};
 use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
 use crate::style::{Sheet, Style, gradient};
 use crate::template::{Error, Kind, Measure, Op, Tag, Template, V};
-use crate::text::{Face, Text};
+use crate::text::{Blob, Face, Text};
 use crate::time::Tick;
 
 /// Variants whose sheets are kept, as many as the frontend keeps.
@@ -52,20 +52,26 @@ impl Scene {
         let text = |path: &str| read(path).and_then(|b| String::from_utf8(b).ok());
         let front = Front::load(entry, &text)?;
         let mut images = Vec::new();
-        let pictures = (front.resources.iter())
-            .map(|slot| {
-                let fail = |e: String| format!("{entry}: resource {}: {e}", slot.name);
-                let path = (slot.default.as_ref())
-                    .ok_or_else(|| fail("nothing is bound to it, and it has no default".into()))?;
-                let bytes = read(path).ok_or_else(|| fail(format!("{path}: not found")))?;
-                Picture::load(&bytes, &mut images).map_err(|e| fail(format!("{path}: {e}")))
-            })
-            .collect::<Result<_, _>>()?;
+        let mut pictures = Vec::new();
+        let mut text = Text::new()?;
+        for slot in &front.resources {
+            let fail = |e: String| format!("{entry}: resource {}: {e}", slot.name);
+            let path = (slot.default.as_ref())
+                .ok_or_else(|| fail("nothing is bound to it, and it has no default".into()))?;
+            let bytes = read(path).ok_or_else(|| fail(format!("{path}: not found")))?;
+            let picture = match slot.kind {
+                Holds::Image => Picture::load(&bytes, &mut images),
+                Holds::Font => {
+                    (text.add_font(&slot.name, Blob::from(bytes))).map(|()| Picture::None)
+                }
+            };
+            pictures.push(picture.map_err(|e| fail(format!("{path}: {e}")))?);
+        }
         Ok(Scene {
             front,
             pictures,
             images,
-            text: Text::new()?,
+            text,
             sheets: Vec::new(),
         })
     }

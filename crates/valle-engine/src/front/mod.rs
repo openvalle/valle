@@ -29,7 +29,7 @@ use crate::template::{Error, Template, V};
 use crate::time::{Rate, Tick};
 
 use lower::{Arg, At};
-pub use rewrite::Slot;
+pub use rewrite::{Holds, Slot};
 
 const RUNTIME: &str = include_str!("runtime.js");
 /// The built-in charts, d3's subset, which run as scene code.
@@ -103,6 +103,7 @@ impl Front {
         let resources = (scene.resources.iter())
             .map(|slot| Slot {
                 name: slot.name.clone(),
+                kind: slot.kind,
                 default: (slot.default.as_ref()).map(|d| match d.starts_with('/') {
                     true => d.clone(),
                     false => rewrite::join(folder, d),
@@ -231,8 +232,7 @@ impl Front {
                 ))
                 .map_err(|e| self.describe(&ctx, e))
         })?;
-        let names: Vec<String> = self.resources.iter().map(|r| r.name.clone()).collect();
-        lower::variant(&traced, &|at| self.place(at), &names)
+        lower::variant(&traced, &|at| self.place(at), &self.resources)
     }
 
     fn run(&self, ctx: &Ctx<'_>, source: String, file: &str) -> Result<(), Error> {

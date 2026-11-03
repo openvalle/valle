@@ -9,7 +9,7 @@ use super::css::{self, angle};
 use super::math::{self, Calc};
 use super::position::{Offset, position};
 use super::{Accept, Len, Units, length_text};
-use crate::front::Slot;
+use crate::front::{Holds, Slot};
 
 /// A `background-image` or `mask-image` layer, its stop positions `P` (declared lengths, then px
 /// and fractions of the gradient line), colors `C` (declared, `None` is `currentcolor`) and
@@ -503,6 +503,11 @@ impl Declared {
         Ok(match self {
             Image::None => Image::None,
             Image::Url(name) => match resources.iter().position(|r| *r.name == **name) {
+                Some(i) if resources[i].kind == Holds::Font => {
+                    return Err(format!(
+                        "url(resource://{name}): {name} is a font, not an image"
+                    ));
+                }
                 Some(i) => Image::Url(i as u32),
                 None => {
                     return Err(format!(
