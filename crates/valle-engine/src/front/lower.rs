@@ -2,6 +2,7 @@
 //! name over operands; `make` turns one into the engine's expression, for tracing (`__host.op`) and
 //! for the template alike.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use serde::Deserialize;
@@ -294,7 +295,8 @@ struct TracedNode {
 
 #[derive(Deserialize)]
 struct TracedShader {
-    code: String,
+    code: Option<String>,
+    source: Option<String>,
     uniforms: Vec<(String, Vec<Ref>)>,
     inputs: Vec<(String, String)>,
     outset: f64,
@@ -330,6 +332,7 @@ pub fn variant(
     json: &str,
     place: &dyn Fn(&At) -> Rc<str>,
     resources: &[Slot],
+    shaders: &HashMap<String, Rc<str>>,
 ) -> Result<Template, Error> {
     let traced: Traced =
         serde_json::from_str(json).map_err(|e| format!("a traced variant: {e}"))?;
@@ -387,7 +390,12 @@ pub fn variant(
         };
         if resources[r].kind != Holds::Image {
             return Err(format!(
-                "{what} resource://{name}: {name} is a font, not an image"
+                "{what} resource://{name}: {name} is a {}, not an image",
+                if resources[r].kind == Holds::Font {
+                    "font"
+                } else {
+                    "shader"
+                }
             ));
         }
         Ok(r as u32)
@@ -424,6 +432,29 @@ pub fn variant(
                     n.site
                         .map_or("<ShaderLayer>".into(), |s| place(&At::Site(s)))
                 };
+                let code: Rc<str> = match (s.code, s.source) {
+                    (Some(code), _) => code.into(),
+                    (None, Some(name)) => {
+                        let what = format!("{}: <ShaderLayer> source resource://{name}", at());
+                        let slot = resources.iter().find(|r| r.name == name);
+                        match (slot.map(|s| s.kind), shaders.get(&name)) {
+                            (Some(Holds::Shader), Some(code)) => code.clone(),
+                            (Some(Holds::Shader), None) => {
+                                return Err(format!("{what}: its code is not read yet"));
+                            }
+                            (Some(_), _) => {
+                                return Err(format!("{what}: {name} is not a shader resource"));
+                            }
+                            (None, _) => {
+                                return Err(format!(
+                                    "{what}: the scene declares no resource {name} in \
+                                     controls.resources"
+                                ));
+                            }
+                        }
+                    }
+                    (None, None) => return Err("a shader node without its code".into()),
+                };
                 Kind::Shader {
                     inputs: (s.inputs.iter())
                         .map(|(k, name)| {
@@ -431,7 +462,7 @@ pub fn variant(
                             Ok((Rc::from(k.as_str()), image(name, &what)?))
                         })
                         .collect::<Result<_, Error>>()?,
-                    code: s.code.into(),
+                    code,
                     uniforms: (s.uniforms.into_iter())
                         .map(|(k, v)| {
                             let v = v.into_iter().map(&prop).collect::<Result<_, Error>>()?;
@@ -557,7 +588,7 @@ mod tests {
                 At::Stack(s) => s.as_str().into(),
             }
         };
-        let t = variant(json, &place, &[]).unwrap();
+        let t = variant(json, &place, &[], &HashMap::new()).unwrap();
         // seconds, 2, mul, 1, gt, template
         assert_eq!(t.program.ops.len(), 6);
         assert_eq!(t.program.ops[2], Op::Bin(Bin::Mul, 0, 1));
@@ -577,6 +608,6 @@ mod tests {
         assert_eq!(t.guards[0].expr, 4);
         assert_eq!(&*t.guards[1].at, "m0.js:3");
         assert_eq!(t.guards[1].when, [(4, true)]);
-        assert!(variant(r#"{"ops": [["add", [{"e": 5}, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#, &place, &[]).is_err());
+        assert!(variant(r#"{"ops": [["add", [{"e": 5}, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#, &place, &[], &HashMap::new()).is_err());
     }
 }

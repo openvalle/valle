@@ -95,6 +95,10 @@ impl Scene {
                             .and_then(|()| text.add_font(&slot.name, path, blob))
                             .map(|()| Picture::None)
                     }
+                    Holds::Shader => String::from_utf8(bytes)
+                        .map(|code| front.set_shader(&slot.name, code.into()))
+                        .map(|()| Picture::None)
+                        .map_err(|_| "a shader file is UTF-8 text".to_string()),
                 }
                 .map_err(|e| fail(format!("{path}: {e}")))?;
             }

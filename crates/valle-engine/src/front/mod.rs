@@ -109,6 +109,8 @@ pub struct Front {
     context: Context,
     /// What lays out text for `measureText` and `textOutline`, once the scene gives it.
     typeset: Rc<RefCell<Option<Box<dyn Typeset>>>>,
+    /// The code of its shader resources, by name, once the scene reads them.
+    shaders: RefCell<HashMap<String, Rc<str>>>,
 }
 
 impl Front {
@@ -157,6 +159,7 @@ impl Front {
             let e = match (slot.kind, files.len()) {
                 (_, 0) => Err("nothing is bound to it".to_string()),
                 (Holds::Image, 2..) => Err("an image resource has one file".to_string()),
+                (Holds::Shader, 2..) => Err("a shader resource has one file".to_string()),
                 _ => files.iter().try_for_each(|f| rewrite::located(f)),
             };
             if let Err(e) = e {
@@ -214,6 +217,7 @@ impl Front {
             traces: 0,
             context,
             typeset: Rc::default(),
+            shaders: RefCell::default(),
         };
         front.context.with(|ctx| -> Result<(), Error> {
             install_host(&ctx, front.typeset.clone()).map_err(|e| e.to_string())?;
@@ -234,6 +238,11 @@ impl Front {
             front.run(&ctx, "__lockdown()".into(), "lockdown.js")
         })?;
         Ok(front)
+    }
+
+    /// Gives shader resource `name` its code.
+    pub fn set_shader(&self, name: &str, code: Rc<str>) {
+        self.shaders.borrow_mut().insert(name.to_string(), code);
     }
 
     /// Gives `measureText` and `textOutline` what lays out text.
@@ -306,7 +315,12 @@ impl Front {
                 ))
                 .map_err(|e| self.describe(&ctx, e))
         })?;
-        lower::variant(&traced, &|at| self.place(at), &self.resources)
+        lower::variant(
+            &traced,
+            &|at| self.place(at),
+            &self.resources,
+            &self.shaders.borrow(),
+        )
     }
 
     fn run(&self, ctx: &Ctx<'_>, source: String, file: &str) -> Result<(), Error> {

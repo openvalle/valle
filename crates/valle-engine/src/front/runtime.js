@@ -1200,7 +1200,7 @@
     span: [],
     mask: ["source", "mode", "invert", "layoutId"],
     image: ["src", "layoutId"],
-    shader: ["code", "uniforms", "inputs", "outset", "layoutId"],
+    shader: ["code", "source", "uniforms", "inputs", "outset", "layoutId"],
   };
 
   const fixed = (x, kind, at) => (x instanceof T ? exact(x, kind, at) : x);
@@ -1412,12 +1412,29 @@
     node.src = src.slice("resource://".length);
   }
 
-  // A <ShaderLayer>'s GLSL code, which cannot change, the values its uniforms take by name, each
+  // A <ShaderLayer>'s GLSL code, which cannot change, or the shader resource it is in, written as
+  // a literal; the values its uniforms take by name, each
   // a number, a boolean, a color or an array of numbers for a vector, any of them traced, the
   // image resources it reads by name, written as literals, and the px it paints out past its box.
   function shaderOf(node, props, at) {
-    const code = fixed(props.code, "code", at);
-    if (typeof code !== "string") fail(at, "<ShaderLayer> code is its shader's GLSL, a string");
+    const code = props.code === undefined ? null : fixed(props.code, "code", at);
+    let source = null;
+    if (props.source !== undefined) {
+      const src = props.source;
+      if (code !== null) fail(at, "<ShaderLayer> takes code or source, not both");
+      if (typeof src !== "string" || !src.startsWith("resource://")) {
+        fail(
+          at,
+          '<ShaderLayer> source is a shader resource written as a literal, such as "resource://wave"',
+        );
+      }
+      source = src.slice("resource://".length);
+    } else if (typeof code !== "string") {
+      fail(
+        at,
+        "<ShaderLayer> code is its shader's GLSL, a string, or source names a shader resource",
+      );
+    }
     const given = props.uniforms ?? {};
     if (!plain(given)) {
       fail(at, "<ShaderLayer> uniforms is an object of the values its uniforms take, by name");
@@ -1455,7 +1472,7 @@
     if (typeof outset !== "number" || !(outset >= 0) || outset === Infinity) {
       fail(at, "<ShaderLayer> outset is px it paints past its box, 0 or more");
     }
-    node.shader = { code, uniforms, inputs, outset };
+    node.shader = { code, source, uniforms, inputs, outset };
   }
 
   // An inline SVG element, into `out`: its attributes, constants or traced values, and the SVG
@@ -1840,8 +1857,14 @@
       }
       if ("src" in n) out.src = n.src;
       if ("shader" in n) {
-        const { code, uniforms, inputs, outset } = n.shader;
-        out.shader = { code, uniforms: uniforms.map(([k, v]) => [k, v.map(ref)]), inputs, outset };
+        const { code, source, uniforms, inputs, outset } = n.shader;
+        out.shader = {
+          code,
+          source,
+          uniforms: uniforms.map(([k, v]) => [k, v.map(ref)]),
+          inputs,
+          outset,
+        };
       }
       if ("tag" in n) {
         out.tag = n.tag;

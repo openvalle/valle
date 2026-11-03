@@ -91,12 +91,13 @@ pub struct Slot {
 /// The names of the built-in font families, which no font resource takes.
 pub const BUILT_IN_FAMILIES: [&str; 4] = ["sans-serif", "serif", "monospace", "emoji"];
 
-/// What a resource holds: an image, an SVG file among them, or a font, whose family is the
-/// resource's name.
+/// What a resource holds: an image, an SVG file among them, a font, whose family is the
+/// resource's name, or a shader's GLSL code.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Holds {
     Image,
     Font,
+    Shader,
 }
 
 /// What `code` starts with before the first line of the module body.
@@ -519,11 +520,16 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
     let kind = match kind.as_deref() {
         Some("image") => Holds::Image,
         Some("font") => Holds::Font,
-        Some(k @ ("video" | "model3d" | "environment" | "shader")) => {
+        Some("shader") => Holds::Shader,
+        Some(k @ ("video" | "model3d" | "environment")) => {
             return Err(format!("{k} resources are not supported yet"));
         }
-        Some(k) => return Err(format!("{k:?} is not a kind of resource: image or font")),
-        None => return Err("resource() needs a kind: \"image\" or \"font\"".into()),
+        Some(k) => {
+            return Err(format!(
+                "{k:?} is not a kind of resource: image, font or shader"
+            ));
+        }
+        None => return Err("resource() needs a kind: \"image\", \"font\" or \"shader\"".into()),
     };
     // Its name is a family name, which the built-in ones would hide.
     if kind == Holds::Font
@@ -538,6 +544,9 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
     match (kind, default.len()) {
         (Holds::Image, _) if list => {
             return Err("an image resource has one file, not a list".into());
+        }
+        (Holds::Shader, _) if list => {
+            return Err("a shader resource has one file, not a list".into());
         }
         (_, 0) if list => return Err("default lists no file".into()),
         _ => {}
@@ -1272,7 +1281,7 @@ mod tests {
             ),
             (
                 "export const controls = { resources: { a: resource({ kind: \"photo\" }) } };",
-                "\"photo\" is not a kind of resource: image or font",
+                "\"photo\" is not a kind of resource: image, font or shader",
             ),
             (
                 "export const controls = { resources: { Serif: resource({ kind: \"font\" }) } };",
