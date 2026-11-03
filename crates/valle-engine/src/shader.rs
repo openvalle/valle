@@ -7,6 +7,9 @@
 //! for the color it gives there, sRGB-encoded with straight alpha, as WebGL takes it. Images read
 //! the same way: y up, straight alpha. `gl_FragCoord` is in the box's pixels, from its bottom left.
 //!
+//! A uniform keeps the value a comment after it gives, `uniform float amount; // = 0.5`, as
+//! gl-transitions writes defaults, until it is given another.
+//!
 //! The code is rewritten in place, line for line, so that naga's errors point at the author's
 //! lines: the declarations become plain globals that a `main` of the engine's fills before it calls
 //! the author's, renamed, and premultiplies the color it gives.
@@ -77,6 +80,8 @@ pub struct Program {
     pub wgsl: String,
     pub uniforms: Vec<Uniform>,
     pub block: u32,
+    /// The block as it is before values are given: the defaults the code writes, else zeros.
+    pub initial: Vec<u8>,
     /// The images it reads by name, in the order of their bindings.
     pub samplers: Vec<Rc<str>>,
 }
@@ -95,9 +100,9 @@ impl Program {
     /// The uniform block for `values` by name, which name uniforms it declares: a number for a
     /// `float` or an `int` (a whole one), a boolean for a `bool`, numbers for a vector, or a color
     /// for a `vec3` or `vec4`, its sRGB-encoded channels with straight alpha. Those it is not given
-    /// are 0, as in WebGL.
+    /// keep the default the code writes, as gl-transitions does, or are 0, as in WebGL.
     pub fn block(&self, values: &[(&str, Vec<&V>)]) -> Result<Vec<u8>, String> {
-        let mut out = vec![0u8; self.block as usize];
+        let mut out = self.initial.clone();
         for (name, v) in values {
             let Some(u) = self.uniforms.iter().find(|u| &*u.name == *name) else {
                 return Err(format!(
@@ -170,6 +175,9 @@ pub fn program(code: &str, images: &[&str]) -> Result<Rc<Program>, Error> {
 #[derive(Default)]
 struct Declared {
     uniforms: Vec<(Rc<str>, Type)>,
+    /// The values uniforms take when they are not given, as gl-transitions writes them: a
+    /// comment `// = <value>` after the declaration.
+    defaults: Vec<(Rc<str>, Vec<[u8; 4]>)>,
     samplers: Vec<Rc<str>>,
     uv: Option<String>,
     color: Option<String>,
@@ -354,6 +362,13 @@ fn declaration(
                     ));
                 };
                 d.uniforms.push((name.into(), t));
+                let after = code[range.end + 1..].split('\n').next().unwrap_or("");
+                let given = (after.trim().strip_prefix("//"))
+                    .and_then(|c| c.trim().strip_prefix('='))
+                    .and_then(|v| default(t, v.trim().trim_end_matches(';')));
+                if let Some(v) = given.filter(|_| names.len() == 1) {
+                    d.defaults.push((name.into(), v));
+                }
                 globals.push_str(&format!("{ty} {name};"));
             }
             replace(edits, code, whole, globals);
@@ -382,6 +397,34 @@ fn declaration(
         _ => {}
     }
     Ok(())
+}
+
+/// A default value as GLSL writes it, for a uniform of type `ty`: a number, `true` or `false`, or
+/// `vecN(…)` of N numbers or one.
+fn default(ty: Type, text: &str) -> Option<Vec<[u8; 4]>> {
+    let number = |s: &str| s.trim().parse::<f64>().ok();
+    match ty {
+        Type::Float(1) => Some(vec![(number(text)? as f32).to_ne_bytes()]),
+        Type::Int => {
+            let x = number(text)?;
+            (x.fract() == 0.0).then(|| vec![(x as i32).to_ne_bytes()])
+        }
+        Type::Bool => match text {
+            "true" => Some(vec![1i32.to_ne_bytes()]),
+            "false" => Some(vec![0i32.to_ne_bytes()]),
+            _ => None,
+        },
+        Type::Float(n) => {
+            let inner = text.strip_prefix(&format!("vec{n}("))?.strip_suffix(')')?;
+            let parts = inner.split(',').map(number).collect::<Option<Vec<_>>>()?;
+            let parts = match parts.len() {
+                1 => vec![parts[0]; n as usize],
+                k if k == n as usize => parts,
+                _ => return None,
+            };
+            Some(parts.iter().map(|&x| (x as f32).to_ne_bytes()).collect())
+        }
+    }
 }
 
 /// The engine's part before the code: the host's block (set 1), and the code's uniforms and
@@ -457,6 +500,16 @@ fn epilogue(d: &Declared) -> String {
 fn compile(code: &str, images: &[&str]) -> Result<Program, Error> {
     let (body, declared) = rewrite(code, images)?;
     let (head, uniforms, block) = prelude(&declared);
+    let mut initial = vec![0u8; block as usize];
+    for (name, words) in &declared.defaults {
+        let Some(u) = uniforms.iter().find(|u| u.name == *name) else {
+            continue;
+        };
+        for (k, w) in words.iter().enumerate() {
+            let at = u.offset as usize + 4 * k;
+            initial[at..at + 4].copy_from_slice(w);
+        }
+    }
     let skip = head.matches('\n').count();
     let source = format!("{head}{body}{}", epilogue(&declared));
     let lines = code.matches('\n').count() + 1;
@@ -503,6 +556,7 @@ fn compile(code: &str, images: &[&str]) -> Result<Program, Error> {
         wgsl,
         uniforms,
         block,
+        initial,
         samplers: declared.samplers,
     })
 }

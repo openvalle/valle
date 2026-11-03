@@ -474,12 +474,16 @@ pub enum Kind {
     /// take by name, a number, a boolean or a color string each, or a vector's numbers, the
     /// images it reads by name, the scene's resources of these indices, and the px it paints out
     /// past its border box on each side. What the box and the boxes in it paint is the image the
-    /// shader reads as `content`, and what is painted under it its `backdrop`.
+    /// shader reads as `content`, and what is painted under it its `backdrop`. A `<Transition>`'s
+    /// reads its two children instead, as `transition.rs` has it, and is a built-in `kind` or
+    /// code of its own.
     Shader {
         code: Rc<str>,
         uniforms: Vec<(Rc<str>, Vec<Prop>)>,
         inputs: Vec<(Rc<str>, u32)>,
         outset: f64,
+        transition: bool,
+        kind: Option<Rc<str>>,
     },
     /// An inline SVG element: an `<svg>` is a box, and the elements in it, its descendants, are
     /// not. Its attributes are as written, camelCase.
@@ -585,6 +589,12 @@ impl Node {
             (None, Kind::Span { .. }) => "<Span>".into(),
             (None, Kind::Mask { .. }) => "<Mask>".into(),
             (None, Kind::Image { .. }) => "<Image>".into(),
+            (
+                None,
+                Kind::Shader {
+                    transition: true, ..
+                },
+            ) => "<Transition>".into(),
             (None, Kind::Shader { .. }) => "<ShaderLayer>".into(),
             (None, Kind::Svg { tag, .. }) => format!("<{}>", tag.name()).into(),
         }

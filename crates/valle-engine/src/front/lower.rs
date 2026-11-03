@@ -19,6 +19,7 @@ use crate::template::{
     Sample, Shape, Stage, Table, Tag, Template, V, Want,
 };
 use crate::time::{Rate, Speed, Tick};
+use crate::transition;
 
 /// An operand of an op by name: an earlier expression, or literal text of a template.
 pub enum Arg {
@@ -300,6 +301,8 @@ struct TracedShader {
     uniforms: Vec<(String, Vec<Ref>)>,
     inputs: Vec<(String, String)>,
     outset: f64,
+    kind: Option<String>,
+    transition: bool,
 }
 
 #[derive(Deserialize)]
@@ -433,6 +436,20 @@ pub fn variant(
                         .map_or("<ShaderLayer>".into(), |s| place(&At::Site(s)))
                 };
                 let code: Rc<str> = match (s.code, s.source) {
+                    (code, _) if s.transition => match (&s.kind, code) {
+                        (Some(k), _) => match transition::kind(k) {
+                            Some((code, _)) => transition::wrap(code).into(),
+                            None => {
+                                return Err(format!(
+                                    "{}: <Transition> kind {k:?} is not one of {}",
+                                    at(),
+                                    transition::KINDS.join(", ")
+                                ));
+                            }
+                        },
+                        (None, Some(code)) => transition::wrap(&code).into(),
+                        (None, None) => return Err("a transition node without its code".into()),
+                    },
                     (Some(code), _) => code.into(),
                     (None, Some(name)) => {
                         let what = format!("{}: <ShaderLayer> source resource://{name}", at());
@@ -470,6 +487,8 @@ pub fn variant(
                         })
                         .collect::<Result<_, Error>>()?,
                     outset: s.outset,
+                    transition: s.transition,
+                    kind: s.kind.map(Rc::from),
                 }
             }
             "svg" => {

@@ -1,8 +1,8 @@
 use super::*;
 use crate::layout::layout;
 use crate::style::{Sheet, color};
-use crate::template::Node;
-use crate::testing::{mask, text, text_node, view};
+use crate::template::{Node, Prop, V};
+use crate::testing::{mask, node, text, text_node, view};
 
 /// The display list on a 200 × 100 canvas, and the layout it paints.
 fn paint_of(nodes: Vec<Node>, roots: &[u32]) -> (Vec<Item>, Layout) {
@@ -59,7 +59,12 @@ fn names(items: &[Item]) -> Vec<String> {
             Item::Transform { items, .. } => format!("transform {:?}", names(items)),
             Item::Cut { items, .. } => format!("cut {:?}", names(items)),
             Item::Backdrop { filters, .. } => format!("backdrop of {}", filters.len()),
-            Item::Shader { items, .. } => format!("shader {:?}", names(items)),
+            Item::Shader { layers, .. } => {
+                let layers: Vec<String> = (layers.iter())
+                    .map(|(name, items)| format!("{name} {:?}", names(items)))
+                    .collect();
+                format!("shader {layers:?}")
+            }
             Item::Filter { filters, items } => {
                 let filters: Vec<&str> = (filters.iter())
                     .map(|f| match f {
@@ -2203,4 +2208,43 @@ fn glyphs_sit_in_the_content_box() {
         .map(|g| (g.id, [35.0 + g.x, 5.0 + g.y]))
         .collect();
     assert_eq!(*glyphs, expected);
+}
+
+#[test]
+fn a_transition_paints_its_children_into_its_shader_over_its_background() {
+    let code: Rc<str> = crate::transition::wrap(crate::transition::kind("fade").unwrap().0).into();
+    let shader = Kind::Shader {
+        code,
+        uniforms: vec![("progress".into(), vec![Prop::Const(V::Num(0.5))])],
+        inputs: Vec::new(),
+        outset: 0.0,
+        transition: true,
+        kind: Some("fade".into()),
+    };
+    let cell = |c| view(&[("isolation", "isolate")], &[c]);
+    let order = painted(
+        vec![
+            node(
+                shader,
+                &[
+                    ("width", "20px"),
+                    ("height", "10px"),
+                    ("background", "gray"),
+                ],
+                &[1, 2],
+            ),
+            cell(3),
+            cell(4),
+            view(&[("height", "10px"), ("background", "red")], &[]),
+            view(&[("height", "10px"), ("background", "blue")], &[]),
+        ],
+        &[0],
+    );
+    assert_eq!(
+        order,
+        [
+            "gray",
+            r#"shader ["valle_from [\"red\"]", "valle_to [\"blue\"]"]"#
+        ]
+    );
 }

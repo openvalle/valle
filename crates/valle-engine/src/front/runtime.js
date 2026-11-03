@@ -1200,7 +1200,7 @@
     span: [],
     mask: ["source", "mode", "invert", "layoutId"],
     image: ["src", "layoutId"],
-    shader: ["code", "source", "uniforms", "inputs", "outset", "layoutId"],
+    shader: ["code", "source", "uniforms", "inputs", "outset", "layoutId", "__transition"],
   };
 
   const fixed = (x, kind, at) => (x instanceof T ? exact(x, kind, at) : x);
@@ -1310,7 +1310,7 @@
         if (c.type === "TimeScope") {
           return scoped(c.props, here, () => c.children.forEach((x) => add(x, here)));
         }
-        if (c.type === "Echo" || c.type === "Shutter" || c.type === "World") {
+        if (["Echo", "Shutter", "World", "Transition"].includes(c.type)) {
           fail(here, "<" + c.type + "> cannot be inside <" + tag + ">: put the <Text> in it");
         }
         if ((INTRINSIC[c.type] && c.type !== "Span") || c.type in SVG) {
@@ -1412,11 +1412,92 @@
     node.src = src.slice("resource://".length);
   }
 
+  // A uniform's value as parts, numbers, booleans, colors or traced values: checked.
+  function uniformOf(parts, what, at) {
+    for (const p of parts) {
+      if (!(p instanceof T) && !["number", "boolean", "string"].includes(typeof p)) {
+        fail(at, what + " is a number, a boolean, a color or an array of numbers");
+      }
+    }
+    return parts;
+  }
+
+  // <Transition kind progress params>, or <Transition code uniforms progress>: a box of its two
+  // children, one over the other, isolated, which a shader goes from the first to the second
+  // by `progress`, 0 to 1. A built-in `kind` (fade by default) takes `params`; `code` is a
+  // transition in gl-transitions' form, which takes `uniforms`. Kind and code cannot change.
+  const TRANSITION = ["kind", "progress", "params", "code", "uniforms", "style", "className"];
+  function transition(props, children, out, at) {
+    if (G.svg > 0) fail(at, "<Transition> cannot be inside an <svg>");
+    for (const k of keys(props)) {
+      if (k !== "key" && !TRANSITION.includes(k)) {
+        fail(at, "<Transition> has no prop " + k + "; it takes " + TRANSITION.join(", "));
+      }
+    }
+    const shown = [];
+    const gather = (c) => {
+      if (isArray(c)) return c.forEach(gather);
+      if (c === null || c === undefined || typeof c === "boolean") return;
+      if (typeof c === "string" && c.trim() === "") return;
+      shown.push(c);
+    };
+    gather(children);
+    if (shown.length !== 2) {
+      fail(at, "<Transition> takes two children: what it goes from, then what it goes to");
+    }
+    const custom = props.code !== undefined;
+    if (custom && (props.kind !== undefined || props.params !== undefined)) {
+      fail(at, "<Transition> takes a kind with params, or code with uniforms, not both");
+    }
+    if (!custom && props.uniforms !== undefined) {
+      fail(at, "<Transition> uniforms go with code; a kind takes params");
+    }
+    const kind = custom ? null : fixed(props.kind ?? "fade", "kind", at);
+    const code = custom ? fixed(props.code, "code", at) : null;
+    if (custom ? typeof code !== "string" : typeof kind !== "string") {
+      fail(at, custom ? "<Transition> code is a string" : "<Transition> kind is a string");
+    }
+    const given = (custom ? props.uniforms : props.params) ?? {};
+    const what = custom ? "uniforms" : "params";
+    if (!plain(given)) fail(at, "<Transition> " + what + " is an object of values by name");
+    const uniforms = [["progress", [props.progress ?? 0]]];
+    for (const [k, v] of entries(given)) {
+      if (k === "progress") fail(at, "<Transition> progress is a prop of its own, not in " + what);
+      const parts = Array.isArray(v) ? v : [v];
+      uniforms.push([k, uniformOf(parts, "<Transition> " + what + " " + k, at)]);
+    }
+    // Each child in a cell of its own over the whole box, which it fills as a grid item.
+    const fill = {
+      display: "grid",
+      gridTemplateColumns: "minmax(0, 1fr)",
+      gridTemplateRows: "minmax(0, 1fr)",
+    };
+    const cell = (c) => ({
+      __el: true,
+      type: "View",
+      props: { style: { ...fill, gridArea: "1 / 1", isolation: "isolate" } },
+      children: [c],
+      site: at,
+    });
+    const box = {
+      style: { ...props.style, ...fill },
+      __transition: { kind, code, uniforms },
+    };
+    if (props.key !== undefined) box.key = props.key;
+    if (props.className !== undefined) box.className = props.className;
+    element("Transition", box, shown.map(cell), out, at);
+  }
+
   // A <ShaderLayer>'s GLSL code, which cannot change, or the shader resource it is in, written as
   // a literal; the values its uniforms take by name, each
   // a number, a boolean, a color or an array of numbers for a vector, any of them traced, the
   // image resources it reads by name, written as literals, and the px it paints out past its box.
   function shaderOf(node, props, at) {
+    if (props.__transition) {
+      const { kind, code, uniforms } = props.__transition;
+      node.shader = { kind, code, source: null, uniforms, inputs: [], outset: 0, transition: true };
+      return;
+    }
     const code = props.code === undefined ? null : fixed(props.code, "code", at);
     let source = null;
     if (props.source !== undefined) {
@@ -1442,17 +1523,7 @@
     const uniforms = [];
     for (const [k, v] of entries(given)) {
       const parts = Array.isArray(v) ? v : [v];
-      for (const p of parts) {
-        if (!(p instanceof T) && !["number", "boolean", "string"].includes(typeof p)) {
-          fail(
-            at,
-            "<ShaderLayer> uniforms " +
-              k +
-              " is a number, a boolean, a color or an array of numbers",
-          );
-        }
-      }
-      uniforms.push([k, parts]);
+      uniforms.push([k, uniformOf(parts, "<ShaderLayer> uniforms " + k, at)]);
     }
     const read = props.inputs ?? {};
     if (!plain(read)) fail(at, "<ShaderLayer> inputs is an object of image resources, by name");
@@ -1553,7 +1624,7 @@
       if (INTRINSIC[type]) fail(at, "<" + type + "> cannot be inside an <svg>");
       fail(at, "<" + type + "> in an <svg> is not supported yet");
     }
-    const kind = INTRINSIC[type];
+    const kind = type === "Transition" ? "shader" : INTRINSIC[type];
     if (!kind) {
       if (type in REMOVED) fail(at, "<" + type + "> is removed: " + REMOVED[type]);
       if (type in HTML) {
@@ -1783,6 +1854,9 @@
     }
     if (type === "Echo" || type === "Shutter") return sampling(type, props, children, out, here);
     if (type === "World") return world(props, children, out, here);
+    if (type === "Transition" && !props.__transition) {
+      return transition(props, children, out, here);
+    }
     element(type, props, children, out, here);
   }
 
@@ -1861,6 +1935,8 @@
         out.shader = {
           code,
           source,
+          kind: n.shader.kind ?? null,
+          transition: n.shader.transition ?? false,
           uniforms: uniforms.map(([k, v]) => [k, v.map(ref)]),
           inputs,
           outset,
@@ -2243,6 +2319,7 @@
     Mask: "Mask",
     Image: "Image",
     ShaderLayer: "ShaderLayer",
+    Transition: "Transition",
     TimeScope: "TimeScope",
     Echo: "Echo",
     Shutter: "Shutter",

@@ -35,6 +35,7 @@ use crate::style::Blend;
 use crate::style::gradient::Space;
 use crate::template::Error;
 use crate::text::{Face, color};
+use crate::transition;
 
 const WORK: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -514,12 +515,11 @@ enum Step {
         target: usize,
         layer: usize,
     },
-    /// Draws one of the frame's shaders into `target`, reading `content` as its content and
-    /// `backdrop` as its backdrop.
+    /// Draws one of the frame's shaders into `target`, reading `layers` as the images its
+    /// shading names: content and backdrop, or a transition's two children.
     Shader {
         target: usize,
-        content: Option<usize>,
-        backdrop: Option<usize>,
+        layers: [Option<usize>; 2],
         shading: usize,
     },
 }
@@ -530,9 +530,7 @@ impl Step {
         match *self {
             Step::Draw { .. } => [None; 2],
             Step::Mask { layer, mask, .. } => [Some(layer), Some(mask)],
-            Step::Shader {
-                content, backdrop, ..
-            } => [content, backdrop],
+            Step::Shader { layers, .. } => layers,
             Step::Composite { layer, .. }
             | Step::Add { layer, .. }
             | Step::Blend { layer, .. }
@@ -581,7 +579,13 @@ struct Plan {
 
 /// A shader drawn: its program, the words of its host block, its uniform block, and the frame's
 /// images it reads by name.
-type Shading = (Rc<Program>, [f32; 16], Rc<[u8]>, Vec<(Rc<str>, u32)>);
+type Shading = (
+    Rc<Program>,
+    [f32; 16],
+    Rc<[u8]>,
+    Vec<(Rc<str>, u32)>,
+    [&'static str; 2],
+);
 
 impl Plan {
     /// A new layer.
@@ -1387,7 +1391,7 @@ impl<'a> Renderer<'a> {
                     inputs,
                     rect,
                     outset,
-                    items,
+                    layers,
                 } => {
                     if rect.width <= 0.0 || rect.height <= 0.0 {
                         continue;
@@ -1396,42 +1400,47 @@ impl<'a> Renderer<'a> {
                         let runs = std::mem::take(runs);
                         plan.steps.push(Step::Draw { target, runs });
                     }
-                    // What is in the box, in a layer of its own, if the shader reads it.
-                    let content = match program.reads("content") {
-                        true => {
-                            let layer = plan.layer();
-                            let mut inside = plan.seen.clone();
-                            inside.here = Under {
-                                root: layer,
-                                open: Vec::new(),
-                            };
-                            let around = std::mem::replace(&mut plan.seen, inside);
-                            self.plan(items, layer, at, faces, plan, atlas)?;
-                            plan.seen = around;
-                            Some(layer)
-                        }
-                        false => None,
+                    let names = match layers.first() {
+                        Some(&(name, _)) if name != "content" => transition::IMAGES,
+                        _ => ["content", "backdrop"],
                     };
+                    // Each layer in one of its own, if the shader reads it.
+                    let mut reads = [None; 2];
+                    for &(name, ref items) in layers {
+                        let Some(k) = names.iter().position(|n| *n == name) else {
+                            continue;
+                        };
+                        if !program.reads(name) {
+                            continue;
+                        }
+                        let layer = plan.layer();
+                        let mut inside = plan.seen.clone();
+                        inside.here = Under {
+                            root: layer,
+                            open: Vec::new(),
+                        };
+                        let around = std::mem::replace(&mut plan.seen, inside);
+                        self.plan(items, layer, at, faces, plan, atlas)?;
+                        plan.seen = around;
+                        reads[k] = Some(layer);
+                    }
                     // What is under the box's group, as a backdrop filter reads it.
-                    let backdrop = match program.reads("backdrop") {
-                        true => {
-                            let Under { root, open } = plan.seen.group.clone();
-                            let copy = plan.layer();
-                            plan.steps.push(Step::Copy {
+                    if names[1] == "backdrop" && program.reads("backdrop") {
+                        let Under { root, open } = plan.seen.group.clone();
+                        let copy = plan.layer();
+                        plan.steps.push(Step::Copy {
+                            target: copy,
+                            layer: root,
+                        });
+                        for (layer, at) in open {
+                            plan.steps.push(Step::Composite {
                                 target: copy,
-                                layer: root,
+                                layer,
+                                at,
                             });
-                            for (layer, at) in open {
-                                plan.steps.push(Step::Composite {
-                                    target: copy,
-                                    layer,
-                                    at,
-                                });
-                            }
-                            Some(copy)
                         }
-                        false => None,
-                    };
+                        reads[1] = Some(copy);
+                    }
                     // Its images have as many pixels as the box covers on the target.
                     let scale = matrix.radius_scale() as f32;
                     let [w, h] =
@@ -1447,13 +1456,17 @@ impl<'a> Renderer<'a> {
                         rect.x,
                         rect.y,
                     ]);
-                    plan.shadings
-                        .push((program.clone(), host, block.clone(), inputs.clone()));
+                    plan.shadings.push((
+                        program.clone(),
+                        host,
+                        block.clone(),
+                        inputs.clone(),
+                        names,
+                    ));
                     let shading = plan.shadings.len() - 1;
                     plan.steps.push(Step::Shader {
                         target,
-                        content,
-                        backdrop,
+                        layers: reads,
                         shading,
                     });
                 }
@@ -1757,12 +1770,11 @@ impl<'a> Renderer<'a> {
         for (k, step) in plan.steps.iter().enumerate() {
             if let Step::Shader {
                 target,
-                content,
-                backdrop,
+                layers,
                 shading,
             } = *step
             {
-                let (program, host, block, inputs) = &plan.shadings[shading];
+                let (program, host, block, inputs, names) = &plan.shadings[shading];
                 let device = &gpu.device;
                 let uniform = |label, contents: &[u8]| {
                     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1781,22 +1793,18 @@ impl<'a> Renderer<'a> {
                         resource: host.as_entire_binding(),
                     }],
                 });
-                // Its images: its content and backdrop each out of its layer into a texture of
-                // the box's size, clear if nothing was drawn into it; an input of its own size.
+                // Its images: each of its layers into a texture of the box's size, clear if
+                // nothing was drawn into it; an input of its own size.
                 let size = [f32::from_bits(words[4]), f32::from_bits(words[5])].map(|v| v as u32);
                 let mut views = Vec::new();
                 for name in &program.samplers {
-                    let (image, size, hosted) = match &**name {
-                        "content" | "backdrop" => {
-                            let layer = if &**name == "content" {
-                                content
-                            } else {
-                                backdrop
-                            };
-                            let s = layer.and_then(|l| surfaces[l]);
+                    let k = names.iter().position(|n| *n == &**name);
+                    let (image, size, hosted) = match k {
+                        Some(k) => {
+                            let s = layers[k].and_then(|l| surfaces[l]);
                             (s.map(|s| &self.pool[s]), size, hosted.clone())
                         }
-                        _ => {
+                        None => {
                             let i = (inputs.iter()).find_map(|(n, i)| (n == name).then_some(*i));
                             let shown = i.map(|i| &self.images[self.shown[i as usize]].1);
                             let size = shown.map_or([1, 1], |s| {
@@ -1870,7 +1878,7 @@ impl<'a> Renderer<'a> {
                 pass.set_bind_group(2, &own, &[]);
                 pass.draw(0..4, 0..1);
                 drop(pass);
-                for l in [content, backdrop].into_iter().flatten() {
+                for l in layers.into_iter().flatten() {
                     if last[l] == k {
                         self.free.extend(surfaces[l]);
                     }

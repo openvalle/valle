@@ -62,6 +62,7 @@ use crate::style::{Blend, BorderStyle, DecorationStyle, Fit, Shadow, Style};
 use crate::svg::Element;
 use crate::template::{Kind, Template};
 use crate::text::{Glyph, Stripe};
+use crate::transition;
 use svg::Drawing;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -129,17 +130,17 @@ pub enum Item {
         filters: Vec<Filter>,
         items: Vec<Item>,
     },
-    /// Items drawn into a layer that a shader authors wrote reads as its `content` image, and
-    /// what is under the box as its `backdrop`, as a `Backdrop` has it: the shader paints the box
-    /// `rect`, grown by `outset` px on each side, with its uniform `block`; and the frame's images
-    /// of `inputs` by the names it reads them by.
+    /// Layers of items that a shader authors wrote reads as the images they are named by, its
+    /// `content`, or a transition's two children, and what is under the box as its `backdrop`,
+    /// as a `Backdrop` has it: the shader paints the box `rect`, grown by `outset` px on each
+    /// side, with its uniform `block`; and the frame's images of `inputs` by their names.
     Shader {
         program: Rc<Program>,
         block: Rc<[u8]>,
         inputs: Vec<(Rc<str>, u32)>,
         rect: Rect,
         outset: f32,
-        items: Vec<Item>,
+        layers: Vec<(&'static str, Vec<Item>)>,
     },
     /// What is under a box's layer, in its border box `rect`, its edges mirrored, through
     /// `filters`, drawn inside the rectangle with its corners rounded by `radii`. Under it is all
@@ -1120,7 +1121,11 @@ impl Painter<'_> {
                 return;
             }
             let mut inside = Vec::new();
-            self.context(Some(d), &mut inside);
+            match s.shader.as_ref().is_some_and(|s| s.transition) {
+                // Its children paint into the shader, which paints over its background.
+                true => self.background(d, &mut inside),
+                false => self.context(Some(d), &mut inside),
+            }
             // It contains all in it, so the clips around it go around all it paints.
             let mut items = self.nest_from(self.chained(inside), self.clips[d].len());
             items = self.shaded(d, items);
@@ -1170,10 +1175,25 @@ impl Painter<'_> {
     }
 
     /// `items` as the content of `d`'s shader, if it is a `<ShaderLayer>`, which its corners
-    /// round as they do a canvas, grown by its outset.
+    /// round as they do a canvas, grown by its outset. A `<Transition>`'s shader reads its two
+    /// children each as a layer of its own, and paints over `items`.
     fn shaded(&self, d: usize, items: Vec<Item>) -> Vec<Item> {
         let Some(shader) = &self.styles[d].shader else {
             return items;
+        };
+        let (layers, under) = match shader.transition {
+            true => {
+                let cells = (self.children(Some(d)).zip(transition::IMAGES)).map(|(c, name)| {
+                    let mut drawn = Vec::new();
+                    self.layer(c, &mut drawn);
+                    (
+                        name,
+                        self.nest_from(self.chained(drawn), self.clips[d].len()),
+                    )
+                });
+                (cells.collect(), items)
+            }
+            false => (vec![("content", items)], Vec::new()),
         };
         let rect = snap(self.layout.boxes[d].border);
         let by = shader.outset as f32;
@@ -1189,17 +1209,18 @@ impl Painter<'_> {
             inputs,
             rect,
             outset: by,
-            items,
+            layers,
         };
         let radii = self.radii(d, rect);
-        if radii == SQUARE {
-            return vec![shaded];
-        }
-        vec![Item::Clip {
-            rect: outset(rect, by),
-            radii: grown(radii, by),
-            items: vec![shaded],
-        }]
+        let shaded = match radii == SQUARE {
+            true => shaded,
+            false => Item::Clip {
+                rect: outset(rect, by),
+                radii: grown(radii, by),
+                items: vec![shaded],
+            },
+        };
+        under.into_iter().chain([shaded]).collect()
     }
 
     /// `items` over what is under `d` through its backdrop filter, in its border box, if it has

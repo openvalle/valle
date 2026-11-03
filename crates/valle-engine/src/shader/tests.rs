@@ -112,3 +112,31 @@ void main() { S s = S(1.0); color = vec4(s.x); }",
     .unwrap();
     assert!(p.uniforms.is_empty() && p.samplers.is_empty());
 }
+
+#[test]
+fn defaults_come_from_comments() {
+    let p = program(
+        "uniform float a; // = 0.25
+uniform vec2 c; // = vec2(0.5)
+uniform vec3 d; // = vec3(1.0, 2.0, 3.0)
+uniform int n; // = 3
+uniform bool b; // = true
+uniform float e, f; // = 9.0
+uniform float g; // the default is 0
+out vec4 color;
+void main() { color = vec4(c, a + e + f + g, float(n) * float(b)) + vec4(d, 0.0); }",
+        IMAGES,
+    )
+    .unwrap();
+    let block = p.block(&[]).unwrap();
+    let f = |at: usize| f32::from_ne_bytes(block[at..at + 4].try_into().unwrap());
+    let i = |at: usize| i32::from_ne_bytes(block[at..at + 4].try_into().unwrap());
+    let at = |name: &str| p.uniforms.iter().find(|u| &*u.name == name).unwrap().offset as usize;
+    assert_eq!(f(at("a")), 0.25);
+    assert_eq!([f(at("c")), f(at("c") + 4)], [0.5, 0.5]);
+    assert_eq!([f(at("d")), f(at("d") + 8)], [1.0, 3.0]);
+    assert_eq!([i(at("n")), i(at("b"))], [3, 1]);
+    assert_eq!([f(at("e")), f(at("f")), f(at("g"))], [0.0, 0.0, 0.0]);
+    let given = p.block(&[("a", vec![&V::Num(2.0)])]).unwrap();
+    assert_eq!(f32::from_ne_bytes(given[0..4].try_into().unwrap()), 2.0);
+}

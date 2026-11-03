@@ -37,6 +37,7 @@ use crate::front::Slot;
 use crate::shader::{self, Program};
 use crate::svg;
 use crate::template::{Error, Kind, Node, Piece, Prop, Tag, Template, V};
+use crate::transition;
 
 /// The root font size: `rem`.
 const REM: f64 = 16.0;
@@ -242,18 +243,25 @@ pub struct Source {
 }
 
 /// A shader as a frame has it: its program, its uniform block, the resources of the images it
-/// reads by name, and the px it paints out past the box on each side.
+/// reads by name, the px it paints out past the box on each side, and whether it is a
+/// `<Transition>`'s, which reads its two children rather than its content.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shaded {
     pub program: Rc<Program>,
     pub block: Rc<[u8]>,
     pub inputs: Vec<(Rc<str>, u32)>,
     pub outset: f64,
+    pub transition: bool,
 }
 
 /// A `<ShaderLayer>`'s program and its uniforms' values, and its block when none is traced.
 struct Shading {
     program: Rc<Program>,
+    /// What errors call it, `<ShaderLayer>` or `<Transition>`.
+    tag: &'static str,
+    /// A built-in transition's parameters' ranges.
+    limits: &'static [transition::Range],
+    transition: bool,
     uniforms: Vec<(Rc<str>, Vec<Prop>)>,
     inputs: Vec<(Rc<str>, u32)>,
     outset: f64,
@@ -277,6 +285,17 @@ impl Shading {
                         (&**k, v)
                     })
                     .collect();
+                for (name, v) in &values {
+                    let Some(&(_, low, high)) = self.limits.iter().find(|l| l.0 == *name) else {
+                        continue;
+                    };
+                    if let [V::Num(x)] = v[..]
+                        && !(low..=high).contains(x)
+                    {
+                        let x = crate::js::number_to_string(*x);
+                        return Err(format!("params {name} is from {low} to {high}, not {x}"));
+                    }
+                }
                 Rc::from(self.program.block(&values)?)
             }
         };
@@ -285,6 +304,7 @@ impl Shading {
             block,
             inputs: self.inputs.clone(),
             outset: self.outset,
+            transition: self.transition,
         })
     }
 }
@@ -827,7 +847,7 @@ impl Sheet {
         }
         if let Some(s) = &b.shader {
             let shaded = s.computed(frame);
-            style.shader = Some(shaded.map_err(|e| format!("{}: <ShaderLayer> {e}", b.place))?);
+            style.shader = Some(shaded.map_err(|e| format!("{}: {} {e}", b.place, s.tag))?);
         }
         Ok(style)
     }
@@ -1129,28 +1149,58 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
             uniforms,
             inputs,
             outset,
+            transition,
+            kind,
         } => {
-            let at = |e: String| format!("{place}: <ShaderLayer> code {e}");
-            let mut images = vec!["content", "backdrop"];
+            let tag = if *transition {
+                "<Transition>"
+            } else {
+                "<ShaderLayer>"
+            };
+            let at = |e: String| format!("{place}: {tag} code {e}");
+            let mut images = match transition {
+                true => transition::IMAGES.to_vec(),
+                false => vec!["content", "backdrop"],
+            };
             for (name, _) in inputs {
                 if images.contains(&&**name) {
                     return Err(format!(
-                        "{place}: <ShaderLayer> inputs {name}: content and backdrop are the \
-                         layer's own"
+                        "{place}: {tag} inputs {name}: content and backdrop are the layer's own"
                     ));
                 }
                 images.push(&**name);
             }
             let program = shader::program(code, &images).map_err(at)?;
+            // A built-in transition takes its parameters only.
+            let limits = kind
+                .as_deref()
+                .and_then(transition::kind)
+                .map_or(&[][..], |k| k.1);
+            if let Some(kind) = kind {
+                for (name, _) in uniforms.iter().filter(|(k, _)| &**k != "progress") {
+                    if !limits.iter().any(|l| l.0 == &**name) {
+                        let names: Vec<&str> = limits.iter().map(|l| l.0).collect();
+                        let takes = match names.is_empty() {
+                            true => "it takes none".to_string(),
+                            false => format!("it takes {}", names.join(", ")),
+                        };
+                        return Err(format!(
+                            "{place}: {tag} {kind} has no param {name}; {takes}"
+                        ));
+                    }
+                }
+            }
             let mut s = Shading {
                 program,
+                tag,
+                limits,
+                transition: *transition,
                 uniforms: uniforms.clone(),
                 inputs: inputs.clone(),
                 outset: *outset,
                 fixed: None,
             };
-            if uniforms
-                .iter()
+            if (uniforms.iter())
                 .flat_map(|(_, v)| v)
                 .all(|p| matches!(p, Prop::Const(_)))
             {
@@ -1162,7 +1212,7 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
                 };
                 let block = s
                     .computed(&none)
-                    .map_err(|e| format!("{place}: <ShaderLayer> {e}"))?;
+                    .map_err(|e| format!("{place}: {tag} {e}"))?;
                 s.fixed = Some(block.block);
             }
             Some(s)
