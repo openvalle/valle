@@ -292,6 +292,40 @@ fn text_falls_back_to_the_fonts_of_its_scripts() {
 }
 
 #[test]
+fn emoji_take_the_emoji_font_and_paint_in_its_colors() {
+    let mut t = text();
+    let lines = t.lines(&plain("A😀", &font(32.0)), 1000.0).unwrap();
+    let [a, smile] = [0, 1].map(|i| lines.glyphs[i].face as usize);
+    assert_ne!(t.faces()[a].data.id(), t.faces()[smile].data.id());
+    let (face, id) = (&t.faces()[smile], lines.glyphs[1].id);
+    assert_eq!(color::colored(face, id), Ok(true));
+    assert_eq!(color::colored(&t.faces()[a], lines.glyphs[0].id), Ok(false));
+    // Yellow, about an em across, from above the baseline.
+    let (image, [left, top]) = color::raster(face, id, 32.0, [0, 0, 0]).unwrap();
+    let [w, h] = image.size;
+    assert!(
+        (24..=40).contains(&w) && (24..=40).contains(&h),
+        "{w} × {h}"
+    );
+    assert!(top < -20.0 && left > -4.0, "{left}, {top}");
+    let middle = &image.pixels[((h / 2 * w + w / 4) * 4) as usize..][..4];
+    assert!(
+        middle[0] > 200 && middle[1] > 150 && middle[2] < 100,
+        "{middle:?}"
+    );
+    // The family by its name.
+    let emoji = Font {
+        family: Rc::new([Family::Emoji]),
+        ..font(16.0)
+    };
+    let lines = t.lines(&plain("😀", &emoji), 1000.0).unwrap();
+    assert_eq!(
+        t.faces()[lines.glyphs[0].face as usize].data.id(),
+        t.faces()[smile].data.id()
+    );
+}
+
+#[test]
 fn paragraphs_are_kept_while_used() {
     let mut t = text();
     t.measure(&plain("a", &font(16.0)), None).unwrap();

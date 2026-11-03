@@ -317,10 +317,11 @@ pub const BUILT_IN: [BuiltIn; 8] = [
 
 /// The generic families, and their files in `BUILT_IN`: upright,
 /// and italic if they have one.
-const GENERIC: [(GenericFamily, usize, Option<usize>); 3] = [
+const GENERIC: [(GenericFamily, usize, Option<usize>); 4] = [
     (GenericFamily::SansSerif, 0, Some(1)),
     (GenericFamily::Serif, 2, Some(3)),
     (GenericFamily::Monospace, 4, None),
+    (GenericFamily::Emoji, 7, None),
 ];
 
 /// Where the built-in fonts come from: the host's file of each, by its entry in `BUILT_IN`.
@@ -380,6 +381,7 @@ impl Text {
                 Family::SansSerif => generic == GenericFamily::SansSerif,
                 Family::Serif => generic == GenericFamily::Serif,
                 Family::Monospace => generic == GenericFamily::Monospace,
+                Family::Emoji => generic == GenericFamily::Emoji,
                 Family::Named(_) => false,
             });
             if !(named || generic == GenericFamily::SansSerif) {
@@ -400,6 +402,7 @@ impl Text {
             if self.given[font].is_some() || !text.chars().any(has) {
                 continue;
             }
+            // The emoji font is a generic family's, which `built_in` sets.
             let family = self.built_in(font)?;
             for &script in scripts {
                 let key = FallbackKey::new(Script::from_bytes(script), None);
@@ -1062,8 +1065,9 @@ pub type Fallback = (usize, &'static [[u8; 4]], fn(char) -> bool);
 
 /// The built-in fonts text falls back to when its fonts do not have a character: by the scripts
 /// they are the fallback of, and the characters that need them. Noto Sans SC has Han, kana and
-/// bopomofo, but no Hangul.
-pub const FALLBACKS: [Fallback; 2] = [
+/// bopomofo, but no Hangul. Shaping takes an emoji's font from the `emoji` family, after those
+/// its text names.
+pub const FALLBACKS: [Fallback; 3] = [
     (5, &[*b"Hani", *b"Hira", *b"Kana", *b"Bopo"], |c| {
         matches!(c,
             '\u{2E80}'..='\u{2FFF}' | '\u{3000}'..='\u{312F}' | '\u{31A0}'..='\u{4DBF}'
@@ -1075,7 +1079,16 @@ pub const FALLBACKS: [Fallback; 2] = [
             '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}'
             | '\u{AC00}'..='\u{D7FF}')
     }),
+    (7, &[], emoji),
 ];
+
+/// Whether `c` may show as an emoji: a pictograph, a regional indicator, or the selector that
+/// asks for an emoji (VS16).
+fn emoji(c: char) -> bool {
+    matches!(c,
+        '\u{231A}'..='\u{23FF}' | '\u{2600}'..='\u{27BF}' | '\u{2B05}'..='\u{2B55}'
+        | '\u{FE0F}' | '\u{1F000}'..='\u{1FAFF}')
+}
 
 /// Fails on the first character of `text` that `layout` has no glyph for, as no font has it.
 fn covered(layout: &parley::Layout<u32>, text: &str) -> Result<(), Error> {
@@ -1124,6 +1137,7 @@ fn families(list: &[Family], named: &[Rc<str>]) -> Result<Vec<FontFamilyName<'st
             Family::SansSerif => Ok(FontFamilyName::Generic(GenericFamily::SansSerif)),
             Family::Serif => Ok(FontFamilyName::Generic(GenericFamily::Serif)),
             Family::Monospace => Ok(FontFamilyName::Generic(GenericFamily::Monospace)),
+            Family::Emoji => Ok(FontFamilyName::Generic(GenericFamily::Emoji)),
             Family::Named(name) => match named.iter().find(|n| n.eq_ignore_ascii_case(name)) {
                 Some(n) => Ok(FontFamilyName::Named(Cow::Owned(n.to_string()))),
                 None => Err(format!(
@@ -1221,6 +1235,8 @@ fn stack(layout: &parley::Layout<u32>, content: &Content, strut: [f32; 2]) -> Ve
         })
         .collect()
 }
+
+pub mod color;
 
 #[cfg(test)]
 mod tests;

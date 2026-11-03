@@ -525,6 +525,7 @@ pub enum Family {
     SansSerif,
     Serif,
     Monospace,
+    Emoji,
     Named(Rc<str>),
 }
 
@@ -3354,7 +3355,7 @@ fn leading(v: &V) -> Result<Leading, String> {
 }
 
 /// CSS's generic families other than the three built in.
-const OTHER_GENERICS: [&str; 10] = [
+const OTHER_GENERICS: [&str; 9] = [
     "cursive",
     "fantasy",
     "system-ui",
@@ -3362,7 +3363,6 @@ const OTHER_GENERICS: [&str; 10] = [
     "ui-sans-serif",
     "ui-monospace",
     "ui-rounded",
-    "emoji",
     "math",
     "fangsong",
 ];
@@ -3623,10 +3623,11 @@ fn families(v: &V) -> Result<Rc<[Family]>, String> {
                     "sans-serif" => Family::SansSerif,
                     "serif" => Family::Serif,
                     "monospace" => Family::Monospace,
+                    "emoji" => Family::Emoji,
                     g if OTHER_GENERICS.contains(&g) => {
                         return Err(format!(
-                            "{g} is not built in: the built-in families are sans-serif, serif and \
-                             monospace, and others come from font resources"
+                            "{g} is not built in: the built-in families are sans-serif, serif, \
+                             monospace and emoji, and others come from font resources"
                         ));
                     }
                     _ => Family::Named(words.join(" ").into()),

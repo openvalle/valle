@@ -13,20 +13,20 @@
 //! outlines are encoded once and kept in two buffers, the atlas, for the renderer's life; paths
 //! are encoded as they are, after the atlas, for their frame only.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::{Arc, mpsc};
 use std::task::{Context, Poll, Waker};
 
 use crate::image::Image;
 use crate::layout::Rect;
-use crate::paint::{Filter, Geometry, Item, Matrix, Radii, SQUARE, Spread};
+use crate::paint::{Filter, Geometry, Item, Matrix, Radii, SQUARE, Spread, Tiles};
 use crate::path::Curve;
 use crate::slug;
 use crate::style::Blend;
 use crate::style::gradient::Space;
 use crate::template::Error;
-use crate::text::Face;
+use crate::text::{Face, color};
 
 const WORK: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -755,6 +755,12 @@ pub struct Renderer<'a> {
     /// By face, glyph and the bits of the width of its stroke in ems (0 for its fill); `None` for
     /// a glyph without curves.
     outlines: HashMap<(u32, u32, u32), Option<Placed>>,
+    /// Whether each glyph, by face and id, has colors of its own.
+    colored: HashMap<(u32, u32), bool>,
+    /// Color glyphs rasterized, by face, id, px an em and the text's color: their pixels, and
+    /// their top left from their origin in px an em; those the last frame used.
+    colors: HashMap<ColorKey, Option<(Image, [f32; 2])>>,
+    used: HashSet<ColorKey>,
     draw: Option<wgpu::BindGroup>,
     /// The textures of the images the last frames showed, and of each of this frame's images, the
     /// index of its texture.
@@ -801,6 +807,9 @@ impl<'a> Renderer<'a> {
             lists: Store::new(device, "lists"),
             atlas_len: [0, 0],
             outlines: HashMap::new(),
+            colored: HashMap::new(),
+            colors: HashMap::new(),
+            used: HashSet::new(),
             draw: None,
             images: Vec::new(),
             shown: Vec::new(),
@@ -817,9 +826,14 @@ impl<'a> Renderer<'a> {
         faces: &[Face],
         images: &[Image],
     ) -> Result<Vec<u8>, Error> {
-        // The images' textures, kept while frames show them.
-        self.images
-            .retain(|(p, _)| images.iter().any(|i| Arc::ptr_eq(&i.pixels, p)));
+        // The images' textures, kept while frames show them; color glyphs' while the last frame
+        // did.
+        let used = std::mem::take(&mut self.used);
+        self.colors.retain(|k, _| used.contains(k));
+        let rasters = || self.colors.values().flatten().map(|(i, _)| &i.pixels);
+        self.images.retain(|(p, _)| {
+            images.iter().any(|i| Arc::ptr_eq(&i.pixels, p)) || rasters().any(|r| Arc::ptr_eq(r, p))
+        });
         self.shown = (images.iter())
             .map(|i| {
                 match self
@@ -1087,6 +1101,46 @@ impl<'a> Renderer<'a> {
                     glyphs,
                 } => {
                     for &(id, [x, y]) in glyphs {
+                        // A color glyph as an image of it at the size it shows at, as much as the
+                        // text's color is opaque; its stroke is of its outline.
+                        if *stroke == 0.0 && self.is_colored(*face, id, faces)? {
+                            let ppem = (size * matrix.radius_scale() as f32)
+                                .ceil()
+                                .clamp(1.0, 2048.0);
+                            let Some((image, [left, top], [w, h])) =
+                                self.color(*face, id, ppem, *color, faces)?
+                            else {
+                                continue;
+                            };
+                            let k = size / ppem;
+                            let rect = Rect {
+                                x: x + left * k,
+                                y: y + top * k,
+                                width: w * k,
+                                height: h * k,
+                            };
+                            let tiles = Tiles {
+                                first: rect,
+                                step: [None, None],
+                            };
+                            let image = Item::Image {
+                                rect,
+                                radii: SQUARE,
+                                tiles,
+                                image,
+                                pixelated: false,
+                            };
+                            let item = match color[3] {
+                                1.0 => image,
+                                opacity => Item::Group {
+                                    opacity,
+                                    blend: Blend::Normal,
+                                    items: vec![image],
+                                },
+                            };
+                            self.draw(&[item], target, at, faces, plan, atlas, runs)?;
+                            continue;
+                        }
                         let Some(o) = self.outline(*face, id, stroke / size, faces, atlas)? else {
                             continue;
                         };
@@ -1341,6 +1395,65 @@ impl<'a> Renderer<'a> {
 
     /// Where glyph `id` of face `face` is in the atlas, or its stroke `stroke` ems wide, encoding
     /// it into `atlas` (curve words, list words) if it is new.
+    /// Whether glyph `id` of face `face` has colors of its own.
+    fn is_colored(&mut self, face: u32, id: u32, faces: &[Face]) -> Result<bool, Error> {
+        if let Some(&colored) = self.colored.get(&(face, id)) {
+            return Ok(colored);
+        }
+        let f = faces
+            .get(face as usize)
+            .ok_or("engine bug: a glyph names a face that is not there")?;
+        let colored = color::colored(f, id)?;
+        self.colored.insert((face, id), colored);
+        Ok(colored)
+    }
+
+    /// Color glyph `id` of face `face` at `ppem` px an em, in text of `color`: the index this
+    /// frame's images give it, its top left from its origin in px an em, and its size in pixels;
+    /// nothing if it paints nothing.
+    fn color(
+        &mut self,
+        face: u32,
+        id: u32,
+        ppem: f32,
+        color: [f32; 4],
+        faces: &[Face],
+    ) -> Result<Option<Shown>, Error> {
+        let f = faces
+            .get(face as usize)
+            .ok_or("engine bug: a glyph names a face that is not there")?;
+        // Where it paints in the text's color, the color opaque, in 8 bits.
+        let foreground = [0, 1, 2].map(|c| (color[c].clamp(0.0, 1.0) * 255.0).round() as u8);
+        let key = (face, id, ppem.to_bits(), foreground);
+        self.used.insert(key);
+        let raster =
+            (self.colors.entry(key)).or_insert_with(|| color::raster(f, id, ppem, foreground));
+        let Some((image, at)) = raster else {
+            return Ok(None);
+        };
+        let (pixels, size, at) = (image.pixels.clone(), image.size, *at);
+        let k = match self
+            .images
+            .iter()
+            .position(|(p, _)| Arc::ptr_eq(p, &pixels))
+        {
+            Some(k) => k,
+            None => {
+                let t = mipmapped(self.gpu, image);
+                self.images.push((pixels, Surface::new(self.gpu, t)));
+                self.images.len() - 1
+            }
+        };
+        let shown = match self.shown.iter().position(|&s| s == k) {
+            Some(i) => i,
+            None => {
+                self.shown.push(k);
+                self.shown.len() - 1
+            }
+        };
+        Ok(Some((shown as u32, at, size.map(|n| n as f32))))
+    }
+
     fn outline(
         &mut self,
         face: u32,
@@ -1525,6 +1638,13 @@ impl<'a> Renderer<'a> {
         pass.draw(0..3, 0..1);
     }
 }
+
+/// A color glyph rasterized: its face and id, its px an em, and the text's color.
+type ColorKey = (u32, u32, u32, [u8; 3]);
+
+/// A color glyph's image as a frame shows it: its index in the frame's images, its top left from
+/// its origin in px an em, and its size in pixels.
+type Shown = (u32, [f32; 2], [f32; 2]);
 
 /// A free texture from the pool of layer textures, or a new one.
 fn take(gpu: &Gpu, pool: &mut Vec<Surface>, free: &mut Vec<usize>, size: [u32; 2]) -> usize {

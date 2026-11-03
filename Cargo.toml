@@ -11,6 +11,8 @@ repository = "https://github.com/openvalle/valle"
 publish = false
 
 [workspace.dependencies]
+# vello_cpu's scalar level, which color glyphs are rasterized at.
+fearless_simd = { version = "0.7.0", default-features = false, features = ["std", "force_support_fallback"] }
 image-webp = "0.2.4"
 # Tests only: multi-line sources indented with the code, the indentation removed.
 indoc = "2.0.8"
@@ -33,6 +35,8 @@ skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 taffy = { version = "0.15.1", default-features = false, features = ["std", "flexbox", "block_layout", "grid", "calc"] }
 # Blocking HTTPS over rustls with ring and the Mozilla roots, gzip decoded.
 ureq = { version = "3.5.1", default-features = false, features = ["rustls", "gzip"] }
+# Color glyphs (COLR) rasterized on the CPU, with no SIMD level picked at run time.
+vello_cpu = { version = "0.3.0", default-features = false, features = ["std", "text", "u8_pipeline"] }
 # The native backends only; shaders are WGSL.
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "metal", "vulkan", "dx12"] }
 # WOFF and WOFF2 fonts, decoded to the TrueType or OpenType file inside.
