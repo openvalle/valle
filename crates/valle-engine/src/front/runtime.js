@@ -177,6 +177,7 @@
     "!=": "ne",
     "!==": "ne",
   };
+  const EQUALITY = new Set(["==", "===", "!=", "!=="]);
   const numeric = (x) => typeof val(x) === "number";
 
   function __b(op, a, b) {
@@ -188,6 +189,8 @@
     if (op === "+" && (typeof val(a) === "string" || typeof val(b) === "string")) {
       return template([a, b]);
     }
+    // A traced value is never null or undefined, so it is not equal to them.
+    if (EQUALITY.has(op) && (a == null || b == null)) return op[0] === "!";
     if (numeric(a) && numeric(b)) {
       if (op in ARITH) return mk(ARITH[op], [a, b]);
       if (op in COMPARE) return mk(COMPARE[op], [a, b]);

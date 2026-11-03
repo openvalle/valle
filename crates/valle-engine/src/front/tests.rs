@@ -177,6 +177,31 @@ fn a_mask_traces_its_source_as_a_root_after_it() {
 }
 
 #[test]
+fn a_traced_value_is_never_null() {
+    big_stack(|| {
+        // d3's path builder tests its last point against null: an arc sweeping with the time is
+        // one variant, not one a frame.
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  const d = arc().innerRadius(20).outerRadius(40).cornerRadius(4)
+                    .startAngle(0).endAngle(seconds)();
+                  const none = seconds === null || seconds == undefined;
+                  return (
+                    <svg viewBox=\"-50 -50 100 100\">
+                      <path d={d} fill={none ? \"red\" : \"blue\"} />
+                    </svg>
+                  );
+                }
+            "});
+        for s in ["2", "2.1", "2.2", "2.3"] {
+            at(&mut f, s);
+        }
+        assert_eq!(f.traces(), 1);
+    });
+}
+
+#[test]
 fn svg_elements_trace_with_their_attributes() {
     big_stack(|| {
         let mut f = scene(indoc! {"
