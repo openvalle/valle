@@ -72,6 +72,8 @@ pub struct Rewritten {
     pub composition: Option<Composition>,
     /// The props its `controls` export declares, read without running it.
     pub props: Vec<Prop>,
+    /// The data it declares.
+    pub data: Vec<Prop>,
     /// The resources it declares.
     pub resources: Vec<Slot>,
 }
@@ -128,7 +130,11 @@ pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten,
         format!("{line}:{col}: {e}")
     };
     let composition = composition(&program).map_err(at)?;
-    let (props, resources) = controls(&program).map_err(at)?;
+    let Declared {
+        props,
+        data,
+        resources,
+    } = controls(&program).map_err(at)?;
     let mut classes = Classes(None);
     classes.visit_program(&program);
     if let Some(e) = classes.0 {
@@ -247,6 +253,7 @@ pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten,
         lines,
         composition,
         props,
+        data,
         resources,
     })
 }
@@ -382,11 +389,11 @@ pub(super) fn key<'b>(p: &'b ObjectProperty<'_>) -> Option<&'b str> {
     }
 }
 
-/// The `controls` export's props and resources, `resources: { logo: resource({ kind: "image",
-/// default: "./logo.png" }) }`, which tools read without running the scene.
-fn controls(program: &Program<'_>) -> Result<(Vec<Prop>, Vec<Slot>), (u32, String)> {
+/// The `controls` export's props, data and resources, `resources: { logo: resource({ kind:
+/// "image", default: "./logo.png" }) }`, which tools read without running the scene.
+fn controls(program: &Program<'_>) -> Result<Declared, (u32, String)> {
     let Some((at, init)) = exported(program, "controls") else {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(Declared::default());
     };
     let literal = |at: u32, what: &str| {
         (
@@ -397,24 +404,30 @@ fn controls(program: &Program<'_>) -> Result<(Vec<Prop>, Vec<Slot>), (u32, Strin
     let Some(Expression::ObjectExpression(object)) = init else {
         return Err(literal(at, "controls"));
     };
-    let (mut props, mut slots) = (Vec::new(), Vec::new());
+    let mut out = Declared::default();
     for p in &object.properties {
         let ObjectPropertyKind::ObjectProperty(p) = p else {
             return Err(literal(p.span().start, "controls"));
         };
         match key(p) {
             Some("resources") => {}
-            Some("props") => {
+            Some(k @ ("props" | "data")) => {
                 let Expression::ObjectExpression(o) = bare(&p.value) else {
-                    return Err(literal(p.span.start, "controls.props"));
+                    return Err(literal(p.span.start, &format!("controls.{k}")));
                 };
-                props = controls::props(o)?;
+                if k == "props" {
+                    out.props = controls::props(o)?;
+                } else {
+                    out.data = controls::data(o)?;
+                }
                 continue;
             }
-            Some("data") => {
-                return Err((p.span.start, "controls.data is not supported yet".into()));
+            _ => {
+                return Err((
+                    p.span.start,
+                    "controls takes props, data and resources".into(),
+                ));
             }
-            _ => return Err((p.span.start, "controls takes props and resources".into())),
         }
         let Expression::ObjectExpression(resources) = bare(&p.value) else {
             return Err(literal(p.span.start, "controls.resources"));
@@ -439,10 +452,21 @@ fn controls(program: &Program<'_>) -> Result<(Vec<Prop>, Vec<Slot>), (u32, Strin
             }
             let slot =
                 slot(name, bare(&r.value)).map_err(|e| (at, format!("resource {name}: {e}")))?;
-            slots.push(slot);
+            out.resources.push(slot);
         }
     }
-    Ok((props, slots))
+    if let Some(e) = controls::clash(&out.props, &out.data) {
+        return Err((at, e));
+    }
+    Ok(out)
+}
+
+/// What a `controls` export declares.
+#[derive(Default)]
+struct Declared {
+    props: Vec<Prop>,
+    data: Vec<Prop>,
+    resources: Vec<Slot>,
 }
 
 /// `resource({ kind: "image", default: "…" })`.
@@ -1195,12 +1219,8 @@ mod tests {
                 "2:14: controls must be an object",
             ),
             (
-                "export const controls = { data: {} };",
-                "controls.data is not supported yet",
-            ),
-            (
                 "export const controls = { fonts: {} };",
-                "controls takes props and resources",
+                "controls takes props, data and resources",
             ),
             (
                 "export const controls = { resources: { a: { kind: \"image\" } } };",

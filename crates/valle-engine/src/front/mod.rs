@@ -75,9 +75,11 @@ pub struct Front {
     pub composition: Composition,
     /// The props the scene declares.
     pub props: Vec<Prop>,
+    /// The data it declares.
+    pub data: Vec<Prop>,
     /// The resources it declares, each default a path joined to the scene's folder.
     pub resources: Vec<Slot>,
-    /// What its root component takes: the props' values, as JSON.
+    /// What its root component takes: the props' and data's values, as JSON.
     values: String,
     entry: String,
     modules: Vec<Module>,
@@ -120,8 +122,9 @@ impl Front {
                 }),
             })
             .collect();
-        let props = scene.props.clone();
-        let values = controls::values(&props, inputs).map_err(|e| format!("{entry}: {e}"))?;
+        let (props, data) = (scene.props.clone(), scene.data.clone());
+        let values =
+            controls::values(&props, &data, inputs).map_err(|e| format!("{entry}: {e}"))?;
         let values = serde_json::Value::Object(values).to_string();
         let composition = scene.composition.ok_or_else(|| {
             format!(
@@ -159,6 +162,7 @@ impl Front {
         let front = Front {
             composition,
             props,
+            data,
             resources,
             values,
             entry: entry.to_string(),

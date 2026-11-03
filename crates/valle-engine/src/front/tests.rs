@@ -721,7 +721,13 @@ export default function Scene({{ title, count, theme, at }}) {{
         );
         let bound = |json: &str| {
             let props = serde_json::from_str(json).expect("JSON");
-            load_bound(&[("scene.motion.tsx", &source)], &Inputs { props })
+            load_bound(
+                &[("scene.motion.tsx", &source)],
+                &Inputs {
+                    props,
+                    ..Inputs::default()
+                },
+            )
         };
         let mut f = bound(r#"{ "theme": "dark" }"#).unwrap();
         assert_eq!(
@@ -791,7 +797,7 @@ fn props_are_declared_as_literals_of_their_kinds() {
             ),
             (
                 "s: string({ default: \"a\", required: true })",
-                "prop s: a prop with a default is never missing",
+                "prop s: one with a default is never missing",
             ),
             (
                 "c: color({ default: \"nope\" })",
@@ -842,5 +848,77 @@ export default function Scene() {
 ",
         );
         assert_eq!(f.props.len(), 5);
+    });
+}
+
+#[test]
+fn data_is_any_json_named_apart_from_props() {
+    big_stack(|| {
+        let source = format!(
+            "{HEAD}export const controls = {{
+  props: {{ unit: string({{ default: \"kg\" }}) }},
+  data: {{
+    rows: {{ default: [{{ v: 1 }}, {{ v: 2 }}] }},
+    title: {{ required: true, label: \"Title\" }},
+  }},
+}};
+export default function Scene({{ rows, unit, title }}) {{
+  return <Text>{{title}} {{rows.map((r) => r.v).join(\"+\")}} {{unit}}</Text>;
+}}
+"
+        );
+        let bound = |json: &str| {
+            let data = serde_json::from_str(json).expect("JSON");
+            load_bound(
+                &[("scene.motion.tsx", &source)],
+                &Inputs {
+                    data,
+                    ..Inputs::default()
+                },
+            )
+        };
+        let mut f = bound(r#"{ "title": "Sum" }"#).unwrap();
+        assert_eq!(f.data[1].label.as_deref(), Some("Title"));
+        assert_eq!(texts(&at(&mut f, "0")), ["Sum 1+2 kg"]);
+        let mut f = bound(r#"{ "title": "T", "rows": [{ "v": 5 }] }"#).unwrap();
+        assert_eq!(texts(&at(&mut f, "0")), ["T 5 kg"]);
+        for (json, want) in [
+            (
+                "{}",
+                "data.title: it is required, and nothing is bound to it",
+            ),
+            (
+                r#"{ "title": "T", "unit": "g" }"#,
+                "data: the scene declares no data unit in controls.data",
+            ),
+        ] {
+            let e = bound(json).err().expect(json);
+            assert_eq!(e, format!("scene.motion.tsx: {want}"), "{json}");
+        }
+        for (controls, want) in [
+            (
+                "props: { a: string() }, data: { a: {} }",
+                "a is both a prop and data",
+            ),
+            ("data: { a: [] }", "data a: write its options"),
+            (
+                "data: { a: { default: 1, required: true } }",
+                "data a: one with a default is never missing",
+            ),
+            (
+                "data: { a: { kind: \"x\" } }",
+                "data a: data takes no option kind",
+            ),
+        ] {
+            let e = error(&format!(
+                "export const controls = {{ {controls} }};
+export default function Scene() {{
+  return null;
+}}
+"
+            ));
+            assert!(e.starts_with("scene.motion.tsx:2:"), "{controls}: {e}");
+            assert!(e.contains(want), "{controls}: {e}");
+        }
     });
 }

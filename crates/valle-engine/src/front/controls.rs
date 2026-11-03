@@ -1,6 +1,6 @@
-//! A scene's props: what `controls.props` declares, read without running the scene so tools can
-//! list them and their defaults, and the values bound to them from outside, checked against
-//! their declarations. The root component takes them as its props.
+//! A scene's props and data: what `controls.props` and `controls.data` declare, read without
+//! running the scene so tools can list them and their defaults, and the values bound to them from
+//! outside, checked against their declarations. The root component takes both as its props.
 
 use oxc::ast::ast::{
     ArrayExpressionElement, Expression, ObjectExpression, ObjectPropertyKind, UnaryOperator,
@@ -11,7 +11,7 @@ use serde_json::{Map, Number, Value};
 use super::rewrite::{bare, key};
 use crate::style::{color, css};
 
-/// A prop `controls.props` declares.
+/// A prop `controls.props` declares, or data `controls.data` does.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Prop {
     pub name: String,
@@ -45,6 +45,8 @@ pub enum Kind {
     Angle,
     /// `{ x, y, width, height }`.
     Rect,
+    /// Any JSON value: what `controls.data` declares, such as a chart's rows.
+    Json,
 }
 
 const KINDS: &str = "number, string, boolean, color, select, point, length, angle or rect";
@@ -58,32 +60,61 @@ const LENGTHS: [&str; 15] = [
 #[derive(Clone, Debug, Default)]
 pub struct Inputs {
     pub props: Map<String, Value>,
+    pub data: Map<String, Value>,
 }
 
 /// The props of `controls.props`, an object of `name: number({ … })` and the like.
 pub fn props(object: &ObjectExpression<'_>) -> Result<Vec<Prop>, (u32, String)> {
+    entries(object, "props", "prop", prop)
+}
+
+/// The data of `controls.data`, an object of `name: { default: [] }` and the like.
+pub fn data(object: &ObjectExpression<'_>) -> Result<Vec<Prop>, (u32, String)> {
+    entries(object, "data", "data", datum)
+}
+
+/// The entries of `controls.{section}`, each read by `read`.
+fn entries(
+    object: &ObjectExpression<'_>,
+    section: &str,
+    what: &str,
+    read: fn(&str, &Expression<'_>) -> Result<Prop, String>,
+) -> Result<Vec<Prop>, (u32, String)> {
+    let literal = || literal(&format!("controls.{section}"));
     let mut out = Vec::new();
     for p in &object.properties {
         let ObjectPropertyKind::ObjectProperty(p) = p else {
-            return Err((p.span().start, literal("controls.props")));
+            return Err((p.span().start, literal()));
         };
         let at = p.span.start;
-        let name = key(p).ok_or_else(|| (at, literal("controls.props")))?;
+        let name = key(p).ok_or_else(|| (at, literal()))?;
         let named = name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
             && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         if !named || name.len() > 64 {
             return Err((
                 at,
                 format!(
-                    "prop name {name:?} is not 1 to 64 ASCII letters, digits and underscores, \
+                    "{what} name {name:?} is not 1 to 64 ASCII letters, digits and underscores, \
                      starting with a letter or an underscore"
                 ),
             ));
         }
-        let prop = prop(name, bare(&p.value)).map_err(|e| (at, format!("prop {name}: {e}")))?;
-        out.push(prop);
+        let entry = read(name, bare(&p.value)).map_err(|e| (at, format!("{what} {name}: {e}")))?;
+        out.push(entry);
     }
     Ok(out)
+}
+
+/// The name `props` and `data` both declare: the root component takes both as its props.
+pub fn clash(props: &[Prop], data: &[Prop]) -> Option<String> {
+    let both = props
+        .iter()
+        .find(|p| data.iter().any(|d| d.name == p.name))?;
+    Some(format!(
+        "{} is both a prop and data: the root component takes both as its props, so each name \
+         is declared once",
+        both.name
+    ))
 }
 
 fn literal(what: &str) -> String {
@@ -152,21 +183,42 @@ fn prop(name: &str, e: &Expression<'_>) -> Result<Prop, String> {
         return Err(format!("its step, {s}, is not over 0"));
     }
     let default = take("default").map(|v| check(&kind, v)).transpose()?;
-    let required = match take("required") {
+    common(name, kind, default, options, &format!("{}()", f.name))
+}
+
+/// `{ default: [] }`: data, any JSON.
+fn datum(name: &str, e: &Expression<'_>) -> Result<Prop, String> {
+    let Expression::ObjectExpression(o) = e else {
+        return Err("write its options, such as { default: [] }".into());
+    };
+    let mut options = object(o)?;
+    let default = options.remove("default");
+    common(name, Kind::Json, default, options, "data")
+}
+
+/// The options props and data share, `required` and `label`, then the entry.
+fn common(
+    name: &str,
+    kind: Kind,
+    default: Option<Value>,
+    mut options: Map<String, Value>,
+    taker: &str,
+) -> Result<Prop, String> {
+    let required = match options.remove("required") {
         None => false,
         Some(Value::Bool(b)) => b,
         Some(_) => return Err("required is true or false".into()),
     };
     if required && default.is_some() {
-        return Err("a prop with a default is never missing, so it is not required".into());
+        return Err("one with a default is never missing, so it is not required".into());
     }
-    let label = match take("label") {
+    let label = match options.remove("label") {
         None => None,
         Some(Value::String(s)) => Some(s),
         Some(_) => return Err("label is a string".into()),
     };
     if let Some(k) = options.keys().next() {
-        return Err(format!("{}() takes no option {k}", f.name));
+        return Err(format!("{taker} takes no option {k}"));
     }
     Ok(Prop {
         name: name.to_string(),
@@ -242,19 +294,36 @@ fn check(kind: &Kind, value: Value) -> Result<Value, String> {
     Ok(value)
 }
 
-/// What the root component takes from `props`: each bound value, or its default; one missing
-/// is left out, unless it is required.
-pub fn values(props: &[Prop], inputs: &Inputs) -> Result<Map<String, Value>, String> {
-    if let Some(k) = (inputs.props.keys()).find(|k| !props.iter().any(|p| p.name == **k)) {
+/// What the root component takes from `props` and `data`: each bound value, or its default;
+/// one missing is left out, unless it is required.
+pub fn values(
+    props: &[Prop],
+    data: &[Prop],
+    inputs: &Inputs,
+) -> Result<Map<String, Value>, String> {
+    let mut out = Map::new();
+    bind(props, &inputs.props, "props", "prop", &mut out)?;
+    bind(data, &inputs.data, "data", "data", &mut out)?;
+    Ok(out)
+}
+
+/// The values `bound` to the entries of `controls.{section}`, into `out`.
+fn bind(
+    entries: &[Prop],
+    bound: &Map<String, Value>,
+    section: &str,
+    what: &str,
+    out: &mut Map<String, Value>,
+) -> Result<(), String> {
+    if let Some(k) = (bound.keys()).find(|k| !entries.iter().any(|p| p.name == **k)) {
         return Err(format!(
-            "props: the scene declares no prop {k} in controls.props"
+            "{section}: the scene declares no {what} {k} in controls.{section}"
         ));
     }
-    let mut out = Map::new();
-    for p in props {
-        let value = match inputs.props.get(&p.name) {
+    for p in entries {
+        let value = match bound.get(&p.name) {
             Some(v) => {
-                Some(check(&p.kind, v.clone()).map_err(|e| format!("props.{}: {e}", p.name))?)
+                Some(check(&p.kind, v.clone()).map_err(|e| format!("{section}.{}: {e}", p.name))?)
             }
             None => p.default.clone(),
         };
@@ -264,14 +333,14 @@ pub fn values(props: &[Prop], inputs: &Inputs) -> Result<Map<String, Value>, Str
             }
             None if p.required => {
                 return Err(format!(
-                    "props.{}: it is required, and nothing is bound to it",
+                    "{section}.{}: it is required, and nothing is bound to it",
                     p.name
                 ));
             }
             None => {}
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 /// An object literal of JSON values.
