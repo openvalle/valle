@@ -13,3 +13,8 @@ serde.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
 valle-ffmpeg.workspace = true
+wgpu.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-metal.workspace = true

@@ -2378,11 +2378,14 @@ dependencies = [
 name = "valle-native"
 version = "0.1.0"
 dependencies = [
+ "objc2",
+ "objc2-metal",
  "ring",
  "serde",
  "serde_json",
  "ureq",
  "valle-ffmpeg",
+ "wgpu",
 ]
 
 [[package]]

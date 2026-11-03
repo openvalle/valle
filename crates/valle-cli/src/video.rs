@@ -2,6 +2,7 @@
 //! in a .mov, by the machine's hardware encoder or FFmpeg's own; a timeline's sound beside them,
 //! or alone in a .wav.
 
+use std::collections::VecDeque;
 use std::path::Path;
 use std::time::Instant;
 
@@ -10,11 +11,11 @@ use valle_engine::audio::Mixer;
 use valle_engine::audio::loudness::Meter;
 use valle_engine::gpu::{Gpu, Renderer};
 use valle_engine::scene::Scene;
-use valle_native::media::{self, Codec, Encoding, Options, RATE};
+use valle_native::media::{self, Codec, Encoding, Options, RATE, Textures};
 
 use crate::Failure;
 use crate::args::Args;
-use crate::motion::{chosen, counted, draw};
+use crate::motion::{chosen, counted};
 
 pub fn render(
     args: &Args,
@@ -65,6 +66,11 @@ pub fn render(
     if !frames.iter().copied().eq(0..count) {
         mixer = None;
     }
+    let mut meter = Meter::default();
+    let started = Instant::now();
+    let gpu = Gpu::new().map_err(|e| Failure::new("gpu", e))?;
+    // On a Metal GPU, frames are drawn into the hardware encoder's own where it has them.
+    let textures = Textures::new(gpu.device());
     let options = Options {
         size: [c.width, c.height],
         fps: [c.fps.num(), c.fps.den()],
@@ -72,15 +78,43 @@ pub fn render(
         encoding,
         bitrate,
         sound: mixer.is_some(),
+        surfaces: textures.is_some(),
     };
-    let mut meter = Meter::default();
-    let started = Instant::now();
     let mut writer = media::writer(out, &options).map_err(failed)?;
-    let gpu = Gpu::new().map_err(|e| Failure::new("gpu", e))?;
     let mut renderer = Renderer::new(&gpu, c.width, c.height);
+    let gpu_failed = |e| Failure::new("gpu", e);
+    // Frames the GPU is drawing into the encoder's, sent in order once it is done: one is drawn
+    // while the next is laid out.
+    let mut drawing = VecDeque::new();
+    let mut direct = false;
     for (k, &i) in frames.iter().enumerate() {
-        let pixels = draw(scene, &mut renderer, c.fps.frame_start(i))?;
-        writer.push(&pixels).map_err(failed)?;
+        let at = c.fps.frame_start(i).map_err(|e| Failure::new("scene", e))?;
+        let frame = scene.frame(at).map_err(|e| Failure::new("scene", e))?;
+        let (items, pictures) = (&frame.items, &frame.pictures);
+        match (&textures, writer.surface().map_err(failed)?) {
+            (Some(textures), Some(surface)) => {
+                let planes = (textures.planes(gpu.device(), &surface)).map_err(failed)?;
+                let views = [&planes.luma, &planes.chroma];
+                let done = renderer
+                    .planes(items, pictures, scene.faces(), scene.images(), views)
+                    .map_err(gpu_failed)?;
+                drawing.push_back((done, surface, planes));
+                direct = true;
+                if drawing.len() > 1
+                    && let Some((done, surface, planes)) = drawing.pop_front()
+                {
+                    gpu.wait(done).map_err(gpu_failed)?;
+                    drop(planes);
+                    writer.send(surface).map_err(failed)?;
+                }
+            }
+            _ => {
+                let pixels = renderer
+                    .render(items, pictures, scene.faces(), scene.images())
+                    .map_err(gpu_failed)?;
+                writer.push(&pixels).map_err(failed)?;
+            }
+        }
         if let Some(m) = mixer.as_deref_mut() {
             // The samples from this frame's start to the next's.
             let at = |f: i64| f * i64::from(RATE) * c.fps.den() / c.fps.num();
@@ -90,6 +124,11 @@ pub fn render(
             writer.sound(&samples).map_err(failed)?;
         }
         crate::progress(k + 1, frames.len());
+    }
+    for (done, surface, planes) in drawing {
+        gpu.wait(done).map_err(gpu_failed)?;
+        drop(planes);
+        writer.send(surface).map_err(failed)?;
     }
     writer.finish().map_err(failed)?;
     let seconds = started.elapsed().as_secs_f64();
@@ -108,6 +147,8 @@ pub fn render(
         "frames": frames.len(),
         "codec": format!("{codec:?}").to_lowercase(),
         "encoder": encoder,
+        // Whether the GPU drew the frames into the encoder's own memory, read back otherwise.
+        "direct": direct,
         "seconds": seconds,
         "sound": mixer.is_some().then(|| loudness(&meter)),
     }))

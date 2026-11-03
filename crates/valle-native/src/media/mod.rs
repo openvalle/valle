@@ -3,10 +3,12 @@
 //! one loaded picks which runs.
 #![allow(clippy::duplicate_mod)]
 
+use std::ffi::c_void;
 use std::path::Path;
 
 use valle_ffmpeg::Version;
 
+mod textures;
 mod v7;
 mod v8;
 mod v9;
@@ -107,6 +109,31 @@ pub struct Options {
     pub bitrate: Option<u64>,
     /// Whether it has sound, which `Write::sound` gives.
     pub sound: bool,
+    /// Whether a GPU draws the frames into the encoder's own pixel buffers (`Write::surface`)
+    /// where the encoder has them: VideoToolbox's H.264 and HEVC on macOS.
+    pub surfaces: bool,
+}
+
+pub use textures::{Planes, Textures};
+
+/// A frame in the encoder's own memory, for a GPU to draw into and `Write::send` to encode: a
+/// VideoToolbox pixel buffer of the video's size, NV12 at limited range.
+pub struct Surface {
+    /// The `CVPixelBufferRef`.
+    pub buffer: *mut c_void,
+    /// The FFmpeg `AVFrame` that holds it, and how it is freed if it is not sent.
+    frame: *mut c_void,
+    free: unsafe fn(*mut c_void),
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        if !self.frame.is_null() {
+            // SAFETY: the frame was allocated by the FFmpeg that `free` belongs to, and is
+            // freed once.
+            unsafe { (self.free)(self.frame) };
+        }
+    }
 }
 
 /// Frames into a video, one after another.
@@ -117,6 +144,11 @@ pub trait Write {
     fn sound(&mut self, samples: &[f32]) -> Result<(), String>;
     /// Writes what is left and closes the file.
     fn finish(&mut self) -> Result<(), String>;
+    /// A frame of the encoder's own to draw the next into, where it was opened on them
+    /// (`Options::surfaces`); `None` where frames go through `push`.
+    fn surface(&mut self) -> Result<Option<Surface>, String>;
+    /// The next frame: a surface drawn, once the GPU is done with it.
+    fn send(&mut self, surface: Surface) -> Result<(), String>;
 }
 
 /// The FFmpeg version loaded, loading it the first time.
@@ -153,9 +185,19 @@ pub fn writer(path: &Path, options: &Options) -> Result<Box<dyn Write>, String> 
     if options.codec == Codec::ProRes4444 && !mov {
         return Err("ProRes goes in a .mov".into());
     }
-    Ok(match version()? {
-        Version::V7 => Box::new(v7::encode::Writer::new(path, options)?),
-        Version::V8 => Box::new(v8::encode::Writer::new(path, options)?),
-        Version::V9 => Box::new(v9::encode::Writer::new(path, options)?),
+    let open = |o: &Options| -> Result<Box<dyn Write>, String> {
+        Ok(match version()? {
+            Version::V7 => Box::new(v7::encode::Writer::new(path, o)?),
+            Version::V8 => Box::new(v8::encode::Writer::new(path, o)?),
+            Version::V9 => Box::new(v9::encode::Writer::new(path, o)?),
+        })
+    };
+    // An encoder that does not open on its own pixel buffers takes frames from memory.
+    open(options).or_else(|e| match options.surfaces {
+        true => open(&Options {
+            surfaces: false,
+            ..options.clone()
+        }),
+        false => Err(e),
     })
 }

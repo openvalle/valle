@@ -39,6 +39,8 @@ use crate::transition;
 
 const WORK: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUTPUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const LUMA: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+const CHROMA: wgpu::TextureFormat = wgpu::TextureFormat::Rg8Unorm;
 
 const COMMON: &str = include_str!("../shaders/common.wgsl");
 
@@ -104,6 +106,9 @@ pub struct Gpu {
     colors: wgpu::RenderPipeline,
     effects: wgpu::RenderPipeline,
     output: wgpu::RenderPipeline,
+    /// The output as an encoder's luma and chroma planes.
+    luma: wgpu::RenderPipeline,
+    chroma: wgpu::RenderPipeline,
     /// Shaders authors write: the block of what the engine tells them, the quad of their box,
     /// the pass taking their images out of layers, and how they sample those.
     host: wgpu::BindGroupLayout,
@@ -196,7 +201,7 @@ impl Gpu {
                 operation: wgpu::BlendOperation::Max,
             },
         });
-        let pipeline = |layout: &wgpu::PipelineLayout, name: &str, source: &str, format, blend| {
+        let stage = |layout: &wgpu::PipelineLayout, name: &str, source: &str, fs, format, blend| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(name),
                 source: wgpu::ShaderSource::Wgsl([COMMON, source].concat().into()),
@@ -212,7 +217,7 @@ impl Gpu {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: Some("fs"),
+                    entry_point: Some(fs),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -230,6 +235,9 @@ impl Gpu {
                 cache: None,
             })
         };
+        let pipeline = |layout: &wgpu::PipelineLayout, name: &str, source: &str, format, blend| {
+            stage(layout, name, source, "fs", format, blend)
+        };
         let rect = include_str!("../shaders/rect.wgsl");
         let gradient = include_str!("../shaders/gradient.wgsl");
         let picture = include_str!("../shaders/image.wgsl");
@@ -241,6 +249,7 @@ impl Gpu {
         let colors = include_str!("../shaders/colors.wgsl");
         let effects = include_str!("../shaders/effects.wgsl");
         let output = include_str!("../shaders/output.wgsl");
+        let yuv = include_str!("../shaders/yuv.wgsl");
         let host = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("host"),
             entries: &[entry(0, buffer(wgpu::BufferBindingType::Uniform))],
@@ -294,6 +303,8 @@ impl Gpu {
             colors: pipeline(&imaging, "colors", colors, WORK, None),
             effects: pipeline(&imaging, "effects", effects, WORK, None),
             output: pipeline(&imaging, "output", output, OUTPUT, None),
+            luma: stage(&imaging, "luma", yuv, "luma", LUMA, None),
+            chroma: stage(&imaging, "chroma", yuv, "chroma", CHROMA, None),
             host,
             quad,
             extract,
@@ -318,9 +329,23 @@ impl Gpu {
         &self.queue
     }
 
+    /// Waits until the GPU has done submission `done`.
+    pub fn wait(&self, done: wgpu::SubmissionIndex) -> Result<(), Error> {
+        (self.device)
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(done),
+                timeout: None,
+            })
+            .map(|_| ())
+            .map_err(|e| format!("GPU: {e}"))
+    }
+
     /// The format of the frames renderers make: sRGB-encoded RGBA8, which a target `present`
     /// copies them into has.
     pub const FRAME: wgpu::TextureFormat = OUTPUT;
+
+    /// The formats of the planes `Renderer::planes` draws into: luma, and chroma at half size.
+    pub const PLANES: [wgpu::TextureFormat; 2] = [LUMA, CHROMA];
 }
 
 /// Where an outline is in the atlas.
@@ -939,7 +964,7 @@ pub struct Renderer<'a> {
     gpu: &'a Gpu,
     size: [u32; 2],
     frame: Surface,
-    output: wgpu::Texture,
+    output: Surface,
     readback: wgpu::Buffer,
     screen: wgpu::Buffer,
     transforms: Store,
@@ -997,7 +1022,7 @@ impl<'a> Renderer<'a> {
             gpu,
             size,
             frame,
-            output: texture(device, size, OUTPUT),
+            output: Surface::new(gpu, texture(device, size, OUTPUT)),
             readback,
             screen,
             transforms: Store::new(device, "transforms"),
@@ -1143,7 +1168,7 @@ impl<'a> Renderer<'a> {
     ) {
         let [width, height] = self.size;
         encoder.copy_texture_to_buffer(
-            self.output.as_image_copy(),
+            self.output.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &self.readback,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -1152,7 +1177,7 @@ impl<'a> Renderer<'a> {
                     rows_per_image: Some(height),
                 },
             },
-            self.output.size(),
+            self.output.texture.size(),
         );
         self.gpu.queue.submit([encoder.finish()]);
         self.readback.map_async(wgpu::MapMode::Read, .., mapped);
@@ -1202,12 +1227,37 @@ impl<'a> Renderer<'a> {
     ) -> Result<(), Error> {
         let mut encoder = self.encode_frame(items, pictures, faces, images)?;
         encoder.copy_texture_to_texture(
-            self.output.as_image_copy(),
+            self.output.texture.as_image_copy(),
             target.as_image_copy(),
-            self.output.size(),
+            self.output.texture.size(),
         );
         self.gpu.queue.submit([encoder.finish()]);
         Ok(())
+    }
+
+    /// Draws the frame `items` paint, as `render` does, into an encoder's planes, BT.709 at
+    /// limited range: `luma` of the renderer's size and `chroma`, Cb and Cr, at half that rounded
+    /// up, in `Gpu::PLANES`. Submitted to the GPU, not waited for: the submission to wait for
+    /// before the encoder reads them.
+    pub fn planes(
+        &mut self,
+        items: &[Item],
+        pictures: &[(u32, Vec<Item>)],
+        faces: &[Face],
+        images: &[Image],
+        [luma, chroma]: [&wgpu::TextureView; 2],
+    ) -> Result<wgpu::SubmissionIndex, Error> {
+        let mut encoder = self.encode_frame(items, pictures, faces, images)?;
+        if let Some(draw) = &self.draw {
+            for (view, pipeline) in [(luma, &self.gpu.luma), (chroma, &self.gpu.chroma)] {
+                let mut pass = begin(&mut encoder, view, false);
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, draw, &[]);
+                pass.set_bind_group(1, &self.output.image, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        Ok(self.gpu.queue.submit([encoder.finish()]))
     }
 
     /// Submits the pictures boxes draw, and encodes drawing the frame into the output.
@@ -2274,8 +2324,7 @@ impl<'a> Renderer<'a> {
         if !started[0] {
             drop(begin(encoder, &self.frame.view, false));
         }
-        let view = self.output.create_view(&Default::default());
-        let mut pass = begin(encoder, &view, false);
+        let mut pass = begin(encoder, &self.output.view, false);
         pass.set_pipeline(&gpu.output);
         pass.set_bind_group(0, draw, &[]);
         pass.set_bind_group(1, &self.frame.image, &[]);

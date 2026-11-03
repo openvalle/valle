@@ -1,14 +1,17 @@
 //! Frames into a video file through one FFmpeg version's API: straight sRGB RGBA converted on the
-//! CPU to the encoder's YUV, tagged BT.709 primaries and matrix, limited range, and the sRGB
+//! CPU to the encoder's YUV, or, for VideoToolbox's H.264 and HEVC, the encoder's own pixel
+//! buffers a GPU draws Y'CbCr into; tagged BT.709 primaries and matrix, limited range, and the sRGB
 //! transfer, so players show the colors a PNG of the frame has. Sound, when there is some, goes
 //! beside them: AAC in an .mp4, 16-bit PCM in a .mov.
 
+use std::ffi::c_void;
 use std::path::Path;
+use std::ptr;
 
 use super::ff;
 use ff::{ChannelLayout, Dictionary, Packet, Rational, codec, encoder, format, frame, software};
 
-use crate::media::{Codec, Encoding, Options, RATE, Write};
+use crate::media::{Codec, Encoding, Options, RATE, Surface, Write};
 
 pub struct Writer {
     output: format::context::Output,
@@ -21,6 +24,8 @@ pub struct Writer {
     next: i64,
     done: bool,
     sound: Option<Sound>,
+    /// Whether the encoder takes frames in its own pixel buffers, which `surface` gives.
+    surfaces: bool,
 }
 
 /// The sound's stream: its encoder, converting from interleaved f32, the samples not yet in a
@@ -59,7 +64,7 @@ impl Writer {
         let found = encoder::find_by_name(name)
             .ok_or_else(|| format!("the FFmpeg loaded has no {name} encoder"))?;
         let [width, height] = o.size;
-        let pixel = match (o.codec, o.encoding) {
+        let mut pixel = match (o.codec, o.encoding) {
             (Codec::ProRes4444, Encoding::Hardware) => format::Pixel::AYUV64LE,
             (Codec::ProRes4444, Encoding::Software) => format::Pixel::YUVA444P10LE,
             (_, Encoding::Hardware) => format::Pixel::NV12,
@@ -80,6 +85,15 @@ impl Writer {
         setup.set_aspect_ratio(Rational(1, 1));
         if global {
             setup.set_flags(codec::Flags::GLOBAL_HEADER);
+        }
+        let surfaces = o.surfaces
+            && o.encoding == Encoding::Hardware
+            && o.codec != Codec::ProRes4444
+            // SAFETY: the context is not yet opened as an encoder.
+            && unsafe { pixel_buffers(setup.as_mut_ptr(), [width, height]) };
+        if surfaces {
+            pixel = format::Pixel::VIDEOTOOLBOX;
+            setup.set_format(pixel);
         }
         // SAFETY: the context is open for writing and not yet opened as an encoder.
         unsafe {
@@ -138,11 +152,13 @@ impl Writer {
             .write_header()
             .map_err(|e| format!("{}: {e}", path.display()))?;
         let flags = software::scaling::Flags::BILINEAR | software::scaling::Flags::ACCURATE_RND;
+        // Unused with surfaces, whose frames the GPU draws.
+        let scaled = if surfaces { format::Pixel::NV12 } else { pixel };
         let mut scaler = software::scaling::Context::get(
             format::Pixel::RGBA,
             width,
             height,
-            pixel,
+            scaled,
             width,
             height,
             flags,
@@ -174,7 +190,24 @@ impl Writer {
             next: 0,
             done: false,
             sound,
+            surfaces,
         })
+    }
+
+    /// `frame`, the next, into the encoder.
+    fn send_frame(&mut self, frame: &mut frame::Video) -> Result<(), String> {
+        // SAFETY: the frame is ours; ProRes writes its tags from the frame.
+        unsafe {
+            let p = frame.as_mut_ptr();
+            (*p).color_primaries = ff::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
+            (*p).color_trc = ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_IEC61966_2_1;
+            (*p).colorspace = ff::ffi::AVColorSpace::AVCOL_SPC_BT709;
+            (*p).color_range = ff::ffi::AVColorRange::AVCOL_RANGE_MPEG;
+        }
+        frame.set_pts(Some(self.next));
+        self.next += 1;
+        (self.encoder.send_frame(frame)).map_err(|e| e.to_string())?;
+        self.drain()
     }
 
     fn drain(&mut self) -> Result<(), String> {
@@ -199,20 +232,43 @@ impl Write for Writer {
         for y in 0..h as usize {
             data[y * stride..y * stride + row].copy_from_slice(&rgba[y * row..(y + 1) * row]);
         }
+        if self.surfaces {
+            return Err("the encoder takes its frames from `surface`".into());
+        }
         let mut converted = frame::Video::new(self.pixel, w, h);
         (self.scaler.run(&source, &mut converted)).map_err(|e| e.to_string())?;
-        // SAFETY: the frame is ours; ProRes writes its tags from the frame.
-        unsafe {
-            let p = converted.as_mut_ptr();
-            (*p).color_primaries = ff::ffi::AVColorPrimaries::AVCOL_PRI_BT709;
-            (*p).color_trc = ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_IEC61966_2_1;
-            (*p).colorspace = ff::ffi::AVColorSpace::AVCOL_SPC_BT709;
-            (*p).color_range = ff::ffi::AVColorRange::AVCOL_RANGE_MPEG;
+        self.send_frame(&mut converted)
+    }
+
+    fn surface(&mut self) -> Result<Option<Surface>, String> {
+        if !self.surfaces {
+            return Ok(None);
         }
-        converted.set_pts(Some(self.next));
-        self.next += 1;
-        (self.encoder.send_frame(&converted)).map_err(|e| e.to_string())?;
-        self.drain()
+        // SAFETY: the encoder was opened with its frames context; the frame is ours until it is
+        // freed or sent.
+        unsafe {
+            let mut frame = ff::ffi::av_frame_alloc();
+            if frame.is_null() {
+                return Err("out of memory for a frame".into());
+            }
+            let frames = (*self.encoder.as_ptr()).hw_frames_ctx;
+            if ff::ffi::av_hwframe_get_buffer(frames, frame, 0) < 0 {
+                ff::ffi::av_frame_free(&mut frame);
+                return Err("the hardware encoder has no frame to draw into".into());
+            }
+            Ok(Some(Surface {
+                buffer: (*frame).data[3].cast(),
+                frame: frame.cast(),
+                free: free_frame,
+            }))
+        }
+    }
+
+    fn send(&mut self, mut surface: Surface) -> Result<(), String> {
+        let taken = std::mem::replace(&mut surface.frame, ptr::null_mut());
+        // SAFETY: a frame `surface` allocated, which the wrapper now frees.
+        let mut frame = unsafe { frame::Video::wrap(taken.cast()) };
+        self.send_frame(&mut frame)
     }
 
     fn sound(&mut self, samples: &[f32]) -> Result<(), String> {
@@ -234,6 +290,61 @@ impl Write for Writer {
         }
         self.output.write_trailer().map_err(|e| e.to_string())
     }
+}
+
+/// Opens the encoder at `context` on VideoToolbox pixel buffers of `size`, NV12 at limited range,
+/// from a pool FFmpeg keeps: whether it can.
+///
+/// # Safety
+///
+/// `context` is an encoder's context, not yet opened.
+unsafe fn pixel_buffers(context: *mut ff::ffi::AVCodecContext, [w, h]: [u32; 2]) -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    // SAFETY: FFmpeg fills `device` and `frames` or leaves them null; the context takes its own
+    // reference to the frames context.
+    unsafe {
+        let mut device = ptr::null_mut();
+        let made = ff::ffi::av_hwdevice_ctx_create(
+            &mut device,
+            ff::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+            ptr::null(),
+            ptr::null_mut(),
+            0,
+        );
+        if made < 0 || device.is_null() {
+            return false;
+        }
+        let mut frames = ff::ffi::av_hwframe_ctx_alloc(device);
+        ff::ffi::av_buffer_unref(&mut device);
+        if frames.is_null() {
+            return false;
+        }
+        let pool = (*frames).data.cast::<ff::ffi::AVHWFramesContext>();
+        (*pool).format = ff::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX;
+        (*pool).sw_format = ff::ffi::AVPixelFormat::AV_PIX_FMT_NV12;
+        (*pool).width = w as i32;
+        (*pool).height = h as i32;
+        let ready = ff::ffi::av_hwframe_ctx_init(frames) >= 0;
+        if ready {
+            (*context).hw_frames_ctx = ff::ffi::av_buffer_ref(frames);
+            (*context).sw_pix_fmt = ff::ffi::AVPixelFormat::AV_PIX_FMT_NV12;
+        }
+        ff::ffi::av_buffer_unref(&mut frames);
+        ready && !(*context).hw_frames_ctx.is_null()
+    }
+}
+
+/// Frees a frame `surface` allocated and did not send.
+///
+/// # Safety
+///
+/// `frame` is an `AVFrame` of this FFmpeg version's, freed once.
+unsafe fn free_frame(frame: *mut c_void) {
+    let mut frame = frame.cast::<ff::ffi::AVFrame>();
+    // SAFETY: the caller's.
+    unsafe { ff::ffi::av_frame_free(&mut frame) };
 }
 
 impl Sound {
