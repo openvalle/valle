@@ -421,6 +421,166 @@ pub fn boolean(a: &BezPath, b: &BezPath, op: &str) -> Result<BezPath, String> {
     )))
 }
 
+/// `morph(from, to, progress, { samples })`: `from` at 0, `to` at 1, and between them:
+///
+/// - Paths of the same commands, segment for segment, move point by point, their curves kept.
+/// - Others are resampled: each subpath to `samples` points evenly along it (by default one every
+///   2 units, 16 to 256), paired with the other's by size, the largest with the largest, a subpath
+///   left over shrinking to its center. A closed pair turns the same way round and starts where
+///   the points move least; an open one may run backwards for that.
+pub fn morph(from: &BezPath, to: &BezPath, progress: f64, samples: Option<usize>) -> BezPath {
+    let t = if progress.is_nan() {
+        0.0
+    } else {
+        progress.clamp(0.0, 1.0)
+    };
+    if t == 0.0 {
+        return from.clone();
+    }
+    if t == 1.0 {
+        return to.clone();
+    }
+    let (a, b) = (subpaths(from), subpaths(to));
+    let kind = |s: &PathSeg| std::mem::discriminant(s);
+    let alike = a.len() == b.len()
+        && a.iter().zip(&b).all(|(p, q)| {
+            let kinds = p.0.iter().zip(&q.0).all(|(x, y)| kind(x) == kind(y));
+            p.1 == q.1 && p.0.len() == q.0.len() && kinds
+        });
+    let lerp = |p: kurbo::Point, q: kurbo::Point| p.lerp(q, t);
+    let mut out = BezPath::new();
+    if alike {
+        for ((p, closed, p0), (q, _, q0)) in a.iter().zip(&b) {
+            let (p, q) = (cubics(p), cubics(q));
+            let start = |list: &[kurbo::CubicBez], first| list.first().map_or(first, |c| c.p0);
+            out.move_to(lerp(start(&p, *p0), start(&q, *q0)));
+            for (c, d) in p.iter().zip(&q) {
+                out.curve_to(lerp(c.p1, d.p1), lerp(c.p2, d.p2), lerp(c.p3, d.p3));
+            }
+            if *closed {
+                out.close_path();
+            }
+        }
+        return out;
+    }
+    let size = |s: &(Vec<PathSeg>, bool, kurbo::Point)| {
+        let points = resampled(&s.0, s.2, s.1, 32);
+        signed_area(&points).abs()
+    };
+    let by_size = |list: &[(Vec<PathSeg>, bool, kurbo::Point)]| {
+        let mut order: Vec<usize> = (0..list.len()).collect();
+        order.sort_by(|&i, &j| size(&list[j]).total_cmp(&size(&list[i])));
+        order
+    };
+    let (oa, ob) = (by_size(&a), by_size(&b));
+    for k in 0..oa.len().max(ob.len()) {
+        let (p, q) = (oa.get(k).map(|&i| &a[i]), ob.get(k).map(|&i| &b[i]));
+        let length = |s: Option<&(Vec<PathSeg>, bool, kurbo::Point)>| {
+            s.map_or(0.0, |s| s.0.iter().map(|g| g.arclen(ACCURACY)).sum::<f64>())
+        };
+        let n = samples
+            .unwrap_or_else(|| ((length(p).max(length(q)) / 2.0).ceil() as usize).clamp(16, 256));
+        let points = |s: Option<&(Vec<PathSeg>, bool, kurbo::Point)>| {
+            s.map(|s| (resampled(&s.0, s.2, s.1, n), s.1))
+        };
+        let (mut pa, mut pb) = (points(p), points(q));
+        // A subpath with no partner shrinks to, or grows from, its own center.
+        let point = |list: &(Vec<kurbo::Point>, bool)| {
+            let c = list.0.iter().fold(Vec2::ZERO, |s, p| s + p.to_vec2()) / n as f64;
+            (vec![c.to_point(); n], list.1)
+        };
+        let (pa, pb) = match (pa.take(), pb.take()) {
+            (Some(x), Some(y)) => (x, y),
+            (Some(x), None) => (x.clone(), point(&x)),
+            (None, Some(y)) => (point(&y), y),
+            (None, None) => continue,
+        };
+        let pb = aligned(&pa, pb);
+        out.move_to(lerp(pa.0[0], pb.0[0]));
+        for (p, q) in pa.0.iter().zip(&pb.0).skip(1) {
+            out.line_to(lerp(*p, *q));
+        }
+        let closed = if t < 0.5 { pa.1 } else { pb.1 };
+        if closed {
+            out.close_path();
+        }
+    }
+    out
+}
+
+/// `n` points evenly along a subpath: round a closed one, its start not repeated, or from end to
+/// end of an open one.
+fn resampled(
+    segments: &[PathSeg],
+    first: kurbo::Point,
+    closed: bool,
+    n: usize,
+) -> Vec<kurbo::Point> {
+    let lengths: Vec<f64> = segments.iter().map(|s| s.arclen(ACCURACY)).collect();
+    let total: f64 = lengths.iter().sum();
+    if total <= 0.0 {
+        return vec![segments.first().map_or(first, |s| s.start()); n];
+    }
+    let gaps = if closed { n } else { n.max(2) - 1 };
+    let (mut i, mut before) = (0, 0.0);
+    (0..n)
+        .map(|k| {
+            let d = total * k as f64 / gaps as f64;
+            while i + 1 < segments.len() && before + lengths[i] < d {
+                before += lengths[i];
+                i += 1;
+            }
+            let s = &segments[i];
+            let into = (d - before).clamp(0.0, lengths[i]);
+            s.eval(if lengths[i] > 0.0 {
+                s.inv_arclen(into, ACCURACY)
+            } else {
+                0.0
+            })
+        })
+        .collect()
+}
+
+/// Twice the area a polygon's points wind round, positive clockwise on screen.
+fn signed_area(points: &[kurbo::Point]) -> f64 {
+    (0..points.len())
+        .map(|i| {
+            let (p, q) = (points[i], points[(i + 1) % points.len()]);
+            p.x * q.y - q.x * p.y
+        })
+        .sum()
+}
+
+/// `to`'s points ordered to move least from `from`'s: a closed pair turned the same way round and
+/// started at the best point, an open pair run forwards or backwards.
+fn aligned(
+    from: &(Vec<kurbo::Point>, bool),
+    mut to: (Vec<kurbo::Point>, bool),
+) -> (Vec<kurbo::Point>, bool) {
+    let n = from.0.len();
+    let cost = |list: &[kurbo::Point], shift: usize| -> f64 {
+        (0..n)
+            .map(|i| (from.0[i] - list[(i + shift) % n]).hypot2())
+            .sum()
+    };
+    if from.1 && to.1 {
+        if signed_area(&from.0) * signed_area(&to.0) < 0.0 {
+            to.0.reverse();
+        }
+        let best = (0..n)
+            .min_by(|&i, &j| cost(&to.0, i).total_cmp(&cost(&to.0, j)))
+            .unwrap_or(0);
+        to.0.rotate_left(best);
+    } else {
+        let mut back = to.0.clone();
+        back.reverse();
+        if cost(&back, 0) < cost(&to.0, 0) {
+            to.0 = back;
+        }
+    }
+    to
+}
+
 /// Appends a segment from where the path is.
 fn push(out: &mut BezPath, s: PathSeg) {
     match s {
@@ -606,6 +766,33 @@ mod tests {
         let back = bez("M0 0 V100 H100 V0 Z").unwrap();
         assert!((area(&inflate(&back, 10.0, Join::Miter(4.0))) - 14400.0).abs() < 1e-6);
         assert!(area(&inflate(&square, -60.0, Join::Miter(4.0))) < 1e-9);
+    }
+
+    #[test]
+    fn alike_paths_morph_point_by_point() {
+        let a = bez("M0 0 L100 0 Q100 50 50 50 Z").unwrap();
+        let b = bez("M0 100 L100 100 Q100 0 50 150 Z").unwrap();
+        let half = data(&morph(&a, &b, 0.5, None));
+        assert!(half.starts_with("M0 50 C0 50 100 50 100 50 C"), "{half}");
+        assert_eq!(data(&morph(&a, &b, 0.0, None)), data(&a));
+        assert_eq!(data(&morph(&a, &b, 7.0, None)), data(&b));
+    }
+
+    #[test]
+    fn other_paths_are_resampled_and_aligned() {
+        let square = bez("M0 0 H100 V100 H0 Z").unwrap();
+        // The same square started at another corner and wound the other way: nothing moves.
+        let other = bez("M100 100 V0 H0 V100 H100 V100 Z").unwrap();
+        let mid = morph(&square, &other, 0.5, Some(64));
+        assert!((area(&mid) - 10000.0).abs() < 1.0, "{}", area(&mid));
+        // A circle into a square stays about as big as both, never folding in.
+        let circle = bez("M0 50 A50 50 0 1 1 100 50 A50 50 0 1 1 0 50 Z").unwrap();
+        let blend = area(&morph(&circle, &square, 0.5, None));
+        assert!(blend > 7800.0 && blend < 10000.0, "{blend}");
+        // A subpath with no partner shrinks to its center.
+        let two = bez("M0 0 H100 V100 H0 Z M200 0 H220 V20 H200 Z").unwrap();
+        let near = morph(&two, &square, 0.99, None);
+        assert!(area(&near) < 10000.0 + 1.0);
     }
 
     #[test]

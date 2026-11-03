@@ -115,6 +115,11 @@ fn path(f: PathFn, args: &[&V]) -> Result<V, Error> {
             let made = edit::inflate(&p, args[1].num(), join);
             return Ok(V::Str(Rc::from(edit::data(&made))));
         }
+        PathFn::Morph(samples) => {
+            let to = edit::bez(&args[1].text())?;
+            let made = edit::morph(&p, &to, args[2].num(), samples.map(|n| n as usize));
+            return Ok(V::Str(Rc::from(edit::data(&made))));
+        }
         PathFn::Boolean(op) => {
             let op = match op {
                 Boolean::Union => "union",

@@ -246,6 +246,8 @@ pub enum PathFn {
     Inflate(Join),
     /// `pathBoolean(a, b, op)`, both paths operands.
     Boolean(Boolean),
+    /// `morph(from, to, progress, { samples })`.
+    Morph(Option<u32>),
 }
 
 /// `pathBoolean`'s ops.
@@ -265,6 +267,12 @@ pub enum Axis {
 
 impl PathFn {
     pub fn parse(name: &str) -> Option<PathFn> {
+        if let Some(samples) = name.strip_prefix("morph|") {
+            return Some(PathFn::Morph(match samples {
+                "" => None,
+                n => Some(n.parse().ok().filter(|n| (2..=4096).contains(n))?),
+            }));
+        }
         if let Some(join) = name.strip_prefix("inflate|") {
             return Some(PathFn::Inflate(match join.split_once('|')? {
                 ("miter", limit) => Join::Miter(limit.parse().ok().filter(|l: &f64| *l >= 1.0)?),
@@ -296,7 +304,7 @@ impl PathFn {
     pub fn operands(self) -> usize {
         match self {
             PathFn::Length => 1,
-            PathFn::Zigzag => 3,
+            PathFn::Zigzag | PathFn::Morph(_) => 3,
             _ => 2,
         }
     }

@@ -757,6 +757,19 @@
     const f = "inflate|" + join + "|" + (join === "miter" ? limit : "");
     return pathOp("inflatePath", f, [path, distance]);
   };
+  // `morph(from, to, progress, { samples })`: any two paths, see `path/edit.rs`.
+  const morph = (from, to, progress, options) => {
+    const o = options ?? {};
+    if (keys(o).some((k) => k !== "samples")) {
+      throw new TypeError("morph(from, to, progress, { samples }) takes samples");
+    }
+    const samples = o.samples instanceof T ? exact(o.samples, "morph", site()) : o.samples;
+    if (samples !== undefined && !(Number.isInteger(samples) && samples >= 2 && samples <= 4096)) {
+      throw new TypeError("morph samples must be a whole number, 2 to 4096");
+    }
+    if (typeof val(to) !== "string") throw new TypeError("morph takes two paths and a progress");
+    return pathOp("morph", "morph|" + (samples ?? ""), [from, to, progress]);
+  };
   // `pathBoolean(a, b, op)` of two filled shapes.
   const pathBoolean = (a, b, op) => {
     op = op instanceof T ? exact(op, "pathBoolean", site()) : op;
@@ -1514,6 +1527,7 @@
     twist,
     inflatePath,
     pathBoolean,
+    morph,
     zigzag,
     formatNumber,
     formatPercent,
