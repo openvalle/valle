@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Made in an editor, which leaves things like this behind. -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="120" height="80" viewBox="0 0 240 160">
+  <title>A scene</title>
+  <desc>Hills under a sun</desc>
+  <metadata>made by hand</metadata>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#42a5f5" />
+      <stop offset="1" style="stop-color:#e3f2fd;stop-opacity:0.8" />
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff59d" />
+      <stop offset="1" stop-color="#fb8c00" />
+    </radialGradient>
+    <clipPath id="frame">
+      <rect width="240" height="160" rx="16" />
+    </clipPath>
+    <mask id="fade">
+      <rect width="240" height="160" fill="#fff" />
+      <circle cx="60" cy="110" r="30" fill="#404040" />
+    </mask>
+    <symbol id="tree" viewBox="0 0 20 30">
+      <polygon points="10,0 20,22 0,22" fill="#2e7d32" />
+      <rect x="8" y="22" width="4" height="8" fill="#5d4037" />
+    </symbol>
+    <marker id="dot" markerWidth="4" markerHeight="4" refX="2" refY="2">
+      <circle cx="2" cy="2" r="2" fill="#e53935" />
+    </marker>
+  </defs>
+  <g clip-path="url(#frame)">
+    <rect width="240" height="160" fill="url(#sky)" />
+    <circle cx="180" cy="50" r="28" fill="url(#glow)" />
+    <g fill="#66bb6a" mask="url(#fade)">
+      <path d="M0 120 Q60 70 120 120 T240 110 V160 H0 Z" />
+      <path style="fill:#388e3c;opacity:0.8" d="M0 140 Q80 100 160 140 T240 130 V160 H0 Z" />
+    </g>
+    <use xlink:href="#tree" x="30" y="84" width="24" height="36" />
+    <use href="#tree" x="96" y="92" width="16" height="24" opacity="0.7" />
+    <polyline points="130,30 150,20 170,34" fill="none" stroke="#263238" stroke-width="2" marker-mid="url(#dot)" marker-end="url(#dot)" />
+    <image x="8" y="8" width="48" height="36" image-rendering="pixelated" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAYAAAD+Bd/7AAAAWklEQVR42mN4amn633mB+3+5jqf/QYCBgeH/3xum//tUVv1nWHOQgQGP5H+gZgYGJEkHNEmQyUAt2HXCrGVgwCMJ0QuUbABKNgAlG4CSDUDJBqBkA1CyAaQbAFcfbK/9DMaBAAAAAElFTkSuQmCC" />
+  </g>
+</svg>

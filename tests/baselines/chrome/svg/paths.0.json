@@ -1,0 +1,42 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"/fonts/NotoSans-Variable.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 360px; height: 240px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"display: flex; flex-wrap: wrap; gap: 8px; padding: 8px;\"><svg data-n=\"1\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"2\" fill=\"#90caf9\" stroke=\"#0d47a1\" stroke-width=\"1.5\" d=\"M8 8 L24 8 H40 V24 L56 24 Q72 24 72 40 C72 52 48 52 40 52 A8 8 0 0 1 24 52 Z\"></path></svg><svg data-n=\"3\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"4\" fill=\"#90caf9\" stroke=\"#0d47a1\" stroke-width=\"1.5\" d=\"m8 8 l16 0 h16 v16 l16 0 q16 0 16 16 c0 12-24 12-32 12 a8 8 0 0 1-16 0 z\"></path></svg><svg data-n=\"5\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"6\" fill=\"none\" stroke=\"#e53935\" stroke-width=\"1.5\" d=\"M8 50 20 10 32 50 44 10 56 50 68 10\"></path></svg><svg data-n=\"7\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"8\" fill=\"none\" stroke=\"#e53935\" stroke-width=\"1.5\" d=\"M.5.5l10 10.5-.5 10.25 8-3 8.5.5.25 20h10v-8.5.5\"></path></svg><svg data-n=\"9\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"10\" fill=\"none\" stroke=\"#e53935\" stroke-width=\"1.5\" d=\"M20 40 A20 14 0 0 0 60 20\"></path><path data-n=\"11\" fill=\"none\" stroke=\"#1e88e5\" stroke-width=\"1.5\" d=\"M20 40 A20 14 0 0 1 60 20\"></path><path data-n=\"12\" fill=\"none\" stroke=\"#43a047\" stroke-width=\"1.5\" d=\"M20 40 A20 14 0 1 0 60 20\"></path><path data-n=\"13\" fill=\"none\" stroke=\"#fb8c00\" stroke-width=\"1.5\" d=\"M20 40 A20 14 0 1 1 60 20\"></path></svg><svg data-n=\"14\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"15\" fill=\"none\" stroke=\"#e53935\" stroke-width=\"1.5\" d=\"M10 30a15 15 0 0130 0a15 15 0 1030 0\"></path></svg><svg data-n=\"16\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"17\" fill=\"none\" stroke=\"#e53935\" stroke-width=\"1.5\" d=\"M8 30 C20 4 30 4 40 30 S60 56 72 30\"></path><path data-n=\"18\" fill=\"none\" stroke=\"#1e88e5\" stroke-width=\"1.5\" d=\"M8 50 Q24 20 40 50 T72 50\"></path><path data-n=\"19\" fill=\"none\" stroke=\"#43a047\" stroke-width=\"1.5\" d=\"M8 10 S20 30 40 10 T72 10\"></path></svg><svg data-n=\"20\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"21\" fill=\"#90caf9\" stroke=\"#0d47a1\" stroke-width=\"1.5\" d=\"M8 8 H36 V30 H8 Z L24 52 H48 Z M56 8 H72 V52 H56 Z\"></path></svg><svg data-n=\"22\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"23\" fill=\"#90caf9\" stroke=\"#0d47a1\" stroke-width=\"1.5\" d=\"M8 8 H72 V52 H8 Z M24 20 H56 V40 H24 Z\"></path></svg><svg data-n=\"24\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"25\" fill=\"#90caf9\" stroke=\"#0d47a1\" stroke-width=\"1.5\" fill-rule=\"evenodd\" d=\"M8 8 H72 V52 H8 Z M24 20 H56 V40 H24 Z\"></path></svg><svg data-n=\"26\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"27\" fill=\"#90caf9\" stroke=\"#0d47a1\" stroke-width=\"1.5\" d=\"M8 8 H72 V52 H8 Z M24 20 V40 H56 V20 Z\"></path></svg><svg data-n=\"28\" width=\"80\" height=\"60\" style=\"display: block; background: #eceff1;\"><path data-n=\"29\" fill=\"none\" stroke=\"#e53935\" stroke-width=\"1.5\" d=\"M10 30 A4 4 0 0 1 70 30\"></path><path data-n=\"30\" fill=\"none\" stroke=\"#1e88e5\" stroke-width=\"1.5\" d=\"M10 50 A0 10 0 0 1 70 50\"></path><path data-n=\"31\" fill=\"none\" stroke=\"#43a047\" stroke-width=\"1.5\" d=\"M10 10 A40 20 30 0 1 70 20\"></path></svg></div></div>\n",
+ "boxes": [
+  [0,0,360,212],
+  [8,8,80,60],
+  [16,16,64,52],
+  [96,8,80,60],
+  [104,16,64,52],
+  [184,8,80,60],
+  [192,18,60,40],
+  [272,8,80,60],
+  [272.5,8.5,36.25,38.25],
+  [8,76,80,60],
+  [28,96,44.57807159423828,27.20465087890625],
+  [23.421924591064453,88.79534912109375,44.57807540893555,27.20465087890625],
+  [28,96,44.57807159423828,27.20465087890625],
+  [23.421924591064453,88.79534912109375,44.57807540893555,27.20465087890625],
+  [96,76,80,60],
+  [106,91,60,30],
+  [184,76,80,60],
+  [192,86.5,64,39],
+  [192,111,64,30],
+  [192,86,64,8.888885498046875],
+  [272,76,80,60],
+  [280,84,64,44],
+  [8,144,80,60],
+  [16,152,64,44],
+  [96,144,80,60],
+  [104,152,64,44],
+  [184,144,80,60],
+  [192,152,64,44],
+  [272,144,80,60],
+  [282,144,60,30],
+  [282,194,60,0],
+  [282,144.3453369140625,60,19.6546630859375]
+ ],
+ "lines": {},
+ "fonts": {
+
+ }
+}
