@@ -2310,6 +2310,7 @@ name = "valle-cli"
 version = "0.1.0"
 dependencies = [
  "png",
+ "ring",
  "serde_json",
  "valle-engine",
  "valle-native",

@@ -2,9 +2,11 @@
 //! arguments and prints the result, as text or, with `--json`, as the JSON itself.
 
 mod args;
+mod http;
 mod motion;
 mod picture;
 mod project;
+mod studio;
 mod timeline;
 mod video;
 
@@ -64,10 +66,18 @@ usage: valle <command> [options]
   project render [timeline] [-o <out>] render, by default a video into renders/; a full render
                                        saves a snapshot and records what it read and made
 
+  motion studio <scene.tsx>            open Studio in the browser on the scene, the timeline or
+  timeline studio <edit.timeline.json> the project, served from 127.0.0.1 until stopped
+  project studio [folder]
+
+options of studio:
+  --port <n>                  the port to listen on (0, the default: one the system picks)
+  --web-assets-dir <folder>   where Studio and the SDK are built (web/ of the source)
+
 options of every command:
   --json                      print the result as JSON
   --events                    print what it does as it goes, a line of JSON each, then the
-                              result as JSON
+                              result as JSON; studio says `ready` with its address and stays
 
 options of project:
   -C <folder>                 the project there, not the one the current folder is in
@@ -182,6 +192,12 @@ fn run(words: &[String]) -> (Result<Value, Failure>, bool) {
     let json = events || words.iter().any(|w| w == "--json");
     let result = (|| {
         let usage = || Failure::new("usage", "no such command").hint(USAGE.trim_end());
+        if let [group, command, rest @ ..] = words
+            && command == "studio"
+            && ["motion", "timeline", "project"].contains(&group.as_str())
+        {
+            return studio::run(group, rest, events);
+        }
         if let [group, command, rest @ ..] = words
             && group == "project"
         {

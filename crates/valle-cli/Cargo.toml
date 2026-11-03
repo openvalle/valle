@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 png.workspace = true
+ring.workspace = true
 serde_json.workspace = true
 valle-engine = { path = "../valle-engine" }
 valle-native = { path = "../valle-native" }
