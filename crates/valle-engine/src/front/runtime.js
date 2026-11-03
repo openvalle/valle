@@ -457,8 +457,8 @@
     return {
       seconds: G.seconds,
       progress: G.progress,
-      clipSeconds: G.seconds,
-      clipProgress: G.progress,
+      clipSeconds: G.clip[0],
+      clipProgress: G.clip[1],
     };
   }
 
@@ -1189,6 +1189,9 @@
         const here = c.site >= 0 ? c.site : at;
         if (c.type === __F) return c.children.forEach((x) => add(x, here));
         if (typeof c.type === "function") return expand(c, here, (x) => add(x, here));
+        if (c.type === "TimeScope") {
+          return scoped(c.props, here, () => c.children.forEach((x) => add(x, here)));
+        }
         if ((INTRINSIC[c.type] && c.type !== "Span") || c.type in SVG) {
           fail(here, "<" + c.type + "> cannot be inside <" + tag + ">: it holds text and <Span>s");
         }
@@ -1366,6 +1369,32 @@
     out.push(node);
   }
 
+  // Runs `f` under a <TimeScope>'s clock: `(seconds − offset) × rate` in ticks, rounded down, and
+  // `progress` from it. Like a component, it adds no element and a key is a segment of key paths.
+  function scoped(props, at, f) {
+    for (const k of keys(props)) {
+      if (k !== "key" && k !== "offset" && k !== "rate") {
+        fail(at, "<TimeScope> has no prop " + k + "; it takes offset and rate");
+      }
+    }
+    const offset = fixed(props.offset ?? 0, "offset", at);
+    const rate = fixed(props.rate ?? 1, "rate", at);
+    if (!Number.isFinite(offset) || !Number.isFinite(rate)) {
+      fail(at, "<TimeScope> offset (seconds) and rate are numbers");
+    }
+    const key = props.key === undefined ? null : String(fixed(props.key, "key", at));
+    const outer = [G.seconds, G.progress];
+    G.seconds = mk("scope|" + offset + "|" + rate, [G.seconds]);
+    G.progress = clamp(__b("/", G.seconds, G.composition.duration), 0, 1);
+    if (key !== null) G.keys.push(key);
+    try {
+      f();
+    } finally {
+      if (key !== null) G.keys.pop();
+      [G.seconds, G.progress] = outer;
+    }
+  }
+
   // Appends the nodes `x` renders to `out`; `at` is the enclosing element's site.
   function render(x, out, at) {
     if (x === null || x === undefined || typeof x === "boolean") return;
@@ -1379,6 +1408,9 @@
     const here = x.site >= 0 ? x.site : at;
     if (type === __F) return children.forEach((c) => render(c, out, here));
     if (typeof type === "function") return expand(x, here, (y) => render(y, out, here));
+    if (type === "TimeScope") {
+      return scoped(props, here, () => children.forEach((c) => render(c, out, here)));
+    }
     element(type, props, children, out, here);
   }
 
@@ -1523,6 +1555,8 @@
       seconds: new T("seconds", [], seconds, false),
       progress: new T("progress", [], progress, false),
     };
+    // A TimeScope changes the clock under it, not the clip's.
+    G.clip = [G.seconds, G.progress];
     instances = new Map();
     try {
       const scene = __import(entry);
@@ -1817,6 +1851,7 @@
     Span: "Span",
     Mask: "Mask",
     Image: "Image",
+    TimeScope: "TimeScope",
     resource,
     number: propKind("number"),
     string: propKind("string"),

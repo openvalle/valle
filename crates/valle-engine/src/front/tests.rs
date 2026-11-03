@@ -294,6 +294,62 @@ fn time_flows_through_expressions() {
 }
 
 #[test]
+fn time_scopes_give_their_children_a_clock() {
+    big_stack(|| {
+        let mut f = scene(indoc! {"
+                function Clock({ label }) {
+                  const { seconds, progress, clipSeconds } = useCurrentTime();
+                  return <Text>{`${label} ${seconds} ${progress} ${clipSeconds}`}</Text>;
+                }
+                function Late() {
+                  return <Span>{useCurrentTime().seconds}</Span>;
+                }
+                export default function Scene() {
+                  return (
+                    <View>
+                      <Clock label=\"root\" />
+                      <TimeScope offset={1} rate={2}>
+                        <Clock label=\"a\" />
+                        <TimeScope key=\"b\" offset={0.5} rate={-1}>
+                          <Clock label=\"b\" />
+                        </TimeScope>
+                      </TimeScope>
+                      <TimeScope rate={0.25}>
+                        <Clock label=\"c\" />
+                      </TimeScope>
+                      <Text>
+                        at <TimeScope offset={1}><Late /></TimeScope>
+                      </Text>
+                    </View>
+                  );
+                }
+            "});
+        assert_eq!(
+            texts(&at(&mut f, "2")),
+            [
+                "root 2 0.5 2".to_string(),
+                "a 2 0.5 2".into(),
+                "b -1.5 0 2".into(),
+                "c 0.5 0.125 2".into(),
+                "at 1".into(),
+            ]
+        );
+        assert_eq!(texts(&at(&mut f, "3"))[1], "a 4 1 3");
+        assert_eq!(f.traces(), 1);
+        for (body, want) in [
+            ("<TimeScope speed={2} />", "no prop speed"),
+            ("<TimeScope rate=\"2\" />", "are numbers"),
+            ("<TimeScope rate={1e19} />", "finite number between"),
+        ] {
+            let e = error(&format!(
+                "export default function Scene() {{ return {body}; }}"
+            ));
+            assert!(e.contains(want), "{body}: {e}");
+        }
+    });
+}
+
+#[test]
 fn branches_become_variants() {
     big_stack(|| {
         let mut f = scene(indoc! {"

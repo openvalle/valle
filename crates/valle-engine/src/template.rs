@@ -12,6 +12,7 @@ use crate::noise::Wiggle;
 use crate::path::edit::Join;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
+use crate::time::{Speed, Tick};
 
 use crate::js::{self, MathFn};
 
@@ -104,6 +105,8 @@ pub enum Op {
     Stage(u32, Stage),
     /// The input time held still from the first time to the second, and later less that span.
     Freeze(u32, [f64; 2]),
+    /// A `TimeScope`'s clock from its parent's, in ticks: `(t − offset) × rate`, rounded down.
+    Scope(u32, Tick, Speed),
     /// A field of a simulation at the input time.
     Table(u32, Rc<Table>),
     Wiggle(u32, Wiggle),
@@ -145,6 +148,7 @@ impl Op {
             Op::Neg(a)
             | Op::Stage(a, _)
             | Op::Freeze(a, _)
+            | Op::Scope(a, ..)
             | Op::Table(a, _)
             | Op::Wiggle(a, _)
             | Op::Format(a, _)

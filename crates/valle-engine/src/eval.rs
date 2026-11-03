@@ -11,6 +11,7 @@ use crate::style::{color, css};
 use crate::template::{
     Axis, Bin, Boolean, Cmp, Error, Interp, Measure, Op, Part, PathFn, Program, V,
 };
+use crate::time::Tick;
 
 /// The clock a frame is evaluated at.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -123,6 +124,12 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             t if t < *to => *from,
             t => t - (to - from),
         }),
+        Op::Scope(input, offset, speed) => {
+            let t = Tick::from_seconds(num(input))?;
+            let t = (t.0.checked_sub(offset.0))
+                .ok_or("a TimeScope's time is outside the supported range of about ±420 days")?;
+            V::Num(speed.apply(Tick(t))?.seconds())
+        }
         Op::Spring {
             input,
             spring,

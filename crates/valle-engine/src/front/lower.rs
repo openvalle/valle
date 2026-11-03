@@ -17,6 +17,7 @@ use crate::template::{
     Bin, Cmp, Error, Guard, Interp, Kind, Measure, Node, Op, Part, PathFn, Piece, Program, Prop,
     Stage, Table, Tag, Template, V, Want,
 };
+use crate::time::{Speed, Tick};
 
 /// An operand of an op by name: an earlier expression, or literal text of a template.
 pub enum Arg {
@@ -88,6 +89,15 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
             }
             _ => Err(format!("freeze {spec}")),
         };
+    }
+    if let Some(spec) = name.strip_prefix("scope|") {
+        let (offset, rate) = spec
+            .split_once('|')
+            .ok_or_else(|| format!("scope {spec}"))?;
+        let number = |s: &str| s.parse::<f64>().map_err(|_| format!("scope {spec}"));
+        let offset = Tick::from_seconds(number(offset)?)?;
+        let rate = Speed::from_f64(number(rate)?)?;
+        return Ok(Op::Scope(fixed(1)?[0], offset, rate));
     }
     if let Some(spec) = name.strip_prefix("progress|") {
         return Ok(Op::Stage(fixed(1)?[0], Stage::parse(spec)?));

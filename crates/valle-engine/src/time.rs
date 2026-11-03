@@ -187,6 +187,38 @@ impl Rate {
     }
 }
 
+/// A playback rate, as a `TimeScope` takes it: a reduced fraction of any sign, read through its
+/// shortest decimal, so 1.1 is exactly 11/10. 0 holds the time still; below 0 it runs backwards.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Speed {
+    num: i64,
+    den: i64,
+}
+
+impl Speed {
+    pub fn from_f64(rate: f64) -> Result<Speed, String> {
+        let bad = || format!("rate {rate} is not a finite number between -10¹⁸ and 10¹⁸");
+        if !rate.is_finite() {
+            return Err(bad());
+        }
+        // Rust prints an f64 as its shortest decimal, without an exponent.
+        let (num, den) = Decimal::parse(&rate.to_string())
+            .and_then(|d| d.fraction())
+            .ok_or_else(bad)?;
+        // Terms up to 10¹⁸ keep `t × num` inside i128.
+        if num.abs() > 1_000_000_000_000_000_000 || den > 1_000_000_000_000_000_000 {
+            return Err(bad());
+        }
+        Ok(Speed { num, den })
+    }
+
+    /// `t × rate`, rounded down.
+    pub fn apply(self, t: Tick) -> Result<Tick, String> {
+        let ticks = (i128::from(t.0) * i128::from(self.num)).div_euclid(i128::from(self.den));
+        Tick::from_i128(ticks).ok_or_else(|| out_of_range(&(ticks / TPS).to_string()))
+    }
+}
+
 impl fmt::Display for Rate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self.den == 1 {
@@ -265,10 +297,10 @@ impl Decimal {
         Some(if self.negative { -value } else { value })
     }
 
-    /// The value as a reduced fraction, if it is positive and fits i64.
+    /// The value as a reduced fraction, its sign on the numerator, if it fits i64.
     fn fraction(&self) -> Option<(i64, i64)> {
-        if self.negative || self.digits == 0 {
-            return None;
+        if self.digits == 0 {
+            return Some((0, 1));
         }
         let (num, den) = if self.exponent >= 0 {
             (
@@ -283,7 +315,8 @@ impl Decimal {
             )
         };
         let g = gcd_i128(num, den);
-        Some((i64::try_from(num / g).ok()?, i64::try_from(den / g).ok()?))
+        let num = if self.negative { -num / g } else { num / g };
+        Some((i64::try_from(num).ok()?, i64::try_from(den / g).ok()?))
     }
 }
 
@@ -418,6 +451,22 @@ mod tests {
             assert!(Rate::parse(bad).is_err(), "{bad:?}");
         }
         assert!(Rate::from_f64(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn speeds_scale_exactly_and_round_down() {
+        let speed = |r| Speed::from_f64(r).unwrap();
+        assert_eq!(speed(1.1), Speed { num: 11, den: 10 });
+        assert_eq!(speed(-0.5), Speed { num: -1, den: 2 });
+        assert_eq!(speed(0.0), Speed { num: 0, den: 1 });
+        assert_eq!(speed(1.1).apply(seconds("3")), Ok(seconds("3.3")));
+        assert_eq!(speed(1.0 / 3.0).apply(Tick(2)), Ok(Tick(0)));
+        assert_eq!(speed(-0.5).apply(Tick(3)), Ok(Tick(-2)));
+        assert_eq!(speed(0.0).apply(seconds("7")), Ok(Tick(0)));
+        assert!(Speed::from_f64(f64::NAN).is_err());
+        assert!(Speed::from_f64(1e19).is_err());
+        assert!(Speed::from_f64(1e-19).is_err());
+        assert!(speed(1e9).apply(seconds("1000000")).is_err());
     }
 
     #[test]
