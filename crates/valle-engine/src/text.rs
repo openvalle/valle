@@ -17,7 +17,8 @@ use std::rc::Rc;
 
 pub use parley::fontique::Blob;
 use parley::fontique::{
-    Collection, CollectionOptions, FamilyId, FontInfoOverride, GenericFamily, SourceCache,
+    Collection, CollectionOptions, FallbackKey, FamilyId, FontInfoOverride, GenericFamily, Script,
+    SourceCache,
 };
 use parley::setting::Tag;
 use parley::{
@@ -392,6 +393,22 @@ impl Text {
         Ok(())
     }
 
+    /// Has the host give the built-in fonts `text` falls back to for its scripts, and makes
+    /// each the fallback of its scripts.
+    fn give_fallbacks(&mut self, text: &str) -> Result<(), Error> {
+        for &(font, scripts, has) in &FALLBACKS {
+            if self.given[font].is_some() || !text.chars().any(has) {
+                continue;
+            }
+            let family = self.built_in(font)?;
+            for &script in scripts {
+                let key = FallbackKey::new(Script::from_bytes(script), None);
+                (self.fonts.collection).set_fallbacks(key, [family].into_iter());
+            }
+        }
+        Ok(())
+    }
+
     /// Adds the faces in `data`, the file at `path`, to the family of font resource `name`; no
     /// two files of a family have a face of the same weight, style and width.
     pub fn add_font(&mut self, name: &str, path: &str, data: Blob<u8>) -> Result<(), Error> {
@@ -757,6 +774,7 @@ impl Text {
     /// `text` shaped in `font` alone, on one line.
     fn alone(&mut self, text: &str, font: &Font) -> Result<parley::Layout<u32>, Error> {
         self.give(font)?;
+        self.give_fallbacks(text)?;
         let families = families(&font.family, &self.named)?;
         let mut builder = (self.layouts).ranged_builder(&mut self.fonts, text, 1.0, false);
         let family = FontFamily::List(Cow::Borrowed(&families));
@@ -770,6 +788,7 @@ impl Text {
         builder.push_default(StyleProperty::FontVariations(variations(font)));
         let mut layout = builder.build(text);
         layout.break_all_lines(None);
+        covered(&layout, text)?;
         Ok(layout)
     }
 
@@ -816,6 +835,7 @@ impl Text {
             let pieces = (content.pieces.iter())
                 .map(|p| (p.text.as_ref(), p.font.collapse, p.font.transform));
             let (string, ranges) = prepare(pieces)?;
+            self.give_fallbacks(&string)?;
             let families = (content.pieces.iter())
                 .map(|p| families(&p.font.family, &self.named))
                 .collect::<Result<Vec<_>, _>>()?;
@@ -872,7 +892,9 @@ impl Text {
                 }
                 builder.push(StyleProperty::Brush(k as u32), range);
             }
-            let layout = builder.build(&string);
+            let mut layout = builder.build(&string);
+            layout.break_all_lines(None);
+            covered(&layout, &string)?;
             let paragraph = Paragraph {
                 layout,
                 empty: string.is_empty(),
@@ -1032,6 +1054,65 @@ fn style(font: &Font) -> parley::FontStyle {
 fn variations(font: &Font) -> FontVariations<'static> {
     let axes = (font.variations.iter()).map(|v| FontVariation::new(Tag::new(&v.tag), v.value));
     FontVariations::List(Cow::Owned(axes.collect()))
+}
+
+/// A built-in font text falls back to: its index in `BUILT_IN`, the scripts it is the fallback
+/// of, and whether a character needs it.
+pub type Fallback = (usize, &'static [[u8; 4]], fn(char) -> bool);
+
+/// The built-in fonts text falls back to when its fonts do not have a character: by the scripts
+/// they are the fallback of, and the characters that need them. Noto Sans SC has Han, kana and
+/// bopomofo, but no Hangul.
+pub const FALLBACKS: [Fallback; 2] = [
+    (5, &[*b"Hani", *b"Hira", *b"Kana", *b"Bopo"], |c| {
+        matches!(c,
+            '\u{2E80}'..='\u{2FFF}' | '\u{3000}'..='\u{312F}' | '\u{31A0}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' | '\u{FE30}'..='\u{FE4F}'
+            | '\u{FF00}'..='\u{FFEF}' | '\u{20000}'..='\u{3FFFF}')
+    }),
+    (6, &[*b"Hang"], |c| {
+        matches!(c,
+            '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{A960}'..='\u{A97F}'
+            | '\u{AC00}'..='\u{D7FF}')
+    }),
+];
+
+/// Fails on the first character of `text` that `layout` has no glyph for, as no font has it.
+fn covered(layout: &parley::Layout<u32>, text: &str) -> Result<(), Error> {
+    for line in layout.lines() {
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(glyphs) = item else {
+                continue;
+            };
+            for cluster in glyphs.run().clusters() {
+                if !cluster.glyphs().any(|g| g.id == 0) {
+                    continue;
+                }
+                let shown = text[cluster.text_range()].chars().find(|&c| !invisible(c));
+                if let Some(c) = shown {
+                    return Err(format!(
+                        "{c:?} (U+{:04X}): no font has it; declare a font resource that does, \
+                         such as one for Thai or Arabic text",
+                        c as u32
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether `c` shows nothing of its own: white space, a control, or a default ignorable code
+/// point, such as a joiner or a variation selector.
+fn invisible(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_control()
+        || matches!(c,
+            '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{115F}' | '\u{1160}' | '\u{17B4}'
+            | '\u{17B5}' | '\u{180B}'..='\u{180F}' | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{FFA0}' | '\u{FFF0}'..='\u{FFF8}'
+            | '\u{1BCA0}'..='\u{1BCA3}' | '\u{1D173}'..='\u{1D17A}' | '\u{E0000}'..='\u{E0FFF}')
 }
 
 /// `list` as parley takes it: built-in families, and the font resources of `named`, as CSS

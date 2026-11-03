@@ -267,6 +267,31 @@ fn a_collection_gives_its_first_face() {
 }
 
 #[test]
+fn text_falls_back_to_the_fonts_of_its_scripts() {
+    let mut t = text();
+    let mut faces = |s: &str| {
+        let lines = t.lines(&plain(s, &font(16.0)), 1000.0).unwrap();
+        let faces = lines
+            .glyphs
+            .iter()
+            .map(|g| t.faces()[g.face as usize].data.id());
+        faces.collect::<Vec<_>>()
+    };
+    let sans = faces("A")[0];
+    // Han, kana and bopomofo in Noto Sans SC; Hangul in Noto Sans KR.
+    let [han, kana, bopomofo, hangul] = ["视", "か", "ㄅ", "한"].map(|s| faces(s)[0]);
+    assert!(han != sans && hangul != sans && hangul != han);
+    assert_eq!([kana, bopomofo], [han, han]);
+    // Each character in its own: Latin stays in sans-serif.
+    assert_eq!(faces("A视"), [sans, han]);
+    assert_eq!(
+        t.measure(&plain("ไทย", &font(16.0)), None).unwrap_err(),
+        "'ไ' (U+0E44): no font has it; declare a font resource that does, such as one for \
+         Thai or Arabic text"
+    );
+}
+
+#[test]
 fn paragraphs_are_kept_while_used() {
     let mut t = text();
     t.measure(&plain("a", &font(16.0)), None).unwrap();

@@ -13,7 +13,7 @@ use valle_engine::js;
 use valle_engine::scene::Frame;
 use valle_engine::svg;
 use valle_engine::template::{Kind, Piece, Prop, Tag, V};
-use valle_engine::text::{BUILT_IN, FontFile};
+use valle_engine::text::{BUILT_IN, FALLBACKS, FontFile};
 
 /// Style properties React DOM prints as bare numbers; it gives other numbers but 0 `px`.
 const UNITLESS: &[&str] = &[
@@ -80,6 +80,25 @@ pub fn print(
     }
     body += "</div>\n";
     let mut html = "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n".to_string();
+    // The fonts the engine falls back to, where the page's text needs them, after each list as
+    // after the engine's: sans-serif, then each by its name.
+    let mut tail = String::new();
+    for (font, _, has) in FALLBACKS {
+        if body.chars().any(has) {
+            let name = BUILT_IN[font].file.trim_end_matches(".ttf");
+            let _ = writeln!(
+                html,
+                "@font-face {{ font-family: \"{name}\"; src: url(\"{}\"); \
+                 font-weight: 100 900; }}",
+                BUILT_IN[font].file
+            );
+            let _ = write!(tail, ", \"{name}\"");
+        }
+    }
+    let canvas = format!("{SANS_SERIF}{tail}");
+    if !tail.is_empty() {
+        body = with_fallbacks(&body, &format!(", {SANS_SERIF}{tail}"));
+    }
     // The sans-serif always, as the canvas's font; the others where the page names them.
     for (i, &(_, name, upright, italic, class)) in FAMILIES.iter().enumerate() {
         // The body escapes the quotes.
@@ -118,7 +137,7 @@ pub fn print(
         "*, ::before, ::after {{ box-sizing: border-box; }}\n\
          body {{ margin: 0; }}\n\
          #canvas {{ position: relative; overflow: hidden; width: {}px; height: {}px; \
-         font-family: {SANS_SERIF}; }}\n\
+         font-family: {canvas}; }}\n\
          </style>\n",
         c.width, c.height
     );
@@ -249,6 +268,26 @@ fn value<'a>(frame: &'a Frame, prop: &'a Prop) -> &'a V {
         Prop::Const(v) => v,
         Prop::Expr(e) => &frame.values[*e as usize],
     }
+}
+
+/// `body` with `tail` after each `font-family` list in its style attributes.
+fn with_fallbacks(body: &str, tail: &str) -> String {
+    const KEY: &str = "font-family: ";
+    let tail = escape(tail);
+    let mut out = String::new();
+    let mut rest = body;
+    while let Some(i) = rest.find(KEY) {
+        // The `;` that ends it, not one of an entity in it: the last declaration's ends the
+        // attribute.
+        let value = &rest[i..];
+        let ends = [value.find("; "), value.find(";\"")];
+        let end = i + ends.into_iter().flatten().min().unwrap_or(value.len());
+        out.push_str(&rest[..end]);
+        out.push_str(&tail);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `key: value;` as React DOM writes it, or nothing for what it leaves out.

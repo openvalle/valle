@@ -1,0 +1,16 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"NotoSansSC\"; src: url(\"NotoSansSC.ttf\"); font-weight: 100 900; }\n@font-face { font-family: \"NotoSansKR\"; src: url(\"NotoSansKR.ttf\"); font-weight: 100 900; }\n@font-face { font-family: \"Valle Sans\"; src: url(\"NotoSans.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; font-style: normal; }\n@font-face { font-family: \"Valle Sans\"; src: url(\"NotoSansItalic.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; font-style: italic; }\n@font-face { font-family: \"Valle Serif\"; src: url(\"NotoSerif.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; font-style: normal; }\n@font-face { font-family: \"Valle Serif\"; src: url(\"NotoSerifItalic.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; font-style: italic; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 160px; font-family: \"Valle Sans\", \"NotoSansSC\", \"NotoSansKR\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 8px; gap: 6px; color: #263238;\"><div data-n=\"1\" data-text style=\"font-size: 18px;\">Valle 视频编辑 かなカナ ㄅㄆ</div><div data-n=\"2\" data-text style=\"font-family: &quot;Valle Serif&quot;, &quot;Valle Sans&quot;, &quot;NotoSansSC&quot;, &quot;NotoSansKR&quot;; font-size: 18px; color: #1e88e5;\">Serif 字幕 한국어 텍스트</div><div data-n=\"3\" data-text style=\"font-size: 16px; font-weight: 700; color: #e53935;\">粗体 굵게 Bold</div></div></div>\n",
+ "boxes": [
+  [0,0,256,92],
+  [8,8,240,26],
+  [8,34,240,26],
+  [8,60,240,24]
+ ],
+ "lines": {"1":["Valle 视频编辑 かなカナ ㄅㄆ"],"2":["Serif 字幕 한국어 텍스트"],"3":["粗体 굵게 Bold"]},
+ "fonts": {
+  "1": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"18px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "2": {"color":"rgb(30, 136, 229)","fill":"rgb(30, 136, 229)","stroke":"0px","stroke_color":"rgb(30, 136, 229)","shadow":"none","size":"18px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "3": {"color":"rgb(229, 57, 53)","fill":"rgb(229, 57, 53)","stroke":"0px","stroke_color":"rgb(229, 57, 53)","shadow":"none","size":"16px","weight":"700","stretch":"100%","style":"normal","transform":"none"}
+ }
+}
