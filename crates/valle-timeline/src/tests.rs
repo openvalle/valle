@@ -149,3 +149,12 @@ fn keyframes_rise_and_ease_the_stretch_after_them() {
     );
     assert!(e.err().unwrap().contains("keyframe times rise"));
 }
+
+#[test]
+fn timecodes_are_labels_the_rate_counts() {
+    let e = parse(
+        r#"{ "canvas": { "width": 64, "height": 36, "fps": 25 }, "startTimecode": "01:00:00;00",
+             "tracks": { "visual": [{ "items": [{ "id": "a", "kind": "solid", "color": "red", "duration": 1 }] }] } }"#,
+    );
+    assert!(e.err().unwrap().starts_with("startTimecode: timecode"));
+}

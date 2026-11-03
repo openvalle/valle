@@ -10,7 +10,9 @@
 //!
 //! The engine lowers a document to a Motion scene; this crate only holds it.
 
+pub mod query;
 pub mod time;
+pub mod timecode;
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -173,6 +175,7 @@ pub struct Source {
     pub end: End,
 }
 
+#[derive(Clone)]
 pub enum SourceTime {
     /// `trimStart + clip time × rate`.
     Linear { trim: Tick, rate: Speed },
@@ -395,6 +398,16 @@ impl Document {
         };
         if let Some(mix) = &doc.mix {
             object(mix, "mix")?;
+        }
+        let fps = doc.canvas.fps.as_f64();
+        if let Some(tc) = &doc.start_timecode {
+            timecode::parse(tc, fps).map_err(|e| format!("startTimecode: {e}"))?;
+        }
+        for (alias, r) in &doc.resources {
+            if let Some(tc) = &r.timecode {
+                timecode::parse(tc, r.fps.unwrap_or(fps))
+                    .map_err(|e| format!("resources.{alias}.timecode: {e}"))?;
+            }
         }
         let tracks = object(
             o.get("tracks").ok_or("tracks: the document has none")?,

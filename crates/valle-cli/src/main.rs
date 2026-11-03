@@ -27,6 +27,17 @@ usage: valle <command> [options]
   timeline render <edit.timeline.json> -o <out>
                                        draw the timeline's frames, as motion render does, its
                                        sound mixed into a video; a .wav <out> is its sound alone
+  timeline query <edit.timeline.json> [filters]
+                                       the clips the filters pick, with their program and source
+                                       timecodes, lines, anchors and the clips anchored to them
+
+options of query (every one given holds):
+  --clip <id>                 the clip of that id
+  --track <id>                the clips of that track
+  --index <n>                 the nth clip of its track by start, from 1
+  --at <seconds|timecode>     the clips on at that time, with the source timecode there
+  --marker <name>             the clips that carry that marker, or that the timeline's is on
+  --meta <key=value>          metadata: a dotted path from the top, or a key at any depth
 
 options of motion:
   --props <json|@file>        values of the props controls.props declares
@@ -147,6 +158,7 @@ fn run(words: &[String]) -> (Result<Value, Failure>, bool) {
         match command {
             "check" => motion::check(&args),
             "render" => motion::render(&args),
+            "query" if group == "timeline" => timeline::query(&args),
             _ => Err(usage()),
         }
     })();

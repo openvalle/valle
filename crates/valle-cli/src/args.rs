@@ -25,7 +25,18 @@ pub enum Frames {
 }
 
 /// Options that take a value, beyond those read here.
-const VALUED: [&str; 4] = ["--encoder", "--decoder", "--codec", "--bitrate"];
+const VALUED: [&str; 10] = [
+    "--encoder",
+    "--decoder",
+    "--codec",
+    "--bitrate",
+    "--clip",
+    "--track",
+    "--index",
+    "--at",
+    "--marker",
+    "--meta",
+];
 
 impl Args {
     pub fn parse(words: &[String]) -> Result<Args, Failure> {
