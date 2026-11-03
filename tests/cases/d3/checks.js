@@ -211,4 +211,35 @@ export const checks = {
       pie()([0, 0]),
     ];
   },
+  stack: () => {
+    const rows = [
+      { month: 1, apples: 10, pears: 5, plums: 2 },
+      { month: 2, apples: 7, pears: NaN, plums: 4 },
+      { month: 3, apples: 12, pears: 8, plums: 0 },
+    ];
+    const layers = (s) =>
+      s.map((series) => ({
+        key: series.key,
+        index: series.index,
+        points: series.map((p) => [p[0], p[1], p.data.month]),
+      }));
+    return [
+      layers(stack().keys(["apples", "pears", "plums"])(rows)),
+      layers(stack().keys(["apples", "pears", "plums"]).order([2, 0, 1])(rows)),
+      layers(
+        stack()
+          .keys(["a", "b"])
+          .value((d, key) => d[key] * 2)([
+          { a: 1, b: 2 },
+          { a: 3, b: 4 },
+        ]),
+      ),
+      layers(
+        stack()
+          .keys((data) => Object.keys(data[0]))
+          .offset(null)([{ x: 1, y: 2 }]),
+      ),
+      layers(stack()(rows)),
+    ];
+  },
 };

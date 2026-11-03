@@ -1186,3 +1186,66 @@ export function pie() {
   shape.padAngle = (...a) => (a.length ? ((padAngle = numberOr(a[0])), shape) : padAngle);
   return shape;
 }
+
+// Stacks the series in `order` on each other, from 0; a missing value keeps the one below.
+function stackOffsetNone(series, order) {
+  const n = series.length;
+  if (!(n > 1)) return;
+  let s1 = series[order[0]];
+  const m = s1.length;
+  for (let i = 1; i < n; ++i) {
+    const s0 = s1;
+    s1 = series[order[i]];
+    for (let j = 0; j < m; ++j) {
+      const below = s0[j][1];
+      s1[j][0] = traced(below) || !isNaN(below) ? below : s0[j][0];
+      s1[j][1] += s1[j][0];
+    }
+  }
+}
+
+const stackOrderNone = (series) => series.map((_, i) => i);
+
+export function stack() {
+  let keys = shapeConstant([]);
+  let order = stackOrderNone;
+  let offset = stackOffsetNone;
+  let value = (d, key) => d[key];
+
+  function shape(data, ...rest) {
+    const series = Array.from(keys(data, ...rest), (key) => {
+      const s = [];
+      s.key = key;
+      return s;
+    });
+    const n = series.length;
+    let j = -1;
+    for (const d of data) {
+      ++j;
+      for (let i = 0; i < n; ++i) {
+        const point = [0, +value(d, series[i].key, j, data)];
+        point.data = d;
+        series[i][j] = point;
+      }
+    }
+    const oz = asArray(order(series));
+    for (let i = 0; i < n; ++i) series[oz[i]].index = i;
+    offset(series, oz);
+    return series;
+  }
+
+  shape.keys = (...a) =>
+    a.length
+      ? ((keys = typeof a[0] === "function" ? a[0] : shapeConstant(Array.from(a[0]))), shape)
+      : keys;
+  shape.value = (...a) => (a.length ? ((value = numberOr(a[0])), shape) : value);
+  shape.order = (...a) => {
+    if (!a.length) return order;
+    const o = a[0];
+    order = o == null ? stackOrderNone : typeof o === "function" ? o : shapeConstant(Array.from(o));
+    return shape;
+  };
+  shape.offset = (...a) =>
+    a.length ? ((offset = a[0] == null ? stackOffsetNone : a[0]), shape) : offset;
+  return shape;
+}

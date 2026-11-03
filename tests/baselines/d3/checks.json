@@ -1,6 +1,6 @@
 {
   "d3": "7.9.0",
-  "source": "// Calls of d3's functions whose results the built-in charts must give: the case d3/checks runs\n// them on both (see crates/valle-engine/tests/cases/d3.rs).\n\nexport const checks = {\n  extent: () => [\n    extent([3, 1, null, 7, NaN, 2]),\n    extent([]),\n    extent([\"b\", \"a\", \"c\"]),\n    extent([{ v: 4 }, { v: -2 }], (d) => d.v),\n  ],\n  ticks: () => [\n    ticks(0, 1, 10),\n    ticks(0, 100, 5),\n    ticks(-3.7, 12.1, 7),\n    ticks(1, 0, 4),\n    ticks(0.001, 0.0093, 6),\n    ticks(5, 5, 3),\n    ticks(0, 1e6, 3),\n    ticks(0, 10, 0),\n  ],\n  tickIncrement: () => [tickIncrement(0, 1, 10), tickIncrement(0, 1000, 7)],\n  tickStep: () => [tickStep(0, 1, 10), tickStep(10, 0, 3)],\n  nice: () => [nice(0.13, 9.87, 10), nice(-41, 997, 5), nice(5, 5, 3), nice(12, 1, 4)],\n  scaleLinear: () => {\n    const x = scaleLinear().domain([0, 100]).range([0, 640]);\n    const y = scaleLinear([0, 10], [300, 0]);\n    const piecewise = scaleLinear().domain([-1, 0, 1]).range([0, 50, 200]);\n    const clamped = scaleLinear().domain([10, 20]).range([0, 1]).clamp(true);\n    const rounded = scaleLinear().domain([0, 3]).rangeRound([0, 100]);\n    const nice = scaleLinear().domain([0.13, 97.6]).nice();\n    const descending = scaleLinear().domain([5, -5]).range([0, 10]);\n    return [\n      [x(0), x(37.5), x(100), x(-20), x(120), x.invert(320), x(null), x(\"12\")],\n      [y(2.5), y.invert(75), y.ticks(), y.ticks(4), y.domain(), y.range()],\n      [piecewise(-0.5), piecewise(0.25), piecewise(2), piecewise.invert(125)],\n      [clamped(5), clamped(15), clamped(25), clamped.invert(2), clamped.clamp()],\n      [rounded(1), rounded(2), nice.domain(), nice.ticks(5), descending(2.5), descending.ticks(3)],\n      scaleLinear().domain([0, 7]).nice(4).domain(),\n      scaleLinear().domain([3, 3]).range([0, 10])(3),\n      scaleLinear().unknown(-1)(NaN),\n      x.copy().domain([0, 10])(5),\n    ];\n  },\n  scaleLinearColors: () => {\n    const c = scaleLinear().domain([0, 1]).range([\"red\", \"steelblue\"]);\n    const alpha = scaleLinear().domain([0, 1]).range([\"rgba(0, 0, 0, 0)\", \"#ff8000\"]);\n    const hsl = scaleLinear().domain([0, 1]).range([\"hsl(120, 50%, 50%)\", \"white\"]);\n    const text = scaleLinear().domain([0, 1]).range([\"0px 4px\", \"10px 8px\"]);\n    const named = scaleLinear().domain([0, 1]).range([\"transparent\", \"blue\"]);\n    return [c(0), c(0.3), c(1), alpha(0.25), hsl(0.5), text(0.5), named(0.5), c(1.5)];\n  },\n  scaleBand: () => {\n    const x = scaleBand().domain([\"a\", \"b\", \"c\", \"d\"]).range([0, 400]);\n    const padded = scaleBand([\"a\", \"b\", \"c\"], [0, 300]).padding(0.2);\n    const parts = scaleBand().domain([\"a\", \"b\", \"c\"]).range([300, 0]).paddingInner(0.1);\n    const outer = scaleBand().domain([\"a\", \"b\"]).range([0, 100]).paddingOuter(0.5).align(0);\n    const round = scaleBand().domain([\"a\", \"b\", \"c\"]).rangeRound([0, 100]).padding(0.1);\n    return [\n      [x(\"a\"), x(\"c\"), x(\"e\"), x.bandwidth(), x.step(), x.domain()],\n      [padded(\"b\"), padded.bandwidth(), padded.padding()],\n      [parts(\"a\"), parts(\"c\"), parts.bandwidth()],\n      [outer(\"a\"), outer(\"b\"), outer.bandwidth(), outer.align()],\n      [round(\"a\"), round(\"b\"), round(\"c\"), round.bandwidth(), round.round()],\n      scaleBand().domain([\"a\", \"a\", \"b\"]).range([0, 10]).domain(),\n      x.copy().range([0, 40])(\"b\"),\n    ];\n  },\n  scalePoint: () => {\n    const x = scalePoint().domain([\"a\", \"b\", \"c\"]).range([0, 100]);\n    const padded = scalePoint([\"a\", \"b\", \"c\", \"d\"], [0, 90]).padding(0.5);\n    return [\n      [x(\"a\"), x(\"b\"), x(\"c\"), x.bandwidth(), x.step()],\n      [padded(\"a\"), padded(\"d\"), padded.padding(), padded.step()],\n      x.copy().range([0, 10])(\"b\"),\n    ];\n  },\n  scaleSequential: () => {\n    const s = scaleSequential((t) => t * t).domain([0, 10]);\n    const ranged = scaleSequential([0, 100], [\"white\", \"black\"]);\n    const clamped = scaleSequential((t) => t)\n      .domain([10, 0])\n      .clamp(true);\n    return [\n      [s(5), s(10), s(-5), s.domain(), s.ticks(5)],\n      [ranged(25), ranged.range()],\n      [clamped(2), clamped(-4), clamped(12)],\n      scaleSequential((t) => t).domain([3, 3])(3),\n    ];\n  },\n  scaleQuantize: () => {\n    const q = scaleQuantize().domain([0, 1]).range([\"a\", \"b\", \"c\"]);\n    const n = scaleQuantize([0, 100], [1, 2, 3, 4]);\n    return [\n      [q(0), q(0.3), q(0.34), q(0.5), q(0.9), q(1.2), q(-1)],\n      [q.thresholds(), q.invertExtent(\"b\"), q.invertExtent(\"a\"), q.invertExtent(\"z\")],\n      [n(24), n(25), n(26), n.thresholds(), n.ticks(4)],\n      scaleQuantize().domain([0.1, 9.7]).nice().domain(),\n    ];\n  },\n  line: () => {\n    const points = [\n      [0, 10],\n      [10.12345, 40],\n      [20, 25],\n      [35, 25],\n      [50, 60],\n    ];\n    const rows = [\n      { t: 0, v: 3 },\n      { t: 1, v: null },\n      { t: 2, v: 5 },\n      { t: 3, v: 4 },\n      { t: 4, v: 9 },\n    ];\n    const gappy = line()\n      .x((d) => d.t * 20)\n      .y((d) => d.v * 10)\n      .defined((d) => d.v != null);\n    return [\n      line()(points),\n      line().curve(curveMonotoneX)(points),\n      line().digits(1)(points),\n      line().digits(null)(points),\n      gappy(rows),\n      gappy.curve(curveMonotoneX)(rows),\n      line()([]),\n      line()([[1, 2]]),\n      line().curve(curveMonotoneX)([\n        [0, 0],\n        [5, 5],\n      ]),\n      line(\n        (d) => d.x,\n        (d) => d.y,\n      ).curve(curveMonotoneX)([\n        { x: 0, y: 5 },\n        { x: 1, y: 5 },\n        { x: 2, y: 9 },\n        { x: 3, y: 1 },\n        { x: 3, y: 1 },\n        { x: 6, y: 8 },\n      ]),\n    ];\n  },\n  area: () => {\n    const points = [\n      [0, 10],\n      [10, 40],\n      [20, 25],\n      [30, 50],\n    ];\n    const band = area()\n      .x((d) => d[0])\n      .y0((d) => d[1] - 5)\n      .y1((d) => d[1] + 5);\n    return [\n      area()(points),\n      area().y0(100)(points),\n      area().curve(curveMonotoneX).y0(60)(points),\n      band(points),\n      band.lineY1()(points),\n      band.lineY0()(points),\n      area()\n        .defined((d) => d[1] !== 40)\n        .y0(0)(points),\n      area()\n        .x0(0)\n        .x1((d) => d[0])(points),\n    ];\n  },\n  arc: () => {\n    const a = arc();\n    const sector = { innerRadius: 0, outerRadius: 100, startAngle: 0, endAngle: Math.PI / 2 };\n    const ring = { innerRadius: 40, outerRadius: 100, startAngle: 1, endAngle: 4 };\n    return [\n      a(sector),\n      a(ring),\n      a({ innerRadius: 0, outerRadius: 50, startAngle: 0, endAngle: 2 * Math.PI }),\n      a({ innerRadius: 30, outerRadius: 50, startAngle: 0, endAngle: 7 }),\n      a({ innerRadius: 0, outerRadius: 0, startAngle: 0, endAngle: 1 }),\n      a({ innerRadius: 20, outerRadius: 50, startAngle: 2, endAngle: 0.5 }),\n      a.centroid(ring),\n      arc().cornerRadius(8)(ring),\n      arc().cornerRadius(30)(ring),\n      arc().cornerRadius(10)(sector),\n      arc().padAngle(0.05)(ring),\n      arc().padAngle(0.05).padRadius(200)(ring),\n      arc().padAngle(0.3).cornerRadius(6)({ ...ring, endAngle: 1.4 }),\n      arc().innerRadius(10).outerRadius(60).startAngle(0).endAngle(5).cornerRadius(4)(),\n      arc().digits(1)(ring),\n      arc().cornerRadius(12)({ innerRadius: 0, outerRadius: 60, startAngle: 0, endAngle: 4.5 }),\n    ];\n  },\n  pie: () => {\n    const values = [3, 1, 4, 1, 5, -2, 0];\n    return [\n      pie()(values),\n      pie().sort(null).sortValues(null)(values),\n      pie()\n        .padAngle(0.02)\n        .startAngle(-Math.PI / 2)\n        .endAngle(Math.PI / 2)(values),\n      pie()\n        .value((d) => d.n)\n        .sort((a, b) => (a.name < b.name ? -1 : 1))([\n        { name: \"b\", n: 2 },\n        { name: \"a\", n: 7 },\n      ]),\n      pie().endAngle(-Math.PI)([1, 1]),\n      pie()([]),\n      pie()([0, 0]),\n    ];\n  },\n};\n",
+  "source": "// Calls of d3's functions whose results the built-in charts must give: the case d3/checks runs\n// them on both (see crates/valle-engine/tests/cases/d3.rs).\n\nexport const checks = {\n  extent: () => [\n    extent([3, 1, null, 7, NaN, 2]),\n    extent([]),\n    extent([\"b\", \"a\", \"c\"]),\n    extent([{ v: 4 }, { v: -2 }], (d) => d.v),\n  ],\n  ticks: () => [\n    ticks(0, 1, 10),\n    ticks(0, 100, 5),\n    ticks(-3.7, 12.1, 7),\n    ticks(1, 0, 4),\n    ticks(0.001, 0.0093, 6),\n    ticks(5, 5, 3),\n    ticks(0, 1e6, 3),\n    ticks(0, 10, 0),\n  ],\n  tickIncrement: () => [tickIncrement(0, 1, 10), tickIncrement(0, 1000, 7)],\n  tickStep: () => [tickStep(0, 1, 10), tickStep(10, 0, 3)],\n  nice: () => [nice(0.13, 9.87, 10), nice(-41, 997, 5), nice(5, 5, 3), nice(12, 1, 4)],\n  scaleLinear: () => {\n    const x = scaleLinear().domain([0, 100]).range([0, 640]);\n    const y = scaleLinear([0, 10], [300, 0]);\n    const piecewise = scaleLinear().domain([-1, 0, 1]).range([0, 50, 200]);\n    const clamped = scaleLinear().domain([10, 20]).range([0, 1]).clamp(true);\n    const rounded = scaleLinear().domain([0, 3]).rangeRound([0, 100]);\n    const nice = scaleLinear().domain([0.13, 97.6]).nice();\n    const descending = scaleLinear().domain([5, -5]).range([0, 10]);\n    return [\n      [x(0), x(37.5), x(100), x(-20), x(120), x.invert(320), x(null), x(\"12\")],\n      [y(2.5), y.invert(75), y.ticks(), y.ticks(4), y.domain(), y.range()],\n      [piecewise(-0.5), piecewise(0.25), piecewise(2), piecewise.invert(125)],\n      [clamped(5), clamped(15), clamped(25), clamped.invert(2), clamped.clamp()],\n      [rounded(1), rounded(2), nice.domain(), nice.ticks(5), descending(2.5), descending.ticks(3)],\n      scaleLinear().domain([0, 7]).nice(4).domain(),\n      scaleLinear().domain([3, 3]).range([0, 10])(3),\n      scaleLinear().unknown(-1)(NaN),\n      x.copy().domain([0, 10])(5),\n    ];\n  },\n  scaleLinearColors: () => {\n    const c = scaleLinear().domain([0, 1]).range([\"red\", \"steelblue\"]);\n    const alpha = scaleLinear().domain([0, 1]).range([\"rgba(0, 0, 0, 0)\", \"#ff8000\"]);\n    const hsl = scaleLinear().domain([0, 1]).range([\"hsl(120, 50%, 50%)\", \"white\"]);\n    const text = scaleLinear().domain([0, 1]).range([\"0px 4px\", \"10px 8px\"]);\n    const named = scaleLinear().domain([0, 1]).range([\"transparent\", \"blue\"]);\n    return [c(0), c(0.3), c(1), alpha(0.25), hsl(0.5), text(0.5), named(0.5), c(1.5)];\n  },\n  scaleBand: () => {\n    const x = scaleBand().domain([\"a\", \"b\", \"c\", \"d\"]).range([0, 400]);\n    const padded = scaleBand([\"a\", \"b\", \"c\"], [0, 300]).padding(0.2);\n    const parts = scaleBand().domain([\"a\", \"b\", \"c\"]).range([300, 0]).paddingInner(0.1);\n    const outer = scaleBand().domain([\"a\", \"b\"]).range([0, 100]).paddingOuter(0.5).align(0);\n    const round = scaleBand().domain([\"a\", \"b\", \"c\"]).rangeRound([0, 100]).padding(0.1);\n    return [\n      [x(\"a\"), x(\"c\"), x(\"e\"), x.bandwidth(), x.step(), x.domain()],\n      [padded(\"b\"), padded.bandwidth(), padded.padding()],\n      [parts(\"a\"), parts(\"c\"), parts.bandwidth()],\n      [outer(\"a\"), outer(\"b\"), outer.bandwidth(), outer.align()],\n      [round(\"a\"), round(\"b\"), round(\"c\"), round.bandwidth(), round.round()],\n      scaleBand().domain([\"a\", \"a\", \"b\"]).range([0, 10]).domain(),\n      x.copy().range([0, 40])(\"b\"),\n    ];\n  },\n  scalePoint: () => {\n    const x = scalePoint().domain([\"a\", \"b\", \"c\"]).range([0, 100]);\n    const padded = scalePoint([\"a\", \"b\", \"c\", \"d\"], [0, 90]).padding(0.5);\n    return [\n      [x(\"a\"), x(\"b\"), x(\"c\"), x.bandwidth(), x.step()],\n      [padded(\"a\"), padded(\"d\"), padded.padding(), padded.step()],\n      x.copy().range([0, 10])(\"b\"),\n    ];\n  },\n  scaleSequential: () => {\n    const s = scaleSequential((t) => t * t).domain([0, 10]);\n    const ranged = scaleSequential([0, 100], [\"white\", \"black\"]);\n    const clamped = scaleSequential((t) => t)\n      .domain([10, 0])\n      .clamp(true);\n    return [\n      [s(5), s(10), s(-5), s.domain(), s.ticks(5)],\n      [ranged(25), ranged.range()],\n      [clamped(2), clamped(-4), clamped(12)],\n      scaleSequential((t) => t).domain([3, 3])(3),\n    ];\n  },\n  scaleQuantize: () => {\n    const q = scaleQuantize().domain([0, 1]).range([\"a\", \"b\", \"c\"]);\n    const n = scaleQuantize([0, 100], [1, 2, 3, 4]);\n    return [\n      [q(0), q(0.3), q(0.34), q(0.5), q(0.9), q(1.2), q(-1)],\n      [q.thresholds(), q.invertExtent(\"b\"), q.invertExtent(\"a\"), q.invertExtent(\"z\")],\n      [n(24), n(25), n(26), n.thresholds(), n.ticks(4)],\n      scaleQuantize().domain([0.1, 9.7]).nice().domain(),\n    ];\n  },\n  line: () => {\n    const points = [\n      [0, 10],\n      [10.12345, 40],\n      [20, 25],\n      [35, 25],\n      [50, 60],\n    ];\n    const rows = [\n      { t: 0, v: 3 },\n      { t: 1, v: null },\n      { t: 2, v: 5 },\n      { t: 3, v: 4 },\n      { t: 4, v: 9 },\n    ];\n    const gappy = line()\n      .x((d) => d.t * 20)\n      .y((d) => d.v * 10)\n      .defined((d) => d.v != null);\n    return [\n      line()(points),\n      line().curve(curveMonotoneX)(points),\n      line().digits(1)(points),\n      line().digits(null)(points),\n      gappy(rows),\n      gappy.curve(curveMonotoneX)(rows),\n      line()([]),\n      line()([[1, 2]]),\n      line().curve(curveMonotoneX)([\n        [0, 0],\n        [5, 5],\n      ]),\n      line(\n        (d) => d.x,\n        (d) => d.y,\n      ).curve(curveMonotoneX)([\n        { x: 0, y: 5 },\n        { x: 1, y: 5 },\n        { x: 2, y: 9 },\n        { x: 3, y: 1 },\n        { x: 3, y: 1 },\n        { x: 6, y: 8 },\n      ]),\n    ];\n  },\n  area: () => {\n    const points = [\n      [0, 10],\n      [10, 40],\n      [20, 25],\n      [30, 50],\n    ];\n    const band = area()\n      .x((d) => d[0])\n      .y0((d) => d[1] - 5)\n      .y1((d) => d[1] + 5);\n    return [\n      area()(points),\n      area().y0(100)(points),\n      area().curve(curveMonotoneX).y0(60)(points),\n      band(points),\n      band.lineY1()(points),\n      band.lineY0()(points),\n      area()\n        .defined((d) => d[1] !== 40)\n        .y0(0)(points),\n      area()\n        .x0(0)\n        .x1((d) => d[0])(points),\n    ];\n  },\n  arc: () => {\n    const a = arc();\n    const sector = { innerRadius: 0, outerRadius: 100, startAngle: 0, endAngle: Math.PI / 2 };\n    const ring = { innerRadius: 40, outerRadius: 100, startAngle: 1, endAngle: 4 };\n    return [\n      a(sector),\n      a(ring),\n      a({ innerRadius: 0, outerRadius: 50, startAngle: 0, endAngle: 2 * Math.PI }),\n      a({ innerRadius: 30, outerRadius: 50, startAngle: 0, endAngle: 7 }),\n      a({ innerRadius: 0, outerRadius: 0, startAngle: 0, endAngle: 1 }),\n      a({ innerRadius: 20, outerRadius: 50, startAngle: 2, endAngle: 0.5 }),\n      a.centroid(ring),\n      arc().cornerRadius(8)(ring),\n      arc().cornerRadius(30)(ring),\n      arc().cornerRadius(10)(sector),\n      arc().padAngle(0.05)(ring),\n      arc().padAngle(0.05).padRadius(200)(ring),\n      arc().padAngle(0.3).cornerRadius(6)({ ...ring, endAngle: 1.4 }),\n      arc().innerRadius(10).outerRadius(60).startAngle(0).endAngle(5).cornerRadius(4)(),\n      arc().digits(1)(ring),\n      arc().cornerRadius(12)({ innerRadius: 0, outerRadius: 60, startAngle: 0, endAngle: 4.5 }),\n    ];\n  },\n  pie: () => {\n    const values = [3, 1, 4, 1, 5, -2, 0];\n    return [\n      pie()(values),\n      pie().sort(null).sortValues(null)(values),\n      pie()\n        .padAngle(0.02)\n        .startAngle(-Math.PI / 2)\n        .endAngle(Math.PI / 2)(values),\n      pie()\n        .value((d) => d.n)\n        .sort((a, b) => (a.name < b.name ? -1 : 1))([\n        { name: \"b\", n: 2 },\n        { name: \"a\", n: 7 },\n      ]),\n      pie().endAngle(-Math.PI)([1, 1]),\n      pie()([]),\n      pie()([0, 0]),\n    ];\n  },\n  stack: () => {\n    const rows = [\n      { month: 1, apples: 10, pears: 5, plums: 2 },\n      { month: 2, apples: 7, pears: NaN, plums: 4 },\n      { month: 3, apples: 12, pears: 8, plums: 0 },\n    ];\n    const layers = (s) =>\n      s.map((series) => ({\n        key: series.key,\n        index: series.index,\n        points: series.map((p) => [p[0], p[1], p.data.month]),\n      }));\n    return [\n      layers(stack().keys([\"apples\", \"pears\", \"plums\"])(rows)),\n      layers(stack().keys([\"apples\", \"pears\", \"plums\"]).order([2, 0, 1])(rows)),\n      layers(\n        stack()\n          .keys([\"a\", \"b\"])\n          .value((d, key) => d[key] * 2)([\n          { a: 1, b: 2 },\n          { a: 3, b: 4 },\n        ]),\n      ),\n      layers(\n        stack()\n          .keys((data) => Object.keys(data[0]))\n          .offset(null)([{ x: 1, y: 2 }]),\n      ),\n      layers(stack()(rows)),\n    ];\n  },\n};\n",
   "results": {
     "arc": [
       "M0,-100A100,100,0,0,1,100,0L0,0Z",
@@ -556,6 +556,197 @@
         0
       ],
       0.5
+    ],
+    "stack": [
+      [
+        {
+          "index": 0,
+          "key": "apples",
+          "points": [
+            [
+              0,
+              10,
+              1
+            ],
+            [
+              0,
+              7,
+              2
+            ],
+            [
+              0,
+              12,
+              3
+            ]
+          ]
+        },
+        {
+          "index": 1,
+          "key": "pears",
+          "points": [
+            [
+              10,
+              15,
+              1
+            ],
+            [
+              7,
+              null,
+              2
+            ],
+            [
+              12,
+              20,
+              3
+            ]
+          ]
+        },
+        {
+          "index": 2,
+          "key": "plums",
+          "points": [
+            [
+              15,
+              17,
+              1
+            ],
+            [
+              7,
+              11,
+              2
+            ],
+            [
+              20,
+              20,
+              3
+            ]
+          ]
+        }
+      ],
+      [
+        {
+          "index": 1,
+          "key": "apples",
+          "points": [
+            [
+              2,
+              12,
+              1
+            ],
+            [
+              4,
+              11,
+              2
+            ],
+            [
+              0,
+              12,
+              3
+            ]
+          ]
+        },
+        {
+          "index": 2,
+          "key": "pears",
+          "points": [
+            [
+              12,
+              17,
+              1
+            ],
+            [
+              11,
+              null,
+              2
+            ],
+            [
+              12,
+              20,
+              3
+            ]
+          ]
+        },
+        {
+          "index": 0,
+          "key": "plums",
+          "points": [
+            [
+              0,
+              2,
+              1
+            ],
+            [
+              0,
+              4,
+              2
+            ],
+            [
+              0,
+              0,
+              3
+            ]
+          ]
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "key": "a",
+          "points": [
+            [
+              0,
+              2,
+              null
+            ],
+            [
+              0,
+              6,
+              null
+            ]
+          ]
+        },
+        {
+          "index": 1,
+          "key": "b",
+          "points": [
+            [
+              2,
+              6,
+              null
+            ],
+            [
+              6,
+              14,
+              null
+            ]
+          ]
+        }
+      ],
+      [
+        {
+          "index": 0,
+          "key": "x",
+          "points": [
+            [
+              0,
+              1,
+              null
+            ]
+          ]
+        },
+        {
+          "index": 1,
+          "key": "y",
+          "points": [
+            [
+              1,
+              3,
+              null
+            ]
+          ]
+        }
+      ],
+      []
     ],
     "tickIncrement": [
       -10,
