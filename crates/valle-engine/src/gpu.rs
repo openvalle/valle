@@ -579,8 +579,9 @@ struct Plan {
     shadings: Vec<Shading>,
 }
 
-/// A shader drawn: its program, the words of its host block and its uniform block.
-type Shading = (Rc<Program>, [f32; 16], Rc<[u8]>);
+/// A shader drawn: its program, the words of its host block, its uniform block, and the frame's
+/// images it reads by name.
+type Shading = (Rc<Program>, [f32; 16], Rc<[u8]>, Vec<(Rc<str>, u32)>);
 
 impl Plan {
     /// A new layer.
@@ -1383,6 +1384,7 @@ impl<'a> Renderer<'a> {
                 Item::Shader {
                     program,
                     block,
+                    inputs,
                     rect,
                     outset,
                     items,
@@ -1445,7 +1447,8 @@ impl<'a> Renderer<'a> {
                         rect.x,
                         rect.y,
                     ]);
-                    plan.shadings.push((program.clone(), host, block.clone()));
+                    plan.shadings
+                        .push((program.clone(), host, block.clone(), inputs.clone()));
                     let shading = plan.shadings.len() - 1;
                     plan.steps.push(Step::Shader {
                         target,
@@ -1759,7 +1762,7 @@ impl<'a> Renderer<'a> {
                 shading,
             } = *step
             {
-                let (program, host, block) = &plan.shadings[shading];
+                let (program, host, block, inputs) = &plan.shadings[shading];
                 let device = &gpu.device;
                 let uniform = |label, contents: &[u8]| {
                     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1778,23 +1781,51 @@ impl<'a> Renderer<'a> {
                         resource: host.as_entire_binding(),
                     }],
                 });
-                // Its images, each out of its layer into a texture of the box's size; one
-                // nothing was drawn into is clear.
+                // Its images: its content and backdrop each out of its layer into a texture of
+                // the box's size, clear if nothing was drawn into it; an input of its own size.
                 let size = [f32::from_bits(words[4]), f32::from_bits(words[5])].map(|v| v as u32);
                 let mut views = Vec::new();
                 for name in &program.samplers {
-                    let layer = match &**name {
-                        "content" => content,
-                        "backdrop" => backdrop,
-                        _ => None,
+                    let (image, size, hosted) = match &**name {
+                        "content" | "backdrop" => {
+                            let layer = if &**name == "content" {
+                                content
+                            } else {
+                                backdrop
+                            };
+                            let s = layer.and_then(|l| surfaces[l]);
+                            (s.map(|s| &self.pool[s]), size, hosted.clone())
+                        }
+                        _ => {
+                            let i = (inputs.iter()).find_map(|(n, i)| (n == name).then_some(*i));
+                            let shown = i.map(|i| &self.images[self.shown[i as usize]].1);
+                            let size = shown.map_or([1, 1], |s| {
+                                let e = s.texture.size();
+                                [e.width, e.height]
+                            });
+                            let mut words = [0.0f32; 16];
+                            words[4..6].copy_from_slice(&size.map(|v| v as f32));
+                            words[8] = 1.0;
+                            let words: Vec<u32> = words.iter().map(|v| v.to_bits()).collect();
+                            let own = uniform("input", &bytes(&words));
+                            let hosted = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: None,
+                                layout: &gpu.host,
+                                entries: &[wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: own.as_entire_binding(),
+                                }],
+                            });
+                            (shown, size, hosted)
+                        }
                     };
                     let view = texture(device, size, WORK).create_view(&Default::default());
                     let mut pass = begin(encoder, &view, false);
-                    if let Some(s) = layer.and_then(|l| surfaces[l]) {
+                    if let Some(image) = image {
                         pass.set_pipeline(&gpu.extract);
                         pass.set_bind_group(0, draw, &[]);
                         pass.set_bind_group(1, &hosted, &[]);
-                        pass.set_bind_group(2, &self.pool[s].image, &[]);
+                        pass.set_bind_group(2, &image.image, &[]);
                         pass.draw(0..3, 0..1);
                     }
                     drop(pass);

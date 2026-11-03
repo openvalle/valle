@@ -1,11 +1,11 @@
 // The engine's part of a shader authors write: the quad of its box, grown by its outset and an
 // antialiased edge, in the px of its transform, whose fragments the shader colors; and the
-// images it reads, taken out of their layers in its box's px, its bottom row first and with
-// straight alpha, as WebGL reads a texture.
+// images it reads, taken out of their layers in its box's px or copied from the scene's, their
+// bottom row first and with straight alpha, as WebGL reads a texture.
 
 struct Host {
-  // The box's width and height in px, its outset, and its transform's index; the size of its
-  // images in pixels, and its top left in px.
+  // The box's width and height in px, its outset, and its transform's index; the size of the
+  // image taken in pixels, and the box's top left in px; and whether the image is the scene's.
   h: array<vec4f, 4>,
 }
 
@@ -53,16 +53,23 @@ fn sampled(q: vec2f) -> vec4f {
   return mix(top, bottom, t.y);
 }
 
+// A pixel of an image the shader reads: of a layer, where the box's px it is at is on it; or of
+// an image of the scene, which is as big (h[2].x is 1), flipped.
 @fragment fn fx(@builtin(position) pos: vec4f) -> @location(0) vec4f {
-  let size = host.h[0].xy;
-  let t = u32(host.h[0].w);
-  let uv = pos.xy / host.h[1].xy;
-  let local = vec2f(uv.x, 1.0 - uv.y) * size + host.h[1].zw;
-  let h = transforms[t].forward * vec3f(local, 1.0);
-  if (h.z <= 0.0) {
-    return vec4f(0.0);
+  var c: vec4f;
+  if (host.h[2].x > 0.5) {
+    c = textureLoad(image, vec2<i32>(i32(pos.x), i32(host.h[1].y - pos.y)), 0);
+  } else {
+    let size = host.h[0].xy;
+    let t = u32(host.h[0].w);
+    let uv = pos.xy / host.h[1].xy;
+    let local = vec2f(uv.x, 1.0 - uv.y) * size + host.h[1].zw;
+    let h = transforms[t].forward * vec3f(local, 1.0);
+    if (h.z <= 0.0) {
+      return vec4f(0.0);
+    }
+    c = sampled(h.xy / h.z);
   }
-  let c = sampled(h.xy / h.z);
   if (c.a <= 0.0) {
     return vec4f(0.0);
   }

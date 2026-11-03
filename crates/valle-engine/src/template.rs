@@ -471,12 +471,14 @@ pub enum Kind {
         resource: u32,
     },
     /// A box a shader authors write paints (`shader.rs`): its GLSL code, the values its uniforms
-    /// take by name, a number, a boolean or a color string each, or a vector's numbers, and the
-    /// px it paints out past its border box on each side. What the box and the boxes in it paint
-    /// is the image the shader reads as `content`, and what is painted under it its `backdrop`.
+    /// take by name, a number, a boolean or a color string each, or a vector's numbers, the
+    /// images it reads by name, the scene's resources of these indices, and the px it paints out
+    /// past its border box on each side. What the box and the boxes in it paint is the image the
+    /// shader reads as `content`, and what is painted under it its `backdrop`.
     Shader {
         code: Rc<str>,
         uniforms: Vec<(Rc<str>, Vec<Prop>)>,
+        inputs: Vec<(Rc<str>, u32)>,
         outset: f64,
     },
     /// An inline SVG element: an `<svg>` is a box, and the elements in it, its descendants, are

@@ -241,12 +241,13 @@ pub struct Source {
     pub invert: bool,
 }
 
-/// A shader as a frame has it: its program, its uniform block, and the px it paints out past the
-/// box on each side.
+/// A shader as a frame has it: its program, its uniform block, the resources of the images it
+/// reads by name, and the px it paints out past the box on each side.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shaded {
     pub program: Rc<Program>,
     pub block: Rc<[u8]>,
+    pub inputs: Vec<(Rc<str>, u32)>,
     pub outset: f64,
 }
 
@@ -254,6 +255,7 @@ pub struct Shaded {
 struct Shading {
     program: Rc<Program>,
     uniforms: Vec<(Rc<str>, Vec<Prop>)>,
+    inputs: Vec<(Rc<str>, u32)>,
     outset: f64,
     fixed: Option<Rc<[u8]>>,
 }
@@ -281,6 +283,7 @@ impl Shading {
         Ok(Shaded {
             program: self.program.clone(),
             block,
+            inputs: self.inputs.clone(),
             outset: self.outset,
         })
     }
@@ -1124,13 +1127,25 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
         Kind::Shader {
             code,
             uniforms,
+            inputs,
             outset,
         } => {
             let at = |e: String| format!("{place}: <ShaderLayer> code {e}");
-            let program = shader::program(code, &["content", "backdrop"]).map_err(at)?;
+            let mut images = vec!["content", "backdrop"];
+            for (name, _) in inputs {
+                if images.contains(&&**name) {
+                    return Err(format!(
+                        "{place}: <ShaderLayer> inputs {name}: content and backdrop are the \
+                         layer's own"
+                    ));
+                }
+                images.push(&**name);
+            }
+            let program = shader::program(code, &images).map_err(at)?;
             let mut s = Shading {
                 program,
                 uniforms: uniforms.clone(),
+                inputs: inputs.clone(),
                 outset: *outset,
                 fixed: None,
             };

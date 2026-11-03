@@ -296,6 +296,7 @@ struct TracedNode {
 struct TracedShader {
     code: String,
     uniforms: Vec<(String, Vec<Ref>)>,
+    inputs: Vec<(String, String)>,
     outset: f64,
 }
 
@@ -376,6 +377,21 @@ pub fn variant(
             })
             .collect()
     };
+    // The image resource `name`, which `what` reads.
+    let image = |name: &str, what: &str| -> Result<u32, Error> {
+        let Some(r) = resources.iter().position(|r| r.name == name) else {
+            return Err(format!(
+                "{what} resource://{name}: the scene declares no resource {name} in \
+                 controls.resources"
+            ));
+        };
+        if resources[r].kind != Holds::Image {
+            return Err(format!(
+                "{what} resource://{name}: {name} is a font, not an image"
+            ));
+        }
+        Ok(r as u32)
+    };
     let mut nodes = Vec::with_capacity(traced.nodes.len());
     for n in traced.nodes {
         let kind = match &*n.kind {
@@ -398,27 +414,23 @@ pub fn variant(
             "image" => {
                 let name = n.src.as_deref().ok_or("an image node without a source")?;
                 let at = || n.site.map_or("<Image>".into(), |s| place(&At::Site(s)));
-                let resource =
-                    (resources.iter().position(|r| r.name == name)).ok_or_else(|| {
-                        format!(
-                            "{}: <Image> src resource://{name}: the scene declares no resource \
-                         {name} in controls.resources",
-                            at()
-                        )
-                    })?;
-                if resources[resource].kind != Holds::Image {
-                    return Err(format!(
-                        "{}: <Image> src resource://{name}: {name} is a font, not an image",
-                        at()
-                    ));
-                }
                 Kind::Image {
-                    resource: resource as u32,
+                    resource: image(name, &format!("{}: <Image> src", at()))?,
                 }
             }
             "shader" => {
                 let s = n.shader.ok_or("a shader node without its shader")?;
+                let at = || {
+                    n.site
+                        .map_or("<ShaderLayer>".into(), |s| place(&At::Site(s)))
+                };
                 Kind::Shader {
+                    inputs: (s.inputs.iter())
+                        .map(|(k, name)| {
+                            let what = format!("{}: <ShaderLayer> inputs {k}", at());
+                            Ok((Rc::from(k.as_str()), image(name, &what)?))
+                        })
+                        .collect::<Result<_, Error>>()?,
                     code: s.code.into(),
                     uniforms: (s.uniforms.into_iter())
                         .map(|(k, v)| {

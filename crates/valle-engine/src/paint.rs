@@ -131,10 +131,12 @@ pub enum Item {
     },
     /// Items drawn into a layer that a shader authors wrote reads as its `content` image, and
     /// what is under the box as its `backdrop`, as a `Backdrop` has it: the shader paints the box
-    /// `rect`, grown by `outset` px on each side, with its uniform `block`.
+    /// `rect`, grown by `outset` px on each side, with its uniform `block`; and the frame's images
+    /// of `inputs` by the names it reads them by.
     Shader {
         program: Rc<Program>,
         block: Rc<[u8]>,
+        inputs: Vec<(Rc<str>, u32)>,
         rect: Rect,
         outset: f32,
         items: Vec<Item>,
@@ -1175,9 +1177,16 @@ impl Painter<'_> {
         };
         let rect = snap(self.layout.boxes[d].border);
         let by = shader.outset as f32;
+        let inputs = (shader.inputs.iter())
+            .filter_map(|(name, r)| match self.pictures[*r as usize] {
+                Picture::Image { image, .. } => Some((name.clone(), image)),
+                _ => None,
+            })
+            .collect();
         let shaded = Item::Shader {
             program: shader.program.clone(),
             block: shader.block.clone(),
+            inputs,
             rect,
             outset: by,
             items,

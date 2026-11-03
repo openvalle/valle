@@ -183,6 +183,21 @@ impl Scene {
                 self.sheets.insert(0, kept);
             }
             None => {
+                // A shader reads raster images only.
+                for node in &frame.template.nodes {
+                    let Kind::Shader { inputs, .. } = &node.kind else {
+                        continue;
+                    };
+                    for (name, r) in inputs {
+                        if let Picture::Svg(_) = self.pictures[*r as usize] {
+                            return Err(format!(
+                                "{}: <ShaderLayer> inputs {name}: an SVG file is not supported \
+                                 yet: a shader reads a PNG, JPEG or WebP image",
+                                node.place()
+                            ));
+                        }
+                    }
+                }
                 let sheet = Sheet::new(&frame.template)?;
                 let measured = measured(&frame.template)?;
                 self.sheets
