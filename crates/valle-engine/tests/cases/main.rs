@@ -356,9 +356,11 @@ impl Runner {
 
     /// The bytes of a case or of a file it reads.
     fn bytes(&self, path: &str) -> Option<Vec<u8>> {
-        match self.made.get(path) {
-            Some(source) => Some(source.clone().into_bytes()),
-            None => std::fs::read(self.root.join(path)).ok(),
+        // A path from `/` is the repository's, so cases can name the built-in fonts.
+        match (self.made.get(path), path.strip_prefix('/')) {
+            (Some(source), _) => Some(source.clone().into_bytes()),
+            (None, Some(path)) => std::fs::read(self.repo.join(path)).ok(),
+            (None, None) => std::fs::read(self.root.join(path)).ok(),
         }
     }
 

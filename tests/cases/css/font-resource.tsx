@@ -1,6 +1,6 @@
 export const controls = {
   resources: {
-    display: resource({ kind: "font", default: "../resources/Bungee-Regular.ttf" }),
+    display: resource({ kind: "font", default: "/fonts/NotoSerif-Variable.ttf" }),
   },
 };
 

@@ -207,7 +207,11 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
 /// Where the server gives a resource's file.
 fn file(slot: &Slot) -> Result<String, String> {
     let path = (slot.default.as_deref()).ok_or_else(|| format!("{}: no file", slot.name))?;
-    Ok(format!("/cases/{path}"))
+    // One from `/` is the repository's, which the server has only `/fonts/` of.
+    match path.starts_with('/') {
+        true => Ok(path.to_string()),
+        false => Ok(format!("/cases/{path}")),
+    }
 }
 
 /// `text` with each `resource://` name in it the path of the resource's file.
