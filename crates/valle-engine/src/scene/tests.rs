@@ -162,6 +162,33 @@ export default function Scene() {
             e,
             "scenes/s.tsx: resources: the scene declares no resource logo in controls.resources"
         );
+
+        // A file on the web, by its address, as the default or bound.
+        let web = source.replace("../img/dot.png", "https://x.org/dot.png");
+        let read = move |path: &str| match path {
+            "scenes/s.tsx" => Some(web.clone().into_bytes()),
+            "https://x.org/dot.png" => Some(png(2, &[[0, 0, 0, 255]; 2])),
+            "https://x.org/wide.png" => Some(png(3, &[[0, 0, 0, 255]; 3])),
+            _ => None,
+        };
+        let scene = Scene::load("scenes/s.tsx", &read, &Inputs::default()).unwrap();
+        let default = scene.resources()[0].default.as_deref();
+        assert_eq!(default, Some("https://x.org/dot.png"));
+        assert_eq!(scene.images()[0].size, [2, 1]);
+        let bind = |location: &str| Inputs {
+            resources: [("dot".to_string(), location.to_string())].into(),
+            ..Inputs::default()
+        };
+        let scene = Scene::load("scenes/s.tsx", &read, &bind("https://x.org/wide.png")).unwrap();
+        assert_eq!(scene.images()[0].size, [3, 1]);
+        let e = Scene::load("scenes/s.tsx", &read, &bind("file:///wide.png"))
+            .err()
+            .unwrap();
+        assert_eq!(
+            e,
+            "scenes/s.tsx: resources: file:///wide.png: write a path, or an http:// or https:// \
+             address"
+        );
     });
 }
 

@@ -77,7 +77,8 @@ pub struct Front {
     pub props: Vec<Prop>,
     /// The data it declares.
     pub data: Vec<Prop>,
-    /// The resources it declares, each default a path joined to the scene's folder.
+    /// The resources it declares, each default a path joined to the scene's folder or a web
+    /// address.
     pub resources: Vec<Slot>,
     /// What its root component takes: the props' and data's values, as JSON.
     values: String,
@@ -116,9 +117,11 @@ impl Front {
             .map(|slot| Slot {
                 name: slot.name.clone(),
                 kind: slot.kind,
-                default: (slot.default.as_ref()).map(|d| match d.starts_with('/') {
-                    true => d.clone(),
-                    false => rewrite::join(folder, d),
+                default: (slot.default.as_ref()).map(|d| {
+                    match d.starts_with('/') || rewrite::web(d) {
+                        true => d.clone(),
+                        false => rewrite::join(folder, d),
+                    }
                 }),
             })
             .collect::<Vec<_>>();
@@ -128,6 +131,13 @@ impl Front {
             return Err(format!(
                 "{entry}: resources: the scene declares no resource {k} in controls.resources"
             ));
+        }
+        if let Some(e) = inputs
+            .resources
+            .values()
+            .find_map(|v| rewrite::located(v).err())
+        {
+            return Err(format!("{entry}: resources: {e}"));
         }
         let (props, data) = (scene.props.clone(), scene.data.clone());
         let values =

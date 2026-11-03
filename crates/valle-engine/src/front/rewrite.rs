@@ -518,9 +518,8 @@ fn slot(name: &str, e: &Expression<'_>) -> Result<Slot, String> {
             "a font resource cannot be named {name}: that is a built-in family"
         ));
     }
-    let web = |d: &String| d.starts_with("http://") || d.starts_with("https://");
-    if default.as_ref().is_some_and(web) {
-        return Err("a default from the web is not supported yet; use a project file".into());
+    if let Some(d) = &default {
+        located(d)?;
     }
     Ok(Slot {
         name: name.to_string(),
@@ -703,6 +702,21 @@ fn import(line: &str, dir: &str) -> Result<(String, String), String> {
         return Err(unsupported());
     }
     Ok((names.join(", "), join(dir, spec)))
+}
+
+/// Whether a resource's file is on the web.
+pub(super) fn web(location: &str) -> bool {
+    location.starts_with("http://") || location.starts_with("https://")
+}
+
+/// Checks that a resource's file is a path or an HTTP(S) address.
+pub(super) fn located(location: &str) -> Result<(), String> {
+    match location.contains("://") && !web(location) {
+        true => Err(format!(
+            "{location}: write a path, or an http:// or https:// address"
+        )),
+        false => Ok(()),
+    }
 }
 
 /// `spec` relative to `dir`, with `.` and `..` segments resolved and `/` separators.
@@ -1244,8 +1258,8 @@ mod tests {
             ),
             (
                 "export const controls = { resources: { a: resource({ kind: \"image\", default: \
-                 \"https://x.org/a.png\" }) } };",
-                "a default from the web is not supported yet",
+                 \"file:///a.png\" }) } };",
+                "resource a: file:///a.png: write a path, or an http:// or https:// address",
             ),
             (
                 "export const controls = { resources: { \"a b\": resource({ kind: \"image\" }) } };",
