@@ -8,14 +8,15 @@
 //   bun web/tests/chrome.ts <jobs.json>
 //
 // Chrome is downloaded once into ~/.valle/cache/chrome (or $VALLE_CACHE_DIR/chrome). The pages, the
-// fonts and the files the cases read come from a local server, so the HTML names no path on this
-// machine; the fonts, by their SHA-256, from the cache the case runner downloads them into.
+// fonts and the files the cases read come from a local server. A baseline keeps the job's HTML,
+// which names the built-in fonts by their files' names; Chrome loads its page, which the case
+// runner gives the fonts' paths in the cache.
 
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-type Job = { html: string; size: [number, number]; out: string };
+type Job = { html: string; page: string; size: [number, number]; out: string };
 /** The easings `ease.rs` is tested against. */
 const EASINGS = [
   "linear",
@@ -123,7 +124,7 @@ if (!platform) {
 
 /** Draws every job in one Chrome. */
 async function draw() {
-  const pages = await Promise.all(jobs.map((job) => page(job.html)));
+  const pages = await Promise.all(jobs.map((job) => page(job.page)));
   const chrome = await install();
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -136,9 +137,10 @@ async function draw() {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
-      const font = /^\/fonts\/([0-9a-f]{64})$/.exec(path);
-      if (font) {
-        return new Response(Bun.file(join(cache, "files", font[1])));
+      // A file in the cache, by its path.
+      const cached = /^\/file(\/.+)$/.exec(path);
+      if (cached && decodeURIComponent(cached[1]).startsWith(join(cache, "files") + "/")) {
+        return new Response(Bun.file(decodeURIComponent(cached[1])));
       }
       const file = /^\/cases\/((?:[\w-][\w.-]*\/)*[\w-][\w.-]*)$/.exec(path);
       if (file) {

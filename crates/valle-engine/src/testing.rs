@@ -64,7 +64,7 @@ pub fn fonts() -> Fonts {
             return Ok(blob.clone());
         }
         let cache = valle_native::urls::UrlCache::global()?;
-        let path = cache.fetch_pinned(font.url, font.sha256)?;
+        let path = cache.fetch_pinned(font.url, font.sha256, font.file)?;
         let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let blob = Blob::from(bytes);
         given.insert(font.sha256, blob.clone());

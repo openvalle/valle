@@ -233,6 +233,8 @@ pub struct Text {
 /// A built-in font: a file of Google Fonts at a fixed version, as fonts.google.com downloads it.
 pub struct BuiltIn {
     pub name: &'static str,
+    /// The name the file is kept as, in the cache and in test pages.
+    pub file: &'static str,
     pub url: &'static str,
     pub sha256: &'static str,
     /// Bytes.
@@ -243,48 +245,56 @@ pub struct BuiltIn {
 pub const BUILT_IN: [BuiltIn; 8] = [
     BuiltIn {
         name: "Noto Sans",
+        file: "NotoSans.ttf",
         url: "https://fonts.gstatic.com/s/notosans/v42/o-0IIpQlx3QUlC5A4PNb4j5Ba_2c7A.ttf",
         sha256: "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97",
         size: 2_044_548,
     },
     BuiltIn {
         name: "Noto Sans Italic",
+        file: "NotoSansItalic.ttf",
         url: "https://fonts.gstatic.com/s/notosans/v42/o-0OIpQlx3QUlC5A4PNr4DRFSfiM7HBj.ttf",
         sha256: "4bf7b366af79c434984d67eae3967e9cd7a2f51c196101c43f21a7e21e608844",
         size: 2_300_468,
     },
     BuiltIn {
         name: "Noto Serif",
+        file: "NotoSerif.ttf",
         url: "https://fonts.gstatic.com/s/notoserif/v33/ga6Iaw1J5X9T9RW6j9bNTFAcaRi_bMQ.ttf",
         sha256: "26485cbd00507110de7a77cd63d0ec99d356f38e5d9c0c5d07ecea1c7827ea24",
         size: 1_868_872,
     },
     BuiltIn {
         name: "Noto Serif Italic",
+        file: "NotoSerifItalic.ttf",
         url: "https://fonts.gstatic.com/s/notoserif/v33/ga6Kaw1J5X9T9RW6j9bNfFIWbTq6fMRRMw.ttf",
         sha256: "061daf34bfdd0e0635ce3d4f701398772ce2944ee0b24f584e0273366bbea468",
         size: 2_429_468,
     },
     BuiltIn {
         name: "Noto Sans Mono",
+        file: "NotoSansMono.ttf",
         url: "https://fonts.gstatic.com/s/notosansmono/v37/BngRUXNETWXI6LwhGYvaxZikqYCByxyKeuDp.ttf",
         sha256: "47d856141683450ee297592b27be447eb5141c68516e5e0e748c66b6e0a54afe",
         size: 1_707_908,
     },
     BuiltIn {
         name: "Noto Sans SC",
+        file: "NotoSansSC.ttf",
         url: "https://fonts.gstatic.com/s/notosanssc/v41/k3kXo84MPvpLmixcA63oeALhKYiJ-Q7m8w.ttf",
         sha256: "6cbd3ac22ef454e4e9bcfb67369ea94297002a218e9abebc90852534afee096a",
         size: 17_711_448,
     },
     BuiltIn {
         name: "Noto Sans KR",
+        file: "NotoSansKR.ttf",
         url: "https://fonts.gstatic.com/s/notosanskr/v40/PbykFmXiEBPT4ITbgNA5Cgm21nTs4JMMuA.ttf",
         sha256: "16efec3833f189345a7185d85790cd0db4d9729ea2d58c57fccc06ba5d1f3017",
         size: 10_359_708,
     },
     BuiltIn {
         name: "Noto Color Emoji",
+        file: "NotoColorEmoji.ttf",
         url: "https://fonts.gstatic.com/s/notocoloremoji/v50/Yq6P-KqIXTD0t4D9z1ESnKM3-HpFab5s79iz64w.ttf",
         sha256: "d8c8a5e2eaecf93bf46be895640139d344ace174e2cdb6b0d988f7e83fd97844",
         size: 25_347_176,

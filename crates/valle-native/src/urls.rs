@@ -1,7 +1,8 @@
 //! Files from the web, downloaded into the global cache.
 //!
-//! A file is kept under `files/` by the SHA-256 of its content, so one file at two URLs is kept
-//! once. What a URL served last is recorded under `urls/`, by the SHA-256 of the URL, with the
+//! A file is kept as `files/<SHA-256 of its content>/<its name>`: the folder finds it, the name
+//! tells a person what it is. A URL's file takes its name from the URL's last segment. What a URL
+//! served last is recorded under `urls/`, by the SHA-256 of the URL, with the
 //! response's validators: each fetch asks the server whether that is still current. A pinned fetch
 //! names the content's SHA-256 instead, and never asks again once the file is there.
 //!
@@ -34,6 +35,7 @@ pub struct UrlCache {
 struct Record {
     url: String,
     sha256: String,
+    name: String,
     etag: Option<String>,
     last_modified: Option<String>,
 }
@@ -89,6 +91,7 @@ impl UrlCache {
     /// server cannot be reached, a copy downloaded before is used.
     pub fn fetch(&self, url: &str) -> Result<PathBuf, String> {
         web(url)?;
+        let name = name(url);
         let urls = self.folder("urls")?;
         let key = hex(&sha256(url.as_bytes()));
         let _lock = lock(&urls.join(format!("{key}.lock")))?;
@@ -96,19 +99,25 @@ impl UrlCache {
         let record = fs::read(&record_path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok())
-            .filter(|record| record.url == url && self.file(&record.sha256).is_file());
+            .filter(|record| {
+                record.url == url && self.file(&record.sha256, &record.name).is_file()
+            });
         match self.download(url, record.as_ref()) {
-            Ok(Answer::NotModified) => Ok(self.file(&record.expect("asked about it").sha256)),
+            Ok(Answer::NotModified) => {
+                let record = record.expect("asked about it");
+                Ok(self.file(&record.sha256, &record.name))
+            }
             Ok(Answer::File {
                 part,
                 sha256,
                 etag,
                 last_modified,
             }) => {
-                let path = self.publish(&part, &sha256)?;
+                let path = self.publish(&part, &sha256, &name)?;
                 let record = Record {
                     url: url.to_string(),
                     sha256,
+                    name,
                     etag,
                     last_modified,
                 };
@@ -120,16 +129,16 @@ impl UrlCache {
                 Ok(path)
             }
             Err(failure) => match record {
-                Some(record) if failure.passing => Ok(self.file(&record.sha256)),
+                Some(record) if failure.passing => Ok(self.file(&record.sha256, &record.name)),
                 _ => Err(format!("{url}: {}", failure.message)),
             },
         }
     }
 
-    /// The file with SHA-256 `sha256` that `url` serves: downloaded once and checked, then never
-    /// asked for again.
-    pub fn fetch_pinned(&self, url: &str, sha256: &str) -> Result<PathBuf, String> {
-        let path = self.file(sha256);
+    /// The file with SHA-256 `sha256` that `url` serves, kept as `name`: downloaded once and
+    /// checked, then never asked for again.
+    pub fn fetch_pinned(&self, url: &str, sha256: &str, name: &str) -> Result<PathBuf, String> {
+        let path = self.file(sha256, name);
         if path.is_file() {
             return Ok(path);
         }
@@ -142,7 +151,7 @@ impl UrlCache {
         match self.download(url, None) {
             Ok(Answer::File {
                 part, sha256: got, ..
-            }) if got == sha256 => self.publish(&part, sha256),
+            }) if got == sha256 => self.publish(&part, sha256, name),
             Ok(Answer::File {
                 part, sha256: got, ..
             }) => {
@@ -154,9 +163,9 @@ impl UrlCache {
         }
     }
 
-    /// Where the file with SHA-256 `sha256` is kept.
-    fn file(&self, sha256: &str) -> PathBuf {
-        self.root.join("files").join(sha256)
+    /// Where the file with SHA-256 `sha256` is kept as `name`.
+    fn file(&self, sha256: &str, name: &str) -> PathBuf {
+        self.root.join("files").join(sha256).join(name)
     }
 
     /// Downloads `url`, asking whether `cached` is still current, with more tries for failures
@@ -252,9 +261,9 @@ impl UrlCache {
     }
 
     /// Moves a downloaded file into place.
-    fn publish(&self, part: &Path, sha256: &str) -> Result<PathBuf, String> {
-        let path = self.file(sha256);
-        self.folder("files")?;
+    fn publish(&self, part: &Path, sha256: &str, name: &str) -> Result<PathBuf, String> {
+        let path = self.file(sha256, name);
+        self.folder(&format!("files/{sha256}"))?;
         fs::rename(part, &path).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(path)
     }
@@ -280,6 +289,25 @@ fn web(url: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("{url}: not an HTTP or HTTPS address"))
+    }
+}
+
+/// The name a file from `url` is kept as: the URL's last segment, or `file` when that is empty or
+/// has a character other than a letter, a digit, `.`, `-` or `_`.
+fn name(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    // After the host.
+    let path = path
+        .split_once("://")
+        .and_then(|(_, rest)| rest.split_once('/'));
+    let last = path.map_or("", |(_, path)| path.rsplit('/').next().unwrap_or_default());
+    let plain = last
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+    if plain && !last.trim_matches('.').is_empty() {
+        last.to_string()
+    } else {
+        "file".to_string()
     }
 }
 

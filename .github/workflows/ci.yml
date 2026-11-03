@@ -31,12 +31,12 @@ jobs:
         with:
           path: ~/.bun/install/cache
           key: bun-${{ hashFiles('bun.lock') }}
-      # The built-in fonts the tests download, kept by their SHA-256.
+      # The built-in fonts the tests download, as files/<SHA-256>/<name>.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.valle/cache/files
-          key: fonts-${{ hashFiles('crates/valle-engine/src/text.rs') }}
-          restore-keys: fonts-
+          key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs') }}
+          restore-keys: downloads-
       - name: Check formatting
         run: cargo xtask fmt --check
       - name: Lint
@@ -58,12 +58,12 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1' }}
-      # The built-in fonts the tests download, kept by their SHA-256.
+      # The built-in fonts the tests download, as files/<SHA-256>/<name>.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.valle/cache/files
-          key: fonts-${{ hashFiles('crates/valle-engine/src/text.rs') }}
-          restore-keys: fonts-
+          key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs') }}
+          restore-keys: downloads-
       - name: Test
         run: cargo xtask test
       - name: Keep the frames to review
@@ -86,12 +86,12 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/v1' }}
-      # The built-in fonts the tests download, kept by their SHA-256.
+      # The built-in fonts the tests download, as files/<SHA-256>/<name>.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.valle/cache/files
-          key: fonts-${{ hashFiles('crates/valle-engine/src/text.rs') }}
-          restore-keys: fonts-
+          key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs') }}
+          restore-keys: downloads-
       # No GPU here either.
       - name: Test
         run: cargo xtask test --skip gpu,browser

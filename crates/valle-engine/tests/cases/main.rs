@@ -121,7 +121,9 @@ fn main() -> ExitCode {
     };
     // The built-in fonts, which Chrome's pages name, downloaded before the cases run.
     for font in &BUILT_IN {
-        if let Err(e) = UrlCache::global().and_then(|c| c.fetch_pinned(font.url, font.sha256)) {
+        if let Err(e) =
+            UrlCache::global().and_then(|c| c.fetch_pinned(font.url, font.sha256, font.file))
+        {
             eprintln!("cases: the font {}: {e}", font.name);
             return ExitCode::FAILURE;
         }
@@ -468,6 +470,7 @@ impl Runner {
                     }
                 }
                 _ => jobs.push(chrome::Job {
+                    page: page(&html)?,
                     html,
                     size,
                     out: out.to_string_lossy().into_owned(),
@@ -782,7 +785,21 @@ fn write_png(path: &Path, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {
 
 /// The file of built-in font `font` in the global cache.
 fn cached(font: &BuiltIn) -> Result<PathBuf, String> {
-    UrlCache::global()?.fetch_pinned(font.url, font.sha256)
+    UrlCache::global()?.fetch_pinned(font.url, font.sha256, font.file)
+}
+
+/// The page Chrome loads for `html`: each built-in font it names by its file's name the file in
+/// the cache, which the server `web/tests/chrome.ts` runs gives under `/file`.
+fn page(html: &str) -> Result<String, String> {
+    let mut page = html.to_string();
+    for font in &BUILT_IN {
+        let name = format!("url(\"{}\")", font.file);
+        if page.contains(&name) {
+            let path = cached(font)?;
+            page = page.replace(&name, &format!("url(\"/file{}\")", path.display()));
+        }
+    }
+    Ok(page)
 }
 
 /// The built-in fonts, from the global cache, each read once for all the cases.

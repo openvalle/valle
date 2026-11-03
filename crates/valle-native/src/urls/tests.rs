@@ -72,7 +72,8 @@ fn files_are_downloaded_once_and_revalidated() {
     ]);
     let first = cache.fetch(&server.url).unwrap();
     assert_eq!(read(&first), "one");
-    assert_eq!(first, root.join("files").join(hex(&sha256(b"one"))));
+    let one = hex(&sha256(b"one"));
+    assert_eq!(first, root.join("files").join(one).join("font.ttf"));
     assert_eq!(cache.fetch(&server.url).unwrap(), first);
     let url = server.url.clone();
     let requests = server.finish();
@@ -134,19 +135,35 @@ fn pinned_files_are_checked_and_never_asked_for_again() {
     let (cache, root) = cache("pinned");
     let font = hex(&sha256(b"font"));
     let server = Server::new(vec![reply(200, &[], "other"), reply(200, &[], "font")]);
-    let e = cache.fetch_pinned(&server.url, &font).unwrap_err();
+    let e = cache
+        .fetch_pinned(&server.url, &font, "Font.ttf")
+        .unwrap_err();
     let other = hex(&sha256(b"other"));
     assert_eq!(
         e,
         format!("{}: the file's SHA-256 is {other}, not {font}", server.url)
     );
     assert!(!root.join("files").join(&other).exists());
-    let path = cache.fetch_pinned(&server.url, &font).unwrap();
+    let path = cache.fetch_pinned(&server.url, &font, "Font.ttf").unwrap();
     assert_eq!(read(&path), "font");
+    assert_eq!(path, root.join("files").join(&font).join("Font.ttf"));
     let url = server.url.clone();
     server.finish();
     // The server is gone, and is not needed.
-    assert_eq!(cache.fetch_pinned(&url, &font).unwrap(), path);
+    assert_eq!(cache.fetch_pinned(&url, &font, "Font.ttf").unwrap(), path);
     assert_eq!(fs::read_dir(root.join("partial")).unwrap().count(), 0);
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn files_are_named_by_the_last_segment_of_their_url() {
+    assert_eq!(
+        name("https://example.com/fonts/Inter.woff2?v=4#x"),
+        "Inter.woff2"
+    );
+    assert_eq!(name("https://example.com/a/b-c_d.1.ttf"), "b-c_d.1.ttf");
+    assert_eq!(name("https://example.com/"), "file");
+    assert_eq!(name("https://example.com"), "file");
+    assert_eq!(name("https://example.com/.."), "file");
+    assert_eq!(name("https://example.com/f%C3%BCr.ttf"), "file");
 }

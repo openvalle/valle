@@ -72,10 +72,12 @@ pub struct Properties {
     pub paths: BTreeMap<String, serde_json::Value>,
 }
 
-/// A baseline to draw: the HTML, the canvas size, and its path without the extension.
+/// A baseline to draw: the HTML, the page Chrome loads, the canvas size, and its path without the
+/// extension.
 #[derive(Serialize)]
 pub struct Job {
     pub html: String,
+    pub page: String,
     pub size: [u32; 2],
     pub out: String,
 }
