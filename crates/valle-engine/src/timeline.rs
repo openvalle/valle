@@ -22,6 +22,14 @@ use crate::front::{self, Declared, Holds, Inputs, Role};
 use crate::template::{self, ClipTime, Clips, Error};
 use crate::time::{Speed, Tick};
 
+/// The standard caption template, which the scene imports from beside the document.
+const CAPTION: &str = include_str!("../templates/caption.motion.tsx");
+
+/// Where the scene finds the caption template.
+fn template_path(folder: &str) -> String {
+    front::join(folder, "__valle/caption.motion.tsx")
+}
+
 /// A color grade's temperature, as the old engine had it: red times 2^(t / 4), blue divided by
 /// it, of what is under it.
 const GRADE: &str = "#version 300 es
@@ -64,6 +72,7 @@ pub fn lower(path: &str, doc: &Document, host: &Host<'_>) -> Result<Lowered, Err
         clips: Clips::new(),
         functions: Vec::new(),
         drawn: Vec::new(),
+        template: false,
     };
     let [w, h] = [doc.canvas.width, doc.canvas.height];
     let fill = format!("{{ position: \"absolute\", left: 0, top: 0, width: {w}, height: {h} }}");
@@ -74,15 +83,20 @@ pub fn lower(path: &str, doc: &Document, host: &Host<'_>) -> Result<Lowered, Err
             // Sound is the mix's.
             valle_timeline::Kind::Audio => {}
             valle_timeline::Kind::Adjustment => body = l.adjustment(track, body, &fill)?,
-            valle_timeline::Kind::Caption => {
-                return Err(format!(
-                    "{}: caption tracks are not supported yet",
-                    track.at
-                ));
-            }
+            // Over all the rest.
+            valle_timeline::Kind::Caption => {}
+        }
+    }
+    for track in &doc.tracks {
+        if track.kind == valle_timeline::Kind::Caption {
+            body.push_str(&l.captions(track, &fill)?);
         }
     }
 
+    let mut files = HashMap::new();
+    if l.template {
+        files.insert(template_path(folder), CAPTION.to_string());
+    }
     let mut code = String::from("// The scene a Timeline document plays as.\n");
     for (name, file) in &l.imports {
         writeln!(
@@ -125,8 +139,9 @@ export default function Timeline() {{
         drawn: l.drawn,
         ..Inputs::default()
     };
+    files.insert(entry.clone(), code);
     Ok(Lowered {
-        files: HashMap::from([(entry.clone(), code)]),
+        files,
         entry,
         inputs,
     })
@@ -148,6 +163,8 @@ struct Lowering<'a> {
     functions: Vec<String>,
     /// The pictures boxes of the scene draw, `p0`, `p1`…
     drawn: Vec<String>,
+    /// Whether a caption track draws with the standard template.
+    template: bool,
 }
 
 impl Lowering<'_> {
@@ -556,6 +573,126 @@ impl Lowering<'_> {
             let shown = self.scope(&id, &id, table, &[], fill, &inside);
             writeln!(out, "        {shown}").unwrap();
         }
+        out.push_str("      </View>\n");
+        Ok(out)
+    }
+
+    /// A caption track: each caption a clip of the table, drawn by its presenter or by the
+    /// standard template in the track's style, given its `caption`, `{ text, runs }`.
+    fn captions(&mut self, track: &Track, fill: &str) -> Result<String, Error> {
+        let at = track.at.as_str();
+        let (made, d, name) = match &track.presenter {
+            Some(c) => {
+                let w = format!("{at}.presenter.component");
+                let (d, name) = self.component(&c.component, &w)?;
+                if !matches!(d.role, Role::CaptionPresenter { .. }) {
+                    return Err(format!(
+                        "{w}: {} is not a captionPresenter(); a presenter declares `export const \
+                         role = captionPresenter({{ intro, outro }})` and reads its caption prop",
+                        c.component
+                    ));
+                }
+                (None, d, name)
+            }
+            None => {
+                let path = template_path(self.folder);
+                let read = |p: &str| match p == path {
+                    true => Some(CAPTION.to_string()),
+                    false => (self.host.read)(p),
+                };
+                let d = Rc::new(front::declared(&path, &read)?);
+                let name = format!("C{}", self.imports.len());
+                self.imports.push((name.clone(), path));
+                self.template = true;
+                // The track's style as the template's props; its font a resource of the scene.
+                let mut c = Component {
+                    component: "the caption template".into(),
+                    props: Vec::new(),
+                    data: None,
+                    resources: BTreeMap::new(),
+                };
+                for (k, v) in track.style.iter().flatten() {
+                    let w = format!("{at}.style.{k}");
+                    let value = match k.as_str() {
+                        "font" => {
+                            let alias = v
+                                .as_str()
+                                .ok_or_else(|| format!("{w}: the alias of a font resource"))?;
+                            let files = self.files(alias, &w)?;
+                            Value::String(self.resource(Holds::Font, files))
+                        }
+                        _ if k != "fontFamily" && d.props.iter().any(|p| p.name == *k) => v.clone(),
+                        _ => {
+                            let mut names: Vec<&str> = (d.props.iter())
+                                .map(|p| p.name.as_str())
+                                .filter(|n| *n != "fontFamily")
+                                .collect();
+                            names.insert(0, "font");
+                            return Err(format!(
+                                "{w}: a caption style has no {k}; it takes {}",
+                                names.join(", ")
+                            ));
+                        }
+                    };
+                    let k = if k == "font" { "fontFamily" } else { k };
+                    c.props.push((k.to_string(), Animated::Constant(value)));
+                }
+                (Some(c), d, name)
+            }
+        };
+        let c = (made.as_ref())
+            .or(track.presenter.as_ref())
+            .expect("a presenter or the template's");
+        let mut scope = Scope::default();
+        let props = self.given(c, &d, at, None, &mut scope)?;
+        let mut captions = Vec::new();
+        let mut out = format!("      <View key={} style={{{fill}}}>\n", js(&track.id));
+        let list = format!("CAPTIONS{}", self.functions.len());
+        let shows = format!("K{}", self.functions.len() + 1);
+        for clip in track.clips.iter().filter(|c| c.enabled) {
+            let Content::Caption { text, runs } = &clip.content else {
+                unreachable!("a caption track holds captions: {}", clip.at)
+            };
+            if let Some((intro, outro)) = d.role.ends()
+                && clip.duration < intro + outro
+            {
+                return Err(format!(
+                    "{}.duration: {} s is shorter than the presenter's intro and outro, {} s",
+                    clip.at,
+                    clip.duration.seconds_text(),
+                    (intro + outro).seconds_text()
+                ));
+            }
+            let runs: Vec<Value> = (runs.iter())
+                .map(|r| {
+                    serde_json::json!({
+                        "text": r.text,
+                        "start": r.start.seconds(),
+                        "end": r.end.seconds(),
+                    })
+                })
+                .collect();
+            captions.push(serde_json::json!({ "text": text, "runs": runs }));
+            let table = template::Clip {
+                start: clip.start,
+                end: clip.end(),
+                on: [clip.start, clip.end()],
+                time: ClipTime::Role {
+                    role: d.role,
+                    duration: d.composition.duration,
+                },
+                frames: None,
+            };
+            let props = self.role_props(&d, clip.duration, &scope);
+            let inside = format!("<{shows} k={{{}}} />", captions.len() - 1);
+            let shown = self.scope(&clip.id, &clip.id, table, &props, fill, &inside);
+            writeln!(out, "        {shown}").unwrap();
+        }
+        self.functions
+            .push(format!("const {list} = {};\n", js(&captions)));
+        self.functions.push(format!(
+            "function {shows}({{ k }}) {{\n  const t = useCurrentTime().clipSeconds;\n  return (\n    <View style={{{{ position: \"absolute\", inset: 0 }}}}>\n      <{name} {{...{props}}} caption={{{list}[k]}} />\n    </View>\n  );\n}}\n"
+        ));
         out.push_str("      </View>\n");
         Ok(out)
     }
