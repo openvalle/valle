@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use crate::ease::Easing;
 use crate::js::MathFn;
+use crate::noise::Wiggle;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
 use crate::template::{
@@ -42,6 +43,9 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
     if let Some(f) = name.strip_prefix("math|") {
         let f = MathFn::parse(f).ok_or_else(|| format!("no Math function {f}"))?;
         return Ok(Op::Math(f, exprs()?));
+    }
+    if let Some(spec) = name.strip_prefix("wiggle|") {
+        return Ok(Op::Wiggle(fixed(1)?[0], Wiggle::parse(spec)?));
     }
     if let Some(spec) = name.strip_prefix("table|") {
         return Ok(Op::Table(fixed(1)?[0], Rc::new(Table::parse(spec)?)));

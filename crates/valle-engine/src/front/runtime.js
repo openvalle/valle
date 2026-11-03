@@ -646,6 +646,42 @@
   const SIMULATE = ["dt", "duration", "init", "step"];
   const MAX_STEPS = 16384;
 
+  // `wiggle(t, { seed, frequency, amplitude, phase })`: a value drifting within ±amplitude,
+  // `frequency` times a second; `wiggle2D` takes an amplitude for each axis and gives `{ x, y }`.
+  function wiggleOf(name, t, options, axes) {
+    const o = options ?? {};
+    if (keys(o).some((k) => !WIGGLE.includes(k))) {
+      throw new TypeError(name + " takes " + WIGGLE.join(", "));
+    }
+    const fix = (v) => (v instanceof T ? exact(v, name, site()) : v);
+    const [seed, frequency, phase] = [fix(o.seed ?? 0), fix(o.frequency), fix(o.phase ?? 0)];
+    let amplitude = fix(o.amplitude);
+    if (axes === 2 && !isArray(amplitude)) amplitude = [amplitude, amplitude];
+    const amplitudes = axes === 2 ? amplitude.map(fix) : [amplitude];
+    if (!Number.isSafeInteger(seed) || seed < 0) {
+      throw new TypeError(name + " seed must be a whole number, at least 0");
+    }
+    if (!(Number.isFinite(frequency) && frequency > 0) || !Number.isFinite(phase)) {
+      throw new TypeError(name + " frequency must be a number over 0, and phase a number");
+    }
+    if (amplitudes.length !== axes || !amplitudes.every(Number.isFinite)) {
+      throw new TypeError(
+        name + " amplitude must be a number" + (axes === 2 ? ", or [x, y] numbers" : ""),
+      );
+    }
+    if (!numeric(t)) throw new TypeError(name + " takes a number of seconds");
+    return amplitudes.map((a, axis) => {
+      const op = "wiggle|" + [seed, frequency, a, phase, axis].join("|");
+      return isT(t) ? mk(op, [t]) : host.op(op, [t]);
+    });
+  }
+  const WIGGLE = ["seed", "frequency", "amplitude", "phase"];
+  const wiggle = (t, options) => wiggleOf("wiggle", t, options, 1)[0];
+  const wiggle2D = (t, options) => {
+    const [x, y] = wiggleOf("wiggle2D", t, options, 2);
+    return { x, y };
+  };
+
   // `freezeTime(t, { from, to })`: the time held at `from` until `to`, later less the time held.
   function freezeTime(t, options) {
     const o = options ?? {};
@@ -1321,6 +1357,8 @@
     defineSequence,
     freezeTime,
     simulate,
+    wiggle,
+    wiggle2D,
     stageProgress,
     staggerProgress,
     repeatProgress,

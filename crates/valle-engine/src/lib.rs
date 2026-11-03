@@ -8,6 +8,7 @@ pub mod gpu;
 pub mod image;
 pub mod js;
 pub mod layout;
+pub mod noise;
 pub mod paint;
 pub mod path;
 pub mod scene;

@@ -7,6 +7,7 @@ use std::borrow::Cow;
 use std::rc::Rc;
 
 use crate::ease::Easing;
+use crate::noise::Wiggle;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
 
@@ -103,6 +104,7 @@ pub enum Op {
     Freeze(u32, [f64; 2]),
     /// A field of a simulation at the input time.
     Table(u32, Rc<Table>),
+    Wiggle(u32, Wiggle),
     /// `spring(t)`, or its velocity.
     Spring {
         input: u32,

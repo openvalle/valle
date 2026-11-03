@@ -75,6 +75,7 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
         Op::Interp(i) => interpolate(i, values)?,
         Op::Stage(input, stage) => V::Num(stage.at(num(input))),
         Op::Table(input, table) => V::Num(table.at(num(input))),
+        Op::Wiggle(input, wiggle) => V::Num(wiggle.at(num(input))),
         Op::Freeze(input, [from, to]) => V::Num(match num(input) {
             t if t < *from => t,
             t if t < *to => *from,
