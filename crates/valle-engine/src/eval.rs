@@ -92,22 +92,23 @@ fn interpolate(i: &Interp, values: &[V]) -> Result<f64, Error> {
         return Ok(f64::NAN);
     }
     let (first, last) = (stops[0], stops[stops.len() - 1]);
-    if x <= first.0 && !i.extend[0] {
+    if x < first.0 && !i.extend[0] {
         return Ok(first.1);
     }
-    if x >= last.0 && !i.extend[1] {
+    if x > last.0 && !i.extend[1] {
         return Ok(last.1);
     }
     // The segment holding x; the end segments extend past the range.
     let k = stops[1..stops.len() - 1].partition_point(|s| s.0 <= x);
     let ((x0, y0), (x1, y1)) = (stops[k], stops[k + 1]);
-    let t = (x - x0) / (x1 - x0);
+    let t = i.easing.at((x - x0) / (x1 - x0));
     Ok(y0 + t * (y1 - y0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ease::Easing;
     use crate::js::MathFn;
 
     fn program(ops: Vec<Op>) -> Program {
@@ -177,6 +178,7 @@ mod tests {
                 input: 0,
                 stops: vec![(1, 4), (2, 5), (3, 6)],
                 extend,
+                easing: Easing::Linear,
             })),
         ];
         Ok(run(&program(ops), AT)?[7].num())
@@ -200,6 +202,7 @@ mod tests {
                 input: 0,
                 stops: vec![(1, 1), (2, 2)],
                 extend: [false; 2],
+                easing: Easing::Linear,
             })),
         ];
         let e = run(&program(decreasing), AT).unwrap_err();

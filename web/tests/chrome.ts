@@ -16,6 +16,35 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 type Job = { html: string; size: [number, number]; out: string };
+/** The easings `ease.rs` is tested against. */
+const EASINGS = [
+  "linear",
+  "ease",
+  "ease-in",
+  "ease-out",
+  "ease-in-out",
+  "step-start",
+  "step-end",
+  "cubic-bezier(0.1, 0.7, 1, 0.1)",
+  "cubic-bezier(0.68, -0.6, 0.32, 1.6)",
+  "cubic-bezier(0, 1, 0, 1)",
+  "cubic-bezier(1, 0, 1, 0)",
+  "cubic-bezier(0, 0, 1, 1)",
+  "steps(3)",
+  "steps(4, start)",
+  "steps(4, jump-start)",
+  "steps(3, jump-none)",
+  "steps(3, jump-both)",
+  "steps(2, end)",
+  "linear(0, 1)",
+  "linear(0, 0.25 25% 75%, 1)",
+  "linear(0, 0.7, 0.3, 1)",
+  "linear(0, 1.2 60%, 0.9 80%, 1)",
+  "linear(0 20%, 1 80%)",
+  "linear(0.5, 0.5 20%, 0 40% 40%, 1)",
+  "linear(0, 0.5 60%, 0.2 40%, 1)",
+];
+
 type Measured = {
   boxes: number[][];
   lines: Record<string, string[]>;
@@ -148,9 +177,16 @@ async function draw() {
       returnByValue: true,
     });
     const properties = (result.value as string[]).map((p) => `  ${JSON.stringify(p)}`).join(",\n");
+    const { result: curves } = await page("Runtime.evaluate", {
+      expression: `(${eased})(${JSON.stringify(EASINGS)})`,
+      returnByValue: true,
+    });
+    const easings = Object.entries(curves.value as Record<string, number[]>)
+      .map(([e, v]) => `  ${JSON.stringify(e)}: ${JSON.stringify(v)}`)
+      .join(",\n");
     await Bun.write(
       join(root, "tests/baselines/chrome/properties.json"),
-      `{\n "chrome": ${JSON.stringify(version)},\n "properties": [\n${properties}\n ]\n}\n`,
+      `{\n "chrome": ${JSON.stringify(version)},\n "properties": [\n${properties}\n ],\n "easings": {\n${easings}\n }\n}\n`,
     );
     await cdp.send("Browser.close").catch(() => {});
   } finally {
@@ -373,6 +409,22 @@ function measure(): Promise<Measured> {
     moved.forEach((e, i) => e.setAttribute("style", written[i]));
     return { boxes, lines: text, fonts, refused };
   });
+}
+
+/** Runs in the page: each easing's progress at twenty-firsts of a second of an animation. */
+function eased(easings: string[]): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  for (const easing of easings) {
+    const options = { duration: 1000, easing, fill: "both" as const };
+    const animation = document.documentElement.animate({ opacity: [0, 1] }, options);
+    animation.pause();
+    out[easing] = Array.from({ length: 21 }, (_, i) => {
+      animation.currentTime = i * 50;
+      return animation.effect!.getComputedTiming().progress!;
+    });
+    animation.cancel();
+  }
+  return out;
 }
 
 /** Runs in the page: the CSS properties Chrome knows, by their CSS names, sorted. */

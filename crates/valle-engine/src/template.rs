@@ -6,6 +6,8 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
+use crate::ease::Easing;
+
 use crate::js::{self, MathFn};
 
 pub type Error = String;
@@ -104,6 +106,8 @@ pub struct Interp {
     pub stops: Vec<(u32, u32)>,
     /// Past the first stop and past the last: extend the end segment (true) or clamp (false).
     pub extend: [bool; 2],
+    /// Between each two stops.
+    pub easing: Easing,
 }
 
 /// Expressions in dependency order: every operand has a lower index.

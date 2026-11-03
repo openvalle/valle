@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use serde::Deserialize;
 
+use crate::ease::Easing;
 use crate::js::MathFn;
 use crate::template::{
     Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Tag, Template, V,
@@ -46,7 +47,9 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
             "extend" => Ok(true),
             _ => Err(format!("interpolate extrapolation {s}")),
         };
-        let (left, right) = spec.split_once('|').ok_or("interpolate spec")?;
+        let mut spec = spec.splitn(3, '|');
+        let mut part = || spec.next().ok_or("interpolate spec");
+        let (left, right, easing) = (part()?, part()?, part()?);
         let a = exprs()?;
         let n = a.len().saturating_sub(1) / 2;
         if n < 2 || a.len() != 1 + 2 * n {
@@ -58,6 +61,7 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
             input: a[0],
             stops: (0..n).map(|i| (a[1 + i], a[1 + n + i])).collect(),
             extend: [side(left)?, side(right)?],
+            easing: Easing::parse(easing)?,
         })));
     }
     let bin = |b: Bin| -> Result<Op, Error> {
@@ -349,15 +353,17 @@ mod tests {
             make("math|sin", &[e(3)]),
             Ok(Op::Math(MathFn::Sin, vec![3]))
         );
-        let Ok(Op::Interp(i)) = make("interpolate|clamp|extend", &[e(0), e(1), e(2), e(3), e(4)])
-        else {
+        let Ok(Op::Interp(i)) = make(
+            "interpolate|clamp|extend|ease",
+            &[e(0), e(1), e(2), e(3), e(4)],
+        ) else {
             panic!("an interpolation")
         };
         assert_eq!(
-            (i.input, &i.stops[..], i.extend),
-            (0, &[(1, 3), (2, 4)][..], [false, true])
+            (i.input, &i.stops[..], i.extend, i.easing.at(1.0)),
+            (0, &[(1, 3), (2, 4)][..], [false, true], 1.0)
         );
-        assert!(make("interpolate|clamp|clamp", &[e(0), e(1), e(2)]).is_err());
+        assert!(make("interpolate|clamp|clamp|linear", &[e(0), e(1), e(2)]).is_err());
         assert!(
             make("add", &[e(0)])
                 .unwrap_err()

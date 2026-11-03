@@ -496,7 +496,8 @@ impl Runner {
         let path = self.chrome_baselines.join("properties.json");
         let listed = || {
             let list = chrome::read::<chrome::Properties>(&path)?;
-            Ok::<_, String>(list.filter(|l| l.chrome == *version).map(|l| l.properties))
+            let drawn = list.filter(|l| l.chrome == *version && !l.easings.is_empty());
+            Ok::<_, String>(drawn.map(|l| l.properties))
         };
         if let Some(known) = listed()? {
             return Ok(known);

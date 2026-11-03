@@ -61,6 +61,9 @@ pub struct Font {
 pub struct Properties {
     pub chrome: String,
     pub properties: Vec<String>,
+    /// Each easing's progress at twenty-firsts of the way, which `ease.rs` is tested against.
+    #[serde(default)]
+    pub easings: BTreeMap<String, Vec<f64>>,
 }
 
 /// A baseline to draw: the HTML, the canvas size, and its path without the extension.

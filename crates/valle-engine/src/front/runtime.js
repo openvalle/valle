@@ -460,7 +460,8 @@
 
   const EXTRAPOLATE = ["clamp", "extend"];
 
-  // `interpolate(input, inputs, outputs, { extrapolateLeft, extrapolateRight })` over numbers.
+  // `interpolate(input, inputs, outputs, { easing, extrapolateLeft, extrapolateRight })` over
+  // numbers.
   // The options decide the op, so a traced option is fixed by a guard.
   function interpolate(x, inputs, outputs, options) {
     if (
@@ -475,14 +476,20 @@
     }
     const o = options ?? {};
     for (const k of keys(o)) {
-      if (k !== "extrapolateLeft" && k !== "extrapolateRight") {
+      if (k !== "easing" && k !== "extrapolateLeft" && k !== "extrapolateRight") {
         throw new TypeError(
-          "interpolate has no option " + k + "; it takes extrapolateLeft and extrapolateRight",
+          "interpolate has no option " +
+            k +
+            "; it takes easing, extrapolateLeft and extrapolateRight",
         );
       }
     }
+    const fixed = (k, otherwise) =>
+      o[k] instanceof T ? exact(o[k], "interpolate", site()) : (o[k] ?? otherwise);
+    const easing = fixed("easing", "linear");
+    if (typeof easing !== "string") throw new TypeError("interpolate easing must be a string");
     const side = (k) => {
-      const e = o[k] instanceof T ? exact(o[k], "interpolate", site()) : (o[k] ?? "clamp");
+      const e = fixed(k, "clamp");
       if (!EXTRAPOLATE.includes(e)) {
         throw new TypeError("interpolate " + k + ' must be "clamp" or "extend"');
       }
@@ -490,7 +497,8 @@
     };
     const args = [x, ...inputs, ...outputs];
     if (!args.every(numeric)) throw new TypeError("interpolate takes numbers");
-    const name = "interpolate|" + side("extrapolateLeft") + "|" + side("extrapolateRight");
+    const left = side("extrapolateLeft");
+    const name = "interpolate|" + left + "|" + side("extrapolateRight") + "|" + easing;
     return args.some(isT) ? mk(name, args) : host.op(name, args);
   }
 
