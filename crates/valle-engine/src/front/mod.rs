@@ -12,6 +12,7 @@
 pub mod controls;
 mod lower;
 mod rewrite;
+pub mod role;
 #[cfg(test)]
 mod tests;
 
@@ -32,6 +33,7 @@ use crate::time::{Rate, Tick};
 pub use controls::{Inputs, Prop};
 use lower::{Arg, At};
 pub use rewrite::{BUILT_IN_FAMILIES, Holds, Slot};
+pub use role::{Hold, Role};
 
 const RUNTIME: &str = include_str!("runtime.js");
 /// The built-in charts, d3's subset, which run as scene code.
@@ -96,6 +98,8 @@ pub struct Front {
     /// The resources it declares, each default a path joined to the scene's folder or a web
     /// address.
     pub resources: Vec<Slot>,
+    /// Its role in a Timeline.
+    pub role: Role,
     /// What its root component takes: the props' and data's values, as JSON.
     values: String,
     entry: String,
@@ -176,6 +180,17 @@ impl Front {
                      = {{ width: 1920, height: 1080, fps: 30, duration: 5 }}`"
             )
         })?;
+        let role = scene.role;
+        if let Some((intro, outro)) = role.ends()
+            && intro + outro > composition.duration
+        {
+            return Err(format!(
+                "{entry}: role: the intro and the outro, {} s, are longer than the composition, \
+                 {} s",
+                (intro + outro).seconds_text(),
+                composition.duration.seconds_text()
+            ));
+        }
 
         let runtime = Runtime::new_with_alloc(Counted(0)).map_err(|e| e.to_string())?;
         runtime.set_max_stack_size(STACK);
@@ -208,6 +223,7 @@ impl Front {
             props,
             data,
             resources,
+            role,
             values,
             entry: entry.to_string(),
             modules,

@@ -48,6 +48,7 @@ use oxc::transformer::{JsxRuntime, TransformOptions, Transformer};
 
 use super::Composition;
 use super::controls::{self, Prop};
+use super::role::{self, Role};
 use crate::time::{Rate, Tick};
 
 /// A place in the source where the runtime may record a guard or an element.
@@ -76,6 +77,8 @@ pub struct Rewritten {
     pub data: Vec<Prop>,
     /// The resources it declares.
     pub resources: Vec<Slot>,
+    /// Its role in a Timeline.
+    pub role: Role,
 }
 
 /// A resource `controls.resources` declares: its name, what it holds, and the file it reads, as
@@ -135,6 +138,14 @@ pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten,
         format!("{line}:{col}: {e}")
     };
     let composition = composition(&program).map_err(at)?;
+    let role = match exported(&program, "role") {
+        None => Role::Clip,
+        Some((offset, e)) => {
+            let e = e.ok_or((offset, "role is declared with its value".to_string()));
+            e.and_then(|e| role::read(e).map_err(|m| (offset, m)))
+                .map_err(at)?
+        }
+    };
     let Declared {
         props,
         data,
@@ -260,6 +271,7 @@ pub fn rewrite(path: &str, source: &str, first_site: usize) -> Result<Rewritten,
         props,
         data,
         resources,
+        role,
     })
 }
 
@@ -1205,6 +1217,55 @@ mod tests {
         assert!(e.starts_with("2:1: async functions and await"), "{e}");
         let e = err("function f() {\n  const g = async () => 1;\n}\n");
         assert!(e.starts_with("2:13:"), "{e}");
+    }
+
+    #[test]
+    fn roles_are_read_statically() {
+        let role = |code: &str| rewrite("s.motion.tsx", code, 0).map(|r| r.role);
+        let s = |x: f64| Tick::from_seconds(x).unwrap();
+        assert_eq!(role("export const a = 1;\n"), Ok(Role::Clip));
+        assert_eq!(
+            role("export const role = overlay({ intro: 0.5, outro: 1, hold: \"loop\" });\n"),
+            Ok(Role::Overlay {
+                intro: s(0.5),
+                outro: s(1.0),
+                hold: role::Hold::Loop
+            })
+        );
+        assert_eq!(
+            role("export const role = overlay();\n"),
+            Ok(Role::Overlay {
+                intro: Tick::ZERO,
+                outro: Tick::ZERO,
+                hold: role::Hold::Once
+            })
+        );
+        assert_eq!(
+            role("export const role = transition();\n"),
+            Ok(Role::Transition)
+        );
+        assert_eq!(role("export const role = effect();\n"), Ok(Role::Effect));
+        assert_eq!(
+            role("export const role = captionPresenter({ intro: 0.25 });\n"),
+            Ok(Role::CaptionPresenter {
+                intro: s(0.25),
+                outro: Tick::ZERO
+            })
+        );
+        let e = err("const r = effect();\nexport const role = r;\n");
+        assert!(e.starts_with("2:14: role must be one of overlay"), "{e}");
+        let e = err("export const role = overlay({ hold: \"freeze\" });\n");
+        assert!(
+            e.ends_with("hold is \"once\", \"loop\" or \"stretch\", not \"freeze\""),
+            "{e}"
+        );
+        let e = err("export const role = overlay({ intro: -1 });\n");
+        assert!(e.ends_with("intro is seconds, 0 or more, not -1"), "{e}");
+        let e = err("export const role = effect({ amount: 1 });\n");
+        assert!(
+            e.ends_with("role effect() has no option amount; it takes none"),
+            "{e}"
+        );
     }
 
     #[test]

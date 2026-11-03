@@ -349,7 +349,7 @@ fn bind(
 }
 
 /// An object literal of JSON values.
-fn object(o: &ObjectExpression<'_>) -> Result<Map<String, Value>, String> {
+pub(super) fn object(o: &ObjectExpression<'_>) -> Result<Map<String, Value>, String> {
     let mut out = Map::new();
     for p in &o.properties {
         let ObjectPropertyKind::ObjectProperty(p) = p else {

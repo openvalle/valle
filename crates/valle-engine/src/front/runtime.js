@@ -481,6 +481,9 @@
   // A prop of `controls.props` of a kind, which tools read without running the scene.
   const propKind = (kind) => (options) => ({ kind, ...options });
 
+  // The scene's role in a Timeline, which tools read without running the scene.
+  const roleOf = (role) => (options) => ({ role, ...options });
+
   const EXTRAPOLATE = ["clamp", "extend"];
   const INTERPOLATE = ["easing", "colorSpace", "hue", "extrapolateLeft", "extrapolateRight"];
 
@@ -1427,7 +1430,7 @@
   // by `progress`, 0 to 1. A built-in `kind` (fade by default) takes `params`; `code` is a
   // transition in gl-transitions' form, which takes `uniforms`. Kind and code cannot change.
   const TRANSITION = ["kind", "progress", "params", "code", "uniforms", "style", "className"];
-  function transition(props, children, out, at) {
+  function transitionOf(props, children, out, at) {
     if (G.svg > 0) fail(at, "<Transition> cannot be inside an <svg>");
     for (const k of keys(props)) {
       if (k !== "key" && !TRANSITION.includes(k)) {
@@ -1855,7 +1858,7 @@
     if (type === "Echo" || type === "Shutter") return sampling(type, props, children, out, here);
     if (type === "World") return world(props, children, out, here);
     if (type === "Transition" && !props.__transition) {
-      return transition(props, children, out, here);
+      return transitionOf(props, children, out, here);
     }
     element(type, props, children, out, here);
   }
@@ -2334,5 +2337,9 @@
     length: propKind("length"),
     angle: propKind("angle"),
     rect: propKind("rect"),
+    overlay: roleOf("overlay"),
+    transition: roleOf("transition"),
+    effect: roleOf("effect"),
+    captionPresenter: roleOf("captionPresenter"),
   });
 })();
