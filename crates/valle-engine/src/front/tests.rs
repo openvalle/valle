@@ -931,7 +931,7 @@ fn errors_point_at_the_source() {
             ),
             (
                 "<Image src=\"a.png\" />",
-                "such as \"resource://logo\", not \"a.png\"",
+                "such as \"input://source\", not \"a.png\"",
             ),
             (
                 "<Image src=\"resource://a\"><View /></Image>",

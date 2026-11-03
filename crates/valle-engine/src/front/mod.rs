@@ -181,6 +181,12 @@ impl Front {
             )
         })?;
         let role = scene.role;
+        if let Some(k) = (inputs.pictures.keys()).find(|k| !role.inputs().contains(&k.as_str())) {
+            return Err(format!(
+                "{entry}: pictures: the scene reads no input://{k}: the Timeline gives \
+                 input://source to an effect(), and input://from and input://to to a transition()"
+            ));
+        }
         if let Some((intro, outro)) = role.ends()
             && intro + outro > composition.duration
         {
@@ -335,6 +341,7 @@ impl Front {
             &traced,
             &|at| self.place(at),
             &self.resources,
+            self.role.inputs(),
             &self.shaders.borrow(),
         )
     }

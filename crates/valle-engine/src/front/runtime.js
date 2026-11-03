@@ -1397,22 +1397,33 @@
     node.source = { type: "view", path: null, classes: [], style: [], children: [], site: at };
   }
 
-  // An <Image>'s resource, by the name its src gives as a literal: which files a scene reads
-  // cannot depend on time.
+  // The image `src` names: a resource by its name, or a picture the Timeline gives as
+  // `input://name`; null for anything else.
+  function pictureOf(src) {
+    if (typeof src !== "string") return null;
+    if (src.startsWith("resource://")) return src.slice("resource://".length);
+    if (src.startsWith("input://")) return src;
+    return null;
+  }
+
+  // An <Image>'s resource, or the picture it shows, by the name its src gives as a literal:
+  // which files a scene reads cannot depend on time.
   function imageOf(node, props, children, at) {
     const src = props.src;
     if (src instanceof T) {
       fail(at, '<Image> src is written as a literal, such as "resource://logo"; it cannot change');
     }
-    if (typeof src !== "string" || !src.startsWith("resource://")) {
+    const name = pictureOf(src);
+    if (name === null) {
       fail(
         at,
-        '<Image> src is a resource declared in controls.resources, such as "resource://logo", not ' +
+        '<Image> src is a resource declared in controls.resources, such as "resource://logo", ' +
+          'or a picture the Timeline gives, such as "input://source", not ' +
           stringify(src),
       );
     }
     if (children.length > 0) fail(at, "<Image> has no children");
-    node.src = src.slice("resource://".length);
+    node.src = name;
   }
 
   // A uniform's value as parts, numbers, booleans, colors or traced values: checked.
@@ -1532,15 +1543,17 @@
     if (!plain(read)) fail(at, "<ShaderLayer> inputs is an object of image resources, by name");
     const inputs = [];
     for (const [k, src] of entries(read)) {
-      if (typeof src !== "string" || !src.startsWith("resource://")) {
+      const name = pictureOf(src);
+      if (name === null) {
         fail(
           at,
           "<ShaderLayer> inputs " +
             k +
-            ' is an image resource written as a literal, such as "resource://noise"',
+            " is an image resource or a picture the Timeline gives, written as a literal, such " +
+            'as "resource://noise" or "input://source"',
         );
       }
-      inputs.push([k, src.slice("resource://".length)]);
+      inputs.push([k, name]);
     }
     const outset = fixed(props.outset ?? 0, "outset", at);
     if (typeof outset !== "number" || !(outset >= 0) || outset === Infinity) {

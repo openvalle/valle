@@ -330,11 +330,13 @@ struct TracedGuard {
 }
 
 /// The template of a variant `runtime.js` serialized; `place` names where a site or stack line is
-/// in the source, and `resources` are the scene's.
+/// in the source, `resources` are the scene's, and `inputs` the pictures the Timeline gives it as
+/// its role has them, numbered after its resources.
 pub fn variant(
     json: &str,
     place: &dyn Fn(&At) -> Rc<str>,
     resources: &[Slot],
+    inputs: &[&str],
     shaders: &HashMap<String, Rc<str>>,
 ) -> Result<Template, Error> {
     let traced: Traced =
@@ -385,6 +387,25 @@ pub fn variant(
     };
     // The image resource `name`, which `what` reads.
     let image = |name: &str, what: &str| -> Result<u32, Error> {
+        if let Some(input) = name.strip_prefix("input://") {
+            if let Some(k) = inputs.iter().position(|i| *i == input) {
+                return Ok((resources.len() + k) as u32);
+            }
+            let role = match input {
+                "source" => "effect()",
+                "from" | "to" => "transition()",
+                _ => {
+                    return Err(format!(
+                        "{what} {name}: the Timeline gives input://source to an effect, and \
+                         input://from and input://to to a transition"
+                    ));
+                }
+            };
+            return Err(format!(
+                "{what} {name}: the Timeline gives it to a scene that declares `export const \
+                 role = {role}`"
+            ));
+        }
         let Some(r) = resources.iter().position(|r| r.name == name) else {
             return Err(format!(
                 "{what} resource://{name}: the scene declares no resource {name} in \
@@ -607,7 +628,7 @@ mod tests {
                 At::Stack(s) => s.as_str().into(),
             }
         };
-        let t = variant(json, &place, &[], &HashMap::new()).unwrap();
+        let t = variant(json, &place, &[], &[], &HashMap::new()).unwrap();
         // seconds, 2, mul, 1, gt, template
         assert_eq!(t.program.ops.len(), 6);
         assert_eq!(t.program.ops[2], Op::Bin(Bin::Mul, 0, 1));
@@ -627,6 +648,6 @@ mod tests {
         assert_eq!(t.guards[0].expr, 4);
         assert_eq!(&*t.guards[1].at, "m0.js:3");
         assert_eq!(t.guards[1].when, [(4, true)]);
-        assert!(variant(r#"{"ops": [["add", [{"e": 5}, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#, &place, &[], &HashMap::new()).is_err());
+        assert!(variant(r#"{"ops": [["add", [{"e": 5}, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#, &place, &[], &[], &HashMap::new()).is_err());
     }
 }

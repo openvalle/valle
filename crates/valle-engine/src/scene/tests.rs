@@ -503,3 +503,50 @@ fn text_outline_gives_the_glyphs_as_paths() {
         }
     });
 }
+
+#[test]
+fn a_role_reads_the_pictures_the_timeline_gives_or_placeholders() {
+    big_stack(|| {
+        let source = indoc! {"
+            export const composition = { width: 40, height: 20, fps: 30, duration: 1 };
+            export const role = transition();
+            export default function Scene() {
+              return (
+                <View style={{ display: 'flex' }}>
+                  <Image src='input://from' style={{ width: 10, height: 10 }} />
+                  <Image src='input://to' style={{ width: 10, height: 10 }} />
+                </View>
+              );
+            }
+        "};
+        let image = png(2, &[[255, 0, 0, 255], [0, 0, 255, 255]]);
+        let read = move |path: &str| match path {
+            "s.tsx" => Some(source.as_bytes().to_vec()),
+            "b.png" => Some(image.clone()),
+            _ => None,
+        };
+        let mut inputs = Inputs::default();
+        inputs.pictures.insert("to".into(), "b.png".into());
+        let mut scene = Scene::load("s.tsx", &read, &inputs, fonts()).unwrap();
+        // The placeholder is the composition's size; the bound file its own.
+        let sizes: Vec<_> = (scene.pictures().iter())
+            .map(|p| match p {
+                Picture::Image { image, size } => (*image, *size),
+                _ => panic!("{p:?}"),
+            })
+            .collect();
+        assert_eq!(sizes, [(0, [40, 20]), (1, [2, 1])]);
+        let frame = scene.frame(Tick(0)).unwrap();
+        assert!(matches!(
+            &frame.items[..],
+            [Item::Image { image: 0, .. }, Item::Image { image: 1, .. }]
+        ));
+
+        inputs.pictures.insert("source".into(), "b.png".into());
+        let e = Scene::load("s.tsx", &read, &inputs, fonts()).err().unwrap();
+        assert!(
+            e.starts_with("s.tsx: pictures: the scene reads no input://source"),
+            "{e}"
+        );
+    });
+}

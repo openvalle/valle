@@ -110,6 +110,15 @@ fn options(o: &ObjectExpression<'_>, name: &str) -> Result<Map<String, Value>, S
 }
 
 impl Role {
+    /// The pictures the Timeline gives a scene of the role, which it reads as `input://name`.
+    pub fn inputs(self) -> &'static [&'static str] {
+        match self {
+            Role::Effect => &["source"],
+            Role::Transition => &["from", "to"],
+            _ => &[],
+        }
+    }
+
     /// The intro and outro the scene keeps in a clip of any length, if it has them.
     pub fn ends(self) -> Option<(Tick, Tick)> {
         match self {

@@ -66,6 +66,9 @@ pub struct Inputs {
     /// The files of each resource bound, by its name: paths `read` takes, in place of the
     /// resource's default; one for an image, the faces of its family for a font.
     pub resources: BTreeMap<String, Vec<String>>,
+    /// The file of each picture the scene's role reads as `input://name`, by its name, in place
+    /// of the placeholder it shows alone; the Timeline gives them frame by frame.
+    pub pictures: BTreeMap<String, String>,
 }
 
 /// The props of `controls.props`, an object of `name: number({ … })` and the like.

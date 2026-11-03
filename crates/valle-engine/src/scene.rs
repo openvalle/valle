@@ -104,7 +104,25 @@ impl Scene {
             }
             pictures.push(picture);
         }
+        // The pictures its role reads, after its resources: files bound to them, or placeholders
+        // of the composition's size.
         let c = front.composition;
+        for (k, name) in front.role.inputs().iter().enumerate() {
+            let image = match inputs.pictures.get(*name) {
+                Some(path) => {
+                    let fail = |e: String| format!("{entry}: input://{name}: {path}: {e}");
+                    let bytes = read(path).ok_or_else(|| fail("not found".into()))?;
+                    Image::decode(&bytes).map_err(fail)?
+                }
+                None => Image::placeholder([c.width, c.height], k),
+            };
+            let size = image.size;
+            images.push(image);
+            pictures.push(Picture::Image {
+                image: (images.len() - 1) as u32,
+                size,
+            });
+        }
         front.set_typeset(Box::new(Typesetter {
             text: RefCell::new(measuring),
             resources: front.resources.clone(),

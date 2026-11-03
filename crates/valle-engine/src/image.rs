@@ -62,6 +62,34 @@ pub struct Image {
 }
 
 impl Image {
+    /// What stands for the `k`th picture the Timeline gives a scene, when it shows alone: a ramp
+    /// from corner to corner, blue for the first, orange for the second, with a check of light
+    /// squares over it, 8 across, so that moving it shows.
+    pub fn placeholder(size: [u32; 2], k: usize) -> Image {
+        let ends: [[f32; 3]; 2] = match k {
+            0 => [[30.0, 136.0, 229.0], [0.0, 172.0, 193.0]],
+            _ => [[255.0, 112.0, 67.0], [236.0, 64.0, 122.0]],
+        };
+        let [w, h] = size.map(|v| v.max(1));
+        let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let t = ((x as f32 + 0.5) / w as f32 + (y as f32 + 0.5) / h as f32) / 2.0;
+                let light = (x * 8 / w + y * 8 / w) % 2 == 1;
+                for (a, b) in ends[0].iter().zip(&ends[1]) {
+                    let v = a + (b - a) * t;
+                    let v = if light { v + (255.0 - v) * 0.2 } else { v };
+                    pixels.push(v.round() as u8);
+                }
+                pixels.push(255);
+            }
+        }
+        Image {
+            size: [w, h],
+            pixels: pixels.into(),
+        }
+    }
+
     /// The image a PNG, JPEG or WebP file holds, by the bytes the file starts with, its colors
     /// taken as sRGB whatever profile it embeds; 16-bit channels are cut to 8. An animated one is
     /// an error.
