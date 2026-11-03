@@ -35,7 +35,7 @@ use math::{Calc, Math};
 
 use crate::front::Slot;
 use crate::svg;
-use crate::template::{Error, Kind, Node, Prop, Tag, Template, V};
+use crate::template::{Error, Kind, Node, Piece, Prop, Tag, Template, V};
 
 /// The root font size: `rem`.
 const REM: f64 = 16.0;
@@ -599,6 +599,8 @@ pub struct Sheet {
     parents: Vec<Option<u32>>,
     /// Where each node's descendants end, past the last.
     ends: Vec<u32>,
+    /// Which of the program's expressions are late.
+    late: Vec<bool>,
 }
 
 /// A node's declarations: those before the first one bound to an expression, applied once, and
@@ -625,15 +627,16 @@ struct Geometry {
 }
 
 impl Geometry {
-    fn computed(&self, values: &[V]) -> Result<Rc<svg::Computed>, String> {
+    fn computed(&self, frame: &Frame) -> Result<Rc<svg::Computed>, String> {
         if let Some(c) = &self.fixed {
             return Ok(c.clone());
         }
         let list: Vec<(&str, &V)> = (self.attributes.iter())
+            .filter(|(_, p)| !frame.unsettled(p))
             .map(|(k, p)| {
                 let v = match p {
                     Prop::Const(v) => v,
-                    Prop::Expr(e) => &values[*e as usize],
+                    Prop::Expr(e) => &frame.values[*e as usize],
                 };
                 (&**k, v)
             })
@@ -668,26 +671,36 @@ impl Sheet {
             }
         }
         let classes = tailwind::declarations(template)?;
+        let late = template.program.late();
         let nodes = (template.nodes.iter().zip(&classes))
-            .map(|(node, classes)| bind(node, classes))
+            .map(|(node, classes)| bind(node, classes, &late))
             .collect::<Result<_, _>>()?;
         Ok(Sheet {
             nodes,
             parents,
             ends,
+            late,
         })
     }
 
+    /// Node `i`'s descendants, a mask's source's among the mask's.
+    pub fn descendants(&self, i: usize) -> std::ops::Range<usize> {
+        i + 1..self.ends[i] as usize
+    }
+
     /// Every node's computed style for the program's values at one frame on a canvas of `canvas`
-    /// px, in template order, in a scene of these `resources`.
+    /// px, in template order, in a scene of these `resources`. Before the values are `settled`,
+    /// declarations of late values are left out: those only paint, so layout goes without them.
     pub fn compute(
         &self,
         values: &[V],
+        settled: bool,
         canvas: [f32; 2],
         resources: &[Slot],
     ) -> Result<Vec<Style>, Error> {
         let frame = Frame {
             values,
+            late: (!settled).then_some(&self.late[..]),
             canvas: canvas.map(f64::from),
             resources,
         };
@@ -728,6 +741,9 @@ impl Sheet {
         } else {
             let mut d = b.declared.clone();
             for (field, prop, what, attribute) in &b.rest {
+                if frame.unsettled(prop) {
+                    continue;
+                }
                 let v = match prop {
                     Prop::Const(v) => v,
                     Prop::Expr(e) => &frame.values[*e as usize],
@@ -750,10 +766,7 @@ impl Sheet {
             ));
         }
         if let Some(g) = &b.svg {
-            style.svg = Some(
-                g.computed(frame.values)
-                    .map_err(|e| format!("{}: {e}", b.place))?,
-            );
+            style.svg = Some(g.computed(frame).map_err(|e| format!("{}: {e}", b.place))?);
         }
         Ok(style)
     }
@@ -889,8 +902,17 @@ impl Sheet {
 /// the scene's resources.
 struct Frame<'a> {
     values: &'a [V],
+    /// The late expressions, to leave out, while the values are not settled.
+    late: Option<&'a [bool]>,
     canvas: [f64; 2],
     resources: &'a [Slot],
+}
+
+impl Frame<'_> {
+    /// Whether a declaration of `prop` waits for the values to settle.
+    fn unsettled(&self, prop: &Prop) -> bool {
+        matches!((prop, self.late), (Prop::Expr(e), Some(late)) if late.get(*e as usize) == Some(&true))
+    }
 }
 
 /// A declaration as written: its key, its value, what errors call it, and whether it is a
@@ -898,8 +920,18 @@ struct Frame<'a> {
 type Written<'a> = (Rc<str>, Cow<'a, Prop>, Rc<str>, bool);
 
 /// A node's declarations, with those its classes make.
-fn bind(node: &Node, classes: &[tailwind::Declaration]) -> Result<Bound, Error> {
+fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result<Bound, Error> {
     let place = node.place();
+    let late_prop = |p: &Prop| matches!(p, Prop::Expr(e) if late.get(*e as usize) == Some(&true));
+    if let Kind::Text { content } | Kind::Span { content } = &node.kind
+        && content
+            .iter()
+            .any(|p| matches!(p, Piece::Text(t) if late_prop(t)))
+    {
+        return Err(format!(
+            "{place}: {LATE}, so it cannot be text, which is laid out"
+        ));
+    }
     let mut declared = Declared::default();
     let mut rest = Vec::new();
     let (tag, attributes) = match &node.kind {
@@ -958,6 +990,13 @@ fn bind(node: &Node, classes: &[tailwind::Declaration]) -> Result<Bound, Error> 
             ));
         }
         let at = |e: String| format!("{place}: {what}: {e}");
+        let drawn = tag.is_some_and(|t| t != Tag::Svg);
+        if late_prop(&prop) && !drawn && !field.paints_only() {
+            return Err(at(format!(
+                "{LATE}, so it sets only what does not change layout, such as translate, \
+                 opacity, colors or what an <svg> draws"
+            )));
+        }
         match &*prop {
             Prop::Const(v) if rest.is_empty() => {
                 set(&mut declared, field, &presented(v, attribute)).map_err(at)?;
@@ -972,19 +1011,33 @@ fn bind(node: &Node, classes: &[tailwind::Declaration]) -> Result<Bound, Error> 
     }
     let svg = match tag {
         Some(tag) => {
+            let geometry = attributes
+                .iter()
+                .filter(|(k, _)| !svg::presentational(tag, k));
+            if let Some((k, _)) = geometry
+                .clone()
+                .find(|(_, p)| tag == Tag::Svg && late_prop(p))
+            {
+                return Err(format!(
+                    "{place}: attribute {k}: {LATE}, and an <svg>'s {k} changes its layout"
+                ));
+            }
             let mut g = Geometry {
                 tag,
-                attributes: (attributes.iter())
-                    .filter(|(k, _)| !svg::presentational(tag, k))
-                    .cloned()
-                    .collect(),
+                attributes: geometry.cloned().collect(),
                 fixed: None,
             };
             if g.attributes
                 .iter()
                 .all(|(_, p)| matches!(p, Prop::Const(_)))
             {
-                g.fixed = Some(g.computed(&[]).map_err(|e| format!("{place}: {e}"))?);
+                let none = Frame {
+                    values: &[],
+                    late: None,
+                    canvas: [0.0; 2],
+                    resources: &[],
+                };
+                g.fixed = Some(g.computed(&none).map_err(|e| format!("{place}: {e}"))?);
             }
             Some(g)
         }
@@ -1011,6 +1064,9 @@ fn bind(node: &Node, classes: &[tailwind::Declaration]) -> Result<Bound, Error> 
         svg,
     })
 }
+
+/// Why a value made from `bounds()` cannot go where layout reads it.
+const LATE: &str = "a value from bounds() is known only after layout";
 
 /// Properties Valle will never take, by camelCase name or prefix (`*`): why, and what to write
 /// instead.
@@ -2250,6 +2306,57 @@ impl Field {
                 | Field::Visibility
                 | Field::Display
                 | Field::Color
+        )
+    }
+
+    /// Whether it changes how a box paints and never where any box is laid out (a transform and
+    /// a filter make a box the containing block of its absolute boxes; `Scene` checks that).
+    fn paints_only(self) -> bool {
+        matches!(
+            self,
+            Field::Background
+                | Field::BackgroundColor
+                | Field::BackgroundImage
+                | Field::BackgroundSize
+                | Field::BackgroundPosition
+                | Field::BackgroundPositionAxis(_)
+                | Field::BackgroundRepeat
+                | Field::BackgroundOrigin
+                | Field::BackgroundClip
+                | Field::BackgroundBlendMode
+                | Field::Translate
+                | Field::Rotate
+                | Field::Scale
+                | Field::Transform
+                | Field::TransformOrigin
+                | Field::Perspective
+                | Field::PerspectiveOrigin
+                | Field::OffsetPath
+                | Field::OffsetDistance
+                | Field::OffsetRotate
+                | Field::OffsetAnchor
+                | Field::OffsetPosition
+                | Field::ObjectPosition
+                | Field::BorderRadius
+                | Field::CornerRadius(_)
+                | Field::Border(_, BorderPart::Color)
+                | Field::Outline(_)
+                | Field::OutlineOffset
+                | Field::BoxShadow
+                | Field::Opacity
+                | Field::Filter
+                | Field::BackdropFilter
+                | Field::ClipPath
+                | Field::MaskImage
+                | Field::MaskSize
+                | Field::MaskPosition
+                | Field::Visibility
+                | Field::ZIndex
+                | Field::Color
+                | Field::TextDecorationColor
+                | Field::TextShadow
+                | Field::WebkitTextFillColor
+                | Field::WebkitTextStrokeColor
         )
     }
 

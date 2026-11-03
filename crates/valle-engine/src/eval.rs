@@ -8,7 +8,9 @@ use crate::js;
 use crate::noise;
 use crate::path::edit;
 use crate::style::{color, css};
-use crate::template::{Axis, Bin, Boolean, Cmp, Error, Interp, Op, Part, PathFn, Program, V};
+use crate::template::{
+    Axis, Bin, Boolean, Cmp, Error, Interp, Measure, Op, Part, PathFn, Program, V,
+};
 
 /// The clock a frame is evaluated at.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,17 +20,41 @@ pub struct Clock {
     pub progress: f64,
 }
 
-/// Every expression's value, in program order.
+/// Every expression's value, in program order, a late one's 0 until `settle` gives it.
 pub fn run(program: &Program, clock: Clock) -> Result<Vec<V>, Error> {
+    let late = program.late();
     let mut values = Vec::with_capacity(program.ops.len());
-    for op in &program.ops {
-        let v = value(op, &values, clock)?;
+    for (op, late) in program.ops.iter().zip(late) {
+        let v = match late {
+            true => V::Num(0.0),
+            false => value(op, &values, clock)?,
+        };
         values.push(v);
     }
     Ok(values)
 }
 
-/// One expression's value over the values of the expressions before it.
+/// Gives the late expressions their values once the frame is laid out: `bounds` measures the box
+/// of the element with a key path.
+pub fn settle(
+    program: &Program,
+    clock: Clock,
+    values: &mut [V],
+    bounds: &dyn Fn(&str, Measure) -> f64,
+) -> Result<(), Error> {
+    for (i, (op, late)) in program.ops.iter().zip(program.late()).enumerate() {
+        if late {
+            values[i] = match op {
+                Op::Bounds(path, measure) => V::Num(bounds(path, *measure)),
+                _ => value(op, &values[..i], clock)?,
+            };
+        }
+    }
+    Ok(())
+}
+
+/// One expression's value over the values of the expressions before it; a box measures 0, as it
+/// does while tracing.
 pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
     let num = |i: &u32| values[*i as usize].num();
     Ok(match op {
@@ -86,6 +112,7 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
                 .collect::<Vec<_>>(),
         )?,
         Op::Format(input, format) => V::Str(Rc::from(format.text(num(input)))),
+        Op::Bounds(..) => V::Num(0.0),
         Op::Noise(seed, args) => V::Num(match args[..] {
             [x] => noise::noise1(*seed, 0, num(&x)),
             [x, y] => noise::noise2(*seed, num(&x), num(&y)),

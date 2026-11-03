@@ -82,7 +82,7 @@ impl Document {
             Natural::Size(size) => size,
             Natural::Ratio(_) => [300.0, 150.0],
         };
-        let styles = Sheet::new(&template)?.compute(&[], viewport, &[])?;
+        let styles = Sheet::new(&template)?.compute(&[], true, viewport, &[])?;
         Ok(Document {
             template,
             styles,

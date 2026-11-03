@@ -13,8 +13,8 @@ use crate::noise::Wiggle;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
 use crate::template::{
-    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, PathFn, Piece, Program, Prop, Stage,
-    Table, Tag, Template, V, Want,
+    Bin, Cmp, Error, Guard, Interp, Kind, Measure, Node, Op, Part, PathFn, Piece, Program, Prop,
+    Stage, Table, Tag, Template, V, Want,
 };
 
 /// An operand of an op by name: an earlier expression, or literal text of a template.
@@ -48,6 +48,17 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
     if let Some(f) = name.strip_prefix("path|") {
         let f = PathFn::parse(f).ok_or_else(|| format!("no path function {f}"))?;
         return Ok(Op::Path(f, fixed(f.operands())?));
+    }
+    if let Some(spec) = name.strip_prefix("bounds|") {
+        let (path, measure) = match spec.split_once('|') {
+            Some(("x", path)) => (path, Measure::X),
+            Some(("y", path)) => (path, Measure::Y),
+            Some(("width", path)) => (path, Measure::Width),
+            Some(("height", path)) => (path, Measure::Height),
+            _ => return Err(format!("bounds {spec}")),
+        };
+        fixed(0)?;
+        return Ok(Op::Bounds(Rc::from(path), measure));
     }
     if let Some(spec) = name.strip_prefix("format|") {
         return Ok(Op::Format(fixed(1)?[0], Format::parse(spec)?));

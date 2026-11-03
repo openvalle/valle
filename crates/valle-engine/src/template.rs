@@ -119,6 +119,56 @@ pub enum Op {
         spring: Spring,
         velocity: bool,
     },
+    /// `bounds(path)`: a measure of the border box of the element with this key path, in canvas
+    /// px, as laid out. It is known only after layout, as is every value made from it (`late`).
+    Bounds(Rc<str>, Measure),
+}
+
+/// What `bounds()` gives of a box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Measure {
+    X,
+    Y,
+    Width,
+    Height,
+}
+
+impl Op {
+    /// Calls `f` with each operand.
+    pub fn operands(&self, mut f: impl FnMut(u32)) {
+        match self {
+            Op::Const(_) | Op::Seconds | Op::Progress | Op::Bounds(..) => {}
+            Op::Bin(_, a, b) | Op::Cmp(_, a, b) => {
+                f(*a);
+                f(*b);
+            }
+            Op::Neg(a)
+            | Op::Stage(a, _)
+            | Op::Freeze(a, _)
+            | Op::Table(a, _)
+            | Op::Wiggle(a, _)
+            | Op::Format(a, _)
+            | Op::Spring { input: a, .. } => f(*a),
+            Op::Select(a, b, c) => [a, b, c].into_iter().for_each(|x| f(*x)),
+            Op::Math(_, args) | Op::Path(_, args) | Op::Noise(_, args) => {
+                args.iter().for_each(|x| f(*x));
+            }
+            Op::Template(parts) => {
+                for p in parts {
+                    if let Part::Expr(i) = p {
+                        f(*i);
+                    }
+                }
+            }
+            Op::Interp(i) => {
+                f(i.input);
+                for &(a, b) in &i.stops {
+                    f(a);
+                    f(b);
+                }
+            }
+        }
+    }
 }
 
 /// A stage of a sequence and how its progress goes: from 0 to 1 once, `count` times, or there and
@@ -329,6 +379,19 @@ pub struct Interp {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Program {
     pub ops: Vec<Op>,
+}
+
+impl Program {
+    /// Which expressions are late: known only after layout, as they read a box.
+    pub fn late(&self) -> Vec<bool> {
+        let mut late = vec![false; self.ops.len()];
+        for (i, op) in self.ops.iter().enumerate() {
+            let mut l = matches!(op, Op::Bounds(..));
+            op.operands(|j| l |= late[j as usize]);
+            late[i] = l;
+        }
+        late
+    }
 }
 
 /// A node's prop: known at tracing, or an expression evaluated per frame.

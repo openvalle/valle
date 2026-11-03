@@ -10,7 +10,7 @@ fn lay(nodes: Vec<Node>, roots: &[u32]) -> Result<Layout, Error> {
         roots: roots.to_vec(),
         ..Default::default()
     };
-    let styles = Sheet::new(&template)?.compute(&[], [200.0, 100.0], &[])?;
+    let styles = Sheet::new(&template)?.compute(&[], true, [200.0, 100.0], &[])?;
     layout(&template, &[], &styles, [200.0, 100.0], &mut text(), &[])
 }
 

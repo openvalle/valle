@@ -42,10 +42,12 @@
 
   // ------------------------------------------------------------------------------ traced values
 
-  function T(op, args, v) {
+  // `late`: known only after layout, as it reads a box (`bounds()`).
+  function T(op, args, v, late) {
     this.op = op;
     this.args = freeze(args);
     this.v = v;
+    this.late = late;
     freeze(this);
   }
   const isT = (x) => x instanceof T;
@@ -59,7 +61,16 @@
           " values that depend on the time, such as from a loop that adds to one every turn",
       );
     }
-    return new T(op, args, host.op(op, args.map(val)));
+    const late = op.startsWith("bounds|") || args.some((a) => a instanceof T && a.late);
+    if (!late) return new T(op, args, host.op(op, args.map(val)), false);
+    // While tracing a box measures 0; what fails on such boxes waits for layout as NaN.
+    let v;
+    try {
+      v = host.op(op, args.map(val));
+    } catch {
+      v = NaN;
+    }
+    return new T(op, args, v, true);
   }
 
   const plain = (x) => {
@@ -86,6 +97,14 @@
   }
 
   function guard(t, want, kind, at) {
+    if (t.late || G.when.some(([c]) => c.late)) {
+      throw new TypeError(
+        "a value from bounds() is known only after layout, so it cannot decide what the frame " +
+          "holds (" +
+          kind +
+          ") or reach code that does not trace it",
+      );
+    }
     if (G.guards.length >= MAX_GUARDS) {
       throw new RangeError(
         "a frame decides on the time more than " +
@@ -787,6 +806,57 @@
     return pathOp("zigzag", "zigzag", [path, o.size ?? 0, o.ridges ?? 0]);
   };
 
+  // `bounds("key/path")`: the border box of the element with this key path as laid out, before
+  // transforms, in canvas px, as `{ x, y, width, height }`. Its values are late: known after
+  // layout, so they set only what paints (`style/mod.rs`) and decide nothing.
+  function bounds(path) {
+    path = path instanceof T ? exact(path, "bounds", site()) : path;
+    if (typeof path !== "string" || path === "") {
+      throw new TypeError('bounds takes a key path, as "card/title"');
+    }
+    const m = (k) => mk("bounds|" + k + "|" + path, []);
+    return { x: m("x"), y: m("y"), width: m("width"), height: m("height") };
+  }
+  // `anchor("key/path", side)`: a point on that border box, `{ x, y }`.
+  const SIDES = {
+    center: [0.5, 0.5],
+    left: [0, 0.5],
+    right: [1, 0.5],
+    top: [0.5, 0],
+    bottom: [0.5, 1],
+    "top-left": [0, 0],
+    "top-right": [1, 0],
+    "bottom-left": [0, 1],
+    "bottom-right": [1, 1],
+  };
+  function anchor(path, side) {
+    side = side instanceof T ? exact(side, "anchor", site()) : (side ?? "center");
+    if (!Object.hasOwn(SIDES, side)) {
+      throw new TypeError("anchor side must be one of " + keys(SIDES).join(", "));
+    }
+    const [u, v] = SIDES[side];
+    const b = bounds(path);
+    const along = (start, size, k) => (k === 0 ? start : __b("+", start, __b("*", size, k)));
+    return { x: along(b.x, b.width, u), y: along(b.y, b.height, v) };
+  }
+  // `connect(a, b, { route })`: path data from point `a` to point `b`, a line, or with route
+  // "cubic" a curve that leaves and reaches them level, both controls at the middle x.
+  function connect(a, b, options) {
+    const o = options ?? {};
+    if (keys(o).some((k) => k !== "route")) {
+      throw new TypeError("connect(a, b, { route }) takes route");
+    }
+    const route = o.route instanceof T ? exact(o.route, "connect", site()) : (o.route ?? "line");
+    if (![a?.x, a?.y, b?.x, b?.y].every(numeric)) {
+      throw new TypeError("connect takes two points, { x, y }");
+    }
+    if (route === "line") return __tpl(["M", " ", " L", " ", ""], a.x, a.y, b.x, b.y);
+    if (route !== "cubic") throw new TypeError('connect route must be "line" or "cubic"');
+    const mid = __b("/", __b("+", a.x, b.x), 2);
+    const parts = ["M", " ", " C", " ", " ", " ", " ", " ", ""];
+    return __tpl(parts, a.x, a.y, mid, a.y, mid, b.y, b.x, b.y);
+  }
+
   // `clamp(x, min, max)` as CSS clamps: `min` wins over `max`.
   const clamp = (x, min, max) => {
     if (![x, min, max].every(numeric)) throw new TypeError("clamp(x, min, max) takes numbers");
@@ -1328,8 +1398,8 @@
       // How deep in <svg> elements tracing is.
       svg: 0,
       composition,
-      seconds: new T("seconds", [], seconds),
-      progress: new T("progress", [], progress),
+      seconds: new T("seconds", [], seconds, false),
+      progress: new T("progress", [], progress, false),
     };
     instances = new Map();
     try {
@@ -1569,6 +1639,9 @@
     pathBoolean,
     morph,
     zigzag,
+    bounds,
+    anchor,
+    connect,
     formatNumber,
     formatPercent,
     padNumber,

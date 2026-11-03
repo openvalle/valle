@@ -42,7 +42,7 @@ fn resources() -> [Slot; 2] {
 }
 
 fn styles(nodes: Vec<Node>, values: &[V]) -> Result<Vec<Style>, Error> {
-    sheet(nodes)?.compute(values, CANVAS, &resources())
+    sheet(nodes)?.compute(values, true, CANVAS, &resources())
 }
 
 fn one(style: &[(&str, Prop)]) -> Style {
@@ -1691,7 +1691,7 @@ fn expressions_are_set_in_declaration_order() {
     );
     let sheet = sheet(vec![view(&[("width", Prop::Expr(0))], &[])]).unwrap();
     assert_eq!(
-        sheet.compute(&[V::Num(5.0)], CANVAS, &[]).unwrap()[0]
+        sheet.compute(&[V::Num(5.0)], true, CANVAS, &[]).unwrap()[0]
             .layout
             .size
             .width,
@@ -1699,12 +1699,14 @@ fn expressions_are_set_in_declaration_order() {
     );
     assert_eq!(
         sheet
-            .compute(&[V::Str("abc".into())], CANVAS, &[])
+            .compute(&[V::Str("abc".into())], true, CANVAS, &[])
             .unwrap_err(),
         "s.tsx:1:1: style width: abc is not a length"
     );
     assert_eq!(
-        sheet.compute(&[V::Bool(true)], CANVAS, &[]).unwrap_err(),
+        sheet
+            .compute(&[V::Bool(true)], true, CANVAS, &[])
+            .unwrap_err(),
         "s.tsx:1:1: style width: true is not a length"
     );
 }

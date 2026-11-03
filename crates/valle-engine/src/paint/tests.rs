@@ -14,7 +14,7 @@ fn paint_of(nodes: Vec<Node>, roots: &[u32]) -> (Vec<Item>, Layout) {
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template)
         .unwrap()
-        .compute(&[], canvas, &[])
+        .compute(&[], true, canvas, &[])
         .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     (paint(&template, &styles, &laid, &[]), laid)
@@ -419,7 +419,7 @@ fn transforms_take_a_box_to_the_canvas_through_its_ancestors() {
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template)
         .unwrap()
-        .compute(&[], canvas, &[])
+        .compute(&[], true, canvas, &[])
         .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
@@ -480,7 +480,7 @@ fn motion_paths_move_a_box_along_and_turn_it_after_its_own_transforms() {
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template)
         .unwrap()
-        .compute(&[], canvas, &[])
+        .compute(&[], true, canvas, &[])
         .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
@@ -526,7 +526,7 @@ fn a_perspective_reaches_only_the_boxs_children() {
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template)
         .unwrap()
-        .compute(&[], canvas, &[])
+        .compute(&[], true, canvas, &[])
         .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
@@ -647,7 +647,7 @@ fn transforms_in_a_3d_scene_add_up_before_they_are_flattened() {
     let canvas = [200.0, 100.0];
     let styles = Sheet::new(&template)
         .unwrap()
-        .compute(&[], canvas, &[])
+        .compute(&[], true, canvas, &[])
         .unwrap();
     let laid = layout(&template, &[], &styles, canvas, &mut text(), &[]).unwrap();
     let transforms = transforms(&template, &styles, &laid);
