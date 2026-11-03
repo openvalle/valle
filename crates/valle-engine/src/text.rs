@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ops::Range;
 use std::rc::Rc;
+use unicode_segmentation::UnicodeSegmentation;
 
 pub use parley::fontique::Blob;
 use parley::fontique::{
@@ -801,6 +802,11 @@ impl Text {
         let mut builder = (self.layouts).ranged_builder(&mut self.fonts, text, 1.0, false);
         let family = FontFamily::List(Cow::Borrowed(&families));
         builder.push_default(StyleProperty::FontFamily(family));
+        let first = emoji_first(&families);
+        for range in presented(text) {
+            let family = FontFamily::List(Cow::Borrowed(&first));
+            builder.push(StyleProperty::FontFamily(family), range);
+        }
         builder.push_default(StyleProperty::FontSize(font.size as f32));
         let weight = FontWeight::new(font.weight as f32);
         builder.push_default(StyleProperty::FontWeight(weight));
@@ -861,6 +867,7 @@ impl Text {
             let families = (content.pieces.iter())
                 .map(|p| families(&p.font.family, &self.named))
                 .collect::<Result<Vec<_>, _>>()?;
+            let firsts: Vec<_> = families.iter().map(|f| emoji_first(f)).collect();
             let mut builder = (self.layouts).ranged_builder(&mut self.fonts, &string, 1.0, false);
             for (k, (piece, range)) in content.pieces.iter().zip(ranges).enumerate() {
                 if range.is_empty() {
@@ -911,6 +918,11 @@ impl Text {
                 if !font.variations.is_empty() {
                     let axes = StyleProperty::FontVariations(variations(font));
                     builder.push(axes, range.clone());
+                }
+                for emoji in presented(&string[range.clone()]) {
+                    let family = FontFamily::List(Cow::Borrowed(&firsts[k]));
+                    let at = range.start + emoji.start..range.start + emoji.end;
+                    builder.push(StyleProperty::FontFamily(family), at);
                 }
                 builder.push(StyleProperty::Brush(k as u32), range);
             }
@@ -1107,6 +1119,22 @@ fn emoji(c: char) -> bool {
     matches!(c,
         '\u{231A}'..='\u{23FF}' | '\u{2600}'..='\u{27BF}' | '\u{2B05}'..='\u{2B55}'
         | '\u{FE0F}' | '\u{1F000}'..='\u{1FAFF}')
+}
+
+/// The characters of `text` that ask to show as an emoji with the selector VS16, as graphemes,
+/// which the emoji font shapes first, as in Chrome, before a text font that has them.
+fn presented(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    (text.grapheme_indices(true))
+        .filter(|(_, g)| g.contains('\u{FE0F}'))
+        .map(|(i, g)| i..i + g.len())
+}
+
+/// `families` with the emoji family first.
+fn emoji_first(families: &[FontFamilyName<'static>]) -> Vec<FontFamilyName<'static>> {
+    let emoji = FontFamilyName::Generic(GenericFamily::Emoji);
+    std::iter::once(emoji.clone())
+        .chain(families.iter().filter(|&f| *f != emoji).cloned())
+        .collect()
 }
 
 /// Fails on the first character of `text` that `layout` has no glyph for, as no font has it.

@@ -323,6 +323,19 @@ fn emoji_take_the_emoji_font_and_paint_in_its_colors() {
         t.faces()[lines.glyphs[0].face as usize].data.id(),
         t.faces()[smile].data.id()
     );
+    // The selector VS16 asks for the emoji font before a text font that has the character.
+    let lines = t
+        .lines(&plain("A\u{A9}\u{A9}\u{FE0F}A", &font(16.0)), 1000.0)
+        .unwrap();
+    let ids = (lines.glyphs.iter())
+        .map(|g| t.faces()[g.face as usize].data.id())
+        .collect::<Vec<_>>();
+    let emoji = t.faces()[smile].data.id();
+    assert!(
+        ids[0] != emoji && ids[1] != emoji && ids[2] == emoji,
+        "{ids:?}"
+    );
+    assert_ne!(*ids.last().unwrap(), emoji);
 }
 
 #[test]
