@@ -64,41 +64,21 @@ pub fn lower(path: &str, doc: &Document, host: &Host<'_>) -> Result<Lowered, Err
     let mut l = Lowering {
         doc,
         folder,
+        root: folder,
+        prefix: String::new(),
+        nesting: vec![path.to_string()],
         host,
-        slots: Vec::new(),
-        bound: BTreeMap::new(),
-        imports: Vec::new(),
-        declared: HashMap::new(),
-        clips: Clips::new(),
-        functions: Vec::new(),
-        drawn: Vec::new(),
-        template: false,
+        s: Shared::default(),
     };
     let [w, h] = [doc.canvas.width, doc.canvas.height];
-    let fill = format!("{{ position: \"absolute\", left: 0, top: 0, width: {w}, height: {h} }}");
-    let mut body = String::new();
-    for track in &doc.tracks {
-        match track.kind {
-            valle_timeline::Kind::Visual => body.push_str(&l.track(track, &fill)?),
-            // Sound is the mix's.
-            valle_timeline::Kind::Audio => {}
-            valle_timeline::Kind::Adjustment => body = l.adjustment(track, body, &fill)?,
-            // Over all the rest.
-            valle_timeline::Kind::Caption => {}
-        }
-    }
-    for track in &doc.tracks {
-        if track.kind == valle_timeline::Kind::Caption {
-            body.push_str(&l.captions(track, &fill)?);
-        }
-    }
+    let body = l.body()?;
 
     let mut files = HashMap::new();
-    if l.template {
+    if l.s.template {
         files.insert(template_path(folder), CAPTION.to_string());
     }
     let mut code = String::from("// The scene a Timeline document plays as.\n");
-    for (name, file) in &l.imports {
+    for (name, file) in &l.s.imports {
         writeln!(
             code,
             "import {name} from {};",
@@ -106,10 +86,10 @@ pub fn lower(path: &str, doc: &Document, host: &Host<'_>) -> Result<Lowered, Err
         )
         .unwrap();
     }
-    let slots: Vec<String> = (l.slots.iter())
+    let slots: Vec<String> = (l.s.slots.iter())
         .map(|(name, kind)| format!("{}: resource({{ kind: {} }})", js(name), js(&kind.name())))
         .collect();
-    for f in &l.functions {
+    for f in &l.s.functions {
         write!(code, "\n{f}").unwrap();
     }
     write!(
@@ -134,9 +114,9 @@ export default function Timeline() {{
     .unwrap();
     let entry = format!("{path}.tsx");
     let inputs = Inputs {
-        resources: l.bound,
-        clips: Rc::new(l.clips),
-        drawn: l.drawn,
+        resources: l.s.bound,
+        clips: Rc::new(l.s.clips),
+        drawn: l.s.drawn,
         ..Inputs::default()
     };
     files.insert(entry.clone(), code);
@@ -150,7 +130,20 @@ export default function Timeline() {{
 struct Lowering<'a> {
     doc: &'a Document,
     folder: &'a str,
+    /// The folder of the document the scene plays, beside which it finds the caption template.
+    root: &'a str,
+    /// What the ids of the document's clips are prefixed with in the clip table: the ids of the
+    /// clips it is nested in.
+    prefix: String,
+    /// The documents it is nested in, by file.
+    nesting: Vec<String>,
     host: &'a Host<'a>,
+    s: Shared,
+}
+
+/// What lowering a document and those nested in it makes, for the one scene.
+#[derive(Default)]
+struct Shared {
     /// The scene's resources, `r0`, `r1`…, and what each holds.
     slots: Vec<(String, Holds)>,
     /// The files bound to each.
@@ -168,18 +161,78 @@ struct Lowering<'a> {
 }
 
 impl Lowering<'_> {
+    /// What the document's tracks show, each over those before it: its visual tracks, its
+    /// adjustment tracks over them, and its captions over all.
+    fn body(&mut self) -> Result<String, Error> {
+        let doc = self.doc;
+        let [w, h] = [doc.canvas.width, doc.canvas.height];
+        let fill =
+            format!("{{ position: \"absolute\", left: 0, top: 0, width: {w}, height: {h} }}");
+        let mut body = String::new();
+        for track in &doc.tracks {
+            match track.kind {
+                valle_timeline::Kind::Visual => body.push_str(&self.track(track, &fill)?),
+                // Sound is the mix's.
+                valle_timeline::Kind::Audio => {}
+                valle_timeline::Kind::Adjustment => body = self.adjustment(track, body, &fill)?,
+                // Over all the rest.
+                valle_timeline::Kind::Caption => {}
+            }
+        }
+        for track in &doc.tracks {
+            if track.kind == valle_timeline::Kind::Caption {
+                body.push_str(&self.captions(track, &fill)?);
+            }
+        }
+        Ok(body)
+    }
+
+    /// A nested timeline's content: the document in file `file` fitted into the clip's box as a
+    /// Motion clip is, on its own background; its clips on the clip's source time.
+    fn nested(&mut self, clip: &Clip, file: &str, scope: &mut Scope) -> Result<String, Error> {
+        let at = clip.at.as_str();
+        if self.nesting.iter().any(|f| f == file) {
+            return Err(format!(
+                "{at}.src: {file} is nested in itself: {} → {file}",
+                self.nesting.join(" → ")
+            ));
+        }
+        let text = (self.host.read)(file).ok_or_else(|| format!("{at}.src: {file}: not found"))?;
+        let doc = valle_timeline::parse(&text).map_err(|e| format!("{file}: {e}"))?;
+        let mut nesting = self.nesting.clone();
+        nesting.push(file.to_string());
+        let mut inner = Lowering {
+            doc: &doc,
+            folder: file.rsplit_once('/').map_or("", |(dir, _)| dir),
+            root: self.root,
+            prefix: format!("{}{}/", self.prefix, clip.id),
+            nesting,
+            host: self.host,
+            s: std::mem::take(&mut self.s),
+        };
+        let body = inner.body();
+        self.s = inner.s;
+        let body = body?;
+        let [cw, ch] = [doc.canvas.width, doc.canvas.height];
+        writeln!(scope.lets, "  const fit = [{}];", fit_scale(clip, [cw, ch])).unwrap();
+        Ok(format!(
+            "<View style={{{{ position: \"absolute\", inset: 0, overflow: \"hidden\" }}}}><View style={{{{ position: \"absolute\", left: (size[0] - {cw} * fit[0]) / 2, top: (size[1] - {ch} * fit[1]) / 2, width: {cw}, height: {ch}, transformOrigin: \"0 0\", transform: `scale(${{fit[0]}}, ${{fit[1]}})`, overflow: \"hidden\", backgroundColor: {} }}}}>\n{body}      </View></View>",
+            js(&doc.canvas.background)
+        ))
+    }
+
     /// A new resource of the scene holding `kind`, bound to `files`.
     fn resource(&mut self, kind: Holds, files: Vec<String>) -> String {
-        let name = format!("r{}", self.slots.len());
-        self.slots.push((name.clone(), kind));
-        self.bound.insert(name.clone(), files);
+        let name = format!("r{}", self.s.slots.len());
+        self.s.slots.push((name.clone(), kind));
+        self.s.bound.insert(name.clone(), files);
         name
     }
 
     /// A new picture of the scene, which a box draws.
     fn picture(&mut self) -> String {
-        let name = format!("p{}", self.drawn.len());
-        self.drawn.push(name.clone());
+        let name = format!("p{}", self.s.drawn.len());
+        self.s.drawn.push(name.clone());
         name
     }
 
@@ -216,17 +269,17 @@ impl Lowering<'_> {
                 "{at}: resource {alias:?} is {file}, not a Motion component (.motion.tsx)"
             ));
         }
-        if let Some(d) = self.declared.get(&file) {
-            let name = (self.imports.iter())
+        if let Some(d) = self.s.declared.get(&file) {
+            let name = (self.s.imports.iter())
                 .find(|(_, f)| *f == file)
                 .map(|(n, _)| n.clone())
                 .expect("imported with it");
             return Ok((d.clone(), name));
         }
         let d = Rc::new(front::declared(&file, self.host.read)?);
-        let name = format!("C{}", self.imports.len());
-        self.imports.push((name.clone(), file.clone()));
-        self.declared.insert(file, d.clone());
+        let name = format!("C{}", self.s.imports.len());
+        self.s.imports.push((name.clone(), file.clone()));
+        self.s.declared.insert(file, d.clone());
         Ok((d, name))
     }
 
@@ -264,8 +317,15 @@ impl Lowering<'_> {
                 media(&r, "Video")
             }
             Content::Motion(c) => self.motion(clip, c, reads, &mut scope)?,
-            Content::Timeline { .. } => {
-                return Err(format!("{at}: nested timelines are not supported yet"));
+            Content::Timeline { src } => {
+                let file = self.file(src, &format!("{at}.src"))?;
+                let text = (self.host.read)(&file);
+                let length = text
+                    .as_deref()
+                    .and_then(|t| valle_timeline::parse(t).ok())
+                    .map(|d| d.duration);
+                scope.time = Some(source_time(clip, reads, length, &file)?);
+                self.nested(clip, &file, &mut scope)?
             }
             Content::Audio { .. } | Content::Caption { .. } | Content::Grade { .. } => {
                 unreachable!("not on a visual track: {}", track.at)
@@ -279,9 +339,9 @@ impl Lowering<'_> {
         });
         // Its effects work on it before its opacity and its blend.
         let finished = clip.look.effects.is_empty();
-        let shows = format!("K{}", self.functions.len());
+        let shows = format!("K{}", self.s.functions.len());
         let body = self.look(clip, &scope.lets, &content, finished)?;
-        self.functions.push(format!(
+        self.s.functions.push(format!(
             "function {shows}() {{\n  const t = useCurrentTime().clipSeconds;\n{body}}}\n"
         ));
         let mut effects = Vec::new();
@@ -301,8 +361,8 @@ impl Lowering<'_> {
             if k + 1 == clip.look.effects.len() {
                 style.extend(self.finish(clip)?);
             }
-            let shows = format!("K{}", self.functions.len());
-            self.functions.push(format!(
+            let shows = format!("K{}", self.s.functions.len());
+            self.s.functions.push(format!(
                 "function {shows}() {{\n  const t = useCurrentTime().clipSeconds;\n  return (\n    <View style={{{{ {} }}}}>\n      <{name} {{...{props}}} />\n    </View>\n  );\n}}\n",
                 style.join(", ")
             ));
@@ -421,7 +481,8 @@ impl Lowering<'_> {
         fill: &str,
         inside: &str,
     ) -> String {
-        self.clips.insert(id.to_string(), Rc::new(clip));
+        let id = format!("{}{id}", self.prefix);
+        self.s.clips.insert(id.clone(), Rc::new(clip));
         let mut all = vec![
             format!("key={}", js(&key)),
             format!("clip={}", js(&id)),
@@ -503,8 +564,8 @@ impl Lowering<'_> {
                 }
                 let mut scope = Scope::default();
                 let props = self.given(c, &d, &t.at, None, &mut scope)?;
-                let shows = format!("K{}", self.functions.len());
-                self.functions.push(format!(
+                let shows = format!("K{}", self.s.functions.len());
+                self.s.functions.push(format!(
                     "function {shows}() {{\n  const t = useCurrentTime().clipSeconds;\n  return (\n    <View style={{{{ position: \"absolute\", inset: 0 }}}}>\n      <{name} {{...{props}}} />\n    </View>\n  );\n}}\n"
                 ));
                 let mut props = self.role_props(&d, hi - lo, &scope);
@@ -539,8 +600,8 @@ impl Lowering<'_> {
                     fill,
                 ));
             }
-            let shows = format!("K{}", self.functions.len());
-            self.functions.push(format!(
+            let shows = format!("K{}", self.s.functions.len());
+            self.s.functions.push(format!(
                 "function {shows}() {{
   const progress = useCurrentTime().clipProgress;
   return (
@@ -595,15 +656,15 @@ impl Lowering<'_> {
                 (None, d, name)
             }
             None => {
-                let path = template_path(self.folder);
+                let path = template_path(self.root);
                 let read = |p: &str| match p == path {
                     true => Some(CAPTION.to_string()),
                     false => (self.host.read)(p),
                 };
                 let d = Rc::new(front::declared(&path, &read)?);
-                let name = format!("C{}", self.imports.len());
-                self.imports.push((name.clone(), path));
-                self.template = true;
+                let name = format!("C{}", self.s.imports.len());
+                self.s.imports.push((name.clone(), path));
+                self.s.template = true;
                 // The track's style as the template's props; its font a resource of the scene.
                 let mut c = Component {
                     component: "the caption template".into(),
@@ -647,8 +708,8 @@ impl Lowering<'_> {
         let props = self.given(c, &d, at, None, &mut scope)?;
         let mut captions = Vec::new();
         let mut out = format!("      <View key={} style={{{fill}}}>\n", js(&track.id));
-        let list = format!("CAPTIONS{}", self.functions.len());
-        let shows = format!("K{}", self.functions.len() + 1);
+        let list = format!("CAPTIONS{}", self.s.functions.len());
+        let shows = format!("K{}", self.s.functions.len() + 1);
         for clip in track.clips.iter().filter(|c| c.enabled) {
             let Content::Caption { text, runs } = &clip.content else {
                 unreachable!("a caption track holds captions: {}", clip.at)
@@ -688,9 +749,10 @@ impl Lowering<'_> {
             let shown = self.scope(&clip.id, &clip.id, table, &props, fill, &inside);
             writeln!(out, "        {shown}").unwrap();
         }
-        self.functions
+        self.s
+            .functions
             .push(format!("const {list} = {};\n", js(&captions)));
-        self.functions.push(format!(
+        self.s.functions.push(format!(
             "function {shows}({{ k }}) {{\n  const t = useCurrentTime().clipSeconds;\n  return (\n    <View style={{{{ position: \"absolute\", inset: 0 }}}}>\n      <{name} {{...{props}}} caption={{{list}[k]}} />\n    </View>\n  );\n}}\n"
         ));
         out.push_str("      </View>\n");
@@ -773,8 +835,14 @@ impl Lowering<'_> {
             let at = clip.at.as_str();
             let (time, props, inside) = match &clip.content {
                 Content::Grade { temperature } => {
-                    if !self.functions.iter().any(|f| f.starts_with("const GRADE")) {
-                        self.functions
+                    if !self
+                        .s
+                        .functions
+                        .iter()
+                        .any(|f| f.starts_with("const GRADE"))
+                    {
+                        self.s
+                            .functions
                             .insert(0, format!("const GRADE = {};\n", js(&GRADE)));
                     }
                     let grade = format!(
@@ -795,8 +863,8 @@ impl Lowering<'_> {
                     }
                     let mut scope = Scope::default();
                     let given = self.given(c, &d, at, None, &mut scope)?;
-                    let shows = format!("K{}", self.functions.len());
-                    self.functions.push(format!(
+                    let shows = format!("K{}", self.s.functions.len());
+                    self.s.functions.push(format!(
                         "function {shows}() {{\n  const t = useCurrentTime().clipSeconds;\n  return (\n    <View style={{{{ position: \"absolute\", inset: 0 }}}}>\n      <{name} {{...{given}}} />\n    </View>\n  );\n}}\n"
                     ));
                     let mut props = self.role_props(&d, clip.duration, &scope);
@@ -969,21 +1037,9 @@ impl Lowering<'_> {
                     clip.duration.seconds_text()
                 ));
                 let [cw, ch] = [composition.width, composition.height];
-                let (sx, sy) = match clip.look.fit.unwrap_or(Fit::Contain) {
-                    Fit::Contain => {
-                        let s = format!("Math.min(size[0] / {cw}, size[1] / {ch})");
-                        (s.clone(), s)
-                    }
-                    Fit::Cover => {
-                        let s = format!("Math.max(size[0] / {cw}, size[1] / {ch})");
-                        (s.clone(), s)
-                    }
-                    Fit::Fill => (format!("size[0] / {cw}"), format!("size[1] / {ch}")),
-                    Fit::None => ("1".into(), "1".into()),
-                };
-                writeln!(scope.lets, "  const fit = [{sx}, {sy}];").unwrap();
+                writeln!(scope.lets, "  const fit = [{}];", fit_scale(clip, [cw, ch])).unwrap();
                 Ok(format!(
-                    "<View style={{{{ position: \"absolute\", left: (size[0] - {cw} * fit[0]) / 2, top: (size[1] - {ch} * fit[1]) / 2, width: {cw}, height: {ch}, transformOrigin: \"0 0\", transform: `scale(${{fit[0]}}, ${{fit[1]}})`, overflow: \"hidden\" }}}}><{name} {{...{props}}} /></View>"
+                    "<View style={{{{ position: \"absolute\", inset: 0, overflow: \"hidden\" }}}}><View style={{{{ position: \"absolute\", left: (size[0] - {cw} * fit[0]) / 2, top: (size[1] - {ch} * fit[1]) / 2, width: {cw}, height: {ch}, transformOrigin: \"0 0\", transform: `scale(${{fit[0]}}, ${{fit[1]}})`, overflow: \"hidden\" }}}}><{name} {{...{props}}} /></View></View>"
                 ))
             }
             Role::Overlay { .. } => {
@@ -1164,6 +1220,22 @@ struct Scope {
     names: Map<String, Value>,
     /// Constants of the clip's component its content reads, as JS.
     lets: String,
+}
+
+/// How a clip scales content `w` × `h` into its box, `size`, as its fit says: x and y, as JS.
+fn fit_scale(clip: &Clip, [w, h]: [u32; 2]) -> String {
+    match clip.look.fit.unwrap_or(Fit::Contain) {
+        Fit::Contain => {
+            let s = format!("Math.min(size[0] / {w}, size[1] / {h})");
+            format!("{s}, {s}")
+        }
+        Fit::Cover => {
+            let s = format!("Math.max(size[0] / {w}, size[1] / {h})");
+            format!("{s}, {s}")
+        }
+        Fit::Fill => format!("size[0] / {w}, size[1] / {h}"),
+        Fit::None => "1, 1".into(),
+    }
 }
 
 /// A source's time in a clip: its trim and rate or its time map, held or looped past `length`
