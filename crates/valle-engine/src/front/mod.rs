@@ -15,7 +15,7 @@ mod rewrite;
 #[cfg(test)]
 mod tests;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ptr;
 use std::rc::Rc;
@@ -59,6 +59,10 @@ pub struct Composition {
     pub looped: bool,
 }
 
+/// What `measureText` asks of the scene: the box of a text in a style, its declarations as JSON
+/// pairs; its width, height and count of lines.
+pub type Measure = Box<dyn Fn(&str, &str) -> Result<[f64; 3], Error>>;
+
 /// One frame: the variant that holds at its time, and its expressions' values there.
 pub struct Frame {
     pub template: Rc<Template>,
@@ -91,6 +95,8 @@ pub struct Front {
     variants: VecDeque<Rc<Template>>,
     traces: usize,
     context: Context,
+    /// What measures text for `measureText`, once the scene gives it.
+    measure: Rc<RefCell<Option<Measure>>>,
 }
 
 impl Front {
@@ -195,9 +201,10 @@ impl Front {
             variants: VecDeque::new(),
             traces: 0,
             context,
+            measure: Rc::default(),
         };
         front.context.with(|ctx| -> Result<(), Error> {
-            install_host(&ctx).map_err(|e| e.to_string())?;
+            install_host(&ctx, front.measure.clone()).map_err(|e| e.to_string())?;
             front.run(&ctx, RUNTIME.into(), "runtime.js")?;
             front.run(&ctx, format!("__builtin({})", charts.code), "charts.js")?;
             let mut free: Vec<&str> = loader
@@ -215,6 +222,11 @@ impl Front {
             front.run(&ctx, "__lockdown()".into(), "lockdown.js")
         })?;
         Ok(front)
+    }
+
+    /// Gives `measureText` what measures text.
+    pub fn set_measure(&self, measure: Measure) {
+        *self.measure.borrow_mut() = Some(measure);
     }
 
     /// The frame at `at`: a variant whose guards hold there, traced when none does.
@@ -519,10 +531,29 @@ fn units(text: &str, split: &str) -> Vec<usize> {
 }
 
 /// `__host.op(name, args)`: one op's value over concrete operands, through the evaluator frames
-/// use, so tracing sees the values frames compute; `__host.svg`, the SVG tables as JSON; and
-/// `__host.random(seed, count, low, high)`, checked by the runtime.
-fn install_host<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<()> {
+/// use, so tracing sees the values frames compute; `__host.svg`, the SVG tables as JSON;
+/// `__host.random(seed, count, low, high)`, checked by the runtime; `__host.units(text, split)`,
+/// the units of a split text; and `__host.measure(text, style)`, what `measureText` gives.
+fn install_host<'js>(
+    ctx: &Ctx<'js>,
+    measure: Rc<RefCell<Option<Measure>>>,
+) -> rquickjs::Result<()> {
     let host = Object::new(ctx.clone())?;
+    host.set(
+        "measure",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, text: String, style: String| {
+                let measured = match &*measure.borrow() {
+                    Some(m) => m(&text, &style).map(Vec::from),
+                    None => {
+                        Err("measureText measures with a scene's fonts, which this has not".into())
+                    }
+                };
+                measured.map_err(|e| Exception::throw_type(&ctx, &format!("measureText: {e}")))
+            },
+        )?,
+    )?;
     host.set(
         "op",
         Function::new(

@@ -700,6 +700,30 @@
   const noise1d = (seed, x) => noise("noise1d", seed, [x]);
   const noise2d = (seed, x, y) => noise("noise2d", seed, [x, y]);
 
+  // `measureText(text, style)`: the box a <Text> of `text` in `style` lays out in, alone and
+  // absolute in the canvas: max-content wide, or wrapped at the style's maxWidth; `width` and
+  // `height` in px and its count of `lines`. What it measures cannot change with time.
+  function measureText(text, style) {
+    const fix = (v) => (v instanceof T ? exact(v, "measureText", site()) : v);
+    text = fix(text);
+    if (typeof text !== "string" && typeof text !== "number") {
+      throw new TypeError("measureText(text, style) measures a string");
+    }
+    const s = style ?? {};
+    if (!plain(s)) throw new TypeError("measureText's style is an object, as a <Text>'s is");
+    const declared = [];
+    for (const [k, v] of entries(s)) {
+      const value = fix(v);
+      if (value === undefined || value === null) continue;
+      if (typeof value !== "number" && typeof value !== "string") {
+        throw new TypeError("measureText style " + k + " must be a number or a string");
+      }
+      declared.push([k, value]);
+    }
+    const [width, height, lines] = host.measure(String(text), stringify(declared));
+    return freeze({ width, height, lines });
+  }
+
   // `rangeSelector(unit, { start, end, offset, softness, shape })`: the weight in [0, 1] of the
   // unit `perUnit` gets, at its index over the count, as After Effects' range selector gives it
   // (`eval.rs`). The shape is fixed: "square" (the default), "ramp", "smooth" or "triangle".
@@ -2090,6 +2114,7 @@
     padNumber,
     noise1d,
     rangeSelector,
+    measureText,
     noise2d,
     clamp,
     mod,

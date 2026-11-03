@@ -393,3 +393,52 @@ fn auto_motion_blur_measures_the_trail_on_the_canvas() {
         assert!((t[0] - 1.0).abs() < 1e-3, "{t:?}");
     });
 }
+
+#[test]
+fn measure_text_gives_the_box_the_text_lays_out_in() {
+    big_stack(|| {
+        let mut scene = load(indoc! {"
+            export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+            const one = measureText('Measure me', { fontSize: 20, fontWeight: 700 });
+            const wrapped = measureText('one two three four', { fontSize: 16, maxWidth: 60 });
+            export default function Scene() {
+              return (
+                <View>
+                  <View style={{ width: one.width, height: one.height }} />
+                  <Text style={{ position: 'absolute', fontSize: 20, fontWeight: 700 }}>
+                    Measure me
+                  </Text>
+                  <View style={{ width: wrapped.width, height: wrapped.height }} />
+                  <Text style={{ position: 'absolute', fontSize: 16, maxWidth: 60 }}>
+                    one two three four
+                  </Text>
+                  <View style={{ width: wrapped.lines }} />
+                </View>
+              );
+            }
+        "})
+        .unwrap();
+        let frame = scene.frame(Tick::ZERO).unwrap();
+        let size = |i: usize| {
+            let b = frame.layout.boxes[i].border;
+            [b.width, b.height]
+        };
+        assert_eq!(size(1), size(2));
+        assert_eq!(size(3), size(4));
+        assert!(size(3)[0] <= 60.0, "{:?}", size(3));
+        let lines = frame.layout.lines[4].as_ref().unwrap().boxes.len();
+        assert!(lines > 1);
+        assert_eq!(size(5)[0], lines as f32);
+        assert!(
+            load(indoc! {"
+                export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+                const m = measureText('x', { padding: { top: 1 } });
+                export default function Scene() {
+                  return <View />;
+                }
+            "})
+            .and_then(|mut s| s.frame(Tick::ZERO).map(|_| ()))
+            .is_err()
+        );
+    });
+}

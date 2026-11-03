@@ -1,6 +1,7 @@
 //! A scene frame by frame: the variant and values the frontend gives at a time, styled, laid out
 //! with its text and painted into a display list.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -10,7 +11,9 @@ use crate::image::{Image, Picture};
 use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
 use crate::style::{Sheet, Style, filter, gradient};
-use crate::template::{Error, Kind, Measure, Op, Sample, Tag, Template, V};
+use crate::template::{
+    Error, Kind, Measure, Node, Op, Piece, Program, Prop, Sample, Tag, Template, V,
+};
 use crate::text::{Blob, Face, FontFile, Fonts, Text};
 use crate::time::Tick;
 
@@ -68,7 +71,9 @@ impl Scene {
         let front = Front::load(entry, &text, inputs)?;
         let mut images = Vec::new();
         let mut pictures = Vec::new();
-        let mut text = Text::new(fonts);
+        let mut text = Text::new(fonts.clone());
+        // `measureText`'s own text, of the same fonts.
+        let mut measuring = Text::new(fonts);
         for slot in &front.resources {
             let fail = |e: String| format!("{entry}: resource {}: {e}", slot.name);
             let files = (inputs.resources.get(&slot.name)).unwrap_or(&slot.default);
@@ -82,13 +87,36 @@ impl Scene {
                 picture = match slot.kind {
                     Holds::Image => Picture::load(&bytes, &mut images),
                     Holds::Font => {
-                        (text.add_font(&slot.name, path, Blob::from(bytes))).map(|()| Picture::None)
+                        let blob = Blob::from(bytes);
+                        (measuring.add_font(&slot.name, path, blob.clone()))
+                            .and_then(|()| text.add_font(&slot.name, path, blob))
+                            .map(|()| Picture::None)
                     }
                 }
                 .map_err(|e| fail(format!("{path}: {e}")))?;
             }
             pictures.push(picture);
         }
+        let c = front.composition;
+        let canvas = [c.width as f32, c.height as f32];
+        let resources = front.resources.clone();
+        let measuring = RefCell::new(measuring);
+        let measured = RefCell::new(HashMap::new());
+        front.set_measure(Box::new(move |content: &str, style: &str| {
+            let key = (content.to_string(), style.to_string());
+            if let Some(&m) = measured.borrow().get(&key) {
+                return Ok(m);
+            }
+            let m = measure(
+                &mut measuring.borrow_mut(),
+                &resources,
+                canvas,
+                content,
+                style,
+            )?;
+            measured.borrow_mut().insert(key, m);
+            Ok(m)
+        }));
         Ok(Scene {
             front,
             pictures,
@@ -266,6 +294,53 @@ impl Scene {
         }
         Ok(())
     }
+}
+
+/// What `measureText` gives: the border box width and height of a Text of `content` laid out
+/// alone, absolute in the canvas, in `style`, max-content wide or as its max width wraps it, and
+/// its count of lines.
+fn measure(
+    text: &mut Text,
+    resources: &[Slot],
+    canvas: [f32; 2],
+    content: &str,
+    style: &str,
+) -> Result<[f64; 3], Error> {
+    let declared: Vec<(String, serde_json::Value)> =
+        serde_json::from_str(style).map_err(|e| e.to_string())?;
+    let mut props = vec![
+        ("position".into(), Prop::Const(V::Str("absolute".into()))),
+        ("width".into(), Prop::Const(V::Str("max-content".into()))),
+    ];
+    for (k, v) in declared {
+        let v = match v {
+            serde_json::Value::Number(n) => V::Num(n.as_f64().unwrap_or(f64::NAN)),
+            serde_json::Value::String(s) => V::Str(s.into()),
+            _ => return Err(format!("style {k} must be a number or a string")),
+        };
+        props.push((k.into(), Prop::Const(v)));
+    }
+    let template = Template {
+        program: Program::default(),
+        nodes: vec![Node {
+            kind: Kind::Text {
+                content: vec![Piece::Text(Prop::Const(V::Str(content.into())))],
+            },
+            path: None,
+            classes: Vec::new(),
+            style: props,
+            children: Vec::new(),
+            site: Some("measureText".into()),
+        }],
+        roots: vec![0],
+        guards: Vec::new(),
+    };
+    let styles = Sheet::new(&template)?.compute(&[], true, canvas, resources)?;
+    let laid = layout(&template, &[], &styles, canvas, text, &[])?;
+    text.sweep();
+    let b = laid.boxes[0].border;
+    let lines = laid.lines[0].as_ref().map_or(0, |l| l.boxes.len());
+    Ok([b.width.into(), b.height.into(), lines as f64])
 }
 
 /// The node each `bounds()` of the variant measures.
