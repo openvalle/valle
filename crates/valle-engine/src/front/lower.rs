@@ -43,6 +43,17 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
         let f = MathFn::parse(f).ok_or_else(|| format!("no Math function {f}"))?;
         return Ok(Op::Math(f, exprs()?));
     }
+    if let Some(spec) = name.strip_prefix("freeze|") {
+        let span = spec
+            .split_once('|')
+            .map(|(a, b)| (a.parse::<f64>(), b.parse::<f64>()));
+        return match span {
+            Some((Ok(from), Ok(to))) if from.is_finite() && to.is_finite() && from < to => {
+                Ok(Op::Freeze(fixed(1)?[0], [from, to]))
+            }
+            _ => Err(format!("freeze {spec}")),
+        };
+    }
     if let Some(spec) = name.strip_prefix("progress|") {
         return Ok(Op::Stage(fixed(1)?[0], Stage::parse(spec)?));
     }

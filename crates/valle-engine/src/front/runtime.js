@@ -594,6 +594,21 @@
     progress("repeatProgress", t, stage, "repeat", count, 0);
   const yoyoProgress = (t, stage, count) => progress("yoyoProgress", t, stage, "yoyo", count, 0);
 
+  // `freezeTime(t, { from, to })`: the time held at `from` until `to`, later less the time held.
+  function freezeTime(t, options) {
+    const o = options ?? {};
+    if (keys(o).some((k) => k !== "from" && k !== "to")) {
+      throw new TypeError("freezeTime(seconds, { from, to }) takes only from and to");
+    }
+    const fix = (v) => (v instanceof T ? exact(v, "freezeTime", site()) : v);
+    const [from, to] = [fix(o.from), fix(o.to)];
+    if (!numeric(t) || !Number.isFinite(from) || !Number.isFinite(to) || !(from < to)) {
+      throw new TypeError("freezeTime takes a number of seconds and from before to, both numbers");
+    }
+    const op = "freeze|" + from + "|" + to;
+    return isT(t) ? mk(op, [t]) : host.op(op, [t]);
+  }
+
   // `spring(t, options)` and `springVelocity(t, options)`: options as `spring.rs` takes them,
   // fixed values.
   const springOf = (name) => (t, options) => {
@@ -1252,6 +1267,7 @@
     spring,
     springVelocity,
     defineSequence,
+    freezeTime,
     stageProgress,
     staggerProgress,
     repeatProgress,

@@ -99,6 +99,8 @@ pub enum Op {
     Interp(Rc<Interp>),
     /// A stage's progress at the input time.
     Stage(u32, Stage),
+    /// The input time held still from the first time to the second, and later less that span.
+    Freeze(u32, [f64; 2]),
     /// `spring(t)`, or its velocity.
     Spring {
         input: u32,

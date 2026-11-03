@@ -74,6 +74,11 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
         }
         Op::Interp(i) => interpolate(i, values)?,
         Op::Stage(input, stage) => V::Num(stage.at(num(input))),
+        Op::Freeze(input, [from, to]) => V::Num(match num(input) {
+            t if t < *from => t,
+            t if t < *to => *from,
+            t => t - (to - from),
+        }),
         Op::Spring {
             input,
             spring,
@@ -275,6 +280,16 @@ mod tests {
         ] {
             assert!(Stage::parse(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn frozen_time() {
+        let ops = |t| vec![Op::Const(V::Num(t)), Op::Freeze(0, [1.0, 1.5])];
+        let at = |t| run(&program(ops(t)), AT).unwrap()[1].num();
+        assert_eq!(
+            [0.5, 1.0, 1.25, 1.5, 2.0].map(at),
+            [0.5, 1.0, 1.0, 1.0, 1.5]
+        );
     }
 
     fn between(x: f64, a: V, b: V) -> Result<String, Error> {
