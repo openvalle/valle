@@ -71,6 +71,9 @@ pub enum Function<L = f64, C = Rgba> {
         threshold: f64,
         knee: f64,
     },
+    /// What `motionBlur` adds after the filters: blurred evenly along the trail, px, centered
+    /// on each point.
+    MotionBlur([f64; 2]),
 }
 
 impl Function<Len, Option<Rgba>> {
@@ -129,6 +132,7 @@ impl Function<Len, Option<Rgba>> {
                 threshold: *threshold,
                 knee: *knee,
             },
+            Function::MotionBlur(trail) => Function::MotionBlur(*trail),
         }
     }
 }

@@ -70,6 +70,7 @@ fn names(items: &[Item]) -> Vec<String> {
                         Filter::Lens { .. } => "lens",
                         Filter::Grain { .. } => "grain",
                         Filter::Radial { .. } => "radial",
+                        Filter::Motion(_) => "motion",
                         Filter::Displacement { .. } => "displacement",
                         Filter::Bloom { .. } => "bloom",
                     })

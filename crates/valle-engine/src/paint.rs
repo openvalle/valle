@@ -195,6 +195,8 @@ pub enum Filter {
     /// Blurred along each ray from `center` by up to `amount` px either way, and never more
     /// than half of the way to it.
     Radial { center: [f32; 2], amount: f32 },
+    /// Blurred evenly along this trail, px, centered on each point.
+    Motion([f32; 2]),
     /// Each point shows the one `scale` px times two noises less a half away along x and y:
     /// noises of a pattern `seed` picks, `frequency` cycles a px along x and y from `origin`, of
     /// `octaves`, fractal or `turbulence`, as SVG's feTurbulence makes them.
@@ -618,6 +620,7 @@ fn filters(functions: &[filter::Function], frame: Rect) -> Vec<Filter> {
                 size: *size as f32,
                 origin: [frame.x, frame.y],
             },
+            filter::Function::MotionBlur(trail) => Filter::Motion(trail.map(|v| v as f32)),
             filter::Function::RadialBlur { center, amount } => Filter::Radial {
                 center: [frame.x + center[0] as f32, frame.y + center[1] as f32],
                 amount: *amount as f32,
@@ -733,6 +736,7 @@ fn colors(f: &filter::Function) -> Option<[f32; 20]> {
         | F::LensDistortion(_)
         | F::FilmGrain { .. }
         | F::RadialBlur { .. }
+        | F::MotionBlur(_)
         | F::Displacement { .. }
         | F::Bloom { .. } => return None,
     })

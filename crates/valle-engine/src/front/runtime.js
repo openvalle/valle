@@ -1119,6 +1119,10 @@
         out.push(...flipped(v, tag, at, layoutId));
         continue;
       }
+      if (k === "motionBlur") {
+        if (v !== undefined && v !== null) out.push(["motionBlur", trail(v, tag, at)]);
+        continue;
+      }
       if (k.startsWith("--")) {
         fail(
           at,
@@ -1136,6 +1140,23 @@
       out.push([k, v]);
     }
     return out;
+  }
+
+  // `motionBlur: { velocity: { x, y }, shutterAngle }` as the trail the element makes while the
+  // shutter is open, `x y` in its own px: the velocity in px a second of the scene's clock, times
+  // the rates of the TimeScopes around, times the shutter's part of a frame (180° by default).
+  function trail(v, tag, at) {
+    const form = "<" + tag + "> motionBlur is { velocity: { x, y }, shutterAngle }";
+    if (!plain(v)) fail(at, form);
+    for (const k of keys(v)) if (k !== "velocity" && k !== "shutterAngle") fail(at, form);
+    const { velocity } = v;
+    const angle = fixed(v.shutterAngle ?? 180, "shutterAngle", at);
+    if (!plain(velocity) || !numeric(velocity.x) || !numeric(velocity.y)) fail(at, form);
+    if (!(Number.isFinite(angle) && angle >= 0 && angle <= 360)) {
+      fail(at, "<" + tag + "> motionBlur shutterAngle is degrees from 0 to 360");
+    }
+    const exposure = (G.rate * angle) / 360 / G.composition.fps;
+    return __tpl(["", " ", ""], __b("*", velocity.x, exposure), __b("*", velocity.y, exposure));
   }
 
   // An element's `layoutId`, a name written as a literal.
@@ -1389,17 +1410,18 @@
     }
     const key = props.key === undefined ? null : String(fixed(props.key, "key", at));
     const op = "scope|" + offset + "|" + rate;
-    const outer = [G.seconds, G.progress];
+    const outer = [G.seconds, G.progress, G.rate];
     G.seconds = mk(op, [G.seconds]);
     G.progress = progressOf(G.seconds);
     G.scopes.push(op);
+    G.rate *= rate;
     if (key !== null) G.keys.push(key);
     try {
       f();
     } finally {
       if (key !== null) G.keys.pop();
       G.scopes.pop();
-      [G.seconds, G.progress] = outer;
+      [G.seconds, G.progress, G.rate] = outer;
     }
   }
 
@@ -1696,8 +1718,9 @@
     };
     // A TimeScope changes the clock under it, not the clip's.
     G.clip = [G.seconds, G.progress];
-    // The ops of the TimeScopes tracing is in, outermost first.
+    // The ops of the TimeScopes tracing is in, outermost first, and their rates' product.
     G.scopes = [];
+    G.rate = 1;
     // Whether tracing is in an <Echo> or a <Shutter>, and how many times it has sampled.
     G.sampling = false;
     G.samples = 0;

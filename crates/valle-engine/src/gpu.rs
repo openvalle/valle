@@ -52,6 +52,9 @@ const GRAIN: f32 = 2.0;
 const RADIAL: f32 = 3.0;
 const DISPLACEMENT: f32 = 4.0;
 const LIGHT: f32 = 5.0;
+const MOTION: f32 = 6.0;
+/// Most taps a motion blur averages; past as many px its taps spread.
+const MOTION_TAPS: f64 = 128.0;
 
 /// Premultiplied colors to the luminance of their working values, Rec. 709's weights as Skia's,
 /// times their alpha, as the alpha of black.
@@ -623,6 +626,17 @@ impl Plan {
                         layer = self.effect(layer, RADIAL, &words);
                     }
                     layer
+                }
+                Filter::Motion([tx, ty]) => {
+                    let (tx, ty) = (f64::from(*tx), f64::from(*ty));
+                    let [dx, dy] = [0, 1].map(|k| x[k] * tx + y[k] * ty);
+                    let length = dx.hypot(dy);
+                    if length <= 0.0 {
+                        continue;
+                    }
+                    // A tap a px or less apart, so that between them it reads as one smear.
+                    let taps = (length.ceil() + 1.0).min(MOTION_TAPS) as f32;
+                    self.effect(layer, MOTION, &[taps, dx as f32, dy as f32])
                 }
                 Filter::Bloom {
                     radius,

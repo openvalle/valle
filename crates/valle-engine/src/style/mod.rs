@@ -1482,6 +1482,8 @@ struct Declared {
     blend: Blend,
     isolate: bool,
     filter: Vec<filter::Function<Len, Option<Rgba>>>,
+    /// `motionBlur` as the frontend gives it: the trail in the box's own px.
+    motion_blur: [f64; 2],
     backdrop: Vec<filter::Function<Len, Option<Rgba>>>,
     clip: Option<shape::Clip<Len>>,
     masks: background::Declared,
@@ -1612,6 +1614,7 @@ impl Default for Declared {
             blend: Blend::Normal,
             isolate: false,
             filter: Vec::new(),
+            motion_blur: [0.0; 2],
             backdrop: Vec::new(),
             clip: None,
             masks: background::Declared::default(),
@@ -1764,6 +1767,7 @@ enum Field {
     MixBlendMode,
     Isolation,
     Filter,
+    MotionBlur,
     BackdropFilter,
     ClipPath,
     MaskImage,
@@ -1890,7 +1894,7 @@ enum Sides {
 /// The support table: the style properties the engine takes, by their React names. The case
 /// runner compares each with Chrome, and makes each other property Chrome knows a case that must
 /// fail.
-const FIELDS: [(&str, Field); 256] = [
+const FIELDS: [(&str, Field); 257] = [
     ("display", Field::Display),
     ("position", Field::Position),
     ("inset", Field::Inset(Sides::All)),
@@ -2162,6 +2166,7 @@ const FIELDS: [(&str, Field); 256] = [
     ("mixBlendMode", Field::MixBlendMode),
     ("isolation", Field::Isolation),
     ("filter", Field::Filter),
+    ("motionBlur", Field::MotionBlur),
     ("backdropFilter", Field::BackdropFilter),
     ("clipPath", Field::ClipPath),
     ("maskImage", Field::MaskImage),
@@ -2346,6 +2351,7 @@ impl Field {
                 | Field::BoxShadow
                 | Field::Opacity
                 | Field::Filter
+                | Field::MotionBlur
                 | Field::BackdropFilter
                 | Field::ClipPath
                 | Field::MaskImage
@@ -2404,9 +2410,13 @@ impl Field {
     }
 }
 
-/// The style properties the engine takes.
+/// The style properties the engine takes, but `motionBlur`, which is Valle's and which the
+/// frontend gives from what scenes write.
 pub fn properties() -> impl Iterator<Item = &'static str> {
-    FIELDS.iter().map(|&(name, _)| name)
+    FIELDS
+        .iter()
+        .map(|&(name, _)| name)
+        .filter(|&name| name != "motionBlur")
 }
 
 /// What a length may be.
@@ -3839,6 +3849,14 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::MixBlendMode => d.blend = keyword(v, &BLENDS)?,
         F::Isolation => d.isolate = keyword(v, &[("auto", false), ("isolate", true)])?,
         F::Filter => d.filter = filter::filter(&text(v)?)?,
+        F::MotionBlur => {
+            let trail = text(v)?;
+            let xy: Vec<f64> = trail.split(' ').filter_map(|n| n.parse().ok()).collect();
+            d.motion_blur = match xy[..] {
+                [x, y] if x.is_finite() && y.is_finite() => [x, y],
+                _ => return Err(format!("motionBlur trail {trail:?}")),
+            };
+        }
         F::BackdropFilter => d.backdrop = filter::filter(&text(v)?)?,
         F::ClipPath => match v {
             V::Str(s) => match reference(s) {
@@ -4549,7 +4567,11 @@ fn compute(
         preserve_3d: d.preserve_3d,
         blend: d.blend,
         isolate: d.isolate,
-        filter: d.filter.iter().map(|f| f.computed(u, color)).collect(),
+        filter: (d.filter.iter().map(|f| f.computed(u, color)))
+            .chain(
+                (d.motion_blur != [0.0; 2]).then_some(filter::Function::MotionBlur(d.motion_blur)),
+            )
+            .collect(),
         backdrop: d.backdrop.iter().map(|f| f.computed(u, color)).collect(),
         clip: d.clip.as_ref().map(|c| c.computed(u)),
         masks: match d

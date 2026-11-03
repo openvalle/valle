@@ -23,6 +23,8 @@
 // - 5, bloom's light: each pixel's colors as much as their luminance, unpremultiplied, is past a
 //   threshold, eased in over a knee either side of it, times an intensity; its alpha the most of
 //   those colors before the intensity.
+// - 6, motion blur: the mean of taps evenly from half a trail back to half of it on, in target
+//   px, the first and last at its ends.
 
 struct Effect {
   // x: which effect; then its parameters.
@@ -175,6 +177,15 @@ fn displacement(p: vec2f, t: u32, seed: u32, frequency: vec2f, more: vec4f, orig
   return sampled(h.xy / h.z);
 }
 
+fn motion(p: vec2f, taps: f32, trail: vec2f) -> vec4f {
+  let n = u32(taps);
+  var sum = vec4f(0.0);
+  for (var i = 0u; i < n; i++) {
+    sum += sampled(p + trail * (f32(i) / (taps - 1.0) - 0.5));
+  }
+  return sum / taps;
+}
+
 fn light(p: vec2f, threshold: f32, knee: f32, intensity: f32) -> vec4f {
   let c = texel(vec2<i32>(p));
   if (c.a <= 0.0) {
@@ -201,6 +212,9 @@ fn light(p: vec2f, threshold: f32, knee: f32, intensity: f32) -> vec4f {
   }
   if (kind == 3u) {
     return radial(in.pos.xy, u32(e.head.y), e.head.zw, e.more[0].x, e.more[0].y);
+  }
+  if (kind == 6u) {
+    return motion(in.pos.xy, e.head.y, e.head.zw);
   }
   if (kind == 5u) {
     return light(in.pos.xy, e.head.y, e.head.z, e.head.w);

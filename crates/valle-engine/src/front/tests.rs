@@ -518,6 +518,46 @@ fn a_world_is_a_canvas_box_its_camera_moves() {
 }
 
 #[test]
+fn motion_blur_is_the_trail_while_the_shutter_is_open() {
+    big_stack(|| {
+        let mut f = scene(indoc! {"
+                export default function Scene() {
+                  const fast = { velocity: { x: 120, y: -60 } };
+                  return (
+                    <View style={{ motionBlur: fast }}>
+                      <TimeScope rate={2}>
+                        <View style={{ motionBlur: { ...fast, shutterAngle: 90 } }} />
+                      </TimeScope>
+                    </View>
+                  );
+                }
+            "});
+        let frame = at(&mut f, "0");
+        assert_eq!(style(&frame, 0, "motionBlur"), V::Str("2 -1".into()));
+        assert_eq!(style(&frame, 1, "motionBlur"), V::Str("2 -1".into()));
+        for (body, want) in [
+            (
+                "<View style={{ motionBlur: 5 }} />",
+                "motionBlur is { velocity",
+            ),
+            (
+                "<View style={{ motionBlur: { velocity: { x: 1 } } }} />",
+                "motionBlur is {",
+            ),
+            (
+                "<View style={{ motionBlur: { velocity: { x: 1, y: 0 }, shutterAngle: 400 } }} />",
+                "degrees from 0 to 360",
+            ),
+        ] {
+            let e = error(&format!(
+                "export default function Scene() {{ return {body}; }}"
+            ));
+            assert!(e.contains(want), "{body}: {e}");
+        }
+    });
+}
+
+#[test]
 fn branches_become_variants() {
     big_stack(|| {
         let mut f = scene(indoc! {"
