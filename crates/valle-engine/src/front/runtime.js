@@ -857,6 +857,53 @@
     return __tpl(parts, a.x, a.y, mid, a.y, mid, b.y, b.x, b.y);
   }
 
+  // `defineLayoutStates({ state: { layoutId: { x, y, width, height } } })`: named layouts of the
+  // same elements, each a box in px of its containing block. `flip(states, from, to, progress)`
+  // moves each element between two of them, as its `style.layoutTransition`.
+  const LAYOUTS = Symbol("layout states");
+  const FLIP = Symbol("flip");
+  function defineLayoutStates(states) {
+    if (!plain(states) || hasT(states)) {
+      throw new TypeError(
+        "defineLayoutStates takes states of boxes that do not depend on the time",
+      );
+    }
+    const names = keys(states);
+    if (names.length < 2) throw new TypeError("defineLayoutStates takes two states or more");
+    const ids = (name) => {
+      if (!plain(states[name])) throw new TypeError("layout state " + name + " must be an object");
+      return keys(states[name]).sort().join();
+    };
+    for (const name of names) {
+      if (ids(name) !== ids(names[0])) {
+        throw new TypeError("layout state " + name + " lists other layoutIds than " + names[0]);
+      }
+      for (const [id, r] of entries(states[name])) {
+        const finite = (k) => Number.isFinite(r?.[k]);
+        if (!["x", "y", "width", "height"].every(finite) || !(r.width > 0 && r.height > 0)) {
+          throw new TypeError(
+            "layout state " + name + " " + id + " must be { x, y, width, height }, sized over 0",
+          );
+        }
+      }
+    }
+    return freeze({ [LAYOUTS]: states });
+  }
+  function flip(layouts, from, to, progress) {
+    if (!layouts?.[LAYOUTS]) throw new TypeError("flip takes states from defineLayoutStates");
+    const states = layouts[LAYOUTS];
+    [from, to] = [fixed(from, "flip", site()), fixed(to, "flip", site())];
+    for (const s of [from, to]) {
+      if (!Object.hasOwn(states, s)) {
+        throw new TypeError(
+          "flip: no layout state " + s + "; there are " + keys(states).join(", "),
+        );
+      }
+    }
+    if (!numeric(progress)) throw new TypeError("flip progress must be a number");
+    return freeze({ [FLIP]: { states, from, to, progress } });
+  }
+
   // `clamp(x, min, max)` as CSS clamps: `min` wins over `max`.
   const clamp = (x, min, max) => {
     if (![x, min, max].every(numeric)) throw new TypeError("clamp(x, min, max) takes numbers");
@@ -1033,20 +1080,24 @@
 
   // Props each element takes besides key, className and style.
   const PROPS = {
-    view: [],
-    text: [],
+    view: ["layoutId"],
+    text: ["layoutId"],
     span: [],
-    mask: ["source", "mode", "invert"],
-    image: ["src"],
+    mask: ["source", "mode", "invert", "layoutId"],
+    image: ["src", "layoutId"],
   };
 
   const fixed = (x, kind, at) => (x instanceof T ? exact(x, kind, at) : x);
 
-  function styleOf(style, tag, at) {
+  function styleOf(style, tag, at, layoutId) {
     if (style === undefined || style === null) return [];
     if (!plain(style)) fail(at, "<" + tag + "> style must be an object");
     const out = [];
     for (const [k, v] of entries(style)) {
+      if (k === "layoutTransition") {
+        out.push(...flipped(v, tag, at, layoutId));
+        continue;
+      }
       if (k.startsWith("--")) {
         fail(
           at,
@@ -1064,6 +1115,40 @@
       out.push([k, v]);
     }
     return out;
+  }
+
+  // An element's `layoutId`, a name written as a literal.
+  function layoutIdOf(props, tag, at) {
+    const id = fixed(props.layoutId, "layoutId", at);
+    if (id !== undefined && (typeof id !== "string" || id === "")) {
+      fail(at, "<" + tag + "> layoutId must be a name");
+    }
+    return id;
+  }
+
+  // `layoutTransition: flip(…)` as the styles that move the element from its box in one state
+  // to its box in the other: laid out absolute at `to`, and translated and scaled back from
+  // `from` about its top left as the progress goes from 0 to 1. A size never crosses 0.
+  function flipped(f, tag, at, id) {
+    if (!f || !f[FLIP]) fail(at, "<" + tag + "> style layoutTransition takes flip(…)");
+    if (id === undefined) fail(at, "<" + tag + "> style layoutTransition needs a layoutId");
+    const { states, from, to, progress } = f[FLIP];
+    if (!Object.hasOwn(states[from], id)) {
+      fail(at, "<" + tag + "> layoutId " + id + " is in no layout state");
+    }
+    const [a, b] = [states[from][id], states[to][id]];
+    const back = (d) => __b("*", d, __b("-", 1, progress));
+    const ratio = (s, t) => math("max", [0, __b("+", 1, back(s / t - 1))]);
+    return [
+      ["position", "absolute"],
+      ["left", b.x],
+      ["top", b.y],
+      ["width", b.width],
+      ["height", b.height],
+      ["transformOrigin", "0 0"],
+      ["translate", __tpl(["", "px ", "px"], back(a.x - b.x), back(a.y - b.y))],
+      ["scale", __tpl(["", " ", ""], ratio(a.width, b.width), ratio(a.height, b.height))],
+    ];
   }
 
   // What a <Text> or a <Span> holds, into `node`: runs of strings, numbers and traced values,
@@ -1239,7 +1324,7 @@
       type: kind,
       path: key === null ? null : [...G.keys, key].join("/"),
       classes: className.split(/\s+/).filter(Boolean),
-      style: styleOf(props.style, type, at),
+      style: styleOf(props.style, type, at, layoutIdOf(props, type, at)),
       children: [],
       site: at,
     };
@@ -1642,6 +1727,8 @@
     bounds,
     anchor,
     connect,
+    defineLayoutStates,
+    flip,
     formatNumber,
     formatPercent,
     padNumber,
