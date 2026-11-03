@@ -37,9 +37,34 @@ pub fn noise1(seed: u64, stream: u64, x: f64) -> f64 {
     if !x.is_finite() {
         return 0.5;
     }
+    let (i, w) = spline(x);
+    (0..4)
+        .map(|k| w[k] * lattice(seed, stream, i.wrapping_add(k as i64 - 1)))
+        .sum()
+}
+
+/// [`noise1`] over the plane: the spline across x on four rows, then across y.
+pub fn noise2(seed: u64, x: f64, y: f64) -> f64 {
+    if !x.is_finite() || !y.is_finite() {
+        return 0.5;
+    }
+    let ((i, wx), (j, wy)) = (spline(x), spline(y));
+    let row = |r: i64| {
+        let stream = mix(PLANE ^ j.wrapping_add(r) as u64);
+        (0..4)
+            .map(|k| wx[k] * lattice(seed, stream, i.wrapping_add(k as i64 - 1)))
+            .sum::<f64>()
+    };
+    (0..4).map(|r| wy[r] * row(r as i64 - 1)).sum()
+}
+
+/// Streams of [`noise2`]'s rows start here, away from the small streams [`Wiggle`] takes.
+const PLANE: u64 = 0xD1B5_4A32_D192_ED03;
+
+/// The lattice point at or below `x` and the weights of the four from the one before it.
+fn spline(x: f64) -> (i64, [f64; 4]) {
     let i = x.floor();
-    let (t, i) = (x - i, i as i64);
-    let p = |k: i64| lattice(seed, stream, i.wrapping_add(k));
+    let t = x - i;
     let (t2, t3) = (t * t, t * t * t);
     let w = [
         (1.0 - t) * (1.0 - t) * (1.0 - t),
@@ -47,7 +72,7 @@ pub fn noise1(seed: u64, stream: u64, x: f64) -> f64 {
         -3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0,
         t3,
     ];
-    (w[0] * p(-1) + w[1] * p(0) + w[2] * p(1) + w[3] * p(2)) / 6.0
+    (i as i64, w.map(|w| w / 6.0))
 }
 
 /// `wiggle()`, one axis of it: a value within ±amplitude that drifts `frequency` times a second.
@@ -135,6 +160,27 @@ mod tests {
         assert!(scaled.iter().all(|&v| (-2.0..3.0).contains(&v)));
         assert!((scaled.iter().sum::<f64>() / 1000.0 - 0.5).abs() < 0.2);
         assert_ne!(random(1, 1, [0.0, 1.0]), random(2, 1, [0.0, 1.0]));
+    }
+
+    #[test]
+    fn plane_noise_is_smooth_and_within_its_range() {
+        let (mut least, mut most) = (1.0f64, 0.0f64);
+        for i in -60..60 {
+            for j in -60..60 {
+                let (x, y) = (f64::from(i) * 0.05 + 0.01, f64::from(j) * 0.07 + 0.02);
+                let n = noise2(4, x, y);
+                (least, most) = (least.min(n), most.max(n));
+                let step = (noise2(4, x + 1e-6, y) - n).abs() + (noise2(4, x, y + 1e-6) - n).abs();
+                assert!(step < 1e-5);
+            }
+        }
+        assert!(
+            least >= 0.0 && most <= 1.0 && most - least > 0.4,
+            "{least} {most}"
+        );
+        // Not the same along both axes, and not along a row of the line's noise.
+        assert_ne!(noise2(4, 1.3, 2.6), noise2(4, 2.6, 1.3));
+        assert_ne!(noise2(4, 1.3, 0.0), noise1(4, 0, 1.3));
     }
 
     #[test]

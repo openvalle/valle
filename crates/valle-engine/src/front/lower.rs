@@ -44,6 +44,14 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
         let f = MathFn::parse(f).ok_or_else(|| format!("no Math function {f}"))?;
         return Ok(Op::Math(f, exprs()?));
     }
+    if let Some(seed) = name.strip_prefix("noise|") {
+        let seed = seed.parse().map_err(|_| format!("noise seed {seed}"))?;
+        let args = exprs()?;
+        if !(1..=2).contains(&args.len()) {
+            return Err("noise takes one or two coordinates".into());
+        }
+        return Ok(Op::Noise(seed, args));
+    }
     if let Some(spec) = name.strip_prefix("wiggle|") {
         return Ok(Op::Wiggle(fixed(1)?[0], Wiggle::parse(spec)?));
     }

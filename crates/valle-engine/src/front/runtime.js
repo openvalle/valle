@@ -665,6 +665,18 @@
   }
   const MAX_RANDOM = 1 << 20;
 
+  // `noise1d(seed, x)` and `noise2d(seed, x, y)`: smooth noise in [0, 1]; the seed is fixed.
+  const noise = (name, seed, at) => {
+    seed = seed instanceof T ? exact(seed, name, site()) : seed;
+    if (!Number.isSafeInteger(seed) || seed < 0) {
+      throw new TypeError(name + " seed must be a whole number, at least 0");
+    }
+    if (!at.every(numeric)) throw new TypeError(name + " takes numbers");
+    return at.some(isT) ? mk("noise|" + seed, at) : host.op("noise|" + seed, at);
+  };
+  const noise1d = (seed, x) => noise("noise1d", seed, [x]);
+  const noise2d = (seed, x, y) => noise("noise2d", seed, [x, y]);
+
   // `clamp(x, min, max)` as CSS clamps: `min` wins over `max`.
   const clamp = (x, min, max) => {
     if (![x, min, max].every(numeric)) throw new TypeError("clamp(x, min, max) takes numbers");
@@ -1397,6 +1409,8 @@
     wiggle,
     wiggle2D,
     seededRandom,
+    noise1d,
+    noise2d,
     clamp,
     mod,
     pingPong,
