@@ -515,6 +515,85 @@
     return args.some(isT) ? mk(name, args) : host.op(name, args);
   }
 
+  // A sequence of stages: each starts `at` a time or `after` an earlier one, with a `delay` or
+  // an `overlap`; the first starts at 0 if it says neither. Fixed values, so plain numbers out.
+  function defineSequence(stages) {
+    if (!stages || typeof stages !== "object" || isArray(stages)) {
+      throw new TypeError("defineSequence takes an object of stages by name");
+    }
+    const out = {};
+    for (const name of keys(stages)) {
+      const s = stages[name] ?? {};
+      const at = (k) => {
+        if (!STAGE.includes(k)) {
+          throw new TypeError("stage " + name + " has no " + k + "; it takes " + STAGE.join(", "));
+        }
+        const v = s[k] instanceof T ? exact(s[k], "defineSequence", site()) : s[k];
+        if (v !== undefined && k !== "after" && !(typeof v === "number" && Number.isFinite(v))) {
+          throw new TypeError("stage " + name + " " + k + " must be a number");
+        }
+        return v;
+      };
+      keys(s).forEach(at);
+      const duration = at("duration");
+      if (!(duration > 0)) throw new TypeError("stage " + name + " needs a duration over 0");
+      let start;
+      if (at("at") !== undefined) {
+        if (at("after") !== undefined || at("delay") !== undefined || at("overlap") !== undefined) {
+          throw new TypeError(
+            "stage " + name + " starts at a time; after, delay and overlap go without at",
+          );
+        }
+        start = at("at");
+      } else if (at("after") !== undefined) {
+        const before = out[at("after")];
+        if (!before) {
+          throw new TypeError(
+            "stage " + name + " is after " + at("after") + ", which is no stage before it",
+          );
+        }
+        start = before.start + before.duration + (at("delay") ?? 0) - (at("overlap") ?? 0);
+      } else if (
+        keys(out).length === 0 &&
+        at("delay") === undefined &&
+        at("overlap") === undefined
+      ) {
+        start = 0;
+      } else {
+        throw new TypeError("stage " + name + " needs at or after");
+      }
+      out[name] = { start, duration };
+    }
+    return out;
+  }
+  const STAGE = ["duration", "at", "after", "delay", "overlap"];
+
+  // A stage's progress at `t`: once, `count` times, or there and back `count` times; the stage, the
+  // count, the index and the gap are fixed.
+  function progress(name, t, stage, how, count, shift) {
+    const fix = (v) => (v instanceof T ? exact(v, name, site()) : v);
+    const finite = (v) => typeof v === "number" && Number.isFinite(v);
+    const [start, duration] = [fix(stage?.start), fix(stage?.duration)];
+    if (!finite(start) || !finite(duration)) {
+      throw new TypeError(name + " takes a stage from defineSequence, or { start, duration }");
+    }
+    if (!numeric(t)) throw new TypeError(name + " takes a number of seconds");
+    if (!finite(fix(count)) || !finite(shift)) throw new TypeError(name + " takes numbers");
+    if (!(duration > 0) || !(fix(count) > 0)) {
+      throw new TypeError(name + ": the duration and the count must be over 0");
+    }
+    const op = "progress|" + [start + shift, duration, fix(count), how].join("|");
+    return isT(t) ? mk(op, [t]) : host.op(op, [t]);
+  }
+  const stageProgress = (t, stage) => progress("stageProgress", t, stage, "once", 1, 0);
+  const staggerProgress = (t, stage, index, gap) => {
+    const fix = (v) => (v instanceof T ? exact(v, "staggerProgress", site()) : v);
+    return progress("staggerProgress", t, stage, "once", 1, fix(index) * fix(gap));
+  };
+  const repeatProgress = (t, stage, count) =>
+    progress("repeatProgress", t, stage, "repeat", count, 0);
+  const yoyoProgress = (t, stage, count) => progress("yoyoProgress", t, stage, "yoyo", count, 0);
+
   // `spring(t, options)` and `springVelocity(t, options)`: options as `spring.rs` takes them,
   // fixed values.
   const springOf = (name) => (t, options) => {
@@ -1172,6 +1251,11 @@
     interpolate,
     spring,
     springVelocity,
+    defineSequence,
+    stageProgress,
+    staggerProgress,
+    repeatProgress,
+    yoyoProgress,
     View: "View",
     Text: "Text",
     Span: "Span",

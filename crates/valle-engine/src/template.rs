@@ -97,12 +97,67 @@ pub enum Op {
     /// The parts joined as a template literal joins them.
     Template(Vec<Part>),
     Interp(Rc<Interp>),
+    /// A stage's progress at the input time.
+    Stage(u32, Stage),
     /// `spring(t)`, or its velocity.
     Spring {
         input: u32,
         spring: Spring,
         velocity: bool,
     },
+}
+
+/// A stage of a sequence and how its progress goes: from 0 to 1 once, `count` times, or there and
+/// back `count` times.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stage {
+    pub start: f64,
+    pub duration: f64,
+    pub count: f64,
+    pub yoyo: bool,
+}
+
+impl Stage {
+    /// From `start|duration|count|once`, `…|repeat` or `…|yoyo`.
+    pub fn parse(spec: &str) -> Result<Stage, String> {
+        let bad = || format!("stage {spec}");
+        let [start, duration, count, how] = spec.split('|').collect::<Vec<_>>()[..] else {
+            return Err(bad());
+        };
+        let number = |s: &str| {
+            s.parse::<f64>()
+                .ok()
+                .filter(|x| x.is_finite())
+                .ok_or_else(bad)
+        };
+        let (start, duration, count) = (number(start)?, number(duration)?, number(count)?);
+        if duration <= 0.0 || count <= 0.0 || !["once", "repeat", "yoyo"].contains(&how) {
+            return Err(bad());
+        }
+        let count = if how == "once" { 1.0 } else { count };
+        let yoyo = how == "yoyo";
+        Ok(Stage {
+            start,
+            duration,
+            count,
+            yoyo,
+        })
+    }
+
+    /// The progress at `t` seconds: within [0, 1], and back at 0 when a yoyo ends; a repeat ends
+    /// at 1, not at the start of another turn.
+    pub fn at(&self, t: f64) -> f64 {
+        let p = ((t - self.start) / self.duration).clamp(0.0, 1.0);
+        if self.yoyo {
+            let leg = (p * self.count * 2.0) % 2.0;
+            return if leg > 1.0 { 2.0 - leg } else { leg };
+        }
+        if p >= 1.0 {
+            1.0
+        } else {
+            (p * self.count).fract()
+        }
+    }
 }
 
 /// `interpolate(input, inputs, outputs, options)` over numbers. Stops are operands, so traced

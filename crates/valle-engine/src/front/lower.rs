@@ -11,8 +11,8 @@ use crate::js::MathFn;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
 use crate::template::{
-    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Tag, Template, V,
-    Want,
+    Bin, Cmp, Error, Guard, Interp, Kind, Node, Op, Part, Piece, Program, Prop, Stage, Tag,
+    Template, V, Want,
 };
 
 /// An operand of an op by name: an earlier expression, or literal text of a template.
@@ -42,6 +42,9 @@ pub fn make(name: &str, args: &[Arg]) -> Result<Op, Error> {
     if let Some(f) = name.strip_prefix("math|") {
         let f = MathFn::parse(f).ok_or_else(|| format!("no Math function {f}"))?;
         return Ok(Op::Math(f, exprs()?));
+    }
+    if let Some(spec) = name.strip_prefix("progress|") {
+        return Ok(Op::Stage(fixed(1)?[0], Stage::parse(spec)?));
     }
     for (prefix, velocity) in [("spring|", false), ("springVelocity|", true)] {
         if let Some(spec) = name.strip_prefix(prefix) {

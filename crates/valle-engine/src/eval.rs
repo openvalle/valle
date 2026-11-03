@@ -73,6 +73,7 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
             V::Str(Rc::from(s))
         }
         Op::Interp(i) => interpolate(i, values)?,
+        Op::Stage(input, stage) => V::Num(stage.at(num(input))),
         Op::Spring {
             input,
             spring,
@@ -146,6 +147,7 @@ mod tests {
     use super::*;
     use crate::ease::Easing;
     use crate::js::MathFn;
+    use crate::template::Stage;
 
     fn program(ops: Vec<Op>) -> Program {
         Program { ops }
@@ -245,6 +247,34 @@ mod tests {
         ];
         let e = run(&program(decreasing), AT).unwrap_err();
         assert!(e.contains("[1, 0]"), "{e}");
+    }
+
+    #[test]
+    fn stages() {
+        let stage = |spec: &str| Stage::parse(spec).unwrap();
+        let once = stage("1|2|1|once");
+        let at = |s: Stage, ts: &[f64]| ts.iter().map(|&t| s.at(t)).collect::<Vec<_>>();
+        assert_eq!(
+            at(once, &[0.0, 1.0, 2.0, 3.0, 9.0]),
+            [0.0, 0.0, 0.5, 1.0, 1.0]
+        );
+        let repeat = stage("0|1|4|repeat");
+        assert_eq!(at(repeat, &[0.125, 0.25, 0.375, 1.0]), [0.5, 0.0, 0.5, 1.0]);
+        let yoyo = stage("0|1|2|yoyo");
+        assert_eq!(
+            at(yoyo, &[0.125, 0.25, 0.375, 0.5, 1.0]),
+            [0.5, 1.0, 0.5, 0.0, 0.0]
+        );
+        assert!(stage("0|1|1|once").at(f64::NAN).is_nan());
+        for bad in [
+            "0|0|1|once",
+            "0|1|0|repeat",
+            "0|1|1|twice",
+            "x|1|1|once",
+            "0|1|1",
+        ] {
+            assert!(Stage::parse(bad).is_err(), "{bad}");
+        }
     }
 
     fn between(x: f64, a: V, b: V) -> Result<String, Error> {
