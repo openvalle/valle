@@ -1365,12 +1365,52 @@
     useVideoConfig: "use useComposition()",
   };
 
+  // Functions of Valle's earlier engine that are gone, with what replaces them.
+  const GONE = {
+    TAU: "write 2 * Math.PI",
+    deg: "convert with Math.PI: degrees * Math.PI / 180 are radians",
+    rad: "convert with Math.PI: degrees * Math.PI / 180 are radians",
+    fract: "write x - Math.floor(x)",
+    stage: "write the stage as an object in defineSequence()",
+    trail: "use staggerProgress(), or clamp(p + i * gap, 0, 1)",
+    defineRepeater: "use Array.from({ length: n }, (_, i) => …)",
+    motionPath: "use the CSS offsetPath, offsetDistance and offsetRotate: auto",
+    follow: "use the CSS offsetPath, offsetDistance and offsetRotate: auto",
+    autoRotate: "use the CSS offsetRotate: auto",
+    pathTemplate: "write the path data as a template string",
+    morphPath: "use morph()",
+    boolean: "use pathBoolean()",
+    offsetPath: "use inflatePath(); offsetPath is the CSS property",
+    linearGradient: "write a CSS gradient, or an SVG <linearGradient>",
+    radialGradient: "write a CSS gradient, or an SVG <radialGradient>",
+    gradientStop: "write a CSS gradient, or an SVG <stop>",
+    point: "write { x, y }",
+    rect: "write { x, y, width, height }",
+    path: "path data is the string itself",
+    areaBand: "use area() with y0 and y1",
+    sector: "use arc()",
+    curve: "use line() with a curve such as curveMonotoneX",
+    cubic: "write the path data as a template string",
+    niceDomain: "use a scale's nice()",
+    extentOrDefault: "use extent(values) ?? fallback",
+    geoProject: "use a projection, as proj([lon, lat])",
+    displacement: "write displacement(…) in filter",
+    motionBlur: "write motionBlur as an object { velocity, shutterAngle }",
+  };
+  for (const name of MATH) GONE[name] ??= "use Math." + name + "()";
+
   // Free names the scene reads: a capitalized one is a tag (an unknown one fails when rendered,
   // with its replacement where it has one); the gone hooks throw with theirs.
   function __declareFree(names) {
     for (const name of names) {
       if (name in globalThis) continue;
-      if (name in UNAVAILABLE) {
+      if (name in GONE) {
+        defineProperty(globalThis, name, {
+          get() {
+            throw new TypeError(name + " is removed: " + GONE[name]);
+          },
+        });
+      } else if (name in UNAVAILABLE) {
         globalThis[name] = () => {
           throw new TypeError(name + "() is not supported: " + UNAVAILABLE[name]);
         };
