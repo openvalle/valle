@@ -42,6 +42,72 @@ mod properties;
 mod tailwind;
 
 /// The largest canvas, px a side, and the most frames a case may have.
+/// The fonts the format cases read from the web, pinned as the built-in ones are: Source Sans 3,
+/// release 3.052R, in each format.
+const TEST_FONTS: [BuiltIn; 7] = [
+    // OpenType, CFF outlines.
+    BuiltIn {
+        name: "Source Sans 3 OTF/SourceSans3-Regular.otf",
+        file: "SourceSans3-Regular.otf",
+        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/OTF/SourceSans3-Regular.otf",
+        sha256: "08df266400933d3178d081a45f94a08814c3e55b4b7dd2e0ff69cb1329f13ab6",
+        size: 334_924,
+    },
+    // TrueType.
+    BuiltIn {
+        name: "Source Sans 3 TTF/SourceSans3-Regular.ttf",
+        file: "SourceSans3-Regular.ttf",
+        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/TTF/SourceSans3-Regular.ttf",
+        sha256: "4644c81b86ec9caaa76b634889968ed3c4f4f52f054855933acc7c2b21e53b0f",
+        size: 431_196,
+    },
+    // Variable, CFF2 outlines.
+    BuiltIn {
+        name: "Source Sans 3 VF/SourceSans3VF-Upright.otf",
+        file: "SourceSans3VF-Upright.otf",
+        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/VF/SourceSans3VF-Upright.otf",
+        sha256: "3d0dfd6a3a644ab3d462a737923ffac41fb0ae007ce9ba83c24e6bfa76aa56c7",
+        size: 538_164,
+    },
+    // WOFF of TrueType.
+    BuiltIn {
+        name: "Source Sans 3 WOFF/TTF/SourceSans3-Regular.ttf.woff",
+        file: "SourceSans3-Regular.ttf.woff",
+        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF/TTF/SourceSans3-Regular.ttf.woff",
+        sha256: "56413337e96f5764882f3e18eaa654eec27515ec7c3de3520eec9e36b25371b9",
+        size: 188_176,
+    },
+    // WOFF2 of CFF outlines.
+    BuiltIn {
+        name: "Source Sans 3 WOFF2/OTF/SourceSans3-Regular.otf.woff2",
+        file: "SourceSans3-Regular.otf.woff2",
+        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF2/OTF/SourceSans3-Regular.otf.woff2",
+        sha256: "63de0da0cc05298e2e9c6e5cef506d8454ca665f6e668a99d94f51174b9256ed",
+        size: 153_800,
+    },
+    // WOFF2 of TrueType, its glyphs transformed.
+    BuiltIn {
+        name: "Source Sans 3 WOFF2/TTF/SourceSans3-Regular.ttf.woff2",
+        file: "SourceSans3-Regular.ttf.woff2",
+        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF2/TTF/SourceSans3-Regular.ttf.woff2",
+        sha256: "53492fb3a0def77354f166a55d09b63a10855e91c206c7620a81cf56e97f8ec3",
+        size: 109_632,
+    },
+    // WOFF2 of a variable font of CFF2 outlines.
+    BuiltIn {
+        name: "Source Sans 3 WOFF2/VF/SourceSans3VF-Upright.otf.woff2",
+        file: "SourceSans3VF-Upright.otf.woff2",
+        url: "https://raw.githubusercontent.com/adobe-fonts/source-sans/87b37a2daaed80fcb8e8ccb0085c4d72ddade12e/WOFF2/VF/SourceSans3VF-Upright.otf.woff2",
+        sha256: "f9e4eac0e8f8ffdae91cf6eff3962b96e81417cba5c728bc1c89efe9510e7653",
+        size: 164_736,
+    },
+];
+
+/// The fonts cases read from the web: the built-in ones and the test fonts.
+fn pinned() -> impl Iterator<Item = &'static BuiltIn> {
+    BUILT_IN.iter().chain(&TEST_FONTS)
+}
+
 const MAX_SIZE: u32 = 512;
 const MAX_FRAMES: i64 = 10;
 /// Scene code needs a stack of more than 12 MiB.
@@ -119,8 +185,8 @@ fn main() -> ExitCode {
         reviewed: Mutex::new(Vec::new()),
         largest: AtomicU8::new(0),
     };
-    // The built-in fonts, which Chrome's pages name, downloaded before the cases run.
-    for font in &BUILT_IN {
+    // The fonts from the web, which Chrome's pages name, downloaded before the cases run.
+    for font in pinned() {
         if let Err(e) =
             UrlCache::global().and_then(|c| c.fetch_pinned(font.url, font.sha256, font.file))
         {
@@ -366,14 +432,14 @@ impl Runner {
         }
     }
 
-    /// The bytes of a case or of a file it reads: from the web, only a built-in font's, from
-    /// the cache.
+    /// The bytes of a case or of a file it reads: from the web, only a pinned font's, from the
+    /// cache.
     fn bytes(&self, path: &str) -> Option<Vec<u8>> {
         if let Some(source) = self.made.get(path) {
             return Some(source.clone().into_bytes());
         }
         if path.starts_with("https://") {
-            let font = BUILT_IN.iter().find(|f| f.url == path)?;
+            let font = pinned().find(|f| f.url == path)?;
             return std::fs::read(cached(font).ok()?).ok();
         }
         std::fs::read(self.root.join(path)).ok()
@@ -784,16 +850,16 @@ fn write_png(path: &Path, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {
     writer.finish().map_err(|e| bad(&e))
 }
 
-/// The file of built-in font `font` in the global cache.
+/// The file of pinned font `font` in the global cache.
 fn cached(font: &BuiltIn) -> Result<PathBuf, String> {
     UrlCache::global()?.fetch_pinned(font.url, font.sha256, font.file)
 }
 
-/// The page Chrome loads for `html`: each built-in font it names by its file's name the file in
+/// The page Chrome loads for `html`: each pinned font it names by its file's name the file in
 /// the cache, which the server `web/tests/chrome.ts` runs gives under `/file`.
 fn page(html: &str) -> Result<String, String> {
     let mut page = html.to_string();
-    for font in &BUILT_IN {
+    for font in pinned() {
         let name = format!("url(\"{}\")", font.file);
         if page.contains(&name) {
             let path = cached(font)?;

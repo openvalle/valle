@@ -55,8 +55,8 @@ const UNITLESS: &[&str] = &[
 ];
 
 /// The built-in families: their `font-family` names, the names the pages give them, their upright
-/// and italic fonts in `BUILT_IN`, which a page names by their files' names, and the Tailwind class that names them through the theme `web/tests/tailwind.ts`
-/// gives.
+/// and italic fonts in `BUILT_IN`, which a page names by their files' names, and the Tailwind
+/// class that names them through the theme `web/tests/tailwind.ts` gives.
 const FAMILIES: [(&str, &str, usize, Option<usize>, &str); 3] = [
     ("sans-serif", "\"Valle Sans\"", 0, Some(1), "font-sans"),
     ("serif", "\"Valle Serif\"", 2, Some(3), "font-serif"),
@@ -213,11 +213,11 @@ fn file(slot: &Slot) -> Result<String, String> {
     }
 }
 
-/// Where the server gives the file at `path`; a built-in font's from the web is its file's name.
+/// Where the server gives the file at `path`; a pinned font's from the web is its file's name.
 fn location(path: &str) -> Result<String, String> {
     if path.starts_with("https://") {
-        let font = (BUILT_IN.iter().find(|f| f.url == path))
-            .ok_or_else(|| format!("{path}: cases read only the built-in fonts from the web"))?;
+        let font = (super::pinned().find(|f| f.url == path))
+            .ok_or_else(|| format!("{path}: cases read only the pinned fonts from the web"))?;
         return Ok(font.file.to_string());
     }
     Ok(format!("/cases/{path}"))

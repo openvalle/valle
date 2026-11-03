@@ -16,6 +16,7 @@ in `Cargo.lock` and `bun.lock`.
 | [wgpu](https://github.com/gfx-rs/wgpu), with naga | Drawing on the GPU through Metal, Vulkan and Direct3D 12 | MIT or Apache-2.0 |
 | [png](https://github.com/image-rs/image-png), [zune-jpeg](https://github.com/etemesi254/zune-image) and [image-webp](https://github.com/image-rs/image-webp) | Decoding PNG, JPEG and WebP images | MIT or Apache-2.0; zune-jpeg also Zlib |
 | [roxmltree](https://github.com/RazrFalcon/roxmltree) | Reading SVG files | MIT or Apache-2.0 |
+| [wuff](https://github.com/nicoburns/wuff), with [brotli-decompressor](https://github.com/dropbox/rust-brotli-decompressor) and [flate2](https://github.com/rust-lang/flate2-rs) | Decoding WOFF and WOFF2 fonts | MIT; brotli-decompressor BSD-3-Clause or MIT; flate2 MIT or Apache-2.0 |
 | [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) v4.3.3 | Its default theme, `theme.css` unmodified, its property order, and its utilities, rewritten in Rust | MIT |
 | [libm](https://github.com/rust-lang/compiler-builtins) | Math functions that agree on every platform | MIT or Apache-2.0 |
 | [Serde](https://github.com/serde-rs/serde) and [serde_json](https://github.com/serde-rs/json) | Reading what tracing records | MIT or Apache-2.0 |
@@ -34,7 +35,9 @@ in `Cargo.lock` and `bun.lock`.
 No font ships with Valle. The built-in ones, Noto Sans, Noto Sans Italic, Noto Serif, Noto Serif
 Italic, Noto Sans Mono, Noto Sans SC, Noto Sans KR and Noto Color Emoji, are downloaded from
 [Google Fonts](https://fonts.google.com/noto) the first time text needs them, unmodified; they are
-under the SIL Open Font License 1.1.
+under the SIL Open Font License 1.1. The tests also download
+[Source Sans 3](https://github.com/adobe-fonts/source-sans) in each of its formats, under the same
+license.
 
 ## Tools
 

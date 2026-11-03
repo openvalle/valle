@@ -399,9 +399,13 @@ impl Text {
             family_name: Some(name),
             ..Default::default()
         };
+        let data = match sfnt(data.data())? {
+            Some(file) => Blob::from(file),
+            None => data,
+        };
         let added = self.fonts.collection.register_fonts(data, Some(named));
         let Some((_, infos)) = added.first() else {
-            return Err("not a font file: TrueType, OpenType or a collection of them".into());
+            return Err("not a font file: TrueType, OpenType, WOFF, WOFF2 or a collection".into());
         };
         let family: Rc<str> = match self.named.iter().find(|n| ***n == *name) {
             Some(family) => family.clone(),
@@ -1050,6 +1054,46 @@ fn families(list: &[Family], named: &[Rc<str>]) -> Result<Vec<FontFamilyName<'st
         .collect::<Result<Vec<_>, Error>>()?;
     out.push(FontFamilyName::Generic(GenericFamily::SansSerif));
     Ok(out)
+}
+
+/// The TrueType or OpenType file to register for font file `data`, where that is not `data`
+/// itself: the one a WOFF or WOFF2 file holds, and of a collection (TTC), its first face.
+fn sfnt(data: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+    let file = match data.get(..4) {
+        Some(b"wOFF") => wuff::decompress_woff1(data).map_err(|e| format!("WOFF: {e}"))?,
+        Some(b"wOF2") => wuff::decompress_woff2(data).map_err(|e| format!("WOFF2: {e}"))?,
+        Some(b"ttcf") => {
+            return first_face(data)
+                .map(Some)
+                .ok_or_else(|| "a broken TTC".into());
+        }
+        _ => return Ok(None),
+    };
+    match file.starts_with(b"ttcf") {
+        true => first_face(&file)
+            .map(Some)
+            .ok_or_else(|| "a broken TTC".into()),
+        false => Ok(Some(file)),
+    }
+}
+
+/// The first face of collection `data` as a font file of its own: its table directory, each
+/// table's offset where the table is copied after it.
+fn first_face(data: &[u8]) -> Option<Vec<u8>> {
+    let u32_at = |at: usize| Some(u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?));
+    let face = u32_at(12)? as usize;
+    let tables = u16::from_be_bytes(data.get(face + 4..face + 6)?.try_into().ok()?) as usize;
+    let mut out = data.get(face..face + 12 + 16 * tables)?.to_vec();
+    for i in 0..tables {
+        let record = face + 12 + 16 * i;
+        let (offset, length) = (u32_at(record + 8)? as usize, u32_at(record + 12)? as usize);
+        let table = data.get(offset..offset.checked_add(length)?)?;
+        let at = u32::try_from(out.len()).ok()?;
+        out[12 + 16 * i + 8..12 + 16 * i + 12].copy_from_slice(&at.to_be_bytes());
+        out.extend_from_slice(table);
+        out.resize(out.len().next_multiple_of(4), 0);
+    }
+    Some(out)
 }
 
 /// What a box in `font`, with ascent, descent and line gap `m`, takes above and below its

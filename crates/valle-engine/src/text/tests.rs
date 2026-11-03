@@ -190,7 +190,7 @@ fn families_are_built_in_or_resources() {
     assert_eq!(
         t.add_font("bad", "bad.ttf", Blob::from(b"not a font".to_vec()))
             .unwrap_err(),
-        "not a font file: TrueType, OpenType or a collection of them"
+        "not a font file: TrueType, OpenType, WOFF, WOFF2 or a collection"
     );
 }
 
@@ -230,6 +230,39 @@ fn a_font_resource_is_a_family_of_its_files() {
         t.add_font("brand", "Again.ttf", crate::testing::built_in(0))
             .unwrap_err(),
         "the same weight, style and width as Sans.ttf"
+    );
+}
+
+#[test]
+fn a_collection_gives_its_first_face() {
+    // Noto Sans, then Noto Serif, as a TTC.
+    let fonts = [0, 2].map(|i| crate::testing::built_in(i).data().to_vec());
+    let mut ttc = b"ttcf\0\x01\0\0\0\0\0\x02".to_vec();
+    ttc.resize(20, 0);
+    for (n, font) in fonts.iter().enumerate() {
+        let base = ttc.len();
+        ttc[12 + 4 * n..16 + 4 * n].copy_from_slice(&(base as u32).to_be_bytes());
+        let mut font = font.clone();
+        let tables = u16::from_be_bytes([font[4], font[5]]) as usize;
+        for i in 0..tables {
+            let at = 12 + 16 * i + 8;
+            let offset = u32::from_be_bytes(font[at..at + 4].try_into().unwrap());
+            font[at..at + 4].copy_from_slice(&(offset + base as u32).to_be_bytes());
+        }
+        ttc.extend(font);
+        ttc.resize(ttc.len().next_multiple_of(4), 0);
+    }
+    let mut t = text();
+    t.add_font("pair", "Pair.ttc", Blob::from(ttc)).unwrap();
+    assert_eq!(t.font_files().len(), 1);
+    let with = |family: Family| Font {
+        family: Rc::new([family]),
+        ..font(16.0)
+    };
+    let mut width = |family| t.measure(&plain("Serif", &with(family)), None).unwrap()[0];
+    assert_eq!(
+        width(Family::Named("pair".into())),
+        width(Family::SansSerif)
     );
 }
 

@@ -84,7 +84,11 @@ pub fn contours(face: &Face, glyph: u32) -> Result<(f32, Vec<Vec<Curve>>), Error
         .iter()
         .map(|&c| NormalizedCoord::from_bits(c))
         .collect();
-    let mut pen = Pen::default();
+    // Cubic curves (CFF and CFF2 outlines) as quadratic ones within 1/4096 em.
+    let mut pen = Pen {
+        tolerance: em / 4096.0,
+        ..Pen::default()
+    };
     drawn
         .draw(
             DrawSettings::unhinted(Size::unscaled(), LocationRef::new(&coords)),
@@ -92,11 +96,6 @@ pub fn contours(face: &Face, glyph: u32) -> Result<(f32, Vec<Vec<Curve>>), Error
         )
         .map_err(|e| format!("glyph {glyph}: {e}"))?;
     pen.end();
-    if pen.cubic {
-        return Err(format!(
-            "glyph {glyph}: cubic outlines are not supported yet"
-        ));
-    }
     // Slanted as Skia slants a face for an italic it does not have, by a quarter of the height.
     if face.slanted {
         for p in pen.contours.iter_mut().flatten().flatten() {
@@ -112,7 +111,7 @@ struct Pen {
     open: Vec<Curve>,
     start: [f32; 2],
     at: [f32; 2],
-    cubic: bool,
+    tolerance: f32,
 }
 
 impl Pen {
@@ -152,9 +151,10 @@ impl OutlinePen for Pen {
         self.to([cx, cy], [x, y]);
     }
 
-    fn curve_to(&mut self, _: f32, _: f32, _: f32, _: f32, x: f32, y: f32) {
-        self.cubic = true;
-        self.line_to(x, y);
+    fn curve_to(&mut self, ax: f32, ay: f32, bx: f32, by: f32, x: f32, y: f32) {
+        let points = [self.at, [ax, ay], [bx, by], [x, y]];
+        path::cubic(points, self.tolerance, &mut self.open);
+        self.at = [x, y];
     }
 
     fn close(&mut self) {

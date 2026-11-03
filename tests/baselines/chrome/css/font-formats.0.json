@@ -1,0 +1,28 @@
+{
+ "chrome": "156.0.8078.80",
+ "html": "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n@font-face { font-family: \"Valle Sans\"; src: url(\"NotoSans.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; font-style: normal; }\n@font-face { font-family: \"Valle Sans\"; src: url(\"NotoSansItalic.ttf\"); font-weight: 100 900; font-stretch: 62.5% 100%; font-style: italic; }\n@font-face { font-family: \"otf\"; src: url(\"SourceSans3-Regular.otf\"); font-weight: 400; font-stretch: 100%; font-style: normal; }\n@font-face { font-family: \"ttf\"; src: url(\"SourceSans3-Regular.ttf\"); font-weight: 400; font-stretch: 100%; font-style: normal; }\n@font-face { font-family: \"cff2\"; src: url(\"SourceSans3VF-Upright.otf\"); font-weight: 200 900; font-stretch: 100%; font-style: normal; }\n@font-face { font-family: \"woff\"; src: url(\"SourceSans3-Regular.ttf.woff\"); font-weight: 400; font-stretch: 100%; font-style: normal; }\n@font-face { font-family: \"woff2\"; src: url(\"SourceSans3-Regular.otf.woff2\"); font-weight: 400; font-stretch: 100%; font-style: normal; }\n@font-face { font-family: \"woff2ttf\"; src: url(\"SourceSans3-Regular.ttf.woff2\"); font-weight: 400; font-stretch: 100%; font-style: normal; }\n@font-face { font-family: \"woff2vf\"; src: url(\"SourceSans3VF-Upright.otf.woff2\"); font-weight: 200 900; font-stretch: 100%; font-style: normal; }\n*, ::before, ::after { box-sizing: border-box; }\nbody { margin: 0; }\n#canvas { position: relative; overflow: hidden; width: 256px; height: 256px; font-family: \"Valle Sans\"; }\n</style>\n<div id=\"canvas\"><div data-n=\"0\" style=\"padding: 6px; gap: 4px; color: #263238;\"><div data-n=\"1\" data-text style=\"font-family: otf; font-size: 22px;\">OpenType CFF</div><div data-n=\"2\" data-text style=\"font-family: ttf; font-size: 22px;\">TrueType</div><div data-n=\"3\" data-text style=\"font-family: cff2; font-size: 22px;\">CFF2<span data-n=\"4\" style=\"font-weight: 900; color: #e53935;\"> Black 900</span></div><div data-n=\"5\" data-text style=\"font-family: woff; font-size: 22px;\">WOFF</div><div data-n=\"6\" data-text style=\"font-family: woff2; font-size: 22px;\">WOFF2 CFF</div><div data-n=\"7\" data-text style=\"font-family: woff2ttf; font-size: 22px;\">WOFF2 TrueType</div><div data-n=\"8\" data-text style=\"font-family: woff2vf; font-size: 22px;\">WOFF2 CFF2<span data-n=\"9\" style=\"font-weight: 900; color: #e53935;\"> Black 900</span></div></div></div>\n",
+ "boxes": [
+  [0,0,256,215],
+  [6,6,244,29],
+  [6,35,244,29],
+  [6,64,244,29],
+  [51.234375,64,99.140625,29],
+  [6,93,244,29],
+  [6,122,244,29],
+  [6,151,244,29],
+  [6,180,244,29],
+  [120.078125,180,99.140625,29]
+ ],
+ "lines": {"1":["OpenType CFF"],"2":["TrueType"],"3":["CFF2 Black 900"],"5":["WOFF"],"6":["WOFF2 CFF"],"7":["WOFF2 TrueType"],"8":["WOFF2 CFF2 Black 900"]},
+ "fonts": {
+  "1": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"22px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "2": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"22px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "3": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"22px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "4": {"color":"rgb(229, 57, 53)","fill":"rgb(229, 57, 53)","stroke":"0px","stroke_color":"rgb(229, 57, 53)","shadow":"none","size":"22px","weight":"900","stretch":"100%","style":"normal","transform":"none"},
+  "5": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"22px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "6": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"22px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "7": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"22px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "8": {"color":"rgb(38, 50, 56)","fill":"rgb(38, 50, 56)","stroke":"0px","stroke_color":"rgb(38, 50, 56)","shadow":"none","size":"22px","weight":"400","stretch":"100%","style":"normal","transform":"none"},
+  "9": {"color":"rgb(229, 57, 53)","fill":"rgb(229, 57, 53)","stroke":"0px","stroke_color":"rgb(229, 57, 53)","shadow":"none","size":"22px","weight":"900","stretch":"100%","style":"normal","transform":"none"}
+ }
+}

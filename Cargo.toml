@@ -35,6 +35,8 @@ taffy = { version = "0.15.1", default-features = false, features = ["std", "flex
 ureq = { version = "3.5.1", default-features = false, features = ["rustls", "gzip"] }
 # The native backends only; shaders are WGSL.
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "metal", "vulkan", "dx12"] }
+# WOFF and WOFF2 fonts, decoded to the TrueType or OpenType file inside.
+wuff = "0.2.9"
 # Without SIMD: every host decodes the same pixels.
 zune-jpeg = { version = "0.5.15", default-features = false, features = ["std"] }
 
