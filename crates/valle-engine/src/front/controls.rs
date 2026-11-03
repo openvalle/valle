@@ -69,6 +69,8 @@ pub struct Inputs {
     /// The file of each picture the scene's role reads as `input://name`, by its name, in place
     /// of the placeholder it shows alone; the Timeline gives them frame by frame.
     pub pictures: BTreeMap<String, String>,
+    /// The caption a `captionPresenter()` shows, `{ text, runs }`, in place of its placeholder.
+    pub caption: Option<Value>,
 }
 
 /// The props of `controls.props`, an object of `name: number({ … })` and the like.

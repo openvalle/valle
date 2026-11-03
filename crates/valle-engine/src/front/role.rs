@@ -169,6 +169,56 @@ impl Role {
     }
 }
 
+/// The words of the caption a presenter shows alone.
+const PLACEHOLDER: &str = "Each word lights up as it is said";
+
+/// The `caption` prop a presenter takes: `bound`, `{ text, runs }`, checked, each run a word
+/// with its start and end in seconds into the clip, in order; or alone, a placeholder whose
+/// words come one by one between the intro and the outro of a scene `duration` long.
+pub fn caption(bound: Option<&Value>, role: Role, duration: Tick) -> Result<Value, String> {
+    let Some(bound) = bound else {
+        let (intro, outro) = role.ends().unwrap_or_default();
+        let words: Vec<&str> = PLACEHOLDER.split(' ').collect();
+        let step = (duration - intro - outro).seconds() / words.len() as f64;
+        let runs: Vec<Value> = (words.iter().enumerate())
+            .map(|(i, w)| {
+                let start = intro.seconds() + step * i as f64;
+                serde_json::json!({ "text": w, "start": start, "end": start + step })
+            })
+            .collect();
+        return Ok(serde_json::json!({ "text": PLACEHOLDER, "runs": runs }));
+    };
+    let shape = "is { text, runs }, each run { text, start, end } with its seconds into the clip";
+    let Value::Object(o) = bound else {
+        return Err(format!("caption {shape}"));
+    };
+    if o.len() != 2 || !matches!(o.get("text"), Some(Value::String(_))) {
+        return Err(format!("caption {shape}"));
+    }
+    let Some(Value::Array(runs)) = o.get("runs") else {
+        return Err(format!("caption {shape}"));
+    };
+    let mut last = 0.0;
+    for (i, run) in runs.iter().enumerate() {
+        let number = |k: &str| run.get(k).and_then(Value::as_f64);
+        let (Some(start), Some(end)) = (number("start"), number("end")) else {
+            return Err(format!("caption runs[{i}] {shape}"));
+        };
+        let words = run.get("text").is_some_and(Value::is_string);
+        if !words || run.as_object().is_some_and(|r| r.len() != 3) {
+            return Err(format!("caption runs[{i}] {shape}"));
+        }
+        if start < last || end < start {
+            return Err(format!(
+                "caption runs[{i}] is from {start} to {end} s: runs come in order, each ending \
+                 after it starts"
+            ));
+        }
+        last = start;
+    }
+    Ok(bound.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +263,40 @@ mod tests {
             "the clip is 1.5 s, shorter than the intro and the outro, 2 s"
         );
         assert_eq!(Role::Effect.time(s(4.0), s(9.0), s(6.0)), Ok(s(6.0)));
+    }
+
+    #[test]
+    fn presenters_take_captions_checked_or_a_placeholder() {
+        let role = Role::CaptionPresenter {
+            intro: s(1.0),
+            outro: s(1.0),
+        };
+        let shown = caption(None, role, s(10.0)).unwrap();
+        let runs = shown["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 8);
+        assert_eq!(
+            (runs[0]["text"].as_str(), runs[0]["start"].as_f64()),
+            (Some("Each"), Some(1.0))
+        );
+        assert_eq!(runs[7]["end"].as_f64(), Some(9.0));
+        let bound = serde_json::json!({ "text": "Hi there", "runs": [
+            { "text": "Hi", "start": 0.5, "end": 1 },
+            { "text": "there", "start": 1, "end": 1.5 },
+        ] });
+        assert_eq!(caption(Some(&bound), role, s(10.0)), Ok(bound));
+        let late = serde_json::json!({ "text": "a b", "runs": [
+            { "text": "a", "start": 2, "end": 3 },
+            { "text": "b", "start": 1, "end": 2 },
+        ] });
+        assert_eq!(
+            caption(Some(&late), role, s(10.0)).unwrap_err(),
+            "caption runs[1] is from 1 to 2 s: runs come in order, each ending after it starts"
+        );
+        let bare = serde_json::json!("Hi");
+        assert!(
+            caption(Some(&bare), role, s(10.0))
+                .unwrap_err()
+                .starts_with("caption is {")
+        );
     }
 }

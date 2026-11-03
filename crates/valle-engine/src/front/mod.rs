@@ -171,8 +171,31 @@ impl Front {
             }
         }
         let (props, data) = (scene.props.clone(), scene.data.clone());
-        let values =
+        let mut values =
             controls::values(&props, &data, inputs).map_err(|e| format!("{entry}: {e}"))?;
+        match scene.role {
+            Role::CaptionPresenter { .. } => {
+                if let Some(p) = props.iter().chain(&data).find(|p| p.name == "caption") {
+                    let section = if props.contains(p) { "props" } else { "data" };
+                    return Err(format!(
+                        "{entry}: {section}: caption is the caption the Timeline gives a \
+                         captionPresenter(), so the scene declares no {section} of that name"
+                    ));
+                }
+                let duration = scene.composition.map(|c| c.duration).unwrap_or_default();
+                let caption = role::caption(inputs.caption.as_ref(), scene.role, duration);
+                values.insert(
+                    "caption".into(),
+                    caption.map_err(|e| format!("{entry}: {e}"))?,
+                );
+            }
+            _ if inputs.caption.is_some() => {
+                return Err(format!(
+                    "{entry}: caption: only a captionPresenter() takes a caption"
+                ));
+            }
+            _ => {}
+        }
         let values = serde_json::Value::Object(values).to_string();
         let composition = scene.composition.ok_or_else(|| {
             format!(
