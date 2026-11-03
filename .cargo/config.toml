@@ -1,2 +1,6 @@
 [alias]
 xtask = "run --package xtask --"
+
+# Scene code runs on the module's stack in the browser: QuickJS takes up to 12 MiB of it.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=16777216"]

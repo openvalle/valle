@@ -19,7 +19,11 @@ commands:
                   run the tests, or only the cases under tests/cases at these paths;
                   --skip leaves out test layers
   accept case...  take the frames the last test run drew for these cases as their baselines
+  build-web       build the engine for the browser into web/packages/engine/dist
 ";
+
+/// The wasm-bindgen that makes the browser module's JavaScript: the version `valle-web` pins.
+const WASM_BINDGEN: &str = "0.2.128";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,6 +36,8 @@ fn main() -> ExitCode {
         "lint" => lint(flags),
         "test" => test(flags),
         "accept" => accept(flags),
+        "build-web" if flags.is_empty() => build_web(),
+        "build-web" => Err(unexpected(flags)),
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
             Ok(())
@@ -66,6 +72,11 @@ fn lint(flags: &[String]) -> Result<(), String> {
     }
     args.extend(["--", "-D", "warnings"]);
     cargo(&args)?;
+    // The browser's engine, which the workspace's own target leaves empty.
+    run(
+        wasm(&["clippy", "--locked"]).args(["--", "-D", "warnings"]),
+        "cargo clippy -p valle-web --target wasm32-unknown-unknown",
+    )?;
     let mut args = vec!["--deny-warnings", "--report-unused-disable-directives"];
     if fix {
         args.push("--fix");
@@ -77,8 +88,8 @@ fn lint(flags: &[String]) -> Result<(), String> {
     bun("oxlint", &args, &scripts)
 }
 
-/// Test layers past the first, which `--skip` can leave out. The browser layer does not exist
-/// yet.
+/// Test layers past the first, which `--skip` can leave out: the cases the GPU draws, and the
+/// engine in Chrome with WebGPU, which `web/tests/player.ts` compares with the native engine.
 const LAYERS: [&str; 2] = ["gpu", "browser"];
 
 fn test(args: &[String]) -> Result<(), String> {
@@ -108,14 +119,23 @@ fn test(args: &[String]) -> Result<(), String> {
         command.push("--workspace");
     } else {
         command.extend(["-p", "valle-engine", "--test", "cases", "--"]);
-        command.extend(cases);
+        command.extend(&cases);
     }
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     run(
-        Command::new(cargo)
+        Command::new(cargo_path())
             .args(&command)
             .env("VALLE_TEST_LAYERS", layers.join(",")),
         &format!("cargo {}", command.join(" ")),
+    )?;
+    if !cases.is_empty() || !layers.contains(&"browser") {
+        return Ok(());
+    }
+    build_web()?;
+    cargo(&["build", "--locked", "-p", "valle-cli"])?;
+    let valle = root().join("target/debug/valle");
+    run(
+        Command::new("bun").arg("web/tests/player.ts").arg(valle),
+        "bun web/tests/player.ts",
     )
 }
 
@@ -188,6 +208,74 @@ fn frames(dir: &Path, prefix: &str, out: &mut Vec<String>) -> Result<(), String>
     Ok(())
 }
 
+/// Cargo's `command` for `valle-web` in the browser.
+fn wasm(command: &[&str]) -> Command {
+    let mut cargo = Command::new(cargo_path());
+    cargo.args(command);
+    cargo.args(["-p", "valle-web", "--target", "wasm32-unknown-unknown"]);
+    // QuickJS is C, and Apple's clang builds no wasm32: Homebrew's LLVM does.
+    let llvm = Path::new("/opt/homebrew/opt/llvm/bin");
+    if std::env::var_os("CC_wasm32_unknown_unknown").is_none() && llvm.join("clang").exists() {
+        cargo.env("CC_wasm32_unknown_unknown", llvm.join("clang"));
+        cargo.env("AR_wasm32_unknown_unknown", llvm.join("llvm-ar"));
+    }
+    cargo
+}
+
+/// Builds `valle-web` for wasm32, makes its JavaScript with the pinned wasm-bindgen, installed
+/// into `target/tools` the first time, and bundles the SDK with its worker beside them.
+fn build_web() -> Result<(), String> {
+    run(
+        &mut wasm(&["build", "--locked", "--release"]),
+        "cargo build -p valle-web",
+    )?;
+    let tools = root().join("target/tools");
+    let bindgen = tools.join("bin/wasm-bindgen");
+    let version = Command::new(&bindgen).arg("--version").output();
+    let installed =
+        version.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(WASM_BINDGEN));
+    if !installed {
+        let tools = tools.to_string_lossy();
+        let args = [
+            "install",
+            "--locked",
+            "--force",
+            "wasm-bindgen-cli",
+            "--version",
+            WASM_BINDGEN,
+            "--root",
+            &tools,
+        ];
+        cargo(&args)?;
+    }
+    let package = root().join("web/packages/engine");
+    let wasm = root().join("target/wasm32-unknown-unknown/release/valle_web.wasm");
+    run(
+        Command::new(&bindgen)
+            .args(["--target", "web", "--remove-name-section", "--out-dir"])
+            .arg(package.join("src/wasm"))
+            .arg(&wasm),
+        "wasm-bindgen",
+    )?;
+    let dist = package.join("dist");
+    let _ = std::fs::remove_dir_all(&dist);
+    run(
+        Command::new("bun")
+            .args([
+                "build", "--target", "browser", "--format", "esm", "--outdir",
+            ])
+            .arg(&dist)
+            .arg(package.join("src/index.ts"))
+            .arg(package.join("src/worker.ts")),
+        "bun build",
+    )?;
+    let from = package.join("src/wasm/valle_web_bg.wasm");
+    std::fs::copy(&from, dist.join("valle_web_bg.wasm"))
+        .map_err(|e| format!("{}: {e}", from.display()))?;
+    println!("built {}", dist.display());
+    Ok(())
+}
+
 /// Accepts either no flags or exactly `name`, and reports which.
 fn switch(flags: &[String], name: &str) -> Result<bool, String> {
     match flags {
@@ -209,11 +297,14 @@ fn root() -> &'static Path {
 
 /// Runs the cargo that started xtask, from the workspace root.
 fn cargo(args: &[&str]) -> Result<(), String> {
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     run(
-        Command::new(cargo).args(args),
+        Command::new(cargo_path()).args(args),
         &format!("cargo {}", args.join(" ")),
     )
+}
+
+fn cargo_path() -> OsString {
+    std::env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"))
 }
 
 /// Runs a tool of `package.json` on `files` through bun, after installing the locked packages.

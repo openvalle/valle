@@ -416,3 +416,61 @@ fn not_json() -> String {
      them without running the scene"
         .into()
 }
+
+/// What a scene declares, as JSON an editor draws its form from: each prop's and datum's type,
+/// default, label and options, and each resource's kind and default files.
+pub fn describe(props: &[Prop], data: &[Prop], resources: &[super::Slot]) -> Value {
+    let entries = |list: &[Prop]| -> Map<String, Value> {
+        (list.iter())
+            .map(|p| {
+                let mut o = Map::new();
+                let (name, options): (&str, Vec<(&str, Value)>) = match &p.kind {
+                    Kind::Number { min, max, step } => {
+                        let some =
+                            |k: &'static str, v: &Option<f64>| v.map(|v| (k, Value::from(v)));
+                        let options = [some("min", min), some("max", max), some("step", step)];
+                        ("number", options.into_iter().flatten().collect())
+                    }
+                    Kind::String => ("string", Vec::new()),
+                    Kind::Boolean => ("boolean", Vec::new()),
+                    Kind::Color => ("color", Vec::new()),
+                    Kind::Select(values) => {
+                        ("select", vec![("values", Value::from(values.clone()))])
+                    }
+                    Kind::Point => ("point", Vec::new()),
+                    Kind::Length => ("length", Vec::new()),
+                    Kind::Angle => ("angle", Vec::new()),
+                    Kind::Rect => ("rect", Vec::new()),
+                    Kind::Json => ("json", Vec::new()),
+                };
+                o.insert("type".into(), name.into());
+                if let Some(d) = &p.default {
+                    o.insert("default".into(), d.clone());
+                }
+                if p.required {
+                    o.insert("required".into(), true.into());
+                }
+                if let Some(l) = &p.label {
+                    o.insert("label".into(), l.clone().into());
+                }
+                o.extend(options.into_iter().map(|(k, v)| (k.to_string(), v)));
+                (p.name.clone(), Value::Object(o))
+            })
+            .collect()
+    };
+    let resources: Map<String, Value> = (resources.iter())
+        .map(|s| {
+            let mut o = Map::new();
+            o.insert("kind".into(), s.kind.name().into());
+            if !s.default.is_empty() {
+                o.insert("default".into(), Value::from(s.default.clone()));
+            }
+            (s.name.clone(), Value::Object(o))
+        })
+        .collect();
+    let mut out = Map::new();
+    out.insert("props".into(), Value::Object(entries(props)));
+    out.insert("data".into(), Value::Object(entries(data)));
+    out.insert("resources".into(), Value::Object(resources));
+    Value::Object(out)
+}

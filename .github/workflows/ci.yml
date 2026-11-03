@@ -67,8 +67,17 @@ jobs:
           path: ~/.valle/cache/files
           key: downloads-${{ hashFiles('crates/valle-engine/src/text.rs', 'crates/valle-engine/tests/cases/main.rs') }}
           restore-keys: downloads-
-      - name: Install FFmpeg
-        run: brew install ffmpeg
+      # LLVM's clang builds QuickJS for the browser's engine; Apple's builds no wasm32.
+      - name: Install FFmpeg and LLVM
+        run: brew install ffmpeg llvm
+      # The browser layer: the SDK built with Bun, played in the pinned Chrome.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.valle/cache/chrome
+          key: chrome-${{ runner.os }}-${{ hashFiles('tests/baselines/chrome/version') }}
       - name: Test
         run: cargo xtask test
       - name: Keep the frames to review

@@ -10,3 +10,7 @@
 
 # Web tooling
 /node_modules/
+
+# The engine in the browser, which `cargo xtask build-web` makes
+/web/packages/engine/dist/
+/web/packages/engine/src/wasm/
