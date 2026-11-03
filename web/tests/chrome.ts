@@ -416,7 +416,7 @@ function measure(): Promise<Measured> {
       return i.decode();
     }),
   ];
-  return Promise.all([document.fonts.load('16px "Valle Sans"'), ...images]).then(() => {
+  return Promise.all([...[...document.fonts].map((f) => f.load()), ...images]).then(() => {
     for (const face of document.fonts) {
       if (face.status !== "loaded") {
         throw new Error(`font ${face.family} is ${face.status}`);

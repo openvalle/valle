@@ -27,10 +27,10 @@ const options = {
   },
 };
 
-// Valle's font stacks, its built-in families, as the engine's theme has them; sans-serif is the
-// served "Valle Sans", as the HTML printer writes it.
+// Valle's font stacks, its built-in families, as the engine's theme has them, served as the HTML
+// printer names them.
 const FONTS =
-  '@theme { --font-sans: "Valle Sans"; --font-serif: serif; --font-mono: monospace; }\n';
+  '@theme { --font-sans: "Valle Sans"; --font-serif: "Valle Serif"; --font-mono: "Valle Mono"; }\n';
 
 /** The stylesheet Tailwind builds for `classes`, with Valle's font stacks. */
 export async function stylesheet(classes: string[]): Promise<string> {

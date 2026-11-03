@@ -53,8 +53,30 @@ const UNITLESS: &[&str] = &[
     "strokeWidth",
 ];
 
-/// The built-in sans-serif as Chrome loads it, from the server `web/tests/chrome.ts` runs.
-const SANS_SERIF: &str = "\"Valle Sans\"";
+/// The built-in families, as Chrome loads them from the server `web/tests/chrome.ts` runs: their
+/// `font-family` names, the names the pages give them, their files, and the Tailwind class that
+/// names them through the theme `web/tests/tailwind.ts` gives.
+const FAMILIES: [(&str, &str, &str, &str); 3] = [
+    (
+        "sans-serif",
+        "\"Valle Sans\"",
+        "NotoSans-Variable.ttf",
+        "font-sans",
+    ),
+    (
+        "serif",
+        "\"Valle Serif\"",
+        "NotoSerif-Variable.ttf",
+        "font-serif",
+    ),
+    (
+        "monospace",
+        "\"Valle Mono\"",
+        "NotoSansMono-Variable.ttf",
+        "font-mono",
+    ),
+];
+const SANS_SERIF: &str = FAMILIES[0].1;
 
 /// The frame's HTML, or what in it has none; `resources` are the scene's, their files paths from
 /// the cases' folder, and `tailwind` the Tailwind version its classes are compiled by.
@@ -64,11 +86,26 @@ pub fn print(
     resources: &[Slot],
     tailwind: &str,
 ) -> Result<String, String> {
-    let mut html = format!(
-        "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n\
-         @font-face {{ font-family: {SANS_SERIF}; src: url(\"/fonts/NotoSans-Variable.ttf\"); \
-         font-weight: 100 900; font-stretch: 62.5% 100%; }}\n\
-         *, ::before, ::after {{ box-sizing: border-box; }}\n\
+    let mut body = "<div id=\"canvas\">".to_string();
+    for &root in &frame.template.roots {
+        node(&mut body, frame, resources, root)?;
+    }
+    body += "</div>\n";
+    let mut html = "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n".to_string();
+    // The sans-serif always, as the canvas's font; the others where the page names them.
+    for (i, (_, name, file, class)) in FAMILIES.iter().enumerate() {
+        // The body escapes the quotes.
+        if i == 0 || body.contains(name.trim_matches('"')) || body.contains(class) {
+            let _ = writeln!(
+                html,
+                "@font-face {{ font-family: {name}; src: url(\"/fonts/{file}\"); \
+                 font-weight: 100 900; font-stretch: 62.5% 100%; }}"
+            );
+        }
+    }
+    let _ = write!(
+        html,
+        "*, ::before, ::after {{ box-sizing: border-box; }}\n\
          body {{ margin: 0; }}\n\
          #canvas {{ position: relative; overflow: hidden; width: {}px; height: {}px; \
          font-family: {SANS_SERIF}; }}\n\
@@ -78,11 +115,7 @@ pub fn print(
     if frame.template.nodes.iter().any(|n| !n.classes.is_empty()) {
         let _ = writeln!(html, "<style data-tailwind=\"{tailwind}\"></style>");
     }
-    html += "<div id=\"canvas\">";
-    for &root in &frame.template.roots {
-        node(&mut html, frame, resources, root)?;
-    }
-    html += "</div>\n";
+    html += &body;
     Ok(html)
 }
 
@@ -202,9 +235,11 @@ fn declaration(key: &str, v: &V) -> Option<String> {
         V::Num(x) if *x == 0.0 || UNITLESS.contains(&key) => js::number_to_string(*x),
         V::Num(x) => format!("{}px", js::number_to_string(*x)),
         V::Str(s) if key == "fontFamily" => (s.split(','))
-            .map(|f| match f.trim() {
-                name if name.eq_ignore_ascii_case("sans-serif") => SANS_SERIF,
-                name => name,
+            .map(|f| {
+                let f = f.trim();
+                (FAMILIES.iter())
+                    .find(|(generic, ..)| f.eq_ignore_ascii_case(generic))
+                    .map_or(f, |(_, name, ..)| name)
             })
             .collect::<Vec<_>>()
             .join(", "),

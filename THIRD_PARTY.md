@@ -24,7 +24,9 @@ in `Cargo.lock` and `bun.lock`.
 
 | Font | Use | License |
 | --- | --- | --- |
-| [Noto Sans](https://github.com/google/fonts/tree/2984c575fdce412ee02b2baaba67672b9a9434d8/ofl/notosans), `NotoSans[wdth,wght].ttf` unmodified | The built-in sans-serif | SIL OFL 1.1, [fonts/NotoSans-OFL.txt](fonts/NotoSans-OFL.txt) |
+| [Noto Sans](https://github.com/google/fonts/tree/2984c575fdce412ee02b2baaba67672b9a9434d8/ofl/notosans), `NotoSans[wdth,wght].ttf` unmodified | The built-in sans-serif | SIL OFL 1.1, [fonts/Noto-OFL.txt](fonts/Noto-OFL.txt) |
+| [Noto Serif](https://github.com/google/fonts/tree/2984c575fdce412ee02b2baaba67672b9a9434d8/ofl/notoserif), `NotoSerif[wdth,wght].ttf` unmodified | The built-in serif | SIL OFL 1.1, [fonts/Noto-OFL.txt](fonts/Noto-OFL.txt) |
+| [Noto Sans Mono](https://github.com/google/fonts/tree/2984c575fdce412ee02b2baaba67672b9a9434d8/ofl/notosansmono), `NotoSansMono[wdth,wght].ttf` unmodified | The built-in monospace | SIL OFL 1.1, [fonts/Noto-OFL.txt](fonts/Noto-OFL.txt) |
 
 ## Tools
 

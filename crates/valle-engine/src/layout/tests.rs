@@ -589,9 +589,9 @@ fn hidden_subtrees_take_no_room() {
 
 #[test]
 fn text_errors_point_at_the_node() {
-    let e = lay(vec![text_node("a", &[("fontFamily", "serif")])], &[0]);
+    let e = lay(vec![text_node("a", &[("fontFamily", "Brand")])], &[0]);
     assert_eq!(
         e.err().unwrap(),
-        "s.tsx:1:1: font family serif is not built in yet"
+        "s.tsx:1:1: font family Brand: font resources are not supported yet"
     );
 }

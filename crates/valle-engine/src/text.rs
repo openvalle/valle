@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ops::Range;
 use std::rc::Rc;
+use std::sync::Arc;
 
 pub use parley::fontique::Blob;
 use parley::fontique::{Collection, CollectionOptions, GenericFamily, SourceCache};
@@ -220,19 +221,39 @@ pub struct Text {
     outlines: HashMap<(u32, u32), (f32, Vec<Curve>)>,
 }
 
+/// The built-in families, as `font-family` names them, and their fonts.
+const BUILT_IN: [(GenericFamily, &str, &[u8]); 3] = [
+    (
+        GenericFamily::SansSerif,
+        "sans-serif",
+        include_bytes!("../../../fonts/NotoSans-Variable.ttf"),
+    ),
+    (
+        GenericFamily::Serif,
+        "serif",
+        include_bytes!("../../../fonts/NotoSerif-Variable.ttf"),
+    ),
+    (
+        GenericFamily::Monospace,
+        "monospace",
+        include_bytes!("../../../fonts/NotoSansMono-Variable.ttf"),
+    ),
+];
+
 impl Text {
-    /// Text in the built-in families. Only `sans-serif` exists so far.
-    pub fn new(sans_serif: Blob<u8>) -> Result<Text, Error> {
+    /// Text in the built-in families.
+    pub fn new() -> Result<Text, Error> {
         let mut collection = Collection::new(CollectionOptions {
             shared: false,
             system_fonts: false,
         });
-        let families = collection.register_fonts(sans_serif, None);
-        if families.is_empty() {
-            return Err("the sans-serif font has no families".into());
+        for (generic, name, bytes) in BUILT_IN {
+            let families = collection.register_fonts(Blob::new(Arc::new(bytes)), None);
+            if families.is_empty() {
+                return Err(format!("the {name} font has no families"));
+            }
+            collection.set_generic_families(generic, families.iter().map(|(id, _)| *id));
         }
-        collection
-            .set_generic_families(GenericFamily::SansSerif, families.iter().map(|(id, _)| *id));
         Ok(Text {
             fonts: FontContext {
                 collection,
@@ -829,8 +850,8 @@ fn families(list: &[Family]) -> Result<Vec<FontFamilyName<'static>>, Error> {
     list.iter()
         .map(|f| match f {
             Family::SansSerif => Ok(FontFamilyName::Generic(GenericFamily::SansSerif)),
-            Family::Serif => Err("font family serif is not built in yet".into()),
-            Family::Monospace => Err("font family monospace is not built in yet".into()),
+            Family::Serif => Ok(FontFamilyName::Generic(GenericFamily::Serif)),
+            Family::Monospace => Ok(FontFamilyName::Generic(GenericFamily::Monospace)),
             Family::Named(name) => Err(format!(
                 "font family {name}: font resources are not supported yet"
             )),

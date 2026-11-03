@@ -4,11 +4,7 @@ use std::rc::Rc;
 use super::*;
 
 fn text() -> Text {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../fonts/NotoSans-Variable.ttf"
-    );
-    Text::new(Blob::from(std::fs::read(path).unwrap())).unwrap()
+    Text::new().unwrap()
 }
 
 /// `text`, all in its paragraph's own font.
@@ -163,16 +159,23 @@ fn weight_spacing_and_alignment() {
 }
 
 #[test]
-fn families_must_be_built_in() {
+fn families_are_built_in_or_resources() {
     let mut t = text();
     let with = |family: Family| Font {
         family: Rc::new([family, Family::SansSerif]),
         ..font(16.0)
     };
+    // Each built-in family is its own font: monospace gives i and W one width.
+    let mut width = |family: Family, s: &str| t.measure(&plain(s, &with(family)), None).unwrap()[0];
+    let [sans, serif] = [Family::SansSerif, Family::Serif].map(|f| width(f, "Serif"));
+    assert_ne!(sans, serif);
     assert_eq!(
-        t.measure(&plain("a", &with(Family::Serif)), None)
-            .unwrap_err(),
-        "font family serif is not built in yet"
+        width(Family::Monospace, "iiii"),
+        width(Family::Monospace, "WWWW")
+    );
+    assert_ne!(
+        width(Family::SansSerif, "iiii"),
+        width(Family::SansSerif, "WWWW")
     );
     assert_eq!(
         t.measure(&plain("a", &with(Family::Named("Brand".into()))), None)

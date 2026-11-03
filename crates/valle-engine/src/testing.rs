@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use crate::template::{Kind, Node, Piece, Prop, V};
-use crate::text::{Blob, Text};
+use crate::text::Text;
 
 /// A node with constant inline styles, at `s.tsx:1:1`.
 pub fn node(kind: Kind, style: &[(&str, &str)], children: &[u32]) -> Node {
@@ -45,9 +45,5 @@ pub fn text_node(s: &str, style: &[(&str, &str)]) -> Node {
 
 /// Text in the built-in fonts.
 pub fn text() -> Text {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../fonts/NotoSans-Variable.ttf"
-    );
-    Text::new(Blob::from(std::fs::read(path).unwrap())).unwrap()
+    Text::new().unwrap()
 }

@@ -1965,10 +1965,15 @@ const ROWS: &[Row] = &[
     Row {
         properties: &["fontFamily"],
         sample: r##"<View style={{ display: "flex" }}><Text style={{ fontSize: 10, PROPERTY: VALUE }}>Family</Text></View>"##,
-        values: &["\"sans-serif\"", "\"SANS-SERIF\"", "\" sans-serif \""],
-        refused: &[
+        values: &[
+            "\"sans-serif\"",
+            "\"SANS-SERIF\"",
+            "\" sans-serif \"",
             "\"serif\"",
             "\"monospace\"",
+            "\"monospace, serif\"",
+        ],
+        refused: &[
             "\"cursive\"",
             "\"Inter, sans-serif\"",
             "\"'Inter'\"",

@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use crate::eval::{self, Clock};
 use crate::front::{Composition, Front, Slot};
@@ -12,11 +11,8 @@ use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
 use crate::style::{Sheet, Style, gradient};
 use crate::template::{Error, Kind, Measure, Op, Tag, Template, V};
-use crate::text::{Blob, Face, Text};
+use crate::text::{Face, Text};
 use crate::time::Tick;
-
-/// The built-in sans-serif.
-const SANS_SERIF: &[u8] = include_bytes!("../../../fonts/NotoSans-Variable.ttf");
 
 /// Variants whose sheets are kept, as many as the frontend keeps.
 const SHEETS: usize = 64;
@@ -69,7 +65,7 @@ impl Scene {
             front,
             pictures,
             images,
-            text: Text::new(Blob::new(Arc::new(SANS_SERIF)))?,
+            text: Text::new()?,
             sheets: Vec::new(),
         })
     }
