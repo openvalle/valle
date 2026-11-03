@@ -538,11 +538,11 @@ fn motion_blur_is_the_trail_while_the_shutter_is_open() {
         for (body, want) in [
             (
                 "<View style={{ motionBlur: 5 }} />",
-                "motionBlur is { velocity",
+                "motionBlur is \"auto\" or { velocity",
             ),
             (
                 "<View style={{ motionBlur: { velocity: { x: 1 } } }} />",
-                "motionBlur is {",
+                "motionBlur is \"auto\" or {",
             ),
             (
                 "<View style={{ motionBlur: { velocity: { x: 1, y: 0 }, shutterAngle: 400 } }} />",

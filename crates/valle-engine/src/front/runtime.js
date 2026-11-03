@@ -1145,8 +1145,10 @@
   // `motionBlur: { velocity: { x, y }, shutterAngle }` as the trail the element makes while the
   // shutter is open, `x y` in its own px: the velocity in px a second of the scene's clock, times
   // the rates of the TimeScopes around, times the shutter's part of a frame (180° by default).
+  // `"auto"` stays, for the scene to measure.
   function trail(v, tag, at) {
-    const form = "<" + tag + "> motionBlur is { velocity: { x, y }, shutterAngle }";
+    if (fixed(v, "motionBlur", at) === "auto") return "auto";
+    const form = "<" + tag + '> motionBlur is "auto" or { velocity: { x, y }, shutterAngle }';
     if (!plain(v)) fail(at, form);
     for (const k of keys(v)) if (k !== "velocity" && k !== "shutterAngle") fail(at, form);
     const { velocity } = v;

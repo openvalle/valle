@@ -152,8 +152,10 @@ pub struct Style {
     /// with what is under it.
     pub blend: Blend,
     pub isolate: bool,
-    /// `filter` and `backdrop-filter`: empty for `none`.
+    /// `filter` and `backdrop-filter`: empty for `none`. A `motionBlur` is the last filter.
     pub filter: Vec<filter::Function>,
+    /// `motionBlur: "auto"`: the scene measures the trail of its last filter.
+    pub motion_auto: bool,
     pub backdrop: Vec<filter::Function>,
     /// `clip-path`; `None` for `none`.
     pub clip: Option<shape::Clip>,
@@ -1482,8 +1484,9 @@ struct Declared {
     blend: Blend,
     isolate: bool,
     filter: Vec<filter::Function<Len, Option<Rgba>>>,
-    /// `motionBlur` as the frontend gives it: the trail in the box's own px.
-    motion_blur: [f64; 2],
+    /// `motionBlur` as the frontend gives it, if declared: the trail in the box's own px, or
+    /// `None` for `auto`.
+    motion_blur: Option<Option<[f64; 2]>>,
     backdrop: Vec<filter::Function<Len, Option<Rgba>>>,
     clip: Option<shape::Clip<Len>>,
     masks: background::Declared,
@@ -1614,7 +1617,7 @@ impl Default for Declared {
             blend: Blend::Normal,
             isolate: false,
             filter: Vec::new(),
-            motion_blur: [0.0; 2],
+            motion_blur: None,
             backdrop: Vec::new(),
             clip: None,
             masks: background::Declared::default(),
@@ -3852,10 +3855,11 @@ fn set(d: &mut Declared, field: Field, v: &V) -> Result<(), String> {
         F::MotionBlur => {
             let trail = text(v)?;
             let xy: Vec<f64> = trail.split(' ').filter_map(|n| n.parse().ok()).collect();
-            d.motion_blur = match xy[..] {
-                [x, y] if x.is_finite() && y.is_finite() => [x, y],
+            d.motion_blur = Some(match xy[..] {
+                _ if trail == "auto" => None,
+                [x, y] if x.is_finite() && y.is_finite() => Some([x, y]),
                 _ => return Err(format!("motionBlur trail {trail:?}")),
-            };
+            });
         }
         F::BackdropFilter => d.backdrop = filter::filter(&text(v)?)?,
         F::ClipPath => match v {
@@ -4569,9 +4573,11 @@ fn compute(
         isolate: d.isolate,
         filter: (d.filter.iter().map(|f| f.computed(u, color)))
             .chain(
-                (d.motion_blur != [0.0; 2]).then_some(filter::Function::MotionBlur(d.motion_blur)),
+                (d.motion_blur)
+                    .map(|trail| filter::Function::MotionBlur(trail.unwrap_or([0.0; 2]))),
             )
             .collect(),
+        motion_auto: d.motion_blur == Some(None),
         backdrop: d.backdrop.iter().map(|f| f.computed(u, color)).collect(),
         clip: d.clip.as_ref().map(|c| c.computed(u)),
         masks: match d

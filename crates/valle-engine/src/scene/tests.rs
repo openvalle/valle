@@ -347,3 +347,49 @@ fn svg_files_show_in_images_only() {
         );
     });
 }
+
+#[test]
+fn auto_motion_blur_measures_the_trail_on_the_canvas() {
+    big_stack(|| {
+        // At 30 fps a 180° shutter is open a 60th of a second: 120 px a second moves 2 px. The
+        // second box turns a quarter in a box turned back a quarter, and moves as fast twice
+        // over: 4 px along its own y.
+        let mut scene = load(indoc! {"
+            export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+            const box = { position: 'absolute', width: 10, height: 10, motionBlur: 'auto' };
+            function Turned() {
+              const { seconds } = useCurrentTime();
+              return <View style={{ ...box, rotate: '90deg', translate: `${120 * seconds}px` }} />;
+            }
+            export default function Scene() {
+              const { seconds } = useCurrentTime();
+              return (
+                <View>
+                  <View style={{ ...box, left: 120 * seconds }} />
+                  <View style={{ position: 'absolute', rotate: '-90deg' }}>
+                    <TimeScope rate={2}>
+                      <Turned />
+                    </TimeScope>
+                  </View>
+                  <View style={{ ...box, top: 50 }} />
+                </View>
+              );
+            }
+        "})
+        .unwrap();
+        let frame = scene.frame(Tick::parse_seconds("1").unwrap()).unwrap();
+        let trail = |i: usize| match frame.styles[i].filter.last() {
+            Some(filter::Function::MotionBlur(t)) => t.map(|v| (v * 1e3).round() / 1e3),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(trail(1), [2.0, 0.0]);
+        assert_eq!(trail(3), [0.0, -4.0]);
+        assert_eq!(trail(4), [0.0, 0.0]);
+        // Held at the start: only the half after the frame moves.
+        let frame = scene.frame(Tick::ZERO).unwrap();
+        let Some(filter::Function::MotionBlur(t)) = frame.styles[1].filter.last() else {
+            panic!()
+        };
+        assert!((t[0] - 1.0).abs() < 1e-3, "{t:?}");
+    });
+}

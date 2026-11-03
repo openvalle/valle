@@ -138,6 +138,18 @@ pub struct Sample {
     pub looped: bool,
 }
 
+impl Sample {
+    /// The time `self` samples for the frame at `t`.
+    pub fn at(&self, t: Tick) -> Tick {
+        let t = t.0.saturating_add(self.offset.0);
+        let end = self.duration.0;
+        Tick(match self.looped {
+            true => t.rem_euclid(end),
+            false => t.clamp(0, end),
+        })
+    }
+}
+
 /// What `bounds()` gives of a box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Measure {

@@ -9,8 +9,8 @@ use crate::front::{Composition, Front, Holds, Inputs, Slot};
 use crate::image::{Image, Picture};
 use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
-use crate::style::{Sheet, Style, gradient};
-use crate::template::{Error, Kind, Measure, Op, Tag, Template, V};
+use crate::style::{Sheet, Style, filter, gradient};
+use crate::template::{Error, Kind, Measure, Op, Sample, Tag, Template, V};
 use crate::text::{Blob, Face, FontFile, Fonts, Text};
 use crate::time::Tick;
 
@@ -28,6 +28,14 @@ pub struct Frame {
     /// Each node's transform from its px, those of `layout`, to the canvas's.
     pub transforms: Vec<Matrix>,
     pub items: Vec<Item>,
+}
+
+/// A frame laid out, before it is painted.
+struct Laid {
+    template: Rc<Template>,
+    values: Vec<V>,
+    styles: Vec<Style>,
+    layout: Layout,
 }
 
 /// The node each `bounds()` of a variant measures, by its key path.
@@ -121,6 +129,31 @@ impl Scene {
 
     /// The frame at `at`.
     pub fn frame(&mut self, at: Tick) -> Result<Frame, Error> {
+        let Laid {
+            template,
+            values,
+            mut styles,
+            layout: laid,
+        } = self.laid(at)?;
+        if styles.iter().any(|s| s.motion_auto) {
+            self.trails(at, &template, &mut styles, &laid)?;
+        }
+        self.text.sweep();
+        backgrounds(&template, &styles, &self.pictures)?;
+        let items = paint(&template, &styles, &laid, &self.pictures);
+        let transforms = transforms(&template, &styles, &laid);
+        Ok(Frame {
+            template,
+            values,
+            styles,
+            layout: laid,
+            transforms,
+            items,
+        })
+    }
+
+    /// The variant at `at`, its values, its styles and its layout.
+    fn laid(&mut self, at: Tick) -> Result<Laid, Error> {
         let frame = self.front.frame(at)?;
         match self
             .sheets
@@ -153,7 +186,6 @@ impl Scene {
             &mut self.text,
             &self.pictures,
         )?;
-        self.text.sweep();
         let mut values = frame.values;
         if !settled {
             // The late values, from the boxes laid out, set only what paints.
@@ -176,17 +208,63 @@ impl Scene {
             contained(&frame.template, sheet, &styles, &painted)?;
             styles = painted;
         }
-        backgrounds(&frame.template, &styles, &self.pictures)?;
-        let items = paint(&frame.template, &styles, &laid, &self.pictures);
-        let transforms = transforms(&frame.template, &styles, &laid);
-        Ok(Frame {
+        Ok(Laid {
             template: frame.template,
             values,
             styles,
             layout: laid,
-            transforms,
-            items,
         })
+    }
+
+    /// The trail of each box of `motionBlur: "auto"`, in its own px: from where its center is on
+    /// the canvas when a 180° shutter opens, a quarter of a frame before `at`, to where it is when
+    /// the shutter closes, a quarter after. The times hold inside the scene or wrap round it as
+    /// Echo's and Shutter's do; an end where another variant holds counts as not moving.
+    fn trails(
+        &mut self,
+        at: Tick,
+        template: &Rc<Template>,
+        styles: &mut [Style],
+        laid: &Layout,
+    ) -> Result<(), Error> {
+        let c = self.front.composition;
+        // A quarter of a frame back, the first of two samples of a 360° shutter.
+        let back = c.fps.shutter(360, 0, 2);
+        let mut ends = Vec::new();
+        for offset in [back, -back] {
+            let sample = Sample {
+                offset,
+                duration: c.duration,
+                looped: c.looped,
+            };
+            let end = self.laid(sample.at(at))?;
+            ends.push(Rc::ptr_eq(&end.template, template).then(|| {
+                let moved = transforms(&end.template, &end.styles, &end.layout);
+                (moved, end.layout)
+            }));
+        }
+        let now = transforms(template, styles, laid);
+        let center = |m: &Matrix, l: &Layout, i: usize| {
+            let b = l.boxes[i].border;
+            m.apply([b.x + b.width / 2.0, b.y + b.height / 2.0])
+        };
+        for (i, style) in styles.iter_mut().enumerate() {
+            if !style.motion_auto {
+                continue;
+            }
+            let Some(inverse) = now[i].inverse() else {
+                continue;
+            };
+            let here = center(&now[i], laid, i);
+            let [open, close] = [0, 1].map(|k| {
+                let end = ends[k].as_ref();
+                inverse.apply(end.map_or(here, |(m, l)| center(&m[i], l, i)))
+            });
+            if let Some(filter::Function::MotionBlur(trail)) = style.filter.last_mut() {
+                *trail = [0, 1].map(|k| f64::from(close[k] - open[k]));
+            }
+        }
+        Ok(())
     }
 }
 

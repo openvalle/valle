@@ -130,20 +130,7 @@ pub fn value(op: &Op, values: &[V], clock: Clock) -> Result<V, Error> {
                 .ok_or("a TimeScope's time is outside the supported range of about ±420 days")?;
             V::Num(speed.apply(Tick(t))?.seconds())
         }
-        Op::Sample(input, sample) => {
-            let t = (Tick::from_seconds(num(input))?
-                .0
-                .checked_add(sample.offset.0))
-            .ok_or("a sample's time is outside the supported range of about ±420 days")?;
-            let end = sample.duration.0;
-            V::Num(
-                match sample.looped {
-                    true => Tick(t.rem_euclid(end)),
-                    false => Tick(t.clamp(0, end)),
-                }
-                .seconds(),
-            )
-        }
+        Op::Sample(input, sample) => V::Num(sample.at(Tick::from_seconds(num(input))?).seconds()),
         Op::Spring {
             input,
             spring,
