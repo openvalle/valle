@@ -646,6 +646,24 @@
   const SIMULATE = ["dt", "duration", "init", "step"];
   const MAX_STEPS = 16384;
 
+  // `clamp(x, min, max)` as CSS clamps: `min` wins over `max`.
+  const clamp = (x, min, max) => {
+    if (![x, min, max].every(numeric)) throw new TypeError("clamp(x, min, max) takes numbers");
+    return math("max", [min, math("min", [x, max])]);
+  };
+  // `mod(x, m)`: the remainder in [0, m), where JavaScript's `%` takes the sign of `x`.
+  const mod = (x, m) => {
+    if (!numeric(x) || !numeric(m)) throw new TypeError("mod(x, m) takes numbers");
+    return __b("%", __b("+", __b("%", x, m), m), m);
+  };
+  // `pingPong(x, length)`: from 0 up to `length` and back, every `2 length`.
+  const pingPong = (x, length) => {
+    if (!numeric(x) || !numeric(length)) {
+      throw new TypeError("pingPong(x, length) takes numbers");
+    }
+    return __b("-", length, math("abs", [__b("-", mod(x, __b("*", length, 2)), length)]));
+  };
+
   // `wiggle(t, { seed, frequency, amplitude, phase })`: a value drifting within ±amplitude,
   // `frequency` times a second; `wiggle2D` takes an amplitude for each axis and gives `{ x, y }`.
   function wiggleOf(name, t, options, axes) {
@@ -1359,6 +1377,9 @@
     simulate,
     wiggle,
     wiggle2D,
+    clamp,
+    mod,
+    pingPong,
     stageProgress,
     staggerProgress,
     repeatProgress,
