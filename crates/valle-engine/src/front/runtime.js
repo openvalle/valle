@@ -732,6 +732,17 @@
 
   // `roundCorners(path, radius)`: path data with its corners rounded.
   const roundCorners = (path, radius) => pathOp("roundCorners", "roundCorners", [path, radius]);
+  // AE's path modifiers: `puckerBloat(path, amount)` with 1 for 100%, `twist(path, angle)` in
+  // degrees, and `zigzag(path, { size, ridges })`.
+  const puckerBloat = (path, amount) => pathOp("puckerBloat", "puckerBloat", [path, amount]);
+  const twist = (path, angle) => pathOp("twist", "twist", [path, angle]);
+  const zigzag = (path, options) => {
+    const o = options ?? {};
+    if (keys(o).some((k) => k !== "size" && k !== "ridges")) {
+      throw new TypeError("zigzag(path, { size, ridges }) takes size and ridges");
+    }
+    return pathOp("zigzag", "zigzag", [path, o.size ?? 0, o.ridges ?? 0]);
+  };
 
   // `clamp(x, min, max)` as CSS clamps: `min` wins over `max`.
   const clamp = (x, min, max) => {
@@ -1469,6 +1480,9 @@
     pointAt,
     tangentAt,
     roundCorners,
+    puckerBloat,
+    twist,
+    zigzag,
     formatNumber,
     formatPercent,
     padNumber,

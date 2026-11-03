@@ -191,6 +191,143 @@ pub fn round_corners(path: &BezPath, radius: f64) -> BezPath {
     out
 }
 
+/// A subpath as cubic segments, a line one whose handles sit on its ends, as AE's and Lottie's
+/// paths are: vertices with handles.
+fn cubics(segments: &[PathSeg]) -> Vec<kurbo::CubicBez> {
+    (segments.iter())
+        .map(|s| match *s {
+            PathSeg::Line(l) => kurbo::CubicBez::new(l.p0, l.p0, l.p1, l.p1),
+            PathSeg::Quad(q) => q.raise(),
+            PathSeg::Cubic(c) => c,
+        })
+        .collect()
+}
+
+/// Each subpath's cubics moved point by point by `f(point, subpath's cubics)`, or with
+/// `pieces` cubics a segment first, so a bend shows inside a segment.
+fn moved(
+    path: &BezPath,
+    pieces: usize,
+    f: impl Fn(kurbo::Point, &[kurbo::CubicBez], bool) -> kurbo::Point,
+) -> BezPath {
+    let mut out = BezPath::new();
+    for (segments, closed, first) in subpaths(path) {
+        let mut list = cubics(&segments);
+        if pieces > 1 {
+            let k = pieces as f64;
+            list = (list.iter())
+                .flat_map(|c| {
+                    (0..pieces).map(move |i| c.subsegment(i as f64 / k..(i + 1) as f64 / k))
+                })
+                .collect();
+        }
+        let Some(start) = list.first() else {
+            out.move_to(f(first, &list, false));
+            continue;
+        };
+        out.move_to(f(start.p0, &list, false));
+        for c in &list {
+            // The handles, even where they sit on the vertices, as a line's do.
+            let (a, b) = (f(c.p1, &list, true), f(c.p2, &list, true));
+            out.curve_to(a, b, f(c.p3, &list, false));
+        }
+        if closed {
+            out.close_path();
+        }
+    }
+    out
+}
+
+/// The mean of a subpath's vertices.
+fn center(list: &[kurbo::CubicBez]) -> kurbo::Point {
+    let sum = list.iter().fold(Vec2::ZERO, |s, c| s + c.p0.to_vec2());
+    (sum / list.len().max(1) as f64).to_point()
+}
+
+/// `puckerBloat(path, amount)`, as AE and Lottie do it: each subpath's vertices pulled toward
+/// their mean by `amount` (a fraction, 1 for 100%) and its handles pushed away by as much, so a
+/// positive amount bloats the segments out between vertices drawn in, a negative one puckers.
+pub fn pucker_bloat(path: &BezPath, amount: f64) -> BezPath {
+    moved(path, 1, |p, list, handle| {
+        let c = center(list);
+        let k = if handle { -amount } else { amount };
+        p + (c - p) * k
+    })
+}
+
+/// `twist(path, angle)`: the path turned about its bounding box's center, by `angle` degrees at
+/// the center and less going out, none at the farthest point. Each segment is cut into pieces
+/// first so the turn bends it.
+pub fn twist(path: &BezPath, angle: f64) -> BezPath {
+    let bounds = kurbo::Shape::bounding_box(path);
+    let c = bounds.center();
+    let far = (path.elements().iter())
+        .flat_map(|el| el.end_point())
+        .map(|p| (p - c).hypot())
+        .fold(0.0f64, f64::max);
+    if far <= 0.0 {
+        return path.clone();
+    }
+    moved(path, 8, |p, _, _| {
+        let turn = angle.to_radians() * (1.0 - ((p - c).hypot() / far).min(1.0));
+        kurbo::Affine::rotate_about(turn, c) * p
+    })
+}
+
+/// `zigzag(path, size, ridges)`: each subpath as a line through its vertices and `ridges` points
+/// a segment between them, spread evenly along it, each moved `size` off the path to alternate
+/// sides, as AE's Zig Zag with corner points.
+pub fn zigzag(path: &BezPath, size: f64, ridges: usize) -> BezPath {
+    let mut out = BezPath::new();
+    for (segments, closed, first) in subpaths(path) {
+        let mut points: Vec<(kurbo::Point, Vec2)> = Vec::new();
+        for (i, s) in segments.iter().enumerate() {
+            let length = s.arclen(ACCURACY);
+            // The vertex at the start: off along the bisector of the two normals.
+            let before = match i {
+                0 if !closed => None,
+                0 => segments.last(),
+                _ => segments.get(i - 1),
+            };
+            let normal = |d: Vec2| Vec2::new(-d.y, d.x);
+            let outward = normal(direction(s, 0.0));
+            let n = match before {
+                Some(b) => {
+                    let m = normal(direction(b, 1.0)) + outward;
+                    if m.hypot() > 1e-9 {
+                        m / m.hypot()
+                    } else {
+                        outward
+                    }
+                }
+                None => outward,
+            };
+            points.push((s.start(), n));
+            for k in 1..=ridges {
+                let t = s.inv_arclen(length * k as f64 / (ridges + 1) as f64, ACCURACY);
+                points.push((s.eval(t), normal(direction(s, t))));
+            }
+        }
+        if let (Some(last), false) = (segments.last(), closed) {
+            let d = direction(last, 1.0);
+            points.push((last.end(), Vec2::new(-d.y, d.x)));
+        }
+        let Some(&(p, n)) = points.first() else {
+            out.move_to(first);
+            continue;
+        };
+        out.move_to(p + n * size);
+        for (i, &(p, n)) in points.iter().enumerate().skip(1) {
+            let side = if i % 2 == 0 { size } else { -size };
+            out.line_to(p + n * side);
+        }
+        if closed {
+            out.close_path();
+        }
+    }
+    out
+}
+
 /// Appends a segment from where the path is.
 fn push(out: &mut BezPath, s: PathSeg) {
     match s {
@@ -295,6 +432,40 @@ mod tests {
         let smooth = bez("M0 0 C50 0 50 0 100 0 C150 0 150 0 200 0").unwrap();
         assert_eq!(data(&round_corners(&smooth, 5.0)), data(&smooth));
         assert_eq!(data(&round_corners(&square, 0.0)), data(&square));
+    }
+
+    #[test]
+    fn pucker_and_bloat_move_vertices_and_handles() {
+        let square = bez("M0 0 H100 V100 H0 Z").unwrap();
+        let bloat = data(&pucker_bloat(&square, 0.5));
+        // Vertices halfway in, handles halfway out from the center.
+        assert!(
+            bloat.starts_with("M25 25 C-25 -25 125 -25 75 25"),
+            "{bloat}"
+        );
+        assert_eq!(
+            data(&pucker_bloat(&square, 0.0)),
+            "M0 0 C0 0 100 0 100 0 C100 0 100 100 100 100 C100 100 0 100 0 100 C0 100 0 0 0 0 Z"
+        );
+    }
+
+    #[test]
+    fn twists_turn_the_middle_most() {
+        let line = bez("M0 50 L100 50").unwrap();
+        // The ends are the farthest, so they stay; the middle turns with the center.
+        let t = twist(&line, 90.0);
+        let (start, mid) = (at(&t, 0.0).0, at(&t, 0.5).0);
+        assert!((start - kurbo::Point::new(0.0, 50.0)).hypot() < 1e-9);
+        assert!((mid - kurbo::Point::new(50.0, 50.0)).hypot() < 1e-6);
+        assert!((at(&t, 0.25).0.y - 50.0).abs() > 5.0);
+    }
+
+    #[test]
+    fn zigzags_alternate_sides() {
+        let z = data(&zigzag(&bez("M0 0 L100 0").unwrap(), 10.0, 3));
+        assert_eq!(z, "M0 10 L25 -10 L50 10 L75 -10 L100 10");
+        let closed = data(&zigzag(&bez("M0 0 H100 V100 H0 Z").unwrap(), 5.0, 1));
+        assert_eq!(closed.matches('L').count(), 7, "{closed}");
     }
 
     #[test]

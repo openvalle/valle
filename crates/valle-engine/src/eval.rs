@@ -111,9 +111,24 @@ fn path(f: PathFn, args: &[&V]) -> Result<V, Error> {
     let p = edit::bez(&args[0].text())?;
     let (point, direction) = match f {
         PathFn::Length => return Ok(V::Num(edit::length(&p))),
-        PathFn::RoundCorners => {
-            let rounded = edit::round_corners(&p, args[1].num());
-            return Ok(V::Str(Rc::from(edit::data(&rounded))));
+        PathFn::RoundCorners | PathFn::PuckerBloat | PathFn::Twist | PathFn::Zigzag => {
+            let n = args[1].num();
+            let made = match f {
+                PathFn::RoundCorners => edit::round_corners(&p, n),
+                PathFn::PuckerBloat => edit::pucker_bloat(&p, n),
+                PathFn::Twist => edit::twist(&p, n),
+                _ => {
+                    let ridges = args[2].num();
+                    if !(0.0..=1000.0).contains(&ridges) || ridges.fract() != 0.0 {
+                        return Err(format!(
+                            "zigzag ridges must be a whole number, 0 to 1000, got {}",
+                            args[2].text()
+                        ));
+                    }
+                    edit::zigzag(&p, n, ridges as usize)
+                }
+            };
+            return Ok(V::Str(Rc::from(edit::data(&made))));
         }
         _ => edit::at(&p, args[1].num()),
     };

@@ -235,6 +235,12 @@ pub enum PathFn {
     Angle,
     /// `roundCorners(path, radius)`.
     RoundCorners,
+    /// `puckerBloat(path, amount)`.
+    PuckerBloat,
+    /// `twist(path, angle)`.
+    Twist,
+    /// `zigzag(path, { size, ridges })`, the two as operands.
+    Zigzag,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,6 +259,9 @@ impl PathFn {
             "dy" => PathFn::Tangent(Axis::Y),
             "angle" => PathFn::Angle,
             "roundCorners" => PathFn::RoundCorners,
+            "puckerBloat" => PathFn::PuckerBloat,
+            "twist" => PathFn::Twist,
+            "zigzag" => PathFn::Zigzag,
             _ => return None,
         })
     }
@@ -261,6 +270,7 @@ impl PathFn {
     pub fn operands(self) -> usize {
         match self {
             PathFn::Length => 1,
+            PathFn::Zigzag => 3,
             _ => 2,
         }
     }
