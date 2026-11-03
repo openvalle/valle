@@ -6,6 +6,7 @@
   "description": "Valle's engine in the browser: a Motion scene or a Timeline drawn with WebGPU",
   "exports": {
     ".": "./dist/index.js",
+    "./element": "./dist/element.js",
     "./export": "./dist/export.js"
   },
   "files": [

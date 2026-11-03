@@ -43,6 +43,7 @@ const PAGE = `<!doctype html>
 <script type="module">
   import { createPlayer } from "/web/packages/engine/dist/index.js";
   import { exportBrowserVideo } from "/web/packages/engine/dist/export.js";
+  import "/web/packages/engine/dist/element.js";
   /** The files players fetched through the page's \`fetch\`. */
   window.fetched = 0;
   const fetching = (url) => (window.fetched++, fetch(url));
@@ -179,6 +180,32 @@ const PAGE = `<!doctype html>
       return error.code;
     }
   };
+  /** A <valle-player> of \`src\`, looping, playing on its own, muted: whether it plays, and how
+   * its frame at 1 s differs from \`native\`'s; and whether taking it out of the page closes
+   * its player. */
+  window.element = async (src, native) => {
+    await window.player?.close();
+    window.player = undefined;
+    const element = document.createElement("valle-player");
+    element.setAttribute("src", src);
+    element.setAttribute("runtime", "/web/packages/engine/dist/");
+    for (const name of ["loop", "autoplay", "muted"]) element.setAttribute(name, "");
+    const ready = new Promise((resolve, reject) => {
+      element.addEventListener("ready", resolve, { once: true });
+      element.addEventListener("error", (event) => reject(event.detail), { once: true });
+    });
+    document.body.append(element);
+    await ready;
+    const player = element.player;
+    await new Promise((r) => setTimeout(r, 700));
+    const [playing, at, muted, loop] = [player.playing, player.currentTime, player.muted, player.loop];
+    const png = URL.createObjectURL(await player.frame(1));
+    const [x, y] = [await decoded(png), await decoded(native)];
+    let most = x.length === y.length ? 0 : Infinity;
+    for (let i = 0; i < x.length && most !== Infinity; i++) most = Math.max(most, Math.abs(x[i] - y[i]));
+    element.remove();
+    return { playing, at, muted, loop, most, closed: element.player === undefined };
+  };
   /** How two frames differ: the most a channel does, and on average. */
   window.similar = async (a, b) => {
     const [x, y] = [await decoded(a), await decoded(b)];
@@ -288,6 +315,19 @@ function aligned(heard: Float32Array, mixed: Float32Array): { lag: number; rms: 
   }
   return best;
 }
+
+/** A scene for `<valle-player>`, without text: a square that moves. */
+const ELEMENT = `export const composition = { width: 320, height: 180, fps: 30, duration: 2 };
+export default function Element() {
+  const time = useCurrentTime();
+  const left = interpolate(time.progress, [0, 1], [0, 240]);
+  return (
+    <View className="relative h-full w-full" style={{ backgroundColor: "#203040" }}>
+      <View style={{ position: "absolute", left, top: 50, width: 80, height: 80, backgroundColor: "#e0a030" }} />
+    </View>
+  );
+}
+`;
 
 /** The width and height of the H.264 video of an MP4, from its `avc1` sample entry, and whether
  * it has a track of sound. */
@@ -599,6 +639,29 @@ async function main() {
     console.log(`export frame 45: most ${frame.most}, mean ${frame.mean.toFixed(2)} apart`);
     if (frame.mean > 1.5) {
       failed.push(`the exported edit's frame 45 is ${frame.mean} apart on average`);
+    }
+    // <valle-player>.
+    await Bun.write(join(out, "element.motion.tsx"), ELEMENT);
+    run([
+      "motion",
+      "render",
+      join(out, "element.motion.tsx"),
+      "--frame",
+      "30",
+      "-o",
+      join(out, "element.png"),
+    ]);
+    const element = await evaluate(`element("/out/element.motion.tsx", "/out/element.png")`);
+    console.log(`<valle-player>: ${JSON.stringify(element)}`);
+    if (
+      !element.playing ||
+      !(element.at > 0) ||
+      !element.muted ||
+      !element.loop ||
+      element.most > STEP ||
+      !element.closed
+    ) {
+      failed.push(`<valle-player>: ${JSON.stringify(element)}`);
     }
     // The sound: the export's, as a timeline's clip, and the mix.
     await Bun.write(join(out, "listen.timeline.json"), JSON.stringify(LISTEN));

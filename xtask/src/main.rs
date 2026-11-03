@@ -275,7 +275,7 @@ fn build_web() -> Result<(), String> {
             ])
             .arg(&dist)
             .args(
-                ["index", "export", "worker", "sound"]
+                ["index", "element", "export", "worker", "sound"]
                     .map(|entry| package.join(format!("src/{entry}.ts"))),
             ),
         "bun build",
