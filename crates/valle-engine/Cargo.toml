@@ -26,6 +26,8 @@ zune-jpeg.workspace = true
 
 [dev-dependencies]
 indoc.workspace = true
+# The built-in fonts, from the global cache.
+valle-native = { path = "../valle-native" }
 
 # The case runner over tests/cases, the crate's one integration test binary.
 [[test]]

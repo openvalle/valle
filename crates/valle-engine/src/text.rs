@@ -1,5 +1,8 @@
-//! Text: paragraphs shaped by parley in the built-in fonts, broken into lines and stacked as
-//! Chrome stacks them. No system font is read, so every host shapes with the same bytes.
+//! Text: paragraphs shaped by parley in the built-in fonts and the scene's, broken into lines and
+//! stacked as Chrome stacks them. No system font is read, so every host shapes with the same bytes.
+//!
+//! The built-in fonts are not in the engine: each is a file of Google Fonts at a fixed version,
+//! which the host gives the first time text needs it (`Fonts`), checked against its SHA-256.
 //!
 //! A paragraph is pieces of text, each in the font of the Text or Span it is in. It is shaped
 //! once per text and fonts and kept while it is in use; measuring it at a width only breaks its
@@ -11,11 +14,10 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::ops::Range;
 use std::rc::Rc;
-use std::sync::Arc;
 
 pub use parley::fontique::Blob;
 use parley::fontique::{
-    Collection, CollectionOptions, FontInfoOverride, GenericFamily, SourceCache,
+    Collection, CollectionOptions, FamilyId, FontInfoOverride, GenericFamily, SourceCache,
 };
 use parley::setting::Tag;
 use parley::{
@@ -223,42 +225,91 @@ pub struct Text {
     outlines: HashMap<(u32, u32), (f32, Vec<Curve>)>,
     /// The families of font resources, by their resources' names.
     named: Vec<Rc<str>>,
+    /// Where the built-in fonts come from, and the family of each one given so far.
+    built_in: Fonts,
+    given: [Option<FamilyId>; BUILT_IN.len()],
 }
 
-/// The built-in families, as `font-family` names them, and their fonts.
-const BUILT_IN: [(GenericFamily, &str, &[u8]); 3] = [
-    (
-        GenericFamily::SansSerif,
-        "sans-serif",
-        include_bytes!("../../../fonts/NotoSans-Variable.ttf"),
-    ),
-    (
-        GenericFamily::Serif,
-        "serif",
-        include_bytes!("../../../fonts/NotoSerif-Variable.ttf"),
-    ),
-    (
-        GenericFamily::Monospace,
-        "monospace",
-        include_bytes!("../../../fonts/NotoSansMono-Variable.ttf"),
-    ),
+/// A built-in font: a file of Google Fonts at a fixed version, as fonts.google.com downloads it.
+pub struct BuiltIn {
+    pub name: &'static str,
+    pub url: &'static str,
+    pub sha256: &'static str,
+    /// Bytes.
+    pub size: u64,
+}
+
+/// The built-in fonts, which the host gives by their entries here.
+pub const BUILT_IN: [BuiltIn; 8] = [
+    BuiltIn {
+        name: "Noto Sans",
+        url: "https://fonts.gstatic.com/s/notosans/v42/o-0IIpQlx3QUlC5A4PNb4j5Ba_2c7A.ttf",
+        sha256: "7b8cac46a1c86d2533a616b1fcf4e1926b8e39bda69034508b0df96791f56d97",
+        size: 2_044_548,
+    },
+    BuiltIn {
+        name: "Noto Sans Italic",
+        url: "https://fonts.gstatic.com/s/notosans/v42/o-0OIpQlx3QUlC5A4PNr4DRFSfiM7HBj.ttf",
+        sha256: "4bf7b366af79c434984d67eae3967e9cd7a2f51c196101c43f21a7e21e608844",
+        size: 2_300_468,
+    },
+    BuiltIn {
+        name: "Noto Serif",
+        url: "https://fonts.gstatic.com/s/notoserif/v33/ga6Iaw1J5X9T9RW6j9bNTFAcaRi_bMQ.ttf",
+        sha256: "26485cbd00507110de7a77cd63d0ec99d356f38e5d9c0c5d07ecea1c7827ea24",
+        size: 1_868_872,
+    },
+    BuiltIn {
+        name: "Noto Serif Italic",
+        url: "https://fonts.gstatic.com/s/notoserif/v33/ga6Kaw1J5X9T9RW6j9bNfFIWbTq6fMRRMw.ttf",
+        sha256: "061daf34bfdd0e0635ce3d4f701398772ce2944ee0b24f584e0273366bbea468",
+        size: 2_429_468,
+    },
+    BuiltIn {
+        name: "Noto Sans Mono",
+        url: "https://fonts.gstatic.com/s/notosansmono/v37/BngRUXNETWXI6LwhGYvaxZikqYCByxyKeuDp.ttf",
+        sha256: "47d856141683450ee297592b27be447eb5141c68516e5e0e748c66b6e0a54afe",
+        size: 1_707_908,
+    },
+    BuiltIn {
+        name: "Noto Sans SC",
+        url: "https://fonts.gstatic.com/s/notosanssc/v41/k3kXo84MPvpLmixcA63oeALhKYiJ-Q7m8w.ttf",
+        sha256: "6cbd3ac22ef454e4e9bcfb67369ea94297002a218e9abebc90852534afee096a",
+        size: 17_711_448,
+    },
+    BuiltIn {
+        name: "Noto Sans KR",
+        url: "https://fonts.gstatic.com/s/notosanskr/v40/PbykFmXiEBPT4ITbgNA5Cgm21nTs4JMMuA.ttf",
+        sha256: "16efec3833f189345a7185d85790cd0db4d9729ea2d58c57fccc06ba5d1f3017",
+        size: 10_359_708,
+    },
+    BuiltIn {
+        name: "Noto Color Emoji",
+        url: "https://fonts.gstatic.com/s/notocoloremoji/v50/Yq6P-KqIXTD0t4D9z1ESnKM3-HpFab5s79iz64w.ttf",
+        sha256: "d8c8a5e2eaecf93bf46be895640139d344ace174e2cdb6b0d988f7e83fd97844",
+        size: 25_347_176,
+    },
 ];
 
+/// The generic families, and their files in `BUILT_IN`: upright,
+/// and italic if they have one.
+const GENERIC: [(GenericFamily, usize, Option<usize>); 3] = [
+    (GenericFamily::SansSerif, 0, Some(1)),
+    (GenericFamily::Serif, 2, Some(3)),
+    (GenericFamily::Monospace, 4, None),
+];
+
+/// Where the built-in fonts come from: the host's file of each, by its entry in `BUILT_IN`.
+pub type Fonts = Rc<dyn Fn(&BuiltIn) -> Result<Blob<u8>, Error>>;
+
 impl Text {
-    /// Text in the built-in families.
-    pub fn new() -> Result<Text, Error> {
-        let mut collection = Collection::new(CollectionOptions {
+    /// Text in the built-in families, whose files `fonts` gives when text first needs them.
+    pub fn new(fonts: Fonts) -> Text {
+        let collection = Collection::new(CollectionOptions {
             shared: false,
             system_fonts: false,
         });
-        for (generic, name, bytes) in BUILT_IN {
-            let families = collection.register_fonts(Blob::new(Arc::new(bytes)), None);
-            if families.is_empty() {
-                return Err(format!("the {name} font has no families"));
-            }
-            collection.set_generic_families(generic, families.iter().map(|(id, _)| *id));
-        }
-        Ok(Text {
+        Text {
             fonts: FontContext {
                 collection,
                 source_cache: SourceCache::new(Default::default()),
@@ -270,7 +321,51 @@ impl Text {
             faces: Vec::new(),
             outlines: HashMap::new(),
             named: Vec::new(),
-        })
+            built_in: fonts,
+            given: [None; BUILT_IN.len()],
+        }
+    }
+
+    /// The family of built-in font `i`, which the host gives the first time; an upright one is
+    /// its generic family's from then on.
+    fn built_in(&mut self, i: usize) -> Result<FamilyId, Error> {
+        if let Some(family) = self.given[i] {
+            return Ok(family);
+        }
+        let font = &BUILT_IN[i];
+        let data = (self.built_in)(font).map_err(|e| format!("the font {}: {e}", font.name))?;
+        let families = self.fonts.collection.register_fonts(data, None);
+        let [(family, _)] = families[..] else {
+            return Err(format!("the font {}: not one family", font.name));
+        };
+        self.given[i] = Some(family);
+        if let Some((generic, ..)) = GENERIC.iter().find(|g| g.1 == i) {
+            (self.fonts.collection).set_generic_families(*generic, [family].into_iter());
+        }
+        Ok(family)
+    }
+
+    /// Has the host give the built-in fonts that text in `font` may be shaped in: those of the
+    /// generic families it names, and sans-serif, which every list ends in; their italics if it
+    /// is not upright.
+    fn give(&mut self, font: &Font) -> Result<(), Error> {
+        let slanted = font.style != FontStyle::Normal;
+        for (generic, upright, italic) in GENERIC {
+            let named = (font.family.iter()).any(|f| match f {
+                Family::SansSerif => generic == GenericFamily::SansSerif,
+                Family::Serif => generic == GenericFamily::Serif,
+                Family::Monospace => generic == GenericFamily::Monospace,
+                Family::Named(_) => false,
+            });
+            if !(named || generic == GenericFamily::SansSerif) {
+                continue;
+            }
+            self.built_in(upright)?;
+            if let Some(italic) = italic.filter(|_| slanted) {
+                self.built_in(italic)?;
+            }
+        }
+        Ok(())
     }
 
     /// The font resource `name`, a family by that name, of the faces in `data`.
@@ -593,6 +688,7 @@ impl Text {
 
     /// `text` shaped in `font` alone, on one line.
     fn alone(&mut self, text: &str, font: &Font) -> Result<parley::Layout<u32>, Error> {
+        self.give(font)?;
         let families = families(&font.family, &self.named)?;
         let mut builder = (self.layouts).ranged_builder(&mut self.fonts, text, 1.0, false);
         let family = FontFamily::List(Cow::Borrowed(&families));
@@ -646,6 +742,9 @@ impl Text {
             .map(|p| (p.text.as_ref().into(), Shaping::of(p.font, min)))
             .collect();
         if !self.paragraphs.contains_key(&key) {
+            for piece in &content.pieces {
+                self.give(piece.font)?;
+            }
             let pieces = (content.pieces.iter())
                 .map(|p| (p.text.as_ref(), p.font.collapse, p.font.transform));
             let (string, ranges) = prepare(pieces)?;
@@ -854,6 +953,9 @@ fn style(font: &Font) -> parley::FontStyle {
     match font.style {
         FontStyle::Normal => parley::FontStyle::Normal,
         FontStyle::Italic => parley::FontStyle::Italic,
+        // Chrome takes an italic face for 14deg and more, where fontique would slant the upright
+        // one; a family without one is slanted either way.
+        FontStyle::Oblique(angle) if angle >= 14.0 => parley::FontStyle::Italic,
         FontStyle::Oblique(angle) => parley::FontStyle::Oblique(Some(angle as f32)),
     }
 }

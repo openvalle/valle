@@ -1,15 +1,10 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::text::Blob;
 
 fn face(coords: Vec<i16>) -> Face {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../fonts/NotoSans-Variable.ttf"
-    );
     Face {
-        data: Blob::from(std::fs::read(path).unwrap()),
+        data: crate::testing::built_in(0),
         index: 0,
         coords,
         slanted: false,

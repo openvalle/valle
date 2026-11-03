@@ -13,6 +13,7 @@ use valle_engine::js;
 use valle_engine::scene::Frame;
 use valle_engine::svg;
 use valle_engine::template::{Kind, Piece, Prop, Tag, V};
+use valle_engine::text::BUILT_IN;
 
 /// Style properties React DOM prints as bare numbers; it gives other numbers but 0 `px`.
 const UNITLESS: &[&str] = &[
@@ -54,27 +55,13 @@ const UNITLESS: &[&str] = &[
 ];
 
 /// The built-in families, as Chrome loads them from the server `web/tests/chrome.ts` runs: their
-/// `font-family` names, the names the pages give them, their files, and the Tailwind class that
-/// names them through the theme `web/tests/tailwind.ts` gives.
-const FAMILIES: [(&str, &str, &str, &str); 3] = [
-    (
-        "sans-serif",
-        "\"Valle Sans\"",
-        "NotoSans-Variable.ttf",
-        "font-sans",
-    ),
-    (
-        "serif",
-        "\"Valle Serif\"",
-        "NotoSerif-Variable.ttf",
-        "font-serif",
-    ),
-    (
-        "monospace",
-        "\"Valle Mono\"",
-        "NotoSansMono-Variable.ttf",
-        "font-mono",
-    ),
+/// `font-family` names, the names the pages give them, their upright and italic fonts in
+/// `BUILT_IN`, and the Tailwind class that names them through the theme `web/tests/tailwind.ts`
+/// gives.
+const FAMILIES: [(&str, &str, usize, Option<usize>, &str); 3] = [
+    ("sans-serif", "\"Valle Sans\"", 0, Some(1), "font-sans"),
+    ("serif", "\"Valle Serif\"", 2, Some(3), "font-serif"),
+    ("monospace", "\"Valle Mono\"", 4, None, "font-mono"),
 ];
 const SANS_SERIF: &str = FAMILIES[0].1;
 
@@ -93,13 +80,18 @@ pub fn print(
     body += "</div>\n";
     let mut html = "<!doctype html>\n<meta charset=\"utf-8\">\n<style>\n".to_string();
     // The sans-serif always, as the canvas's font; the others where the page names them.
-    for (i, (_, name, file, class)) in FAMILIES.iter().enumerate() {
+    for (i, &(_, name, upright, italic, class)) in FAMILIES.iter().enumerate() {
         // The body escapes the quotes.
-        if i == 0 || body.contains(name.trim_matches('"')) || body.contains(class) {
+        if !(i == 0 || body.contains(name.trim_matches('"')) || body.contains(class)) {
+            continue;
+        }
+        let faces = [(upright, "normal")].into_iter();
+        for (font, style) in faces.chain(italic.map(|i| (i, "italic"))) {
             let _ = writeln!(
                 html,
-                "@font-face {{ font-family: {name}; src: url(\"/fonts/{file}\"); \
-                 font-weight: 100 900; font-stretch: 62.5% 100%; }}"
+                "@font-face {{ font-family: {name}; src: url(\"/fonts/{}\"); \
+                 font-weight: 100 900; font-stretch: 62.5% 100%; font-style: {style}; }}",
+                BUILT_IN[font].sha256
             );
         }
     }
@@ -204,14 +196,15 @@ fn node(html: &mut String, frame: &Frame, resources: &[Slot], i: u32) -> Result<
     Ok(())
 }
 
-/// Where the server gives a resource's file.
+/// Where the server gives a resource's file: a built-in font's from the web, from the cache.
 fn file(slot: &Slot) -> Result<String, String> {
     let path = (slot.default.as_deref()).ok_or_else(|| format!("{}: no file", slot.name))?;
-    // One from `/` is the repository's, which the server has only `/fonts/` of.
-    match path.starts_with('/') {
-        true => Ok(path.to_string()),
-        false => Ok(format!("/cases/{path}")),
+    if path.starts_with("https://") {
+        let font = (BUILT_IN.iter().find(|f| f.url == path))
+            .ok_or_else(|| format!("{path}: cases read only the built-in fonts from the web"))?;
+        return Ok(format!("/fonts/{}", font.sha256));
     }
+    Ok(format!("/cases/{path}"))
 }
 
 /// `text` with each `resource://` name in it the path of the resource's file.

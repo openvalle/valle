@@ -31,11 +31,10 @@ in `Cargo.lock` and `bun.lock`.
 
 ## Fonts
 
-| Font | Use | License |
-| --- | --- | --- |
-| [Noto Sans](https://github.com/google/fonts/tree/2984c575fdce412ee02b2baaba67672b9a9434d8/ofl/notosans), `NotoSans[wdth,wght].ttf` unmodified | The built-in sans-serif | SIL OFL 1.1, [fonts/Noto-OFL.txt](fonts/Noto-OFL.txt) |
-| [Noto Serif](https://github.com/google/fonts/tree/2984c575fdce412ee02b2baaba67672b9a9434d8/ofl/notoserif), `NotoSerif[wdth,wght].ttf` unmodified | The built-in serif | SIL OFL 1.1, [fonts/Noto-OFL.txt](fonts/Noto-OFL.txt) |
-| [Noto Sans Mono](https://github.com/google/fonts/tree/2984c575fdce412ee02b2baaba67672b9a9434d8/ofl/notosansmono), `NotoSansMono[wdth,wght].ttf` unmodified | The built-in monospace | SIL OFL 1.1, [fonts/Noto-OFL.txt](fonts/Noto-OFL.txt) |
+No font ships with Valle. The built-in ones, Noto Sans, Noto Sans Italic, Noto Serif, Noto Serif
+Italic, Noto Sans Mono, Noto Sans SC, Noto Sans KR and Noto Color Emoji, are downloaded from
+[Google Fonts](https://fonts.google.com/noto) the first time text needs them, unmodified; they are
+under the SIL Open Font License 1.1.
 
 ## Tools
 

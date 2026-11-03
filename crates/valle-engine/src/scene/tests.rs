@@ -4,6 +4,7 @@ use super::*;
 use crate::layout::Rect;
 use crate::paint::{SQUARE, work};
 use crate::style::color;
+use crate::testing::fonts;
 
 const SOURCE: &str = indoc! {"
     export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
@@ -33,6 +34,7 @@ fn load(source: &'static str) -> Result<Scene, Error> {
         "s.tsx",
         &|path| (path == "s.tsx").then(|| source.as_bytes().to_vec()),
         &Inputs::default(),
+        fonts(),
     )
 }
 
@@ -121,7 +123,7 @@ fn images_come_from_the_resources_the_scene_declares() {
             }
         };
         let read = files(source.into(), Some(image.clone()));
-        let mut scene = Scene::load("scenes/s.tsx", &read, &Inputs::default()).unwrap();
+        let mut scene = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts()).unwrap();
         // The default from the scene's folder.
         assert_eq!(scene.resources()[0].default.as_deref(), Some("img/dot.png"));
         assert_eq!(scene.images()[0].size, [2, 1]);
@@ -134,13 +136,13 @@ fn images_come_from_the_resources_the_scene_declares() {
         assert!(matches!(&frame.items[..], [Item::Image { image: 0, .. }]));
 
         let read = files(source.replace("://dot", "://logo"), Some(image));
-        let e = Scene::load("scenes/s.tsx", &read, &Inputs::default())
+        let e = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts())
             .and_then(|mut s| s.frame(Tick(0)).map(drop))
             .unwrap_err();
         assert!(e.starts_with("scenes/s.tsx:6:"), "{e}");
         assert!(e.contains("declares no resource logo"), "{e}");
         let read = files(source.into(), None);
-        let e = Scene::load("scenes/s.tsx", &read, &Inputs::default())
+        let e = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts())
             .err()
             .unwrap();
         assert!(e.contains("resource dot: img/dot.png: not found"), "{e}");
@@ -156,9 +158,9 @@ fn images_come_from_the_resources_the_scene_declares() {
             resources: [(name.to_string(), "other/wide.png".to_string())].into(),
             ..Inputs::default()
         };
-        let scene = Scene::load("scenes/s.tsx", &read, &bind("dot")).unwrap();
+        let scene = Scene::load("scenes/s.tsx", &read, &bind("dot"), fonts()).unwrap();
         assert_eq!(scene.images()[0].size, [3, 1]);
-        let e = Scene::load("scenes/s.tsx", &read, &bind("logo"))
+        let e = Scene::load("scenes/s.tsx", &read, &bind("logo"), fonts())
             .err()
             .unwrap();
         assert_eq!(
@@ -174,7 +176,7 @@ fn images_come_from_the_resources_the_scene_declares() {
             "https://x.org/wide.png" => Some(png(3, &[[0, 0, 0, 255]; 3])),
             _ => None,
         };
-        let scene = Scene::load("scenes/s.tsx", &read, &Inputs::default()).unwrap();
+        let scene = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts()).unwrap();
         let default = scene.resources()[0].default.as_deref();
         assert_eq!(default, Some("https://x.org/dot.png"));
         assert_eq!(scene.images()[0].size, [2, 1]);
@@ -182,9 +184,15 @@ fn images_come_from_the_resources_the_scene_declares() {
             resources: [("dot".to_string(), location.to_string())].into(),
             ..Inputs::default()
         };
-        let scene = Scene::load("scenes/s.tsx", &read, &bind("https://x.org/wide.png")).unwrap();
+        let scene = Scene::load(
+            "scenes/s.tsx",
+            &read,
+            &bind("https://x.org/wide.png"),
+            fonts(),
+        )
+        .unwrap();
         assert_eq!(scene.images()[0].size, [3, 1]);
-        let e = Scene::load("scenes/s.tsx", &read, &bind("file:///wide.png"))
+        let e = Scene::load("scenes/s.tsx", &read, &bind("file:///wide.png"), fonts())
             .err()
             .unwrap();
         assert_eq!(
@@ -222,7 +230,7 @@ fn background_and_mask_images_take_their_natural_size() {
             "scenes/dot.png" => Some(image.clone()),
             _ => None,
         };
-        let frame = Scene::load("scenes/s.tsx", &read, &Inputs::default())
+        let frame = Scene::load("scenes/s.tsx", &read, &Inputs::default(), fonts())
             .unwrap()
             .frame(Tick(0))
             .unwrap();
@@ -284,8 +292,13 @@ fn svg_files_show_in_images_only() {
                 _ => None,
             }
         };
-        let mut scene =
-            Scene::load("scenes/s.tsx", &files(source.into()), &Inputs::default()).unwrap();
+        let mut scene = Scene::load(
+            "scenes/s.tsx",
+            &files(source.into()),
+            &Inputs::default(),
+            fonts(),
+        )
+        .unwrap();
         // The images display lists name are the files that are not SVG.
         assert_eq!(scene.images().len(), 1);
         assert!(matches!(
@@ -306,9 +319,14 @@ fn svg_files_show_in_images_only() {
         ));
 
         let source = source.replace("url(resource://dot)", "url(resource://icon)");
-        let e = Scene::load("scenes/s.tsx", &files(source.clone()), &Inputs::default())
-            .and_then(|mut s| s.frame(Tick(0)).map(drop))
-            .unwrap_err();
+        let e = Scene::load(
+            "scenes/s.tsx",
+            &files(source.clone()),
+            &Inputs::default(),
+            fonts(),
+        )
+        .and_then(|mut s| s.frame(Tick(0)).map(drop))
+        .unwrap_err();
         assert!(e.starts_with("scenes/s.tsx:13:"), "{e}");
         assert!(
             e.contains("backgroundImage: an SVG file shows in an <Image> only"),
@@ -321,7 +339,7 @@ fn svg_files_show_in_images_only() {
             }
             _ => files(source.clone())(path),
         };
-        let e = Scene::load("scenes/s.tsx", &broken, &Inputs::default())
+        let e = Scene::load("scenes/s.tsx", &broken, &Inputs::default(), fonts())
             .err()
             .unwrap();
         assert_eq!(

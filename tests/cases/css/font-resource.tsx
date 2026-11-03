@@ -1,6 +1,6 @@
 export const controls = {
   resources: {
-    display: resource({ kind: "font", default: "/fonts/NotoSerif-Variable.ttf" }),
+    display: resource({ kind: "font", default: "https://fonts.gstatic.com/s/notoserif/v33/ga6Iaw1J5X9T9RW6j9bNTFAcaRi_bMQ.ttf" }),
   },
 };
 

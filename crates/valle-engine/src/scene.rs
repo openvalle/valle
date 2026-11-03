@@ -11,7 +11,7 @@ use crate::layout::{Layout, layout};
 use crate::paint::{Item, Matrix, paint, transforms};
 use crate::style::{Sheet, Style, gradient};
 use crate::template::{Error, Kind, Measure, Op, Tag, Template, V};
-use crate::text::{Blob, Face, Text};
+use crate::text::{Blob, Face, Fonts, Text};
 use crate::time::Tick;
 
 /// Variants whose sheets are kept, as many as the frontend keeps.
@@ -46,19 +46,21 @@ pub struct Scene {
 
 impl Scene {
     /// Loads the scene at `entry` as `Front::load` does, its controls bound to `inputs`, and the
-    /// files of its resources; `read` gives a file's bytes by its `/`-separated path. Like a
+    /// files of its resources; `read` gives a file's bytes by its `/`-separated path or its web
+    /// address, and `fonts` the built-in fonts when text first needs them. Like a
     /// `Front`, a scene runs scene code on the thread that calls it, which needs a stack of more
     /// than 12 MiB.
     pub fn load(
         entry: &str,
         read: &dyn Fn(&str) -> Option<Vec<u8>>,
         inputs: &Inputs,
+        fonts: Fonts,
     ) -> Result<Scene, Error> {
         let text = |path: &str| read(path).and_then(|b| String::from_utf8(b).ok());
         let front = Front::load(entry, &text, inputs)?;
         let mut images = Vec::new();
         let mut pictures = Vec::new();
-        let mut text = Text::new()?;
+        let mut text = Text::new(fonts);
         for slot in &front.resources {
             let fail = |e: String| format!("{entry}: resource {}: {e}", slot.name);
             let path = (inputs.resources.get(&slot.name).or(slot.default.as_ref()))

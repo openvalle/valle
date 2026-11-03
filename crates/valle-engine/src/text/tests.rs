@@ -4,7 +4,7 @@ use std::rc::Rc;
 use super::*;
 
 fn text() -> Text {
-    Text::new().unwrap()
+    crate::testing::text()
 }
 
 /// `text`, all in its paragraph's own font.
@@ -183,12 +183,7 @@ fn families_are_built_in_or_resources() {
         "font family Brand: the scene declares no font resource Brand in controls.resources"
     );
     // A font resource is a family by its name, whatever its ASCII case.
-    let serif = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../fonts/NotoSerif-Variable.ttf"
-    );
-    t.add_font("brand", Blob::from(std::fs::read(serif).unwrap()))
-        .unwrap();
+    t.add_font("brand", crate::testing::built_in(2)).unwrap();
     let mut width = |family: Family| t.measure(&plain("Serif", &with(family)), None).unwrap()[0];
     assert_eq!(width(Family::Named("Brand".into())), width(Family::Serif));
     assert_eq!(
@@ -549,19 +544,33 @@ fn font_stretch_sets_the_width_axis_up_to_its_ends() {
 #[test]
 fn italic_text_has_a_slanted_face_where_its_font_has_no_italic() {
     let mut t = text();
-    let mut slanted = |style| {
+    let mut slanted = |family, style| {
         let f = Font {
+            family: Rc::from([family]),
             style,
             ..font(16.0)
         };
         let lines = t.lines(&plain("Lean", &f), 1000.0).unwrap();
-        let face = lines.glyphs[0].face;
-        (t.faces()[face as usize].slanted, lines.runs[0].x)
+        let face = &t.faces()[lines.glyphs[0].face as usize];
+        (face.data.id(), face.slanted, lines.runs[0].x)
     };
-    let (upright, x) = slanted(FontStyle::Normal);
+    let (mono, upright, x) = slanted(Family::Monospace, FontStyle::Normal);
     assert!(!upright);
     // Slanting moves no glyph.
-    assert_eq!(slanted(FontStyle::Italic), (true, x));
-    assert_eq!(slanted(FontStyle::Oblique(14.0)), (true, x));
-    assert_eq!(slanted(FontStyle::Oblique(10.0)), (false, x));
+    assert_eq!(
+        slanted(Family::Monospace, FontStyle::Italic),
+        (mono, true, x)
+    );
+    assert_eq!(
+        slanted(Family::Monospace, FontStyle::Oblique(14.0)),
+        (mono, true, x)
+    );
+    assert_eq!(
+        slanted(Family::Monospace, FontStyle::Oblique(10.0)),
+        (mono, false, x)
+    );
+    // Sans-serif has an italic, its own file.
+    let (sans, _, x) = slanted(Family::SansSerif, FontStyle::Normal);
+    let (italic, slanted, italic_x) = slanted(Family::SansSerif, FontStyle::Italic);
+    assert!(italic != sans && !slanted && italic_x != x);
 }

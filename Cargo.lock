@@ -2095,6 +2095,7 @@ dependencies = [
  "serde_json",
  "skrifa",
  "taffy",
+ "valle-native",
  "wgpu",
  "zune-jpeg",
 ]

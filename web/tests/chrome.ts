@@ -9,7 +9,7 @@
 //
 // Chrome is downloaded once into ~/.valle/cache/chrome (or $VALLE_CACHE_DIR/chrome). The pages, the
 // fonts and the files the cases read come from a local server, so the HTML names no path on this
-// machine.
+// machine; the fonts, by their SHA-256, from the cache the case runner downloads them into.
 
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
@@ -105,6 +105,7 @@ type Measured = {
 };
 
 const root = join(import.meta.dir, "../..");
+const cache = process.env.VALLE_CACHE_DIR ?? join(homedir(), ".valle/cache");
 const version = (await Bun.file(join(root, "tests/baselines/chrome/version")).text()).trim();
 const jobs: Job[] = await Bun.file(process.argv[2]).json();
 
@@ -135,8 +136,9 @@ async function draw() {
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
-      if (/^\/fonts\/[\w.-]+$/.test(path)) {
-        return new Response(Bun.file(join(root, path)));
+      const font = /^\/fonts\/([0-9a-f]{64})$/.exec(path);
+      if (font) {
+        return new Response(Bun.file(join(cache, "files", font[1])));
       }
       const file = /^\/cases\/((?:[\w-][\w.-]*\/)*[\w-][\w.-]*)$/.exec(path);
       if (file) {
@@ -290,7 +292,6 @@ async function page(html: string): Promise<string> {
 
 /** The pinned Chrome's executable, downloaded into the cache the first time. */
 async function install(): Promise<string> {
-  const cache = process.env.VALLE_CACHE_DIR ?? join(homedir(), ".valle/cache");
   const dir = join(cache, "chrome", version);
   const name = platform === "win64" ? "chrome-headless-shell.exe" : "chrome-headless-shell";
   const exe = join(dir, `chrome-headless-shell-${platform}`, name);

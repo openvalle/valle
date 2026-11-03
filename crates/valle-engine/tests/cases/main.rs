@@ -31,7 +31,9 @@ use std::time::{Duration, Instant};
 use valle_engine::front::Inputs;
 use valle_engine::gpu::{Gpu, Renderer};
 use valle_engine::scene::Scene;
+use valle_engine::text::{BUILT_IN, Blob, BuiltIn, Fonts};
 use valle_engine::time::Tick;
+use valle_native::urls::UrlCache;
 
 mod chrome;
 mod d3;
@@ -117,6 +119,13 @@ fn main() -> ExitCode {
         reviewed: Mutex::new(Vec::new()),
         largest: AtomicU8::new(0),
     };
+    // The built-in fonts, which Chrome's pages name, downloaded before the cases run.
+    for font in &BUILT_IN {
+        if let Err(e) = UrlCache::global().and_then(|c| c.fetch_pinned(font.url, font.sha256)) {
+            eprintln!("cases: the font {}: {e}", font.name);
+            return ExitCode::FAILURE;
+        }
+    }
     let made = (runner.chrome_properties()).and_then(|known| properties::cases(&known));
     runner.made = match made {
         Ok(made) => made,
@@ -355,14 +364,17 @@ impl Runner {
         }
     }
 
-    /// The bytes of a case or of a file it reads.
+    /// The bytes of a case or of a file it reads: from the web, only a built-in font's, from
+    /// the cache.
     fn bytes(&self, path: &str) -> Option<Vec<u8>> {
-        // A path from `/` is the repository's, so cases can name the built-in fonts.
-        match (self.made.get(path), path.strip_prefix('/')) {
-            (Some(source), _) => Some(source.clone().into_bytes()),
-            (None, Some(path)) => std::fs::read(self.repo.join(path)).ok(),
-            (None, None) => std::fs::read(self.root.join(path)).ok(),
+        if let Some(source) = self.made.get(path) {
+            return Some(source.clone().into_bytes());
         }
+        if path.starts_with("https://") {
+            let font = BUILT_IN.iter().find(|f| f.url == path)?;
+            return std::fs::read(cached(font).ok()?).ok();
+        }
+        std::fs::read(self.root.join(path)).ok()
     }
 
     fn error(&self, case: &str) -> Result<(), String> {
@@ -528,7 +540,8 @@ impl Runner {
         each: &mut dyn FnMut(&mut Scene, i64, Tick) -> Result<(), String>,
     ) -> Result<(), Failure> {
         let read = |path: &str| self.bytes(path);
-        let mut scene = Scene::load(case, &read, &Inputs::default()).map_err(Failure::Scene)?;
+        let mut scene =
+            Scene::load(case, &read, &Inputs::default(), fonts()).map_err(Failure::Scene)?;
         let c = scene.composition();
         if c.width > MAX_SIZE || c.height > MAX_SIZE {
             let e = format!("cases are at most {MAX_SIZE} × {MAX_SIZE} px");
@@ -765,4 +778,25 @@ fn write_png(path: &Path, size: [u32; 2], pixels: &[u8]) -> Result<(), String> {
     let mut writer = encoder.write_header().map_err(|e| bad(&e))?;
     writer.write_image_data(pixels).map_err(|e| bad(&e))?;
     writer.finish().map_err(|e| bad(&e))
+}
+
+/// The file of built-in font `font` in the global cache.
+fn cached(font: &BuiltIn) -> Result<PathBuf, String> {
+    UrlCache::global()?.fetch_pinned(font.url, font.sha256)
+}
+
+/// The built-in fonts, from the global cache, each read once for all the cases.
+fn fonts() -> Fonts {
+    static GIVEN: Mutex<BTreeMap<&str, Blob<u8>>> = Mutex::new(BTreeMap::new());
+    std::rc::Rc::new(|font: &BuiltIn| {
+        let mut given = GIVEN.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(blob) = given.get(font.sha256) {
+            return Ok(blob.clone());
+        }
+        let path = cached(font)?;
+        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let blob = Blob::from(bytes);
+        given.insert(font.sha256, blob.clone());
+        Ok(blob)
+    })
 }
