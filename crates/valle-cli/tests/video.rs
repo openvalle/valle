@@ -1,5 +1,7 @@
 //! `valle motion render` into a video, read back: each encoder's frames show what a PNG of the
-//! frame shows, the hardware's on macOS drawn by the GPU into its own memory.
+//! frame shows, the hardware's on macOS drawn by the GPU into its own memory. They need a GPU, so
+//! they run only when `VALLE_TEST_LAYERS` names `gpu`, as `cargo xtask test` does unless told to
+//! skip it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -109,8 +111,17 @@ fn round_trip(encoder: &str) -> (Value, u8, f64) {
     (rendered, most, sum as f64 / n as f64)
 }
 
+/// Whether the GPU layer runs.
+fn gpu() -> bool {
+    let layers = std::env::var("VALLE_TEST_LAYERS").unwrap_or_default();
+    layers.split(',').any(|l| l == "gpu")
+}
+
 #[test]
 fn ffmpeg_encodes_what_the_frame_shows() {
+    if !gpu() {
+        return;
+    }
     let (rendered, most, mean) = round_trip("ffmpeg");
     assert_eq!(rendered["direct"], false, "{rendered}");
     assert!(mean < 2.0 && most < 96, "most {most}, mean {mean:.2}");
@@ -119,6 +130,9 @@ fn ffmpeg_encodes_what_the_frame_shows() {
 #[test]
 #[cfg(target_os = "macos")]
 fn the_hardware_encodes_what_the_gpu_drew_into_it() {
+    if !gpu() {
+        return;
+    }
     let (rendered, most, mean) = round_trip("vt");
     assert_eq!(rendered["direct"], true, "{rendered}");
     assert!(mean < 2.0 && most < 96, "most {most}, mean {mean:.2}");
