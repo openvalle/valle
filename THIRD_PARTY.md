@@ -20,6 +20,15 @@ in `Cargo.lock` and `bun.lock`.
 | [libm](https://github.com/rust-lang/compiler-builtins) | Math functions that agree on every platform | MIT or Apache-2.0 |
 | [Serde](https://github.com/serde-rs/serde) and [serde_json](https://github.com/serde-rs/json) | Reading what tracing records | MIT or Apache-2.0 |
 
+## Native host
+
+| Project | Use | License |
+| --- | --- | --- |
+| [ureq](https://github.com/algesten/ureq) | Downloading files from the web | MIT or Apache-2.0 |
+| [rustls](https://github.com/rustls/rustls), with [rustls-webpki](https://github.com/rustls/webpki) | The TLS of those downloads | Apache-2.0, ISC or MIT; rustls-webpki ISC |
+| [ring](https://github.com/briansmith/ring) | The cryptography of that TLS, and the SHA-256 of downloads | Apache-2.0 and ISC |
+| [webpki-roots](https://github.com/rustls/webpki-roots) | Mozilla's root certificates | CDLA-Permissive-2.0 |
+
 ## Fonts
 
 | Font | Use | License |
