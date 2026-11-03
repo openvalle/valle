@@ -61,7 +61,7 @@ impl Scene {
         let mut text = Text::new()?;
         for slot in &front.resources {
             let fail = |e: String| format!("{entry}: resource {}: {e}", slot.name);
-            let path = (slot.default.as_ref())
+            let path = (inputs.resources.get(&slot.name).or(slot.default.as_ref()))
                 .ok_or_else(|| fail("nothing is bound to it, and it has no default".into()))?;
             let bytes = read(path).ok_or_else(|| fail(format!("{path}: not found")))?;
             let picture = match slot.kind {

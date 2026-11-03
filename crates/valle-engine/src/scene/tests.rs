@@ -141,6 +141,27 @@ export default function Scene() {
             .err()
             .unwrap();
         assert!(e.contains("resource dot: img/dot.png: not found"), "{e}");
+
+        // A file bound in place of the default.
+        let wide = png(3, &[[0, 0, 255, 255]; 3]);
+        let read = move |path: &str| match path {
+            "scenes/s.tsx" => Some(source.as_bytes().to_vec()),
+            "other/wide.png" => Some(wide.clone()),
+            _ => None,
+        };
+        let bind = |name: &str| Inputs {
+            resources: [(name.to_string(), "other/wide.png".to_string())].into(),
+            ..Inputs::default()
+        };
+        let scene = Scene::load("scenes/s.tsx", &read, &bind("dot")).unwrap();
+        assert_eq!(scene.images()[0].size, [3, 1]);
+        let e = Scene::load("scenes/s.tsx", &read, &bind("logo"))
+            .err()
+            .unwrap();
+        assert_eq!(
+            e,
+            "scenes/s.tsx: resources: the scene declares no resource logo in controls.resources"
+        );
     });
 }
 

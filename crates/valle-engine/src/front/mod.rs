@@ -121,7 +121,14 @@ impl Front {
                     false => rewrite::join(folder, d),
                 }),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if let Some(k) =
+            (inputs.resources.keys()).find(|k| !resources.iter().any(|s| s.name == **k))
+        {
+            return Err(format!(
+                "{entry}: resources: the scene declares no resource {k} in controls.resources"
+            ));
+        }
         let (props, data) = (scene.props.clone(), scene.data.clone());
         let values =
             controls::values(&props, &data, inputs).map_err(|e| format!("{entry}: {e}"))?;

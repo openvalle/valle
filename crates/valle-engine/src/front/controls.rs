@@ -2,6 +2,8 @@
 //! running the scene so tools can list them and their defaults, and the values bound to them from
 //! outside, checked against their declarations. The root component takes both as its props.
 
+use std::collections::BTreeMap;
+
 use oxc::ast::ast::{
     ArrayExpressionElement, Expression, ObjectExpression, ObjectPropertyKind, UnaryOperator,
 };
@@ -61,6 +63,9 @@ const LENGTHS: [&str; 15] = [
 pub struct Inputs {
     pub props: Map<String, Value>,
     pub data: Map<String, Value>,
+    /// The file of each resource bound, by its name: a path `read` takes, in place of the
+    /// resource's default.
+    pub resources: BTreeMap<String, String>,
 }
 
 /// The props of `controls.props`, an object of `name: number({ … })` and the like.
