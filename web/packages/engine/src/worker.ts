@@ -3,6 +3,7 @@
 
 import init, { builtInFonts, Engine, type Sound } from "./wasm/valle_web.js";
 import type { Code, Reply, Request, Source } from "./messages.ts";
+import { Reader } from "./video.ts";
 
 type Font = { name: string; file: string; url: string; sha256: string; size: number };
 type Status = { status: "ok" } | { status: "missing"; files: string[] };
@@ -33,6 +34,11 @@ let next = 0;
 /** The audio worklet's port, and the sound it plays: the samples asked for at a time. */
 let worklet: MessagePort | undefined;
 const CHUNK = 4800;
+/** Where the engine asks for a video file's size and length, and its frames for a resource. */
+const VIDEO_INFO = "valle:video-info/";
+const VIDEO = "valle:video/";
+/** The readers of video files: one to probe each file, and one for each resource of a file. */
+const readers = new Map<string, Promise<Reader | undefined>>();
 /** Sounds the page is decoding, by id. */
 const decoding = new Map<number, (pcm: Float32Array | null) => void>();
 let decodes = 0;
@@ -109,6 +115,10 @@ async function handle(request: Request): Promise<unknown> {
       e.close();
       return undefined;
     case "destroy":
+      for (const reader of readers.values()) {
+        void reader.then((r) => r?.dispose());
+      }
+      readers.clear();
       e.destroy();
       engine = undefined;
       return undefined;
@@ -152,12 +162,56 @@ async function load(path: string): Promise<void> {
     }
     return;
   }
+  if (path.startsWith(VIDEO_INFO)) {
+    const file = path.slice(VIDEO_INFO.length);
+    const reader = await opened(file, file);
+    if (reader) {
+      const probed = await reader.probe().catch((error: unknown) => {
+        throw new Failure("file", `${file}: ${String(error)}`);
+      });
+      e.give(path, new TextEncoder().encode(JSON.stringify(probed)));
+    } else {
+      e.absent(path);
+    }
+    return;
+  }
+  if (path.startsWith(VIDEO)) {
+    // `<resource>@<seconds>/<file>`
+    const rest = path.slice(VIDEO.length);
+    const [at, slash] = [rest.indexOf("@"), rest.indexOf("/")];
+    const file = rest.slice(slash + 1);
+    const reader = await opened(`${rest.slice(0, at)}/${file}`, file);
+    const seconds = Number(rest.slice(at + 1, slash));
+    const pixels = await reader!.frame(seconds).catch((error: unknown) => {
+      throw new Failure("file", `${file} at ${seconds} s: ${String(error)}`);
+    });
+    e.give(path, pixels);
+    return;
+  }
   const bytes = await read(path);
   if (bytes) {
     e.give(path, bytes);
   } else {
     e.absent(path);
   }
+}
+
+/** The reader `key` names of the video file at `path`, opened the first time. */
+function opened(key: string, path: string): Promise<Reader | undefined> {
+  let reader = readers.get(key);
+  if (!reader) {
+    const source = given.get(path);
+    const file =
+      source === undefined || typeof source === "string"
+        ? (source ?? new URL(path, base).href)
+        : new Blob([source]);
+    reader = Reader.open(file).catch((error: unknown) => {
+      readers.delete(key);
+      throw new Failure("file", `${path}: ${String(error)}`);
+    });
+    readers.set(key, reader);
+  }
+  return reader;
 }
 
 /** The bytes of the file at `path`, or nothing where there is none. */
@@ -211,6 +265,11 @@ function decode(file: Uint8Array): Promise<Float32Array | null> {
     self.postMessage({ decode: id, file }, [file.buffer]);
   });
 }
+
+// What fails outside a request stops the worker, which the player reports.
+self.onunhandledrejection = (event: PromiseRejectionEvent) => {
+  throw event.reason instanceof Error ? event.reason : new Error(String(event.reason));
+};
 
 let queue = Promise.resolve();
 self.onmessage = (

@@ -84,10 +84,12 @@ export async function listening(stderr: ReadableStream<Uint8Array>): Promise<str
   }
 }
 
-/** A Chrome DevTools Protocol connection: commands with their replies, and events awaited. */
+/** A Chrome DevTools Protocol connection: commands with their replies, and events awaited or
+ * listened to. */
 export class Cdp {
   #ws: WebSocket;
   #next = 0;
+  #listeners = new Map<string, ((params: any, sessionId?: string) => void)[]>();
   #replies = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   #waiting: { method: string; sessionId?: string; resolve: (v: any) => void }[] = [];
 
@@ -114,6 +116,9 @@ export class Cdp {
         }
         return;
       }
+      for (const listener of this.#listeners.get(message.method) ?? []) {
+        listener(message.params, message.sessionId);
+      }
       const i = this.#waiting.findIndex(
         (w) => w.method === message.method && w.sessionId === message.sessionId,
       );
@@ -130,6 +135,11 @@ export class Cdp {
       method,
       new Promise((resolve, reject) => this.#replies.set(id, { resolve, reject })),
     );
+  }
+
+  /** Calls `listener` with every `method` event, of any session. */
+  on(method: string, listener: (params: any, sessionId?: string) => void): void {
+    this.#listeners.set(method, [...(this.#listeners.get(method) ?? []), listener]);
   }
 
   /** The next `method` event of the session. */

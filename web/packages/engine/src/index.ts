@@ -108,6 +108,17 @@ export class Player {
         request?.reject(new PlayerError(reply.code, reply.message));
       }
     };
+    // The worker stopped: nothing it was asked answers.
+    worker.onerror = (event: ErrorEvent) => {
+      event.preventDefault();
+      const error = new PlayerError("scene", `the engine stopped: ${event.message}`);
+      for (const request of this.#requests.values()) {
+        request.reject(error);
+      }
+      this.#requests.clear();
+      this.pause();
+      this.#emit("error", error);
+    };
   }
 
   /** @internal */
@@ -344,7 +355,9 @@ export class Player {
   async close(): Promise<void> {
     this.pause();
     const worker = this.#worker;
-    await this.#send({ type: "destroy" }).catch(() => {});
+    // A worker stuck on a request is stopped all the same.
+    const destroyed = this.#send({ type: "destroy" }).catch(() => {});
+    await Promise.race([destroyed, new Promise((r) => setTimeout(r, 1000))]);
     for (const request of this.#requests.values()) {
       request.reject(new PlayerError("scene", "the player was closed"));
     }

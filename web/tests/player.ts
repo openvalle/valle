@@ -26,6 +26,7 @@ const CASES: { entry: string; frames: number[]; props?: Record<string, unknown> 
     props: { name: "Ada Lovelace", accent: "#00C2A8" },
   },
   { entry: "examples/edit.timeline.json", frames: [20] },
+  { entry: "tests/cases/motion/video.tsx", frames: [1, 3] },
 ];
 /** The most a channel may differ, and the share of pixels that may differ by more than 1. */
 const STEP = 2;
@@ -227,7 +228,9 @@ async function main() {
       if (frame && natives.has(frame[1])) {
         return new Response(Bun.file(natives.get(frame[1])!));
       }
-      const file = /^\/((?:examples|web\/packages\/engine\/dist)\/[\w./-]+)$/.exec(path);
+      const file = /^\/((?:examples|tests\/cases|web\/packages\/engine\/dist)\/[\w./-]+)$/.exec(
+        path,
+      );
       if (file && !file[1].includes("..")) {
         const f = Bun.file(join(root, file[1]));
         const type = file[1].endsWith(".js") ? { "content-type": "text/javascript" } : undefined;
@@ -267,6 +270,24 @@ async function main() {
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
     const page = (method: string, params: object = {}) => cdp.send(method, params, sessionId);
     await page("Page.enable");
+    // What the page and its workers say to the console goes to the test's.
+    cdp.on("Target.attachedToTarget", ({ sessionId: worker }) => {
+      void cdp.send("Runtime.enable", {}, worker);
+      void cdp.send("Runtime.runIfWaitingForDebugger", {}, worker);
+    });
+    cdp.on("Runtime.consoleAPICalled", ({ type, args }) => {
+      const text = args.map((a: any) => a.value ?? a.description).join(" ");
+      console.log(`console.${type}: ${text}`);
+    });
+    cdp.on("Runtime.exceptionThrown", ({ exceptionDetails: e }) => {
+      console.log(`exception: ${e.exception?.description ?? e.text}`);
+    });
+    await page("Runtime.enable");
+    await page("Target.setAutoAttach", {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+    });
     const loaded = cdp.event("Page.loadEventFired", sessionId);
     await page("Page.navigate", { url: `http://127.0.0.1:${server.port}/` });
     await loaded;
