@@ -2,7 +2,8 @@
 // as it asks for them. One request at a time, answered in order.
 
 import init, { builtInFonts, Engine, type Sound } from "./wasm/valle_web.js";
-import type { Code, Reply, Request, Source } from "./messages.ts";
+import type { Code, Opened, Reply, Request, Source } from "./messages.ts";
+import { encode } from "./export.ts";
 import { Reader } from "./video.ts";
 
 type Font = { name: string; file: string; url: string; sha256: string; size: number };
@@ -39,11 +40,14 @@ const VIDEO_INFO = "valle:video-info/";
 const VIDEO = "valle:video/";
 /** The readers of video files: one to probe each file, and one for each resource of a file. */
 const readers = new Map<string, Promise<Reader | undefined>>();
+/** The composition open, and whether the export running was cancelled. */
+let composition: Opened | undefined;
+let cancelled = false;
 /** Sounds the page is decoding, by id. */
 const decoding = new Map<number, (pcm: Float32Array | null) => void>();
 let decodes = 0;
 
-async function handle(request: Request): Promise<unknown> {
+async function handle(request: Request, id: number): Promise<unknown> {
   if (request.type === "start") {
     await init({ module_or_path: new URL("./valle_web_bg.wasm", import.meta.url) });
     fonts = new Map((JSON.parse(builtInFonts()) as Font[]).map((f) => [f.url, f]));
@@ -69,9 +73,32 @@ async function handle(request: Request): Promise<unknown> {
   }
   switch (request.type) {
     case "open":
-      return JSON.parse(
+      composition = JSON.parse(
         await fetching(() => e.open(request.entry, JSON.stringify(request.inputs))),
-      );
+      ) as Opened;
+      return composition;
+    case "export": {
+      const { width, height, fps, frames } = composition!;
+      const [n, d = "1"] = fps.split("/");
+      cancelled = false;
+      const sound = rendering?.fresh();
+      try {
+        return await encode(
+          { width, height, rate: [Number(n), Number(d)], frames, ...request.options },
+          e,
+          async (index) => {
+            await fetching(() => e.render(index));
+          },
+          sound,
+          (done) => self.postMessage({ progress: id, done }),
+          () => cancelled,
+        );
+      } catch (error) {
+        throw cancelled ? new Failure("cancelled", "the export was cancelled") : error;
+      } finally {
+        sound?.free();
+      }
+    }
     case "frame":
       await fetching(() => e.frame(request.index));
       await e.drawn();
@@ -273,8 +300,14 @@ self.onunhandledrejection = (event: PromiseRejectionEvent) => {
 
 let queue = Promise.resolve();
 self.onmessage = (
-  event: MessageEvent<({ id: number } & Request) | { decoded: number; pcm: Float32Array | null }>,
+  event: MessageEvent<
+    ({ id: number } & Request) | { decoded: number; pcm: Float32Array | null } | { cancel: true }
+  >,
 ) => {
+  if ("cancel" in event.data) {
+    cancelled = true;
+    return;
+  }
   if ("decoded" in event.data) {
     const { decoded, pcm } = event.data;
     decoding.get(decoded)?.(pcm);
@@ -285,13 +318,14 @@ self.onmessage = (
   queue = queue.then(async () => {
     let reply: Reply;
     try {
-      reply = { id, ok: true, value: await handle(request as Request) };
+      reply = { id, ok: true, value: await handle(request as Request, id) };
     } catch (error) {
       const code = error instanceof Failure ? error.code : "scene";
       const message = error instanceof Error ? error.message : String(error);
       reply = { id, ok: false, code, message };
     }
     const value = reply.ok ? reply.value : undefined;
-    self.postMessage(reply, ArrayBuffer.isView(value) ? [value.buffer] : []);
+    const buffer = ArrayBuffer.isView(value) ? value.buffer : value;
+    self.postMessage(reply, buffer instanceof ArrayBuffer ? [buffer] : []);
   });
 };

@@ -433,6 +433,16 @@ impl Engine {
     /// Draws frame `index` into the canvas. Gives JSON: `status` `ok`, or `missing` with the
     /// files to give first.
     pub fn frame(&mut self, index: f64) -> Result<String, JsValue> {
+        self.draw(index, true)
+    }
+
+    /// Draws frame `index` as `frame` does, but not into the canvas: for `pixels` or `yuv` to
+    /// read, as an export does.
+    pub fn render(&mut self, index: f64) -> Result<String, JsValue> {
+        self.draw(index, false)
+    }
+
+    fn draw(&mut self, index: f64, shown: bool) -> Result<String, JsValue> {
         check()?;
         let open = self.open.as_mut().ok_or_else(|| js("nothing is open"))?;
         let c = open.scene.composition();
@@ -451,16 +461,23 @@ impl Engine {
                     .ok_or_else(|| js(e));
             }
         };
+        let scene = &open.scene;
+        let (items, pictures) = (&frame.items, &frame.pictures);
+        if !shown {
+            (open.renderer)
+                .submit(items, pictures, scene.faces(), scene.images())
+                .map_err(js)?;
+            return Ok(json!({ "status": "ok", "size": open.size }).to_string());
+        }
         let target = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             _ => return Err(js("the canvas gave no texture to draw into")),
         };
-        let scene = &open.scene;
         (open.renderer)
             .present(
-                &frame.items,
-                &frame.pictures,
+                items,
+                pictures,
                 scene.faces(),
                 scene.images(),
                 &target.texture,
@@ -495,6 +512,18 @@ impl Engine {
         }
         let open = self.open.as_mut().ok_or_else(|| js("nothing is open"))?;
         open.renderer.pixels().map_err(js)
+    }
+
+    /// The frame drawn last as an export encodes it: I420, BT.709's matrix, limited range, as
+    /// the native engine converts it.
+    pub async fn yuv(&mut self) -> Result<Vec<u8>, JsValue> {
+        let size = self
+            .open
+            .as_ref()
+            .ok_or_else(|| js("nothing is open"))?
+            .size;
+        let pixels = self.pixels().await?;
+        Ok(yuv::i420(&pixels, size))
     }
 
     /// Lets the GPU go: the engine draws nothing after.

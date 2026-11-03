@@ -4,7 +4,16 @@
 //   const player = await createPlayer({ canvas, entry: "examples/01-kinetic-title.motion.tsx" });
 //   player.play();
 
-import type { Code, Controls, Inputs, Opened, Reply, Request, Source } from "./messages.ts";
+import type {
+  Code,
+  Controls,
+  ExportOptions,
+  Inputs,
+  Opened,
+  Reply,
+  Request,
+  Source,
+} from "./messages.ts";
 
 export type { Code, Control, Controls, Opened, Source } from "./messages.ts";
 
@@ -23,6 +32,13 @@ export type Options = {
   /** Each resource's files, by its name. */
   resources?: Record<string, Source[]>;
   loop?: boolean;
+};
+
+export type Export = Partial<ExportOptions> & {
+  /** Hears of each frame encoded, and of how many there are. */
+  onProgress?: (done: number, frames: number) => void;
+  /** Cancels the export, which then fails with `cancelled`. */
+  signal?: AbortSignal;
 };
 
 export type Events = {
@@ -87,6 +103,8 @@ export class Player {
   #wanted: number | undefined;
   #animation = 0;
   #given = 0;
+  /** What hears how far each request that says so is, by its id. */
+  #progress = new Map<number, (done: number) => void>();
   loop: boolean;
 
   constructor(worker: Worker, options: Options) {
@@ -94,7 +112,15 @@ export class Player {
     this.#entry = options.entry;
     this.#inputs = { props: options.props ?? {}, data: options.data ?? {}, resources: {} };
     this.loop = options.loop ?? false;
-    worker.onmessage = (event: MessageEvent<Reply | { decode: number; file: Uint8Array }>) => {
+    worker.onmessage = (
+      event: MessageEvent<
+        Reply | { decode: number; file: Uint8Array } | { progress: number; done: number }
+      >,
+    ) => {
+      if ("progress" in event.data) {
+        this.#progress.get(event.data.progress)?.(event.data.done);
+        return;
+      }
       if ("decode" in event.data) {
         void this.#decode(event.data.decode, event.data.file);
         return;
@@ -226,6 +252,29 @@ export class Player {
       this.#run(frame);
     }
     this.#show(frame);
+  }
+
+  /** The MP4 of what is open, as it is bound now: its frames from the first, H.264 by default,
+   * and its sound, AAC where the browser encodes it, else Opus. Playing pauses. */
+  async export(options: Export = {}): Promise<Blob> {
+    this.pause();
+    const { onProgress, signal, codec = "avc", bitrate } = options;
+    signal?.throwIfAborted();
+    const id = this.#next;
+    const frames = this.#info.frames;
+    this.#progress.set(id, (done) => onProgress?.(done, frames));
+    const cancel = () => this.#worker.postMessage({ cancel: true });
+    signal?.addEventListener("abort", cancel);
+    try {
+      const mp4 = (await this.#send({
+        type: "export",
+        options: { codec, bitrate },
+      })) as ArrayBuffer;
+      return new Blob([mp4], { type: "video/mp4" });
+    } finally {
+      this.#progress.delete(id);
+      signal?.removeEventListener("abort", cancel);
+    }
   }
 
   /** `seconds` of the sound from `start`, interleaved stereo at 48 000 samples a second, as an

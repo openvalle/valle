@@ -28,10 +28,16 @@ export type Request =
   | { type: "sound"; entry: string }
   /** `samples` of it from `sample`, interleaved stereo. */
   | { type: "render-sound"; sample: number; samples: number }
+  /** The MP4 of what is open; the worker says how far it is as `{ progress: id, done }`. */
+  | { type: "export"; options: ExportOptions }
   /** The port the audio worklet asks for the sound it plays at. */
   | { type: "worklet"; port: MessagePort }
   | { type: "close" }
   | { type: "destroy" };
+
+/** How an export encodes its video: H.264 or HEVC, and bits a second, by default 0.15 a pixel a
+ * frame for H.264 and 0.1 for HEVC, as the native engine's. */
+export type ExportOptions = { codec: "avc" | "hevc"; bitrate?: number };
 
 /** The composition and the controls of what is open. */
 export type Opened = {
@@ -63,8 +69,9 @@ export type Control = {
   values?: unknown[];
 };
 
-/** Why a request failed: `no-webgpu`, a `file` that could not be fetched, or the `scene`'s error. */
-export type Code = "no-webgpu" | "file" | "scene";
+/** Why a request failed: `no-webgpu`, a `file` that could not be fetched, the `scene`'s error, or
+ * an export `cancelled`. */
+export type Code = "no-webgpu" | "file" | "scene" | "cancelled";
 
 export type Reply = { id: number } & (
   { ok: true; value?: unknown } | { ok: false; code: Code; message: string }

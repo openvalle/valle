@@ -61,6 +61,9 @@ const PAGE = `<!doctype html>
     const started = performance.now();
     window.player = await createPlayer({ canvas, entry, base: "/", fonts: "/fonts/" });
     if (props) await window.player.setProps(props);
+    // The canvas laid out at its size now, not once the worker's first frame reaches the page.
+    canvas.style.width = window.player.info.width + "px";
+    canvas.style.height = window.player.info.height + "px";
     await window.player.draw(index);
     const ms = Math.round(performance.now() - started);
     const [x, y] = [await window.player.pixels(), await decoded(native)];
@@ -112,9 +115,42 @@ const PAGE = `<!doctype html>
     const { at } = await window.played();
     return { sound: player.hasSound, samples: native.length / 2, most, at };
   };
+  /** The MP4 \`entry\` exports, as a data address, how long it took and how many frames it
+   * said it had done. */
+  window.exported = async (entry) => {
+    await window.player?.close();
+    const canvas = document.createElement("canvas");
+    document.querySelector("canvas").replaceWith(canvas);
+    const player = (window.player = await createPlayer({ canvas, entry, base: "/", fonts: "/fonts/" }));
+    let done = 0;
+    const started = performance.now();
+    const mp4 = await player.export({ onProgress: (n) => (done = n) });
+    const ms = Math.round(performance.now() - started);
+    const url = await new Promise((r) => {
+      const reader = new FileReader();
+      reader.onload = () => r(reader.result);
+      reader.readAsDataURL(mp4);
+    });
+    return { url, ms, done, frames: player.info.frames };
+  };
+  /** How two frames differ: the most a channel does, and on average. */
+  window.similar = async (a, b) => {
+    const [x, y] = [await decoded(a), await decoded(b)];
+    if (x.length !== y.length) return { most: Infinity, mean: Infinity };
+    let [most, sum] = [0, 0];
+    for (let i = 0; i < x.length; i += 4) {
+      for (let k = 0; k < 3; k++) {
+        const d = Math.abs(x[i + k] - y[i + k]);
+        most = Math.max(most, d);
+        sum += d;
+      }
+    }
+    return { most, mean: sum / (x.length / 4) / 3 };
+  };
   /** How the frame on screen differs from \`native\`'s where it is opaque: the canvas is. */
   window.shown = async (screenshot, native) => {
     const [x, y] = [await decoded(screenshot), await decoded(native)];
+    if (x.length !== y.length) return Infinity;
     let most = 0;
     for (let i = 0; i < x.length; i += 4) {
       if (y[i + 3] !== 255) continue;
@@ -135,7 +171,8 @@ const SOUND = {
   },
 };
 
-/** A WAV of a sine at `hertz` for `seconds`: stereo 32-bit floats at 48 000 samples a second. */
+/** A WAV of a sweep from `hertz` up an octave a second, for `seconds`: no two stretches of it
+ * alike, so how late a copy of it is shows. Stereo 32-bit floats at 48 000 samples a second. */
 function tone(seconds: number, hertz: number): Uint8Array {
   const samples = seconds * 48_000;
   const wav = new DataView(new ArrayBuffer(44 + samples * 8));
@@ -154,11 +191,56 @@ function tone(seconds: number, hertz: number): Uint8Array {
   text(36, "data");
   wav.setUint32(40, samples * 8, true);
   for (let i = 0; i < samples; i++) {
-    const v = 0.5 * Math.sin((2 * Math.PI * hertz * i) / 48_000);
+    const t = i / 48_000;
+    const v = 0.5 * Math.sin((2 * Math.PI * hertz * (2 ** t - 1)) / Math.LN2);
     wav.setFloat32(44 + i * 8, v, true);
     wav.setFloat32(48 + i * 8, v, true);
   }
   return new Uint8Array(wav.buffer);
+}
+
+/** A scene that shows the edit's export, at the edit's size and rate. */
+const SHOWN = `export const composition = { width: 640, height: 360, fps: 30, duration: 3 };
+export const controls = {
+  resources: { clip: resource({ kind: "video", default: "edit.mp4" }) },
+};
+export default function Shown() {
+  return <Video src="resource://clip" style={{ width: 640, height: 360 }} />;
+}
+`;
+
+/** A timeline that sounds the export of the timeline with sound. */
+const LISTEN = {
+  canvas: { width: 320, height: 180, fps: 30 },
+  resources: { exported: "sound.mp4" },
+  tracks: { audio: [{ clips: [{ src: "exported", start: 0, duration: 2 }] }] },
+};
+
+/** The samples of a WAV the native engine wrote: 32-bit floats after a 44-byte header. */
+async function samples(path: string): Promise<Float32Array> {
+  const bytes = await Bun.file(path).arrayBuffer();
+  return new Float32Array(bytes.slice(44));
+}
+
+/** How many samples late `heard` is against `mixed`, at most 4096 either way, and how far apart
+ * the two are then, as the RMS of their difference over the middle second. */
+function aligned(heard: Float32Array, mixed: Float32Array): { lag: number; rms: number } {
+  const apart = (lag: number) => {
+    let sum = 0;
+    for (let i = 24_000; i < 72_000; i++) {
+      const d = (heard[2 * (i + lag)] ?? 0) - (mixed[2 * i] ?? 0);
+      sum += d * d;
+    }
+    return Math.sqrt(sum / 48_000);
+  };
+  let best = { lag: 0, rms: apart(0) };
+  for (let lag = -4096; lag <= 4096; lag++) {
+    const rms = apart(lag);
+    if (rms < best.rms) {
+      best = { lag, rms };
+    }
+  }
+  return best;
 }
 
 /** A frame's name: its entry, its index, and the props bound. */
@@ -196,6 +278,13 @@ async function main() {
       natives.set(named(entry, frame, props), png);
     }
   }
+  /** Runs the native engine. */
+  const run = (args: string[]) => {
+    const done = Bun.spawnSync([valle, ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    if (done.exitCode !== 0) {
+      throw new Error(`valle ${args.join(" ")}: ${done.stderr.toString()}`);
+    }
+  };
   // A timeline with sound: a tone, its own file, which both engines mix.
   const sound = join(out, "sound");
   await Bun.write(join(sound, "tone.wav"), tone(2, 440));
@@ -221,7 +310,10 @@ async function main() {
         const file = cached.get(font[1]);
         return file ? new Response(Bun.file(file)) : new Response("not found", { status: 404 });
       }
-      if (path === "/mix.wav" || path.startsWith("/sound/")) {
+      if (path === "/mix.wav" || path.startsWith("/sound/") || path.startsWith("/out/")) {
+        if (path.startsWith("/out/")) {
+          return new Response(Bun.file(join(out, path.slice("/out/".length))));
+        }
         return new Response(Bun.file(join(out, path.slice(1))));
       }
       const frame = /^\/native\/(.+)$/.exec(path);
@@ -288,6 +380,13 @@ async function main() {
       waitForDebuggerOnStart: true,
       flatten: true,
     });
+    // Room for the largest composition at 1 px a pixel.
+    await page("Emulation.setDeviceMetricsOverride", {
+      width: 1920,
+      height: 1920,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
     const loaded = cdp.event("Page.loadEventFired", sessionId);
     await page("Page.navigate", { url: `http://127.0.0.1:${server.port}/` });
     await loaded;
@@ -332,21 +431,24 @@ async function main() {
         }
         // The page shows it too.
         const [width, height] = d.size;
-        await page("Emulation.setDeviceMetricsOverride", {
-          width,
-          height,
-          deviceScaleFactor: 1,
-          mobile: false,
-        });
-        await evaluate(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`);
-        const { data } = await page("Page.captureScreenshot", {
-          format: "png",
-          clip: { x: 0, y: 0, width, height, scale: 1 },
-        });
-        const most = await evaluate(
-          `shown(${JSON.stringify(`data:image/png;base64,${data}`)}, ${JSON.stringify(native)})`,
-        );
+        // The canvas shows a frame the worker drew some animation frames later: how many is
+        // the browser's, so the page is looked at again for up to 2 s.
+        let most = Infinity;
+        let screen = "";
+        for (let tries = 0; tries < 20 && most > STEP; tries++) {
+          await evaluate(`new Promise((r) => setTimeout(() => requestAnimationFrame(r), 100))`);
+          const { data } = await page("Page.captureScreenshot", {
+            format: "png",
+            clip: { x: 0, y: 0, width, height, scale: 1 },
+          });
+          screen = data;
+          most = await evaluate(
+            `shown(${JSON.stringify(`data:image/png;base64,${data}`)}, ${JSON.stringify(native)})`,
+          );
+        }
         if (most > STEP) {
+          const png = natives.get(name)!.slice(0, -4);
+          await Bun.write(`${png}.screen.png`, Buffer.from(screen, "base64"));
           failed.push(`${name}: on screen, a channel differs by ${most}`);
         }
       }
@@ -365,6 +467,56 @@ async function main() {
     if (!heard.sound || heard.most > 1e-6 || heard.at < 0.5) {
       failed.push(`sound: ${JSON.stringify(heard)}`);
     }
+    // Exports: the browser's MP4s, which the native engine decodes.
+    for (const [entry, file] of [
+      ["examples/edit.timeline.json", "edit.mp4"],
+      ["sound/sound.timeline.json", "sound.mp4"],
+    ]) {
+      const e = await evaluate(`exported(${JSON.stringify(entry)})`);
+      await Bun.write(join(out, file), Buffer.from(e.url.slice(e.url.indexOf(",") + 1), "base64"));
+      console.log(`exported ${entry}: ${e.frames} frames in ${e.ms} ms`);
+      if (e.done !== e.frames) {
+        failed.push(`exporting ${entry} said ${e.done} of ${e.frames} frames were done`);
+      }
+    }
+    // The frames: the export of the edit shown by a scene, and the edit drawn.
+    await Bun.write(join(out, "shown.motion.tsx"), SHOWN);
+    run([
+      "motion",
+      "render",
+      join(out, "shown.motion.tsx"),
+      "--frame",
+      "45",
+      "-o",
+      join(out, "shown.png"),
+    ]);
+    run([
+      "timeline",
+      "render",
+      "examples/edit.timeline.json",
+      "--frame",
+      "45",
+      "-o",
+      join(out, "edit.png"),
+    ]);
+    const frame = await evaluate(`similar("/out/shown.png", "/out/edit.png")`);
+    console.log(`export frame 45: most ${frame.most}, mean ${frame.mean.toFixed(2)} apart`);
+    if (frame.mean > 1.5) {
+      failed.push(`the exported edit's frame 45 is ${frame.mean} apart on average`);
+    }
+    // The sound: the export's, as a timeline's clip, and the mix.
+    await Bun.write(join(out, "listen.timeline.json"), JSON.stringify(LISTEN));
+    run(["timeline", "render", join(out, "listen.timeline.json"), "-o", join(out, "listen.wav")]);
+    const heardBack = aligned(
+      await samples(join(out, "listen.wav")),
+      await samples(join(out, "mix.wav")),
+    );
+    console.log(
+      `export sound: ${heardBack.lag} samples late, ${heardBack.rms.toFixed(4)} apart (RMS)`,
+    );
+    if (Math.abs(heardBack.lag) > 0 || heardBack.rms > 0.01) {
+      failed.push(`the exported sound is ${heardBack.lag} samples late, ${heardBack.rms} apart`);
+    }
     await cdp.send("Browser.close").catch(() => {});
   } finally {
     browser.kill();
@@ -374,7 +526,7 @@ async function main() {
   }
   if (failed.length > 0) {
     throw new Error(
-      `the browser's frames are not the native ones (<n>.png beside <n>.browser.png in ${out}):\n${failed.join("\n")}`,
+      `the browser's frames are not the native ones (<n>.png beside <n>.browser.png or <n>.screen.png in ${out}):\n${failed.join("\n")}`,
     );
   }
   await rm(out, { recursive: true, force: true });

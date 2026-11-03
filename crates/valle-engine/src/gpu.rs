@@ -1175,6 +1175,20 @@ impl<'a> Renderer<'a> {
         Ok(pixels)
     }
 
+    /// Draws the frame `items` paint, as `render` does, for `read_back` to copy: submitted to the
+    /// GPU, not waited for.
+    pub fn submit(
+        &mut self,
+        items: &[Item],
+        pictures: &[(u32, Vec<Item>)],
+        faces: &[Face],
+        images: &[Image],
+    ) -> Result<(), Error> {
+        let encoder = self.encode_frame(items, pictures, faces, images)?;
+        self.gpu.queue.submit([encoder.finish()]);
+        Ok(())
+    }
+
     /// Draws the frame `items` paint, as `render` does, into `target`, a texture of the
     /// renderer's size in `Gpu::FRAME` that it can copy into, such as a canvas's: submitted to the
     /// GPU, not waited for.

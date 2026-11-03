@@ -125,6 +125,46 @@ pub fn rgba(p: &Planes) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Straight RGBA of `size` as an export encodes it, as the native engine converts it: I420, BT.709's
+/// matrix, limited range, each chroma sample the mean of the pixels it covers; alpha dropped.
+pub fn i420(rgba: &[u8], size: [u32; 2]) -> Vec<u8> {
+    let [w, h] = size.map(|n| n as usize);
+    let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+    let (kr, kb) = (0.2126f32, 0.0722f32);
+    let kg = 1.0 - kr - kb;
+    let to = |x: f32| x.round().clamp(0.0, 255.0) as u8;
+    let mut out = vec![0; w * h + 2 * cw * ch];
+    let (luma, chroma) = out.split_at_mut(w * h);
+    let (u, v) = chroma.split_at_mut(cw * ch);
+    let pixel = |x: usize, y: usize| {
+        let p = &rgba[(y * w + x) * 4..];
+        [p[0], p[1], p[2]].map(f32::from)
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let [r, g, b] = pixel(x, y);
+            luma[y * w + x] = to(16.0 + 219.0 / 255.0 * (kr * r + kg * g + kb * b));
+        }
+    }
+    for j in 0..ch {
+        for i in 0..cw {
+            let (mut cb, mut cr, mut n) = (0.0, 0.0, 0.0);
+            for y in 2 * j..(2 * j + 2).min(h) {
+                for x in 2 * i..(2 * i + 2).min(w) {
+                    let [r, g, b] = pixel(x, y);
+                    let l = kr * r + kg * g + kb * b;
+                    cb += (b - l) / (2.0 * (1.0 - kb));
+                    cr += (r - l) / (2.0 * (1.0 - kr));
+                    n += 1.0;
+                }
+            }
+            u[j * cw + i] = to(128.0 + 224.0 / 255.0 * cb / n);
+            v[j * cw + i] = to(128.0 + 224.0 / 255.0 * cr / n);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +202,39 @@ mod tests {
         // Blue, Y 32 Cb 240 Cr 118, is all blue: the browser's own conversion gives 243.
         let [r, g, b, _] = bt709([32, 240, 118]);
         assert!(r <= 1 && g == 0 && b == 255, "{r} {g} {b}");
+    }
+
+    #[test]
+    fn colors_go_to_yuv_and_back() {
+        let colors = [
+            [255, 255, 255],
+            [0, 0, 0],
+            [0, 0, 255],
+            [200, 120, 40],
+            [12, 200, 90],
+        ];
+        for c in colors {
+            let rgba: Vec<u8> = (0..9).flat_map(|_| [c[0], c[1], c[2], 255]).collect();
+            let yuv = i420(&rgba, [3, 3]);
+            let planes = [(0, 3), (9, 2), (13, 2)];
+            let back = rgba_of(&yuv, &planes, [3, 3]);
+            for k in 0..3 {
+                let d = (i16::from(back[k]) - i16::from(c[k])).abs();
+                assert!(d <= 1, "{c:?} came back as {:?}", &back[..3]);
+            }
+        }
+    }
+
+    fn rgba_of(bytes: &[u8], planes: &[(usize, usize)], size: [u32; 2]) -> Vec<u8> {
+        rgba(&Planes {
+            format: Format::I420,
+            size,
+            planes,
+            bytes,
+            bt709: true,
+            full: false,
+        })
+        .expect("converted")
     }
 
     #[test]
