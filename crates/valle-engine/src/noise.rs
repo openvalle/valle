@@ -9,11 +9,26 @@ fn mix(mut z: u64) -> u64 {
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
 
+/// `count` values in [low, high), SplitMix64's sequence from `seed`.
+pub fn random(seed: u64, count: usize, [low, high]: [f64; 2]) -> Vec<f64> {
+    let mut state = seed;
+    (0..count)
+        .map(|_| {
+            state = state.wrapping_add(GOLDEN);
+            low + unit(mix(state)) * (high - low)
+        })
+        .collect()
+}
+
+/// The top 53 bits as a number in [0, 1).
+fn unit(bits: u64) -> f64 {
+    (bits >> 11) as f64 / (1u64 << 53) as f64
+}
+
 /// A value in [0, 1) for each seed, stream and lattice point.
 fn lattice(seed: u64, stream: u64, cell: i64) -> f64 {
     let z = mix(mix(seed.wrapping_add(GOLDEN)) ^ stream.wrapping_mul(GOLDEN));
-    let bits = mix(z ^ (cell as u64).wrapping_mul(GOLDEN));
-    (bits >> 11) as f64 / (1u64 << 53) as f64
+    unit(mix(z ^ (cell as u64).wrapping_mul(GOLDEN)))
 }
 
 /// Smooth noise in [0, 1]: the lattice values joined by a uniform cubic B-spline, whose curve and
@@ -104,6 +119,22 @@ mod tests {
             "{least} {most}"
         );
         assert!((sum / 4000.0 - 0.5).abs() < 0.1);
+    }
+
+    #[test]
+    fn random_values_are_splitmix64_s() {
+        // The first outputs of SplitMix64 from seed 0, as its reference implementation gives them.
+        let first = [
+            0xE220_A839_7B1D_CDAF_u64,
+            0x6E78_9E6A_A1B9_65F4,
+            0x06C4_5D18_8009_454F,
+        ];
+        let expected = first.map(unit);
+        assert_eq!(random(0, 3, [0.0, 1.0]), expected);
+        let scaled = random(9, 1000, [-2.0, 3.0]);
+        assert!(scaled.iter().all(|&v| (-2.0..3.0).contains(&v)));
+        assert!((scaled.iter().sum::<f64>() / 1000.0 - 0.5).abs() < 0.2);
+        assert_ne!(random(1, 1, [0.0, 1.0]), random(2, 1, [0.0, 1.0]));
     }
 
     #[test]

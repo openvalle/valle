@@ -646,6 +646,25 @@
   const SIMULATE = ["dt", "duration", "init", "step"];
   const MAX_STEPS = 16384;
 
+  // `seededRandom(seed, count, [low, high])`: `count` numbers in [low, high), [0, 1) if left out,
+  // the same on every host. Fixed values in, so plain numbers out.
+  function seededRandom(seed, count, range) {
+    const fix = (v) => (v instanceof T ? exact(v, "seededRandom", site()) : v);
+    [seed, count, range] = [fix(seed), fix(count), fix(range ?? [0, 1])];
+    const [low, high] = isArray(range) ? range.map(fix) : [];
+    if (!Number.isSafeInteger(seed) || seed < 0) {
+      throw new TypeError("seededRandom seed must be a whole number, at least 0");
+    }
+    if (!Number.isSafeInteger(count) || count < 0 || count > MAX_RANDOM) {
+      throw new TypeError("seededRandom count must be a whole number from 0 to " + MAX_RANDOM);
+    }
+    if (range.length !== 2 || !Number.isFinite(low) || !Number.isFinite(high)) {
+      throw new TypeError("seededRandom range must be [low, high], two numbers");
+    }
+    return host.random(seed, count, low, high);
+  }
+  const MAX_RANDOM = 1 << 20;
+
   // `clamp(x, min, max)` as CSS clamps: `min` wins over `max`.
   const clamp = (x, min, max) => {
     if (![x, min, max].every(numeric)) throw new TypeError("clamp(x, min, max) takes numbers");
@@ -1377,6 +1396,7 @@
     simulate,
     wiggle,
     wiggle2D,
+    seededRandom,
     clamp,
     mod,
     pingPong,
