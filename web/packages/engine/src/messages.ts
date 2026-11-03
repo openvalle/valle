@@ -19,11 +19,15 @@ export type Request =
       base: string;
       /** Where the built-in fonts are fetched from, by their file names, if not their own addresses. */
       fonts?: string;
+      /** Whether files are fetched through the page, which answers `{ fetch: id, url }`. */
+      proxied: boolean;
     }
   | { type: "give"; files: Record<string, Source> }
   | { type: "open"; entry: string; inputs: Inputs }
   | { type: "frame"; index: number }
   | { type: "pixels" }
+  /** Draws frame `index` off the canvas, and answers its pixels as `pixels` does. */
+  | { type: "still"; index: number }
   /** Mixes the timeline's sound: its length in samples, or null where it has none. */
   | { type: "sound"; entry: string }
   /** `samples` of it from `sample`, interleaved stereo. */
@@ -35,9 +39,15 @@ export type Request =
   | { type: "close" }
   | { type: "destroy" };
 
-/** How an export encodes its video: H.264 or HEVC, and bits a second, by default 0.15 a pixel a
- * frame for H.264 and 0.1 for HEVC, as the native engine's. */
-export type ExportOptions = { codec: "avc" | "hevc"; bitrate?: number };
+/** How an export encodes what is open: H.264 of `width` × `height`, the frames fitted in whole,
+ * at `rate` frames a second, `bitrate` bits a second, with the sound or not. */
+export type ExportOptions = {
+  width: number;
+  height: number;
+  rate: [number, number];
+  bitrate: number;
+  audio: boolean;
+};
 
 /** The composition and the controls of what is open. */
 export type Opened = {
@@ -69,10 +79,24 @@ export type Control = {
   values?: unknown[];
 };
 
-/** Why a request failed: `no-webgpu`, a `file` that could not be fetched, the `scene`'s error, or
- * an export `cancelled`. */
+/** Why a request failed: `no-webgpu`, a `file` that could not be fetched, the `scene`'s error (a
+ * value that does not fit its control among them), or an export `cancelled`. */
 export type Code = "no-webgpu" | "file" | "scene" | "cancelled";
 
 export type Reply = { id: number } & (
   { ok: true; value?: unknown } | { ok: false; code: Code; message: string }
 );
+
+/** The composition's frame at each frame of an export at `rate`: its own at its own rate, else
+ * the one at each frame's time. */
+export function exportFrames(composition: Opened, rate: [number, number]): number[] {
+  const [n, d] = rate;
+  const [cn, cd = 1] = composition.fps.split("/").map(Number);
+  if (n * cd === cn * d) {
+    return Array.from({ length: composition.frames }, (_, i) => i);
+  }
+  const count = Math.ceil((composition.duration * n) / d - 1e-9);
+  return Array.from({ length: count }, (_, i) =>
+    Math.min(composition.frames - 1, Math.floor((i * d * cn) / (n * cd) + 1e-9)),
+  );
+}

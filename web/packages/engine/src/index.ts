@@ -4,27 +4,24 @@
 //   const player = await createPlayer({ canvas, entry: "examples/01-kinetic-title.motion.tsx" });
 //   player.play();
 
-import type {
-  Code,
-  Controls,
-  ExportOptions,
-  Inputs,
-  Opened,
-  Reply,
-  Request,
-  Source,
-} from "./messages.ts";
+import { Connection, PlayerError, RATE, type Spawn, spawns } from "./connection.ts";
+import type { Controls, Opened, Request, Source } from "./messages.ts";
 
+export { PlayerError } from "./connection.ts";
 export type { Code, Control, Controls, Opened, Source } from "./messages.ts";
 
 export type Options = {
   canvas: HTMLCanvasElement;
   /** The scene, `.motion.tsx`, or the timeline, `.json`, as a path from `base`. */
   entry: string;
+  /** Where the SDK's worker, audio worklet and wasm are: beside this module by default. */
+  runtime?: string | URL;
   /** Where relative paths are fetched from: the page's address by default. */
   base?: string | URL;
   /** Files given in place of fetching their paths. */
   files?: Record<string, Source>;
+  /** What fetches the files the engine reads, the built-in fonts among them: `fetch` by default. */
+  fetch?: (url: string) => Promise<Response>;
   /** Where the built-in fonts are fetched from, by their file names, if not Google's addresses. */
   fonts?: string | URL;
   props?: Record<string, unknown>;
@@ -32,132 +29,105 @@ export type Options = {
   /** Each resource's files, by its name. */
   resources?: Record<string, Source[]>;
   loop?: boolean;
+  muted?: boolean;
+  /** From 0 to 1. */
+  volume?: number;
 };
 
-export type Export = Partial<ExportOptions> & {
-  /** Hears of each frame encoded, and of how many there are. */
-  onProgress?: (done: number, frames: number) => void;
-  /** Cancels the export, which then fails with `cancelled`. */
-  signal?: AbortSignal;
-};
+/** How playing went since it last said: frames shown, and frames its clock passed but that
+ * were not drawn in time; how long a frame took to draw, on average; and the bytes of the
+ * engine's memory. */
+export type Stats = { shown: number; dropped: number; frameMs: number; memory: number };
 
 export type Events = {
-  /** A frame was drawn: its index and time. */
-  frame: { frame: number; time: number };
+  /** A frame was drawn: its time and index. */
+  time: { time: number; frame: number };
   play: undefined;
   pause: undefined;
   /** Playing reached the last frame and does not loop. */
   ended: undefined;
   error: PlayerError;
+  /** Each second of playing, and when it pauses. */
+  stats: Stats;
 };
-
-export class PlayerError extends Error {
-  constructor(
-    readonly code: Code,
-    message: string,
-  ) {
-    super(message);
-    this.name = "PlayerError";
-  }
-}
 
 /** What plays a timeline's sound: an audio worklet the worker gives chunks to. */
 type Audio = { context: AudioContext; node: AudioWorkletNode; gain: GainNode };
 
-/** Samples a second of the engine's sound. */
-const RATE = 48_000;
-
 export async function createPlayer(options: Options): Promise<Player> {
-  const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
-  const player = new Player(worker, options);
+  const runtime =
+    options.runtime === undefined
+      ? new URL("./", import.meta.url)
+      : new URL(String(options.runtime).replace(/\/?$/, "/"), location.href);
+  const base = new URL(options.base ?? ".", location.href).href;
+  const spawn: Spawn = {
+    runtime,
+    base,
+    fonts: options.fonts === undefined ? undefined : new URL(options.fonts, base).href,
+    fetch: options.fetch,
+    entry: options.entry,
+    inputs: { props: options.props ?? {}, data: options.data ?? {}, resources: {} },
+    given: { ...options.files },
+  };
+  const offscreen = options.canvas.transferControlToOffscreen();
+  const connection = await Connection.start(spawn, offscreen);
+  const player = new Player(connection, spawn, options);
   try {
-    await player.start(options);
+    await player.start(options.resources ?? {});
   } catch (error) {
-    worker.terminate();
+    await connection.close();
     throw error;
   }
   return player;
 }
 
 export class Player {
-  #worker: Worker;
-  #entry: string;
-  #inputs: Inputs;
+  #connection: Connection;
+  #spawn: Spawn;
   #info!: Opened;
   #rate!: [number, number];
-  #requests = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
-  #next = 0;
   #listeners = new Map<keyof Events, Set<(value: never) => void>>();
   #frame = 0;
   /** While playing: the frame it started from, and when, in seconds of its clock: the audio
-   * context's when there is sound, from when its first sample is heard (NaN until then), else the
-   * page's. */
+   * context's when there is sound to hear, from when its first sample is heard (NaN until then),
+   * else the page's. */
   #clock: { frame: number; at: number; gen?: number } | undefined;
   /** The sound of the timeline open, if it has any, and what plays it once it first plays. */
   #sound: { length: number } | null = null;
   #audio: Promise<Audio> | undefined;
+  #context: AudioContext | undefined;
   #gen = 0;
-  #volume = 1;
+  #volume: number;
+  #muted: boolean;
   /** A frame being drawn, and the one asked for since. */
   #drawing = false;
   #wanted: number | undefined;
   #animation = 0;
   #given = 0;
-  /** What hears how far each request that says so is, by its id. */
-  #progress = new Map<number, (done: number) => void>();
+  /** What playing has done since it last said, the frame its clock last reached, and when it
+   * said. */
+  #stats: Stats = { shown: 0, dropped: 0, frameMs: 0, memory: 0 };
+  #reached = 0;
+  #said = 0;
   loop: boolean;
 
-  constructor(worker: Worker, options: Options) {
-    this.#worker = worker;
-    this.#entry = options.entry;
-    this.#inputs = { props: options.props ?? {}, data: options.data ?? {}, resources: {} };
+  constructor(connection: Connection, spawn: Spawn, options: Options) {
+    this.#connection = connection;
+    this.#spawn = spawn;
     this.loop = options.loop ?? false;
-    worker.onmessage = (
-      event: MessageEvent<
-        Reply | { decode: number; file: Uint8Array } | { progress: number; done: number }
-      >,
-    ) => {
-      if ("progress" in event.data) {
-        this.#progress.get(event.data.progress)?.(event.data.done);
-        return;
-      }
-      if ("decode" in event.data) {
-        void this.#decode(event.data.decode, event.data.file);
-        return;
-      }
-      const reply = event.data;
-      const request = this.#requests.get(reply.id);
-      this.#requests.delete(reply.id);
-      if (reply.ok) {
-        request?.resolve(reply.value);
-      } else {
-        request?.reject(new PlayerError(reply.code, reply.message));
-      }
-    };
-    // The worker stopped: nothing it was asked answers.
-    worker.onerror = (event: ErrorEvent) => {
-      event.preventDefault();
-      const error = new PlayerError("scene", `the engine stopped: ${event.message}`);
-      for (const request of this.#requests.values()) {
-        request.reject(error);
-      }
-      this.#requests.clear();
+    this.#muted = options.muted ?? false;
+    this.#volume = options.volume ?? 1;
+    spawns.set(this, spawn);
+    connection.stopped = (error) => {
       this.pause();
       this.#emit("error", error);
     };
   }
 
   /** @internal */
-  async start(options: Options): Promise<void> {
-    const offscreen = options.canvas.transferControlToOffscreen();
-    const base = new URL(options.base ?? ".", location.href).href;
-    const fonts = options.fonts === undefined ? undefined : new URL(options.fonts, base).href;
-    await this.#send({ type: "start", canvas: offscreen, base, fonts }, [offscreen]);
-    if (options.files) {
-      await this.#send({ type: "give", files: options.files });
-    }
-    for (const [name, files] of Object.entries(options.resources ?? {})) {
-      this.#inputs.resources[name] = await this.#give(name, files);
+  async start(resources: Record<string, Source[]>): Promise<void> {
+    for (const [name, files] of Object.entries(resources)) {
+      this.#spawn.inputs.resources[name] = await this.#give(name, files);
     }
     await this.#open();
   }
@@ -172,11 +142,12 @@ export class Player {
   }
 
   /** The frame shown, or being drawn. */
-  get frame(): number {
+  get currentFrame(): number {
     return this.#frame;
   }
 
-  get time(): number {
+  /** The time of the frame shown, in seconds. */
+  get currentTime(): number {
     return this.#time(this.#frame);
   }
 
@@ -194,6 +165,22 @@ export class Player {
     void this.#audio?.then((a) => (a.gain.gain.value = volume));
   }
 
+  /** Whether the sound is silenced: playing then keeps to the page's clock, as it may without a
+   * user's gesture. */
+  get muted(): boolean {
+    return this.#muted;
+  }
+
+  set muted(muted: boolean) {
+    if (muted === this.#muted) {
+      return;
+    }
+    this.#muted = muted;
+    if (this.#clock) {
+      this.#run(this.#frame);
+    }
+  }
+
   /** Whether what is open has sound, which then sets the clock playing keeps to. */
   get hasSound(): boolean {
     return this.#sound !== null;
@@ -205,6 +192,8 @@ export class Player {
     }
     const last = this.#info.frames - 1;
     this.#run(this.#frame >= last && !this.loop ? 0 : this.#frame);
+    this.#reached = this.#clock!.frame;
+    this.#said = performance.now();
     this.#emit("play", undefined);
     const tick = () => {
       const clock = this.#clock;
@@ -222,9 +211,15 @@ export class Player {
           return;
         }
         this.#run(0);
-        index = 0;
+        index = this.#reached = 0;
       }
+      // Frames the clock went past without asking for them.
+      this.#stats.dropped += Math.max(0, index - this.#reached - 1);
+      this.#reached = Math.max(this.#reached, index);
       this.#show(index);
+      if (performance.now() - this.#said >= 1000) {
+        this.#say();
+      }
       this.#animation = requestAnimationFrame(tick);
     };
     tick();
@@ -236,45 +231,34 @@ export class Player {
     }
     this.#clock = undefined;
     cancelAnimationFrame(this.#animation);
-    void this.#audio?.then((a) => a.node.port.postMessage({ stop: true }));
+    this.#silence();
+    this.#say();
     this.#emit("pause", undefined);
   }
 
   /** Shows the frame at `seconds`; playing goes on from it. */
   seek(seconds: number): void {
-    const [n, d] = this.#rate;
-    this.seekFrame(Math.floor(seconds * (n / d) + 1e-9));
+    this.seekFrame(this.#index(seconds));
   }
 
   seekFrame(index: number): void {
     const frame = Math.min(Math.max(Math.trunc(index), 0), this.#info.frames - 1);
     if (this.#clock) {
       this.#run(frame);
+      this.#reached = frame;
     }
     this.#show(frame);
   }
 
-  /** The MP4 of what is open, as it is bound now: its frames from the first, H.264 by default,
-   * and its sound, AAC where the browser encodes it, else Opus. Playing pauses. */
-  async export(options: Export = {}): Promise<Blob> {
-    this.pause();
-    const { onProgress, signal, codec = "avc", bitrate } = options;
-    signal?.throwIfAborted();
-    const id = this.#next;
-    const frames = this.#info.frames;
-    this.#progress.set(id, (done) => onProgress?.(done, frames));
-    const cancel = () => this.#worker.postMessage({ cancel: true });
-    signal?.addEventListener("abort", cancel);
-    try {
-      const mp4 = (await this.#send({
-        type: "export",
-        options: { codec, bitrate },
-      })) as ArrayBuffer;
-      return new Blob([mp4], { type: "video/mp4" });
-    } finally {
-      this.#progress.delete(id);
-      signal?.removeEventListener("abort", cancel);
-    }
+  /** The frame at `seconds` as a PNG, drawn off the canvas. */
+  async frame(seconds: number): Promise<Blob> {
+    const index = this.#index(seconds);
+    const pixels = (await this.#send({ type: "still", index })) as Uint8Array;
+    const { width, height } = this.#info;
+    const canvas = new OffscreenCanvas(width, height);
+    const image = new ImageData(new Uint8ClampedArray(pixels.buffer as ArrayBuffer), width, height);
+    canvas.getContext("2d")!.putImageData(image, 0, 0);
+    return canvas.convertToBlob({ type: "image/png" });
   }
 
   /** `seconds` of the sound from `start`, interleaved stereo at 48 000 samples a second, as an
@@ -285,10 +269,75 @@ export class Player {
     return (await this.#send({ type: "render-sound", sample, samples })) as Float32Array;
   }
 
+  /** Draws frame `index` and resolves once it is drawn. */
+  async draw(index: number): Promise<void> {
+    this.#frame = index;
+    const started = performance.now();
+    const { memory } = (await this.#send({ type: "frame", index })) as { memory: number };
+    const stats = this.#stats;
+    stats.frameMs += performance.now() - started;
+    stats.shown++;
+    stats.memory = memory;
+    this.#emit("time", { time: this.#time(index), frame: index });
+  }
+
+  /** The pixels of the frame drawn last: straight sRGB, 4 bytes a pixel, rows top down. */
+  async pixels(): Promise<Uint8Array> {
+    return (await this.#send({ type: "pixels" })) as Uint8Array;
+  }
+
+  /** Binds the scene's props to `props`, in place of those given before. A value that does not
+   * fit its control fails, and what was bound stays. */
+  async setProps(props: Record<string, unknown>): Promise<void> {
+    await this.#rebind("props", props);
+  }
+
+  async setData(data: Record<string, unknown>): Promise<void> {
+    await this.#rebind("data", data);
+  }
+
+  /** Binds resource `name` to `files`, or back to its default with none. */
+  async setResource(name: string, files: Source[] | undefined): Promise<void> {
+    const resources = { ...this.#spawn.inputs.resources };
+    if (files === undefined || files.length === 0) {
+      delete resources[name];
+    } else {
+      resources[name] = await this.#give(name, files);
+    }
+    await this.#rebind("resources", resources);
+  }
+
+  on<K extends keyof Events>(type: K, listener: (value: Events[K]) => void): () => void {
+    const set = this.#listeners.get(type) ?? new Set();
+    this.#listeners.set(type, set);
+    set.add(listener as (value: never) => void);
+    return () => set.delete(listener as (value: never) => void);
+  }
+
+  /** Stops the player and lets its GPU device go. */
+  async close(): Promise<void> {
+    this.pause();
+    spawns.delete(this);
+    await this.#connection.close();
+    await this.#audio?.then((a) => a.context.close()).catch(() => {});
+  }
+
+  #time(index: number): number {
+    const [n, d] = this.#rate;
+    return (index * d) / n;
+  }
+
+  #index(seconds: number): number {
+    const [n, d] = this.#rate;
+    const index = Math.floor(seconds * (n / d) + 1e-9);
+    return Math.min(Math.max(index, 0), this.#info.frames - 1);
+  }
+
   /** Starts the clock at `frame`: the sound's, from when it plays that frame's sample, else
    * the page's. */
   #run(frame: number): void {
-    if (!this.#sound) {
+    this.#silence();
+    if (!this.#sound || this.#muted) {
       this.#clock = { frame, at: performance.now() / 1000 };
       return;
     }
@@ -301,6 +350,10 @@ export class Player {
     });
   }
 
+  #silence(): void {
+    void this.#audio?.then((a) => a.node.port.postMessage({ stop: true }));
+  }
+
   /** The clock's time now, in seconds. */
   #now(clock: { gen?: number }): number {
     if (clock.gen === undefined) {
@@ -310,15 +363,13 @@ export class Player {
     return context ? context.currentTime - (context.outputLatency || context.baseLatency) : 0;
   }
 
-  #context: AudioContext | undefined;
-
   /** What plays the sound, made the first time: in the call that first plays, as browsers let
    * pages start sound only on a user's gesture. */
   #playing(): Promise<Audio> {
     this.#audio ??= (async () => {
       const context = new AudioContext({ sampleRate: RATE, latencyHint: "interactive" });
       this.#context = context;
-      await context.audioWorklet.addModule(new URL("./sound.js", import.meta.url));
+      await context.audioWorklet.addModule(new URL("sound.js", this.#spawn.runtime));
       const node = new AudioWorkletNode(context, "valle-sound", {
         numberOfInputs: 0,
         outputChannelCount: [2],
@@ -339,85 +390,12 @@ export class Player {
     return this.#audio;
   }
 
-  /** Decodes a file's sound for the worker, which cannot: interleaved stereo at 48 000 samples a
-   * second, or null where it has none. */
-  async #decode(id: number, file: Uint8Array): Promise<void> {
-    let pcm: Float32Array | null = null;
-    try {
-      // An offline context decodes without a user's gesture, at its rate.
-      const decoder = new OfflineAudioContext(2, 1, RATE);
-      const buffer = await decoder.decodeAudioData(file.buffer as ArrayBuffer);
-      const left = buffer.getChannelData(0);
-      const right = buffer.getChannelData(Math.min(1, buffer.numberOfChannels - 1));
-      pcm = new Float32Array(2 * buffer.length);
-      for (let i = 0; i < buffer.length; i++) {
-        pcm[2 * i] = left[i];
-        pcm[2 * i + 1] = right[i];
-      }
-    } catch {
-      // No sound in it, or none the browser decodes.
-    }
-    this.#worker.postMessage({ decoded: id, pcm }, pcm ? [pcm.buffer] : []);
-  }
-
-  /** Draws frame `index` and resolves once it is drawn. */
-  async draw(index: number): Promise<void> {
-    this.#frame = index;
-    await this.#send({ type: "frame", index });
-    this.#emit("frame", { frame: index, time: this.#time(index) });
-  }
-
-  /** The pixels of the frame drawn last: straight sRGB, 4 bytes a pixel, rows top down. */
-  async pixels(): Promise<Uint8Array> {
-    return (await this.#send({ type: "pixels" })) as Uint8Array;
-  }
-
-  /** Binds the scene's props to `props`, in place of those given before, and opens it again. */
-  async setProps(props: Record<string, unknown>): Promise<void> {
-    this.#inputs.props = props;
-    await this.#reopen();
-  }
-
-  async setData(data: Record<string, unknown>): Promise<void> {
-    this.#inputs.data = data;
-    await this.#reopen();
-  }
-
-  /** Binds resource `name` to `files`, or back to its default with none. */
-  async setResource(name: string, files: Source[] | undefined): Promise<void> {
-    if (files === undefined || files.length === 0) {
-      delete this.#inputs.resources[name];
-    } else {
-      this.#inputs.resources[name] = await this.#give(name, files);
-    }
-    await this.#reopen();
-  }
-
-  on<K extends keyof Events>(type: K, listener: (value: Events[K]) => void): () => void {
-    const set = this.#listeners.get(type) ?? new Set();
-    this.#listeners.set(type, set);
-    set.add(listener as (value: never) => void);
-    return () => set.delete(listener as (value: never) => void);
-  }
-
-  /** Stops the player and lets its GPU device go. */
-  async close(): Promise<void> {
-    this.pause();
-    const worker = this.#worker;
-    // A worker stuck on a request is stopped all the same.
-    const destroyed = this.#send({ type: "destroy" }).catch(() => {});
-    await Promise.race([destroyed, new Promise((r) => setTimeout(r, 1000))]);
-    for (const request of this.#requests.values()) {
-      request.reject(new PlayerError("scene", "the player was closed"));
-    }
-    this.#requests.clear();
-    worker.terminate();
-    await this.#audio?.then((a) => a.context.close()).catch(() => {});
-  }
-
-  #time(index: number): number {
-    const [n, d] = this.#rate;
-    return (index * d) / n;
+  /** Says how playing went since it last said, and starts counting again. */
+  #say(): void {
+    const { shown, dropped, frameMs, memory } = this.#stats;
+    this.#emit("stats", { shown, dropped, frameMs: shown ? frameMs / shown : 0, memory });
+    this.#stats = { shown: 0, dropped: 0, frameMs: 0, memory };
+    this.#said = performance.now();
   }
 
   /** Asks for frame `index`, drawn once the one being drawn is; frames asked for in between are
@@ -425,6 +403,9 @@ export class Player {
   #show(index: number): void {
     this.#frame = index;
     if (this.#drawing) {
+      if (this.#wanted !== undefined && this.#wanted !== index) {
+        this.#stats.dropped++;
+      }
       this.#wanted = index;
       return;
     }
@@ -445,27 +426,37 @@ export class Player {
   }
 
   async #open(): Promise<void> {
-    this.#info = (await this.#send({
-      type: "open",
-      entry: this.#entry,
-      inputs: this.#inputs,
-    })) as Opened;
+    const { entry, inputs } = this.#spawn;
+    this.#info = (await this.#send({ type: "open", entry, inputs })) as Opened;
     const [n, d = "1"] = this.#info.fps.split("/");
     this.#rate = [Number(n), Number(d)];
     this.#frame = Math.min(this.#frame, this.#info.frames - 1);
-    this.#sound = (await this.#send({ type: "sound", entry: this.#entry })) as {
-      length: number;
-    } | null;
+    this.#sound = (await this.#send({ type: "sound", entry })) as { length: number } | null;
     await this.draw(this.#frame);
   }
 
-  async #reopen(): Promise<void> {
+  /** Binds `key` of the inputs to `value` and opens what is open again; where that fails, opens
+   * it again as it was. */
+  async #rebind<K extends "props" | "data" | "resources">(
+    key: K,
+    value: Spawn["inputs"][K],
+  ): Promise<void> {
     const playing = this.playing;
     this.pause();
-    await this.#send({ type: "close" });
-    await this.#open();
-    if (playing) {
-      this.play();
+    const before = this.#spawn.inputs[key];
+    this.#spawn.inputs[key] = value;
+    try {
+      await this.#send({ type: "close" });
+      await this.#open();
+    } catch (error) {
+      this.#spawn.inputs[key] = before;
+      await this.#send({ type: "close" });
+      await this.#open();
+      throw error;
+    } finally {
+      if (playing) {
+        this.play();
+      }
     }
   }
 
@@ -483,15 +474,12 @@ export class Player {
       paths.push(path);
     }
     await this.#send({ type: "give", files: given });
+    Object.assign(this.#spawn.given, given);
     return paths;
   }
 
   #send(request: Request, transfer: Transferable[] = []): Promise<unknown> {
-    const id = this.#next++;
-    return new Promise((resolve, reject) => {
-      this.#requests.set(id, { resolve, reject });
-      this.#worker.postMessage({ id, ...request }, transfer);
-    });
+    return this.#connection.send(request, transfer);
   }
 
   #emit<K extends keyof Events>(type: K, value: Events[K]): void {

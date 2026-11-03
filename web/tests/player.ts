@@ -42,6 +42,10 @@ const PAGE = `<!doctype html>
 <canvas></canvas>
 <script type="module">
   import { createPlayer } from "/web/packages/engine/dist/index.js";
+  import { exportBrowserVideo } from "/web/packages/engine/dist/export.js";
+  /** The files players fetched through the page's \`fetch\`. */
+  window.fetched = 0;
+  const fetching = (url) => (window.fetched++, fetch(url));
   /** The pixels of a frame the native engine drew. */
   const decoded = async (url) => {
     const bitmap = await createImageBitmap(await (await fetch(url)).blob(), {
@@ -59,7 +63,7 @@ const PAGE = `<!doctype html>
     const canvas = document.createElement("canvas");
     document.querySelector("canvas").replaceWith(canvas);
     const started = performance.now();
-    window.player = await createPlayer({ canvas, entry, base: "/", fonts: "/fonts/" });
+    window.player = await createPlayer({ canvas, entry, base: "/", fonts: "/fonts/", fetch: fetching });
     if (props) await window.player.setProps(props);
     // The canvas laid out at its size now, not once the worker's first frame reaches the page.
     canvas.style.width = window.player.info.width + "px";
@@ -69,15 +73,22 @@ const PAGE = `<!doctype html>
     const [x, y] = [await window.player.pixels(), await decoded(native)];
     if (x.length !== y.length) return { size: true, ms };
     let [most, differ] = [0, 0];
+    /** Where pixels differ by more than 1: left, top, right and bottom. */
+    const box = [Infinity, Infinity, -1, -1];
     for (let i = 0; i < x.length; i += 4) {
       // A 2D canvas keeps colors premultiplied: those of pixels not opaque come back rounded.
       const channels = x[i + 3] === 255 && y[i + 3] === 255 ? [0, 1, 2, 3] : [3];
       let d = 0;
       for (const k of channels) d = Math.max(d, Math.abs(x[i + k] - y[i + k]));
       most = Math.max(most, d);
-      if (d > 1) differ++;
+      if (d > 1) {
+        differ++;
+        const [px, py] = [(i / 4) % canvas.width, Math.floor(i / 4 / canvas.width)];
+        [box[0], box[1]] = [Math.min(box[0], px), Math.min(box[1], py)];
+        [box[2], box[3]] = [Math.max(box[2], px), Math.max(box[3], py)];
+      }
     }
-    return { most, differ, pixels: x.length / 4, ms, size: [canvas.width, canvas.height] };
+    return { most, differ, box, pixels: x.length / 4, ms, size: [canvas.width, canvas.height] };
   };
   /** The frame the player drew last, as a PNG's data address. */
   window.drawn = async () => {
@@ -93,13 +104,18 @@ const PAGE = `<!doctype html>
    * has fewer of. */
   window.played = async () => {
     const shown = new Set();
-    const off = window.player.on("frame", ({ frame }) => shown.add(frame));
+    const stats = [];
+    const offs = [
+      window.player.on("time", ({ frame }) => shown.add(frame)),
+      window.player.on("stats", (s) => stats.push(s)),
+    ];
     window.player.seekFrame(0);
     window.player.play();
     await new Promise((r) => setTimeout(r, 1000));
     window.player.pause();
-    off();
-    return { at: window.player.time, drawn: shown.size };
+    for (const off of offs) off();
+    const counted = stats.reduce((n, s) => n + s.shown, 0);
+    return { at: window.player.currentTime, drawn: shown.size, counted, memory: stats.at(-1)?.memory };
   };
   /** How the sound of \`entry\` differs from the native mix in the WAV at \`mix\`, and where its
    * clock is after it plays for a second. */
@@ -115,23 +131,53 @@ const PAGE = `<!doctype html>
     const { at } = await window.played();
     return { sound: player.hasSound, samples: native.length / 2, most, at };
   };
-  /** The MP4 \`entry\` exports, as a data address, how long it took and how many frames it
-   * said it had done. */
-  window.exported = async (entry) => {
+  /** Whether binding a prop to a value its control does not take fails, and leaves the frame
+   * as it was. */
+  window.invalid = async (index) => {
+    const before = await window.player.pixels();
+    try {
+      await window.player.setProps({ accent: "not a color" });
+      return { rejected: false };
+    } catch (error) {
+      await window.player.draw(index);
+      const after = await window.player.pixels();
+      const same = before.length === after.length && before.every((b, i) => b === after[i]);
+      return { rejected: true, code: error.code, message: error.message, same };
+    }
+  };
+  /** The MP4 \`entry\` exports as \`options\` say, as a data address, how long it took and how
+   * many frames it said it had done of how many. */
+  window.exported = async (entry, options = {}) => {
     await window.player?.close();
     const canvas = document.createElement("canvas");
     document.querySelector("canvas").replaceWith(canvas);
     const player = (window.player = await createPlayer({ canvas, entry, base: "/", fonts: "/fonts/" }));
-    let done = 0;
+    let [done, count] = [0, 0];
     const started = performance.now();
-    const mp4 = await player.export({ onProgress: (n) => (done = n) });
+    const { blob: mp4 } = await exportBrowserVideo(player, {
+      ...options,
+      onProgress: ({ framesCompleted, frameCount }) => ([done, count] = [framesCompleted, frameCount]),
+    });
     const ms = Math.round(performance.now() - started);
     const url = await new Promise((r) => {
       const reader = new FileReader();
       reader.onload = () => r(reader.result);
       reader.readAsDataURL(mp4);
     });
-    return { url, ms, done, frames: player.info.frames };
+    return { url, ms, done, count, frames: player.info.frames };
+  };
+  /** How an export of what the player has open, cancelled after 3 frames, fails. */
+  window.cancelled = async () => {
+    const abort = new AbortController();
+    try {
+      await exportBrowserVideo(window.player, {
+        signal: abort.signal,
+        onProgress: ({ framesCompleted }) => framesCompleted === 3 && abort.abort(),
+      });
+      return "not cancelled";
+    } catch (error) {
+      return error.code;
+    }
   };
   /** How two frames differ: the most a channel does, and on average. */
   window.similar = async (a, b) => {
@@ -241,6 +287,18 @@ function aligned(heard: Float32Array, mixed: Float32Array): { lag: number; rms: 
     }
   }
   return best;
+}
+
+/** The width and height of the H.264 video of an MP4, from its `avc1` sample entry, and whether
+ * it has a track of sound. */
+function mp4(bytes: Uint8Array): { size: [number, number]; sound: boolean } {
+  const text = Buffer.from(bytes).toString("latin1");
+  // The sample entry in `stsd`: `avc1` is a brand in `ftyp` too.
+  const at = text.indexOf("avc1", text.indexOf("stsd"));
+  const view = new DataView(bytes.buffer, bytes.byteOffset);
+  const size: [number, number] =
+    at < 0 ? [0, 0] : [view.getUint16(at + 28), view.getUint16(at + 30)];
+  return { size, sound: text.includes("mp4a") || text.includes("Opus") };
 }
 
 /** A frame's name: its entry, its index, and the props bound. */
@@ -417,7 +475,7 @@ async function main() {
         const line =
           d.size === true
             ? "a frame of another size"
-            : `most ${d.most}, ${d.differ} of ${d.pixels} pixels by more than 1`;
+            : `most ${d.most}, ${d.differ} of ${d.pixels} pixels by more than 1${d.differ ? `, within ${d.box.join(",")}` : ""}`;
         console.log(`${name}: ${line} (${d.ms} ms)`);
         if (d.size === true || d.most > STEP || d.differ > d.pixels * SHARE) {
           const url: string = await evaluate("drawn()");
@@ -451,13 +509,28 @@ async function main() {
           await Bun.write(`${png}.screen.png`, Buffer.from(screen, "base64"));
           failed.push(`${name}: on screen, a channel differs by ${most}`);
         }
+        // A value its control does not take fails, and what was bound stays.
+        if (props) {
+          const invalid = await evaluate(`invalid(${frame})`);
+          console.log(`invalid prop: ${JSON.stringify(invalid)}`);
+          if (!invalid.rejected || !invalid.same) {
+            failed.push(`binding an invalid prop: ${JSON.stringify(invalid)}`);
+          }
+        }
       }
     }
     // The last player plays on its own clock.
     const played = await evaluate("played()");
-    console.log(`played: at ${played.at.toFixed(2)} s after 1 s, ${played.drawn} frames drawn`);
-    if (played.at < 0.5 || played.drawn < 2) {
-      failed.push(`playing for 1 s reached ${played.at} s and drew ${played.drawn} frames`);
+    console.log(
+      `played: at ${played.at.toFixed(2)} s after 1 s, ${played.drawn} frames drawn, ${played.counted} counted, ${played.memory} bytes of memory`,
+    );
+    if (played.at < 0.5 || played.drawn < 2 || played.counted < 2 || !(played.memory > 0)) {
+      failed.push(`playing for 1 s: ${JSON.stringify(played)}`);
+    }
+    const fetched = await evaluate("fetched");
+    console.log(`fetched through the page's fetch: ${fetched} files`);
+    if (fetched === 0) {
+      failed.push("no file was fetched through the page's fetch");
     }
     // A timeline's sound: the native mix, and played on its clock.
     const heard = await evaluate(`heard("sound/sound.timeline.json", "/mix.wav")`);
@@ -475,9 +548,32 @@ async function main() {
       const e = await evaluate(`exported(${JSON.stringify(entry)})`);
       await Bun.write(join(out, file), Buffer.from(e.url.slice(e.url.indexOf(",") + 1), "base64"));
       console.log(`exported ${entry}: ${e.frames} frames in ${e.ms} ms`);
-      if (e.done !== e.frames) {
-        failed.push(`exporting ${entry} said ${e.done} of ${e.frames} frames were done`);
+      if (e.done !== e.frames || e.count !== e.frames) {
+        failed.push(`exporting ${entry} said ${e.done} of ${e.count} frames were done`);
       }
+    }
+    // An export at another size and rate, without its sound, and one cancelled.
+    const options = { width: 160, frameRate: 15, includeAudio: false };
+    const small = await evaluate(
+      `exported("sound/sound.timeline.json", ${JSON.stringify(options)})`,
+    );
+    const smallMp4 = mp4(Buffer.from(small.url.slice(small.url.indexOf(",") + 1), "base64"));
+    console.log(
+      `exported at ${JSON.stringify(options)}: ${small.count} frames of ${smallMp4.size.join("×")}, sound ${smallMp4.sound}`,
+    );
+    if (
+      small.count !== 30 ||
+      small.done !== 30 ||
+      smallMp4.size.join() !== "160,90" ||
+      smallMp4.sound
+    ) {
+      failed.push(
+        `exporting at ${JSON.stringify(options)}: ${JSON.stringify({ ...small, url: undefined, ...smallMp4 })}`,
+      );
+    }
+    const cancelled = await evaluate("cancelled()");
+    if (cancelled !== "cancelled") {
+      failed.push(`a cancelled export: ${cancelled}`);
     }
     // The frames: the export of the edit shown by a scene, and the edit drawn.
     await Bun.write(join(out, "shown.motion.tsx"), SHOWN);

@@ -1,11 +1,12 @@
 {
-  "name": "@valle/engine",
+  "name": "valle-engine",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "Valle's engine in the browser: a Motion scene or a Timeline drawn with WebGPU",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./export": "./dist/export.js"
   },
   "files": [
     "dist"

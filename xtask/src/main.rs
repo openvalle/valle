@@ -265,12 +265,19 @@ fn build_web() -> Result<(), String> {
     run(
         Command::new("bun")
             .args([
-                "build", "--target", "browser", "--format", "esm", "--outdir",
+                "build",
+                "--target",
+                "browser",
+                "--format",
+                "esm",
+                "--splitting",
+                "--outdir",
             ])
             .arg(&dist)
-            .arg(package.join("src/index.ts"))
-            .arg(package.join("src/worker.ts"))
-            .arg(package.join("src/sound.ts")),
+            .args(
+                ["index", "export", "worker", "sound"]
+                    .map(|entry| package.join(format!("src/{entry}.ts"))),
+            ),
         "bun build",
     )?;
     let from = package.join("src/wasm/valle_web_bg.wasm");

@@ -271,6 +271,16 @@ pub fn built_in_fonts() -> String {
     Value::from(fonts).to_string()
 }
 
+/// Straight RGBA of `width` × `height` as an export encodes it, as `Engine::yuv` converts a frame:
+/// for a frame the worker scaled itself.
+#[wasm_bindgen]
+pub fn i420(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, JsValue> {
+    if rgba.len() != (width * height * 4) as usize {
+        return Err(js(format!("{} bytes for {width}×{height} px", rgba.len())));
+    }
+    Ok(yuv::i420(rgba, [width, height]))
+}
+
 #[wasm_bindgen]
 impl Engine {
     /// The engine on `canvas`'s GPU. Fails with `no-webgpu` where the browser has none.

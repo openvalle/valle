@@ -3,10 +3,12 @@
 
 import init, { builtInFonts, Engine, type Sound } from "./wasm/valle_web.js";
 import type { Code, Opened, Reply, Request, Source } from "./messages.ts";
-import { encode } from "./export.ts";
+import { encode } from "./encode.ts";
 import { Reader } from "./video.ts";
 
 type Font = { name: string; file: string; url: string; sha256: string; size: number };
+/** What the page's `fetch` answered: a status, with the bytes when it is found, or an error. */
+type Fetched = { status: number; statusText: string; bytes?: ArrayBuffer } | { error: string };
 type Status = { status: "ok" } | { status: "missing"; files: string[] };
 
 class Failure extends Error {
@@ -21,6 +23,12 @@ class Failure extends Error {
 let engine: Engine | undefined;
 let base = "";
 let fontBase: string | undefined;
+/** Whether files are fetched through the page's `fetch`, and the fetches it is answering, by id. */
+let proxied = false;
+const fetches = new Map<number, (answer: Fetched) => void>();
+let fetchCount = 0;
+/** The wasm's memory, whose size is the engine's. */
+let memory: WebAssembly.Memory | undefined;
 /** The built-in fonts, by their addresses. */
 let fonts = new Map<string, Font>();
 /** What the page gave in place of fetching a path. */
@@ -40,19 +48,21 @@ const VIDEO_INFO = "valle:video-info/";
 const VIDEO = "valle:video/";
 /** The readers of video files: one to probe each file, and one for each resource of a file. */
 const readers = new Map<string, Promise<Reader | undefined>>();
-/** The composition open, and whether the export running was cancelled. */
+/** The composition open. */
 let composition: Opened | undefined;
-let cancelled = false;
 /** Sounds the page is decoding, by id. */
 const decoding = new Map<number, (pcm: Float32Array | null) => void>();
 let decodes = 0;
 
 async function handle(request: Request, id: number): Promise<unknown> {
   if (request.type === "start") {
-    await init({ module_or_path: new URL("./valle_web_bg.wasm", import.meta.url) });
+    ({ memory } = await init({
+      module_or_path: new URL("./valle_web_bg.wasm", import.meta.url),
+    }));
     fonts = new Map((JSON.parse(builtInFonts()) as Font[]).map((f) => [f.url, f]));
     base = request.base;
     fontBase = request.fonts;
+    proxied = request.proxied;
     if (!("gpu" in navigator)) {
       throw new Failure("no-webgpu", "this browser has no WebGPU");
     }
@@ -78,23 +88,18 @@ async function handle(request: Request, id: number): Promise<unknown> {
       ) as Opened;
       return composition;
     case "export": {
-      const { width, height, fps, frames } = composition!;
-      const [n, d = "1"] = fps.split("/");
-      cancelled = false;
-      const sound = rendering?.fresh();
+      const sound = request.options.audio ? rendering?.fresh() : undefined;
       try {
         return await encode(
-          { width, height, rate: [Number(n), Number(d)], frames, ...request.options },
-          e,
+          request.options,
+          composition!,
           async (index) => {
             await fetching(() => e.render(index));
           },
+          e,
           sound,
           (done) => self.postMessage({ progress: id, done }),
-          () => cancelled,
         );
-      } catch (error) {
-        throw cancelled ? new Failure("cancelled", "the export was cancelled") : error;
       } finally {
         sound?.free();
       }
@@ -102,8 +107,11 @@ async function handle(request: Request, id: number): Promise<unknown> {
     case "frame":
       await fetching(() => e.frame(request.index));
       await e.drawn();
-      return undefined;
+      return { memory: memory?.buffer.byteLength ?? 0 };
     case "pixels":
+      return await e.pixels();
+    case "still":
+      await fetching(() => e.render(request.index));
       return await e.pixels();
     case "sound": {
       const status = JSON.parse(await fetching(() => e.sound(request.entry))) as { status: string };
@@ -228,14 +236,20 @@ function opened(key: string, path: string): Promise<Reader | undefined> {
   let reader = readers.get(key);
   if (!reader) {
     const source = given.get(path);
-    const file =
-      source === undefined || typeof source === "string"
-        ? (source ?? new URL(path, base).href)
-        : new Blob([source]);
-    reader = Reader.open(file).catch((error: unknown) => {
-      readers.delete(key);
-      throw new Failure("file", `${path}: ${String(error)}`);
-    });
+    const url = source === undefined || typeof source === "string" ? source : undefined;
+    // Through the page's `fetch`, a file is read whole.
+    const file = async () =>
+      source !== undefined && url === undefined
+        ? new Blob([source])
+        : proxied
+          ? new Blob([((await read(path)) ?? new Uint8Array()) as BlobPart])
+          : (url ?? new URL(path, base).href);
+    reader = file()
+      .then(Reader.open)
+      .catch((error: unknown) => {
+        readers.delete(key);
+        throw new Failure("file", `${path}: ${String(error)}`);
+      });
     readers.set(key, reader);
   }
   return reader;
@@ -256,11 +270,9 @@ async function read(path: string): Promise<Uint8Array | undefined> {
   const font = fonts.get(path);
   const url =
     source ?? (font && fontBase ? new URL(font.file, fontBase).href : new URL(path, base).href);
-  let response: Response;
-  try {
-    response = await fetch(url);
-  } catch (error) {
-    throw new Failure("file", `${url}: ${String(error)}`);
+  const response = await get(url);
+  if ("error" in response) {
+    throw new Failure("file", `${url}: ${response.error}`);
   }
   // An import tries its extensions in turn, so a file that is not there is an answer.
   if (response.status === 404) {
@@ -269,10 +281,10 @@ async function read(path: string): Promise<Uint8Array | undefined> {
     }
     return undefined;
   }
-  if (!response.ok) {
+  if (!response.bytes) {
     throw new Failure("file", `${url}: ${response.status} ${response.statusText}`);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = new Uint8Array(response.bytes);
   if (font) {
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
     const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -281,6 +293,24 @@ async function read(path: string): Promise<Uint8Array | undefined> {
     }
   }
   return bytes;
+}
+
+/** `url` fetched, through the page's `fetch` where it gave one. */
+async function get(url: string): Promise<Fetched> {
+  if (proxied) {
+    const id = fetchCount++;
+    return new Promise((resolve) => {
+      fetches.set(id, resolve);
+      self.postMessage({ fetch: id, url });
+    });
+  }
+  try {
+    const response = await fetch(url);
+    const { status, statusText } = response;
+    return { status, statusText, bytes: response.ok ? await response.arrayBuffer() : undefined };
+  } catch (error) {
+    return { error: String(error) };
+  }
 }
 
 /** A file's sound as the page decodes it, a worker cannot: interleaved stereo at 48 000 a
@@ -301,11 +331,15 @@ self.onunhandledrejection = (event: PromiseRejectionEvent) => {
 let queue = Promise.resolve();
 self.onmessage = (
   event: MessageEvent<
-    ({ id: number } & Request) | { decoded: number; pcm: Float32Array | null } | { cancel: true }
+    | ({ id: number } & Request)
+    | { decoded: number; pcm: Float32Array | null }
+    | ({ fetched: number } & Fetched)
   >,
 ) => {
-  if ("cancel" in event.data) {
-    cancelled = true;
+  if ("fetched" in event.data) {
+    const { fetched, ...answer } = event.data;
+    fetches.get(fetched)?.(answer);
+    fetches.delete(fetched);
     return;
   }
   if ("decoded" in event.data) {
