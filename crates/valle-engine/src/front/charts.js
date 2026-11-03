@@ -1249,3 +1249,1458 @@ export function stack() {
     a.length ? ((offset = a[0] == null ? stackOffsetNone : a[0]), shape) : offset;
   return shape;
 }
+
+// ------------------------------------------------------------------------------ d3-geo
+
+// Its streams keep what they gather in themselves, made new for each call, where d3's are shared.
+const geoEpsilon = 1e-6;
+const geoEpsilon2 = 1e-12;
+const quarterPi = pi / 4;
+const degrees = 180 / pi;
+const radians = pi / 180;
+const noop = () => {};
+
+// d3-array's Adder: a sum of doubles without their rounding errors.
+class Adder {
+  constructor() {
+    this._partials = [];
+    this._n = 0;
+  }
+  add(x) {
+    const p = this._partials;
+    let i = 0;
+    for (let j = 0; j < this._n && j < 32; j++) {
+      const y = p[j];
+      const hi = x + y;
+      const lo = Math.abs(x) < Math.abs(y) ? x - (hi - y) : y - (hi - x);
+      if (lo) p[i++] = lo;
+      x = hi;
+    }
+    p[i] = x;
+    this._n = i + 1;
+    return this;
+  }
+  valueOf() {
+    const p = this._partials;
+    let n = this._n;
+    let x, y, lo;
+    let hi = 0;
+    if (n > 0) {
+      hi = p[--n];
+      while (n > 0) {
+        x = hi;
+        y = p[--n];
+        hi = x + y;
+        lo = y - (hi - x);
+        if (lo) break;
+      }
+      if (n > 0 && ((lo < 0 && p[n - 1] < 0) || (lo > 0 && p[n - 1] > 0))) {
+        y = lo * 2;
+        x = hi + y;
+        if (y === x - hi) hi = x;
+      }
+    }
+    return hi;
+  }
+}
+
+// GeoJSON into a stream: its points, lines and polygons as calls.
+function geoStream(object, stream) {
+  if (object && Object.hasOwn(streamObjectType, object.type)) {
+    streamObjectType[object.type](object, stream);
+  } else {
+    streamGeometry(object, stream);
+  }
+}
+
+function streamGeometry(geometry, stream) {
+  if (geometry && Object.hasOwn(streamGeometryType, geometry.type)) {
+    streamGeometryType[geometry.type](geometry, stream);
+  }
+}
+
+const streamObjectType = {
+  Feature: (object, stream) => streamGeometry(object.geometry, stream),
+  FeatureCollection: (object, stream) => {
+    for (const feature of object.features) streamGeometry(feature.geometry, stream);
+  },
+};
+
+const streamGeometryType = {
+  Sphere: (object, stream) => stream.sphere(),
+  Point: (object, stream) => {
+    const c = object.coordinates;
+    stream.point(c[0], c[1], c[2]);
+  },
+  MultiPoint: (object, stream) => {
+    for (const c of object.coordinates) stream.point(c[0], c[1], c[2]);
+  },
+  LineString: (object, stream) => streamLine(object.coordinates, stream, 0),
+  MultiLineString: (object, stream) => {
+    for (const c of object.coordinates) streamLine(c, stream, 0);
+  },
+  Polygon: (object, stream) => streamPolygon(object.coordinates, stream),
+  MultiPolygon: (object, stream) => {
+    for (const c of object.coordinates) streamPolygon(c, stream);
+  },
+  GeometryCollection: (object, stream) => {
+    for (const g of object.geometries) streamGeometry(g, stream);
+  },
+};
+
+function streamLine(coordinates, stream, closed) {
+  const n = coordinates.length - closed;
+  stream.lineStart();
+  for (let i = 0; i < n; ++i) {
+    const c = coordinates[i];
+    stream.point(c[0], c[1], c[2]);
+  }
+  stream.lineEnd();
+}
+
+function streamPolygon(coordinates, stream) {
+  stream.polygonStart();
+  for (const ring of coordinates) streamLine(ring, stream, 1);
+  stream.polygonEnd();
+}
+
+function cartesian(spherical) {
+  const [lambda, phi] = spherical;
+  const cosPhi = Math.cos(phi);
+  return [cosPhi * Math.cos(lambda), cosPhi * Math.sin(lambda), Math.sin(phi)];
+}
+
+function cartesianCross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+
+function cartesianNormalizeInPlace(d) {
+  const l = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+  d[0] /= l;
+  d[1] /= l;
+  d[2] /= l;
+}
+
+function compose(a, b) {
+  const composed = (x, y) => {
+    const p = a(x, y);
+    return b(p[0], p[1]);
+  };
+  if (a.invert && b.invert) {
+    composed.invert = (x, y) => {
+      const p = b.invert(x, y);
+      return p && a.invert(p[0], p[1]);
+    };
+  }
+  return composed;
+}
+
+function rotationIdentity(lambda, phi) {
+  if (Math.abs(lambda) > pi) lambda -= Math.round(lambda / tau) * tau;
+  return [lambda, phi];
+}
+rotationIdentity.invert = rotationIdentity;
+
+function rotateRadians(deltaLambda, deltaPhi, deltaGamma) {
+  deltaLambda %= tau;
+  if (deltaLambda) {
+    return deltaPhi || deltaGamma
+      ? compose(rotationLambda(deltaLambda), rotationPhiGamma(deltaPhi, deltaGamma))
+      : rotationLambda(deltaLambda);
+  }
+  return deltaPhi || deltaGamma ? rotationPhiGamma(deltaPhi, deltaGamma) : rotationIdentity;
+}
+
+function forwardRotationLambda(deltaLambda) {
+  return (lambda, phi) => {
+    lambda += deltaLambda;
+    if (Math.abs(lambda) > pi) lambda -= Math.round(lambda / tau) * tau;
+    return [lambda, phi];
+  };
+}
+
+function rotationLambda(deltaLambda) {
+  const rotation = forwardRotationLambda(deltaLambda);
+  rotation.invert = forwardRotationLambda(-deltaLambda);
+  return rotation;
+}
+
+function rotationPhiGamma(deltaPhi, deltaGamma) {
+  const cosDeltaPhi = Math.cos(deltaPhi);
+  const sinDeltaPhi = Math.sin(deltaPhi);
+  const cosDeltaGamma = Math.cos(deltaGamma);
+  const sinDeltaGamma = Math.sin(deltaGamma);
+  const rotation = (lambda, phi) => {
+    const cosPhi = Math.cos(phi);
+    const x = Math.cos(lambda) * cosPhi;
+    const y = Math.sin(lambda) * cosPhi;
+    const z = Math.sin(phi);
+    const k = z * cosDeltaPhi + x * sinDeltaPhi;
+    return [
+      Math.atan2(y * cosDeltaGamma - k * sinDeltaGamma, x * cosDeltaPhi - z * sinDeltaPhi),
+      clampedAsin(k * cosDeltaGamma + y * sinDeltaGamma),
+    ];
+  };
+  rotation.invert = (lambda, phi) => {
+    const cosPhi = Math.cos(phi);
+    const x = Math.cos(lambda) * cosPhi;
+    const y = Math.sin(lambda) * cosPhi;
+    const z = Math.sin(phi);
+    const k = z * cosDeltaGamma - y * sinDeltaGamma;
+    return [
+      Math.atan2(y * cosDeltaGamma + z * sinDeltaGamma, x * cosDeltaPhi + k * sinDeltaPhi),
+      clampedAsin(k * cosDeltaPhi - x * sinDeltaPhi),
+    ];
+  };
+  return rotation;
+}
+
+// A rotation of [longitude, latitude] in degrees.
+function geoRotation(rotate) {
+  const r = rotateRadians(
+    rotate[0] * radians,
+    rotate[1] * radians,
+    rotate.length > 2 ? rotate[2] * radians : 0,
+  );
+  const forward = (c) => {
+    const p = r(c[0] * radians, c[1] * radians);
+    return [p[0] * degrees, p[1] * degrees];
+  };
+  forward.invert = (c) => {
+    const p = r.invert(c[0] * radians, c[1] * radians);
+    return [p[0] * degrees, p[1] * degrees];
+  };
+  return forward;
+}
+
+// A stream that passes its calls to `stream`, but for those `methods` give.
+class TransformStream {
+  point(x, y) {
+    this.stream.point(x, y);
+  }
+  sphere() {
+    this.stream.sphere();
+  }
+  lineStart() {
+    this.stream.lineStart();
+  }
+  lineEnd() {
+    this.stream.lineEnd();
+  }
+  polygonStart() {
+    this.stream.polygonStart();
+  }
+  polygonEnd() {
+    this.stream.polygonEnd();
+  }
+}
+
+function transformer(methods) {
+  return (stream) => {
+    const s = new TransformStream();
+    Object.assign(s, methods);
+    s.stream = stream;
+    return s;
+  };
+}
+
+const pointEqual = (a, b) =>
+  Math.abs(a[0] - b[0]) < geoEpsilon && Math.abs(a[1] - b[1]) < geoEpsilon;
+
+// Lines cut by a clip, kept for the clip to join.
+function clipBuffer() {
+  let lines = [];
+  let line = null;
+  return {
+    point: (x, y, m) => line.push([x, y, m]),
+    lineStart: () => lines.push((line = [])),
+    lineEnd: noop,
+    rejoin: () => {
+      if (lines.length > 1) lines.push(lines.pop().concat(lines.shift()));
+    },
+    result: () => {
+      const result = lines;
+      lines = [];
+      line = null;
+      return result;
+    },
+  };
+}
+
+class Intersection {
+  constructor(point, points, other, entry) {
+    this.x = point;
+    this.z = points;
+    this.o = other;
+    this.e = entry;
+    this.v = false;
+    this.n = this.p = null;
+  }
+}
+
+// Joins a polygon cut into its visible segments, along the clip's edge.
+function clipRejoin(segments, compareIntersection, startInside, interpolate, stream) {
+  const subject = [];
+  const clip = [];
+  for (const segment of segments) {
+    const n = segment.length - 1;
+    if (n <= 0) continue;
+    let p0 = segment[0];
+    const p1 = segment[n];
+    if (pointEqual(p0, p1)) {
+      if (!p0[2] && !p1[2]) {
+        stream.lineStart();
+        for (let i = 0; i < n; ++i) {
+          p0 = segment[i];
+          stream.point(p0[0], p0[1]);
+        }
+        stream.lineEnd();
+        continue;
+      }
+      // A degenerate segment: its end moves.
+      p1[0] += 2 * geoEpsilon;
+    }
+    let x = new Intersection(p0, segment, null, true);
+    subject.push(x);
+    clip.push((x.o = new Intersection(p0, null, x, false)));
+    x = new Intersection(p1, segment, null, false);
+    subject.push(x);
+    clip.push((x.o = new Intersection(p1, null, x, true)));
+  }
+  if (!subject.length) return;
+  clip.sort(compareIntersection);
+  link(subject);
+  link(clip);
+  for (const c of clip) c.e = startInside = !startInside;
+  const start = subject[0];
+  for (;;) {
+    // The first intersection not visited.
+    let current = start;
+    let isSubject = true;
+    while (current.v) if ((current = current.n) === start) return;
+    let points = current.z;
+    stream.lineStart();
+    do {
+      current.v = current.o.v = true;
+      if (current.e) {
+        if (isSubject) {
+          for (const point of points) stream.point(point[0], point[1]);
+        } else {
+          interpolate(current.x, current.n.x, 1, stream);
+        }
+        current = current.n;
+      } else {
+        if (isSubject) {
+          points = current.p.z;
+          for (let i = points.length - 1; i >= 0; --i) stream.point(points[i][0], points[i][1]);
+        } else {
+          interpolate(current.x, current.p.x, -1, stream);
+        }
+        current = current.p;
+      }
+      current = current.o;
+      points = current.z;
+      isSubject = !isSubject;
+    } while (!current.v);
+    stream.lineEnd();
+  }
+}
+
+function link(array) {
+  const n = array.length;
+  if (!n) return;
+  let a = array[0];
+  for (let i = 1; i < n; ++i) {
+    const b = array[i];
+    a.n = b;
+    b.p = a;
+    a = b;
+  }
+  a.n = array[0];
+  array[0].p = a;
+}
+
+function longitude(point) {
+  return Math.abs(point[0]) <= pi
+    ? point[0]
+    : Math.sign(point[0]) * (((Math.abs(point[0]) + pi) % tau) - pi);
+}
+
+// Whether `point` is inside the spherical `polygon`.
+function polygonContains(polygon, point) {
+  const lambda = longitude(point);
+  let phi = point[1];
+  const sinPhi = Math.sin(phi);
+  const normal = [Math.sin(lambda), -Math.cos(lambda), 0];
+  let angle = 0;
+  let winding = 0;
+  const sum = new Adder();
+  if (sinPhi === 1) phi = halfPi + geoEpsilon;
+  else if (sinPhi === -1) phi = -halfPi - geoEpsilon;
+  for (const ring of polygon) {
+    const m = ring.length;
+    if (!m) continue;
+    let point0 = ring[m - 1];
+    let lambda0 = longitude(point0);
+    const phi0 = point0[1] / 2 + quarterPi;
+    let sinPhi0 = Math.sin(phi0);
+    let cosPhi0 = Math.cos(phi0);
+    for (let j = 0; j < m; ++j) {
+      const point1 = ring[j];
+      const lambda1 = longitude(point1);
+      const phi1 = point1[1] / 2 + quarterPi;
+      const sinPhi1 = Math.sin(phi1);
+      const cosPhi1 = Math.cos(phi1);
+      const delta = lambda1 - lambda0;
+      const sign = delta >= 0 ? 1 : -1;
+      const absDelta = sign * delta;
+      const antimeridian = absDelta > pi;
+      const k = sinPhi0 * sinPhi1;
+      sum.add(
+        Math.atan2(k * sign * Math.sin(absDelta), cosPhi0 * cosPhi1 + k * Math.cos(absDelta)),
+      );
+      angle += antimeridian ? delta + sign * tau : delta;
+      // Whether the longitudes are either side of the point's meridian.
+      if ((antimeridian !== lambda0 >= lambda) !== lambda1 >= lambda) {
+        const arc = cartesianCross(cartesian(point0), cartesian(point1));
+        cartesianNormalizeInPlace(arc);
+        const intersection = cartesianCross(normal, arc);
+        cartesianNormalizeInPlace(intersection);
+        const turn = antimeridian !== delta >= 0 ? -1 : 1;
+        const phiArc = turn * clampedAsin(intersection[2]);
+        if (phi > phiArc || (phi === phiArc && (arc[0] || arc[1]))) winding -= turn;
+      }
+      [lambda0, sinPhi0, cosPhi0, point0] = [lambda1, sinPhi1, cosPhi1, point1];
+    }
+  }
+  const south = angle < -geoEpsilon || (angle < geoEpsilon && sum.valueOf() < -geoEpsilon2);
+  return south !== ((winding & 1) === 1);
+}
+
+// A clip on the sphere: lines cut where `clipLine` cuts them, polygons joined along its edge.
+function clip(pointVisible, clipLine, interpolate, start) {
+  return (sink) => {
+    const line = clipLine(sink);
+    const ringBuffer = clipBuffer();
+    const ringSink = clipLine(ringBuffer);
+    let polygonStarted = false;
+    let polygon, segments, ring;
+    const begin = () => {
+      if (!polygonStarted) {
+        sink.polygonStart();
+        polygonStarted = true;
+      }
+    };
+    const point = (lambda, phi) => {
+      if (pointVisible(lambda, phi)) sink.point(lambda, phi);
+    };
+    const pointLine = (lambda, phi) => line.point(lambda, phi);
+    const lineStart = () => {
+      stream.point = pointLine;
+      line.lineStart();
+    };
+    const lineEnd = () => {
+      stream.point = point;
+      line.lineEnd();
+    };
+    const pointRing = (lambda, phi) => {
+      ring.push([lambda, phi]);
+      ringSink.point(lambda, phi);
+    };
+    const ringStart = () => {
+      ringSink.lineStart();
+      ring = [];
+    };
+    const ringEnd = () => {
+      pointRing(ring[0][0], ring[0][1]);
+      ringSink.lineEnd();
+      const clean = ringSink.clean();
+      const ringSegments = ringBuffer.result();
+      const n = ringSegments.length;
+      ring.pop();
+      polygon.push(ring);
+      ring = null;
+      if (!n) return;
+      // No intersections.
+      if (clean & 1) {
+        const segment = ringSegments[0];
+        const m = segment.length - 1;
+        if (m > 0) {
+          begin();
+          sink.lineStart();
+          for (let i = 0; i < m; ++i) sink.point(segment[i][0], segment[i][1]);
+          sink.lineEnd();
+        }
+        return;
+      }
+      // Connected segments, joined.
+      if (n > 1 && clean & 2) ringSegments.push(ringSegments.pop().concat(ringSegments.shift()));
+      segments.push(ringSegments.filter((s) => s.length > 1));
+    };
+    const stream = {
+      point,
+      lineStart,
+      lineEnd,
+      polygonStart: () => {
+        stream.point = pointRing;
+        stream.lineStart = ringStart;
+        stream.lineEnd = ringEnd;
+        segments = [];
+        polygon = [];
+      },
+      polygonEnd: () => {
+        stream.point = point;
+        stream.lineStart = lineStart;
+        stream.lineEnd = lineEnd;
+        segments = segments.flat();
+        const startInside = polygonContains(polygon, start);
+        if (segments.length) {
+          begin();
+          clipRejoin(segments, compareIntersection, startInside, interpolate, sink);
+        } else if (startInside) {
+          begin();
+          sink.lineStart();
+          interpolate(null, null, 1, sink);
+          sink.lineEnd();
+        }
+        if (polygonStarted) {
+          sink.polygonEnd();
+          polygonStarted = false;
+        }
+        segments = polygon = null;
+      },
+      sphere: () => {
+        sink.polygonStart();
+        sink.lineStart();
+        interpolate(null, null, 1, sink);
+        sink.lineEnd();
+        sink.polygonEnd();
+      },
+    };
+    return stream;
+  };
+}
+
+// Intersections in their order along the clip's edge.
+function compareIntersection(a, b) {
+  const [p, q] = [a.x, b.x];
+  return (
+    (p[0] < 0 ? p[1] - halfPi - geoEpsilon : halfPi - p[1]) -
+    (q[0] < 0 ? q[1] - halfPi - geoEpsilon : halfPi - q[1])
+  );
+}
+
+// Cuts lines at the antimeridian. `clean()`: 0 when cut or empty, 1 when not cut, 2 when cut
+// with the first and last segments to join.
+function clipAntimeridianLine(stream) {
+  let lambda0 = NaN;
+  let phi0 = NaN;
+  let sign0 = NaN;
+  let clean;
+  return {
+    lineStart: () => {
+      stream.lineStart();
+      clean = 1;
+    },
+    point: (lambda1, phi1) => {
+      const sign1 = lambda1 > 0 ? pi : -pi;
+      const delta = Math.abs(lambda1 - lambda0);
+      if (Math.abs(delta - pi) < geoEpsilon) {
+        // Across a pole.
+        phi0 = (phi0 + phi1) / 2 > 0 ? halfPi : -halfPi;
+        stream.point(lambda0, phi0);
+        stream.point(sign0, phi0);
+        stream.lineEnd();
+        stream.lineStart();
+        stream.point(sign1, phi0);
+        stream.point(lambda1, phi0);
+        clean = 0;
+      } else if (sign0 !== sign1 && delta >= pi) {
+        // Across the antimeridian.
+        if (Math.abs(lambda0 - sign0) < geoEpsilon) lambda0 -= sign0 * geoEpsilon;
+        if (Math.abs(lambda1 - sign1) < geoEpsilon) lambda1 -= sign1 * geoEpsilon;
+        phi0 = clipAntimeridianIntersect(lambda0, phi0, lambda1, phi1);
+        stream.point(sign0, phi0);
+        stream.lineEnd();
+        stream.lineStart();
+        stream.point(sign1, phi0);
+        clean = 0;
+      }
+      stream.point((lambda0 = lambda1), (phi0 = phi1));
+      sign0 = sign1;
+    },
+    lineEnd: () => {
+      stream.lineEnd();
+      lambda0 = phi0 = NaN;
+    },
+    clean: () => 2 - clean,
+  };
+}
+
+function clipAntimeridianIntersect(lambda0, phi0, lambda1, phi1) {
+  const sinLambda0Lambda1 = Math.sin(lambda0 - lambda1);
+  if (!(Math.abs(sinLambda0Lambda1) > geoEpsilon)) return (phi0 + phi1) / 2;
+  const cosPhi0 = Math.cos(phi0);
+  const cosPhi1 = Math.cos(phi1);
+  return Math.atan(
+    (Math.sin(phi0) * cosPhi1 * Math.sin(lambda1) - Math.sin(phi1) * cosPhi0 * Math.sin(lambda0)) /
+      (cosPhi0 * cosPhi1 * sinLambda0Lambda1),
+  );
+}
+
+function clipAntimeridianInterpolate(from, to, direction, stream) {
+  if (from == null) {
+    const phi = direction * halfPi;
+    stream.point(-pi, phi);
+    stream.point(0, phi);
+    stream.point(pi, phi);
+    stream.point(pi, 0);
+    stream.point(pi, -phi);
+    stream.point(0, -phi);
+    stream.point(-pi, -phi);
+    stream.point(-pi, 0);
+    stream.point(-pi, phi);
+  } else if (Math.abs(from[0] - to[0]) > geoEpsilon) {
+    const lambda = from[0] < to[0] ? pi : -pi;
+    const phi = (direction * lambda) / 2;
+    stream.point(-lambda, phi);
+    stream.point(0, phi);
+    stream.point(lambda, phi);
+  } else {
+    stream.point(to[0], to[1]);
+  }
+}
+
+const clipAntimeridian = clip(() => true, clipAntimeridianLine, clipAntimeridianInterpolate, [
+  -pi,
+  -halfPi,
+]);
+
+// Liang–Barsky: the part of the line a–b inside the rectangle, `a` and `b` moved to its ends.
+function clipLine(a, b, x0, y0, x1, y1) {
+  const [ax, ay] = a;
+  const dx = b[0] - ax;
+  const dy = b[1] - ay;
+  let t0 = 0;
+  let t1 = 1;
+  // One side: whether the line can be inside of it, `t0` and `t1` narrowed.
+  const side = (r, d, lower) => {
+    if (!d && (lower ? r > 0 : r < 0)) return false;
+    r /= d;
+    if (lower ? d < 0 : d > 0) {
+      if (r < t0) return false;
+      if (r < t1) t1 = r;
+    } else if (lower ? d > 0 : d < 0) {
+      if (r > t1) return false;
+      if (r > t0) t0 = r;
+    }
+    return true;
+  };
+  const inside =
+    side(x0 - ax, dx, true) &&
+    side(x1 - ax, dx, false) &&
+    side(y0 - ay, dy, true) &&
+    side(y1 - ay, dy, false);
+  if (!inside) return false;
+  if (t0 > 0) [a[0], a[1]] = [ax + t0 * dx, ay + t0 * dy];
+  if (t1 < 1) [b[0], b[1]] = [ax + t1 * dx, ay + t1 * dy];
+  return true;
+}
+
+const clipMax = 1e9;
+const clipMin = -clipMax;
+const clipBound = (v) => Math.max(clipMin, Math.min(clipMax, v));
+
+// A clip to the rectangle of projected points from x0, y0 to x1, y1.
+function clipRectangle(x0, y0, x1, y1) {
+  const visible = (x, y) => x0 <= x && x <= x1 && y0 <= y && y <= y1;
+  const corner = (p, direction) =>
+    Math.abs(p[0] - x0) < geoEpsilon
+      ? direction > 0
+        ? 0
+        : 3
+      : Math.abs(p[0] - x1) < geoEpsilon
+        ? direction > 0
+          ? 2
+          : 1
+        : Math.abs(p[1] - y0) < geoEpsilon
+          ? direction > 0
+            ? 1
+            : 0
+          : direction > 0
+            ? 3
+            : 2;
+  const comparePoint = (a, b) => {
+    const ca = corner(a, 1);
+    const cb = corner(b, 1);
+    return ca !== cb
+      ? ca - cb
+      : ca === 0
+        ? b[1] - a[1]
+        : ca === 1
+          ? a[0] - b[0]
+          : ca === 2
+            ? a[1] - b[1]
+            : b[0] - a[0];
+  };
+  const compareIntersection = (a, b) => comparePoint(a.x, b.x);
+  const interpolate = (from, to, direction, stream) => {
+    let a = 0;
+    let a1 = 0;
+    if (
+      from == null ||
+      (a = corner(from, direction)) !== (a1 = corner(to, direction)) ||
+      comparePoint(from, to) < 0 !== direction > 0
+    ) {
+      do stream.point(a === 0 || a === 3 ? x0 : x1, a > 1 ? y1 : y0);
+      while ((a = (a + direction + 4) % 4) !== a1);
+    } else {
+      stream.point(to[0], to[1]);
+    }
+  };
+
+  return (stream) => {
+    let activeStream = stream;
+    const bufferStream = clipBuffer();
+    let segments, polygon, ring;
+    let x__, y__, v__;
+    let x_, y_, v_;
+    let first, clean;
+
+    const point = (x, y) => {
+      if (visible(x, y)) activeStream.point(x, y);
+    };
+    const polygonInside = () => {
+      let winding = 0;
+      for (const r of polygon) {
+        let [b0, b1] = r[0];
+        for (let j = 1; j < r.length; ++j) {
+          const [a0, a1] = [b0, b1];
+          [b0, b1] = r[j];
+          if (a1 <= y1) {
+            if (b1 > y1 && (b0 - a0) * (y1 - a1) > (b1 - a1) * (x0 - a0)) ++winding;
+          } else if (b1 <= y1 && (b0 - a0) * (y1 - a1) < (b1 - a1) * (x0 - a0)) {
+            --winding;
+          }
+        }
+      }
+      return winding;
+    };
+    const linePoint = (x, y) => {
+      const v = visible(x, y);
+      if (polygon) ring.push([x, y]);
+      if (first) {
+        [x__, y__, v__] = [x, y, v];
+        first = false;
+        if (v) {
+          activeStream.lineStart();
+          activeStream.point(x, y);
+        }
+      } else if (v && v_) {
+        activeStream.point(x, y);
+      } else {
+        x_ = clipBound(x_);
+        y_ = clipBound(y_);
+        x = clipBound(x);
+        y = clipBound(y);
+        const a = [x_, y_];
+        const b = [x, y];
+        if (clipLine(a, b, x0, y0, x1, y1)) {
+          if (!v_) {
+            activeStream.lineStart();
+            activeStream.point(a[0], a[1]);
+          }
+          activeStream.point(b[0], b[1]);
+          if (!v) activeStream.lineEnd();
+          clean = false;
+        } else if (v) {
+          activeStream.lineStart();
+          activeStream.point(x, y);
+          clean = false;
+        }
+      }
+      [x_, y_, v_] = [x, y, v];
+    };
+    const clipStream = {
+      point,
+      lineStart: () => {
+        clipStream.point = linePoint;
+        if (polygon) polygon.push((ring = []));
+        first = true;
+        v_ = false;
+        x_ = y_ = NaN;
+      },
+      lineEnd: () => {
+        if (segments) {
+          linePoint(x__, y__);
+          if (v__ && v_) bufferStream.rejoin();
+          segments.push(bufferStream.result());
+        }
+        clipStream.point = point;
+        if (v_) activeStream.lineEnd();
+      },
+      // A polygon is buffered, then clipped whole.
+      polygonStart: () => {
+        activeStream = bufferStream;
+        segments = [];
+        polygon = [];
+        clean = true;
+      },
+      polygonEnd: () => {
+        const startInside = polygonInside();
+        const cleanInside = clean && startInside;
+        segments = segments.flat();
+        const visible = segments.length;
+        if (cleanInside || visible) {
+          stream.polygonStart();
+          if (cleanInside) {
+            stream.lineStart();
+            interpolate(null, null, 1, stream);
+            stream.lineEnd();
+          }
+          if (visible) clipRejoin(segments, compareIntersection, startInside, interpolate, stream);
+          stream.polygonEnd();
+        }
+        activeStream = stream;
+        segments = polygon = ring = null;
+      },
+    };
+    return clipStream;
+  };
+}
+
+const maxDepth = 16;
+const cosMinDistance = Math.cos(30 * radians);
+
+// Projects a stream's points, adding points along its lines where the projection bends them by
+// more than the square root of `delta2`.
+function resample(project, delta2) {
+  return +delta2 ? resampleAdaptive(project, delta2) : resampleNone(project);
+}
+
+function resampleNone(project) {
+  return transformer({
+    point(x, y) {
+      const p = project(x, y);
+      this.stream.point(p[0], p[1]);
+    },
+  });
+}
+
+function resampleAdaptive(project, delta2) {
+  function resampleLineTo(x0, y0, lambda0, a0, b0, c0, x1, y1, lambda1, a1, b1, c1, depth, stream) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > 4 * delta2 && depth--) {
+      let a = a0 + a1;
+      let b = b0 + b1;
+      let c = c0 + c1;
+      const m = Math.sqrt(a * a + b * b + c * c);
+      c /= m;
+      const phi2 = clampedAsin(c);
+      const lambda2 =
+        Math.abs(Math.abs(c) - 1) < geoEpsilon || Math.abs(lambda0 - lambda1) < geoEpsilon
+          ? (lambda0 + lambda1) / 2
+          : Math.atan2(b, a);
+      const p = project(lambda2, phi2);
+      const [x2, y2] = p;
+      const dx2 = x2 - x0;
+      const dy2 = y2 - y0;
+      const dz = dy * dx2 - dx * dy2;
+      if (
+        (dz * dz) / d2 > delta2 ||
+        Math.abs((dx * dx2 + dy * dy2) / d2 - 0.5) > 0.3 ||
+        a0 * a1 + b0 * b1 + c0 * c1 < cosMinDistance
+      ) {
+        a /= m;
+        b /= m;
+        resampleLineTo(x0, y0, lambda0, a0, b0, c0, x2, y2, lambda2, a, b, c, depth, stream);
+        stream.point(x2, y2);
+        resampleLineTo(x2, y2, lambda2, a, b, c, x1, y1, lambda1, a1, b1, c1, depth, stream);
+      }
+    }
+  }
+  return (stream) => {
+    let lambda00, x00, y00, a00, b00, c00;
+    let lambda0, x0, y0, a0, b0, c0;
+    const point = (x, y) => {
+      const p = project(x, y);
+      stream.point(p[0], p[1]);
+    };
+    const lineStart = () => {
+      x0 = NaN;
+      resampleStream.point = linePoint;
+      stream.lineStart();
+    };
+    const linePoint = (lambda, phi) => {
+      const c = cartesian([lambda, phi]);
+      const p = project(lambda, phi);
+      const [x1, y1, a1, b1, c1] = [p[0], p[1], c[0], c[1], c[2]];
+      resampleLineTo(x0, y0, lambda0, a0, b0, c0, x1, y1, lambda, a1, b1, c1, maxDepth, stream);
+      [x0, y0, lambda0, a0, b0, c0] = [x1, y1, lambda, a1, b1, c1];
+      stream.point(x0, y0);
+    };
+    const lineEnd = () => {
+      resampleStream.point = point;
+      stream.lineEnd();
+    };
+    const ringStart = () => {
+      lineStart();
+      resampleStream.point = ringPoint;
+      resampleStream.lineEnd = ringEnd;
+    };
+    const ringPoint = (lambda, phi) => {
+      linePoint((lambda00 = lambda), phi);
+      [x00, y00, a00, b00, c00] = [x0, y0, a0, b0, c0];
+      resampleStream.point = linePoint;
+    };
+    const ringEnd = () => {
+      resampleLineTo(
+        x0,
+        y0,
+        lambda0,
+        a0,
+        b0,
+        c0,
+        x00,
+        y00,
+        lambda00,
+        a00,
+        b00,
+        c00,
+        maxDepth,
+        stream,
+      );
+      resampleStream.lineEnd = lineEnd;
+      lineEnd();
+    };
+    const resampleStream = {
+      point,
+      lineStart,
+      lineEnd,
+      polygonStart: () => {
+        stream.polygonStart();
+        resampleStream.lineStart = ringStart;
+      },
+      polygonEnd: () => {
+        stream.polygonEnd();
+        resampleStream.lineStart = lineStart;
+      },
+    };
+    return resampleStream;
+  };
+}
+
+const transformRadians = transformer({
+  point(x, y) {
+    this.stream.point(x * radians, y * radians);
+  },
+});
+
+function transformRotate(rotate) {
+  return transformer({
+    point(x, y) {
+      const r = rotate(x, y);
+      this.stream.point(r[0], r[1]);
+    },
+  });
+}
+
+function scaleTranslate(k, dx, dy, sx, sy) {
+  const transform = (x, y) => [dx + k * x * sx, dy - k * y * sy];
+  transform.invert = (x, y) => [((x - dx) / k) * sx, ((dy - y) / k) * sy];
+  return transform;
+}
+
+function scaleTranslateRotate(k, dx, dy, sx, sy, alpha) {
+  if (!alpha) return scaleTranslate(k, dx, dy, sx, sy);
+  const cosAlpha = Math.cos(alpha);
+  const sinAlpha = Math.sin(alpha);
+  const a = cosAlpha * k;
+  const b = sinAlpha * k;
+  const ai = cosAlpha / k;
+  const bi = sinAlpha / k;
+  const ci = (sinAlpha * dy - cosAlpha * dx) / k;
+  const fi = (sinAlpha * dx + cosAlpha * dy) / k;
+  const transform = (x, y) => {
+    x *= sx;
+    y *= sy;
+    return [a * x - b * y + dx, dy - b * x - a * y];
+  };
+  transform.invert = (x, y) => [sx * (ai * x - bi * y + ci), sy * (fi - bi * x - ai * y)];
+  return transform;
+}
+
+// A projection of the raw projection `projectAt(...)` gives, made again when called.
+function projectionMutator(projectAt) {
+  let project;
+  let k = 150;
+  let x = 480;
+  let y = 250;
+  let lambda = 0;
+  let phi = 0;
+  let deltaLambda = 0;
+  let deltaPhi = 0;
+  let deltaGamma = 0;
+  let rotate;
+  let alpha = 0;
+  let sx = 1;
+  let sy = 1;
+  let x0 = null;
+  let y0, x1, y1;
+  let postclip = identity;
+  let delta2 = 0.5;
+  let projectResample, projectTransform, projectRotateTransform;
+
+  const projection = (point) => projectRotateTransform(point[0] * radians, point[1] * radians);
+  const invert = (point) => {
+    const p = projectRotateTransform.invert(point[0], point[1]);
+    return p && [p[0] * degrees, p[1] * degrees];
+  };
+  projection.stream = (stream) =>
+    transformRadians(transformRotate(rotate)(clipAntimeridian(projectResample(postclip(stream)))));
+  projection.clipExtent = (...a) => {
+    if (!a.length) {
+      return x0 == null
+        ? null
+        : [
+            [x0, y0],
+            [x1, y1],
+          ];
+    }
+    const e = a[0];
+    if (e == null) {
+      x0 = y0 = x1 = y1 = null;
+      postclip = identity;
+    } else {
+      [x0, y0, x1, y1] = [+e[0][0], +e[0][1], +e[1][0], +e[1][1]];
+      postclip = clipRectangle(x0, y0, x1, y1);
+    }
+    return projection;
+  };
+  projection.scale = (...a) => (a.length ? ((k = +a[0]), recenter()) : k);
+  projection.translate = (...a) =>
+    a.length ? ((x = +a[0][0]), (y = +a[0][1]), recenter()) : [x, y];
+  projection.center = (...a) => {
+    if (!a.length) return [lambda * degrees, phi * degrees];
+    lambda = (a[0][0] % 360) * radians;
+    phi = (a[0][1] % 360) * radians;
+    return recenter();
+  };
+  projection.rotate = (...a) => {
+    if (!a.length) return [deltaLambda * degrees, deltaPhi * degrees, deltaGamma * degrees];
+    const r = a[0];
+    deltaLambda = (r[0] % 360) * radians;
+    deltaPhi = (r[1] % 360) * radians;
+    deltaGamma = r.length > 2 ? (r[2] % 360) * radians : 0;
+    return recenter();
+  };
+  projection.angle = (...a) =>
+    a.length ? ((alpha = (a[0] % 360) * radians), recenter()) : alpha * degrees;
+  projection.reflectX = (...a) => (a.length ? ((sx = a[0] ? -1 : 1), recenter()) : sx < 0);
+  projection.reflectY = (...a) => (a.length ? ((sy = a[0] ? -1 : 1), recenter()) : sy < 0);
+  projection.precision = (...a) => {
+    if (!a.length) return Math.sqrt(delta2);
+    delta2 = a[0] * a[0];
+    projectResample = resample(projectTransform, delta2);
+    return projection;
+  };
+  projection.fitExtent = (extent, object) => fitExtent(projection, extent, object);
+  projection.fitSize = (size, object) => fitSize(projection, size, object);
+  projection.fitWidth = (width, object) => fitWidth(projection, width, object);
+  projection.fitHeight = (height, object) => fitHeight(projection, height, object);
+
+  function recenter() {
+    const center = scaleTranslateRotate(k, 0, 0, sx, sy, alpha)(...project(lambda, phi));
+    const transform = scaleTranslateRotate(k, x - center[0], y - center[1], sx, sy, alpha);
+    rotate = rotateRadians(deltaLambda, deltaPhi, deltaGamma);
+    projectTransform = compose(project, transform);
+    projectRotateTransform = compose(rotate, projectTransform);
+    projectResample = resample(projectTransform, delta2);
+    return projection;
+  }
+
+  return (...args) => {
+    project = projectAt(...args);
+    projection.invert = project.invert && invert;
+    return recenter();
+  };
+}
+
+// Scales and translates `projection` so that `object` fits the bounds `fitBounds` makes.
+function fit(projection, fitBounds, object) {
+  const clip = projection.clipExtent();
+  projection.scale(150).translate([0, 0]);
+  if (clip != null) projection.clipExtent(null);
+  const bounds = boundsStream();
+  geoStream(object, projection.stream(bounds));
+  fitBounds(bounds.result());
+  if (clip != null) projection.clipExtent(clip);
+  return projection;
+}
+
+function fitExtent(projection, extent, object) {
+  return fit(
+    projection,
+    (b) => {
+      const w = extent[1][0] - extent[0][0];
+      const h = extent[1][1] - extent[0][1];
+      const k = Math.min(w / (b[1][0] - b[0][0]), h / (b[1][1] - b[0][1]));
+      const x = +extent[0][0] + (w - k * (b[1][0] + b[0][0])) / 2;
+      const y = +extent[0][1] + (h - k * (b[1][1] + b[0][1])) / 2;
+      projection.scale(150 * k).translate([x, y]);
+    },
+    object,
+  );
+}
+
+function fitSize(projection, size, object) {
+  return fitExtent(projection, [[0, 0], size], object);
+}
+
+function fitWidth(projection, width, object) {
+  return fit(
+    projection,
+    (b) => {
+      const w = +width;
+      const k = w / (b[1][0] - b[0][0]);
+      const x = (w - k * (b[1][0] + b[0][0])) / 2;
+      const y = -k * b[0][1];
+      projection.scale(150 * k).translate([x, y]);
+    },
+    object,
+  );
+}
+
+function fitHeight(projection, height, object) {
+  return fit(
+    projection,
+    (b) => {
+      const h = +height;
+      const k = h / (b[1][1] - b[0][1]);
+      const x = -k * b[0][0];
+      const y = (h - k * (b[1][1] + b[0][1])) / 2;
+      projection.scale(150 * k).translate([x, y]);
+    },
+    object,
+  );
+}
+
+function mercatorRaw(lambda, phi) {
+  return [lambda, Math.log(Math.tan((halfPi + phi) / 2))];
+}
+mercatorRaw.invert = (x, y) => [x, 2 * Math.atan(Math.exp(y)) - halfPi];
+
+export function geoMercator() {
+  const m = projectionMutator(() => mercatorRaw)();
+  const { center, scale, translate, clipExtent } = m;
+  let x0 = null;
+  let y0, x1, y1;
+  // The clip extent follows the scale and translation, so the poles never show.
+  const reclip = () => {
+    const k = pi * scale();
+    const t = m(geoRotation(m.rotate()).invert([0, 0]));
+    return clipExtent(
+      x0 == null
+        ? [
+            [t[0] - k, t[1] - k],
+            [t[0] + k, t[1] + k],
+          ]
+        : [
+            [Math.max(t[0] - k, x0), y0],
+            [Math.min(t[0] + k, x1), y1],
+          ],
+    );
+  };
+  m.scale = (...a) => (a.length ? (scale(a[0]), reclip()) : scale());
+  m.translate = (...a) => (a.length ? (translate(a[0]), reclip()) : translate());
+  m.center = (...a) => (a.length ? (center(a[0]), reclip()) : center());
+  m.clipExtent = (...a) => {
+    if (!a.length) {
+      return x0 == null
+        ? null
+        : [
+            [x0, y0],
+            [x1, y1],
+          ];
+    }
+    const e = a[0];
+    if (e == null) x0 = y0 = x1 = y1 = null;
+    else [x0, y0, x1, y1] = [+e[0][0], +e[0][1], +e[1][0], +e[1][1]];
+    return reclip();
+  };
+  return reclip().scale(961 / tau);
+}
+
+function cylindricalEqualAreaRaw(phi0) {
+  const cosPhi0 = Math.cos(phi0);
+  const forward = (lambda, phi) => [lambda * cosPhi0, Math.sin(phi) / cosPhi0];
+  forward.invert = (x, y) => [x / cosPhi0, clampedAsin(y * cosPhi0)];
+  return forward;
+}
+
+function conicEqualAreaRaw(y0, y1) {
+  const sy0 = Math.sin(y0);
+  const n = (sy0 + Math.sin(y1)) / 2;
+  // Parallels symmetric about the equator.
+  if (Math.abs(n) < geoEpsilon) return cylindricalEqualAreaRaw(y0);
+  const c = 1 + sy0 * (2 * n - sy0);
+  const r0 = Math.sqrt(c) / n;
+  const project = (x, y) => {
+    const r = Math.sqrt(c - 2 * n * Math.sin(y)) / n;
+    x *= n;
+    return [r * Math.sin(x), r0 - r * Math.cos(x)];
+  };
+  project.invert = (x, y) => {
+    const r0y = r0 - y;
+    let l = Math.atan2(x, Math.abs(r0y)) * Math.sign(r0y);
+    if (r0y * n < 0) l -= pi * Math.sign(x) * Math.sign(r0y);
+    return [l / n, clampedAsin((c - (x * x + r0y * r0y) * n * n) / (2 * n))];
+  };
+  return project;
+}
+
+export function geoAlbers() {
+  let phi0 = 0;
+  let phi1 = pi / 3;
+  const m = projectionMutator(conicEqualAreaRaw);
+  const p = m(phi0, phi1);
+  p.parallels = (...a) =>
+    a.length
+      ? m((phi0 = a[0][0] * radians), (phi1 = a[0][1] * radians))
+      : [phi0 * degrees, phi1 * degrees];
+  return p
+    .scale(155.424)
+    .center([0, 33.6442])
+    .parallels([29.5, 45.5])
+    .scale(1070)
+    .translate([480, 250])
+    .rotate([96, 0])
+    .center([-0.6, 38.7]);
+}
+
+// Path data of a stream, as d3's PathString writes it.
+class GeoPathString {
+  constructor(digits) {
+    let k = null;
+    if (digits != null) {
+      const d = Math.floor(digits);
+      if (!(d >= 0)) throw new RangeError(`invalid digits: ${digits}`);
+      if (d <= 15) k = 10 ** d;
+    }
+    this._k = k;
+    this._radius = 4.5;
+    this._parts = [];
+    this._line = NaN;
+    this._point = NaN;
+  }
+  // Text, and numbers, rounded.
+  _append(...items) {
+    for (const [i, item] of items.entries()) {
+      const number = i % 2 === 1;
+      this._parts.push(number && this._k !== null ? Math.round(item * this._k) / this._k : item);
+    }
+  }
+  pointRadius(r) {
+    this._radius = +r;
+    return this;
+  }
+  polygonStart() {
+    this._line = 0;
+  }
+  polygonEnd() {
+    this._line = NaN;
+  }
+  lineStart() {
+    this._point = 0;
+  }
+  lineEnd() {
+    if (this._line === 0) this._parts.push("Z");
+    this._point = NaN;
+  }
+  point(x, y) {
+    if (this._point === 0) {
+      this._append("M", x, ",", y);
+      this._point = 1;
+    } else if (this._point === 1) {
+      this._append("L", x, ",", y);
+    } else {
+      const r = this._radius;
+      this._append("M", x, ",", y, "m0,", r, "a", r, ",", r, " 0 1,1 0,", -2 * r, "a", r, ",");
+      this._append("", r, " 0 1,1 0,", 2 * r, "z");
+    }
+  }
+  result() {
+    const t = concat(this._parts);
+    this._parts = [];
+    return traced(t) ? t : t || null;
+  }
+}
+
+function boundsStream() {
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  return {
+    point: (x, y) => {
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    },
+    lineStart: noop,
+    lineEnd: noop,
+    polygonStart: noop,
+    polygonEnd: noop,
+    result: () => [
+      [x0, y0],
+      [x1, y1],
+    ],
+  };
+}
+
+function areaStream() {
+  const areaSum = new Adder();
+  let ringSum = new Adder();
+  let x00, y00, x0, y0;
+  const pointFirst = (x, y) => {
+    stream.point = point;
+    [x00, y00, x0, y0] = [x, y, x, y];
+  };
+  const point = (x, y) => {
+    ringSum.add(y0 * x - x0 * y);
+    [x0, y0] = [x, y];
+  };
+  const stream = {
+    point: noop,
+    lineStart: noop,
+    lineEnd: noop,
+    polygonStart: () => {
+      stream.lineStart = () => (stream.point = pointFirst);
+      stream.lineEnd = () => point(x00, y00);
+    },
+    polygonEnd: () => {
+      stream.lineStart = stream.lineEnd = stream.point = noop;
+      areaSum.add(Math.abs(ringSum.valueOf()));
+      ringSum = new Adder();
+    },
+    result: () => areaSum.valueOf() / 2,
+  };
+  return stream;
+}
+
+// The centroid of the polygons, else of the lines, else of the points.
+function centroidStream() {
+  let [X0, Y0, Z0, X1, Y1, Z1, X2, Y2, Z2] = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  let x00, y00, x0, y0;
+  const point = (x, y) => {
+    X0 += x;
+    Y0 += y;
+    ++Z0;
+  };
+  const along = (x, y) => {
+    const dx = x - x0;
+    const dy = y - y0;
+    const z = Math.sqrt(dx * dx + dy * dy);
+    X1 += (z * (x0 + x)) / 2;
+    Y1 += (z * (y0 + y)) / 2;
+    Z1 += z;
+  };
+  const pointFirstLine = (x, y) => {
+    stream.point = pointLine;
+    point((x0 = x), (y0 = y));
+  };
+  const pointLine = (x, y) => {
+    along(x, y);
+    point((x0 = x), (y0 = y));
+  };
+  const lineStart = () => (stream.point = pointFirstLine);
+  const lineEnd = () => (stream.point = point);
+  const pointFirstRing = (x, y) => {
+    stream.point = pointRing;
+    [x00, y00] = [x, y];
+    point((x0 = x), (y0 = y));
+  };
+  const pointRing = (x, y) => {
+    along(x, y);
+    const z = y0 * x - x0 * y;
+    X2 += z * (x0 + x);
+    Y2 += z * (y0 + y);
+    Z2 += z * 3;
+    point((x0 = x), (y0 = y));
+  };
+  const stream = {
+    point,
+    lineStart,
+    lineEnd,
+    polygonStart: () => {
+      stream.lineStart = () => (stream.point = pointFirstRing);
+      stream.lineEnd = () => pointRing(x00, y00);
+    },
+    polygonEnd: () => {
+      stream.point = point;
+      stream.lineStart = lineStart;
+      stream.lineEnd = lineEnd;
+    },
+    result: () =>
+      Z2 ? [X2 / Z2, Y2 / Z2] : Z1 ? [X1 / Z1, Y1 / Z1] : Z0 ? [X0 / Z0, Y0 / Z0] : [NaN, NaN],
+  };
+  return stream;
+}
+
+// Path data of GeoJSON through a projection, null for none. Scenes draw path data, so it has no
+// context.
+export function geoPath(projection, context) {
+  let digits = 3;
+  let pointRadius = 4.5;
+  let projectionStream = identity;
+  const noContext = () => {
+    throw new Error("geoPath() gives path data for <path d>; it draws on no context");
+  };
+  if (context != null) noContext();
+
+  function path(object, ...rest) {
+    if (!object) return null;
+    const out = new GeoPathString(digits);
+    out.pointRadius(
+      typeof pointRadius === "function" ? +pointRadius(object, ...rest) : pointRadius,
+    );
+    geoStream(object, projectionStream(out));
+    return out.result();
+  }
+  const measure = (stream) => (object) => {
+    const s = stream();
+    geoStream(object, projectionStream(s));
+    return s.result();
+  };
+  path.area = measure(areaStream);
+  path.bounds = measure(boundsStream);
+  path.centroid = measure(centroidStream);
+  path.projection = (...a) => {
+    if (!a.length) return projection;
+    projection = a[0] == null ? null : a[0];
+    projectionStream = projection == null ? identity : projection.stream;
+    return path;
+  };
+  path.context = (...a) => {
+    if (!a.length) return null;
+    if (a[0] != null) noContext();
+    return path;
+  };
+  path.pointRadius = (...a) => {
+    if (!a.length) return pointRadius;
+    pointRadius = typeof a[0] === "function" ? a[0] : +a[0];
+    return path;
+  };
+  path.digits = (...a) => {
+    if (!a.length) return digits;
+    if (a[0] == null) {
+      digits = null;
+    } else {
+      const d = Math.floor(a[0]);
+      if (!(d >= 0)) throw new RangeError(`invalid digits: ${a[0]}`);
+      digits = d;
+    }
+    return path;
+  };
+  return path.projection(projection ?? null);
+}

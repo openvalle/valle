@@ -242,4 +242,109 @@ export const checks = {
       layers(stack()(rows)),
     ];
   },
+  geo: () => {
+    // Clockwise, as d3 takes a polygon's outside; reversed, it is the rest of the sphere.
+    const square = (x, y, d) => [
+      [x, y],
+      [x, y + d],
+      [x + d, y + d],
+      [x + d, y],
+      [x, y],
+    ];
+    const land = {
+      type: "FeatureCollection",
+      features: [
+        { type: "Feature", geometry: { type: "Polygon", coordinates: [square(-10, 40, 20)] } },
+        {
+          type: "Feature",
+          geometry: {
+            type: "MultiPolygon",
+            coordinates: [[square(100, -20, 30), square(105, -15, 10).reverse()]],
+          },
+        },
+        // Across the antimeridian.
+        { type: "Feature", geometry: { type: "Polygon", coordinates: [square(170, 50, 20)] } },
+      ],
+    };
+    const river = {
+      type: "LineString",
+      coordinates: [
+        [-120, 30],
+        [-60, 45],
+        [10, 20],
+        [175, 0],
+        [-170, -10],
+      ],
+    };
+    const towns = {
+      type: "MultiPoint",
+      coordinates: [
+        [2.35, 48.85],
+        [139.7, 35.7],
+        [-74, 40.7],
+      ],
+    };
+    const usa = { type: "Polygon", coordinates: [square(-120, 30, 45)] };
+    const mercator = geoMercator();
+    const fitted = geoMercator().fitSize([400, 300], land);
+    const framed = geoMercator().fitExtent(
+      [
+        [20, 10],
+        [380, 290],
+      ],
+      river,
+    );
+    const turned = geoMercator().rotate([-150, 10, 20]).scale(80).translate([200, 150]);
+    const clipped = geoMercator().clipExtent([
+      [100, 100],
+      [500, 400],
+    ]);
+    const albers = geoAlbers();
+    const albersFit = geoAlbers().fitSize([600, 400], usa);
+    const path = geoPath(fitted);
+    return [
+      [mercator([0, 0]), mercator([-74, 40.7]), mercator.invert([100, 50]), mercator.scale()],
+      [mercator.translate(), mercator.clipExtent(), mercator.center()],
+      [fitted.scale(), fitted.translate(), framed.scale(), framed.translate()],
+      [turned([10, 20]), turned.invert([120, 80]), turned.rotate()],
+      [albers([-96, 38]), albers([-122.4, 37.8]), albers.invert([480, 250]), albers.parallels()],
+      [albers.scale(), albers.translate(), albers.rotate(), albers.center()],
+      [albersFit.scale(), albersFit.translate(), albersFit([-100, 50])],
+      geoMercator().angle(30).reflectY(true)([20, 30]),
+      geoMercator().precision(0).precision(),
+      path(land),
+      path(river),
+      path(towns),
+      path.pointRadius(2)({ type: "Point", coordinates: [10, 10] }),
+      path.pointRadius((d) => d.r)({ type: "Point", coordinates: [0, 0] }, 1),
+      path.digits(1)(land.features[1]),
+      path.bounds(land),
+      path.area(land),
+      path.centroid(land.features[0]),
+      path.centroid(river),
+      path.centroid(towns),
+      path(null),
+      geoPath(turned)(land),
+      geoPath(turned)(river),
+      geoPath(turned)({ type: "Polygon", coordinates: [square(-30, -25, 55).reverse()] }),
+      geoPath(clipped)(land),
+      geoPath(clipped)(river),
+      geoPath(mercator)({ type: "Sphere" }),
+      geoPath(clipped)({ type: "Sphere" }),
+      geoPath(albersFit)(usa),
+      geoPath(albers)({
+        type: "GeometryCollection",
+        geometries: [usa, towns, { type: "MultiLineString", coordinates: [river.coordinates] }],
+      }),
+      geoPath()({
+        type: "LineString",
+        coordinates: [
+          [1, 2],
+          [3.14159, 4],
+        ],
+      }),
+      geoPath(geoMercator().fitWidth(300, land))(land),
+      geoPath(geoMercator().fitHeight(200, river))(river),
+    ];
+  },
 };
