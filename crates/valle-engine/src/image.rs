@@ -54,7 +54,8 @@ impl Picture {
     }
 }
 
-/// An image: 4 bytes a pixel, red, green, blue and alpha, rows top down.
+/// An image: 4 bytes a pixel, red, green, blue and alpha, rows top down; none for a picture a
+/// box draws, which the GPU draws each frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Image {
     pub size: [u32; 2],

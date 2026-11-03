@@ -772,33 +772,96 @@ pub fn paint(
     layout: &Layout,
     pictures: &[Picture],
 ) -> Vec<Item> {
-    let n = template.nodes.len();
-    let parents = parents(template);
-    let mut painter = Painter {
-        template,
-        styles,
-        layout,
-        pictures,
-        spaces: spaces(template, styles, layout),
-        parents,
-        clips: Vec::with_capacity(n),
-        drawing: Drawing::new(template, styles, &[]),
-    };
-    // In preorder, so the box whose clips a box takes has its own.
-    for i in 0..n {
-        let clips = match painter.container(i) {
-            None => Vec::new(),
-            Some(c) => {
-                let mut clips = painter.clips[c].clone();
-                clips.extend(painter.clipping(c).then_some(c));
-                clips
-            }
-        };
-        painter.clips.push(clips);
-    }
+    let painter = Painter::new(template, styles, layout, pictures);
     let mut out = Vec::new();
     painter.context(None, &mut out);
     painter.nest(out)
+}
+
+/// The pictures boxes of the frame draw, in the order to draw them in, as each reads only those
+/// before it: those in a box before it, and a box's before its later siblings'. Each is its
+/// image, and the display list of the canvas the box alone paints; one hidden, or in a hidden
+/// box, is left out, as nothing shown reads it.
+pub fn drawn(
+    template: &Template,
+    styles: &[Style],
+    layout: &Layout,
+    pictures: &[Picture],
+) -> Vec<(u32, Vec<Item>)> {
+    if template.pictures.is_empty() {
+        return Vec::new();
+    }
+    let painter = Painter::new(template, styles, layout, pictures);
+    // The last box in each box, in preorder.
+    let n = template.nodes.len();
+    let mut last: Vec<usize> = (0..n).collect();
+    for i in (0..n).rev() {
+        for &c in &template.nodes[i].children {
+            last[i] = last[i].max(last[c as usize]);
+        }
+    }
+    let mut order: Vec<(u32, u32)> = template.pictures.clone();
+    order.sort_by_key(|&(node, _)| (last[node as usize], std::cmp::Reverse(node)));
+    let shown = |mut i: usize| loop {
+        if styles[i].layout.display == Display::None {
+            return false;
+        }
+        match painter.parents[i] {
+            Some(p) => i = p,
+            None => return true,
+        }
+    };
+    (order.into_iter())
+        .filter(|&(node, _)| shown(node as usize))
+        .filter_map(|(node, slot)| {
+            let Picture::Image { image, .. } = pictures[slot as usize] else {
+                return None;
+            };
+            let mut out = Vec::new();
+            painter.layer(node as usize, &mut out);
+            Some((image, painter.nest(out)))
+        })
+        .collect()
+}
+
+impl<'a> Painter<'a> {
+    fn new(
+        template: &'a Template,
+        styles: &'a [Style],
+        layout: &'a Layout,
+        pictures: &'a [Picture],
+    ) -> Painter<'a> {
+        let n = template.nodes.len();
+        let parents = parents(template);
+        let mut drawn = vec![false; n];
+        for &(node, _) in &template.pictures {
+            drawn[node as usize] = true;
+        }
+        let mut painter = Painter {
+            template,
+            styles,
+            layout,
+            pictures,
+            spaces: spaces(template, styles, layout),
+            parents,
+            clips: Vec::with_capacity(n),
+            drawing: Drawing::new(template, styles, &[]),
+            drawn,
+        };
+        // In preorder, so the box whose clips a box takes has its own.
+        for i in 0..n {
+            let clips = match painter.container(i) {
+                None => Vec::new(),
+                Some(c) => {
+                    let mut clips = painter.clips[c].clone();
+                    clips.extend(painter.clipping(c).then_some(c));
+                    clips
+                }
+            };
+            painter.clips.push(clips);
+        }
+        painter
+    }
 }
 
 /// Each box's transform from its px to the canvas's: its ancestors' and its own.
@@ -1000,6 +1063,8 @@ struct Painter<'a> {
     clips: Vec<Vec<usize>>,
     /// What the frame's `<svg>`s draw.
     drawing: Drawing<'a>,
+    /// Whether each box draws a picture, which it paints alone rather than where it is.
+    drawn: Vec<bool>,
 }
 
 impl Painter<'_> {
@@ -1022,7 +1087,8 @@ impl Painter<'_> {
             )
             .collect(),
         };
-        (list.into_iter()).filter(|&c| self.styles[c].layout.display != Display::None)
+        (list.into_iter())
+            .filter(|&c| self.styles[c].layout.display != Display::None && !self.drawn[c])
     }
 
     fn positioned(&self, i: usize) -> bool {
@@ -1057,6 +1123,7 @@ impl Painter<'_> {
             || s.contains_all()
             || self.in_scene(i)
             || s.layout.position == Position::Fixed
+            || self.drawn[i]
             || (s.z_index.is_some() && (self.positioned(i) || self.item(i)))
     }
 

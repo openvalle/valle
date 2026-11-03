@@ -308,6 +308,8 @@ struct TracedNode {
     shader: Option<TracedShader>,
     /// A video's source time, in seconds.
     time: Option<Ref>,
+    /// The picture it draws, `<TimeScope picture>`'s name.
+    picture: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -455,6 +457,7 @@ pub fn variant(
     };
     let image = |name: &str, what: &str| picture(name, what, false);
     let mut nodes = Vec::with_capacity(traced.nodes.len());
+    let mut pictures = Vec::new();
     for n in traced.nodes {
         let kind = match &*n.kind {
             "view" => Kind::View,
@@ -564,6 +567,11 @@ pub fn variant(
             }
             other => return Err(format!("node type {other}")),
         };
+        if let Some(name) = &n.picture {
+            let k = (inputs.iter().position(|i| i == name))
+                .ok_or_else(|| format!("the scene draws no picture {name}"))?;
+            pictures.push((nodes.len() as u32, (resources.len() + k) as u32));
+        }
         nodes.push(Node {
             kind,
             path: n.path.map(Rc::from),
@@ -610,6 +618,7 @@ pub fn variant(
         nodes,
         roots,
         guards,
+        pictures,
     })
 }
 

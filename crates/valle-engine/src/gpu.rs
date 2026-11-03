@@ -992,17 +992,82 @@ impl<'a> Renderer<'a> {
     }
 
     /// The frame `items` paint: straight sRGB, 4 bytes a pixel, rows top down. `faces` are the
-    /// faces their glyphs name, and `images` the images they show.
+    /// faces their glyphs name, and `images` the images they show. First the `pictures` boxes of
+    /// it draw, which it reads as images: each in turn, which may read those before it, of the
+    /// canvas's size.
     pub fn render(
+        &mut self,
+        items: &[Item],
+        pictures: &[(u32, Vec<Item>)],
+        faces: &[Face],
+        images: &[Image],
+    ) -> Result<Vec<u8>, Error> {
+        // Color glyphs' images, kept while the last frame showed them.
+        let used = std::mem::take(&mut self.used);
+        self.colors.retain(|k, _| used.contains(k));
+        for (image, items) in pictures {
+            let mut encoder = self.prepare(items, faces, images)?;
+            let target = &self.images[self.shown[*image as usize]].1.texture;
+            // In working colors, as images are read.
+            encoder.copy_texture_to_texture(
+                self.frame.texture.as_image_copy(),
+                target.as_image_copy(),
+                self.frame.texture.size(),
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+        }
+        let mut encoder = self.prepare(items, faces, images)?;
+        let gpu = self.gpu;
+        let device = &gpu.device;
+        let queue = &gpu.queue;
+
+        let [width, height] = self.size;
+        encoder.copy_texture_to_buffer(
+            self.output.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &self.readback,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row(width)),
+                    rows_per_image: Some(height),
+                },
+            },
+            self.output.size(),
+        );
+        queue.submit([encoder.finish()]);
+        let (sent, mapped) = mpsc::channel();
+        self.readback.map_async(wgpu::MapMode::Read, .., move |r| {
+            let _ = sent.send(r);
+        });
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| format!("GPU: {e}"))?;
+        mapped
+            .recv()
+            .map_err(|e| format!("engine bug: readback: {e}"))?
+            .map_err(|e| format!("GPU readback: {e}"))?;
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        {
+            let view = self
+                .readback
+                .get_mapped_range(..)
+                .map_err(|e| format!("engine bug: readback: {e}"))?;
+            for line in view.chunks(row(width) as usize) {
+                pixels.extend_from_slice(&line[..(width * 4) as usize]);
+            }
+        }
+        self.readback.unmap();
+        Ok(pixels)
+    }
+
+    /// Encodes drawing the frame `items` paint into the output, its buffers written.
+    fn prepare(
         &mut self,
         items: &[Item],
         faces: &[Face],
         images: &[Image],
-    ) -> Result<Vec<u8>, Error> {
-        // The images' textures, kept while frames show them; color glyphs' while the last frame
-        // did.
-        let used = std::mem::take(&mut self.used);
-        self.colors.retain(|k, _| used.contains(k));
+    ) -> Result<wgpu::CommandEncoder, Error> {
+        // The images' textures, kept while frames show them, and color glyphs'.
         let rasters = || self.colors.values().flatten().map(|(i, _)| &i.pixels);
         self.images.retain(|(p, _)| {
             images.iter().any(|i| Arc::ptr_eq(&i.pixels, p)) || rasters().any(|r| Arc::ptr_eq(r, p))
@@ -1016,7 +1081,11 @@ impl<'a> Renderer<'a> {
                 {
                     Some(k) => k,
                     None => {
-                        let t = mipmapped(self.gpu, i);
+                        // One without pixels is a picture a box draws.
+                        let t = match i.pixels.is_empty() {
+                            true => texture(&self.gpu.device, i.size, WORK),
+                            false => mipmapped(self.gpu, i),
+                        };
                         self.images
                             .push((i.pixels.clone(), Surface::new(self.gpu, t)));
                         self.images.len() - 1
@@ -1099,44 +1168,7 @@ impl<'a> Renderer<'a> {
             }));
         }
         self.encode(&mut encoder, &plan);
-
-        let [width, height] = self.size;
-        encoder.copy_texture_to_buffer(
-            self.output.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &self.readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row(width)),
-                    rows_per_image: Some(height),
-                },
-            },
-            self.output.size(),
-        );
-        queue.submit([encoder.finish()]);
-        let (sent, mapped) = mpsc::channel();
-        self.readback.map_async(wgpu::MapMode::Read, .., move |r| {
-            let _ = sent.send(r);
-        });
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| format!("GPU: {e}"))?;
-        mapped
-            .recv()
-            .map_err(|e| format!("engine bug: readback: {e}"))?
-            .map_err(|e| format!("GPU readback: {e}"))?;
-        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-        {
-            let view = self
-                .readback
-                .get_mapped_range(..)
-                .map_err(|e| format!("engine bug: readback: {e}"))?;
-            for line in view.chunks(row(width) as usize) {
-                pixels.extend_from_slice(&line[..(width * 4) as usize]);
-            }
-        }
-        self.readback.unmap();
-        Ok(pixels)
+        Ok(encoder)
     }
 
     /// Plans drawing `items` into `target`, at `at`.

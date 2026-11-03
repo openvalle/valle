@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::eval::{self, Clock};
 use kurbo::{BezPath, Point, Shape};
@@ -11,7 +12,7 @@ use kurbo::{BezPath, Point, Shape};
 use crate::front::{Composition, Front, Holds, Inputs, Slot, Typeset};
 use crate::image::{Image, Picture};
 use crate::layout::{Layout, layout};
-use crate::paint::{Item, Matrix, paint, transforms};
+use crate::paint::{Item, Matrix, drawn, paint, transforms};
 use crate::slug;
 use crate::style::{Sheet, Style, filter, gradient};
 use crate::template::{
@@ -34,6 +35,9 @@ pub struct Frame {
     /// Each node's transform from its px, those of `layout`, to the canvas's.
     pub transforms: Vec<Matrix>,
     pub items: Vec<Item>,
+    /// The pictures its boxes draw, to draw before `items`, which read them: each image, and
+    /// what it shows.
+    pub pictures: Vec<(u32, Vec<Item>)>,
 }
 
 /// A frame laid out, before it is painted.
@@ -144,6 +148,17 @@ impl Scene {
             pictures.push(Picture::Image {
                 image: (images.len() - 1) as u32,
                 size,
+            });
+        }
+        // Then those its boxes draw, frame by frame: empty until the GPU draws them.
+        for _ in &front.drawn {
+            images.push(Image {
+                size: [c.width, c.height],
+                pixels: Arc::from([]),
+            });
+            pictures.push(Picture::Image {
+                image: (images.len() - 1) as u32,
+                size: [c.width, c.height],
             });
         }
         front.set_typeset(Box::new(Typesetter {
@@ -319,6 +334,7 @@ impl Scene {
         self.show_videos(&template, &values, &styles)?;
         backgrounds(&template, &styles, &self.pictures)?;
         let items = paint(&template, &styles, &laid, &self.pictures);
+        let pictures = drawn(&template, &styles, &laid, &self.pictures);
         let transforms = transforms(&template, &styles, &laid);
         Ok(Frame {
             template,
@@ -327,6 +343,7 @@ impl Scene {
             layout: laid,
             transforms,
             items,
+            pictures,
         })
     }
 
@@ -511,6 +528,7 @@ impl Typesetter {
             }],
             roots: vec![0],
             guards: Vec::new(),
+            pictures: Vec::new(),
         };
         let mut styles = Sheet::new(&template)?.compute(&[], true, self.canvas, &self.resources)?;
         let laid = layout(&template, &[], &styles, self.canvas, text, &[])?;

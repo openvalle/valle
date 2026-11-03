@@ -220,6 +220,9 @@ pub struct Speed {
 }
 
 impl Speed {
+    /// The source's own speed.
+    pub const ONE: Speed = Speed { num: 1, den: 1 };
+
     pub fn from_f64(rate: f64) -> Result<Speed, String> {
         let bad = || format!("rate {rate} is not a finite number between -10¹⁸ and 10¹⁸");
         if !rate.is_finite() {

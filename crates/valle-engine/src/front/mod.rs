@@ -118,6 +118,8 @@ pub struct Front {
     shaders: RefCell<HashMap<String, Rc<str>>>,
     /// The clip table of a Timeline's scene.
     clips: Rc<Clips>,
+    /// The pictures boxes of it draw, as `Inputs` names them.
+    pub drawn: Vec<String>,
 }
 
 /// What a scene declares, read without running it: its composition, controls and role, its
@@ -305,6 +307,7 @@ impl Front {
             typeset: Rc::default(),
             shaders: RefCell::default(),
             clips: inputs.clips.clone(),
+            drawn: inputs.drawn.clone(),
         };
         front.context.with(|ctx| -> Result<(), Error> {
             install_host(&ctx, front.typeset.clone(), front.clips.clone())
@@ -411,10 +414,17 @@ impl Front {
             &traced,
             &|at| self.place(at),
             &self.resources,
-            self.role.inputs(),
+            &self.pictures(),
             &self.shaders.borrow(),
             &self.clips,
         )
+    }
+
+    /// The names of the pictures it reads as `input://name`, which come after its resources: its
+    /// role's, then those its boxes draw.
+    pub fn pictures(&self) -> Vec<&str> {
+        let drawn = self.drawn.iter().map(String::as_str);
+        self.role.inputs().iter().copied().chain(drawn).collect()
     }
 
     fn run(&self, ctx: &Ctx<'_>, source: String, file: &str) -> Result<(), Error> {

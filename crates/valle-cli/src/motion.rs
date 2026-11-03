@@ -307,7 +307,7 @@ pub fn draw(
     let at = at.map_err(|e| Failure::new("scene", e))?;
     let frame = scene.frame(at).map_err(|e| Failure::new("scene", e))?;
     renderer
-        .render(&frame.items, scene.faces(), scene.images())
+        .render(&frame.items, &frame.pictures, scene.faces(), scene.images())
         .map_err(|e| Failure::new("gpu", e))
 }
 

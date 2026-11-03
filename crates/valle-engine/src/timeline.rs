@@ -22,6 +22,20 @@ use crate::front::{self, Declared, Holds, Inputs, Role};
 use crate::template::{self, ClipTime, Clips, Error};
 use crate::time::{Speed, Tick};
 
+/// A color grade's temperature, as the old engine had it: red times 2^(t / 4), blue divided by
+/// it, of what is under it.
+const GRADE: &str = "#version 300 es
+precision highp float;
+uniform sampler2D backdrop;
+uniform float temperature;
+in vec2 uv;
+out vec4 color;
+void main() {
+  vec4 c = texture(backdrop, uv);
+  float g = exp2(temperature * 0.25);
+  color = vec4(c.r * g, c.g, c.b / g, c.a);
+}";
+
 /// The scene a document lowers to: its path, beside the document, the sources of the modules
 /// made for it by path, and what its controls are bound to, the clip table among them.
 pub struct Lowered {
@@ -49,24 +63,24 @@ pub fn lower(path: &str, doc: &Document, host: &Host<'_>) -> Result<Lowered, Err
         declared: HashMap::new(),
         clips: Clips::new(),
         functions: Vec::new(),
+        drawn: Vec::new(),
     };
     let [w, h] = [doc.canvas.width, doc.canvas.height];
     let fill = format!("{{ position: \"absolute\", left: 0, top: 0, width: {w}, height: {h} }}");
     let mut body = String::new();
     for track in &doc.tracks {
         match track.kind {
-            valle_timeline::Kind::Visual => {}
+            valle_timeline::Kind::Visual => body.push_str(&l.track(track, &fill)?),
             // Sound is the mix's.
-            valle_timeline::Kind::Audio => continue,
-            _ => {
+            valle_timeline::Kind::Audio => {}
+            valle_timeline::Kind::Adjustment => body = l.adjustment(track, body, &fill)?,
+            valle_timeline::Kind::Caption => {
                 return Err(format!(
-                    "{}: {} tracks are not supported yet",
-                    track.at,
-                    track.kind.name()
+                    "{}: caption tracks are not supported yet",
+                    track.at
                 ));
             }
         }
-        body.push_str(&l.track(track, &fill)?);
     }
 
     let mut code = String::from("// The scene a Timeline document plays as.\n");
@@ -108,6 +122,7 @@ export default function Timeline() {{
     let inputs = Inputs {
         resources: l.bound,
         clips: Rc::new(l.clips),
+        drawn: l.drawn,
         ..Inputs::default()
     };
     Ok(Lowered {
@@ -131,6 +146,8 @@ struct Lowering<'a> {
     clips: Clips,
     /// The components that draw the clips.
     functions: Vec<String>,
+    /// The pictures boxes of the scene draw, `p0`, `p1`…
+    drawn: Vec<String>,
 }
 
 impl Lowering<'_> {
@@ -139,6 +156,13 @@ impl Lowering<'_> {
         let name = format!("r{}", self.slots.len());
         self.slots.push((name.clone(), kind));
         self.bound.insert(name.clone(), files);
+        name
+    }
+
+    /// A new picture of the scene, which a box draws.
+    fn picture(&mut self) -> String {
+        let name = format!("p{}", self.drawn.len());
+        self.drawn.push(name.clone());
         name
     }
 
@@ -193,9 +217,6 @@ impl Lowering<'_> {
     /// what is in it, on the clip's time.
     fn clip(&mut self, track: &Track, clip: &Clip, reads: [Tick; 2]) -> Result<Drawn, Error> {
         let at = clip.at.as_str();
-        if !clip.look.effects.is_empty() {
-            return Err(format!("{at}.effects: clip effects are not supported yet"));
-        }
         let fit = clip.look.fit.unwrap_or(Fit::Contain);
         let mut scope = Scope::default();
         let media = |r: &str, tag: &str| {
@@ -235,15 +256,48 @@ impl Lowering<'_> {
         };
         let time = scope.time.take().unwrap_or(ClipTime::Source {
             trim: Tick::ZERO,
-            rate: Speed::from_f64(1.0)?,
+            rate: Speed::ONE,
             map: Vec::new(),
             length: None,
         });
+        // Its effects work on it before its opacity and its blend.
+        let finished = clip.look.effects.is_empty();
         let shows = format!("K{}", self.functions.len());
-        let body = self.look(clip, &scope.lets, &content)?;
+        let body = self.look(clip, &scope.lets, &content, finished)?;
         self.functions.push(format!(
             "function {shows}() {{\n  const t = useCurrentTime().clipSeconds;\n{body}}}\n"
         ));
+        let mut effects = Vec::new();
+        for (k, e) in clip.look.effects.iter().enumerate() {
+            let at = format!("{at}.effects[{k}]");
+            let (d, name) = self.component(&e.component, &format!("{at}.component"))?;
+            if d.role != Role::Effect {
+                return Err(format!(
+                    "{at}.component: {} is not an effect(); an effect declares `export const \
+                     role = effect()` and reads the clip as input://source",
+                    e.component
+                ));
+            }
+            let mut scope = Scope::default();
+            let props = self.given(e, &d, &at, None, &mut scope)?;
+            let mut style = vec!["position: \"absolute\"".to_string(), "inset: 0".into()];
+            if k + 1 == clip.look.effects.len() {
+                style.extend(self.finish(clip)?);
+            }
+            let shows = format!("K{}", self.functions.len());
+            self.functions.push(format!(
+                "function {shows}() {{\n  const t = useCurrentTime().clipSeconds;\n  return (\n    <View style={{{{ {} }}}}>\n      <{name} {{...{props}}} />\n    </View>\n  );\n}}\n",
+                style.join(", ")
+            ));
+            effects.push(Effect {
+                shows,
+                props: self.role_props(&d, clip.duration, &scope),
+                time: ClipTime::Role {
+                    role: d.role,
+                    duration: d.composition.duration,
+                },
+            });
+        }
         let mut props = Vec::new();
         if let Some(c) = scope.composition {
             props.push(format!("composition={{{c}}}"));
@@ -251,7 +305,92 @@ impl Lowering<'_> {
         if !scope.names.is_empty() {
             props.push(format!("resources={{{}}}", js(&scope.names)));
         }
-        Ok(Drawn { shows, props, time })
+        Ok(Drawn {
+            shows,
+            props,
+            time,
+            effects,
+        })
+    }
+
+    /// The props of the TimeScope of a role's component in a clip `duration` long: the
+    /// composition it sees, of the canvas's size, and the scene's resources its own stand for.
+    fn role_props(&self, d: &Declared, duration: Tick, scope: &Scope) -> Vec<String> {
+        let mut props = vec![format!(
+            "composition={{{{ width: {}, height: {}, duration: {}, clipDuration: {} }}}}",
+            self.doc.canvas.width,
+            self.doc.canvas.height,
+            d.composition.duration.seconds_text(),
+            duration.seconds_text()
+        )];
+        if !scope.names.is_empty() {
+            props.push(format!("resources={{{}}}", js(&scope.names)));
+        }
+        props
+    }
+
+    /// A clip shown over `on`, as clip `id` of the table, with `extra` props on its TimeScope:
+    /// with effects, its picture drawn, then each effect reading the one before.
+    #[allow(clippy::too_many_arguments)]
+    fn instance(
+        &mut self,
+        clip: &Clip,
+        d: &Drawn,
+        id: &str,
+        key: &str,
+        on: [Tick; 2],
+        extra: &[String],
+        fill: &str,
+    ) -> String {
+        let table = |time: &ClipTime| template::Clip {
+            start: clip.start,
+            end: clip.end(),
+            on,
+            time: time.clone(),
+            frames: None,
+        };
+        let shows = format!("<{} />", d.shows);
+        if d.effects.is_empty() {
+            let props: Vec<String> = d.props.iter().chain(extra).cloned().collect();
+            return self.scope(id, key, table(&d.time), &props, fill, &shows);
+        }
+        let mut source = self.picture();
+        let mut props = d.props.clone();
+        props.push(format!("picture={}", js(&source)));
+        let mut inside = self.scope(
+            &format!("{id}~source"),
+            "source",
+            table(&d.time),
+            &props,
+            fill,
+            &shows,
+        );
+        for (k, e) in d.effects.iter().enumerate() {
+            let mut props = e.props.clone();
+            props.push(format!("inputs={{{{ source: {} }}}}", js(&source)));
+            if k + 1 < d.effects.len() {
+                source = self.picture();
+                props.push(format!("picture={}", js(&source)));
+            }
+            let shows = format!("<{} />", e.shows);
+            inside.push_str(&self.scope(
+                &format!("{id}~e{k}"),
+                &format!("e{k}"),
+                table(&e.time),
+                &props,
+                fill,
+                &shows,
+            ));
+        }
+        // All on the timeline's time.
+        let whole = template::Clip {
+            start: Tick::ZERO,
+            end: self.doc.duration,
+            on,
+            time: same_time(),
+            frames: None,
+        };
+        self.scope(id, key, whole, extra, fill, &inside)
     }
 
     /// A clip of the table, `id`, shown over `on` and timed as `clip`, and its TimeScope with
@@ -307,43 +446,81 @@ impl Lowering<'_> {
             let d = self.clip(track, clip, reads)?;
             let on = [clip.start + head[i], clip.end() - tail[i]];
             if on[0] < on[1] {
-                let table = template::Clip {
-                    start: clip.start,
-                    end: clip.end(),
-                    on,
-                    time: d.time.clone(),
-                    frames: None,
-                };
-                let inside = format!("<{} />", d.shows);
-                let shown = self.scope(&clip.id, &clip.id, table, &d.props, fill, &inside);
+                let shown = self.instance(clip, &d, &clip.id, &clip.id, on, &[], fill);
                 writeln!(out, "        {shown}").unwrap();
             }
             drawn.push(Some(d));
         }
         for (k, t) in track.transitions.iter().enumerate() {
             let (lo, hi) = t.span(track);
-            if t.kind == "motion" {
-                return Err(format!(
-                    "{}: motion transitions are not supported yet",
-                    t.at
-                ));
-            }
             let id = format!("{}~{k}", track.id);
+            if let Some(c) = &t.component {
+                // The two clips drawn as pictures, which it reads.
+                let mut names = Map::new();
+                for (side, i) in [("from", t.from), ("to", t.to)] {
+                    let d = drawn[i]
+                        .as_ref()
+                        .expect("transitions go between enabled clips");
+                    let p = self.picture();
+                    let extra = [format!("picture={}", js(&p))];
+                    let shown = self.instance(
+                        &track.clips[i],
+                        d,
+                        &format!("{id}~{side}"),
+                        side,
+                        [lo, hi],
+                        &extra,
+                        fill,
+                    );
+                    writeln!(out, "        {shown}").unwrap();
+                    names.insert(side.to_string(), Value::String(p));
+                }
+                let at = format!("{}.component", t.at);
+                let (d, name) = self.component(&c.component, &at)?;
+                if d.role != Role::Transition {
+                    return Err(format!(
+                        "{at}: {} is not a transition(); a transition declares `export const \
+                         role = transition()` and reads input://from and input://to",
+                        c.component
+                    ));
+                }
+                let mut scope = Scope::default();
+                let props = self.given(c, &d, &t.at, None, &mut scope)?;
+                let shows = format!("K{}", self.functions.len());
+                self.functions.push(format!(
+                    "function {shows}() {{\n  const t = useCurrentTime().clipSeconds;\n  return (\n    <View style={{{{ position: \"absolute\", inset: 0 }}}}>\n      <{name} {{...{props}}} />\n    </View>\n  );\n}}\n"
+                ));
+                let mut props = self.role_props(&d, hi - lo, &scope);
+                props.push(format!("inputs={{{}}}", js(&names)));
+                let table = template::Clip {
+                    start: lo,
+                    end: hi,
+                    on: [lo, hi],
+                    time: ClipTime::Role {
+                        role: d.role,
+                        duration: d.composition.duration,
+                    },
+                    frames: Some(self.doc.canvas.fps),
+                };
+                let shown = self.scope(&id, &id, table, &props, fill, &format!("<{shows} />"));
+                writeln!(out, "        {shown}").unwrap();
+                continue;
+            }
             let mut sides = Vec::new();
             for (side, i) in [("from", t.from), ("to", t.to)] {
-                let clip = &track.clips[i];
                 let d = drawn[i]
                     .as_ref()
                     .expect("transitions go between enabled clips");
-                let table = template::Clip {
-                    start: clip.start,
-                    end: clip.end(),
-                    on: [lo, hi],
-                    time: d.time.clone(),
-                    frames: None,
-                };
-                let (props, inside) = (d.props.clone(), format!("<{} />", d.shows));
-                sides.push(self.scope(&format!("{id}~{side}"), side, table, &props, fill, &inside));
+                let clip = &track.clips[i];
+                sides.push(self.instance(
+                    clip,
+                    d,
+                    &format!("{id}~{side}"),
+                    side,
+                    [lo, hi],
+                    &[],
+                    fill,
+                ));
             }
             let shows = format!("K{}", self.functions.len());
             self.functions.push(format!(
@@ -369,7 +546,7 @@ impl Lowering<'_> {
                 on: [lo, hi],
                 time: ClipTime::Source {
                     trim: lo,
-                    rate: Speed::from_f64(1.0)?,
+                    rate: Speed::ONE,
                     map: Vec::new(),
                     length: None,
                 },
@@ -383,10 +560,146 @@ impl Lowering<'_> {
         Ok(out)
     }
 
+    /// An adjustment track over `below`, all the tracks before it: a color grade over what is
+    /// under it; for an effect, `below` drawn as a picture, which the effect reads and replaces,
+    /// and shown where no effect is.
+    fn adjustment(&mut self, track: &Track, below: String, fill: &str) -> Result<String, Error> {
+        let clips: Vec<&Clip> = track.clips.iter().filter(|c| c.enabled).collect();
+        let effects = clips
+            .iter()
+            .any(|c| matches!(c.content, Content::Motion(_)));
+        let mut out = below;
+        let picture = match effects {
+            true => {
+                let p = self.picture();
+                let whole = template::Clip {
+                    start: Tick::ZERO,
+                    end: self.doc.duration,
+                    on: [Tick::ZERO, self.doc.duration],
+                    time: same_time(),
+                    frames: None,
+                };
+                let extra = [format!("picture={}", js(&p))];
+                let id = format!("{}~below", track.id);
+                // On the canvas's background, as all is.
+                let background = fill.replacen(
+                    " }",
+                    &format!(", backgroundColor: {} }}", js(&self.doc.canvas.background)),
+                    1,
+                );
+                out = format!(
+                    "        {}\n",
+                    self.scope(&id, &id, whole, &extra, &background, &out)
+                );
+                p
+            }
+            false => String::new(),
+        };
+        writeln!(out, "      <View key={} style={{{fill}}}>", js(&track.id)).unwrap();
+        // Where no effect is, what is under it.
+        let mut shown = Tick::ZERO;
+        let mut gaps = Vec::new();
+        let mut spans: Vec<[Tick; 2]> = (clips.iter())
+            .filter(|c| matches!(c.content, Content::Motion(_)))
+            .map(|c| [c.start, c.end()])
+            .collect();
+        spans.sort();
+        for [start, end] in spans.iter().copied().chain([[self.doc.duration; 2]]) {
+            if shown < start {
+                gaps.push([shown, start]);
+            }
+            shown = shown.max(end);
+        }
+        if effects {
+            for (k, [start, end]) in gaps.into_iter().enumerate() {
+                let table = template::Clip {
+                    start,
+                    end,
+                    on: [start, end],
+                    time: same_time(),
+                    frames: None,
+                };
+                let id = format!("{}~under{k}", track.id);
+                let image = format!(
+                    "<Image src={} style={{{{ position: \"absolute\", inset: 0, width: \"100%\", height: \"100%\" }}}} />",
+                    js(&format!("input://{picture}"))
+                );
+                writeln!(
+                    out,
+                    "        {}",
+                    self.scope(&id, &id, table, &[], fill, &image)
+                )
+                .unwrap();
+            }
+        }
+        for clip in clips {
+            let at = clip.at.as_str();
+            let (time, props, inside) = match &clip.content {
+                Content::Grade { temperature } => {
+                    if !self.functions.iter().any(|f| f.starts_with("const GRADE")) {
+                        self.functions
+                            .insert(0, format!("const GRADE = {};\n", js(&GRADE)));
+                    }
+                    let grade = format!(
+                        "<ShaderLayer code={{GRADE}} uniforms={{{{ temperature: {} }}}} style={{{{ position: \"absolute\", inset: 0 }}}} />",
+                        num(*temperature)
+                    );
+                    (same_time(), Vec::new(), grade)
+                }
+                Content::Motion(c) => {
+                    let w = format!("{at}.component");
+                    let (d, name) = self.component(&c.component, &w)?;
+                    if d.role != Role::Effect {
+                        return Err(format!(
+                            "{w}: {} is not an effect(); an adjustment declares `export const \
+                             role = effect()` and reads what is under it as input://source",
+                            c.component
+                        ));
+                    }
+                    let mut scope = Scope::default();
+                    let given = self.given(c, &d, at, None, &mut scope)?;
+                    let shows = format!("K{}", self.functions.len());
+                    self.functions.push(format!(
+                        "function {shows}() {{\n  const t = useCurrentTime().clipSeconds;\n  return (\n    <View style={{{{ position: \"absolute\", inset: 0 }}}}>\n      <{name} {{...{given}}} />\n    </View>\n  );\n}}\n"
+                    ));
+                    let mut props = self.role_props(&d, clip.duration, &scope);
+                    props.push(format!("inputs={{{{ source: {} }}}}", js(&picture)));
+                    let time = ClipTime::Role {
+                        role: d.role,
+                        duration: d.composition.duration,
+                    };
+                    (time, props, format!("<{shows} />"))
+                }
+                _ => unreachable!("an adjustment is a grade or an effect: {at}"),
+            };
+            let table = template::Clip {
+                start: clip.start,
+                end: clip.end(),
+                on: [clip.start, clip.end()],
+                time,
+                frames: None,
+            };
+            writeln!(
+                out,
+                "        {}",
+                self.scope(&clip.id, &clip.id, table, &props, fill, &inside)
+            )
+            .unwrap();
+        }
+        out.push_str("      </View>\n");
+        Ok(out)
+    }
+
     /// The body of a clip's component: its box where `position`, `size`, `anchor`, `scale` and
-    /// `rotation` put it, at its `opacity` and `blend`, and `content` in it. `t` is the clip's
-    /// time, which keyframes are over.
-    fn look(&self, clip: &Clip, lets: &str, content: &str) -> Result<String, Error> {
+    /// `rotation` put it, at its `opacity` and `blend` once `finished`, and `content` in it. `t`
+    /// is the clip's time, which keyframes are over.
+    fn look(
+        &self,
+        clip: &Clip,
+        lets: &str,
+        content: &str,
+        finished: bool,
+    ) -> Result<String, Error> {
         let at = clip.at.as_str();
         let l = &clip.look;
         let [w, h] = [self.doc.canvas.width as f64, self.doc.canvas.height as f64];
@@ -456,12 +769,8 @@ impl Lowering<'_> {
             style
                 .push("transform: `rotate(${rotation}deg) scale(${scale[0]}, ${scale[1]})`".into());
         }
-        if l.opacity.is_some() {
-            let o = number(&l.opacity, "opacity", 1.0, Some([0.0, 1.0]))?;
-            style.push(format!("opacity: {o}"));
-        }
-        if let Some(b) = &l.blend {
-            style.push(format!("mixBlendMode: {}", js(b)));
+        if finished {
+            style.extend(self.finish(clip)?);
         }
         writeln!(
             out,
@@ -470,6 +779,25 @@ impl Lowering<'_> {
         )
         .unwrap();
         Ok(out)
+    }
+
+    /// The style of a clip's `opacity` and `blend`, which go after its effects.
+    fn finish(&self, clip: &Clip) -> Result<Vec<String>, Error> {
+        let mut style = Vec::new();
+        if let Some(v) = &clip.look.opacity {
+            let o = curve(v, &format!("{}.opacity", clip.at), &|v, w| {
+                let x = v.as_f64().ok_or_else(|| format!("{w}: a number"))?;
+                match (0.0..=1.0).contains(&x) {
+                    true => Ok(Js::Number(x)),
+                    false => Err(format!("{w}: from 0 to 1, not {x}")),
+                }
+            })?;
+            style.push(format!("opacity: {o}"));
+        }
+        if let Some(b) = &clip.look.blend {
+            style.push(format!("mixBlendMode: {}", js(b)));
+        }
+        Ok(style)
     }
 
     /// A color written in the document, checked.
@@ -527,7 +855,7 @@ impl Lowering<'_> {
                     ("end", clip.source.end != End::Error),
                     (
                         "trimStart or rate",
-                        !matches!(&clip.source.time, SourceTime::Linear { trim, rate } if *trim == Tick::ZERO && *rate == Speed::from_f64(1.0).unwrap_or(*rate)),
+                        !matches!(&clip.source.time, SourceTime::Linear { trim, rate } if *trim == Tick::ZERO && *rate == Speed::ONE),
                     ),
                 ] {
                     if given {
@@ -669,6 +997,25 @@ struct Drawn {
     shows: String,
     props: Vec<String>,
     time: ClipTime,
+    effects: Vec<Effect>,
+}
+
+/// One of a clip's effects as drawn: the component that draws it, the props of its TimeScope,
+/// and its time.
+struct Effect {
+    shows: String,
+    props: Vec<String>,
+    time: ClipTime,
+}
+
+/// The time of a TimeScope that gives what is in it the time around it.
+fn same_time() -> ClipTime {
+    ClipTime::Source {
+        trim: Tick::ZERO,
+        rate: Speed::ONE,
+        map: Vec::new(),
+        length: None,
+    }
 }
 
 /// What a clip's TimeScope gives inside: its time, the composition components see, and the
@@ -693,7 +1040,7 @@ fn source_time(
     let at = &clip.at;
     let (trim, rate, map) = match &clip.source.time {
         SourceTime::Linear { trim, rate } => (*trim, *rate, Vec::new()),
-        SourceTime::Map(points) => (Tick::ZERO, Speed::from_f64(1.0)?, points.clone()),
+        SourceTime::Map(points) => (Tick::ZERO, Speed::ONE, points.clone()),
     };
     // How far into the source the clip reads, from where, and whether it reads that far tick
     // itself; its handles in a transition too.

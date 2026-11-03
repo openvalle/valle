@@ -1763,7 +1763,8 @@
   // lowering writes: a box styled `style` that shows while the clip is on, its children on the
   // clip's time from the clip table; `composition` is what useComposition() gives inside
   // (`{ width, height, duration, clipDuration }`, seconds), and `resources` and `inputs` name the
-  // scene's resources and pictures that the names of the component inside stand for.
+  // scene's resources and pictures that the names of the component inside stand for; with
+  // `picture`, the box draws that picture of the scene instead of showing where it is.
   function clipped(props, at, f, out) {
     const id = props.clip;
     const c = props.composition;
@@ -1783,6 +1784,7 @@
     const style = { ...props.style, display: mk("select", [on, "flex", "none"]) };
     try {
       element("View", { key: props.key, style }, [], out, at, false, f);
+      if (props.picture !== undefined) out[out.length - 1].picture = props.picture;
     } finally {
       G.scopes.pop();
       [G.seconds, G.progress, G.clip, G.composition, G.names, G.inputs] = outer;
@@ -2046,6 +2048,7 @@
       }
       if ("src" in n) out.src = n.src;
       if ("time" in n) out.time = ref(n.time);
+      if ("picture" in n) out.picture = n.picture;
       if ("shader" in n) {
         const { code, source, uniforms, inputs, outset } = n.shader;
         out.shader = {

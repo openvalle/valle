@@ -500,8 +500,9 @@ impl Runner {
         let drawn = self.frames(case, &mut |scene, i, at| {
             let c = scene.composition();
             let renderer = renderer.get_or_insert_with(|| Renderer::new(gpu, c.width, c.height));
-            let items = scene.frame(at)?.items;
-            let pixels = renderer.render(&items, scene.faces(), scene.images())?;
+            let frame = scene.frame(at)?;
+            let (items, pictures) = (&frame.items, &frame.pictures);
+            let pixels = renderer.render(items, pictures, scene.faces(), scene.images())?;
             match self.compare(&format!("{stem}.{i}.png"), [c.width, c.height], &pixels) {
                 Ok(Some(problem)) => problems.push(format!("frame {i}: {problem}")),
                 Ok(None) => {}
@@ -552,7 +553,7 @@ impl Runner {
                         let renderer =
                             renderer.get_or_insert_with(|| Renderer::new(gpu, size[0], size[1]));
                         let items = chrome::glyphless(&frame, scene.pictures());
-                        let drawn = renderer.render(&items, scene.faces(), scene.images())?;
+                        let drawn = renderer.render(&items, &[], scene.faces(), scene.images())?;
                         let name = format!("{stem}.{i}.png");
                         if let Some(p) = self.against_chrome(&name, size, &drawn, &png)? {
                             problems.push(format!("frame {i}: {p}"));

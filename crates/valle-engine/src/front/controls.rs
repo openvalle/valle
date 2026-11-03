@@ -75,6 +75,9 @@ pub struct Inputs {
     pub caption: Option<Value>,
     /// The clip table of the scene a Timeline lowers to, which its clips' `TimeScope`s name.
     pub clips: Rc<Clips>,
+    /// The pictures of the Timeline's scene that boxes of it draw, by name: `<TimeScope picture>`
+    /// draws one, and `input://name` reads it, as it reads a role's.
+    pub drawn: Vec<String>,
 }
 
 /// The props of `controls.props`, an object of `name: number({ … })` and the like.

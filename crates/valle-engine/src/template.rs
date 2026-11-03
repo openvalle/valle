@@ -738,6 +738,9 @@ pub struct Template {
     /// What the scene's root component returned, in order; the canvas holds them.
     pub roots: Vec<u32>,
     pub guards: Vec<Guard>,
+    /// The boxes drawn as pictures rather than where they are, each with the picture it draws:
+    /// the canvas as the box alone paints it.
+    pub pictures: Vec<(u32, u32)>,
 }
 
 impl Template {
