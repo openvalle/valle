@@ -177,6 +177,16 @@ impl Rate {
         frame as i64
     }
 
+    /// Where the `k`th of `n` shutter samples falls from its frame's time: the middles of `n` even
+    /// steps across an exposure of `angle`° of a frame, centered on it, rounded down.
+    pub fn shutter(self, angle: u32, k: u32, n: u32) -> Tick {
+        // (k + ½) / n − ½ of angle / 360 frames.
+        let steps = 2 * i128::from(k) + 1 - i128::from(n);
+        let ticks = TPS * i128::from(self.den) * i128::from(angle) * steps;
+        let per = i128::from(self.num) * 720 * i128::from(n);
+        Tick::from_i128(ticks.div_euclid(per)).expect("an exposure within a frame")
+    }
+
     /// How many frames, counting from frame 0, start before `duration`.
     pub fn frames_in(self, duration: Tick) -> i64 {
         if duration.0 <= 0 {
@@ -451,6 +461,22 @@ mod tests {
             assert!(Rate::parse(bad).is_err(), "{bad:?}");
         }
         assert!(Rate::from_f64(f64::INFINITY).is_err());
+    }
+
+    #[test]
+    fn shutter_samples_center_on_the_frame() {
+        let r = rate("30");
+        let frame = r.frame_start(1).unwrap().0;
+        let at = |angle, k, n| r.shutter(angle, k, n).0;
+        assert_eq!(at(180, 0, 1), 0);
+        assert_eq!([at(360, 0, 2), at(360, 1, 2)], [-frame / 4, frame / 4]);
+        assert_eq!(
+            [at(180, 0, 4), at(180, 3, 4)],
+            [-frame * 3 / 16, frame * 3 / 16]
+        );
+        // A third of an 11 fps frame is no whole number of ticks: down, not toward zero.
+        let odd = rate("11");
+        assert_eq!(odd.shutter(360, 0, 3).0, -(odd.shutter(360, 2, 3).0) - 1);
     }
 
     #[test]

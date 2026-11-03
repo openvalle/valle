@@ -350,6 +350,130 @@ fn time_scopes_give_their_children_a_clock() {
 }
 
 #[test]
+fn echo_and_shutter_trace_their_children_at_other_times() {
+    big_stack(|| {
+        let clock = indoc! {"
+                function Clock() {
+                  const { seconds, clipSeconds } = useCurrentTime();
+                  return <Text>{`${seconds} ${clipSeconds}`}</Text>;
+                }
+            "};
+        let mut f = scene(&format!(
+            "{clock}{}",
+            indoc! {"
+                export default function Scene() {
+                  return (
+                    <Echo count={2} delay={0.5} decay={0.5}>
+                      <Clock />
+                    </Echo>
+                  );
+                }
+            "}
+        ));
+        let frame = at(&mut f, "2");
+        assert_eq!(texts(&frame), ["1 1", "1.5 1.5", "2 2"]);
+        // A grid box, then a cell per copy, oldest first.
+        assert_eq!(style(&frame, 0, "display"), V::Str("grid".into()));
+        assert_eq!(style(&frame, 1, "opacity"), V::Num(0.25));
+        assert_eq!(style(&frame, 3, "opacity"), V::Num(0.5));
+        // Held at the start of a scene that does not loop.
+        assert_eq!(
+            texts(&at(&mut f, "0.75")),
+            ["0 0", "0.25 0.25", "0.75 0.75"]
+        );
+        let looped = format!(
+            "export const composition = {{ width: 320, height: 180, fps: 30, duration: 4, \
+             loop: true }};\n{clock}{}",
+            indoc! {"
+                export default function Scene() {
+                  return (
+                    <Echo count={1} delay={0.5} decay={1}>
+                      <Clock />
+                    </Echo>
+                  );
+                }
+            "}
+        );
+        let mut f = load(&[("scene.motion.tsx", looped.as_str())]).expect("the scene loads");
+        assert_eq!(texts(&at(&mut f, "0.25")), ["3.75 3.75", "0.25 0.25"]);
+
+        // Half a 30 fps frame each side; under a TimeScope the scene clock is mapped, the clip
+        // clock is not.
+        let mut f = scene(&format!(
+            "{clock}{}",
+            indoc! {"
+                export default function Scene() {
+                  return (
+                    <TimeScope offset={1} rate={2}>
+                      <Shutter samples={2} angle={360}>
+                        <Clock />
+                      </Shutter>
+                    </TimeScope>
+                  );
+                }
+            "}
+        ));
+        let frame = at(&mut f, "1");
+        let s = |ticks: i64| crate::js::number_to_string(Tick(ticks).seconds());
+        let quarter = crate::time::TICKS_PER_SECOND / 120;
+        assert_eq!(
+            texts(&frame),
+            [
+                format!(
+                    "{} {}",
+                    s(-2 * quarter),
+                    s(crate::time::TICKS_PER_SECOND - quarter)
+                ),
+                format!(
+                    "{} {}",
+                    s(2 * quarter),
+                    s(crate::time::TICKS_PER_SECOND + quarter)
+                ),
+            ]
+        );
+        assert_eq!(style(&frame, 1, "opacity"), V::Num(0.5));
+        assert_eq!(
+            style(&frame, 1, "mixBlendMode"),
+            V::Str("plus-lighter".into())
+        );
+        assert_eq!(f.traces(), 1);
+
+        for (body, want) in [
+            (
+                "<Echo count={2} delay={1} />",
+                "decay is a number from 0 to 1",
+            ),
+            (
+                "<Echo count={0} delay={1} decay={1} />",
+                "count is a whole number",
+            ),
+            ("<Shutter samples={33} />", "samples is a whole number"),
+            (
+                "<Shutter samples={4} angle={400} />",
+                "angle is a whole number",
+            ),
+            (
+                "<Shutter samples={4}><Echo count={1} delay={1} decay={1} /></Shutter>",
+                "cannot be inside an <Echo>",
+            ),
+            (
+                "<Text>a<Shutter samples={2} /></Text>",
+                "cannot be inside <Text>",
+            ),
+            (
+                "<View>{[1, 2, 3, 4, 5].map((i) => <Shutter key={i} samples={32} />)}</View>",
+                "more than 128",
+            ),
+        ] {
+            let e = error(&format!(
+                "export default function Scene() {{ return {body}; }}"
+            ));
+            assert!(e.contains(want), "{body}: {e}");
+        }
+    });
+}
+
+#[test]
 fn branches_become_variants() {
     big_stack(|| {
         let mut f = scene(indoc! {"

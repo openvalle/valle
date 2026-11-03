@@ -264,6 +264,13 @@ impl Front {
             set("height", c.height.into())?;
             set("fps", c.fps.as_f64())?;
             set("duration", c.duration.seconds())?;
+            // Exactly, for the times Echo and Shutter sample; useComposition() does not give them.
+            let exact = |k: &str, v: String| composition.set(k, v).map_err(|e| e.to_string());
+            exact("rate", c.fps.to_string())?;
+            exact("ticks", c.duration.seconds_text())?;
+            composition
+                .set("looped", c.looped)
+                .map_err(|e| e.to_string())?;
             let trace: Function = ctx.globals().get("__trace").map_err(|e| e.to_string())?;
             trace
                 .call((

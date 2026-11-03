@@ -107,6 +107,8 @@ pub enum Op {
     Freeze(u32, [f64; 2]),
     /// A `TimeScope`'s clock from its parent's, in ticks: `(t − offset) × rate`, rounded down.
     Scope(u32, Tick, Speed),
+    /// The root clock at another output time, for `Echo` and `Shutter`.
+    Sample(u32, Sample),
     /// A field of a simulation at the input time.
     Table(u32, Rc<Table>),
     Wiggle(u32, Wiggle),
@@ -125,6 +127,15 @@ pub enum Op {
     /// `bounds(path)`: a measure of the border box of the element with this key path, in canvas
     /// px, as laid out. It is known only after layout, as is every value made from it (`late`).
     Bounds(Rc<str>, Measure),
+}
+
+/// An output time other than the frame's: moved by `offset`, then held inside the composition's
+/// `duration`, or wrapped round it when it loops.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sample {
+    pub offset: Tick,
+    pub duration: Tick,
+    pub looped: bool,
 }
 
 /// What `bounds()` gives of a box.
@@ -149,6 +160,7 @@ impl Op {
             | Op::Stage(a, _)
             | Op::Freeze(a, _)
             | Op::Scope(a, ..)
+            | Op::Sample(a, _)
             | Op::Table(a, _)
             | Op::Wiggle(a, _)
             | Op::Format(a, _)

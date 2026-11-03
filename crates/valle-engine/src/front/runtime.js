@@ -1192,6 +1192,9 @@
         if (c.type === "TimeScope") {
           return scoped(c.props, here, () => c.children.forEach((x) => add(x, here)));
         }
+        if (c.type === "Echo" || c.type === "Shutter") {
+          fail(here, "<" + c.type + "> cannot be inside <" + tag + ">: put the <Text> in it");
+        }
         if ((INTRINSIC[c.type] && c.type !== "Span") || c.type in SVG) {
           fail(here, "<" + c.type + "> cannot be inside <" + tag + ">: it holds text and <Span>s");
         }
@@ -1369,6 +1372,8 @@
     out.push(node);
   }
 
+  const progressOf = (seconds) => clamp(__b("/", seconds, G.composition.duration), 0, 1);
+
   // Runs `f` under a <TimeScope>'s clock: `(seconds − offset) × rate` in ticks, rounded down, and
   // `progress` from it. Like a component, it adds no element and a key is a segment of key paths.
   function scoped(props, at, f) {
@@ -1383,16 +1388,105 @@
       fail(at, "<TimeScope> offset (seconds) and rate are numbers");
     }
     const key = props.key === undefined ? null : String(fixed(props.key, "key", at));
+    const op = "scope|" + offset + "|" + rate;
     const outer = [G.seconds, G.progress];
-    G.seconds = mk("scope|" + offset + "|" + rate, [G.seconds]);
-    G.progress = clamp(__b("/", G.seconds, G.composition.duration), 0, 1);
+    G.seconds = mk(op, [G.seconds]);
+    G.progress = progressOf(G.seconds);
+    G.scopes.push(op);
     if (key !== null) G.keys.push(key);
     try {
       f();
     } finally {
       if (key !== null) G.keys.pop();
+      G.scopes.pop();
       [G.seconds, G.progress] = outer;
     }
+  }
+
+  // Runs `f` at another output time, the root clock through the op `sample`: the clip clock is
+  // there, and the scene clock is it through the TimeScopes around.
+  function sampled(sample, f) {
+    const outer = [G.seconds, G.progress, G.clip];
+    const root = mk(sample, [G.clip[0]]);
+    G.clip = [root, progressOf(root)];
+    G.seconds = G.scopes.reduce((t, op) => mk(op, [t]), root);
+    G.progress = progressOf(G.seconds);
+    G.sampling = true;
+    try {
+      f();
+    } finally {
+      G.sampling = false;
+      [G.seconds, G.progress, G.clip] = outer;
+    }
+  }
+
+  const SAMPLE = Symbol("sample");
+  // Output times a frame may sample across its <Echo>s and <Shutter>s.
+  const MAX_SAMPLES = 128;
+
+  // <Echo count delay decay> and <Shutter samples angle>: copies of the children at other output
+  // times, stacked in one grid cell of an isolated box. Echo paints the copy `count × delay`
+  // seconds back first at opacity `decay^count`, newer ones over it, and the children at the
+  // frame's time last. Shutter adds its copies at `1 / samples` opacity (plus-lighter), which
+  // averages them.
+  function sampling(type, props, children, out, at) {
+    if (G.svg > 0) fail(at, "<" + type + "> cannot be inside an <svg>");
+    if (G.sampling) fail(at, "<" + type + "> cannot be inside an <Echo> or a <Shutter>");
+    const echo = type === "Echo";
+    const names = echo ? ["count", "delay", "decay"] : ["samples", "angle"];
+    for (const k of keys(props)) {
+      if (k !== "key" && !names.includes(k)) {
+        fail(at, "<" + type + "> has no prop " + k + "; it takes " + names.join(", "));
+      }
+    }
+    const get = (k, d) => fixed(props[k] ?? d, k, at);
+    const whole = (v, max) => Number.isInteger(v) && v >= 1 && v <= max;
+    const c = G.composition;
+    const tail = "|" + c.ticks + "|" + c.looped;
+    const cells = [];
+    const cell = (style, sample) => {
+      const inner =
+        sample === null
+          ? children
+          : [{ __el: true, type: SAMPLE, props: { sample }, children, site: at }];
+      cells.push({
+        __el: true,
+        type: "View",
+        props: { style: { gridArea: "1 / 1", ...style } },
+        children: inner,
+        site: at,
+      });
+    };
+    if (echo) {
+      const [count, delay, decay] = [get("count"), get("delay"), get("decay")];
+      if (!whole(count, 32)) fail(at, "<Echo> count is a whole number from 1 to 32");
+      if (!(Number.isFinite(delay) && delay > 0))
+        fail(at, "<Echo> delay is a number of seconds above 0");
+      if (!(Number.isFinite(decay) && decay >= 0 && decay <= 1)) {
+        fail(at, "<Echo> decay is a number from 0 to 1");
+      }
+      for (let i = count; i >= 1; i--)
+        cell({ opacity: decay ** i }, "echo|" + i + "|" + delay + tail);
+      cell({}, null);
+    } else {
+      const [n, angle] = [get("samples"), get("angle", 180)];
+      if (!whole(n, 32)) fail(at, "<Shutter> samples is a whole number from 1 to 32");
+      if (!(Number.isInteger(angle) && angle >= 0 && angle <= 360)) {
+        fail(at, "<Shutter> angle is a whole number of degrees from 0 to 360");
+      }
+      const style = n === 1 ? {} : { opacity: 1 / n, mixBlendMode: "plus-lighter" };
+      for (let k = 0; k < n; k++) {
+        cell(style, "shutter|" + k + "|" + n + "|" + angle + "|" + c.rate + tail);
+      }
+    }
+    G.samples += cells.length;
+    if (G.samples > MAX_SAMPLES) {
+      fail(at, "a frame samples more than " + MAX_SAMPLES + " times across <Echo>s and <Shutter>s");
+    }
+    const style = { display: "grid", isolation: "isolate" };
+    const box = { key: props.key, style };
+    if (props.key === undefined) delete box.key;
+    render({ __el: true, type: "View", props: box, children: cells, site: at }, out, at);
   }
 
   // Appends the nodes `x` renders to `out`; `at` is the enclosing element's site.
@@ -1411,6 +1505,10 @@
     if (type === "TimeScope") {
       return scoped(props, here, () => children.forEach((c) => render(c, out, here)));
     }
+    if (type === SAMPLE) {
+      return sampled(props.sample, () => children.forEach((c) => render(c, out, here)));
+    }
+    if (type === "Echo" || type === "Shutter") return sampling(type, props, children, out, here);
     element(type, props, children, out, here);
   }
 
@@ -1557,6 +1655,11 @@
     };
     // A TimeScope changes the clock under it, not the clip's.
     G.clip = [G.seconds, G.progress];
+    // The ops of the TimeScopes tracing is in, outermost first.
+    G.scopes = [];
+    // Whether tracing is in an <Echo> or a <Shutter>, and how many times it has sampled.
+    G.sampling = false;
+    G.samples = 0;
     instances = new Map();
     try {
       const scene = __import(entry);
@@ -1852,6 +1955,8 @@
     Mask: "Mask",
     Image: "Image",
     TimeScope: "TimeScope",
+    Echo: "Echo",
+    Shutter: "Shutter",
     resource,
     number: propKind("number"),
     string: propKind("string"),
