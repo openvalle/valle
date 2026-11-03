@@ -714,7 +714,8 @@
   // Path data in: `pathLength(path)`, `pointAt(path, progress)` as `{ x, y }`, and
   // `tangentAt(path, progress)` as the unit direction `{ x, y }` and its `angle` in degrees.
   const pathOp = (name, f, args) => {
-    if (typeof val(args[0]) !== "string" || !args.slice(1).every(numeric)) {
+    const operand = (a) => numeric(a) || typeof val(a) === "string";
+    if (typeof val(args[0]) !== "string" || !args.slice(1).every(operand)) {
       throw new TypeError(name + " takes path data" + (args.length > 1 ? " and a number" : ""));
     }
     return args.some(isT) ? mk("path|" + f, args) : host.op("path|" + f, args);
@@ -736,6 +737,35 @@
   // degrees, and `zigzag(path, { size, ridges })`.
   const puckerBloat = (path, amount) => pathOp("puckerBloat", "puckerBloat", [path, amount]);
   const twist = (path, angle) => pathOp("twist", "twist", [path, angle]);
+  // `inflatePath(path, distance, { join, miterLimit })`: AE's Offset Paths, mitered at 4 unless
+  // told otherwise.
+  const inflatePath = (path, distance, options) => {
+    const o = options ?? {};
+    if (keys(o).some((k) => k !== "join" && k !== "miterLimit")) {
+      throw new TypeError(
+        "inflatePath(path, distance, { join, miterLimit }) takes join and miterLimit",
+      );
+    }
+    const fix = (v) => (v instanceof T ? exact(v, "inflatePath", site()) : v);
+    const [join, limit] = [fix(o.join ?? "miter"), fix(o.miterLimit ?? 4)];
+    if (!["miter", "round", "bevel"].includes(join)) {
+      throw new TypeError('inflatePath join must be "miter", "round" or "bevel"');
+    }
+    if (!(Number.isFinite(limit) && limit >= 1)) {
+      throw new TypeError("inflatePath miterLimit must be a number, at least 1");
+    }
+    const f = "inflate|" + join + "|" + (join === "miter" ? limit : "");
+    return pathOp("inflatePath", f, [path, distance]);
+  };
+  // `pathBoolean(a, b, op)` of two filled shapes.
+  const pathBoolean = (a, b, op) => {
+    op = op instanceof T ? exact(op, "pathBoolean", site()) : op;
+    if (!["union", "intersect", "subtract", "xor"].includes(op)) {
+      throw new TypeError('pathBoolean op must be "union", "intersect", "subtract" or "xor"');
+    }
+    if (typeof val(b) !== "string") throw new TypeError("pathBoolean takes two paths");
+    return pathOp("pathBoolean", op, [a, b]);
+  };
   const zigzag = (path, options) => {
     const o = options ?? {};
     if (keys(o).some((k) => k !== "size" && k !== "ridges")) {
@@ -1482,6 +1512,8 @@
     roundCorners,
     puckerBloat,
     twist,
+    inflatePath,
+    pathBoolean,
     zigzag,
     formatNumber,
     formatPercent,

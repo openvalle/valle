@@ -9,6 +9,7 @@ use std::rc::Rc;
 use crate::ease::Easing;
 use crate::format::Format;
 use crate::noise::Wiggle;
+use crate::path::edit::Join;
 use crate::spring::Spring;
 use crate::style::color::Mixing;
 
@@ -224,7 +225,7 @@ impl Table {
 }
 
 /// What a path function gives.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PathFn {
     /// `pathLength(path)`.
     Length,
@@ -241,6 +242,19 @@ pub enum PathFn {
     Twist,
     /// `zigzag(path, { size, ridges })`, the two as operands.
     Zigzag,
+    /// `inflatePath(path, distance, { join, miterLimit })`.
+    Inflate(Join),
+    /// `pathBoolean(a, b, op)`, both paths operands.
+    Boolean(Boolean),
+}
+
+/// `pathBoolean`'s ops.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Boolean {
+    Union,
+    Intersect,
+    Subtract,
+    Xor,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,6 +265,14 @@ pub enum Axis {
 
 impl PathFn {
     pub fn parse(name: &str) -> Option<PathFn> {
+        if let Some(join) = name.strip_prefix("inflate|") {
+            return Some(PathFn::Inflate(match join.split_once('|')? {
+                ("miter", limit) => Join::Miter(limit.parse().ok().filter(|l: &f64| *l >= 1.0)?),
+                ("round", "") => Join::Round,
+                ("bevel", "") => Join::Bevel,
+                _ => return None,
+            }));
+        }
         Some(match name {
             "length" => PathFn::Length,
             "x" => PathFn::Point(Axis::X),
@@ -262,6 +284,10 @@ impl PathFn {
             "puckerBloat" => PathFn::PuckerBloat,
             "twist" => PathFn::Twist,
             "zigzag" => PathFn::Zigzag,
+            "union" => PathFn::Boolean(Boolean::Union),
+            "intersect" => PathFn::Boolean(Boolean::Intersect),
+            "subtract" => PathFn::Boolean(Boolean::Subtract),
+            "xor" => PathFn::Boolean(Boolean::Xor),
             _ => return None,
         })
     }

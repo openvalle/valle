@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 image-webp.workspace = true
+i_overlay.workspace = true
 kurbo.workspace = true
 libm.workspace = true
 oxc.workspace = true

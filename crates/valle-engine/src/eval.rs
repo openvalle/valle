@@ -8,7 +8,7 @@ use crate::js;
 use crate::noise;
 use crate::path::edit;
 use crate::style::{color, css};
-use crate::template::{Axis, Bin, Cmp, Error, Interp, Op, Part, PathFn, Program, V};
+use crate::template::{Axis, Bin, Boolean, Cmp, Error, Interp, Op, Part, PathFn, Program, V};
 
 /// The clock a frame is evaluated at.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -111,6 +111,20 @@ fn path(f: PathFn, args: &[&V]) -> Result<V, Error> {
     let p = edit::bez(&args[0].text())?;
     let (point, direction) = match f {
         PathFn::Length => return Ok(V::Num(edit::length(&p))),
+        PathFn::Inflate(join) => {
+            let made = edit::inflate(&p, args[1].num(), join);
+            return Ok(V::Str(Rc::from(edit::data(&made))));
+        }
+        PathFn::Boolean(op) => {
+            let op = match op {
+                Boolean::Union => "union",
+                Boolean::Intersect => "intersect",
+                Boolean::Subtract => "subtract",
+                Boolean::Xor => "xor",
+            };
+            let made = edit::boolean(&p, &edit::bez(&args[1].text())?, op)?;
+            return Ok(V::Str(Rc::from(edit::data(&made))));
+        }
         PathFn::RoundCorners | PathFn::PuckerBloat | PathFn::Twist | PathFn::Zigzag => {
             let n = args[1].num();
             let made = match f {

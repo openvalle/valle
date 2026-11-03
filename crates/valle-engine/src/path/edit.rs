@@ -1,6 +1,12 @@
 //! The path functions scenes call (`pathLength`, `pointAt`, …): SVG path data in, numbers or SVG
 //! path data out, through kurbo's curves.
 
+use i_overlay::core::fill_rule::FillRule;
+use i_overlay::core::overlay_rule::OverlayRule;
+use i_overlay::float::simplify::SimplifyShape;
+use i_overlay::float::single::SingleFloatOverlay;
+use i_overlay::mesh::outline::offset::OutlineOffset;
+use i_overlay::mesh::style::{LineJoin, OutlineStyle};
 use kurbo::{BezPath, ParamCurve, ParamCurveArclen, ParamCurveDeriv, PathEl, PathSeg, Vec2};
 
 use super::{Path, Segment, parse};
@@ -328,6 +334,93 @@ pub fn zigzag(path: &BezPath, size: f64, ridges: usize) -> BezPath {
     out
 }
 
+/// How far a flattened curve may stray from the curve, in path units.
+const FLAT: f64 = 0.02;
+
+/// The path's subpaths flattened to polygons, each closed, for i_overlay. An open subpath counts
+/// as closed, as a fill takes it.
+fn polygons(path: &BezPath) -> Vec<Vec<[f64; 2]>> {
+    let mut out: Vec<Vec<[f64; 2]>> = Vec::new();
+    kurbo::flatten(path.elements().iter().copied(), FLAT, |el| match el {
+        PathEl::MoveTo(p) => out.push(vec![[p.x, p.y]]),
+        PathEl::LineTo(p) => {
+            if let Some(last) = out.last_mut() {
+                last.push([p.x, p.y]);
+            }
+        }
+        _ => {}
+    });
+    for p in &mut out {
+        if p.len() > 1 && p.first() == p.last() {
+            p.pop();
+        }
+    }
+    out.retain(|p| p.len() >= 3);
+    out
+}
+
+/// Path data of i_overlay's shapes: an outline and its holes each.
+fn shaped(shapes: Vec<Vec<Vec<[f64; 2]>>>) -> BezPath {
+    let mut out = BezPath::new();
+    for contour in shapes.iter().flatten().filter(|c| c.len() >= 3) {
+        out.move_to((contour[0][0], contour[0][1]));
+        for p in &contour[1..] {
+            out.line_to((p[0], p[1]));
+        }
+        out.close_path();
+    }
+    out
+}
+
+/// How `inflatePath` joins the sides it moves out: AE's Offset Paths' joins, a miter cut off where
+/// it would reach past `limit` times the distance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Join {
+    Miter(f64),
+    Round,
+    Bevel,
+}
+
+/// `inflatePath(path, distance)`: the filled shape (non-zero) grown by `distance`, or shrunk by a
+/// negative one, as AE's Offset Paths and Clipper2's `InflatePaths`; curves are flattened.
+pub fn inflate(path: &BezPath, distance: f64, join: Join) -> BezPath {
+    let shapes = polygons(path).simplify_shape(FillRule::NonZero);
+    if distance == 0.0 || !distance.is_finite() {
+        return shaped(shapes);
+    }
+    let join = match join {
+        // The miter limit as the sharpest angle it keeps: a ratio of 1 / sin(angle / 2).
+        Join::Miter(limit) => LineJoin::Miter(2.0 * (1.0 / limit.max(1.0)).asin()),
+        // Arcs in pieces at most FLAT off the circle.
+        Join::Round => {
+            LineJoin::Round(2.0 * (1.0 - FLAT / distance.abs()).max(0.0).acos().max(0.01))
+        }
+        Join::Bevel => LineJoin::Bevel,
+    };
+    shaped(shapes.outline(&OutlineStyle::new(distance).line_join(join)))
+}
+
+/// `pathBoolean(a, b, op)` of the two filled shapes (non-zero): `union`, `intersect`, `subtract`
+/// (b from a) or `xor`; curves are flattened.
+pub fn boolean(a: &BezPath, b: &BezPath, op: &str) -> Result<BezPath, String> {
+    let rule = match op {
+        "union" => OverlayRule::Union,
+        "intersect" => OverlayRule::Intersect,
+        "subtract" => OverlayRule::Difference,
+        "xor" => OverlayRule::Xor,
+        _ => {
+            return Err(format!(
+                "pathBoolean op {op} is not union, intersect, subtract or xor"
+            ));
+        }
+    };
+    Ok(shaped(polygons(a).overlay(
+        &polygons(b),
+        rule,
+        FillRule::NonZero,
+    )))
+}
+
 /// Appends a segment from where the path is.
 fn push(out: &mut BezPath, s: PathSeg) {
     match s {
@@ -466,6 +559,53 @@ mod tests {
         assert_eq!(z, "M0 10 L25 -10 L50 10 L75 -10 L100 10");
         let closed = data(&zigzag(&bez("M0 0 H100 V100 H0 Z").unwrap(), 5.0, 1));
         assert_eq!(closed.matches('L').count(), 7, "{closed}");
+    }
+
+    /// The area a path fills, non-zero, by its flattened contours' signed areas.
+    fn area(path: &BezPath) -> f64 {
+        kurbo::Shape::area(path).abs()
+    }
+
+    #[test]
+    fn booleans_add_up() {
+        let a = bez("M0 0 H100 V100 H0 Z").unwrap();
+        let b = bez("M50 50 H150 V150 H50 Z").unwrap();
+        let of = |op| area(&boolean(&a, &b, op).unwrap());
+        assert!((of("union") - 17500.0).abs() < 1e-6);
+        assert!((of("intersect") - 2500.0).abs() < 1e-6);
+        assert!((of("subtract") - 7500.0).abs() < 1e-6);
+        assert!((of("xor") - 15000.0).abs() < 1e-6);
+        // A circle less a smaller one inside: a ring, its hole the other way round.
+        let ring = boolean(
+            &bez("M0 50 A50 50 0 1 1 100 50 A50 50 0 1 1 0 50 Z").unwrap(),
+            &bez("M25 50 A25 25 0 1 1 75 50 A25 25 0 1 1 25 50 Z").unwrap(),
+            "subtract",
+        )
+        .unwrap();
+        let expected = std::f64::consts::PI * (2500.0 - 625.0);
+        assert!(
+            (area(&ring) - expected).abs() < expected * 1e-3,
+            "{}",
+            area(&ring)
+        );
+        assert!(boolean(&a, &b, "difference").is_err());
+    }
+
+    #[test]
+    fn inflated_shapes_grow_by_the_distance() {
+        let square = bez("M0 0 H100 V100 H0 Z").unwrap();
+        let bevel = |d| area(&inflate(&square, d, Join::Miter(4.0)));
+        assert!((bevel(10.0) - 120.0 * 120.0).abs() < 1e-6);
+        assert!((bevel(-10.0) - 80.0 * 80.0).abs() < 1e-6);
+        let round = area(&inflate(&square, 10.0, Join::Round));
+        let expected = 10000.0 + 4.0 * 1000.0 + std::f64::consts::PI * 100.0;
+        assert!((round - expected).abs() < 2.0, "{round}");
+        let cut = area(&inflate(&square, 10.0, Join::Bevel));
+        assert!((cut - (14400.0 - 4.0 * 50.0)).abs() < 1e-6, "{cut}");
+        // Wound the other way, the same shape.
+        let back = bez("M0 0 V100 H100 V0 Z").unwrap();
+        assert!((area(&inflate(&back, 10.0, Join::Miter(4.0))) - 14400.0).abs() < 1e-6);
+        assert!(area(&inflate(&square, -60.0, Join::Miter(4.0))) < 1e-9);
     }
 
     #[test]

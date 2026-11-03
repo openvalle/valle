@@ -17,6 +17,7 @@ oxc = { version = "=0.148.0", features = ["ast_visit", "codegen", "semantic", "t
 # Without system fonts: every host shapes with the same bytes.
 parley = { version = "0.12.0", default-features = false, features = ["std"] }
 # With libm, not the platform's math: every host strokes the same outlines.
+i_overlay = { version = "=4.5.2", default-features = false }
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
 png = "0.18.1"
 rquickjs = "=0.14.0"
