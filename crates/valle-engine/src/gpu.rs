@@ -48,7 +48,7 @@ const COMMON: &str = include_str!("../shaders/common.wgsl");
 /// transform; blur passes take a layer's words too.
 const RECT: usize = 44;
 const GRADIENT: usize = 32;
-const GLYPH: usize = 20;
+const GLYPH: usize = 24;
 const LAYER: usize = 20;
 const SEGMENT: usize = 12;
 const TRANSFORM: usize = 24;
@@ -1683,6 +1683,7 @@ impl<'a> Renderer<'a> {
                         let bands = o.bands[0] | o.bands[1] << 16;
                         plan.glyphs.extend([o.at[0], o.at[1], bands, transform]);
                         plan.glyphs.extend(color.map(f32::to_bits));
+                        plan.glyphs.extend(o.bounds.map(f32::to_bits));
                         extend(runs, Run::Glyphs(i..i + 1));
                     }
                 }
@@ -1703,6 +1704,7 @@ impl<'a> Renderer<'a> {
                                 .collect();
                             let kept = Kept {
                                 outline: slug::encode(1.0, &contours),
+                                runs: None,
                                 used: false,
                             };
                             self.paths.entry(key).or_insert(kept)
@@ -1720,22 +1722,55 @@ impl<'a> Renderer<'a> {
                         width: x1 - x0,
                         height: y1 - y0,
                     };
-                    plan.reach = plan.reach.union(Reach::of(matrix, r).grown(1.0));
+                    let on = Reach::of(matrix, r);
+                    plan.reach = plan.reach.union(on.grown(1.0));
                     let (curves, lists) = &mut plan.paths;
                     let first = [(curves.len() / 4) as u32, lists.len() as u32];
                     curves.extend(o.curves.iter().flatten().map(|v| v.to_bits()));
                     lists.extend(&o.lists);
+                    // A path large on the target draws in runs of cells about `CELL` px across,
+                    // where the transform keeps its scale everywhere.
+                    let cells = match (on.0, matrix.least_scale()) {
+                        (Some([x0, y0, x1, y1]), Some(least)) if (x1 - x0).max(y1 - y0) > CELL => {
+                            let least = least as f32;
+                            let across =
+                                |n: f32| ((n * least / CELL).ceil() as usize).clamp(1, 256);
+                            Some(([across(r.width), across(r.height)], 1.5 / least))
+                        }
+                        _ => None,
+                    };
+                    let whole = [slug::Run {
+                        rect: o.bounds,
+                        solid: false,
+                    }];
+                    let parts: &[slug::Run] = match cells {
+                        Some((cells, margin)) => {
+                            let at = (cells, margin.to_bits(), *even_odd);
+                            if kept.runs.as_ref().is_none_or(|(k, _)| *k != at) {
+                                let runs = o.runs(cells, margin, *even_odd);
+                                kept.runs = Some((at, runs));
+                            }
+                            kept.runs.as_ref().map_or(&[], |(_, r)| r)
+                        }
+                        None => &whole,
+                    };
                     let i = (plan.glyphs.len() / GLYPH) as u32;
                     let [u, v] = o.band_scale();
-                    let fill = f32::from(u8::from(*even_odd));
-                    let floats = [0.0, 0.0, 1.0, fill].into_iter().chain(o.bounds);
-                    let floats = floats.chain([u, v, 0.0, 0.0]);
-                    plan.glyphs.extend(floats.map(f32::to_bits));
-                    plan.placed.push(plan.glyphs.len());
                     let bands = o.bands[0] | o.bands[1] << 16;
-                    plan.glyphs.extend([first[0], first[1], bands, transform]);
-                    plan.glyphs.extend(color.map(f32::to_bits));
-                    extend(runs, Run::Glyphs(i..i + 1));
+                    for part in parts {
+                        let flags = u8::from(*even_odd) | u8::from(part.solid) << 1;
+                        let floats = [0.0, 0.0, 1.0, f32::from(flags)]
+                            .into_iter()
+                            .chain(o.bounds);
+                        let floats = floats.chain([u, v, 0.0, 0.0]);
+                        plan.glyphs.extend(floats.map(f32::to_bits));
+                        plan.placed.push(plan.glyphs.len());
+                        plan.glyphs.extend([first[0], first[1], bands, transform]);
+                        plan.glyphs.extend(color.map(f32::to_bits));
+                        plan.glyphs.extend(part.rect.map(f32::to_bits));
+                    }
+                    let n = parts.len() as u32;
+                    extend(runs, Run::Glyphs(i..i + n));
                 }
                 Item::Transform { matrix: m, items } => {
                     let m = matrix.times(*m);
@@ -2453,11 +2488,19 @@ fn keeps_transparent(matrices: &[[f32; 20]]) -> bool {
     u[3] <= 0.0
 }
 
-/// A path's outline, kept while frames draw it.
+/// About how many target px across a large path's cells are.
+const CELL: f32 = 32.0;
+
+/// A path's outline, kept while frames draw it, and its runs of cells for the last grid asked.
 struct Kept {
     outline: slug::Outline,
+    runs: Option<(Grid, Vec<slug::Run>)>,
     used: bool,
 }
+
+/// A grid of cells over a path: columns and rows, the bits of the margin, and whether the path
+/// fills by even-odd.
+type Grid = ([usize; 2], u32, bool);
 
 /// What a path's outline is made of, exactly: its segments and the tolerance it is flattened to.
 fn path_key(path: &Path, tolerance: f32) -> Vec<u32> {

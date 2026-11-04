@@ -307,3 +307,71 @@ fn strokes_cover_a_band_centered_on_the_edges() {
     assert_eq!(coverage(&o, [(x0 + x1) / 2.0, mid], ppu), 0.0);
     assert_eq!(coverage(&o, [x0 - 15.0, y1 + 15.0], ppu), 1.0);
 }
+
+#[test]
+fn runs_hold_every_pixel_that_shows_and_solid_ones_are_covered() {
+    let f = face(Vec::new());
+    // Outlines with holes, and a stroke, which is a thin ring.
+    let (em, o) = contours(&f, glyph(&f, 'O')).unwrap();
+    let ring = path::stroke(&o, 0.02 * em, em / 4096.0);
+    // The ring, 20 units across, is thinner than a cell grown by the margin: none of it is solid.
+    let ring = (ring, false);
+    let shapes = [
+        (o, true),
+        (contours(&f, glyph(&f, '@')).unwrap().1, true),
+        ring,
+    ];
+    for (contours, filled) in shapes {
+        let o = encode(em, &contours);
+        // 4 font units a pixel.
+        let ppu = 0.25;
+        let runs = o.runs([48, 48], 1.5 / ppu, false);
+        let [x0, y0, x1, y1] = o.bounds;
+        let (mut solid, mut drawn, mut all) = (0, 0, 0);
+        let mut y = y0 - 10.0;
+        while y < y1 + 10.0 {
+            let mut x = x0 - 10.0;
+            while x < x1 + 10.0 {
+                let c = coverage(&o, [x, y], ppu);
+                let run = runs.iter().find(|r| {
+                    let [a, b, c, d] = r.rect;
+                    x >= a && x < c && y >= b && y < d
+                });
+                match run {
+                    None => assert_eq!(c, 0.0, "{x}, {y} shows {c} out of the runs"),
+                    Some(r) if r.solid => {
+                        assert_eq!(c, 1.0, "{x}, {y} in a solid run is {c}");
+                        solid += 1;
+                    }
+                    Some(_) => drawn += 1,
+                }
+                all += 1;
+                x += 4.0;
+            }
+            y += 4.0;
+        }
+        assert!(
+            (solid > 0) == filled && solid + drawn < all,
+            "{solid} solid, {drawn} drawn of {all}"
+        );
+    }
+}
+
+#[test]
+fn crossings_count_a_vertex_once_and_a_touch_not_at_all() {
+    let mut out = Vec::new();
+    // Up to a vertex at y = 1, and on up: the line there crosses once.
+    super::crossings([[0.0, 0.0], [0.0, 0.5], [0.0, 1.0]], 1.0, &mut out);
+    super::crossings([[0.0, 1.0], [0.0, 1.5], [0.0, 2.0]], 1.0, &mut out);
+    assert_eq!(out, [(0.0, 1)]);
+    // A peak at y = 1: up then down, which the line touches.
+    out.clear();
+    super::crossings([[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]], 1.0, &mut out);
+    super::crossings([[1.0, 1.0], [1.5, 0.5], [2.0, 0.0]], 1.0, &mut out);
+    assert_eq!(out, []);
+    // A curve that turns: crossed on the way up and on the way down.
+    out.clear();
+    super::crossings([[0.0, 0.0], [1.0, 2.0], [2.0, 0.0]], 0.5, &mut out);
+    assert_eq!(out.iter().map(|c| c.1).collect::<Vec<_>>(), [1, -1]);
+    assert!((out[0].0 + out[1].0 - 2.0).abs() < 1e-5, "{out:?}");
+}

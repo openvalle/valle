@@ -1,9 +1,11 @@
 // Glyphs and filled paths by Slug coverage (see slug.rs): each instance an outline in font units,
-// placed at an origin in the px of a transform and scaled, in a premultiplied working color.
+// placed at an origin in the px of a transform and scaled, in a premultiplied working color; all
+// of its bounds, or a run of its cells, which a large path draws apart so that the cells nothing
+// is in are skipped and those all inside it are filled without reading a curve.
 
 struct Glyph {
-  // The origin, px, on the baseline; px per font unit; 1 to fill where the outline winds an odd
-  // number of times rather than where it winds at all.
+  // The origin, px, on the baseline; px per font unit; flags: 1 to fill where the outline winds
+  // an odd number of times rather than where it winds at all, 2 for a run all inside it.
   place: vec4f,
   // The outline's bounds in font units, y up: min x, min y, max x, max y.
   bounds: vec4f,
@@ -13,6 +15,8 @@ struct Glyph {
   // vertical ones above 16 bits; the transform.
   at: vec4<u32>,
   color: vec4f,
+  // The part of the bounds the instance draws, as they are.
+  part: vec4f,
 }
 
 @group(0) @binding(2) var<storage, read> glyphs: array<Glyph>;
@@ -27,11 +31,18 @@ struct Out {
 @vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
   let g = glyphs[ii];
   let s = g.place.z;
-  // The bounds in px, grown for the antialiased edge.
-  let lo = g.place.xy + vec2f(g.bounds.x, -g.bounds.w) * s;
-  let hi = g.place.xy + vec2f(g.bounds.z, -g.bounds.y) * s;
+  // Its part in px, grown for the antialiased edge where that is the bounds' edge: a run's edges
+  // inside the bounds meet the next run's.
+  let q = g.part;
+  let lo = g.place.xy + vec2f(q.x, -q.w) * s;
+  let hi = g.place.xy + vec2f(q.z, -q.y) * s;
   let c = corner(vi);
-  let p = grown(mix(lo, hi, c), c * 2.0 - 1.0, g.at.w);
+  let outer = select(
+    vec2f(f32(q.x <= g.bounds.x), f32(q.w >= g.bounds.w)),
+    vec2f(f32(q.z >= g.bounds.z), f32(q.y <= g.bounds.y)),
+    c > vec2f(0.5),
+  );
+  let p = grown(mix(lo, hi, c), (c * 2.0 - 1.0) * outer, g.at.w);
   var out: Out;
   out.pos = place(p, g.at.w);
   out.index = ii;
@@ -110,6 +121,10 @@ fn odd(w: vec2f) -> vec2f {
 
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let g = glyphs[in.index];
+  let flags = u32(g.place.w);
+  if ((flags & 2u) != 0u) {
+    return g.color;
+  }
   // Target pixels per font unit along x and along y: over how much of each axis a pixel spreads.
   let j = steps(in.pos.xy, g.at.w);
   // The pixel in font units, y up, from its center rather than from the corners of the quad: where
@@ -125,7 +140,7 @@ fn odd(w: vec2f) -> vec2f {
   let v = ray(g, em, ppu.y, 2u * (bands.y + u32(band.x)), true);
   // Swapping the axes reverses the winding.
   var cov = vec2f(h.x, -v.x);
-  if (g.place.w > 0.0) {
+  if ((flags & 1u) != 0u) {
     cov = odd(cov);
   }
   let w = vec2f(h.y, v.y);

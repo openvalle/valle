@@ -83,6 +83,22 @@ impl Matrix {
         }
     }
 
+    /// The least it scales a length by, in any direction: `None` in perspective, where that
+    /// differs from place to place, or if it flattens the plane.
+    pub fn least_scale(&self) -> Option<f64> {
+        let [x, y, t] = &self.0;
+        if x[2] != 0.0 || y[2] != 0.0 || t[2] != 1.0 {
+            return None;
+        }
+        // The smaller singular value of the linear part.
+        let sum = x[0] * x[0] + x[1] * x[1] + y[0] * y[0] + y[1] * y[1];
+        let det = x[0] * y[1] - x[1] * y[0];
+        let least = ((sum - (sum * sum - 4.0 * det * det).max(0.0).sqrt()) / 2.0)
+            .max(0.0)
+            .sqrt();
+        (least > 1e-9).then_some(least)
+    }
+
     /// How much it scales a radius: the geometric mean of what it makes of a unit step along x
     /// and one along y, as Skia scales a blur.
     pub fn radius_scale(&self) -> f64 {
