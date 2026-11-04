@@ -49,16 +49,26 @@ fn within(p: vec2<i32>, low: vec2<i32>, high: vec2<i32>, mirrored: bool) -> vec2
     high = low + vec2<i32>(bounds.zw);
   }
   let p = vec2<i32>(in.pos.xy);
-  // Pixels out to three standard deviations, weighted by the Gaussian.
+  let mirrored = bounds.z > 0.0;
+  // Pixels out to three standard deviations either side, weighted by the Gaussian, k^(i²) with
+  // k = e^(-1 / 2σ²): each weight the last times a ratio that goes up by k² each step.
   let n = i32(ceil(3.0 * sigma));
-  var sum = vec4f(0.0);
-  var total = 0.0;
-  for (var i = -n; i <= n; i++) {
-    let w = exp(-f32(i * i) / (2.0 * sigma * sigma));
-    // Bounds may run off the canvas.
-    let q = clamp(within(p + axis * i, low, high, bounds.z > 0.0), vec2<i32>(0), size - 1);
-    sum += textureLoad(image, q, 0) * w;
-    total += w;
+  let k = exp(-1.0 / (2.0 * sigma * sigma));
+  var sum = pixel(p, low, high, size, mirrored);
+  var total = 1.0;
+  var w = 1.0;
+  var ratio = k;
+  for (var i = 1; i <= n; i++) {
+    w *= ratio;
+    ratio *= k * k;
+    let after = pixel(p + axis * i, low, high, size, mirrored);
+    sum += (after + pixel(p - axis * i, low, high, size, mirrored)) * w;
+    total += 2.0 * w;
   }
   return sum / total;
+}
+
+// The layer's pixel at `p`, within the bounds; bounds may run off the canvas.
+fn pixel(p: vec2<i32>, low: vec2<i32>, high: vec2<i32>, size: vec2<i32>, mirrored: bool) -> vec4f {
+  return textureLoad(image, clamp(within(p, low, high, mirrored), vec2<i32>(0), size - 1), 0);
 }
