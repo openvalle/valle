@@ -28,7 +28,7 @@ use wgpu::util::DeviceExt;
 use crate::image::Image;
 use crate::layout::Rect;
 use crate::paint::{Filter, Geometry, Item, Matrix, Radii, SQUARE, Spread, Tiles};
-use crate::path::Curve;
+use crate::path::{Curve, Path, Segment};
 use crate::shader::Program;
 use crate::slug;
 use crate::style::Blend;
@@ -1028,6 +1028,8 @@ pub struct Renderer<'a> {
     /// By face, glyph and the bits of the width of its stroke in ems (0 for its fill); `None` for
     /// a glyph without curves.
     outlines: HashMap<(u32, u32, u32), Option<Placed>>,
+    /// Paths' outlines, by what they are made of; those the last frame drew.
+    paths: HashMap<Vec<u32>, Kept>,
     /// Whether each glyph, by face and id, has colors of its own.
     colored: HashMap<(u32, u32), bool>,
     /// Color glyphs rasterized, by face, id, px an em and the text's color: their pixels, and
@@ -1083,6 +1085,7 @@ impl<'a> Renderer<'a> {
             lists: Store::new(device, "lists"),
             atlas_len: [0, 0],
             outlines: HashMap::new(),
+            paths: HashMap::new(),
             colored: HashMap::new(),
             colors: HashMap::new(),
             used: HashSet::new(),
@@ -1319,6 +1322,7 @@ impl<'a> Renderer<'a> {
         // Color glyphs' images, kept while the last frame showed them.
         let used = std::mem::take(&mut self.used);
         self.colors.retain(|k, _| used.contains(k));
+        self.paths.retain(|_, k| std::mem::take(&mut k.used));
         for (image, items) in pictures {
             let mut encoder = self.prepare(items, faces, images)?;
             let target = &self.images[self.shown[*image as usize]].1.texture;
@@ -1687,12 +1691,25 @@ impl<'a> Renderer<'a> {
                     even_odd,
                     color,
                 } => {
-                    // An outline of 1 px a unit, y up, as glyph outlines are.
+                    // An outline of 1 px a unit, y up, as glyph outlines are, kept while frames
+                    // draw the same path.
                     let tolerance = TOLERANCE / (matrix.radius_scale() as f32).max(1e-6);
-                    let contours: Vec<Vec<Curve>> = (path.quads(tolerance).into_iter())
-                        .map(|c| c.into_iter().map(|q| q.map(|[x, y]| [x, -y])).collect())
-                        .collect();
-                    let o = slug::encode(1.0, &contours);
+                    let key = path_key(path, tolerance);
+                    let kept = match self.paths.get_mut(&key) {
+                        Some(kept) => kept,
+                        None => {
+                            let contours: Vec<Vec<Curve>> = (path.quads(tolerance).into_iter())
+                                .map(|c| c.into_iter().map(|q| q.map(|[x, y]| [x, -y])).collect())
+                                .collect();
+                            let kept = Kept {
+                                outline: slug::encode(1.0, &contours),
+                                used: false,
+                            };
+                            self.paths.entry(key).or_insert(kept)
+                        }
+                    };
+                    kept.used = true;
+                    let o = &kept.outline;
                     if o.curves.is_empty() {
                         continue;
                     }
@@ -2434,6 +2451,30 @@ fn keeps_transparent(matrices: &[[f32; 20]]) -> bool {
         });
     }
     u[3] <= 0.0
+}
+
+/// A path's outline, kept while frames draw it.
+struct Kept {
+    outline: slug::Outline,
+    used: bool,
+}
+
+/// What a path's outline is made of, exactly: its segments and the tolerance it is flattened to.
+fn path_key(path: &Path, tolerance: f32) -> Vec<u32> {
+    let mut key = Vec::with_capacity(path.0.len() * 3 + 1);
+    key.push(tolerance.to_bits());
+    for s in &path.0 {
+        let (tag, points): (u32, &[[f32; 2]]) = match s {
+            Segment::Move(a) => (0, std::slice::from_ref(a)),
+            Segment::Line(a) => (1, std::slice::from_ref(a)),
+            Segment::Quad(a, b) => (2, &[*a, *b]),
+            Segment::Cubic(a, b, c) => (3, &[*a, *b, *c]),
+            Segment::Close => (4, &[]),
+        };
+        key.push(tag);
+        key.extend(points.iter().flatten().map(|v| v.to_bits()));
+    }
+    key
 }
 
 /// A free texture from the pool of layer textures, or a new one.
