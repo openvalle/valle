@@ -612,8 +612,20 @@ impl Reach {
     /// Anywhere: what an effect may draw where nothing was.
     const ALL: Reach = Reach(Some([f32::MIN, f32::MIN, f32::MAX, f32::MAX]));
 
-    /// The bounds of `rect` in px `matrix` takes to the layer's, anywhere if they are not finite.
+    /// The bounds of `rect` in px `matrix` takes to the layer's; anywhere if they are not
+    /// finite, or if a corner goes behind the eye, where its projection wraps around.
     fn of(matrix: Matrix, rect: Rect) -> Reach {
+        let m = &matrix.0;
+        let behind = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+            .iter()
+            .any(|[u, v]| {
+                let x = f64::from(rect.x) + u * f64::from(rect.width);
+                let y = f64::from(rect.y) + v * f64::from(rect.height);
+                m[0][2] * x + m[1][2] * y + m[2][2] <= 0.0
+            });
+        if behind {
+            return Reach::ALL;
+        }
         let b = matrix.bounds(rect);
         let r = [b.x, b.y, b.x + b.width, b.y + b.height];
         if r.iter().all(|v| v.is_finite()) {
@@ -641,6 +653,28 @@ impl Reach {
             self.0
                 .map(|[x0, y0, x1, y1]| [x0 - d, y0 - d, x1 + d, y1 + d]),
         )
+    }
+
+    /// The part also in `other`.
+    fn meet(self, other: Reach) -> Reach {
+        match (self.0, other.0) {
+            (Some(a), Some(b)) => Reach(Some([
+                a[0].max(b[0]),
+                a[1].max(b[1]),
+                a[2].min(b[2]),
+                a[3].min(b[3]),
+            ])),
+            _ => Reach(None),
+        }
+    }
+
+    /// The whole px of a target of `size` it touches, x, y, width and height: `None` if none.
+    fn pixels(self, [w, h]: [u32; 2]) -> Option<[u32; 4]> {
+        let [x0, y0, x1, y1] = self.0?;
+        let [w, h] = [w as f32, h as f32];
+        let [x0, y0] = [x0.floor().clamp(0.0, w), y0.floor().clamp(0.0, h)];
+        let [x1, y1] = [x1.ceil().clamp(0.0, w), y1.ceil().clamp(0.0, h)];
+        (x1 > x0 && y1 > y0).then(|| [x0, y0, x1 - x0, y1 - y0].map(|v| v as u32))
     }
 
     /// Moved by `offset` px.
@@ -671,6 +705,9 @@ struct Plan {
     shadings: Vec<Shading>,
     /// Where what was drawn since the innermost layer that blurs began is.
     reach: Reach,
+    /// By target, where it may have anything: the steps that read it run only there. Anywhere
+    /// until a layer's is known.
+    bounds: Vec<Reach>,
 }
 
 /// A shader drawn: its program, the words of its host block, its uniform block, and the frame's
@@ -687,7 +724,13 @@ impl Plan {
     /// A new layer.
     fn layer(&mut self) -> usize {
         self.targets += 1;
+        self.bounds.resize(self.targets, Reach::ALL);
         self.targets - 1
+    }
+
+    /// Where target `t` may have anything.
+    fn bound(&self, t: usize) -> Reach {
+        self.bounds.get(t).copied().unwrap_or(Reach::ALL)
     }
 
     /// Adds the words of a layer instance, or of a pass that takes their place: its index.
@@ -769,11 +812,13 @@ impl Plan {
         let scale = matrix.radius_scale() as f32;
         let [x, y, _] = matrix.0;
         for filter in filters {
+            // The layers each filter makes have what is in it only where it may now reach.
+            let first = self.targets;
             layer = match filter {
                 Filter::Blur(sigma) => self.blurred(layer, sigma * scale, bounds, reach),
                 Filter::Colors(matrices) => {
-                    // An alpha offset shows where nothing was.
-                    if matrices.iter().any(|m| m[19] > 0.0) {
+                    // Colors that make something of transparent show where nothing was.
+                    if !keeps_transparent(matrices) {
                         *reach = Reach::ALL;
                     }
                     self.colored(layer, [0.0; 2], matrices, false)
@@ -907,6 +952,9 @@ impl Plan {
                     both
                 }
             };
+            for t in first..self.targets {
+                self.bounds[t] = *reach;
+            }
         }
         layer
     }
@@ -1414,6 +1462,24 @@ impl<'a> Renderer<'a> {
         Ok(())
     }
 
+    /// Plans `items` into `layer`, a new one, as `plan` does: where they reach on it, which
+    /// becomes its bounds.
+    fn reach(
+        &mut self,
+        items: &[Item],
+        layer: usize,
+        at: At,
+        faces: &[Face],
+        plan: &mut Plan,
+        atlas: &mut (Vec<u32>, Vec<u32>),
+    ) -> Result<Reach, Error> {
+        let outer = std::mem::take(&mut plan.reach);
+        self.plan(items, layer, at, faces, plan, atlas)?;
+        let reach = std::mem::replace(&mut plan.reach, outer);
+        plan.bounds[layer] = reach;
+        Ok(reach)
+    }
+
     /// Plans `items` into `target` at `at`, adding their instances to `runs`, which a layer's
     /// steps come after.
     #[allow(clippy::too_many_arguments)]
@@ -1677,6 +1743,7 @@ impl<'a> Renderer<'a> {
                     self.plan(items, layer, at, faces, plan, atlas)?;
                     plan.seen = around;
                     let mut reach = std::mem::replace(&mut plan.reach, outer);
+                    plan.bounds[layer] = reach;
                     let layer = plan.filtered(layer, filters, matrix, None, &mut reach);
                     plan.reach = plan.reach.union(reach);
                     plan.composite(target, layer);
@@ -1716,7 +1783,8 @@ impl<'a> Renderer<'a> {
                             open: Vec::new(),
                         };
                         let around = std::mem::replace(&mut plan.seen, inside);
-                        self.plan(items, layer, at, faces, plan, atlas)?;
+                        let reach = self.reach(items, layer, at, faces, plan, atlas)?;
+                        plan.reach = plan.reach.union(reach);
                         plan.seen = around;
                         reads[k] = Some(layer);
                     }
@@ -1796,6 +1864,8 @@ impl<'a> Renderer<'a> {
                     let bounds = [x0, y0, x1 - x0, y1 - y0];
                     let mut all = Reach::ALL;
                     let layer = plan.filtered(copy, filters, matrix, Some(bounds), &mut all);
+                    // Only what is in the box shows.
+                    plan.bounds[layer] = Reach::of(matrix, *rect).grown(1.0);
                     let at = plan.words([1.0, 0.0, 0.0, 0.0].into_iter().chain(xywh(*rect)));
                     plan.layers
                         .extend(radii.iter().flatten().map(|v| v.to_bits()));
@@ -1820,7 +1890,8 @@ impl<'a> Renderer<'a> {
                         group: plan.seen.here.clone(),
                     };
                     let around = std::mem::replace(&mut plan.seen, inside);
-                    self.plan(items, layer, at, faces, plan, atlas)?;
+                    let reach = self.reach(items, layer, at, faces, plan, atlas)?;
+                    plan.reach = plan.reach.union(reach);
                     plan.seen = around;
                     let words = [*opacity, *blend as u32 as f32, 0.0, 0.0];
                     let at = plan.words(words.into_iter().chain([0.0; 16]));
@@ -1845,7 +1916,11 @@ impl<'a> Renderer<'a> {
                             group: plan.seen.group.clone(),
                         };
                         let around = std::mem::replace(&mut plan.seen, inside);
-                        self.plan(items, into, at, faces, plan, atlas)?;
+                        let reach = self.reach(items, into, at, faces, plan, atlas)?;
+                        // What shows is in the items' layer.
+                        if into == layer {
+                            plan.reach = plan.reach.union(reach);
+                        }
                         plan.seen = around;
                     }
                     plan.steps.push(Step::Mask {
@@ -1938,8 +2013,13 @@ impl<'a> Renderer<'a> {
                     self.plan(items, layer, at, faces, plan, atlas)?;
                     plan.seen = around;
                     let mut reach = std::mem::replace(&mut plan.reach, outer);
+                    plan.bounds[layer] = reach;
                     let sigma = sigma * matrix.radius_scale() as f32;
+                    let first = plan.targets;
                     let layer = plan.blurred(layer, sigma, None, &mut reach);
+                    for t in first..plan.targets {
+                        plan.bounds[t] = reach;
+                    }
                     plan.reach = plan.reach.union(reach);
                     plan.steps.push(Step::Composite {
                         target,
@@ -2263,7 +2343,13 @@ impl<'a> Renderer<'a> {
                     pass.set_pipeline(&gpu.masks);
                     pass.set_bind_group(1, &self.pool[s].image, &[]);
                     pass.set_bind_group(2, &self.pool[m].image, &[]);
-                    pass.draw(0..3, 0..1);
+                    let [l, m] = step
+                        .reads()
+                        .map(|l| l.map_or(Reach::ALL, |l| plan.bound(l)));
+                    if let Some([x, y, w, h]) = l.meet(m).pixels(self.size) {
+                        pass.set_scissor_rect(x, y, w, h);
+                        pass.draw(0..3, 0..1);
+                    }
                 }
                 Step::Draw { runs, .. } => {
                     for run in runs {
@@ -2300,20 +2386,17 @@ impl<'a> Renderer<'a> {
                     if let Some(u) = under {
                         pass.set_bind_group(2, &self.pool[u].image, &[]);
                     }
-                    let mut shown = true;
-                    if let Step::Blur { clip, .. } = step {
-                        // The whole px of the target the clip touches, if any.
-                        let [w, h] = self.size.map(|v| v as f32);
-                        let [x0, y0] =
-                            [clip[0].floor().clamp(0.0, w), clip[1].floor().clamp(0.0, h)];
-                        let [x1, y1] = [clip[2].ceil().clamp(0.0, w), clip[3].ceil().clamp(0.0, h)];
-                        let [x0, y0, x1, y1] = [x0, y0, x1, y1].map(|v| v as u32);
-                        shown = x1 > x0 && y1 > y0;
-                        if shown {
-                            pass.set_scissor_rect(x0, y0, x1 - x0, y1 - y0);
+                    // Only where it may change anything: where the layer has anything, or what
+                    // the step makes of it does.
+                    let reach = match *step {
+                        Step::Blur { clip, .. } => Reach(Some(clip)),
+                        Step::Colors { target, .. } | Step::Effect { target, .. } => {
+                            plan.bound(target)
                         }
-                    }
-                    if shown {
+                        _ => step.reads()[0].map_or(Reach::ALL, |l| plan.bound(l)),
+                    };
+                    if let Some([x, y, w, h]) = reach.pixels(self.size) {
+                        pass.set_scissor_rect(x, y, w, h);
                         pass.draw(0..3, *at..*at + 1);
                     }
                 }
@@ -2338,6 +2421,20 @@ type ColorKey = (u32, u32, u32, [u8; 3]);
 /// A color glyph's image as a frame shows it: its index in the frame's images, its top left from
 /// its origin in px an em, and its size in pixels.
 type Shown = (u32, [f32; 2], [f32; 2]);
+
+/// Whether color matrices, applied in turn as `Step::Colors` applies them (each the factors of
+/// red, green, blue and alpha in each of them, then their offsets), keep transparent
+/// transparent.
+fn keeps_transparent(matrices: &[[f32; 20]]) -> bool {
+    let mut u = [0.0f32; 4];
+    for m in matrices {
+        u = std::array::from_fn(|r| {
+            let row = &m[4 * r..4 * r + 4];
+            (row.iter().zip(u).map(|(a, b)| a * b).sum::<f32>() + m[16 + r]).clamp(0.0, 1.0)
+        });
+    }
+    u[3] <= 0.0
+}
 
 /// A free texture from the pool of layer textures, or a new one.
 fn take(gpu: &Gpu, pool: &mut Vec<Surface>, free: &mut Vec<usize>, size: [u32; 2]) -> usize {
