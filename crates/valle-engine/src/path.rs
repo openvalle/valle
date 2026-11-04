@@ -24,6 +24,23 @@ pub enum Segment {
 pub struct Path(pub Vec<Segment>);
 
 impl Path {
+    /// An exact geometry key, independent of its paint and placement.
+    pub(crate) fn key(&self) -> Vec<u32> {
+        let mut key = Vec::with_capacity(self.0.len() * 3);
+        for segment in &self.0 {
+            let (tag, points): (u32, &[[f32; 2]]) = match segment {
+                Segment::Move(a) => (0, std::slice::from_ref(a)),
+                Segment::Line(a) => (1, std::slice::from_ref(a)),
+                Segment::Quad(a, b) => (2, &[*a, *b]),
+                Segment::Cubic(a, b, c) => (3, &[*a, *b, *c]),
+                Segment::Close => (4, &[]),
+            };
+            key.push(tag);
+            key.extend(points.iter().flatten().map(|v| v.to_bits()));
+        }
+        key
+    }
+
     /// The path moved by `by`.
     pub fn moved(&self, by: Point) -> Path {
         let p = |q: Point| [q[0] + by[0], q[1] + by[1]];

@@ -828,18 +828,12 @@ pub fn viewport([x, y, w, h]: [f64; 4], fit: Fit, size: [f64; 2]) -> Matrix {
 /// nothing.
 pub fn path(shape: &Shape, size: [f64; 2]) -> Option<Path> {
     let [w, h] = size;
-    let diagonal = ((w * w + h * h) / 2.0).sqrt();
     let point = |x: Length, y: Length| [x.resolve(w) as f32, y.resolve(h) as f32];
     let path = match shape {
         Shape::Path { path, .. } => path.clone(),
-        Shape::Circle { center, r } => {
-            let r = r.resolve(diagonal) as f32;
-            ellipse(point(center[0], center[1]), [r, r])?
-        }
-        Shape::Ellipse { center, r } => {
-            let [rx, ry] = [r[0].map(|l| l.resolve(w)), r[1].map(|l| l.resolve(h))];
-            let [rx, ry] = [rx.or(ry)?, ry.or(rx)?].map(|r| r as f32);
-            ellipse(point(center[0], center[1]), [rx, ry])?
+        Shape::Circle { .. } | Shape::Ellipse { .. } => {
+            let (center, radii) = ellipse_geometry(shape, size)?;
+            ellipse(center, radii)?
         }
         Shape::Rect { at, size, r } => {
             let [x, y] = point(at[0], at[1]);
@@ -866,6 +860,23 @@ pub fn path(shape: &Shape, size: [f64; 2]) -> Option<Path> {
         }
     };
     (!path.0.is_empty()).then_some(path)
+}
+
+/// The ellipse's center and radii in its viewport's units, before any placement transform.
+pub(crate) fn ellipse_geometry(shape: &Shape, [w, h]: [f64; 2]) -> Option<(Point, Point)> {
+    let (center, radii) = match shape {
+        Shape::Circle { center, r } => {
+            let r = r.resolve(((w * w + h * h) / 2.0).sqrt()) as f32;
+            (*center, [r, r])
+        }
+        Shape::Ellipse { center, r } => {
+            let [rx, ry] = [r[0].map(|l| l.resolve(w)), r[1].map(|l| l.resolve(h))];
+            (*center, [rx.or(ry)?, ry.or(rx)?].map(|r| r as f32))
+        }
+        _ => return None,
+    };
+    let center = [center[0].resolve(w) as f32, center[1].resolve(h) as f32];
+    (radii[0] > 0.0 && radii[1] > 0.0).then_some((center, radii))
 }
 
 /// Where a shape's markers go: each vertex of a path, a line, a polyline or a polygon (`path` its
@@ -963,7 +974,7 @@ pub fn vertices(shape: &Shape, path: &Path) -> Vec<(Point, f64)> {
 const KAPPA: f32 = 0.552_284_8;
 
 /// An ellipse around `c` as four cubic curves, from its rightmost point clockwise.
-fn ellipse(c: Point, [rx, ry]: [f32; 2]) -> Option<Path> {
+pub(crate) fn ellipse(c: Point, [rx, ry]: [f32; 2]) -> Option<Path> {
     if rx <= 0.0 || ry <= 0.0 {
         return None;
     }

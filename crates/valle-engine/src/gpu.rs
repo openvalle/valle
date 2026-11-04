@@ -28,7 +28,7 @@ use wgpu::util::DeviceExt;
 use crate::image::Image;
 use crate::layout::Rect;
 use crate::paint::{Filter, Geometry, Item, Matrix, Radii, SQUARE, Spread, Tiles};
-use crate::path::{Curve, Path, Segment};
+use crate::path::{Curve, Path};
 use crate::shader::Program;
 use crate::slug;
 use crate::style::Blend;
@@ -2608,19 +2608,8 @@ type Grid = ([usize; 2], u32, bool);
 
 /// What a path's outline is made of, exactly: its segments and the tolerance it is flattened to.
 fn path_key(path: &Path, tolerance: f32) -> Vec<u32> {
-    let mut key = Vec::with_capacity(path.0.len() * 3 + 1);
+    let mut key = path.key();
     key.push(tolerance.to_bits());
-    for s in &path.0 {
-        let (tag, points): (u32, &[[f32; 2]]) = match s {
-            Segment::Move(a) => (0, std::slice::from_ref(a)),
-            Segment::Line(a) => (1, std::slice::from_ref(a)),
-            Segment::Quad(a, b) => (2, &[*a, *b]),
-            Segment::Cubic(a, b, c) => (3, &[*a, *b, *c]),
-            Segment::Close => (4, &[]),
-        };
-        key.push(tag);
-        key.extend(points.iter().flatten().map(|v| v.to_bits()));
-    }
     key
 }
 

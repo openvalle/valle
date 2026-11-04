@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use taffy::Display;
 
-use super::{Blend, Filter, Item, Matrix, Ramp, SQUARE, Tiles, work};
+use super::{Blend, Cache, Filter, Item, Matrix, Ramp, SQUARE, Tiles, work};
 use crate::layout::{Natural, Rect};
 use crate::path::Path;
 use crate::style::color;
@@ -21,7 +21,7 @@ use crate::template::Template;
 /// without one, unscaled in a viewport its natural size if it has one, which then stretches to
 /// the rect as an image does, else the rect's. The rect clips them. `None` if it draws nothing,
 /// as with a viewBox without area.
-pub fn document(document: &Document, first: Rect) -> Option<Item> {
+pub fn document(document: &Document, first: Rect, cache: &Cache) -> Option<Item> {
     let root = document.styles.first()?.svg.as_deref()?;
     let Element::Svg { view_box, fit } = root.element else {
         return None;
@@ -44,7 +44,12 @@ pub fn document(document: &Document, first: Rect) -> Option<Item> {
     let scaled = Matrix::affine([kx, 0.0, 0.0, ky, first.x.into(), first.y.into()]);
     let matrix = scaled.times(matrix);
     let mut items = Vec::new();
-    let drawing = Drawing::new(&document.template, &document.styles, &document.embedded);
+    let drawing = Drawing::new(
+        &document.template,
+        &document.styles,
+        &document.embedded,
+        cache,
+    );
     drawing.element(0, units, matrix, &mut items, None);
     (!items.is_empty()).then(|| Item::Clip {
         rect: first,
@@ -55,6 +60,7 @@ pub fn document(document: &Document, first: Rect) -> Option<Item> {
 
 /// The elements of a document of SVG, a frame's or a file's, by their styles at a frame.
 pub struct Drawing<'a> {
+    cache: &'a Cache,
     template: &'a Template,
     styles: &'a [Style],
     /// Its elements by id: as Chrome finds them in its document, the first of each.
@@ -70,6 +76,7 @@ impl<'a> Drawing<'a> {
         template: &'a Template,
         styles: &'a [Style],
         embedded: &'a [Embedded],
+        cache: &'a Cache,
     ) -> Drawing<'a> {
         let mut ids = HashMap::new();
         for (i, s) in styles.iter().enumerate() {
@@ -78,6 +85,7 @@ impl<'a> Drawing<'a> {
             }
         }
         Drawing {
+            cache,
             template,
             styles,
             ids,
@@ -165,14 +173,37 @@ impl<'a> Drawing<'a> {
                             path_length: c.path_length,
                         };
                         let outline = (pen.width > 0.0)
-                            .then(|| svg::stroke(&path, &pen, scale))
+                            .then(|| self.cache.stroke(&path, &pen, scale))
                             .flatten()?;
                         let cover = svg::bounds(&outline);
                         painted(outline, false, paint, cover, scale)
                     });
                 let markers = self.markers(s, shape, &path, width, size, matrix);
                 let fill = self.paint(&s.fill, s.fill_opacity, s, size, bbox);
-                items.extend(fill.and_then(|f| painted(path, s.even_odd, f, bbox, scale)));
+                items.extend(fill.and_then(|f| {
+                    // Solid ellipses share one outline. Their center and radii belong to their
+                    // transform, so a dot field does not encode a new path at every position.
+                    if let Fill::Color(color) = &f
+                        && let Some(([x, y], [rx, ry])) = svg::ellipse_geometry(shape, size)
+                    {
+                        return Some(Item::Transform {
+                            matrix: Matrix::affine([
+                                rx.into(),
+                                0.0,
+                                0.0,
+                                ry.into(),
+                                x.into(),
+                                y.into(),
+                            ]),
+                            items: vec![Item::Path {
+                                path: svg::ellipse([0.0; 2], [1.0; 2])?,
+                                even_odd: s.even_odd,
+                                color: *color,
+                            }],
+                        });
+                    }
+                    painted(path, s.even_odd, f, bbox, scale)
+                }));
                 items.extend(stroke);
                 items.extend(markers);
             }

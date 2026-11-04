@@ -34,12 +34,14 @@
 //! Boxes paint with their edges on whole pixels, as Chrome paints them, so a layout that lands
 //! between pixels still has crisp edges.
 
+mod cache;
 mod dash;
 mod gradient;
 mod matrix;
 mod offset;
 mod scene;
 mod shape;
+pub use cache::Cache;
 mod svg;
 
 use std::rc::Rc;
@@ -772,56 +774,78 @@ pub fn paint(
     layout: &Layout,
     pictures: &[Picture],
 ) -> Vec<Item> {
-    let painter = Painter::new(template, styles, layout, pictures);
-    let mut out = Vec::new();
-    painter.context(None, &mut out);
-    painter.nest(out)
+    Cache::default().paint(template, styles, layout, pictures)
 }
 
-/// The pictures boxes of the frame draw, in the order to draw them in, as each reads only those
-/// before it: those in a box before it, and a box's before its later siblings'. Each is its
-/// image, and the display list of the canvas the box alone paints; one hidden, or in a hidden
-/// box, is left out, as nothing shown reads it.
 pub fn drawn(
     template: &Template,
     styles: &[Style],
     layout: &Layout,
     pictures: &[Picture],
 ) -> Vec<(u32, Vec<Item>)> {
-    if template.pictures.is_empty() {
-        return Vec::new();
+    Cache::default().drawn(template, styles, layout, pictures)
+}
+
+impl Cache {
+    pub fn paint(
+        &self,
+        template: &Template,
+        styles: &[Style],
+        layout: &Layout,
+        pictures: &[Picture],
+    ) -> Vec<Item> {
+        let painter = Painter::new(template, styles, layout, pictures, self);
+        let mut out = Vec::new();
+        painter.context(None, &mut out);
+        painter.nest(out)
     }
-    let painter = Painter::new(template, styles, layout, pictures);
-    // The last box in each box, in preorder.
-    let n = template.nodes.len();
-    let mut last: Vec<usize> = (0..n).collect();
-    for i in (0..n).rev() {
-        for &c in &template.nodes[i].children {
-            last[i] = last[i].max(last[c as usize]);
+
+    /// The pictures boxes of the frame draw, in the order to draw them in, as each reads only those
+    /// before it: those in a box before it, and a box's before its later siblings'. Each is its
+    /// image, and the display list of the canvas the box alone paints; one hidden, or in a hidden
+    /// box, is left out, as nothing shown reads it.
+    pub fn drawn(
+        &self,
+        template: &Template,
+        styles: &[Style],
+        layout: &Layout,
+        pictures: &[Picture],
+    ) -> Vec<(u32, Vec<Item>)> {
+        if template.pictures.is_empty() {
+            return Vec::new();
         }
+        let painter = Painter::new(template, styles, layout, pictures, self);
+        // The last box in each box, in preorder.
+        let n = template.nodes.len();
+        let mut last: Vec<usize> = (0..n).collect();
+        for i in (0..n).rev() {
+            for &c in &template.nodes[i].children {
+                last[i] = last[i].max(last[c as usize]);
+            }
+        }
+        let mut order: Vec<(u32, u32)> = template.pictures.clone();
+        order.sort_by_key(|&(node, _)| (last[node as usize], std::cmp::Reverse(node)));
+        let shown = |mut i: usize| loop {
+            if styles[i].layout.display == Display::None {
+                return false;
+            }
+            match painter.parents[i] {
+                Some(p) => i = p,
+                None => return true,
+            }
+        };
+        (order.into_iter())
+            .filter(|&(node, _)| shown(node as usize))
+            .filter_map(|(node, slot)| {
+                let Picture::Image { image, .. } = pictures[slot as usize] else {
+                    return None;
+                };
+                let mut out = Vec::new();
+                painter.layer(node as usize, &mut out);
+                Some((image, painter.nest(out)))
+            })
+            .collect()
     }
-    let mut order: Vec<(u32, u32)> = template.pictures.clone();
-    order.sort_by_key(|&(node, _)| (last[node as usize], std::cmp::Reverse(node)));
-    let shown = |mut i: usize| loop {
-        if styles[i].layout.display == Display::None {
-            return false;
-        }
-        match painter.parents[i] {
-            Some(p) => i = p,
-            None => return true,
-        }
-    };
-    (order.into_iter())
-        .filter(|&(node, _)| shown(node as usize))
-        .filter_map(|(node, slot)| {
-            let Picture::Image { image, .. } = pictures[slot as usize] else {
-                return None;
-            };
-            let mut out = Vec::new();
-            painter.layer(node as usize, &mut out);
-            Some((image, painter.nest(out)))
-        })
-        .collect()
 }
 
 impl<'a> Painter<'a> {
@@ -830,6 +854,7 @@ impl<'a> Painter<'a> {
         styles: &'a [Style],
         layout: &'a Layout,
         pictures: &'a [Picture],
+        cache: &'a Cache,
     ) -> Painter<'a> {
         let n = template.nodes.len();
         let parents = parents(template);
@@ -838,6 +863,7 @@ impl<'a> Painter<'a> {
             drawn[node as usize] = true;
         }
         let mut painter = Painter {
+            cache,
             template,
             styles,
             layout,
@@ -845,7 +871,7 @@ impl<'a> Painter<'a> {
             spaces: spaces(template, styles, layout, 0..template.nodes.len()),
             parents,
             clips: Vec::with_capacity(n),
-            drawing: Drawing::new(template, styles, &[]),
+            drawing: Drawing::new(template, styles, &[], cache),
             drawn,
         };
         // In preorder, so the box whose clips a box takes has its own.
@@ -1071,6 +1097,7 @@ fn transform(
 
 /// Boxes are template indices; `None` is the canvas, a block container without a background.
 struct Painter<'a> {
+    cache: &'a Cache,
     template: &'a Template,
     styles: &'a [Style],
     layout: &'a Layout,
@@ -1943,7 +1970,7 @@ impl Painter<'_> {
                 pixelated: s.pixelated,
             },
             Picture::Svg(document) => {
-                let Some(drawn) = svg::document(document, first) else {
+                let Some(drawn) = svg::document(document, first, self.cache) else {
                     return;
                 };
                 Item::Clip {

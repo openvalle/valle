@@ -12,7 +12,7 @@ use kurbo::{BezPath, Point, Shape};
 use crate::front::{Composition, Front, Holds, Inputs, Slot, Typeset};
 use crate::image::{Image, Picture};
 use crate::layout::{Layout, layout};
-use crate::paint::{Item, Matrix, drawn, paint, transforms, transforms_of};
+use crate::paint::{Cache, Item, Matrix, transforms, transforms_of};
 use crate::slug;
 use crate::style::{Sheet, Style, filter, gradient};
 use crate::template::{
@@ -76,6 +76,7 @@ pub struct Scene {
     /// The images they show, as display lists number them.
     images: Vec<Image>,
     text: Text,
+    paint: Cache,
     /// Most recently used first.
     sheets: Vec<(Rc<Template>, Sheet, Measured)>,
 }
@@ -175,6 +176,7 @@ impl Scene {
             images,
             text,
             sheets: Vec::new(),
+            paint: Cache::default(),
         })
     }
 
@@ -338,8 +340,9 @@ impl Scene {
         self.text.sweep();
         self.show_videos(&template, &values, &styles)?;
         backgrounds(&template, &styles, &self.pictures)?;
-        let items = paint(&template, &styles, &laid, &self.pictures);
-        let pictures = drawn(&template, &styles, &laid, &self.pictures);
+        self.paint.sweep();
+        let items = self.paint.paint(&template, &styles, &laid, &self.pictures);
+        let pictures = self.paint.drawn(&template, &styles, &laid, &self.pictures);
         let transforms = transforms(&template, &styles, &laid);
         Ok(Frame {
             template,
