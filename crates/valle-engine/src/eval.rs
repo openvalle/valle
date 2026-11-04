@@ -79,8 +79,8 @@ pub fn run(program: &Program, clock: Clock) -> Result<Vec<V>, Error> {
     Ok(values)
 }
 
-/// The values of the expressions `read` marks, as `run` gives them, in a program without late
-/// expressions; the others' are 0.
+/// The values of the expressions `read` marks, none of them late, as `run` gives them; the
+/// others' are 0.
 pub fn run_only(program: &Program, clock: Clock, read: &[bool]) -> Result<Vec<V>, Error> {
     let mut values = Vec::with_capacity(program.ops.len());
     for (op, &read) in program.ops.iter().zip(read) {

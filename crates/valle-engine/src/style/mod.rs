@@ -835,6 +835,11 @@ impl Sheet {
         })
     }
 
+    /// Which of the program's expressions are late.
+    pub fn late(&self) -> &[bool] {
+        &self.late
+    }
+
     /// Node `i`'s descendants, a mask's source's among the mask's.
     pub fn descendants(&self, i: usize) -> std::ops::Range<usize> {
         i + 1..self.ends[i] as usize

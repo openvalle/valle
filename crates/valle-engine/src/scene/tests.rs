@@ -511,6 +511,43 @@ fn auto_motion_blur_ends_restyle_alone_what_reaches_the_box() {
             "}),
             [2.0, 0.0]
         );
+        // Moved by its translate, where a box out of flow takes the place of another that moves.
+        assert_eq!(
+            trail(indoc! {"
+                export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  const mark = bounds('mark');
+                  const moved = { width: 10, height: 10, translate: `${120 * seconds}px`, motionBlur: 'auto' };
+                  return (
+                    <View>
+                      <View key='mark' style={{ position: 'absolute', left: 100 * seconds, width: 4, height: 4 }} />
+                      <View style={{ position: 'absolute', width: 4, height: 4, translate: `${mark.x}px` }} />
+                      <View style={moved} />
+                    </View>
+                  );
+                }
+            "}),
+            [2.0, 0.0]
+        );
+        // Moved by where a box that moves is laid out.
+        assert_eq!(
+            trail(indoc! {"
+                export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  const mark = bounds('mark');
+                  const moved = { width: 10, height: 10, translate: `${mark.x}px`, motionBlur: 'auto' };
+                  return (
+                    <View>
+                      <View key='mark' style={{ position: 'absolute', left: 120 * seconds, width: 4, height: 4 }} />
+                      <View style={moved} />
+                    </View>
+                  );
+                }
+            "}),
+            [2.0, 0.0]
+        );
         // Out of flow at its static place, under a box in flow that grows.
         assert_eq!(
             trail(indoc! {"

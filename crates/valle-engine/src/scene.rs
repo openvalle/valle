@@ -502,13 +502,10 @@ impl Scene {
     }
 
     /// What the ends of the trails in a frame of `template`, its variant, with these `styles`
-    /// restyle alone, and what they read; `None` where the variant measures boxes, which its late
-    /// values are of.
+    /// restyle alone, and what they read; `None` where that is a value from `bounds()`, which an
+    /// end's own layout gives. Other late values only paint, so the frame's layout holds there.
     fn reach(&self, template: &Rc<Template>, styles: &[Style]) -> Option<Reach> {
-        let (_, sheet, measured) = self.sheets.iter().find(|(t, ..)| Rc::ptr_eq(t, template))?;
-        if !measured.is_empty() {
-            return None;
-        }
+        let (_, sheet, _) = self.sheets.iter().find(|(t, ..)| Rc::ptr_eq(t, template))?;
         let nodes = sheet.reaching(styles);
         let mut roots: Vec<u32> = template.decided().collect();
         sheet.reads(&nodes, |e| roots.push(e));
@@ -521,6 +518,9 @@ impl Scene {
             }
         }
         let read = template.program.reading(roots);
+        if (read.iter().zip(sheet.late())).any(|(&read, &late)| read && late) {
+            return None;
+        }
         Some(Reach { nodes, read })
     }
 
