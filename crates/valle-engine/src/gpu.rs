@@ -1004,6 +1004,21 @@ impl Plan {
     }
 }
 
+/// Delivery sizes up to UHD 8K, including portrait and other aspect ratios.
+/// This is independent of layout dimensions and of the device's own limits.
+pub fn output_size([width, height]: [u32; 2]) -> Result<(), Error> {
+    if width == 0
+        || height == 0
+        || width.max(height) > 7680
+        || u64::from(width) * u64::from(height) > 7680 * 4320
+    {
+        return Err(
+            "output size must be nonzero, at most 7680 px per side and 33177600 pixels (8K)".into(),
+        );
+    }
+    Ok(())
+}
+
 /// Where instances are: a transform's index and the transform.
 type At = (u32, Matrix);
 
@@ -1011,6 +1026,8 @@ type At = (u32, Matrix);
 pub struct Renderer<'a> {
     gpu: &'a Gpu,
     size: [u32; 2],
+    canvas: [u32; 2],
+    mapping: Matrix,
     frame: Surface,
     output: Surface,
     readback: wgpu::Buffer,
@@ -1071,6 +1088,8 @@ impl<'a> Renderer<'a> {
         Renderer {
             gpu,
             size,
+            canvas: size,
+            mapping: Matrix::IDENTITY,
             frame,
             output: Surface::new(gpu, texture(device, size, OUTPUT)),
             readback,
@@ -1096,6 +1115,37 @@ impl<'a> Renderer<'a> {
             free: Vec::new(),
             programs: HashMap::new(),
         }
+    }
+
+    /// Draws a logical `canvas` directly at `size`, contained and centred without relayout.
+    /// The same-size path keeps the original transforms and render passes.
+    pub fn at_size(gpu: &'a Gpu, canvas: [u32; 2], size: [u32; 2]) -> Result<Self, Error> {
+        output_size(size)?;
+        if canvas.contains(&0) {
+            return Err("the design canvas must have nonzero dimensions".into());
+        }
+        let limits = gpu.device.limits();
+        if size.iter().any(|&v| v > limits.max_texture_dimension_2d)
+            || u64::from(row(size[0])) * u64::from(size[1]) > limits.max_buffer_size
+        {
+            return Err(format!(
+                "output {}×{} exceeds this GPU's texture or readback limits",
+                size[0], size[1]
+            ));
+        }
+        let scale = (f64::from(size[0]) / f64::from(canvas[0]))
+            .min(f64::from(size[1]) / f64::from(canvas[1]));
+        let offset = [0, 1].map(|i| (f64::from(size[i]) - f64::from(canvas[i]) * scale) / 2.0);
+        let mut renderer = Self::new(gpu, size[0], size[1]);
+        renderer.canvas = canvas;
+        renderer.mapping = Matrix::translate(offset[0], offset[1]).times(Matrix::scale(scale));
+        Ok(renderer)
+    }
+
+    /// The pixels of a picture drawn by the scene, without the output's letterbox.
+    fn picture_size(&self, size: [u32; 2]) -> [u32; 2] {
+        let scale = self.mapping.radius_scale();
+        size.map(|v| (f64::from(v) * scale).ceil().max(1.0) as u32)
     }
 
     /// Makes the pipeline of `program` if there is none yet: the engine's quad, then its code,
@@ -1324,17 +1374,28 @@ impl<'a> Renderer<'a> {
         self.colors.retain(|k, _| used.contains(k));
         self.paths.retain(|_, k| std::mem::take(&mut k.used));
         for (image, items) in pictures {
-            let mut encoder = self.prepare(items, faces, images)?;
+            let size = self.picture_size(images[*image as usize].size);
+            let logical = images[*image as usize].size;
+            let mapping = Matrix::affine([
+                f64::from(size[0]) / f64::from(logical[0]),
+                0.0,
+                0.0,
+                f64::from(size[1]) / f64::from(logical[1]),
+                0.0,
+                0.0,
+            ]);
+            let mut encoder = self.prepare(items, faces, images, mapping, false)?;
             let target = &self.images[self.shown[*image as usize]].1.texture;
             // In working colors, as images are read.
             encoder.copy_texture_to_texture(
                 self.frame.texture.as_image_copy(),
                 target.as_image_copy(),
-                self.frame.texture.size(),
+                target.size(),
             );
             self.gpu.queue.submit([encoder.finish()]);
         }
-        self.prepare(items, faces, images)
+        let letterbox = self.mapping.0[2][0] > 0.0 || self.mapping.0[2][1] > 0.0;
+        self.prepare(items, faces, images, self.mapping, letterbox)
     }
 
     /// Encodes drawing the frame `items` paint into the output, its buffers written.
@@ -1343,6 +1404,8 @@ impl<'a> Renderer<'a> {
         items: &[Item],
         faces: &[Face],
         images: &[Image],
+        mapping: Matrix,
+        letterbox: bool,
     ) -> Result<wgpu::CommandEncoder, Error> {
         // The images' textures, kept while frames show them, and color glyphs'.
         let rasters = || self.colors.values().flatten().map(|(i, _)| &i.pixels);
@@ -1360,7 +1423,7 @@ impl<'a> Renderer<'a> {
                     None => {
                         // One without pixels is a picture a box draws.
                         let t = match i.pixels.is_empty() {
-                            true => texture(&self.gpu.device, i.size, WORK),
+                            true => texture(&self.gpu.device, self.picture_size(i.size), WORK),
                             false => mipmapped(self.gpu, i),
                         };
                         self.images
@@ -1375,9 +1438,31 @@ impl<'a> Renderer<'a> {
             ..Plan::default()
         };
         let identity = plan.transform(Matrix::IDENTITY);
-        let at = (identity.ok_or("engine bug: no identity")?, Matrix::IDENTITY);
+        let identity = identity.ok_or("engine bug: no identity")?;
+        // Index 0 stays the identity: layer composites are in target pixels.
+        let transform = if mapping == Matrix::IDENTITY {
+            identity
+        } else {
+            plan.transform(mapping).ok_or("invalid output transform")?
+        };
+        let at = (transform, mapping);
         let mut atlas = (Vec::new(), Vec::new());
-        self.plan(items, 0, at, faces, &mut plan, &mut atlas)?;
+        if letterbox {
+            let rect = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: self.canvas[0] as f32,
+                height: self.canvas[1] as f32,
+            };
+            let clip = Item::Clip {
+                rect,
+                radii: SQUARE,
+                items: items.to_vec(),
+            };
+            self.plan(&[clip], 0, at, faces, &mut plan, &mut atlas)?;
+        } else {
+            self.plan(items, 0, at, faces, &mut plan, &mut atlas)?;
+        }
         let gpu = self.gpu;
         let device = &gpu.device;
         let mut encoder = device.create_command_encoder(&Default::default());
@@ -1859,8 +1944,15 @@ impl<'a> Renderer<'a> {
                     }
                     // Its images have as many pixels as the box covers on the target.
                     let scale = matrix.radius_scale() as f32;
-                    let [w, h] =
-                        [rect.width, rect.height].map(|v| (v * scale).ceil().clamp(1.0, 4096.0));
+                    let [w, h] = [rect.width, rect.height].map(|v| (v * scale).ceil().max(1.0));
+                    if reads.iter().any(Option::is_some)
+                        && [w, h].iter().any(|&v| {
+                            !v.is_finite()
+                                || v > self.gpu.device.limits().max_texture_dimension_2d as f32
+                        })
+                    {
+                        return Err("shader input exceeds this GPU's texture limit".into());
+                    }
                     let mut host = [0.0; 16];
                     host[..8].copy_from_slice(&[
                         rect.width,

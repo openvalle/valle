@@ -60,6 +60,13 @@ pub fn render(
         })?),
     };
     let c = scene.composition();
+    let size = args.output_size([c.width, c.height])?;
+    if codec != Codec::ProRes4444 && size.iter().any(|v| v % 2 != 0) {
+        return Err(Failure::new(
+            "usage",
+            "H.264 and HEVC need even output dimensions",
+        ));
+    }
     let count = c.fps.frames_in(c.duration);
     let frames = chosen(args, count)?;
     // Sound goes with all the frames only, which it lines up with.
@@ -72,7 +79,7 @@ pub fn render(
     // On a Metal GPU, frames are drawn into the hardware encoder's own where it has them.
     let textures = Textures::new(gpu.device());
     let options = Options {
-        size: [c.width, c.height],
+        size,
         fps: [c.fps.num(), c.fps.den()],
         codec,
         encoding,
@@ -80,8 +87,9 @@ pub fn render(
         sound: mixer.is_some(),
         surfaces: textures.is_some(),
     };
+    let mut renderer =
+        Renderer::at_size(&gpu, [c.width, c.height], size).map_err(|e| Failure::new("gpu", e))?;
     let mut writer = media::writer(out, &options).map_err(failed)?;
-    let mut renderer = Renderer::new(&gpu, c.width, c.height);
     let gpu_failed = |e| Failure::new("gpu", e);
     // Frames the GPU is drawing into the encoder's, sent in order once it is done: one is drawn
     // while the next is laid out.
@@ -145,6 +153,8 @@ pub fn render(
         ),
         "file": out.display().to_string(),
         "frames": frames.len(),
+        "width": size[0],
+        "height": size[1],
         "codec": format!("{codec:?}").to_lowercase(),
         "encoder": encoder,
         // Whether the GPU drew the frames into the encoder's own memory, read back otherwise.

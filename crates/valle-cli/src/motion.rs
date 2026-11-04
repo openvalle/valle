@@ -324,9 +324,10 @@ pub fn render(args: &Args) -> Result<Value, Failure> {
     if args.storyboard && !png {
         return Err(Failure::new("usage", "a storyboard is a .png"));
     }
+    let size = args.output_size([c.width, c.height])?;
     let gpu = Gpu::new().map_err(|e| Failure::new("gpu", e))?;
-    let mut renderer = Renderer::new(&gpu, c.width, c.height);
-    let size = [c.width, c.height];
+    let mut renderer =
+        Renderer::at_size(&gpu, [c.width, c.height], size).map_err(|e| Failure::new("gpu", e))?;
     let mut drawn = Vec::new();
     let mut written = Vec::new();
     for (k, &i) in frames.iter().enumerate() {

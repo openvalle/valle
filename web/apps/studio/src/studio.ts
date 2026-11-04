@@ -445,6 +445,12 @@ export class ValleStudio extends LitElement {
         : this.timeline
           ? ["timeline", "render", this.#entry, "-o", out]
           : ["motion", "render", this.#entry, "-o", out];
+    const size = this.renderRoot.querySelector<HTMLSelectElement>("#output-size")?.value;
+    if (size) {
+      const info = this.player?.info;
+      const output = info && info.height > info.width ? size.split("x").reverse().join("x") : size;
+      args.push("--output-size", output);
+    }
     const id = await service.render(args);
     this.#jobs.set(id, { id, done: 0, frames: 0 });
     this.requestUpdate();
@@ -519,6 +525,13 @@ export class ValleStudio extends LitElement {
         <button ?disabled=${!this.#drafts.size} @click=${() => void this.save()}>
           Save${this.#drafts.size ? ` (${this.#drafts.size})` : ""}
         </button>
+        <select id="output-size" aria-label="Export resolution">
+          <option value="">Design size</option>
+          <option value="1280x720">720p</option>
+          <option value="1920x1080">1080p</option>
+          <option value="3840x2160">4K</option>
+          <option value="7680x4320">8K</option>
+        </select>
         <button @click=${() => void this.export()}>Export</button>
       </header>
       ${this.#left()}

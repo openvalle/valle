@@ -106,6 +106,7 @@ options of render (motion and timeline):
   --storyboard                draw the frames side by side into the one .png
   --codec <h264|hevc|prores>  a video's codec: h264 for a .mp4, prores (4444, with alpha) for
                               a .mov
+  --output-size <WxH>        output pixels, without relayout (up to 7680x4320 / 8K)
   --encoder <vt|ffmpeg>       the hardware encoder (VideoToolbox), or FFmpeg's own on the CPU
                               (x264, x265, prores_ks); the hardware's where it has the codec
   --decoder <vt|ffmpeg>       how videos the scene shows are decoded: the hardware's (where it

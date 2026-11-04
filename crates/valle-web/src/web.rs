@@ -404,6 +404,7 @@ impl Engine {
                 size[0], size[1], c.width, c.height
             )));
         }
+        let renderer = Renderer::at_size(self.gpu, [c.width, c.height], size).map_err(js)?;
         self.canvas.set_width(size[0]);
         self.canvas.set_height(size[1]);
         self.surface.configure(
@@ -420,7 +421,6 @@ impl Engine {
                 view_formats: Vec::new(),
             },
         );
-        let renderer = Renderer::new(self.gpu, size[0], size[1]);
         self.open = Some(Open {
             scene,
             renderer,
@@ -444,6 +444,19 @@ impl Engine {
     /// files to give first.
     pub fn frame(&mut self, index: f64) -> Result<String, JsValue> {
         self.draw(index, true)
+    }
+
+    /// Sets the pixel size of an offscreen export without changing layout or the canvas.
+    /// An export has its own engine; `render` draws at this size and `pixels`/`yuv` read it.
+    pub fn render_size(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
+        let open = self.open.as_mut().ok_or_else(|| js("nothing is open"))?;
+        let size = [width, height];
+        if size != open.size {
+            let c = open.scene.composition();
+            open.renderer = Renderer::at_size(self.gpu, [c.width, c.height], size).map_err(js)?;
+            open.size = size;
+        }
+        Ok(())
     }
 
     /// Draws frame `index` as `frame` does, but not into the canvas: for `pixels` or `yuv` to

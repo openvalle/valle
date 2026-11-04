@@ -185,12 +185,28 @@ async function main() {
     const settled = await evaluate("return [studio.drafts.length, studio.conflicts.length];");
     expect(settled.join() === "0,0", "taking theirs drops the draft");
 
-    // An export, rendered natively.
-    const id = await evaluate("return await studio.export();");
+    // The export's resolution is independent of the preview and the saved design canvas.
+    const beforeExport = await evaluate(
+      "return [studio.player.info.width, studio.player.info.height];",
+    );
+    const id = await evaluate(
+      'studio.renderRoot.querySelector("#output-size").value = "1280x720"; return await studio.export();',
+    );
     const job = await until("the export", () =>
       evaluate(`const j = studio.job(${id}); return j?.result && j;`),
     );
     expect(job.result.status === "ok", `the export rendered: ${JSON.stringify(job.result)}`);
+    expect(
+      job.result.width === 1280 && job.result.height === 720,
+      "the export uses the selected 720p size",
+    );
+    const afterExport = await evaluate(
+      "return [studio.player.info.width, studio.player.info.height];",
+    );
+    expect(
+      beforeExport.join() === afterExport.join(),
+      "exporting does not resize the preview's canvas",
+    );
     expect(await Bun.file(join(project, "renders/cut.mp4")).exists(), "renders/cut.mp4 is there");
     await cdp.send("Browser.close").catch(() => {});
   } finally {

@@ -27,7 +27,8 @@ pub enum Frames {
 }
 
 /// Options that take a value, beyond those read here.
-const VALUED: [&str; 11] = [
+const VALUED: [&str; 12] = [
+    "--output-size",
     "--encoder",
     "--decoder",
     "--codec",
@@ -76,6 +77,23 @@ impl Args {
             return Err(bad("which file?".into()));
         }
         Ok(args)
+    }
+
+    /// Output pixels, leaving the scene's logical canvas unchanged.
+    pub fn output_size(&self, canvas: [u32; 2]) -> Result<[u32; 2], Failure> {
+        let size = match self.option("output-size") {
+            None => canvas,
+            Some(text) => {
+                let parsed = text
+                    .split_once('x')
+                    .and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?]));
+                parsed.ok_or_else(|| {
+                    Failure::new("usage", "--output-size is WIDTHxHEIGHT, such as 3840x2160")
+                })?
+            }
+        };
+        valle_engine::gpu::output_size(size).map_err(|e| Failure::new("usage", e))?;
+        Ok(size)
     }
 
     pub fn option(&self, name: &str) -> Option<&str> {

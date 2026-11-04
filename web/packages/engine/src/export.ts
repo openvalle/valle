@@ -9,8 +9,8 @@ import type { Player } from "./index.ts";
 import { exportFrames, type Opened } from "./messages.ts";
 
 export type ExportVideoOptions = {
-  /** The frame size; the composition's by default. Its frames are fitted in whole, centred on
-   * black. Given one, the other keeps the composition's shape. */
+  /** Output pixels, rendered directly without relayout, up to UHD 8K. The composition's size
+   * by default; fitted whole and centred on black. Given one, the other keeps its shape. */
   width?: number;
   height?: number;
   /** Frames a second; the composition's by default. At another rate, each frame is the
@@ -52,6 +52,18 @@ export async function exportBrowserVideo(
       })) as Opened;
       const audio = includeAudio && (await connection.send({ type: "sound", entry: spawn.entry }));
       const { width, height } = size(info, options);
+      if (
+        ![width, height].every((v) => Number.isInteger(v) && v > 0 && v <= 7680) ||
+        width * height > 7680 * 4320
+      ) {
+        throw new PlayerError(
+          "scene",
+          "output size must be nonzero, at most 7680 px per side and 33177600 pixels (8K)",
+        );
+      }
+      if (width % 2 || height % 2) {
+        throw new PlayerError("scene", "H.264 needs even output dimensions");
+      }
       const [n, d] =
         options.frameRate === undefined ? rate(info.fps) : rate(String(options.frameRate));
       const frameCount = exportFrames(info, [n, d]).length;

@@ -13,7 +13,7 @@ import {
   VideoSampleSource,
 } from "mediabunny";
 import { type ExportOptions, exportFrames, type Opened } from "./messages.ts";
-import { type Engine, i420, type Sound } from "./wasm/valle_web.js";
+import type { Engine, Sound } from "./wasm/valle_web.js";
 
 /** The tags of the frames it encodes: BT.709's primaries and matrix, limited range, and the
  * values as sRGB's, as the native engine tags its MP4s. */
@@ -39,6 +39,7 @@ export async function encode(
   progress: (done: number) => void,
 ): Promise<ArrayBuffer> {
   const { width, height, bitrate } = options;
+  engine.render_size(width, height);
   const [n, d] = options.rate;
   const indices = exportFrames(composition, options.rate);
   const frames = indices.length;
@@ -53,14 +54,13 @@ export async function encode(
     output.addAudioTrack(audio);
   }
   await output.start();
-  const fit = fitter(composition, width, height);
   const seconds = (frames * d) / n;
   const samples = Math.round(seconds * RATE);
   let mixed = 0;
   try {
     for (let i = 0; i < frames; i++) {
       await draw(indices[i]);
-      const data = fit ? await fit(await engine.pixels()) : await engine.yuv();
+      const data = await engine.yuv();
       const frame = new VideoSample(data, {
         format: "I420",
         codedWidth: width,
@@ -93,35 +93,4 @@ export async function encode(
     throw error;
   }
   return target.buffer!;
-}
-
-/** What puts a frame of the composition's size into one of `width` × `height` as I420: scaled
- * whole, keeping its shape, centred on black; none where the sizes are the same. */
-function fitter(
-  composition: Opened,
-  width: number,
-  height: number,
-): ((rgba: Uint8Array) => Promise<Uint8Array>) | undefined {
-  const { width: w, height: h } = composition;
-  if (w === width && h === height) {
-    return undefined;
-  }
-  const scale = Math.min(width / w, height / h);
-  const [fw, fh] = [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))];
-  const canvas = new OffscreenCanvas(width, height);
-  const context = canvas.getContext("2d", { alpha: false })!;
-  return async (rgba) => {
-    const pixels = new ImageData(new Uint8ClampedArray(rgba.buffer as ArrayBuffer), w, h);
-    const scaled = await createImageBitmap(pixels, {
-      resizeWidth: fw,
-      resizeHeight: fh,
-      resizeQuality: "high",
-    });
-    context.fillStyle = "#000";
-    context.fillRect(0, 0, width, height);
-    context.drawImage(scaled, Math.floor((width - fw) / 2), Math.floor((height - fh) / 2));
-    scaled.close();
-    const fitted = context.getImageData(0, 0, width, height).data;
-    return i420(new Uint8Array(fitted.buffer), width, height);
-  };
 }

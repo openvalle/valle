@@ -614,6 +614,51 @@ async function main() {
     if (cancelled !== "cancelled") {
       failed.push(`a cancelled export: ${cancelled}`);
     }
+    // Subpixel design details must be rasterized at delivery density, not enlarged as a bitmap.
+    const detail = `export const composition = { width: 64, height: 32, fps: 2, duration: 1 };
+export default function Scene() {
+  return <View style={{ width: 64, height: 32, background: "black" }}>
+    {Array.from({ length: 128 }, (_, i) => <View style={{ position: "absolute", left: i / 2, top: 0, width: 0.25, height: 32, background: "white" }} />)}
+  </View>;
+}`;
+    await Bun.write(join(out, "detail.motion.tsx"), detail);
+    const detailed = await evaluate(
+      'exported("/out/detail.motion.tsx", { width: 256, height: 128, videoBitrate: 20000000 })',
+    );
+    await Bun.write(join(out, "detail.mp4"), await (await fetch(detailed.url)).arrayBuffer());
+    await Bun.write(
+      join(out, "detail-video.motion.tsx"),
+      `export const composition = { width: 256, height: 128, fps: 2, duration: 1 };
+export const controls = { resources: { video: resource({ kind: "video", default: "detail.mp4" }) } };
+export default function Scene() { return <Video src="resource://video" style={{ width: 256, height: 128 }} />; }`,
+    );
+    run([
+      "motion",
+      "render",
+      join(out, "detail.motion.tsx"),
+      "--output-size",
+      "256x128",
+      "-o",
+      join(out, "detail.png"),
+    ]);
+    run([
+      "motion",
+      "render",
+      join(out, "detail-video.motion.tsx"),
+      "--decoder",
+      "ffmpeg",
+      "-o",
+      join(out, "detail-video.png"),
+    ]);
+    const detailDiff = await evaluate('similar("/out/detail.png", "/out/detail-video.png")');
+    console.log(`resized export detail: mean ${detailDiff.mean.toFixed(2)} apart`);
+    if (detailDiff.mean > 4) failed.push(`resized export lost subpixel detail: ${detailDiff.mean}`);
+    for (const size of [{ width: 7680, height: 4322 }, { width: 0 }, { width: 127, height: 72 }]) {
+      const rejected = await evaluate(
+        `exported("/out/detail.motion.tsx", ${JSON.stringify(size)}).then(() => false, () => true)`,
+      );
+      if (!rejected) failed.push(`export accepted invalid size ${JSON.stringify(size)}`);
+    }
     // The frames: the export of the edit shown by a scene, and the edit drawn.
     await Bun.write(join(out, "shown.motion.tsx"), SHOWN);
     run([
