@@ -1355,7 +1355,7 @@ fn text_shadows_inherit_in_px_with_currentcolor_kept() {
 #[test]
 fn font_features_are_quoted_tags_with_their_values() {
     let features = |v: &str| {
-        let f = one(&[("fontFeatureSettings", text(v))]).font.features;
+        let f = &one(&[("fontFeatureSettings", text(v))]).font.features;
         (f.iter())
             .map(|f| (std::str::from_utf8(&f.tag).unwrap().to_owned(), f.value))
             .collect::<Vec<_>>()
@@ -1429,7 +1429,7 @@ fn font_stretch_is_a_keyword_or_a_percentage() {
 #[test]
 fn font_variations_are_quoted_axes_with_numbers() {
     let variations = |v: &str| {
-        let f = one(&[("fontVariationSettings", text(v))]).font.variations;
+        let f = &one(&[("fontVariationSettings", text(v))]).font.variations;
         (f.iter())
             .map(|v| (std::str::from_utf8(&v.tag).unwrap().to_owned(), v.value))
             .collect::<Vec<_>>()
@@ -1632,9 +1632,9 @@ fn text_properties_inherit() {
         skip_ink: true,
         underline_offset: None,
     };
-    assert_eq!(s[0].font, initial);
+    assert_eq!(*s[0].font, initial);
     assert_eq!(s[0].color, color::BLACK);
-    assert_eq!(s[4].font, initial);
+    assert_eq!(*s[4].font, initial);
 
     let brand = Font {
         size: 20.0,
@@ -1687,7 +1687,7 @@ fn text_properties_inherit() {
         skip_ink: true,
         underline_offset: None,
     };
-    assert_eq!(s[1].font, brand);
+    assert_eq!(*s[1].font, brand);
     assert_eq!(s[1].color, [1.0, 0.0, 0.0, 1.0]);
     // Spacing inherits as px; a factor line height inherits as the factor.
     let bigger = Font {
@@ -1695,7 +1695,7 @@ fn text_properties_inherit() {
         weight: 900.0,
         ..brand.clone()
     };
-    assert_eq!(s[2].font, bigger);
+    assert_eq!(*s[2].font, bigger);
     assert_eq!(s[2].color, s[1].color);
     let smaller = Font {
         size: 20.0,
@@ -1703,7 +1703,7 @@ fn text_properties_inherit() {
         line_height: LineHeight::Px(30.0),
         ..brand
     };
-    assert_eq!(s[3].font, smaller);
+    assert_eq!(*s[3].font, smaller);
 }
 
 #[test]

@@ -251,9 +251,10 @@ fn shown([x, y, w, h]: [f64; 4]) -> String {
 pub fn glyphless(frame: &Frame, pictures: &[Picture]) -> Vec<Item> {
     let mut styles = frame.styles.to_vec();
     for s in &mut styles {
-        s.font.fill = Some(color::TRANSPARENT);
-        s.font.stroke = 0.0;
-        s.font.shadows = Rc::new([]);
+        let font = Rc::make_mut(&mut s.font);
+        font.fill = Some(color::TRANSPARENT);
+        font.stroke = 0.0;
+        font.shadows = Rc::new([]);
     }
     paint::paint(&frame.template, &styles, &frame.layout, pictures)
 }

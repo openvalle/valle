@@ -806,3 +806,28 @@ fn changing_a_video_sources_natural_size_invalidates_layout() {
         assert_eq!(changed.layout.boxes[0].border.height, 80.0);
     });
 }
+
+#[test]
+fn styled_variants_match_fresh_scenes_when_seeking_in_both_directions() {
+    big_stack(|| {
+        let source = indoc! {"
+            export const composition = {width:200, height:100, fps:30, duration:3};
+            function Label() { return <Text style={{fontSize:'1.5em'}}>label</Text>; }
+            export default function Scene() {
+              const {seconds} = useCurrentTime();
+              return <View style={{fontSize:12 + seconds * 2, color:seconds < 1 ? 'red' : 'blue'}}>
+                <Label />
+                {seconds < 1.5 ? <View style={{position:'absolute', left:seconds * 20, opacity:seconds / 3}} /> : <Text>late</Text>}
+              </View>;
+            }
+        "};
+        let mut reused = load(source).unwrap();
+        for seconds in ["0", "1.2", "2.4", "0.4", "2.0", "1.0", "0"] {
+            let at = Tick::parse_seconds(seconds).unwrap();
+            let actual = reused.frame(at).unwrap();
+            let expected = load(source).unwrap().frame(at).unwrap();
+            assert_eq!(actual.styles, expected.styles, "{seconds}");
+            assert_eq!(actual.items, expected.items, "{seconds}");
+        }
+    });
+}

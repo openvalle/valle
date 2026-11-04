@@ -398,6 +398,11 @@ impl Scene {
 
     /// `template`, a variant, with its `values` at `at`, styled and laid out.
     fn lay(&mut self, at: Tick, template: Rc<Template>, mut values: Vec<V>) -> Result<Laid, Error> {
+        if let Some((previous, sheet, _)) = self.sheets.first_mut()
+            && !Rc::ptr_eq(previous, &template)
+        {
+            sheet.clear_computed();
+        }
         match self
             .sheets
             .iter()

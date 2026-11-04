@@ -8,6 +8,7 @@
 //! why and what to write instead.
 
 pub mod background;
+mod cache;
 pub mod color;
 pub(crate) mod css;
 pub mod filter;
@@ -21,6 +22,7 @@ pub mod tailwind;
 pub mod transform;
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -193,7 +195,7 @@ pub struct Style {
     /// A `<ShaderLayer>`'s shader, with its uniforms' values at the frame.
     pub shader: Option<Shaded>,
     pub color: Rgba,
-    pub font: Font,
+    pub font: Rc<Font>,
     /// The text decorations its text takes: those of the boxes around it, outermost first, then
     /// its own. A box out of flow takes none from around it.
     pub decorations: Vec<Decoration>,
@@ -759,6 +761,10 @@ pub struct Sheet {
 /// traced `paddingTop` overrides it).
 struct Bound {
     declared: Declared,
+    /// The invariant part of eligible styles; geometry and uniforms stay frame-dependent.
+    /// Boxed so inactive variants do not reserve a computed style for every node.
+    base: RefCell<Option<Box<cache::Base>>>,
+    updates: Option<cache::Updates>,
     /// Whether it is a Text.
     text: bool,
     /// Each with what errors call it, and whether it is a presentation attribute.
@@ -833,6 +839,14 @@ impl Sheet {
             ends,
             late,
         })
+    }
+
+    /// Drop computed styles when a scene switches variants. The parsed declarations remain
+    /// reusable, but only the active variant retains frame-dependent style snapshots.
+    pub(crate) fn clear_computed(&mut self) {
+        for node in &mut self.nodes {
+            *node.base.get_mut() = None;
+        }
     }
 
     /// Which of the program's expressions are late.
@@ -1002,8 +1016,34 @@ impl Sheet {
             Cow::Owned(d)
         };
         let (canvas, resources) = (frame.canvas, frame.resources);
-        let mut style = compute(&declared, parent, canvas, calcs, i, b.text, resources)
-            .map_err(|e| format!("{}: {e}", b.place))?;
+        let mut base = b.base.borrow_mut();
+        let kept = base.as_ref().and_then(|s| {
+            if !s.matches(parent, canvas, calcs, resources) {
+                return None;
+            }
+            let mut style = s.style.clone();
+            b.updates
+                .as_ref()?
+                .apply(&mut style, &declared, canvas)
+                .then_some(style)
+        });
+        let mut style = match kept {
+            Some(style) => style,
+            None => {
+                let style = compute(&declared, parent, canvas, calcs, i, b.text, resources)
+                    .map_err(|e| format!("{}: {e}", b.place))?;
+                if b.updates.is_some() {
+                    *base = Some(Box::new(cache::Base::new(
+                        parent,
+                        canvas,
+                        calcs,
+                        resources,
+                        style.clone(),
+                    )));
+                }
+                style
+            }
+        };
         style.source = b.source;
         let boxed = (b.svg.as_ref()).is_none_or(|g| g.tag == Tag::Svg);
         if boxed && (style.clip_ref.is_some() || style.mask_ref.is_some()) {
@@ -1391,6 +1431,8 @@ fn bind(node: &Node, classes: &[tailwind::Declaration], late: &[bool]) -> Result
         _ => None,
     };
     Ok(Bound {
+        updates: cache::Updates::new(&rest),
+        base: RefCell::default(),
         declared,
         text: matches!(node.kind, Kind::Text { .. }),
         rest,
@@ -4631,6 +4673,15 @@ fn lighter(w: f64) -> f64 {
     }
 }
 
+fn computed_transforms(d: &Declared, units: Units) -> Vec<transform::Function> {
+    [&d.translate, &d.rotate, &d.scale]
+        .into_iter()
+        .flatten()
+        .chain(&d.transform)
+        .map(|f| f.computed(units))
+        .collect()
+}
+
 /// The computed style of a node with these declared values under `parent` (`None`: the canvas,
 /// a block container with CSS's initial text properties), after `first` calcs in the frame.
 fn compute(
@@ -4644,7 +4695,7 @@ fn compute(
 ) -> Result<Style, String> {
     let initial;
     let (inherited, inherited_color, inherited_visible, container) = match parent {
-        Some(p) => (&p.font, p.color, p.visible, p.layout.display),
+        Some(p) => (p.font.as_ref(), p.color, p.visible, p.layout.display),
         None => {
             initial = Font::initial();
             (&initial, color::BLACK, true, Display::Block)
@@ -4889,12 +4940,7 @@ fn compute(
             })
             .collect(),
         opacity: d.opacity,
-        transform: [&d.translate, &d.rotate, &d.scale]
-            .into_iter()
-            .flatten()
-            .chain(&d.transform)
-            .map(|f| f.computed(u))
-            .collect(),
+        transform: computed_transforms(d, u),
         individual: [&d.translate, &d.rotate, &d.scale]
             .into_iter()
             .flatten()
@@ -4959,7 +5005,7 @@ fn compute(
         instance: None,
         shader: None,
         color,
-        font,
+        font: Rc::new(font),
         decorations,
         ellipsis: d.ellipsis,
         clamp: match (d.display, d.box_vertical) {
