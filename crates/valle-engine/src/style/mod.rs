@@ -327,6 +327,81 @@ impl Style {
         !self.transform.is_empty() || self.motion.is_some()
     }
 
+    /// Whether layout lays out a box of this style as one of `other`: they differ at most in
+    /// what paints the box or moves it once laid out. Every field is named, so that a new one
+    /// takes a side.
+    pub fn lays_out_as(&self, other: &Style) -> bool {
+        let Style {
+            layout,
+            order,
+            source,
+            svg,
+            font,
+            decorations,
+            ellipsis,
+            clamp,
+            calcs,
+            // Only whether they make a containing block of all, below.
+            transform: _,
+            motion: _,
+            perspective: _,
+            preserve_3d: _,
+            filter: _,
+            backdrop: _,
+            shader: _,
+            z_index: _,
+            background: _,
+            layers: _,
+            radii: _,
+            border: _,
+            border_colors: _,
+            border_styles: _,
+            outline: _,
+            outline_color: _,
+            outline_style: _,
+            outline_offset: _,
+            shadows: _,
+            opacity: _,
+            individual: _,
+            transform_origin: _,
+            transform_origin_z: _,
+            perspective_origin: _,
+            object_fit: _,
+            object_position: _,
+            backface_visible: _,
+            blend: _,
+            isolate: _,
+            motion_auto: _,
+            clip: _,
+            masks: _,
+            visible: _,
+            pixelated: _,
+            fill: _,
+            fill_opacity: _,
+            even_odd: _,
+            stroke: _,
+            stop_color: _,
+            stop_opacity: _,
+            clip_ref: _,
+            mask_ref: _,
+            clip_even_odd: _,
+            mask_alpha: _,
+            markers: _,
+            instance: _,
+            color: _,
+        } = self;
+        *layout == other.layout
+            && *order == other.order
+            && *source == other.source
+            && *svg == other.svg
+            && *font == other.font
+            && *decorations == other.decorations
+            && *ellipsis == other.ellipsis
+            && *clamp == other.clamp
+            && *calcs == other.calcs
+            && self.contains_all() == other.contains_all()
+    }
+
     /// Whether its children with transforms stay in its space: it preserves 3D and nothing
     /// groups what is in it into one flat layer, as an opacity, a clip, a clip path, a mask or a
     /// `<Mask>` source, a blend, isolation, a filter of it or of its backdrop, or a shader does.
@@ -800,6 +875,78 @@ impl Sheet {
         let mut copied = 0;
         for (u, style) in out.iter_mut().enumerate() {
             self.instantiate(u, style, &ids, &frame, 0, &mut copied)?;
+        }
+        Ok(out)
+    }
+
+    /// The nodes whose styles can move a box of `motionBlur: "auto"` in a frame of these
+    /// `styles`, or change its layout, in preorder: all but those apart from such boxes, an
+    /// `<svg>`'s elements, a `<Mask>`'s source and a box out of flow whose `position` no traced
+    /// value sets, each with what is in it, none of which lays out or moves a box outside it.
+    pub fn reaching(&self, styles: &[Style]) -> Vec<usize> {
+        let n = self.nodes.len();
+        let mut held = vec![false; n];
+        for i in (0..n).filter(|&i| styles[i].motion_auto) {
+            let mut at = Some(i);
+            while let Some(a) = at.filter(|&a| !held[a]) {
+                held[a] = true;
+                at = self.parents[a].map(|p| p as usize);
+            }
+        }
+        let traced = |b: &Bound, field: Field| {
+            (b.rest.iter()).any(|(f, p, ..)| *f == field && matches!(p, Prop::Expr(_)))
+        };
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < n {
+            let b = &self.nodes[i];
+            let source = (self.parents[i])
+                .and_then(|p| self.nodes[p as usize].source)
+                .is_some_and(|s| s.root == i);
+            let apart = b.svg.as_ref().is_some_and(|g| g.tag != Tag::Svg)
+                || source
+                || (styles[i].layout.position.is_out_of_flow() && !traced(b, Field::Position));
+            if apart && !held[i] {
+                i = self.ends[i] as usize;
+            } else {
+                out.push(i);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// The computed styles of `nodes` alone, in preorder, each one's parent among them, for the
+    /// program's settled values at one frame: as `compute` gives them, but for the copies of
+    /// `<use>`s. Each numbers its calcs as the node's style in `like`, another frame's, does, so
+    /// that their layouts compare.
+    pub fn compute_only(
+        &self,
+        nodes: &[usize],
+        values: &[V],
+        canvas: [f32; 2],
+        resources: &[Slot],
+        like: &[Style],
+    ) -> Result<Vec<Style>, Error> {
+        let frame = Frame {
+            values,
+            late: None,
+            canvas: canvas.map(f64::from),
+            resources,
+        };
+        // Where each node's style is in `out`.
+        let mut at = vec![usize::MAX; self.nodes.len()];
+        let mut out: Vec<Style> = Vec::with_capacity(nodes.len());
+        let (mut calcs, mut counted) = (0, 0);
+        for &i in nodes {
+            calcs += (like[counted..i].iter())
+                .map(|s| s.calcs.len())
+                .sum::<usize>();
+            counted = i;
+            let parent = self.parents[i].map(|p| &out[at[p as usize]]);
+            let style = self.style(i, parent, &frame, calcs)?;
+            at[i] = out.len();
+            out.push(style);
         }
         Ok(out)
     }

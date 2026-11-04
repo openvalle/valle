@@ -695,6 +695,70 @@ fn a_mask_source_inherits_from_the_mask() {
 }
 
 #[test]
+fn what_reaches_a_blurred_box_is_all_but_what_lays_out_apart() {
+    let absolute = || ("position", text("absolute"));
+    let mut tree = vec![
+        view(&[], &[1, 2, 4, 5, 7, 9]),
+        view(&[], &[]),
+        // Out of flow at every frame, with what is in it.
+        view(&[absolute()], &[3]),
+        view(&[("width", text("calc(50% + 1px)"))], &[]),
+        // Out of flow at this one only.
+        view(
+            &[
+                ("position", Prop::Expr(0)),
+                ("width", text("calc(50% + 2px)")),
+            ],
+            &[],
+        ),
+        // Out of flow, around the blurred box.
+        view(&[absolute()], &[6]),
+        view(&[absolute(), ("motionBlur", text("auto"))], &[]),
+        // An <svg>'s elements, and a mask's source.
+        view(&[], &[8]),
+        view(&[], &[]),
+        view(&[], &[]),
+        view(&[], &[]),
+    ];
+    let svg = |tag| Kind::Svg {
+        tag,
+        attributes: Vec::new(),
+    };
+    tree[7].kind = svg(Tag::Svg);
+    tree[8].kind = svg(Tag::Circle);
+    tree[9].kind = Kind::Mask {
+        source: 10,
+        luminance: false,
+        invert: false,
+    };
+    let sheet = sheet(tree).unwrap();
+    let values = [V::Str("absolute".into())];
+    let styles = sheet.compute(&values, true, CANVAS, &resources()).unwrap();
+    assert_eq!(sheet.reaching(&styles), [0, 1, 4, 5, 6, 7, 9]);
+    // Alone, as `compute` gives them, their calcs numbered as there.
+    let only = sheet.reaching(&styles);
+    let alone = (sheet.compute_only(&only, &values, CANVAS, &resources(), &styles)).unwrap();
+    assert!(only.iter().zip(&alone).all(|(&i, s)| *s == styles[i]));
+}
+
+#[test]
+fn a_box_lays_out_alike_with_what_only_paints_or_moves_it() {
+    let alike = |a: &[(&str, Prop)], b: &[(&str, Prop)]| one(a).lays_out_as(&one(b));
+    let wide = || ("width", num(10.0));
+    assert!(alike(
+        &[wide(), ("translate", text("5px")), ("opacity", num(0.5))],
+        &[wide(), ("translate", text("6px 2px"))],
+    ));
+    assert!(!alike(&[wide()], &[("width", num(11.0))]));
+    assert!(!alike(
+        &[("fontSize", num(20.0))],
+        &[("fontSize", num(21.0))]
+    ));
+    // A transform makes it the containing block of the boxes out of flow in it.
+    assert!(!alike(&[wide()], &[wide(), ("translate", text("5px"))]));
+}
+
+#[test]
 fn a_span_takes_only_text_properties() {
     let mut tree = vec![view(&[("fontSize", num(20.0))], &[1]), view(&[], &[])];
     let span = |style: &[(&str, Prop)]| Node {

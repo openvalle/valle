@@ -419,6 +419,118 @@ fn auto_motion_blur_ends_are_of_the_frames_variant() {
 }
 
 #[test]
+fn auto_motion_blur_ends_restyle_alone_what_reaches_the_box() {
+    big_stack(|| {
+        // The last node's trail at 1 s, against where frames at its ends put its center on the
+        // canvas, which it is not turned from: each scene but the first moves it by layout.
+        let trail = |source: &'static str| {
+            let mut scene = load(source).unwrap();
+            let back = scene.composition().fps.shutter(360, 0, 2);
+            let at = Tick::parse_seconds("1").unwrap();
+            let mut center = |at: Tick| {
+                let frame = scene.frame(at).unwrap();
+                let i = frame.styles.len() - 1;
+                let b = frame.layout.boxes[i].border;
+                frame.transforms[i].apply([b.x + b.width / 2.0, b.y + b.height / 2.0])
+            };
+            let [open, close] = [at + back, at - back].map(&mut center);
+            let frame = scene.frame(at).unwrap();
+            let Some(filter::Function::MotionBlur(t)) = frame.styles.last().unwrap().filter.last()
+            else {
+                panic!()
+            };
+            let ends = [0, 1].map(|k| f64::from(close[k] - open[k]));
+            assert!(
+                (0..2).all(|k| (t[k] - ends[k]).abs() < 1e-3),
+                "{t:?} {ends:?}"
+            );
+            t.map(|v| (v * 1e3).round() / 1e3)
+        };
+        // Moved by its translate only, beside boxes and a text out of flow that change.
+        assert_eq!(
+            trail(indoc! {"
+                export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  const moved = { width: 10, height: 10, translate: `${120 * seconds}px`, motionBlur: 'auto' };
+                  return (
+                    <View>
+                      <View style={{ position: 'absolute', left: 100 * seconds, width: 4, height: 4 }} />
+                      <Text style={{ position: 'absolute', top: 50 }}>{`${10 ** (Math.floor(seconds * 120 + 0.5) - 120)}`}</Text>
+                      <View style={moved} />
+                    </View>
+                  );
+                }
+            "}),
+            [2.0, 0.0]
+        );
+        // By a box in flow before it, which grows.
+        assert_eq!(
+            trail(indoc! {"
+                export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return (
+                    <View style={{ display: 'flex' }}>
+                      <View style={{ width: 120 * seconds, height: 10 }} />
+                      <View style={{ width: 10, height: 10, motionBlur: 'auto' }} />
+                    </View>
+                  );
+                }
+            "}),
+            [2.0, 0.0]
+        );
+        // By a text before it, 1 at 1 s, 0.1 before and 10 after.
+        let t = trail(indoc! {"
+            export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+            export default function Scene() {
+              const { seconds } = useCurrentTime();
+              return (
+                <View style={{ display: 'flex' }}>
+                  <Text>{`${10 ** (Math.floor(seconds * 120 + 0.5) - 120)}`}</Text>
+                  <View style={{ width: 10, height: 10, motionBlur: 'auto' }} />
+                </View>
+              );
+            }
+        "});
+        assert!(t[0] != 0.0, "{t:?}");
+        // By the box out of flow it is in, which moves.
+        assert_eq!(
+            trail(indoc! {"
+                export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return (
+                    <View>
+                      <View style={{ position: 'absolute', left: 120 * seconds }}>
+                        <View style={{ width: 10, height: 10, motionBlur: 'auto' }} />
+                      </View>
+                    </View>
+                  );
+                }
+            "}),
+            [2.0, 0.0]
+        );
+        // Out of flow at its static place, under a box in flow that grows.
+        assert_eq!(
+            trail(indoc! {"
+                export const composition = { width: 200, height: 100, fps: 30, duration: 2 };
+                export default function Scene() {
+                  const { seconds } = useCurrentTime();
+                  return (
+                    <View>
+                      <View style={{ width: 10, height: 120 * seconds }} />
+                      <View style={{ position: 'absolute', width: 10, height: 10, motionBlur: 'auto' }} />
+                    </View>
+                  );
+                }
+            "}),
+            [0.0, 2.0]
+        );
+    });
+}
+
+#[test]
 fn measure_text_gives_the_box_the_text_lays_out_in() {
     big_stack(|| {
         let mut scene = load(indoc! {"

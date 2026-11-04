@@ -12,7 +12,7 @@ use kurbo::{BezPath, Point, Shape};
 use crate::front::{Composition, Front, Holds, Inputs, Slot, Typeset};
 use crate::image::{Image, Picture};
 use crate::layout::{Layout, layout};
-use crate::paint::{Item, Matrix, drawn, paint, transforms};
+use crate::paint::{Item, Matrix, drawn, paint, transforms, transforms_of};
 use crate::slug;
 use crate::style::{Sheet, Style, filter, gradient};
 use crate::template::{
@@ -333,7 +333,7 @@ impl Scene {
             layout: laid,
         } = self.laid(at)?;
         if styles.iter().any(|s| s.motion_auto) {
-            self.trails(at, &template, &mut styles, &laid)?;
+            self.trails(at, &template, &values, &mut styles, &laid)?;
         }
         self.text.sweep();
         self.show_videos(&template, &values, &styles)?;
@@ -439,6 +439,7 @@ impl Scene {
         &mut self,
         at: Tick,
         template: &Rc<Template>,
+        values: &[V],
         styles: &mut [Style],
         laid: &Layout,
     ) -> Result<(), Error> {
@@ -453,14 +454,17 @@ impl Scene {
                 looped: c.looped,
             };
             let at = sample.at(at);
-            let end = match self.front.values(template, at) {
-                Some(values) => Some(self.lay(at, template.clone(), values)?),
-                None => None,
+            let Some(then) = self.front.values(template, at) else {
+                ends.push(None);
+                continue;
             };
-            ends.push(end.map(|end| {
-                let moved = transforms(&end.template, &end.styles, &end.layout);
-                (moved, end.layout)
-            }));
+            if let Some(moved) = self.moved(template, &then, values, styles, laid)? {
+                ends.push(Some((moved, None)));
+                continue;
+            }
+            let end = self.lay(at, template.clone(), then)?;
+            let moved = transforms(&end.template, &end.styles, &end.layout);
+            ends.push(Some((moved, Some(end.layout))));
         }
         let now = transforms(template, styles, laid);
         let center = |m: &Matrix, l: &Layout, i: usize| {
@@ -477,7 +481,8 @@ impl Scene {
             let here = center(&now[i], laid, i);
             let [open, close] = [0, 1].map(|k| {
                 let end = ends[k].as_ref();
-                inverse.apply(end.map_or(here, |(m, l)| center(&m[i], l, i)))
+                let end = end.map(|(m, l)| center(&m[i], l.as_ref().unwrap_or(laid), i));
+                inverse.apply(end.unwrap_or(here))
             });
             if let Some(filter::Function::MotionBlur(trail)) = style.filter.last_mut() {
                 *trail = [0, 1].map(|k| f64::from(close[k] - open[k]));
@@ -485,6 +490,55 @@ impl Scene {
         }
         Ok(())
     }
+
+    /// The transforms of the boxes of `motionBlur: "auto"` at another time of `template`, the
+    /// frame's variant, whose values are `then` there: where all that reaches them
+    /// (`Sheet::reaching`) lays out as in the frame, of the values `now`, `styles` and `laid`,
+    /// that alone is styled again, on the frame's boxes. `None` where it does not, or where the
+    /// variant measures boxes, which its late values are of.
+    fn moved(
+        &self,
+        template: &Rc<Template>,
+        then: &[V],
+        now: &[V],
+        styles: &mut [Style],
+        laid: &Layout,
+    ) -> Result<Option<Vec<Matrix>>, Error> {
+        let kept = self.sheets.iter().find(|(t, ..)| Rc::ptr_eq(t, template));
+        let Some((_, sheet, _)) = kept.filter(|(.., measured)| measured.is_empty()) else {
+            return Ok(None);
+        };
+        let reach = sheet.reaching(styles);
+        let c = self.front.composition;
+        let canvas = [c.width as f32, c.height as f32];
+        let resources = &self.front.resources;
+        let mut moved = sheet.compute_only(&reach, then, canvas, resources, styles)?;
+        let alike = (reach.iter().zip(&moved)).all(|(&i, s)| s.lays_out_as(&styles[i]))
+            && same_text(template, &reach, then, now);
+        if !alike {
+            return Ok(None);
+        }
+        // Their styles there in place of the frame's while their transforms read them.
+        for (&i, s) in reach.iter().zip(&mut moved) {
+            std::mem::swap(&mut styles[i], s);
+        }
+        let transforms = transforms_of(template, styles, laid, reach.iter().copied());
+        for (&i, s) in reach.iter().zip(&mut moved) {
+            std::mem::swap(&mut styles[i], s);
+        }
+        Ok(Some(transforms))
+    }
+}
+
+/// Whether the Texts and Spans among `nodes` hold the same text with the values `a` as with `b`.
+fn same_text(template: &Template, nodes: &[usize], a: &[V], b: &[V]) -> bool {
+    nodes.iter().all(|&i| match &template.nodes[i].kind {
+        Kind::Text { content } | Kind::Span { content, .. } => content.iter().all(|p| match p {
+            Piece::Text(Prop::Expr(e)) => a[*e as usize] == b[*e as usize],
+            _ => true,
+        }),
+        _ => true,
+    })
 }
 
 /// `measureText` and `textOutline`: a text laid out alone, absolute in the canvas, in a style,

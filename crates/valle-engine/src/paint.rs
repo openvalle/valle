@@ -842,7 +842,7 @@ impl<'a> Painter<'a> {
             styles,
             layout,
             pictures,
-            spaces: spaces(template, styles, layout),
+            spaces: spaces(template, styles, layout, 0..template.nodes.len()),
             parents,
             clips: Vec::with_capacity(n),
             drawing: Drawing::new(template, styles, &[]),
@@ -866,12 +866,25 @@ impl<'a> Painter<'a> {
 
 /// Each box's transform from its px to the canvas's: its ancestors' and its own.
 pub fn transforms(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix> {
-    let spaces = spaces(template, styles, layout);
+    transforms_of(template, styles, layout, 0..template.nodes.len())
+}
+
+/// The transforms of the boxes `of` alone, in preorder, each one's ancestors among them, a
+/// `<Mask>`'s source's its mask; the others' are left the identity. They read only the styles
+/// and boxes of those.
+pub fn transforms_of(
+    template: &Template,
+    styles: &[Style],
+    layout: &Layout,
+    of: impl Iterator<Item = usize> + Clone,
+) -> Vec<Matrix> {
+    let spaces = spaces(template, styles, layout, of.clone());
     let mut out = vec![Matrix::IDENTITY; template.nodes.len()];
     // What the plane each box is flattened onto goes to on the canvas.
     let mut onto = out.clone();
     // In preorder, so a parent's comes first.
-    for (i, node) in template.nodes.iter().enumerate() {
+    for i in of {
+        let node = &template.nodes[i];
         out[i] = onto[i].times(spaces[i].flatten());
         for &c in &node.children {
             onto[c as usize] = match styles[i].keeps_3d() {
@@ -942,8 +955,13 @@ fn area(s: &Style, b: &Boxes, a: Area) -> (Rect, Radii) {
 
 /// Each box's transform in space, in its parent's perspective, onto the plane it is flattened
 /// onto: its parent's, or in a 3D scene, the plane its root is flattened onto, through the
-/// transforms of the boxes between.
-fn spaces(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix4> {
+/// transforms of the boxes between; of the boxes `of` alone, as `transforms_of` takes them.
+fn spaces(
+    template: &Template,
+    styles: &[Style],
+    layout: &Layout,
+    of: impl Iterator<Item = usize>,
+) -> Vec<Matrix4> {
     let n = template.nodes.len();
     let parents = parents(template);
     let mut out = vec![Matrix4::IDENTITY; n];
@@ -952,7 +970,8 @@ fn spaces(template: &Template, styles: &[Style], layout: &Layout) -> Vec<Matrix4
     let mut seen = vec![None; n];
     let mut base = out.clone();
     // In preorder, so a parent's comes first.
-    for (i, node) in template.nodes.iter().enumerate() {
+    for i in of {
+        let node = &template.nodes[i];
         let border = layout.boxes[i].border;
         // The box of its containing block a motion path is in.
         let within = (styles[i].motion.as_ref()).map(|m| match container(&parents, styles, i) {
