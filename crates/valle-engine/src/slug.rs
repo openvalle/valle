@@ -14,8 +14,14 @@ use crate::path::{self, Curve};
 use crate::template::Error;
 use crate::text::Face;
 
-/// Most bands along an axis. A glyph gets one per curve up to this.
-const BANDS: usize = 16;
+/// Most bands along an axis.
+const BANDS: usize = 256;
+
+/// Bands along an axis for `n` curves crossing it: one a curve up to 16, as a glyph has, then one
+/// every 4 curves, so that a pixel of a large path reads about as many curves as one of a glyph.
+fn bands(n: usize) -> u32 {
+    n.min(16).max(n.div_ceil(4)).clamp(1, BANDS) as u32
+}
 /// How far past a band's edges, in font units, a curve still counts as reaching into it, so the
 /// GPU's band of a point near an edge lists every curve there.
 const BAND_MARGIN: f32 = 1.0 / 1024.0;
@@ -206,10 +212,7 @@ pub fn encode(em: f32, contours: &[Vec<Curve>]) -> Outline {
     };
     let horizontal = across(0);
     let vertical = across(1);
-    out.bands = [
-        horizontal.len().clamp(1, BANDS) as u32,
-        vertical.len().clamp(1, BANDS) as u32,
-    ];
+    out.bands = [bands(horizontal.len()), bands(vertical.len())];
 
     let mut lists: Vec<Vec<u32>> = Vec::new();
     // Horizontal bands cut y and sort by x; vertical ones cut x and sort by y.
