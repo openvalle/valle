@@ -11,7 +11,7 @@ use kurbo::{BezPath, Point, Shape};
 
 use crate::front::{Composition, Front, Holds, Inputs, Slot, Typeset};
 use crate::image::{Image, Picture};
-use crate::layout::{Layout, layout};
+use crate::layout::{Layout, Natural, layout};
 use crate::paint::{Cache, Item, Matrix, transforms, transforms_of};
 use crate::slug;
 use crate::style::{Sheet, Style, filter, gradient};
@@ -30,8 +30,8 @@ pub struct Frame {
     pub template: Rc<Template>,
     pub values: Vec<V>,
     /// Each node's computed style.
-    pub styles: Vec<Style>,
-    pub layout: Layout,
+    pub styles: Rc<Vec<Style>>,
+    pub layout: Rc<Layout>,
     /// Each node's transform from its px, those of `layout`, to the canvas's.
     pub transforms: Vec<Matrix>,
     pub items: Vec<Item>,
@@ -45,7 +45,31 @@ struct Laid {
     template: Rc<Template>,
     values: Vec<V>,
     styles: Vec<Style>,
-    layout: Layout,
+    layout: Rc<Layout>,
+}
+
+/// The preceding frame's layout and its inputs. Painting data is shared with that frame rather
+/// than copied, and only text values are retained from its expression program.
+struct RetainedLayout {
+    template: Rc<Template>,
+    styles: Rc<Vec<Style>>,
+    text: Vec<V>,
+    natural: Vec<Natural>,
+    layout: Rc<Layout>,
+}
+
+fn text_values<'a>(template: &'a Template, values: &'a [V]) -> impl Iterator<Item = &'a V> {
+    template
+        .nodes
+        .iter()
+        .flat_map(|n| match &n.kind {
+            Kind::Text { content } | Kind::Span { content, .. } => &content[..],
+            _ => &[],
+        })
+        .filter_map(|p| match p {
+            Piece::Text(Prop::Expr(e)) => Some(&values[*e as usize]),
+            _ => None,
+        })
 }
 
 /// The node each `bounds()` of a variant measures, by its key path.
@@ -77,6 +101,7 @@ pub struct Scene {
     images: Vec<Image>,
     text: Text,
     paint: Cache,
+    retained: Option<RetainedLayout>,
     /// Most recently used first.
     sheets: Vec<(Rc<Template>, Sheet, Measured)>,
 }
@@ -177,6 +202,7 @@ impl Scene {
             text,
             sheets: Vec::new(),
             paint: Cache::default(),
+            retained: None,
         })
     }
 
@@ -328,6 +354,7 @@ impl Scene {
 
     /// The frame at `at`.
     pub fn frame(&mut self, at: Tick) -> Result<Frame, Error> {
+        let natural = self.pictures.iter().map(Picture::natural).collect();
         let Laid {
             template,
             values,
@@ -344,6 +371,14 @@ impl Scene {
         let items = self.paint.paint(&template, &styles, &laid, &self.pictures);
         let pictures = self.paint.drawn(&template, &styles, &laid, &self.pictures);
         let transforms = transforms(&template, &styles, &laid);
+        let styles = Rc::new(styles);
+        self.retained = Some(RetainedLayout {
+            text: text_values(&template, &values).cloned().collect(),
+            template: template.clone(),
+            styles: styles.clone(),
+            natural,
+            layout: laid.clone(),
+        });
         Ok(Frame {
             template,
             values,
@@ -400,14 +435,34 @@ impl Scene {
         let resources = &self.front.resources;
         let settled = measured.is_empty();
         let mut styles = sheet.compute(&values, settled, canvas, resources)?;
-        let laid = layout(
-            &template,
-            &values,
-            &styles,
-            canvas,
-            &mut self.text,
-            &self.pictures,
-        )?;
+        // Reuse only a fully known layout whose inputs still match. Late bounds remain on the
+        // existing layout/settle path. Changes to paint or post-layout movement need no layout.
+        let retained = self.retained.as_ref().filter(|last| {
+            settled
+                && Rc::ptr_eq(&template, &last.template)
+                && last.layout.canvas == canvas
+                && text_values(&template, &values).eq(last.text.iter())
+                && styles
+                    .iter()
+                    .zip(last.styles.iter())
+                    .all(|(a, b)| a.lays_out_as(b))
+                && self
+                    .pictures
+                    .iter()
+                    .map(Picture::natural)
+                    .eq(last.natural.iter().copied())
+        });
+        let laid = match retained {
+            Some(last) => last.layout.clone(),
+            None => Rc::new(layout(
+                &template,
+                &values,
+                &styles,
+                canvas,
+                &mut self.text,
+                &self.pictures,
+            )?),
+        };
         if !settled {
             // The late values, from the boxes laid out, set only what paints.
             let clock = self.front.clock(at);
@@ -494,7 +549,7 @@ impl Scene {
             let here = center(&now[i], laid, i);
             let [open, close] = [0, 1].map(|k| {
                 let end = ends[k].as_ref();
-                let end = end.map(|(m, l)| center(&m[i], l.as_ref().unwrap_or(laid), i));
+                let end = end.map(|(m, l)| center(&m[i], l.as_deref().unwrap_or(laid), i));
                 inverse.apply(end.unwrap_or(here))
             });
             if let Some(filter::Function::MotionBlur(trail)) = style.filter.last_mut() {

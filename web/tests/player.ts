@@ -19,6 +19,7 @@ const CASES: { entry: string; frames: number[]; props?: Record<string, unknown> 
   { entry: "examples/01-kinetic-title.motion.tsx", frames: [45] },
   { entry: "examples/03-data-dashboard.motion.tsx", frames: [120] },
   { entry: "examples/06-memphis-loop.motion.tsx", frames: [30] },
+  { entry: "examples/09-cards-3d.motion.tsx", frames: [210] },
   { entry: "examples/10-lower-third.motion.tsx", frames: [40] },
   {
     entry: "examples/10-lower-third.motion.tsx",

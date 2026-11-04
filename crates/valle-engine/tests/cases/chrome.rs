@@ -249,7 +249,7 @@ fn shown([x, y, w, h]: [f64; 4]) -> String {
 /// (`-webkit-text-fill-color: transparent`), and without strokes or text shadows, which are
 /// glyphs too.
 pub fn glyphless(frame: &Frame, pictures: &[Picture]) -> Vec<Item> {
-    let mut styles = frame.styles.clone();
+    let mut styles = frame.styles.to_vec();
     for s in &mut styles {
         s.font.fill = Some(color::TRANSPARENT);
         s.font.stroke = 0.0;

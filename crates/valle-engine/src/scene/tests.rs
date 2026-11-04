@@ -723,3 +723,86 @@ fn a_role_reads_the_pictures_the_timeline_gives_or_placeholders() {
         );
     });
 }
+
+#[test]
+fn paint_only_changes_reuse_layout_and_keep_each_frames_styles() {
+    big_stack(|| {
+        let mut scene = load(indoc! {"
+            export const composition = {width: 200, height: 100, fps: 30, duration: 2};
+            export default function Scene() {
+              const { seconds } = useCurrentTime();
+              return <View style={{translate: `${seconds * 20}px 0px`, opacity: 1 - seconds / 4}}>
+                <Text style={{fontSize: 20}}>same text</Text>
+              </View>;
+            }
+        "})
+        .unwrap();
+        let first = scene.frame(Tick::parse_seconds("0").unwrap()).unwrap();
+        let next = scene.frame(Tick::parse_seconds("1").unwrap()).unwrap();
+        assert!(Rc::ptr_eq(&first.layout, &next.layout));
+        assert_ne!(first.styles[0].opacity, next.styles[0].opacity);
+        assert_ne!(first.transforms, next.transforms);
+        let again = scene.frame(Tick::parse_seconds("0").unwrap()).unwrap();
+        assert_eq!(first.items, again.items);
+    });
+}
+
+#[test]
+fn layout_reuse_observes_text_size_and_containing_blocks() {
+    big_stack(|| {
+        for expression in [
+            "<Text>{seconds.toFixed(1)}</Text>",
+            "<View style={{width: 20 + seconds, height: 10}} />",
+            "<View style={{transform: seconds < 1 ? 'none' : 'translateX(0px)'}}><View style={{position:'fixed', left: 0, top: 0}} /></View>",
+            "<Text style={{fontSize: 10 + seconds}}>text</Text>",
+        ] {
+            let source = format!(
+                "export const composition = {{width:200,height:100,fps:30,duration:2}}; export default function Scene() {{ const {{seconds}} = useCurrentTime(); return {expression}; }}"
+            );
+            let mut scene = Scene::load(
+                "s.tsx",
+                &|p| (p == "s.tsx").then(|| source.as_bytes().to_vec()),
+                &Inputs::default(),
+                fonts(),
+            )
+            .unwrap();
+            let first = scene.frame(Tick::parse_seconds("0").unwrap()).unwrap();
+            let next = scene.frame(Tick::parse_seconds("1.5").unwrap()).unwrap();
+            assert!(!Rc::ptr_eq(&first.layout, &next.layout), "{expression}");
+            let again = scene.frame(Tick::parse_seconds("0").unwrap()).unwrap();
+            assert_eq!(first.items, again.items, "{expression}");
+        }
+    });
+}
+
+#[test]
+fn changing_a_video_sources_natural_size_invalidates_layout() {
+    struct Solid([u32; 2]);
+    impl Video for Solid {
+        fn size(&self) -> [u32; 2] {
+            self.0
+        }
+        fn frame(&mut self, _: Tick) -> Result<Image, String> {
+            Ok(Image {
+                size: self.0,
+                pixels: vec![255; (self.0[0] * self.0[1] * 4) as usize].into(),
+            })
+        }
+    }
+    big_stack(|| {
+        let mut scene = load(indoc! {"
+            export const composition = {width: 200, height: 100, fps: 30, duration: 2};
+            export const controls = {resources: {clip: resource({kind:'video', default:'./clip.mov'})}};
+            export default function Scene() { return <Video src='resource://clip' style={{width:40}} />; }
+        "}).unwrap();
+        scene.set_video("clip", Box::new(Solid([4, 2]))).unwrap();
+        let first = scene.frame(Tick(0)).unwrap();
+        let next = scene.frame(Tick::parse_seconds("0.5").unwrap()).unwrap();
+        assert!(Rc::ptr_eq(&first.layout, &next.layout));
+        assert_eq!(next.layout.boxes[0].border.height, 20.0);
+        scene.set_video("clip", Box::new(Solid([2, 4]))).unwrap();
+        let changed = scene.frame(Tick::parse_seconds("1").unwrap()).unwrap();
+        assert!(!Rc::ptr_eq(&next.layout, &changed.layout));
+        assert_eq!(changed.layout.boxes[0].border.height, 80.0);
+    });
+}
