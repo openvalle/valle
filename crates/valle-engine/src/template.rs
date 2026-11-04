@@ -546,6 +546,21 @@ impl Program {
         }
         late
     }
+
+    /// Which expressions the `roots` read, they among them.
+    pub fn reading(&self, roots: impl IntoIterator<Item = u32>) -> Vec<bool> {
+        let mut read = vec![false; self.ops.len()];
+        for r in roots {
+            read[r as usize] = true;
+        }
+        // Operands come first.
+        for i in (0..self.ops.len()).rev() {
+            if read[i] {
+                self.ops[i].operands(|j| read[j as usize] = true);
+            }
+        }
+        read
+    }
 }
 
 /// A node's prop: known at tracing, or an expression evaluated per frame.
@@ -766,6 +781,11 @@ impl Template {
                     Want::Eq(v) => same(&values[g.expr as usize], v),
                 }
         })
+    }
+
+    /// The expressions its guards read.
+    pub fn decided(&self) -> impl Iterator<Item = u32> + '_ {
+        (self.guards.iter()).flat_map(|g| g.when.iter().map(|&(c, _)| c).chain([g.expr]))
     }
 
     /// Where a traced value reached code that cannot trace it, so the scene is traced again

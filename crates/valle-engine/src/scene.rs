@@ -446,6 +446,7 @@ impl Scene {
         let c = self.front.composition;
         // A quarter of a frame back, the first of two samples of a 360° shutter.
         let back = c.fps.shutter(360, 0, 2);
+        let reach = self.reach(template, styles);
         let mut ends = Vec::new();
         for offset in [back, -back] {
             let sample = Sample {
@@ -454,14 +455,23 @@ impl Scene {
                 looped: c.looped,
             };
             let at = sample.at(at);
+            if let Some(reach) = &reach {
+                let then = eval::run_only(&template.program, self.front.clock(at), &reach.read);
+                let Some(then) = then.ok().filter(|then| template.holds(then)) else {
+                    ends.push(None);
+                    continue;
+                };
+                if let Some(moved) =
+                    self.moved(template, &reach.nodes, &then, values, styles, laid)?
+                {
+                    ends.push(Some((moved, None)));
+                    continue;
+                }
+            }
             let Some(then) = self.front.values(template, at) else {
                 ends.push(None);
                 continue;
             };
-            if let Some(moved) = self.moved(template, &then, values, styles, laid)? {
-                ends.push(Some((moved, None)));
-                continue;
-            }
             let end = self.lay(at, template.clone(), then)?;
             let moved = transforms(&end.template, &end.styles, &end.layout);
             ends.push(Some((moved, Some(end.layout))));
@@ -491,30 +501,51 @@ impl Scene {
         Ok(())
     }
 
+    /// What the ends of the trails in a frame of `template`, its variant, with these `styles`
+    /// restyle alone, and what they read; `None` where the variant measures boxes, which its late
+    /// values are of.
+    fn reach(&self, template: &Rc<Template>, styles: &[Style]) -> Option<Reach> {
+        let (_, sheet, measured) = self.sheets.iter().find(|(t, ..)| Rc::ptr_eq(t, template))?;
+        if !measured.is_empty() {
+            return None;
+        }
+        let nodes = sheet.reaching(styles);
+        let mut roots: Vec<u32> = template.decided().collect();
+        sheet.reads(&nodes, |e| roots.push(e));
+        for &i in &nodes {
+            if let Kind::Text { content } | Kind::Span { content, .. } = &template.nodes[i].kind {
+                roots.extend(content.iter().filter_map(|p| match p {
+                    Piece::Text(Prop::Expr(e)) => Some(*e),
+                    _ => None,
+                }));
+            }
+        }
+        let read = template.program.reading(roots);
+        Some(Reach { nodes, read })
+    }
+
     /// The transforms of the boxes of `motionBlur: "auto"` at another time of `template`, the
-    /// frame's variant, whose values are `then` there: where all that reaches them
-    /// (`Sheet::reaching`) lays out as in the frame, of the values `now`, `styles` and `laid`,
-    /// that alone is styled again, on the frame's boxes. `None` where it does not, or where the
-    /// variant measures boxes, which its late values are of.
+    /// frame's variant, whose values are `then` there: where all that reaches them, `reach`,
+    /// lays out as in the frame, of the values `now`, `styles` and `laid`, that alone is styled
+    /// again, on the frame's boxes, and `None` where it does not.
     fn moved(
         &self,
         template: &Rc<Template>,
+        reach: &[usize],
         then: &[V],
         now: &[V],
         styles: &mut [Style],
         laid: &Layout,
     ) -> Result<Option<Vec<Matrix>>, Error> {
-        let kept = self.sheets.iter().find(|(t, ..)| Rc::ptr_eq(t, template));
-        let Some((_, sheet, _)) = kept.filter(|(.., measured)| measured.is_empty()) else {
+        let Some((_, sheet, _)) = self.sheets.iter().find(|(t, ..)| Rc::ptr_eq(t, template)) else {
             return Ok(None);
         };
-        let reach = sheet.reaching(styles);
         let c = self.front.composition;
         let canvas = [c.width as f32, c.height as f32];
         let resources = &self.front.resources;
-        let mut moved = sheet.compute_only(&reach, then, canvas, resources, styles)?;
+        let mut moved = sheet.compute_only(reach, then, canvas, resources, styles)?;
         let alike = (reach.iter().zip(&moved)).all(|(&i, s)| s.lays_out_as(&styles[i]))
-            && same_text(template, &reach, then, now);
+            && same_text(template, reach, then, now);
         if !alike {
             return Ok(None);
         }
@@ -528,6 +559,13 @@ impl Scene {
         }
         Ok(Some(transforms))
     }
+}
+
+/// The nodes the ends of a frame's trails restyle alone, as `Sheet::reaching` gives them, and the
+/// expressions their styles, their text and the variant's guards read, which alone they evaluate.
+struct Reach {
+    nodes: Vec<usize>,
+    read: Vec<bool>,
 }
 
 /// Whether the Texts and Spans among `nodes` hold the same text with the values `a` as with `b`.

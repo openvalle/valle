@@ -916,6 +916,25 @@ impl Sheet {
         out
     }
 
+    /// Calls `f` with each expression the styles of `nodes` read.
+    pub fn reads(&self, nodes: &[usize], mut f: impl FnMut(u32)) {
+        let mut prop = |p: &Prop| {
+            if let Prop::Expr(e) = p {
+                f(*e);
+            }
+        };
+        for &i in nodes {
+            let b = &self.nodes[i];
+            b.rest.iter().for_each(|(_, p, ..)| prop(p));
+            if let Some(g) = &b.svg {
+                g.attributes.iter().for_each(|(_, p)| prop(p));
+            }
+            if let Some(s) = &b.shader {
+                s.uniforms.iter().flat_map(|(_, v)| v).for_each(&mut prop);
+            }
+        }
+    }
+
     /// The computed styles of `nodes` alone, in preorder, each one's parent among them, for the
     /// program's settled values at one frame: as `compute` gives them, but for the copies of
     /// `<use>`s. Each numbers its calcs as the node's style in `like`, another frame's, does, so

@@ -79,6 +79,20 @@ pub fn run(program: &Program, clock: Clock) -> Result<Vec<V>, Error> {
     Ok(values)
 }
 
+/// The values of the expressions `read` marks, as `run` gives them, in a program without late
+/// expressions; the others' are 0.
+pub fn run_only(program: &Program, clock: Clock, read: &[bool]) -> Result<Vec<V>, Error> {
+    let mut values = Vec::with_capacity(program.ops.len());
+    for (op, &read) in program.ops.iter().zip(read) {
+        let v = match read {
+            true => value(op, &values, clock)?,
+            false => V::Num(0.0),
+        };
+        values.push(v);
+    }
+    Ok(values)
+}
+
 /// Gives the late expressions their values once the frame is laid out: `bounds` measures the box
 /// of the element with a key path.
 pub fn settle(
@@ -346,6 +360,22 @@ mod tests {
         assert_eq!(v[7], V::Num(1.5));
         assert_eq!(v[8], V::Num(4.0));
         assert_eq!(v[9], V::Num(0.75));
+    }
+
+    #[test]
+    fn run_only_evaluates_what_the_roots_read() {
+        let p = program(vec![
+            Op::Seconds,
+            Op::Const(V::Num(2.0)),
+            Op::Bin(Bin::Mul, 0, 1),
+            Op::Progress,
+            Op::Bin(Bin::Add, 3, 1),
+        ]);
+        let read = p.reading([2]);
+        assert_eq!(read, [true, true, true, false, false]);
+        let v = run_only(&p, AT, &read).unwrap();
+        assert_eq!(v[..3], run(&p, AT).unwrap()[..3]);
+        assert_eq!(v[3..], [V::Num(0.0), V::Num(0.0)]);
     }
 
     #[test]
