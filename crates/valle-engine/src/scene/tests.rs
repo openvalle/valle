@@ -395,6 +395,30 @@ fn auto_motion_blur_measures_the_trail_on_the_canvas() {
 }
 
 #[test]
+fn auto_motion_blur_ends_are_of_the_frames_variant() {
+    big_stack(|| {
+        // At 4 fps the ends are a 16th of a second either side of a frame. The box goes at
+        // 1.03 s, between the frame at 1 s and its later end: that end counts as not moving, and
+        // the scene is not traced again for it.
+        let mut scene = load(indoc! {"
+            export const composition = { width: 200, height: 100, fps: 4, duration: 2 };
+            export default function Scene() {
+              const { seconds } = useCurrentTime();
+              const box = { position: 'absolute', width: 10, height: 10, motionBlur: 'auto' };
+              return <View>{seconds < 1.03 ? <View style={{ ...box, left: 40 * seconds }} /> : null}</View>;
+            }
+        "})
+        .unwrap();
+        let frame = scene.frame(Tick::parse_seconds("1").unwrap()).unwrap();
+        let Some(filter::Function::MotionBlur(t)) = frame.styles[1].filter.last() else {
+            panic!()
+        };
+        assert_eq!(t.map(|v| (v * 1e3).round() / 1e3), [2.5, 0.0]);
+        assert_eq!(scene.traces().0, 1);
+    });
+}
+
+#[test]
 fn measure_text_gives_the_box_the_text_lays_out_in() {
     big_stack(|| {
         let mut scene = load(indoc! {"

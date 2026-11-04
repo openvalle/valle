@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::eval::{self, Clock};
+use crate::eval;
 use kurbo::{BezPath, Point, Shape};
 
 use crate::front::{Composition, Front, Holds, Inputs, Slot, Typeset};
@@ -355,10 +355,15 @@ impl Scene {
     /// The variant at `at`, its values, its styles and its layout.
     fn laid(&mut self, at: Tick) -> Result<Laid, Error> {
         let frame = self.front.frame(at)?;
+        self.lay(at, frame.template, frame.values)
+    }
+
+    /// `template`, a variant, with its `values` at `at`, styled and laid out.
+    fn lay(&mut self, at: Tick, template: Rc<Template>, mut values: Vec<V>) -> Result<Laid, Error> {
         match self
             .sheets
             .iter()
-            .position(|(t, ..)| Rc::ptr_eq(t, &frame.template))
+            .position(|(t, ..)| Rc::ptr_eq(t, &template))
         {
             Some(i) => {
                 let kept = self.sheets.remove(i);
@@ -366,7 +371,7 @@ impl Scene {
             }
             None => {
                 // A shader reads raster images only.
-                for node in &frame.template.nodes {
+                for node in &template.nodes {
                     let Kind::Shader { inputs, .. } = &node.kind else {
                         continue;
                     };
@@ -380,10 +385,9 @@ impl Scene {
                         }
                     }
                 }
-                let sheet = Sheet::new(&frame.template)?;
-                let measured = measured(&frame.template)?;
-                self.sheets
-                    .insert(0, (frame.template.clone(), sheet, measured));
+                let sheet = Sheet::new(&template)?;
+                let measured = measured(&template)?;
+                self.sheets.insert(0, (template.clone(), sheet, measured));
                 self.sheets.truncate(SHEETS);
             }
         }
@@ -392,23 +396,18 @@ impl Scene {
         let (_, sheet, measured) = &self.sheets[0];
         let resources = &self.front.resources;
         let settled = measured.is_empty();
-        let mut styles = sheet.compute(&frame.values, settled, canvas, resources)?;
+        let mut styles = sheet.compute(&values, settled, canvas, resources)?;
         let laid = layout(
-            &frame.template,
-            &frame.values,
+            &template,
+            &values,
             &styles,
             canvas,
             &mut self.text,
             &self.pictures,
         )?;
-        let mut values = frame.values;
         if !settled {
             // The late values, from the boxes laid out, set only what paints.
-            let seconds = at.seconds();
-            let clock = Clock {
-                seconds,
-                progress: (seconds / c.duration.seconds()).clamp(0.0, 1.0),
-            };
+            let clock = self.front.clock(at);
             let bounds = |path: &str, m: Measure| {
                 let b = laid.boxes[measured[path]].border;
                 f64::from(match m {
@@ -418,13 +417,13 @@ impl Scene {
                     Measure::Height => b.height,
                 })
             };
-            eval::settle(&frame.template.program, clock, &mut values, &bounds)?;
+            eval::settle(&template.program, clock, &mut values, &bounds)?;
             let painted = sheet.compute(&values, true, canvas, resources)?;
-            contained(&frame.template, sheet, &styles, &painted)?;
+            contained(&template, sheet, &styles, &painted)?;
             styles = painted;
         }
         Ok(Laid {
-            template: frame.template,
+            template,
             values,
             styles,
             layout: laid,
@@ -434,7 +433,8 @@ impl Scene {
     /// The trail of each box of `motionBlur: "auto"`, in its own px: from where its center is on
     /// the canvas when a 180° shutter opens, a quarter of a frame before `at`, to where it is when
     /// the shutter closes, a quarter after. The times hold inside the scene or wrap round it as
-    /// Echo's and Shutter's do; an end where another variant holds counts as not moving.
+    /// Echo's and Shutter's do. The ends are of the frame's variant, which is not traced again
+    /// for them: one where it fails or another holds counts as not moving.
     fn trails(
         &mut self,
         at: Tick,
@@ -452,8 +452,12 @@ impl Scene {
                 duration: c.duration,
                 looped: c.looped,
             };
-            let end = self.laid(sample.at(at))?;
-            ends.push(Rc::ptr_eq(&end.template, template).then(|| {
+            let at = sample.at(at);
+            let end = match self.front.values(template, at) {
+                Some(values) => Some(self.lay(at, template.clone(), values)?),
+                None => None,
+            };
+            ends.push(end.map(|end| {
                 let moved = transforms(&end.template, &end.styles, &end.layout);
                 (moved, end.layout)
             }));

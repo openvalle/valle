@@ -373,13 +373,18 @@ impl Front {
         *self.typeset.borrow_mut() = Some(typeset);
     }
 
-    /// The frame at `at`: a variant whose guards hold there, traced when none does.
-    pub fn frame(&mut self, at: Tick) -> Result<Frame, Error> {
+    /// The clock at `at`.
+    pub fn clock(&self, at: Tick) -> Clock {
         let seconds = at.seconds();
-        let clock = Clock {
+        Clock {
             seconds,
             progress: (seconds / self.composition.duration.seconds()).clamp(0.0, 1.0),
-        };
+        }
+    }
+
+    /// The frame at `at`: a variant whose guards hold there, traced when none does.
+    pub fn frame(&mut self, at: Tick) -> Result<Frame, Error> {
+        let clock = self.clock(at);
         let mut missed = None;
         for i in 0..self.variants.len() {
             // A variant that fails to evaluate here does not hold here either; a fresh trace
@@ -404,12 +409,20 @@ impl Front {
         let values = eval::run(&template.program, clock)?;
         if !template.holds(&values) {
             return Err(format!(
-                "engine bug: the variant traced at {seconds} s fails there"
+                "engine bug: the variant traced at {} s fails there",
+                clock.seconds
             ));
         }
         self.variants.push_front(template.clone());
         self.variants.truncate(VARIANTS);
         Ok(Frame { template, values })
+    }
+
+    /// The values of `template`, a variant, at `at`, if they evaluate there and its guards hold
+    /// with them; it is not traced again.
+    pub fn values(&self, template: &Template, at: Tick) -> Option<Vec<V>> {
+        let values = eval::run(&template.program, self.clock(at)).ok()?;
+        template.holds(&values).then_some(values)
     }
 
     /// How many times the scene was traced.
