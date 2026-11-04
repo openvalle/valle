@@ -13,6 +13,7 @@ struct Blur {
 
 @group(0) @binding(5) var<storage, read> blurs: array<Blur>;
 @group(1) @binding(0) var image: texture_2d<f32>;
+@group(1) @binding(1) var linear: sampler;
 
 struct Out {
   @builtin(position) pos: vec4f,
@@ -58,12 +59,24 @@ fn within(p: vec2<i32>, low: vec2<i32>, high: vec2<i32>, mirrored: bool) -> vec2
   var total = 1.0;
   var w = 1.0;
   var ratio = k;
-  for (var i = 1; i <= n; i++) {
-    w *= ratio;
+  // Two adjacent taps are one filtered sample: a*A + b*B = (a+b)*mix(A,B,b/(a+b)).
+  // Keep the same finite kernel, including its last tap when the radius is odd.
+  for (var i = 1; i <= n; i += 2) {
+    let a = w * ratio;
     ratio *= k * k;
-    let after = pixel(p + axis * i, low, high, size, mirrored);
-    sum += (after + pixel(p - axis * i, low, high, size, mirrored)) * w;
-    total += 2.0 * w;
+    var b = 0.0;
+    if (i < n) {
+      b = a * ratio;
+      ratio *= k * k;
+    }
+    w = b;
+    let weight = a + b;
+    if (weight == 0.0) { break; }
+    let t = b / weight;
+    let after = paired(p, axis, i, t, low, high, size, mirrored);
+    let before = paired(p, -axis, i, t, low, high, size, mirrored);
+    sum += (after + before) * weight;
+    total += 2.0 * weight;
   }
   return sum / total;
 }
@@ -71,4 +84,17 @@ fn within(p: vec2<i32>, low: vec2<i32>, high: vec2<i32>, mirrored: bool) -> vec2
 // The layer's pixel at `p`, within the bounds; bounds may run off the canvas.
 fn pixel(p: vec2<i32>, low: vec2<i32>, high: vec2<i32>, size: vec2<i32>, mirrored: bool) -> vec4f {
   return textureLoad(image, clamp(within(p, low, high, mirrored), vec2<i32>(0), size - 1), 0);
+}
+
+// Fold the two integer taps separately: at a mirrored edge they may coincide or run backwards.
+// After folding and canvas clamping they are still adjacent, so filtering gives the same pair.
+fn paired(p: vec2<i32>, axis: vec2<i32>, i: i32, t: f32,
+    low: vec2<i32>, high: vec2<i32>, size: vec2<i32>, mirrored: bool) -> vec4f {
+  var at = vec2f(p) + vec2f(axis) * (f32(i) + t);
+  if (mirrored) {
+    let a = clamp(within(p + axis * i, low, high, true), vec2<i32>(0), size - 1);
+    let b = clamp(within(p + axis * (i + 1), low, high, true), vec2<i32>(0), size - 1);
+    at = mix(vec2f(a), vec2f(b), t);
+  }
+  return textureSampleLevel(image, linear, (at + 0.5) / vec2f(size), 0.0);
 }

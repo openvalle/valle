@@ -168,14 +168,20 @@ impl Gpu {
         });
         let image = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("image"),
-            entries: &[entry(
-                0,
-                wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-            )],
+            entries: &[
+                entry(
+                    0,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(
+                    1,
+                    wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                ),
+            ],
         });
         let layout = |groups: &[Option<&wgpu::BindGroupLayout>]| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -483,10 +489,16 @@ impl Surface {
         let image = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &gpu.image,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&gpu.sampler),
+                },
+            ],
         });
         Surface {
             texture,
