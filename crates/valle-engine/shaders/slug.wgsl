@@ -21,9 +21,7 @@ struct Glyph {
 
 struct Out {
   @builtin(position) pos: vec4f,
-  // The pixel in font units, y up.
-  @location(0) em: vec2f,
-  @location(1) @interpolate(flat) index: u32,
+  @location(0) @interpolate(flat) index: u32,
 }
 
 @vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> Out {
@@ -36,7 +34,6 @@ struct Out {
   let p = grown(mix(lo, hi, c), c * 2.0 - 1.0, g.at.w);
   var out: Out;
   out.pos = place(p, g.at.w);
-  out.em = vec2f(p.x - g.place.x, g.place.y - p.y) / s;
   out.index = ii;
   return out;
 }
@@ -115,12 +112,17 @@ fn odd(w: vec2f) -> vec2f {
   let g = glyphs[in.index];
   // Target pixels per font unit along x and along y: over how much of each axis a pixel spreads.
   let j = steps(in.pos.xy, g.at.w);
+  // The pixel in font units, y up, from its center rather than from the corners of the quad: where
+  // an edge runs through pixel centers, the least difference turns its coverage, and the same
+  // pixel must come out the same in any of the quads a path draws in.
+  let l = local(in.pos.xy, g.at.w);
+  let em = vec2f(l.x - g.place.x, g.place.y - l.y) / g.place.z;
   let ppu = g.place.z / vec2f(abs(j[0].x) + abs(j[1].x), abs(j[0].y) + abs(j[1].y));
   let bands = vec2u(g.at.z >> 16u, g.at.z & 0xffffu);
   let last = vec2f(bands) - 1.0;
-  let band = clamp(floor((in.em - g.bounds.xy) * g.bands.xy), vec2f(0.0), last);
-  let h = ray(g, in.em, ppu.x, 2u * u32(band.y), false);
-  let v = ray(g, in.em, ppu.y, 2u * (bands.y + u32(band.x)), true);
+  let band = clamp(floor((em - g.bounds.xy) * g.bands.xy), vec2f(0.0), last);
+  let h = ray(g, em, ppu.x, 2u * u32(band.y), false);
+  let v = ray(g, em, ppu.y, 2u * (bands.y + u32(band.x)), true);
   // Swapping the axes reverses the winding.
   var cov = vec2f(h.x, -v.x);
   if (g.place.w > 0.0) {
