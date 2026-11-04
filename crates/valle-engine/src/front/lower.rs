@@ -293,7 +293,7 @@ impl Constant {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum Ref {
-    Expr { e: u32 },
+    Expr(u32),
     Const { c: Constant },
     Text { text: String },
 }
@@ -387,7 +387,7 @@ pub fn variant(
         let mut args = Vec::with_capacity(refs.len());
         for r in refs {
             args.push(match r {
-                Ref::Expr { e } => Arg::Expr(expr(&ids, e)?),
+                Ref::Expr(e) => Arg::Expr(expr(&ids, e)?),
                 Ref::Const { c } => {
                     program.ops.push(Op::Const(c.value()?));
                     Arg::Expr(program.ops.len() as u32 - 1)
@@ -400,7 +400,7 @@ pub fn variant(
     }
     let prop = |r: Ref| -> Result<Prop, Error> {
         match r {
-            Ref::Expr { e } => Ok(Prop::Expr(expr(&ids, e)?)),
+            Ref::Expr(e) => Ok(Prop::Expr(expr(&ids, e)?)),
             Ref::Const { c } => Ok(Prop::Const(c.value()?)),
             Ref::Text { .. } => Err("a prop cannot be template text".into()),
         }
@@ -687,13 +687,13 @@ mod tests {
     #[test]
     fn variants_lower_to_templates() {
         let json = r#"{
-            "ops": [["seconds", []], ["mul", [{"e": 0}, {"c": 2}]], ["gt", [{"e": 1}, {"c": 1}]],
-                    ["template", [{"text": "t="}, {"e": 1}]]],
+            "ops": [["seconds", []], ["mul", [0, {"c": 2}]], ["gt", [1, {"c": 1}]],
+                    ["template", [{"text": "t="}, 1]]],
             "nodes": [
-                {"type": "view", "path": "a", "classes": ["flex"], "style": [["opacity", {"e": 1}],
+                {"type": "view", "path": "a", "classes": ["flex"], "style": [["opacity", 1],
                  ["width", {"c": {"nf": "Infinity"}}]], "children": [1], "site": 4},
                 {"type": "text", "path": null, "classes": [], "style": [], "children": [],
-                 "site": null, "content": [{"text": {"e": 3}}]}
+                 "site": null, "content": [{"text": 3}]}
             ],
             "roots": [0],
             "guards": [{"e": 2, "truthy": false, "when": [], "kind": "if", "at": 7},
@@ -726,6 +726,16 @@ mod tests {
         assert_eq!(t.guards[0].expr, 4);
         assert_eq!(&*t.guards[1].at, "m0.js:3");
         assert_eq!(t.guards[1].when, [(4, true)]);
-        assert!(variant(r#"{"ops": [["add", [{"e": 5}, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#, &place, &[], &[], &HashMap::new(), &Clips::new()).is_err());
+        assert!(
+            variant(
+                r#"{"ops": [["add", [5, {"c": 1}]]], "nodes": [], "roots": [], "guards": []}"#,
+                &place,
+                &[],
+                &[],
+                &HashMap::new(),
+                &Clips::new()
+            )
+            .is_err()
+        );
     }
 }

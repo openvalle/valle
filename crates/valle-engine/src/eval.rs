@@ -9,7 +9,7 @@ use crate::noise;
 use crate::path::edit;
 use crate::style::{color, css};
 use crate::template::{
-    Axis, Bin, Boolean, Cmp, Error, Interp, Measure, Op, Part, PathFn, Program, Shape, V,
+    Axis, Bin, Boolean, Cmp, Error, Interp, Measure, Op, Part, PathFn, Program, Shape, Template, V,
 };
 use crate::time::Tick;
 
@@ -75,6 +75,41 @@ pub fn run(program: &Program, clock: Clock) -> Result<Vec<V>, Error> {
             false => value(op, &values, clock)?,
         };
         values.push(v);
+    }
+    Ok(values)
+}
+
+/// A cached variant's values, stopping after its decisions if they no longer hold. The
+/// returned prefix identifies its first failed guard; a matching variant still evaluates every
+/// op, including those whose errors must be reported even when nothing draws their result.
+pub fn guarded(template: &Template, clock: Clock) -> Result<Vec<V>, Error> {
+    let mut guards = template.guards.iter().map(|g| {
+        let end = g
+            .when
+            .iter()
+            .map(|&(c, _)| c)
+            .chain([g.expr])
+            .max()
+            .unwrap() as usize
+            + 1;
+        (end, g)
+    });
+    let mut next = guards.next();
+    let program = &template.program;
+    let late = program.late();
+    let mut values = Vec::with_capacity(program.ops.len());
+    for (i, (op, late)) in program.ops.iter().zip(late).enumerate() {
+        while let Some((_, guard)) = next.filter(|(end, _)| *end <= i) {
+            if !guard.holds(&values) {
+                return Ok(values);
+            }
+            next = guards.next();
+        }
+        values.push(if late {
+            V::Num(0.0)
+        } else {
+            value(op, &values, clock)?
+        });
     }
     Ok(values)
 }
@@ -337,6 +372,42 @@ mod tests {
         seconds: 1.5,
         progress: 0.75,
     };
+
+    #[test]
+    fn a_failed_variant_skips_its_values_but_a_matching_one_keeps_errors() {
+        use crate::template::{Guard, Want};
+        let mut template = Template {
+            program: program(vec![
+                Op::Seconds,
+                Op::Const(V::Str("not a path".into())),
+                Op::Path(PathFn::Length, vec![1]),
+            ]),
+            guards: vec![Guard {
+                expr: 0,
+                want: Want::Eq(V::Num(0.0)),
+                when: Vec::new(),
+                kind: "if".into(),
+                at: "s.tsx:1".into(),
+            }],
+            ..Default::default()
+        };
+        // Even a later guard may need expensive or invalid values. The first failure is
+        // sufficient to reject this variant without evaluating those later decisions.
+        template.guards.push(Guard {
+            expr: 2,
+            want: Want::Truthy(true),
+            when: Vec::new(),
+            kind: "if".into(),
+            at: "s.tsx:2".into(),
+        });
+        let values = guarded(&template, AT).unwrap();
+        assert_eq!(values, [V::Num(AT.seconds)]);
+        assert!(!template.holds(&values));
+        template.guards[0].want = Want::Eq(V::Num(AT.seconds));
+        assert!(guarded(&template, AT).is_err());
+        template.guards[0].when = vec![(0, false)];
+        assert!(guarded(&template, AT).is_err());
+    }
 
     #[test]
     fn arithmetic_and_selects() {

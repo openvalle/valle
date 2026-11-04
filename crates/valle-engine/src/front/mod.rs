@@ -389,7 +389,7 @@ impl Front {
         for i in 0..self.variants.len() {
             // A variant that fails to evaluate here does not hold here either; a fresh trace
             // reports the error if it is real.
-            let Ok(values) = eval::run(&self.variants[i].program, clock) else {
+            let Ok(values) = eval::guarded(&self.variants[i], clock) else {
                 continue;
             };
             if self.variants[i].holds(&values) {

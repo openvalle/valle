@@ -40,11 +40,14 @@
   const MAX_GUARDS = 10000;
 
   let G = null;
+  const TRACE_INDEX = Symbol("trace index");
+  let nextValue = 0;
 
   // ------------------------------------------------------------------------------ traced values
 
   // `late`: known only after layout, as it reads a box (`bounds()`).
   function T(op, args, v, late) {
+    this[TRACE_INDEX] = nextValue++;
     this.op = op;
     this.args = freeze(args);
     this.v = v;
@@ -2174,11 +2177,12 @@
 
   // The variant as `front/lower.rs` reads it: ops in dependency order, nodes flat.
   function serialize(roots, guards) {
-    const ids = new Map();
+    const ids = [];
+    ids.length = nextValue;
     const ops = [];
     const arg = (t, a) =>
       a instanceof T
-        ? { e: ids.get(a) }
+        ? ids[a[TRACE_INDEX]]
         : t.op === "template"
           ? { text: a.text }
           : { c: constant(a) };
@@ -2186,20 +2190,21 @@
       const stack = [root];
       while (stack.length > 0) {
         const t = stack[stack.length - 1];
-        if (ids.has(t)) {
+        if (ids[t[TRACE_INDEX]] !== undefined) {
           stack.pop();
           continue;
         }
         const before = stack.length;
-        for (const a of t.args) if (a instanceof T && !ids.has(a)) stack.push(a);
+        for (const a of t.args)
+          if (a instanceof T && ids[a[TRACE_INDEX]] === undefined) stack.push(a);
         if (stack.length > before) continue;
         stack.pop();
         ops.push([t.op, t.args.map((a) => arg(t, a))]);
-        ids.set(t, ops.length - 1);
+        ids[t[TRACE_INDEX]] = ops.length - 1;
       }
-      return ids.get(root);
+      return ids[root[TRACE_INDEX]];
     }
-    const ref = (x) => (x instanceof T ? { e: id(x) } : { c: constant(x) });
+    const ref = (x) => (x instanceof T ? id(x) : { c: constant(x) });
     const nodes = [];
     function node(n) {
       const out = {
@@ -2244,7 +2249,8 @@
       }
       return index;
     }
-    const top = roots.map(node);
+    // Decisions precede drawing values, so a cached variant can be rejected without
+    // evaluating the geometry and styles of a branch that is no longer active.
     const checks = guards.map((g) => ({
       e: id(g.t),
       truthy: g.want.truthy,
@@ -2253,6 +2259,7 @@
       kind: g.kind,
       at: g.at,
     }));
+    const top = roots.map(node);
     return { ops, nodes, roots: top, guards: checks };
   }
 
@@ -2289,6 +2296,7 @@
 
   // Traces the scene `entry` at a time; returns the variant as JSON.
   function __trace(entry, seconds, progress, composition, props) {
+    nextValue = 0;
     G = {
       guards: [],
       when: [],

@@ -770,17 +770,7 @@ impl Template {
 
     /// The first of its guards that does not hold with `values`.
     pub fn failing(&self, values: &[V]) -> Option<&Guard> {
-        self.guards.iter().find(|g| {
-            let applies = g
-                .when
-                .iter()
-                .all(|&(c, side)| values[c as usize].truthy() == side);
-            applies
-                && !match &g.want {
-                    Want::Truthy(t) => values[g.expr as usize].truthy() == *t,
-                    Want::Eq(v) => same(&values[g.expr as usize], v),
-                }
-        })
+        self.guards.iter().find(|g| !g.holds(values))
     }
 
     /// The expressions its guards read.
@@ -792,6 +782,20 @@ impl Template {
     /// whenever that value changes.
     pub fn escapes(&self) -> impl Iterator<Item = &Guard> {
         self.guards.iter().filter(|g| &*g.kind == "escape")
+    }
+}
+
+impl Guard {
+    pub(crate) fn holds(&self, values: &[V]) -> bool {
+        let applies = self
+            .when
+            .iter()
+            .all(|&(c, side)| values[c as usize].truthy() == side);
+        !applies
+            || match &self.want {
+                Want::Truthy(t) => values[self.expr as usize].truthy() == *t,
+                Want::Eq(v) => same(&values[self.expr as usize], v),
+            }
     }
 }
 
