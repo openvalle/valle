@@ -6,8 +6,8 @@
 //! A computed one with a percentage in it waits for layout, which knows what the percentage is
 //! of. Taffy holds a handle to it, which numbers the calcs of a frame's styles in order.
 
-use super::Len;
 use super::css::{self, Num};
+use super::units::Len;
 
 /// The larger or smaller of sums: of lengths in their units as declared, or of px and a fraction
 /// of what percentages are of once computed ([`Calc`]).

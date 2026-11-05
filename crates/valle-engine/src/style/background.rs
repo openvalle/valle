@@ -4,12 +4,13 @@
 //! show the box by their alpha or their luminance.
 
 use super::color::{self, Rgba};
+use super::computed::{BLENDS, Blend};
 use super::gradient::{self, Image, image};
 use super::math::Calc;
 use super::position::{Offset, position};
-use super::{
-    Accept, BLENDS, Blend, Len, NO_SCROLL, NO_SCROLL_INSTEAD, Units, css, length_text, math,
-};
+use super::property::{NO_SCROLL, NO_SCROLL_INSTEAD};
+use super::units::{Accept, Len, Units, length_text};
+use super::{css, math};
 use crate::front::Slot;
 
 /// A background image, how big it is, where it is, how it repeats, the box it is placed in, the

@@ -3,8 +3,9 @@
 
 use super::color::Rgba;
 use super::css;
+use super::declaration::{Shadowed, shadow};
 use super::math;
-use super::{Len, Shadowed, Units, shadow};
+use super::units::{Len, Units};
 
 /// A filter function; amounts are numbers, 1 for 100 %.
 #[derive(Clone, Debug, PartialEq)]
@@ -207,7 +208,7 @@ fn function(w: &str) -> Result<Function<Len, Option<Rgba>>, String> {
     Ok(match name {
         "blur" => Function::Blur(match args[..] {
             [] => Len::Px(0.0),
-            [l] => super::length_text(l, super::BLUR).map_err(named)?,
+            [l] => super::units::length_text(l, super::units::BLUR).map_err(named)?,
             _ => return Err(named("takes one length".into())),
         }),
         "brightness" => Function::Brightness(amount(false)?),
