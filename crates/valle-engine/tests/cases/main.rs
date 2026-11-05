@@ -416,6 +416,7 @@ impl Runner {
             return Outcome::Skipped;
         }
         let run = std::panic::AssertUnwindSafe(|| {
+            self.check(case)?;
             if standard {
                 self.chrome(case)
             } else if drawn {
@@ -627,12 +628,50 @@ impl Runner {
         listed()?.ok_or_else(|| format!("{}: Chrome {version} listed nothing", path.display()))
     }
 
+    /// The standalone checker must report the same frame errors as the rendering path. This
+    /// also exercises the generated CSS/SVG matrices, including recovery after an invalid frame.
+    fn check(&self, case: &str) -> Result<(), String> {
+        let mut scene = match self.scene(case) {
+            Ok(scene) => scene,
+            // Loading is shared, and the regular error case below checks this diagnostic.
+            Err(Failure::Scene(_)) => return Ok(()),
+            Err(Failure::Case(e)) => return Err(e),
+        };
+        let mut checker = self
+            .scene(case)
+            .map_err(|e| match e {
+                Failure::Scene(e) | Failure::Case(e) => e,
+            })?
+            .into_checker();
+        let c = scene.composition();
+        for i in 0..c.fps.frames_in(c.duration) {
+            let at = c.fps.frame_start(i)?;
+            let checked = checker.check(at);
+            let drawn = scene.frame(at).map(drop);
+            if checked != drawn {
+                return Err(format!("frame {i}: check {checked:?}, render {drawn:?}"));
+            }
+        }
+        Ok(())
+    }
+
     /// Runs `each` on the case's frames in order, with the scene, the frame and its time.
     fn frames(
         &self,
         case: &str,
         each: &mut dyn FnMut(&mut Scene, i64, Tick) -> Result<(), String>,
     ) -> Result<(), Failure> {
+        let mut scene = self.scene(case)?;
+        let c = scene.composition();
+        for i in 0..c.fps.frames_in(c.duration) {
+            let at = c.fps.frame_start(i).map_err(Failure::Case)?;
+            each(&mut scene, i, at).map_err(Failure::Scene)?;
+        }
+        Ok(())
+    }
+
+    /// Load a case and its video decoders, shared by checking and drawing tests.
+    fn scene(&self, case: &str) -> Result<Scene, Failure> {
         let lowered = match case.ends_with(".timeline.json") {
             true => Some(self.lower(case).map_err(Failure::Scene)?),
             false => None,
@@ -663,11 +702,7 @@ impl Runner {
             let e = format!("cases have at most {MAX_FRAMES} frames, not {n}");
             return Err(Failure::Case(e));
         }
-        for i in 0..n {
-            let at = c.fps.frame_start(i).map_err(Failure::Case)?;
-            each(&mut scene, i, at).map_err(Failure::Scene)?;
-        }
-        Ok(())
+        Ok(scene)
     }
 
     /// The scene a timeline case plays as.

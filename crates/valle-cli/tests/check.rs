@@ -55,3 +55,20 @@ export default function Scene() {
     assert_eq!(out["status"], "ok", "{out}");
     assert_eq!(out["warnings"], serde_json::json!([]), "{out}");
 }
+
+#[test]
+fn an_error_in_later_frames_is_reported_with_its_first_frame_and_count() {
+    let out = check(
+        "late-error",
+        "
+        export const composition = {width:64,height:36,fps:30,duration:2};
+        export default function Scene() {
+          const {seconds} = useCurrentTime();
+          return <View style={{width:seconds < 1 ? 20 : 'broken'}}/>;
+        }
+    ",
+    );
+    assert_eq!(out["status"], "error", "{out}");
+    assert_eq!(out["problems"][0]["first"], 30, "{out}");
+    assert_eq!(out["problems"][0]["count"], 30, "{out}");
+}

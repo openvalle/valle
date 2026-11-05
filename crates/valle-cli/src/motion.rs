@@ -181,26 +181,26 @@ pub fn chosen(args: &Args, count: i64) -> Result<Vec<i64>, Failure> {
     Ok(list)
 }
 
-/// Every frame computed as it is drawn, but not drawn: each error once, with the frames it is
-/// in.
+/// Check every frame without building drawing commands: each error once, with its frames.
 pub fn check(args: &Args) -> Result<Value, Failure> {
-    let Loaded { mut scene, urls } = load(args)?;
+    let Loaded { scene, urls } = load(args)?;
     let c = scene.composition();
     let count = c.fps.frames_in(c.duration);
+    let mut checker = scene.into_checker();
     let mut problems: Vec<(String, Vec<i64>)> = Vec::new();
     // The frames traced again, by why.
     let mut retraced: Vec<(String, Vec<i64>)> = Vec::new();
     let frames = chosen(args, count)?;
     for &i in &frames {
         let at = c.fps.frame_start(i).map_err(|e| Failure::new("scene", e))?;
-        let before = scene.traces().0;
-        if let Err(e) = scene.frame(at) {
+        let before = checker.traces().0;
+        if let Err(e) = checker.check(at) {
             match problems.iter_mut().find(|(m, _)| *m == e) {
                 Some((_, frames)) => frames.push(i),
                 None => problems.push((e, vec![i])),
             }
         }
-        if let (after, Some(why)) = scene.traces()
+        if let (after, Some(why)) = checker.traces()
             && after > before
             && before > 0
         {

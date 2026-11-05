@@ -21,6 +21,9 @@ use crate::template::{
 use crate::text::{Blob, Face, FontFile, Fonts, Text};
 use crate::time::Tick;
 
+mod check;
+pub use check::Checker;
+
 /// Variants whose sheets are kept, as many as the frontend keeps.
 const SHEETS: usize = 64;
 
@@ -352,6 +355,11 @@ impl Scene {
         self.text.faces()
     }
 
+    /// Check this scene without producing display lists or final transforms.
+    pub fn into_checker(self) -> Checker {
+        Checker::new(self)
+    }
+
     /// The frame at `at`.
     pub fn frame(&mut self, at: Tick) -> Result<Frame, Error> {
         let natural = self.pictures.iter().map(Picture::natural).collect();
@@ -397,16 +405,22 @@ impl Scene {
     }
 
     /// `template`, a variant, with its `values` at `at`, styled and laid out.
-    fn lay(&mut self, at: Tick, template: Rc<Template>, mut values: Vec<V>) -> Result<Laid, Error> {
+    fn lay(&mut self, at: Tick, template: Rc<Template>, values: Vec<V>) -> Result<Laid, Error> {
+        let styles = self.styled(&template, &values)?;
+        self.layout(at, template, values, styles)
+    }
+
+    /// Bind a variant and validate its computed styles, before any layout or drawing.
+    fn styled(&mut self, template: &Rc<Template>, values: &[V]) -> Result<Vec<Style>, Error> {
         if let Some((previous, sheet, _)) = self.sheets.first_mut()
-            && !Rc::ptr_eq(previous, &template)
+            && !Rc::ptr_eq(previous, template)
         {
             sheet.clear_computed();
         }
         match self
             .sheets
             .iter()
-            .position(|(t, ..)| Rc::ptr_eq(t, &template))
+            .position(|(t, ..)| Rc::ptr_eq(t, template))
         {
             Some(i) => {
                 let kept = self.sheets.remove(i);
@@ -428,8 +442,8 @@ impl Scene {
                         }
                     }
                 }
-                let sheet = Sheet::new(&template)?;
-                let measured = measured(&template)?;
+                let sheet = Sheet::new(template)?;
+                let measured = measured(template)?;
                 self.sheets.insert(0, (template.clone(), sheet, measured));
                 self.sheets.truncate(SHEETS);
             }
@@ -439,7 +453,22 @@ impl Scene {
         let (_, sheet, measured) = &self.sheets[0];
         let resources = &self.front.resources;
         let settled = measured.is_empty();
-        let mut styles = sheet.compute(&values, settled, canvas, resources)?;
+        sheet.compute(values, settled, canvas, resources)
+    }
+
+    /// Layout-dependent checks, including font shaping and the settling of `bounds()` values.
+    fn layout(
+        &mut self,
+        at: Tick,
+        template: Rc<Template>,
+        mut values: Vec<V>,
+        mut styles: Vec<Style>,
+    ) -> Result<Laid, Error> {
+        let c = self.front.composition;
+        let canvas = [c.width as f32, c.height as f32];
+        let (_, sheet, measured) = &self.sheets[0];
+        let resources = &self.front.resources;
+        let settled = measured.is_empty();
         // Reuse only a fully known layout whose inputs still match. Late bounds remain on the
         // existing layout/settle path. Changes to paint or post-layout movement need no layout.
         let retained = self.retained.as_ref().filter(|last| {
@@ -587,6 +616,30 @@ impl Scene {
         Some(Reach { nodes, read })
     }
 
+    /// Restyle a trail sample. A changed layout needs the full layout-dependent checks.
+    fn restyled(
+        &self,
+        template: &Rc<Template>,
+        reach: &[usize],
+        then: &[V],
+        now: &[V],
+        styles: &[Style],
+    ) -> Result<Option<Vec<Style>>, Error> {
+        let Some((_, sheet, _)) = self.sheets.iter().find(|(t, ..)| Rc::ptr_eq(t, template)) else {
+            return Ok(None);
+        };
+        let c = self.front.composition;
+        let canvas = [c.width as f32, c.height as f32];
+        let resources = &self.front.resources;
+        let moved = sheet.compute_only(reach, then, canvas, resources, styles)?;
+        let alike = (reach.iter().zip(&moved)).all(|(&i, s)| s.lays_out_as(&styles[i]))
+            && same_text(template, reach, then, now);
+        if !alike {
+            return Ok(None);
+        }
+        Ok(Some(moved))
+    }
+
     /// The transforms of the boxes of `motionBlur: "auto"` at another time of `template`, the
     /// frame's variant, whose values are `then` there: where all that reaches them, `reach`,
     /// lays out as in the frame, of the values `now`, `styles` and `laid`, that alone is styled
@@ -600,18 +653,9 @@ impl Scene {
         styles: &mut [Style],
         laid: &Layout,
     ) -> Result<Option<Vec<Matrix>>, Error> {
-        let Some((_, sheet, _)) = self.sheets.iter().find(|(t, ..)| Rc::ptr_eq(t, template)) else {
+        let Some(mut moved) = self.restyled(template, reach, then, now, styles)? else {
             return Ok(None);
         };
-        let c = self.front.composition;
-        let canvas = [c.width as f32, c.height as f32];
-        let resources = &self.front.resources;
-        let mut moved = sheet.compute_only(reach, then, canvas, resources, styles)?;
-        let alike = (reach.iter().zip(&moved)).all(|(&i, s)| s.lays_out_as(&styles[i]))
-            && same_text(template, reach, then, now);
-        if !alike {
-            return Ok(None);
-        }
         // Their styles there in place of the frame's while their transforms read them.
         for (&i, s) in reach.iter().zip(&mut moved) {
             std::mem::swap(&mut styles[i], s);
