@@ -563,6 +563,8 @@ fn compile(code: &str, images: &[&str]) -> Result<Program, Error> {
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
+
     use super::*;
 
     const IMAGES: &[&str] = &["content"];
@@ -570,27 +572,28 @@ mod tests {
     #[test]
     fn a_webgl2_shader_translates() {
         let p = program(
-            "#version 300 es
-precision highp float;
-uniform sampler2D content;
-uniform float amount;
-uniform vec2 center, size;
-uniform vec3 tint;
-uniform int steps;
-uniform bool flip;
-in vec2 uv;
-out vec4 color;
-float wave(float x) { return 0.5 + 0.5 * sin(x); }
-void main() {
-  vec4 c = texture(content, flip ? vec2(uv.x, 1.0 - uv.y) : uv);
-  ivec2 at = ivec2(gl_FragCoord.xy) % textureSize(content, 0);
-  uint h = uint(at.x * 73856093 ^ at.y * 19349663) >> 3u;
-  float edge = fwidth(uv.x) + dFdx(uv.y) + dFdy(uv.x);
-  vec4 t = texelFetch(content, at, 0);
-  color = vec4(c.rgb * tint * wave(amount) + t.rgb * edge, c.a) * float(steps + int(h & 1u));
-  color.xy += center + size;
-}
-",
+            indoc! {r#"
+                #version 300 es
+                precision highp float;
+                uniform sampler2D content;
+                uniform float amount;
+                uniform vec2 center, size;
+                uniform vec3 tint;
+                uniform int steps;
+                uniform bool flip;
+                in vec2 uv;
+                out vec4 color;
+                float wave(float x) { return 0.5 + 0.5 * sin(x); }
+                void main() {
+                  vec4 c = texture(content, flip ? vec2(uv.x, 1.0 - uv.y) : uv);
+                  ivec2 at = ivec2(gl_FragCoord.xy) % textureSize(content, 0);
+                  uint h = uint(at.x * 73856093 ^ at.y * 19349663) >> 3u;
+                  float edge = fwidth(uv.x) + dFdx(uv.y) + dFdy(uv.x);
+                  vec4 t = texelFetch(content, at, 0);
+                  color = vec4(c.rgb * tint * wave(amount) + t.rgb * edge, c.a) * float(steps + int(h & 1u));
+                  color.xy += center + size;
+                }
+            "#},
             IMAGES,
         )
         .unwrap();
@@ -614,8 +617,9 @@ void main() {
     #[test]
     fn values_fill_the_block() {
         let p = program(
-            "uniform float a; uniform vec3 c; uniform int n; uniform bool b; out vec4 color;
-void main() { color = vec4(c, a + float(n)) * float(b); }",
+            indoc! {r#"
+                uniform float a; uniform vec3 c; uniform int n; uniform bool b; out vec4 color;
+                void main() { color = vec4(c, a + float(n)) * float(b); }"#},
             IMAGES,
         )
         .unwrap();
@@ -647,18 +651,36 @@ void main() { color = vec4(c, a + float(n)) * float(b); }",
     #[test]
     fn errors_point_at_the_code_s_lines() {
         let error = |code: &str| program(code, IMAGES).unwrap_err();
-        let e = error("out vec4 color;\nvoid main() {\n  color = vec4(nope);\n}\n");
+        let e = error(indoc! {r#"
+            out vec4 color;
+            void main() {
+              color = vec4(nope);
+            }
+        "#});
         assert!(e.starts_with("line 3: "), "{e}");
-        let e = error("out vec4 color;\nuniform mat3 m;\nvoid main() { color = vec4(1.0); }");
+        let e = error(indoc! {r#"
+            out vec4 color;
+            uniform mat3 m;
+            void main() { color = vec4(1.0); }"#});
         assert!(e.starts_with("line 2: uniform mat3 m"), "{e}");
-        let e =
-            error("out vec4 color;\nuniform sampler2D other;\nvoid main() { color = vec4(1.0); }");
+        let e = error(indoc! {r#"
+            out vec4 color;
+            uniform sampler2D other;
+            void main() { color = vec4(1.0); }"#});
         assert!(e.starts_with("line 2: uniform sampler2D other"), "{e}");
         let e = error("void main() {}");
         assert!(e.contains("declares no color"), "{e}");
-        let e = error("out vec4 color;\nuniform float a = 1.0;\nvoid main() { color = vec4(a); }");
+        let e = error(indoc! {r#"
+            out vec4 color;
+            uniform float a = 1.0;
+            void main() { color = vec4(a); }"#});
         assert!(e.starts_with("line 2: "), "{e}");
-        let e = error("out vec4 color;\nvoid main() {\n  color = vec4(1.0)\n}\n");
+        let e = error(indoc! {r#"
+            out vec4 color;
+            void main() {
+              color = vec4(1.0)
+            }
+        "#});
         assert!(
             e.starts_with("line 3: ") || e.starts_with("line 4: "),
             "{e}"
@@ -668,11 +690,12 @@ void main() { color = vec4(c, a + float(n)) * float(b); }",
     #[test]
     fn comments_and_blocks_are_not_declarations() {
         let p = program(
-            "// uniform float hidden;
-/* uniform vec2 also; */
-struct S { float x; };
-out vec4 color; // the color
-void main() { S s = S(1.0); color = vec4(s.x); }",
+            indoc! {r#"
+                // uniform float hidden;
+                /* uniform vec2 also; */
+                struct S { float x; };
+                out vec4 color; // the color
+                void main() { S s = S(1.0); color = vec4(s.x); }"#},
             IMAGES,
         )
         .unwrap();
@@ -682,15 +705,16 @@ void main() { S s = S(1.0); color = vec4(s.x); }",
     #[test]
     fn defaults_come_from_comments() {
         let p = program(
-            "uniform float a; // = 0.25
-uniform vec2 c; // = vec2(0.5)
-uniform vec3 d; // = vec3(1.0, 2.0, 3.0)
-uniform int n; // = 3
-uniform bool b; // = true
-uniform float e, f; // = 9.0
-uniform float g; // the default is 0
-out vec4 color;
-void main() { color = vec4(c, a + e + f + g, float(n) * float(b)) + vec4(d, 0.0); }",
+            indoc! {r#"
+                uniform float a; // = 0.25
+                uniform vec2 c; // = vec2(0.5)
+                uniform vec3 d; // = vec3(1.0, 2.0, 3.0)
+                uniform int n; // = 3
+                uniform bool b; // = true
+                uniform float e, f; // = 9.0
+                uniform float g; // the default is 0
+                out vec4 color;
+                void main() { color = vec4(c, a + e + f + g, float(n) * float(b)) + vec4(d, 0.0); }"#},
             IMAGES,
         )
         .unwrap();
