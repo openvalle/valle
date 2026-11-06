@@ -5,6 +5,19 @@ Use small scenes with a few related variants. Keep test inputs separate from
 expected data; normal test runs must never regenerate their own expectations.
 All commands below run from the repository root.
 
+Web unit tests live in each package's `tests/` directory alongside `src/`, as
+`*.test.ts`: `web/packages/engine/tests/` and `web/apps/studio/tests/`. Run them
+with `bun test ./web` (or `bun test` from the repository root). Use `bun:test`
+assertions against observable behavior; replace browser transports only where
+the test does not need an actual browser. For example, test export frame
+selection in `messages.test.ts`, worker reply handling in `connection.test.ts`,
+and revision conflicts in Studio's `service.test.ts`.
+
+`cargo xtask test` runs these unit tests even with `--skip gpu,browser`, so all
+CI platforms exercise them. The Playwright player and Studio tests in
+`web/tests/` remain the checks for real WebGPU rendering, browser media APIs
+and UI interaction.
+
 | What you are testing              | What to compare                                                           | Example to adapt                                                                                            |
 | --------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | CSS layout, text or compositing   | Explicit numerical expectations and reviewed browser images               | [Content box](cases/css/box-model/content-box/scene.tsx), [text](cases/css/text/preserved-spaces/scene.tsx) |

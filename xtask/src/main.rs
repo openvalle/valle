@@ -14,7 +14,7 @@ commands:
   fmt [--check]   format the code with rustfmt and Prettier, or only check it
   lint [--fix]    run clippy and Oxlint with warnings as errors, optionally applying fixes
   test [--skip gpu,browser]
-                  run workspace and browser tests; --skip leaves out test layers
+                  run Rust, Bun and browser tests; --skip leaves out test layers
   cases [path]    run dependency and scene cases, optionally under one path in tests/cases
   fonts           prepare the pinned test fonts from the download cache
   build-web       build the engine for the browser into web/packages/engine/dist, and
@@ -123,6 +123,14 @@ fn test(args: &[String]) -> Result<(), String> {
         }
     }
     let layers: Vec<&str> = LAYERS.into_iter().filter(|l| !skip.contains(l)).collect();
+    run(
+        Command::new("bun").args(["install", "--frozen-lockfile", "--silent"]),
+        "bun install",
+    )?;
+    run(
+        Command::new("bun").args(["test", "./web"]),
+        "bun test ./web",
+    )?;
     let command = ["test", "--locked", "--workspace"];
     run(
         Command::new(cargo_path())
