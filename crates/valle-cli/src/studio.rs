@@ -21,6 +21,8 @@ use valle_project::{Project, digest, inside};
 use crate::Failure;
 use crate::http::{self, Request, Response};
 
+mod assets;
+
 /// How often the files Studio read are looked at for changes, and how long an event stream may
 /// stay quiet.
 const POLL: Duration = Duration::from_millis(300);
@@ -51,8 +53,8 @@ type Clients = Arc<Mutex<Vec<mpsc::Sender<String>>>>;
 
 struct Service {
     port: u16,
-    /// `web/` of the source: Studio's and the SDK's builds.
-    web: PathBuf,
+    /// An explicit web build, overriding the packaged assets or development default.
+    web: Option<PathBuf>,
     exe: PathBuf,
     session: Mutex<Session>,
     watched: Mutex<BTreeMap<PathBuf, Seen>>,
@@ -104,8 +106,7 @@ pub fn run(group: &str, words: &[String], events: bool) -> Result<Value, Failure
         .map_err(|e| Failure::new("studio", e.to_string()))?;
     let service = Arc::new(Service {
         port: port.port(),
-        // A build from the source finds its web/; a packaged one is given it.
-        web: web.unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web")),
+        web,
         exe: std::env::current_exe().map_err(|e| Failure::new("studio", e.to_string()))?,
         session: Mutex::new(session),
         watched: Mutex::new(BTreeMap::new()),
@@ -318,38 +319,15 @@ impl Service {
             ("GET", p) if p.starts_with("/api/files/") => return self.read(&p[11..]),
             ("GET", p) if p.starts_with("/api/renders/") => return self.output(&p[13..]),
             ("PUT", p) if p.starts_with("/api/files/") => return self.write(&p[11..], request),
-            ("GET", p) if !p.starts_with("/api/") => return self.asset(p),
+            ("GET", p) if !p.starts_with("/api/") => {
+                return assets::serve(self.web.as_deref(), p, request.header("accept-encoding"));
+            }
             _ => return Response::new(404, "text/plain", "no such request"),
         };
         match result {
             Ok(value) if value["status"] == "conflict" => Response::json(409, &value),
             Ok(value) => Response::json(200, &value),
             Err(e) => Response::json(400, &json!({ "status": "error", "message": e })),
-        }
-    }
-
-    /// Studio's files, and the SDK's under `/valle/`.
-    fn asset(&self, path: &str) -> Response {
-        let (dir, file) = match path.strip_prefix("/valle/") {
-            Some(rest) => ("packages/engine/dist", rest),
-            None => ("apps/studio/dist", path.trim_start_matches('/')),
-        };
-        let file = if file.is_empty() { "index.html" } else { file };
-        let Some(file) = inside(file) else {
-            return Response::new(403, "text/plain", "not in Studio");
-        };
-        let full = self.web.join(dir).join(&file);
-        match std::fs::read(&full) {
-            Ok(bytes) => Response::new(200, http::kind(&file), bytes),
-            Err(_) if file == "index.html" => Response::new(
-                404,
-                "text/plain",
-                format!(
-                    "Studio is not built in {}: run cargo xtask build-web",
-                    self.web.display()
-                ),
-            ),
-            Err(_) => Response::new(404, "text/plain", "not found"),
         }
     }
 

@@ -149,6 +149,39 @@ fn folder(name: &str) -> PathBuf {
 }
 
 #[test]
+#[cfg(feature = "embed-web")]
+fn packaged_resources_negotiate_brotli_over_http() {
+    let dir = folder("embedded");
+    let project = dir.join("film");
+    let created = Command::new(VALLE)
+        .args(["project", "create"])
+        .arg(&project)
+        .output()
+        .unwrap();
+    assert!(created.status.success(), "{created:?}");
+    let studio = Studio::start(&project, &dir.join("cache"));
+    for (path, kind) in [
+        ("/", "text/html; charset=utf-8"),
+        ("/main.js", "text/javascript; charset=utf-8"),
+        ("/valle/valle_web_bg.wasm", "application/wasm"),
+    ] {
+        let plain = studio.get(path);
+        let br = studio.send("GET", path, &[("Accept-Encoding", "gzip, br")], &[]);
+        assert_eq!((plain.status, br.status), (200, 200), "{path}");
+        assert_eq!(br.header("content-type").as_deref(), Some(kind));
+        assert_eq!(br.header("content-encoding").as_deref(), Some("br"));
+        assert_eq!(br.header("vary").as_deref(), Some("Accept-Encoding"));
+        assert_eq!(br.header("content-length"), Some(br.body.len().to_string()));
+        assert!(plain.header("content-encoding").is_none());
+        let mut decoded = Vec::new();
+        brotli_decompressor::BrotliDecompress(&mut br.body.as_slice(), &mut decoded).unwrap();
+        assert_eq!(decoded, plain.body, "{path}");
+    }
+    drop(studio);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn the_service_reads_writes_and_runs_for_its_page_only() {
     let dir = folder("project");
     let project = dir.join("film");

@@ -11,7 +11,15 @@ publish.workspace = true
 name = "valle"
 path = "src/main.rs"
 
+[features]
+# `cargo xtask package` builds the web assets first, then embeds them in the executable.
+embed-web = ["dep:brotli", "dep:brotli-decompressor"]
+
+[build-dependencies]
+brotli = { workspace = true, optional = true }
+
 [dependencies]
+brotli-decompressor = { workspace = true, optional = true }
 png.workspace = true
 rfd.workspace = true
 serde_json.workspace = true

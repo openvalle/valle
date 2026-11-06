@@ -54,5 +54,6 @@ and their license is included in [OFL.txt](tests/resources/OFL.txt).
 | [Prettier](https://github.com/prettier/prettier) | Formatting scripts | MIT |
 | [Oxlint](https://github.com/oxc-project/oxc) | Linting scripts | MIT |
 | [indoc](https://github.com/dtolnay/indoc) | Indenting scene sources in tests with the code around them | MIT or Apache-2.0 |
+| [Brotli](https://github.com/dropbox/rust-brotli) | Compressing the web resources embedded in packaged executables; the existing brotli-decompressor handles clients without Brotli support | BSD-3-Clause and MIT; decoder BSD-3-Clause or MIT |
 | [Chrome for Testing](https://github.com/GoogleChromeLabs/chrome-for-testing) | The Chromium browser managed by Playwright for baseline capture, WebGPU player and Studio tests | BSD-3-Clause, with Chromium's third-party licenses |
 | [Playwright](https://github.com/microsoft/playwright) | Managing test browsers, capturing Chrome/Firefox/WebKit baseline candidates, and driving the player and Studio tests | Apache-2.0; downloaded browser binaries retain their own licenses |

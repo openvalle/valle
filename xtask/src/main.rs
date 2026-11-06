@@ -19,6 +19,8 @@ commands:
   fonts           prepare the pinned test fonts from the download cache
   build-web       build the engine for the browser into web/packages/engine/dist, and
                   Studio into web/apps/studio/dist
+  package         build a release executable with Studio embedded into dist/valle (.exe
+                  on Windows), for the current platform
 ";
 
 /// The wasm-bindgen that makes the browser module's JavaScript: the version `valle-web` pins.
@@ -46,6 +48,8 @@ fn main() -> ExitCode {
         "fonts" => Err(unexpected(flags)),
         "build-web" if flags.is_empty() => build_web(),
         "build-web" => Err(unexpected(flags)),
+        "package" if flags.is_empty() => package(),
+        "package" => Err(unexpected(flags)),
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
             Ok(())
@@ -293,6 +297,32 @@ fn build_web() -> Result<(), String> {
         std::fs::copy(&from, dist.join(file)).map_err(|e| format!("{}: {e}", from.display()))?;
     }
     println!("built {}", dist.display());
+    Ok(())
+}
+
+/// A standalone executable: the browser build must precede the native one that embeds it.
+fn package() -> Result<(), String> {
+    build_web()?;
+    cargo(&[
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "valle-cli",
+        "--features",
+        "embed-web",
+    ])?;
+    let name = format!("valle{}", std::env::consts::EXE_SUFFIX);
+    let dist = root().join("dist");
+    std::fs::create_dir_all(&dist).map_err(|e| e.to_string())?;
+    let output = dist.join(&name);
+    let size = std::fs::copy(root().join("target/release").join(name), &output)
+        .map_err(|e| format!("{}: {e}", output.display()))?;
+    println!(
+        "packaged {} ({:.2} MiB)",
+        output.display(),
+        size as f64 / 1048576.0
+    );
     Ok(())
 }
 

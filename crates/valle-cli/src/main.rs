@@ -75,7 +75,7 @@ usage: valle <command> [options]
 
 options of studio:
   --port <n>                  the port to listen on (default: 9527; 0 lets the system pick)
-  --web-assets-dir <folder>   where Studio and the SDK are built (web/ of the source)
+  --web-assets-dir <folder>   override Studio's embedded assets with a web/ build
 
 options of every command:
   --json                      print the result as JSON
