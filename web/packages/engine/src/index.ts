@@ -34,10 +34,16 @@ export type Options = {
   volume?: number;
 };
 
-/** How playing went since it last said: frames shown, and frames its clock passed but that
- * were not drawn in time; how long a frame took to draw, on average; and the bytes of the
- * engine's memory. */
-export type Stats = { shown: number; dropped: number; frameMs: number; memory: number };
+/** Playback over `elapsedMs`: distinct completed video frames and their rate (not display
+ * refreshes), skipped frames, average frame latency, and bytes of engine memory. */
+export type Stats = {
+  fps: number;
+  elapsedMs: number;
+  shown: number;
+  dropped: number;
+  frameMs: number;
+  memory: number;
+};
 
 export type Events = {
   /** A frame was drawn: its time and index. */
@@ -100,13 +106,15 @@ export class Player {
   #volume: number;
   #muted: boolean;
   /** A frame being drawn, and the one asked for since. */
-  #drawing = false;
+  #drawing: number | undefined;
   #wanted: number | undefined;
   #animation = 0;
   #given = 0;
   /** What playing has done since it last said, the frame its clock last reached, and when it
    * said. */
-  #stats: Stats = { shown: 0, dropped: 0, frameMs: 0, memory: 0 };
+  #stats: Omit<Stats, "fps" | "elapsedMs"> = { shown: 0, dropped: 0, frameMs: 0, memory: 0 };
+  #lastShown: number | undefined;
+  #statsEpoch = 0;
   #reached = 0;
   #said = 0;
   loop: boolean;
@@ -193,7 +201,7 @@ export class Player {
     const last = this.#info.frames - 1;
     this.#run(this.#frame >= last && !this.loop ? 0 : this.#frame);
     this.#reached = this.#clock!.frame;
-    this.#said = performance.now();
+    this.#resetStats(this.#frame);
     this.#emit("play", undefined);
     const tick = () => {
       const clock = this.#clock;
@@ -246,7 +254,9 @@ export class Player {
     if (this.#clock) {
       this.#run(frame);
       this.#reached = frame;
+      this.#resetStats(frame);
     }
+    this.#wanted = undefined;
     this.#show(frame);
   }
 
@@ -273,11 +283,15 @@ export class Player {
   async draw(index: number): Promise<void> {
     this.#frame = index;
     const started = performance.now();
+    const epoch = this.#statsEpoch;
     const { memory } = (await this.#send({ type: "frame", index })) as { memory: number };
     const stats = this.#stats;
-    stats.frameMs += performance.now() - started;
-    stats.shown++;
     stats.memory = memory;
+    if (this.#clock && epoch === this.#statsEpoch && index !== this.#lastShown) {
+      stats.frameMs += performance.now() - started;
+      stats.shown++;
+      this.#lastShown = index;
+    }
     this.#emit("time", { time: this.#time(index), frame: index });
   }
 
@@ -392,9 +406,26 @@ export class Player {
 
   /** Says how playing went since it last said, and starts counting again. */
   #say(): void {
+    const now = performance.now();
+    const elapsedMs = now - this.#said;
     const { shown, dropped, frameMs, memory } = this.#stats;
-    this.#emit("stats", { shown, dropped, frameMs: shown ? frameMs / shown : 0, memory });
+    this.#emit("stats", {
+      fps: elapsedMs > 0 ? (shown * 1000) / elapsedMs : 0,
+      elapsedMs,
+      shown,
+      dropped,
+      frameMs: shown ? frameMs / shown : 0,
+      memory,
+    });
     this.#stats = { shown: 0, dropped: 0, frameMs: 0, memory };
+    this.#said = now;
+  }
+
+  /** Paused draws and seeks do not count as playback or dropped frames. */
+  #resetStats(frame: number): void {
+    this.#stats = { shown: 0, dropped: 0, frameMs: 0, memory: this.#stats.memory };
+    this.#lastShown = frame;
+    this.#statsEpoch++;
     this.#said = performance.now();
   }
 
@@ -402,21 +433,26 @@ export class Player {
    * dropped. */
   #show(index: number): void {
     this.#frame = index;
-    if (this.#drawing) {
-      if (this.#wanted !== undefined && this.#wanted !== index) {
+    if (this.#drawing !== undefined) {
+      if (
+        this.#clock &&
+        this.#wanted !== undefined &&
+        this.#wanted !== index &&
+        this.#wanted !== this.#drawing
+      ) {
         this.#stats.dropped++;
       }
       this.#wanted = index;
       return;
     }
-    this.#drawing = true;
+    this.#drawing = index;
     this.draw(index)
       .catch((error: PlayerError) => {
         this.pause();
         this.#emit("error", error);
       })
       .finally(() => {
-        this.#drawing = false;
+        this.#drawing = undefined;
         const wanted = this.#wanted;
         this.#wanted = undefined;
         if (wanted !== undefined && wanted !== index) {

@@ -33,6 +33,8 @@ png = "0.18.1"
 # The SHA-256 of downloads, and the cryptography of the TLS ureq speaks.
 ring = "0.17.14"
 rquickjs = "=0.14.0"
+# Studio's system save dialog; Linux uses the desktop portal without GTK.
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 # Never resolves external entities: an SVG file reads nothing else.
 roxmltree = "0.21.2"
 serde = { version = "1.0.229", features = ["derive"] }

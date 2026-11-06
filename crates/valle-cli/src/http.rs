@@ -193,12 +193,12 @@ mod tests {
 
     #[test]
     fn a_request_is_read_whole() {
-        let text = "PUT /api/files/a%20b.json?token=x%2By&n=1 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\
+        let text = "PUT /api/files/a%20b.json?name=x%2By&n=1 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\
                     Content-Length: 4\r\nX-Valle-Base: none\r\n\r\nbody";
         let r = Request::read(&mut text.as_bytes()).expect("a request");
         assert_eq!(r.method, "PUT");
         assert_eq!(r.path, "/api/files/a b.json");
-        assert_eq!(r.query("token"), Some("x+y"));
+        assert_eq!(r.query("name"), Some("x+y"));
         assert_eq!(r.header("x-valle-base"), Some("none"));
         assert_eq!(r.body, b"body");
     }

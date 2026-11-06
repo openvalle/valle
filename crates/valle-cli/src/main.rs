@@ -74,7 +74,7 @@ usage: valle <command> [options]
   project studio [folder]
 
 options of studio:
-  --port <n>                  the port to listen on (0, the default: one the system picks)
+  --port <n>                  the port to listen on (default: 9527; 0 lets the system pick)
   --web-assets-dir <folder>   where Studio and the SDK are built (web/ of the source)
 
 options of every command:
@@ -141,6 +141,14 @@ impl Failure {
 
 fn main() -> ExitCode {
     let words: Vec<String> = std::env::args().skip(1).collect();
+    // Cocoa's save panel needs the main thread. Studio invokes this short-lived helper so
+    // choosing a file does not block its HTTP service or require a separate GUI event loop.
+    if let [command, name] = words.as_slice()
+        && command == "--studio-save-file"
+    {
+        println!("{}", studio::save_file(name));
+        return ExitCode::SUCCESS;
+    }
     let thread = std::thread::Builder::new()
         .stack_size(STACK)
         .spawn(move || run(&words));

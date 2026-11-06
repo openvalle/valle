@@ -1,5 +1,5 @@
 //! `valle motion|timeline|project studio`: Studio's local service. It listens on 127.0.0.1 only,
-//! for requests that carry the token it made when it started and come from its own origin; it
+//! for requests addressed to the local service and coming from its own origin; it
 //! serves Studio and the SDK, reads and writes the files of what is open (atomically, refusing a
 //! write over a change it did not see), runs `project` commands and renders as the CLI does, and
 //! says what changes as server-sent events.
@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime};
 
-use ring::rand::{SecureRandom, SystemRandom};
 use serde_json::{Value, json};
 use valle_engine::text::BUILT_IN;
 use valle_native::urls::UrlCache;
@@ -51,7 +50,6 @@ struct Seen {
 type Clients = Arc<Mutex<Vec<mpsc::Sender<String>>>>;
 
 struct Service {
-    token: String,
     port: u16,
     /// `web/` of the source: Studio's and the SDK's builds.
     web: PathBuf,
@@ -63,11 +61,15 @@ struct Service {
     /// Held while a file is compared and written, so two writes do not cross.
     writing: Mutex<()>,
     renders: AtomicU64,
+    /// Completed exports, including destinations outside the open folder.
+    outputs: Arc<Mutex<BTreeMap<u64, PathBuf>>>,
+    /// Only one system save panel is open at a time.
+    picking: Mutex<()>,
 }
 
 pub fn run(group: &str, words: &[String], events: bool) -> Result<Value, Failure> {
     let usage = |m: String| Failure::new("usage", m).hint("valle --help lists the options");
-    let (mut port, mut web, mut file) = (0u16, None, None);
+    let (mut port, mut web, mut file) = (9527u16, None, None);
     let mut words = words.iter();
     while let Some(w) = words.next() {
         match w.as_str() {
@@ -100,11 +102,7 @@ pub fn run(group: &str, words: &[String], events: bool) -> Result<Value, Failure
     let port = listener
         .local_addr()
         .map_err(|e| Failure::new("studio", e.to_string()))?;
-    let mut token = [0u8; 16];
-    (SystemRandom::new().fill(&mut token))
-        .map_err(|_| Failure::new("studio", "no random numbers for a token"))?;
     let service = Arc::new(Service {
-        token: token.iter().map(|b| format!("{b:02x}")).collect(),
         port: port.port(),
         // A build from the source finds its web/; a packaged one is given it.
         web: web.unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web")),
@@ -114,8 +112,10 @@ pub fn run(group: &str, words: &[String], events: bool) -> Result<Value, Failure
         clients: Arc::default(),
         writing: Mutex::new(()),
         renders: AtomicU64::new(0),
+        outputs: Arc::default(),
+        picking: Mutex::new(()),
     });
-    let url = format!("http://127.0.0.1:{}/?token={}", service.port, service.token);
+    let url = format!("http://127.0.0.1:{}/", service.port);
     match events {
         true => {
             let ready = json!({ "event": "ready", "url": url, "port": service.port });
@@ -134,6 +134,17 @@ pub fn run(group: &str, words: &[String], events: bool) -> Result<Value, Failure
         std::thread::spawn(move || service.serve(stream));
     }
     Ok(json!({ "status": "ok", "summary": "Studio stopped" }))
+}
+
+/// Run by the private helper command on its main thread, as Cocoa requires.
+/// A save panel returns a path without creating the file; cancellation returns null.
+pub fn save_file(name: &str) -> Value {
+    let path = rfd::FileDialog::new()
+        .set_title("Export video")
+        .set_file_name(name)
+        .add_filter("MP4 video", &["mp4"])
+        .save_file();
+    json!({ "status": "ok", "path": path })
 }
 
 /// What `valle <group> studio <file>` opens.
@@ -260,8 +271,7 @@ impl Service {
         let _ = self.finish(response).write(&mut &stream, false);
     }
 
-    /// Refuses a request not from this service's page: another host or origin, which a page
-    /// elsewhere would send, or an API request without the token.
+    /// Refuses requests addressed to another host or sent from another page's origin.
     fn allowed(&self, request: &Request) -> Result<(), Response> {
         let forbidden = |m: &str| Err(Response::new(403, "text/plain", m.to_string()));
         let hosts = [
@@ -278,10 +288,6 @@ impl Service {
             && !hosts.iter().any(|h| origin == format!("http://{h}"))
         {
             return forbidden("not this origin");
-        }
-        let token = request.header("x-valle-token").or(request.query("token"));
-        if request.path.starts_with("/api/") && token != Some(self.token.as_str()) {
-            return forbidden("no token, or not this service's");
         }
         Ok(())
     }
@@ -304,16 +310,19 @@ impl Service {
             ("POST", "/api/open") => self.open_project(&request.body),
             ("POST", "/api/project") => self.command(&request.body),
             ("POST", "/api/render") => self.render(&request.body),
+            ("POST", "/api/save-file") => self.choose_output(&request.body),
             ("POST", "/api/edit") => edit(&request.body),
             ("GET", "/api/list") => self.list(),
             ("GET", "/api/url") => return url(request.query("u")),
             ("GET", p) if p.starts_with("/api/fonts/") => return font(&p["/api/fonts/".len()..]),
             ("GET", p) if p.starts_with("/api/files/") => return self.read(&p[11..]),
+            ("GET", p) if p.starts_with("/api/renders/") => return self.output(&p[13..]),
             ("PUT", p) if p.starts_with("/api/files/") => return self.write(&p[11..], request),
             ("GET", p) if !p.starts_with("/api/") => return self.asset(p),
             _ => return Response::new(404, "text/plain", "no such request"),
         };
         match result {
+            Ok(value) if value["status"] == "conflict" => Response::json(409, &value),
             Ok(value) => Response::json(200, &value),
             Err(e) => Response::json(400, &json!({ "status": "error", "message": e })),
         }
@@ -497,6 +506,48 @@ impl Service {
         Some((self.root()?.join(&path), path))
     }
 
+    /// The system save panel chooses both the directory and name, and confirms replacement.
+    fn choose_output(&self, body: &[u8]) -> Result<Value, String> {
+        let body: Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+        let name = body["name"].as_str().ok_or("which file name?")?;
+        if name.contains(['/', '\\']) || !name.to_lowercase().ends_with(".mp4") {
+            return Err("choose an MP4 file name, without a directory".into());
+        }
+        let _picking = self
+            .picking
+            .try_lock()
+            .map_err(|_| "the save dialog is already open")?;
+        let done = Command::new(&self.exe)
+            .args(["--studio-save-file", name])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !done.status.success() {
+            return Err(format!(
+                "could not open the system save dialog: {}",
+                String::from_utf8_lossy(&done.stderr).trim()
+            ));
+        }
+        serde_json::from_slice(&done.stdout).map_err(|e| format!("save dialog: {e}"))
+    }
+
+    /// Only files produced by this service can be read through an export link.
+    fn output(&self, id: &str) -> Response {
+        let path = id.parse::<u64>().ok().and_then(|id| {
+            self.outputs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&id)
+                .cloned()
+        });
+        let Some(path) = path else {
+            return Response::new(404, "text/plain", "no completed export");
+        };
+        match std::fs::read(&path) {
+            Ok(bytes) => Response::new(200, http::kind(&path.to_string_lossy()), bytes),
+            Err(e) => Response::new(404, "text/plain", e.to_string()),
+        }
+    }
+
     /// Runs `valle project <args> --json` on the project open, as the CLI does.
     fn command(&self, body: &[u8]) -> Result<Value, String> {
         let args = arguments(body)?;
@@ -518,7 +569,7 @@ impl Service {
     /// Starts `valle <motion|timeline|project> render <args>` in the folder open, as the CLI
     /// does; what it does is said as `render` events with its id.
     fn render(&self, body: &[u8]) -> Result<Value, String> {
-        let args = arguments(body)?;
+        let mut args = arguments(body)?;
         match args.as_slice() {
             [group, command, ..]
                 if command == "render" && ["motion", "timeline", "project"].contains(&&**group) => {
@@ -526,6 +577,28 @@ impl Service {
             _ => return Err("a render is motion, timeline or project render".into()),
         }
         let root = self.root().ok_or("no folder is open")?;
+        let body: Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+        // Standalone scenes have no project-created renders/ folder. Prepare the destination
+        // before invoking the CLI, including nested output paths chosen by Studio.
+        if let Some(index) = args.iter().position(|word| word == "-o") {
+            let path = root.join(args.get(index + 1).ok_or("-o needs a path")?);
+            if path.is_dir() {
+                return Err(format!(
+                    "{} is a directory; choose a file name",
+                    path.display()
+                ));
+            }
+            if path.try_exists().map_err(|e| e.to_string())? && body["overwrite"] != true {
+                return Ok(
+                    json!({ "status": "conflict", "code": "output_exists", "path": path, "message": format!("{} already exists", path.display()) }),
+                );
+            }
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            args[index + 1] = path.to_string_lossy().into_owned();
+        }
         let id = self.renders.fetch_add(1, Ordering::Relaxed) + 1;
         let mut child = Command::new(&self.exe)
             .args(&args)
@@ -538,6 +611,7 @@ impl Service {
         let stdout = child.stdout.take().ok_or("no output")?;
         let clients = self.clients.clone();
         let clients = move |event: Value| say(&clients, &event);
+        let outputs = self.outputs.clone();
         std::thread::spawn(move || {
             let mut last = None;
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -553,8 +627,24 @@ impl Service {
                 }
             }
             let _ = child.wait();
-            let result = last
+            let mut result = last
                 .unwrap_or_else(|| json!({ "status": "error", "message": "the render stopped" }));
+            // Display workspace-relative paths when possible. Export links use job IDs so
+            // outputs outside the workspace can be opened without exposing arbitrary files.
+            if let Some(file) = result["file"].as_str()
+                && let (Ok(base), Ok(full)) = (root.canonicalize(), root.join(file).canonicalize())
+            {
+                if result["status"] == "ok" {
+                    outputs
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(id, full.clone());
+                    result["url"] = format!("/api/renders/{id}").into();
+                }
+                result["file"] = relative(&base, &full)
+                    .unwrap_or_else(|| full.to_string_lossy().into_owned())
+                    .into();
+            }
             clients(json!({ "event": "render", "id": id, "result": result }));
         });
         Ok(json!({ "status": "ok", "id": id }))

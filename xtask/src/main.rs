@@ -282,9 +282,16 @@ fn build_web() -> Result<(), String> {
             .arg(studio.join("src/main.ts")),
         "bun build",
     )?;
-    let from = studio.join("index.html");
-    std::fs::copy(&from, dist.join("index.html"))
-        .map_err(|e| format!("{}: {e}", from.display()))?;
+    std::fs::create_dir_all(dist.join("brand")).map_err(|e| e.to_string())?;
+    for file in [
+        "index.html",
+        "brand/valle-logo-dark.svg",
+        "brand/valle-mark.svg",
+        "brand/favicon.svg",
+    ] {
+        let from = studio.join(file);
+        std::fs::copy(&from, dist.join(file)).map_err(|e| format!("{}: {e}", from.display()))?;
+    }
     println!("built {}", dist.display());
     Ok(())
 }

@@ -16,7 +16,6 @@ const VALLE: &str = env!("CARGO_BIN_EXE_valle");
 struct Studio {
     child: Child,
     port: u16,
-    token: String,
 }
 
 impl Drop for Studio {
@@ -62,19 +61,16 @@ impl Studio {
         let ready: Value = serde_json::from_str(&line).expect("ready");
         assert_eq!(ready["event"], "ready", "{line}");
         let url = ready["url"].as_str().expect("its address");
+        assert_eq!(url, format!("http://127.0.0.1:{}/", ready["port"]));
         Studio {
             child,
             port: ready["port"].as_u64().expect("its port") as u16,
-            token: url.split("token=").nth(1).expect("a token").to_string(),
         }
     }
 
-    /// `method path` with the token and `headers`, as a page of the service sends it.
+    /// `method path` with `headers`, as a page of the service sends it.
     fn send(&self, method: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Reply {
-        let mut all = vec![
-            ("Host".to_string(), format!("127.0.0.1:{}", self.port)),
-            ("X-Valle-Token".to_string(), self.token.clone()),
-        ];
+        let mut all = vec![("Host".to_string(), format!("127.0.0.1:{}", self.port))];
         for (k, v) in headers {
             all.retain(|(n, _)| !n.eq_ignore_ascii_case(k));
             if !v.is_empty() {
@@ -116,8 +112,8 @@ fn raw(port: u16, method: &str, path: &str, headers: &[(String, String)], body: 
 fn events(studio: &Studio) -> mpsc::Receiver<Value> {
     let mut stream = TcpStream::connect(("127.0.0.1", studio.port)).expect("connects");
     let request = format!(
-        "GET /api/events?token={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
-        studio.token, studio.port
+        "GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n",
+        studio.port
     );
     stream.write_all(request.as_bytes()).expect("sent");
     let (send, receive) = mpsc::channel();
@@ -165,13 +161,8 @@ fn the_service_reads_writes_and_runs_for_its_page_only() {
     assert!(created.status.success(), "{created:?}");
     let studio = Studio::start(&project, &dir.join("cache"));
 
-    // Only its own page: the token, the host and the origin.
-    assert_eq!(
-        studio
-            .send("GET", "/api/session", &[("X-Valle-Token", "")], &[])
-            .status,
-        403
-    );
+    // Local requests need no token; unrelated hosts and origins are still refused.
+    assert_eq!(studio.get("/api/session").status, 200);
     let evil = [("Host", "evil.example:80")];
     assert_eq!(studio.send("GET", "/api/session", &evil, &[]).status, 403);
     let elsewhere = [("Origin", "https://evil.example")];
@@ -293,6 +284,60 @@ fn the_service_reads_writes_and_runs_for_its_page_only() {
     let body = br#"{ "args": ["studio"] }"#;
     assert_eq!(studio.send("POST", "/api/project", &[], body).status, 400);
 
+    // Save dialogs are local-only and reject invalid names before opening a system panel.
+    let body = br#"{ "name": "video.mp4" }"#;
+    assert_eq!(
+        studio
+            .send("POST", "/api/save-file", &elsewhere, body)
+            .status,
+        403
+    );
+    for name in ["../video.mp4", "video.png", "folder/video.mp4"] {
+        let body = serde_json::json!({ "name": name }).to_string();
+        assert_eq!(
+            studio
+                .send("POST", "/api/save-file", &[], body.as_bytes())
+                .status,
+            400
+        );
+    }
+    assert_eq!(
+        studio.send("POST", "/api/directories", &[], b"{}").status,
+        404
+    );
+    let output = dir.join("导出 videos");
+    std::fs::create_dir_all(&output).expect("an output folder");
+    std::fs::write(output.join("existing.mp4"), b"keep this video").expect("a video");
+    assert_eq!(studio.get("/api/renders/999").status, 404);
+    assert_eq!(studio.get("/api/renders/../outside.mp4").status, 404);
+
+    let mut body = serde_json::json!({
+        "args": ["motion", "render", "missing.motion.tsx", "-o", output.join("existing.mp4")]
+    });
+    let refused = studio.send("POST", "/api/render", &[], body.to_string().as_bytes());
+    assert_eq!(refused.status, 409);
+    assert_eq!(refused.json()["code"], "output_exists");
+    assert_eq!(
+        std::fs::read(output.join("existing.mp4")).unwrap(),
+        b"keep this video"
+    );
+    body["overwrite"] = true.into();
+    let accepted = studio.send("POST", "/api/render", &[], body.to_string().as_bytes());
+    assert_eq!(accepted.status, 200);
+    let id = accepted.json()["id"].clone();
+    let done = next(&events, |e| {
+        e["event"] == "render" && e["id"] == id && e.get("result").is_some()
+    });
+    assert_eq!(done["result"]["status"], "error");
+    assert_eq!(studio.get(&format!("/api/renders/{id}")).status, 404);
+    body["args"][4] = serde_json::json!(output);
+    assert_eq!(
+        studio
+            .send("POST", "/api/render", &[], body.to_string().as_bytes())
+            .status,
+        400
+    );
+
     drop(studio);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -322,13 +367,6 @@ fn a_project_studio_out_of_a_project_opens_the_home() {
     let studio = Studio {
         child,
         port: ready["port"].as_u64().expect("a port") as u16,
-        token: (ready["url"]
-            .as_str()
-            .expect("an address")
-            .split("token=")
-            .nth(1))
-        .expect("a token")
-        .to_string(),
     };
     assert_eq!(studio.get("/api/session").json()["kind"], "home");
     assert_eq!(studio.get("/api/files/timeline.json").status, 403);

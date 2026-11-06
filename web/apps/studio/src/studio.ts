@@ -3,14 +3,16 @@
 // timeline, each over the file as it was read, so a change made outside is never lost. Exports
 // are native renders the service runs.
 
-import { css, html, LitElement, nothing } from "lit";
-import { createPlayer, type Player } from "../../../packages/engine/src/index.ts";
+import { html, LitElement, nothing } from "lit";
+import { styles } from "./styles.ts";
+import { icon } from "./icons.ts";
+import { createPlayer, type Player, type Stats } from "../../../packages/engine/src/index.ts";
 
 import {
   Conflict,
   fetching,
   type Layout,
-  link,
+  address,
   type Listed,
   type Session,
   service,
@@ -28,163 +30,7 @@ type Step = { path: string; before: string; after: string };
 type Job = { id: number; done: number; frames: number; result?: Record<string, any> };
 
 export class ValleStudio extends LitElement {
-  static styles = css`
-    :host {
-      display: grid;
-      grid-template: "top top top" auto "left stage right" 1fr "left bottom right" auto / 240px 1fr 320px;
-      height: 100vh;
-      background: #0f172a;
-      color: #e2e8f0;
-      font:
-        13px system-ui,
-        sans-serif;
-    }
-    header {
-      grid-area: top;
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      padding: 6px 10px;
-      border-bottom: 1px solid #1e293b;
-    }
-    header .name {
-      font-weight: 600;
-      margin-right: auto;
-    }
-    aside {
-      overflow: auto;
-      padding: 8px;
-      border-right: 1px solid #1e293b;
-    }
-    aside.right {
-      grid-area: right;
-      border-right: 0;
-      border-left: 1px solid #1e293b;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    aside.left {
-      grid-area: left;
-    }
-    h3 {
-      margin: 10px 0 4px;
-      font-size: 11px;
-      text-transform: uppercase;
-      color: #64748b;
-    }
-    .file {
-      display: block;
-      width: 100%;
-      text-align: left;
-      background: none;
-      border: 0;
-      color: inherit;
-      padding: 2px 4px;
-      cursor: pointer;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .file.open,
-    .file:hover {
-      background: #1e293b;
-    }
-    .file small {
-      color: #64748b;
-    }
-    .stage {
-      grid-area: stage;
-      position: relative;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-    .canvas {
-      flex: 1;
-      min-height: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 8px;
-    }
-    .canvas canvas {
-      max-width: 100%;
-      max-height: 100%;
-      box-shadow: 0 0 0 1px #334155;
-    }
-    .error {
-      position: absolute;
-      inset: 8px 8px auto;
-      background: #7f1d1d;
-      border-radius: 4px;
-      padding: 8px;
-      white-space: pre-wrap;
-      font-family: ui-monospace, monospace;
-    }
-    .transport {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      padding: 4px 8px;
-      border-top: 1px solid #1e293b;
-    }
-    .transport input[type="range"] {
-      flex: 1;
-    }
-    .bottom {
-      grid-area: bottom;
-      border-top: 1px solid #1e293b;
-      padding: 0 10px 6px;
-      max-height: 40vh;
-      overflow: auto;
-    }
-    textarea {
-      flex: 1;
-      min-height: 200px;
-      background: #020617;
-      color: #e2e8f0;
-      border: 1px solid #334155;
-      font:
-        12px/1.4 ui-monospace,
-        monospace;
-      tab-size: 2;
-    }
-    button,
-    select,
-    input {
-      font: inherit;
-    }
-    button {
-      background: #1e293b;
-      color: inherit;
-      border: 1px solid #334155;
-      border-radius: 4px;
-      padding: 3px 8px;
-      cursor: pointer;
-    }
-    button:disabled {
-      opacity: 0.5;
-    }
-    .banner {
-      background: #78350f;
-      padding: 6px;
-      border-radius: 4px;
-    }
-    label.field {
-      display: grid;
-      grid-template-columns: 100px 1fr;
-      gap: 6px;
-      align-items: center;
-      margin: 3px 0;
-    }
-    .home {
-      grid-column: 1 / -1;
-      grid-row: 2 / -1;
-      padding: 40px;
-      max-width: 640px;
-    }
-  `;
+  static styles = styles;
 
   session: Session | undefined;
   /** The files read, as they are on disk, and the drafts of those changed here. */
@@ -206,26 +52,53 @@ export class ValleStudio extends LitElement {
   #redo: Step[] = [];
   #status = "";
   #time = 0;
+  #shownFrame = 0;
+  #scrub: { frame: number; dragging: boolean; resume: boolean } | undefined;
+  #stats: Stats | undefined;
   /** Each opening of the player, so one superseded is let go. */
   #opening = 0;
   #reload: ReturnType<typeof setTimeout> | undefined;
   /** The props the preview of a scene is played with. */
   #values: Record<string, unknown> = {};
+  #leftTab: "files" | "media" | "history" | "renders" = "files";
+  #rightTab: "properties" | "code" = "properties";
+  #filter = "";
+  #asset: Listed | undefined;
+  #focused = false;
+  #inspectorVisible = innerWidth > 850;
+  #collapsed = false;
+  #zoom = 1;
+  #busy = false;
+  #exporting = false;
+  #exportJob: number | undefined;
+  #events: EventSource | undefined;
 
   connectedCallback(): void {
     super.connectedCallback();
+    try {
+      const prefs = JSON.parse(localStorage.getItem("valle.studio.workspace") ?? "{}");
+      for (const area of ["left", "right", "bottom"] as const) {
+        if (Number.isFinite(prefs[area])) this.#dimension(area, prefs[area]);
+      }
+    } catch {
+      /* Preferences are optional. */
+    }
     addEventListener("keydown", this.#key);
-    void this.#start();
+    void this.#run(() => this.#start());
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
     removeEventListener("keydown", this.#key);
+    this.#events?.close();
+    clearTimeout(this.#reload);
+    this.#opening++;
+    void this.player?.close();
   }
 
   async #start(): Promise<void> {
     this.session = await service.session();
-    service.events((event) => void this.#event(event));
+    this.#events = service.events((event) => void this.#run(() => this.#event(event)));
     if (this.session.kind !== "home") {
       await this.#load(this.session.entry!);
     }
@@ -234,11 +107,40 @@ export class ValleStudio extends LitElement {
 
   /** Opens `entry`: its text, the folder's files, and a player of it. */
   async #load(entry: string): Promise<void> {
+    const opening = ++this.#opening;
+    const changed = entry !== this.#entry;
+    const playing = this.player?.playing ?? false;
+    const time = changed ? 0 : (this.player?.currentTime ?? 0);
+    clearTimeout(this.#reload);
+    this.player?.pause();
+    if (changed) {
+      this.#values = {};
+      this.#exportJob = undefined;
+    }
     this.#entry = this.#open = entry;
     this.#selected = undefined;
-    await this.#read(entry);
-    await this.#refresh();
-    await this.#play();
+    this.#asset = undefined;
+    this.layout = undefined;
+    this.#time = time;
+    this.#scrub = undefined;
+    this.#error = this.#status = "";
+    this.#busy = true;
+    this.setAttribute("mode", this.timeline ? "timeline" : "motion");
+    this.requestUpdate();
+    try {
+      // Keep a draft's original revision: rereading it here would hide an outside edit.
+      if (!this.#files.has(entry)) await this.#read(entry);
+      if (opening !== this.#opening) return;
+      await this.#refresh();
+      await this.updateComplete;
+      if (opening === this.#opening) await this.#play(time, playing);
+    } catch (error) {
+      if (opening === this.#opening) {
+        this.#busy = false;
+        this.#error = (error as Error).message;
+        this.requestUpdate();
+      }
+    }
   }
 
   /** The folder's files, and a project's snapshots. */
@@ -265,11 +167,22 @@ export class ValleStudio extends LitElement {
   }
 
   /** A new player of the entry, its drafts given in place of the files. */
-  async #play(): Promise<void> {
+  async #play(
+    time = this.player?.currentTime ?? this.#time,
+    playing = this.player?.playing ?? false,
+  ): Promise<void> {
     const opening = ++this.#opening;
-    const time = this.player?.currentTime ?? 0;
+    this.#scrub = undefined;
+    this.#busy = true;
+    this.#stats = undefined;
+    this.requestUpdate();
+    const entry = this.#entry;
+    const loop = this.player?.loop ?? false;
+    const muted = this.player?.muted ?? false;
     await this.player?.close();
+    if (opening !== this.#opening) return;
     this.player = undefined;
+    this.#stats = undefined;
     const canvas = document.createElement("canvas");
     const stage = this.renderRoot.querySelector(".canvas");
     stage?.replaceChildren(canvas);
@@ -277,50 +190,63 @@ export class ValleStudio extends LitElement {
     for (const [path, text] of this.#drafts) {
       files[path] = new Blob([text]);
     }
-    if (this.timeline) {
-      await this.#lay();
-    }
     try {
+      const layout = this.timeline ? (await service.edit(this.text(entry))).layout : undefined;
+      if (opening !== this.#opening) return;
+      this.layout = layout;
       const player = await createPlayer({
         canvas,
         runtime: "/valle/",
-        entry: this.#entry,
+        entry,
         base: "/api/files/",
         fonts: "/api/fonts/",
         fetch: fetching,
         files,
+        props: this.#values,
+        loop,
+        muted,
       });
       if (opening !== this.#opening) {
         await player.close();
         return;
       }
       this.player = player;
+      this.#shownFrame = player.currentFrame;
       this.#error = "";
-      player.on("time", ({ time }) => {
+      player.on("time", ({ time, frame }) => {
+        if (this.player !== player) return;
         this.#time = time;
+        this.#shownFrame = frame;
+        this.#finishScrub();
         this.requestUpdate();
       });
       player.on("error", (error) => {
+        if (this.player !== player) return;
         this.#error = error.message;
         this.requestUpdate();
       });
+      player.on("stats", (stats) => {
+        if (this.player !== player) return;
+        this.#stats = stats;
+        this.requestUpdate();
+      });
+      player.on("play", () => {
+        if (this.player !== player) return;
+        this.#stats = undefined;
+        this.requestUpdate();
+      });
+      for (const event of ["pause", "ended"] as const) {
+        player.on(event, () => this.requestUpdate());
+      }
       player.seek(time);
+      if (playing) player.play();
     } catch (error) {
       if (opening === this.#opening) {
         this.#error = (error as Error).message;
       }
     }
+    if (opening === this.#opening) this.#busy = false;
     this.requestUpdate();
-  }
-
-  /** Where the timeline's clips are, from its text here. */
-  async #lay(): Promise<void> {
-    try {
-      this.layout = (await service.edit(this.text(this.#entry))).layout;
-    } catch (error) {
-      this.layout = undefined;
-      this.#error = (error as Error).message;
-    }
   }
 
   /** Plays the drafts once typing stops. */
@@ -348,6 +274,7 @@ export class ValleStudio extends LitElement {
   }
 
   #change(step: { path: string; after: string }): void {
+    this.#status = "";
     if (step.after === this.#files.get(step.path)?.text) {
       this.#drafts.delete(step.path);
     } else {
@@ -432,27 +359,37 @@ export class ValleStudio extends LitElement {
     this.requestUpdate();
   }
 
-  /** Renders what is open natively, into `renders/`. */
-  async export(): Promise<number> {
-    const stem = this.#entry
-      .split("/")
-      .pop()!
-      .replace(/(\.motion\.tsx|\.timeline\.json|\.json)$/, "");
-    const out = `renders/${stem}.mp4`;
-    const args =
-      this.session!.kind === "project"
-        ? ["project", "render", this.#entry]
+  /** The system save panel chooses the destination, then Rust renders directly to it. */
+  async export(): Promise<number | undefined> {
+    const name =
+      this.#entry
+        .split("/")
+        .pop()!
+        .replace(/(\.motion\.tsx|\.tsx|\.timeline\.json|\.json)$/, "") + ".mp4";
+    const out = await service.saveFile(name);
+    if (!out) {
+      this.#status = "Export cancelled.";
+      this.requestUpdate();
+      return undefined;
+    }
+    await this.save();
+    if (this.#conflicts.size) throw new Error("Resolve the file conflict before exporting.");
+    const group =
+      this.session!.kind === "project" && this.timeline
+        ? "project"
         : this.timeline
-          ? ["timeline", "render", this.#entry, "-o", out]
-          : ["motion", "render", this.#entry, "-o", out];
+          ? "timeline"
+          : "motion";
+    const args = [group, "render", this.#entry, "-o", out];
     const size = this.renderRoot.querySelector<HTMLSelectElement>("#output-size")?.value;
     if (size) {
       const info = this.player?.info;
       const output = info && info.height > info.width ? size.split("x").reverse().join("x") : size;
       args.push("--output-size", output);
     }
-    const id = await service.render(args);
-    this.#jobs.set(id, { id, done: 0, frames: 0 });
+    // The system save panel already confirmed replacement of an existing file.
+    const id = await service.render(args, true);
+    if (!this.#jobs.has(id)) this.#jobs.set(id, { id, done: 0, frames: 0 });
     this.requestUpdate();
     return id;
   }
@@ -471,18 +408,26 @@ export class ValleStudio extends LitElement {
   }
 
   #key = (event: KeyboardEvent) => {
-    const typing = event.composedPath()[0] instanceof HTMLTextAreaElement;
+    if (this.renderRoot.querySelector("dialog[open]")) return;
+    const target = event.composedPath()[0];
+    const typing =
+      target instanceof HTMLElement &&
+      (target.matches("input, textarea, select") || target.isContentEditable);
     const mod = event.metaKey || event.ctrlKey;
     if (mod && event.key === "s") {
       event.preventDefault();
-      void this.save();
+      void this.#run(() => this.save());
     } else if (!typing && mod && event.key.toLowerCase() === "z") {
       event.preventDefault();
       void (event.shiftKey ? this.redo() : this.undo());
     } else if (!typing && (event.key === "Delete" || event.key === "Backspace") && this.#selected) {
       void this.edit({ op: "delete", clip: this.#selected });
       this.#selected = undefined;
-    } else if (!typing && event.key === " ") {
+    } else if (
+      !typing &&
+      !(target instanceof HTMLElement && target.closest("button, a, [role=button]")) &&
+      event.key === " "
+    ) {
       event.preventDefault();
       if (this.player?.playing) {
         this.player.pause();
@@ -493,201 +438,876 @@ export class ValleStudio extends LitElement {
   };
 
   updated(): void {
+    this.toggleAttribute("focused", this.#focused);
+    this.toggleAttribute("inspector-hidden", !this.#inspectorVisible);
+    this.toggleAttribute("collapsed", this.timeline && this.#collapsed);
     const view = this.renderRoot.querySelector<TimelineView>("timeline-view");
-    view?.set(this.layout, this.#selected, this.#time);
+    view?.set(this.layout, this.#selected, this.#time, this.#zoom);
+  }
+
+  async #run(action: () => Promise<unknown>): Promise<void> {
+    try {
+      await action();
+    } catch (error) {
+      this.#status = (error as Error).message;
+    }
+    this.requestUpdate();
+  }
+
+  #dimension(area: "left" | "right" | "bottom", value: number): void {
+    const [min, max] =
+      area === "bottom"
+        ? [120, Math.max(120, innerHeight - 280)]
+        : area === "left"
+          ? [180, 360]
+          : [260, 560];
+    this.style.setProperty(`--${area}`, `${Math.min(max, Math.max(min, value))}px`);
+  }
+
+  #remember(): void {
+    const prefs = Object.fromEntries(
+      ["left", "right", "bottom"].map((area) => [
+        area,
+        parseFloat(getComputedStyle(this).getPropertyValue(`--${area}`)),
+      ]),
+    );
+    try {
+      localStorage.setItem("valle.studio.workspace", JSON.stringify(prefs));
+    } catch {
+      /* Preferences are optional. */
+    }
+  }
+
+  #resize(event: PointerEvent, area: "left" | "right" | "bottom"): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const handle = event.currentTarget as HTMLElement;
+    const initial = parseFloat(getComputedStyle(this).getPropertyValue(`--${area}`));
+    const move = (e: PointerEvent) => {
+      const by =
+        area === "bottom"
+          ? event.clientY - e.clientY
+          : (e.clientX - event.clientX) * (area === "left" ? 1 : -1);
+      this.#dimension(area, initial + by);
+    };
+    const stop = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", stop);
+      handle.removeEventListener("pointercancel", stop);
+      this.#remember();
+    };
+    handle.setPointerCapture(event.pointerId);
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", stop);
+    handle.addEventListener("pointercancel", stop);
+  }
+
+  #separator(area: "left" | "right" | "bottom") {
+    return html`<div
+      class=${area === "bottom" ? "horizontal" : `split ${area}-split`}
+      role="separator"
+      aria-label=${`Resize ${area === "bottom" ? "timeline" : area + " panel"}`}
+      aria-orientation=${area === "bottom" ? "horizontal" : "vertical"}
+      tabindex="0"
+      @pointerdown=${(e: PointerEvent) => this.#resize(e, area)}
+      @keydown=${(e: KeyboardEvent) => {
+        const keys =
+          area === "bottom"
+            ? ["ArrowDown", "ArrowUp"]
+            : area === "right"
+              ? ["ArrowRight", "ArrowLeft"]
+              : ["ArrowLeft", "ArrowRight"];
+        if (!keys.includes(e.key)) return;
+        e.preventDefault();
+        this.#dimension(
+          area,
+          parseFloat(getComputedStyle(this).getPropertyValue(`--${area}`)) +
+            (keys.indexOf(e.key) ? 20 : -20),
+        );
+        this.#remember();
+      }}
+    ></div>`;
   }
 
   render() {
     const session = this.session;
-    if (!session) {
-      return html`<header><span class="name">Valle Studio</span></header>`;
-    }
-    if (session.kind === "home") {
-      return this.#home(session);
-    }
+    if (!session)
+      return html`${this.#header()}
+        <div class="home muted">${this.#status || "Opening Studio…"}</div>`;
+    if (session.kind === "home") return this.#home(session);
+    const info = this.player?.info;
     return html`
-      <header>
-        <span class="name">${session.name} · ${this.#entry}</span>
-        <span>${this.#status}</span>
-        ${
-          session.timelines && session.timelines.length > 1
-            ? html`<select
-                @change=${(e: Event) => void this.#load((e.target as HTMLSelectElement).value)}
-              >
-                ${session.timelines.map(
-                  (t) => html`<option ?selected=${t === this.#entry}>${t}</option>`,
-                )}
-              </select>`
-            : nothing
-        }
-        <button ?disabled=${!this.#undo.length} @click=${() => void this.undo()}>Undo</button>
-        <button ?disabled=${!this.#redo.length} @click=${() => void this.redo()}>Redo</button>
-        <button ?disabled=${!this.#drafts.size} @click=${() => void this.save()}>
-          Save${this.#drafts.size ? ` (${this.#drafts.size})` : ""}
-        </button>
-        <select id="output-size" aria-label="Export resolution">
-          <option value="">Design size</option>
-          <option value="1280x720">720p</option>
-          <option value="1920x1080">1080p</option>
-          <option value="3840x2160">4K</option>
-          <option value="7680x4320">8K</option>
-        </select>
-        <button @click=${() => void this.export()}>Export</button>
-      </header>
-      ${this.#left()}
-      <section class="stage">
-        <div class="canvas"></div>
-        ${this.#error ? html`<div class="error">${this.#error}</div>` : nothing}
-        ${this.#transport()}
+      ${this.#header()}
+      <main class="workspace">
+        ${this.#left()} ${this.#separator("left")}
+        <section class="stage panel" aria-label="Preview">
+          <div class="panel-head preview-head">
+            <strong>Preview</strong>
+            ${this.#playbackRate()}
+            <span class="preview-meta">
+              <small>${info ? `${info.width} × ${info.height}` : ""}</small>
+              <span class="badge">Fit</span>
+            </span>
+          </div>
+          <div class="canvas"></div>
+          ${
+            this.#error
+              ? html`<div class="error" role="alert">
+                  <pre>${this.#error}</pre>
+                  <button @click=${() => this.#run(() => this.#play())}>Retry preview</button>
+                </div>`
+              : nothing
+          }
+          ${this.#transport()}
+        </section>
+        ${this.#separator("right")} ${this.#right()}
+      </main>
+      ${this.#separator("bottom")}
+      <section class="bottom panel" aria-label="Timeline" ?hidden=${!this.timeline}>
+        <div class="panel-head timeline-tools">
+          <strong>Timeline</strong>
+          <small class="hint"
+            >${this.layout?.tracks.length ?? 0} tracks · Drag to move, edges to trim</small
+          >
+          <span class="spacer"></span>
+          <button
+            class="quiet"
+            @click=${() => {
+              this.#zoom = 1;
+              this.requestUpdate();
+            }}
+          >
+            Fit
+          </button>
+          <input
+            type="range"
+            aria-label="Timeline zoom"
+            min="1"
+            max="10"
+            step="0.25"
+            .value=${String(this.#zoom)}
+            @input=${(e: Event) => {
+              this.#zoom = Number((e.target as HTMLInputElement).value);
+              this.requestUpdate();
+            }}
+          />
+          <button
+            class="icon quiet"
+            aria-label=${this.#collapsed ? "Expand timeline" : "Collapse timeline"}
+            @click=${() => {
+              this.#collapsed = !this.#collapsed;
+              this.requestUpdate();
+            }}
+          >
+            ${icon("chevron")}
+          </button>
+        </div>
+        <timeline-view
+          ?hidden=${this.#collapsed}
+          @select=${(e: CustomEvent) => {
+            this.#selected = e.detail;
+            this.#asset = undefined;
+            this.#rightTab = "properties";
+            this.#inspectorVisible = true;
+            this.requestUpdate();
+          }}
+          @op=${(e: CustomEvent) => this.#run(() => this.edit(e.detail))}
+          @seek=${(e: CustomEvent) => this.player?.seek(e.detail)}
+        ></timeline-view>
       </section>
+      <footer class="statusbar" role="status">
+        <span class="message">${this.#status || (this.#busy ? "Updating preview…" : "Ready")}</span
+        ><span class="spacer"></span><span>${info ? `${info.frames} frames` : ""}</span
+        ><span>Local workspace</span>
+      </footer>
+      ${this.#exportDialog()}
+    `;
+  }
+
+  #header() {
+    const session = this.session;
+    const dirty = this.#drafts.size;
+    return html`<header class="topbar">
+      <div class="brand">
+        <img class="logo" src="/brand/valle-mark.svg" alt="Valle" />
+      </div>
       ${
-        this.timeline
-          ? html`<section class="bottom">
-              <timeline-view
-                @select=${(e: CustomEvent) => {
-                  this.#selected = e.detail;
+        session && session.kind !== "home"
+          ? html`
+              <span class="divider"></span
+              ><span class="name" title=${this.#entry}
+                >${session.kind === "project" ? session.name : this.#entry.split("/").pop()}</span
+              >
+              <span class="badge">${this.timeline ? "timeline" : "motion"}</span>
+              ${
+                this.timeline && session.timelines && session.timelines.length > 1
+                  ? html`<select
+                      aria-label="Timeline"
+                      @change=${(e: Event) => this.#run(() => this.#load((e.target as HTMLSelectElement).value))}
+                    >
+                      ${session.timelines.map((t) => html`<option ?selected=${t === this.#entry}>${t}</option>`)}
+                    </select>`
+                  : nothing
+              }
+              <span class="spacer"></span>
+              <span class="save-state ${dirty ? "dirty" : ""}"
+                >${dirty ? html`<span class="dot">●</span>${dirty} unsaved` : html`${icon("check")}Saved`}</span
+              >
+              <button
+                class="icon quiet"
+                title="Undo (⌘/Ctrl Z)"
+                aria-label="Undo"
+                ?disabled=${!this.#undo.length}
+                @click=${() => this.#run(() => this.undo())}
+              >
+                ${icon("undo")}
+              </button>
+              <button
+                class="icon quiet"
+                title="Redo (⇧⌘/Ctrl Z)"
+                aria-label="Redo"
+                ?disabled=${!this.#redo.length}
+                @click=${() => this.#run(() => this.redo())}
+              >
+                ${icon("redo")}
+              </button>
+              <button
+                class="icon quiet"
+                title="Save (⌘/Ctrl S)"
+                aria-label="Save"
+                ?disabled=${!dirty}
+                @click=${() => this.#run(() => this.save())}
+              >
+                ${icon("save")}
+              </button>
+              <span class="divider"></span>
+              <button
+                class="icon quiet"
+                title="Focus preview"
+                aria-label="Focus preview"
+                aria-pressed=${this.#focused}
+                @click=${() => {
+                  this.#focused = !this.#focused;
                   this.requestUpdate();
                 }}
-                @op=${(e: CustomEvent) => void this.edit(e.detail)}
-                @seek=${(e: CustomEvent) => this.player?.seek(e.detail)}
-              ></timeline-view>
-            </section>`
-          : nothing
+              >
+                ${icon("focus")}
+              </button>
+              <button
+                class="icon quiet"
+                title="Inspector"
+                aria-label="Toggle inspector"
+                aria-pressed=${this.#inspectorVisible && !this.#focused}
+                @click=${() => {
+                  this.#focused = false;
+                  this.#inspectorVisible = !this.#inspectorVisible;
+                  this.requestUpdate();
+                }}
+              >
+                ${icon("panel")}
+              </button>
+              <button
+                class="primary"
+                ?disabled=${this.#busy || !this.player}
+                @click=${async () => {
+                  await this.updateComplete;
+                  this.renderRoot.querySelector<HTMLDialogElement>("#export-dialog")?.showModal();
+                }}
+              >
+                ${icon("export")}Export
+              </button>
+            `
+          : html`<span class="spacer"></span
+              ><span class="muted">Your local creative workspace</span>`
       }
-      ${this.#right()}
-    `;
+    </header>`;
+  }
+
+  #playbackRate() {
+    const fps = !this.#busy && this.player?.playing ? this.#stats?.fps : undefined;
+    return html`<span
+      class="playback-rate"
+      data-metric="fps"
+      aria-label="Live playback FPS"
+      title="Actual playback frame rate, updated about once a second."
+      >${fps === undefined ? "—" : fps.toFixed(1)} fps</span
+    >`;
+  }
+
+  /** Hold playback while dragging; resume after the final requested frame is actually drawn. */
+  #seekPreview(frame: number): void {
+    const player = this.player;
+    if (!player) return;
+    this.#scrub ??= { frame, dragging: false, resume: player.playing };
+    this.#scrub.frame = frame;
+    player.pause();
+    player.seekFrame(frame);
+    this.#finishScrub();
+    this.requestUpdate();
+  }
+
+  #finishScrub(): void {
+    const scrub = this.#scrub;
+    if (!scrub || scrub.dragging || scrub.frame !== this.#shownFrame) return;
+    this.#scrub = undefined;
+    if (scrub.resume) this.player?.play();
   }
 
   #transport() {
     const player = this.player;
     const info = player?.info;
+    const frame = this.#scrub?.frame ?? this.#shownFrame;
+    const [n, d = 1] = (info?.fps ?? "30").split("/").map(Number);
+    const seconds = this.#scrub ? (frame * d) / n : this.#time;
+    const progress = info && info.frames > 1 ? frame / (info.frames - 1) : 0;
+    const release = () => {
+      if (this.#scrub) this.#scrub.dragging = false;
+      this.#finishScrub();
+      this.requestUpdate();
+    };
     return html`<div class="transport">
-      <button
-        ?disabled=${!player}
-        @click=${() => (player?.playing ? player.pause() : player?.play())}
+      <div
+        class="scrubber"
+        data-playing=${!!player?.playing && !this.#scrub && frame > 0}
+        data-disabled=${!player}
+        style=${`--scrub-progress: ${progress}; --scrub-step: ${Math.min(100, (1000 * d) / n)}ms`}
       >
-        ${player?.playing ? "Pause" : "Play"}
-      </button>
-      <input
-        type="range"
-        min="0"
-        max=${info ? info.frames - 1 : 0}
-        .value=${String(player?.currentFrame ?? 0)}
-        @input=${(e: Event) => player?.seekFrame(Number((e.target as HTMLInputElement).value))}
-      />
-      <span>${this.#time.toFixed(2)} / ${info?.duration.toFixed(2) ?? "–"} s</span>
-      <label
-        ><input
-          type="checkbox"
-          .checked=${player?.loop ?? false}
-          @change=${(e: Event) => player && (player.loop = (e.target as HTMLInputElement).checked)}
-        />Loop</label
+        <div class="scrub-rail" aria-hidden="true">
+          <div class="scrub-fill"></div>
+          <div class="scrub-thumb"></div>
+        </div>
+        <input
+          class="scrub"
+          type="range"
+          aria-label="Preview frame"
+          aria-valuetext=${`${clock(seconds)}, frame ${frame}`}
+          min="0"
+          max=${info ? info.frames - 1 : 0}
+          step="1"
+          .value=${String(frame)}
+          ?disabled=${!player}
+          @pointerdown=${(e: PointerEvent) => {
+            if (!player || e.button !== 0) return;
+            this.#scrub = { frame, dragging: true, resume: player.playing };
+            player.pause();
+            player.seekFrame(frame);
+            (e.currentTarget as HTMLInputElement).setPointerCapture(e.pointerId);
+            this.requestUpdate();
+          }}
+          @input=${(e: Event) => this.#seekPreview(Number((e.target as HTMLInputElement).value))}
+          @pointerup=${release}
+          @pointercancel=${release}
+          @lostpointercapture=${release}
+        />
+      </div>
+      <span class="time"
+        >${clock(seconds)} <span class="muted">/ ${clock(info?.duration ?? 0)}</span></span
       >
-      <label
-        ><input
-          type="checkbox"
-          .checked=${player?.muted ?? false}
-          @change=${(e: Event) => player && (player.muted = (e.target as HTMLInputElement).checked)}
-        />Mute</label
-      >
+      <span class="playback" role="group" aria-label="Playback controls">
+        <button
+          class="icon quiet"
+          title="Previous frame"
+          aria-label="Previous frame"
+          ?disabled=${!player}
+          @click=${() => player?.seekFrame(player.currentFrame - 1)}
+        >
+          ${icon("back")}
+        </button>
+        <button
+          class="icon"
+          title="Play / pause (Space)"
+          aria-label=${player?.playing ? "Pause" : "Play"}
+          ?disabled=${!player}
+          @click=${() => (player?.playing ? player.pause() : player?.play())}
+        >
+          ${icon(player?.playing ? "pause" : "play")}
+        </button>
+        <button
+          class="icon quiet"
+          title="Next frame"
+          aria-label="Next frame"
+          ?disabled=${!player}
+          @click=${() => player?.seekFrame(player.currentFrame + 1)}
+        >
+          ${icon("next")}
+        </button>
+      </span>
+      <span class="toggle-group">
+        <button
+          class="icon quiet"
+          title="Loop"
+          aria-label="Loop"
+          aria-pressed=${player?.loop ?? false}
+          ?disabled=${!player}
+          @click=${() => {
+            if (player) player.loop = !player.loop;
+            this.requestUpdate();
+          }}
+        >
+          ${icon("loop")}
+        </button>
+        <button
+          class="icon quiet"
+          title="Mute"
+          aria-label="Mute"
+          aria-pressed=${player?.muted ?? false}
+          ?disabled=${!player}
+          @click=${() => {
+            if (player) player.muted = !player.muted;
+            this.requestUpdate();
+          }}
+        >
+          ${icon(player?.muted ? "muted" : "volume")}
+        </button>
+      </span>
     </div>`;
   }
 
   #left() {
-    const renders = this.#listed.filter((f) => f.path.startsWith("renders/"));
-    const files = this.#listed.filter((f) => !f.path.startsWith("renders/"));
-    return html`<aside class="left">
-      <h3>Files</h3>
-      ${files.map(
-        (f) =>
-          html`<button
-            class="file ${f.path === this.#open ? "open" : ""}"
-            title=${f.path}
-            ?disabled=${!TEXT.test(f.path)}
-            @click=${() => void this.#show(f.path)}
-          >
-            ${this.#drafts.has(f.path) ? "● " : ""}${f.path} <small>${size(f.size)}</small>
-          </button>`,
-      )}
+    const files = this.#listed.filter(
+      (f) =>
+        !f.path.startsWith("renders/") && f.path.toLowerCase().includes(this.#filter.toLowerCase()),
+    );
+    const media = files.filter((f) => mediaKind(f.path) !== "file");
+    const groups = new Map<string, Listed[]>();
+    for (const file of files) {
+      const folder = file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : "";
+      groups.set(folder, [...(groups.get(folder) ?? []), file]);
+    }
+    return html`<aside class="left panel" aria-label="Project browser">
+      <div class="tabs" role="tablist" aria-label="Project panels">
+        ${(
+          [
+            ["files", "Files"],
+            ["media", "Media"],
+            ["history", "History"],
+            ["renders", "Renders"],
+          ] as const
+        ).map(
+          ([tab, name]) =>
+            html`<button
+              role="tab"
+              aria-selected=${this.#leftTab === tab}
+              @click=${() => {
+                this.#leftTab = tab;
+                this.requestUpdate();
+              }}
+            >
+              ${name}
+            </button>`,
+        )}
+      </div>
       ${
-        this.session?.kind === "project"
-          ? html`<h3>History</h3>
-              <button @click=${() => void this.#snapshot()}>Save a snapshot</button>
-              ${this.#history.map(
-                (s) =>
-                  html`<button class="file" @click=${() => void this.#restore(s.snapshot)}>
-                    #${s.snapshot} ${s.message ?? ""}
-                    <small>${new Date(s.time * 1000).toLocaleString()}</small>
-                  </button>`,
-              )}`
-          : nothing
+        this.#leftTab === "files" || this.#leftTab === "media"
+          ? html`
+              <label class="search"
+                >${icon("search")}<input
+                  aria-label="Filter files"
+                  placeholder="Search files…"
+                  .value=${this.#filter}
+                  @input=${(e: Event) => {
+                    this.#filter = (e.target as HTMLInputElement).value;
+                    this.requestUpdate();
+                  }}
+              /></label>
+              ${
+                this.#leftTab === "files"
+                  ? html`<div class="scroll files">
+                      ${
+                        groups.size
+                          ? [...groups].map(
+                              ([folder, entries]) =>
+                                html`<details open>
+                                  <summary>${folder || "Project files"}</summary>
+                                  ${entries.map(
+                                    (f) =>
+                                      html`<button
+                                        class="file ${f.path === this.#open ? "open" : ""}"
+                                        title=${f.path}
+                                        @click=${() => this.#openFile(f)}
+                                      >
+                                        ${icon(TEXT.test(f.path) ? "code" : mediaKind(f.path))}<span
+                                          class="filename"
+                                          >${f.path.split("/").pop()}</span
+                                        >${this.#drafts.has(f.path) ? html`<span class="dot">●</span>` : nothing}<small
+                                          >${size(f.size)}</small
+                                        >
+                                      </button>`,
+                                  )}
+                                </details>`,
+                            )
+                          : html`<div class="empty">No matching files.</div>`
+                      }
+                    </div>`
+                  : html`<div class="scroll" style="padding:0">
+                      ${
+                        media.length
+                          ? html`<div class="media-grid">
+                              ${media.map(
+                                (f) =>
+                                  html`<button
+                                    class="asset"
+                                    title=${f.path}
+                                    @click=${() => this.#openFile(f)}
+                                  >
+                                    <span class="thumbnail"
+                                      >${mediaKind(f.path) === "image" ? html`<img loading="lazy" src=${address(f.path)} alt="" />` : icon(mediaKind(f.path))}</span
+                                    ><span>${f.path.split("/").pop()}</span>
+                                  </button>`,
+                              )}
+                            </div>`
+                          : html`<div class="empty">
+                              ${icon("image")}<strong>No media yet</strong>Images, video and audio
+                              in this folder appear here.
+                            </div>`
+                      }
+                    </div>`
+              }
+            `
+          : this.#leftTab === "history"
+            ? html`<div class="scroll">
+                ${
+                  this.session?.kind === "project"
+                    ? html`<button @click=${() => this.#run(() => this.#snapshot())}>
+                          ${icon("history")}Save a snapshot
+                        </button>
+                        ${this.#history.map(
+                          (s) =>
+                            html`<button
+                              class="file"
+                              @click=${() => this.#run(() => this.#restore(s.snapshot))}
+                            >
+                              ${icon("history")}<span class="filename"
+                                >#${s.snapshot} ${s.message || "Snapshot"}<br /><small
+                                  >${new Date(s.time).toLocaleString()}</small
+                                ></span
+                              >
+                            </button>`,
+                        )}
+                        ${!this.#history.length ? html`<div class="empty">Save a snapshot to keep a version of your project.</div>` : nothing}`
+                    : html`<div class="empty">
+                        ${icon("history")}<strong>Project history</strong>Open a project to save and
+                        restore snapshots.
+                      </div>`
+                }
+              </div>`
+            : html`<div class="scroll">
+                ${[...this.#jobs.values()].reverse().map((job) => this.#renderJob(job))}
+                ${this.#listed.filter((f) => f.path.startsWith("renders/")).map((f) => html`<a class="file" href=${address(f.path)} target="_blank" rel="noopener">${icon("film")}<span class="filename">${f.path.slice(8)}</span><small>${size(f.size)}</small></a>`)}
+                ${!this.#jobs.size && !this.#listed.some((f) => f.path.startsWith("renders/")) ? html`<div class="empty">${icon("export")}<strong>Your finished work</strong>Export a video to see it here.</div>` : nothing}
+              </div>`
       }
-      <h3>Renders</h3>
-      ${[...this.#jobs.values()].map(
-        (j) =>
-          html`<div>
-            #${j.id}
-            ${
-              j.result
-                ? j.result.status === "ok"
-                  ? "done"
-                  : html`<span title=${j.result.message}>failed</span>`
-                : `${j.done}/${j.frames || "…"}`
-            }
-          </div>`,
-      )}
-      ${renders.map(
-        (f) =>
-          html`<a class="file" href=${link(f.path)} target="_blank"
-            >${f.path.slice(8)} <small>${size(f.size)}</small></a
-          >`,
-      )}
     </aside>`;
+  }
+
+  #openFile(file: Listed): void {
+    this.#focused = false;
+    this.#inspectorVisible = true;
+    const preview =
+      /\.tsx$|\.timeline\.json$|(?:^|\/)timeline\.json$/.test(file.path) ||
+      file.path === this.session?.entry ||
+      this.session?.timelines?.includes(file.path);
+    if (preview) {
+      this.#rightTab = "properties";
+      if (file.path !== this.#entry) void this.#run(() => this.#load(file.path));
+      else {
+        this.#open = file.path;
+        this.#asset = undefined;
+      }
+    } else if (TEXT.test(file.path)) void this.#run(() => this.#show(file.path));
+    else {
+      this.#asset = file;
+      this.#rightTab = "properties";
+    }
+    this.requestUpdate();
   }
 
   #right() {
-    const conflicts = [...this.#conflicts];
-    return html`<aside class="right">
-      ${conflicts.map(
+    return html`<aside class="right panel" aria-label="Inspector">
+      <div class="tabs" role="tablist" aria-label="Inspector panels">
+        ${(
+          [
+            ["properties", "Properties"],
+            ["code", "Code"],
+          ] as const
+        ).map(
+          ([tab, name]) =>
+            html`<button
+              role="tab"
+              aria-selected=${this.#rightTab === tab}
+              @click=${() => {
+                this.#rightTab = tab;
+                this.requestUpdate();
+              }}
+            >
+              ${name}
+            </button>`,
+        )}
+      </div>
+      ${[...this.#conflicts].map(
         (path) =>
-          html`<div class="banner">
-            ${path} changed on disk.
-            <button @click=${() => void this.settle(path, "theirs")}>Take theirs</button>
-            <button @click=${() => void this.settle(path, "mine")}>Keep mine</button>
+          html`<div class="banner" role="alert">
+            <strong>File changed outside Studio</strong>
+            <p>${path}</p>
+            <div class="actions">
+              <button @click=${() => this.#run(() => this.settle(path, "theirs"))}>
+                Reload file</button
+              ><button @click=${() => this.#run(() => this.settle(path, "mine"))}>
+                Save my draft
+              </button>
+            </div>
           </div>`,
       )}
-      ${this.#inspector()} ${this.#props()}
-      <h3>Source · ${this.#open}</h3>
-      <textarea
-        spellcheck="false"
-        wrap="off"
-        .value=${this.text(this.#open)}
-        @input=${(e: Event) => {
-          this.#change({ path: this.#open, after: (e.target as HTMLTextAreaElement).value });
-          this.requestUpdate();
-          this.#later();
-        }}
-      ></textarea>
+      ${this.#rightTab === "code" ? this.#source() : html`<div class="scroll">${this.#asset ? this.#media() : html`${this.#inspector()}${this.#props()}${this.#composition()}`}</div>`}
     </aside>`;
   }
 
-  /** The selected clip, as JSON that is edited field by field. */
+  #source() {
+    const source = this.text(this.#open);
+    return html`<div class="source">
+      <div class="source-name" title=${this.#open}>
+        ${this.#open}${this.#drafts.has(this.#open) ? " ●" : ""}
+      </div>
+      <div class="editor">
+        <pre class="gutter" aria-hidden="true">
+${Array.from({ length: source.split("\n").length }, (_, i) => i + 1).join("\n")}</pre>
+        <textarea
+          aria-label="Source code"
+          spellcheck="false"
+          wrap="off"
+          .value=${source}
+          @scroll=${(e: Event) => {
+            const input = e.target as HTMLTextAreaElement;
+            const gutter = input.previousElementSibling!;
+            gutter.scrollTop = input.scrollTop;
+          }}
+          @input=${(e: Event) => {
+            this.#change({ path: this.#open, after: (e.target as HTMLTextAreaElement).value });
+            this.requestUpdate();
+            this.#later();
+          }}
+          @keydown=${(e: KeyboardEvent) => {
+            if (e.key === "Tab" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+              e.preventDefault();
+              const input = e.target as HTMLTextAreaElement;
+              input.setRangeText("  ", input.selectionStart, input.selectionEnd, "end");
+              input.dispatchEvent(new Event("input"));
+            }
+          }}
+        ></textarea>
+      </div>
+      <div class="source-foot">
+        <span>${source.split("\n").length} lines · UTF-8</span><span>⌘/Ctrl S to save</span>
+      </div>
+    </div>`;
+  }
+
+  #composition() {
+    const info = this.player?.info;
+    return html`<section class="section">
+      <h3>Composition</h3>
+      ${
+        info
+          ? html`<div class="field">Canvas<span>${info.width} × ${info.height}</span></div>
+              <div class="field">Frame rate<span>${info.fps} fps</span></div>
+              <div class="field">
+                Duration<span>${clock(info.duration)} · ${info.frames} frames</span>
+              </div>`
+          : html`<p class="muted">
+              ${this.#busy ? "Loading composition…" : "Preview unavailable"}
+            </p>`
+      }
+      ${this.timeline && !this.#selected ? html`<div class="empty">Select a clip on the timeline to edit its properties.</div>` : nothing}
+    </section>`;
+  }
+
+  #media() {
+    const file = this.#asset!;
+    const url = address(file.path);
+    const kind = mediaKind(file.path);
+    return html`<section class="section">
+      <h3>Media</h3>
+      ${kind === "image" ? html`<img class="media-preview" src=${url} alt=${file.path} />` : kind === "film" ? html`<video class="media-preview" src=${url} controls preload="metadata"></video>` : kind === "music" ? html`<audio class="media-preview" src=${url} controls preload="metadata"></audio>` : nothing}
+      <p style="overflow-wrap:anywhere">${file.path}</p>
+      <div class="field">Size<span>${size(file.size)}</span></div>
+      <a href=${url} target="_blank" rel="noopener">Open file ↗</a>
+    </section>`;
+  }
+
   #inspector() {
     const at = this.#selected;
-    if (!this.timeline || !at) {
+    if (!this.timeline || !at) return nothing;
+    let clip: Record<string, any> | undefined;
+    try {
+      clip = find(JSON.parse(this.text(this.#entry)), at);
+    } catch {
       return nothing;
     }
-    const clip = find(JSON.parse(this.text(this.#entry)), at);
-    if (!clip) {
-      return nothing;
-    }
-    return html`<h3>Clip · ${at}</h3>
-      <textarea
-        wrap="off"
-        style="min-height:120px;flex:0 0 auto"
-        .value=${JSON.stringify(clip, null, 2)}
-        @change=${(e: Event) => void this.#apply(at, clip, (e.target as HTMLTextAreaElement).value)}
-      ></textarea>`;
+    if (!clip) return nothing;
+    const placed = this.layout?.tracks.flatMap((t) => t.clips).find((c) => c.at === at);
+    const set = (field: string, value: unknown) =>
+      this.#run(() => this.edit({ op: "set", clip: at, field, value }));
+    return html`<section class="section">
+      <h3>Selected clip · ${clip.kind ?? placed?.kind ?? ""}</h3>
+      <label class="field"
+        >Name<input
+          aria-label="Clip name"
+          .value=${String(clip.name ?? "")}
+          placeholder=${placed?.id ?? "Clip"}
+          @change=${(e: Event) => set("name", (e.target as HTMLInputElement).value)}
+      /></label>
+      ${at.includes(".clips[") ? html`<label class="field">Start (s)<input type="number" min="0" step="0.01" .value=${String(placed?.start ?? 0)} @change=${(e: Event) => this.#run(() => this.edit({ op: "move", clip: at, start: Number((e.target as HTMLInputElement).value) }))} /></label>` : nothing}
+      <label class="field"
+        >Duration (s)<input
+          type="number"
+          min="0.01"
+          step="0.01"
+          .value=${String(placed?.duration ?? 0)}
+          @change=${(e: Event) => this.#run(() => this.edit({ op: "trim", clip: at, duration: Number((e.target as HTMLInputElement).value) }))}
+      /></label>
+      <label class="field"
+        >Enabled<input
+          type="checkbox"
+          .checked=${clip.enabled !== false}
+          @change=${(e: Event) => set("enabled", (e.target as HTMLInputElement).checked)}
+      /></label>
+      ${clip.kind === "solid" ? html`<label class="field">Color<input aria-label="Clip color" .value=${String(clip.color ?? "")} @change=${(e: Event) => set("color", (e.target as HTMLInputElement).value)} /></label>` : nothing}
+      <details>
+        <summary>Advanced · clip JSON</summary>
+        <textarea
+          aria-label="Clip JSON"
+          spellcheck="false"
+          wrap="off"
+          .value=${JSON.stringify(clip, null, 2)}
+          @change=${(e: Event) => this.#run(() => this.#apply(at, clip!, (e.target as HTMLTextAreaElement).value))}
+        ></textarea>
+      </details>
+    </section>`;
+  }
+
+  #renderJob(job: Job) {
+    const result = job.result;
+    const state = result
+      ? result.status === "ok"
+        ? "complete"
+        : "error"
+      : !job.frames
+        ? "preparing"
+        : job.done >= job.frames
+          ? "finishing"
+          : "rendering";
+    const label = {
+      preparing: "Preparing export",
+      rendering: "Rendering video",
+      finishing: "Finishing file",
+      complete: "Export complete",
+      error: "Export failed",
+    }[state];
+    // The last frame still has to leave the encoder and the file has to close successfully.
+    const percent =
+      state === "complete"
+        ? 100
+        : job.frames
+          ? Math.min(99, Math.floor((100 * job.done) / job.frames))
+          : 0;
+    const frames = result?.frames ?? job.frames;
+    return html`<div class="render-card" data-state=${state}>
+      <div class="render-heading">
+        <span class="render-label">
+          <span class="render-mark" aria-hidden="true"
+            >${state === "complete" ? icon("check") : state === "error" ? icon("close") : nothing}</span
+          >
+          <strong role="status">${label}</strong>
+        </span>
+        <span class="render-percent"
+          >${state === "preparing" || (state === "error" && !job.frames) ? "—" : `${percent}%`}</span
+        >
+      </div>
+      <div
+        class="render-track"
+        role="progressbar"
+        aria-label="Export progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow=${state === "preparing" || (state === "error" && !job.frames) ? nothing : percent}
+        aria-valuetext=${state === "rendering" ? `${percent}%, ${job.done} of ${job.frames} frames` : label}
+      >
+        <div class="render-fill" style=${`--render-progress: ${percent / 100}`}></div>
+      </div>
+      <div class="render-detail">
+        <span
+          >${state === "preparing" ? "Preparing scene and encoder…" : state === "finishing" ? "Finalizing video…" : state === "complete" ? `${frames} frames` : state === "error" ? "Export stopped" : `${job.done.toLocaleString()} / ${frames.toLocaleString()} frames`}</span
+        >
+        ${state === "complete" && Number.isFinite(result?.seconds) ? html`<span>${result.seconds.toFixed(1)} s</span>` : nothing}
+      </div>
+      ${result ? html`<p class="render-path" title=${result.message || result.file || result.summary}>${result.message || result.file || result.summary}</p>` : nothing}
+      ${state === "complete" && result?.url ? html`<a class="render-open" href=${result.url} target="_blank" rel="noopener">Open video ↗</a>` : nothing}
+    </div>`;
+  }
+
+  #exportDialog() {
+    const job = this.#exportJob === undefined ? undefined : this.#jobs.get(this.#exportJob);
+    const running = this.#exporting || (job !== undefined && !job.result);
+    return html`<dialog id="export-dialog" aria-labelledby="export-heading">
+      <form
+        @submit=${(e: Event) => {
+          e.preventDefault();
+          void this.#startExport();
+        }}
+      >
+        <div class="dialog-body">
+          <div class="actions">
+            <h2 id="export-heading">Export video</h2>
+            <span class="spacer"></span
+            ><button
+              type="button"
+              class="icon quiet"
+              aria-label="Close export"
+              @click=${() => this.renderRoot.querySelector<HTMLDialogElement>("#export-dialog")?.close()}
+            >
+              ${icon("close")}
+            </button>
+          </div>
+          <p>${this.#entry.split("/").pop()} · MP4</p>
+          <label class="field"
+            >Resolution<select id="output-size" aria-label="Export resolution" ?disabled=${running}>
+              <option value="">Design size</option>
+              <option value="1280x720">720p</option>
+              <option value="1920x1080">1080p</option>
+              <option value="3840x2160">4K</option>
+              <option value="7680x4320">8K</option>
+            </select></label
+          >
+          <p>Choose where to save in the system dialog.</p>
+          ${this.#drafts.size ? html`<p>Unsaved changes will be saved before export.</p>` : nothing}
+          ${job ? this.#renderJob(job) : nothing}
+          ${this.#status && !job ? html`<p role="status">${this.#status}</p>` : nothing}
+        </div>
+        <div class="dialog-foot">
+          <button
+            type="button"
+            @click=${() => this.renderRoot.querySelector<HTMLDialogElement>("#export-dialog")?.close()}
+          >
+            Close</button
+          ><button class="primary" type="submit" ?disabled=${running}>
+            ${icon("export")}${running ? "Exporting…" : job ? "Export again" : "Export video"}
+          </button>
+        </div>
+      </form>
+    </dialog>`;
+  }
+
+  async #startExport(): Promise<void> {
+    if (this.#exporting) return;
+    this.#exporting = true;
+    this.#exportJob = undefined;
+    this.#status = "";
+    this.requestUpdate();
+    await this.#run(async () => {
+      this.#exportJob = await this.export();
+    });
+    this.#exporting = false;
+    this.requestUpdate();
   }
 
   /** Sets each field of the clip at `at` that `text` changes, as one step to undo. */
@@ -730,15 +1350,18 @@ export class ValleStudio extends LitElement {
     }
     const set = (name: string, value: unknown) => {
       const values = { ...this.#values, [name]: value };
-      this.player!.setProps(values).then(
-        () => {
-          this.#values = values;
-          this.#status = "";
-        },
-        (error: Error) => (this.#status = error.message),
-      );
+      this.player!.setProps(values)
+        .then(
+          () => {
+            this.#values = values;
+            this.#status = "";
+          },
+          (error: Error) => (this.#status = error.message),
+        )
+        .finally(() => this.requestUpdate());
     };
-    return html`<h3>Props</h3>
+    return html`<section class="section">
+      <h3>Preview properties</h3>
       ${names.map((name) => {
         const control = props[name];
         const value = this.#values[name] ?? control.default;
@@ -767,7 +1390,8 @@ export class ValleStudio extends LitElement {
                 ? input("checkbox", (e) => e.checked)
                 : input("text", (e) => e.value);
         return html`<label class="field">${control.label ?? name} ${field}</label>`;
-      })}`;
+      })}
+    </section>`;
   }
 
   async #show(path: string): Promise<void> {
@@ -775,6 +1399,8 @@ export class ValleStudio extends LitElement {
       await this.#read(path);
     }
     this.#open = path;
+    this.#asset = undefined;
+    this.#rightTab = "code";
     this.requestUpdate();
   }
 
@@ -819,8 +1445,11 @@ export class ValleStudio extends LitElement {
         await open(done.root ?? folder);
       }
     };
-    return html`<header><span class="name">Valle Studio</span><span>${this.#status}</span></header>
+    return html`${this.#header()}
       <div class="home">
+        <h1>Make something move.</h1>
+        <p>Open a project to bring your scenes, media and timeline together.</p>
+        <p role="status">${this.#status}</p>
         <h3>Projects opened last</h3>
         ${(session.recent ?? []).map(
           (p) => html`<button class="file" @click=${() => void open(p.path)}>${p.path}</button>`,
@@ -853,6 +1482,18 @@ function find(root: any, path: string): Record<string, unknown> | undefined {
     }
   }
   return here;
+}
+
+function clock(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  return `${String(m).padStart(2, "0")}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
+}
+
+function mediaKind(path: string): "image" | "film" | "music" | "file" {
+  if (/\.(png|jpe?g|webp|gif|svg|avif)$/i.test(path)) return "image";
+  if (/\.(mp4|mov|webm|mkv)$/i.test(path)) return "film";
+  if (/\.(wav|mp3|m4a|aac|ogg|flac)$/i.test(path)) return "music";
+  return "file";
 }
 
 function size(bytes: number): string {

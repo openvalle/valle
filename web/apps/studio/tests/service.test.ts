@@ -2,23 +2,15 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "
 
 let api: typeof import("../src/service.ts");
 const originalFetch = globalThis.fetch;
-const globals = ["location", "sessionStorage"].map(
+const globals = ["location"].map(
   (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
 );
 const fetch = mock(async (_url: string | URL | Request, _init?: RequestInit) => Response.json({}));
 
 beforeAll(async () => {
-  const storage = new Map([["valle-token", "old-token"]]);
   Object.defineProperty(globalThis, "location", {
     configurable: true,
-    value: new URL("http://localhost:3000/?token=test-token"),
-  });
-  Object.defineProperty(globalThis, "sessionStorage", {
-    configurable: true,
-    value: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, value),
-    },
+    value: new URL("http://localhost:3000/"),
   });
   api = await import("../src/service.ts");
 });
@@ -39,22 +31,9 @@ afterAll(() => {
   }
 });
 
-test("requests use the URL token, preserve headers and do not mutate the caller's headers", async () => {
-  const headers = new Headers({ "x-valle-token": "wrong-token", "content-type": "text/plain" });
-  await api.request("/api/files/a.tsx", { method: "PUT", body: "source", headers });
-  const [url, init] = fetch.mock.calls[0];
-  expect(url).toBe("/api/files/a.tsx");
-  expect(init).toMatchObject({ method: "PUT", body: "source" });
-  expect(new Headers(init?.headers).get("x-valle-token")).toBe("test-token");
-  expect(new Headers(init?.headers).get("content-type")).toBe("text/plain");
-  expect(headers.get("x-valle-token")).toBe("wrong-token");
-  expect(sessionStorage.getItem("valle-token")).toBe("test-token");
-});
-
 test("file addresses encode each path segment while preserving folders", () => {
   const path = "démos/a #?%.tsx";
   expect(api.address(path)).toBe("/api/files/d%C3%A9mos/a%20%23%3F%25.tsx");
-  expect(api.link(path)).toBe("/api/files/d%C3%A9mos/a%20%23%3F%25.tsx?token=test-token");
 });
 
 test.each([
@@ -64,11 +43,11 @@ test.each([
     "https://assets.test/a b.png?q=1&v=2",
     "/api/url?u=https%3A%2F%2Fassets.test%2Fa%2520b.png%3Fq%3D1%26v%3D2",
   ],
-])("fetching %s uses the authenticated service", async (url, expected) => {
+])("fetching %s uses the local service", async (url, expected) => {
   await api.fetching(url);
   const [path, init] = fetch.mock.calls[0];
   expect(path).toBe(expected);
-  expect(new Headers(init?.headers).get("x-valle-token")).toBe("test-token");
+  expect(init).toBeUndefined();
 });
 
 test("reading preserves the text and revision used for the next write", async () => {
@@ -131,4 +110,28 @@ test("network failures propagate to the caller", async () => {
   const error = new TypeError("connection refused");
   fetch.mockRejectedValue(error);
   await expect(api.service.read("a.tsx")).rejects.toBe(error);
+});
+
+test("an existing output requires an explicit overwrite request", async () => {
+  const args = ["motion", "render", "a.tsx", "-o", "/tmp/导出 videos/a.mp4"];
+  fetch.mockResolvedValueOnce(
+    Response.json({ message: `${args[4]} already exists` }, { status: 409 }),
+  );
+  const error = await api.service.render(args).catch((error) => error);
+  expect(error.message).toContain(args[4]);
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({ args, overwrite: false });
+  fetch.mockResolvedValueOnce(Response.json({ id: 2 }));
+  expect(await api.service.render(args, true)).toBe(2);
+  expect(JSON.parse(fetch.mock.calls[1][1]!.body as string)).toEqual({ args, overwrite: true });
+});
+
+test("the system save dialog returns a chosen path or cancellation", async () => {
+  const path = "/tmp/导出 videos/成片.mp4";
+  fetch.mockResolvedValueOnce(Response.json({ path }));
+  expect(await api.service.saveFile("scene.mp4")).toBe(path);
+  expect(fetch.mock.calls[0][0]).toBe("/api/save-file");
+  expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({ name: "scene.mp4" });
+  fetch.mockResolvedValueOnce(Response.json({ path: null }));
+  expect(await api.service.saveFile("scene.mp4")).toBeNull();
 });
